@@ -1495,5 +1495,53 @@ oturuyor olabilir; onları görünür kılan her mekanizma bedava bulgu üretir.
 
 İlgili: [[Testing]] · FINDINGS L1.
 
+## 7d. Ayırıcının içinde patlayan çökme, ayırıcıyı suçlamana yol açar
+
+`while (i < 200000) { array j = [1,2,3]; }` **SIGSEGV** veriyordu. `gdb` şunu
+gösterdi:
+
+```
+#2  vm_array_push_aot_wrapper (...) at runtime_bindings.cpp:2864
+2864    array->items_ = realloc(array->items_, sizeof(VMValue) * new_cap);
+```
+
+`realloc`'un içinde ölmek "heap bozulması" gibi okunur ve saatlerce orada
+aranır. Üç ayrı sinyal de o yöne itiyordu:
+
+1. **Çerçeve `realloc`'taydı** → "bir yerde tampon taşırıyoruz".
+2. **RSS masumdu** → `arena_drop` kolu **11 MB** ile çöküyordu; "bellek
+   sorunu yok, demek ki bozulma".
+3. **Sistem sınırı yoktu** → `ulimit -v` sınırsız, 24 GB boş; tükenme de
+   elenmişti.
+
+Üçü de yanlış yöndü. ASAN tek satırda söyledi: **`stack-overflow`.**
+
+Gerçek sebep `AST_ARRAY_LITERAL` codegen'inde tek satırdı — `LLVMBuildAlloca`
+builder'ın **o anki bloğuna** yazıyordu, literal döngü içindeyse alloca döngü
+gövdesine düşüyordu. `alloca` ancak fonksiyon dönünce çözülür, yani her
+yineleme eleman sayısı × 16 bayt yığın yiyordu. Aritmetik birebir: 8 MB / 48
+bayt = 174 762, ölçülen çöküş 175 000.
+
+O 11 MB'lık "masum" RSS'in 8 MB'ı **dolan yığının kendisiydi**. Yani ikinci
+sinyal yalnız yanlış değildi, tam tersini söylüyordu.
+
+**Dersler:**
+- Bir çökme ayırıcının içindeyse, ayırıcıya **giren** şeyi değil, sürecin
+  **kaynak profilini** de sor. Yığın da bir kaynaktır ve RSS'te heap'ten
+  ayırt edilmez.
+- `TULPAR_RUNTIME_DIR=$PWD/build-asan TULPAR_AOT_LINK_FLAGS="-fsanitize=address"`
+  ile **herhangi bir Tulpar programı** ASAN altında koşturulabiliyor. Bu yol
+  `tests/run_asan.sh`'ın C paketiyle sınırlı olduğu sanılıyordu; değil.
+- Kardeş yola bak: `AST_OBJECT_LITERAL` aynı işi `llvm_build_alloca_at_entry`
+  ile **doğru** yapıyordu. Doğru desen zaten depodaydı; hata tek siteydi.
+  İki benzer yoldan biri bozuksa, öbürü genelde düzeltmenin kendisidir.
+
+Nöbetçi: `tests/stack_growth_smoke.py` — 13 codegen şekli × 2M yineleme, her
+şekil beklenen toplamı **basıyor** (ilk yazılışında basmıyordu ve LLVM ölü
+kodu atınca şekiller hiçbir şey ölçmeden "TEMİZ" diyordu), artı yığını
+tüketMESİ gereken bir kontrol şekli.
+
+İlgili: [[Testing]] · FINDINGS R11.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]

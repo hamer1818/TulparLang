@@ -240,6 +240,33 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Sessiz hata sondalari basarisiz!${NC}"
             exit 1
         fi
+        # S4 — AKIS SOZLESMESI (uc faz: akis oncesi / akis ortasi / surec).
+        # Bu sozlesme iki tur once KODDA kapandi ama hicbir test onu
+        # sinamiyordu; retrofit sayimi (#21) borcu yakaladi. Fikstur ham
+        # soket kullanir (#22: yorumlayan arac ihlali gizler — curl P48'de
+        # tam bunu yapti) ve kendi kirmiziya-donebilirligini tasiyan bir
+        # ihlal rotasi (/raw) icerir.
+        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/stream_contract_smoke.py; then
+            echo -e "${RED}S4 akis sozlesmesi basarisiz!${NC}"
+            exit 1
+        fi
+        # S3 — ARENA SOZLESMESI (restore birakmaz / drop birakir).
+        # Ayni #21 borcu: `arena_restore` uc suitte geciyordu ama hepsi
+        # sozlesmenin "hayatta kalir" yarisini sinaniyordu; "serbest
+        # birakmaz" yarisi hic sinanmamisti.
+        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/arena_contract_smoke.py; then
+            echo -e "${RED}S3 arena sozlesmesi basarisiz!${NC}"
+            exit 1
+        fi
+        # YIGIN SIZINTISI (R11). Dongu govdesine dusen bir `alloca`
+        # yinelemede yigin harciyor ve program YETERINCE UZUN dondugunde
+        # SIGSEGV veriyor — derleme sessiz, suitler yesil. `AST_ARRAY_LITERAL`
+        # tam bunu yapiyordu ve 175 000 yinelemede oluyordu. Sekil basina
+        # cikti-mutabakati var: dongu elenirse sekil "olctum" diyemez.
+        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/stack_growth_smoke.py; then
+            echo -e "${RED}Yigin sizintisi taramasi basarisiz!${NC}"
+            exit 1
+        fi
     fi
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:

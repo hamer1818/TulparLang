@@ -1,0 +1,107 @@
+// S1 — TRUTHINESS TABLOSU: yalniz SAYISAL SIFIR yanlis.
+//
+// Karar (P38): tabloyu DEGISTIRME, YAZ. Bu dosya yazilanin ikinci yarisi —
+// #21 geregi sozlesme, onu sinayan fikstur dogmadan kapanmaz. Tablo
+// FINDINGS'te duruyordu ama hicbir test onu sinamiyordu; yani "bos dizgi
+// dogrudur" cumlesi silinse ya da davranis degisse kimse fark etmezdi.
+//
+// KIRMIZIYA DONEBILIRLIK (#10): tablo hem TRUE hem FALSE bekleyen satirlar
+// tasiyor. "her sey dogru" hatasi sayisal-sifir satirlarinda, "her sey
+// yanlis" hatasi geri kalaninda kirmizi verir. Tek yonlu bir tablo bu iki
+// hatadan birini goremezdi.
+//
+// ⚠ Son satir (`json[eksik anahtar]` -> FALSE) SUS PAYI DEGIL, YUK TASIYOR:
+// lib/wings'teki `if (hdrs)` / `if (q)` / `if (_schema)` desenleri eksik
+// anahtarin 0 (falsy) donmesine yaslaniyor (P38a: 39 siteden bir kismi).
+// `json[k]` bir gun firlatir yapilirsa bu satir kirmizi doner — ve donmesi
+// GEREKIR: o degisiklik sessiz degil, sozlesme degisikligidir.
+import "test";
+
+// Tabloyu iki YOLDAN sinariz: (a) kutulu parametreye gecirerek, (b) yerelde
+// dogrudan `if`. Ikisi ayrisirsa kutulama truthiness'i degistiriyor demektir
+// — bu dosyanin kendi ic capraz kontrolu (kural: ayni varsayim her katmanda
+// varsa cikti tutarli gorunur; FARKI olc).
+func dogru_mu(v) {
+    if (v) { return 1; }
+    return 0;
+}
+
+// ---- YANLIS olan tek sinif: sayisal sifir --------------------------------
+func run_sayisal_sifir_yanlis() {
+    int s = 0;
+    float f = 0.0;
+    assert_eq_int(dogru_mu(s), 0);
+    assert_eq_int(dogru_mu(f), 0);
+    // dogrudan yol
+    int a = 1;
+    if (s) { a = 99; }
+    if (f) { a = 98; }
+    assert_eq_int(a, 1);
+}
+
+// ---- Sifir olmayan sayilar dogru -----------------------------------------
+func run_sayilar_dogru() {
+    int y = 7;
+    int n = -1;
+    float f = 1.5;
+    assert_eq_int(dogru_mu(y), 1);
+    assert_eq_int(dogru_mu(n), 1);
+    assert_eq_int(dogru_mu(f), 1);
+}
+
+// ---- Bos dizgi DOGRU (Python/JS sezgisinin tersi) ------------------------
+func run_bos_dizgi_dogru() {
+    str bos = "";
+    str sifir_metni = "0";
+    str a = "a";
+    assert_eq_int(dogru_mu(bos), 1);
+    assert_eq_int(dogru_mu(sifir_metni), 1);
+    assert_eq_int(dogru_mu(a), 1);
+    int k = 0;
+    if (bos) { k = 1; }
+    assert_eq_int(k, 1);
+}
+
+// ---- Bos dizi DOGRU -------------------------------------------------------
+func run_bos_dizi_dogru() {
+    array bos = [];
+    array dolu = [1];
+    assert_eq_int(dogru_mu(bos), 1);
+    assert_eq_int(dogru_mu(dolu), 1);
+    int k = 0;
+    if (bos) { k = 1; }
+    assert_eq_int(k, 1);
+}
+
+// ---- Bos json nesnesi DOGRU (olculdu 2026-09-11; tabloda yoktu) ----------
+func run_bos_json_dogru() {
+    json bos = {};
+    json dolu = {"k": 1};
+    assert_eq_int(dogru_mu(bos), 1);
+    assert_eq_int(dogru_mu(dolu), 1);
+    int k = 0;
+    if (bos) { k = 1; }
+    assert_eq_int(k, 1);
+}
+
+// ---- Eksik anahtar YANLIS — cunku 0 donuyor ------------------------------
+// Sozlesmenin yuk tasiyan satiri: bos JSON DOGRU ama EKSIK ANAHTAR YANLIS.
+// Ikisi ayni sey degil ve lib/wings bu farka yaslaniyor.
+func run_eksik_anahtar_yanlis() {
+    json j = {"k": 1};
+    json yok = j["OLMAYAN"];
+    assert_eq_int(dogru_mu(yok), 0);
+    assert_eq_int(dogru_mu(j["k"]), 1);
+    int a = 1;
+    if (yok) { a = 99; }
+    assert_eq_int(a, 1);
+}
+
+print("=== S1: truthiness tablosu ===");
+test("sayisal sifir YANLIS (int + float)", "run_sayisal_sifir_yanlis");
+test("sifir olmayan sayilar dogru",        "run_sayilar_dogru");
+test("bos dizgi DOGRU",                    "run_bos_dizgi_dogru");
+test("bos dizi DOGRU",                     "run_bos_dizi_dogru");
+test("bos json nesnesi DOGRU",             "run_bos_json_dogru");
+test("eksik anahtar YANLIS (0 donuyor)",   "run_eksik_anahtar_yanlis");
+test_summary();

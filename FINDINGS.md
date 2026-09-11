@@ -51,6 +51,7 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | T3 | Paylaşılan dizinin eşzamanlı okunması bozuluyor | **GERİ ÇEKİLDİ** — test `push` dönüşünü atıyordu, dizi tek thread'de bile boştu | [Tuzaklar 7a](docs/mindmap/Tuzaklar.md) |
 | T4 | `arr_debox` okuma yolundan yazıyor | **açık (incelemeyle)** — sertleştirildi, ama tetikleyen test yok | Concurrency |
 | T7 | json okuma yolu da yazma içeriyor (P15) | **çürütüldü (incelemeyle)** — `vm_get_element`→`vm_object_get` saf doğrusal tarama; `ObjObject`'te tembel/önbellek alanı yok. Dizilerdeki `arr_items`→`arr_debox` yazmasının karşılığı json'da **yok** | P15 |
+| R11 | Dizi literali döngüde güvenli | **çürütüldü, DÜZELTİLDİ** — döngü gövdesine düşen `alloca` yinelemede yığın harcıyordu; `[1,2,3]` 175 000 yinelemede **SIGSEGV**. Aşağıda | S3 fikstürü |
 | R10 | Tanı sızıntısı kalmadı | **çürütüldü, DÜZELTİLDİ** — `vm_get_element`/`vm_set_element`'in "gecersiz hedef" tanıları stdout'a yazıyordu; ilk #19 koruması **satır-bazlı olduğu için göremedi** | P15 turu |
 | Y1 | Dil statik tipli | **daraltılmalı** — `var` çapraz-tip yeniden atamaya izin veriyor | `tests/typeinfer/` |
 | Y2 | `void` dönüşün atanması denetleniyor | **çürütüldü, DÜZELTİLDİ** — `e = push(e,3)` geçiyordu; artık hata | `tests/typeinfer/fail/11_void_assignment.tpr` |
@@ -74,6 +75,73 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | C9 | Suite'ler çalışma zamanı hatasını yakalıyor | **doğrulandı (enjeksiyonla)** — tek dosya çıkış 1, suite çıkış 1, paket sayısı 75'te kalıyor | P26 |
 | R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ (strict'te)** — strict modda hata `aot_throw` ile fırlıyor: `catch` yakalıyor, yakalanmazsa stderr + exit 1 | P26b |
 | R4 | LSP tablosu ile tip katalogu tutarlı | **çürütüldü, DÜZELTİLDİ** — 20 native builtin katalogda yoktu (tip+arite denetimsiz); `sb_append` imzası LSP'de yanlıştı | P27 |
+
+## 🔴 R11 — DİZİ LİTERALİ DÖNGÜDE YIĞIN SIZDIRIYOR (2026-09-11)
+
+**Nasıl bulundu:** S3 fikstürünü yazarken. Fikstür üç kolu (drop / restore /
+yönetim yok) N=200 000'de koşuyordu ve RSS tablosu **ikna edici** çıktı:
+
+| kol | zirve RSS | "sonuç" |
+|---|---:|---|
+| drop | 11 MB | sözleşme tutuyor, düz |
+| restore | 161 MB | restore bırakmıyor |
+| none | 143 MB | yönetimsiz büyüyor |
+| | | **oran 15×** |
+
+Tablo yayına hazır görünüyordu. Sonra çıktı denetimi düştü: `cikti=''`. Üç
+kolun **üçü de `exit=139`** — SIGSEGV. Yani 15× oranı, **üç farklı çöküş
+noktasının** oranıydı. RSS ölçen ama çıkış kodunu ve çıktıyı denetlemeyen bir
+düzenek, ölçmediği bir programı ölçüyordu.
+
+**Kök neden.** [llvm_backend.cpp:4770](src/aot/llvm_backend.cpp#L4770),
+`AST_ARRAY_LITERAL`:
+
+```c
+LLVMValueRef val_ptr = LLVMBuildAlloca(          // builder'in O ANKI blogu
+    backend->builder, backend->vm_value_type, "arr_lit_val_ptr");
+```
+
+`alloca` ancak fonksiyon dönünce çözülür. Literal bir döngü içindeyse alloca
+**döngü gövdesi bloğuna** düşer ve her yineleme eleman sayısı × 16 bayt yığın
+harcar. Aritmetik birebir oturuyor (8 MB yığın):
+
+| literal | bayt/yineleme | öngörülen çöküş | ölçülen |
+|---|---:|---:|---|
+| `[1]` | 16 | 524 288 | 200k sağlam |
+| `[1,2]` | 32 | 262 144 | 200k sağlam, 400k çöktü |
+| `[1,2,3]` | 48 | **174 762** | 170k sağlam, **175k çöktü** |
+| `[1..8]` | 128 | 65 536 | 200k çöktü |
+
+**Kardeş yol doğru yapıyordu.** `AST_OBJECT_LITERAL` zaten
+`llvm_build_alloca_at_entry` kullanıyor — bu yüzden `{"a":1}` 400k yinelemede
+sağlamdı. Hata **tek siteydi** ve doğru desen zaten depodaydı. Düzeltme: o
+yardımcıyı çağırmak. Slot yinelemeler arasında paylaşılabilir — değer yazılıp
+hemen `push`'a veriliyor, yinelemeler arası yaşamıyor.
+
+**Neden bu sınıf gözden kaçıyor — üç ayrı yanlış yön:**
+1. Çökme `realloc`'un **içinde** görünüyor (gdb: `vm_array_push_aot_wrapper`
+   → libc). Okunuşu "heap bozulması".
+2. RSS yanıltıyor: `drop` kolu **11 MB** ile çöküyordu, yani "bellek sorunu
+   yok" diyordu. Meğer o 11 MB'ın 8'i **dolan yığının kendisiydi**.
+3. `ulimit -v` sınırsız, 24 GB boş — tükenme hipotezi de eleniyordu.
+
+Doğru cevabı **ASAN** verdi, tek satırda: `stack-overflow`. Projenin kendi
+kuralı buydu (*runtime belleğine dokunduysan sanitizer*); buraya da yazılıyor:
+**ayırıcının içinde patlayan bir çökme, ayırıcının suçlu olduğunu göstermez.**
+`TULPAR_RUNTIME_DIR` + `TULPAR_AOT_LINK_FLAGS` ikilisi rastgele bir Tulpar
+programını ASAN altında koşturmaya yetiyor — bu yol artık biliniyor.
+
+**Kilit:** `tests/stack_growth_smoke.py` — 13 codegen şekli × 2 000 000
+yineleme. Her şekil bir toplam üretip **basıyor** ve harness beklenen değerle
+karşılaştırıyor; ilk yazılışında gövdeler sonucu kullanmıyordu ve LLVM ölü
+kodu atınca şekil "TEMİZ" diyordu, hiçbir şey ölçmeden. Kontrol şekli
+(2 000 000 seviye özyineleme) **kırmızı vermek zorunda** — düzenek yığın
+tükenmesini görmüyorsa diğerlerinin yeşili anlamsız.
+
+**Etki alanı dar ama gerçek:** döngü içinde dizi literali kuran her uzun ömürlü
+program. Wings handler'ları istek başına arena döndürdüğü için sunucu yolu
+etkilenmiyordu; etkilenen, tek bir fonksiyonda yüz binlerce yineleme dönen
+hesap kodu.
 
 ## 🔴 L1 — `&&` ve `||` KISA DEVRE YAPMIYOR
 
@@ -124,10 +192,10 @@ yalnız `&&`/`||`'de idi.
 
 | # | Sözleşme | Durum |
 |---|---|---|
-| S1 | **Truthiness tablosu** — yalnız SAYISAL SIFIR yanlış | **ölçüldü, belgesiz** |
+| S1 | **Truthiness tablosu** — yalnız SAYISAL SIFIR yanlış | **KİLİTLENDİ** — `tests/truthiness.test.tpr` (6 test, iki yönlü tablo) |
 | S2 | `mutex_*` ile paylaşım | **ölçüldü, belgesiz** ([[Concurrency]]) |
-| S3 | `arena_drop` gerekliliği (`arena_restore` serbest bırakmaz) | **ölçüldü, belgesiz** ([[Memory]]) |
-| S4 | SSE/WS akışında handler ortası throw | **kod kapandı, cümle kapanmadı** — üç fazlı sözleşme (P44/P46) yazıldı ve düzeltildi, ama **fikstürü yok** (#21 borcu, aşağıdaki retrofit sayımı) |
+| S3 | `arena_drop` gerekliliği (`arena_restore` serbest bırakmaz) | **KİLİTLENDİ** — `tests/arena_contract_smoke.py` (üç kol, zıt yönlü iki iddia) ([[Memory]]) |
+| S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ, KAPANDI ve KİLİTLENDİ** — `tests/stream_contract_smoke.py` (16 kontrol; kancalar sökülünce kırmızı verdiği **ölçüldü**) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
 | S7 | Thread sözleşmesi: **kopyayla girer, join'le çıkar** | **yazıldı** — argüman derin kopya, join sonucu taşır; paylaşmak isteyen `mutex_*` kullanır |
 | S9 | Uzun ömürlü süreçte **değer-başı geri kazanım yok** (join-dönüş dahil) | **ölçüldü** — join-dönüş değerleri sürecin ömrü boyunca yaşar; binlerce join içeren süreçte RSS ~N×değer-boyu artar (P43). M2'nin çözülmesi bu sınıfın **tamamını** kapatır; yamayı her ekleme noktasına serpmek değil, kök düzeltme tek yerde |
@@ -198,27 +266,35 @@ doğrulanıyor (yukarıdaki tablo). Diğer iki cümlenin fikstürü var.
 
 | Sözleşme | Fikstür | Otomasyonda |
 |---|---|---|
-| S1 truthiness | ❌ **yok** — korpusta tek eşleşme bir *yorum* satırı | — |
+| S1 truthiness | ✅ `truthiness.test.tpr` — tablo hem TRUE hem FALSE satırı taşıyor | ✅ suites |
 | S2 `mutex_*` | ✅ `thread_copy.test.tpr` (P30 sayaç) + `shared_json_read.test.tpr` | ✅ suites |
-| S3 `arena_drop` | ❌ **yok** — `arena_restore` üç testte *geçiyor* ama hepsi "kalıcı değer hayatta kalır" yönünü sınıyor; *"restore serbest bırakmaz"* cümlesini hiçbiri sınamıyor. `arena_drop` hiçbir fikstürde geçmiyor | — |
-| S4 üç fazlı akış | ❌ **yok** — `9f81587` ve `eda9ae1` ikisi de tek satır test eklemedi (stat ile doğrulandı); ölçüm tek kullanımlık düzeneklerdeydi | — |
+| S3 `arena_drop` | ✅ `arena_contract_smoke.py` — üç kol (drop / restore / yönetim yok), zıt yönlü iki iddia | ✅ suites |
+| S4 üç fazlı akış | ✅ `stream_contract_smoke.py` — 16 kontrol + kasıtlı ihlal rotası | ✅ suites |
 | S5 `at`/`json_get` | ✅ `accessors.test.tpr` (8 test) | ✅ suites |
 | S6 paylaşılan okuma | ✅ `shared_json_read.test.tpr` | ✅ suites |
 | S7 thread sözleşmesi | ✅ `thread_copy.test.tpr` — 3 cümlenin 2'si; 3.'sü (*detach atar*) ölçüm istisnası | ✅ suites |
 | S8 handle sözleşmesi | ✅ `thread_copy.test.tpr` (çift-join, detach sonrası join) | ✅ suites |
 | S9 geri kazanım yok | ⚖ **ölçüm** (P43 RSS tablosu) — gözlemlenemeyen bellek özelliği, #21 istisnası | — |
 
-**Sayım: 9 sözleşmenin 5'i fikstürlü, 1'i meşru ölçüm istisnası, 3'ü borçlu**
-(S1, S3, S4). En ağır borç **S4**: defterde "KAPANDI" yazıyordu, oysa #21'e
-göre kapanmamıştı — *kod* düzeldi, *cümle* sınanmadı. Kuralın kendisi bunu
-yakaladı; satır yukarıda düzeltildi.
+**Sayım (2026-09-11 borç ödemesinden sonra): 9 sözleşmenin 8'i fikstürlü,
+1'i meşru ölçüm istisnası (S9), borç YOK.** Üç borcun üçü de aynı turda
+kapandı; üçü de otomasyona bağlandı.
 
-⚠ İkinci bulgu: `tests/ws_masked_client_smoke.py` ve `tests/wings_tls_smoke.py`
-**hiçbir otomasyonda koşmuyor** — `build.sh` yalnız `builtin_audit`,
-`wedge_mesh_check`, `dist_archive_audit`, `ast_child_fields_audit`,
-`silent_failure_probe` ve `lsp_audit`'i çağırıyor. Yani S4'e en yakın duran iki
-harness bile kırmızıya dönemez (kural #10: hiç kırmızı görülmemiş düzenek
-yeşil değil, **bilinmiyor**).
+Borç ödemesi bir şey daha öğretti: **S4'ün fikstürünü yazmak kolaydı, ona
+GÜVENMEK zordu.** Yeşil koşu kanıt değil (#10), bu yüzden iki kancayı
+(`wings_sse_headers` ve `wings_ws_upgrade`'deki `_wings_stream_started = 1`)
+gerçekten **söküp yeniden derledim**. Fikstür tam beklenen dört kontrolde
+kırmızı verdi ve WS kuyruğunda P46'nın kaydettiği bozulmayı birebir geri
+getirdi: `\x81\x03ilk` ardına ham `HTTP/1.1 500 Internal Server Error ...`
+enjekte edilmiş. Yani fikstür davranışı gerçekten **kilitliyor**, sadece
+bugünkü hâlini fotoğraflamıyor.
+
+⚠ İkinci bulgu KAPANDI: `tests/ws_masked_client_smoke.py` ve
+`tests/wings_tls_smoke.py` hiçbir otomasyonda koşmuyordu. Yeni üç harness
+(`stream_contract_smoke`, `arena_contract_smoke`, `stack_growth_smoke`)
+`build.sh suites`e bağlandı — çünkü **yalnız elle koşulan bir test yoktur**
+(#19'un yapısal hâli). Eski iki harness hâlâ otomasyon dışı; S4 artık kendi
+fikstürüyle korunduğu için bu bir borç değil, bir temizlik kalemi.
 
 **S1'in ampirik yarısı (P38a):** korpusta `if(<ad>)` deseninde **165 site**,
 bunların **39'u** bool bildirimi olmayan değerler — yani truthiness'e yaslanıyor.
@@ -235,6 +311,16 @@ dönmesine yaslanıyor.
 
 Yani `json[k]` strict'te fırlatır yapılırsa pratik göç yükü **tek site**.
 
+**⚠ S1'in fikstürü bir gerilim ortaya çıkardı (2026-09-11):** `truthiness.test.tpr`
+6/6 yeşil koşuyor ama `[typecheck]` üç satırda uyarı basıyor —
+*"Condition must be boolean or integer"* — tam da S1'in **tanımlı** dediği
+üç şekilde (`if(float)`, `if(str)`, `if(array)`). Yani **çalışma zamanı
+tablosu bunları tanımlı sayıyor, tip denetleyicisi şüpheli sayıyor.** Çelişki
+değil (biri uyarı, öbürü davranış) ama iki hakikat kaynağı (#8): tabloyu
+"belgelenmiş sözleşme" diye satan bir dil, aynı ifadeye uyarı basmamalı — ya
+uyarı S1'in dışladığı şekillere daralmalı, ya tablo "uyarılır ama tanımlı"
+demeli. Karar verilmedi; kuyruğa yazıldı.
+
 **S1 — truthiness (P38, 2026-09-10):**
 
 | değer | `if()` sonucu |
@@ -243,6 +329,8 @@ Yani `json[k]` strict'te fırlatır yapılırsa pratik göç yükü **tek site**
 | `int 7` · `"a"` · `[1]` | true |
 | `""` boş dizgi | **true** |
 | `[]` boş dizi | **true** |
+| `{}` boş json nesnesi | **true** *(ölçüldü 2026-09-11; tabloda yoktu)* |
+| `j["OLMAYAN"]` eksik anahtar | **false** — çünkü `0` dönüyor *(yük taşıyan satır: `lib/wings`'teki `if (hdrs)` buna yaslanıyor)* |
 | `{}` boş json | **true** |
 
 Yani **yalnız sayısal sıfır yanlıştır**; boşluk/uzunluk doğruluğu etkilemez.
@@ -352,6 +440,13 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+23 (aday). **Bir bellek/başarım ölçümü, ölçtüğü programın SAĞ ÇIKTIĞINI
+   denetlemeden rapor edilemez.** S3'ün ilk tablosu (drop 11 MB · restore
+   161 MB · none 143 MB · **oran 15×**) yayına hazır görünüyordu; üç kolun
+   üçü de SIGSEGV veriyordu ve oran **üç farklı çöküş noktasının** oranıydı.
+   Çıkış kodu + çıktı mutabakatı iki satırlık iş ve bu sınıfı tek başına
+   kapatıyor. Genel hâli: *bir ölçümün birimi, ölçülen işin TAMAMLANDIĞI
+   varsayımını taşır; o varsayım ölçülmeden birim anlamsızdır.*
 22. **Tanı aracı da tanının parçası.** P48'de `curl` tek yanıt gördü, ham
    soket **iki** yanıt gördü — aynı bayt akışı, iki farklı sonuç. Araç
    protokolü *sizin adınıza yorumladığı* için kanıtı siliyordu:
@@ -431,6 +526,11 @@ kendi kapatılmasına yol açardı (#10'un tersi: hiç kırmızıya dönmeyen de
 için değil; **eksik hâli zararlı olduğu için**.
 
 ## Açık kuyruk
+
+**Yeni (2026-09-11):** S1 tablosu ↔ `[typecheck]` uyarısı gerilimi (yukarıda) ·
+`ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ otomasyon dışı ·
+R11'in sınıf taraması 13 şekille sınırlı (async/closure/match şekilleri
+taranmadı).
 
 `srv_json` soak · `thread_join` dönüş değeri · `thread_create` derin kopya
 (5 koşulla onaylı) · global lint · donmuş 9 dilli CSV + checksum kolonu ·

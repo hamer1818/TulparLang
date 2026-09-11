@@ -4767,8 +4767,23 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         // bytes as a VMValue. Mirrors the push() escape path.
         LLVMValueRef val = codegen_struct_expr_as_object(backend, el);
         if (!val) val = codegen_expression(backend, el);
-        LLVMValueRef val_ptr = LLVMBuildAlloca(
-            backend->builder, backend->vm_value_type, "arr_lit_val_ptr");
+        // ⚠ GIRIS BLOGUNDA alloca — DONGU GOVDESINDE DEGIL.
+        //
+        // Burasi `LLVMBuildAlloca` ile yaziliydi, yani alloca BUILDER'IN O
+        // ANKI BLOGUNA dusuyordu. Bir dizi literali dongu icindeyse her
+        // YINELEME 16 bayt yigin harciyor ve hicbiri geri gelmiyor (alloca
+        // ancak fonksiyon donunce cozulur). Olculdu (2026-09-11):
+        //   `while (i < N) { array j = [1,2,3]; }`  ->  N=175 000'de SIGSEGV
+        // 8 MB yigin / (3 eleman x 16 bayt) = 174 762 — birebir. Eleman
+        // sayisiyla da oluyordu: [1,2] 262 144'te, [1..8] 65 536'da.
+        // Cokme `realloc` icinde gorundugu icin YIGIN degil YIGIN(heap)
+        // bozulmasi saniliyordu; ASAN "stack-overflow" dedi.
+        //
+        // Kardes yol (AST_OBJECT_LITERAL) bunu zaten dogru yapiyordu — hata
+        // tek siteydi. Slot yinelemeler arasinda PAYLASILABILIR: deger
+        // yazilir ve hemen push'a verilir, yinelemeler arasi yasamaz.
+        LLVMValueRef val_ptr = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, "arr_lit_val_ptr");
         LLVMBuildStore(backend->builder, val, val_ptr);
         LLVMValueRef val_void = LLVMBuildBitCast(
             backend->builder, val_ptr, backend->ptr_type, "arr_lit_val_void");
@@ -10487,6 +10502,22 @@ static LLVMValueRef native_loop_int_value(LLVMBackend *backend, TypedValue v,
 // zinciri (asagida) klonlari ayni ABI ile uretiyor. Ikisi ayrisirsa native
 // imzaya VMValue govdesi (ya da tersi) yazilir ve modul dogrulamasi patlar.
 // Kopyalanmis kosul tam bu yuzden burada birlestirildi.
+//
+// ⚠ `: int` DONUS SARTINI KALDIRMAK ISTEYEN OKU (2026-09-11, P50).
+//
+// Asagidaki `node->return_type != TYPE_INT` satiri yalniz bir performans
+// secimi degil — `thread_create`'in ABI'siyle SESSIZCE bagli. Sart geregi
+// native yola cikan her fonksiyon i64 DONER; `tw_<ad>` sarmalayicisi
+// (llvm_backend.cpp, thread_create gonderimi) bunu varsayar ve donusu
+// KOSULSUZ `llvm_vm_val_int_val` ile kutular. Sart gevsetilip VOID donen
+// bir fonksiyon native yola cikarsa, o sarmalayici void bir degeri
+// kutulamaya calisir.
+//
+// Bugun o dal ERISILEMEZ: void donen her fonksiyon kutulu `t_<ad>` ABI'sinde
+// kaliyor, yani thread_create sarmalayiciya hic dusmuyor. Yarin biri bu
+// sarti gevsettiginde dusecek — ve hata "thread_create bozuk" diye
+// raporlanacak, kimse donus tipini dusunmeyecek. Gevsetiyorsan once
+// `tw_` sarmalayicisina void dali ekle.
 static bool native_abi_eligible(LLVMBackend *backend, ASTNode_C *node) {
   if (!node || node->type != AST_FUNCTION_DECL || !node->name) return false;
   // async fonksiyonlar ZORUNLU olarak kutulu `t_<ad>` ABI'sini kullanir:

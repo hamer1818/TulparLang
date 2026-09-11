@@ -1,0 +1,19 @@
+// S3 — KONTROL KOLU: hic arena yonetimi YOK.
+// Beklenti: RSS tirmanir. restore bu koldan IYI DEGILSE, restore hicbir sey yapmiyor demektir.
+// N ve govde uc kolda AYNI; tek fark kapanis cagrisi (kural: farki olc).
+// ⚠ N=100000 KEYFI DEGIL: 175 000 civarinda uc kol da SIGSEGV veriyor
+// (R11 — dizi literali dongusu; `drop` kolu 11 MB RSS ile cokuyor, yani
+// bellek tukenmesi DEGIL). Fikstur sozlesmeyi olcmeli, cokusu degil; bu
+// yuzden esigin altinda kaliyor. Asagidaki cikis-kodu + cikti-mutabakati
+// kontrolleri o cokusu ZATEN yakaladi ve burada nobette kaliyor.
+int i = 0;
+int n = 0;
+while (i < 100000) {
+
+    str s = "deger-" + toString(i);
+    json j = {"a": s, "b": [1, 2, 3]};
+    n = n + length(s);
+
+    i = i + 1;
+}
+print(toString(n));
