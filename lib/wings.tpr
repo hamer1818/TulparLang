@@ -88,6 +88,19 @@ int _wings_color = 1;
 // before dispatch). _wings_dispatch_cached writes this at every return.
 int _wings_last_status = 200;
 
+// AKIS BASLADI MI? (S4 / P44, 2026-09-10)
+//
+// SSE/WS handler'lari sokete DOGRUDAN yaziyor (`socket_send(fd, ...)`) ve
+// wings bunu goremiyor. Strict varsayilandan sonra akis ORTASINDA bir hata
+// firlarsa dispatch sarmali 500 zarfini SENTEZLIYOR ve serve dongusu onu ayni
+// sokete YAZIYOR — olculdu (P44): istemci 200 SSE akisi aliyor ve govdesinde
+// "HTTP/1.1 500 Internal Server Error ..." gomulu geliyor. Protokol bozulmasi.
+//
+// `wings_sse_headers()` akisin BASLADIGI tek noktadir; orasi bu bayragi
+// kaldiriyor, dispatch her istekte sifirliyor. Bayrak kalkmissa catch yolu
+// zarf YAZMAZ — yalniz loglar ve baglantiyi kapatir.
+int _wings_stream_started = 0;
+
 // Pulls config overrides from the environment. Today honours
 // `TULPAR_HTTP_MAX_BODY` (bytes) and `TULPAR_HTTP_QUIET` (any
 // non-empty value silences the per-request access log). Future
@@ -1501,7 +1514,62 @@ func _wings_status_or(json result, int fallback) {
 // on cache hits assumes 2xx — only success responses get cached
 // (404 / 5xx bodies aren't worth pinning and would mask transient
 // upstream failures).
+// ISTEK-BASINA HATA SINIRI (P39, 2026-09-10).
+//
+// NEDEN VAR: strict calisma zamaninda (TULPAR_STRICT_RUNTIME=1) bir hata artik
+// ISTISNA (bkz. FINDINGS R3/P26b). Handler icinde sinir disi bir okuma
+// yakalanmazsa `aot_throw` yigini cozup surece exit(1) verir — yani TEK BOZUK
+// ISTEK SUNUCUYU INDIRIR. Olculdu (P39): `/oku?i=999` sonrasi surec oldu ve
+// sonraki istekler baglanti hatasi aldi.
+//
+// Yumusak cagda bu gorunmuyordu cunku hata sessizce 0 ikame edip devam
+// ediyordu — yani sunucu dayanikliligi SESSIZ IKAMEYLE satin alinmisti. Burasi
+// onu gorunur karsiligiyla yeniden satin aliyor: 500 + sayac + canli surec.
+// Her framework'un dispatch sarmali bunu yapar (Go net/http recover, vb).
+//
+// TEK NOKTA YETIYOR: wings'in kendi notuna gore burasi "the single dispatch
+// entry point" — listen, listen_pool, listen_async ve listen_evented'in
+// dordu de buradan geciyor (dogrulandi). Sarmalin .tpr katmaninda olmasi
+// SART: longjmp ayni yigin uzerinde calisiyor, C katmaninda cozulemez.
+//
+// Yumusak varsayilanda hicbir sey degismez: hata firlatilmadigi icin `catch`
+// hic tetiklenmez.
 func _wings_dispatch_cached(int route_idx, int keep) {
+    _wings_stream_started = 0;          // her istekte sifirlanir
+    try {
+        return _wings_dispatch_inner(route_idx, keep);
+    } catch (e) {
+        // `_wings_last_status` SOZLESME GEREGI her donuste yazilmali (bkz.
+        // tanimindaki not): serve dongusu logu handler kostuktan SONRA basiyor
+        // ve durumu buradan okuyor. Catch yolu onu atlarsa istek 500 donerken
+        // 200 loglanir.
+        _wings_last_status = 500;
+        _wings_requests_total = _wings_requests_total + 1;
+        _wings_requests_5xx = _wings_requests_5xx + 1;
+        // YANIT DA TEK KAPIDAN CIKAR. Bu fonksiyon bir DICT degil, TEL
+        // DIZGISI donduruyor (`_wings_build_response`in urettigi). Catch'ten
+        // ham dict dondurmek sessiz bir bosluga dusuyordu: cagiran dizgi
+        // bekliyor, bos dizgi ise `{"_stream":1}` nobetcisiyle AYNI sey
+        // demek ("handler zaten yazdi, socket_send yapma") — yani baglanti
+        // ne yaziliyor ne kapaniyor, istemci zaman asimina ugruyordu
+        // (olculdu: curl "0 bytes received", 5 sn). Bos dizginin iki isi
+        // birden tasimasi #0'in ta kendisi.
+        //
+        // Cozum: hatayi normal handler'in uretecegiyle AYNI sekle sentezleyip
+        // mevcut zarf yolundan gecirmek — downstream'de sifir ozel durum.
+        // UC FAZLI SOZLESME (S4, P44 ile olculdu):
+        //   akis baslamadan -> 500 + log (zarf sentezlenir)
+        //   akis ortasinda  -> yalniz log + baglanti kapanir; zarf YAZILMAZ,
+        //                      cunku header'lar gitti ve yazmak akisi bozuyor
+        //   her iki fazda   -> surec yasar
+        if (_wings_stream_started == 1) {
+            return "";                  // bos dizgi = "yazma, kapat"
+        }
+        return _wings_build_response(server_error("handler error: " + toString(e)), keep);
+    }
+}
+
+func _wings_dispatch_inner(int route_idx, int keep) {
     // Global middleware chain — runs before cache check + handler, for every
     // serve mode (this is the single dispatch entry point). A middleware that
     // returns a response dict (`_status` set) short-circuits; `{}` continues.
@@ -1941,6 +2009,7 @@ func wings_metrics_prom() {
 // wings can't both stream and build a single response, so SSE handlers
 // `socket_close()` the fd themselves when the stream ends.
 func wings_sse_headers() {
+    _wings_stream_started = 1;          // S4: akis basladi (bkz. bayragin notu; WS karsiligi wings_ws_upgrade)
     str s = "HTTP/1.1 200 OK\r\n";
     s = s + "Content-Type: text/event-stream\r\n";
     s = s + "Cache-Control: no-cache\r\n";
@@ -2012,6 +2081,15 @@ func wings_ws_upgrade(json req) {
     if (length(key) == 0) {
         return "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
     }
+    // S4 / P46: akis BURADA basliyor — 101 gonderildikten sonra soket artik
+    // WebSocket cerceve akisidir ve zarf yazmak protokolu bozar. Olculdu
+    // (fix oncesi): 101 + \x81"ilk" cercevesinin ARDINA ham "HTTP/1.1 500
+    // Internal Server Error ..." enjekte ediliyordu; hicbir WS istemcisi
+    // bunu cozemez.
+    //
+    // Bayrak YALNIZ basari yolunda kalkiyor: yukaridaki 400 dalinda akis hic
+    // baslamadigi icin normal 500 sentezi gecerli kalmali.
+    _wings_stream_started = 1;
     str accept_key = wings_ws_accept_key(key);
     str s = "HTTP/1.1 101 Switching Protocols\r\n";
     s = s + "Upgrade: websocket\r\n";
@@ -2065,8 +2143,7 @@ func log_error(str msg) {
 // thread (it's an inline call back into the same interpreter), so the
 // VM serves connections sequentially anyway. The lock-free design is
 // safe there too — there are simply no concurrent writers to race on.
-func _wings_serve_connection(json client_arg) {
-    int client = client_arg;
+func _wings_serve_connection(int client) {
     int wm = arena_save();
 
     while (true) {
@@ -2386,13 +2463,7 @@ func listen_evented(int port) {
 // At 1k req/s, listen_async creates 1000 threads/sec; listen_pool
 // reuses N. Empirically 4-16 workers saturate a single CPU core's
 // worth of HTTP work; tune to physical cores for CPU-bound handlers.
-//
-// The socket fd is boxed into a `json` parameter because
-// `thread_create` passes its argument through the canonical VMValue
-// ABI rather than a native i64 register; the worker unboxes on entry.
-// This is the same pattern `listen_async` uses for per-conn fds.
-func _wings_pool_worker(json server_box) {
-    int server = server_box;
+func _wings_pool_worker(int server) {
     while (true) {
         int client = socket_accept(server);
         if (client < 0) {
@@ -2400,8 +2471,7 @@ func _wings_pool_worker(json server_box) {
         }
         // Reuse the existing per-connection serve function — keep-alive
         // loop, arena reset, request counters, etc. all already there.
-        json c = client;
-        _wings_serve_connection(c);
+        _wings_serve_connection(client);
     }
 }
 
@@ -2447,8 +2517,7 @@ func listen_pool(int port, int n_workers) {
     // listening socket. The first kernel-delivered connection wakes
     // exactly one worker.
     for (int i = 0; i < n_workers; i = i + 1) {
-        json sb = server;
-        int t = thread_create(_wings_pool_worker, sb);
+        int t = thread_create(_wings_pool_worker, server);
         thread_detach(t);
     }
 
@@ -2494,11 +2563,7 @@ func listen_async(int port) {
         if (client < 0) {
             continue;
         }
-        // Box the fd into a json so `thread_create` passes it through
-        // the canonical VMValue ABI rather than a native i64 register.
-        // The worker unboxes on entry.
-        json c = client;
-        int t = thread_create(_wings_serve_connection, c);
+        int t = thread_create(_wings_serve_connection, client);
         thread_detach(t);
     }
 }

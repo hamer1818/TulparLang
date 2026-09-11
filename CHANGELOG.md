@@ -9,6 +9,56 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### ⚠ KIRICI DEĞİŞİKLİKLER
+
+Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
+(*MAJOR for breaking language/stdlib/ABI changes*) bir sonraki sürüm
+**MAJOR** olmalıdır.
+
+- **Çalışma zamanı hataları artık GÖRÜNÜR (strict varsayılan).** Eskiden
+  sınır dışı erişim, sıfıra bölme vb. stdout'a yazıp süreç **0 ile
+  çıkıyordu**; artık tanı stderr'e gidiyor ve yakalanmazsa çıkış kodu ≠ 0.
+  `try/catch` bunları yakalar. Bir sürüm döngüsü için kaçış kapısı:
+  `TULPAR_SOFT_RUNTIME=1`.
+- **Thread sözleşmesi: *kopyayla girer, join'le çıkar*.** `thread_create`'in
+  argümanı artık derin kopyalanıyor; sonuç `thread_join` ile alınır. Handle
+  sözleşmesi: join handle'ı tüketir, ikinci join hatadır, detach edilmiş
+  handle join edilemez.
+- **`thread_create` TAM TİPLİ fonksiyonla çalışıyor.** Eskiden ham sembole
+  düşüp işçiye işaretçiyi tamsayı diye veriyordu (ölçüldü: 42 yerine
+  140166943450080). Artık tek ABI'den geçiyor.
+- **Sembol çözümü bildirim sırasından bağımsız.** Bir global'i bildirim
+  satırından önce kullanan fonksiyon gövdeleri artık **denetleniyor**;
+  önceden sessizce atlanıyorlardı. Daha önce geçen kod tip hatası verebilir.
+- **`if`/`while`/`for` koşul kuralı S1 tablosundan türetiliyor.** `float`
+  koşulu artık uyarı almıyor (yanlış pozitifti); `str`/`array` koşulu
+  *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
+  cümlesi yanlıştı — o şekiller izinli ve tanımlı).
+
+### Doğruluk — üç sessiz hata sınıfı kapandı
+
+- **Yığın sızıntısı (R11).** `AST_ARRAY_LITERAL` ve dört kutulu-ABI builtin
+  makrosu (`MATH1`/`MATH2`/`STR1`/`STR2` — 50 builtin) döngü gövdesine
+  `alloca` koyuyordu; yeterince uzun dönen her program **SIGSEGV** veriyordu
+  (`[1,2,3]` 175 000 yinelemede). Nöbetçi: `tests/stack_growth_smoke.py`.
+- **`&&` / `||` kısa devre yapmıyordu** — her iki taraf da değerlendiriliyordu.
+- **Akış sözleşmesi (SSE/WS).** Akış ortasında throw, yanıt gövdesine ham
+  `HTTP/1.1 500` enjekte ediyordu. Üç fazlı sözleşme yazıldı ve
+  `tests/stream_contract_smoke.py` ile kilitlendi.
+
+### Yeni — paylaşılan global lint'i
+
+`thread_create` işçisinde yazılıp ana akışta senkronizasyonsuz okunan bir
+global artık `[typecheck]` uyarısı alıyor. Dilin bellek modeli olmadığı için
+o yazma okuyana hiç görünmeyebilir; bekleme döngüleri sessizce sonsuza kadar
+döner.
+
+### Performance — ölçümler daraltıldı ve kayan noktaya genişletildi
+
+⚠ Aşağıdaki tablo **2026-09-02 durumudur**. Sonraki atribüsyon koşuları iki
+kazanımı geri çekti ve `fib`in gerekçesini değiştirdi — düzeltmeler tablonun
+hemen altında.
+
 ### Performance — dokuz dilin ÜÇÜNDE BİRİNCİ, ikisinde C ile başa baş
 
 `benchmarks/fair/` düzeneğinde (her dil `BENCH_N`i ortamdan okuyor, aynı
@@ -51,6 +101,22 @@ erişiminden 6 komuta indi.
 **genişletiliyor** (kutulanmıyor) — dilin `int`i 64-bit kalıyor. Genişlik
 dalı erişimde değil **döngü sürümü seçiminde**, yani iki genişlik de sıcak
 yolda dalsız. `sieve` 8,1 → 7,7 · `arrayiter` 1,5 → 1,2.
+
+**⚠ SONRAKİ KOŞULARIN DÜZELTTİĞİ İKİ SATIR.** `strcat` kazanımı bir
+derleyici farkı değil **stdlib asimetrisiydi**: C'ye aynı elle yazılmış
+tamsayı→dizgi yordamı verilince C 1,25× önde bitiriyor. `arrayiter`i de
+C `-march=native` ile geri alıyor. Yani "üçünde birinci" cümlesi **yalnız
+`fib`** için ayakta. Ayrıca `fib` kazanımının gerekçesi ölçüldü: mikro-mimari
+değil **algoritmik** — zincir + CSE büyüme tabanını 1,618'den 1,488'e
+indiriyor, yani oran `n` ile büyüyor (n=34'te 12,3× · n=40'ta 17,3×).
+Zincir derinliği de 4 değil **1**: daha derin zincir daha AZ paylaşım veriyor
+(ölçüldü).
+
+**KAYAN NOKTA (yeni, 2026-09-11).** Üç çekirdek, dokuz dil: `mandelbrot`
+(dizi yok) Tulpar **158,4 ms** / C 158,6 — ayırt edilemiyor. Ama `matmul`
+(kayan nokta dizisi) 824,5 / 31,0 = **26,6×**. Sebep ölçüldü: kutulanmamış
+dizi depolaması yalnız tam sayılar için var (float 16,1 bayt/eleman, C 8,1).
+**Aritmetik C sınıfında; dizi depolaması ölçülmüş açık.**
 
 **Tipsiz yolda iki gereksiz çağrı.** `%` operatörünün kutulu satır içi
 hızlı yolu yoktu (13 ikili operatörden eksik olan tek biri) ve

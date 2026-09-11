@@ -583,7 +583,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     //   func name(...) { ... }              // no return type
     //   func name(...) int { ... }          // bare type
     //   func name(...): int { ... }         // colon-prefixed (idiomatic)
-    DataType return_type = TYPE_VOID;
+    DataType return_type = TYPE_UNSPECIFIED;  // yazilmadi != void
     std::optional<std::string> return_custom_type_name;
     match(TOKEN_COLON); // consume ':' if present, harmless otherwise
     if (!check(TOKEN_LBRACE)) {

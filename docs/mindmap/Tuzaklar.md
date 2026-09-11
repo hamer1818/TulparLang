@@ -1407,24 +1407,141 @@ olan ne var?* Varsa çıkar — yoksa oran, ölçtüğünü sandığın şeyi de
 platformun ek yükünü ölçer. Aynı disiplin `benchmarks/fair`'de zaten var
 (boş program taban çizgisi ayrı raporlanıyor).
 
-## 7a. Bu runtime'da OKUMA her zaman okuma değildir
+## 7a. Kendi testin yanlışsa, güvenle yanlış sonuç yayınlarsın
 
-8 thread paylaşılan bir `int[]`'i **yalnız okurken** program çöktü:
-`get islemi icin gecersiz hedef veya indeks`. Dizi değişmiyordu.
+Sekiz thread paylaşılan bir `int[]`'i "yalnız okurken" program çöktü. Teşhis
+hazırdı ve inandırıcıydı: `ObjArray` genel yoldan ilk erişimde tembel olarak
+kutuluya çevriliyor, o çevrim başlığa *yazıyor*, iki okuyucu çakışıyor. Bulgu
+yazıldı, belgelendi, yayınlandı.
 
-Sebep: `ObjArray` ya kutulanmamış (`idata`) ya kutulu (`items_`) tutuluyor ve
-**genel yoldan ilk erişimde tembel olarak kutuluya çevriliyor**. O çevrim dizi
-başlığına *yazar*. İki thread aynı anda "okuyunca" ikisi de başlığı yazmaya
-çalışıyor.
+**Test yanlıştı.** Kurulum şöyleydi:
 
-**Kural:** tembel temsil değişimi (lazy boxing, memoization, kopyala-yazarken,
-önbellek doldurma) olan her yapıda "salt-okur paylaşım güvenlidir" varsayımı
-YANLIŞ. Paylaşımdan önce sor: *bu okuma yolu ilk çağrıda bir şey yazıyor mu?*
+```tulpar
+while (i < 100000) { shared = push(shared, i); i = i + 1; }
+```
 
-Kardeş bulgu: aynı turda global yazmalarının başka thread'e **görünmediği** de
-ölçüldü (optimize edici okumayı döngüden çıkarıp yazmaçta tutuyor — dilin bir
-bellek modeli olmadığı için bu doğru davranış). Yani spin-wait sessizce sonsuza
-kadar döner. Ayrıntı: [[Concurrency]].
+`push` diziyi **yerinde değiştirir**; dönüş değeri dizi değildir. Atama diziyi
+her turda eziyordu. Dizi **tek thread'de bile** boştu (`len=0`) ve çöküşün
+thread'lerle hiçbir ilgisi yoktu. Doğru yazımla (`push(shared, i);`) test üç
+koşuda da temiz geçiyor.
+
+Hatayı yakalayan şey, işçinin ne gördüğünü sormak için konan tek satırdı — ve o
+satır **ana thread'in de `len=0` gördüğünü** bastı. Eşzamanlılık hipotezi o anda
+öldü.
+
+**Kurallar:**
+- **Tek thread'li kontrol koş.** Eşzamanlılık hatası bildirmeden önce aynı
+  düzeneği tek thread'de koştur. Orada da patlıyorsa hata eşzamanlılıkta değil.
+- **Düzeneğin kendi ön koşullarını bastır.** `len(shared)`, checksum, kurulum
+  değerleri — "test doğru şeyi kurdu mu" sorusu, "test ne buldu"dan önce gelir.
+- **Hazır bir mekanizma açıklamasının varlığı, kanıt değildir.** `arr_debox`
+  gerçekten okuma yolundan yazıyor; hipotez doğruydu, gözlem yanlıştı. Doğru
+  mekanizma + yanlış gözlem = kendinden emin yanlış bulgu.
+- API'nin dönüş sözleşmesini varsayma: `push` yerinde değiştirir,
+  `shared = push(...)` sessizce yıkıcıdır.
+
+İlgili: [[Concurrency]] · aynı sınıfın eski üyeleri için
+[[Tuzaklar#injection-harness-empty-output]].
+
+## 7b. HEP başarısız olan kod, BAZEN başarılı olandan daha az tehlikelidir
+
+Eşzamanlılık testinde iki paylaşılan sayaç vardı. 8 thread × 100 000 artırma:
+
+```
+done=7 counter=800000 beklenen=800000
+```
+
+`done` **her koşuda** yanlıştı — bakılır bakılmaz görüldü, teşhis edildi,
+yazıldı. `counter` ise çoğu koşuda **tam** çıktı. Cazip okuma: "counter yolu
+sağlam."
+
+Yanlış. İkisi de aynı korumasız oku-değiştir-yaz. `counter`'ın tam çıkması
+kazara tutarlı bir spill/load-store desenine işaret ediyor — derleyici bu
+turda öyle kod ürettiği için. Bir sonraki kayıt tahsisi değişikliği, farklı
+bir `-O` seviyesi ya da başka bir CPU o deseni bozar ve aynı kod sessizce
+kaybetmeye başlar.
+
+**Kural:** bir yarışın *gözlemlenmemesi*, yokluğunun kanıtı değildir.
+Tehlikeyi mekanizmadan çıkar, çıktıdan değil: kod korumasız RMW yapıyorsa
+yarış vardır — bugün tetiklenip tetiklenmediği yalnız kod üretimiyle ilgilidir.
+Aynı sebeple, **hep patlayan bir hata bir hediyedir**; asıl korkulacak olan
+bazen patlayandır, çünkü test edilir, geçer, üretime gider.
+
+Kardeş bulgu ve ölçüm ayrıntısı: [[Concurrency]] · [[Tuzaklar#7a]].
+
+## 7c. Doğru kod + yanlış dil = kodu suçlarsın
+
+`scene3d_engine` 654/654 geçerken 9 tane "Dizi indeksi sinir disinda" tanısı
+yutuyordu. İzole edilip daraltıldı: kaynak, bir insertion sort'un iç döngüsü —
+
+```tulpar
+while (j > 0 && o[j - 1] > v) { o[j] = o[j - 1]; j = j - 1; }
+```
+
+Kod okununca **kusursuz**: `j > 0` koruması `o[j-1]`i tam olarak korumak için
+var. İlk refleks "sıralama yanlış yazılmış" demekti. Değildi — **dil `&&`'i
+kısa devre yapmıyor**, sağ operand koşulsuz değerlendiriliyor ve `j=0` iken
+`o[-1]` okunuyor.
+
+**Kural:** bir tanı, doğruluğuna ikna olduğun bir kodun içinden çıkıyorsa
+suçlamayı bir katman aşağı taşı. "Kod doğru görünüyor ama hata var" bir
+çelişki değil, **katman ipucudur** — dil/runtime/derleyici sırasıyla sorgula.
+Burada doğrulama iki satırdı: `(1==2) && yan()` çağırıyor mu?
+
+İkinci ders, dedektör hakkında: bu bulgu bir test yazılarak değil, **var olan
+bir suite'in yuttuğu tanıları görünür kılan bir anahtarla** bulundu
+(`TULPAR_STRICT_RUNTIME=1`). Yeşil bir suite, yutulmuş tanıların üstünde
+oturuyor olabilir; onları görünür kılan her mekanizma bedava bulgu üretir.
+
+İlgili: [[Testing]] · FINDINGS L1.
+
+## 7d. Ayırıcının içinde patlayan çökme, ayırıcıyı suçlamana yol açar
+
+`while (i < 200000) { array j = [1,2,3]; }` **SIGSEGV** veriyordu. `gdb` şunu
+gösterdi:
+
+```
+#2  vm_array_push_aot_wrapper (...) at runtime_bindings.cpp:2864
+2864    array->items_ = realloc(array->items_, sizeof(VMValue) * new_cap);
+```
+
+`realloc`'un içinde ölmek "heap bozulması" gibi okunur ve saatlerce orada
+aranır. Üç ayrı sinyal de o yöne itiyordu:
+
+1. **Çerçeve `realloc`'taydı** → "bir yerde tampon taşırıyoruz".
+2. **RSS masumdu** → `arena_drop` kolu **11 MB** ile çöküyordu; "bellek
+   sorunu yok, demek ki bozulma".
+3. **Sistem sınırı yoktu** → `ulimit -v` sınırsız, 24 GB boş; tükenme de
+   elenmişti.
+
+Üçü de yanlış yöndü. ASAN tek satırda söyledi: **`stack-overflow`.**
+
+Gerçek sebep `AST_ARRAY_LITERAL` codegen'inde tek satırdı — `LLVMBuildAlloca`
+builder'ın **o anki bloğuna** yazıyordu, literal döngü içindeyse alloca döngü
+gövdesine düşüyordu. `alloca` ancak fonksiyon dönünce çözülür, yani her
+yineleme eleman sayısı × 16 bayt yığın yiyordu. Aritmetik birebir: 8 MB / 48
+bayt = 174 762, ölçülen çöküş 175 000.
+
+O 11 MB'lık "masum" RSS'in 8 MB'ı **dolan yığının kendisiydi**. Yani ikinci
+sinyal yalnız yanlış değildi, tam tersini söylüyordu.
+
+**Dersler:**
+- Bir çökme ayırıcının içindeyse, ayırıcıya **giren** şeyi değil, sürecin
+  **kaynak profilini** de sor. Yığın da bir kaynaktır ve RSS'te heap'ten
+  ayırt edilmez.
+- `TULPAR_RUNTIME_DIR=$PWD/build-asan TULPAR_AOT_LINK_FLAGS="-fsanitize=address"`
+  ile **herhangi bir Tulpar programı** ASAN altında koşturulabiliyor. Bu yol
+  `tests/run_asan.sh`'ın C paketiyle sınırlı olduğu sanılıyordu; değil.
+- Kardeş yola bak: `AST_OBJECT_LITERAL` aynı işi `llvm_build_alloca_at_entry`
+  ile **doğru** yapıyordu. Doğru desen zaten depodaydı; hata tek siteydi.
+  İki benzer yoldan biri bozuksa, öbürü genelde düzeltmenin kendisidir.
+
+Nöbetçi: `tests/stack_growth_smoke.py` — 13 codegen şekli × 2M yineleme, her
+şekil beklenen toplamı **basıyor** (ilk yazılışında basmıyordu ve LLVM ölü
+kodu atınca şekiller hiçbir şey ölçmeden "TEMİZ" diyordu), artı yığını
+tüketMESİ gereken bir kontrol şekli.
+
+İlgili: [[Testing]] · FINDINGS R11.
 
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]

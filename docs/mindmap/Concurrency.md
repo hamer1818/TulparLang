@@ -1,8 +1,35 @@
 # Eşzamanlılık — P10 doğruluk kapısı (2026-09-09)
 
-> **Özet: Tulpar'ın bir bellek modeli yok.** `thread_create` ile paylaşılan
-> değişebilir durum ne atomik ne de görünür. Üç ayrı hata sınıfı ölçümle
-> gösterildi. Bu bir performans notu değil, **doğruluk** notu.
+> **Özet (2026-09-10'da DÜZELTİLDİ): dilde MUTEKS var ve çalışıyor.**
+> `thread_create` ile paylaşılan değişebilir durum korumasız kullanılırsa ne
+> atomik ne görünür — ama `mutex_lock`/`mutex_unlock` ikisini de çözüyor
+> (ölçüldü, aşağıda). Sözleşme "paylaşım desteklenmiyor" değil, **"paylaşım
+> muteks ister"**. İlkeller zaten vardı; tip katalogunda olmadıkları için
+> ne typecheck görüyordu ne de ben.
+
+## DÜZELTME — muteksler var, çalışıyor, ve katalogda yoktular
+
+Bu belgenin ilk hâli "dilde bellek modeli yok, paylaşım tanımsız" diyordu.
+Eksik olan parça, LSP tablosuyla tip katalogunun çapraz süpürülmesinde çıktı
+(P27): `mutex_create` / `mutex_lock` / `mutex_unlock` / `mutex_destroy`
+**dilde mevcut**, ama tip katalogunda kayıtlı değillerdi — yani hem typecheck
+onları görmüyordu hem de builtin listesine bakan ben.
+
+Bulgu 1'in birebir aynısı, muteksle (8 thread × 50 000 artırma):
+
+| | `done` | `counter` |
+|---|---|---|
+| korumasız | 7 (kayıp) | değişken |
+| **muteksli** | **8** | **400 000** — üç koşuda da tam |
+
+Muteks **Bulgu 2'yi de** çözüyor: `mutex_lock` opak bir çağrı olduğu için
+optimize edici global okumasını döngüden çıkaramıyor, yani `done`'ın güncel
+değeri görünüyor.
+
+**Geriye kalan gerçek eksik**, sözleşmenin kendisi: bu ilkellerin varlığı
+hiçbir yerde belgelenmiyor, `thread_create` dokümanı paylaşımdan söz etmiyor
+ve korumasız paylaşım sessizce yanlış sonuç veriyor. Yani sorun "araç yok"
+değil, **"araç var ama kimse söylemiyor"**.
 
 ## Zemin: ARC AOT yolunda çalışmıyor
 
@@ -54,30 +81,37 @@ dışarı çıkarıp yazmaçta tutuyor. **Doğru davranış**, çünkü dilin bi
 modeli yok — `volatile`/atomik/ordering kavramı yok. Sonuç: bekleme döngüleri
 (spin-wait) sessizce sonsuza kadar döner.
 
-## Bulgu 3 — "Salt-okur paylaşım" runtime seviyesinde salt-okur DEĞİL
+## Bulgu 3 — GERİ ÇEKİLDİ (test hatalıydı)
 
-8 thread paylaşılan bir `int[]`'i yalnız **okuyor**. Sonuç:
+> ⚠️ **Bu bulgu 2026-09-09'da yayınlandı ve aynı gün geri çekildi.** Önce
+> "8 thread paylaşılan bir `int[]`'i yalnız okurken program çöküyor" denmişti.
+> Yanlıştı: test `shared = push(shared, i)` yazıyordu. **`push` diziyi yerinde
+> değiştirir**, dönüş değeri dizi değildir — atama diziyi eziyordu. Sonuç: dizi
+> tek thread'de bile boştu (`len=0`) ve çöküş thread'lerle ilgisizdi.
+>
+> Doğru yazımla (`push(shared, i);` deyim olarak) test **üç koşuda da temiz
+> geçiyor**: `fin=8`, hatalı toplam `0`. **Paylaşılan bir `int[]`'i eşzamanlı
+> okumak çalışıyor.**
 
-```
-Calisma Zamani Hatasi: get islemi icin gecersiz hedef veya indeks
-```
+Geriye kalan gerçek nokta, ölçümden değil **kaynak incelemesinden**: `arr_debox`
+bir *okuma* yolundan (`arr_items`) tetikleniyor ve dizi başlığına yazıyor
+(`malloc`, `free(idata)`, işaretçi güncellemesi), hiçbir senkronizasyon yok.
+İki thread aynı anda oraya girerse yarış vardır — ama bunu **tetikleyen bir test
+yok**. [[Tuzaklar#7b]] uyarınca tehlikeyi mekanizmadan çıkarıp sertleştirdik
+(çift denetimli kilit + eski tamponu serbest bırakmama), ama bunun *kanıtlanmış
+bir hatayı* değil, *incelemeyle görülen bir yarışı* kapattığını açıkça yazıyoruz.
 
-Sebep: `ObjArray` kutulanmamış (`idata`) ya da kutulu (`items_`) tutuluyor ve
-**genel yoldan ilk erişimde tembel olarak kutuluya çevriliyor** — kaynaktaki
-not: *"bir dizi, kutulanmamış hızlı yolun dışında ilk kez kullanıldığı anda bir
-kez çevriliyor"*. Bu çevrim dizi başlığına **yazar**. Yani iki thread aynı
-diziyi "okurken" ikisi de başlığı yazmaya çalışıyor → bozulma.
-
-**Genel ilke: bu runtime'da okuma her zaman okuma değildir.** Tembel temsil
-değişimi olan her yapı için "salt-okur paylaşım güvenlidir" varsayımı yanlış.
+**P15 (paylaşılan json okuması) de temiz** — aynı düzeltilmiş düzenekle hata yok.
 
 ## Bunun Wings / `listen_pool` başlığına etkisi
 
 `lib/wings.tpr` ve `lib/router.tpr` değişebilir global tutuyor —
 `_wings_requests_total`, `_wings_requests_2xx/4xx`, `_request` (json),
 `_router_routes` (array). `listen_pool` bunları **çok iş parçacıklı** koşuyor.
-Bulgu 1 ve 3 doğrudan uygulanır: sayaçlar eksik sayar, ve istek başına
-paylaşılan `json`/`array` durumu tembel çevrim yarışına açıktır.
+**Bulgu 1 doğrudan uygulanır**: sayaçlar korumasız oku-değiştir-yaz yapıyor,
+yani eksik sayarlar. Bulgu 3 geri çekildiği için "paylaşılan aggregate bozulur"
+iddiası **artık yapılmıyor**; kalan risk incelemeyle görülen `arr_debox` yarışı
+ve o da sertleştirildi.
 
 **Bu yüzden `~36k req/s` başlığı bu kapı kapanana dek yıldızlı yayınlanmalı.**
 Sayı yanlış demiyoruz — altındaki eşzamanlılık sözleşmesinin belgesiz ve
@@ -85,23 +119,27 @@ sınanmamış olduğunu söylüyoruz.
 
 ## Ne yapılmalı (öncelik sırası)
 
-1. **Sözleşmeyi yaz.** Bugünkü gerçek: *"`thread_create` ile paylaşılan
-   değişebilir durum desteklenmiyor; her thread kendi verisiyle çalışmalı,
-   iletişim işletim sistemi ilkelleriyle (soket/dosya) yapılmalı."* Belgesiz
-   bırakmak, kullanıcının sessiz veri kaybıyla tanışması demek.
+1. **Sözleşmeyi yaz.** Bugünkü gerçek: *"paylaşılan değişebilir duruma
+   `mutex_lock`/`mutex_unlock` ile erişin; korumasız erişim hem güncelleme
+   kaybeder hem görünürlük garantisi vermez."* Belgesiz bırakmak, kullanıcının
+   sessiz veri kaybıyla tanışması demek — üstelik çözüm elinin altındayken.
 2. **Wings sayaçlarını thread-güvenli yap** (atomik yerleşik ya da thread başına
    toplama + okuma anında birleştirme).
-3. **Tembel kutulama çevrimini** paylaşılan dizilerde kapıla ya da dizi
-   oluşturulurken kesinleştir.
-4. Atomik yerleşikler (`atomic_add`, `atomic_load`) ve bir `volatile`/bariyer
-   kavramı — bellek modelinin en küçük hali.
+3. ~~Tembel kutulama çevrimini kapıla~~ — **yapıldı** (çift denetimli kilit;
+   eski tampon bilerek serbest bırakılmıyor ki hızlı yoldaki bir okuyucu
+   use-after-free yaşamasın). Kanıtlanmış bir hatayı değil, incelemeyle görülen
+   bir yarışı kapatıyor.
+4. ~~Atomik yerleşikler~~ — muteks zaten yeterli taban; asıl eksik bir
+   **bellek modeli cümlesi** ("muteks altındaki yazmalar diğer thread'lere
+   görünür") ve `mutex_*`'ın belgelenmesi.
 5. TSan'lı bir CI işi: runtime'ı `-fsanitize=thread` ile derleyip yukarıdaki üç
    üretecin koşulması.
 
 ## Ölçüm dosyaları
 
 `/tmp` altında üretildi (kalıcı değil): `mutate.tpr` (bulgu 1),
-`min2.tpr`/`min3.tpr` (bulgu 2), `readonly.tpr` (bulgu 3). Kalıcı gerileme
+`min2.tpr`/`min3.tpr` (bulgu 2), `readonly_fix.tpr` (bulgu 3'ün düzeltilmiş,
+temiz geçen hâli). Kalıcı gerileme
 testi hâline getirilmeleri 5. maddeye bağlı — bugünkü davranış "hatalı" olduğu
 için testler ancak sözleşme yazıldıktan sonra anlamlı olur.
 

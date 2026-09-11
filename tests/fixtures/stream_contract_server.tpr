@@ -1,0 +1,55 @@
+// S4 — uc fazli akis sozlesmesinin FIKSTUR sunucusu.
+//
+// Sozlesme (FINDINGS, P44/P46):
+//   akis BASLAMADAN throw   -> 500 + JSON zarfi, surec yasar
+//   akis ORTASINDA throw    -> YALNIZ log; zarf YAZILMAZ, baglanti kapanir
+//   her iki fazda           -> surec yasar
+//
+// Bu dosya sozlesmenin dort kosesini de bir rotaya baglar. Besinci rota
+// (`/raw`) KASITLI IHLAL: sokete ham yazip `{"_stream":1}` DONDURMEZ, yani
+// wings akisin devralindigini bilemez ve throw'da IKINCI zarfi yazar (P48).
+// Sonda orada KIRMIZIYA donmek ZORUNDA — ayni olcum /sse'de 1, /raw'da 2
+// zarf saymazsa dedektor kordur (#10: hic kirmizi gormemis duzenek yesil
+// degil, bilinmiyor).
+import "wings";
+
+// --- Faz 1: akis baslamadan throw ------------------------------------------
+func h_pre() {
+    throw "faz1: akis baslamadan";
+}
+
+// --- Faz 2a: SSE akisi ortasinda throw --------------------------------------
+func h_sse() {
+    int fd = wings_current_fd();
+    socket_send(fd, wings_sse_headers());          // akis BURADA basliyor
+    socket_send(fd, wings_sse_event("ilk", "{}"));
+    throw "faz2: sse akis ortasi";
+}
+
+// --- Faz 2b: WS akisi ortasinda throw ---------------------------------------
+func h_ws(req) {
+    int fd = wings_current_fd();
+    str up = wings_ws_upgrade(req);                // anahtar varsa akis basliyor
+    socket_send(fd, up);
+    wings_ws_send_text(fd, "ilk");
+    throw "faz2: ws akis ortasi";
+}
+
+// --- ENJEKSIYON: sozlesme disi ham yazan handler ----------------------------
+func h_raw() {
+    int fd = wings_current_fd();
+    socket_send(fd, "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nham");
+    throw "ihlal: nobetci dondurulmedi";
+}
+
+// --- Faz 3: surec yasiyor mu -------------------------------------------------
+func h_health() {
+    return ok({"alive": 1});
+}
+
+get("/pre", "h_pre");
+get("/sse", "h_sse");
+get("/ws", "h_ws");
+get("/raw", "h_raw");
+get("/healthz", "h_health");
+listen(18781);

@@ -240,6 +240,67 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Sessiz hata sondalari basarisiz!${NC}"
             exit 1
         fi
+        # S4 — AKIS SOZLESMESI (uc faz: akis oncesi / akis ortasi / surec).
+        # Bu sozlesme iki tur once KODDA kapandi ama hicbir test onu
+        # sinamiyordu; retrofit sayimi (#21) borcu yakaladi. Fikstur ham
+        # soket kullanir (#22: yorumlayan arac ihlali gizler — curl P48'de
+        # tam bunu yapti) ve kendi kirmiziya-donebilirligini tasiyan bir
+        # ihlal rotasi (/raw) icerir.
+        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/stream_contract_smoke.py; then
+            echo -e "${RED}S4 akis sozlesmesi basarisiz!${NC}"
+            exit 1
+        fi
+        # S3 — ARENA SOZLESMESI (restore birakmaz / drop birakir).
+        # Ayni #21 borcu: `arena_restore` uc suitte geciyordu ama hepsi
+        # sozlesmenin "hayatta kalir" yarisini sinaniyordu; "serbest
+        # birakmaz" yarisi hic sinanmamisti.
+        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/arena_contract_smoke.py; then
+            echo -e "${RED}S3 arena sozlesmesi basarisiz!${NC}"
+            exit 1
+        fi
+        # YIGIN SIZINTISI (R11). Dongu govdesine dusen bir `alloca`
+        # yinelemede yigin harciyor ve program YETERINCE UZUN dondugunde
+        # SIGSEGV veriyor — derleme sessiz, suitler yesil. `AST_ARRAY_LITERAL`
+        # tam bunu yapiyordu ve 175 000 yinelemede oluyordu. Sekil basina
+        # cikti-mutabakati var: dongu elenirse sekil "olctum" diyemez.
+        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/stack_growth_smoke.py; then
+            echo -e "${RED}Yigin sizintisi taramasi basarisiz!${NC}"
+            exit 1
+        fi
+        # TypedValue UC ALANI DA ILKLENDIRILIR (#32 sinifi).
+        #
+        # `TypedValue sc;` yazmak yasak: `.boxed` yigin copu kalir ve bu
+        # dosyada 30 yerde okunuyor. Olculdu (2026-09-11): kisa-devre
+        # duzeltmesinde tek bir ilklendirilmemis alan, CI'da 16 ornegin
+        # derleyicisini SEGV ettirdi (`01_hello_world` dahil) — ama YERELDE
+        # Release/LLVM22'de gorunmuyordu, cunku yigin cogu zaman sifirdi.
+        # Ortama bagli sessizlik, bu sinifin imzasi.
+        # ⚠ Desen SATIR BASINA BAGLI OLAMAZ. Ilk yazimda `^[[:space:]]*`
+        # ile basliyordu ve enjeksiyon testi onu HEMEN kacirdi
+        # (`... { TypedValue bozuk; }` tek satirda). Yani koruma, korudugu
+        # hatanin kendi turunu yapiyordu; enjeksiyon olmasaydi yesil kalirdi.
+        # Yorum satirlari elenir: bu denetimin KENDI aciklama satiri
+        # (`TypedValue sc;` ornegi) deseni tetikliyordu — koruma kendi
+        # belgesine takiliyordu.
+        TV_BARE=$(grep -nE "\bTypedValue[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*;" src/aot/*.cpp \
+                  | grep -vE "^[^:]*:[0-9]+:[[:space:]]*(//|\*|/\*)" || true)
+        if [ -n "$TV_BARE" ]; then
+            echo -e "${RED}ILKLENDIRILMEMIS TypedValue — uc alani da yazin!${NC}"
+            echo "$TV_BARE" | head -5 | sed 's/^/  /'
+            echo "  dogru kalip: TypedValue x = {nullptr, INFERRED_UNKNOWN, nullptr};"
+            exit 1
+        fi
+        echo -e "${GREEN}TypedValue ilklendirmesi tam${NC}"
+        # KORPUS TANI TABANI (#26). Taban SAYI degil METIN tutuyor: bir tani
+        # sessizce dogarsa ya da kaybolursa kirmizi verir. Tarayici, is
+        # yapmadan once KENDINI siniyor (tani uretmesi kesin bir fikstur
+        # uzerinde); goremezse "temiz korpus" demek yerine hata veriyor —
+        # P23'un taban olcumunun ilk uc surumu tam bu yuzden yanlis "0 tani"
+        # demisti.
+        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/typecheck_corpus_scan.py --check; then
+            echo -e "${RED}Korpus tani tabani degisti!${NC}"
+            exit 1
+        fi
     fi
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:
@@ -649,6 +710,62 @@ TPREOF
         rm -rf "$AR_TMP"; exit 1
     fi
     echo -e "${GREEN}zincir baska sekillerde zarar vermiyor${NC} (ackermann: ${AR_OFF_W}us -> ${AR_ON_W}us)"
+
+    # TANI TEK KAPIDAN CIKAR — mekanik garanti (#19).
+    #
+    # Calisma zamani tanilari `aot_runtime_error` / `vm_runtime_error`den
+    # gecmeli: ikisi de stderr'e yazar ve strict modda firlatir. Ham `printf`
+    # ile yazilan bir tani (a) programin kendi ciktisina karisir, (b) firlatmaz,
+    # yani surec 0 ile cikar.
+    #
+    # NEDEN MEKANIK: flip sirasinda printf->throw donusumu REGEX'le yapildi ve
+    # farkli bicimli bir printf'i KACIRDI — `aot_div_error`in tasma dali stdout'a
+    # yazip 0 ile cikmaya devam etti, sifira bolme ise firlatiyordu. Ayni
+    # aileden iki hata, iki farkli sozlesme. Kacan dali yakalayan sey bir
+    # sondanin ESKI beklentiyle GECMESI oldu — yani sans. Metin-deseniyle
+    # yapilan donusum envanteri yeniden uretmez; bu denetim envanteri kalici
+    # kilar: bir sonraki kacak yesil sonda degil, KIRMIZI BUILD olur.
+    # ⚠ COK SATIRLI OLMALI. Ilk yazimda bu denetim satir-bazliydi
+    # (`grep printf | grep Hatasi`) ve HEMEN yanlis yesil verdi: kaynakta
+    # `printf("%s\n",` bir satirda, hata metni SONRAKI satirda olan IKI
+    # sizinti vardi ve denetim ikisini de goremedi. Yani koruma, korumak icin
+    # yazildigi hatanin (metin-deseni envanteri yeniden uretmez, #19) TAM
+    # OLARAK aynisini yapiyordu. Simdi cagri parantez dengesiyle taraniyor.
+    RT_LEAK=$(python3 - <<'PYEOF'
+import re, pathlib
+txt = pathlib.Path("src/vm/runtime_bindings.cpp").read_text(encoding="utf-8")
+for m in re.finditer(r'\bprintf\s*\(', txt):
+    seg = txt[m.start():m.start() + 600]
+    depth = 0
+    call = seg
+    for i, ch in enumerate(seg):
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                call = seg[:i + 1]
+                break
+    if re.search(r'Hatasi|Runtime Error', call):
+        print(f"  satir {txt[:m.start()].count(chr(10)) + 1}: {call.splitlines()[0][:70]}")
+PYEOF
+)
+    if [ -n "$RT_LEAK" ]; then
+        echo -e "${RED}TANI STDOUT'A SIZIYOR — aot_runtime_error kullanin!${NC}"
+        echo "$RT_LEAK" | head -5 | sed 's/^/  /'
+        exit 1
+    fi
+    # SAYISAL BEKLENEN-DEGER: desen-guvenligi tek basina yetmez — denetim
+    # sessizce korlese "sizinti yok" der. Yetkili cikis noktalarinin sayisini
+    # da raporluyoruz; beklenen minimumun altina duserse denetim degil, KAPI
+    # kaybolmus demektir.
+    RT_GATES=$(grep -c "aot_runtime_error(" src/vm/runtime_bindings.cpp)
+    if [ "$RT_GATES" -lt 15 ]; then
+        echo -e "${RED}Yetkili tani kapisi sayisi beklenenin altinda ($RT_GATES < 15)${NC}"
+        echo "  Tanilar baska bir yola mi tasindi? Denetim korlesmis olabilir."
+        exit 1
+    fi
+    echo -e "${GREEN}tani tek kapidan cikiyor${NC} (ham printf yok, $RT_GATES yetkili kapi)"
     rm -rf "$AR_TMP"
     rm -rf "$SR_TMP"
 
@@ -1051,6 +1168,13 @@ if [ "$ACTION" = "test" ]; then
                 return 0
             fi
             if [ -f "$input_file" ]; then
+                # Bu kosucu "yalnizca cikis kodunu" karsilastiriyor. Calisma
+                # zamani hatasi cikis kodunu degistirmediginde bu KOR olur: bir
+                # ornege `kk[999]` enjekte edildiginde suite "All tests passed!"
+                # diyordu (R2, olculdu). Bir sure harness `TULPAR_STRICT_RUNTIME=1`
+                # ile dil varsayilanindan siki kostu; FLIP'ten sonra (2026-09-10)
+                # strict zaten varsayilan, o yuzden bayrak kaldirildi — iki
+                # hakikat tablosu birakmamak icin.
                 $TIMEOUT_CMD "./$out_path" < "$input_file" > /dev/null 2>&1
             else
                 $TIMEOUT_CMD "./$out_path" > /dev/null 2>&1

@@ -47,6 +47,19 @@ BENCH = {
     # Her dil kendi uzunluk erisimini kullaniyor (len(a) / a.len() /
     # a.length); C'de dilde uzunluk yok, n tasiniyor.
     "arrayiter": ("5000000", "dizi yineleme (deyimsel uzunlukla)"),
+    # --- KAYAN NOKTA SETI (2026-09-11) ---------------------------------
+    # Uc cekirdek BILEREK farkli yerleri sinar; "float yavas mi" sorusu tek
+    # sayiyla cevaplanamaz, cunku iki ayri maliyet var:
+    #   * DEGER temsili (her islemde kutu ac/kapa)
+    #   * DEPOLAMA temsili (eleman basina 16 bayt VMValue vs 8 bayt double)
+    # mandelbrot dizi KULLANMAZ -> yalniz deger temsilini olcer.
+    # matmul yalniz dizi gezer    -> depolama + bant genisligini one cikarir.
+    # nbody ikisinin gercekci karisimi (+ sqrt).
+    # Farki ayirmadan olculurse "float 10x yavas" denir ve HANGI yarinin
+    # sucu oldugu bilinmez — unboxing karari tam o ayrima dayaniyor.
+    "mandelbrot": ("2000",    "kayan nokta aritmetigi (dizi YOK)"),
+    "matmul":     ("640",     "kayan nokta dizisi (depolama + bant genisligi)"),
+    "nbody":      ("3000000", "kayan nokta + kucuk dizi + sqrt"),
 }
 
 LANGS = ["c", "cpp", "rust", "go", "csharp", "java", "node", "python", "tulpar"]
@@ -112,38 +125,76 @@ def _build_csharp(bench, errs):
     return None
 
 
+# Kaynak dosyasi olmayan dil satiri DUSER, kosum DURMAZ.
+#
+# Bu koruma olmadan `benchmarks/fair/<bench>.cs` yoksa `_build_csharp`
+# FileNotFoundError firlatiyor ve BUTUN kosum cokuyordu — yani tek bir dilin
+# eksik kaynagi otekilerin olcumunu da goturuyordu. Tam da README'nin
+# "arac zinciri yoksa satir duser, kosum durmaz" kuralinin ihlali; kural
+# arac zincirini kapsiyordu, KAYNAGI kapsamiyordu. (2026-09-11, FP setini
+# eklerken ortaya cikti.)
+def _src(bench, ext):
+    return (HERE / f"{bench}.{ext}").exists()
+
+
 def build(bench):
     """Her dil için (çalıştırma komutu, hata) döndürür."""
     cmds, errs = {}, {}
-    c = OUT / f"{bench}_c"
-    r = sh(["gcc", "-O2", f"{bench}.c", "-o", str(c)])
-    cmds["c"] = [str(c)] if r.returncode == 0 else None
-    if r.returncode: errs["c"] = r.stderr.strip()[:200]
+    if not _src(bench, "c"):
+        cmds["c"] = None; errs["c"] = "kaynak yok (%s.c)" % bench
+    else:
+        c = OUT / f"{bench}_c"
+        # -lm: C'de libm AYRI baglanir (C++/Rust/Go'da degil). Bu bayrak
+        # yokken nbody yalniz C satirinda "DERLENEMEDI" oluyordu ve tablo
+        # C'siz yayinlanacakti — yani referans dil eksik kalacakti.
+        r = sh(["gcc", "-O2", f"{bench}.c", "-o", str(c), "-lm"])
+        cmds["c"] = [str(c)] if r.returncode == 0 else None
+        if r.returncode: errs["c"] = r.stderr.strip()[:200]
 
-    rs = OUT / f"{bench}_rs"
-    r = sh(["rustc", "-C", "opt-level=3", f"{bench}.rs", "-o", str(rs)])
-    cmds["rust"] = [str(rs)] if r.returncode == 0 else None
-    if r.returncode: errs["rust"] = r.stderr.strip()[:200]
+    if not _src(bench, "rs"):
+        cmds["rust"] = None; errs["rust"] = "kaynak yok (%s.rs)" % bench
+    else:
+        rs = OUT / f"{bench}_rs"
+        r = sh(["rustc", "-C", "opt-level=3", f"{bench}.rs", "-o", str(rs)])
+        cmds["rust"] = [str(rs)] if r.returncode == 0 else None
+        if r.returncode: errs["rust"] = r.stderr.strip()[:200]
 
-    cpp = OUT / f"{bench}_cpp"
-    r = sh(["g++", "-O2", "-std=c++17", f"{bench}.cpp", "-o", str(cpp)])
-    cmds["cpp"] = [str(cpp)] if r.returncode == 0 else None
-    if r.returncode: errs["cpp"] = r.stderr.strip()[:200]
+    if not _src(bench, "cpp"):
+        cmds["cpp"] = None; errs["cpp"] = "kaynak yok (%s.cpp)" % bench
+    else:
+        cpp = OUT / f"{bench}_cpp"
+        r = sh(["g++", "-O2", "-std=c++17", f"{bench}.cpp", "-o", str(cpp)])
+        cmds["cpp"] = [str(cpp)] if r.returncode == 0 else None
+        if r.returncode: errs["cpp"] = r.stderr.strip()[:200]
 
-    cmds["csharp"] = _build_csharp(bench, errs)
+    if not _src(bench, "cs"):
+        cmds["csharp"] = None; errs["csharp"] = "kaynak yok (%s.cs)" % bench
+    else:
+        cmds["csharp"] = _build_csharp(bench, errs)
 
-    g = OUT / f"{bench}_go"
-    r = sh(["go", "build", "-o", str(g), f"{bench}.go"])
-    cmds["go"] = [str(g)] if r.returncode == 0 else None
-    if r.returncode: errs["go"] = r.stderr.strip()[:200]
+    if not _src(bench, "go"):
+        cmds["go"] = None; errs["go"] = "kaynak yok (%s.go)" % bench
+    else:
+        g = OUT / f"{bench}_go"
+        r = sh(["go", "build", "-o", str(g), f"{bench}.go"])
+        cmds["go"] = [str(g)] if r.returncode == 0 else None
+        if r.returncode: errs["go"] = r.stderr.strip()[:200]
 
-    r = sh(["javac", "-d", str(OUT), f"{bench}.java"])
-    cmds["java"] = ["java", "-cp", str(OUT), bench] if r.returncode == 0 else None
-    if r.returncode: errs["java"] = r.stderr.strip()[:200]
+    if not _src(bench, "java"):
+        cmds["java"] = None; errs["java"] = "kaynak yok (%s.java)" % bench
+    else:
+        r = sh(["javac", "-d", str(OUT), f"{bench}.java"])
+        cmds["java"] = ["java", "-cp", str(OUT), bench] if r.returncode == 0 else None
+        if r.returncode: errs["java"] = r.stderr.strip()[:200]
 
-    cmds["node"] = ["node", str(HERE / f"{bench}.js")]
-    cmds["python"] = ["python3", str(HERE / f"{bench}.py")]
+    cmds["node"] = ["node", str(HERE / f"{bench}.js")] if _src(bench, "js") else None
+    if cmds["node"] is None: errs["node"] = "kaynak yok (%s.js)" % bench
+    cmds["python"] = ["python3", str(HERE / f"{bench}.py")] if _src(bench, "py") else None
+    if cmds["python"] is None: errs["python"] = "kaynak yok (%s.py)" % bench
 
+    if not _src(bench, "tpr"):
+        cmds["tulpar"] = None; errs["tulpar"] = "kaynak yok (%s.tpr)" % bench
+        return cmds, errs
     t = OUT / f"{bench}_tulpar"
     r = sh([str(TULPAR), "build", f"{bench}.tpr", str(t)])
     cmds["tulpar"] = [str(t)] if (r.returncode == 0 and t.exists()) else None
@@ -233,8 +284,48 @@ def main():
           {k: (round(v, 1) if v else None) for k, v in base.items()})
     (HERE / "results.json").write_text(json.dumps(
         {"results": results, "baseline": base, "repeats": REPEATS}, indent=2))
-    print("\n-> results.json")
+    write_markdown(results, base)
+    print("\n-> results.json + RESULTS.md")
     return 1 if invalid else 0
+
+
+def write_markdown(results, base):
+    """results.json'dan okunabilir tablo uret.
+
+    Elle yazilmiyor: depo kokundeki eski `benchmarks/RESULTS.md` elle
+    tutuluyordu ve BAYATLADI (2026-05 tarihli, silinmis VM satiri, "best of
+    1"). Uretilen tablo bayatlayamaz — kosumun kendisiyle ayni anda dogar.
+    """
+    lines = ["# Adil dil karsilastirmasi — sonuclar", ""]
+    lines.append("Uretildi: `benchmarks/fair/run.py` · %d tekrar, en iyi deger · "
+                 "**dusuk = hizli** (ms)." % REPEATS)
+    lines.append("")
+    lines.append("Her satir ayni algoritmayi ayni veri yapisiyla kosar ve "
+                 "**ciktilar dogrulanir** — diller ayni sonucu basmazsa satir "
+                 "gecersiz sayilir.")
+    lines.append("")
+    order = [l for l in LANGS]
+    head = "| Dil | " + " | ".join(b for b in results) + " |"
+    lines += [head, "|---|" + "---:|" * len(results)]
+    for lang in order:
+        cells = []
+        for b, r in results.items():
+            row = r["rows"].get(lang)
+            cells.append(("%.1f" % row["best"]) if row else "—")
+        lines.append("| %s | %s |" % (LABEL[lang], " | ".join(cells)))
+    lines += ["", "## Is yukleri ve cikti mutabakati", "",
+              "| Kiyas | BENCH_N | Ne olcer | Ortak cikti |", "|---|---:|---|---|"]
+    for b, r in results.items():
+        agree = r["output"] if r["agree"] else "**AYRISIYOR — GECERSIZ**"
+        lines.append("| `%s` | %s | %s | `%s` |" % (b, r["n"], r["desc"], agree))
+    lines += ["", "## Bos program taban cizgisi (ms)", "",
+              "Olctugumuz seyin ne kadari surec baslatma? Is yukleri bunu "
+              "golgede birakacak kadar buyuk secildi.", ""]
+    lines.append("| " + " | ".join(LABEL.get(k, k) for k in base) + " |")
+    lines.append("|" + "---:|" * len(base))
+    lines.append("| " + " | ".join(("%.1f" % v) if v else "—" for v in base.values()) + " |")
+    lines.append("")
+    (HERE / "RESULTS.md").write_text("\n".join(lines) + "\n")
 
 
 if __name__ == "__main__":

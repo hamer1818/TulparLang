@@ -2235,6 +2235,14 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_string_substring =
       LLVMAddFunction(backend->module, "aot_string_substring_ptr", str3_type);
 
+  // ERISIMCILER: at(dizi, i, varsayilan) / json_get(o, anahtar, varsayilan).
+  // Ayni uc-VMValue ABI'si (str3_type) — bkz. runtime_bindings.cpp'deki not:
+  // "yumusaklik ortamda yasamaz, erisimcidedir".
+  backend->func_aot_at =
+      LLVMAddFunction(backend->module, "aot_at_ptr", str3_type);
+  backend->func_aot_json_get =
+      LLVMAddFunction(backend->module, "aot_json_get_ptr", str3_type);
+
   // ====== Time Functions ======
   LLVMTypeRef time0_type = llvm_make_vmvalue_func_type(backend, nullptr, 0, 0);
   backend->func_aot_timestamp =
@@ -3092,6 +3100,66 @@ LLVMValueRef get_local_native(LLVMBackend *backend, const char *name) {
 }
 
 LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node);
+
+// KISA DEVRE (`&&` / `||`) — L1 duzeltmesi, 2026-09-10.
+//
+// NEDEN VAR: her iki operator de IKI OPERANDI DA degerlendiriyordu. Tipli yol
+// (`TOKEN_AND`/`TOKEN_OR` case'leri) ve kutulu yol (`emit_boxed_binary_op`)
+// ZATEN URETILMIS L ve R alip duz `LLVMBuildAnd`/`Or` yapiyordu; kisa devre o
+// noktada yapisal olarak imkansizdi. Sonuc: evrensel koruma deyimi kirikti —
+//   while (j > 0 && o[j - 1] > v)     // j=0 iken o[-1] OKUNUYORDU
+//   if (i < len(a) && a[i] == x)      // ayni
+// ve yan etkili sag taraflar kosulsuz calisiyordu.
+//
+// NASIL BULUNDU: R1'in TULPAR_STRICT_RUNTIME anahtari dedektor olarak
+// kosulunca scene3d_engine 654/654 GECERKEN 9 tani yuttugu gorundu; izolasyon
+// bir insertion sort'a, oradan yukaridaki satira indi. Kod dogruydu, dil
+// yanlisti (bkz. Tuzaklar 7c).
+//
+// SABLON ternary'den (AST_TERNARY): phi YERINE giris blogunda bir alloca
+// yuvasi. Phi olsaydi dallarin tipi ayni olmak zorundaydi; yuva ile o kisit
+// yok ve iki yol (tipli/kutulu) ayni yardimciyi paylasabiliyor.
+//
+// SONUC TIPI i64 0/1 — cagiran taraf ya oldugu gibi kullanir (tipli yol) ya
+// da bool VMValue'ya kutular (kutulu yol).
+static LLVMValueRef emit_logical_shortcircuit_i64(LLVMBackend *backend,
+                                                  ASTNode_C *node) {
+  LLVMValueRef slot =
+      llvm_build_alloca_at_entry(backend, backend->int_type, "sc_res");
+
+  // SOL TARAF TAM BIR KEZ. Thunk yok; tek cagri noktasi burasi.
+  LLVMValueRef lv = codegen_expression(backend, node->left);
+  LLVMValueRef lb = llvm_build_is_truthy(backend, lv);
+
+  LLVMValueRef func = backend->current_function;
+  LLVMBasicBlockRef rhs_bb = append_bb(backend, func, "sc_rhs");
+  LLVMBasicBlockRef done_bb = append_bb(backend, func, "sc_end");
+
+  // KISALTMA KIMLIGI OPERATORE GORE: `&&` erken cikista FALSE, `||` TRUE.
+  // Ters cevirmek klasik sessiz hatadir; fikstur bunu kilitliyor
+  // (tests/short_circuit.test.tpr).
+  int is_and = (node->op == TOKEN_AND);
+  LLVMBuildStore(backend->builder,
+                 LLVMConstInt(backend->int_type, is_and ? 0 : 1, 0), slot);
+  if (is_and)
+    LLVMBuildCondBr(backend->builder, lb, rhs_bb, done_bb);
+  else
+    LLVMBuildCondBr(backend->builder, lb, done_bb, rhs_bb);
+
+  LLVMPositionBuilderAtEnd(backend->builder, rhs_bb);
+  LLVMValueRef rv = codegen_expression(backend, node->right);
+  LLVMValueRef rb = llvm_build_is_truthy(backend, rv);
+  LLVMBuildStore(backend->builder,
+                 LLVMBuildZExt(backend->builder, rb, backend->int_type,
+                               "sc_rhs_i64"),
+                 slot);
+  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
+    LLVMBuildBr(backend->builder, done_bb);
+
+  LLVMPositionBuilderAtEnd(backend->builder, done_bb);
+  return LLVMBuildLoad2(backend->builder, backend->int_type, slot, "sc_val");
+}
+
 LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node);
 
 // Typed expression result for unboxed operations
@@ -3782,6 +3850,28 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_BINARY_OP: {
+    // KISA DEVRE, operandlar URETILMEDEN once. Asagidaki iki satir L ve R'yi
+    // kosulsuz uretiyor; `&&`/`||` icin bu YANLIS (bkz. L1 / Tuzaklar 7c).
+    if (node->op == TOKEN_AND || node->op == TOKEN_OR) {
+      // ⚠ UC ALAN DA ILKLENDIRILIR — `TypedValue sc;` YETMEZ.
+      //
+      // Ilk yazimda yalniz `.type` ve `.value` atanmisti; `.boxed` YIGIN COPU
+      // olarak kaliyordu. Bu dosyada 30 yerde `.boxed` okunuyor ve biri onu
+      // LLVMValueRef sanip kullaninca derleyici COKUYOR. Yerelde (Release,
+      // LLVM 22) yigin cogu zaman sifir oldugu icin GORUNMUYORDU; CI'da
+      // (Ubuntu/LLVM 18) `01_hello_world` dahil 16 ornek SEGV verdi ve ASAN
+      // adresi `0x16` diye gosterdi — klasik ilklendirilmemis bellek imzasi.
+      //
+      // Dosyanin kurali zaten `TypedValue result = {nullptr, INFERRED_UNKNOWN,
+      // nullptr};` — uc alan birden. Bu satir o kurali ihlal ediyordu.
+      //
+      // INFERRED_BOOL: sonuc bool'dur, int degil. INFERRED_INT deseydik
+      // `toString(t && f)` "true" yerine "1" basardi — davranis degisikligi
+      // olurdu (examples/04_math_logic.tpr tam bunu yazdiriyor).
+      TypedValue sc = {nullptr, INFERRED_BOOL, nullptr};
+      sc.value = emit_logical_shortcircuit_i64(backend, node);
+      return sc;
+    }
     TypedValue L = codegen_typed_expr(backend, node->left);
     TypedValue R = codegen_typed_expr(backend, node->right);
 
@@ -4688,8 +4778,23 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         // bytes as a VMValue. Mirrors the push() escape path.
         LLVMValueRef val = codegen_struct_expr_as_object(backend, el);
         if (!val) val = codegen_expression(backend, el);
-        LLVMValueRef val_ptr = LLVMBuildAlloca(
-            backend->builder, backend->vm_value_type, "arr_lit_val_ptr");
+        // ⚠ GIRIS BLOGUNDA alloca — DONGU GOVDESINDE DEGIL.
+        //
+        // Burasi `LLVMBuildAlloca` ile yaziliydi, yani alloca BUILDER'IN O
+        // ANKI BLOGUNA dusuyordu. Bir dizi literali dongu icindeyse her
+        // YINELEME 16 bayt yigin harciyor ve hicbiri geri gelmiyor (alloca
+        // ancak fonksiyon donunce cozulur). Olculdu (2026-09-11):
+        //   `while (i < N) { array j = [1,2,3]; }`  ->  N=175 000'de SIGSEGV
+        // 8 MB yigin / (3 eleman x 16 bayt) = 174 762 — birebir. Eleman
+        // sayisiyla da oluyordu: [1,2] 262 144'te, [1..8] 65 536'da.
+        // Cokme `realloc` icinde gorundugu icin YIGIN degil YIGIN(heap)
+        // bozulmasi saniliyordu; ASAN "stack-overflow" dedi.
+        //
+        // Kardes yol (AST_OBJECT_LITERAL) bunu zaten dogru yapiyordu — hata
+        // tek siteydi. Slot yinelemeler arasinda PAYLASILABILIR: deger
+        // yazilir ve hemen push'a verilir, yinelemeler arasi yasamaz.
+        LLVMValueRef val_ptr = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, "arr_lit_val_ptr");
         LLVMBuildStore(backend->builder, val, val_ptr);
         LLVMValueRef val_void = LLVMBuildBitCast(
             backend->builder, val_ptr, backend->ptr_type, "arr_lit_val_void");
@@ -6683,7 +6788,85 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         char prefixed[256];
         snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
         LLVMValueRef func = LLVMGetNamedFunction(backend->module, prefixed);
-        if (!func) func = LLVMGetNamedFunction(backend->module, raw);
+        if (!func) {
+          // TEK ABI: normallestirici sarmalayici uret.
+          //
+          // `aot_thread_entry` isciyi `void(VMValue *sonuc, VMValue *arg)`
+          // olarak cagiriyor. Tipsiz fonksiyonlar bu imzayi `t_<ad>` shim'iyle
+          // zaten tasiyor; TAM TIPLI olanlar icin yalnizca `@f(i64) -> i64`
+          // uretiliyor ve kod eskiden HAM sembole dusuyordu — yani i64 alan
+          // bir fonksiyon void(ptr,ptr) diye cagriliyordu. Olculdu (T9,
+          // 2026-09-10): `thread_create(isci, 42)` -> isci 42 yerine
+          // 140166943450080 (bir isaretci) gordu. Ozelligin omru boyunca
+          // sessiz tanimsiz davranis.
+          //
+          // Cozum, cagri yolu sayisini BIRE indirmek: burada `tw_<ad>` diye
+          // bir sarmalayici uretiliyor, imzasi shim'inkiyle ayni. Icinde
+          // arguman VMValue'dan i64'e cozuluyor, native fonksiyon cagriliyor,
+          // donus tekrar VMValue'ya kutulaniyor. Entry'ye ULASAN TEK ABI var.
+          //
+          // Derin kopya sozlesmesi etkilenmiyor: kopya `aot_thread_create`ta,
+          // yani BU sarmalayicidan ONCE yapiliyor — tek marshaling noktasi
+          // korunuyor (iki yol = #0 riski).
+          LLVMValueRef bare = LLVMGetNamedFunction(backend->module, raw);
+          if (bare && node->arguments[0]->type == AST_IDENTIFIER) {
+            char wname[300];
+            snprintf(wname, sizeof(wname), "tw_%s", raw);
+            LLVMValueRef w = LLVMGetNamedFunction(backend->module, wname);
+            if (!w) {
+              LLVMTypeRef bft = LLVMGlobalGetValueType(bare);
+              // Yalniz TEK i64 parametreli native isci sarilabiliyor; baska
+              // bir sekil gelirse asagidaki derleme hatasina dusuyoruz.
+              if (LLVMCountParamTypes(bft) == 1) {
+                LLVMTypeRef wpt[] = {backend->ptr_type, backend->ptr_type};
+                LLVMTypeRef wft =
+                    LLVMFunctionType(backend->void_type, wpt, 2, 0);
+                w = LLVMAddFunction(backend->module, wname, wft);
+                LLVMBasicBlockRef prev = LLVMGetInsertBlock(backend->builder);
+                LLVMBasicBlockRef wbb =
+                    LLVMAppendBasicBlockInContext(backend->context, w, "entry");
+                LLVMPositionBuilderAtEnd(backend->builder, wbb);
+                LLVMValueRef res_p = LLVMGetParam(w, 0);
+                LLVMValueRef arg_p = LLVMGetParam(w, 1);
+                LLVMValueRef av = LLVMBuildLoad2(
+                    backend->builder, backend->vm_value_type, arg_p, "tw_arg");
+                LLVMValueRef ai = llvm_vm_val_to_int_payload(backend, av);
+                LLVMValueRef cargs[] = {ai};
+                LLVMValueRef rv = LLVMBuildCall2(backend->builder, bft, bare,
+                                                 cargs, 1, "tw_call");
+                LLVMBuildStore(backend->builder,
+                               llvm_vm_val_int_val(backend, rv), res_p);
+                LLVMBuildRetVoid(backend->builder);
+                if (prev) LLVMPositionBuilderAtEnd(backend->builder, prev);
+              }
+            }
+            if (w) func = w;
+          }
+        }
+        if (!func) {
+          // ⚠ HAM SEMBOLE DUSMEK ABI UYUMSUZLUGUDUR — sessizce COP veri gecer.
+          //
+          // `aot_thread_entry` isciyi `void(VMValue *sonuc, VMValue *arg)`
+          // olarak cagiriyor. Bu ABI'yi yalnizca `t_<ad>` shim'i tasiyor.
+          // TAM TIPLI bir fonksiyon (`func f(int n): int`) icin shim
+          // URETILMIYOR — yalnizca `@f(i64) -> i64` var. Eskiden kod ona
+          // dusuyordu ve isci ISARETCIYI TAMSAYI diye aliyordu: olculdu
+          // (2026-09-10), `thread_create(isci, 42)` icin isci 42 yerine
+          // 140166943450080 gordu. Tanimsiz davranis, ozelligin omru boyunca
+          // sessiz.
+          //
+          // Dogru duzeltme her aday icin shim uretmek; o ayri bir is. Bu arada
+          // SESSIZ COP yerine DERLEME ZAMANI HATASI veriyoruz.
+          if (LLVMGetNamedFunction(backend->module, raw)) {
+            fprintf(stderr, tulpar::i18n::tr_en(
+                "Hata: thread_create() TAM TIPLI bir fonksiyonla kullanilamaz "
+                "('%s'). Donus/parametre tipini kaldirin: `func %s(x) { ... }`\n",
+                "Error: thread_create() cannot take a fully typed function "
+                "('%s'). Drop the type annotations: `func %s(x) { ... }`\n"),
+                raw, raw);
+            backend->had_error = 1;
+          }
+        }
         if (func) func_ptr = func;
       }
       if (!func_ptr) {
@@ -6941,12 +7124,25 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_vm_val_int(backend, 0);
     }
 
+// ⚠ ASAGIDAKI DORT MAKRO GIRIS BLOGUNDA alloca YAPAR (R11 sinifi, 2026-09-11).
+//
+// Kutulu-ABI builtin'leri argumani yigina yazip ISARETCISINI geciriyor.
+// O alloca ham `LLVMBuildAlloca` ile uretilirse builder'in O ANKI blogunda
+// dogar; cagri bir dongu icindeyse her YINELEME 16 bayt yigin harciyor ve
+// program yeterince uzun dondugunde SIGSEGV veriyor. Olculdu: `mod`, `sqrt`,
+// `pow`, `round`, `min`, `max` — hepsi 1 000 000 yinelemede cokuyordu, ve
+// matmul kiyasi N=400'de (160 000 yineleme, 8 MB / 52 bayt) oluyordu.
+//
+// Bu makrolarin kapsadigi builtin sayisi buyuk (sin/cos/tan/exp/log/... +
+// pow/atan2/hypot/fmod/mod/min/max/randint + upper/lower/reverse/...), yani
+// tek satirlik hata ONLARCA builtin'i birden vuruyordu. Nobetci:
+// tests/stack_growth_smoke.py builtin'leri tek tek tariyor.
 // ====== Math Functions - Single Param ======
 #define MATH1_FUNC(func_name, field)                                           \
   if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
-    LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
-        backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
+    LLVMValueRef v_ptr = llvm_build_alloca_at_entry(                           \
+        backend, backend->vm_value_type, func_name "_arg_ptr");                \
     LLVMBuildStore(backend->builder, v, v_ptr);                                \
     LLVMValueRef v_void = LLVMBuildBitCast(                                    \
         backend->builder, v_ptr, backend->ptr_type, func_name "_arg_void");    \
@@ -7002,11 +7198,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 2) {       \
     LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
     LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
-    LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
-        backend->builder, backend->vm_value_type, func_name "_arg1_ptr");      \
+    LLVMValueRef v1_ptr = llvm_build_alloca_at_entry(                          \
+        backend, backend->vm_value_type, func_name "_arg1_ptr");               \
     LLVMBuildStore(backend->builder, v1, v1_ptr);                              \
-    LLVMValueRef v2_ptr = LLVMBuildAlloca(                                     \
-        backend->builder, backend->vm_value_type, func_name "_arg2_ptr");      \
+    LLVMValueRef v2_ptr = llvm_build_alloca_at_entry(                          \
+        backend, backend->vm_value_type, func_name "_arg2_ptr");               \
     LLVMBuildStore(backend->builder, v2, v2_ptr);                              \
     LLVMValueRef v1_void = LLVMBuildBitCast(                                   \
         backend->builder, v1_ptr, backend->ptr_type, func_name "_arg1_void");  \
@@ -7037,8 +7233,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 #define STR1_FUNC(func_name, field)                                            \
   if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
-    LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
-        backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
+    LLVMValueRef v_ptr = llvm_build_alloca_at_entry(                           \
+        backend, backend->vm_value_type, func_name "_arg_ptr");                \
     LLVMBuildStore(backend->builder, v, v_ptr);                                \
     LLVMValueRef v_void = LLVMBuildBitCast(                                    \
         backend->builder, v_ptr, backend->ptr_type, func_name "_arg_void");    \
@@ -7068,11 +7264,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 2) {       \
     LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
     LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
-    LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
-        backend->builder, backend->vm_value_type, func_name "_arg1_ptr");      \
+    LLVMValueRef v1_ptr = llvm_build_alloca_at_entry(                          \
+        backend, backend->vm_value_type, func_name "_arg1_ptr");               \
     LLVMBuildStore(backend->builder, v1, v1_ptr);                              \
-    LLVMValueRef v2_ptr = LLVMBuildAlloca(                                     \
-        backend->builder, backend->vm_value_type, func_name "_arg2_ptr");      \
+    LLVMValueRef v2_ptr = llvm_build_alloca_at_entry(                          \
+        backend, backend->vm_value_type, func_name "_arg2_ptr");               \
     LLVMBuildStore(backend->builder, v2, v2_ptr);                              \
     LLVMValueRef v1_void = LLVMBuildBitCast(                                   \
         backend->builder, v1_ptr, backend->ptr_type, func_name "_arg1_void");  \
@@ -7115,6 +7311,32 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, v2_ptr, backend->ptr_type, "substring_arg2_void");
       LLVMValueRef args[] = {v0_void, v1_void, v2_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_string_substring, args, 3, "substring_res");
+    }
+
+    // at(dizi, i, varsayilan) / json_get(o, anahtar, varsayilan) — ucu de
+    // VMValue alan ayni ABI. Yokluk CAGIRANIN KARARI: bu ikisi tani basmaz.
+    if ((strcmp(bi_name, "at") == 0 || strcmp(bi_name, "json_get") == 0) &&
+        node->argument_count >= 3) {
+      LLVMValueRef a0 = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef a1 = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef a2 = codegen_expression(backend, node->arguments[2]);
+      LLVMValueRef p0 = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "acc_a0");
+      LLVMBuildStore(backend->builder, a0, p0);
+      LLVMValueRef p1 = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "acc_a1");
+      LLVMBuildStore(backend->builder, a1, p1);
+      LLVMValueRef p2 = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "acc_a2");
+      LLVMBuildStore(backend->builder, a2, p2);
+      LLVMValueRef aargs[] = {
+          LLVMBuildBitCast(backend->builder, p0, backend->ptr_type, "acc_v0"),
+          LLVMBuildBitCast(backend->builder, p1, backend->ptr_type, "acc_v1"),
+          LLVMBuildBitCast(backend->builder, p2, backend->ptr_type, "acc_v2")};
+      LLVMValueRef fn = (strcmp(bi_name, "at") == 0)
+                            ? backend->func_aot_at
+                            : backend->func_aot_json_get;
+      return llvm_call_vmvalue_func(backend, fn, aargs, 3, "acc_res");
     }
 
     // ====== Time Functions ======
@@ -10304,6 +10526,22 @@ static LLVMValueRef native_loop_int_value(LLVMBackend *backend, TypedValue v,
 // zinciri (asagida) klonlari ayni ABI ile uretiyor. Ikisi ayrisirsa native
 // imzaya VMValue govdesi (ya da tersi) yazilir ve modul dogrulamasi patlar.
 // Kopyalanmis kosul tam bu yuzden burada birlestirildi.
+//
+// ⚠ `: int` DONUS SARTINI KALDIRMAK ISTEYEN OKU (2026-09-11, P50).
+//
+// Asagidaki `node->return_type != TYPE_INT` satiri yalniz bir performans
+// secimi degil — `thread_create`'in ABI'siyle SESSIZCE bagli. Sart geregi
+// native yola cikan her fonksiyon i64 DONER; `tw_<ad>` sarmalayicisi
+// (llvm_backend.cpp, thread_create gonderimi) bunu varsayar ve donusu
+// KOSULSUZ `llvm_vm_val_int_val` ile kutular. Sart gevsetilip VOID donen
+// bir fonksiyon native yola cikarsa, o sarmalayici void bir degeri
+// kutulamaya calisir.
+//
+// Bugun o dal ERISILEMEZ: void donen her fonksiyon kutulu `t_<ad>` ABI'sinde
+// kaliyor, yani thread_create sarmalayiciya hic dusmuyor. Yarin biri bu
+// sarti gevsettiginde dusecek — ve hata "thread_create bozuk" diye
+// raporlanacak, kimse donus tipini dusunmeyecek. Gevsetiyorsan once
+// `tw_` sarmalayicisina void dali ekle.
 static bool native_abi_eligible(LLVMBackend *backend, ASTNode_C *node) {
   if (!node || node->type != AST_FUNCTION_DECL || !node->name) return false;
   // async fonksiyonlar ZORUNLU olarak kutulu `t_<ad>` ABI'sini kullanir:
@@ -12182,6 +12420,7 @@ LLVMTypeRef datatype_to_llvm(LLVMBackend *backend, DataType type) {
   case TYPE_STRING:
     return backend->string_type;
   case TYPE_VOID:
+  case TYPE_UNSPECIFIED:   // codegen acisindan ayni; fark yalniz typeinfer'de
     return backend->void_type;
   default:
     return backend->vm_value_type; // Fallback for complex types

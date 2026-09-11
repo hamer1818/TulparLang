@@ -1,0 +1,6 @@
+// `push` DEGER URETMIYOR (katalogda TYPE_VOID) ama atamasi typecheck'ten
+// GECIYORDU: `e` calisma zamaninda 0 oluyor, dizi sessizce yok oluyordu.
+// Bu delik gercek bir eszamanlilik testini yanlis sonuca goturdu (Tuzaklar 7a).
+int[] e = [1, 2];
+e = push(e, 3);
+print(len(e));

@@ -526,6 +526,8 @@ typedef struct {
 
   // String Functions - Three params
   LLVMValueRef func_aot_string_substring;
+  LLVMValueRef func_aot_at;
+  LLVMValueRef func_aot_json_get;
 
   // Time Functions
   LLVMValueRef func_aot_timestamp;

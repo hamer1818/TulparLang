@@ -374,7 +374,7 @@ Two further disclosures the numbers alone don't carry:
 Five integer/string kernels on one machine cannot support "fastest
 language". Not covered: floating point and SIMD (matmul, n-body,
 mandelbrot), allocation pressure and hash-map/JSON workloads — which is
-where ARC-versus-GC differences would actually appear — pointer chasing,
+where the arena model's costs would actually appear — pointer chasing,
 sorting, multi-threaded scaling, RSS, and sustained-load p99 latency.
 The defensible reading is: Tulpar is **in C's performance class on
 integer kernels** and decisively ahead of Node/Python/Java/C#. Its flat
@@ -414,7 +414,7 @@ closed form and "won" without executing them. The suite in
 > **\*** These figures come from `listen_pool`, a multi-threaded listener,
 > and Wings keeps mutable globals (request counters, the router table).
 > Tulpar has **no memory model**: shared mutable state across threads is
-> neither atomic nor reliably visible — measured, with three reproducers, in
+> neither atomic nor reliably visible — measured, with reproducers, in
 > [docs/mindmap/Concurrency.md](docs/mindmap/Concurrency.md). The throughput
 > number itself is real; the concurrency contract underneath it is
 > undocumented and untested, so treat the counters as approximate until that
@@ -663,7 +663,7 @@ TulparLang/
 │   ├── cli/            # Subcommands (update, etc.)
 │   └── common/         # Localization, version, platform shims, TLS plumbing
 ├── lib/                # Standard library (Tulpar source, embedded at build)
-├── runtime/            # cJSON, ARC heap, native FFI
+├── runtime/            # cJSON, arena heap, native FFI
 ├── examples/           # 47 example programs
 ├── benchmarks/         # Multi-language benchmark suite (CPU + HTTP)
 ├── tests/              # Smoke tests + lib/test.tpr regression suites

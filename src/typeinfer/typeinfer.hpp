@@ -7,6 +7,7 @@
 #include "../parser/ast_nodes.hpp"
 #include <optional>
 #include <string>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -45,6 +46,21 @@ struct TypeInferContext {
   std::unordered_map<std::string, TypeSymbol> symbols;
   std::unordered_map<std::string, FunctionSignature> functions;
   std::unordered_map<std::string, StructTypeInfo> struct_types;
+
+  // P23 — COZUM ile BASLATMA ayri sorulardir.
+  //
+  // `global_decl_line` on-gecişte doluyor: ad -> bildirim satiri. Cozum
+  // (ad -> tip) artik siradan bagimsiz; ama UST DUZEY calisma sirasi
+  // hala gercek. Bildirim satirindan once OKUNAN bir global calisma
+  // zamaninda sifirdir, ve bu sessizce oluyordu (`print(sayac); int
+  // sayac = 5;` -> "0" basiyor, tek bir tani yok).
+  //
+  // `initialized_globals` ana gezinti ust duzey bir bildirime VARDIKCA
+  // doluyor. Ikisinin farki, "cozuldu ama henuz baslatilmadi" durumunu
+  // "bulunamadi"dan AYIRAN tek bilgi — ve o ayrim, #7'nin (bir sentinel
+  // iki anlam tasiyamaz) bu dosyadaki karsiligi.
+  std::unordered_map<std::string, int> global_decl_line;
+  std::set<std::string> initialized_globals;
 
   // Current function context (for return type checking)
   DataType current_return_type;

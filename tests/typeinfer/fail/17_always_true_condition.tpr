@@ -1,0 +1,21 @@
+// S1 ILE TYPECHECK BIRLESTI — "if-desenleri S1 tablosunun satirlaridir."
+//
+// Eskiden iki hakikat kaynagi vardi (#8): FINDINGS'teki S1 tablosu bu
+// sekilleri TANIMLI sayiyordu, typecheck ise "Condition must be boolean or
+// integer" diyordu — yani IZINLI ve TANIMLI olan bir seye "olmali" diyen,
+// yanlis bir cumle. Ayrica `float` da uyari aliyordu: S1'e gore YANLIS
+// POZITIF, cunku `if (0.0)` yanlis ve `if (1.5)` dogru — tam `int` kadar
+// anlamli.
+//
+// Kural artik tablodan turetiliyor, uc sinif:
+//   SAYISAL (bool/int/float) -> iki yon de anlamli, SESSIZ
+//   DINAMIK (json/unknown)   -> calisma zamaninda belli, SESSIZ
+//   SABIT   (str/array)      -> HER ZAMAN dogru, uyari
+//
+// Tani artik DOGRU cumleyi kuruyor ve duzeltmeyi soyluyor.
+str ad = "";
+if (ad) {
+    print("bos dizgi DOGRUdur — bu dal hep kosar");
+}
+// EXPECT: ALWAYS true
+// EXPECT: length(x) > 0

@@ -36,7 +36,15 @@ enum DataType {
     TYPE_ARRAY_BOOL,
     TYPE_ARRAY_JSON,
     TYPE_JSON,
-    TYPE_VOID
+    TYPE_VOID,
+    // Donus tipi YAZILMAMIS fonksiyon. TYPE_VOID'den AYRI tutulur cunku
+    // "deger uretmiyor" ile "kullanici yazmadi" ayni sey degil: `func f(n)
+    // { return n+1; }` deger donduruyor. Ikisi ayni sentinel'i paylastigi
+    // surece "VOID atamasi hatadir" degismezi kurulamiyordu — denendi,
+    // 221 dosyanin 77'sinde yanlis pozitif verdi (2026-09-09).
+    // Codegen ve LSP acisindan TYPE_VOID ile AYNI davranir; fark yalniz
+    // typeinfer'in denetim kararlarinda.
+    TYPE_UNSPECIFIED
 };
 
 // ============================================================================

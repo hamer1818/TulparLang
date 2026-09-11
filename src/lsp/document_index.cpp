@@ -11,6 +11,7 @@ std::string render_type(int data_type, const char *custom_type) {
         case TYPE_STRING: return "str";
         case TYPE_BOOL: return "bool";
         case TYPE_VOID: return "void";
+        case TYPE_UNSPECIFIED: return "void";
         case TYPE_ARRAY: return "array";
         case TYPE_ARRAY_INT: return "array<int>";
         case TYPE_ARRAY_FLOAT: return "array<float>";

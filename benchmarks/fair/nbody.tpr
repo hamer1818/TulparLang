@@ -1,0 +1,101 @@
+// N-body (5 cisimli gunes sistemi). nbody.c ile AYNI algoritma ve veri yapisi:
+// paralel float dizileri. Olculen: kayan nokta aritmetigi + kucuk dizi
+// erisimi + sqrt — matmul (depolama) ile mandelbrot (saf aritmetik) arasi.
+float PI = 3.141592653589793;
+float SOLAR_MASS = 4.0 * PI * PI;
+float DPY = 365.24;
+float[] x = array_fill(5, 0.0);
+float[] y = array_fill(5, 0.0);
+float[] z = array_fill(5, 0.0);
+float[] vx = array_fill(5, 0.0);
+float[] vy = array_fill(5, 0.0);
+float[] vz = array_fill(5, 0.0);
+float[] mass = array_fill(5, 0.0);
+
+func advance(float dt) {
+    for (int i = 0; i < 5; i = i + 1) {
+        for (int j = i + 1; j < 5; j = j + 1) {
+            float dx = x[i] - x[j];
+            float dy = y[i] - y[j];
+            float dz = z[i] - z[j];
+            float d2 = dx * dx + dy * dy + dz * dz;
+            float mag = dt / (d2 * sqrt(d2));
+            vx[i] = vx[i] - dx * mass[j] * mag;
+            vy[i] = vy[i] - dy * mass[j] * mag;
+            vz[i] = vz[i] - dz * mass[j] * mag;
+            vx[j] = vx[j] + dx * mass[i] * mag;
+            vy[j] = vy[j] + dy * mass[i] * mag;
+            vz[j] = vz[j] + dz * mass[i] * mag;
+        }
+    }
+    for (int i = 0; i < 5; i = i + 1) {
+        x[i] = x[i] + dt * vx[i];
+        y[i] = y[i] + dt * vy[i];
+        z[i] = z[i] + dt * vz[i];
+    }
+}
+
+func energy(): float {
+    float e = 0.0;
+    for (int i = 0; i < 5; i = i + 1) {
+        e = e + 0.5 * mass[i] * (vx[i] * vx[i] + vy[i] * vy[i] + vz[i] * vz[i]);
+        for (int j = i + 1; j < 5; j = j + 1) {
+            float dx = x[i] - x[j];
+            float dy = y[i] - y[j];
+            float dz = z[i] - z[j];
+            e = e - (mass[i] * mass[j]) / sqrt(dx * dx + dy * dy + dz * dz);
+        }
+    }
+    return e;
+}
+
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 1000000; }
+x[0] = 0.0;
+y[0] = 0.0;
+z[0] = 0.0;
+vx[0] = 0.0;
+vy[0] = 0.0;
+vz[0] = 0.0;
+mass[0] = SOLAR_MASS;
+x[1] = 4.841431442464721;
+y[1] = -1.1603200440274284;
+z[1] = -0.10362204447112311;
+vx[1] = 0.001660076642744037 * DPY;
+vy[1] = 0.007699011184197404 * DPY;
+vz[1] = -6.90460016972063e-05 * DPY;
+mass[1] = 0.0009547919384243266 * SOLAR_MASS;
+x[2] = 8.34336671824458;
+y[2] = 4.124798564124305;
+z[2] = -0.4035234171143214;
+vx[2] = -0.002767425107268624 * DPY;
+vy[2] = 0.004998528012349172 * DPY;
+vz[2] = 2.3041729757376393e-05 * DPY;
+mass[2] = 0.0002858859806661308 * SOLAR_MASS;
+x[3] = 12.894369562139131;
+y[3] = -15.111151401698631;
+z[3] = -0.22330757889265573;
+vx[3] = 0.002964601375647616 * DPY;
+vy[3] = 0.0023784717395948095 * DPY;
+vz[3] = -2.9658956854023756e-05 * DPY;
+mass[3] = 4.366244043351563e-05 * SOLAR_MASS;
+x[4] = 15.379697114850917;
+y[4] = -25.919314609987964;
+z[4] = 0.17925877295037118;
+vx[4] = 0.0026806777249038932 * DPY;
+vy[4] = 0.001628241700382423 * DPY;
+vz[4] = -9.515922545197159e-05 * DPY;
+mass[4] = 5.1513890204661145e-05 * SOLAR_MASS;
+float px = 0.0;
+float py = 0.0;
+float pz = 0.0;
+for (int i = 0; i < 5; i = i + 1) {
+    px = px + vx[i] * mass[i];
+    py = py + vy[i] * mass[i];
+    pz = pz + vz[i] * mass[i];
+}
+vx[0] = 0.0 - px / SOLAR_MASS;
+vy[0] = 0.0 - py / SOLAR_MASS;
+vz[0] = 0.0 - pz / SOLAR_MASS;
+for (int i = 0; i < n; i = i + 1) { advance(0.01); }
+print(toInt(round(energy() * 1000000000.0)));

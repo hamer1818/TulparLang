@@ -1,0 +1,21 @@
+// P23 — SEMBOL COZUMU BILDIRIM SIRASINA BAGLI DEGILDIR.
+//
+// Tek gecisli sembol toplamasi, bir global'i bildirim satirindan ONCE
+// kullanan her fonksiyon govdesini DENETIMSIZ birakiyordu: ad cozulemedigi
+// icin tip UNKNOWN'a dusuyor ve ustundeki her kontrol atlaniyor. Sessiz —
+// ne uyari ne hata.
+//
+// Olculdu (2026-09-11): ayni hata, iki siralamada iki farkli sonuc veriyordu.
+//   int sayac = 5;  func oku(): int { return length(sayac); }  -> YAKALANIR
+//   func oku(): int { return length(sayac); }  int sayac = 5;  -> KACAR
+//
+// Korpusta 1353 ust duzey global'in 231'i ilk kullanimindan SONRA
+// bildirilmis (lib/scene3d.tpr tek basina 192) — yani bu, kenar durum degil
+// yaygin bir yazim. Hepsi acik tipli; tek bir `var` yok.
+func oku(): int {
+    return length(sayac);   // sayac bir int; length(int) hatadir
+}
+int sayac = 5;
+print(oku());
+// EXPECT: length
+// EXPECT: got int

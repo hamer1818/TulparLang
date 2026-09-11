@@ -85,6 +85,89 @@ typedef struct {
 // `thread_local` is C++11; works on both gcc/MinGW and MSVC. Each
 // worker thread initialises its own arena lazily on first alloc; the
 // `aot_arena_init` path is idempotent per thread.
+// ---------------------------------------------------------------------------
+// CALISMA ZAMANI HATASI — tek gecis noktasi (R1, 2026-09-10)
+//
+// Olculdu: dizi sinir disi, sifira bolme, `call` bulunamadi ve eksik json
+// anahtari — dordunde de tani STDOUT'a yaziliyordu ve surec 0 ile cikiyordu.
+// Iki ayri sorun:
+//
+//   (1) STDOUT. Tani, programin kendi ciktisina karisiyordu. Ciktiyi
+//       karsilastiran her test duzenegini zehirler; merkezi `vm_runtime_error`
+//       zaten stderr kullaniyordu ama buradaki 18 site onu ATLAYIP printf
+//       cagiriyordu.
+//   (2) CIKIS KODU 0. Cikis koduna bakan her arac (CI, supervisor, shell &&)
+//       basarisizligi goremiyordu. build.sh'in ornek kosucusu "yalnizca cikis
+//       kodunu" karsilastirdigi icin bir ornege `kk[999]` enjekte edildiginde
+//       suite "All tests passed!" diyordu (R2, olculdu).
+//
+// Bu yardimci ikisini de duzeltir, DAVRANISI DEGISTIRMEDEN: hata hala yumusak
+// (yerine 0 konur, akis devam eder). Degisen yalniz akis (stderr) ve nihai
+// cikis kodu. Goc kapisi olculdu: 50 orneğin SIFIRINDA calisma zamani hatasi
+// var, yani bu degisiklik hicbir ornegi kirmiyor.
+//
+// NOT: `try/catch` bu hatalari HALA yakalamiyor (P26b) — iki hata sistemini
+// birlestirmek ayri bir is; bkz. FINDINGS R3.
+extern "C" void aot_throw(VMValue exception);
+VMValue aot_string_from_cstr(const char *cstr);
+static bool g_rt_error_seen = false;
+
+static void rt_error_exit_hook(void) {
+  if (g_rt_error_seen) _exit(70);   // 70 = EX_SOFTWARE
+}
+
+extern "C" void aot_runtime_error(const char *msg) {
+  // Cikis kodu SECIME BAGLI (TULPAR_STRICT_RUNTIME=1). Varsayilan hala 0.
+  //
+  // NEDEN VARSAYILAN DEGIL: "sinir disi okuma 0 dondurur ve program devam
+  // eder" davranisi bir kaza degil, TEST EDILMIS SOZLESME —
+  // tests/loop_versioning.test.tpr::run_sinir_disi_indeks tam bunu iddia
+  // ediyor (`a[64] -> sinir disi -> 0`) ve scene3d_engine ayni deseni
+  // kullaniyor. Cikis kodunu kosulsuz 70 yapmak bu iki suite'i (55/55 ve
+  // 654/654 gecerken) FAIL'e cevirdi — olculdu.
+  //
+  // Yani karar dilin hata felsefesine ait: yumusak hata mi kalsin, yoksa
+  // firlatilabilir/olumcul mu olsun (bkz. FINDINGS R1/R3). Anahtar, kararin
+  // maliyetini olcmeyi mumkun kiliyor; varsayilani degistirmek ayri bir is.
+  // FLIP (2026-09-10): STRICT ARTIK VARSAYILAN. `TULPAR_SOFT_RUNTIME=1` eski
+  // "tani bas, 0 ikame et, devam et" davranisini BIR SURUM DONGUSU boyunca
+  // geri getirir; sonra bu kapi kalkar.
+  //
+  // Flip'in on kosullarinin hepsi olculdu:
+  //   L1  — `&&`/`||` kisa devre yapmiyordu; duzeltildi (yoksa her koruma
+  //         deyimi firlatirdi).
+  //   P36 — korpus-geneli strict delta: 77 suite, 0 tani.
+  //   P37 — goc maliyeti: 1 test dosyasi (loop_versioning), 0 ornek.
+  //   P39 — wings istek-basina hata siniri: bozuk istek sunucuyu DUSURMUYOR,
+  //         500 donuyor.
+  //   R8  — longjmp riski: 76 suite strict altinda, 0 cokme.
+  //
+  // `TULPAR_STRICT_RUNTIME` hala taniniyor (build.sh harness'i onu set
+  // ediyordu) ama artik etkisiz — varsayilan zaten strict.
+  static int strict = -1;
+  if (strict < 0) {
+    const char *e = std::getenv("TULPAR_SOFT_RUNTIME");
+    strict = (e && *e && std::strcmp(e, "0") != 0) ? 0 : 1;
+  }
+  if (strict) {
+    // P26b BIRLESTIRME: strict modda calisma zamani hatasi bir ISTISNADIR.
+    // `aot_throw` zaten dogru sozlesmeyi tasiyor — yakalanirsa `try/catch`e
+    // longjmp eder, yakalanmazsa stderr + exit(1) (fail-fast). Yani iki hata
+    // sistemi burada bulusuyor ve P26b ("try/catch runtime hatasini
+    // yakalamiyor") kapanir.
+    //
+    // ⚠ RISK, OLCULMESI GEREKEN: longjmp runtime'in C++ ici cagri
+    // cerceverlerinden ATLAR. RAII tutan bir cerceve arada kalirsa yikici
+    // calismaz. Bu yuzden secime bagli kaliyor ve korpus uzerinde olculuyor.
+    // Burada BASMIYORUZ: mesaji ya `catch` blogu kullanir ya da `aot_throw`in
+    // yakalanmayan yolu "Uncaught Exception: ..." diye stderr'e yazar. Ikisini
+    // birden yapmak ayni tanIyI iki kez basiyordu.
+    aot_throw(aot_string_from_cstr(msg));
+    return;   // ulasilmaz
+  }
+  std::fprintf(stderr, "%s\n", msg);
+}
+
 static thread_local AOTArena *g_aot_string_arena = nullptr;
 
 // ---------------------------------------------------------------------------
@@ -286,7 +369,7 @@ static VMValue aot_invoke_boxed_n(void (*fp)(VMValue *), int arity,
 // AOT Dynamic Call Support
 VMValue aot_call_dynamic(VMValue func_name) {
   if (!IS_STRING(func_name)) {
-    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
     return VM_VOID();
   }
@@ -314,13 +397,18 @@ VMValue aot_call_dynamic(VMValue func_name) {
       func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
     }
     if (!func_ptr) {
-      printf("%s '%s' (AOT)\n",
-             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
-                                 "Runtime Error: Function not found"),
-             name);
+      {
+        char _b[512];
+        std::snprintf(_b, sizeof _b, "%s '%s' (AOT)",
+                      tulpar::i18n::tr_en(
+                          "Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                          "Runtime Error: Function not found"),
+                      name);
+        aot_runtime_error(_b);
+      }
       const char *error = tulpar_dlerror();
       if (error) {
-        printf("  Detail: %s\n", error);
+        std::fprintf(stderr, "  Detail: %s\n", error);
       }
       return VM_VOID();
     }
@@ -348,7 +436,7 @@ VMValue aot_call_dynamic(VMValue func_name) {
 // `func list_users()` or `func get_user(req)`.
 VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
   if (!IS_STRING(func_name)) {
-    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
     return VM_VOID();
   }
@@ -374,10 +462,15 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
       func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
     }
     if (!func_ptr) {
-      printf("%s '%s' (AOT)\n",
-             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
-                                 "Runtime Error: Function not found"),
-             name);
+      {
+        char _b[512];
+        std::snprintf(_b, sizeof _b, "%s '%s' (AOT)",
+                      tulpar::i18n::tr_en(
+                          "Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                          "Runtime Error: Function not found"),
+                      name);
+        aot_runtime_error(_b);
+      }
       return VM_VOID();
     }
     // Native dlsym fallback: arity unknown (-1) → invoke with the 1-arg shape,
@@ -397,7 +490,7 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
 // two context args instead of smuggling them through globals.
 VMValue aot_call_dynamic_n(VMValue func_name, VMValue *args, int argc) {
   if (!IS_STRING(func_name)) {
-    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
     return VM_VOID();
   }
@@ -423,10 +516,15 @@ VMValue aot_call_dynamic_n(VMValue func_name, VMValue *args, int argc) {
       func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
     }
     if (!func_ptr) {
-      printf("%s '%s' (AOT)\n",
-             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
-                                 "Runtime Error: Function not found"),
-             name);
+      {
+        char _b[512];
+        std::snprintf(_b, sizeof _b, "%s '%s' (AOT)",
+                      tulpar::i18n::tr_en(
+                          "Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                          "Runtime Error: Function not found"),
+                      name);
+        aot_runtime_error(_b);
+      }
       return VM_VOID();
     }
     aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
@@ -874,8 +972,32 @@ static_assert((int)OBJ_ARRAY == 1, "OBJ_ARRAY = 1 olmali (codegen varsayimi)");
 // burayi cagiriyor: yani bir dizi, kutulanmamis hizli yolun disinda ilk kez
 // kullanildigi anda bir kez cevriliyor ve oyle kaliyor. Yavaslamiyor, cunku
 // cevrim eleman basina tek bir yazma ve yalniz BIR KEZ oluyor.
+// ESZAMANLILIK: bu cevrim bir OKUMA yolundan tetikleniyor (`arr_items`), yani
+// ayni diziyi "yalnizca okuyan" iki thread ayni anda BURAYA girebilir. Once
+// oyle oluyordu ve program cokuyordu: 8 thread paylasilan bir int[]'i okurken
+// "gecersiz hedef veya indeks". Iki hata birdeydi — (1) iki thread ayni anda
+// cevirip birbirinin isaretcilerini eziyordu, (2) `free(a->idata)` sirasinda
+// baska bir thread hala `idata[i]` okuyordu (use-after-free).
+//
+// Duzeltme iki parcali:
+//   (1) Cift denetimli kilit: yalniz BIR thread cevirir, otekiler kilidi alip
+//       isin bittigini gorup doner. Hizli yol (arr_items'taki `a->idata`
+//       kontrolu) kilitsiz kalir — cevrim dizi omrunde en fazla bir kez olur.
+//   (2) `idata` SERBEST BIRAKILMIYOR. Cevrim aninda baska bir thread'in elinde
+//       o isaretci olabilir; okudugu veri bayat degil (icerik ayni, yalniz
+//       temsil degisti), yani okumasi DOGRU sonuc verir. Serbest biraksaydik
+//       ayni okuma use-after-free olurdu. Bedeli: dizi omru boyunca eski
+//       tampon duruyor. Bilerek: dogruluk > o bellek. (Zaten P14'e gore bu
+//       runtime deger bellegini genel olarak geri kazanmiyor —
+//       docs/mindmap/Memory.md.)
+//
+// Tek is parcacikli programlarda davranis aynidir; yalniz `free` gitti.
+static std::mutex g_debox_mutex;
+
 void arr_debox(ObjArray *a) {
   if (!a || !a->idata) return;
+  std::lock_guard<std::mutex> lk(g_debox_mutex);
+  if (!a->idata) return;   // baska bir thread cevirdi
   int n = a->count;
   int cap = a->capacity > n ? a->capacity : (n > 0 ? n : 1);
   VMValue *boxed = (VMValue *)malloc(sizeof(VMValue) * cap);
@@ -886,10 +1008,12 @@ void arr_debox(ObjArray *a) {
   } else {
     for (int i = 0; i < n; i++) boxed[i] = VM_INT(a->idata[i]);
   }
-  free(a->idata);
-  a->idata = nullptr;
+  // items_ ONCE yayinlanir, idata SONRA temizlenir: hizli yolun `idata`yi hala
+  // gordugu bir an varsa eski (gecerli, ayni icerikli) tampondan okur; tersi
+  // sirada items_ henuz yokken idata null gorunup null dereference olurdu.
   a->items_ = boxed;
   a->capacity = cap;   // kapasite KORUNUR: buyume kodu old_capacity'yi onceden okumus olabilir
+  a->idata = nullptr;  // NOT: eski tampon BILEREK serbest birakilmiyor — yukaridaki nota bak
 }
 
 // 32-bit depolamayi 64'e GENISLETIR. Kutulanmamis dizi i32 baslar; i32'ye
@@ -922,11 +1046,17 @@ extern "C" void aot_arr_widen(void *p) {
 // kind: 0 = sifira bolme, 1 = tasma (INT_MIN / -1).
 extern "C" void aot_div_error(long long kind) {
   if (kind == 1) {
-    printf("%s\n", tulpar::i18n::tr_en(
-                        "Calisma Zamani Hatasi: Tamsayi bolme tasmasi",
-                        "Runtime Error: Integer division overflow"));
+    // Bu dal FLIP'te GOZDEN KACTI: `aot_runtime_error` donusumu regex'le
+    // yapilmisti ve bu printf farkli bicimdeydi, o yuzden yakalanmadi —
+    // tasma tanIsI stdout'a yaziliyor ve surec 0 ile cikiyordu, sifira
+    // bolme ise firlatiyordu. AYNI AILEDEN IKI HATA, IKI FARKLI SOZLESME.
+    // Yakalayan sey `INT_MIN / -1` sondasinin ESKI beklentiyle GECMESI oldu:
+    // yesil bir sonda, donusumun eksik kaldigini gosterdi.
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: Tamsayi bolme tasmasi",
+        "Runtime Error: Integer division overflow"));
   } else {
-    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                        "Runtime Error: Division by zero"));
   }
 }
@@ -1369,7 +1499,7 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
     switch (type_pair) {
     case TYPE_INT_INT:
       if (AS_INT(b) == 0) {
-        printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+        aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                            "Runtime Error: Division by zero"));
         *result = VM_INT(0);
         return;
@@ -1402,7 +1532,7 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
     switch (type_pair) {
     case TYPE_INT_INT:
       if (AS_INT(b) == 0) {
-        printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+        aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                            "Runtime Error: Division by zero"));
         *result = VM_INT(0);
         return;
@@ -1607,8 +1737,7 @@ VMValue vm_array_get(ObjArray *array, int index) {
     return VM_INT(array->idata[index]);
   }
   if (!array || index < 0 || index >= array->count) {
-    printf("%s\n",
-           tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
                                "Runtime Error: Array index out of bounds"));
     return VM_INT(0);
   }
@@ -1634,8 +1763,7 @@ void vm_array_set(ObjArray *array, int index, VMValue value) {
     }
   }
   if (!array || index < 0 || index >= array->count) {
-    printf("%s\n",
-           tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
                                "Runtime Error: Array index out of bounds"));
     return;
   }
@@ -1816,6 +1944,20 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   obj->count++;
 }
 
+// ⚠ GUVENLIK SOZLESMESI (FINDINGS T7 / P15, 2026-09-10): BU SAF BIR OKUMA
+// YOLUDUR. Paylasilan bir `json`, thread'ler arasinda ESZAMANLI OKUNUYOR ve
+// bunun guvenli olmasinin TEK sebebi burada hicbir yazma olmamasi —
+// `ObjObject`te tembel/onbellek alani yok, ilk erisimde kurulan bir hash
+// indeksi yok, memoizasyon yok.
+//
+// Dizilerin karsit ornegi ogretici: `arr_items()` -> `arr_debox()` bir OKUMA
+// yolundan tetiklenip dizi basligina YAZIYOR, ve tam bu yuzden orasi kilit
+// altina alinmak zorunda kaldi.
+//
+// BURAYA memoizasyon / lazy hash / erisim sayaci EKLEMEYIN. Eklenecekse bu,
+// eszamanlilik sozlesmesinin degismesi demektir: T7 ve derin kopya tasarimi
+// yeniden degerlendirilmelidir (S6). Kalicilik fikstur ile de gozleniyor:
+// tests/shared_json_read.test.tpr.
 VMValue vm_object_get(ObjObject *obj, char *key) {
   if (!obj || !key)
     return VM_INT(0);
@@ -1843,8 +1985,7 @@ VMValue vm_get_element_ptr(VMValue *target, VMValue *index) {
 void vm_set_element_ptr(VM *vm, VMValue *target, VMValue *index,
                         VMValue *value) {
   if (!target || !index || !value) {
-    printf("%s\n",
-           tulpar::i18n::tr_en("Calisma Zamani Hatasi: set element icin gecersiz pointer",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: set element icin gecersiz pointer",
                                "Runtime Error: nullptr pointer in set element"));
     return;
   }
@@ -1874,10 +2015,9 @@ VMValue vm_get_element(VMValue target, VMValue index) {
       return VM_OBJ(aot_allocate_string(&str->chars[idx], 1));
     }
   }
-  printf("%s\n",
-         tulpar::i18n::tr_en(
-             "Calisma Zamani Hatasi: get islemi icin gecersiz hedef veya indeks",
-             "Runtime Error: Invalid index or target for get access"));
+  aot_runtime_error(tulpar::i18n::tr_en(
+      "Calisma Zamani Hatasi: get islemi icin gecersiz hedef veya indeks",
+      "Runtime Error: Invalid index or target for get access"));
   return VM_INT(0);
 }
 
@@ -1893,10 +2033,9 @@ void vm_set_element(VM *vm, VMValue target, VMValue index, VMValue value) {
       return;
     }
   }
-  printf("%s\n",
-         tulpar::i18n::tr_en(
-             "Calisma Zamani Hatasi: set islemi icin gecersiz hedef veya indeks",
-             "Runtime Error: Invalid index or target for set access"));
+  aot_runtime_error(tulpar::i18n::tr_en(
+      "Calisma Zamani Hatasi: set islemi icin gecersiz hedef veya indeks",
+      "Runtime Error: Invalid index or target for set access"));
 }
 
 // Print a VMValue (used by OP_PRINT in VM)
@@ -5204,11 +5343,45 @@ VMValue aot_cpu_count(void) {
   return VM_INT((int64_t)n);
 }
 
-// Thread argument structure
+// Thread kaydi — ARGUMAN VE SONUCUN EVI (derin kopya sozlesmesi, 2026-09-10)
+//
+// SOZLESME TEK CUMLE: **kopyayla girer, join'le cikar.**
+//
+// NEDEN: `thread_create` argumani ONCE dogrudan geciyordu, yani cagiran ile
+// isci AYNI heap nesnesini paylasiyordu. Olculdu (FINDINGS T1/T2): korumasiz
+// paylasilan durum ne atomik ne gorunur — 8 thread x bir artirma 7 veriyor ve
+// spin-wait sonsuza doner. Paylasimi VARSAYILAN yapmak yerine PAHALI VE
+// GORUNUR kilmak (C++ std::thread decay-copy, Rust move, Swift Sendable ayni
+// cizgi): argumanlar KOPYA girer, paylasmak isteyen `mutex_*` kullanir.
+//
+// Kopyalanan kume `aot_persist`in kapsadigi kadar: dizgi, dizi, json (ic ice
+// dahil — ozyinelemeli kopyalar). Tamsayi/float/bool zaten deger; fd ve
+// handle gibi ILKELLER dokunulmadan gecer (examples/37_async_http.tpr
+// server_fd'yi boyle gonderiyor ve etkilenmiyor).
+//
+// SONUC SLOTU: `aot_thread_entry` isciyi cagirirken donusu ZATEN hesapliyordu
+// ama ATIYORDU (P20: `thread_join` hep 0 donuyordu). Artik kayda yaziliyor ve
+// `thread_join` onu donduruyor — argumanla AYNI marshaling yolundan
+// (aot_persist), yani cikan da kopyadir.
+//
+// HANDLE SOZLESMESI: **join handle'i TUKETIR; ikinci join hatadir; detach
+// edilmis handle join edilemez.**
+//
+// Kayit hicbir yolda SERBEST BIRAKILMIYOR ve bu bilerek. Ilk yazimda `join`
+// kaydi free ediyordu; olculdu (2026-09-10): ikinci join
+// `free(): double free detected in tcache 2` ile CEKIRDEK DOKUMU verdi —
+// yani kaydi serbest birakmak, hatali kullanimi bellek guvenligi hatasina
+// ceviriyordu. Simdi `consumed` bayragi tutuluyor: ikinci join guvenli bir
+// calisma zamani hatasi veriyor. Bedeli kayit basina birkac yuz bayt (P43/P49
+// ile birlikte olculmus, belgelenmis maliyet); alternatifi use-after-free.
 typedef struct {
-  void *func_ptr; // Function pointer to call
-  VMValue arg;    // Argument to pass
-} AOTThreadArgs;
+  void *func_ptr;          // Cagrilacak fonksiyon
+  VMValue arg;             // KOPYALANMIS arguman
+  VMValue result;          // Iscinin donusu (kopya)
+  tulpar_thread_t thread;  // Isletim sistemi handle'i
+  int consumed;            // join/detach edildi mi (asagidaki sozlesme)
+  int detached;            // YALNIZ detach kaldirir — bkz. entry'deki not
+} AOTThreadRec;
 
 // Thread entry point wrapper.
 //
@@ -5240,17 +5413,37 @@ static unsigned __stdcall aot_thread_entry(void *arg) {
 #else
 static void *aot_thread_entry(void *arg) {
 #endif
-  AOTThreadArgs *targs = (AOTThreadArgs *)arg;
+  AOTThreadRec *rec = (AOTThreadRec *)arg;
 
   typedef void (*ThreadFunc)(VMValue *result, VMValue *arg);
-  ThreadFunc func = (ThreadFunc)targs->func_ptr;
+  ThreadFunc func = (ThreadFunc)rec->func_ptr;
 
   if (func) {
     VMValue result = VM_VOID();
-    func(&result, &targs->arg);
+    func(&result, &rec->arg);
+    // ⚠ `consumed` DEGIL `detached` bakiyoruz. Ilk yazimda `consumed`
+    // kullanildi ve JOIN YOLUNU BOZDU: `thread_join` bayragi beklemeden ONCE
+    // kaldiriyor, isci onu gorup sonucu atiyordu — join `void` donuyor ve
+    // `r["n"]` "gecersiz hedef" hatasi veriyordu. Olcum yakaladi.
+    // "Sonucu isteyen var mi" sorusunun dogru bayragi yalnizca detach'in
+    // kaldirdigi olan.
+    //
+    // DETACH ATAR (S7'nin ucuncu cumlesi). Handle detach edilmisse sonucu
+    // kimse okumayacak — o hâlde KOPYALAMIYORUZ da. Olculdu (P49): detach
+    // edilen isciler join edilenlerden daha cok siziyordu (3,06x vs 2,85x)
+    // cunku sonuc yine de kalici depoya kopyalaniyordu ve kimse istemiyordu.
+    //
+    // JOIN dali burada duzeltilemez: donen deger artik CAGIRANIN ve genel
+    // kalici-deger omrune tabi (FINDINGS M2 — `arc_release` AOT yolunda hic
+    // cagrilmiyor, deger-basi geri kazanim YOK). O, join'e ozgu bir sizinti
+    // degil; genel geri kazanim isiyle birlikte kapanir.
+    if (!rec->detached) {
+      // Argumanla AYNI marshaling yolu: cikan da KOPYA. Iscinin arenasi
+      // kapandiginda cagiran gecerli bir degere bakmali.
+      rec->result = aot_persist(result);
+    }
   }
-
-  free(targs);
+  // Kayit BURADA serbest birakilmaz — `thread_join`/`thread_detach` yapar.
 #if PLATFORM_WINDOWS
   return 0;
 #else
@@ -5262,25 +5455,32 @@ static void *aot_thread_entry(void *arg) {
 VMValue aot_thread_create(void *func_ptr, VMValue arg) {
   tulpar_thread_t thread;
 
-  AOTThreadArgs *targs = static_cast<AOTThreadArgs*>(malloc(sizeof(AOTThreadArgs)));
-  if (!targs)
+  AOTThreadRec *rec = static_cast<AOTThreadRec *>(malloc(sizeof(AOTThreadRec)));
+  if (!rec)
     return VM_INT(-1);
 
-  targs->func_ptr = func_ptr;
-  targs->arg = arg;
+  rec->func_ptr = func_ptr;
+  // DERIN KOPYA: isci kendi kopyasiyla calisir (bkz. AOTThreadRec notu).
+  rec->arg = aot_persist(arg);
+  rec->result = VM_VOID();
+  rec->consumed = 0;
+  rec->detached = 0;
 
 #if PLATFORM_WINDOWS
-  int result = tulpar_thread_create(&thread, (tulpar_thread_func_t)aot_thread_entry, targs);
+  int result = tulpar_thread_create(&thread, (tulpar_thread_func_t)aot_thread_entry, rec);
 #else
-  int result = tulpar_thread_create(&thread, aot_thread_entry, targs);
+  int result = tulpar_thread_create(&thread, aot_thread_entry, rec);
 #endif
   if (result != 0) {
-    free(targs);
+    free(rec);
     return VM_INT(-1);
   }
+  rec->thread = thread;
 
-  // Return thread ID as int64
-  return VM_INT((int64_t)(uintptr_t)thread);
+  // Id artik KAYDIN adresi (eskiden ham thread handle'iydi). Kullanici icin
+  // opak bir tamsayi oldugu icin gorunur bir fark yok; join/detach onu geri
+  // cevirip sonucu okuyabiliyor.
+  return VM_INT((int64_t)(uintptr_t)rec);
 }
 
 // thread_join / thread_detach return VMValue (sentinel 0) instead of
@@ -5289,15 +5489,41 @@ VMValue aot_thread_create(void *func_ptr, VMValue arg) {
 // `thread_detach(t)` crashes immediately on first call.
 VMValue aot_thread_join(VMValue threadVal) {
   if (!IS_INT(threadVal)) return VM_INT(0);
-  tulpar_thread_t thread = (tulpar_thread_t)(uintptr_t)AS_INT(threadVal);
-  tulpar_thread_join(thread);
-  return VM_INT(0);
+  AOTThreadRec *rec = (AOTThreadRec *)(uintptr_t)AS_INT(threadVal);
+  if (!rec) return VM_INT(0);
+  if (rec->consumed) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: thread_join: bu handle zaten tuketildi "
+        "(join handle'i tuketir; ikinci join hatadir)",
+        "Runtime Error: thread_join: handle already consumed "
+        "(join consumes the handle; a second join is an error)"));
+    return VM_INT(0);
+  }
+  rec->consumed = 1;
+  tulpar_thread_join(rec->thread);
+  // SOZLESMENIN IKINCI YARISI: kopyayla girer, JOIN'LE CIKAR.
+  return rec->result;
 }
 
 VMValue aot_thread_detach(VMValue threadVal) {
   if (!IS_INT(threadVal)) return VM_INT(0);
-  tulpar_thread_t thread = (tulpar_thread_t)(uintptr_t)AS_INT(threadVal);
-  tulpar_thread_detach(thread);
+  AOTThreadRec *rec = (AOTThreadRec *)(uintptr_t)AS_INT(threadVal);
+  if (!rec) return VM_INT(0);
+  if (rec->consumed) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: thread_detach: bu handle zaten tuketildi",
+        "Runtime Error: thread_detach: handle already consumed"));
+    return VM_INT(0);
+  }
+  // Detach da handle'i TUKETIR: sonrasinda join etmek pthread duzeyinde
+  // tanimsiz davranistir, o yuzden bayrak burada da kalkiyor ve sonraki join
+  // guvenli bir hata veriyor. (Olculdu: bayrak yokken "detach sonrasi join"
+  // KAZARA calisiyordu — tanimli degil, sansliydi.)
+  rec->consumed = 1;
+  rec->detached = 1;
+  tulpar_thread_detach(rec->thread);
+  // Kayit serbest birakilmiyor: detach edilen thread hala sonuc slotuna
+  // yaziyor olabilir. Bkz. AOTThreadRec'teki handle sozlesmesi notu.
   return VM_INT(0);
 }
 
@@ -7664,6 +7890,63 @@ VMValue aot_string_substring(VMValue str, VMValue startVal, VMValue endVal) {
   return VM_OBJ((Obj *)aot_allocate_string(s->chars + start, len));
 }
 
+
+// ---------------------------------------------------------------------------
+// ERISIMCILER — `at` ve `json_get` (2026-09-10)
+//
+// NEDEN VAR: bu runtime bugun eksik anahtar / sinir disi indeks icin sessizce
+// `0` ikame ediyor. Bu davranis MESRU kullanimlara sahip ("opsiyonel alan",
+// "nobetci"), ama sorunlu olan sey ORTAMDA yasamasi: dogru erisim ile hatali
+// erisim ayni sekilde davraniyor ve ikisi de sessiz.
+//
+// Politika tek cumle: YUMUSAKLIK ORTAMDA YASAMAZ, ERISIMCIDEDIR. Yokluk,
+// CAGIRANIN KARARI olur — `at(a, i, 0)` yazan kisi varsayilani secmistir;
+// `a[i]` yazan kisi elemanin var oldugunu iddia etmistir.
+//
+// SINIR POLITIKASI — BUGUNKU DAVRANIS BELGELENIYOR, DEGISTIRILMIYOR:
+// negatif indeks "sondan sayma" DEGILDIR, basitce sinir disidir (olculdu:
+// `a[-1]` tani basip 0 donuyor). `at` de ayni cizgiyi kullanir: [0, count)
+// disindaki her indeks -> varsayilan. Goc sirasinda ikinci bir semantik karar
+// kamufle etmemek icin bilerek boyle.
+//
+// Ikisi de TANI BASMAZ: cagiran zaten yoklugu bekliyor.
+VMValue aot_at(VMValue arr_val, VMValue idx_val, VMValue def_val) {
+  // ⚠ `IS_OBJECT` "heap nesnesi mi" DEGIL, "dict mi" demek (OBJ_OBJECT);
+  // "heap nesnesi mi" sorusunun makrosu `IS_OBJ`. Ilk yazimda IS_OBJECT
+  // kullanildi ve `at` dizilerde HER ZAMAN varsayilani dondurdu — ad ile
+  // anlam ayrisiyor (#0'in makro katmanindaki hali). Dogrusu `IS_ARRAY`.
+  if (!IS_ARRAY(arr_val) || !IS_INT(idx_val))
+    return def_val;
+  ObjArray *a = (ObjArray *)AS_OBJ(arr_val);
+  long long i = AS_INT(idx_val);
+  if (i < 0 || i >= (long long)a->count)
+    return def_val;
+  return arr_items(a)[i];
+}
+
+VMValue aot_json_get(VMValue obj_val, VMValue key_val, VMValue def_val) {
+  if (!IS_OBJECT(obj_val) || !IS_STRING(key_val))
+    return def_val;   // IS_OBJECT = "dict mi" (yukaridaki nota bak)
+  ObjObject *o = (ObjObject *)AS_OBJ(obj_val);
+  const char *k = AS_STRING(key_val)->chars;
+  // `vm_object_get` eksik anahtarda VM_INT(0) donuyor ve bu GERCEK bir 0'dan
+  // ayirt edilemiyor — bu yuzden varligi burada acikca sinamak zorundayiz.
+  for (int i = 0; i < o->count; i++)
+    if (strcmp(o->keys[i]->chars, k) == 0)
+      return o->values[i];
+  return def_val;
+}
+
+extern "C" VMValue aot_at_ptr(VMValue *a, VMValue *i, VMValue *d) {
+  if (!a || !i || !d) return VM_INT(0);
+  return aot_at(*a, *i, *d);
+}
+
+extern "C" VMValue aot_json_get_ptr(VMValue *o, VMValue *k, VMValue *d) {
+  if (!o || !k || !d) return VM_INT(0);
+  return aot_json_get(*o, *k, *d);
+}
+
 VMValue aot_string_substring_ptr(VMValue *s_ptr, VMValue *start_ptr,
                                  VMValue *end_ptr) {
   if (!s_ptr || !start_ptr || !end_ptr)
@@ -8930,13 +9213,19 @@ VMValue aot_is_bool(VMValue v) { return VM_BOOL(IS_BOOL(v)); }
 
 VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
   if (!cls) {
-    printf("Calisma Zamani Hatasi: Null closure cagirildi\n");
+    aot_runtime_error("Calisma Zamani Hatasi: Null closure cagirildi");
     VMValue res;
     res.type = VM_VAL_VOID;
     return res;
   }
   if (cls->arity != argc) {
-    printf("Calisma Zamani Hatasi: Hatali parametre sayisi. Beklenen: %d, Alinan: %d\n", cls->arity, argc);
+    {
+      char _b[160];
+      std::snprintf(_b, sizeof _b,
+                    "Calisma Zamani Hatasi: Hatali parametre sayisi. Beklenen: %d, Alinan: %d",
+                    cls->arity, argc);
+      aot_runtime_error(_b);
+    }
     VMValue res;
     res.type = VM_VAL_VOID;
     return res;
@@ -8973,7 +9262,7 @@ VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
       ((void(*)(VMValue*, void*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1], &args[2], &args[3], &args[4], &args[5], &args[6], &args[7]);
       break;
     default:
-      printf("Calisma Zamani Hatasi: 8'den fazla parametreli closure cagirimi desteklenmiyor\n");
+      aot_runtime_error("Calisma Zamani Hatasi: 8'den fazla parametreli closure cagirimi desteklenmiyor");
       break;
   }
   return result;

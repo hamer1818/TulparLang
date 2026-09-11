@@ -380,7 +380,12 @@ const BuiltinEntry kBuiltins[] = {
 
     // ---- Thread ----
     {"thread_create",  "thread_create(func_name: str, arg: any): int", ""},
-    {"thread_join",    "thread_join(thread_id: int): void",         ""},
+    {"at",             "at(arr: array, i: int, default: any): any",
+     "Dizi elemani; [0,count) disinda varsayilani dondurur (tani basmaz)."},
+    {"json_get",       "json_get(obj: json, key: str, default: any): any",
+     "Json alani; anahtar yoksa varsayilani dondurur (tani basmaz)."},
+    {"thread_join",    "thread_join(thread_id: int): any",
+     "Isciyi bekler ve DONUS DEGERINI verir (kopya)."},
     {"thread_detach",  "thread_detach(thread_id: int): void",       ""},
     {"mutex_create",   "mutex_create(): int",                       ""},
     {"mutex_lock",     "mutex_lock(mtx: int): void",                ""},
@@ -391,7 +396,7 @@ const BuiltinEntry kBuiltins[] = {
     {"call",         "call(name: str, ...): any",                   "İsme göre fonksiyon çağırır (handler dispatch)."},
     {"exit",         "exit(code: int): void",                       "Süreci verilen kodla sonlandırır."},
     {"StringBuilder","StringBuilder(capacity: int): int",           "Yeni StringBuilder yaratır, handle döner. sb_append/sb_tostring/sb_free ile kullanılır."},
-    {"sb_append",    "sb_append(sb: int, s: str): void",            "StringBuilder'a ekler."},
+    {"sb_append",    "sb_append(sb: int, value: any): void",            "StringBuilder'a ekler."},
     {"sb_tostring",  "sb_tostring(sb: int): str",                   "StringBuilder içeriğini döner."},
     {"sb_free",      "sb_free(sb: int): void",                      ""},
 

@@ -2,6 +2,8 @@
 // Full static type inference for compile-time type checking
 
 #include "typeinfer.hpp"
+#include "thread_lint.hpp"
+#include <cstring>
 #include "../common/localization.hpp"
 #include "../embedded_libs.h"
 #include "../lexer/lexer.hpp"
@@ -50,7 +52,13 @@ static void report_error(TypeInferContext *ctx, const char *format, ...) {
 static DataType lookup_symbol_type(TypeInferContext *ctx, const std::string &name) {
   auto it = ctx->symbols.find(name);
   if (it == ctx->symbols.end()) {
-    return TYPE_VOID;
+    // SENTINEL: "bu sembolu tanimiyorum" BILINMEYEN'dir, "void" DEGIL.
+    // `function_return_type` ile ayni hatanin kardesiydi. Iki tetikleyici:
+    // (1) bildirimden ONCE kullanim (lib/arcade.tpr:261 `_mus_track`, 274'te
+    //     bildiriliyor), (2) adsiz atama hedefi (`a[i] = x`, `o.f = y`).
+    // Ikisi de VOID donuyordu ve "VOID atamasi hata" degismezi 57 dosyada
+    // yanlis pozitif veriyordu — P21 bunu boyle yakaladi.
+    return TYPE_UNKNOWN;
   }
   return it->second.type;
 }
@@ -82,10 +90,61 @@ static bool symbol_is_moved(TypeInferContext *ctx, const std::string &name) {
   return it->second.is_moved;
 }
 
+// DEGER URETMEYEN builtin'ler. Katalogda TYPE_VOID kayitli olanlardan,
+// gercekte deger donduren ama tabloda VOID gorunen istisnalar cikarilarak
+// (bkz. infer_expr'deki ozel durumlar) kayit sirasinda doldurulur.
+//
+// NEDEN AYRI BIR KUME: `TYPE_VOID` bu dosyada CIFT ANLAMLI — hem "deger
+// uretmiyor" hem de infer_expr'in "cikaramadim" geri dusumu (son satir
+// `return TYPE_VOID;`). Bu yuzden `is_unknown` onu bilinmeyen sayiyor ve
+// atama denetimi atlaniyor. Genel davranisi degistirmek her yerde yanlis
+// pozitif uretirdi; bunun yerine YALNIZ katalogdan gelen, otoriter "void"
+// bilgisini ayri tutuyoruz.
+//
+// Bu delik gercek bir hataya yol acti: `push` VOID donuyor ve
+//   int[] e = [1,2];  e = push(e, 3);
+// typecheck'ten GECIYORDU, calisma zamaninda `e` 0 oluyordu. Bir
+// eszamanlilik testi tam bu yuzden yanlis sonuc verdi (bkz. Tuzaklar 7a).
+// ⚠ NEDEN HALA AYRI BIR KUME (genellestirilemiyor):
+// "VOID ise atama hatadir" diye genellestirmek DENENDI ve OLCULDU (2026-09-09):
+// 221 dosyanin 77'sinde yanlis pozitif. Sebep, sentinel'in UCUNCU bir anlami:
+// parser.cpp:586 donus tipi YAZILMAYAN fonksiyonu TYPE_VOID kaydediyor. Yani
+// `func f(n) { return n+1; }` VOID gorunuyor ama deger donduruyor — lib/wings,
+// lib/router ve testlerin cogu boyle yaziyor.
+//
+// Sentinel'in uc anlami:
+//   (a) katalogda gercekten deger uretmiyor   -> BU kume, otoriter
+//   (b) infer_expr cikaramadi                 -> TYPE_UNKNOWN'a ayrildi (2026-09-09)
+//   (c) kullanici fonksiyonunda donus YAZILMAMIS -> HALA VOID, ayrilmadi
+//
+// (c) ayrilmadan genelleme yapilamaz; ayirmak ya ayri bir sentinel ya da
+// govdeden donus tipi cikarimi ister — ikisi de ayri bir is.
+static std::set<std::string> &void_builtin_names() {
+  static std::set<std::string> s;
+  return s;
+}
+
+static bool expr_is_void_builtin_call(const ASTNode *expr) {
+  const auto *call = as_node<FunctionCall>(expr);
+  if (!call) return false;
+  return void_builtin_names().count(call->name) > 0;
+}
+
+// OLCUM ARACI (gecici): infer_expr'in "cikaramadim" geri dusumu kac kez
+// tetikleniyor? TULPAR_TYPEINFER_STATS=1 ile sonda basilir. Bu sayi, VOID
+// sentinel'inin asiri yuklenmesinin TEORIK mi yoksa CANLI bir delik mi
+// oldugunu soyler: fallback her tetiklendiginde o ifadenin tipi "bilinmiyor"
+// olur ve ona yapilan atama DENETLENMEZ.
+static long g_infer_fallback_hits = 0;
+extern "C" long typeinfer_fallback_hits(void) { return g_infer_fallback_hits; }
+
 static DataType function_return_type(TypeInferContext *ctx, const std::string &name) {
   auto it = ctx->functions.find(name);
   if (it == ctx->functions.end()) {
-    return TYPE_VOID;
+    // SENTINEL AYRIMI: "bu fonksiyonu tanimiyorum" BILINMEYEN'dir, "deger
+    // uretmiyor" DEGIL. Eskiden ikisi de TYPE_VOID donuyordu ve o asiri
+    // yukleme yuzunden `e = push(e,3)` gibi atamalar denetimsiz geciyordu.
+    return TYPE_UNKNOWN;
   }
   return it->second.return_type;
 }
@@ -219,6 +278,33 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     if (is_function_ref_name(ctx, id->name)) {
       return TYPE_STRING;
     }
+    // P23 — "cozuldu" ile "baslatildi" ayri seylerdir.
+    //
+    // Bir fonksiyon govdesi icindeysek sira sorunu YOK: govde cagrildiginda
+    // ust duzey coktan kosmustur. Ama UST DUZEY bir deyim, bildirim
+    // satirindan once o global'i okuyorsa calisma zamaninda SIFIR gorur.
+    // Olculdu (2026-09-11): `print(sayac); int sayac = 5;` -> "0" basiyor,
+    // typecheck tek kelime etmiyordu.
+    //
+    // Tani "bulunamadi" DEMEZ — ad cozuldu, degeri henuz yok. Ikisini ayni
+    // cumleye sikistirmak #7'nin hatasi olurdu: okuyan kisi yazim hatasi
+    // arar, oysa yapmasi gereken bildirimi yukari tasimak.
+    if (ctx->current_function_name.empty()) {
+      auto it = ctx->global_decl_line.find(id->name);
+      if (it != ctx->global_decl_line.end() &&
+          !ctx->initialized_globals.count(id->name)) {
+        report_error(
+            ctx,
+            tulpar::i18n::tr_en(
+                "'%s' bu satirda HENUZ BASLATILMADI (bildirimi satir %d); "
+                "ust duzey deyimler yukaridan asagi kosar, deger su an 0 - "
+                "bildirimi kullanimdan once tasi (satir %d)",
+                "'%s' is NOT YET INITIALISED here (declared at line %d); "
+                "top-level statements run top to bottom, so the value is 0 - "
+                "move the declaration above this use at line %d"),
+            id->name.c_str(), it->second, id->loc.line);
+      }
+    }
     return lookup_symbol_type(ctx, id->name);
   }
 
@@ -340,7 +426,8 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       // `print(...)` de istediği kadar değer alıyor: ikisi de gerçekten
       // değişken argümanlı, tek parametreyle kaydedilip burada muaf.
       const bool is_variadic_builtin =
-          (effective_name == "call" || effective_name == "print");
+          (effective_name == "call" || effective_name == "print" ||
+           effective_name == "gather");
       if (got > expected && !is_variadic_builtin) {
         report_error(ctx,
                      "Function '%s' expects %d argument(s), got %d at line %d",
@@ -350,7 +437,8 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
         // is unknown (TYPE_VOID/UNKNOWN/CUSTOM) we don't flag — better a
         // false negative than a false positive while the catalogue grows.
         auto is_unknown = [](DataType t) {
-          return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
+          return t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+             t == TYPE_UNSPECIFIED;
         };
         // Polymorphism categories for select built-ins. The catalog
         // registers these with TYPE_UNKNOWN to keep the storage shape
@@ -452,11 +540,13 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     case TYPE_STRING:
       return TYPE_STRING;
     default:
-      return TYPE_VOID;
+      g_infer_fallback_hits++;
+      return TYPE_UNKNOWN;   // "cikaramadim" — bkz. sentinel ayrimi notu
     }
   }
 
-  return TYPE_VOID;
+  g_infer_fallback_hits++;
+  return TYPE_UNKNOWN;       // "cikaramadim" — bkz. sentinel ayrimi notu
 }
 
 void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
@@ -480,7 +570,19 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                    decl->custom_type.value().c_str(), decl->name.c_str(),
                    decl->loc.line);
     }
-    if (declared_type == TYPE_VOID && decl->initializer) {
+    // Y1: `var x = e;` TAM OLARAK `T x = e;` demektir (T = infer(e)).
+    // Once `var` TYPE_UNKNOWN olarak kaliyordu, yani degisken DINAMIK dogup
+    // dinamik kaliyordu: `var b = [1,2]; b = 5;` typecheck'ten geciyordu.
+    // Dilin "statik tipli" iddiasi ile deyimsel kullanim (tutorial'in hemen
+    // her satiri `var`) boylece ayrisiyordu. Artik `var` cikarildigi tipte
+    // dogar ve o tipte kalir; gercekten dinamik bir deger isteyen `json`
+    // kullanir — o tipin dinamikligi belgelenmis bir ozellik.
+    //
+    // infer(e) cozulemezse degisken UNKNOWN dogar ve bugunku gibi denetimsiz
+    // kalir (gurultulu hata yerine sessiz gecis) — bunu HATAYA cevirmek ayri
+    // bir karar, once infer kapsaminin olculmesi gerekiyor.
+    if ((declared_type == TYPE_VOID || declared_type == TYPE_UNKNOWN) &&
+        decl->initializer) {
       declared_type = infer_expr(ctx, decl->initializer.get());
     }
     if (decl->initializer) {
@@ -493,7 +595,8 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       // can tighten once the builtin catalogue and custom-type tracking
       // are richer.
       auto is_unknown = [](DataType t) {
-        return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+        return t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+           t == TYPE_UNSPECIFIED ||
                t == TYPE_JSON;
       };
       // FONKSİYON REFERANSINI `int`'e yazmak: çalışıyor (referans zaten bir
@@ -529,11 +632,43 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   }
 
   if (const auto *assign = as_node<Assignment>(stmt)) {
+    // KARMASIK HEDEF (`a[i] = x`, `o.f = y`): `name` bos, hedef bir ifade.
+    // P22 (2026-09-09) bu yolun HIC denetlenmedigini gosterdi:
+    //   str[] s = ["a"];  s[0] = 5;   -> typecheck OK, program "5" basiyor
+    //   int[] n = [1];    n[0] = "abc"; -> typecheck OK
+    // Yani `str[]` eleman tipini atamada zorlamiyordu. Kapsam: yalniz
+    // ArrayAccess hedefi ve YALNIZ tipli dizi kaplari; `json` bilerek disarida
+    // (dinamik olmasi belgelenmis bir ozellik), string indeksi de disarida.
+    if (assign->name.empty() && assign->target) {
+      if (const auto *acc = as_node<ArrayAccess>(assign->target.get())) {
+        DataType cont = infer_expr(ctx, acc->object.get());
+        DataType want = TYPE_UNKNOWN;
+        switch (cont) {
+        case TYPE_ARRAY_INT:   want = TYPE_INT;    break;
+        case TYPE_ARRAY_FLOAT: want = TYPE_FLOAT;  break;
+        case TYPE_ARRAY_STR:   want = TYPE_STRING; break;
+        case TYPE_ARRAY_BOOL:  want = TYPE_BOOL;   break;
+        default: break;
+        }
+        DataType got = infer_expr(ctx, assign->value.get());
+        if (want != TYPE_UNKNOWN && got != TYPE_UNKNOWN &&
+            got != TYPE_CUSTOM && got != TYPE_UNSPECIFIED &&
+            !store_coercible(want, got) && !types_compatible(want, got)) {
+          report_error(ctx,
+                       "Element type mismatch: array holds %s, assigned %s at line %d",
+                       datatype_to_string(want), datatype_to_string(got),
+                       assign->loc.line);
+        }
+      }
+      infer_expr(ctx, assign->value.get());
+      return;
+    }
     DataType var_type = lookup_symbol_type(ctx, assign->name);
     DataType expr_type = infer_expr(ctx, assign->value.get());
     // See VariableDecl note above: don't flag against unknown-typed sides.
     auto is_unknown = [](DataType t) {
-      return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
+      return t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+             t == TYPE_UNSPECIFIED;
     };
     // Bildirimdekiyle aynı tanılama, atama yolunda. `int f = 0; f = selam;`
     // biçimi de aynı tuzağın kapısı.
@@ -550,6 +685,20 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       typeinfer_add_symbol(ctx, assign->name.c_str(), TYPE_STRING);
       return;
     }
+    // DEGER URETMEYEN cagrinin atanmasi: her zaman hata, hedef tipi ne olursa
+    // olsun (`var` dahil). `is_unknown(TYPE_VOID)` true oldugu icin asagidaki
+    // genel denetim bunu goremiyordu.
+    if (expr_is_void_builtin_call(assign->value.get())) {
+      report_error(ctx,
+                   tulpar::i18n::tr_en(
+                       "'%s' DEGER URETMIYOR ama '%s' degiskenine atanıyor "
+                       "(satir %d) — cagriyi tek basina deyim olarak yaz",
+                       "'%s' does not return a value but is assigned to '%s' "
+                       "at line %d - call it as a statement instead"),
+                   as_node<FunctionCall>(assign->value.get())->name.c_str(),
+                   assign->name.c_str(), assign->loc.line);
+      return;
+    }
     if (!is_unknown(var_type) && !is_unknown(expr_type) &&
         !store_coercible(var_type, expr_type) &&
         !types_compatible(var_type, expr_type)) {
@@ -564,7 +713,9 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     if (ret->value) {
       DataType ret_type = infer_expr(ctx, ret->value.get());
       // Don't flag against unknown-typed return expressions.
-      if (ctx->current_return_type != TYPE_VOID && ctx->current_return_type != TYPE_UNKNOWN &&
+      if (ctx->current_return_type != TYPE_VOID &&
+          ctx->current_return_type != TYPE_UNSPECIFIED &&
+          ctx->current_return_type != TYPE_UNKNOWN &&
           ret_type != TYPE_VOID && ret_type != TYPE_UNKNOWN &&
           !types_compatible(ctx->current_return_type, ret_type)) {
         report_error(ctx,
@@ -588,17 +739,54 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   // "no information", same as VOID, so warning on them is a false positive by
   // construction — `if (on)` is the correct way to read a flag, and the whole
   // point of the assert fix was that `on == 1` is the broken one.
-  auto cond_acceptable = [](DataType t) {
-    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_VOID ||
-           t == TYPE_UNKNOWN || t == TYPE_JSON;
+  // ⚠ BU KURAL S1 TABLOSUNDAN TURETILIR — ayri bir hakikat kaynagi DEGIL.
+  //
+  // S1 (olculdu, FINDINGS): `if()` icinde YALNIZ SAYISAL SIFIR yanlistir.
+  //   int 0 · float 0.0            -> false
+  //   int 7 · -1 · float 1.5       -> true
+  //   "" · "a" · "0"               -> true  (HER ZAMAN)
+  //   [] · [1] · {} · {k:1}        -> true  (HER ZAMAN)
+  //   j["OLMAYAN"]                 -> false (eksik anahtar 0 doner)
+  //
+  // Tablodan cikan UC sinif:
+  //   SAYISAL  (bool/int/float) -> iki yon de anlamli, SESSIZ
+  //   DINAMIK  (json/unknown/void/unspecified) -> calisma zamaninda belli,
+  //            SESSIZ. `json` ozellikle: eksik anahtar 0 donuyor ve
+  //            lib/wings'teki `if (hdrs)` deseni tam buna yasliyor.
+  //   SABIT    (str/array/struct) -> HER ZAMAN dogru; uyari hak ediyor ama
+  //            "boolean ya da integer olmali" cumlesi YANLIS: izinli ve
+  //            tanimli. Dogru cumle "her zaman dogru" + duzeltme onerisi.
+  //
+  // Eskiden `float` da uyari aliyordu — S1'e gore YANLIS POZITIF: `if (0.0)`
+  // yanlis, `if (1.5)` dogru, yani tam `int` kadar anlamli. Iki hakikat
+  // kaynagi (tablo vs kural) burada ayrisiyordu; birlestirildi (#8).
+  auto cond_numeric = [](DataType t) {
+    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_FLOAT;
+  };
+  auto cond_dynamic = [](DataType t) {
+    return t == TYPE_VOID || t == TYPE_UNSPECIFIED || t == TYPE_UNKNOWN ||
+           t == TYPE_JSON;
+  };
+  auto cond_always_true = [&](DataType t) {
+    return !cond_numeric(t) && !cond_dynamic(t);
+  };
+  auto check_condition = [&](DataType t, int line) {
+    if (!cond_always_true(t)) return;
+    report_error(
+        ctx,
+        tulpar::i18n::tr_en(
+            "'%s' kosulu HER ZAMAN dogru - Tulpar'da yalnizca SAYISAL SIFIR "
+            "yanlistir (bos dizgi ve bos dizi DOGRUdur). Bosluk sinamak icin "
+            "`length(x) > 0` yaz (satir %d)",
+            "a '%s' condition is ALWAYS true - in Tulpar only NUMERIC ZERO is "
+            "false (an empty string and an empty array are both true). To test "
+            "for emptiness write `length(x) > 0` at line %d"),
+        datatype_to_string(t), line);
   };
 
   if (const auto *if_stmt = as_node<IfStatement>(stmt)) {
     DataType cond_type = infer_expr(ctx, if_stmt->condition.get());
-    if (!cond_acceptable(cond_type)) {
-      report_error(ctx, "Condition must be boolean or integer at line %d",
-                   if_stmt->loc.line);
-    }
+    check_condition(cond_type, if_stmt->loc.line);
     infer_stmt(ctx, if_stmt->then_branch.get());
     if (if_stmt->else_branch) {
       infer_stmt(ctx, if_stmt->else_branch.get());
@@ -608,10 +796,9 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
 
   if (const auto *while_stmt = as_node<WhileLoop>(stmt)) {
     DataType cond_type = infer_expr(ctx, while_stmt->condition.get());
-    if (!cond_acceptable(cond_type)) {
-      report_error(ctx, "While condition must be boolean or integer at line %d",
-                   while_stmt->loc.line);
-    }
+    // ⚠ `while` kosulu SABIT dogruysa dongu sonsuzdur — `if`ten daha
+    // tehlikeli, ayni tanidan gecmesi o yuzden onemli.
+    check_condition(cond_type, while_stmt->loc.line);
     infer_stmt(ctx, while_stmt->body.get());
     return;
   }
@@ -620,10 +807,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     infer_stmt(ctx, for_stmt->init.get());
     if (for_stmt->condition) {
       DataType cond_type = infer_expr(ctx, for_stmt->condition.get());
-      if (!cond_acceptable(cond_type)) {
-        report_error(ctx, "For condition must be boolean or integer at line %d",
-                     for_stmt->loc.line);
-      }
+      check_condition(cond_type, for_stmt->loc.line);
     }
     infer_stmt(ctx, for_stmt->increment.get());
     infer_stmt(ctx, for_stmt->body.get());
@@ -848,6 +1032,59 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
   // on the C-bridge AST — those happen after our pre-pass on the std::variant
   // AST, so the synthetic calls never reach typeinfer.
   const BuiltinSig sigs[] = {
+      // --- P27 (2026-09-10): LSP tablosunda VAR, katalogda YOK olan 20 native
+      // builtin. LSP ile katalog CAPRAZ SUPURULUNCE cikti: 358 LSP adindan
+      // 70'i katalogda yoktu, 50'si lib/*.tpr'de tanimli (import ile zaten
+      // denetleniyor), geriye kalan 20'si GERCEK BOSLUKTU — yani tip ve arite
+      // denetimi HIC yapilmiyordu. Olculdu: `thread_join(t, 99, "fazladan")`
+      // typecheck'ten geciyordu.
+      //
+      // Iki hakikat tablosu (#0): bir sembol hem LSP'de hem katalogda yasiyor
+      // ve ayrisabiliyor. Kalici cozum LSP'yi katalogdan uretmek; bu satirlar
+      // o gune kadarki uzlastirma.
+      //
+      // NOT: `thread_join` BUGUNKU gercegiyle VOID kayitli — isciyi sonucunu
+      // TASIMIYOR (P20, olculdu: `return id*100+7` yapan isciden 0 donuyor).
+      // Boylece `var r = thread_join(t)` artik derleme zamaninda hata veriyor
+      // ve bosluk sessiz kalmiyor. Donus degeri eklenince bu satir guncellenir.
+      // ERISIMCILER (2026-09-10). Donus tipi UNKNOWN cunku eleman/alan tipi
+      // kapta saklI; varsayilan da herhangi bir tip olabilir. UC ARGUMANLI —
+      // iki argumanli asiri yukleme BILEREK yok: bir builtin, bir is (ayni
+      // isim + farkli hakikat = katalog ciftlesmesi, bkz. `push` dersi).
+      {"at", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT, TYPE_UNKNOWN}},
+      {"json_get", TYPE_UNKNOWN, {TYPE_JSON, TYPE_STRING, TYPE_UNKNOWN}},
+      // P20 KAPANDI (2026-09-10): join artik iscinin donusunu tasiyor
+      // (sozlesme: kopyayla girer, join'le cikar). Donus tipi UNKNOWN cunku
+      // isci herhangi bir tip donebilir.
+      {"thread_join", TYPE_UNKNOWN, {TYPE_INT}},
+      {"thread_detach", TYPE_VOID, {TYPE_INT}},
+      // Muteksler CALISIYOR (olculdu): 8 thread x 50 000 artirma, muteksli
+      // surumde counter tam 400 000 ve done tam 8, uc kosuda da. Yani
+      // paylasilan degisebilir durumun sozlesmesi "desteklenmiyor" degil,
+      // "muteks ister" — ilkel zaten vardi, yalniz katalogda yoktu.
+      {"mutex_create", TYPE_INT, {}},
+      {"mutex_lock", TYPE_VOID, {TYPE_INT}},
+      {"mutex_unlock", TYPE_VOID, {TYPE_INT}},
+      {"mutex_destroy", TYPE_VOID, {TYPE_INT}},
+      {"StringBuilder", TYPE_INT, {TYPE_INT}},
+      // sb_append HER tipi alir (tests/stringbuilder.test.tpr::run_mixed_types
+      // int, float ve bool ekliyor). LSP tablosu "s: str" diyordu ve YANLISTI
+      // — iki hakikat tablosunun ayristigi somut ornek (#0). LSP de duzeltildi.
+      {"sb_append", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
+      {"sb_tostring", TYPE_STRING, {TYPE_INT}},
+      {"sb_free", TYPE_VOID, {TYPE_INT}},
+      {"db_last_insert_id", TYPE_INT, {TYPE_INT}},
+      {"db_error", TYPE_STRING, {TYPE_INT}},
+      {"http_status_text", TYPE_STRING, {TYPE_INT}},
+      {"persist", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
+      {"wings_current_fd", TYPE_INT, {}},
+      {"wings_set_current_fd", TYPE_INT, {TYPE_INT}},
+      {"wings_ws_accept_key", TYPE_STRING, {TYPE_STRING}},
+      {"wings_ws_send_frame", TYPE_INT, {TYPE_INT, TYPE_INT, TYPE_STRING}},
+      {"wings_ws_recv_frame", TYPE_JSON, {TYPE_INT}},
+      // `gather(...promises)` gercekten degisken argumanli — asagidaki arite
+      // muafiyetine eklendi.
+      {"gather", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
       // --- Denetimsiz kalan 40 builtin (2026-08-25) ---
       // Tabloda olmayan bir builtin HİÇ denetlenmiyor: dönüşü VOID sayılıyor,
       // o yüzden hem argümanları hem de sonucu kullanan her satır atlanıyor.
@@ -1284,13 +1521,32 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"db_query", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_STRING, TYPE_UNKNOWN}},
       {"db_execute", TYPE_BOOL, {TYPE_UNKNOWN, TYPE_STRING, TYPE_UNKNOWN}},
       // Array mutation — `push(arr, val)` accepts any value type.
-      {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
   };
+  // MUAFIYET LISTESI YOK. P19 supurmesi (2026-09-09) gosterdi ki katalogdaki
+  // 289 builtin'in 83'u TYPE_VOID ve HEPSI gercekten deger uretmiyor (cizim,
+  // kapatma, push, exit...). Eski muafiyet listesindeki 12 addan yalniz
+  // `print` gercekten VOID kayitliydi; `len`/`toString`/`sqrt`/... zaten dogru
+  // tiple kayitli, `println`/`to_string`/`to_int`/`to_float` ise katalogda HIC
+  // yok. Yani liste 11/12 kurguydu — IKINCI BIR HAKIKAT KAYNAGI. Silindi;
+  // degismez artik tek satir: KATALOGDA VOID ISE ATAMA HATADIR.
+  std::set<std::string> seen_builtin_names;
   for (const auto &s : sigs) {
     std::vector<DataType> ps = s.params;
     typeinfer_register_function(ctx, s.name, s.return_type,
                                 ps.empty() ? nullptr : ps.data(),
                                 static_cast<int>(ps.size()));
+    // TEKRAR DENETIMI: ayni ad iki kez kayitliysa hangisinin kazandigi kayit
+    // sirasina bagli olur ve bir satiri duzelten kisi otekinin sessizce
+    // kazandigini gormez. `push` tam olarak boyle iki kez duruyordu (ikisi de
+    // ayni oldugu icin zararsizdi — bir sonraki duzenlemeye kadar).
+    if (!seen_builtin_names.insert(s.name).second) {
+      std::fprintf(stderr,
+                   "[typeinfer] KATALOG HATASI: '%s' builtin tablosunda IKI KEZ "
+                   "kayitli — birini silin (src/typeinfer/typeinfer.cpp)\n",
+                   s.name);
+      std::abort();
+    }
+    if (s.return_type == TYPE_VOID) void_builtin_names().insert(s.name);
   }
 }
 
@@ -1489,6 +1745,42 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
         ctx->struct_types[type_decl->name] = std::move(info);
       }
     }
+    // P23 — SEMBOL COZUMU BILDIRIM SIRASINA BAGLI DEGILDIR (2026-09-11).
+    //
+    // Ust duzey global'ler eskiden YALNIZ ana gezintide, kaynak sirasiyla
+    // kaydoluyordu. Yani bir global'i bildirim satirindan ONCE kullanan her
+    // fonksiyon govdesi DENETIMSIZ kaliyordu: ad cozulemiyor, tip UNKNOWN'a
+    // dusuyor, ustundeki her kontrol atlaniyor — sessizce.
+    //
+    // Olculdu: ayni hata iki siralamada iki farkli sonuc veriyordu.
+    //   int sayac = 5;  func oku(): int { return length(sayac); }  -> YAKALANIR
+    //   func oku(): int { return length(sayac); }  int sayac = 5;  -> KACAR
+    // Korpusta 1353 ust duzey global'in 231'i ilk kullanimindan sonra
+    // bildirilmis (lib/scene3d.tpr tek basina 192) — kenar durum degil.
+    //
+    // Fonksiyonlar ve struct'lar bu on-gecise ZATEN giriyordu; eksik olan
+    // tek kategori global'lerdi. Yani duzeltme yeni bir mekanizma degil,
+    // var olan on-gecisin tamamlanmasi.
+    if (const auto *gvar = as_node<VariableDecl>(stmt.get())) {
+      // YALNIZ acik tipli bildirimler. `var x = e;`in tipi e'den cikiyor;
+      // on-gecişte infer_expr cagirmak hem yan etkili (tani basar, cift
+      // raporlar) hem de ayni sira sorununu bir katman yukari tasirdi
+      // (e baska bir global'e bakabilir). Olculdu: riskli 231 site'in
+      // TAMAMI acik tipli, tek bir `var` yok — kisit kapsamda kayip
+      // yaratmiyor.
+      //
+      // ⚠ Bu YALNIZCA COZUM (ad -> tip). BASLATMA sirasi ayri bir sorudur ve
+      // ayri denetlenir: ust duzeyde bildirim satirindan once okunan bir
+      // global calisma zamaninda hala sifirdir.
+      if (gvar->data_type != TYPE_UNKNOWN && gvar->data_type != TYPE_VOID &&
+          gvar->data_type != TYPE_UNSPECIFIED) {
+        typeinfer_add_symbol(ctx, gvar->name.c_str(), gvar->data_type);
+      }
+      // Baslatma tarafi: hangi satirda bildirilmis? (tipi cikarilamayan
+      // `var` global'leri de buraya girer — cozumlerini yapamasak da
+      // BASLATMA sirasini denetleyebiliriz.)
+      ctx->global_decl_line[gvar->name] = gvar->loc.line;
+    }
     // Programda import varsa, yerel olmayan custom-type'lar için "Unknown type"
     // uyarısını bastır (tip import edilen modülden gelmiş olabilir; typeinfer
     // modül kaynağını parse etmediğinden struct'ını göremez).
@@ -1509,7 +1801,19 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
     }
   }
 
+  // Paylasilan-global lint'i: tip cikarimindan BAGIMSIZ bir analiz (kendi
+  // gezicisi var), ama ayni tani kapisindan cikiyor. Ana gezintiden ONCE
+  // kosuyor ki tanilari kaynak sirasinda gorunsun.
+  ctx->error_count += tulpar::thread_lint_run(program, ctx->source_path,
+                                              ctx->warning_mode);
+
   for (const auto &stmt : prog->statements) {
     infer_stmt(ctx, stmt.get());
+    // Bildirimin KENDISI islendikten sonra isaretleniyor; once degil.
+    // Onemi var: `int n = n + 1;` kendi baslatmasinda kendini okuyor ve
+    // bunun da yakalanmasi gerekiyor.
+    if (const auto *gvar = as_node<VariableDecl>(stmt.get())) {
+      ctx->initialized_globals.insert(gvar->name);
+    }
   }
 }

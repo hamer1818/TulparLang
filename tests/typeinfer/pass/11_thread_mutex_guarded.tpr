@@ -1,0 +1,18 @@
+// Lint'in SUSMASI gereken hal: her iki taraf da kilit altinda.
+// Bu fikstur yanlis-pozitif bekcisi — lint dogru yazilmis eszamanli kodu
+// suclamamali, yoksa kapatilir (ve kapatilan lint yoktur).
+int fin = 0;
+var kilit = mutex_create();
+
+func w(id) {
+    mutex_lock(kilit);
+    fin = 1;
+    mutex_unlock(kilit);
+    return 0;
+}
+
+int t = thread_create(w, 0);
+mutex_lock(kilit);
+print(fin);
+mutex_unlock(kilit);
+thread_join(t);
