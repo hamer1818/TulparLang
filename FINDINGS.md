@@ -643,6 +643,7 @@ yalnız `&&`/`||`'de idi.
 | S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ, KAPANDI ve KİLİTLENDİ** — `tests/stream_contract_smoke.py` (16 kontrol; kancalar sökülünce kırmızı verdiği **ölçüldü**) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
 | S7 | Thread sözleşmesi: **kopyayla girer, join'le çıkar** | **yazıldı** — argüman derin kopya, join sonucu taşır; paylaşmak isteyen `mutex_*` kullanır |
+| S11 | **Float-dizi unboxing İKİ KAPILIDIR** | **ölçüldü, iş YAPILMADI** — *depolama kapısı* (tarama ≤2×, eleman ≤8 bayt) değerli ve ulaşılabilir (int lineer **0,97×** kanıt). *`matmul` kapısı* (≤4×) **geçilemez**: tavan, zaten kutusuz olan int yolunun bugünkü oranıdır ve o **5,95×**. Önce eleman-yazma yolu (tek başına 2,84×). Bu satır, bir yıl sonra *"float kutulu, unboxing yapsak?"* diye soracak kişi için yazıldı: soru zaten soruldu, ölçüldü, ve cevabı sırayla bağlı |
 | S10 | **Lint'in mutex-ilişkilendirmesi yaklaşıktır** | **belgelendi** — kilit derinliği *deyim* düzeyinde izleniyor ama **hangi mutex'in hangi global'i koruduğu bilinmiyor** (dilde o bağ yok); dallanma/erken dönüş de izlenmiyor. Yanlış negatif üretebilir, yanlış pozitif üretmemesi bilerek seçildi (#25) |
 | S9 | Uzun ömürlü süreçte **değer-başı geri kazanım yok** (join-dönüş dahil) | **ölçüldü** — join-dönüş değerleri sürecin ömrü boyunca yaşar; binlerce join içeren süreçte RSS ~N×değer-boyu artar (P43). M2'nin çözülmesi bu sınıfın **tamamını** kapatır; yamayı her ekleme noktasına serpmek değil, kök düzeltme tek yerde |
 | S8 | Handle sözleşmesi | **yazıldı + fikstür** — *join handle'ı tüketir; ikinci join hatadır; detach edilmiş handle join edilemez* |
@@ -1141,6 +1142,12 @@ FP/SIMD.
 | 23 | Ölçüm, ölçtüğü programın sağ çıktığını denetlemeden rapor edilemez |
 | 24 | Bir makro, 50 sitede aynı kusuru yaşatan tek satırdır |
 | 25 | Nöbetçinin maliyeti, kapsamının parçasıdır |
+| 26 | Taban ölçüm bir tespittir; önce kendisi sınanır — ve sayı, içerik değildir |
+| 27 | Gezici envanteri düğüm-tipine değil, anlamsal hedefe göre kurulur |
+| 28 | Uyarı çerçevesi yanlışsa çözüm susturmak değil, soruyu düzeltmektir |
+| 29 | İki hakikat kaynağı birleşirken mutabakat raporu beklenir |
+| 30 | Kârlılık kapısı işten önce ölçülür; tavan kapının altındaysa iş yapılmaz |
+| 31 | Ayrışmayı ölçmeden atıf yapma — ve atfın adı da bir iddiadır |
 
 ⚠ **17 ve 18 numaraları hiç kullanılmadı** — kayıp kayıt değil, numaralandırma
 boşluğu. Kural listesi bir sayaç değil, bir dizin; yeni kural en büyük
@@ -1158,10 +1165,17 @@ numarayı alır ve boşluklar doldurulmaz (doldurmak, eski bir commit mesajında
 | `tests/thread_copy.test.tpr` | S7/S8 — thread ve handle sözleşmeleri |
 | `tests/shared_json_read.test.tpr` | S6 — paylaşılan değer mutasyona uğratılmaz |
 | `tests/accessors.test.tpr` | S5 — `at`/`json_get` sınır politikası |
+| `tests/typecheck_corpus_scan.py` | korpus tanı tabanı — **metin** tutar, kendini sınar (#26) |
 | `build.sh` #19 kapısı | tanı tek kapıdan çıkar (çok satırlı `printf` sızıntısı dahil) |
 
-**Sözleşme muhasebesi: 9 sözleşmenin 8'i fikstürlü, 1'i meşru ölçüm
-istisnası (S9), borç yok.**
+`build.sh suites` bunlara ek olarak `builtin_audit`, `wedge_mesh_check`,
+`dist_archive_audit`, `ast_child_fields_audit`, `silent_failure_probe` ve
+`lsp_audit`'i de koşuyor — **toplam 10 Python nöbetçisi**, 80 suite paketi ve
+`tests/typeinfer/` (13 pass + 17 fail fikstürü).
+
+**Sözleşme muhasebesi: 11 sözleşme — 8'i fikstürlü, 3'ü belgelenmiş
+ölçüm/sınır kaydı (S9 geri kazanım, S10 lint kesinliği, S11 unboxing kapısı),
+borç yok.**
 
 ## Öngörü defterinin hesabı
 
