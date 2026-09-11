@@ -737,18 +737,46 @@ TPREOF
         echo -e "${RED}Zincir ackermann SONUCUNU DEGISTIRDI! on=$AR_O1 off=$AR_O2 beklenen=4093${NC}"
         rm -rf "$AR_TMP"; exit 1
     fi
-    AR_ON=$(sr_best_us "$AR_TMP/ack_on" 9);   AR_ONB=$(sr_best_us "$AR_TMP/ack_on" 1)
-    AR_OFF=$(sr_best_us "$AR_TMP/ack_off" 9); AR_OFFB=$(sr_best_us "$AR_TMP/ack_off" 1)
-    AR_ON_W=$(( AR_ON - AR_ONB ));   [ "$AR_ON_W" -lt 1 ] && AR_ON_W=1
-    AR_OFF_W=$(( AR_OFF - AR_OFFB )); [ "$AR_OFF_W" -lt 1 ] && AR_OFF_W=1
-    # Zincirli, zincirsizin 1,25 katindan yavas OLMAMALI (%25 pay olcum
-    # oynamasi icin; gercek gerileme %29'du, yani bu kapi onu yakalardi).
-    if [ $(( AR_ON_W * 100 )) -gt $(( AR_OFF_W * 125 )) ]; then
-        echo -e "${RED}Zincir ackermann'i GERILETIYOR — karlilik modeli bozuk!${NC}"
-        echo "  is payi: zincirli=${AR_ON_W}us zincirsiz=${AR_OFF_W}us (>%25 yavas)"
+    # ⚠ IKI KOL AYNI TURDA OLCULUR, ORANIN MEDYANI ALINIR.
+    #
+    # Bu kapi once her kolu AYRI blokta olcuyordu (sr_best_us on, sonra off).
+    # Sorun: bir gurultu patlamasi YALNIZ BIR kola denk geldiginde oran cope
+    # donuyor ve kapi, zincir kusursuz calisirken kirmizi veriyor. Olculdu
+    # 2026-09-11: yerelde oran 10 denemede 0,873-0,925 (zincirli DAHA HIZLI,
+    # yayilim 0,05), ama CI Linux ayni kodda 1,262 gordu — kucuk gurultuyle
+    # aciklanamayacak ~%40 kayma, ve kapi dustu (PR #316).
+    #
+    # Cozum: her TURDA dort olcum de alinir (on9/off9/on1/off1) ve o turun
+    # orani hesaplanir. Bir patlama tura denk gelirse ORANDA SADELESIR, cunku
+    # iki kol ayni anda etkilenir. Bes turun MEDYANI alinir; medyan, tek bir
+    # bozuk turu tanim geregi disarida birakir.
+    #
+    # Esik DEGISMEDI (%125) — BILEREK. Olcum tasarimi ve esik AYNI ANDA
+    # degistirilseydi, kirmiziyi hangisinin duzelttigi bilinmezdi.
+    # Esigi gevsetmek zaten yanlis cevap olurdu: olcum hatasini gizler.
+    #
+    # Kapinin hala AYIRT ETTIGI dogrulandi (2026-09-11): tarihsel gerileme
+    # TULPAR_SELFREC_DEPTH=4 ile yeniden uretildi ve 5/5 yakalandi
+    # (oran %126-129, belgelenen %29 gerilemeyle birebir). Normal K=1 ise
+    # 10 denemede %87-94. Yani esigin iki yanindaki paylar: normal tarafta
+    # ~31 puan, gerileme tarafinda ~4 puan.
+    # ⚠ TAKIP: tespit payi dar. CI'in tur-esli olcumdeki yayilimi gorulduk-
+    # ten sonra esik %110'a cekilebilir (normal tarafta hala ~16 puan pay
+    # kalir, tespit payi ~18 puana cikar). Once bir tur veri toplansin.
+    AR_RES=$(python3 tests/perf_pair.py "$AR_TMP/ack_on" "$AR_TMP/ack_off" 9 1 5)
+    AR_RATIO=$(echo "$AR_RES" | cut -d' ' -f1)
+    AR_ON_W=$(echo "$AR_RES" | cut -d' ' -f2)
+    AR_OFF_W=$(echo "$AR_RES" | cut -d' ' -f3)
+    if [ -z "$AR_RATIO" ]; then
+        echo -e "${RED}Ackermann gerileme kapisi OLCUM URETEMEDI${NC}"
         rm -rf "$AR_TMP"; exit 1
     fi
-    echo -e "${GREEN}zincir baska sekillerde zarar vermiyor${NC} (ackermann: ${AR_OFF_W}us -> ${AR_ON_W}us)"
+    if [ "$AR_RATIO" -gt 125 ]; then
+        echo -e "${RED}Zincir ackermann'i GERILETIYOR — karlilik modeli bozuk!${NC}"
+        echo "  medyan tur: zincirli=${AR_ON_W}us zincirsiz=${AR_OFF_W}us (oran %${AR_RATIO}, esik %125)"
+        rm -rf "$AR_TMP"; exit 1
+    fi
+    echo -e "${GREEN}zincir baska sekillerde zarar vermiyor${NC} (ackermann: ${AR_OFF_W}us -> ${AR_ON_W}us, oran %${AR_RATIO})"
 
     # TANI TEK KAPIDAN CIKAR — mekanik garanti (#19).
     #

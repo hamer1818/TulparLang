@@ -145,6 +145,47 @@ uygulanmadı ve aynı hata ikinci kez CI'ı kırdı. **Bir tuzak yazıldığınd
 aynı sınıftan BÜTÜN yerler taranmalı**: `grep -rn "assert(.*time_ms\|dt <"
 tests/` bunu bir dakikada verirdi.
 
+### 1n. İki kol AYRI zamanlarda ölçülürse oran çöp olur — turla eşle
+`build.sh`'ın ackermann gerileme kapısı her kolu **ayrı blokta** ölçüyordu:
+önce zincirli üç kez, sonra zincirsiz üç kez, her birinin en iyisi. Aynı
+kodda, aynı gün:
+
+| | oran |
+|---|---|
+| yerel, 10 deneme | **0,873 – 0,925** (zincirli daha hızlı, yayılım 0,05) |
+| CI Linux | **1,262** → kapı düştü |
+
+~%40'lık bu kayma küçük gürültüyle açıklanamaz. Sebep tasarımdı: bir yavaşlama
+**yalnız bir kola** denk geldiğinde oran çöpe dönüyor, ve kapı ölçtüğü özellik
+kusursuz çalışırken kırmızı veriyor.
+
+**Kural:** karşılaştırılan iki kol **milisaniyeler** arayla, aynı turda
+ölçülür; sonra turların **medyanı** alınır. Aynı turda ölçülen iki kolu bir
+yavaşlama birlikte vurur ve **oranda sadeleşir**. Doğrudan kanıt — düzeltilmiş
+ölçümde bir deneme:
+
+```
+deneme 1  oran=%89  zincirli=11825us zincirsiz=13353us   <- mutlak süreler %30 yüksek
+deneme 3  oran=%91  zincirli= 9461us zincirsiz=10371us   <- oran değişmedi
+```
+
+Medyan, ortalamadan üstün: ortalama tek bir bozuk turu içine alır, medyan onu
+tanımı gereği dışarıda bırakır.
+
+⚠ **Ölçümü ve eşiği AYNI ANDA değiştirme.** Kırmızıyı hangisinin düzelttiği
+bilinmez olur. Burada yalnız ölçüm değişti; eşik (%125) sabit bırakıldı ve
+kapının hâlâ **ayırt ettiği** ayrıca kanıtlandı: tarihsel gerileme
+(`TULPAR_SELFREC_DEPTH=4`) yeniden üretilip **5/5** yakalandı (%126-129 —
+belgelenen %29 gerilemeyle birebir).
+
+Bu, [[#1l. Duvar saati EŞİĞİ, yük altında özelliği değil koşucuyu ölçer]] ve
+[[#6z. Duvar saati ORANI koruması — sabit ek yük oranı platforma bağlı yapar]]
+ile aynı ailenin **üçüncü** üyesi. Üçünün ortak dersi: *zamanlama kapısı
+yazarken asıl soru "eşik kaç olsun" değil, **"neye göre normalize ediyorum"**.*
+
+Nöbetçi: `tests/perf_pair.py` — tur eşlemesi + açılış çıkarma + medyan;
+karar vermez, yalnız ölçer (eşiği çağıran koyar).
+
 ### 1m. Koşmayan sonda, koşturulduğu gün SINADIĞI ŞEYİ suçlar
 `wings_tls_smoke.py` "elle koşulur, CI'da değil" diye duruyordu. 2026-09-11'de
 ilk kez koşulduğunda çıktısı şuydu:
