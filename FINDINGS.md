@@ -920,6 +920,21 @@ yolu eklendiğinde sessizce atlanır.**
    konabilir: `fib` sonucunu "farklı karmaşıklık sınıfı" diye yazdım —
    ölçüler doğruydu, **isim yanlıştı** ve yayına çıktı. Sayı doğrulandığında
    iş bitmez; onu adlandıran cümle de doğrulanır.
+31b. **Kapanış iddiası, kapandığını ilan ettiği aracın kendi kurallarıyla
+   denetlenir.** (#31'in tamamlayıcısı; `9b` gibi bir dal, yeni bir kural
+   değil.) #31 *"atfın adı da bir iddiadır"* der; bu da **kapanışın kendisi
+   bir iddiadır** der. Kanıtı bu defterin son sayfası: kapanış sayfası üç
+   sayı iddia etti — 8 nöbetçi, tam kural dizini, kayıtlı S11 — ve **üçü de
+   yanlıştı** (10, 24/30, hiç yok). Kapanış sayfasını yazan araç, kapanış
+   sayfasını yanlışladı.
+
+   Zincirin dördüncü halkası bu: **sayı → birim → ad → KONUM.** İlk üçü
+   *doğruluk* halkası (ölçüm ne diyor, birim anlamlı mı, isim tutuyor mu);
+   dördüncüsü **erişilebilirlik** halkası — doğru olan şeyin *aranacağı
+   yerde* olması. S11 tam bunu gösterdi: karar FINDINGS'in gövdesinde
+   doğru yazılıydı ama S-listesinde yoktu, yani bir yıl sonra aynı soruyu
+   soracak kişi onu bulamayacaktı. **Yapılmamış iş, ancak aranacağı yerde
+   kayıtlıysa yapılmamış sayılır; değilse yalnızca unutulmuştur.**
 30. **Kârlılık kapısı işten ÖNCE ölçülür; tavan kapının altındaysa iş
    yapılmaz.** Float-dizi unboxing'i için tavan, *zaten kutusuz olan* int
    yolunun bugünkü oranıdır — hipotetik hesap değil, ölçülebilir bir üst
@@ -1148,6 +1163,7 @@ FP/SIMD.
 | 29 | İki hakikat kaynağı birleşirken mutabakat raporu beklenir |
 | 30 | Kârlılık kapısı işten önce ölçülür; tavan kapının altındaysa iş yapılmaz |
 | 31 | Ayrışmayı ölçmeden atıf yapma — ve atfın adı da bir iddiadır |
+| 31b | Kapanış iddiası, kapandığını ilan ettiği aracın kurallarıyla denetlenir |
 
 ⚠ **17 ve 18 numaraları hiç kullanılmadı** — kayıp kayıt değil, numaralandırma
 boşluğu. Kural listesi bir sayaç değil, bir dizin; yeni kural en büyük
