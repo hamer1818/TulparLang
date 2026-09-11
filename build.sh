@@ -665,15 +665,6 @@ TPREOF
         rm -rf "$SR_TMP"
         exit 1
     fi
-    sr_best_us() {
-        local best=99999999 i t0 t1 d
-        for i in 1 2 3; do
-            t0=$(date +%s%N); SR_N=$2 "$1" >/dev/null 2>&1; t1=$(date +%s%N)
-            d=$(( (t1 - t0) / 1000 ))
-            [ "$d" -lt "$best" ] && best=$d
-        done
-        echo "$best"
-    }
     # SÜREÇ AÇILIŞINI ÇIKAR — yoksa eşik platforma bağlı olur.
     #
     # Ölçülen süre `fork+exec+dyld+fib`. Linux'ta açılış ~0,2 ms ve N=32'lik
@@ -687,18 +678,42 @@ TPREOF
     # kod yerleşimi, tek değişen iş miktarı; kalan yalnızca fib işi. Eşik
     # böylece makineden bağımsız hale geliyor. (Eşiği düşürmek YANLIŞ cevap
     # olurdu: ölçüm hatasını gizler, gerçek bir gerilemeyi de kaçırırdı.)
-    SR_ON=$(sr_best_us "$SR_TMP/fib_on" 32)
-    SR_OFF=$(sr_best_us "$SR_TMP/fib_off" 32)
-    SR_ON_BASE=$(sr_best_us "$SR_TMP/fib_on" 1)
-    SR_OFF_BASE=$(sr_best_us "$SR_TMP/fib_off" 1)
-    SR_ON_W=$(( SR_ON - SR_ON_BASE ));  [ "$SR_ON_W" -lt 1 ] && SR_ON_W=1
-    SR_OFF_W=$(( SR_OFF - SR_OFF_BASE )); [ "$SR_OFF_W" -lt 1 ] && SR_OFF_W=1
-    if [ "$SR_OFF_W" -gt $(( SR_ON_W * 2 )) ]; then
-        echo -e "${GREEN}ozyineleme zinciri calisiyor${NC} (is: ${SR_OFF_W}us -> ${SR_ON_W}us, acilis ~${SR_ON_BASE}us cikarildi)"
+    # ⚠ DEJENERE OLCUM YESIL VERMEZ.
+    #
+    # Bu kapi once her kolu ayri olcup acilisi cikariyordu ve cikarma NEGATIFE
+    # dustugunde sonucu 1e KELEPCELIYORDU. Kelepcelenmis 1, `off_w > on_w * 2`
+    # esiginden rahatca gecer. Olculdu (2026-09-11, CI macOS arm64):
+    #
+    #     ozyineleme zinciri calisiyor (is: 9835us -> 1us, acilis ~16329us)
+    #
+    # `-> 1us` kelepcenin kendisi: macOS'ta surec acilisi ~16 ms ve zincirli
+    # fib(32) toplam suresi onun altinda kaliyor, yani is payi OLCULEMIYOR.
+    # Kapi `9835 > 2` diye YESIL veriyordu — zincirli kol hic olculmemisti.
+    # Linux'ta ayni kapi gercek olcuyor (4034 -> 270).
+    #
+    # Artik: olcum tur-esli (tests/perf_pair.py, bkz. ackermann kapisi) ve
+    # kelepcelenen tur SAYILIYOR. Kelepce varsa kapi yesil IDDIA ETMEZ; ne
+    # olculemedigini ve neyin hala kapsadigini soyler. Bu bir GERILEME degil,
+    # platformun olcum siniri — o yuzden kirmizi degil, GORUNUR sari.
+    SR_RES=$(python3 tests/perf_pair.py "$SR_TMP/fib_on" "$SR_TMP/fib_off" 32 1 5)
+    SR_RATIO=$(echo "$SR_RES" | cut -d' ' -f1)
+    SR_ON_W=$(echo "$SR_RES" | cut -d' ' -f2)
+    SR_OFF_W=$(echo "$SR_RES" | cut -d' ' -f3)
+    SR_DEG=$(echo "$SR_RES" | cut -d' ' -f4)
+    if [ -z "$SR_RATIO" ]; then
+        echo -e "${RED}Ozyineleme zinciri kapisi OLCUM URETEMEDI${NC}"
+        rm -rf "$SR_TMP"; exit 1
+    fi
+    if [ "$SR_DEG" -gt 0 ]; then
+        echo -e "${YELLOW}ozyineleme ZAMAN kapisi olcemedi${NC} — 5 turun ${SR_DEG} tanesinde is payi surec acilisinin altinda kaldi (bu platformda fib(32) cok hizli)."
+        echo "  Bu bir gerileme DEGIL, olcum siniri. Zincirin VARLIGINI yukaridaki IR"
+        echo "  kapisi (@fib icindeki oz-cagri sayisi) zaten dogruladi; kazanc olcusu burada yok."
+    elif [ "$SR_RATIO" -le 50 ]; then
+        echo -e "${GREEN}ozyineleme zinciri calisiyor${NC} (is: ${SR_OFF_W}us -> ${SR_ON_W}us, oran %${SR_RATIO}, acilis cikarildi)"
     else
         echo -e "${RED}Ozyineleme zinciri KAZANC VERMIYOR — klonlar satir ici alinmiyor!${NC}"
         echo "  is payi: zincirsiz=${SR_OFF_W}us zincirli=${SR_ON_W}us (en az 2 kat bekleniyor)"
-        echo "  ham: zincirsiz=${SR_OFF}us zincirli=${SR_ON}us, acilis=${SR_OFF_BASE}/${SR_ON_BASE}us"
+        echo "  medyan tur, oran %${SR_RATIO} (esik: zincirli <= zincirsizin yarisi)"
         rm -rf "$SR_TMP"
         exit 1
     fi

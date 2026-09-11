@@ -186,6 +186,31 @@ yazarken asıl soru "eşik kaç olsun" değil, **"neye göre normalize ediyorum"
 Nöbetçi: `tests/perf_pair.py` — tur eşlemesi + açılış çıkarma + medyan;
 karar vermez, yalnız ölçer (eşiği çağıran koyar).
 
+### 1o. KELEPÇE, "ölçemedim"i "geçti"ye çevirir
+`build.sh`'ın fib zincir kapısı iş payını `t(N=32) - t(N=1)` ile ölçüyordu ve
+sonucu `[ "$W" -lt 1 ] && W=1` ile kelepçeliyordu. Kelepçe, negatif bir farkı
+(iş, süreç açılışının gürültüsünün altında kaldı → **ölçemedim**) 1'e çeviriyor;
+1 ise `off_w > on_w * 2` eşiğinden rahatça geçiyor. CI macOS arm64, 2026-09-11:
+
+```
+ozyineleme zinciri calisiyor (is: 9835us -> 1us, acilis ~16329us cikarildi)
+```
+
+`-> 1us` kelepçenin kendisi. macOS'ta süreç açılışı ~16 ms ve zincirli
+`fib(32)`'nin toplam süresi onun altında kalıyor. Kapı `9835 > 2` diye **yeşil**
+verdi; zincirli kol **hiç ölçülmemişti**. Aynı kapı Linux'ta gerçek ölçüyor
+(`4034 -> 270`) — yani hata platforma bağlı ve tek tarafta görünmez.
+
+**Kural:** bir savunma değeri (clamp, `max(x,1)`, `?: varsayılan`) ölçüm
+yolunda duruyorsa, **ölçülemeyen ile ölçülen aynı değere düşmemeli**.
+Kelepçelenen durum sayılır ve çağırana bildirilir; kapı o zaman yeşil *iddia
+etmez*, ne ölçemediğini ve **neyin hâlâ kapsadığını** söyler. Burada zincirin
+varlığını IR düzeyindeki kapı (`@fib` içindeki öz-çağrı sayısı) her platformda
+doğruluyor — kaybolan yalnız *kazanç ölçüsü*, ve bu artık sarı bir satırla
+görünür. Gerileme değil, ölçüm sınırı: o yüzden kırmızı değil.
+
+`tests/perf_pair.py` kelepçelenen tur sayısını dördüncü alan olarak döndürür.
+
 ### 1m. Koşmayan sonda, koşturulduğu gün SINADIĞI ŞEYİ suçlar
 `wings_tls_smoke.py` "elle koşulur, CI'da değil" diye duruyordu. 2026-09-11'de
 ilk kez koşulduğunda çıktısı şuydu:
