@@ -202,3 +202,39 @@ bağlanıyordu: boş program 1,15 → 0,23 ms.
 her kutulu global ataması koşulsuz bir çalışma zamanı çağrısı ödüyordu;
 ikisi de kapatıldı. Kutulu fonksiyonlar ayrıca **değer ABI'sine** geçti
 (argüman ve dönüş yazmaçta): tipsiz `fib` 11,9 → 7,7 ms.
+
+
+## Kayan nokta seti (2026-09-11)
+
+Üç çekirdek **bilerek farklı yerleri** sınar; "float yavaş mı" tek sayıyla
+cevaplanamaz çünkü iki ayrı maliyet vardır:
+
+* **değer** temsili — her işlemde kutu aç/kapa
+* **depolama** temsili — eleman başına 16 bayt `VMValue` vs 8 bayt `double`
+
+| çekirdek | ne ölçer | dizi |
+|---|---|---|
+| `mandelbrot` | saf kayan nokta aritmetiği | **yok** |
+| `matmul` | kayan nokta dizisi (depolama + bant genişliği) | yalnız o |
+| `nbody` | ikisinin karışımı + `sqrt` | küçük |
+
+Ayrım kurulmadan ölçülürse "float 10× yavaş" denir ve **hangi yarının** suçlu
+olduğu bilinmez. Ölçüm bunu gösterdi: mandelbrot **1,00× C**, matmul **26,6×**.
+
+**Çıktı mutabakatı nasıl sağlandı.** Kayan nokta kıyaslarında asıl zorluk
+sürelerin değil, **sonuçların** eşleşmesi:
+
+* `matmul` değerleri **küçük tam sayı** (double içinde birebir) — böylece
+  gcc'nin FMA'ya kaynaştırması sonucu değiştirmiyor ve toplam `2^53`in çok
+  altında kalıyor.
+* `mandelbrot` çıktısı **yineleme sayısı**, yani tam sayı.
+* `nbody` enerjiyi `1e9` ile ölçekleyip **yuvarlayarak tam sayı** basıyor;
+  böylece biçimlendirme (`%.9f` ↔ `toString` ↔ `println!`) ölçümün dışında
+  kalıyor. Dokuz dil de aynı değeri veriyor.
+
+Bir şey daha: **kaynak dosyası olmayan dil satırı düşer, koşum durmaz.**
+Önceden bu kural yalnız *araç zincirini* kapsıyordu; `<bench>.cs` yokken
+koşucu `FileNotFoundError` ile **tamamen** çöküyordu — yani tek bir dilin
+eksik kaynağı ötekilerin ölçümünü de götürüyordu. C'nin `-lm` bağlantısı da
+eklendi (`nbody` yalnız C satırında "DERLENEMEDI" oluyordu; referans dilin
+eksik olduğu bir tablo yayınlanacaktı).

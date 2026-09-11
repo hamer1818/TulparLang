@@ -24,6 +24,10 @@ taşıdığını say — P21 bunu üçten dörde çıkardı.
 
 ## Performans iddiaları
 
+| # | İddia | Sonuç |
+|---|---|---|
+| P3 | "Kutulu float C'den 5–20× yavaş" | **ÇÜRÜTÜLDÜ — sebep yanlıştı.** Float *aritmetiği* kutulu DEĞİL: mandelbrot'ta Tulpar **1,00× C**. 11–27×'lik maliyet tamamen **dizi depolamasında**. Aşağıdaki FP bölümü |
+
 | # | İddia | Durum | Kanıt |
 |---|---|---|---|
 | C1 | Node/Python/Java/C#'tan çok daha hızlı | **doğrulandı** | [fair/README](benchmarks/fair/README.md) |
@@ -75,6 +79,96 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | C9 | Suite'ler çalışma zamanı hatasını yakalıyor | **doğrulandı (enjeksiyonla)** — tek dosya çıkış 1, suite çıkış 1, paket sayısı 75'te kalıyor | P26 |
 | R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ (strict'te)** — strict modda hata `aot_throw` ile fırlıyor: `catch` yakalıyor, yakalanmazsa stderr + exit 1 | P26b |
 | R4 | LSP tablosu ile tip katalogu tutarlı | **çürütüldü, DÜZELTİLDİ** — 20 native builtin katalogda yoktu (tip+arite denetimsiz); `sb_append` imzası LSP'de yanlıştı | P27 |
+
+## 📐 FP SETİ — "float yavaş mı?" sorusunun iki ayrı cevabı var (2026-09-11)
+
+On iki tur önce yazılan **P3** (*"kutulu float 5–20× yavaş"*) nihayet ölçüldü.
+Cevap: **tahmin edilen aralık doğru, gerekçesi yanlış.**
+
+**Neden üç çekirdek, tek çekirdek değil.** "float yavaş mı" tek sayıyla
+cevaplanamaz çünkü iki ayrı maliyet var — **değer** temsili (her işlemde kutu
+aç/kapa) ve **depolama** temsili (eleman başına 16 bayt VMValue vs 8 bayt
+double). Çekirdekler bunları ayıracak şekilde seçildi:
+
+| çekirdek | ne ölçer | dizi kullanır mı |
+|---|---|---|
+| `mandelbrot` | saf kayan nokta **aritmetiği** | **hayır** |
+| `matmul` | kayan nokta **dizisi** (depolama + bant genişliği) | evet, sadece |
+| `nbody` | ikisinin gerçekçi karışımı + `sqrt` | evet, küçük |
+
+**Sonuç (N: 2000 / 640 / 3 000 000; en iyi/5, 9 dil çıktı mutabakatlı):**
+
+| çekirdek | C (gcc -O2) | Tulpar AOT | oran | Python |
+|---|---:|---:|---:|---:|
+| mandelbrot | 158,6 ms | **158,4 ms** | **1,00×** | 15 721 ms |
+| nbody | 114,8 ms | 1 326,1 ms | 11,6× | 10 980 ms |
+| matmul | 31,0 ms | 824,5 ms | **26,6×** | 18 996 ms |
+
+**Öngörü defteri (koşumdan ÖNCE yazıldı):**
+
+| # | Öngörü | Sonuç |
+|---|---|---|
+| P51 | mandelbrot 5–15× geride | ❌ **ÇÜRÜTÜLDÜ** — 1,00×, C ile ayırt edilemiyor |
+| P52 | matmul oranı mandelbrot'tan kötü | ✅ **doğrulandı** — 26,6× vs 1,00× |
+| P53 | nbody ikisinin arasında | ✅ doğrulandı — 11,6× |
+| P54 | Python'dan hızlı ama C'ye yakın değil | ⚖ **yarısı yanlış** — aritmetikte C'nin *kendisi* |
+| P55 | int ↔ float konumu arasında büyük fark | ✅ ama ayrım int/float değil, **skaler/dizi** |
+
+⚠ **Tek çekirdek ölçseydim iki farklı yanlış sonuca varırdım:** yalnız
+mandelbrot → *"float bedava"*; yalnız matmul → *"float 26× yavaş"*. İkisi de
+yanlış. Ayrım kurulmadan yapılan bir FP ölçümü, hangi yarının suçlu olduğunu
+söyleyemez — ve unboxing kararı **tam o ayrıma** dayanıyor.
+
+### Maliyet nerede: izole ölçüm
+
+Aynı döngü (20M eleman doldur + topla), yalnız eleman tipi değişiyor:
+
+| | süre | zirve RSS | bayt/eleman |
+|---|---:|---:|---:|
+| int dizi, C (`long long*`) | 13,9 ms | 158 172 KB | 8,1 |
+| int dizi, **Tulpar** | 20,6 ms | **80 832 KB** | **4,1** |
+| float dizi, C (`double*`) | 16,0 ms | 158 172 KB | 8,1 |
+| float dizi, **Tulpar** | 87,0 ms | **315 220 KB** | **16,1** |
+
+- Tulpar int / C int = **1,48×** · Tulpar float / C float = **5,45×**
+- Tulpar float / Tulpar int = **4,22×** ← saf depolama cezası
+
+**Tulpar'ın int dizisi C'den DAR** (4,1 bayt/eleman; i32 daraltması sayesinde
+C'nin `long long`undan yarı yer). Aynı motorda float dizisi **iki katı**
+(16,1 bayt) — çünkü kutulanmamış depolama (`idata`, `long long*`) yalnız tam
+sayılar için var; `TYPE_ARRAY_FLOAT` codegen'de yalnız tip dönüşümünde geçiyor.
+
+matmul'un 26,6×'i düz taramanın 5,45×'inden büyük: kutulu eleman erişimi
+"kanıtlı erişim" hızlı yoluna giremiyor (o yol diziyi *kutusuz* kanıtlamış
+olmayı şart koşuyor), ve 16 baytlık elemanlar LLVM'in iç döngüyü
+vektörleştirmesini de engelliyor. C aynı döngüde ~17 GFLOP/s yapıyor.
+
+### Ürün kararı — unboxing yol haritası
+
+**Karar: aritmetik tarafında YAPILACAK İŞ YOK.** P3'ün önerdiği "float
+unboxing" zaten var ve çalışıyor; mandelbrot bunu 1,00× ile kanıtlıyor.
+Açık olan tek şey **dizi depolaması**.
+
+**Önerilen şekil (B):** `idata`yı iki-modlu (`i32`/`i64`) bir ham tampondan
+**üç-modlu** bir tampona genişletmek — `elem_bits` yanına `elem_kind`
+(`INT`/`FLOAT`). `fdata` diye İKİNCİ bir işaretçi eklemek (A şıkkı) daha
+kolay görünüyor ama `items_`/`idata` değişmezi zaten inceydi; üçüncü bir
+işaretçi durum uzayını üçe katlar ve R11 bu dosyada hata sınıfının nerede
+yaşadığını gösterdi.
+
+**Kârlılık kapısı (iş başlamadan yazıldı):** göç, `matmul` oranını **≤ 4×**e
+ve float düz taramayı **≤ 2×**ye indirmezse geri alınır. Üst sınır bilgisi
+var: aynı motorda int dizisi 1,48× yapıyor, yani hedef ulaşılabilir.
+
+**Zorunlu fikstür paketi (#21):** göç bir sözleşme değiştiriyor —
+*"kutulanmamış depolama yalnız tam sayılar içindir"* cümlesi ölüyor. Yerine
+geleni sınayan fikstür DOĞMADAN kapanmaz: (i) float dizisi bayt/eleman
+ölçümü, (ii) int↔float dizi karışımı ve `widen`/`debox` yolları, (iii)
+`aot_persist` derin kopyası float tamponu taşıyor mu, (iv) JSON
+serileştirmesi, (v) `tests/stack_growth_smoke.py`'ın float şekilleri.
+
+**SIMD ayrı bir iş değil:** kutusuz `double*` tamponla LLVM iç döngüyü kendi
+vektörleştirir. SIMD'i elle yazmak gündemde değil; unboxing'in yan ürünü.
 
 ## 🔴 R11 — DİZİ LİTERALİ DÖNGÜDE YIĞIN SIZDIRIYOR (2026-09-11)
 
@@ -142,6 +236,34 @@ tükenmesini görmüyorsa diğerlerinin yeşili anlamsız.
 program. Wings handler'ları istek başına arena döndürdüğü için sunucu yolu
 etkilenmiyordu; etkilenen, tek bir fonksiyonda yüz binlerce yineleme dönen
 hesap kodu.
+
+### İKİNCİ DALGA — aynı hata 50 builtin'de birden (aynı gün)
+
+İlk düzeltmeden sonra yazdığım tarayıcı 13 şekli temiz gösterdi. Sonra FP
+kıyası koşuldu ve **`matmul` Tulpar'da N=400'de SIGSEGV verdi** — yani
+tarayıcının "temiz" dediği yerde hâlâ bir sızıntı vardı. Aritmetik yine
+birebir oturdu: 8 MB / 52 bayt ≈ 161 000, çöküş 160 000 yinelemede.
+
+Daraltma `mod()`'a çıktı; sonra `sqrt`, `pow`, `round`, `min`, `max` de
+sızdırdı. Kök: kutulu-ABI builtin makroları — **`MATH1_FUNC`, `MATH2_FUNC`,
+`STR1_FUNC`, `STR2_FUNC`** — dördü de ham `LLVMBuildAlloca` kullanıyordu.
+Yani **tek satırlık hata 50 builtin'i birden** vuruyordu (sin/cos/tan/exp/
+log/... + pow/atan2/hypot/fmod/mod/min/max/randint + upper/lower/reverse/...).
+
+⚠ **Tarayıcım neden göremedi:** 13 şekli *elle* seçmiştim ve builtin çağrısı
+olarak yalnız `at()`/`json_get()` vardı — ikisi de bu makrolara girmiyor.
+Elle seçilmiş bir örneklem, seçenin bilmediği yeri kapsayamaz. Düzeltme
+örneklemi büyütmek değil, **listeyi kaynaktan türetmek** oldu: tarayıcı artık
+`llvm_backend.cpp`'deki makro çağrılarını okuyup her birini tek tek sınıyor,
+yani makroya yeni bir satır eklendiğinde koruma kendiliğinden genişliyor
+(#8: muafiyet listesi yerine kaynağı düzelt · #11: bilinmeyen araç eksik
+araçtır).
+
+**Yan ders (ölçüm maliyeti):** taramanın ilk hâli her yinelemede
+`toString(...)` çağırıp dizgi ayırıyordu ve 42 saniye sürüyordu. Canlılık
+emicisi `if (<çağrı>) { ... }`'ya çevrilince **4,5 saniyeye** düştü — aynı
+kapsama, onda bir maliyet. Nöbetçinin pahalı olması, koşulmamasının en yaygın
+sebebidir.
 
 ## 🔴 L1 — `&&` ve `||` KISA DEVRE YAPMIYOR
 
@@ -440,7 +562,7 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
-23 (aday). **Bir bellek/başarım ölçümü, ölçtüğü programın SAĞ ÇIKTIĞINI
+23. **Bir bellek/başarım ölçümü, ölçtüğü programın SAĞ ÇIKTIĞINI
    denetlemeden rapor edilemez.** S3'ün ilk tablosu (drop 11 MB · restore
    161 MB · none 143 MB · **oran 15×**) yayına hazır görünüyordu; üç kolun
    üçü de SIGSEGV veriyordu ve oran **üç farklı çöküş noktasının** oranıydı.
@@ -527,10 +649,17 @@ için değil; **eksik hâli zararlı olduğu için**.
 
 ## Açık kuyruk
 
-**Yeni (2026-09-11):** S1 tablosu ↔ `[typecheck]` uyarısı gerilimi (yukarıda) ·
-`ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ otomasyon dışı ·
-R11'in sınıf taraması 13 şekille sınırlı (async/closure/match şekilleri
-taranmadı).
+**Kalan (2026-09-11 sonu):**
+1. **Lint** (tam hâliyle, AST okuma tarafı) — tek büyük typeinfer işi
+2. **P23** (iki geçişli sembol toplama) — arcade 261/274'ün kökü
+3. **`[typecheck]` if-şekilleri ↔ S1 tablosu birleşimi** (#8'in kapanışı)
+4. **Float dizi unboxing'i** — yol haritası + kârlılık kapısı yukarıda yazılı
+5. P11/P12 (llvm-mca ile `fib` atribüsyonu; gcc bayrak ikili araması)
+
+Küçük kalemler: `ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ
+otomasyon dışı · yığın taraması async/closure/match şekillerini kapsamıyor ·
+`benchmarks/RESULTS.md` ve tulparlang.dev tabloları FP satırlarını henüz
+içermiyor (veri hazır, yayın kararı bekliyor).
 
 `srv_json` soak · `thread_join` dönüş değeri · `thread_create` derin kopya
 (5 koşulla onaylı) · global lint · donmuş 9 dilli CSV + checksum kolonu ·

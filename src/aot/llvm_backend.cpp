@@ -7113,12 +7113,25 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_vm_val_int(backend, 0);
     }
 
+// ⚠ ASAGIDAKI DORT MAKRO GIRIS BLOGUNDA alloca YAPAR (R11 sinifi, 2026-09-11).
+//
+// Kutulu-ABI builtin'leri argumani yigina yazip ISARETCISINI geciriyor.
+// O alloca ham `LLVMBuildAlloca` ile uretilirse builder'in O ANKI blogunda
+// dogar; cagri bir dongu icindeyse her YINELEME 16 bayt yigin harciyor ve
+// program yeterince uzun dondugunde SIGSEGV veriyor. Olculdu: `mod`, `sqrt`,
+// `pow`, `round`, `min`, `max` — hepsi 1 000 000 yinelemede cokuyordu, ve
+// matmul kiyasi N=400'de (160 000 yineleme, 8 MB / 52 bayt) oluyordu.
+//
+// Bu makrolarin kapsadigi builtin sayisi buyuk (sin/cos/tan/exp/log/... +
+// pow/atan2/hypot/fmod/mod/min/max/randint + upper/lower/reverse/...), yani
+// tek satirlik hata ONLARCA builtin'i birden vuruyordu. Nobetci:
+// tests/stack_growth_smoke.py builtin'leri tek tek tariyor.
 // ====== Math Functions - Single Param ======
 #define MATH1_FUNC(func_name, field)                                           \
   if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
-    LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
-        backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
+    LLVMValueRef v_ptr = llvm_build_alloca_at_entry(                           \
+        backend, backend->vm_value_type, func_name "_arg_ptr");                \
     LLVMBuildStore(backend->builder, v, v_ptr);                                \
     LLVMValueRef v_void = LLVMBuildBitCast(                                    \
         backend->builder, v_ptr, backend->ptr_type, func_name "_arg_void");    \
@@ -7174,11 +7187,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 2) {       \
     LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
     LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
-    LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
-        backend->builder, backend->vm_value_type, func_name "_arg1_ptr");      \
+    LLVMValueRef v1_ptr = llvm_build_alloca_at_entry(                          \
+        backend, backend->vm_value_type, func_name "_arg1_ptr");               \
     LLVMBuildStore(backend->builder, v1, v1_ptr);                              \
-    LLVMValueRef v2_ptr = LLVMBuildAlloca(                                     \
-        backend->builder, backend->vm_value_type, func_name "_arg2_ptr");      \
+    LLVMValueRef v2_ptr = llvm_build_alloca_at_entry(                          \
+        backend, backend->vm_value_type, func_name "_arg2_ptr");               \
     LLVMBuildStore(backend->builder, v2, v2_ptr);                              \
     LLVMValueRef v1_void = LLVMBuildBitCast(                                   \
         backend->builder, v1_ptr, backend->ptr_type, func_name "_arg1_void");  \
@@ -7209,8 +7222,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 #define STR1_FUNC(func_name, field)                                            \
   if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
-    LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
-        backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
+    LLVMValueRef v_ptr = llvm_build_alloca_at_entry(                           \
+        backend, backend->vm_value_type, func_name "_arg_ptr");                \
     LLVMBuildStore(backend->builder, v, v_ptr);                                \
     LLVMValueRef v_void = LLVMBuildBitCast(                                    \
         backend->builder, v_ptr, backend->ptr_type, func_name "_arg_void");    \
@@ -7240,11 +7253,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 2) {       \
     LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
     LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
-    LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
-        backend->builder, backend->vm_value_type, func_name "_arg1_ptr");      \
+    LLVMValueRef v1_ptr = llvm_build_alloca_at_entry(                          \
+        backend, backend->vm_value_type, func_name "_arg1_ptr");               \
     LLVMBuildStore(backend->builder, v1, v1_ptr);                              \
-    LLVMValueRef v2_ptr = LLVMBuildAlloca(                                     \
-        backend->builder, backend->vm_value_type, func_name "_arg2_ptr");      \
+    LLVMValueRef v2_ptr = llvm_build_alloca_at_entry(                          \
+        backend, backend->vm_value_type, func_name "_arg2_ptr");               \
     LLVMBuildStore(backend->builder, v2, v2_ptr);                              \
     LLVMValueRef v1_void = LLVMBuildBitCast(                                   \
         backend->builder, v1_ptr, backend->ptr_type, func_name "_arg1_void");  \

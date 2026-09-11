@@ -1,0 +1,23 @@
+// Mandelbrot yineleme sayimi (mandelbrot.c ile ayni algoritma).
+// DIZI YOK: olculen sey saf kayan nokta deger temsili.
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 2000; }
+int maxit = 50;
+int total = 0;
+for (int y = 0; y < n; y = y + 1) {
+    float ci = 2.0 * toFloat(y) / toFloat(n) - 1.0;
+    for (int x = 0; x < n; x = x + 1) {
+        float cr = 2.0 * toFloat(x) / toFloat(n) - 1.5;
+        float zr = 0.0;
+        float zi = 0.0;
+        int i = 0;
+        while (i < maxit && zr * zr + zi * zi <= 4.0) {
+            float t = zr * zr - zi * zi + cr;
+            zi = 2.0 * zr * zi + ci;
+            zr = t;
+            i = i + 1;
+        }
+        total = total + i;
+    }
+}
+print(total);

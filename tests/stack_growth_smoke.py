@@ -23,9 +23,13 @@ ozyineleme, yigini tuketMESI GEREKEN bir program. O sekil TEMIZ cikarsa
 duzenek yigin tukenmesini hic gormuyor demektir ve digerlerinin yesili
 anlamsizdir.
 """
-import os, subprocess, sys, tempfile
+import os, re, subprocess, sys, tempfile
 
-N = 2_000_000  # 16 bayt/yineleme bile 524 288'de patlar; 2M genis pay
+N = 2_000_000
+# Builtin taramasi icin ayri N: tek bir 16 baytlik alloca sizintisi 8 MB
+# yigini 524 288 yinelemede tuketiyor, MATH2 (iki alloca) 262 144'te.
+# 1 500 000 rahat pay birakiyor (5,6 bayt/yineleme sizintisini bile yakalar).
+BUILTIN_N = 1_500_000  # 16 bayt/yineleme bile 524 288'de patlar; 2M genis pay
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RED, GREEN, RESET = "\033[0;31m", "\033[0;32m", "\033[0m"
 
@@ -52,6 +56,88 @@ SHAPES = [
     ("eleman yazma",        "g[0] = i; n = n + g[0];",                 "array g = [1, 2, 3];",       N * (N - 1) // 2),
     ("ic ice dizi literali", "array j = [[1, 2], [3, 4]]; n = n + len(j);", "",                      2 * N),
 ]
+
+
+
+# ---------------------------------------------------------------------------
+# Faz 2 — KUTULU-ABI BUILTIN TARAMASI (kaynaktan turetilir)
+#
+# Builtin listesi ELLE yazilmaz: llvm_backend.cpp'deki makro cagrilarindan
+# okunur. Sebebi #11 ("bilinmeyen arac, eksik aractir") ve #8 ("muafiyet
+# listesi yerine kaynagi duzelt"): elle tutulan bir liste, makroya yeni bir
+# satir eklendiginde sessizce bayatlar ve yeni builtin korumasiz kalir.
+# Burada liste KAYNAGIN KENDISI oldugu icin bayatlayamaz.
+#
+# Olculdu (2026-09-11): MATH1/MATH2/STR1/STR2 makrolarinin dordu de ham
+# `LLVMBuildAlloca` kullaniyordu -> 51 builtin'in HEPSI dongude yigin
+# sizdiriyordu. `mod`/`sqrt`/`pow`/`round`/`min`/`max` olculerek dogrulandi.
+MACRO_FILE = os.path.join(ROOT, "src", "aot", "llvm_backend.cpp")
+
+# Makro ailesi -> varsayilan arguman metni. Birkac builtin farkli sekil
+# istiyor; onlar OVERRIDE'ta.
+FAMILY_ARGS = {
+    "MATH1_FUNC": "2.0",
+    "MATH2_FUNC": "2.0, 3.0",
+    "STR1_FUNC": '"abc"',
+    "STR2_FUNC": '"abc", "b"',
+    "TYPE_CHECK_FUNC": "1",
+}
+OVERRIDE = {
+    "repeat": '"ab", 2',
+    # ⚠ join AYIRICI-ONCE: join(sep, xs). Ilk yazilista ters yazilmisti ve
+    # sonda "sizinti" diye raporladi; oysa typecheck zaten uyariyordu
+    # (#12: API'yi yanlis kullanan test, ozelligi yanlis suclar).
+    "join": '\'","\', g',
+    "randint": "1, 10",
+    "log": "2.0", "log2": "2.0", "log10": "2.0",
+    "asin": "0.5", "acos": "0.5",
+}
+PRE_FOR = {"join": 'array g = ["a", "b"];'}
+
+
+def discover_builtins():
+    """llvm_backend.cpp'deki makro cagrilarindan (ad, arguman) cikar."""
+    src = open(MACRO_FILE, encoding="utf-8", errors="replace").read()
+    found = []
+    for fam, default in FAMILY_ARGS.items():
+        for m in re.finditer(re.escape(fam) + r'\("([A-Za-z_][A-Za-z0-9_]*)"', src):
+            name = m.group(1)
+            found.append((name, OVERRIDE.get(name, default), PRE_FOR.get(name, "")))
+    # Ayni ad iki makroda gecebilir (takma adlar); teki yeter.
+    seen, uniq = set(), []
+    for name, args, pre in found:
+        if name in seen:
+            continue
+        seen.add(name)
+        uniq.append((name, args, pre))
+    return uniq
+
+
+def scan_builtins(tmp, env):
+    """Her builtin'i dongude cagir; yigin sizdiran duser."""
+    items = discover_builtins()
+    if not items:
+        print("  " + RED + "KAYNAKTAN BUILTIN OKUNAMADI" + RESET +
+              " — makro bicimi degismis olabilir, tarama HICBIR SEY olcmuyor")
+        return ["builtin kesfi"], 0
+    bad = []
+    for idx, (name, args, pre) in enumerate(items):
+        # Sonuc `n`e besleniyor ki LLVM dongusu atmasin (Faz 1'in dersi).
+        # Canlilik emicisi UCUZ olmali: ilk yazilista her yineleme
+        # `toString(...)` ile dizgi ayriliyordu ve tarama 40 sn suruyordu.
+        # `if (<cagri>)` her donus tipinde calisir (S1 truthiness tablosu)
+        # ve tahsis yapmaz; `n` kosulsuz da artiyor ki falsy donen bir
+        # builtin "olculmedi" saniliP kirmizi vermesin.
+        body = 'n = n + 1; if (%s(%s)) { n = n + 2; }' % (name, args)
+        text = ("%s\nint i = 0;\nint n = 0;\nwhile (i < %d) { %s i = i + 1; }\n"
+                "print(toString(n));\n") % (pre, BUILTIN_N, body)
+        rc, out = build_and_run(text, tmp, "b%d" % idx, env)
+        if rc is None:
+            continue  # derlenmedi: bu builtin bu sekilde cagrilamiyor, atla
+        if rc != 0 or out in ("", "0"):
+            bad.append("%s (rc=%s)" % (name, rc))
+    return bad, len(items)
+
 
 CONTROL = ("KONTROL: derin ozyineleme",
            "func derin(int n) { if (n <= 0) { return 0; } return 1 + derin(n - 1); }\n"
@@ -95,6 +181,13 @@ def main():
         if not ok:
             fails.append(name)
 
+    # Faz 2: kutulu-ABI builtin'leri (liste kaynaktan turetilir).
+    bad, total = scan_builtins(tmp, env)
+    print("  %s %-24s %s" % (GREEN + "TEMIZ  " + RESET if not bad else RED + "SIZINTI" + RESET,
+                             "builtin taramasi (%d ad)" % total,
+                             "" if not bad else ", ".join(bad[:8])))
+    fails.extend(bad)
+
     # Kontrol: yigini tuketMESI gereken sekil. Temiz cikarsa duzenek kordur.
     rc, out = build_and_run(CONTROL[1], tmp, "ctrl", env)
     saw = rc is not None and rc != 0
@@ -107,7 +200,8 @@ def main():
     if fails:
         print(RED + "Yigin taramasi BASARISIZ" + RESET + ": %s" % ", ".join(fails))
         return 1
-    print(GREEN + "Yigin temiz" + RESET + " — %d sekil, kontrol kirmizi verebiliyor" % len(SHAPES))
+    print(GREEN + "Yigin temiz" + RESET +
+          " — %d sekil + %d builtin, kontrol kirmizi verebiliyor" % (len(SHAPES), total))
     return 0
 
 
