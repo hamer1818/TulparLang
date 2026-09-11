@@ -1,0 +1,21 @@
+// P23'un IKINCI yarisi — COZUM ile BASLATMA ayri sorulardir.
+//
+// 14_global_use_before_decl.tpr cozumun siradan bagimsiz oldugunu kilitliyor:
+// bir fonksiyon govdesi, bildirim satirindan once gelse bile global'i
+// dogru tiple gorur. Bu fikstur bunun BEDAVA OLMADIGINI kilitliyor.
+//
+// Ust duzey deyimler yukaridan asagi kosar. Bildirim satirindan ONCE okunan
+// bir global calisma zamaninda 0'dir — ve bu sessizce oluyordu: asagidaki
+// program `0` basip 0 ile cikiyordu, typecheck tek kelime etmeden.
+//
+// Tani "bulunamadi" DEMEZ, cunku ad cozuldu; "henuz baslatilmadi" der.
+// Ikisi ayni cumleye sikistirilsaydi okuyan kisi yazim hatasi arardi, oysa
+// yapmasi gereken bildirimi yukari tasimak (#7: bir sentinel iki anlam
+// tasiyamaz).
+print(sayac);
+int sayac = 5;
+// EXPECT satirlari SATIR NUMARASI TASIMAZ: yukaridaki yorum blogunu bir
+// kelime uzatmak fiksturu kirardi ve kirilma sebebi bulgudan bagimsiz
+// olurdu. Onun yerine tanin AYIRT EDICI cumlesi sabitleniyor.
+// EXPECT: NOT YET INITIALISED
+// EXPECT: move the declaration above

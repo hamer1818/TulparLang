@@ -80,6 +80,89 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ (strict'te)** — strict modda hata `aot_throw` ile fırlıyor: `catch` yakalıyor, yakalanmazsa stderr + exit 1 | P26b |
 | R4 | LSP tablosu ile tip katalogu tutarlı | **çürütüldü, DÜZELTİLDİ** — 20 native builtin katalogda yoktu (tip+arite denetimsiz); `sb_append` imzası LSP'de yanlıştı | P27 |
 
+## ✅ P23 — SEMBOL ÇÖZÜMÜ BİLDİRİM SIRASINA BAĞLI DEĞİLDİR (2026-09-11)
+
+**Kapanış cümlesi:** *Sembol çözümü bildirim sırasına bağlı değildir;
+başlatma sırası ayrı denetlenir.*
+
+### Kusur: sıra, denetimi belirliyordu
+
+Aynı hata, iki sıralamada iki farklı sonuç veriyordu:
+
+```
+int sayac = 5;  func oku(): int { return length(sayac); }   ->  YAKALANIR
+func oku(): int { return length(sayac); }  int sayac = 5;   ->  KAÇAR
+```
+
+Sebep: ön-geçiş **fonksiyonları ve struct'ları** topluyordu ama
+**global'leri toplamıyordu**. Global'ler ana gezintide, kaynak sırasıyla
+kaydoluyordu; bildirim satırından önce gelen her fonksiyon gövdesi o adı
+çözemiyor, tip `UNKNOWN`'a düşüyor ve üstündeki **her kontrol atlanıyordu** —
+sessizce. Yani düzeltme yeni bir mekanizma değil, var olan ön-geçişin
+**tamamlanması**.
+
+### Kapsam ölçüldü, tahmin edilmedi
+
+| | sayı |
+|---|---:|
+| üst düzey global bildirimi (lib+examples+tests) | 1353 |
+| **ilk kullanımından SONRA bildirilmiş** | **231** |
+| bunların `lib/scene3d.tpr`'deki payı | 192 |
+| bunların `var` olanı | **0** |
+
+Son satır tasarımı belirledi: ön-geçiş **yalnız açık tipli** bildirimleri
+kaydediyor. `var x = e;`in tipi `e`'den çıkıyor ve `e` başka global'lere
+bakabilir — ön-geçişte `infer_expr` çağırmak hem yan etkili (tanı basar,
+çift raporlar) hem de aynı sıra sorununu bir katman yukarı taşırdı. Riskli
+231 site'in tamamı açık tipli olduğu için bu kısıt **kapsamda kayıp
+yaratmıyor**.
+
+### İkinci yarı: çözüm ≠ başlatma
+
+Çözümü sırasız yapmak, sıra sorununu **yok etmez** — yerini değiştirir. Üst
+düzey deyimler hâlâ yukarıdan aşağı koşar:
+
+```
+print(sayac);
+int sayac = 5;     // program "0" basıyordu, typecheck tek kelime etmeden
+```
+
+Bu artık ayrı bir tanı veriyor ve **"bulunamadı" demiyor** — ad çözüldü,
+değeri henüz yok:
+
+> `'sayac' is NOT YET INITIALISED here (declared at line 2); top-level
+> statements run top to bottom, so the value is 0 — move the declaration
+> above this use`
+
+İkisini aynı cümleye sıkıştırmak **#7'nin** hatası olurdu: okuyan kişi yazım
+hatası arardı, oysa yapması gereken bildirimi yukarı taşımak. Fonksiyon
+gövdesinden okuma tanı vermiyor — gövde çağrıldığında üst düzey çoktan
+koşmuştur.
+
+Kenar durum kendiliğinden kapandı: `int n = n + 1;` kendi başlatmasında
+kendini okuyor ve yakalanıyor (bildirim, işlendikten *sonra* işaretleniyor).
+
+### Kapılar
+
+| kapı | sonuç |
+|---|---|
+| Kırmızı-doğan fikstür (`fail/14`) | yazıldığında **rc=0** (kaçıyordu), düzeltmeden sonra reddediliyor |
+| Başlatma fikstürü (`fail/15`) | `NOT YET INITIALISED` + "move the declaration above" |
+| Yanlış-pozitif fikstürü (`pass/10`) | doğru kod, kullanım-önce — sessiz kalıyor |
+| **Korpus kapısı** | **6 dosya / 17 tanı — birebir değişmedi** (198 dosya) |
+| Gürültü | tüm suite+örnek koşumunda yeni tanı **0 kez** ateşledi |
+
+Korpus kapısının değişmemesi iki şeyi birden söylüyor: 231 denetimsiz site
+denetime girdi ve **hiçbirinde gerçek hata yokmuş**; ve yeni başlatma tanısı
+gerçek kodda yanlış pozitif üretmiyor. İkisi de sentetik vakalarda kırmızı
+verebiliyor (#10).
+
+⚠ **Sondanın kendi hatası, üç kez.** Korpus taramasının ilk üç sürümü
+"195 dosyada 0 tanı" dedi — sırasıyla stderr'i okumadığı, `LC_ALL=C`'nin
+mesajı İngilizceye çevirdiğini hesaba katmadığı, ve `Type Error`'ı küçük
+harfle aradığı için. Üçü de *yeşil* görünüyordu. P23'ün taban ölçümü az
+kalsın "korpus tertemiz" diye yayınlanacaktı (#9b).
+
 ## 📐 FP SETİ — "float yavaş mı?" sorusunun iki ayrı cevabı var (2026-09-11)
 
 On iki tur önce yazılan **P3** (*"kutulu float 5–20× yavaş"*) nihayet ölçüldü.
@@ -667,7 +750,7 @@ için değil; **eksik hâli zararlı olduğu için**.
 
 **Kalan (2026-09-11 sonu):**
 1. **Lint** (tam hâliyle, AST okuma tarafı) — tek büyük typeinfer işi
-2. **P23** (iki geçişli sembol toplama) — arcade 261/274'ün kökü
+2. ~~**P23** (iki geçişli sembol toplama)~~ — **KAPANDI 2026-09-11**, yukarıdaki bölüm
 3. **`[typecheck]` if-şekilleri ↔ S1 tablosu birleşimi** (#8'in kapanışı)
 4. **Float dizi unboxing'i** — yol haritası + kârlılık kapısı yukarıda yazılı
 5. P11/P12 (llvm-mca ile `fib` atribüsyonu; gcc bayrak ikili araması)

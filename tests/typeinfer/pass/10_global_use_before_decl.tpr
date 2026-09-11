@@ -1,0 +1,13 @@
+// P23 kardes fikstur: cozum sirasiz calismali AMA yanlis pozitif uretmemeli.
+// Bildirim satirindan once kullanilan DOGRU tipli bir global, sessizce
+// gecmeli — "bulunamadi" ya da uydurma bir tip catismasi degil.
+func oku(): int {
+    return sayac + 1;
+}
+str ad = "x";
+int sayac = 5;
+func yaz(): str {
+    return ad;
+}
+print(oku());
+print(yaz());

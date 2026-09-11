@@ -277,6 +277,33 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     if (is_function_ref_name(ctx, id->name)) {
       return TYPE_STRING;
     }
+    // P23 — "cozuldu" ile "baslatildi" ayri seylerdir.
+    //
+    // Bir fonksiyon govdesi icindeysek sira sorunu YOK: govde cagrildiginda
+    // ust duzey coktan kosmustur. Ama UST DUZEY bir deyim, bildirim
+    // satirindan once o global'i okuyorsa calisma zamaninda SIFIR gorur.
+    // Olculdu (2026-09-11): `print(sayac); int sayac = 5;` -> "0" basiyor,
+    // typecheck tek kelime etmiyordu.
+    //
+    // Tani "bulunamadi" DEMEZ — ad cozuldu, degeri henuz yok. Ikisini ayni
+    // cumleye sikistirmak #7'nin hatasi olurdu: okuyan kisi yazim hatasi
+    // arar, oysa yapmasi gereken bildirimi yukari tasimak.
+    if (ctx->current_function_name.empty()) {
+      auto it = ctx->global_decl_line.find(id->name);
+      if (it != ctx->global_decl_line.end() &&
+          !ctx->initialized_globals.count(id->name)) {
+        report_error(
+            ctx,
+            tulpar::i18n::tr_en(
+                "'%s' bu satirda HENUZ BASLATILMADI (bildirimi satir %d); "
+                "ust duzey deyimler yukaridan asagi kosar, deger su an 0 - "
+                "bildirimi kullanimdan once tasi (satir %d)",
+                "'%s' is NOT YET INITIALISED here (declared at line %d); "
+                "top-level statements run top to bottom, so the value is 0 - "
+                "move the declaration above this use at line %d"),
+            id->name.c_str(), it->second, id->loc.line);
+      }
+    }
     return lookup_symbol_type(ctx, id->name);
   }
 
@@ -1685,6 +1712,42 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
         ctx->struct_types[type_decl->name] = std::move(info);
       }
     }
+    // P23 — SEMBOL COZUMU BILDIRIM SIRASINA BAGLI DEGILDIR (2026-09-11).
+    //
+    // Ust duzey global'ler eskiden YALNIZ ana gezintide, kaynak sirasiyla
+    // kaydoluyordu. Yani bir global'i bildirim satirindan ONCE kullanan her
+    // fonksiyon govdesi DENETIMSIZ kaliyordu: ad cozulemiyor, tip UNKNOWN'a
+    // dusuyor, ustundeki her kontrol atlaniyor — sessizce.
+    //
+    // Olculdu: ayni hata iki siralamada iki farkli sonuc veriyordu.
+    //   int sayac = 5;  func oku(): int { return length(sayac); }  -> YAKALANIR
+    //   func oku(): int { return length(sayac); }  int sayac = 5;  -> KACAR
+    // Korpusta 1353 ust duzey global'in 231'i ilk kullanimindan sonra
+    // bildirilmis (lib/scene3d.tpr tek basina 192) — kenar durum degil.
+    //
+    // Fonksiyonlar ve struct'lar bu on-gecise ZATEN giriyordu; eksik olan
+    // tek kategori global'lerdi. Yani duzeltme yeni bir mekanizma degil,
+    // var olan on-gecisin tamamlanmasi.
+    if (const auto *gvar = as_node<VariableDecl>(stmt.get())) {
+      // YALNIZ acik tipli bildirimler. `var x = e;`in tipi e'den cikiyor;
+      // on-gecişte infer_expr cagirmak hem yan etkili (tani basar, cift
+      // raporlar) hem de ayni sira sorununu bir katman yukari tasirdi
+      // (e baska bir global'e bakabilir). Olculdu: riskli 231 site'in
+      // TAMAMI acik tipli, tek bir `var` yok — kisit kapsamda kayip
+      // yaratmiyor.
+      //
+      // ⚠ Bu YALNIZCA COZUM (ad -> tip). BASLATMA sirasi ayri bir sorudur ve
+      // ayri denetlenir: ust duzeyde bildirim satirindan once okunan bir
+      // global calisma zamaninda hala sifirdir.
+      if (gvar->data_type != TYPE_UNKNOWN && gvar->data_type != TYPE_VOID &&
+          gvar->data_type != TYPE_UNSPECIFIED) {
+        typeinfer_add_symbol(ctx, gvar->name.c_str(), gvar->data_type);
+      }
+      // Baslatma tarafi: hangi satirda bildirilmis? (tipi cikarilamayan
+      // `var` global'leri de buraya girer — cozumlerini yapamasak da
+      // BASLATMA sirasini denetleyebiliriz.)
+      ctx->global_decl_line[gvar->name] = gvar->loc.line;
+    }
     // Programda import varsa, yerel olmayan custom-type'lar için "Unknown type"
     // uyarısını bastır (tip import edilen modülden gelmiş olabilir; typeinfer
     // modül kaynağını parse etmediğinden struct'ını göremez).
@@ -1707,5 +1770,11 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
 
   for (const auto &stmt : prog->statements) {
     infer_stmt(ctx, stmt.get());
+    // Bildirimin KENDISI islendikten sonra isaretleniyor; once degil.
+    // Onemi var: `int n = n + 1;` kendi baslatmasinda kendini okuyor ve
+    // bunun da yakalanmasi gerekiyor.
+    if (const auto *gvar = as_node<VariableDecl>(stmt.get())) {
+      ctx->initialized_globals.insert(gvar->name);
+    }
   }
 }
