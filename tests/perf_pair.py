@@ -28,8 +28,18 @@ Bu betigin yaptigi:
      onu tanim geregi disarida birakir. Es sayida tur verilse bile alt
      medyan aliniyor (muhafazakar taraf: daha kucuk oran degil, ORTADAKI tur).
 
-Cikti: tek satir, "oran_yuzde is_hi_us is_lo_us" — medyan turun degerleri.
-Cagiran esigi kendi koyar; bu betik KARAR VERMEZ, yalnizca olcer.
+  4. DEJENERASYON BILDIRILIR. Is payi = t(hi) - t(lo) NEGATIFE dusebilir:
+     eger is, surec acilisinin gurultusunun altinda kalirsa cikarma sifirin
+     altina iner ve 1'e kelepcelenir. O an olcum HICBIR SEY olcmuyordur, ama
+     kelepcelenmis 1 bir esikten rahatca gecer. Olculdu (2026-09-11, CI macOS
+     arm64): fib zincir kapisi "is: 9835us -> 1us, acilis ~16329us" bastı ve
+     `9835 > 1*2` ile YESIL verdi — zincirli kol hic olculmemisti.
+     Bu betik kac turda kelepcelendigini SAYAR ve cagirana bildirir; karar
+     cagiranin, ama artik "olctum" ile "olcemedim" ayirt edilebilir.
+
+Cikti: tek satir, "oran_yuzde is_hi_us is_lo_us dejenere_tur" — medyan turun
+degerleri + kelepcelenen tur sayisi. Cagiran esigi kendi koyar; bu betik
+KARAR VERMEZ, yalnizca olcer.
 
 Kullanim:
     python3 tests/perf_pair.py <A_ikili> <B_ikili> <hi_N> <lo_N> [tur]
@@ -63,17 +73,21 @@ def main():
     turlar = int(sys.argv[5]) if len(sys.argv) > 5 else 5
 
     rounds = []
+    dejenere = 0
     for _ in range(turlar):
         # Tur ici sira: is olculeri yan yana, acilis olculeri yan yana.
         a_hi, b_hi = run_us(a_bin, hi), run_us(b_bin, hi)
         a_lo, b_lo = run_us(a_bin, lo), run_us(b_bin, lo)
-        a_w = max(a_hi - a_lo, 1)
-        b_w = max(b_hi - b_lo, 1)
+        a_raw, b_raw = a_hi - a_lo, b_hi - b_lo
+        if a_raw < 1 or b_raw < 1:
+            # Is, acilis gurultusunun altinda kaldi: bu tur OLCMEDI.
+            dejenere += 1
+        a_w, b_w = max(a_raw, 1), max(b_raw, 1)
         rounds.append((a_w / b_w, a_w, b_w))
 
     rounds.sort(key=lambda r: r[0])
     ratio, a_w, b_w = rounds[(len(rounds) - 1) // 2]
-    print("%d %d %d" % (round(ratio * 100), a_w, b_w))
+    print("%d %d %d %d" % (round(ratio * 100), a_w, b_w, dejenere))
     return 0
 
 
