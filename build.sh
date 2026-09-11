@@ -267,6 +267,30 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Yigin sizintisi taramasi basarisiz!${NC}"
             exit 1
         fi
+        # TypedValue UC ALANI DA ILKLENDIRILIR (#32 sinifi).
+        #
+        # `TypedValue sc;` yazmak yasak: `.boxed` yigin copu kalir ve bu
+        # dosyada 30 yerde okunuyor. Olculdu (2026-09-11): kisa-devre
+        # duzeltmesinde tek bir ilklendirilmemis alan, CI'da 16 ornegin
+        # derleyicisini SEGV ettirdi (`01_hello_world` dahil) — ama YERELDE
+        # Release/LLVM22'de gorunmuyordu, cunku yigin cogu zaman sifirdi.
+        # Ortama bagli sessizlik, bu sinifin imzasi.
+        # ⚠ Desen SATIR BASINA BAGLI OLAMAZ. Ilk yazimda `^[[:space:]]*`
+        # ile basliyordu ve enjeksiyon testi onu HEMEN kacirdi
+        # (`... { TypedValue bozuk; }` tek satirda). Yani koruma, korudugu
+        # hatanin kendi turunu yapiyordu; enjeksiyon olmasaydi yesil kalirdi.
+        # Yorum satirlari elenir: bu denetimin KENDI aciklama satiri
+        # (`TypedValue sc;` ornegi) deseni tetikliyordu — koruma kendi
+        # belgesine takiliyordu.
+        TV_BARE=$(grep -nE "\bTypedValue[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*;" src/aot/*.cpp \
+                  | grep -vE "^[^:]*:[0-9]+:[[:space:]]*(//|\*|/\*)" || true)
+        if [ -n "$TV_BARE" ]; then
+            echo -e "${RED}ILKLENDIRILMEMIS TypedValue — uc alani da yazin!${NC}"
+            echo "$TV_BARE" | head -5 | sed 's/^/  /'
+            echo "  dogru kalip: TypedValue x = {nullptr, INFERRED_UNKNOWN, nullptr};"
+            exit 1
+        fi
+        echo -e "${GREEN}TypedValue ilklendirmesi tam${NC}"
         # KORPUS TANI TABANI (#26). Taban SAYI degil METIN tutuyor: bir tani
         # sessizce dogarsa ya da kaybolursa kirmizi verir. Tarayici, is
         # yapmadan once KENDINI siniyor (tani uretmesi kesin bir fikstur

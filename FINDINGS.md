@@ -920,6 +920,22 @@ yolu eklendiğinde sessizce atlanır.**
    konabilir: `fib` sonucunu "farklı karmaşıklık sınıfı" diye yazdım —
    ölçüler doğruydu, **isim yanlıştı** ve yayına çıktı. Sayı doğrulandığında
    iş bitmez; onu adlandıran cümle de doğrulanır.
+32. **Ortama bağlı sessizlik, ilklendirilmemiş belleğin imzasıdır — ve
+   "yerelde geçiyor" bir kanıt değil, bir örneklemdir.** Defter kapandıktan
+   sonra `main`'e açılan PR'da CI **16 örnekte derleyiciyi SEGV ettirdi**,
+   `01_hello_world` dahil. Yerelde (Release, LLVM 22) hepsi yeşildi.
+   İlk refleks *"CI'ı bizim LLVM sürümümüze çekelim"* olurdu; ölçüm onu
+   çürüttü: aynı iki örnek **LLVM 22'de, ASAN altında** da çöküyordu. Yani
+   sürüm farkı hatanın *sebebi* değil, **açığa çıkaran örneklemdi**.
+   Kök: `TypedValue sc;` — L1 kısa-devre düzeltmesinde `.boxed` alanı
+   ilklendirilmemiş kalmıştı; dosyada 30 yerde okunuyor ve yığın çöpü
+   (`0x16`) bir `LLVMValueRef` sanılınca derleyici çöküyordu. Release'te
+   yığın çoğu zaman sıfır olduğu için görünmüyordu.
+   Aynı tarama ikinci, **daha eski** bir hata da buldu: EOF token'ı kapasite
+   denetimsiz yazılıyordu (`realloc`'un boş payına düşen klasik taşma).
+   Nöbetçi: `build.sh`'te `TypedValue x;` yasak — ve o nöbetçinin **ilk
+   sürümü enjeksiyonu kaçırdı** (deseni satır başına bağlıydı), yani koruma
+   korudugu hatanın türünü yapıyordu; enjeksiyon olmasaydı yeşil kalırdı.
 31b. **Kapanış iddiası, kapandığını ilan ettiği aracın kendi kurallarıyla
    denetlenir.** (#31'in tamamlayıcısı; `9b` gibi bir dal, yeni bir kural
    değil.) #31 *"atfın adı da bir iddiadır"* der; bu da **kapanışın kendisi
@@ -1164,6 +1180,7 @@ FP/SIMD.
 | 30 | Kârlılık kapısı işten önce ölçülür; tavan kapının altındaysa iş yapılmaz |
 | 31 | Ayrışmayı ölçmeden atıf yapma — ve atfın adı da bir iddiadır |
 | 31b | Kapanış iddiası, kapandığını ilan ettiği aracın kurallarıyla denetlenir |
+| 32 | Ortama bağlı sessizlik = ilklendirilmemiş bellek; "yerelde geçiyor" bir örneklemdir |
 
 ⚠ **17 ve 18 numaraları hiç kullanılmadı** — kayıp kayıt değil, numaralandırma
 boşluğu. Kural listesi bir sayaç değil, bir dizin; yeni kural en büyük

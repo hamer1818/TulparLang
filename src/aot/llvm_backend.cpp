@@ -3853,11 +3853,22 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     // KISA DEVRE, operandlar URETILMEDEN once. Asagidaki iki satir L ve R'yi
     // kosulsuz uretiyor; `&&`/`||` icin bu YANLIS (bkz. L1 / Tuzaklar 7c).
     if (node->op == TOKEN_AND || node->op == TOKEN_OR) {
-      TypedValue sc;
+      // ⚠ UC ALAN DA ILKLENDIRILIR — `TypedValue sc;` YETMEZ.
+      //
+      // Ilk yazimda yalniz `.type` ve `.value` atanmisti; `.boxed` YIGIN COPU
+      // olarak kaliyordu. Bu dosyada 30 yerde `.boxed` okunuyor ve biri onu
+      // LLVMValueRef sanip kullaninca derleyici COKUYOR. Yerelde (Release,
+      // LLVM 22) yigin cogu zaman sifir oldugu icin GORUNMUYORDU; CI'da
+      // (Ubuntu/LLVM 18) `01_hello_world` dahil 16 ornek SEGV verdi ve ASAN
+      // adresi `0x16` diye gosterdi — klasik ilklendirilmemis bellek imzasi.
+      //
+      // Dosyanin kurali zaten `TypedValue result = {nullptr, INFERRED_UNKNOWN,
+      // nullptr};` — uc alan birden. Bu satir o kurali ihlal ediyordu.
+      //
       // INFERRED_BOOL: sonuc bool'dur, int degil. INFERRED_INT deseydik
       // `toString(t && f)` "true" yerine "1" basardi — davranis degisikligi
       // olurdu (examples/04_math_logic.tpr tam bunu yazdiriyor).
-      sc.type = INFERRED_BOOL;
+      TypedValue sc = {nullptr, INFERRED_BOOL, nullptr};
       sc.value = emit_logical_shortcircuit_i64(backend, node);
       return sc;
     }

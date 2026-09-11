@@ -1072,6 +1072,19 @@ static ASTNode_C *parse_source(const char *source,
     }
     tokens[token_count++] = token;
   }
+  // ⚠ EOF'un da KAPASITE DENETIMI VAR.
+  //
+  // Bu satir eskiden denetimsizdi: dongu tam kapasitede bittiginde EOF
+  // token'i tamponun BIR ELEMAN DISINA yaziliyordu. UBSAN yakaladi
+  // (examples/23_struct_heap.tpr): "store to address ... with insufficient
+  // space for an object of type 'struct Token *'". Sessizdi, cunku
+  // realloc'un verdigi blok genelde istenenden buyuk oluyor ve tasma
+  // bos paya dusuyor — tam da paketlerin goremedigi sinif
+  // (bkz. tests/run_asan.sh basligi).
+  if (token_count >= token_capacity) {
+    token_capacity *= 2;
+    tokens = (Token **)realloc(tokens, sizeof(Token *) * token_capacity);
+  }
   tokens[token_count++] = token; // EOF
 
   lexer_free(lexer);
