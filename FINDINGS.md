@@ -80,6 +80,87 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ (strict'te)** — strict modda hata `aot_throw` ile fırlıyor: `catch` yakalıyor, yakalanmazsa stderr + exit 1 | P26b |
 | R4 | LSP tablosu ile tip katalogu tutarlı | **çürütüldü, DÜZELTİLDİ** — 20 native builtin katalogda yoktu (tip+arite denetimsiz); `sb_append` imzası LSP'de yanlıştı | P27 |
 
+## ✅ LINT — PAYLAŞILAN GLOBAL: "yazan thread, okuyan thread" (2026-09-11)
+
+**Kapanış cümlesi:** *Global yazımı, başka thread'de okunuyorsa uyarı verir.*
+
+Hedef şekil uydurma değil, **ölçülmüş** ([[Concurrency]] Bulgu 2):
+
+```tulpar
+int fin = 0;
+func w(id) { fin = 1; return 0; }
+thread_create(w, 0);
+while (fin == 0 && s < 200000000) { s = s + 1; }   // ASLA çıkmaz
+```
+
+İşçi gerçekten koşuyor ve `fin`'e yazıyor; ana thread'in döngüsü **hiç
+görmüyor**, çünkü optimize edici global okumasını döngüden çıkarıp yazmaçta
+tutuyor. Derleyici hatası değil — dilin bellek modeli yok, davranış
+**tanımsız**. Tanımsızın bedeli: sessizce sonsuza kadar dönen program.
+
+### Neden bir tur ertelenmişti, ve erteleme neyi doğru yaptı
+
+Gerekçe yazılıydı: *yazma tarafı ucuz ama tek başına yanlış mesaj üretir* —
+"bu global yazılıyor" bir kusur değil, programın olağan hâli. Doğru cümle
+**okuma tarafını** gerektiriyordu. Bu lint o okuma tarafıdır: kendi AST
+gezicisi var, çağrı grafiği kuruyor, ve tanı **okuma satırını** gösteriyor.
+
+### Nasıl çalışıyor
+
+1. Ön-geçiş: üst düzey global'ler + fonksiyon adları (P23'ün dersi burada da
+   geçerli — lint de sırasız çalışmalı).
+2. Her fonksiyonun doğrudan etkileri: okunan/yazılan global'ler, çağrılan
+   fonksiyonlar, yerel bildirimler (gölgeleme).
+3. `thread_create(w, …)` → `w` bir **thread kökü**.
+4. Geçişli kapanış: thread tarafı ve ana akış ayrı ayrı.
+5. Uyarı: bir global **thread tarafında yazılıyor** ve **ana akışta
+   senkronizasyonsuz okunuyorsa**.
+
+### İki kez yanlış yazdım, ikisi de sessizdi
+
+**(a) Üst düzeyde bildirim "yerel" sayılıyordu.** `VariableDecl` koşulsuz
+`locals`e ekleniyordu; üst düzeyde bu, global'in **kendi bildiriminin** onu
+yerel işaretlemesi demekti ve sonraki bütün okumaları susturuyordu. Lint,
+Bulgu 2'nin tam şekli üzerinde bile **sessiz** kaldı.
+
+**(b) Atama düğümleri iki biçimli.** `Assignment` hem `name` (dizgi, basit
+hedef) hem `target` (düğüm, karmaşık hedef) taşıyor; ikisi aynı anda dolu
+olmaz. Gezicim yalnız `target`a bakıyordu, yani `fin = 1;` — **en yaygın
+yazım** — hiç görülmüyordu. Aynı kalıp `CompoundAssign`/`IncrementOp`/
+`DecrementOp`'ta da var.
+
+⚠ **(b)'nin dersi bir denetim tasarımını da çürüttü:** "gezici her *çocuk
+alanını* geziyor mu" denetimi bunu **yakalayamazdı**, çünkü `name` bir
+ASTNode alanı değil. Envanter çocuk düğümleri değil, **anlamsal hedefleri**
+kapsamalı. İkisi de ancak *kırmızı vermesi gereken bir şekilde sessiz
+kalarak* bulundu — yani lint'in kendisi #10'a tabi.
+
+### Kesinlik sınırı (belgelenmiş)
+
+Kilit takibi **deyim düzeyinde**: `mutex_lock`/`mutex_unlock` bir derinlik
+sayacı sürüyor, derinlik 0 iken yapılan erişimler korumasız sayılıyor. İlk
+sürüm bunu *fonksiyon* düzeyinde tutuyordu ve bir işçi bir global'i
+kilitleyip ötekini kilitlemeden yazdığında **ikisini birden** susturuyordu —
+doğru iş yapan kod, yanındaki hatayı gizliyordu.
+
+Yaklaşıktır: dallanmayı/erken dönüşü izlemez ve **hangi mutex'in hangi
+global'i koruduğunu bilmez** (dilde o bağ yok). Yanlış negatif üretebilir.
+Yanlış pozitif üretmemesi **bilerek** tercih edildi: gürültülü bir lint
+kapatılır, ve kapatılan lint yoktur (#25).
+
+### Kapılar
+
+| kapı | sonuç |
+|---|---|
+| Bulgu 2 şekli | uyarı ✓ · dolaylı yazma (işçi → yardımcı) ✓ · `++` biçimi ✓ |
+| Susması gerekenler | mutex korumalı ✓ · thread yok ✓ · yalnız `thread_join` ✓ · yerel gölgeleme ✓ |
+| Ayırt edici | biri korumalı biri değil → **yalnız korumasız olan** uyarı alıyor |
+| `fail/16`, `pass/11`, `pass/12` | fikstürler |
+| **Korpus** | 195 gerçek dosyada **0 uyarı** — ve alet canlı olduğu aynı ikiliyle kanıtlandı (6 sentetik şekil kırmızı) |
+
+`TULPAR_LINT_DEBUG=1` iç durumu (global'ler, kökler, fonksiyon başına
+okuma/yazma/çağrı) döküyor — iki hatayı da bu ortaya çıkardı.
+
 ## ✅ P23 — SEMBOL ÇÖZÜMÜ BİLDİRİM SIRASINA BAĞLI DEĞİLDİR (2026-09-11)
 
 **Kapanış cümlesi:** *Sembol çözümü bildirim sırasına bağlı değildir;
@@ -773,7 +854,7 @@ için değil; **eksik hâli zararlı olduğu için**.
 ## Açık kuyruk
 
 **Kalan (2026-09-11 sonu):**
-1. **Lint** (tam hâliyle, AST okuma tarafı) — tek büyük typeinfer işi
+1. ~~**Lint** (tam hâliyle, AST okuma tarafı)~~ — **KAPANDI 2026-09-11**, yukarıdaki bölüm
 2. ~~**P23** (iki geçişli sembol toplama)~~ — **KAPANDI 2026-09-11**, yukarıdaki bölüm
 3. **`[typecheck]` if-şekilleri ↔ S1 tablosu birleşimi** (#8'in kapanışı)
 4. **Float dizi unboxing'i** — yol haritası + kârlılık kapısı yukarıda yazılı

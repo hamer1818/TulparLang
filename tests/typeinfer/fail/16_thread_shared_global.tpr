@@ -1,0 +1,27 @@
+// LINT — "Global yazimi, baska thread'de OKUNUYORSA uyari verir."
+//
+// Bu, docs/mindmap/Concurrency.md Bulgu 2'nin tam sekli ve OLCULMUS bir
+// kusurdur: isci `fin`e yaziyor, ana thread bekleme dongusunde okuyor, ve
+// yazma OKUYANA HIC GORUNMUYOR — optimize edici okumayi dongunun disina
+// cikarip yazmacta tutuyor. Program sessizce sonsuza kadar doner.
+//
+// Derleyici hatasi DEGIL: dilin bellek modeli yok (`volatile`/atomik/
+// ordering kavrami yok), yani davranis TANIMSIZ. Tanimsizin bedeli de tam
+// budur — ve lint'in isi o bedeli GORUNUR kilmak.
+//
+// Tani neyi soyluyor: yazanin kim oldugunu (isci adi) ve ne yapilacagini
+// (`mutex_*` ya da `thread_join`). "Global yaziliyor" demiyor — o bir kusur
+// degil, programin olagan hali; cumle OKUMA tarafina bakiyor.
+int fin = 0;
+
+func w(id) {
+    fin = 1;
+    return 0;
+}
+
+int t = thread_create(w, 0);
+int s = 0;
+while (fin == 0 && s < 200000000) { s = s + 1; }
+print(fin);
+// EXPECT: WRITTEN in thread worker
+// EXPECT: without synchronisation

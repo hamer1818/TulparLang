@@ -1,0 +1,7 @@
+// Sozlesmeye uygun yol: sonuc paylasilan global'den DEGIL, `thread_join`
+// donusunden aliniyor (S7: "kopyayla girer, join'le cikar"). Lint susmali.
+func w(id) {
+    return id + 1;
+}
+int t = thread_create(w, 41);
+print(thread_join(t));

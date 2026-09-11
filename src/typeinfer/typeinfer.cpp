@@ -2,6 +2,7 @@
 // Full static type inference for compile-time type checking
 
 #include "typeinfer.hpp"
+#include "thread_lint.hpp"
 #include <cstring>
 #include "../common/localization.hpp"
 #include "../embedded_libs.h"
@@ -1767,6 +1768,12 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       }
     }
   }
+
+  // Paylasilan-global lint'i: tip cikarimindan BAGIMSIZ bir analiz (kendi
+  // gezicisi var), ama ayni tani kapisindan cikiyor. Ana gezintiden ONCE
+  // kosuyor ki tanilari kaynak sirasinda gorunsun.
+  ctx->error_count += tulpar::thread_lint_run(program, ctx->source_path,
+                                              ctx->warning_mode);
 
   for (const auto &stmt : prog->statements) {
     infer_stmt(ctx, stmt.get());

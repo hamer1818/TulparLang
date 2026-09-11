@@ -203,6 +203,8 @@ set(TYPEINFER_SOURCES
     src/typeinfer/typeinfer.hpp
     src/typeinfer/typeinfer_warn.cpp
     src/typeinfer/typeinfer_warn.hpp
+    src/typeinfer/thread_lint.cpp
+    src/typeinfer/thread_lint.hpp
 )
 
 # Runtime Support (needed for AOT binaries)
