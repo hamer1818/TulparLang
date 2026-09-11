@@ -207,6 +207,18 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Builtin denetimi basarisiz!${NC}"
             exit 1
         fi
+        # KAPILARIN KENDI SELF-TESTI (kural #10'un kalici hali).
+        # Kaynak tarayan kapilar, KAPSAMLARINI kaybettiklerinde temiz bir
+        # agacta da "temiz" derler — duyarlilik degil KAPSAM kaybi, ve bu
+        # sessizdir. 2026-09-11 denetiminde iki kapinin ikisi de tam bu
+        # durumdaydi. Her kapi artik yakalaMASI gereken kacis bicimlerinin
+        # ve gecirMESI gereken mesru bicimlerin tablosunu tasiyor; tablo
+        # her kosumda dogrulaniyor. Yeni bir kacis bulundugunda once
+        # tabloya eklenir (kirmizi verir), sonra desen duzeltilir.
+        if ! python3 tests/source_gates.py --selftest; then
+            echo -e "${RED}Kapi self-testi basarisiz!${NC}"
+            exit 1
+        fi
         # Kama mesh'i: rampa artık gerçek bir mesh. GÖZLE doğrulamak pencere
         # açmayı gerektirir (depoda yasak) ve ters sarılmış bir üçgen
         # arkayüz ayıklamasıyla sessizce GÖRÜNMEZ olur — yani hata "hata yok"
@@ -269,39 +281,19 @@ if [ "$ACTION" = "suites" ]; then
         fi
         # TypedValue UC ALANI DA ILKLENDIRILIR (#32 sinifi).
         #
-        # `TypedValue sc;` yazmak yasak: `.boxed` yigin copu kalir ve bu
-        # dosyada 30 yerde okunuyor. Olculdu (2026-09-11): kisa-devre
-        # duzeltmesinde tek bir ilklendirilmemis alan, CI'da 16 ornegin
-        # derleyicisini SEGV ettirdi (`01_hello_world` dahil) — ama YERELDE
-        # Release/LLVM22'de gorunmuyordu, cunku yigin cogu zaman sifirdi.
-        # Ortama bagli sessizlik, bu sinifin imzasi.
-        # ⚠ Desen SATIR BASINA BAGLI OLAMAZ. Ilk yazimda `^[[:space:]]*`
-        # ile basliyordu ve enjeksiyon testi onu HEMEN kacirdi
-        # (`... { TypedValue bozuk; }` tek satirda). Yani koruma, korudugu
-        # hatanin kendi turunu yapiyordu; enjeksiyon olmasaydi yesil kalirdi.
-        # Yorum satirlari elenir: bu denetimin KENDI aciklama satiri
-        # (`TypedValue sc;` ornegi) deseni tetikliyordu — koruma kendi
-        # belgesine takiliyordu.
-        # ⚠ DESEN BICIMDEN BAGIMSIZ OLMALI. Ilk yazim satir basina bagliydi
-        # (enjeksiyonu kacirdi), ikincisi TEK DEGISKEN adina bagliydi:
-        # `TypedValue x;` yakaliyor ama `TypedValue a, b;` ve
-        # `TypedValue d[2];` KACIYORDU (2026-09-11 bagimsiz denetimi
-        # olctu — ucu de ayni sekilde ilklendirilmemis). Yani kapi, iki tur
-        # ust uste korudugu hatanin kendi turunu yapti.
-        # Simdi: `TypedValue` + bosluk + icinde ; = ( ) { } GECMEYEN bir
-        # bildirim govdesi + `;`. Bu, ilklendiricisiz HER bildirimi yakalar
-        # (virgullu, dizili, isaretcili) ve mesru bicimleri gecirir:
-        # `= {...}` (esittir var), fonksiyon bildirimi/parametresi (parantez
-        # var), `} TypedValue;` (arada bosluk yok).
-        TV_BARE=$(grep -nE "\bTypedValue[[:space:]]+[^;=(){}]*;" src/aot/*.cpp \
-                  | grep -vE "^[^:]*:[0-9]+:[[:space:]]*(//|\*|/\*)" || true)
-        if [ -n "$TV_BARE" ]; then
-            echo -e "${RED}ILKLENDIRILMEMIS TypedValue — uc alani da yazin!${NC}"
-            echo "$TV_BARE" | head -5 | sed 's/^/  /'
-            echo "  dogru kalip: TypedValue x = {nullptr, INFERRED_UNKNOWN, nullptr};"
+        # Desen ve ORNEK TABLOSU artik tests/source_gates.py'de — tek tanim.
+        # Neden tasindi: bu kapi burada satir ici bir grep'ti ve iki tur ust
+        # uste KOR CIKTI. Once satir basina bagliydi (`... { TypedValue
+        # bozuk; }` kaciyordu), sonra tek degisken adina bagliydi
+        # (`TypedValue a, b;` ve `TypedValue d[2];` kaciyordu — 2026-09-11
+        # bagimsiz denetimi olctu). Her seferinde ELLE enjeksiyon yapilip
+        # duzeltildi ve o kanit buharlasti; hicbir sey onu tekrar kosmadi.
+        # source_gates.py kaniti kalici kiliyor: kapi her kosumda KENDI
+        # kacis-bicimi tablosuna karsi sinaniyor (`--selftest`), yani desen
+        # kapsamini kaybederse temiz kaynakta bile KIRMIZI verir.
+        if ! python3 tests/source_gates.py --gate="TypedValue ilklendirmesi"; then
             exit 1
         fi
-        echo -e "${GREEN}TypedValue ilklendirmesi tam${NC}"
         # KORPUS TANI TABANI (#26). Taban SAYI degil METIN tutuyor: bir tani
         # sessizce dogarsa ya da kaybolursa kirmizi verir. Tarayici, is
         # yapmadan once KENDINI siniyor (tani uretmesi kesin bir fikstur
@@ -742,53 +734,15 @@ TPREOF
     # sizinti vardi ve denetim ikisini de goremedi. Yani koruma, korumak icin
     # yazildigi hatanin (metin-deseni envanteri yeniden uretmez, #19) TAM
     # OLARAK aynisini yapiyordu. Simdi cagri parantez dengesiyle taraniyor.
-    RT_LEAK=$(python3 - <<'PYEOF'
-import re, pathlib
-txt = pathlib.Path("src/vm/runtime_bindings.cpp").read_text(encoding="utf-8")
-# STDOUT'A YAZAN HER BICIM. Desen uzun sure yalniz `\bprintf\(` idi ve `\b`
-# yuzunden BUTUN fprintf'leri eliyordu — niyet stderr'e yazan yetkili kapilari
-# muaf tutmakti, ama `fprintf(stdout, ...)` da ayni delikten geciyordu.
-# 2026-09-11 denetiminde olculdu: `fprintf(stdout, "... Hatasi ...")` ve
-# `puts("... Hatasi ...")` enjekte edildi, kapi IKISINI DE goremedi. Ikisi de
-# tam olarak bu kapinin yasakladigi seyi yapar: taniyi programin kendi
-# ciktisina karistirir ve FIRLATMAZ, yani surec 0 ile cikar.
-# Simdi: printf / fprintf / puts / fputs taranir, ilk argumani `stderr` olan
-# cagri muaftir (yetkili kapi zaten stderr'e yazar).
-for m in re.finditer(r'\b(f?printf|f?puts)\s*\(', txt):
-    seg = txt[m.start():m.start() + 600]
-    depth = 0
-    call = seg
-    for i, ch in enumerate(seg):
-        if ch == '(':
-            depth += 1
-        elif ch == ')':
-            depth -= 1
-            if depth == 0:
-                call = seg[:i + 1]
-                break
-    # Yetkili: stderr'e yazan f-bicimleri.
-    if re.match(r'\bf(printf|puts)\s*\(\s*stderr\b', call):
-        continue
-    if re.search(r'Hatasi|Runtime Error', call):
-        print(f"  satir {txt[:m.start()].count(chr(10)) + 1}: {call.splitlines()[0][:70]}")
-PYEOF
-)
-    if [ -n "$RT_LEAK" ]; then
-        echo -e "${RED}TANI STDOUT'A SIZIYOR — aot_runtime_error kullanin!${NC}"
-        echo "$RT_LEAK" | head -5 | sed 's/^/  /'
+    # Desen, yetkili-kapi esigi ve ORNEK TABLOSU tests/source_gates.py'de.
+    # Buradaki satir ici surum `\bprintf\(` ariyordu ve `\b` yuzunden butun
+    # fprintf'leri eliyordu: `fprintf(stdout, "... Hatasi ...")` ve
+    # `puts("... Hatasi ...")` kapidan geciyordu (2026-09-11 denetimi). Ikisi
+    # de tam olarak bu kapinin yasakladigi seyi yapar. Artik her kosumda
+    # kacis bicimleri tablosuna karsi sinaniyor.
+    if ! python3 tests/source_gates.py --gate="tani tek kapi"; then
         exit 1
     fi
-    # SAYISAL BEKLENEN-DEGER: desen-guvenligi tek basina yetmez — denetim
-    # sessizce korlese "sizinti yok" der. Yetkili cikis noktalarinin sayisini
-    # da raporluyoruz; beklenen minimumun altina duserse denetim degil, KAPI
-    # kaybolmus demektir.
-    RT_GATES=$(grep -c "aot_runtime_error(" src/vm/runtime_bindings.cpp)
-    if [ "$RT_GATES" -lt 15 ]; then
-        echo -e "${RED}Yetkili tani kapisi sayisi beklenenin altinda ($RT_GATES < 15)${NC}"
-        echo "  Tanilar baska bir yola mi tasindi? Denetim korlesmis olabilir."
-        exit 1
-    fi
-    echo -e "${GREEN}tani tek kapidan cikiyor${NC} (ham printf yok, $RT_GATES yetkili kapi)"
     rm -rf "$AR_TMP"
     rm -rf "$SR_TMP"
 
