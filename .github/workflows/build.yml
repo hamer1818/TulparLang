@@ -237,8 +237,11 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: awalsh128/cache-apt-pkgs-action@v1.4.3
         with:
-          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev
-          version: 1.1
+          # libvulkan1 + mesa-vulkan-drivers: Vulkan loader + lavapipe (CPU ICD)
+          # — engine RHI testleri GPU'suz koşucuda offscreen üçgen çizip
+          # piksel okur (engine/rhi). Başlıklar vendored (engine/third_party).
+          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libvulkan1 mesa-vulkan-drivers
+          version: 1.2
 
       - name: Verify apt packages installed
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
@@ -253,6 +256,9 @@ jobs:
           # raylib/tame X11 build dep — fail loudly here, not 100 lines deep
           # in a raylib compile, if libx11-dev didn't land.
           test -f /usr/include/X11/Xlib.h || { echo "::error::libx11-dev missing (X11/Xlib.h) — tame build will fail"; exit 1; }
+          # engine RHI testleri lavapipe ICD'sini dlopen ile bulur; yoksa
+          # test GORUNUR atlanir ama burada da erken uyaralim.
+          ls /usr/share/vulkan/icd.d/lvp_icd.*.json >/dev/null 2>&1 || echo "::warning::lavapipe ICD yok — engine RHI testleri ATLANDI olacak"
 
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
@@ -548,6 +554,9 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           brew list --versions cmake >/dev/null 2>&1 || brew install cmake
+          # MoltenVK: Vulkan loader + Metal ICD; engine RHI testleri offscreen
+          # üçgeni burada da çizer (sanal GPU). Yoksa test GORUNUR atlanir.
+          brew list --versions molten-vk >/dev/null 2>&1 || brew install molten-vk || echo "::warning::molten-vk kurulamadı — engine RHI testleri ATLANDI olacak"
           if [ "${{ steps.brew-llvm-cache.outputs.cache-hit }}" = "true" ]; then
             # Cellar restored from cache; just rewire the symlinks into
             # $(brew --prefix)/opt/llvm@18 that find_package(LLVM) looks at.

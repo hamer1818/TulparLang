@@ -27,6 +27,7 @@ Case Registry::cases[Registry::kMax];
 int Registry::count = 0;
 int Registry::failures = 0;
 int Registry::failures_total = 0;
+int Registry::skipped = 0;
 } // namespace tulpar::engine::test
 
 using namespace tulpar::engine::test;
@@ -75,6 +76,7 @@ int main(int argc, char **argv) {
       Registry::failures_total += Registry::failures;
     }
   }
-  std::printf("engine tests: %d passed, %d failed (%d/%d kosuldu)\n", passed, failed, ran, Registry::count);
+  std::printf("engine tests: %d passed, %d failed, %d atlandi (%d/%d kosuldu)\n", passed, failed,
+              Registry::skipped, ran, Registry::count);
   return failed == 0 && ran > 0 ? 0 : 1;
 }

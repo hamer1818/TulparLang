@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tulpar Engine Kotlin host (plan Faz 1). Native kutuphane jniLibs/<abi>/libtulpargame.so. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="Tulpar Engine" android:hasCode="true">
+        <activity android:name=".TulparActivity"
+                  android:exported="true"
+                  android:screenOrientation="landscape"
+                  android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
