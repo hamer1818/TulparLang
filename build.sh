@@ -739,6 +739,42 @@ TPREOF
     #
     # ackermann secildi cunku sekli fib'den farkli: ozyinelemeli cagri baska
     # bir cagrinin argumaninda (ack(m-1, ack(m, n-1))). fib'de yan yana.
+    #
+    # ⚠ 2026-09-13: KAPI DUVAR SAATINDEN IR DUZEYINE INDI. Hikaye:
+    # Kapi K=1 zincirli ackermann'in zincirsizden <= %125 olmasini duvar
+    # saatiyle olcuyordu ve CI Linux'ta "bazen" dusuyordu. Iki kez gurultu
+    # sanildi ve iki kez olcum duzeltildi (tur eslemesi, N=9 -> 11); ikisi de
+    # gerekliydi ama kirmizi bitmedi. Ucuncu bakista sonuc [makine] satiriyla
+    # eslestirilince gurultu OLMADIGI cikti — KOSUCUNUN CPU'SU sonucu
+    # belirliyordu (ayni ikili: ccache %100 isabet, ayni LLVM 18.1.3, ayni
+    # imaj; 8/8 kosumda CPU modeli sonucu belirledi):
+    #
+    #     EPYC 9V74 (Zen 4)   %125 / %126 / %134 / %149  <- 4/4 kirmizi/sinirda
+    #     EPYC 7763 (Zen 3)   %107 / %108 / %110
+    #     EPYC 9V45 (Zen 5)   %66
+    #     9800X3D  (Zen 5)    %87-93 (yerel)
+    #     Apple arm64         %62
+    #
+    # Yani kapi HAKLIYDI: K=1 zincir, ic ice oz-cagri seklini Zen 4'te %49
+    # yavaslatiyor. Ilkeye gore bu HATA ve cozumu kapinin esigi degil,
+    # derleyicinin karlilik modeli: ic ice oz-cagri sekli artik
+    # ZINCIRLENMIYOR (llvm_backend.cpp, selfrec_scan `nested`). Kuralin
+    # bedeli Zen 5 / arm64'teki %9-38 kazanc — olculdu, kabul edildi
+    # (bkz. Tuzaklar 1p).
+    #
+    # Kapi artik uc ayakli ve ilk ikisi BELIRLENIMLI (makineden bagimsiz):
+    #   1) varsayilan derlemede @ack'in oz-cagri sayisi zincirsizle AYNI
+    #      -> sekil kurali yerinde (kalkarsa 3 > 1, kirmizi)
+    #   2) POZITIF KONTROL: TULPAR_SELFREC_DEPTH=1 ile zorlaninca oz-cagri
+    #      sayisi ARTIYOR -> "zincirlenmedi" KURAL yuzunden, kaza eseri degil.
+    #      (ack native yoldan dusse ya da dugum butcesini assa 1. ayak yine
+    #      gecerdi ama hicbir sey sinanmamis olurdu — bu ayak onu yakalar.)
+    #   3) cikti dogrulugu: varsayilan ve zorlanmis ikili ayni sonucu verir.
+    # Duvar saati OLCUMU KALDI ama KARAR VERMIYOR: zorla-K=1 / zincirsiz
+    # orani `[bilgi]` satiri olarak makine adiyla basilir. Sekil kurali bes
+    # CPU'luk veriyle kondu; bu satir her CI kosumunda veri setini buyutur —
+    # kural gozden gecirilecekse kanit orada birikir. Karar vermedigi icin
+    # kosucu piyangosu CI'i kirmaz.
     AR_TMP=$(mktemp -d)
     cat > "$AR_TMP/ack.tpr" <<'TPREOF'
 func ack(int m, int n): int {
@@ -750,70 +786,59 @@ int n = toInt(env("SR_N"));
 if (n <= 0) { n = 9; }
 print(ack(3, n));
 TPREOF
-    ./tulpar build "$AR_TMP/ack.tpr" "$AR_TMP/ack_on" >/dev/null 2>&1
-    TULPAR_NO_SELFREC=1 ./tulpar build "$AR_TMP/ack.tpr" "$AR_TMP/ack_off" >/dev/null 2>&1
-    if [ ! -x "$AR_TMP/ack_on" ] || [ ! -x "$AR_TMP/ack_off" ]; then
-        echo -e "${RED}Gerileme kapisi icin ackermann ikilileri uretilemedi!${NC}"
+    # ar_emit <ad> [ENV=deger ...]: ikili $AR_TMP/<ad>, IR $AR_TMP/<ad>.ll
+    ar_emit() {
+        local name="$1"; shift
+        local d; d=$(mktemp -d)
+        env "$@" TULPAR_AOT_EMIT_LL=1 ./tulpar build "$AR_TMP/ack.tpr" "$d/$name" >/dev/null 2>&1
+        local ll; ll=$(ls "$d"/*.ll 2>/dev/null | head -1)
+        [ -n "$ll" ] && mv "$ll" "$AR_TMP/$name.ll"
+        [ -x "$d/$name" ] && mv "$d/$name" "$AR_TMP/$name"
+        rm -rf "$d"
+    }
+    ar_emit ack_on
+    ar_emit ack_off TULPAR_NO_SELFREC=1
+    ar_emit ack_force TULPAR_SELFREC_DEPTH=1
+    for v in ack_on ack_off ack_force; do
+        if [ ! -x "$AR_TMP/$v" ] || [ ! -f "$AR_TMP/$v.ll" ]; then
+            echo -e "${RED}Gerileme kapisi icin ackermann ikilisi/IR uretilemedi: $v${NC}"
+            rm -rf "$AR_TMP"; exit 1
+        fi
+    done
+    ar_selfcalls() { awk '/^define .*@ack\(/,/^}/' "$1" | grep -c 'call .*@ack'; }
+    AR_C_ON=$(ar_selfcalls "$AR_TMP/ack_on.ll")
+    AR_C_OFF=$(ar_selfcalls "$AR_TMP/ack_off.ll")
+    AR_C_FORCE=$(ar_selfcalls "$AR_TMP/ack_force.ll")
+    if [ "$AR_C_OFF" -lt 1 ]; then
+        echo -e "${RED}Ackermann kapisi IR'de @ack'i bulamadi — kapi hicbir sey sinamiyor!${NC}"
+        echo "  zincirsiz .ll'de @ack icindeki oz-cagri: $AR_C_OFF (en az 1 bekleniyor)"
         rm -rf "$AR_TMP"; exit 1
     fi
-    # N=11 (ack(3,11) = 2^14-3 = 16381). N=9 idi ve is payi ~14 ms cikiyordu:
-    # paylasimli bir CI VM'inde bu KISA. Olculdu (2026-09-11) — ayni kod, ayni
-    # tur-esli olcum, iki ardisik CI kosumu: Linux %66, sonra %134. Yani
-    # eslestirme gurultuyu azaltti ama bitirmedi; sinyalin kendisi kucuktu.
-    # N=11 is payini ~150-170 ms yapiyor (14 kat sinyal) ve yerel yayilim
-    # 8 denemede %88-93 (5 puan) — N=9 ile 87-94 idi ama CI'da 66-134.
-    # Kapinin maliyeti ~1,6 sn; gurultuyu ESIK gevseterek degil SINYALI
-    # buyuterek yenmek dogru cevap (esik gevsetmek gerilemeyi de kacirir).
-    AR_O1=$(SR_N=11 "$AR_TMP/ack_on"); AR_O2=$(SR_N=11 "$AR_TMP/ack_off")
+    if [ "$AR_C_ON" -ne "$AR_C_OFF" ]; then
+        echo -e "${RED}IC ICE oz-cagri sekli ZINCIRLENDI — sekil kurali kalkmis (Zen 4'te %49 gerileme)!${NC}"
+        echo "  @ack icindeki oz-cagri: varsayilan=$AR_C_ON zincirsiz=$AR_C_OFF (AYNI olmali)"
+        rm -rf "$AR_TMP"; exit 1
+    fi
+    if [ "$AR_C_FORCE" -le "$AR_C_OFF" ]; then
+        echo -e "${RED}Ackermann kapisinin POZITIF KONTROLU dustu — zorla K=1 bile zincirlemiyor!${NC}"
+        echo "  @ack icindeki oz-cagri: zorla=$AR_C_FORCE zincirsiz=$AR_C_OFF (zorla DAHA COK olmali)"
+        echo "  ack zincir adayi bile degil (native yoldan dusmus ya da dugum butcesi asilmis);"
+        echo "  1. ayak bosa gecti, sekil kurali SINANMADI."
+        rm -rf "$AR_TMP"; exit 1
+    fi
+    AR_O1=$(SR_N=11 "$AR_TMP/ack_on"); AR_O2=$(SR_N=11 "$AR_TMP/ack_force")
     if [ "$AR_O1" != "$AR_O2" ] || [ "$AR_O1" != "16381" ]; then
-        echo -e "${RED}Zincir ackermann SONUCUNU DEGISTIRDI! on=$AR_O1 off=$AR_O2 beklenen=16381${NC}"
+        echo -e "${RED}Zincir ackermann SONUCUNU DEGISTIRDI! varsayilan=$AR_O1 zorla=$AR_O2 beklenen=16381${NC}"
         rm -rf "$AR_TMP"; exit 1
     fi
-    # ⚠ IKI KOL AYNI TURDA OLCULUR, ORANIN MEDYANI ALINIR.
-    #
-    # Bu kapi once her kolu AYRI blokta olcuyordu (sr_best_us on, sonra off).
-    # Sorun: bir gurultu patlamasi YALNIZ BIR kola denk geldiginde oran cope
-    # donuyor ve kapi, zincir kusursuz calisirken kirmizi veriyor. Olculdu
-    # 2026-09-11: yerelde oran 10 denemede 0,873-0,925 (zincirli DAHA HIZLI,
-    # yayilim 0,05), ama CI Linux ayni kodda 1,262 gordu — kucuk gurultuyle
-    # aciklanamayacak ~%40 kayma, ve kapi dustu (PR #316). Eslestirme tek
-    # basina yetmedi: iki ardisik CI kosumu %66 ve %134 verdi. Ikinci yari
-    # asagidaki N=11 (sinyali buyutme).
-    #
-    # Cozum: her TURDA dort olcum de alinir (on9/off9/on1/off1) ve o turun
-    # orani hesaplanir. Bir patlama tura denk gelirse ORANDA SADELESIR, cunku
-    # iki kol ayni anda etkilenir. Bes turun MEDYANI alinir; medyan, tek bir
-    # bozuk turu tanim geregi disarida birakir.
-    #
-    # Esik DEGISMEDI (%125) — BILEREK. Olcum tasarimi ve esik AYNI ANDA
-    # degistirilseydi, kirmiziyi hangisinin duzelttigi bilinmezdi.
-    # Esigi gevsetmek zaten yanlis cevap olurdu: olcum hatasini gizler.
-    #
-    # Kapinin hala AYIRT ETTIGI dogrulandi (2026-09-11): tarihsel gerileme
-    # TULPAR_SELFREC_DEPTH=4 ile yeniden uretildi ve 5/5 yakalandi
-    # (oran %126-129, belgelenen %29 gerilemeyle birebir). Normal K=1 ise
-    # 10 denemede %87-94. Yani esigin iki yanindaki paylar: normal tarafta
-    # ~31 puan, gerileme tarafinda ~4 puan.
-    # N=11 ile yerel olculer: normal %88-93 (8 deneme), K=4 gerilemesi
-    # %127-137 (5/5 yakalandi). Esigin iki yanindaki pay: normal tarafta
-    # ~32 puan, tespit tarafinda ~2 puan.
-    # ⚠ TAKIP: tespit payi hala dar. CI'in N=11 ile KARARLI degeri gorulduk-
-    # ten sonra esik %110'a cekilmeli (o zaman iki yanda da ~17 puan olur).
-    # Once bir tur veri toplansin — esik ve olcum ayni anda degistirilmez.
-    AR_RES=$(python3 tests/perf_pair.py "$AR_TMP/ack_on" "$AR_TMP/ack_off" 11 1 5)
-    AR_RATIO=$(echo "$AR_RES" | cut -d' ' -f1)
-    AR_ON_W=$(echo "$AR_RES" | cut -d' ' -f2)
-    AR_OFF_W=$(echo "$AR_RES" | cut -d' ' -f3)
-    if [ -z "$AR_RATIO" ]; then
-        echo -e "${RED}Ackermann gerileme kapisi OLCUM URETEMEDI${NC}"
-        rm -rf "$AR_TMP"; exit 1
-    fi
-    if [ "$AR_RATIO" -gt 125 ]; then
-        echo -e "${RED}Zincir ackermann'i GERILETIYOR — karlilik modeli bozuk!${NC}"
-        echo "  medyan tur: zincirli=${AR_ON_W}us zincirsiz=${AR_OFF_W}us (oran %${AR_RATIO}, esik %125)"
-        rm -rf "$AR_TMP"; exit 1
-    fi
-    echo -e "${GREEN}zincir baska sekillerde zarar vermiyor${NC} (ackermann: ${AR_OFF_W}us -> ${AR_ON_W}us, oran %${AR_RATIO})"
+    echo -e "${GREEN}ic ice oz-cagri sekli zincirlenmiyor${NC} (@ack oz-cagri: varsayilan=$AR_C_ON zincirsiz=$AR_C_OFF zorla-K=1=$AR_C_FORCE; cikti 16381)"
+    # [bilgi] — KARAR YOK. Zorla-K=1 / zincirsiz orani, makine adiyla (bkz. yukari).
+    AR_RES=$(python3 tests/perf_pair.py "$AR_TMP/ack_force" "$AR_TMP/ack_off" 11 1 5)
+    AR_CPU=$(awk -F': ' '/^model name/{print $2; exit}' /proc/cpuinfo 2>/dev/null)
+    [ -z "$AR_CPU" ] && AR_CPU=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
+    [ -z "$AR_CPU" ] && AR_CPU=$(uname -m)
+    echo "  [bilgi] zorla zincirli ackermann bu makinede: oran %$(echo "$AR_RES" | cut -d' ' -f1) (zorla=$(echo "$AR_RES" | cut -d' ' -f2)us zincirsiz=$(echo "$AR_RES" | cut -d' ' -f3)us) — $AR_CPU"
+    rm -rf "$AR_TMP"
 
     # TANI TEK KAPIDAN CIKAR — mekanik garanti (#19).
     #
@@ -844,7 +869,6 @@ TPREOF
     if ! python3 tests/source_gates.py --gate="tani tek kapi"; then
         exit 1
     fi
-    rm -rf "$AR_TMP"
     rm -rf "$SR_TMP"
 
     # KUTULU (tipsiz) YOLUN satır içi hızlı yolları duruyor mu?

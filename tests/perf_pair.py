@@ -74,10 +74,17 @@ def main():
 
     rounds = []
     dejenere = 0
-    for _ in range(turlar):
+    for t in range(turlar):
         # Tur ici sira: is olculeri yan yana, acilis olculeri yan yana.
-        a_hi, b_hi = run_us(a_bin, hi), run_us(b_bin, hi)
-        a_lo, b_lo = run_us(a_bin, lo), run_us(b_bin, lo)
+        # Sira turdan tura DEGISIR (A-B, B-A, ...): "hep once kosan" kolun
+        # olasi sabit bir cezasi (frekans rampasi, soguk onbellek) tek kola
+        # yigilmasin; iki kola esit dagilsin ve medyanda sadelessin.
+        if t % 2 == 0:
+            a_hi, b_hi = run_us(a_bin, hi), run_us(b_bin, hi)
+            a_lo, b_lo = run_us(a_bin, lo), run_us(b_bin, lo)
+        else:
+            b_hi, a_hi = run_us(b_bin, hi), run_us(a_bin, hi)
+            b_lo, a_lo = run_us(b_bin, lo), run_us(a_bin, lo)
         a_raw, b_raw = a_hi - a_lo, b_hi - b_lo
         if a_raw < 1 or b_raw < 1:
             # Is, acilis gurultusunun altinda kaldi: bu tur OLCMEDI.
