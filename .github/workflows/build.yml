@@ -240,8 +240,10 @@ jobs:
           # libvulkan1 + mesa-vulkan-drivers: Vulkan loader + lavapipe (CPU ICD)
           # — engine RHI testleri GPU'suz koşucuda offscreen üçgen çizip
           # piksel okur (engine/rhi). Başlıklar vendored (engine/third_party).
-          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libvulkan1 mesa-vulkan-drivers
-          version: 1.2
+          # vulkan-validationlayers: engine RHI testleri katman etkinken 0 hata ister
+          # (API kullanimi lavapipe uzerinde dogrulanir; katman yoksa GORUNUR atlanir).
+          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libvulkan1 mesa-vulkan-drivers vulkan-validationlayers
+          version: 1.3
 
       - name: Verify apt packages installed
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'

@@ -25,6 +25,10 @@ struct OffscreenConfig {
   JobSystem *jobs = nullptr;
   CommandPools *pools = nullptr;
   uint32_t parallel_jobs = 0;
+  // Renk pipeline'ini VK_EXT_graphics_pipeline_library ile 4 kutuphaneden
+  // LINKLE (plan Faz 1: PSO yukleme ucuz olmali). Cihaz desteklemiyorsa
+  // monolitik'e duser ve bunu raporlar.
+  bool use_pipeline_library = false;
 };
 
 struct OffscreenResult {
@@ -42,6 +46,11 @@ struct OffscreenResult {
   uint32_t memory_allocations = 0; // vkAllocateMemory sayisi (cihaz toplam)
   uint32_t secondaries_recorded = 0; // paralel kayitta kullanilan ikincil tampon
   uint32_t recording_threads = 0;    // kac farkli thread yuvasi kayit yapti
+  // Pipeline olusturma sureleri (kurulum, bilgi):
+  uint64_t pipeline_monolithic_ns = 0; // renk pipeline'i monolitik
+  uint64_t pipeline_library_ns = 0;    // 4 kutuphane (GPL)
+  uint64_t pipeline_link_ns = 0;       // kutuphanelerden link
+  bool pipeline_library_used = false;
 };
 
 // Tek adim: kurulum + kare + yikim (kolaylik). A2 iddiasi icin asagidaki

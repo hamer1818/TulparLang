@@ -44,6 +44,7 @@ bool open_device(SystemArena &sys, Device &dev) {
   DeviceConfig cfg;
   const char *pref = std::getenv("TULPAR_ENGINE_GPU");
   cfg.prefer = pref ? pref : "";
+  cfg.validation = true; // katman varsa etkin; yoksa caps.validation_layer=false (bilgi)
   return dev.init(sys, g_api, cfg);
 }
 
@@ -73,6 +74,8 @@ ENGINE_TEST(rhi_loader_and_device_caps) {
               "fragment_shading_rate=%d portability=%d\n",
               c.ext_subpass_merge_feedback, c.ext_graphics_pipeline_library, c.ext_host_image_copy,
               c.khr_fragment_shading_rate, c.khr_portability_subset);
+  std::printf("    [bilgi] GPL kullanilabilir=%d; dogrulama katmani=%s\n", c.graphics_pipeline_library,
+              c.validation_layer ? "ETKIN" : "yok (VK_LAYER_KHRONOS_validation kurulu degil)");
   CHECK(dev.ok());
   CHECK(c.descriptor_indexing && c.timeline_semaphore && c.buffer_device_address);
   dev.shutdown();
@@ -192,6 +195,66 @@ ENGINE_TEST(rhi_parallel_command_recording_matches_inline) {
                 par_r.recording_threads, js.worker_count(), par_r.gpu_ns / 1e6);
     CHECK(par_r.recording_threads >= 1);
   }
+  pools.shutdown();
+  js.shutdown();
+  dev.shutdown();
+}
+
+// GPL: 4 kutuphane + link ile kurulan renk pipeline'i monolitikle ayni pikseli
+// vermeli; sureler bilgi. Cihaz desteklemiyorsa GORUNUR atlanir.
+ENGINE_TEST(rhi_graphics_pipeline_library_links_and_matches) {
+  if (!loader()) { test::skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  Device dev;
+  if (!open_device(sys, dev)) { test::skip("Vulkan cihazi yok"); return; }
+  if (!dev.caps().graphics_pipeline_library) {
+    test::skip("VK_EXT_graphics_pipeline_library yok bu cihazda");
+    dev.shutdown();
+    return;
+  }
+  OffscreenConfig cfg;
+  cfg.width = 96;
+  cfg.height = 96;
+  OffscreenResult mono, gpl;
+  CHECK(render_triangle_offscreen(dev, sys, cfg, &mono));
+  cfg.use_pipeline_library = true;
+  bool ok = render_triangle_offscreen(dev, sys, cfg, &gpl);
+  if (!ok) std::printf("    hata: %s\n", gpl.error);
+  CHECK(ok);
+  if (ok && mono.ok) {
+    CHECK(gpl.pipeline_library_used);
+    CHECK(std::memcmp(mono.pixels, gpl.pixels, (size_t)cfg.width * cfg.height * 4) == 0);
+    std::printf("    [bilgi] pipeline olusturma: monolitik %.3f ms, GPL kutuphaneler %.3f ms + link %.3f ms\n",
+                gpl.pipeline_monolithic_ns / 1e6, gpl.pipeline_library_ns / 1e6, gpl.pipeline_link_ns / 1e6);
+  }
+  CHECK(dev.validation_errors() == 0);
+  dev.shutdown();
+}
+
+// Dogrulama katmani etkinse butun RHI yolu 0 hata vermeli (katman yoksa bilgi).
+ENGINE_TEST(rhi_validation_layer_reports_zero_errors) {
+  if (!loader()) { test::skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  Device dev;
+  if (!open_device(sys, dev)) { test::skip("Vulkan cihazi yok"); return; }
+  if (!dev.caps().validation_layer) {
+    test::skip("VK_LAYER_KHRONOS_validation yok — API kullanimi dogrulanmadi");
+    dev.shutdown();
+    return;
+  }
+  JobSystem js;
+  CHECK(js.init(sys, JobSystemConfig{}));
+  CommandPools pools;
+  CHECK(pools.init(dev, sys, js.worker_count() + 1, 16));
+  OffscreenConfig cfg;
+  cfg.jobs = &js;
+  cfg.pools = &pools;
+  cfg.parallel_jobs = 4;
+  cfg.use_pipeline_library = dev.caps().graphics_pipeline_library;
+  OffscreenResult r;
+  CHECK(render_triangle_offscreen(dev, sys, cfg, &r));
+  CHECK(dev.validation_errors() == 0);
+  std::printf("    [bilgi] dogrulama hatasi: %u\n", dev.validation_errors());
   pools.shutdown();
   js.shutdown();
   dev.shutdown();

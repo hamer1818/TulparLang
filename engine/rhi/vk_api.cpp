@@ -36,6 +36,7 @@ bool vk_api_load(VkApi &api) {
 #define G(name) api.name = (PFN_##name)api.vkGetInstanceProcAddr(nullptr, #name)
   G(vkEnumerateInstanceVersion);
   G(vkEnumerateInstanceExtensionProperties);
+  G(vkEnumerateInstanceLayerProperties);
   G(vkCreateInstance);
 #undef G
   return api.vkCreateInstance != nullptr;
@@ -52,6 +53,8 @@ void vk_api_load_instance(VkApi &api, VkInstance inst) {
   G(vkEnumerateDeviceExtensionProperties);
   G(vkCreateDevice);
   G(vkGetDeviceProcAddr);
+  G(vkCreateDebugUtilsMessengerEXT);
+  G(vkDestroyDebugUtilsMessengerEXT);
 #undef G
 }
 

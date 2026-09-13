@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "platform/time.hpp"
+
 #include "rhi/shaders/triangle_frag_spv.h"
 #include "rhi/shaders/triangle_vert_spv.h"
 
@@ -24,6 +26,7 @@ struct Ctx {
   VkPipelineLayout layout = VK_NULL_HANDLE;
   VkPipelineCache cache = VK_NULL_HANDLE;
   VkPipeline pipe_depth = VK_NULL_HANDLE, pipe_color = VK_NULL_HANDLE;
+  VkPipeline gpl_libs[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
   VkQueryPool queries = VK_NULL_HANDLE;
 
   bool fail(const char *what, VkResult r) {
@@ -36,6 +39,7 @@ struct Ctx {
     if (queries) a.vkDestroyQueryPool(d, queries, nullptr);
     if (pipe_depth) a.vkDestroyPipeline(d, pipe_depth, nullptr);
     if (pipe_color) a.vkDestroyPipeline(d, pipe_color, nullptr);
+    for (VkPipeline &l : gpl_libs) if (l) a.vkDestroyPipeline(d, l, nullptr);
     if (cache) a.vkDestroyPipelineCache(d, cache, nullptr);
     if (layout) a.vkDestroyPipelineLayout(d, layout, nullptr);
     if (vs) a.vkDestroyShaderModule(d, vs, nullptr);
@@ -298,6 +302,113 @@ bool make_pipeline(Ctx &c, uint32_t subpass, bool color, VkPipeline *out) {
   return true;
 }
 
+// GPL: renk pipeline'i 4 kutuphane + link. Kutuphaneler ayni renderPass/subpass
+// ve layout ile; link asamasi (LTO yok) hizli — plan Faz 1 "PSO'yu build'de
+// uretmek yetmez, yuklemesi de ucuz olmali" maddesinin olculebilir hali.
+bool make_pipeline_gpl(Ctx &c, VkPipeline *out, uint64_t *lib_ns, uint64_t *link_ns) {
+  VkApi &a = *c.api;
+  VkPipelineShaderStageCreateInfo vs_stage{};
+  vs_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  vs_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+  vs_stage.module = c.vs;
+  vs_stage.pName = "main";
+  VkPipelineShaderStageCreateInfo fs_stage = vs_stage;
+  fs_stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+  fs_stage.module = c.fs;
+  VkPipelineVertexInputStateCreateInfo vi{};
+  vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+  VkPipelineInputAssemblyStateCreateInfo ia{};
+  ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  VkPipelineViewportStateCreateInfo vp{};
+  vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  vp.viewportCount = 1;
+  vp.scissorCount = 1;
+  VkPipelineRasterizationStateCreateInfo rs{};
+  rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  rs.polygonMode = VK_POLYGON_MODE_FILL;
+  rs.cullMode = VK_CULL_MODE_NONE;
+  rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  rs.lineWidth = 1.0f;
+  VkPipelineMultisampleStateCreateInfo ms{};
+  ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  VkPipelineDepthStencilStateCreateInfo ds{};
+  ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+  ds.depthTestEnable = VK_TRUE;
+  ds.depthWriteEnable = VK_FALSE;
+  ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+  VkPipelineColorBlendAttachmentState cba{};
+  cba.colorWriteMask = 0xF;
+  VkPipelineColorBlendStateCreateInfo cb{};
+  cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  cb.attachmentCount = 1;
+  cb.pAttachments = &cba;
+  VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+  VkPipelineDynamicStateCreateInfo dsci{};
+  dsci.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+  dsci.dynamicStateCount = 2;
+  dsci.pDynamicStates = dyn;
+
+  VkGraphicsPipelineLibraryCreateInfoEXT lib_ci[4]{};
+  VkGraphicsPipelineCreateInfo gp[4]{};
+  const VkGraphicsPipelineLibraryFlagBitsEXT parts[4] = {
+      VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT,
+      VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT,
+      VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT,
+      VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT};
+  for (int i = 0; i < 4; i++) {
+    lib_ci[i].sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT;
+    lib_ci[i].flags = parts[i];
+    gp[i].sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gp[i].pNext = &lib_ci[i];
+    gp[i].flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR;
+    gp[i].renderPass = c.rp;
+    gp[i].subpass = 1;
+    gp[i].layout = c.layout;
+  }
+  // 1: vertex input
+  gp[0].pVertexInputState = &vi;
+  gp[0].pInputAssemblyState = &ia;
+  // 2: pre-rasterization (vertex shader, viewport, raster, dinamik)
+  gp[1].stageCount = 1;
+  gp[1].pStages = &vs_stage;
+  gp[1].pViewportState = &vp;
+  gp[1].pRasterizationState = &rs;
+  gp[1].pDynamicState = &dsci;
+  // 3: fragment shader (+ derinlik, multisample)
+  gp[2].stageCount = 1;
+  gp[2].pStages = &fs_stage;
+  gp[2].pMultisampleState = &ms;
+  gp[2].pDepthStencilState = &ds;
+  // 4: fragment output (renk karistirma, multisample)
+  gp[3].pColorBlendState = &cb;
+  gp[3].pMultisampleState = &ms;
+
+  uint64_t t0 = platform::now_ns();
+  for (int i = 0; i < 4; i++) {
+    VkResult r = a.vkCreateGraphicsPipelines(c.d, c.cache, 1, &gp[i], nullptr, &c.gpl_libs[i]);
+    if (r != VK_SUCCESS) return c.fail("vkCreateGraphicsPipelines (GPL kutuphane)", r);
+  }
+  uint64_t t1 = platform::now_ns();
+  VkPipelineLibraryCreateInfoKHR link{};
+  link.sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR;
+  link.libraryCount = 4;
+  link.pLibraries = c.gpl_libs;
+  VkGraphicsPipelineCreateInfo linked{};
+  linked.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  linked.pNext = &link;
+  linked.layout = c.layout;
+  linked.renderPass = c.rp;
+  linked.subpass = 1;
+  VkResult r = a.vkCreateGraphicsPipelines(c.d, c.cache, 1, &linked, nullptr, out);
+  if (r != VK_SUCCESS) return c.fail("vkCreateGraphicsPipelines (GPL link)", r);
+  uint64_t t2 = platform::now_ns();
+  *lib_ns = t1 - t0;
+  *link_ns = t2 - t1;
+  return true;
+}
+
 // PSO cache dosyasi: [VkPipelineCacheHeaderVersionOne][veri]. Baslik cihazla
 // eslesmiyorsa (baska GPU/surucu) yuklenmez — yabanci cache sessizce kabul
 // edilmez.
@@ -435,7 +546,19 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
       if (r != VK_SUCCESS) { c.fail("vkCreatePipelineCache", r); break; }
     }
     if (!make_pipeline(c, 0, false, &c.pipe_depth)) break;
-    if (!make_pipeline(c, 1, true, &c.pipe_color)) break;
+    {
+      uint64_t m0 = platform::now_ns();
+      if (!make_pipeline(c, 1, true, &c.pipe_color)) break;
+      out->pipeline_monolithic_ns = platform::now_ns() - m0;
+    }
+    if (cfg.use_pipeline_library && dev.caps().graphics_pipeline_library) {
+      // Monolitik olan olcum icin yapildi; GPL ile yeniden kur, onu kullan.
+      VkPipeline linked = VK_NULL_HANDLE;
+      if (!make_pipeline_gpl(c, &linked, &out->pipeline_library_ns, &out->pipeline_link_ns)) break;
+      a.vkDestroyPipeline(c.d, c.pipe_color, nullptr);
+      c.pipe_color = linked;
+      out->pipeline_library_used = true;
+    }
     if (cfg.pso_cache_path) {
       size_t n = 0;
       a.vkGetPipelineCacheData(c.d, c.cache, &n, nullptr);
@@ -579,6 +702,10 @@ bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig 
   out->post_merge_subpass_count = setup.post_merge_subpass_count;
   out->subpass_merge_status[0] = setup.subpass_merge_status[0];
   out->subpass_merge_status[1] = setup.subpass_merge_status[1];
+  out->pipeline_monolithic_ns = setup.pipeline_monolithic_ns;
+  out->pipeline_library_ns = setup.pipeline_library_ns;
+  out->pipeline_link_ns = setup.pipeline_link_ns;
+  out->pipeline_library_used = setup.pipeline_library_used;
   offscreen_destroy(t);
   return ok;
 }

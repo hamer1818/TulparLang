@@ -29,6 +29,8 @@ struct DeviceCaps {
   bool lazily_allocated_memory = false; // transient attachment icin (TBDR'da var)
   bool ext_subpass_merge_feedback = false;
   bool ext_graphics_pipeline_library = false;
+  bool graphics_pipeline_library = false; // uzanti + feature acik (kullanilabilir)
+  bool validation_layer = false;          // VK_LAYER_KHRONOS_validation etkin
   bool ext_host_image_copy = false;
   bool khr_fragment_shading_rate = false;
   bool khr_portability_subset = false; // MoltenVK
@@ -39,6 +41,9 @@ struct DeviceConfig {
   // "" = ayrik > tumlesik > sanal > cpu.
   const char *prefer = "";
   bool require_mandatory = true; // zorunlu feature eksikse init false
+  // Dogrulama katmani (VK_LAYER_KHRONOS_validation) varsa etkinlestir; hatalar
+  // sayilir (validation_errors) ve ilk birkaci basilir. Testler 0 bekler.
+  bool validation = false;
 };
 
 // Bellek: tur basina buyuk blok, bump; serbest birakma yok (cihaz omru).
@@ -65,6 +70,8 @@ public:
   bool ok() const { return device_ != VK_NULL_HANDLE; }
   const DeviceCaps &caps() const { return caps_; }
   const char *last_error() const { return err_; }
+  uint32_t validation_errors() const { return validation_errors_; }
+  void count_validation_error() { validation_errors_++; }
 
   VkApi &api() { return *api_; }
   VkInstance instance() const { return instance_; }
@@ -97,6 +104,8 @@ private:
   uint32_t queue_family_ = 0;
   VkCommandPool cmd_pool_ = VK_NULL_HANDLE;
   VkFence one_shot_fence_ = VK_NULL_HANDLE;
+  VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
+  uint32_t validation_errors_ = 0;
   VkPhysicalDeviceMemoryProperties mem_props_{};
   DeviceCaps caps_{};
   static constexpr uint32_t kMaxBlocks = 16;

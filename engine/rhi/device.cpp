@@ -5,6 +5,20 @@
 
 namespace tulpar::engine::rhi {
 
+// Dogrulama mesaji: hata SAYILIR (test 0 bekler), ilk 8'i basilir.
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
+                                                     VkDebugUtilsMessageTypeFlagsEXT,
+                                                     const VkDebugUtilsMessengerCallbackDataEXT *data,
+                                                     void *user) {
+  Device *d = static_cast<Device *>(user);
+  if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+    d->count_validation_error();
+    if (d->validation_errors() <= 8)
+      std::fprintf(stderr, "[vulkan-validation] %s\n", data && data->pMessage ? data->pMessage : "?");
+  }
+  return VK_FALSE;
+}
+
 void Device::fail(const char *msg, VkResult r) {
   std::snprintf(err_, sizeof err_, "%s (%s)", msg, vk_result_str(r));
 }
@@ -25,6 +39,7 @@ bool Device::init(Arena &, VkApi &api, const DeviceConfig &cfg) {
   const char *inst_exts[4];
   uint32_t inst_ext_n = 0;
   VkInstanceCreateFlags inst_flags = 0;
+  bool have_debug_utils = false;
   {
     uint32_t n = 0;
     api.vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
@@ -35,8 +50,26 @@ bool Device::init(Arena &, VkApi &api, const DeviceConfig &cfg) {
       if (std::strcmp(props[i].extensionName, "VK_KHR_portability_enumeration") == 0) {
         inst_exts[inst_ext_n++] = "VK_KHR_portability_enumeration";
         inst_flags |= 0x00000001; // VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+      } else if (std::strcmp(props[i].extensionName, "VK_EXT_debug_utils") == 0) {
+        have_debug_utils = true;
       }
     }
+  }
+  // Dogrulama katmani: istenmis ve mevcutsa. Yoksa sessiz degil, caps'te false.
+  const char *layers[1];
+  uint32_t layer_n = 0;
+  if (cfg.validation && api.vkEnumerateInstanceLayerProperties) {
+    uint32_t n = 0;
+    api.vkEnumerateInstanceLayerProperties(&n, nullptr);
+    VkLayerProperties lp[64];
+    if (n > 64) n = 64;
+    api.vkEnumerateInstanceLayerProperties(&n, lp);
+    for (uint32_t i = 0; i < n; i++)
+      if (std::strcmp(lp[i].layerName, "VK_LAYER_KHRONOS_validation") == 0) {
+        layers[layer_n++] = "VK_LAYER_KHRONOS_validation";
+        if (have_debug_utils) inst_exts[inst_ext_n++] = "VK_EXT_debug_utils";
+        caps_.validation_layer = true;
+      }
   }
   VkApplicationInfo app{};
   app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -49,12 +82,23 @@ bool Device::init(Arena &, VkApi &api, const DeviceConfig &cfg) {
   ici.flags = inst_flags;
   ici.enabledExtensionCount = inst_ext_n;
   ici.ppEnabledExtensionNames = inst_exts;
+  ici.enabledLayerCount = layer_n;
+  ici.ppEnabledLayerNames = layers;
   VkResult r = api.vkCreateInstance(&ici, nullptr, &instance_);
   if (r != VK_SUCCESS) {
     fail("vkCreateInstance", r);
     return false;
   }
   vk_api_load_instance(api, instance_);
+  if (caps_.validation_layer && have_debug_utils && api.vkCreateDebugUtilsMessengerEXT) {
+    VkDebugUtilsMessengerCreateInfoEXT mci{};
+    mci.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    mci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
+    mci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
+    mci.pfnUserCallback = debug_callback;
+    mci.pUserData = this;
+    api.vkCreateDebugUtilsMessengerEXT(instance_, &mci, nullptr, &messenger_);
+  }
   if (!pick_physical(cfg)) return false;
 
   // Kuyruk ailesi: grafik + compute + transfer tek aile (mobilde tipik).
@@ -80,10 +124,28 @@ bool Device::init(Arena &, VkApi &api, const DeviceConfig &cfg) {
   uint32_t dev_ext_n = 0;
   if (caps_.ext_subpass_merge_feedback) dev_exts[dev_ext_n++] = "VK_EXT_subpass_merge_feedback";
   if (caps_.khr_portability_subset) dev_exts[dev_ext_n++] = "VK_KHR_portability_subset";
+  // GPL: VK_KHR_pipeline_library + VK_EXT_graphics_pipeline_library + feature.
+  VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gplf{};
+  gplf.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT;
+  if (caps_.ext_graphics_pipeline_library) {
+    VkPhysicalDeviceFeatures2 q{};
+    q.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    q.pNext = &gplf;
+    api.vkGetPhysicalDeviceFeatures2(phys_, &q);
+    if (gplf.graphicsPipelineLibrary) {
+      dev_exts[dev_ext_n++] = "VK_KHR_pipeline_library";
+      dev_exts[dev_ext_n++] = "VK_EXT_graphics_pipeline_library";
+      caps_.graphics_pipeline_library = true;
+    }
+  }
 
-  // Feature zinciri: 1.2 (descriptorIndexing, timelineSemaphore, bufferDeviceAddress).
+  // Feature zinciri: 1.2 (descriptorIndexing, timelineSemaphore, bufferDeviceAddress) [+ GPL].
   VkPhysicalDeviceVulkan12Features f12{};
   f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  if (caps_.graphics_pipeline_library) {
+    gplf.graphicsPipelineLibrary = VK_TRUE;
+    f12.pNext = &gplf;
+  }
   f12.descriptorIndexing = caps_.descriptor_indexing;
   f12.runtimeDescriptorArray = caps_.descriptor_indexing;
   f12.shaderSampledImageArrayNonUniformIndexing = caps_.descriptor_indexing;
@@ -194,6 +256,7 @@ bool Device::pick_physical(const DeviceConfig &cfg) {
   caps_.buffer_device_address = f12.bufferDeviceAddress;
   caps_.draw_indirect = true; // cekirdek 1.0: vkCmdDrawIndexedIndirect
 
+  bool has_pipeline_library = false;
   uint32_t en = 0;
   api.vkEnumerateDeviceExtensionProperties(phys_, nullptr, &en, nullptr);
   VkExtensionProperties ext[512];
@@ -203,10 +266,12 @@ bool Device::pick_physical(const DeviceConfig &cfg) {
     const char *e = ext[i].extensionName;
     if (!std::strcmp(e, "VK_EXT_subpass_merge_feedback")) caps_.ext_subpass_merge_feedback = true;
     else if (!std::strcmp(e, "VK_EXT_graphics_pipeline_library")) caps_.ext_graphics_pipeline_library = true;
+    else if (!std::strcmp(e, "VK_KHR_pipeline_library")) has_pipeline_library = true;
     else if (!std::strcmp(e, "VK_EXT_host_image_copy")) caps_.ext_host_image_copy = true;
     else if (!std::strcmp(e, "VK_KHR_fragment_shading_rate")) caps_.khr_fragment_shading_rate = true;
     else if (!std::strcmp(e, "VK_KHR_portability_subset")) caps_.khr_portability_subset = true;
   }
+  if (!has_pipeline_library) caps_.ext_graphics_pipeline_library = false; // ikisi birlikte gerekir
   if (cfg.require_mandatory) {
     if (!caps_.descriptor_indexing) { fail("zorunlu: descriptorIndexing yok", VK_ERROR_FEATURE_NOT_PRESENT); return false; }
     if (!caps_.timeline_semaphore) { fail("zorunlu: timelineSemaphore yok", VK_ERROR_FEATURE_NOT_PRESENT); return false; }
@@ -322,6 +387,8 @@ void Device::shutdown() {
     device_ = VK_NULL_HANDLE;
   }
   if (instance_) {
+    if (messenger_ && api.vkDestroyDebugUtilsMessengerEXT) api.vkDestroyDebugUtilsMessengerEXT(instance_, messenger_, nullptr);
+    messenger_ = VK_NULL_HANDLE;
     api.vkDestroyInstance(instance_, nullptr);
     instance_ = VK_NULL_HANDLE;
   }
