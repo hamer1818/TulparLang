@@ -194,6 +194,35 @@ if [ "$ACTION" = "suites" ]; then
             printf "%-42s ${GREEN}PASS${NC} %s\n" "$name" "$summary"
         fi
     done
+    # ENGINE (Faz 0) birim testleri — C++ L0/L1 (engine/). macOS arm64 kosumu
+    # AArch64 fiber gecisini, Linux x86_64 kosumu SysV gecisini sinar; A2
+    # kapisi (karede 0 ayirma, pozitif kontrollu) ve crash reporter her
+    # build'de burada kosar. Ikili yoksa bu bir build sapmasidir, atlama
+    # degil: kirmizi. Zaman olcumleri [profiler]/[bilgi] satirlariyla BILGI
+    # olarak basilir, karar vermez (Tuzaklar 1l/1p).
+    # CI `build/` icinde derliyor (workflow: mkdir build; cmake ..), yerel
+    # build.sh ise build-<platform>/; ikisine de bak. Bulunamazsa KIRMIZI.
+    ENGINE_TESTS=""
+    for d in "$BUILD_DIR" build build-linux build-macos; do
+        if [ -x "$d/engine/engine_tests" ]; then ENGINE_TESTS="$d/engine/engine_tests"; break; fi
+    done
+    SUITE_N=$((SUITE_N + 1))
+    if [ -z "$ENGINE_TESTS" ]; then
+        ENGINE_TESTS="$BUILD_DIR/engine/engine_tests"
+        printf "%-42s ${RED}FAIL${NC} (ikili yok: %s — engine hedefi derlenmedi mi?)\n" "engine_tests" "$ENGINE_TESTS"
+        SUITE_FAILED=1
+    else
+        out=$(DISPLAY= $SUITE_TIMEOUT_CMD "$ENGINE_TESTS" 2>&1); code=$?
+        summary=$(echo "$out" | grep -E '^engine tests:' | tail -1)
+        if [ $code -ne 0 ] || [ -z "$summary" ]; then
+            printf "%-42s ${RED}FAIL${NC} %s\n" "engine_tests" "$summary"
+            echo "$out" | grep -E 'FAIL|FATAL|ATLANDI' | awk 'NR<=12' | sed 's/^/    /'
+            SUITE_FAILED=1
+        else
+            printf "%-42s ${GREEN}PASS${NC} %s\n" "engine_tests" "$summary"
+            echo "$out" | grep -E '^\[profiler\]|\[bilgi\]|ATLANDI' | sed 's/^/    /'
+        fi
+    fi
     echo ""
     if [ $SUITE_FAILED -ne 0 ]; then
         hw_end "suites"

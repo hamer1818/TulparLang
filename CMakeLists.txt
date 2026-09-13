@@ -596,6 +596,14 @@ install(FILES
 message(STATUS "")
 message(STATUS "=== TulparLang Build Configuration ===")
 message(STATUS "Version: ${PROJECT_VERSION}")
+# ---------------------------------------------------------------------------
+# Tulpar Engine (Faz 0) — ayri agac, derleyiciye linklenmez. Bkz. engine/ ve
+# docs/engine/MIMARI.md. Native Windows desteklenmedigi icin MSVC'de atlanir.
+# ---------------------------------------------------------------------------
+if(NOT MSVC)
+    add_subdirectory(engine)
+endif()
+
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "LLVM Version: ${LLVM_PACKAGE_VERSION}")
 message(STATUS "C++ Compiler: ${CMAKE_CXX_COMPILER}")
