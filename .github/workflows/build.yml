@@ -567,6 +567,12 @@ jobs:
           brew list --versions molten-vk >/dev/null 2>&1 || brew install molten-vk || echo "::warning::molten-vk kurulamadı — engine RHI testleri ATLANDI olacak"
           # Dogrulama katmani: MoltenVK uzerinde de API kullanimi 0 hata istenir.
           brew list --versions vulkan-validationlayers >/dev/null 2>&1 || brew install vulkan-validationlayers || echo "::warning::vulkan-validationlayers kurulamadı — dogrulama testi ATLANDI olacak"
+          # Loader brew dizinini (/opt/homebrew/share/vulkan) ARAMAZ: ICD ve katman
+          # yollarini acikca ver — yoksa "Vulkan cihazi yok" (olculdu 2026-09-14).
+          echo "VK_ICD_FILENAMES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
+          echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
+          echo "VK_ADD_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
           if [ "${{ steps.brew-llvm-cache.outputs.cache-hit }}" = "true" ]; then
             # Cellar restored from cache; just rewire the symlinks into
             # $(brew --prefix)/opt/llvm@18 that find_package(LLVM) looks at.

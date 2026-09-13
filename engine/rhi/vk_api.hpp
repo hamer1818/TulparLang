@@ -94,6 +94,11 @@ struct VkApi {
 // libvulkan'i dlopen edip global + vkGetInstanceProcAddr'i yukler.
 // Basarisizlikta false (loader yok) — cagiran GORUNUR atlar.
 bool vk_api_load(VkApi &api);
+// macOS: loader bulundu ama ICD'yi (MoltenVK json'u brew dizininde, loader'in
+// aramadigi yerde) gormuyorsa MoltenVK'yi DOGRUDAN yukle (vkGetInstanceProcAddr
+// disari verir, ICD gibi degil kutuphane gibi calisir). Basari: true.
+bool vk_api_load_moltenvk_direct(VkApi &api);
+bool vk_api_is_direct_moltenvk(const VkApi &api);
 void vk_api_load_instance(VkApi &api, VkInstance instance);
 void vk_api_load_device(VkApi &api, VkDevice device);
 void vk_api_unload(VkApi &api);

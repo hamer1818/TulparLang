@@ -5,6 +5,45 @@
 
 namespace tulpar::engine::rhi {
 
+namespace {
+bool g_direct_moltenvk = false;
+bool load_from(VkApi &api, const char *const *names, int n) {
+  for (int i = 0; i < n; i++) {
+    api.lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
+    if (api.lib) break;
+  }
+  if (!api.lib) return false;
+  api.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(api.lib, "vkGetInstanceProcAddr");
+  if (!api.vkGetInstanceProcAddr) {
+    dlclose(api.lib);
+    api.lib = nullptr;
+    return false;
+  }
+#define G(name) api.name = (PFN_##name)api.vkGetInstanceProcAddr(nullptr, #name)
+  G(vkEnumerateInstanceVersion);
+  G(vkEnumerateInstanceExtensionProperties);
+  G(vkEnumerateInstanceLayerProperties);
+  G(vkCreateInstance);
+#undef G
+  return api.vkCreateInstance != nullptr;
+}
+} // namespace
+
+bool vk_api_load_moltenvk_direct(VkApi &api) {
+#if defined(__APPLE__)
+  vk_api_unload(api);
+  const char *names[] = {"libMoltenVK.dylib", "/opt/homebrew/lib/libMoltenVK.dylib", "/usr/local/lib/libMoltenVK.dylib"};
+  if (!load_from(api, names, 3)) return false;
+  g_direct_moltenvk = true;
+  return true;
+#else
+  (void)api;
+  return false;
+#endif
+}
+
+bool vk_api_is_direct_moltenvk(const VkApi &) { return g_direct_moltenvk; }
+
 bool vk_api_load(VkApi &api) {
   if (api.lib) return true;
   // Pozitif kontrol: loader yokmus gibi davran — GORUNUR atlama yolu sinanir
@@ -22,24 +61,8 @@ bool vk_api_load(VkApi &api) {
       "libvulkan.so.1", "libvulkan.so",
 #endif
   };
-  for (const char *n : names) {
-    api.lib = dlopen(n, RTLD_NOW | RTLD_LOCAL);
-    if (api.lib) break;
-  }
-  if (!api.lib) return false;
-  api.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(api.lib, "vkGetInstanceProcAddr");
-  if (!api.vkGetInstanceProcAddr) {
-    dlclose(api.lib);
-    api.lib = nullptr;
-    return false;
-  }
-#define G(name) api.name = (PFN_##name)api.vkGetInstanceProcAddr(nullptr, #name)
-  G(vkEnumerateInstanceVersion);
-  G(vkEnumerateInstanceExtensionProperties);
-  G(vkEnumerateInstanceLayerProperties);
-  G(vkCreateInstance);
-#undef G
-  return api.vkCreateInstance != nullptr;
+  g_direct_moltenvk = false;
+  return load_from(api, names, (int)(sizeof names / sizeof names[0]));
 }
 
 void vk_api_load_instance(VkApi &api, VkInstance inst) {
@@ -85,6 +108,7 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
 void vk_api_unload(VkApi &api) {
   if (api.lib) dlclose(api.lib);
   api = VkApi{};
+  g_direct_moltenvk = false;
 }
 
 const char *vk_result_str(VkResult r) {
