@@ -358,10 +358,23 @@ void record_band(void *p) {
 }
 } // namespace
 
-bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig &cfg,
-                               OffscreenResult *out) {
+struct OffscreenTarget {
+  Ctx c;
+  Device *dev;
+  uint32_t w, h;
+  uint8_t *pixels; // arenadan, kurulumda
+};
+
+OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConfig &cfg,
+                                  OffscreenResult *out) {
   *out = OffscreenResult{};
-  Ctx c{&dev, &dev.api(), dev.handle(), out};
+  OffscreenTarget *t = arena.alloc_array_zeroed<OffscreenTarget>(1);
+  if (!t) return nullptr;
+  t->dev = &dev;
+  t->w = cfg.width;
+  t->h = cfg.height;
+  t->c = Ctx{&dev, &dev.api(), dev.handle(), out};
+  Ctx &c = t->c;
   VkApi &a = *c.api;
   const uint32_t w = cfg.width, h = cfg.height;
   const VkFormat color_fmt = VK_FORMAT_R8G8B8A8_UNORM;
@@ -373,7 +386,6 @@ bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig 
     if (!make_image(c, depth_fmt,
                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, true,
                     w, h, &c.depth, &c.depth_view, VK_IMAGE_ASPECT_DEPTH_BIT)) break;
-    // Geri okuma tamponu (host gorunur).
     {
       VkBufferCreateInfo bci{};
       bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -435,101 +447,139 @@ bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig 
         }
       }
     }
-    // Zaman damgasi
-    const DeviceCaps &caps = dev.caps();
-    if (caps.timestamps) {
+    if (dev.caps().timestamps) {
       VkQueryPoolCreateInfo qci{};
       qci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
       qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
       qci.queryCount = 2;
       if (a.vkCreateQueryPool(c.d, &qci, nullptr, &c.queries) != VK_SUCCESS) c.queries = VK_NULL_HANDLE;
     }
-    VkCommandBuffer cb = dev.begin_one_shot();
-    if (!cb) { c.fail("komut tamponu", VK_ERROR_OUT_OF_HOST_MEMORY); break; }
-    if (c.queries) {
-      a.vkCmdResetQueryPool(cb, c.queries, 0, 2);
-      a.vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.queries, 0);
-    }
-    VkClearValue clears[2]{};
-    clears[0].color.float32[0] = cfg.clear[0] / 255.0f;
-    clears[0].color.float32[1] = cfg.clear[1] / 255.0f;
-    clears[0].color.float32[2] = cfg.clear[2] / 255.0f;
-    clears[0].color.float32[3] = cfg.clear[3] / 255.0f;
-    clears[1].depthStencil = {1.0f, 0};
-    VkRenderPassBeginInfo rbi{};
-    rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rbi.renderPass = c.rp;
-    rbi.framebuffer = c.fb;
-    rbi.renderArea = {{0, 0}, {w, h}};
-    rbi.clearValueCount = 2;
-    rbi.pClearValues = clears;
-    a.vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
-    VkViewport vpt{0, 0, (float)w, (float)h, 0.0f, 1.0f};
-    VkRect2D sc{{0, 0}, {w, h}};
-    a.vkCmdSetViewport(cb, 0, 1, &vpt);
-    a.vkCmdSetScissor(cb, 0, 1, &sc);
-    a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipe_depth);
-    a.vkCmdDraw(cb, 3, 1, 0, 0);
-    bool parallel = cfg.parallel_jobs > 0 && cfg.jobs && cfg.pools;
-    if (!parallel) {
-      a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
-      a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipe_color);
-      a.vkCmdSetViewport(cb, 0, 1, &vpt);
-      a.vkCmdSetScissor(cb, 0, 1, &sc);
-      a.vkCmdDraw(cb, 3, 1, 0, 0);
-    } else {
-      // Renk subpass'i: N job, her biri kendi thread havuzundan ikincil tampon.
-      uint32_t n = cfg.parallel_jobs > 64 ? 64 : cfg.parallel_jobs;
-      BandJob bands[64];
-      JobDecl decls[64];
-      VkCommandBuffer secs[64];
-      cfg.pools->begin_frame();
-      for (uint32_t i = 0; i < n; i++) {
-        bands[i] = BandJob{&c, &cfg, i, n, VK_NULL_HANDLE};
-        decls[i] = JobDecl{record_band, &bands[i], "record_band"};
-      }
-      Counter done;
-      cfg.jobs->run(decls, n, &done);
-      cfg.jobs->wait(done);
-      uint32_t got = 0;
-      for (uint32_t i = 0; i < n; i++) if (bands[i].out) secs[got++] = bands[i].out;
-      if (got != n) { c.fail("ikincil tampon kapasitesi yetmedi", VK_ERROR_OUT_OF_HOST_MEMORY); break; }
-      out->secondaries_recorded = got;
-      for (uint32_t t = 0; t < cfg.pools->thread_count(); t++) if (cfg.pools->used_in_slot(t)) out->recording_threads++;
-      a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
-      a.vkCmdExecuteCommands(cb, got, secs);
-    }
-    a.vkCmdEndRenderPass(cb);
-    if (c.queries) a.vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, c.queries, 1);
-    VkBufferImageCopy region{};
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {w, h, 1};
-    a.vkCmdCopyImageToBuffer(cb, c.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.readback, 1, &region);
-    if (!dev.end_one_shot_and_wait(cb)) {
-      std::snprintf(out->error, sizeof out->error, "gonderim: %s", dev.last_error());
-      break;
-    }
-    if (c.queries) {
-      uint64_t ts[2] = {0, 0};
-      if (a.vkGetQueryPoolResults(c.d, c.queries, 0, 2, sizeof ts, ts, sizeof(uint64_t),
-                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS && ts[1] > ts[0])
-        out->gpu_ns = (uint64_t)((double)(ts[1] - ts[0]) * caps.timestamp_period_ns);
-    }
-    // Pikselleri kopyala.
-    out->pixels = arena.alloc_array<uint8_t>((size_t)w * h * 4);
-    if (!out->pixels) { c.fail("piksel arenasi", VK_ERROR_OUT_OF_HOST_MEMORY); break; }
-    VkMappedMemoryRange rng{};
-    rng.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-    rng.memory = c.readback_mem.memory;
-    rng.offset = 0;
-    rng.size = VK_WHOLE_SIZE;
-    a.vkInvalidateMappedMemoryRanges(c.d, 1, &rng); // koherent degilse gerekli, koherentse zararsiz
-    std::memcpy(out->pixels, c.readback_mem.mapped, (size_t)w * h * 4);
-    out->memory_allocations = dev.memory_allocation_count();
+    t->pixels = arena.alloc_array<uint8_t>((size_t)w * h * 4);
+    if (!t->pixels) { c.fail("piksel arenasi", VK_ERROR_OUT_OF_HOST_MEMORY); break; }
     ok = true;
   } while (false);
-  c.cleanup();
-  out->ok = ok;
+  if (!ok) {
+    c.cleanup();
+    return nullptr;
+  }
+  out->memory_allocations = dev.memory_allocation_count();
+  return t;
+}
+
+bool offscreen_render_frame(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenResult *out) {
+  Ctx &c = t->c;
+  c.out = out;
+  VkApi &a = *c.api;
+  Device &dev = *t->dev;
+  const uint32_t w = t->w, h = t->h;
+  out->ok = false;
+  out->pixels = t->pixels;
+  out->gpu_ns = 0;
+  out->secondaries_recorded = 0;
+  out->recording_threads = 0;
+  VkCommandBuffer cb = dev.begin_one_shot();
+  if (!cb) return c.fail("komut tamponu", VK_ERROR_OUT_OF_HOST_MEMORY);
+  if (c.queries) {
+    a.vkCmdResetQueryPool(cb, c.queries, 0, 2);
+    a.vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.queries, 0);
+  }
+  VkClearValue clears[2]{};
+  clears[0].color.float32[0] = cfg.clear[0] / 255.0f;
+  clears[0].color.float32[1] = cfg.clear[1] / 255.0f;
+  clears[0].color.float32[2] = cfg.clear[2] / 255.0f;
+  clears[0].color.float32[3] = cfg.clear[3] / 255.0f;
+  clears[1].depthStencil = {1.0f, 0};
+  VkRenderPassBeginInfo rbi{};
+  rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  rbi.renderPass = c.rp;
+  rbi.framebuffer = c.fb;
+  rbi.renderArea = {{0, 0}, {w, h}};
+  rbi.clearValueCount = 2;
+  rbi.pClearValues = clears;
+  a.vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+  VkViewport vpt{0, 0, (float)w, (float)h, 0.0f, 1.0f};
+  VkRect2D sc{{0, 0}, {w, h}};
+  a.vkCmdSetViewport(cb, 0, 1, &vpt);
+  a.vkCmdSetScissor(cb, 0, 1, &sc);
+  a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipe_depth);
+  a.vkCmdDraw(cb, 3, 1, 0, 0);
+  bool parallel = cfg.parallel_jobs > 0 && cfg.jobs && cfg.pools;
+  if (!parallel) {
+    a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+    a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipe_color);
+    a.vkCmdSetViewport(cb, 0, 1, &vpt);
+    a.vkCmdSetScissor(cb, 0, 1, &sc);
+    a.vkCmdDraw(cb, 3, 1, 0, 0);
+  } else {
+    uint32_t n = cfg.parallel_jobs > 64 ? 64 : cfg.parallel_jobs;
+    BandJob bands[64];
+    JobDecl decls[64];
+    VkCommandBuffer secs[64];
+    cfg.pools->begin_frame();
+    for (uint32_t i = 0; i < n; i++) {
+      bands[i] = BandJob{&c, &cfg, i, n, VK_NULL_HANDLE};
+      decls[i] = JobDecl{record_band, &bands[i], "record_band"};
+    }
+    Counter done;
+    cfg.jobs->run(decls, n, &done);
+    cfg.jobs->wait(done);
+    uint32_t got = 0;
+    for (uint32_t i = 0; i < n; i++) if (bands[i].out) secs[got++] = bands[i].out;
+    if (got != n) {
+      a.vkCmdEndRenderPass(cb);
+      dev.end_one_shot_and_wait(cb);
+      return c.fail("ikincil tampon kapasitesi yetmedi", VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
+    out->secondaries_recorded = got;
+    for (uint32_t k = 0; k < cfg.pools->thread_count(); k++) if (cfg.pools->used_in_slot(k)) out->recording_threads++;
+    a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+    a.vkCmdExecuteCommands(cb, got, secs);
+  }
+  a.vkCmdEndRenderPass(cb);
+  if (c.queries) a.vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, c.queries, 1);
+  VkBufferImageCopy region{};
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  region.imageExtent = {w, h, 1};
+  a.vkCmdCopyImageToBuffer(cb, c.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.readback, 1, &region);
+  if (!dev.end_one_shot_and_wait(cb)) {
+    std::snprintf(out->error, sizeof out->error, "gonderim: %s", dev.last_error());
+    return false;
+  }
+  if (c.queries) {
+    uint64_t ts[2] = {0, 0};
+    if (a.vkGetQueryPoolResults(c.d, c.queries, 0, 2, sizeof ts, ts, sizeof(uint64_t),
+                                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS && ts[1] > ts[0])
+      out->gpu_ns = (uint64_t)((double)(ts[1] - ts[0]) * dev.caps().timestamp_period_ns);
+  }
+  VkMappedMemoryRange rng{};
+  rng.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+  rng.memory = c.readback_mem.memory;
+  rng.offset = 0;
+  rng.size = VK_WHOLE_SIZE;
+  a.vkInvalidateMappedMemoryRanges(c.d, 1, &rng);
+  std::memcpy(t->pixels, c.readback_mem.mapped, (size_t)w * h * 4);
+  out->memory_allocations = dev.memory_allocation_count();
+  out->ok = true;
+  return true;
+}
+
+void offscreen_destroy(OffscreenTarget *t) {
+  if (t) t->c.cleanup();
+}
+
+bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig &cfg,
+                               OffscreenResult *out) {
+  OffscreenTarget *t = offscreen_create(dev, arena, cfg, out);
+  if (!t) { out->ok = false; return false; }
+  OffscreenResult setup = *out; // pso_cache_* ve merge feedback kurulumdan
+  bool ok = offscreen_render_frame(t, cfg, out);
+  out->pso_cache_loaded = setup.pso_cache_loaded;
+  out->pso_cache_bytes = setup.pso_cache_bytes;
+  out->merge_feedback_available = setup.merge_feedback_available;
+  out->post_merge_subpass_count = setup.post_merge_subpass_count;
+  out->subpass_merge_status[0] = setup.subpass_merge_status[0];
+  out->subpass_merge_status[1] = setup.subpass_merge_status[1];
+  offscreen_destroy(t);
   return ok;
 }
 

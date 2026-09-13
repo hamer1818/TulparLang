@@ -258,7 +258,9 @@ jobs:
           test -f /usr/include/X11/Xlib.h || { echo "::error::libx11-dev missing (X11/Xlib.h) — tame build will fail"; exit 1; }
           # engine RHI testleri lavapipe ICD'sini dlopen ile bulur; yoksa
           # test GORUNUR atlanir ama burada da erken uyaralim.
-          ls /usr/share/vulkan/icd.d/lvp_icd.*.json >/dev/null 2>&1 || echo "::warning::lavapipe ICD yok — engine RHI testleri ATLANDI olacak"
+          # ICD nerede? (ilk kosumda /usr/share/vulkan/icd.d/'de gorunmedi ama cihaz bulundu)
+          ls -la /usr/share/vulkan/icd.d/ /etc/vulkan/icd.d/ 2>/dev/null || true
+          ls /usr/share/vulkan/icd.d/lvp_icd.*.json /etc/vulkan/icd.d/lvp_icd.*.json >/dev/null 2>&1 || echo "::notice::lavapipe ICD json standart dizinlerde yok — engine_tests [bilgi] GPU satirina bak"
 
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
@@ -556,6 +558,9 @@ jobs:
           brew list --versions cmake >/dev/null 2>&1 || brew install cmake
           # MoltenVK: Vulkan loader + Metal ICD; engine RHI testleri offscreen
           # üçgeni burada da çizer (sanal GPU). Yoksa test GORUNUR atlanir.
+          # vulkan-loader: libvulkan.1.dylib (ICD mekanizmasi); molten-vk: Metal ICD.
+          # Ilk denemede yalniz molten-vk kuruldu ve loader bulunamadi (3 ATLANDI, gorunur).
+          brew list --versions vulkan-loader >/dev/null 2>&1 || brew install vulkan-loader || echo "::warning::vulkan-loader kurulamadı"
           brew list --versions molten-vk >/dev/null 2>&1 || brew install molten-vk || echo "::warning::molten-vk kurulamadı — engine RHI testleri ATLANDI olacak"
           if [ "${{ steps.brew-llvm-cache.outputs.cache-hit }}" = "true" ]; then
             # Cellar restored from cache; just rewire the symlinks into

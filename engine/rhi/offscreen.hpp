@@ -44,8 +44,20 @@ struct OffscreenResult {
   uint32_t recording_threads = 0;    // kac farkli thread yuvasi kayit yapti
 };
 
+// Tek adim: kurulum + kare + yikim (kolaylik). A2 iddiasi icin asagidaki
+// ayrik API kullanilir: kurulum surucu icinde ayirma yapar (pipeline, image,
+// JIT — lavapipe'ta operator new ile gorunur), KARE yapmamali.
 bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig &cfg,
                                OffscreenResult *out);
+
+// Ayrik API: kurulum bir kez, kare N kez.
+struct OffscreenTarget;
+OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConfig &cfg,
+                                  OffscreenResult *out);
+// Bir kare: kayit + gonderim + bekleme + piksel geri okuma. Bizim kodda
+// ayirma YOK (AllocGate ile test edilir); out->pixels arenadan (kurulumda).
+bool offscreen_render_frame(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenResult *out);
+void offscreen_destroy(OffscreenTarget *t);
 
 // Basit PPM (P6) yazici — insan gozu icin; test artefakti.
 bool write_ppm(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);

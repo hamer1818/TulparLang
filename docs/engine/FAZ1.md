@@ -28,6 +28,8 @@ ucgen %17.6 piksel; GPU render pass 0.008 ms; vkAllocateMemory=2; PSO cache 2264
 ```
 
 ## Notlar
+- **A2 kapısı ve sürücü ayırmaları (CI lavapipe, 2026-09-14):** tek adımlı offscreen çizim `operator new` sayacında sıfır vermedi: lavapipe (Mesa + LLVM JIT) pipeline/image kurulumunda C++ `new` kullanıyor ve global override onu da sayıyor; NVIDIA sürücüsü saymadı (kendi ayırıcısı). Kurulum ile kare ayrıldı (`offscreen_create` / `offscreen_render_frame`): kurulumun ayırması ölçülüp **bilgi** basılır, **kare** için 0 iddia edilir. Ders: A2 iddiası "bizim kodumuz kare içinde ayırmaz"dır; sürücü içi ayırma ayrı kalem, cihazda ayrıca ölçülür (Mali/Adreno sürücüleri de sürece yüklenir).
+- **macOS CI:** yalnız `molten-vk` kurulunca loader (`libvulkan.1.dylib`) bulunamadı ve 3 test **görünür** atlandı (harness sayacı işini yaptı). `vulkan-loader` eklendi; MoltenVK tam yol yedeği (`/opt/homebrew/lib/libMoltenVK.dylib`) kondu.
 - Shader'lar GLSL (`engine/rhi/shaders/*.vert|frag`) → `glslc` → depoya giren C dizileri (`compile_shaders.py`). Plan Faz 8'e kadar Slang diyordu; `slangc` bu makinede ve CI'da yok (Arch'taki `slang` paketi S-Lang kütüphanesi). Faz 8'de Slang'e geçilir; Faz 1 üçgeni için GLSL yeterli.
 - Depth `D32_SFLOAT`; LAZILY_ALLOCATED bellek masaüstünde yok (TBDR'da var) — kod tercih eder, yoksa DEVICE_LOCAL'a düşer ve bunu `caps.lazily_allocated_memory` ile raporlar.
 - Layer kuralı: `rhi/` L2, yalnız `core/` ve `platform/` içerir; `<vulkan/vulkan.h>` üçüncü parti.

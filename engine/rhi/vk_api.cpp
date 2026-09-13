@@ -12,8 +12,12 @@ bool vk_api_load(VkApi &api) {
   if (const char *e = getenv("TULPAR_ENGINE_NO_VULKAN"); e && *e && *e != '0') return false;
   const char *names[] = {
 #if defined(__APPLE__)
-      "libvulkan.1.dylib", "libvulkan.dylib", "libMoltenVK.dylib",
+      // Once loader (brew vulkan-loader), sonra MoltenVK'nin kendisi (ICD
+      // olarak degil dogrudan: vkGetInstanceProcAddr disari verir). dlopen
+      // bare adi DYLD yolunda aramaz; brew dizinleri TAM yol.
+      "libvulkan.1.dylib", "libvulkan.dylib",
       "/opt/homebrew/lib/libvulkan.1.dylib", "/usr/local/lib/libvulkan.1.dylib",
+      "libMoltenVK.dylib", "/opt/homebrew/lib/libMoltenVK.dylib", "/usr/local/lib/libMoltenVK.dylib",
 #else
       "libvulkan.so.1", "libvulkan.so",
 #endif
