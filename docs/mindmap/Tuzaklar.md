@@ -1831,3 +1831,35 @@ Yan bulgu: fiber içindeki çökme testinde `js.shutdown()` çağrılmayınca ç
 serbest bırakılmış arenaya dokunup **başka** bir SIGSEGV üretti; rapor "çıkışta `_dl_fini`"
 gösterdi — testin kendi kurulumu ikinci bir çökme üretmişti ([[#7a. Kendi testin yanlışsa, güvenle yanlış sonuç yayınlarsın]]).
 
+### 8d. İkinci mimari, birinci mimarinin göremediğini bulur (libm ulp, FMA)
+`math_quat` testi 180°'lik quaternion'a `slerp` uyguluyordu. 180°'nin **iki eşit-kısa yolu**
+var; hangisinin seçileceğine `dot(a,b)`'nin işareti karar veriyor ve `dot = c² − s²`,
+`sin(π/4)` ile `cos(π/4)`'ün float'ta **son ulp'ta** eşit olup olmamasına bağlı. x86_64
+glibc: eşit, dot = 0, yol A, yerelde 10/10 yeşil. macOS arm64 (Apple libm + FMA
+birleştirme): dot < 0, yol B, 90° ters, CI kırmızı. Hata `slerp`'te değil, **belirsiz
+girdiyi sınayan testte**; 90°/45°'ye alındı.
+
+**Kural:** matematik testinde girdi tekil/belirsiz noktada olmasın (antipodal quaternion,
+dejenere üçgen, tam 0 determinant); sonuç tanımlı ama seçim platformun libm'ine kalıyorsa
+test "bazen düşen" sınıfına girer ([[#1p. "Bazen düşen" kapı gürültü değil MAKİNE SINIFI olabilir — [makine] satırıyla eşle]]).
+Ve simülasyon determinizmi için aynı ders (PLAN.md REV 8): aynı mimari + aynı libm + aynı
+FP bayrakları dışında bit eşitliği yok. macOS arm64 CI'ı bu yüzden **ikinci mimari** olarak
+değerli: fiber geçişini de, libm farkını da o buldu.
+
+### 8e. Kapsama beklentisi kağıt üstünde hesaplanırken NDC genişliği 1 sanıldı
+İlk piksel testi "üçgen ekranın %36'sı" bekliyordu; ölçüm %17.6 dedi. NDC −1..1 arası 2
+birim: taban 1.2 → %60, yükseklik 1.2 → %60, alan ½·0.6·0.6 = **%18**. Beklenti yanlıştı,
+renderer doğruydu. **Kural:** ölçüm iddiaya uymadığında önce iddiayı hesapla; sayı test
+koduna yorumla birlikte girer ki bir sonraki okuyan aynı hatayı yapmasın.
+
+### 8f. "Kare içinde 0 ayırma" kapısı SÜRÜCÜYÜ de sayar
+Global `operator new` sayacı süreçteki herkesi sayar: NVIDIA 0/kare, **MoltenVK 28/kare**
+(Metal nesneleri), lavapipe kurulumda (LLVM JIT). İlk yazım tek adımlı çizime `== 0` dedi;
+lavapipe'ta düştü, MoltenVK'da düştü, NVIDIA'da geçti — yani yerelde yeşil, iki CI
+sürücüsünde kırmızı ([[#1p. "Bazen düşen" kapı gürültü değil MAKİNE SINIFI olabilir — [makine] satırıyla eşle]]
+ailesi, bu kez sürücü sınıfı). **Kural:** iddiayı ikiye ayır. (a) *bizim kod* kare içinde
+ayırmaz → sürücüsüz harness'ta 0 (Faz 0 kapısı, kesin). (b) *sürücünün* kare ayırması cihaz
+verisidir → ölçülür, basılır, **kararlılığı** iddia edilir (kareler arası büyüme = bizde sızıntı,
+ör. havuz sıfırlanmıyor), sıfırı değil. Kurulum (pipeline, image, JIT) kareden ayrılır; kurulum
+ayırması serbest ve bilgi.
+

@@ -15,7 +15,14 @@ struct Registry {
   static int count;
   static int failures;      // mevcut testteki CHECK basarisizliklari
   static int failures_total;
+  static int skipped;       // GORUNUR atlanan testler (ozet satirinda)
 };
+// Test kosamadi (donanim/arac yok): sebep basilir ve ozet satirina girer.
+// Sessiz `return` YASAK — atlanan test yesil sayilmasin (Tuzaklar 1m).
+inline void skip(const char *reason) {
+  std::printf("    ATLANDI: %s\n", reason);
+  Registry::skipped++;
+}
 struct Registrar {
   Registrar(const char *name, TestFn fn) {
     if (Registry::count < Registry::kMax) Registry::cases[Registry::count++] = Case{name, fn};

@@ -216,7 +216,9 @@ if [ "$ACTION" = "suites" ]; then
         summary=$(echo "$out" | grep -E '^engine tests:' | tail -1)
         if [ $code -ne 0 ] || [ -z "$summary" ]; then
             printf "%-42s ${RED}FAIL${NC} %s\n" "engine_tests" "$summary"
-            echo "$out" | grep -E 'FAIL|FATAL|ATLANDI' | awk 'NR<=12' | sed 's/^/    /'
+            # Teshis icin GPU/yetenek satirlari da basilir (ilk lavapipe
+            # kosumunda hangi cihazin bulundugu gorunmedi).
+            echo "$out" | grep -E 'FAIL|FATAL|ATLANDI|\[bilgi\] (GPU|zorunlu|uzanti|operator)' | awk 'NR<=16' | sed 's/^/    /'
             SUITE_FAILED=1
         else
             printf "%-42s ${GREEN}PASS${NC} %s\n" "engine_tests" "$summary"

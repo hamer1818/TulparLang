@@ -50,6 +50,19 @@ if(ENGINE_MEM_CANARY)
 endif()
 add_dependencies(engine_core engine_layer_check)
 
+# --- L2 RHI (Vulkan) ---------------------------------------------------------
+# Basliklar vendored, loader dlopen: link zamani Vulkan bagimliligi YOK.
+add_library(engine_rhi STATIC
+    rhi/vk_api.cpp
+    rhi/device.cpp
+    rhi/command_pools.cpp
+    rhi/offscreen.cpp
+)
+target_include_directories(engine_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)
+target_link_libraries(engine_rhi PUBLIC engine_core ${CMAKE_DL_LIBS})
+target_compile_options(engine_rhi PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
+add_dependencies(engine_rhi engine_layer_check)
+
 # --- Testler ------------------------------------------------------------------
 # alloc_gate_override.cpp YURUTULEBILIRE eklenir: hangi ikilinin sayildigi
 # burada gorunur (A2 kapisi).
@@ -64,8 +77,9 @@ add_executable(engine_tests
     tests/test_crash.cpp
     tests/test_math.cpp
     tests/test_containers.cpp
+    tests/test_rhi.cpp
     core/memory/alloc_gate_override.cpp
 )
-target_link_libraries(engine_tests PRIVATE engine_core ${CMAKE_DL_LIBS})
+target_link_libraries(engine_tests PRIVATE engine_rhi engine_core ${CMAKE_DL_LIBS})
 target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(engine_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
