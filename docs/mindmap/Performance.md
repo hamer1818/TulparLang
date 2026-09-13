@@ -576,6 +576,29 @@ katından küçük tek kareye topluyor.
 
 Bkz. [[Tuzaklar]] 6u.
 
+### İç içe öz-çağrı şekli ZİNCİRLENMİYOR (2026-09-13)
+Yukarıdaki tabloda `ack` K=4'te 0,9×, K=6'da 0,8× — bu şekil zincirden hiç
+kazanmıyordu; K=1 yerelde 1,1× verdiği için "nötr" sayıldı. CI filosu bunu
+çürüttü — **aynı ikili**, koşucuya göre (N=11, tur eşli medyan):
+
+| CPU | K=1 zincirli / zincirsiz |
+|---|--:|
+| EPYC 9V74 (Zen 4) | 1,25 · 1,26 · 1,34 · **1,49** |
+| EPYC 7763 (Zen 3) | 1,07–1,10 |
+| EPYC 9V45 (Zen 5) | 0,66 |
+| Ryzen 9800X3D (Zen 5, yerel) | 0,87–0,93 |
+| Apple arm64 | 0,62 |
+
+Zen 4'te %49 gerileme → ilkeye göre hata. Karlılık modeli: bir öz-çağrının
+**argümanı içinde** başka bir öz-çağrı varsa (`ack`, `tak`) zincir kurulmaz
+(`selfrec_scan` `nested`). `fib(n-1)+fib(n-2)` yan yana, etkilenmez (oran %5
+aynen). Bedel (yerel, zorla K=1'e göre): ack %9, tak %25; arm64'te ack %38.
+`TULPAR_SELFREC_DEPTH` açık verilirse kural atlanır (K taraması / teşhis).
+Mekanizma bilinmiyor: K=1 `ack` 76→139 B, çağrı yeri 1→3, çerçeve aynı.
+Kapı IR düzeyine indi (öz-çağrı sayısı + pozitif kontrol); zorla-K=1 oranı
+her CI koşumunda `[bilgi]` satırıyla makine adına bağlı birikiyor.
+Bkz. [[Tuzaklar]] 1p.
+
 ## i32 dizi elemanı ÖLÇÜLDÜ ve BIRAKILDI (2026-09-07)
 
 Elekte C/Rust/Go'nun üçü de **32-bit** eleman kullanıyor (`int*`,

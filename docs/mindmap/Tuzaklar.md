@@ -186,6 +186,38 @@ yazarken asıl soru "eşik kaç olsun" değil, **"neye göre normalize ediyorum"
 Nöbetçi: `tests/perf_pair.py` — tur eşlemesi + açılış çıkarma + medyan;
 karar vermez, yalnız ölçer (eşiği çağıran koyar).
 
+⚠ **Devamı (2026-09-13):** eşleme **gerekliydi ama sebep değildi**. Eşlenmiş
+ölçüm ve 14 kat büyütülmüş sinyalle CI Linux yine %134, sonra %149 verdi.
+Kırmızı gürültü değil, **koşucunun CPU'su**ydu — bkz. [[#1p. "Bazen düşen"
+kapı gürültü değil MAKİNE SINIFI olabilir — [makine] satırıyla eşle]]. Bu
+girdinin dersi geçerli (ayrı zamanlarda ölçmek oranı bozar); yanlış olan,
+ölçüm düzeltilince **kalan** sinyalin de gürültü sayılmasıydı.
+
+### 1o. KELEPÇE, "ölçemedim"i "geçti"ye çevirir
+`build.sh`'ın fib zincir kapısı iş payını `t(N=32) - t(N=1)` ile ölçüyordu ve
+sonucu `[ "$W" -lt 1 ] && W=1` ile kelepçeliyordu. Kelepçe, negatif bir farkı
+(iş, süreç açılışının gürültüsünün altında kaldı → **ölçemedim**) 1'e çeviriyor;
+1 ise `off_w > on_w * 2` eşiğinden rahatça geçiyor. CI macOS arm64, 2026-09-11:
+
+```
+ozyineleme zinciri calisiyor (is: 9835us -> 1us, acilis ~16329us cikarildi)
+```
+
+`-> 1us` kelepçenin kendisi. macOS'ta süreç açılışı ~16 ms ve zincirli
+`fib(32)`'nin toplam süresi onun altında kalıyor. Kapı `9835 > 2` diye **yeşil**
+verdi; zincirli kol **hiç ölçülmemişti**. Aynı kapı Linux'ta gerçek ölçüyor
+(`4034 -> 270`) — yani hata platforma bağlı ve tek tarafta görünmez.
+
+**Kural:** bir savunma değeri (clamp, `max(x,1)`, `?: varsayılan`) ölçüm
+yolunda duruyorsa, **ölçülemeyen ile ölçülen aynı değere düşmemeli**.
+Kelepçelenen durum sayılır ve çağırana bildirilir; kapı o zaman yeşil *iddia
+etmez*, ne ölçemediğini ve **neyin hâlâ kapsadığını** söyler. Burada zincirin
+varlığını IR düzeyindeki kapı (`@fib` içindeki öz-çağrı sayısı) her platformda
+doğruluyor — kaybolan yalnız *kazanç ölçüsü*, ve bu artık sarı bir satırla
+görünür. Gerileme değil, ölçüm sınırı: o yüzden kırmızı değil.
+
+`tests/perf_pair.py` kelepçelenen tur sayısını dördüncü alan olarak döndürür.
+
 ### 1m. Koşmayan sonda, koşturulduğu gün SINADIĞI ŞEYİ suçlar
 `wings_tls_smoke.py` "elle koşulur, CI'da değil" diye duruyordu. 2026-09-11'de
 ilk kez koşulduğunda çıktısı şuydu:
@@ -211,6 +243,57 @@ sebep yoksa bağlanır. Bağlarken iki şey ölçülür: **güvenilirlik** (tekr
 koşum — [[#1l. Duvar saati EŞİĞİ, yük altında özelliği değil koşucuyu ölçer]])
 ve **sessiz SKIP** — `exit 0` ile atlayan bir sonda kapıyı boşuna yeşil yapar,
 o yüzden atlama GÖRÜNÜR olmalı.
+
+### 1p. "Bazen düşen" kapı gürültü değil MAKİNE SINIFI olabilir — [makine] satırıyla eşle
+Ackermann gerileme kapısı (K=1 zincirli ≤ %125 zincirsiz) CI Linux'ta "bazen"
+düşüyordu. İki kez gürültü teşhisi kondu, iki kez ölçüm düzeltildi — tur
+eşlemesi ([[#1n. İki kol AYRI zamanlarda ölçülürse oran çöp olur — turla eşle]])
+ve sinyalin N=9→11 ile 14 kat büyütülmesi. İkisi de doğru düzeltmeydi ve
+kırmızı bitmedi: %134, sonra %149.
+
+Üçüncü bakışta sonuçlar koşumların `[makine]` satırıyla (`tools/hwstat.sh`)
+eşlendi:
+
+| koşucu CPU | oran (zincirli / zincirsiz) |
+|---|---|
+| EPYC 9V74 (Zen 4) | **%125 / %126 / %134 / %149** — 4/4 kırmızı ya da sınırda |
+| EPYC 7763 (Zen 3) | %107 / %108 / %110 |
+| EPYC 9V45 (Zen 5) | %66 |
+| Ryzen 9800X3D (Zen 5, yerel) | %87–93 |
+| Apple arm64 (macOS CI) | %62 |
+
+Aynı ikili (ccache %100 isabet), aynı LLVM 18.1.3, aynı imaj; 8/8 koşumda CPU
+modeli sonucu belirledi. Gürültü değildi — **kapı haklıydı.** K=1 zincir, iç
+içe öz-çağrı şeklini (`ack(m-1, ack(m, n-1))`) Zen 4'te %49 yavaşlatıyor.
+Yerel makine bunu **göremezdi**: orada aynı şey %9 hızlanma. Yerelde 10/10
+kararlı olmak CI kırmızısını gürültü yapmaz; yalnızca yerelin o kırmızıyı
+göremediğini gösterir (ölçüm aleti kendi ortamında doğru, başka ortamda kör).
+
+**Yanlış cevaplar:** eşiği %150'ye çekmek (gerçek gerilemeyi gizler); kapıyı
+sarıya almak (bilinen %49'luk gerileme kullanıcıya gider); koşucuyu sabitlemek
+(gerilemeyi kullanıcı makinelerine taşır, CI'dan saklar).
+**Doğru cevap** projenin kendi ilkesinden çıkıyor (*bazı programları yavaşlatan
+optimizasyon HATADIR, bazılarına az kazandıran değil*): karlılık modeli
+düzeltildi — bir öz-çağrının **argümanı içinde** başka bir öz-çağrı varsa
+zincir kurulmuyor (`llvm_backend.cpp` `selfrec_scan`, `nested`). Oran her
+çekirdekte tanım gereği 1,0. Bedeli ölçüldü ve kabul edildi: yerelde (Zen 5)
+ack %9, tak %25; arm64'te ack %38 kazanç gidiyor. `fib` yan yana, etkilenmiyor.
+
+Kapı da değişti: duvar saati artık **karar vermiyor**. İki belirlenimli ayak —
+varsayılan derlemede `@ack` öz-çağrı sayısı zincirsizle **aynı**; zorla
+`TULPAR_SELFREC_DEPTH=1` ile **artıyor** (pozitif kontrol: "zincirlenmedi"
+kural yüzünden mi, kaza eseri mi) — artı çıktı eşitliği. Üçü de env
+enjeksiyonuyla kırmızıya döndürüldü. Zorla-K=1 oranı `[bilgi]` satırı olarak
+makine adıyla basılıyor: kural beş CPU'luk veriyle kondu, veri seti her CI
+koşumunda büyümeye devam ediyor.
+
+**Kural:** bir zamanlama kapısı CI'da "bazen" düşüyorsa, gürültü demeden önce
+sonuçları `[makine]` satırıyla eşle (`gh run view --log | grep '\[makine\]'`).
+CI filosu heterojen (bu depo üç EPYC nesli gördü), yerel makine **tek bir
+mikromimaridir**. Model sonucu belirliyorsa iş ölçümde değil **iddiada**:
+eşiği değil, karlılık modelini ya da kapının söylediğini düzelt.
+Mekanizma bilinmiyor (K=1 `ack` 76→139 B, çağrı yeri 1→3, çerçeve aynı; Zen 4
+elde yok) — kural ölçümün söylediğini kodlar, sebebini değil; bu da yazıldı.
 
 ### 1j. Disk artığı testler arasında taşınıyor
 "Diske yazılmamış olmalı" testi, önceki bir **bozma denemesinin** yazdığı

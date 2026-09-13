@@ -10610,6 +10610,22 @@ static bool native_abi_eligible(LLVMBackend *backend, ASTNode_C *node) {
 // satir ici alma bunu kaldirmiyor, yalnizca kodu buyutuyor. (Tipsiz surum
 // tipliden 21 kat yavas — 11,88 vs 0,56 — ama o acigi kapatacak sey zincir
 // degil, kutulamanin kendisi.)
+//
+// IC ICE oz-cagri sekli (ack(m-1, ack(m, n-1))) ZINCIRLENMEZ — olculdu
+// (2026-09-11..13, CI kosumlari): K=1 zincirin bu sekle etkisi CEKIRDEGE
+// BAGLI ve isareti degisiyor. Zincirli/zincirsiz oran (N=11, tur-esli medyan):
+//   Apple arm64 0,62 · EPYC 9V45 (Zen 5) 0,66 · Ryzen 9800X3D (Zen 5) 0,91
+//   EPYC 7763 (Zen 3) 1,07-1,10 · EPYC 9V74 (Zen 4) 1,25 / 1,26 / 1,34 / 1,49
+// Ayni ikili (ccache %100 isabet), ayni LLVM 18.1.3, ayni imaj — tek degisen
+// kosucunun CPU'su; 8/8 kosumda CPU modeli sonucu belirledi. Zen 4'te %49
+// gerileme, yukaridaki ilkeye gore HATA. Sekil kurali bunu tanim geregi
+// cozer (zincirsiz = zincirli, oran 1,0 her cekirdekte); bedeli Zen 5 /
+// arm64'teki %9-38 kazanc ve ilke o bedeli odemeyi soyluyor. Mekanizma
+// BILINMIYOR — kod 76 -> 139 B, cagri yeri 1 -> 3, cerceve ayni; Zen 4 elde
+// yok, sekil kurali olcumun soyledigini kodlar, sebebini degil.
+// TULPAR_SELFREC_DEPTH acik verilirse kural atlanir (K taramasi / teshis).
+// Nobetci: build.sh ackermann kapisi — artik IR duzeyinde (klon yok) +
+// pozitif kontrol (zorla K=1'de klon var), duvar saati degil.
 #define SELFREC_DEPTH 1
 // Govde dugum siniri: buyuk ozyinelemeli fonksiyonlarin K kopyasi derleme
 // suresini ve .text'i buyutur. Kucuk govdeler zaten kazancin tamamini veriyor.
@@ -10630,17 +10646,25 @@ static bool native_abi_eligible(LLVMBackend *backend, ASTNode_C *node) {
     for (int _i = 0; _i < (n)->object_count;   _i++) FN((n)->object_values[_i]);\
   } while (0)
 
-// Tek gezinti: hem `name`e dogrudan cagri var mi, hem govde kac dugum.
+// Tek gezinti: hem `name`e dogrudan cagri var mi, hem govde kac dugum, hem
+// de IC ICE oz-cagri var mi (`nested`: bir oz-cagrinin ARGUMANLARI icinde
+// baska bir oz-cagri — ack(m-1, ack(m, n-1)); fib(n-1)+fib(n-2) ic ice DEGIL).
 // Ic fonksiyon/lambda govdelerine GIRMEZ — oradaki `f(...)` cagrilari ayri
 // bir fonksiyonun govdesine ait ve orijinal `f`i cagirmaya devam etmeli.
 static void selfrec_scan(ASTNode_C *n, const char *name, int *found,
-                         int *count) {
+                         int *count, int *nested, int in_self_arg) {
   if (!n) return;
   (*count)++;
-  if (n->type == AST_FUNCTION_CALL && n->name && strcmp(n->name, name) == 0)
+  int is_self =
+      (n->type == AST_FUNCTION_CALL && n->name && strcmp(n->name, name) == 0);
+  if (is_self) {
     *found = 1;
+    if (in_self_arg) *nested = 1;
+  }
   if (n->type == AST_FUNCTION_DECL || n->type == AST_LAMBDA) return;
-#define SELFREC_SCAN_CHILD(c) selfrec_scan((c), name, found, count)
+  int child_in = in_self_arg || is_self;
+#define SELFREC_SCAN_CHILD(c) \
+  selfrec_scan((c), name, found, count, nested, child_in)
   SELFREC_EACH_CHILD(n, SELFREC_SCAN_CHILD);
 #undef SELFREC_SCAN_CHILD
 }
@@ -10685,11 +10709,17 @@ static int selfrec_depth(LLVMBackend *backend, ASTNode_C *fn) {
   }
   if (!fn || fn->type != AST_FUNCTION_DECL || !fn->name || !fn->body) return 0;
   if (!native_abi_eligible(backend, fn)) return 0;
-  int found = 0, count = 0;
-  selfrec_scan(fn->body, fn->name, &found, &count);
+  int found = 0, count = 0, nested = 0;
+  selfrec_scan(fn->body, fn->name, &found, &count, &nested, 0);
   if (!found) return 0;
   if (count > SELFREC_MAX_NODES) return 0;
-  return depth_override >= 0 ? depth_override : SELFREC_DEPTH;
+  // Acik derinlik istegi SEKIL KURALINI ATLAR: K taramasi ve teshis icin
+  // ic ice sekli de zorla zincirleyebilmek gerekiyor (build.sh'in ackermann
+  // kapisi bunu pozitif kontrol olarak kullanir: kural yuzunden mi, kaza
+  // eseri mi zincirlenmedi).
+  if (depth_override >= 0) return depth_override;
+  if (nested) return 0;
+  return SELFREC_DEPTH;
 }
 
 // Klon adi. Kaynak dilinde `.` tanimlayici karakteri degil, dolayisiyla bu ad
