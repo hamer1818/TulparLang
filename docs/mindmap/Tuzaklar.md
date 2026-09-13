@@ -1802,3 +1802,32 @@ Nöbetçi: `benchmarks/fair/shapes.py` — dört erişim şekli, C tabanıyla,
 
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
+
+## 8. Engine (Faz 0, `engine/`) — C++ çekirdek tuzakları
+
+### 8a. Park etmiş fiber'lar havuzu tüketince sistem KİLİTLENİR
+8 fiber, 32 ebeveyn iş; her ebeveyn 32 çocuk üretip bekliyor. İlk 8 ebeveyn fiber'ları
+alıp park etti; çocuklara fiber kalmadı; çocuklar koşmadan ebeveynler uyanamıyor. Sonuç:
+16 thread %1548 CPU, 33 dakika, çıktı yok (stdout tam tamponluydu; hangi testin
+asılı kaldığı da görünmüyordu — `setvbuf(_IOLBF)` + her testten önce `RUN` satırı).
+**Kural:** fiber yoksa iş worker'ın kendi yığınında **satır içi** koşar ve onun `wait()`i
+park edemediği için kuyruğa **yardım eder** (iç içe). Havuz boyutu yine init'te (A2),
+açlık **sayılır** (`fiber_starved`, `jobs_inline`). Test: `jobs_fiber_pool_starvation_recovers`.
+
+### 8b. `new`/`delete` çifti ELENİR — ayırma kapısı yanlış geçer
+C++14 allocation elision: GCC/Clang -O2+ gözlemlenmeyen `new`/`delete` çiftini siler.
+`int *p = new int(1); delete p;` sayaçta görünmedi ve **A2 kapısının pozitif kontrolü**
+"ayırma yakalandı" yerine "0" dedi — yani kapı çalışıyor sanılırken hiçbir şey ölçmüyordu
+([[#1k. Nöbetçi KEŞFETTİĞİNİ sayıyor, ÖLÇTÜĞÜNÜ değil — 50 dedi, 49 ölçtü]] ailesi).
+**Kural:** ayırma sayan testte işaretçi **kaçmalı**: `test::escape(p)` (`asm volatile`
+engeli). Enjeksiyonun kendisi de bu engeli kullanır.
+
+### 8c. GCC sabit null dereference'ı SİLER — çökme kobayı çökmez
+`volatile int *p = nullptr; *p = 42;` -O3'te çökmeden döndü (çıkış kodu 4). Derleyici sabit
+null dereference'ı UB sayıp yazmayı kaldırdı; `volatile` pointee'yi korumadı. Crash reporter
+testi "rapor yok" diye düştü ve ilk teşhis işleyiciye gitti — suçlu kobaydı.
+**Kural:** çökme kobayı adresi derleyicinin **göremediği** yerden okur (`volatile` global).
+Yan bulgu: fiber içindeki çökme testinde `js.shutdown()` çağrılmayınca çıkışta worker'lar
+serbest bırakılmış arenaya dokunup **başka** bir SIGSEGV üretti; rapor "çıkışta `_dl_fini`"
+gösterdi — testin kendi kurulumu ikinci bir çökme üretmişti ([[#7a. Kendi testin yanlışsa, güvenle yanlış sonuç yayınlarsın]]).
+

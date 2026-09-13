@@ -139,6 +139,17 @@ sessiz boş işlem olan bir menü üretirdi. → [[Scene3D]] · [[Editor]]
 Varsayılan KAPALI: sabit pencere çoğu oyunun istediği şey (arcade mantıksal
 bir çözünürlük varsayıyor). scene3d açıyor. → [[Tame]] · [[Editor]]
 
+## Yeni motor çekirdeği: plan kabul, sıra düzeltildi, L0/L1 C++ (2026-09-14)
+Hedef "gelişmiş mekanikli, Godot kadar hızlı, Unity kadar çok cihaza ulaşan mobil oyun".
+raylib/GLES2 hattı bu hedefe **eklenerek** varmaz (fizik, animasyon, UI, platform servisi
+yok; anlık-kip API); ayrı bir çekirdek `engine/` başladı, arcade/TameEngine dondurulup
+gönderilmeye devam eder. Dışarıdan gelen plan ([PLAN.md](../engine/PLAN.md)) yargılandı:
+aksiyomlar ve katman modeli doğru; **yanlışlar düzeltildi** (vis buffer önceliği, hacim
+başına LOD bake, streaming↔VT çelişkisi, Nanite yoğunluk hedefi, faz sırası, Tulpar'ı hazır
+sayma). **Dil:** L0/L1 C++17, çünkü Tulpar bugün kutusuz struct/işaretçi/atomik vermiyor;
+alt küme gelince L1 taşınır, L2+ dili o zaman kararlaştırılır — "üstü C++ kalır" varsayılan
+değil. Web hedef değil; masaüstü ürün değil, geliştirme platformu. Ayrıntı: [[Engine]].
+
 ## Sunset (geri getirme)
 Tree-walk interpreter (`src/interpreter/`) + x64 JIT (`src/jit/`) — 2026-05-05 kaldırıldı.
 
