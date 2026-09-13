@@ -200,9 +200,15 @@ if [ "$ACTION" = "suites" ]; then
     # build'de burada kosar. Ikili yoksa bu bir build sapmasidir, atlama
     # degil: kirmizi. Zaman olcumleri [profiler]/[bilgi] satirlariyla BILGI
     # olarak basilir, karar vermez (Tuzaklar 1l/1p).
-    ENGINE_TESTS="$BUILD_DIR/engine/engine_tests"
+    # CI `build/` icinde derliyor (workflow: mkdir build; cmake ..), yerel
+    # build.sh ise build-<platform>/; ikisine de bak. Bulunamazsa KIRMIZI.
+    ENGINE_TESTS=""
+    for d in "$BUILD_DIR" build build-linux build-macos; do
+        if [ -x "$d/engine/engine_tests" ]; then ENGINE_TESTS="$d/engine/engine_tests"; break; fi
+    done
     SUITE_N=$((SUITE_N + 1))
-    if [ ! -x "$ENGINE_TESTS" ]; then
+    if [ -z "$ENGINE_TESTS" ]; then
+        ENGINE_TESTS="$BUILD_DIR/engine/engine_tests"
         printf "%-42s ${RED}FAIL${NC} (ikili yok: %s — engine hedefi derlenmedi mi?)\n" "engine_tests" "$ENGINE_TESTS"
         SUITE_FAILED=1
     else

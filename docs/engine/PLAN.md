@@ -414,7 +414,7 @@ Bu tablo motorun **neden hem daha hızlı hem daha küçük** olduğunun tamamı
 - Katman kuralı mekanik: `engine/tools/layer_check.py`, ihlal = build hatası
 - ⚠️ REV: "boş pencere" yerine **headless kare döngüsü** — pencere Vulkan yüzeyiyle Faz 1'de. Timestamp'li input da Faz 1'e (ALooper ve Android host orada kuruluyor)
 - ⚠️ REV: performans CI **masaüstü CI'da** (engine_tests her build'de, Linux x86_64 + macOS arm64 = iki mimaride fiber geçişi); **gerçek cihaz farm'ı Faz 1'de** (cihaz matrisi: `docs/engine/CIHAZ-MATRISI.md`)
-- İlk oyunun tanımı (tür, kamera, sanat yönü — tek cümle) `CIHAZ-MATRISI.md`'de: motorun ölçüsü bu
+- İlk oyunun tanımı ✅ `CIHAZ-MATRISI.md` §1: stilize düşük poligon, üçüncü şahıs yörünge kamera, arena/oda bölümleri, fizik tabanlı savaş; motorun ölçüsü bu
 - **Çıktı:** headless döngü, 240 karede 0 ayırma, profiler çalışıyor, iki mimaride yeşil
 - **Kapı:** karede ayırma sayısı = 0, doğrulanmış (pozitif kontrol: enjekte edilen tek ayırma yakalanıyor)
 

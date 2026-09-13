@@ -17,7 +17,7 @@
 | A2 kapısı: karede 0 ayırma | ✅ `AllocGate` (global new/delete sayacı, yürütülebilire açıkça eklenir) | `faz0_gate_zero_allocations_per_frame` (240 kare), pozitif kontrol `faz0_gate_catches_injected_allocation` |
 | Performans CI | ⚠️ **masaüstü**: `engine_tests` her build'de iki mimaride; zaman değerleri `[profiler]`/`[bilgi]` olarak bilgi, karar vermez. **Gerçek cihaz farm'ı Faz 1** | build.sh `suites` bloğu |
 | Boş pencere, timestamp'li input | ➡️ **Faz 1** (Vulkan yüzeyi + Android host; plan REV 11) | — |
-| İlk oyun tanımı, cihaz matrisi | ⚠️ belge yazıldı, **oyun tanımı stüdyo tarafından doldurulacak** | `CIHAZ-MATRISI.md` §1 |
+| İlk oyun tanımı, cihaz matrisi | ✅ belge yazıldı; oyun tanımı 2026-09-14 (stilize üçüncü şahıs arena aksiyon) | `CIHAZ-MATRISI.md` §1 |
 
 Toplam: 27 test, 27 geçiyor (yerel, 2026-09-14). ASan/UBSan: bellek, profiler, math ve container testleri temiz (fiber/job/crash ASan altında koşturulmuyor: yığın değişimi annotasyonsuz yanlış pozitif verir — Faz 1'de `__sanitizer_start_switch_fiber` ile).
 
