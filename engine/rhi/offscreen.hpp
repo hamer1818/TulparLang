@@ -35,7 +35,8 @@ struct OffscreenResult {
   bool ok = false;
   char error[512] = {0};
   uint8_t *pixels = nullptr; // RGBA8, arenadan, width*height*4
-  uint64_t gpu_ns = 0;       // render pass suresi (zaman damgasi), 0 = yok
+  uint64_t gpu_ns = 0;       // render pass suresi (zaman damgasi); 0 olabilir (MoltenVK iki damgayi ayni verir)
+  bool timestamps_valid = false; // sorgu basariyla okundu (deger 0 olsa da)
   // Subpass birlesme geri bildirimi (VK_EXT_subpass_merge_feedback):
   bool merge_feedback_available = false;
   uint32_t post_merge_subpass_count = 0; // 1 = iki subpass birlesti

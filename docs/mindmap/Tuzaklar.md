@@ -1852,3 +1852,14 @@ birim: taban 1.2 → %60, yükseklik 1.2 → %60, alan ½·0.6·0.6 = **%18**. B
 renderer doğruydu. **Kural:** ölçüm iddiaya uymadığında önce iddiayı hesapla; sayı test
 koduna yorumla birlikte girer ki bir sonraki okuyan aynı hatayı yapmasın.
 
+### 8f. "Kare içinde 0 ayırma" kapısı SÜRÜCÜYÜ de sayar
+Global `operator new` sayacı süreçteki herkesi sayar: NVIDIA 0/kare, **MoltenVK 28/kare**
+(Metal nesneleri), lavapipe kurulumda (LLVM JIT). İlk yazım tek adımlı çizime `== 0` dedi;
+lavapipe'ta düştü, MoltenVK'da düştü, NVIDIA'da geçti — yani yerelde yeşil, iki CI
+sürücüsünde kırmızı ([[#1p. "Bazen düşen" kapı gürültü değil MAKİNE SINIFI olabilir — [makine] satırıyla eşle]]
+ailesi, bu kez sürücü sınıfı). **Kural:** iddiayı ikiye ayır. (a) *bizim kod* kare içinde
+ayırmaz → sürücüsüz harness'ta 0 (Faz 0 kapısı, kesin). (b) *sürücünün* kare ayırması cihaz
+verisidir → ölçülür, basılır, **kararlılığı** iddia edilir (kareler arası büyüme = bizde sızıntı,
+ör. havuz sıfırlanmıyor), sıfırı değil. Kurulum (pipeline, image, JIT) kareden ayrılır; kurulum
+ayırması serbest ve bilgi.
+

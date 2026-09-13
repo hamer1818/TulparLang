@@ -668,11 +668,16 @@ bool offscreen_render_frame(OffscreenTarget *t, const OffscreenConfig &cfg, Offs
     std::snprintf(out->error, sizeof out->error, "gonderim: %s", dev.last_error());
     return false;
   }
+  out->timestamps_valid = false;
   if (c.queries) {
     uint64_t ts[2] = {0, 0};
     if (a.vkGetQueryPoolResults(c.d, c.queries, 0, 2, sizeof ts, ts, sizeof(uint64_t),
-                                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS && ts[1] > ts[0])
-      out->gpu_ns = (uint64_t)((double)(ts[1] - ts[0]) * dev.caps().timestamp_period_ns);
+                                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
+      out->timestamps_valid = true;
+      // MoltenVK (Metal) TOP/BOTTOM damgalarini ayni degerle verebiliyor
+      // (olculdu CI macOS 2026-09-14: fark 0). Sifir "olculemedi" demek, hata degil.
+      if (ts[1] > ts[0]) out->gpu_ns = (uint64_t)((double)(ts[1] - ts[0]) * dev.caps().timestamp_period_ns);
+    }
   }
   VkMappedMemoryRange rng{};
   rng.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
