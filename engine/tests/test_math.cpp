@@ -45,7 +45,15 @@ ENGINE_TEST(math_quat) {
   Quat qq = q * q; // 180 derece
   CHECK(nearly_equal(rotate(qq, {1, 0, 0}), {-1, 0, 0}));
   CHECK(nearly_equal(rotate(q * conjugate(q), {1, 2, 3}), {1, 2, 3}));
-  Quat h = slerp(Quat::identity(), qq, 0.5f); // yarisi = 90 derece
-  CHECK(nearly_equal(rotate(h, {1, 0, 0}), {0, 1, 0}, 1e-4f));
+  // slerp: 45 derece = 90'in yarisi. ⚠ 180 dereceyle (qq) SINANMAZ: 180'in
+  // iki esit-kisa yolu var ve hangisinin secilecegine dot(a,b)'nin ISARETI
+  // karar verir; dot = c*c - s*s ve sin(pi/4) ile cos(pi/4) float'ta libm'e
+  // gore son ulp'ta farkli olabiliyor. Olculdu 2026-09-14: x86_64 glibc'de
+  // dot = 0 (yol A), macOS arm64'te dot < 0 (yol B) ve test dustu. Hata
+  // slerp'te degil, belirsiz girdiyi sinayan testte.
+  Quat h = slerp(Quat::identity(), q, 0.5f);
+  CHECK(nearly_equal(rotate(h, {1, 0, 0}), {0.70710678f, 0.70710678f, 0}, 1e-4f));
+  Quat h1 = slerp(Quat::identity(), q, 1.0f);
+  CHECK(nearly_equal(rotate(h1, {1, 0, 0}), {0, 1, 0}, 1e-4f));
   CHECK(nearly_equal(length(normalize(Quat{1, 2, 3, 4})), 1.0f));
 }

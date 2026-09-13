@@ -40,6 +40,7 @@ Kare döngüsü harness'i: 64 iş/kare (LCG), profiler bölgeleri, frame arena r
 2. **`new`/`delete` çifti elenebiliyor** (C++14 allocation elision, GCC -O2+). Ayırma sayan testte pointer kaçmazsa sayaç artmaz ve kapı **yanlış geçer**. `test::escape()` engeli.
 3. **GCC sabit null dereference'ı siliyor.** `volatile int *p = nullptr; *p = 42;` çökmeden döndü. Çökme kobayı adresi derleyicinin göremediği global'den okur.
 4. **100 karede tek hitch p99'a girmez** (indeks 98). p99 "yüzde birlik kuyruk"tur; `max` ile birlikte okunur, ikisi de basılıyor.
+6. **180° slerp testi libm'e göre iki yoldan birini seçiyor.** `dot = c²−s²`; `sin(π/4)` ve `cos(π/4)` float'ta son ulp'ta farklı olabiliyor: x86_64 glibc'de 0, macOS arm64'te negatif → `b = −b` → ters yönde 90°. Hata slerp'te değil, belirsiz girdiyi (antipodal) sınayan testte; test 90°/45°'ye alındı. macOS arm64 CI'ı bulmasaydı yerelde hiç görünmezdi.
 5. **Fiber TLS önbelleği.** Fiber başka thread'de devam edince `thread_local` adresi bayatlar; getter `noinline` (`JobSystem::tls()`), her geçişten sonra yeniden okunur. Göç sayısı istatistikte görünür (9811/10240).
 
 ## Faz 1'e devreden
