@@ -85,6 +85,7 @@ struct VkApi {
   PFN_vkCmdDraw vkCmdDraw = nullptr;
   PFN_vkCmdPipelineBarrier vkCmdPipelineBarrier = nullptr;
   PFN_vkCmdCopyImageToBuffer vkCmdCopyImageToBuffer = nullptr;
+  PFN_vkCmdExecuteCommands vkCmdExecuteCommands = nullptr;
 };
 
 // libvulkan'i dlopen edip global + vkGetInstanceProcAddr'i yukler.

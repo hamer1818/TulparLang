@@ -323,6 +323,39 @@ bool load_cache_file(Ctx &c, Arena &arena, const char *path, void **data, size_t
   *size = (size_t)n;
   return true;
 }
+// Paralel kayit job'u: bir yatay bant icin ikincil tampon.
+struct BandJob {
+  Ctx *c;
+  const OffscreenConfig *cfg;
+  uint32_t band, bands;
+  VkCommandBuffer out;
+};
+void record_band(void *p) {
+  BandJob *b = static_cast<BandJob *>(p);
+  VkApi &a = *b->c->api;
+  VkCommandBuffer sc = b->cfg->pools->acquire_secondary();
+  b->out = sc;
+  if (!sc) return; // kapasite: cagiran sayar
+  VkCommandBufferInheritanceInfo inh{};
+  inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+  inh.renderPass = b->c->rp;
+  inh.subpass = 1;
+  inh.framebuffer = b->c->fb;
+  VkCommandBufferBeginInfo bi{};
+  bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT | VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+  bi.pInheritanceInfo = &inh;
+  a.vkBeginCommandBuffer(sc, &bi);
+  const uint32_t w = b->cfg->width, h = b->cfg->height;
+  uint32_t y0 = h * b->band / b->bands, y1 = h * (b->band + 1) / b->bands;
+  VkViewport vpt{0, 0, (float)w, (float)h, 0.0f, 1.0f};
+  VkRect2D sc_rect{{0, (int32_t)y0}, {w, y1 - y0}};
+  a.vkCmdSetViewport(sc, 0, 1, &vpt);
+  a.vkCmdSetScissor(sc, 0, 1, &sc_rect);
+  a.vkCmdBindPipeline(sc, VK_PIPELINE_BIND_POINT_GRAPHICS, b->c->pipe_color);
+  a.vkCmdDraw(sc, 3, 1, 0, 0);
+  a.vkEndCommandBuffer(sc);
+}
 } // namespace
 
 bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig &cfg,
@@ -437,11 +470,35 @@ bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig 
     a.vkCmdSetScissor(cb, 0, 1, &sc);
     a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipe_depth);
     a.vkCmdDraw(cb, 3, 1, 0, 0);
-    a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
-    a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipe_color);
-    a.vkCmdSetViewport(cb, 0, 1, &vpt);
-    a.vkCmdSetScissor(cb, 0, 1, &sc);
-    a.vkCmdDraw(cb, 3, 1, 0, 0);
+    bool parallel = cfg.parallel_jobs > 0 && cfg.jobs && cfg.pools;
+    if (!parallel) {
+      a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+      a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipe_color);
+      a.vkCmdSetViewport(cb, 0, 1, &vpt);
+      a.vkCmdSetScissor(cb, 0, 1, &sc);
+      a.vkCmdDraw(cb, 3, 1, 0, 0);
+    } else {
+      // Renk subpass'i: N job, her biri kendi thread havuzundan ikincil tampon.
+      uint32_t n = cfg.parallel_jobs > 64 ? 64 : cfg.parallel_jobs;
+      BandJob bands[64];
+      JobDecl decls[64];
+      VkCommandBuffer secs[64];
+      cfg.pools->begin_frame();
+      for (uint32_t i = 0; i < n; i++) {
+        bands[i] = BandJob{&c, &cfg, i, n, VK_NULL_HANDLE};
+        decls[i] = JobDecl{record_band, &bands[i], "record_band"};
+      }
+      Counter done;
+      cfg.jobs->run(decls, n, &done);
+      cfg.jobs->wait(done);
+      uint32_t got = 0;
+      for (uint32_t i = 0; i < n; i++) if (bands[i].out) secs[got++] = bands[i].out;
+      if (got != n) { c.fail("ikincil tampon kapasitesi yetmedi", VK_ERROR_OUT_OF_HOST_MEMORY); break; }
+      out->secondaries_recorded = got;
+      for (uint32_t t = 0; t < cfg.pools->thread_count(); t++) if (cfg.pools->used_in_slot(t)) out->recording_threads++;
+      a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+      a.vkCmdExecuteCommands(cb, got, secs);
+    }
     a.vkCmdEndRenderPass(cb);
     if (c.queries) a.vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, c.queries, 1);
     VkBufferImageCopy region{};

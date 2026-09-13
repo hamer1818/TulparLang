@@ -55,6 +55,7 @@ add_dependencies(engine_core engine_layer_check)
 add_library(engine_rhi STATIC
     rhi/vk_api.cpp
     rhi/device.cpp
+    rhi/command_pools.cpp
     rhi/offscreen.cpp
 )
 target_include_directories(engine_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)

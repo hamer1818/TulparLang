@@ -71,7 +71,7 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
   G(vkCmdResetQueryPool); G(vkCmdWriteTimestamp);
   G(vkCmdBeginRenderPass); G(vkCmdNextSubpass); G(vkCmdEndRenderPass);
   G(vkCmdBindPipeline); G(vkCmdSetViewport); G(vkCmdSetScissor); G(vkCmdDraw);
-  G(vkCmdPipelineBarrier); G(vkCmdCopyImageToBuffer);
+  G(vkCmdPipelineBarrier); G(vkCmdCopyImageToBuffer); G(vkCmdExecuteCommands);
 #undef G
 }
 

@@ -22,5 +22,8 @@ ve düzeltildi.
 ## Faz 0'da öğrenilenler → [[Tuzaklar]] 8a–8c
 Fiber havuzu tükenince kilitlenme (satır içi yürütme ile çözüldü); `new/delete` elision'ı ayırma kapısını yanlış geçirir; GCC sabit null dereference'ı siler; 100 karede tek hitch p99'a girmez, max'la okunur; fiber'da TLS adresi bayatlar (noinline getter).
 
-## Sıradaki: Faz 1
-Vulkan RHI + ilk üçgen (masaüstü Vulkan'da geliştirme), Kotlin host + JNI, pencere + timestamp'li input, üç gerçek cihaz (Mali, Adreno, düşük segment), `VK_EXT_subpass_merge_feedback` kapısı. Önce `CIHAZ-MATRISI.md` §1 (oyun tanımı) dolmalı.
+## Faz 1 (başladı 2026-09-14) → [FAZ1.md](../engine/FAZ1.md)
+`engine/rhi/` L2: `VkApi` (libvulkan **dlopen**, link bağımlılığı yok; başlıklar `engine/third_party/vulkan` vendored v1.4.351), `Device` (cihaz seçimi + yetenek raporu, blok bellek ayırıcı), offscreen ilk piksel (depth prepass → renk subpass, transient depth, piksel kapısı, GPU zaman damgası, PSO cache dosyası, subpass merge feedback zinciri). Pencere **açılmaz**; masaüstü offscreen, gerçek yüzey Android host'ta. CI: Linux lavapipe, macOS MoltenVK; loader yoksa `atlandi` sayacı görünür. Kotlin host + JNI iskeleti (`android/host/`, `engine/platform/android/`) derlenmedi: SDK yok.
+İlk oyun tanımı verildi (`CIHAZ-MATRISI.md` §1). **Tek bloke:** üç gerçek cihaz + NDK — Faz 1 kapısı ("G-buffer DRAM'e inmedi", merge feedback) cihazda ölçülür.
+Shader: GLSL → glslc → depoya giren C dizileri (`engine/tools/compile_shaders.py`); Slang Faz 8.
+Faz 1 tuzakları: [[Tuzaklar]] 8d (antipodal slerp, ikinci mimari), 8e (NDC kapsama hesabı).

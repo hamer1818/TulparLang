@@ -145,3 +145,39 @@ ENGINE_TEST(rhi_first_pixel_offscreen_triangle) {
   // temizlik (ppm bilgi icin kalir; cache silinir)
   unlink(cache_path);
 }
+
+// Paralel komut kaydi: renk subpass'i 8 job'a bolunur (yatay bantlar), her
+// job kendi thread havuzundan ikincil tampon kaydeder; sonuc tek thread'li
+// cizimle BAYT BAYT ayni olmali.
+ENGINE_TEST(rhi_parallel_command_recording_matches_inline) {
+  if (!loader()) { test::skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  Device dev;
+  if (!open_device(sys, dev)) { test::skip("Vulkan cihazi yok"); return; }
+  JobSystem js;
+  CHECK(js.init(sys, JobSystemConfig{}));
+  CommandPools pools;
+  CHECK(pools.init(dev, sys, js.worker_count() + 1, 16));
+  OffscreenConfig cfg;
+  cfg.width = 96;
+  cfg.height = 96;
+  OffscreenResult inline_r, par_r;
+  CHECK(render_triangle_offscreen(dev, sys, cfg, &inline_r));
+  cfg.jobs = &js;
+  cfg.pools = &pools;
+  cfg.parallel_jobs = 8;
+  bool ok = render_triangle_offscreen(dev, sys, cfg, &par_r);
+  if (!ok) std::printf("    hata: %s\n", par_r.error);
+  CHECK(ok);
+  if (ok && inline_r.ok) {
+    CHECK(par_r.secondaries_recorded == 8);
+    CHECK(std::memcmp(inline_r.pixels, par_r.pixels, (size_t)cfg.width * cfg.height * 4) == 0);
+    std::printf("    [bilgi] 8 ikincil tampon, %u farkli thread yuvasi (worker=%u); GPU %.3f ms\n",
+                par_r.recording_threads, js.worker_count(), par_r.gpu_ns / 1e6);
+    CHECK(par_r.recording_threads >= 1);
+  }
+  pools.shutdown();
+  js.shutdown();
+  dev.shutdown();
+}
+

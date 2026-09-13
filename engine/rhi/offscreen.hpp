@@ -7,7 +7,9 @@
 #pragma once
 #include <cstdint>
 
+#include "core/jobs/job_system.hpp"
 #include "core/memory/arena.hpp"
+#include "rhi/command_pools.hpp"
 #include "rhi/device.hpp"
 
 namespace tulpar::engine::rhi {
@@ -17,6 +19,12 @@ struct OffscreenConfig {
   uint32_t height = 256;
   uint8_t clear[4] = {10, 20, 30, 255};
   const char *pso_cache_path = nullptr; // varsa yukle, sonunda yaz
+  // Paralel kayit: renk subpass'i `parallel_jobs` job'a bolunur, her job
+  // kendi thread'inin havuzundan ikincil tampon kaydeder (yatay bant), ana
+  // thread vkCmdExecuteCommands ile calistirir. 0 = satir ici (tek thread).
+  JobSystem *jobs = nullptr;
+  CommandPools *pools = nullptr;
+  uint32_t parallel_jobs = 0;
 };
 
 struct OffscreenResult {
@@ -32,6 +40,8 @@ struct OffscreenResult {
   bool pso_cache_loaded = false; // dosya vardi ve baslik cihazla eslesti
   uint64_t pso_cache_bytes = 0;  // yazilan
   uint32_t memory_allocations = 0; // vkAllocateMemory sayisi (cihaz toplam)
+  uint32_t secondaries_recorded = 0; // paralel kayitta kullanilan ikincil tampon
+  uint32_t recording_threads = 0;    // kac farkli thread yuvasi kayit yapti
 };
 
 bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig &cfg,
