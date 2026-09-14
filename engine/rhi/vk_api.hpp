@@ -23,12 +23,19 @@ struct VkApi {
   PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2 = nullptr;
   PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties = nullptr;
   PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties = nullptr;
+  PFN_vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties = nullptr;
   PFN_vkEnumerateDeviceExtensionProperties vkEnumerateDeviceExtensionProperties = nullptr;
   PFN_vkCreateDevice vkCreateDevice = nullptr;
   PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr = nullptr;
   PFN_vkEnumerateInstanceLayerProperties vkEnumerateInstanceLayerProperties = nullptr;
   PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT = nullptr;   // dogrulama katmani varsa
   PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT = nullptr;
+  // yuzey (VK_KHR_surface; pencere varsa)
+  PFN_vkDestroySurfaceKHR vkDestroySurfaceKHR = nullptr;
+  PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR = nullptr;
+  PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR = nullptr;
+  PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR = nullptr;
+  PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR = nullptr;
   // device
   PFN_vkDestroyDevice vkDestroyDevice = nullptr;
   PFN_vkGetDeviceQueue vkGetDeviceQueue = nullptr;
@@ -58,6 +65,11 @@ struct VkApi {
   PFN_vkDestroyImage vkDestroyImage = nullptr;
   PFN_vkGetImageMemoryRequirements vkGetImageMemoryRequirements = nullptr;
   PFN_vkBindImageMemory vkBindImageMemory = nullptr;
+  PFN_vkCmdBlitImage vkCmdBlitImage = nullptr;
+  PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage = nullptr;
+  PFN_vkCreateSampler vkCreateSampler = nullptr;
+  PFN_vkDestroySampler vkDestroySampler = nullptr;
+  PFN_vkCmdSetDepthBias vkCmdSetDepthBias = nullptr;
   PFN_vkCreateImageView vkCreateImageView = nullptr;
   PFN_vkDestroyImageView vkDestroyImageView = nullptr;
   PFN_vkCreateRenderPass2 vkCreateRenderPass2 = nullptr;
@@ -89,6 +101,29 @@ struct VkApi {
   PFN_vkCmdPipelineBarrier vkCmdPipelineBarrier = nullptr;
   PFN_vkCmdCopyImageToBuffer vkCmdCopyImageToBuffer = nullptr;
   PFN_vkCmdExecuteCommands vkCmdExecuteCommands = nullptr;
+  // swapchain + senkron + cizim
+  PFN_vkCreateSwapchainKHR vkCreateSwapchainKHR = nullptr;
+  PFN_vkDestroySwapchainKHR vkDestroySwapchainKHR = nullptr;
+  PFN_vkGetSwapchainImagesKHR vkGetSwapchainImagesKHR = nullptr;
+  PFN_vkAcquireNextImageKHR vkAcquireNextImageKHR = nullptr;
+  PFN_vkQueuePresentKHR vkQueuePresentKHR = nullptr;
+  PFN_vkCreateSemaphore vkCreateSemaphore = nullptr;
+  PFN_vkDestroySemaphore vkDestroySemaphore = nullptr;
+  PFN_vkResetCommandBuffer vkResetCommandBuffer = nullptr;
+  PFN_vkFreeCommandBuffers vkFreeCommandBuffers = nullptr;
+  PFN_vkCmdBindVertexBuffers vkCmdBindVertexBuffers = nullptr;
+  PFN_vkCmdBindIndexBuffer vkCmdBindIndexBuffer = nullptr;
+  PFN_vkCmdDrawIndexed vkCmdDrawIndexed = nullptr;
+  PFN_vkCmdPushConstants vkCmdPushConstants = nullptr;
+  PFN_vkCmdCopyBuffer vkCmdCopyBuffer = nullptr;
+  PFN_vkFlushMappedMemoryRanges vkFlushMappedMemoryRanges = nullptr;
+  PFN_vkCreateDescriptorSetLayout vkCreateDescriptorSetLayout = nullptr;
+  PFN_vkDestroyDescriptorSetLayout vkDestroyDescriptorSetLayout = nullptr;
+  PFN_vkCreateDescriptorPool vkCreateDescriptorPool = nullptr;
+  PFN_vkDestroyDescriptorPool vkDestroyDescriptorPool = nullptr;
+  PFN_vkAllocateDescriptorSets vkAllocateDescriptorSets = nullptr;
+  PFN_vkUpdateDescriptorSets vkUpdateDescriptorSets = nullptr;
+  PFN_vkCmdBindDescriptorSets vkCmdBindDescriptorSets = nullptr;
 };
 
 // libvulkan'i dlopen edip global + vkGetInstanceProcAddr'i yukler.

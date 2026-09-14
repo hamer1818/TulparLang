@@ -12,7 +12,7 @@
 > 5. Faz sırası değişti: simülasyon, UI ve platform servisleri öne; Tulpar shader stage, cluster geometri ve iOS sona; **ilk oyunun dikey dilimi** ayrı faz. "Oyun tasarımı Faz 5'te dondurulur" kalktı: ilk oyun Faz 0'da tanımlanır.
 > 6. Tulpar'ın derleyici önkoşulları (kutusuz struct, işaretçi, ayırmasız fonksiyon, reflection) **hazır sayılmıyor** → yeni §11.
 > 7. L1 job sistemi: little core pinleme kalktı (EK A.4 ile çelişiyordu); fiber havuzu tükenince satır içi yürütme.
-> 8. Jolt determinizmi aynı mimari + aynı ikili ile sınırlı; rollback için not.
+> 8. Jolt determinizmi: ⚠️ REV-2 (2026-09-14) **CI ile doğrulandı** — `JPH_CROSS_PLATFORM_DETERMINISTIC` + `-ffp-contract=off` + libm'siz girdiyle x86_64 (SSE4.2) ve arm64 (NEON) **bit eşit** (altın özet `5dc41c2bddc345cb` iki platformda). İlk REV "aynı mimari ile sınırlı" diyordu; o ihtiyat iki hatamızı ölçüyordu (libm'li girdi, FMA birleştirmesi), Jolt'u değil. Rollback netcode x86/arm karışık lobide mümkün; şartlar §11'in altında "Determinizm sözleşmesi".
 > 9. Web hedefi yok (karar 2026-09-13); masaüstü ürün değil, geliştirme platformu.
 > 10. **Her AL bir hipotezdir** — cihaz matrisinde ölçülene kadar (§1 kuralı).
 > 11. Faz 0 çıktısı "boş pencere" değil headless kare döngüsü; pencere ve timestamp'li input Faz 1 (Vulkan yüzeyi + Android host).
@@ -73,7 +73,7 @@ Sektörde "devrimsel" sayılan her şey ve bizim kararımız.
 | **Cascaded shadow maps** | Standart | Baseline gölge | **AL** | VSM'e kadar köprü, sonra fallback olarak kalır |
 | **Variable Rate Shading** | `VK_KHR_fragment_shading_rate` | Fillrate | **AL** | ⚠️ **Değişti.** Vulkan Roadmap 2026 VRS'i zorunlu kıldı — artık opsiyonel bir ekstra değil, baseline |
 | **fp16 (mediump) default precision** | Mobil altın kural | ALU throughput 2x | **AL — zorunlu** | Compiler value-range analiziyle **otomatik** yapar, elle `half` yazılmaz (A6) |
-| **Bindless / descriptor indexing** | Modern standart | Descriptor bind maliyeti | **AL** | `descriptorIndexing` Vulkan 1.2, Android'de yaygın. Baseline şartımız |
+| **Bindless / descriptor indexing** | Modern standart | Descriptor bind maliyeti | **AL, ama baseline DEĞİL** ⚠️ REV-3 | `descriptorIndexing` Vulkan 1.2. "Android'de yaygın" ölçülmedi ve ilk gerçek cihazda (Mali-G72, Vulkan 1.1) **yok**. Bindless yolu olur, klasik descriptor set yedeği **şart** |
 | **Neural texture compression** | NVIDIA 2023+ | Texture bellek | **ATLA** | Mobil NPU/GPU entegrasyonu olgun değil |
 | **Gaussian splatting** | SIGGRAPH 2023 | Fotogerçekçi capture | **ATLA** | Bizim içerik pipeline'ımıza uymuyor |
 
@@ -116,7 +116,7 @@ Sektörde "devrimsel" sayılan her şey ve bizim kararımız.
 
 | Teknoloji | Kaynak | Ne çözüyor | Karar | Not |
 |---|---|---|---|---|
-| **Jolt-style physics** | Horizon FW (Rouwe) | Fizik | **ADAPTE / entegre et** | Kendi fiziğini yazma. Jolt zaten SoA + job-friendly + deterministik. Bizim job system'imize bağla. ⚠️ REV: determinizm **aynı mimari + aynı ikili + aynı FP bayrakları** içinde geçerli; arm64 cihaz ↔ x86_64 emülatör ↔ iOS arasında garanti YOK. Rollback netcode aynı-mimari eşleşme ya da sabit noktalı sim ister |
+| **Jolt-style physics** | Horizon FW (Rouwe) | Fizik | **ADAPTE / entegre et** | Kendi fiziğini yazma. Jolt zaten SoA + job-friendly + deterministik. Bizim job system'imize bağla. ⚠️ REV-2: determinizm **platformlar arası** (x86_64 ↔ arm64) CI'da bit eşit doğrulandı — şartlar: `JPH_CROSS_PLATFORM_DETERMINISTIC`, `-ffp-contract=off`, aynı define'lar, girdide libm yok (Determinizm sözleşmesi, §11 altı). Bu şartlar dışında garanti yok |
 | **Motion matching** | Ubisoft For Honor (Clavet, GDC 2016) | Animasyon kalitesi | **ERTELE** | Bellek maliyeti yüksek. Faz 3, oyun türü gerektirirse |
 | **Animation compression (ACL sınıfı)** | Nicholas Frechette | Anim bellek | **AL** | Bellek bütçesinde ciddi kalem |
 | **GPU particle simulation** | Standart | Particle CPU maliyeti | **AL** | Compute + indirect draw |
@@ -212,7 +212,8 @@ Kural: **peak kullanım build'de hesaplanır**, boot'ta o kadar reserve edilir. 
   - ⚠️ Versiyon numarası seçme — Google'ın yayınladığı profili kullan. AVP üç kademe sunuyor ve her birinin gerçek cihaz kapsama yüzdesi Android Distribution Dashboard'da yayınlanıyor. Tahmin yerine veri
   - Android 13+ cihazlar Vulkan 1.3, Android 16+ cihazlar Vulkan 1.4 desteklemek **zorunda**. 2027 hedefi için 1.3 savunulabilir bir taban
 - GLES backend **yok** (karar kilitli — ve artık Google da aynı yönde: Vulkan resmi API oldu, GLES aktif geliştirme dışı, ANGLE üzerinden sunuluyor)
-- Zorunlu feature'lar: `descriptorIndexing`, `subpass` (veya `framebuffer_fetch`), `timelineSemaphore`, `drawIndirect`, `bufferDeviceAddress`
+- ⚠️ REV-3 (cihaz verisi, 2026-09-14): "Zorunlu feature" listesi **hipotezmiş**. Huawei P20 Pro (Kirin 970, Mali-G72, Vulkan **1.1**, 2018 sürücüsü) `descriptorIndexing`, `timelineSemaphore`, `bufferDeviceAddress`'in **üçünü de** vermiyor. Bunlar Vulkan 1.2 çekirdeği; 1.1 cihazda uzantı biçimleri de yok. Karar: bu üçü **zorunlu değil, raporlanır** (`DeviceCaps::missing_mandatory`, `DeviceConfig::require_mandatory` varsayılan **false**) ve her biri için eksik yol yedeği olur. Gerçekten zorunlu kalanlar: Vulkan 1.1, `subpass` (veya `framebuffer_fetch`), `drawIndirect`. Kapsama hedefi (≥ %85 aktif cihaz) 1.2 şartıyla tutmaz.
+- Eski liste (hipotez olarak kalsın): `descriptorIndexing`, `subpass`, `timelineSemaphore`, `drawIndirect`, `bufferDeviceAddress`
 - ⚠️ **Descriptor sistemini fazla soyutlama.** `VK_EXT_descriptor_heap` Vulkan'ın descriptor sistemini komple değiştiriyor (descriptor'lar buffer memory'de). Bugünün descriptor set modelinin üstüne kalın bir soyutlama yazmak, bir yıl içinde çöpe atacağın kod demek. İnce tut
 - Command buffer'lar **paralel kaydedilir** (thread başına pool)
 - Memory: kendi sub-allocator'ımız. `vkAllocateMemory` çağrı sayısı sabit ve az
@@ -430,7 +431,7 @@ Bu tablo motorun **neden hem daha hızlı hem daha küçük** olduğunun tamamı
 - **Çıktı:** ekranda üçgen, GPU timing okunuyor, cihazda koşuyor
 - **Kapı:** subpass ile G-buffer'ın DRAM'e inmediği GPU counter'la kanıtlanmış, 3 cihazda
 
-### Faz 2 — Simülasyon (eski Faz 5)
+### Faz 2 — Simülasyon (eski Faz 5) ✅ yazılım tarafı kapandı 2026-09-14 (durum: `docs/engine/FAZ2.md`; GPU particle/skinning Faz 3'e)
 - ECS: archetype/SoA. ⚠️ REV: "layout'u compiler üretir" §11 önkoşuluna bağlı; o gelene kadar C++ SoA, aynı API
 - Jolt entegrasyonu, deterministik fixed-step (**strict FP**, fast-math yalnız render/VFX)
 - Animasyon: ACL sınıfı sıkıştırma, GPU skinning, job'lı pose evaluation
@@ -440,7 +441,7 @@ Bu tablo motorun **neden hem daha hızlı hem daha küçük** olduğunun tamamı
 - **Çıktı:** fizikli, animasyonlu, gezinen test sahnesi (Faz 1 renderer'ıyla kutu/kapsül çizimi yeter)
 - **Kapı:** replay determinizmi doğrulanmış (aynı mimaride bit eşit)
 
-### Faz 3 — Renderer Çekirdeği
+### Faz 3 — Renderer Çekirdeği (ilk dilim başladı 2026-09-14: pencere + swapchain + forward Lambert + `engine_demo`; durum: `docs/engine/FAZ3.md`)
 - ⚠️ REV: **depth prepass + clustered forward+ (subpass içinde)** varsayılan; **visibility buffer A/B ölçümü** (bant genişliği + kare süresi, 3 cihaz). Kazanırsa geçilir, kaybederse §1.2 kararı kapanır
 - Stochastic tile-based lighting düşük segment yolu (HypeHype), ışık seçiminde temporal stabilizasyon
 - CSM gölge, PBR, **VRS baseline** (Mali'de FDM yoluyla değerlendir)
@@ -561,6 +562,8 @@ Plan, Tulpar'dan aşağıdakileri bekliyor. **Hiçbiri bugün derleyicide yok.**
 | GPU stage (ortak tip sistemi) | Faz 8 | Yok | Faz 8 |
 
 **Dil kararı (kayıt):** L0 (platform) ve L1 (core) 2026-09-14'te **C++17** ile yazıldı, çünkü Tulpar bugün bunları yazamıyor. Bu bir tercih değil zorunluluktu ve kayda geçti. Alt küme geldiğinde L1 Tulpar'a taşınır (küçük: ~2 bin satır; bugünkü testler davranış sözleşmesi olarak kalır ve taşımayı doğrular). L2 ve üstünün dili o noktada karar verilir; "L0'ın üstü C++'ta kalır" **varsayılan değildir**. Alt küme, planın L5 / ECS / GPU stage isteklerinin de önkoşulu olduğu için her hâlükârda yapılacak iş; tek soru zamanlama. Emsal: Jai (EK G.2), Zig, Odin.
+
+**Determinizm sözleşmesi (⚠️ REV-2, 2026-09-14, CI ile doğrulandı):** simülasyon x86_64 ve arm64'te bit eşit — şartlar: (1) Jolt `JPH_CROSS_PLATFORM_DETERMINISTIC`; (2) sim/fizik/test hedeflerinde `-ffp-contract=off` (AArch64 derleyicileri FMA'ya birleştirir, x86'da `-mfma` yoksa birleşmez); (3) fast-math yok (plan C.1.5); (4) sim girdisi libm'den geçmez (`sinf/cosf` → glibc ↔ Apple libm son ulp farkı) — açılar/dönüşler sabit bit ya da kendi deterministik fonksiyonumuz; (5) aynı Jolt sürümü ve define'ları. Nöbetçi: `physics_cross_platform_golden_hash` (altın özet x86_64'te üretilir, macOS arm64 CI karşılaştırır). Tuzaklar 8d, 8j.
 
 **Ne değişmez:** L5 gameplay Tulpar'dadır, aynı ikiliye linklenir, script sınırı yoktur. Bu, planın diğer motorlara karşı ölçülebilir tek dil avantajı (Unity P/Invoke 20–100 ns, GDScript Variant 100–500 ns, Tulpar doğrudan çağrı) ve her iki yolda korunur.
 

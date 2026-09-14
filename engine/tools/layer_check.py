@@ -4,7 +4,7 @@
 Kurallar:
   1. Bir katman yalniz ALTINDAKI katmanlari #include eder. Yukari cagri yok.
      platform=L0 core=L1 rhi=L2 renderer=L3 sim=L4 gameplay=L5 content=L6
-     tools=L7. tests/ her seyi gorebilir.
+     app=L6 (birlestirme koku) tools=L7. tests/ her seyi gorebilir.
   2. STL konteyneri / genel ayirici YOK (plan L1 "STL yok", A2): vector, map,
      string, memory (shared_ptr), functional... Testler DAHIL — kapi durust
      kalsin: test kodunda vector kullanmak "0 ayirma" iddiasini gizler.
@@ -16,8 +16,11 @@ import os
 import re
 import sys
 
-LAYERS = {"platform": 0, "core": 1, "rhi": 2, "renderer": 3, "sim": 4,
-          "gameplay": 5, "content": 6, "tools": 7, "tests": 99}
+# app = birlestirme koku (executable): content dahil her seyi gorur, tools'u
+# gormez. content (L6) icerik boru hattinin runtime yuzu; gameplay icerik
+# yuklemeye ihtiyac duyarsa runtime yukleyici asagi (L3.5) ayrilir.
+LAYERS = {"platform": 0, "core": 1, "rhi": 2, "renderer": 3, "audio": 3, "sim": 4,
+          "gameplay": 5, "content": 6, "app": 6, "tools": 7, "tests": 99}
 BANNED_STL = {"vector", "map", "unordered_map", "set", "unordered_set",
               "string", "list", "deque", "forward_list", "memory",
               "functional", "sstream", "iostream", "fstream", "queue",

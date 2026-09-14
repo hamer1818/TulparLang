@@ -1,4 +1,5 @@
 #include "rhi/offscreen.hpp"
+#include "rhi/tile_budget.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -488,7 +489,7 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
   Ctx &c = t->c;
   VkApi &a = *c.api;
   const uint32_t w = cfg.width, h = cfg.height;
-  const VkFormat color_fmt = VK_FORMAT_R8G8B8A8_UNORM;
+  const VkFormat color_fmt = cfg.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
   const VkFormat depth_fmt = VK_FORMAT_D32_SFLOAT;
   bool ok = false;
   do {
@@ -515,6 +516,11 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
       }
       r = a.vkBindBufferMemory(c.d, c.readback, c.readback_mem.memory, c.readback_mem.offset);
       if (r != VK_SUCCESS) { c.fail("vkBindBufferMemory", r); break; }
+    }
+    { // Mali tile butcesi (tile_budget.hpp): asim = hata, sessiz gecis yok.
+      const VkFormat fmts[2] = {color_fmt, depth_fmt};
+      const TileBudget tb = tile_budget(fmts, 2);
+      if (!tb.ok) { std::snprintf(out->error, sizeof out->error, "%s", tb.error); break; }
     }
     if (!make_render_pass(c, color_fmt, depth_fmt)) break;
     {
@@ -693,6 +699,58 @@ bool offscreen_render_frame(OffscreenTarget *t, const OffscreenConfig &cfg, Offs
 
 void offscreen_destroy(OffscreenTarget *t) {
   if (t) t->c.cleanup();
+}
+
+VkRenderPass offscreen_render_pass(OffscreenTarget *t) { return t ? t->c.rp : VK_NULL_HANDLE; }
+
+bool offscreen_render_custom(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenRecordFn record, void *user,
+                             OffscreenResult *out, OffscreenRecordFn before) {
+  Ctx &c = t->c;
+  c.out = out;
+  VkApi &a = *c.api;
+  Device &dev = *t->dev;
+  const uint32_t w = t->w, h = t->h;
+  out->ok = false;
+  out->pixels = t->pixels;
+  VkCommandBuffer cb = dev.begin_one_shot();
+  if (!cb) return c.fail("komut tamponu", VK_ERROR_OUT_OF_HOST_MEMORY);
+  VkClearValue clears[2]{};
+  clears[0].color.float32[0] = cfg.clear[0] / 255.0f;
+  clears[0].color.float32[1] = cfg.clear[1] / 255.0f;
+  clears[0].color.float32[2] = cfg.clear[2] / 255.0f;
+  clears[0].color.float32[3] = cfg.clear[3] / 255.0f;
+  clears[1].depthStencil = {1.0f, 0};
+  if (before) before(cb, user); // kendi render pass'i olan isler (golge haritasi)
+  VkRenderPassBeginInfo rbi{};
+  rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  rbi.renderPass = c.rp;
+  rbi.framebuffer = c.fb;
+  rbi.renderArea = {{0, 0}, {w, h}};
+  rbi.clearValueCount = 2;
+  rbi.pClearValues = clears;
+  a.vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+  VkViewport vpt{0, 0, (float)w, (float)h, 0.0f, 1.0f};
+  VkRect2D sc{{0, 0}, {w, h}};
+  a.vkCmdSetViewport(cb, 0, 1, &vpt);
+  a.vkCmdSetScissor(cb, 0, 1, &sc);
+  record(cb, user);
+  a.vkCmdEndRenderPass(cb);
+  VkBufferImageCopy region{};
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  region.imageExtent = {w, h, 1};
+  a.vkCmdCopyImageToBuffer(cb, c.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.readback, 1, &region);
+  if (!dev.end_one_shot_and_wait(cb)) {
+    std::snprintf(out->error, sizeof out->error, "gonderim: %s", dev.last_error());
+    return false;
+  }
+  VkMappedMemoryRange rng{};
+  rng.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+  rng.memory = c.readback_mem.memory;
+  rng.size = VK_WHOLE_SIZE;
+  a.vkInvalidateMappedMemoryRanges(c.d, 1, &rng);
+  std::memcpy(t->pixels, c.readback_mem.mapped, (size_t)w * h * 4);
+  out->ok = true;
+  return true;
 }
 
 bool render_triangle_offscreen(Device &dev, Arena &arena, const OffscreenConfig &cfg,

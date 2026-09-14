@@ -116,15 +116,22 @@ base, stage = sys.argv[1], sys.argv[2]
 libroot = os.path.join(stage, "lib")
 with zipfile.ZipFile(base, "a", zipfile.ZIP_STORED) as z:
     for abi in sorted(os.listdir(libroot)):
-        so = os.path.join(libroot, abi, "libtulpargame.so")
-        if os.path.isfile(so):
-            arc = "lib/%s/libtulpargame.so" % abi
+        # Tame: libtulpargame.so; motor host: libtulparengine.so — dizindeki her .so
+        for name in sorted(os.listdir(os.path.join(libroot, abi))):
+            if not name.endswith(".so"):
+                continue
+            so = os.path.join(libroot, abi, name)
+            arc = "lib/%s/%s" % (abi, name)
             zi = zipfile.ZipInfo(arc)
             zi.compress_type = zipfile.ZIP_STORED
             zi.external_attr = 0o755 << 16
             with open(so, "rb") as f:
                 z.writestr(zi, f.read())
             print("  +", arc, "(%d bytes)" % os.path.getsize(so))
+    dex = os.path.join(stage, "classes.dex")
+    if os.path.isfile(dex):  # hasCode=true host (motor: Swappy Java simi icin gerekli)
+        z.write(dex, "classes.dex", zipfile.ZIP_DEFLATED)
+        print("  + classes.dex (%d bytes)" % os.path.getsize(dex))
     aroot = os.path.join(stage, "assets")
     if os.path.isdir(aroot):
         for dirpath, _dirs, files in os.walk(aroot):

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tulpar Engine — NativeActivity host (hasCode=false: Java/DEX yok).
+     Kutuphane: lib/<abi>/libtulparengine.so (engine/app/android_main.cpp).
+     debuggable: `adb shell run-as dev.tulparlang.engine` ile files/engine_log.txt okunur. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.tulparlang.engine"
+    android:versionCode="1"
+    android:versionName="0.1">
+  <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400000" android:required="true"/>
+  <!-- Tracy istemcisi (TULPAR_TRACY=1): 8086 dinler; adb forward ile masaustunden yakalanir. -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <application android:label="Tulpar Engine" android:hasCode="false" android:debuggable="true"
+      android:extractNativeLibs="true"
+      android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+    <activity android:name="android.app.NativeActivity"
+        android:configChanges="orientation|keyboardHidden|screenSize"
+        android:screenOrientation="landscape"
+        android:exported="true">
+      <meta-data android:name="android.app.lib_name" android:value="tulparengine"/>
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

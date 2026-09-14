@@ -97,6 +97,19 @@ struct Mat4 {
     r.m[3][3] = 0.0f;
     return r;
   }
+  // Vulkan ortografik: NDC z in [0,1], y asagi (perspective ile ayni gelenek).
+  // Yonlu isik golge haritasi icin: isik uzayinda eksen hizali kutu.
+  static Mat4 ortho(float l, float r, float b, float t, float znear, float zfar) {
+    Mat4 o;
+    o.m[0][0] = 2.0f / (r - l);
+    o.m[1][1] = -2.0f / (t - b);
+    o.m[2][2] = -1.0f / (zfar - znear);
+    o.m[3][0] = -(r + l) / (r - l);
+    o.m[3][1] = (t + b) / (t - b);
+    o.m[3][2] = -znear / (zfar - znear);
+    o.m[3][3] = 1.0f;
+    return o;
+  }
   static Mat4 look_at(Vec3 eye, Vec3 target, Vec3 up) {
     Vec3 f = normalize(target - eye);
     Vec3 s = normalize(cross(f, up));

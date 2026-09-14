@@ -1900,3 +1900,140 @@ upstream cmake'i atıp glob ile derleyince bayrak da gitti. **Kural:** üçünc�
 CMake'inle derliyorsan upstream'in bayraklarını **oku ve taşı** (özellikle FP); belirlenimlilik
 iddiası ikinci mimaride altın özetle sınanmadan kabul edilmez; giriş verisi libm'den geçmemeli.
 
+### 8k. Vulkan'da y ters çevrilmiş projeksiyon + GL alışkanlığı `CLOCKWISE` = zemin kaybolur
+`Mat4::perspective` Vulkan NDC için y'yi ters çevirir. GL tarzı (çevirmeyen) projeksiyonda
+dünya-CCW üçgen framebuffer'da CW görünür ve `VK_FRONT_FACE_CLOCKWISE` doğrudur; y'yi ters
+çevirince sarım **geri** CCW olur. "Y'yi çevirdim, sarım da dönmüştür" diye CW koyunca tek yüzlü
+zemin kayboldu, küpler iç yüzleriyle karanlık çizildi (normal ışığa ters → yalnız ambient) —
+sahne "çalışıyor ama karanlık" göründü. **Sarım testi:** headless karede tek yüzlü zemin var mı.
+Kural: ters çevrilmiş projeksiyon + `COUNTER_CLOCKWISE`; ikisini aynı yerde belgele.
+
+### 8l. Swapchain kare yuvası ile renderer kare yuvası ayrı sayılırsa GPU'nun okuduğu UBO'ya yazılır
+Renderer `begin_frame(frame_i % 2)` ile UBO yuvasını, swapchain kendi `frame_` sayacıyla fence
+yuvasını seçiyordu. Acquire başarısız olunca (OUT_OF_DATE, yeniden boyutlandırma) swapchain
+sayacı durur, uygulama sayacı ilerler → iki yuva ayrışır, fence beklenen yuva ile yazılan yuva
+farklı olur. **Kural:** kare yuvası tek kaynaktan gelir (`FrameContext::frame_index`), renderer
+onu alır. Ayrıca fence'i **gönderimden hemen önce** sıfırla: acquire'da sıfırlayıp gönderemeyen
+kod bir sonraki `vkWaitForFences`'i sonsuza kadar takar.
+
+### 8m. SUBOPTIMAL'i "yeniden yarat" saymak Android'de kareyi 3 katina cikarir
+Telefonda demo 20 fps kosuyordu; alt zamanlayicilar toplami 6 ms iken kare 51 ms'ti — yani sure
+**olculmeyen** yerdeydi. Sebep: `vkQueuePresentKHR` her kare `VK_SUBOPTIMAL_KHR` donuyordu ve kod
+onu `needs_recreate` sayip **her karede swapchain'i yeniden kuruyordu** (~45 ms). Android'de
+SUBOPTIMAL kalicidir: swapchain'in `preTransform`'u yuzeyin `currentTransform`'undan farkliysa
+(biz IDENTITY istiyorduk, panel dikey oldugu icin yuzey ROTATE_90 istiyordu) her kare boyle doner ve
+**yeniden yaratmak bunu duzeltmez**. Kurallar: (1) yalniz `OUT_OF_DATE` yeniden yaratma sebebidir,
+SUBOPTIMAL **sayilir ve raporlanir**; (2) dogru cozum **on-dondurme**: `preTransform = currentTransform`,
+90/270'te goruntu olcusu devrik, projeksiyon clip uzayinda dondurulur (kompozitorun tam ekran
+dondurme gecisi de kalkar); (3) genel ders: **alt zamanlarin toplami ust zamani tutmuyorsa olculmeyen
+bir is vardir** — once o bosluga zamanlayici koy, tahmin etme. Olculdu: 20 fps -> 59.9 fps.
+
+### 8n. `adb shell`den kosan ikili GPU'yu GORMEZ — olcum APK surecinde yapilir
+Telefona `adb push` edilen `engine_tests`/`engine_demo` calisti ama `vkEnumeratePhysicalDevices`
+**0 cihaz** dondurdu (`vkCreateInstance` basariliydi, loader 1.1, `VK_KHR_android_surface` vardi).
+`/dev/mali0` shell kullanicisina rw gorunuyor; engel SELinux/HAL tarafinda, uygulama surec baglami
+gerekiyor. Yani "telefonda kostu, GPU yok" sonucu **cihaz hakkinda degil, kosum baglami hakkindadir**.
+Cozum: NativeActivity host (`engine/app/android_main.cpp`, `libtulparengine.so`) — testler de demo da
+APK **surecinde** kosar (`debug.tulpar.mode` ozelligi secer), stdout boruyla logcat'e ve
+`files/engine_log.txt`'ye gider. Ek tuzaklar: Huawei'de `run-as` calismiyor ("/data has wrong owner")
+→ cikti **harici** dizine (`/sdcard/Android/data/<pkg>/files`) yazilir ve `adb pull` ile alinir;
+logcat halkasi dakikalar icinde tasar, **dosya asil kaynak, logcat yedek**.
+
+### 8o. Plan "zorunlu" dediyse bile gercek cihaz vermeyebilir — kapiyi rapora cevir
+Plan L2 "zorunlu feature" listesi (`descriptorIndexing`, `timelineSemaphore`, `bufferDeviceAddress`)
+ilk gercek cihazda (Mali-G72, Vulkan **1.1**, 2018 surucusu) **ucu de yoktu** ve `Device::init`
+cihazi reddediyordu: motor telefonda hic acilmiyordu. Bunlar Vulkan 1.2 cekirdegi; 1.1 cihazda
+uzanti bicimleri de yok. Duzeltme: `require_mandatory` varsayilan **false**, eksikler
+`DeviceCaps::missing_mandatory` ile **raporlanir** ve test `[bilgi]` satiri basar (kapi degil, cihaz
+verisi). Ders: "baseline sartimiz" cumlesi de bir hipotezdir; ilk cihaz onu curutebilir. Kapiyi
+silme — rapora cevir ve eksik yol yedegini yaz.
+
+### 8p. Bump ayirici + pencere omurlu kaynak = her yeniden boyutlandirmada sizinti
+`Device::allocate` blok ayiricidir (64 MB blok, bump, **geri vermez**) — sahne omurlu kaynaklar icin
+dogru, ucuz ve belirlenimli. Ama swapchain derinlik goruntusunun omru **pencereye** baglidir: her
+yeniden boyutlandirma/dondurme yeni bir derinlik ayirir ve eskisi blokta gomulu kalir. 2159x1080 D32
+= ~9 MB; birkac dondurme bir bloku, birkac blok yuz MB'lari yer. Kural: **omru farkli olan kaynak,
+ayirma stratejisi de farkli olmali** — pencereye bagli olanlar `allocate_dedicated`/`free_dedicated`
+ile. Testin pozitif kontrolu sart: ayni donguyu blok ayiriciyla kosup **buyudugunu** gosteremiyorsan
+test bir sey olcmuyor olabilir.
+
+### 8q. Boru hattinin `depthBias` birimi SURUCUYE baglidir — Mali'de golgeyi tamamen sildi
+Golge haritasi akne'sine karsi standart recete `VkPipelineRasterizationStateCreateInfo::depthBias`
+(constant 1.25 / slope 2.0). NVIDIA'da dogru gorundu; **Mali-G72'de golge hic cikmadi**. Sebep:
+`depthBiasConstantFactor` "en kucuk cozulebilir derinlik farki r" cinsindendir ve **r
+implementation-defined**'dir (D16 gibi sabit noktali formatlarda surucuye gore degisir). Mali'de r
+buyuk cikinca tum golge yuzeyi isik tarafina itildi (asiri peter-panning) ve sahne golgesiz kaldi —
+hicbir hata, hicbir uyari, yalniz "golge yok". **Kural:** egilim cihazdan bagimsiz birimde olsun —
+golge aramasini DUNYA uzayinda normal boyunca kaydir (`shadow_params.w` metre) + derinlik uzayinda
+kucuk sabit. `depthBias` kullanma. Genel ders: bir gorsel ozelligin "calistigi" yalniz gelistiricinin
+GPU'sunda dogrulanmissa **dogrulanmamistir**; ikinci saticinin GPU'su sart.
+**Kapi:** `renderer_shadow_map_actually_darkens` — golge ACIK/KAPALI iki kareyi karsilastirir ve
+koyulasan piksel sayar; kendi **negatif kontrolu** var (6 m kaydirma → golge kacar, koyulasan 0),
+yani ariza moduna duyarli oldugu gosteriliyor. Masaustu ve telefon ayni sayiyi verdi (2433 piksel).
+
+### 8r. 2B arayuz framebuffer uzayinda cizilirse on-dondurmede 90 derece yatar; atlas tasarsa "font yok"
+Iki cihaz-ozel tuzak, ikisi de yalniz telefonda gorundu. (1) HUD framebuffer piksel uzayinda
+ciziliyordu; Android on-dondurmede framebuffer dikeydir (1080x2159), gorunen ekran yatay — metin
+ekranin sol kenarinda 90 derece yatik cikti. Kural: UI **mantiksal** (gorunen) uzayda cizilir ve 3B
+projeksiyonla **ayni aci** kadar dondurulur (`ui.vert` push sabiti); dokunmatik koordinatlar da o
+uzaydadir. (2) Font atlasi 28 px x 2x oversample x 213 glif 512x512'ye sigmadi; `stbtt_PackFontRanges`
+0 dondurdu, `Font::load` false dondu ve demo "font yok" dedi — masaustunde 14 px'te siginca gorulmedi.
+Kural: sigmazsa atlasi buyut (2048'e kadar) ve sebebi bas; "yukleme basarisiz"i dosya yoklugu sanma.
+
+### 8s. Dogrulama katmani "ETKIN" ama mesaj kanali yok = sahte yesil; Mali linter iki gercek ihlal buldu
+Telefonda (Huawei P20 Pro, Android 10) Khronos dogrulama katmani APK'nin lib dizininden yuklendi,
+`caps.validation_layer=true` yazdi, "0 hata" dedi — ama hicbir mesaj gelmiyordu: `VK_EXT_debug_utils`'i
+ICD/yukleyici `vkEnumerateInstanceExtensionProperties(nullptr)` listesinde vermiyor, uzantiyi **katman**
+saglar ve o liste yalniz katman adiyla sorgulaninca gorunur. Messenger yaratilmadi, "0 hata" olcum degildi.
+Yakalayan sey pozitif kontroldu: LOD kirpan sampler Arm uyarisi vermeliydi, 0 -> 0 kaldi. Kural: (1) katman
+varsa uzantiyi katmanin kendi listesinden de ara; (2) `caps.debug_messenger` yoksa dogrulama testleri
+GECMEZ (0 hata iddiasi yok); (3) her "0 uyari" kapisinin yaninda uyariyi kasten tetikleyen kontrol olsun.
+Ayrica linterin ilk kosumu iki gercek Mali ihlali buldu: her iki sampler `maxLod`'u kirpiyordu
+(`BestPractices-Arm-vkCreateSampler-lod-clamping`; kural `maxLod = VK_LOD_CLAMP_NONE`, mip araligini
+image view sinirlar). PerfDoc arsivlenmis; ardili bu katmanin `validate_best_practices_arm` ayari
+(`rhi/device.cpp`, `VK_EXT_layer_settings` pNext ile). Masaustunde katman `~/.local/share/vulkan/explicit_layer.d`
+altinda (LunarG SDK'dan yalniz katman); telefona `engine/tools/fetch_vvl_android.sh` + `android_run.sh tests`.
+Ayni turda iki ek bulgu: (a) `compositeAlpha=OPAQUE` Huawei yuzeyinde desteklenmiyor (yalniz INHERIT) — yillarca
+tanimsiz davranisla calisirdi; yuzeyin `supportedCompositeAlpha`'sindan sec. (b) Katmanin
+`sparse-index-buffer` taramasi alt-ayirmali tamponun **blok basini** okur (offset yok, VVL issue 45): "%0.00"
+sahte pozitif. Kural: katmanin dogru olcemedigi seyi kendin olc (`Renderer::sparse_mesh_count`) ve dususu
+kimlik adiyla, gerekcesiyle yap; "Arm uyarilarini yok say" gibi genel filtre asla.
+
+### 8t. Tracy: bos iz dort ayri sebepten gelir — port kacirma, dinamik srcloc, kesik baglam, NO_EXIT
+Tracy istemcisi motora baglaninca (ENGINE_TRACY) yakalama uc saat boyunca "0 bolge" verdi; her seferinde sebep
+farkliydi. (1) Onceki telefon kosumundan kalan `adb forward tcp:8086` masaustunde 8086'yi tutuyordu:
+`tracy-capture 127.0.0.1` sessizce telefona (kapali uygulamaya) baglandi, iz 400 bayt. Kural: yakalamadan once
+`ss -ltnp | grep 8086` — kim dinliyor? Betik denetler ve forward'i sonda kaldirir. (2) Dinamik kaynak konumu
+(`___tracy_alloc_srcloc_name`) ile acilan bolgeler yakalanir (5994) ama `tracy-csvexport` istatistiginde
+gorunmez; ad basina statik `___tracy_source_location_data` tablosu kullan. (3) `TracyCZoneCtx` yalniz `id` +
+`active` olarak saklanip `zone_end`'de yeniden kurulunca `TRACY_ON_DEMAND` altindaki `connectionId` alani
+kaybolur ve `___tracy_emit_zone_end` sessizce doner: bolgeler acilir, hicbiri kapanmaz. Baglami ham bayt olarak
+butunuyle sakla (`memcpy`, sizeof static_assert). (4) `TRACY_NO_EXIT` sunucu yoksa cikista SONSUZA dek bekler
+(engine_tests asili kaldi); kullanma, yakalama penceresini kosumun icinde tut. Ayrica: `pkill -f <ad>` kendi
+kabuk komut satirini da eslestirir ve tool cagrisini oldurur (cikis 144); `pkill -x` kullan.
+
+### 8u. `alloc_array_zeroed<T>` kurucu calistirmaz: `-1` varsayilani sessizce 0 olur
+`ModelMesh::skin = -1` (yok) varsayilaniyla eklendi; `out->meshes = arena.alloc_array_zeroed<ModelMesh>(n)` bellegi
+sifirlar, kurucuyu CAGIRMAZ — her mesh "skin 0" oldu, dama kupu icin `cgltf_accessor_read_uint(nullptr)` cokme.
+Testler 67/67'den "COKME testi: content_gltf_loads_checker_cube" a dustu; yeni test gecerken eski test cokuyordu.
+Kural: zeroed dizilerde "yok" anlami 0 olsun (indeks+1 sakla) ya da alani acikca yaz; `alloc_array_zeroed` ile
+"varsayilan uye degeri" birlikte kullanilmaz. Ayni sinif: `ModelClip::skin = -1`, `ModelMaterial::image = -1`.
+
+### 8v. AGDK Swappy NativeActivity'de (API >= 30) ilk sunumda asilir: Java simi kendi lib'ini bulamaz
+`SwappyVk_initAndGetRefreshCycleDuration` basarili (yenileme 16.67 ms), sonra `SwappyVk_queuePresent` sonsuza
+dek bekler. logcat: `SwappyDisplayManager: InMemoryDexClassLoader[... nativeLibraryDirectories=[/system/lib64,
+/system_ext/lib64]] couldn't find "libtulparengine.so"` — bellekten yuklenen Java simi dogal metotlarini
+`System.loadLibrary` ile baglamaya calisir, sinif yukleyicinin dogal yolu uygulama lib dizinini icermez, vsync
+callback'i gelmez. `hasCode=true` + bos classes.dex denendi, degismedi. API 29 (Android 10) bu Java yolunu
+kullanmaz. Kural: Swappy varsayilan KAPALI (`ENGINE_SWAPPY`), yalniz gercek cihazda olcumle acilir; "init basarili"
+sunumun calistigi anlamina gelmez — kare sayaci ilerlemeli. GameActivity gocu (IP-P, Gradle host) bu sinif
+yukleyici sorununu kokten cozer.
+
+### 8w. CI macOS'un GPU'su sanal ("Apple Paravirtual device"): piksel kapilari orada olculmez
+PR #321'in ilk tam macOS kosumunda (daha once engine_tests fizikten sonra cokuyordu; bu kosumda cokme yok,
+sebebi bilinmiyor) 6 renderer/content testi dustu: golge koyulasmadi, nokta isik kirmizi piksel vermedi, dama
+dokusu keskin gecis vermedi, LOD silueti, iskeletli boru hic cizilmedi, sRGB yedek yolu farkli — hepsi piksel
+sonucu. Ayni testler RTX (Linux), lavapipe (CI Linux), Mali (telefon) ve gfxstream (emulator) ile gecer. Karar:
+`test::gpu_is_virtual` ile bu cihazda piksel kapilari GORUNUR ATLANDI; CPU tarafi (analitik skinning, meshopt
+istatistigi, KTX2 cozumu) kosmaya devam eder. Gercek bir Mac'te MoltenVK sonucu ayri konu (olculmedi).
+

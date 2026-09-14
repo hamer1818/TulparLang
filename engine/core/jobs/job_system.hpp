@@ -140,6 +140,7 @@ private:
   WorkerTls *worker_tls_ = nullptr;
 
   FiberSlot *fibers_ = nullptr;
+  char *fiber_names_ = nullptr; // "fiber-N" (Tracy fiber adi; statik omur)
   uint32_t *free_fibers_ = nullptr; // yigin
   uint32_t free_top_ = 0;
   SpinLock free_lock_;

@@ -10,6 +10,7 @@
 #include "core/memory/arena.hpp"
 #include "rhi/device.hpp"
 #include "rhi/offscreen.hpp"
+#include "rhi/tile_budget.hpp"
 #include "rhi/vk_api.hpp"
 #include "tests/test.hpp"
 
@@ -77,7 +78,13 @@ ENGINE_TEST(rhi_loader_and_device_caps) {
   std::printf("    [bilgi] GPL kullanilabilir=%d; dogrulama katmani=%s\n", c.graphics_pipeline_library,
               c.validation_layer ? "ETKIN" : "yok (VK_LAYER_KHRONOS_validation kurulu degil)");
   CHECK(dev.ok());
-  CHECK(c.descriptor_indexing && c.timeline_semaphore && c.buffer_device_address);
+  // Plan L2 "zorunlu" listesi (1.2 cekirdek) bir HIPOTEZ: Dusuk sinif cihaz
+  // (Mali-G72, Vulkan 1.1, 2018 surucusu) ucunu de vermiyor. Kapi degil, veri:
+  // basilir, cihaz matrisine girer; eksik yol yedegiyle calismak zorunda.
+  if (c.missing_mandatory[0])
+    std::printf("    [bilgi] plan L2 'zorunlu' eksik (cihaz verisi, kapi degil): %s\n", c.missing_mandatory);
+  std::printf("    [bilgi] surucu=%u gpl=%d merge_feedback=%d fsr=%d host_image_copy=%d\n", c.driver_version,
+              c.graphics_pipeline_library, c.ext_subpass_merge_feedback, c.khr_fragment_shading_rate, c.ext_host_image_copy);
   dev.shutdown();
 }
 
@@ -86,7 +93,8 @@ ENGINE_TEST(rhi_first_pixel_offscreen_triangle) {
   static SystemArena sys;
   Device dev;
   if (!open_device(sys, dev)) { test::skip("Vulkan cihazi yok"); return; }
-  char dir[] = "/tmp/engine_rhi_XXXXXX";
+  char dir[512];
+  test::tmp_template(dir, sizeof dir, "engine_rhi");
   CHECK(mkdtemp(dir) != nullptr);
   char cache_path[300];
   std::snprintf(cache_path, sizeof cache_path, "%s/pso.cache", dir);
@@ -257,6 +265,8 @@ ENGINE_TEST(rhi_validation_layer_reports_zero_errors) {
     dev.shutdown();
     return;
   }
+  // Katman var ama mesaj kanali yoksa "0 hata" olcum degil (telefonda goruldu).
+  CHECK(dev.caps().debug_messenger);
   JobSystem js;
   CHECK(js.init(sys, JobSystemConfig{}));
   CommandPools pools;
@@ -275,3 +285,84 @@ ENGINE_TEST(rhi_validation_layer_reports_zero_errors) {
   dev.shutdown();
 }
 
+
+// Pencereye bagli omur: swapchain derinligi her yeniden boyutlandirmada yeniden
+// ayrilir. Blok ayirici bump'tir ve GERI VERMEZ — o yolla her boyut degisimi
+// bellek yerdi (FAZ3 acik isi). `allocate_dedicated`/`free_dedicated` serbest
+// birakabilir. Bu test mekanizmayi sinar; pozitif kontrol eski yolun gercekten
+// buyudugunu gosterir (yoksa test hicbir sey olcmuyor olabilir).
+ENGINE_TEST(rhi_dedicated_allocation_is_released) {
+  if (!loader()) { test::skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  Device dev;
+  if (!open_device(sys, dev)) { test::skip("Vulkan cihazi yok"); return; }
+
+  VkMemoryRequirements req{};
+  req.size = 16u << 20; // ~2K derinlik tamponu mertebesi
+  req.alignment = 256;
+  req.memoryTypeBits = 0xFFFFFFFFu;
+
+  const uint32_t blocks0 = dev.memory_allocation_count();
+  CHECK(dev.dedicated_allocation_count() == 0);
+  for (int i = 0; i < 8; i++) { // 8 "yeniden boyutlandirma"
+    MemoryAlloc m;
+    bool ok = dev.allocate_dedicated(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &m);
+    CHECK(ok);
+    if (!ok) break;
+    bool one = dev.dedicated_allocation_count() == 1;
+    CHECK(one);
+    dev.free_dedicated(&m);
+    bool released = m.memory == VK_NULL_HANDLE && dev.dedicated_allocation_count() == 0;
+    CHECK(released);
+  }
+  // Blok ayirici hic buyumedi: 8 dongu tek bir blok bile yemedi.
+  bool blocks_same = dev.memory_allocation_count() == blocks0;
+  CHECK(blocks_same);
+
+  // POZITIF KONTROL: ayni 8 dongu blok ayiricidan gecerse bellek BUYUR.
+  for (int i = 0; i < 8; i++) {
+    MemoryAlloc m;
+    if (!dev.allocate(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &m)) break;
+  }
+  const uint32_t blocks1 = dev.memory_allocation_count();
+  bool grew = blocks1 > blocks0;
+  CHECK(grew); // buyumediyse test bir sey olcmuyor demektir
+  std::printf("    [bilgi] adanmis ayirma: 8 dongu sonrasi blok %u -> %u (degismedi); blok ayiriciyla %u -> %u (pozitif kontrol)\n",
+              blocks0, blocks0, blocks0, blocks1);
+  dev.shutdown();
+}
+
+// Mali tile butcesi (Vulkan-Samples/Arm): <= 8 renk+girdi attachment, <= 128 bit/px
+// renk. Gecisler yaratilirken zorlanir (swapchain, offscreen). Burada kural
+// kendisi sinanir: bizim gecislerimiz sigar; pozitif kontrol asimi yakalar;
+// bilinmeyen bicim SESSIZCE gecmez.
+ENGINE_TEST(rhi_mali_tile_budget_rule) {
+  const VkFormat main_pass[2] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT}; // swapchain + offscreen
+  TileBudget tb = tile_budget(main_pass, 2);
+  std::printf("    [bilgi] ana gecis: %u attachment, %u bit/px renk, %u bit derinlik (butce %u / %u)\n", tb.attachments,
+              tb.color_bits, tb.depth_bits, kTileMaxAttachments, kTileMaxColorBits);
+  CHECK(tb.ok);
+  CHECK(tb.attachments == 1 && tb.color_bits == 32 && tb.depth_bits == 32);
+  const VkFormat shadow_pass[1] = {VK_FORMAT_D16_UNORM};
+  tb = tile_budget(shadow_pass, 1);
+  CHECK(tb.ok && tb.attachments == 0 && tb.depth_bits == 16);
+  // Plan vis buffer (64 bit) + isik (32) + hareket vektoru (16) + reaktif maske (8) = 120: sigar.
+  const VkFormat planned[5] = {VK_FORMAT_R32G32_UINT, VK_FORMAT_B10G11R11_UFLOAT_PACK32, VK_FORMAT_R8G8_UNORM,
+                               VK_FORMAT_R8_UNORM, VK_FORMAT_D32_SFLOAT};
+  tb = tile_budget(planned, 5);
+  CHECK(tb.ok && tb.color_bits == 120);
+  // POZITIF KONTROL 1: 2 x RGBA32F = 256 bit > 128 -> reddedilmeli.
+  const VkFormat fat[2] = {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT};
+  tb = tile_budget(fat, 2);
+  CHECK(!tb.ok);
+  std::printf("    [bilgi] pozitif kontrol: %s\n", tb.error);
+  // POZITIF KONTROL 2: 9 x R8 = 72 bit ama 9 attachment > 8 -> reddedilmeli.
+  VkFormat many[9];
+  for (int i = 0; i < 9; i++) many[i] = VK_FORMAT_R8_UNORM;
+  tb = tile_budget(many, 9);
+  CHECK(!tb.ok && tb.attachments == 9);
+  // Bilinmeyen bicim: hata, 0 bit sayip gecmek yok.
+  const VkFormat unknown[1] = {VK_FORMAT_ASTC_4x4_UNORM_BLOCK};
+  tb = tile_budget(unknown, 1);
+  CHECK(!tb.ok);
+}

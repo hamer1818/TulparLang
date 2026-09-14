@@ -29,6 +29,9 @@ struct OffscreenConfig {
   // LINKLE (plan Faz 1: PSO yukleme ucuz olmali). Cihaz desteklemiyorsa
   // monolitik'e duser ve bunu raporlar.
   bool use_pipeline_library = false;
+  // Renk hedefi sRGB (R8G8B8A8_SRGB): shader dogrusal yazar, donanim kodlar; okunan
+  // bayt ekrandaki gibi kodludur. false: UNORM (RHI ucgen testleri tam renk bekler).
+  bool srgb = false;
 };
 
 struct OffscreenResult {
@@ -68,6 +71,15 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
 // ayirma YOK (AllocGate ile test edilir); out->pixels arenadan (kurulumda).
 bool offscreen_render_frame(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenResult *out);
 void offscreen_destroy(OffscreenTarget *t);
+VkRenderPass offscreen_render_pass(OffscreenTarget *t);
+// Ozel kayit: render pass baslatilir (subpass 0, viewport/scissor ayarli),
+// `record(cb, user)` cagrilir (prepass cizimleri, vkCmdNextSubpass, renk),
+// sonra bitirilip pikseller okunur. Renderer'in headless dogrulamasi icin.
+typedef void (*OffscreenRecordFn)(VkCommandBuffer cb, void *user);
+// `before` (varsa) render pass BASLAMADAN once cagrilir: kendi pass'i olan
+// isler (golge haritasi) buraya kaydedilir.
+bool offscreen_render_custom(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenRecordFn record, void *user,
+                             OffscreenResult *out, OffscreenRecordFn before = nullptr);
 
 // Basit PPM (P6) yazici — insan gozu icin; test artefakti.
 bool write_ppm(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);

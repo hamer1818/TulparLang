@@ -9,7 +9,7 @@ cd "$(dirname "$0")/../.." || exit 1
 if ! command -v clang++ >/dev/null 2>&1; then
     echo "clang_syntax_check: ATLANDI (clang++ yok)"; exit 0
 fi
-FLAGS="-std=c++17 -fsyntax-only -fno-exceptions -fno-rtti -Wall -Wextra -DENGINE_MEM_CANARY=1 -DENGINE_SOURCE_DIR=\"engine\" -DPHYSICS_GOLDEN_HASH=0ull -DJPH_CROSS_PLATFORM_DETERMINISTIC -Iengine -Iengine/third_party/vulkan -Iengine/third_party/jolt"
+FLAGS="-std=c++17 -fsyntax-only -fno-exceptions -fno-rtti -Wall -Wextra -DENGINE_MEM_CANARY=1 -DENGINE_SOURCE_DIR=\"engine\" -DPHYSICS_GOLDEN_HASH=0ull -DJPH_CROSS_PLATFORM_DETERMINISTIC -Iengine -Iengine/third_party/vulkan -Iengine/third_party/jolt -Iengine/third_party/recast/Recast/Include -Iengine/third_party/recast/Detour/Include -Iengine/third_party/glfw -Iengine/third_party/cgltf -Iengine/third_party/stb -Iengine/third_party/meshoptimizer -Iengine/third_party/imgui -Iengine/third_party/miniaudio -Iengine/third_party/astcenc -DIMGUI_IMPL_VULKAN_NO_PROTOTYPES"
 case "$(uname -m)" in x86_64) FLAGS="$FLAGS -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -msse4.2";; esac
 fail=0; n=0
 while IFS= read -r f; do

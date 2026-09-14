@@ -73,11 +73,14 @@ void vk_api_load_instance(VkApi &api, VkInstance inst) {
   G(vkGetPhysicalDeviceFeatures2);
   G(vkGetPhysicalDeviceQueueFamilyProperties);
   G(vkGetPhysicalDeviceMemoryProperties);
+  G(vkGetPhysicalDeviceFormatProperties);
   G(vkEnumerateDeviceExtensionProperties);
   G(vkCreateDevice);
   G(vkGetDeviceProcAddr);
   G(vkCreateDebugUtilsMessengerEXT);
   G(vkDestroyDebugUtilsMessengerEXT);
+  G(vkDestroySurfaceKHR); G(vkGetPhysicalDeviceSurfaceSupportKHR); G(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+  G(vkGetPhysicalDeviceSurfaceFormatsKHR); G(vkGetPhysicalDeviceSurfacePresentModesKHR);
 #undef G
 }
 
@@ -91,6 +94,8 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
   G(vkCreateBuffer); G(vkDestroyBuffer); G(vkGetBufferMemoryRequirements); G(vkBindBufferMemory);
   G(vkCreateImage); G(vkDestroyImage); G(vkGetImageMemoryRequirements); G(vkBindImageMemory);
   G(vkCreateImageView); G(vkDestroyImageView);
+  G(vkCreateSampler); G(vkDestroySampler); G(vkCmdSetDepthBias);
+  G(vkCmdBlitImage); G(vkCmdCopyBufferToImage);
   G(vkCreateRenderPass2); G(vkCreateRenderPass); G(vkDestroyRenderPass);
   G(vkCreateFramebuffer); G(vkDestroyFramebuffer);
   G(vkCreateShaderModule); G(vkDestroyShaderModule);
@@ -102,6 +107,12 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
   G(vkCmdBeginRenderPass); G(vkCmdNextSubpass); G(vkCmdEndRenderPass);
   G(vkCmdBindPipeline); G(vkCmdSetViewport); G(vkCmdSetScissor); G(vkCmdDraw);
   G(vkCmdPipelineBarrier); G(vkCmdCopyImageToBuffer); G(vkCmdExecuteCommands);
+  G(vkCreateSwapchainKHR); G(vkDestroySwapchainKHR); G(vkGetSwapchainImagesKHR); G(vkAcquireNextImageKHR); G(vkQueuePresentKHR);
+  G(vkCreateSemaphore); G(vkDestroySemaphore); G(vkResetCommandBuffer); G(vkFreeCommandBuffers);
+  G(vkCmdBindVertexBuffers); G(vkCmdBindIndexBuffer); G(vkCmdDrawIndexed); G(vkCmdPushConstants); G(vkCmdCopyBuffer);
+  G(vkFlushMappedMemoryRanges);
+  G(vkCreateDescriptorSetLayout); G(vkDestroyDescriptorSetLayout); G(vkCreateDescriptorPool); G(vkDestroyDescriptorPool);
+  G(vkAllocateDescriptorSets); G(vkUpdateDescriptorSets); G(vkCmdBindDescriptorSets);
 #undef G
 }
 

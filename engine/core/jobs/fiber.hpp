@@ -23,6 +23,11 @@ struct Fiber {
   uint32_t index = 0;
   // Profiler: acik bolge yigini fiber'la birlikte gocer (thread'le degil).
   uint32_t zone_stack[32];
+  // Tracy bolge baglami (ENGINE_TRACY; yoksa kullanilmaz): TracyCZoneCtx'in
+  // ham kopyasi (id + aktif + ON_DEMAND baglanti kimligi; alanlar yapilandirmaya
+  // gore degisir, o yuzden BUTUNU saklanir — yalniz id/aktif saklaninca zone_end
+  // baglanti kimligi tutmadigi icin sessizce atlanmisti, 2026-09-14).
+  uint32_t tracy_ctx[32][4];
   uint32_t zone_depth = 0;
 };
 

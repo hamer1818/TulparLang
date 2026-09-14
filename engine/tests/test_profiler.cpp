@@ -53,7 +53,8 @@ ENGINE_TEST(profiler_frames_zones_and_trace) {
   FrameStats st = p.frame_stats(Span<uint64_t>(scratch, 16));
   CHECK(st.count == 8); // halka kapasitesi
   CHECK(st.p99_ns >= st.p50_ns && st.max_ns >= st.p99_ns);
-  char path[] = "/tmp/engine_trace_XXXXXX";
+  char path[512];
+  test::tmp_template(path, sizeof path, "engine_trace");
   int fd = mkstemp(path);
   CHECK(fd >= 0);
   if (fd >= 0) {

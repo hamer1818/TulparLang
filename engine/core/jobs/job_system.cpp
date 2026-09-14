@@ -1,5 +1,11 @@
 #include "core/jobs/job_system.hpp"
 
+#include <cstdio>
+
+#if ENGINE_TRACY
+#include <tracy/TracyC.h> // fiber giris/cikis: bolgeler fiber'a baglanir (goc olsa da dogru)
+#endif
+
 #include "core/profiler/profiler.hpp"
 #include "platform/fatal.hpp"
 #include "platform/memory.hpp"
@@ -47,6 +53,9 @@ bool JobSystem::init(Arena &arena, const JobSystemConfig &cfg) {
     f.index = i;
     free_fibers_[i] = cfg.fiber_count - 1 - i;
   }
+  fiber_names_ = arena.alloc_array<char>(cfg.fiber_count * 16);
+  if (!fiber_names_) return false;
+  for (uint32_t i = 0; i < cfg.fiber_count; i++) std::snprintf(fiber_names_ + i * 16, 16, "fiber-%u", i);
   free_top_ = cfg.fiber_count;
 
   running_.store(true, std::memory_order_release);
@@ -237,7 +246,13 @@ void JobSystem::resume_fiber(uint32_t fi, WorkerTls *t) {
   t->current = &slot.fiber;
   t->action = Action::None;
   st_switches_.fetch_add(1, std::memory_order_relaxed);
+#if ENGINE_TRACY
+  ___tracy_fiber_enter(fiber_names_ + fi * 16);
+#endif
   tulpar_fiber_switch(&t->scheduler_sp, slot.fiber.sp);
+#if ENGINE_TRACY
+  ___tracy_fiber_leave();
+#endif
   // Fiber geri gecti: t bu thread'in TLS'i, gecerli (scheduler gocmez).
   t->current = nullptr;
   switch (t->action) {
@@ -257,6 +272,9 @@ void JobSystem::worker_main(void *arg) {
   WorkerTls *t = static_cast<WorkerTls *>(arg);
   g_tls = t;
   JobSystem *js = t->js;
+#if ENGINE_TRACY
+  ___tracy_set_thread_name("tulpar-job");
+#endif
   uint32_t idle = 0;
   while (js->running_.load(std::memory_order_acquire)) {
     uint32_t fi;

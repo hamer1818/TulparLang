@@ -221,3 +221,9 @@ android/host/.gradle/
 android/host/build/
 android/host/app/build/
 android/host/local.properties
+
+# Khronos Vulkan dogrulama katmani Android ikilileri (engine/tools/fetch_vvl_android.sh)
+engine/third_party/vvl-android/
+
+# AGDK Swappy statik kutuphaneleri (engine/tools/fetch_swappy.sh)
+engine/third_party/swappy/libs/
