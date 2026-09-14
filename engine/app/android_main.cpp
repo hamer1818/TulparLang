@@ -196,6 +196,65 @@ app::HostPoll android_poll(void *user, uint32_t *w, uint32_t *h_) {
 }
 } // namespace
 
+#if ENGINE_SWAPPY
+// AGDK Swappy (kare temposu): swapchain yaratilinca baglam kurulur (JNI env bu
+// thread'e baglanir; NativeActivity jobject = activity->clazz), sunum
+// SwappyVk_queuePresent ile; sonda istatistik (gec kare / bekleme histogrami).
+#include <jni.h>
+#include <swappy/swappyVk.h>
+struct SwappyCtx {
+  android_app *app = nullptr;
+  VkDevice device = VK_NULL_HANDLE;
+  VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+  uint64_t refresh_ns = 0;
+  bool ok = false;
+};
+static SwappyCtx g_swappy;
+static void swappy_on_create(void *user, VkPhysicalDevice phys, VkDevice dev, VkQueue, VkSwapchainKHR sc) {
+  SwappyCtx *c = static_cast<SwappyCtx *>(user);
+  JNIEnv *env = nullptr;
+  if (c->app->activity->vm->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) { std::printf("[android] swappy: JNI env yok\n"); return; }
+  uint64_t refresh = 0;
+  c->ok = SwappyVk_initAndGetRefreshCycleDuration(env, c->app->activity->clazz, phys, dev, sc, &refresh);
+  c->device = dev;
+  c->swapchain = sc;
+  c->refresh_ns = refresh;
+  if (!c->ok) { std::printf("[android] swappy: init basarisiz\n"); return; }
+  SwappyVk_setWindow(dev, sc, c->app->window);
+  SwappyVk_setSwapIntervalNS(dev, sc, SWAPPY_SWAP_60FPS);
+  SwappyVk_enableStats(sc, true);
+  std::printf("[android] swappy: yenileme %.2f ms, hedef 60 fps, istatistik acik\n", refresh / 1e6);
+}
+static void swappy_on_destroy(void *user, VkDevice dev, VkSwapchainKHR sc) {
+  SwappyCtx *c = static_cast<SwappyCtx *>(user);
+  if (c->ok) SwappyVk_destroySwapchain(dev, sc);
+  c->swapchain = VK_NULL_HANDLE;
+}
+static VkResult swappy_present(void *user, VkQueue q, const VkPresentInfoKHR *pi) {
+  SwappyCtx *c = static_cast<SwappyCtx *>(user);
+  if (!c->ok) return VK_ERROR_DEVICE_LOST;
+  SwappyVk_recordFrameStart(q, c->swapchain, pi->pImageIndices ? pi->pImageIndices[0] : 0);
+  return SwappyVk_queuePresent(q, pi);
+}
+static void swappy_report() {
+  SwappyCtx *c = &g_swappy;
+  if (!c->ok) return;
+  SwappyStats st{};
+  if (c->swapchain) SwappyVk_getStats(c->swapchain, &st);
+  std::printf("[android] swappy istatistik: %llu kare | gec kare [0..5]: %llu %llu %llu %llu %llu %llu | onceki kareden kayma [0..5]: %llu %llu %llu %llu %llu %llu | bekleme [0..5]: %llu %llu %llu %llu %llu %llu\n",
+              (unsigned long long)st.totalFrames, (unsigned long long)st.lateFrames[0], (unsigned long long)st.lateFrames[1],
+              (unsigned long long)st.lateFrames[2], (unsigned long long)st.lateFrames[3], (unsigned long long)st.lateFrames[4],
+              (unsigned long long)st.lateFrames[5], (unsigned long long)st.offsetFromPreviousFrame[0],
+              (unsigned long long)st.offsetFromPreviousFrame[1], (unsigned long long)st.offsetFromPreviousFrame[2],
+              (unsigned long long)st.offsetFromPreviousFrame[3], (unsigned long long)st.offsetFromPreviousFrame[4],
+              (unsigned long long)st.offsetFromPreviousFrame[5], (unsigned long long)st.idleFrames[0], (unsigned long long)st.idleFrames[1],
+              (unsigned long long)st.idleFrames[2], (unsigned long long)st.idleFrames[3], (unsigned long long)st.idleFrames[4],
+              (unsigned long long)st.idleFrames[5]);
+  if (c->device) SwappyVk_destroyDevice(c->device);
+  c->ok = false;
+}
+#endif
+
 extern "C" void android_main(android_app *app) {
   AndroidHost host;
   host.app = app;
@@ -253,8 +312,9 @@ extern "C" void android_main(android_app *app) {
   prop("debug.tulpar.prerotate", prerot, sizeof prerot, "1");
   prop("debug.tulpar.size", size, sizeof size, "2159x1080");
   prop("debug.tulpar.validation", validation, sizeof validation, "0"); // 1: katman + Mali linter (APK'da katman varsa)
-  char audio_p[PROP_VALUE_MAX];
+  char audio_p[PROP_VALUE_MAX], swappy_p[PROP_VALUE_MAX];
   prop("debug.tulpar.audio", audio_p, sizeof audio_p, "0"); // 1: 440 Hz ton (AAudio yolu + callback sayimi)
+  prop("debug.tulpar.swappy", swappy_p, sizeof swappy_p, "0"); // 1: AGDK Swappy kare temposu (ENGINE_SWAPPY derlenmisse)
   std::printf("[android] kip=%s dizin=%s\n", mode, dir);
 
   int rc = 0;
@@ -284,6 +344,18 @@ extern "C" void android_main(android_app *app) {
       o.prerotate = prerot[0] != '0';
       o.validation = validation[0] == '1';
       o.audio = audio_p[0] == '1';
+#if ENGINE_SWAPPY
+      if (swappy_p[0] == '1') {
+        g_swappy.app = app;
+        o.swap_hooks.user = &g_swappy;
+        o.swap_hooks.on_create = swappy_on_create;
+        o.swap_hooks.on_destroy = swappy_on_destroy;
+        o.swap_hooks.present = swappy_present;
+        std::printf("[android] swappy: acik (games-frame-pacing)\n");
+      }
+#else
+      if (swappy_p[0] == '1') std::printf("[android] swappy istendi ama ENGINE_SWAPPY derlenmedi (TULPAR_SWAPPY=ON)\n");
+#endif
       app::DemoHost dh;
       dh.user = &host;
       dh.instance_extensions = android_exts;
@@ -292,6 +364,9 @@ extern "C" void android_main(android_app *app) {
       dh.touch = android_touch;
       rc = app::demo_run(o, &dh);
       std::printf("[android] demo_run = %d\n", rc);
+#if ENGINE_SWAPPY
+      if (swappy_p[0] == '1') swappy_report();
+#endif
     }
   }
   std::printf("[android] bitti rc=%d\n", rc);

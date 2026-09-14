@@ -157,6 +157,7 @@ bool Swapchain::create_swapchain(uint32_t w, uint32_t h) {
   ci.oldSwapchain = swap_;
   VkSwapchainKHR ns = VK_NULL_HANDLE;
   if (a.vkCreateSwapchainKHR(dev_->handle(), &ci, nullptr, &ns) != VK_SUCCESS) return false;
+  if (cfg_.hooks.on_create) cfg_.hooks.on_create(cfg_.hooks.user, dev_->physical(), dev_->handle(), dev_->queue(), ns);
   destroy_swapchain();
   swap_ = ns;
   image_count_ = kMaxImages;
@@ -217,6 +218,7 @@ void Swapchain::destroy_swapchain() {
   if (depth_) a.vkDestroyImage(dev_->handle(), depth_, nullptr);
   depth_view_ = VK_NULL_HANDLE; depth_ = VK_NULL_HANDLE;
   dev_->free_dedicated(&depth_mem_); // yeniden boyutlandirma sizdirmasin
+  if (swap_ && cfg_.hooks.on_destroy) cfg_.hooks.on_destroy(cfg_.hooks.user, dev_->handle(), swap_);
   if (swap_) a.vkDestroySwapchainKHR(dev_->handle(), swap_, nullptr);
   swap_ = VK_NULL_HANDLE;
   image_count_ = 0;
@@ -336,7 +338,7 @@ bool Swapchain::end_frame(const FrameContext &fc) {
   pi.swapchainCount = 1;
   pi.pSwapchains = &swap_;
   pi.pImageIndices = &fc.image_index;
-  VkResult r = a.vkQueuePresentKHR(dev_->queue(), &pi);
+  VkResult r = cfg_.hooks.present ? cfg_.hooks.present(cfg_.hooks.user, dev_->queue(), &pi) : a.vkQueuePresentKHR(dev_->queue(), &pi);
   frame_ = (frame_ + 1) % kFramesInFlight;
   frames_++;
   // SUBOPTIMAL yeniden yaratma SEBEBI DEGIL: Android'de swapchain preTransform'u

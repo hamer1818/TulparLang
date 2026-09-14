@@ -134,6 +134,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   rhi::SwapchainConfig swap_cfg;
   swap_cfg.prerotate = opts.prerotate;
   swap_cfg.preferred_present_mode = present_mode_of(opts.present_mode);
+  swap_cfg.hooks = opts.swap_hooks;
   rhi::OffscreenTarget *off = nullptr;
   rhi::OffscreenConfig oc;
   rhi::OffscreenResult ores;
@@ -315,7 +316,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
         VkSurfaceKHR ns = VK_NULL_HANDLE;
         if (!host->create_surface(host->user, api, dev.instance(), &ns)) { std::fprintf(stderr, "yuzey (yeniden)\n"); return 1; }
         dev.replace_surface(ns);
-        if (!swap.init(dev, sys, ns, fw, fh)) { std::fprintf(stderr, "swapchain (yeniden)\n"); return 1; }
+        if (!swap.init(dev, sys, ns, fw, fh, swap_cfg)) { std::fprintf(stderr, "swapchain (yeniden)\n"); return 1; }
         ren.set_render_size(swap.extent().width, swap.extent().height);
         std::printf("[engine_demo] pencere yeniden: swapchain %ux%u\n", swap.extent().width, swap.extent().height);
         have_window = true;

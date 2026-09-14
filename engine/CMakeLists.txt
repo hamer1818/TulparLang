@@ -279,6 +279,18 @@ if(ANDROID)
       ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
   target_compile_options(tulparengine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
   target_link_libraries(tulparengine PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core android log ${CMAKE_DL_LIBS})
+  # AGDK Swappy (kare temposu, Apache-2.0): third_party/swappy/libs/<abi>/libswappy_static.a
+  # (tools/fetch_swappy.sh, gitignore'lu). ENGINE_SWAPPY=ON ve lib varsa baglanir.
+  option(ENGINE_SWAPPY "AGDK Swappy kare temposu (SwappyVk_queuePresent)" OFF)
+  set(ENGINE_SWAPPY_LIB ${CMAKE_CURRENT_SOURCE_DIR}/third_party/swappy/libs/${ANDROID_ABI}/libswappy_static.a)
+  if(ENGINE_SWAPPY AND EXISTS ${ENGINE_SWAPPY_LIB})
+      target_include_directories(tulparengine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/swappy/include)
+      target_compile_definitions(tulparengine PRIVATE ENGINE_SWAPPY=1)
+      target_link_libraries(tulparengine PRIVATE ${ENGINE_SWAPPY_LIB})
+      message(STATUS "engine: Swappy bagli (${ANDROID_ABI})")
+  elseif(ENGINE_SWAPPY)
+      message(WARNING "engine: ENGINE_SWAPPY=ON ama ${ENGINE_SWAPPY_LIB} yok (tools/fetch_swappy.sh)")
+  endif()
   # --no-undefined: eksik sembol LINK'te dussun (cihazda UnsatisfiedLinkError degil);
   # 16 KB sayfa; glue'nun ANativeActivity_onCreate'i disari ver.
   target_link_options(tulparengine PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384 -u ANativeActivity_onCreate)

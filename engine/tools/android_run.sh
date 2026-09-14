@@ -26,7 +26,7 @@ ACT="$PKG/android.app.NativeActivity"
 
 echo "[1/5] derleme (NDK: $(basename "$NDK"), $ABI)"
 cmake -S "$ROOT/engine" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-      -DANDROID_ABI="$ABI" -DANDROID_PLATFORM=android-26 -DCMAKE_BUILD_TYPE=Release -DENGINE_TRACY="${TULPAR_TRACY:-OFF}" >/dev/null 2>&1
+      -DANDROID_ABI="$ABI" -DANDROID_PLATFORM=android-26 -DCMAKE_BUILD_TYPE=Release -DENGINE_TRACY="${TULPAR_TRACY:-OFF}" -DENGINE_SWAPPY="${TULPAR_SWAPPY:-OFF}" >/dev/null 2>&1
 cmake --build "$BUILD" -j --target tulparengine engine_tests 2>&1 | grep -E "error|warning: unused" | grep -v third_party || true
 [ -f "$BUILD/libtulparengine.so" ] || { echo "HATA: libtulparengine.so uretilmedi"; exit 1; }
 
@@ -58,7 +58,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 # Bos deger adb shell'de kaybolur: tirnakla.
-adb shell "setprop debug.tulpar.mode '$MODE'; setprop debug.tulpar.filter '$FILTER'; setprop debug.tulpar.frames '$FRAMES'; setprop debug.tulpar.present '${TULPAR_PRESENT:-fifo}'; setprop debug.tulpar.prerotate '${TULPAR_PREROTATE:-1}'; setprop debug.tulpar.size '${TULPAR_SIZE:-2159x1080}'; setprop debug.tulpar.validation '${TULPAR_VALIDATION:-0}'; setprop debug.tulpar.audio '${TULPAR_AUDIO:-0}'"
+adb shell "setprop debug.tulpar.mode '$MODE'; setprop debug.tulpar.filter '$FILTER'; setprop debug.tulpar.frames '$FRAMES'; setprop debug.tulpar.present '${TULPAR_PRESENT:-fifo}'; setprop debug.tulpar.prerotate '${TULPAR_PREROTATE:-1}'; setprop debug.tulpar.size '${TULPAR_SIZE:-2159x1080}'; setprop debug.tulpar.validation '${TULPAR_VALIDATION:-0}'; setprop debug.tulpar.audio '${TULPAR_AUDIO:-0}'; setprop debug.tulpar.swappy '$([ "${TULPAR_SWAPPY:-OFF}" = ON ] && echo 1 || echo 0)'"
 
 if [ "${TULPAR_TRACY:-OFF}" = ON ]; then adb forward tcp:8086 tcp:8086 >/dev/null && echo "  tracy: adb forward 8086 (masaustunde tracy-capture -a 127.0.0.1)"; fi
 echo "[4/5] baslat: $MODE"

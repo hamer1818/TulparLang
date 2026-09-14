@@ -128,6 +128,10 @@ with zipfile.ZipFile(base, "a", zipfile.ZIP_STORED) as z:
             with open(so, "rb") as f:
                 z.writestr(zi, f.read())
             print("  +", arc, "(%d bytes)" % os.path.getsize(so))
+    dex = os.path.join(stage, "classes.dex")
+    if os.path.isfile(dex):  # hasCode=true host (motor: Swappy Java simi icin gerekli)
+        z.write(dex, "classes.dex", zipfile.ZIP_DEFLATED)
+        print("  + classes.dex (%d bytes)" % os.path.getsize(dex))
     aroot = os.path.join(stage, "assets")
     if os.path.isdir(aroot):
         for dirpath, _dirs, files in os.walk(aroot):

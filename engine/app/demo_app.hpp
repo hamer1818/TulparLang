@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.h>
 
 #include "platform/touch.hpp"
+#include "rhi/swapchain.hpp"
 
 namespace tulpar::engine::rhi { struct VkApi; }
 
@@ -22,6 +23,7 @@ struct DemoOptions {
   bool audio = false; // 440 Hz ton (dongu): ses cihazi yolu + callback sayimi raporda
   bool prerotate = true;            // Android on-dondurme (A/B icin kapatilabilir)
   const char *present_mode = nullptr; // "fifo" (vars.), "mailbox", "immediate"
+  rhi::SwapchainConfig::Hooks swap_hooks; // Android: Swappy sunum kancalari (host doldurur)
 };
 
 enum class HostPoll : uint8_t {

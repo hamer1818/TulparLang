@@ -419,3 +419,22 @@ Android'e derlenmez (`if(NOT ANDROID)`).
 (ışın–AABB), geri al/yinele (PLAN "The Truth" işlem günlüğü), ışık/malzeme düzenleme, oynat/durdur sim geri
 sarımı, implot ile kare zamanı grafiği.
 
+## Android kare temposu — AGDK Swappy (tarama belgesi §9, İP-E) — 2026-09-14
+
+**Teslim edilen (derlendi, varsayılan KAPALI):** `rhi::SwapchainConfig::Hooks` (on_create / on_destroy / present):
+kare temposu katmanı sunumu sarar; `Swapchain` bunları yaratma/yok etme/sunumda çağırır. Android host
+(`app/android_main.cpp`, `ENGINE_SWAPPY=1`): swapchain yaratılınca JNI env bu thread'e bağlanır,
+`SwappyVk_initAndGetRefreshCycleDuration(env, activity->clazz, ...)`, `setWindow`, hedef 60 fps
+(`SwappyVk_setSwapIntervalNS`), istatistik açık; sunum `SwappyVk_queuePresent`; sonda `SwappyVk_getStats`
+(geç kare / kayma / bekleme histogramları) basılır. `engine/tools/fetch_swappy.sh` AGDK games-frame-pacing
+AAR'ını (2.3.0-alpha01, Apache-2.0) Google Maven'dan indirir, prefab statik kütüphaneler gitignore'lu;
+`TULPAR_SWAPPY=ON android_run.sh demo`.
+
+**Ölçüm:** emülatörde (API 37) init başarılı (yenileme 16.67 ms) ama **ilk sunumda asılı kalıyor** (300 s):
+Swappy'nin bellekten yüklediği Java simi (`SwappyDisplayManager`, API ≥ 30 yolu) `System.loadLibrary("tulparengine")`
+ile kendi doğal metotlarını bağlamak istiyor; `InMemoryDexClassLoader`'ın `nativeLibraryDirectories`'i yalnız sistem
+dizinleri → "couldn't find libtulparengine.so" → vsync callback'i gelmez → `SwappyVk_queuePresent` bekler.
+Denenen: `hasCode=true` + boş `classes.dex` (javac+d8) — değişmedi; geri alındı. **Huawei P20 Pro Android 10
+(SDK 29)** Swappy'de Java sim yolunu **kullanmaz** (NDK Choreographer) → telefonda çalışması beklenir; ölçüm
+(p99/max, geç kare histogramı, FIFO ile A/B) telefon bağlanınca. Tuzaklar 8v.
+

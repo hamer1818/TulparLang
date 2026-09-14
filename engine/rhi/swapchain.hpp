@@ -33,6 +33,15 @@ struct SwapchainConfig {
   // Istenen sunum kipi; yoksa FIFO'ya duser. IMMEDIATE/MAILBOX: vsync kilidi
   // kalkar, GPU'nun gercek kare maliyeti olculur (A7: urun FIFO ile kilitli).
   VkPresentModeKHR preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+  // Sunum kancalari: kare temposu katmani (Android AGDK Swappy) sunumu sarar.
+  // present verilmisse vkQueuePresentKHR yerine o cagrilir; on_create/on_destroy
+  // swapchain omrunu bildirir (Swappy swapchain basina baglam tutar).
+  struct Hooks {
+    void *user = nullptr;
+    void (*on_create)(void *user, VkPhysicalDevice phys, VkDevice dev, VkQueue q, VkSwapchainKHR sc) = nullptr;
+    void (*on_destroy)(void *user, VkDevice dev, VkSwapchainKHR sc) = nullptr;
+    VkResult (*present)(void *user, VkQueue q, const VkPresentInfoKHR *pi) = nullptr;
+  } hooks;
 };
 
 class Swapchain {

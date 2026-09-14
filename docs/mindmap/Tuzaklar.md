@@ -2019,3 +2019,13 @@ Testler 67/67'den "COKME testi: content_gltf_loads_checker_cube" a dustu; yeni t
 Kural: zeroed dizilerde "yok" anlami 0 olsun (indeks+1 sakla) ya da alani acikca yaz; `alloc_array_zeroed` ile
 "varsayilan uye degeri" birlikte kullanilmaz. Ayni sinif: `ModelClip::skin = -1`, `ModelMaterial::image = -1`.
 
+### 8v. AGDK Swappy NativeActivity'de (API >= 30) ilk sunumda asilir: Java simi kendi lib'ini bulamaz
+`SwappyVk_initAndGetRefreshCycleDuration` basarili (yenileme 16.67 ms), sonra `SwappyVk_queuePresent` sonsuza
+dek bekler. logcat: `SwappyDisplayManager: InMemoryDexClassLoader[... nativeLibraryDirectories=[/system/lib64,
+/system_ext/lib64]] couldn't find "libtulparengine.so"` — bellekten yuklenen Java simi dogal metotlarini
+`System.loadLibrary` ile baglamaya calisir, sinif yukleyicinin dogal yolu uygulama lib dizinini icermez, vsync
+callback'i gelmez. `hasCode=true` + bos classes.dex denendi, degismedi. API 29 (Android 10) bu Java yolunu
+kullanmaz. Kural: Swappy varsayilan KAPALI (`ENGINE_SWAPPY`), yalniz gercek cihazda olcumle acilir; "init basarili"
+sunumun calistigi anlamina gelmez — kare sayaci ilerlemeli. GameActivity gocu (IP-P, Gradle host) bu sinif
+yukleyici sorununu kokten cozer.
+

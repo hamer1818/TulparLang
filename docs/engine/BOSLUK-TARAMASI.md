@@ -4,16 +4,28 @@
 > Tracy, ozz, Oboe, xatlas, ImGui, Performance Tuner) madde madde `engine/`'in gerçek durumuyla karşılaştırıldı.
 > Üç sütun: belgenin istediği, bizde ne var (ölçülmüş), ne yapıldı / ne sırada. Kural: iddia yok, sayı var.
 
-## 0. Bugün kapatılanlar
+## 0. Bugün kapatılanlar (özet — ayrıntı katman tablolarında)
 
 | # | Belge maddesi | Yapılan | Kanıt |
 |---|---|---|---|
-| 1 | **PerfDoc = CI kapısı** (§5, §7.2, İP-B) | PerfDoc arşivlenmiş; ardılı Khronos doğrulama katmanının **BestPractices + Arm satıcı kuralları**. `DeviceConfig::best_practices` katman ayarlarını `VK_EXT_layer_settings` zinciriyle açıyor; uyarılar kimlik başına sayılıyor (`Device::best_practice_id`). Test `renderer_mali_best_practices_gate`: tam kare (gölge + doku + nokta ışık + UI) → **Arm uyarısı 0 = kapı**, genel uyarılar rapor; **pozitif kontrol** LOD kırpan sampler'ın Arm uyarısı vermesi | İlk koşumda **2 gerçek Mali ihlali** buldu: iki sampler `maxLod` kırpıyordu (`BestPractices-Arm-vkCreateSampler-lod-clamping`). Düzeltildi (`VK_LOD_CLAMP_NONE`). Masaüstü 64/64 katmanla; telefon: aşağıda |
-| 2 | **Mali birleştirme bütçesi ≤8 attachment, ≤128 bit/px** (§5, §7.1) | `rhi/tile_budget.hpp`: bütçe **kodla zorlanıyor** — swapchain ve offscreen geçişleri yaratılırken aşım = init hatası; bilinmeyen biçim sessizce 0 sayılmaz, hata | Test `rhi_mali_tile_budget_rule`: ana geçiş 1 att / 32 bit renk / 32 bit derinlik; plan zinciri (vis 64 + ışık 32 + hareket 16 + maske 8 = **120**) sığıyor; 2×RGBA32F (256) ve 9 attachment reddediliyor |
-| 3 | Katman telefona | `android_run.sh tests` Khronos Android katmanını (1.4.357.0, Apache-2.0, `engine/tools/fetch_vvl_android.sh`, gitignore'lu) APK'ya koyuyor; yükleyici debuggable uygulamanın lib dizininden alıyor | Telefonda: testler 64/64, pozitif kontrol 0→1 (Arm kuralları gerçekten açık); demo 0 doğrulama hatası. Yol boyunca **3 gerçek hata** çıktı: sampler LOD ×2, mesaj kanalı yok (sahte yeşil), `compositeAlpha` desteklenmiyor. Katmanın bir sahte pozitifi (VVL 45) CPU ölçümüyle açıkça düşülüyor |
-| 4 | **Defold 1 MB** karşılaştırması (§2, §7.3) | `KARSILASTIRMA.md` yazıldı, **ölçülmüş** boyutla | `libtulparengine.so` arm64 Release strip: **2.7 MB** (Jolt + Recast + renderer + testler dahil) |
-| 6 | **Filament renk uzayı** (İP-A) | Doğrusal aydınlatma + sRGB hedef/doku; yazar renkleri dönüştürülür | `renderer_srgb_roundtrip_is_identity`: 32 128 200 255 aynen; kontrol 4 55 147 255 (masaüstü + telefon + emülatör) |
-| 5 | Masaüstünde doğrulama katmanı yoktu (testler ATLANDI diyordu) | LunarG SDK'dan yalnız katman `~/.local/lib/vulkan/` + `~/.local/share/vulkan/explicit_layer.d/` (kullanıcı düzeyi, açık katman; başka uygulamayı etkilemez) | Masaüstü artık **64/64, 0 atlandı** |
+| 1 | **PerfDoc = CI kapısı** | Khronos BestPractices + Arm kuralları, `DeviceConfig::best_practices`, kapı + pozitif kontrol | 3 gerçek hata bulundu/düzeltildi; masaüstü + telefon + emülatör |
+| 2 | **Mali tile bütçesi** | `rhi/tile_budget.hpp`, geçiş yaratılırken zorlanır | test + kontroller |
+| 3 | Katman telefona | `fetch_vvl_android.sh`, APK'da katman | telefon 64/64 (o adımda) |
+| 4 | **Defold boyut** | `KARSILASTIRMA.md`: 2.7 MB strip'li arm64 | ölçüldü |
+| 5 | Masaüstü doğrulama katmanı | `~/.local` altında | 0 atlandı |
+| 6 | **Filament renk uzayı** | doğrusal aydınlatma + sRGB hedef/doku | gidiş-dönüş birim (3 ortam) |
+| 7 | **meshoptimizer + LOD** | vendored; cache/overdraw/fetch + %50/%25 LOD | ACMR 1.06→0.71, siluet %1.5 |
+| 8 | **The Forge SRT** | `FrameUbo` std140 `static_assert` | derleme |
+| 9 | **Tracy** | istemci + fiber + `tracy_check.sh` | telefon 2187 bölge |
+| 10 | **glTF iskelet + skinning** (ozz'suz) | kendi runtime; GPU skinning | analitik + siluet; emülatör |
+| 11 | **Dear ImGui + ImGuizmo** | `engine_editor` iskeleti | offscreen kapı |
+| 12 | **Ses (miniaudio; AAudio)** | karıştırıcı + cihaz + klip | 3 kapı; emülatör AAudio |
+| 13 | **ASTC + KTX2** | astc-encoder, kendi KTX2, `engine_texpack` | PSNR; emülatör donanım ASTC |
+| 14 | **Swappy** | hooks + host + fetch (kapalı) | emülatörde asılı (8v); telefon bekliyor |
+
+**Yapılmayanlar ve neden:** GameActivity, Memory Advice, Performance Tuner (Gradle host / Play; İP-P, İP-T),
+lightmap zinciri (OpenGL bake), ozz (kendi runtime yeterli), libktx (kendi okuyucu), Oboe (AAudio doğrudan),
+GGPO/ağ (ilk oyunda yok), RenderDoc/AGI (araç, kod değil). Telefon USB düştüğünden 10–14 Mali'de doğrulanmadı.
 
 ## 1. Renderer katmanı (belge §1–8)
 
@@ -33,13 +45,13 @@
 
 | Bileşen | Bizde | Durum / karar |
 |---|---|---|
-| **GameActivity** (yaşam döngüsü + IME + insets) | `NativeActivity` + `native_app_glue`, `hasCode=false` (Java/DEX yok), APK `aapt2` ile elle | 🟠 **İP-P planlandı, henüz değil.** Gerektirdiği şey: Java sınıfı (`GameActivity` türevi) → `hasCode=true`, `javac`+`d8` (build-tools'ta var), `androidx.games:games-activity` AAR (Maven'dan indirilir, prefab `.a` + başlıklar). Gradle şart değil. Öncesinde bugünkü host'un yaşam döngüsü kapısı: `TERM_WINDOW → INIT_WINDOW` yüzey değişimi çalışıyor (`replace_surface`), `LOW_MEMORY` yalnız loglanıyor |
+| **GameActivity** (yaşam döngüsü + IME + insets) | 🟠 **İP-P planlı**, yapılmadı: Java sınıfı + `games-activity` AAR (AppCompat/lifecycle bağımlılık ağacı → Gradle host; `android/host/` iskeleti var, `gradle` bu makinede yok). Swappy Java-sim tıkanması (8v) da bununla çözülür. Bugünkü host: `TERM_WINDOW→INIT_WINDOW` yüzey değişimi çalışıyor, `LOW_MEMORY` log | Sıra: 6 |
 | **GameTextInput** | Yok (metin girişi yok; editör masaüstünde) | 🟡 İP-P ile birlikte |
 | **GameController** | Yok | 🟢 sonra |
-| **Swappy** kare temposu | Yok; FIFO ile 60 fps ölçüldü, MAILBOX 223 fps | 🟠 `games-frame-pacing` AAR prefab ile `SwappyVk_queuePresent`; sabit 60/30 hedefi ve termal düşüşte adım. İP-P'den bağımsız yapılabilir |
-| **Memory Advice API** | Yok; bellek tepe değeri statik (arena rezervleri) | 🟡 AAR + JNI; `APP_CMD_LOW_MEMORY` bugün log. İP-T |
+| **Swappy** kare temposu | 🟡 **bugün derlendi**: `SwapchainConfig::Hooks` + Android host + AAR fetch; emülatörde Java simi lib bulamıyor (asılı, Tuzaklar 8v); telefon (API 29, sim yok) ölçümü bekliyor | `TULPAR_SWAPPY=ON`, varsayılan kapalı |
+| **Memory Advice API** | 🟡 Yapılmadı: `games-memory-advice` AAR (prefab C API + TFLite modeli, JNI context) — GameActivity/Gradle host ile birlikte (İP-T); bugün `APP_CMD_LOW_MEMORY` yalnız log | Sıra: 7 |
 | **Oboe** | ✅ **bugün, miniaudio ile**: AAudio doğrudan (Oboe'nin sardığı API) + OpenSL yedek; FAZ4.md | Oboe yalnız cihaz tuzağı görülürse |
-| **Performance Tuner** | Yok (saha telemetrisi yok) | 🟡 L8, oyun yayınlanınca |
+| **Performance Tuner** | 🟡 Yapılmadı: Play + protobuf + yayınlanmış oyun ister (L8); ilk oyunla | — |
 | **AGI** | Kullanılmadı; G72'de timestamp yok | 🟡 Araç, kod değil: bir sonraki telefon ölçüm turunda denenecek (`adb` üstünden, pencere açılmadan) |
 | **ADPF** termal | Yok | 🟡 Faz 5 (termal sürdürülebilir 60 fps kapısı) |
 
@@ -68,7 +80,7 @@ köprü C ABI ile. Sırada "Tulpar bağlaması" (DURUM §6.3). Emsaller okuma li
 | Belge | Bizde | Karar |
 |---|---|---|
 | cgltf | ✅ | ✅ |
-| xatlas → lightmapper → seamoptimizer | Yok (dinamik gölge + nokta ışık var, lightmap yok) | 🟢 Faz 6; zincir hazır, tek dosya kütüphaneler |
+| xatlas → lightmapper → seamoptimizer | 🟢 Yapılmadı (karar): `lightmapper` OpenGL tabanlı, Vulkan'a taşınmaz; xatlas + kendi Vulkan compute bake Faz 6'nın ikinci yarısı; bugün dinamik gölge + kümelenmiş ışık | — |
 | meshoptimizer | ✅ **bugün**: vendored v1.2; yüklemede cache/overdraw/fetch + %50/%25 LOD, uzaklıkla seçim | Kapı: ACMR 1.06→0.71, LOD2 silueti %1.5 içinde, hata sınırı kontrolü. Meshlet/cluster DAG Faz 9 |
 | astc-encoder + libktx | ✅ **bugün**: astc-encoder vendored, **kendi KTX2 okuyucu/yazıcı** (libktx yok), `engine_texpack`, GPU ASTC ya da CPU çözümü; kapı PSNR | FAZ6.md; Mali donanım yolu telefon gelince |
 
@@ -87,7 +99,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 
 | Katman | Belge | Bizim | Bugün değişen |
 |---|---|---|---|
-| L0 | 🟡 | 🟡 NativeActivity çalışıyor, GameActivity/Swappy/MemAdvice yok | — |
+| L0 | 🟡 | 🟡 NativeActivity çalışıyor, **Swappy derlendi** (telefon ölçümü bekliyor), GameActivity/MemAdvice yok | 🟡 |
 | L1 | 🟢 | 🟢 **Tracy bugün** | ✅ |
 | L2 | 🟢 | 🟢 **+ Mali linter kapısı + tile bütçesi** | ✅ |
 | L3 | 🟢 | 🟡 **sRGB/doğrusal bugün**, render graph yok, 2 sampler ihlali **düzeltildi** | ✅ |
@@ -102,5 +114,5 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 2. **Sahne veri modeli + format** → editörün kaydet/yükle/geri al katmanı (editör iskeleti ✅ bugün, ImGui kararı verildi).
 3. ~~glTF iskelet + GPU skinning~~ ✅ bugün (kendi runtime; ozz gerekmedi). Karakter modeli: sanatçı varlığı bekliyor.
 4. ~~Tracy (İP-R)~~ ✅ bugün.
-5. **Swappy** kare temposu, sonra **GameActivity** göçü (İP-P).
+5. ~~Swappy~~ derlendi (telefon ölçümü bekliyor); **GameActivity** göçü (İP-P) Gradle host ile.
 6. ~~Faz 4 ses~~ ✅; ~~ASTC/KTX2~~ ✅ bugün; Faz 6 kalan: pack formatı, lightmap.
