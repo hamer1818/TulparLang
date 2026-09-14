@@ -175,6 +175,13 @@ extern "C" void android_main(android_app *app) {
   uint32_t extracted = 0;
   if (AAssetDir *ad = AAssetManager_openDir(app->activity->assetManager, "")) {
     while (const char *name = AAssetDir_getNextFileName(ad)) {
+      // Yalniz bizim icerik turlerimiz: Huawei'de kok dizin listesi sistem
+      // kaplamalarini da getiriyor (APK'da 1 dosya, listede 16).
+      const char *dot = std::strrchr(name, '.');
+      if (!dot) continue;
+      const bool ours = !std::strcmp(dot, ".gltf") || !std::strcmp(dot, ".glb") || !std::strcmp(dot, ".bin") ||
+                        !std::strcmp(dot, ".png") || !std::strcmp(dot, ".jpg") || !std::strcmp(dot, ".ktx2");
+      if (!ours) continue;
       AAsset *as = AAssetManager_open(app->activity->assetManager, name, AASSET_MODE_BUFFER);
       if (!as) continue;
       char path[1024];

@@ -168,6 +168,11 @@ Düz küp **pozitif kontrol**: doku yolu kırılsa ikisi aynı çıkar ve test d
 (`TULPAR_ENGINE_ASSETS` ya da kaynak ağacı). Masaüstü headless 600 kare: sahne özeti değişmedi
 (`1513845f8ca5afd9`) — doku sim'e dokunmaz.
 
+**Telefonda (Mali-G72, USB geri gelince):** içerik kapıları geçti — keskin geçiş 2152 / 384 (masaüstü 2142:
+rasterizer farkı), turuncu 8226 / lacivert 7731; `engine_tests` 58/58; dokulu+gölgeli demo FIFO 59.6 fps,
+MAILBOX 233.9 fps (gölge-yalnız 233.8) → doku bedeli bu ölçekte ölçülemez. Ekran görüntüsü dama zemin ve
+glTF kutuları gösteriyor.
+
 Bilinen boşluk: renk uzayı yok (UNORM doku × ışık → UNORM hedef, "ekran uzayında aydınlatma"); sRGB/linear
 ayrımı PBR ile gelir. Mobil asıl doku yolu ASTC/KTX2 (Faz 6).
 
