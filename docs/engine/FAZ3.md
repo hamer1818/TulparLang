@@ -31,6 +31,14 @@ Headless 600 kare, 640×360:
 Headless kare görüntüsü: zemin, duvar, yerleşmiş kutu yığınları, dağılmış ajanlar ve
 üstlerinde sallanan eklem zincirleri — Faz 2'nin "fizikli, animasyonlu, gezinen" sahnesi.
 
+**Pencereli koşu (kullanıcı, 2026-09-14, Wayland + RTX 5080):** açıldı, ESC ile kapandı, 18 s / 3228 kare.
+
+| Ölçü | Değer |
+|---|---|
+| kare p50 / p99 / max | 5.55 / ~5.7 / 7.6 ms (FIFO vsync, 180 Hz ekran — GPU/CPU sınırı değil, ekran) |
+| kare içi `operator new` | 0 |
+| içerik özeti, 600. tick | `1513845f8ca5afd9` — headless 600 karelik koşuyla **bit eşit** (sabit adım: pencere hızından bağımsız aynı simülasyon) |
+
 ## Bulgular
 - **Sarım ve y ters çevirme (Tuzaklar 8k):** `Mat4::perspective` y'yi ters çeviriyor (Vulkan NDC).
   GL alışkanlığıyla `frontFace = CLOCKWISE` konunca tek yüzlü zemin kayboldu, küpler iç
@@ -46,8 +54,7 @@ Headless kare görüntüsü: zemin, duvar, yerleşmiş kutu yığınları, dağ�
   (acquire/present/yeniden yaratma) kullanıcı çalıştırınca görülecek.
 
 ## Açık iş
-1. Kullanıcı pencereli demoyu çalıştırır: `./build-linux/engine/engine_demo` (ESC çıkar; `--frames N` ile kendiliğinden kapanır).
-   Wayland oturumu: GLFW 3.4+ Wayland'ı seçer; sorun olursa `GLFW_PLATFORM`/X11 ile denenir.
+1. ~~Pencereli demo~~ çalıştı (Wayland, GLFW 3.5). Yeniden boyutlandırma/küçültme yolu (`needs_recreate`) henüz denenmedi.
 2. Depth görüntüsü `Device::allocate` blok ayırıcıdan geliyor ve **serbest bırakılmıyor**: her
    pencere yeniden boyutlandırması 64 MB bloklardan yer yer. Faz 3'te ayırıcıya serbest bırakma
    (ya da geçici görüntüler için ayrı havuz) gelir.
