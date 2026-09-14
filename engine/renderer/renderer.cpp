@@ -715,6 +715,67 @@ MeshHandle Renderer::create_skinned_mesh(const SkinnedVertex *verts, uint32_t nv
   return MeshHandle{mesh_count_ - 1};
 }
 
+TextureHandle Renderer::create_texture_levels(VkFormat fmt, uint32_t w, uint32_t h, uint32_t levels, const uint8_t *const *data,
+                                              const uint32_t *sizes) {
+  if (texture_count_ >= cfg_.max_textures || levels == 0 || levels > 16) return TextureHandle{};
+  rhi::VkApi &a = dev_->api();
+  Texture &t = textures_[texture_count_];
+  VkImageCreateInfo ii{};
+  ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  ii.imageType = VK_IMAGE_TYPE_2D;
+  ii.format = fmt;
+  ii.extent = {w, h, 1};
+  ii.mipLevels = levels;
+  ii.arrayLayers = 1;
+  ii.samples = VK_SAMPLE_COUNT_1_BIT;
+  ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  if (a.vkCreateImage(dev_->handle(), &ii, nullptr, &t.image) != VK_SUCCESS) return TextureHandle{};
+  VkMemoryRequirements req;
+  a.vkGetImageMemoryRequirements(dev_->handle(), t.image, &req);
+  rhi::MemoryAlloc mem;
+  if (!dev_->allocate(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, &mem)) return TextureHandle{};
+  a.vkBindImageMemory(dev_->handle(), t.image, mem.memory, mem.offset);
+  VkDeviceSize total = 0;
+  for (uint32_t i = 0; i < levels; i++) total += (sizes[i] + 15) & ~15u; // seviye baslangici 16'ya hizali (blok = 16 B)
+  VkBuffer staging = VK_NULL_HANDLE;
+  rhi::MemoryAlloc sm;
+  if (!make_buffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, total, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &staging, &sm))
+    return TextureHandle{};
+  VkBufferImageCopy regions[16]{};
+  VkDeviceSize off = 0;
+  uint32_t mw = w, mh = h;
+  for (uint32_t i = 0; i < levels; i++) {
+    std::memcpy(static_cast<uint8_t *>(sm.mapped) + off, data[i], sizes[i]);
+    regions[i].bufferOffset = off;
+    regions[i].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
+    regions[i].imageExtent = {mw, mh, 1};
+    off += (sizes[i] + 15) & ~15u;
+    mw = mw > 1 ? mw / 2 : 1; mh = mh > 1 ? mh / 2 : 1;
+  }
+  VkCommandBuffer cb = dev_->begin_one_shot();
+  image_barrier(a, cb, t.image, 0, levels, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+  a.vkCmdCopyBufferToImage(cb, staging, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, levels, regions);
+  image_barrier(a, cb, t.image, 0, levels, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+  bool ok = dev_->end_one_shot_and_wait(cb);
+  a.vkDestroyBuffer(dev_->handle(), staging, nullptr);
+  if (!ok) return TextureHandle{};
+  VkImageViewCreateInfo vi{};
+  vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  vi.image = t.image;
+  vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  vi.format = fmt;
+  vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1};
+  if (a.vkCreateImageView(dev_->handle(), &vi, nullptr, &t.view) != VK_SUCCESS) return TextureHandle{};
+  t.w = w; t.h = h; t.mips = levels;
+  stats_.textures = ++texture_count_;
+  return TextureHandle{texture_count_ - 1};
+}
+
 void Renderer::set_camera(const Mat4 &view, const Mat4 &proj) { view_ = view; proj_ = proj; }
 void Renderer::set_light(Vec3 dir, Vec3 ambient, float diffuse_scale) { light_dir_ = dir; ambient_ = ambient; diffuse_scale_ = diffuse_scale; }
 

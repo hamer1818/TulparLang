@@ -124,6 +124,22 @@ add_library(engine_meshopt STATIC ${ENGINE_MESHOPT_SOURCES})
 target_include_directories(engine_meshopt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/meshoptimizer)
 target_compile_options(engine_meshopt PRIVATE -fno-exceptions -fno-rtti -w)
 
+# --- astc-encoder (vendored, engine/third_party/astcenc, Apache-2.0) ---------
+# Arac (engine_texpack) sikistirir; runtime yalniz ASTC LDR olmayan GPU'da (masaustu
+# NVIDIA) cozer. ISA: x86_64 SSE4.1+POPCNT, AArch64 NEON, digerleri skaler.
+file(GLOB ENGINE_ASTCENC_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astcenc/astcenc_*.cpp)
+add_library(engine_astcenc STATIC ${ENGINE_ASTCENC_SOURCES})
+target_include_directories(engine_astcenc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astcenc)
+target_compile_options(engine_astcenc PRIVATE -fno-exceptions -fno-rtti -w)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_definitions(engine_astcenc PRIVATE ASTCENC_SSE=41 ASTCENC_AVX=0 ASTCENC_POPCNT=1 ASTCENC_F16C=0 ASTCENC_NEON=0 ASTCENC_SVE=0)
+    target_compile_options(engine_astcenc PRIVATE -msse4.1 -mpopcnt)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+    target_compile_definitions(engine_astcenc PRIVATE ASTCENC_SSE=0 ASTCENC_AVX=0 ASTCENC_POPCNT=0 ASTCENC_F16C=0 ASTCENC_NEON=1 ASTCENC_SVE=0)
+else()
+    target_compile_definitions(engine_astcenc PRIVATE ASTCENC_SSE=0 ASTCENC_AVX=0 ASTCENC_POPCNT=0 ASTCENC_F16C=0 ASTCENC_NEON=0 ASTCENC_SVE=0)
+endif()
+
 # --- audio (L3): miniaudio (vendored, engine/third_party/miniaudio, MIT-0) ---
 add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/miniaudio_impl.c)
 target_include_directories(engine_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio)
@@ -161,11 +177,11 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/font.cpp content/vendored_impl.c)
+add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
-target_link_libraries(engine_content PUBLIC engine_renderer engine_meshopt)
+target_link_libraries(engine_content PUBLIC engine_renderer engine_meshopt engine_astcenc)
 target_compile_options(engine_content PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
 add_dependencies(engine_content engine_layer_check)
 
@@ -229,6 +245,10 @@ target_link_libraries(engine_tests PRIVATE engine_content engine_renderer engine
 if(NOT ANDROID)
     target_link_libraries(engine_tests PRIVATE engine_imgui)
     target_include_directories(engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
+    # --- engine_texpack: PNG -> ASTC mip zinciri -> .ktx2 (sahne derleyicisi doku dilimi)
+    add_executable(engine_texpack tools/texpack.cpp)
+    target_link_libraries(engine_texpack PRIVATE engine_content engine_core ${CMAKE_DL_LIBS})
+    target_compile_options(engine_texpack PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
     # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
     add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/demo_scene.cpp)
     target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})

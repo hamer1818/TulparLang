@@ -70,7 +70,7 @@ köprü C ABI ile. Sırada "Tulpar bağlaması" (DURUM §6.3). Emsaller okuma li
 | cgltf | ✅ | ✅ |
 | xatlas → lightmapper → seamoptimizer | Yok (dinamik gölge + nokta ışık var, lightmap yok) | 🟢 Faz 6; zincir hazır, tek dosya kütüphaneler |
 | meshoptimizer | ✅ **bugün**: vendored v1.2; yüklemede cache/overdraw/fetch + %50/%25 LOD, uzaklıkla seçim | Kapı: ACMR 1.06→0.71, LOD2 silueti %1.5 içinde, hata sınırı kontrolü. Meshlet/cluster DAG Faz 9 |
-| astc-encoder + libktx | Yok (RGBA8 + blit mip) | 🟡 Faz 6 pack; Mali'de ASTC ölçümü telefonda yapılır |
+| astc-encoder + libktx | ✅ **bugün**: astc-encoder vendored, **kendi KTX2 okuyucu/yazıcı** (libktx yok), `engine_texpack`, GPU ASTC ya da CPU çözümü; kapı PSNR | FAZ6.md; Mali donanım yolu telefon gelince |
 
 ## 7. L7 Tooling (belge §14)
 
@@ -93,7 +93,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 | L3 | 🟢 | 🟡 **sRGB/doğrusal bugün**, render graph yok, 2 sampler ihlali **düzeltildi** | ✅ |
 | L4 | 🟡 | 🟢 **iskelet/animasyon + skinning**, **ses (miniaudio) bugün**; Steam Audio/ağ yok | ✅ |
 | L5 | 🔴 | 🔴 Tulpar bağlaması yok | — |
-| L6 | 🟢 | 🟡 glTF + **meshopt/LOD bugün**; lightmap/ASTC/pack yok | ✅ |
+| L6 | 🟢 | 🟢 glTF + meshopt/LOD + iskelet + **ASTC/KTX2 bugün**; lightmap/pack yok | ✅ |
 | L7 | 🟢 | 🟡 **editör iskeleti bugün** (ImGui + ImGuizmo); veri modeli/kaydet yok | ✅ |
 | L8 | 🟡 | 🔴 yok (ilk oyun öncesi gerekmez) | — |
 
@@ -103,4 +103,4 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 3. ~~glTF iskelet + GPU skinning~~ ✅ bugün (kendi runtime; ozz gerekmedi). Karakter modeli: sanatçı varlığı bekliyor.
 4. ~~Tracy (İP-R)~~ ✅ bugün.
 5. **Swappy** kare temposu, sonra **GameActivity** göçü (İP-P).
-6. ~~Faz 4 ses~~ ✅ ilk dilim bugün (miniaudio); Faz 6 içerik (ASTC/KTX2/lightmap).
+6. ~~Faz 4 ses~~ ✅; ~~ASTC/KTX2~~ ✅ bugün; Faz 6 kalan: pack formatı, lightmap.

@@ -307,6 +307,7 @@ bool Device::init_device(VkSurfaceKHR surface) {
   f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   f2.pNext = chain;
   f2.features.drawIndirectFirstInstance = VK_FALSE;
+  f2.features.textureCompressionASTC_LDR = caps_.texture_compression_astc_ldr ? VK_TRUE : VK_FALSE;
 
   float prio = 1.0f;
   VkDeviceQueueCreateInfo qci{};
@@ -440,6 +441,7 @@ bool Device::pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface) {
   }
   f2.pNext = chain;
   api.vkGetPhysicalDeviceFeatures2(phys_, &f2);
+  caps_.texture_compression_astc_ldr = f2.features.textureCompressionASTC_LDR == VK_TRUE;
   if (core12) {
     caps_.descriptor_indexing = f12.descriptorIndexing && f12.runtimeDescriptorArray;
     caps_.timeline_semaphore = f12.timelineSemaphore;

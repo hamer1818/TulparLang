@@ -6,6 +6,9 @@
 #include <cstring>
 
 #include "content/gltf.hpp"
+#include "content/ktx2.hpp"
+
+#include <stb_image.h>
 #include "content/meshopt.hpp"
 #include "core/memory/arena.hpp"
 #include "renderer/renderer.hpp"
@@ -347,4 +350,111 @@ ENGINE_TEST(content_skinned_gltf_bends) {
   ren.shutdown();
   rhi::offscreen_destroy(off);
   dev.shutdown();
+}
+
+// KTX2 + ASTC (Faz 6 doku yolu): engine_texpack'in urettigi checker_64.ktx2 (4x4
+// sRGB, 7 mip) okunur; (1) CPU cozumu kaynak PNG'ye PSNR > 35 dB (belirlenimli,
+// her platformda ayni); (2) GPU'ya yuklenir — ASTC LDR varsa donanim (Mali),
+// yoksa CPU cozumu (masaustu) — 1:1 cizilip geri okunur, PSNR > 30 dB; hangi
+// yol raporlanir. POZITIF KONTROLLER: kimligi bozuk dosya reddedilir; PSNR
+// metrigi kaydirilmis goruntude dusuk (< 20 dB) — olcum ayirt edici.
+ENGINE_TEST(content_ktx2_astc_decodes_and_uploads) {
+  static SystemArena sys;
+  if (!sys.reserve(64u << 20, "content_ktx2")) { CHECK(false); return; }
+  char kpath[512], ppath[512];
+  if (!asset_path(kpath, sizeof kpath, "checker_64.ktx2") || !asset_path(ppath, sizeof ppath, "checker_64.png")) { CHECK(false); return; }
+  // Kaynak PNG
+  FILE *f = std::fopen(ppath, "rb");
+  CHECK(f != nullptr);
+  if (!f) return;
+  std::fseek(f, 0, SEEK_END); const long sz = std::ftell(f); std::fseek(f, 0, SEEK_SET);
+  uint8_t *file = sys.alloc_array<uint8_t>((uint32_t)sz);
+  const size_t got = std::fread(file, 1, (size_t)sz, f);
+  std::fclose(f);
+  int w = 0, h = 0, comp = 0;
+  stbi_uc *png = stbi_load_from_memory(file, (int)got, &w, &h, &comp, 4);
+  CHECK(png != nullptr && w == 64 && h == 64);
+  if (!png) return;
+  content::Ktx2Image img;
+  bool ok = content::ktx2_load(sys, kpath, &img);
+  if (!ok) std::printf("    [bilgi] ktx2: %s\n", img.error);
+  CHECK(ok);
+  if (!ok) return;
+  std::printf("    [bilgi] ktx2: vkFormat %u, %ux%u, %u seviye, blok %ux%u, sRGB %d, seviye0 %u bayt\n", (unsigned)img.vk_format, img.width,
+              img.height, img.levels, img.block_w, img.block_h, (int)img.srgb, img.level_size[0]);
+  CHECK(img.vk_format == VK_FORMAT_ASTC_4x4_SRGB_BLOCK && img.width == 64 && img.levels == 7 && img.level_size[0] == 4096);
+  // (1) CPU cozumu
+  uint8_t *dec = nullptr;
+  CHECK(content::astc_decode_rgba(sys, img.level_data[0], img.level_size[0], 64, 64, 4, 4, true, &dec));
+  const double psnr_cpu = dec ? content::rgba_psnr(png, dec, 64, 64) : 0;
+  // Kontrol: 8 px kaydirilmis dama (blok sinirlari kayar) dusuk PSNR vermeli.
+  static uint8_t shifted[64 * 64 * 4];
+  for (uint32_t y = 0; y < 64; y++) for (uint32_t x = 0; x < 64; x++) std::memcpy(shifted + (y * 64 + x) * 4, png + (y * 64 + ((x + 8) % 64)) * 4, 4);
+  const double psnr_ctrl = content::rgba_psnr(png, shifted, 64, 64);
+  std::printf("    [bilgi] CPU cozumu PSNR %.1f dB (kontrol: kaydirilmis %.1f dB)\n", psnr_cpu, psnr_ctrl);
+  CHECK(psnr_cpu > 35.0);
+  CHECK(psnr_ctrl < 20.0);
+  // Bozuk kimlik reddedilir.
+  uint8_t bad[96] = {0};
+  content::Ktx2Image junk;
+  CHECK(!content::ktx2_parse(sys, bad, sizeof bad, &junk));
+  // (2) GPU
+  if (!rhi::vk_api_load(g_api)) { skip("Vulkan loader yok (GPU yolu atlandi)"); stbi_image_free(png); return; }
+  rhi::Device dev;
+  rhi::DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); stbi_image_free(png); return; }
+  const uint32_t W = 64, H = 64;
+  rhi::OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  rhi::OffscreenResult ores;
+  rhi::OffscreenTarget *off = rhi::offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 0;
+  if (!ren.init(dev, sys, rhi::offscreen_render_pass(off), rc)) { CHECK(false); rhi::offscreen_destroy(off); dev.shutdown(); return; }
+  content::Ktx2UploadInfo ui;
+  renderer::TextureHandle th = content::ktx2_upload(ren, dev.caps(), sys, img, &ui);
+  CHECK(th.valid());
+  renderer::MaterialHandle mat = ren.create_material(th, {1, 1, 1});
+  renderer::Vertex v[4];
+  uint32_t idx[6];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  ren.set_light({0, 1, 0}, {1, 1, 1}, 0.0f);
+  ren.set_shadows_enabled(false);
+  // Ustten ortografik, 64 px = 64 texel (1:1): plane 64 birim, kamera y+.
+  ren.set_camera(Mat4::look_at({0, 10.0f, 0}, {0, 0, 0}, {0, 0, -1}), Mat4::ortho(-32, 32, -32, 32, 0.1f, 50.0f));
+  ren.set_render_size(W, H);
+  ren.begin_frame(0);
+  ren.draw(plane, mat, Mat4::scale({64, 1, 64}), {1, 1, 1});
+  Rec rr{&ren};
+  bool drawn = rhi::offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
+  CHECK(drawn);
+  double psnr_gpu = 0;
+  if (drawn) {
+    // Yonelim: piksel satiri/sutunu texel'e dogrudan denk gelmeyebilir (uv yonu);
+    // dama 8 px periyotlu ve simetrik: 4 yonelimin en iyisi alinir (bilgi basilir).
+    static uint8_t reor[64 * 64 * 4];
+    double best = 0; int best_k = 0;
+    for (int k = 0; k < 4; k++) {
+      for (uint32_t y = 0; y < 64; y++) for (uint32_t x = 0; x < 64; x++) {
+        uint32_t sx = x, sy = y;
+        if (k == 1) sx = 63 - x; else if (k == 2) sy = 63 - y; else if (k == 3) { sx = 63 - x; sy = 63 - y; }
+        std::memcpy(reor + (y * 64 + x) * 4, ores.pixels + (sy * 64 + sx) * 4, 4);
+      }
+      const double p = content::rgba_psnr(png, reor, 64, 64);
+      if (p > best) { best = p; best_k = k; }
+    }
+    psnr_gpu = best;
+    std::printf("    [bilgi] GPU yolu: %s (%u seviye), geri okuma PSNR %.1f dB (yonelim %d)\n", ui.hardware ? "donanim ASTC" : "CPU cozumu -> RGBA8",
+                ui.levels, psnr_gpu, best_k);
+  }
+  CHECK(psnr_gpu > 30.0);
+  ren.shutdown();
+  rhi::offscreen_destroy(off);
+  dev.shutdown();
+  stbi_image_free(png);
 }

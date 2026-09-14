@@ -106,6 +106,10 @@ public:
   // srgb: renk verisi (albedo) -> R8G8B8A8_SRGB, ornekleme dogrusal dondurur.
   // false: veri (kaplama/alfa/normal) -> UNORM, oldugu gibi.
   TextureHandle create_texture(const uint8_t *rgba, uint32_t w, uint32_t h, bool mipmaps = true, bool srgb = true);
+  // Hazir mip zinciri (sikistirilmis ASTC bloklari ya da RGBA8): seviye basina
+  // bayt dizisi, blit yok. fmt: VK_FORMAT_ASTC_*_SRGB_BLOCK / R8G8B8A8_SRGB...
+  TextureHandle create_texture_levels(VkFormat fmt, uint32_t w, uint32_t h, uint32_t levels, const uint8_t *const *data,
+                                      const uint32_t *sizes);
   MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1});
   TextureHandle default_texture() const { return default_texture_; } // 1x1 beyaz
   MaterialHandle default_material() const { return default_material_; }

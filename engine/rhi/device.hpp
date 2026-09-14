@@ -28,6 +28,7 @@ struct DeviceCaps {
   bool draw_indirect = false;         // zorunlu (multiDrawIndirect DEGIL)
   char missing_mandatory[96] = {0};   // eksik "zorunlu"lar (bos = tam); cihaz matrisi verisi
   bool lazily_allocated_memory = false; // transient attachment icin (TBDR'da var)
+  bool texture_compression_astc_ldr = false; // ASTC LDR (Mali/Adreno var, masaustu NVIDIA yok -> CPU coz)
   bool ext_subpass_merge_feedback = false;
   bool ext_graphics_pipeline_library = false;
   bool graphics_pipeline_library = false; // uzanti + feature acik (kullanilabilir)

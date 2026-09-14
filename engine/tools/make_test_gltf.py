@@ -231,7 +231,22 @@ def skin_tube():
     print("%s (%d bayt): %d vertex, %d ucgen, 2 eklem, 1 klip" % (OUT_SKIN, os.path.getsize(OUT_SKIN), len(pos), len(idx) // 3))
 
 
+def checker_png():
+    """64x64 dama PNG (KTX2/ASTC testi: engine_texpack ile checker_64.ktx2 uretilir)."""
+    w = h = 64
+    px = []
+    for y in range(h):
+        for x in range(w):
+            on = ((x // 8) + (y // 8)) % 2 == 0
+            px += [235, 120, 30, 255] if on else [25, 40, 110, 255]
+    out = os.path.join(os.path.dirname(HERE), "tests", "assets", "checker_64.png")
+    with open(out, "wb") as f:
+        f.write(png_rgba(w, h, px))
+    print("%s (%d bayt)" % (out, os.path.getsize(out)))
+
+
 if __name__ == "__main__":
     main()
     sphere()
     skin_tube()
+    checker_png()
