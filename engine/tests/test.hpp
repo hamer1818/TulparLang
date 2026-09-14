@@ -1,6 +1,7 @@
 // Minimal test cercevesi: STL yok, ayirma yok (kayit sabit diziye).
 #pragma once
 #include <cstdio>
+#include <cstdlib>
 
 namespace tulpar::engine::test {
 
@@ -22,6 +23,16 @@ struct Registry {
 inline void skip(const char *reason) {
   std::printf("    ATLANDI: %s\n", reason);
   Registry::skipped++;
+}
+// Gecici dizin: $TMPDIR, yoksa /tmp. Android'de /tmp YOK; adb shell'de
+// TMPDIR=/data/local/tmp, APK icinde host internalDataPath verir.
+inline const char *tmp_dir() {
+  const char *t = std::getenv("TMPDIR");
+  return (t && *t) ? t : "/tmp";
+}
+// mkstemp/mkdtemp sablonu: "<tmp>/<stem>_XXXXXX".
+inline void tmp_template(char *buf, size_t n, const char *stem) {
+  std::snprintf(buf, n, "%s/%s_XXXXXX", tmp_dir(), stem);
 }
 struct Registrar {
   Registrar(const char *name, TestFn fn) {

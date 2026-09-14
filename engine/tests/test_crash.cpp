@@ -45,7 +45,13 @@ int count_frames(const char *buf) {
 }
 
 void run_case(bool fiber) {
-  char dir[] = "/tmp/engine_crash_XXXXXX";
+  if (!g_engine_tests_exe) {
+    // APK icinde: cocuk surec exec edilemez (ikili yok, app_process). Gorunur atla.
+    ::tulpar::engine::test::skip("alt surec yok (APK icinde kosuyor) — cokme raporu testi masaustunde");
+    return;
+  }
+  char dir[512];
+  ::tulpar::engine::test::tmp_template(dir, sizeof dir, "engine_crash");
   CHECK(mkdtemp(dir) != nullptr);
   pid_t pid = fork();
   CHECK(pid >= 0);

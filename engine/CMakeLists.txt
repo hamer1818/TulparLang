@@ -4,6 +4,18 @@
 # linklenir. Plan: docs/engine/MIMARI.md. Katman kurali (tools/layer_check.py)
 # engine_core'un on kosulu — ihlal = build hatasi.
 # ===========================================================================
+# Tek basina yapilandirma (Android capraz derleme: cmake -S engine -B build-android
+# -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a
+# -DANDROID_PLATFORM=android-26). Ust agactan add_subdirectory ile de gelir.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  cmake_minimum_required(VERSION 3.14)
+  project(tulpar_engine CXX C ASM)
+  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+  endif()
+endif()
 enable_language(ASM)
 find_package(Threads REQUIRED)
 
@@ -119,18 +131,21 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- Demo uygulamasi (L5): pencere (GLFW dlopen) ya da --headless -------------
+if(NOT ANDROID)
 add_executable(engine_demo
     app/demo.cpp
+    app/demo_app.cpp
     app/demo_scene.cpp
     core/memory/alloc_gate_override.cpp
 )
 target_link_libraries(engine_demo PRIVATE engine_renderer engine_sim engine_rhi engine_core ${CMAKE_DL_LIBS})
 target_compile_options(engine_demo PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
+endif()
 
 # --- Testler ------------------------------------------------------------------
 # alloc_gate_override.cpp YURUTULEBILIRE eklenir: hangi ikilinin sayildigi
 # burada gorunur (A2 kapisi).
-add_executable(engine_tests
+set(ENGINE_TEST_SOURCES
     tests/test_main.cpp
     tests/test_memory.cpp
     tests/test_alloc_gate.cpp
@@ -147,12 +162,35 @@ add_executable(engine_tests
     tests/test_navmesh.cpp
     tests/test_animation.cpp
     tests/test_scene_faz2.cpp
-    core/memory/alloc_gate_override.cpp
 )
-target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
-target_compile_options(engine_tests PRIVATE -ffp-contract=off) # sim belirlenimliligi (strict FP, plan C.1.5)
-# Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 karsilastirir (0 = henuz yok).
+# Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
 set(ENGINE_PHYSICS_GOLDEN_HASH "0x5dc41c2bddc345cb" CACHE STRING "Jolt sahnesinin platformlar arasi altin ozeti (x86_64'te hesaplandi)")
+add_executable(engine_tests ${ENGINE_TEST_SOURCES} core/memory/alloc_gate_override.cpp)
+target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
+target_compile_options(engine_tests PRIVATE -ffp-contract=off) # sim belirlenimliligi (strict FP, plan C.1.5)
 target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
 target_compile_options(engine_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
+
+# --- Android NativeActivity host: libtulparengine.so (testler + demo ayni surecte) ---
+# adb shell'den GPU yok (vkEnumeratePhysicalDevices = 0, SELinux/HAL); APK sureci gerekir.
+# Paketleme/kosum: engine/tools/android_run.sh
+if(ANDROID)
+  set(ENGINE_GLUE_DIR ${ANDROID_NDK}/sources/android/native_app_glue)
+  add_library(tulparengine SHARED
+      app/android_main.cpp
+      app/demo_app.cpp
+      app/demo_scene.cpp
+      core/memory/alloc_gate_override.cpp
+      ${ENGINE_GLUE_DIR}/android_native_app_glue.c
+      ${ENGINE_TEST_SOURCES}
+  )
+  target_include_directories(tulparengine PRIVATE ${ENGINE_GLUE_DIR})
+  target_compile_definitions(tulparengine PRIVATE ENGINE_TESTS_NO_MAIN=1
+      ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
+  target_compile_options(tulparengine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
+  target_link_libraries(tulparengine PRIVATE engine_renderer engine_sim engine_rhi engine_core android log ${CMAKE_DL_LIBS})
+  # --no-undefined: eksik sembol LINK'te dussun (cihazda UnsatisfiedLinkError degil);
+  # 16 KB sayfa; glue'nun ANativeActivity_onCreate'i disari ver.
+  target_link_options(tulparengine PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384 -u ANativeActivity_onCreate)
+endif()

@@ -37,3 +37,9 @@ Faz 2 tuzakları: 8h (fiber yığını, üçüncü parti job), 8i (auto-merge il
 **İlk uygulama:** `engine_demo` (L5 `engine/app/`) — pencere (`platform/window`, GLFW 3 dlopen) → `Device::init_instance` → yüzey → `init_device(surface)` → `Swapchain` (2 kare uçuşta, FIFO, transient D32, prepass → renk) → `Renderer` (L3, forward Lambert, UBO + push sabiti) → Faz 2 sahnesi (24 ajan + eklem zinciri, 40 Jolt kutusu). `--headless N --out x.ppm` aynı renderer'ı offscreen render pass'e kaydeder (`offscreen_render_custom`): ben bununla doğrularım, pencereyi kullanıcı açar. Yerel: 600 kare, kare içi 0 `new`, 53/53 test. **Çalışma kuralı (kullanıcı, 2026-09-14):** adım başına CI/push yok; yerelde doğrula, uygulama elde olunca push.
 Tuzaklar: 8k (y ters çevirme + `CLOCKWISE` = zemin kaybolur), 8l (swapchain/renderer kare yuvası tek kaynaktan; fence gönderimden önce sıfırlanır).
 
+## İlk gerçek cihaz (2026-09-14) → [CIHAZ-MATRISI §2.1](../engine/CIHAZ-MATRISI.md), [FAZ3.md](../engine/FAZ3.md)
+Huawei P20 Pro (Kirin 970, **Mali-G72**, Vulkan 1.1, Android 10) adb ile bağlı. Motor **NativeActivity host** olarak koşuyor (`engine/app/android_main.cpp` → `libtulparengine.so`; `engine/tools/android_run.sh` derler, paketler, kurar, logu çeker). Kip `debug.tulpar.mode` ile: `tests` (aynı süreçte `engine_tests_main`), `demo` (ekranda), `headless` (offscreen + PPM).
+**Sonuç:** testler 53/53; demo **59.9 fps** (FIFO), MAILBOX'ta 241 fps / 3.48 ms → **CPU-submit bağlı, GPU değil**; kare içi 0 `new`; 600 tick sahne özeti masaüstüyle **bit eşit**; `LAZILY_ALLOCATED` var → TBDR doğrulandı.
+**Plan düzeltmesi (⚠️ REV-3):** L2 "zorunlu feature" listesi (descriptorIndexing/timelineSemaphore/bufferDeviceAddress) bu cihazda **yok**; kapı **rapora** çevrildi (`DeviceCaps::missing_mandatory`).
+Cihaz tuzakları: [[Tuzaklar]] 8m (SUBOPTIMAL'i recreate saymak = 20 fps), 8n (adb shell'den GPU görünmez), 8o (plan "zorunlu" dedi, cihaz vermedi).
+

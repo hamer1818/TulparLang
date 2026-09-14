@@ -32,8 +32,10 @@ int Registry::skipped = 0;
 
 using namespace tulpar::engine::test;
 
-int main(int argc, char **argv) {
-  g_engine_tests_exe = argv[0];
+// APK icinde host cagirir (main yok: ENGINE_TESTS_NO_MAIN). argv[0] yoksa
+// cocuk surec isteyen testler gorunur atlanir.
+int engine_tests_main(int argc, char **argv) {
+  g_engine_tests_exe = (argc > 0 && argv && argv[0] && argv[0][0]) ? argv[0] : nullptr;
   if (argc >= 3 && std::strcmp(argv[1], "--crash-child") == 0) {
     tulpar::engine::platform::CrashConfig cfg;
     cfg.report_dir = argv[2];
@@ -56,7 +58,7 @@ int main(int argc, char **argv) {
     crash_child_fn();
     return 4;
   }
-  const char *only = argc > 1 ? argv[1] : nullptr;
+  const char *only = (argc > 1 && argv[1] && argv[1][0]) ? argv[1] : nullptr;
   // Satir tamponu: CI/dosyaya yonlendirmede asili kalan testin adi GORUNSUN.
   setvbuf(stdout, nullptr, _IOLBF, 0);
   int passed = 0, failed = 0, ran = 0;
@@ -80,3 +82,7 @@ int main(int argc, char **argv) {
               Registry::skipped, ran, Registry::count);
   return failed == 0 && ran > 0 ? 0 : 1;
 }
+
+#if !defined(ENGINE_TESTS_NO_MAIN)
+int main(int argc, char **argv) { return engine_tests_main(argc, argv); }
+#endif

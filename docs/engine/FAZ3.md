@@ -61,3 +61,33 @@ Headless kare görüntüsü: zemin, duvar, yerleşmiş kutu yığınları, dağ�
 3. Bu dilim **Faz 3 kapısı değildir**: clustered forward+, CSM, PBR, VRS, vis buffer A/B ve
    "bandwidth < 8 GB/s (3 cihaz)" kapısı PLAN.md §7 Faz 3'te durur.
 4. Android: `ANativeWindow` → `VK_KHR_android_surface` ile aynı `Swapchain` (kod yüzey tipinden bağımsız).
+
+## Telefonda (Huawei P20 Pro, Mali-G72) — 2026-09-14
+
+Kullanıcı adb ile bağlı bir telefon verdi; **ilk gerçek cihaz**. Tüm sayılar
+`docs/engine/CIHAZ-MATRISI.md` §2.1'de. Buradaki iş:
+
+| parça | dosya | not |
+|---|---|---|
+| NativeActivity host | `app/android_main.cpp` | `libtulparengine.so`; `debug.tulpar.mode` = `tests` / `demo` / `headless`; stdout → boru → logcat + `files/engine_log.txt` |
+| Manifest | `platform/android/AndroidManifest.xml` | `hasCode=false`, NativeActivity, yatay |
+| Koşum betiği | `tools/android_run.sh` | NDK derleme → APK paketleme → kurulum → başlat → log çek |
+| Test girişi | `tests/test_main.cpp` | `engine_tests_main()` ayrıldı (`ENGINE_TESTS_NO_MAIN`); geçici dizin `$TMPDIR` (Android'de `/tmp` yok); alt süreç yoksa çökme testi **görünür atlanır** |
+| Tek başına CMake | `engine/CMakeLists.txt` | `cmake -S engine -B build-android -DCMAKE_TOOLCHAIN_FILE=...` ile çapraz derlenir |
+| Ön-döndürme + sunum kipi | `rhi/swapchain.*` | `SwapchainConfig{prerotate, preferred_present_mode}` |
+| "Zorunlu" feature kapısı | `rhi/device.*` | kapı → rapor (`missing_mandatory`), Tuzaklar 8o |
+
+**Üç bulgu, üçü de plan/kod düzeltmesi:**
+1. **`adb shell`den GPU görünmüyor** (0 fiziksel cihaz) — ölçüm APK sürecinde yapılır (Tuzaklar 8n).
+2. **Plan L2 "zorunlu" listesi cihazda yok** — kapı rapora çevrildi, PLAN.md ⚠️ REV-3 (Tuzaklar 8o).
+3. **SUBOPTIMAL → her karede swapchain yeniden** = 20 fps; düzeltildi + ön-döndürme → **59.9 fps** (Tuzaklar 8m).
+
+**Doğrulananlar:** `engine_tests` cihazda 53/53; Jolt altın özeti eşit; 600 tick sahne özeti
+`1513845f8ca5afd9` masaüstüyle **bit eşit**; kare içi 0 `new`; aynı karenin pikselleri masaüstüne
+göre yalnız %0.237 (üçgen kenarları). `LAZILY_ALLOCATED` bellek **var** — TBDR doğrulandı, transient
+depth gerçekten tile'da kalıyor (masaüstünde bu yol yok).
+
+**Bu bir Faz 1/3 kapısı değil:** tek koşu, soğuk başlangıç, termal pencere yok; GPU zaman damgası bu
+sürücüde yok, `subpass_merge_feedback` yok → "G-buffer DRAM'e inmedi" kanıtı **hâlâ** Adreno + modern
+Mali bekliyor.
+

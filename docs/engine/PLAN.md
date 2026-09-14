@@ -73,7 +73,7 @@ Sektörde "devrimsel" sayılan her şey ve bizim kararımız.
 | **Cascaded shadow maps** | Standart | Baseline gölge | **AL** | VSM'e kadar köprü, sonra fallback olarak kalır |
 | **Variable Rate Shading** | `VK_KHR_fragment_shading_rate` | Fillrate | **AL** | ⚠️ **Değişti.** Vulkan Roadmap 2026 VRS'i zorunlu kıldı — artık opsiyonel bir ekstra değil, baseline |
 | **fp16 (mediump) default precision** | Mobil altın kural | ALU throughput 2x | **AL — zorunlu** | Compiler value-range analiziyle **otomatik** yapar, elle `half` yazılmaz (A6) |
-| **Bindless / descriptor indexing** | Modern standart | Descriptor bind maliyeti | **AL** | `descriptorIndexing` Vulkan 1.2, Android'de yaygın. Baseline şartımız |
+| **Bindless / descriptor indexing** | Modern standart | Descriptor bind maliyeti | **AL, ama baseline DEĞİL** ⚠️ REV-3 | `descriptorIndexing` Vulkan 1.2. "Android'de yaygın" ölçülmedi ve ilk gerçek cihazda (Mali-G72, Vulkan 1.1) **yok**. Bindless yolu olur, klasik descriptor set yedeği **şart** |
 | **Neural texture compression** | NVIDIA 2023+ | Texture bellek | **ATLA** | Mobil NPU/GPU entegrasyonu olgun değil |
 | **Gaussian splatting** | SIGGRAPH 2023 | Fotogerçekçi capture | **ATLA** | Bizim içerik pipeline'ımıza uymuyor |
 
@@ -212,7 +212,8 @@ Kural: **peak kullanım build'de hesaplanır**, boot'ta o kadar reserve edilir. 
   - ⚠️ Versiyon numarası seçme — Google'ın yayınladığı profili kullan. AVP üç kademe sunuyor ve her birinin gerçek cihaz kapsama yüzdesi Android Distribution Dashboard'da yayınlanıyor. Tahmin yerine veri
   - Android 13+ cihazlar Vulkan 1.3, Android 16+ cihazlar Vulkan 1.4 desteklemek **zorunda**. 2027 hedefi için 1.3 savunulabilir bir taban
 - GLES backend **yok** (karar kilitli — ve artık Google da aynı yönde: Vulkan resmi API oldu, GLES aktif geliştirme dışı, ANGLE üzerinden sunuluyor)
-- Zorunlu feature'lar: `descriptorIndexing`, `subpass` (veya `framebuffer_fetch`), `timelineSemaphore`, `drawIndirect`, `bufferDeviceAddress`
+- ⚠️ REV-3 (cihaz verisi, 2026-09-14): "Zorunlu feature" listesi **hipotezmiş**. Huawei P20 Pro (Kirin 970, Mali-G72, Vulkan **1.1**, 2018 sürücüsü) `descriptorIndexing`, `timelineSemaphore`, `bufferDeviceAddress`'in **üçünü de** vermiyor. Bunlar Vulkan 1.2 çekirdeği; 1.1 cihazda uzantı biçimleri de yok. Karar: bu üçü **zorunlu değil, raporlanır** (`DeviceCaps::missing_mandatory`, `DeviceConfig::require_mandatory` varsayılan **false**) ve her biri için eksik yol yedeği olur. Gerçekten zorunlu kalanlar: Vulkan 1.1, `subpass` (veya `framebuffer_fetch`), `drawIndirect`. Kapsama hedefi (≥ %85 aktif cihaz) 1.2 şartıyla tutmaz.
+- Eski liste (hipotez olarak kalsın): `descriptorIndexing`, `subpass`, `timelineSemaphore`, `drawIndirect`, `bufferDeviceAddress`
 - ⚠️ **Descriptor sistemini fazla soyutlama.** `VK_EXT_descriptor_heap` Vulkan'ın descriptor sistemini komple değiştiriyor (descriptor'lar buffer memory'de). Bugünün descriptor set modelinin üstüne kalın bir soyutlama yazmak, bir yıl içinde çöpe atacağın kod demek. İnce tut
 - Command buffer'lar **paralel kaydedilir** (thread başına pool)
 - Memory: kendi sub-allocator'ımız. `vkAllocateMemory` çağrı sayısı sabit ve az

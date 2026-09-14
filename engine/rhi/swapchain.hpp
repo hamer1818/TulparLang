@@ -19,10 +19,23 @@ struct FrameContext {
   VkFramebuffer framebuffer = VK_NULL_HANDLE;
 };
 
+struct SwapchainConfig {
+  // ON-DONDURME (Android): preTransform = yuzeyin currentTransform'u; goruntu
+  // panelin dogal yonunde uretilir, kompozitor DONDURMEZ (tam ekran dondurme
+  // gecisi = bant genisligi). Uygulama projeksiyonu clip uzayinda dondurur
+  // (rotation_radians()). false: IDENTITY iste, kompozitor dondursun (her kare
+  // SUBOPTIMAL; A/B olcumu icin).
+  bool prerotate = true;
+  // Istenen sunum kipi; yoksa FIFO'ya duser. IMMEDIATE/MAILBOX: vsync kilidi
+  // kalkar, GPU'nun gercek kare maliyeti olculur (A7: urun FIFO ile kilitli).
+  VkPresentModeKHR preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+};
+
 class Swapchain {
 public:
   static constexpr uint32_t kFramesInFlight = 2;
-  bool init(Device &dev, Arena &arena, VkSurfaceKHR surface, uint32_t width, uint32_t height);
+  bool init(Device &dev, Arena &arena, VkSurfaceKHR surface, uint32_t width, uint32_t height,
+            const SwapchainConfig &cfg = SwapchainConfig{});
   void shutdown();
   // Pencere boyutu degisince (ya da acquire OUT_OF_DATE deyince).
   bool recreate(uint32_t width, uint32_t height);
@@ -35,9 +48,20 @@ public:
 
   VkRenderPass render_pass() const { return rp_; }
   VkFormat color_format() const { return format_; }
+  // Goruntu (framebuffer) olcusu: viewport/scissor bunu kullanir. On-dondurmede
+  // 90/270'te logical_extent'in devrigi.
   VkExtent2D extent() const { return extent_; }
+  // Kullanicinin gordugu yon: en-boy orani BUNDAN hesaplanir.
+  VkExtent2D logical_extent() const { return logical_extent_; }
+  // Projeksiyona clip uzayinda uygulanacak donus (0, pi/2, pi, 3pi/2).
+  float rotation_radians() const;
+  VkPresentModeKHR present_mode() const { return present_mode_; }
   uint32_t image_count() const { return image_count_; }
   bool needs_recreate() const { return needs_recreate_; }
+  // Sunumun "calisir ama optimum degil" dedigi kare sayisi (Android: preTransform
+  // uyusmazligi). Yeniden yaratmayi TETIKLEMEZ; raporlanir.
+  uint64_t suboptimal_frames() const { return suboptimal_; }
+  VkSurfaceTransformFlagBitsKHR pretransform() const { return pretransform_; }
   uint64_t frames_presented() const { return frames_; }
 
 private:
@@ -66,6 +90,11 @@ private:
   uint32_t frame_ = 0;
   uint64_t frames_ = 0;
   bool needs_recreate_ = false;
+  uint64_t suboptimal_ = 0;
+  SwapchainConfig cfg_;
+  VkExtent2D logical_extent_{};
+  VkPresentModeKHR present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
+  VkSurfaceTransformFlagBitsKHR pretransform_ = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 };
 
 } // namespace tulpar::engine::rhi

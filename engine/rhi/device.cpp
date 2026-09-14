@@ -171,7 +171,7 @@ bool Device::init_device(VkSurfaceKHR surface) {
   caps_.timestamps = qp[queue_family_].timestampValidBits > 0 && caps_.timestamp_period_ns > 0;
 
   // Uzantilar (varsa ac).
-  const char *dev_exts[8];
+  const char *dev_exts[12];
   uint32_t dev_ext_n = 0;
   if (surface) {
     if (!has_swapchain_ext_) { fail("VK_KHR_swapchain yok", VK_ERROR_EXTENSION_NOT_PRESENT); return false; }
@@ -194,22 +194,57 @@ bool Device::init_device(VkSurfaceKHR surface) {
     }
   }
 
-  // Feature zinciri: 1.2 (descriptorIndexing, timelineSemaphore, bufferDeviceAddress) [+ GPL].
+  // Feature zinciri: 1.2 cekirdek (descriptorIndexing, timelineSemaphore, BDA) ya da
+  // 1.1 cihazda uzanti bicimleri (ayni yapilar, EXT/KHR takma adlari) [+ GPL].
+  const bool core12 = instance_version_ >= VK_API_VERSION_1_2 && caps_.api_version >= VK_API_VERSION_1_2;
   VkPhysicalDeviceVulkan12Features f12{};
   f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  VkPhysicalDeviceDescriptorIndexingFeatures fdi{};
+  fdi.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+  VkPhysicalDeviceTimelineSemaphoreFeatures fts{};
+  fts.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+  VkPhysicalDeviceBufferDeviceAddressFeatures fbda{};
+  fbda.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+  void *chain = nullptr;
   if (caps_.graphics_pipeline_library) {
     gplf.graphicsPipelineLibrary = VK_TRUE;
-    f12.pNext = &gplf;
+    gplf.pNext = chain;
+    chain = &gplf;
   }
-  f12.descriptorIndexing = caps_.descriptor_indexing;
-  f12.runtimeDescriptorArray = caps_.descriptor_indexing;
-  f12.shaderSampledImageArrayNonUniformIndexing = caps_.descriptor_indexing;
-  f12.descriptorBindingPartiallyBound = caps_.descriptor_indexing;
-  f12.timelineSemaphore = caps_.timeline_semaphore;
-  f12.bufferDeviceAddress = caps_.buffer_device_address;
+  if (core12) {
+    f12.descriptorIndexing = caps_.descriptor_indexing;
+    f12.runtimeDescriptorArray = caps_.descriptor_indexing;
+    f12.shaderSampledImageArrayNonUniformIndexing = caps_.descriptor_indexing;
+    f12.descriptorBindingPartiallyBound = caps_.descriptor_indexing;
+    f12.timelineSemaphore = caps_.timeline_semaphore;
+    f12.bufferDeviceAddress = caps_.buffer_device_address;
+    f12.pNext = chain;
+    chain = &f12;
+  } else {
+    if (ext_descriptor_indexing_ && caps_.descriptor_indexing) {
+      dev_exts[dev_ext_n++] = "VK_EXT_descriptor_indexing";
+      fdi.runtimeDescriptorArray = VK_TRUE;
+      fdi.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+      fdi.descriptorBindingPartiallyBound = VK_TRUE;
+      fdi.pNext = chain;
+      chain = &fdi;
+    }
+    if (ext_timeline_semaphore_ && caps_.timeline_semaphore) {
+      dev_exts[dev_ext_n++] = "VK_KHR_timeline_semaphore";
+      fts.timelineSemaphore = VK_TRUE;
+      fts.pNext = chain;
+      chain = &fts;
+    }
+    if (ext_buffer_device_address_ && caps_.buffer_device_address) {
+      dev_exts[dev_ext_n++] = "VK_KHR_buffer_device_address";
+      fbda.bufferDeviceAddress = VK_TRUE;
+      fbda.pNext = chain;
+      chain = &fbda;
+    }
+  }
   VkPhysicalDeviceFeatures2 f2{};
   f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-  f2.pNext = instance_version_ >= VK_API_VERSION_1_2 ? &f12 : nullptr;
+  f2.pNext = chain;
   f2.features.drawIndirectFirstInstance = VK_FALSE;
 
   float prio = 1.0f;
@@ -301,18 +336,8 @@ bool Device::pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface) {
   caps_.device_type = p2.properties.deviceType;
   caps_.timestamp_period_ns = p2.properties.limits.timestampPeriod;
 
-  VkPhysicalDeviceVulkan12Features f12{};
-  f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-  VkPhysicalDeviceFeatures2 f2{};
-  f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-  if (caps_.api_version >= VK_API_VERSION_1_2) f2.pNext = &f12;
-  api.vkGetPhysicalDeviceFeatures2(phys_, &f2);
-  caps_.descriptor_indexing = f12.descriptorIndexing && f12.runtimeDescriptorArray;
-  caps_.timeline_semaphore = f12.timelineSemaphore;
-  caps_.buffer_device_address = f12.bufferDeviceAddress;
-  caps_.draw_indirect = true; // cekirdek 1.0: vkCmdDrawIndexedIndirect
-
   bool has_pipeline_library = false;
+  ext_descriptor_indexing_ = ext_timeline_semaphore_ = ext_buffer_device_address_ = false;
   uint32_t en = 0;
   api.vkEnumerateDeviceExtensionProperties(phys_, nullptr, &en, nullptr);
   VkExtensionProperties ext[512];
@@ -320,7 +345,10 @@ bool Device::pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface) {
   api.vkEnumerateDeviceExtensionProperties(phys_, nullptr, &en, ext);
   for (uint32_t i = 0; i < en; i++) {
     const char *e = ext[i].extensionName;
-    if (!std::strcmp(e, "VK_EXT_subpass_merge_feedback")) caps_.ext_subpass_merge_feedback = true;
+    if (!std::strcmp(e, "VK_EXT_descriptor_indexing")) ext_descriptor_indexing_ = true;
+    else if (!std::strcmp(e, "VK_KHR_timeline_semaphore")) ext_timeline_semaphore_ = true;
+    else if (!std::strcmp(e, "VK_KHR_buffer_device_address")) ext_buffer_device_address_ = true;
+    else if (!std::strcmp(e, "VK_EXT_subpass_merge_feedback")) caps_.ext_subpass_merge_feedback = true;
     else if (!std::strcmp(e, "VK_EXT_graphics_pipeline_library")) caps_.ext_graphics_pipeline_library = true;
     else if (!std::strcmp(e, "VK_KHR_pipeline_library")) has_pipeline_library = true;
     else if (!std::strcmp(e, "VK_EXT_host_image_copy")) caps_.ext_host_image_copy = true;
@@ -329,12 +357,57 @@ bool Device::pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface) {
     else if (!std::strcmp(e, "VK_KHR_swapchain")) has_swapchain_ext_ = true;
   }
   if (!has_pipeline_library) caps_.ext_graphics_pipeline_library = false; // ikisi birlikte gerekir
-  if (cfg.require_mandatory) {
-    if (!caps_.descriptor_indexing) { fail("zorunlu: descriptorIndexing yok", VK_ERROR_FEATURE_NOT_PRESENT); return false; }
-    if (!caps_.timeline_semaphore) { fail("zorunlu: timelineSemaphore yok", VK_ERROR_FEATURE_NOT_PRESENT); return false; }
-    if (!caps_.buffer_device_address) { fail("zorunlu: bufferDeviceAddress yok", VK_ERROR_FEATURE_NOT_PRESENT); return false; }
+
+  // Feature sorgusu: 1.2 cekirdek yapisi ya da (1.1 cihazda) uzanti yapilari.
+  VkPhysicalDeviceVulkan12Features f12{};
+  f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  VkPhysicalDeviceDescriptorIndexingFeatures fdi{};
+  fdi.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+  VkPhysicalDeviceTimelineSemaphoreFeatures fts{};
+  fts.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+  VkPhysicalDeviceBufferDeviceAddressFeatures fbda{};
+  fbda.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+  VkPhysicalDeviceFeatures2 f2{};
+  f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  void *chain = nullptr;
+  const bool core12 = instance_version_ >= VK_API_VERSION_1_2 && caps_.api_version >= VK_API_VERSION_1_2;
+  if (core12) chain = &f12;
+  else {
+    if (ext_descriptor_indexing_) { fdi.pNext = chain; chain = &fdi; }
+    if (ext_timeline_semaphore_) { fts.pNext = chain; chain = &fts; }
+    if (ext_buffer_device_address_) { fbda.pNext = chain; chain = &fbda; }
+  }
+  f2.pNext = chain;
+  api.vkGetPhysicalDeviceFeatures2(phys_, &f2);
+  if (core12) {
+    caps_.descriptor_indexing = f12.descriptorIndexing && f12.runtimeDescriptorArray;
+    caps_.timeline_semaphore = f12.timelineSemaphore;
+    caps_.buffer_device_address = f12.bufferDeviceAddress;
+  } else {
+    caps_.descriptor_indexing = ext_descriptor_indexing_ && fdi.runtimeDescriptorArray;
+    caps_.timeline_semaphore = ext_timeline_semaphore_ && fts.timelineSemaphore;
+    caps_.buffer_device_address = ext_buffer_device_address_ && fbda.bufferDeviceAddress;
+  }
+  caps_.draw_indirect = true; // cekirdek 1.0: vkCmdDrawIndexedIndirect
+  caps_.missing_mandatory[0] = 0;
+  size_t mm = 0;
+  auto miss = [&](const char *name) {
+    int w = std::snprintf(caps_.missing_mandatory + mm, sizeof caps_.missing_mandatory - mm, "%s%s", mm ? "," : "", name);
+    if (w > 0) mm += (size_t)w;
+  };
+  if (!caps_.descriptor_indexing) miss("descriptorIndexing");
+  if (!caps_.timeline_semaphore) miss("timelineSemaphore");
+  if (!caps_.buffer_device_address) miss("bufferDeviceAddress");
+  if (cfg.require_mandatory && mm) {
+    fail("zorunlu feature eksik (caps.missing_mandatory)", VK_ERROR_FEATURE_NOT_PRESENT);
+    return false;
   }
   return true;
+}
+
+void Device::replace_surface(VkSurfaceKHR s) {
+  if (surface_ && api_ && api_->vkDestroySurfaceKHR) api_->vkDestroySurfaceKHR(instance_, surface_, nullptr);
+  surface_ = s;
 }
 
 int Device::find_memory_type(uint32_t mask, VkMemoryPropertyFlags flags) const {

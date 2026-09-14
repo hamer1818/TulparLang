@@ -4,9 +4,10 @@
 
 namespace tulpar::engine::rhi {
 
-bool Swapchain::init(Device &dev, Arena &, VkSurfaceKHR surface, uint32_t w, uint32_t h) {
+bool Swapchain::init(Device &dev, Arena &, VkSurfaceKHR surface, uint32_t w, uint32_t h, const SwapchainConfig &cfg) {
   dev_ = &dev;
   surface_ = surface;
+  cfg_ = cfg;
   VkApi &a = dev.api();
   // Format: BGRA8 UNORM tercih (yaygin), yoksa ilk.
   uint32_t n = 0;
@@ -94,9 +95,13 @@ bool Swapchain::create_swapchain(uint32_t w, uint32_t h) {
   VkApi &a = dev_->api();
   VkSurfaceCapabilitiesKHR caps;
   a.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev_->physical(), surface_, &caps);
-  extent_ = caps.currentExtent;
-  if (extent_.width == 0xFFFFFFFFu) extent_ = VkExtent2D{w, h};
-  if (extent_.width == 0 || extent_.height == 0) return false; // kucultulmus pencere
+  logical_extent_ = caps.currentExtent;
+  if (logical_extent_.width == 0xFFFFFFFFu) logical_extent_ = VkExtent2D{w, h};
+  if (logical_extent_.width == 0 || logical_extent_.height == 0) return false; // kucultulmus pencere
+  // On-dondurme: 90/270'te goruntu olcusu devriktir (Android on-dondurme kurali).
+  const bool quarter = (caps.currentTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) != 0;
+  extent_ = logical_extent_;
+  if (cfg_.prerotate && quarter) { extent_.width = logical_extent_.height; extent_.height = logical_extent_.width; }
   uint32_t want = caps.minImageCount + 1;
   if (caps.maxImageCount && want > caps.maxImageCount) want = caps.maxImageCount;
   if (want > kMaxImages) want = kMaxImages;
@@ -110,9 +115,25 @@ bool Swapchain::create_swapchain(uint32_t w, uint32_t h) {
   ci.imageArrayLayers = 1;
   ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
   ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  ci.preTransform = caps.currentTransform;
+  // On-dondurme acik: yuzeyin istedigi donusu BIZ uyguluyoruz de (kompozitor
+  // dondurmez, SUBOPTIMAL gelmez). Kapali: IDENTITY iste, kompozitor dondursun.
+  ci.preTransform = (cfg_.prerotate || !(caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR))
+                        ? caps.currentTransform
+                        : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+  pretransform_ = ci.preTransform;
   ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-  ci.presentMode = VK_PRESENT_MODE_FIFO_KHR; // vsync, her yerde var
+  // Sunum kipi: istenen varsa o, yoksa FIFO (cekirdek, her zaman var).
+  present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
+  if (cfg_.preferred_present_mode != VK_PRESENT_MODE_FIFO_KHR) {
+    uint32_t pmn = 0;
+    a.vkGetPhysicalDeviceSurfacePresentModesKHR(dev_->physical(), surface_, &pmn, nullptr);
+    VkPresentModeKHR pms[8];
+    if (pmn > 8) pmn = 8;
+    a.vkGetPhysicalDeviceSurfacePresentModesKHR(dev_->physical(), surface_, &pmn, pms);
+    for (uint32_t i = 0; i < pmn; i++)
+      if (pms[i] == cfg_.preferred_present_mode) { present_mode_ = cfg_.preferred_present_mode; break; }
+  }
+  ci.presentMode = present_mode_;
   ci.clipped = VK_TRUE;
   ci.oldSwapchain = swap_;
   VkSwapchainKHR ns = VK_NULL_HANDLE;
@@ -181,6 +202,15 @@ void Swapchain::destroy_swapchain() {
   image_count_ = 0;
 }
 
+float Swapchain::rotation_radians() const {
+  switch (pretransform_) {
+  case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: return 1.57079632679489662f;
+  case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: return 3.14159265358979324f;
+  case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: return 4.71238898038468986f;
+  default: return 0.0f;
+  }
+}
+
 bool Swapchain::recreate(uint32_t w, uint32_t h) {
   dev_->api().vkDeviceWaitIdle(dev_->handle());
   return create_swapchain(w, h);
@@ -208,6 +238,7 @@ bool Swapchain::begin_frame(FrameContext *out) {
   uint32_t idx = 0;
   VkResult r = a.vkAcquireNextImageKHR(dev_->handle(), swap_, UINT64_MAX, acquire_sem_[f], VK_NULL_HANDLE, &idx);
   if (r == VK_ERROR_OUT_OF_DATE_KHR) { needs_recreate_ = true; return false; }
+  if (r == VK_SUBOPTIMAL_KHR) suboptimal_++;
   if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return false;
   // Fence gonderimden hemen once sifirlanir (end_frame): burada sifirlayip
   // gonderim basarisiz olursa bir sonraki bekleme sonsuza kadar takilir.
@@ -275,7 +306,13 @@ bool Swapchain::end_frame(const FrameContext &fc) {
   VkResult r = a.vkQueuePresentKHR(dev_->queue(), &pi);
   frame_ = (frame_ + 1) % kFramesInFlight;
   frames_++;
-  if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) { needs_recreate_ = true; return false; }
+  // SUBOPTIMAL yeniden yaratma SEBEBI DEGIL: Android'de swapchain preTransform'u
+  // yuzeyin currentTransform'undan farkliysa (biz IDENTITY veriyoruz, kompozitor
+  // donduruyor) her kare SUBOPTIMAL doner — bunu recreate sayan kod her karede
+  // swapchain'i yeniden kurar (olculdu: 45 ms/kare, 20 fps). Sayilir, gorunur
+  // olur, on-dondurme ile kapanir. Tuzaklar 8m.
+  if (r == VK_ERROR_OUT_OF_DATE_KHR) { needs_recreate_ = true; return false; }
+  if (r == VK_SUBOPTIMAL_KHR) { suboptimal_++; return true; }
   return r == VK_SUCCESS;
 }
 

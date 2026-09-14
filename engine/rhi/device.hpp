@@ -26,6 +26,7 @@ struct DeviceCaps {
   bool timeline_semaphore = false;    // zorunlu
   bool buffer_device_address = false; // zorunlu
   bool draw_indirect = false;         // zorunlu (multiDrawIndirect DEGIL)
+  char missing_mandatory[96] = {0};   // eksik "zorunlu"lar (bos = tam); cihaz matrisi verisi
   bool lazily_allocated_memory = false; // transient attachment icin (TBDR'da var)
   bool ext_subpass_merge_feedback = false;
   bool ext_graphics_pipeline_library = false;
@@ -40,7 +41,11 @@ struct DeviceConfig {
   // "cpu" = lavapipe/CPU cihazini tercih et (CI belirlenimli olsun);
   // "" = ayrik > tumlesik > sanal > cpu.
   const char *prefer = "";
-  bool require_mandatory = true; // zorunlu feature eksikse init false
+  // Plan L2 "zorunlu" listesi (descriptorIndexing, timelineSemaphore, BDA) 1.2
+  // cekirdek; Dusuk sinif (Mali-G72, 2018 surucusu, Vulkan 1.1) hicbirini vermiyor
+  // (Huawei P20 Pro, 2026-09-14). Varsayilan: RAPORLA (caps.missing_mandatory),
+  // reddetme — eksik yol yedegiyle calisir. true: eskisi gibi reddet.
+  bool require_mandatory = false;
   // Dogrulama katmani (VK_LAYER_KHRONOS_validation) varsa etkinlestir; hatalar
   // sayilir (validation_errors) ve ilk birkaci basilir. Testler 0 bekler.
   bool validation = false;
@@ -82,6 +87,9 @@ public:
 
   VkApi &api() { return *api_; }
   VkInstance instance() const { return instance_; }
+  // Android: pencere yeniden yaratilinca (TERM_WINDOW -> INIT_WINDOW) yeni yuzey.
+  // Once swapchain kapatilmis olmali. Eskisi yok edilir.
+  void replace_surface(VkSurfaceKHR s);
   VkPhysicalDevice physical() const { return phys_; }
   VkDevice handle() const { return device_; }
   VkQueue queue() const { return queue_; }
@@ -113,6 +121,8 @@ private:
   VkQueue queue_ = VK_NULL_HANDLE;
   uint32_t queue_family_ = 0;
   uint32_t instance_version_ = 0;
+  // 1.1 cihazda uzanti bicimleri (1.2 cekirdegi yoksa): init_device bunlari acar.
+  bool ext_descriptor_indexing_ = false, ext_timeline_semaphore_ = false, ext_buffer_device_address_ = false;
   VkCommandPool cmd_pool_ = VK_NULL_HANDLE;
   VkFence one_shot_fence_ = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;

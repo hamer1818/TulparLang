@@ -1916,3 +1916,35 @@ farklı olur. **Kural:** kare yuvası tek kaynaktan gelir (`FrameContext::frame_
 onu alır. Ayrıca fence'i **gönderimden hemen önce** sıfırla: acquire'da sıfırlayıp gönderemeyen
 kod bir sonraki `vkWaitForFences`'i sonsuza kadar takar.
 
+### 8m. SUBOPTIMAL'i "yeniden yarat" saymak Android'de kareyi 3 katina cikarir
+Telefonda demo 20 fps kosuyordu; alt zamanlayicilar toplami 6 ms iken kare 51 ms'ti — yani sure
+**olculmeyen** yerdeydi. Sebep: `vkQueuePresentKHR` her kare `VK_SUBOPTIMAL_KHR` donuyordu ve kod
+onu `needs_recreate` sayip **her karede swapchain'i yeniden kuruyordu** (~45 ms). Android'de
+SUBOPTIMAL kalicidir: swapchain'in `preTransform`'u yuzeyin `currentTransform`'undan farkliysa
+(biz IDENTITY istiyorduk, panel dikey oldugu icin yuzey ROTATE_90 istiyordu) her kare boyle doner ve
+**yeniden yaratmak bunu duzeltmez**. Kurallar: (1) yalniz `OUT_OF_DATE` yeniden yaratma sebebidir,
+SUBOPTIMAL **sayilir ve raporlanir**; (2) dogru cozum **on-dondurme**: `preTransform = currentTransform`,
+90/270'te goruntu olcusu devrik, projeksiyon clip uzayinda dondurulur (kompozitorun tam ekran
+dondurme gecisi de kalkar); (3) genel ders: **alt zamanlarin toplami ust zamani tutmuyorsa olculmeyen
+bir is vardir** — once o bosluga zamanlayici koy, tahmin etme. Olculdu: 20 fps -> 59.9 fps.
+
+### 8n. `adb shell`den kosan ikili GPU'yu GORMEZ — olcum APK surecinde yapilir
+Telefona `adb push` edilen `engine_tests`/`engine_demo` calisti ama `vkEnumeratePhysicalDevices`
+**0 cihaz** dondurdu (`vkCreateInstance` basariliydi, loader 1.1, `VK_KHR_android_surface` vardi).
+`/dev/mali0` shell kullanicisina rw gorunuyor; engel SELinux/HAL tarafinda, uygulama surec baglami
+gerekiyor. Yani "telefonda kostu, GPU yok" sonucu **cihaz hakkinda degil, kosum baglami hakkindadir**.
+Cozum: NativeActivity host (`engine/app/android_main.cpp`, `libtulparengine.so`) — testler de demo da
+APK **surecinde** kosar (`debug.tulpar.mode` ozelligi secer), stdout boruyla logcat'e ve
+`files/engine_log.txt`'ye gider. Ek tuzaklar: Huawei'de `run-as` calismiyor ("/data has wrong owner")
+→ cikti **harici** dizine (`/sdcard/Android/data/<pkg>/files`) yazilir ve `adb pull` ile alinir;
+logcat halkasi dakikalar icinde tasar, **dosya asil kaynak, logcat yedek**.
+
+### 8o. Plan "zorunlu" dediyse bile gercek cihaz vermeyebilir — kapiyi rapora cevir
+Plan L2 "zorunlu feature" listesi (`descriptorIndexing`, `timelineSemaphore`, `bufferDeviceAddress`)
+ilk gercek cihazda (Mali-G72, Vulkan **1.1**, 2018 surucusu) **ucu de yoktu** ve `Device::init`
+cihazi reddediyordu: motor telefonda hic acilmiyordu. Bunlar Vulkan 1.2 cekirdegi; 1.1 cihazda
+uzanti bicimleri de yok. Duzeltme: `require_mandatory` varsayilan **false**, eksikler
+`DeviceCaps::missing_mandatory` ile **raporlanir** ve test `[bilgi]` satiri basar (kapi degil, cihaz
+verisi). Ders: "baseline sartimiz" cumlesi de bir hipotezdir; ilk cihaz onu curutebilir. Kapiyi
+silme — rapora cevir ve eksik yol yedegini yaz.
+

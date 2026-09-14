@@ -35,9 +35,47 @@ oturumlar, asenkron liderlik tablosu, orta segmentte 60 fps, düşük segmentte 
 
 | sınıf | ölçüt | aday SoC (doğrulanacak) | GPU ailesi | elde |
 |---|---|---|---|---|
-| **Düşük** | 3–4 GB RAM, AVP 2025 alt kademe, ~2021–2023 giriş segmenti | Snapdragon 680 / 4 Gen 1, Helio G85–G99, Unisoc T616 | Adreno 610/619, Mali-G52/G57 | ⛔ yok |
+| **Düşük** | 3–4 GB RAM, AVP 2025 alt kademe, ~2021–2023 giriş segmenti | Snapdragon 680 / 4 Gen 1, Helio G85–G99, Unisoc T616 | Adreno 610/619, Mali-G52/G57 | ⛔ yok (P20 Pro **vekil**, §2.1) |
 | **Orta** (referans) | 6–8 GB RAM, AVP 2025 orta kademe | Snapdragon 7 Gen 1–3, Dimensity 7050–8300, Exynos 1380 | Adreno 644/720, Mali-G68/G610/G615 | ⛔ yok |
 | **Yüksek** | 8–12 GB RAM, AVP 2025 üst kademe, Vulkan 1.3 | Snapdragon 8 Gen 2/3, Dimensity 9300, Tensor G3 | Adreno 740/750, Immortalis-G715/G720 | ⛔ yok |
+
+### 2.1 Elde olan cihaz — Huawei P20 Pro (CLT-L09), ölçüldü 2026-09-14
+
+İlk gerçek cihaz. **Sınıf doldurmuyor:** 2018 amiral gemisi; ham GPU gücü orta sınıfa yakın ama
+özellik/sürücü tarafı düşük sınıfın *altında* (Vulkan 1.1, 2018 sürücüsü). Değeri: **Mali kapsaması**
+ve **eski sürücü** vekili. Adreno ve gerçek düşük segment hâlâ gerekli.
+
+| alan | değer |
+|---|---|
+| SoC / GPU | Kirin 970 / **Mali-G72 MP12** (vendor 0x13b5, sürücü 75497472) |
+| CPU | 4× Cortex-A73 2.36 GHz + 4× Cortex-A53 1.84 GHz; motor 7 worker açtı |
+| RAM / OS | 5.8 GB / Android 10 (SDK 29), güvenlik yaması 2020-07 |
+| Vulkan | **1.1.97** (loader 1.1) — 1.2 çekirdeği yok |
+| Plan L2 "zorunlu" | `descriptorIndexing` ❌, `timelineSemaphore` ❌, `bufferDeviceAddress` ❌ → PLAN.md ⚠️ REV-3 |
+| Uzantılar | GPL ❌, `subpass_merge_feedback` ❌, FSR ❌, `host_image_copy` ❌ |
+| **`LAZILY_ALLOCATED` bellek** | ✅ **var** (masaüstünde yok) — TBDR doğrulandı, transient depth gerçekten tile'da |
+| Zaman damgası | ❌ (`timestampValidBits` = 0) → GPU kare süresi bu cihazda sorgulanamaz, CPU duvar saati kullanılır |
+| Ekran (yatay) | 2159×1080; panel dikey → yüzey `currentTransform` = ROTATE_90 |
+
+**Ölçümler** (`engine_demo`, 24 ajan + eklem zinciri + 40 Jolt kutusu, 162 çizim, depth prepass + renk, 2159×1080):
+
+| koşul | kare p50 | fps | not |
+|---|---|---|---|
+| FIFO (ürün yolu, vsync) | 16.75 ms | **59.9** | 11.2 ms'i vsync beklemesi → gerçek iş ~5.5 ms |
+| MAILBOX (kilit açık) | **3.48 ms** | 241.7 | kayıt 1.11 + submit/present 2.41 → **CPU-submit bağlı, GPU değil** |
+| offscreen + geri okuma | 35.9 ms | 29.5 | ⚠️ render ölçümü **değil**: kare başına 9.3 MB geri okuma + senkron bekleme |
+
+| ölçü | değer |
+|---|---|
+| kare içi `operator new` | **0** (sürücü dahil) |
+| `engine_tests` | 53/53 geçti, 4 görünür atlama (2 alt-süreç yok + GPL yok + doğrulama katmanı yok) |
+| Jolt altın özeti | `5dc41c2bddc345cb` — masaüstü x86_64 ve CI arm64 ile **eşit** |
+| 600 tick sahne özeti | `1513845f8ca5afd9` — masaüstü ile **bit eşit** (ECS + Jolt + navmesh + animasyon) |
+| aynı karenin pikselleri | masaüstüne göre %0.237 bayt farkı (yalnız üçgen kenarları; rasterizer farkı) |
+| Jolt 300 adım | Jolt havuzu 119.0 ms, fiber job sistemi 87.9 ms → fiber yolu cihazda da hızlı |
+
+**Ölçüm koşulu uyarısı:** bu sayılar tek koşu, soğuk başlangıç, pil %42, ekran açık. §3'ün disiplini
+(10–15 dk pencere, 3–5 koşu, medyan) **uygulanmadı** — bunlar ilk ışık, termal kapı değil.
 
 Kurallar:
 - **Bir Mali ve bir Adreno şart** (tile boyutu, subpass merge davranışı, wave genişliği farklı; PLAN.md Faz 2 / EK F.1).

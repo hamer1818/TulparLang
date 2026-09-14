@@ -50,7 +50,7 @@ macOS MoltenVK (Apple Paravirtual, Vulkan 1.3.357): piksel kapisi gecti; zaman d
 - Layer kuralı: `rhi/` L2, yalnız `core/` ve `platform/` içerir; `<vulkan/vulkan.h>` üçüncü parti.
 
 ## Kalan (Faz 1 kapısı için)
-1. Üç gerçek cihaz (Mali, Adreno, düşük segment) ve NDK/SDK: host derlemesi + `subpass_merge_feedback` + GPU sayaçla "DRAM'e inmedi" kanıtı.
+1. ~~NDK/SDK~~ geldi ve **ilk gerçek cihaz** (Huawei P20 Pro, Mali-G72) koştu: NativeActivity host derlendi, `engine_tests` 53/53, demo 59.9 fps (CIHAZ-MATRISI §2.1, FAZ3.md). Kalan: **Adreno** ve gerçek **düşük segment**; bu cihazda `subpass_merge_feedback` ve GPU zaman damgası **yok**, yani "DRAM'e inmedi" kanıtı burada alınamaz.
 2. Yüzeyli (swapchain) yol: masaüstünde GLFW (dlopen) + `Swapchain` ile geldi (FAZ3.md, 2026-09-14; kullanıcı çalıştırır, ben headless doğrularım); Android `ANativeWindow` → `VK_KHR_android_surface` aynı sınıfla.
-3. `VK_EXT_graphics_pipeline_library` ile parçalı PSO linkleme (cache yükleme süresi ölçümüyle).
+3. `VK_EXT_graphics_pipeline_library` ile parçalı PSO linkleme (cache yükleme süresi ölçümüyle). İlk cihazda GPL **yok** — yedek yol (tam PSO + cache dosyası) zaten çalışıyor.
 4. Komut tamponlarının job sisteminden paralel kaydı (thread başına pool).
