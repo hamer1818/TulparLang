@@ -19,7 +19,8 @@ if [ -z "$NDK" ]; then
 fi
 [ -z "$NDK" ] && { echo "HATA: NDK yok (TULPAR_ANDROID_NDK)"; exit 1; }
 ABI="${TULPAR_ANDROID_ABI:-arm64-v8a}"
-BUILD="$ROOT/build-android"
+# ABI basina ayri build dizini (emulator x86_64, telefon arm64-v8a).
+if [ "$ABI" = "arm64-v8a" ]; then BUILD="$ROOT/build-android"; else BUILD="$ROOT/build-android-$ABI"; fi
 PKG="dev.tulparlang.engine"
 ACT="$PKG/android.app.NativeActivity"
 
@@ -34,6 +35,7 @@ STAGE="$BUILD/tulparengine_apk"
 rm -rf "$STAGE"; mkdir -p "$STAGE/lib/$ABI"
 cp "$BUILD/libtulparengine.so" "$STAGE/lib/$ABI/"
 cp "$ROOT/engine/platform/android/AndroidManifest.xml" "$STAGE/"
+mkdir -p "$STAGE/assets" && cp "$ROOT"/engine/tests/assets/* "$STAGE/assets/" # APK icine (host cikarir)
 "$ROOT/android/package_apk.sh" "$STAGE" "$BUILD/tulparengine.apk" | grep -E "^\s+\+|HATA|apk" || true
 
 echo "[3/5] kurulum"
@@ -55,8 +57,7 @@ echo "[4/5] baslat: $MODE"
 # Huawei'de dakikalar icinde tasiyor — dosya asil kaynak, logcat yedek).
 EXT="/sdcard/Android/data/$PKG/files"
 LOGF="$EXT/engine_log.txt"
-adb shell "rm -f '$LOGF'; mkdir -p '$EXT/assets'" 2>/dev/null || true
-adb push "$ROOT/engine/tests/assets/." "$EXT/assets/" >/dev/null 2>&1 || echo "  (varliklar push edilemedi)"
+adb shell "rm -f '$LOGF'" 2>/dev/null || true
 adb logcat -G 8M 2>/dev/null || true
 adb logcat -c 2>/dev/null || true
 adb shell am start -W -n "$ACT" >/dev/null

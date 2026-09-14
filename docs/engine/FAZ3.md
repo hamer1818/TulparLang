@@ -171,3 +171,25 @@ Düz küp **pozitif kontrol**: doku yolu kırılsa ikisi aynı çıkar ve test d
 Bilinen boşluk: renk uzayı yok (UNORM doku × ışık → UNORM hedef, "ekran uzayında aydınlatma"); sRGB/linear
 ayrımı PBR ile gelir. Mobil asıl doku yolu ASTC/KTX2 (Faz 6).
 
+## Sanal makine (Android Emülatörü) — işlevsel test yatağı (2026-09-14)
+
+Telefonun adb bağlantısı kopunca kullanıcı "sanal makine ile test et" dedi. `Pixel_10_Pro_XL` AVD
+(Android 17 / API 37, x86_64, 16 KB sayfa, gfxstream → ana makinenin RTX 5080'i, Vulkan 1.3) headless
+(`-no-window -gpu host`) koşuyor; `TULPAR_ANDROID_ABI=x86_64 engine/tools/android_run.sh ...` aynı
+akışı sürüyor (`build-android-x86_64/`). **Yalnız işlevsel:** TBDR değil, `lazily_allocated=0`,
+performans kapısı değil (CIHAZ-MATRISI §2 kuralı).
+
+| ölçü | emülatör |
+|---|---|
+| `engine_tests` | 58/58, 4 görünür atlama (alt süreç ×2, GPL, doğrulama katmanı) |
+| içerik kapıları | masaüstüyle **aynı sayılar** (keskin geçiş 2142/384; turuncu 8163, lacivert 7724) |
+| gölge kapısı | aynı (2437 / 2433) |
+| demo | 60.5 fps (vsync), glTF APK'dan yüklendi |
+
+**Bulgu:** `adb push` ile `/sdcard/Android/data/<pkg>/files/` altına konan varlığı uygulama **okuyamadı**
+(kapsamlı depolama; Android 10 telefonda okunuyordu). Doğru yol: varlıklar APK'nın `assets/` dizinine
+girer (`android_run.sh` stage eder), host açılışta `AAssetManager` ile **dahili** dizine çıkarır ve
+`TULPAR_ENGINE_ASSETS` oraya işaret eder. cgltf `fopen` istediği için çıkarma şart.
+Emülatörü sandbox içinden arka planda başlatmak olmuyor (süreç 144 ile ölüyor); sandbox dışı arka plan
+görevle başlatılır.
+

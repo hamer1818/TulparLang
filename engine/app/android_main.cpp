@@ -6,8 +6,10 @@
 // stdout/stderr -> boru -> logcat (etiket "tulpar") + files/engine_log.txt.
 #if defined(__ANDROID__)
 #define VK_USE_PLATFORM_ANDROID_KHR 1
+#include <android/asset_manager.h>
 #include <android/log.h>
 #include <android/native_window.h>
+#include <sys/stat.h>
 #include <android_native_app_glue.h>
 #include <pthread.h>
 #include <sys/system_properties.h>
@@ -164,9 +166,30 @@ extern "C" void android_main(android_app *app) {
   const char *dir = app->activity->externalDataPath ? app->activity->externalDataPath : app->activity->internalDataPath;
   redirect_output(dir);
   setenv("TMPDIR", dir, 1);
+  // Varliklar APK'nin assets/ dizininden DAHILI dizine cikarilir (cgltf fopen
+  // ister; adb push ile dis dizine konan dosyayi kapsamli depolama olan
+  // surumler uygulamaya OKUTMUYOR — emulator API 37'de olculdu).
   static char assets[512];
-  std::snprintf(assets, sizeof assets, "%s/assets", dir); // android_run.sh push eder
+  std::snprintf(assets, sizeof assets, "%s/assets", app->activity->internalDataPath);
+  mkdir(assets, 0700);
+  uint32_t extracted = 0;
+  if (AAssetDir *ad = AAssetManager_openDir(app->activity->assetManager, "")) {
+    while (const char *name = AAssetDir_getNextFileName(ad)) {
+      AAsset *as = AAssetManager_open(app->activity->assetManager, name, AASSET_MODE_BUFFER);
+      if (!as) continue;
+      char path[1024];
+      std::snprintf(path, sizeof path, "%s/%s", assets, name);
+      if (FILE *f = std::fopen(path, "wb")) {
+        std::fwrite(AAsset_getBuffer(as), 1, (size_t)AAsset_getLength(as), f);
+        std::fclose(f);
+        extracted++;
+      }
+      AAsset_close(as);
+    }
+    AAssetDir_close(ad);
+  }
   setenv("TULPAR_ENGINE_ASSETS", assets, 1);
+  std::printf("[android] varlik: %u dosya -> %s\n", extracted, assets);
   platform::CrashConfig cc;
   cc.report_dir = dir;
   cc.build_id = "engine_android";
