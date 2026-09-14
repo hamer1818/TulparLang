@@ -220,7 +220,10 @@ if [ "$ACTION" = "suites" ]; then
             # kosumunda hangi cihazin bulundugu gorunmedi).
             # Dusen kosumda TUM [bilgi] satirlari: teshis icin gereken sayilar
             # (cihaz acilamadi sebebi, altin ozet farki) burada.
-            echo "$out" | grep -E 'FAIL|FATAL|COKME|ATLANDI|\[bilgi\]' | awk 'NR<=28' | sed 's/^/    /'
+            # Once DUSEN kontroller (hepsi; 28 satir siniri bunlari kesiyordu, CI'da
+            # hangi testin dustugu gorunmuyordu 2026-09-14), sonra bilgi satirlari.
+            echo "$out" | grep -E 'FAIL|FATAL|COKME' | sed 's/^/    /'
+            echo "$out" | grep -E 'ATLANDI|\[bilgi\]' | awk 'NR<=80' | sed 's/^/    /'
             SUITE_FAILED=1
         else
             printf "%-42s ${GREEN}PASS${NC} %s\n" "engine_tests" "$summary"
