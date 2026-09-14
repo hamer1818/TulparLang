@@ -2,6 +2,7 @@
 
 > Plan: `PLAN.md` §7 Faz 2 (eski Faz 5). Başladı 2026-09-14. Kod: `engine/sim/` (L4). Testler: `engine_tests ecs|sched|fixed|faz2|sim_tick`.
 > Faz 1'in kapısı cihaz bekliyor (`FAZ1.md`); yazılım tarafı bittiği için Faz 2 paralel açıldı — plan "faz atlanmaz" der, kapı atlanmıyor, cihaz gelince ölçülür.
+> **Durum 2026-09-14:** Faz 2'nin yazılım tarafı kapandı — ECS, zamanlayıcı, sabit adım, replay, Jolt (fiber job'larda, platformlar arası bit eşit), navmesh, animasyon ve entegre sahne. Açık: GPU particle (compute pipeline ister, Faz 3), GPU skinning (Faz 3). Kapı `faz2_gate_replay_is_bit_identical` + `faz2_gate_physics_is_deterministic_across_thread_counts` + `faz2_scene_*` ile geçildi; arm64 CI aynı özeti veriyor.
 
 ## Teslim edilen
 
@@ -19,7 +20,8 @@
 | Platformlar arası determinizm (REV 8 sınaması) | 🔬 altın özet x86_64'te `5dc41c2bddc345cb` (başlangıç dönüşleri sabit bit, libm yok). **İlk iki CI denemesi arm64'te farklı çıktı** (`4087…`): (1) `axis_angle`'ın sin/cos'u libm'e bağlıydı → sabit bitlere alındı; (2) AArch64'te derleyici `a*b+c`'yi FMA'ya birleştiriyor, x86_64'te (-mfma yok) birleştirmiyor → `-ffp-contract=off` (Jolt'un kendi derlemesi de bunu kapatıyor; define tek başına yetmiyor). Üçüncü koşum bekleniyor | `physics_cross_platform_golden_hash` |
 | Animasyon (ACL sınıfı sıkıştırma) | ✅ kendi formatımız (`sim/animation`): sabit iz eleme, aralık indirgeme + 16-bit niceleme (çeviri/ölçek), "en küçük üç" 3×15-bit dönüş; düz blob (mmap'lenebilir), `ClipBuilder` bake (ayırma serbest), `ClipSampler::sample` **0 ayırma**, nlerp/lerp, döngüsel; `to_model` ebeveyn zinciri. 8 eklem × 60 örnek: 19.2 KB → 3.6 KB (5.3×), 16/24 sabit iz, dönüş hatası 0.04°, çeviri < 1e-5. Paralel (64 job) = seri, bit eşit. ⚠️ ACL vendor edilmedi bilerek: 30k satır, gereken alt küme ~400 satır ve format sahne derleyicisinin olmalı | `anim_*` (5) |
 | GPU skinning | ⬜ renderer (Faz 3) ile: model matrisleri hazır, shader yolu yok | — |
-| GPU particle sim | ⬜ (çizim Faz 3/5) | — |
+| GPU particle sim | ⬜ compute pipeline RHI'da yok; Faz 3 ile (çizim Faz 5) | — |
+| **Faz 2 çıktısı: fizikli, animasyonlu, gezinen test sahnesi** | ✅ headless: 16 navmesh ajanı (yol takibi, hedef yenileme) + 20 Jolt kutusu (adım bir fiber job'ının içinde, Jolt job'ları iç içe) + ajan başına animasyon; üç sistem aynı aşamada paralel; 600 tick. Seri = paralel aynı özet, tick içinde 0 `new`, ajanlar navmesh'te, kutular zeminde. Yerel: seri 4.0 ms, paralel 10.6 ms (iş küçük, job ek yükü baskın — kilitsiz kuyruk açık iş) | `faz2_scene_walks_animates_and_falls_deterministically` |
 
 ## Ölçüm (bilgi, yerel)
 

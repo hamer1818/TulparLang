@@ -430,7 +430,7 @@ Bu tablo motorun **neden hem daha hızlı hem daha küçük** olduğunun tamamı
 - **Çıktı:** ekranda üçgen, GPU timing okunuyor, cihazda koşuyor
 - **Kapı:** subpass ile G-buffer'ın DRAM'e inmediği GPU counter'la kanıtlanmış, 3 cihazda
 
-### Faz 2 — Simülasyon (eski Faz 5)
+### Faz 2 — Simülasyon (eski Faz 5) ✅ yazılım tarafı kapandı 2026-09-14 (durum: `docs/engine/FAZ2.md`; GPU particle/skinning Faz 3'e)
 - ECS: archetype/SoA. ⚠️ REV: "layout'u compiler üretir" §11 önkoşuluna bağlı; o gelene kadar C++ SoA, aynı API
 - Jolt entegrasyonu, deterministik fixed-step (**strict FP**, fast-math yalnız render/VFX)
 - Animasyon: ACL sınıfı sıkıştırma, GPU skinning, job'lı pose evaluation
