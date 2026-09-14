@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "app/demo_scene.hpp"
+#include "app/virtual_stick.hpp"
 #include "content/gltf.hpp"
 #include "core/jobs/job_system.hpp"
 #include "core/memory/alloc_gate.hpp"
@@ -27,10 +28,11 @@ struct Cam {
   float angle = 0.6f;
   float radius = 24.0f;
   float height = 13.0f;
+  Vec3 target{0, 0.5f, -1}; // yorunge merkezi (oyuncu varsa oyuncu)
 };
 Mat4 cam_view(const Cam &c) {
-  Vec3 eye{std::sin(c.angle) * c.radius, c.height, std::cos(c.angle) * c.radius};
-  return Mat4::look_at(eye, {0, 0.5f, -1}, {0, 1, 0});
+  Vec3 eye{c.target.x + std::sin(c.angle) * c.radius, c.target.y + c.height, c.target.z + std::cos(c.angle) * c.radius};
+  return Mat4::look_at(eye, c.target, {0, 1, 0});
 }
 struct RecordCtx {
   renderer::Renderer *r;
@@ -171,6 +173,9 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
 
   sim::FixedStep fs;
   Cam cam;
+  VirtualStick stick;
+  const bool interactive = !headless && host && (host->touch || host->keyboard_move);
+  if (interactive) { cam.radius = 9.0f; cam.height = 5.0f; }
   uint64_t last_ns = platform::now_ns(), report_ns = last_ns, start_ns = last_ns;
   uint32_t frame_i = 0, tick_i = 0;
   uint64_t frame_allocs_max = 0;
@@ -210,6 +215,29 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       }
     }
     uint64_t t0 = platform::now_ns();
+    // Girdi -> oyuncu komutu (kameraya gore) + kamera yorungesi
+    if (interactive) {
+      float mx = 0, my = 0;
+      bool jump = false;
+      if (host->touch) {
+        if (const platform::TouchState *ts = host->touch(host->user)) {
+          stick.update(*ts, now);
+          mx = stick.move.x; my = stick.move.y;
+          jump = stick.action;
+          cam.angle -= stick.look_delta.x * 0.006f;
+        }
+      }
+      if (host->keyboard_move) {
+        float kx = 0, ky = 0; bool kj = false;
+        host->keyboard_move(host->user, &kx, &ky, &kj);
+        if (kx != 0 || ky != 0) { mx = kx; my = ky; }
+        jump = jump || kj;
+      }
+      // Kameranin baktigi yon: hedef - goz (xz)
+      float fx = -std::sin(cam.angle), fz = -std::cos(cam.angle);
+      float rx = fz, rz = -fx; // sag = ileri x yukari
+      scene.set_player_command({rx * mx + fx * my, rz * mx + fz * my}, jump);
+    }
     {
       ENGINE_ZONE("sim");
       uint32_t ticks = fs.advance(dt);
@@ -217,7 +245,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
     }
     uint64_t t1 = platform::now_ns();
     sim_ns += t1 - t0;
-    cam.angle += dt * 0.15f;
+    if (interactive) { Vec3 p = scene.player_position(); cam.target = {p.x, p.y + 0.6f, p.z}; }
+    else cam.angle += dt * 0.15f;
     if (running && (headless || have_window)) {
       ENGINE_ZONE("render");
       // En-boy orani GORUNEN yonden; on-dondurmede projeksiyon clip uzayinda dondurulur.
@@ -283,6 +312,11 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
                   acquire_ns / rf / 1e6, ubo_ns / rf / 1e6, draw_ns / rf / 1e6, record_ns / rf / 1e6, submit_ns / rf / 1e6,
                   ren.stats().draws, ren.point_light_count(), ren.stats().clusters.clusters_touched,
                   (unsigned long long)frame_allocs_max, (unsigned long long)scene.content_hash());
+      if (interactive) {
+        Vec3 pp = scene.player_position();
+        std::printf("[engine_demo] oyuncu (%.2f, %.2f, %.2f) cubuk (%.2f, %.2f) dokunus %u\n", pp.x, pp.y, pp.z, stick.move.x,
+                    stick.move.y, host->touch && host->touch(host->user) ? host->touch(host->user)->count : 0u);
+      }
       if (!headless && swap.suboptimal_frames())
         std::printf("[engine_demo] sunum SUBOPTIMAL %llu kare (preTransform 0x%x != yuzey) — kompozitor donduruyor\n",
                     (unsigned long long)swap.suboptimal_frames(), (unsigned)swap.pretransform());

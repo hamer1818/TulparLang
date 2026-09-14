@@ -7,6 +7,7 @@
 #if defined(__ANDROID__)
 #define VK_USE_PLATFORM_ANDROID_KHR 1
 #include <android/asset_manager.h>
+#include <android/input.h>
 #include <android/log.h>
 #include <android/native_window.h>
 #include <sys/stat.h>
@@ -23,6 +24,8 @@
 
 #include "app/demo_app.hpp"
 #include "platform/crash.hpp"
+#include "platform/time.hpp"
+#include "platform/touch.hpp"
 #include "rhi/vk_api.hpp"
 
 int engine_tests_main(int argc, char **argv);
@@ -82,6 +85,7 @@ void prop(const char *name, char *out, size_t n, const char *def) {
 
 struct AndroidHost {
   android_app *app = nullptr;
+  platform::TouchState touch;
   bool window_ready = false;
   bool had_window = false;     // bir kez yuzey yaratildi mi (sonraki INIT = degisim)
   bool window_changed = false;
@@ -116,6 +120,42 @@ void on_cmd(android_app *app, int32_t cmd) {
   case APP_CMD_DESTROY: h->quit = true; break;
   default: break;
   }
+}
+int32_t on_input(android_app *app, AInputEvent *ev) {
+  AndroidHost *h = static_cast<AndroidHost *>(app->userData);
+  if (AInputEvent_getType(ev) != AINPUT_EVENT_TYPE_MOTION) return 0;
+  const int32_t action = AMotionEvent_getAction(ev);
+  const int32_t kind = action & AMOTION_EVENT_ACTION_MASK;
+  const size_t idx = (size_t)((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+  platform::TouchState &t = h->touch;
+  t.time_ns = platform::now_ns();
+  switch (kind) {
+  case AMOTION_EVENT_ACTION_DOWN:
+  case AMOTION_EVENT_ACTION_POINTER_DOWN:
+    t.begin(AMotionEvent_getPointerId(ev, idx), AMotionEvent_getX(ev, idx), AMotionEvent_getY(ev, idx));
+    break;
+  case AMOTION_EVENT_ACTION_MOVE:
+    for (size_t i = 0; i < AMotionEvent_getPointerCount(ev); i++)
+      t.move(AMotionEvent_getPointerId(ev, i), AMotionEvent_getX(ev, i), AMotionEvent_getY(ev, i));
+    break;
+  case AMOTION_EVENT_ACTION_UP:
+  case AMOTION_EVENT_ACTION_POINTER_UP:
+    t.end(AMotionEvent_getPointerId(ev, idx));
+    break;
+  case AMOTION_EVENT_ACTION_CANCEL:
+    t.clear();
+    break;
+  default: break;
+  }
+  return 1;
+}
+const platform::TouchState *android_touch(void *user) {
+  AndroidHost *h = static_cast<AndroidHost *>(user);
+  if (h->app->window) {
+    h->touch.width = (float)ANativeWindow_getWidth(h->app->window);
+    h->touch.height = (float)ANativeWindow_getHeight(h->app->window);
+  }
+  return &h->touch;
 }
 void pump_events(AndroidHost *h, int timeout_ms) {
   int events;
@@ -161,6 +201,7 @@ extern "C" void android_main(android_app *app) {
   host.app = app;
   app->userData = &host;
   app->onAppCmd = on_cmd;
+  app->onInputEvent = on_input;
   // Cikti dizini: harici app dizini (/sdcard/Android/data/<pkg>/files) — adb pull ile
   // okunur; run-as Huawei'de calismiyor ("/data has wrong owner"). Yoksa dahili.
   const char *dir = app->activity->externalDataPath ? app->activity->externalDataPath : app->activity->internalDataPath;
@@ -241,6 +282,7 @@ extern "C" void android_main(android_app *app) {
       dh.instance_extensions = android_exts;
       dh.create_surface = android_surface;
       dh.poll = android_poll;
+      dh.touch = android_touch;
       rc = app::demo_run(o, &dh);
       std::printf("[android] demo_run = %d\n", rc);
     }

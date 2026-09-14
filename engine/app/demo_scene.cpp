@@ -77,6 +77,15 @@ void demo_sys_anim(SystemCtx &c) {
 }
 void demo_sys_phys(SystemCtx &c) {
   DemoScene *sc = g_scene;
+  // Oyuncu komutu: yatay hiz dogrudan, dusey (yercekimi) korunur; zipla = dusey darbe.
+  if (sc->player_.valid()) {
+    Vec3 v = sc->phys_.linear_velocity(sc->player_);
+    v.x = sc->player_cmd_.x * sc->player_speed_;
+    v.z = sc->player_cmd_.y * sc->player_speed_;
+    if (sc->player_jump_ && std::fabs(v.y) < 0.05f) v.y = 5.5f;
+    sc->player_jump_ = false;
+    sc->phys_.set_linear_velocity(sc->player_, v);
+  }
   sc->phys_.step(c.dt, 1);
   c.world->each(mask_of(cid_phys()), [&](const ChunkView &v) {
     PhysMirror *pm = v.col<PhysMirror>();
@@ -92,7 +101,15 @@ bool DemoScene::init(Arena &arena, JobSystem *jobs) {
   if (!build_nav(nav_)) return false;
   PhysicsConfig pc; pc.jobs = jobs;
   if (!phys_.init(arena, pc)) return false;
-  phys_.add_box({50, 1, 50}, {0, -1, 0}, Quat::identity(), false);
+  // Zemin gorsel arena kadar (20x20) + gorunmez kenar duvarlari: oyuncu ve
+  // kutular arenayi terk edemez (telefonda olculdu: oyuncu -25 m'ye yurudu).
+  phys_.add_box({10, 1, 10}, {0, -1, 0}, Quat::identity(), false);
+  phys_.add_box({0.5f, 3, 11}, {-10.5f, 3, 0}, Quat::identity(), false);
+  phys_.add_box({0.5f, 3, 11}, {10.5f, 3, 0}, Quat::identity(), false);
+  phys_.add_box({11, 3, 0.5f}, {0, 3, -10.5f}, Quat::identity(), false);
+  phys_.add_box({11, 3, 0.5f}, {0, 3, 10.5f}, Quat::identity(), false);
+  phys_.add_box({0.5f, 1.5f, 8}, {0, 1.5f, -2}, Quat::identity(), false); // gorsel duvar (nav engeli) fizikte de
+  player_ = phys_.add_box({0.4f, 0.5f, 0.4f}, {-4.0f, 0.6f, 4.0f}, Quat::identity(), true);
   // Klip: 4 eklemli sallanan zincir
   static Vec3 t[kJoints][30]; static Quat r[kJoints][30]; static Vec3 s[kJoints][30];
   static RawTrack tracks[kJoints];
@@ -144,6 +161,12 @@ void DemoScene::shutdown() {
 
 void DemoScene::tick(float dt, uint32_t tick_index) { sched_.run(world_, dt, nullptr, tick_index); }
 
+void DemoScene::set_player_command(Vec2 move, bool jump) {
+  player_cmd_ = move;
+  if (jump) player_jump_ = true;
+}
+Vec3 DemoScene::player_position() const { return player_.valid() ? phys_.position(player_) : Vec3{0, 0, 0}; }
+
 uint64_t DemoScene::content_hash() const { return world_.content_hash() ^ (phys_.state_hash() * 0x9E3779B97F4A7C15ull); }
 
 void DemoScene::draw(renderer::Renderer &r, const DrawSet &d) {
@@ -151,6 +174,8 @@ void DemoScene::draw(renderer::Renderer &r, const DrawSet &d) {
   r.draw(plane, d.ground, Mat4::scale({20, 1, 20}), {0.62f, 0.64f, 0.67f});
   r.draw(cube, Mat4::translate({0, 1.5f, -2}) * Mat4::scale({1, 3, 16}), {0.55f, 0.5f, 0.45f});
   Skeleton sk{joints_, kJoints};
+  if (player_.valid()) // oyuncu: beyaz kutu, hafif buyuk
+    r.draw(cube, Mat4::translate(phys_.position(player_)) * to_mat4(phys_.rotation(player_)) * Mat4::scale({0.8f, 1.0f, 0.8f}), {0.95f, 0.95f, 0.9f});
   const renderer::MeshHandle bm = d.box_mesh.valid() ? d.box_mesh : cube;
   world_.each(mask_of(cid_phys()), [&](const ChunkView &v) {
     const PhysMirror *pm = v.col<PhysMirror>();

@@ -32,6 +32,10 @@ public:
   void draw(renderer::Renderer &r, const DrawSet &d);
   uint64_t content_hash() const;
   uint32_t entities() const { return world_.stats().entities; }
+  // Oyuncu: dinamik Jolt kutusu. Komut karede latch'lenir, her tick uygulanir
+  // (deterministik: ayni komut dizisi = ayni ozet).
+  void set_player_command(Vec2 move_world_xz, bool jump);
+  Vec3 player_position() const;
 
 private:
   sim::World world_;
@@ -39,6 +43,10 @@ private:
   sim::NavMesh nav_;
   sim::Physics phys_;
   const sim::ClipHeader *clip_ = nullptr;
+  sim::BodyId player_{};
+  Vec2 player_cmd_{0, 0};
+  bool player_jump_ = false;
+  float player_speed_ = 5.0f;
   sim::Joint joints_[kJoints];
   friend void demo_sys_nav(sim::SystemCtx &);
   friend void demo_sys_anim(sim::SystemCtx &);

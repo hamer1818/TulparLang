@@ -226,3 +226,25 @@ Telefonda aynı: 14 824 / 0 / 0.
 
 Kalan (Faz 3): stochastic tile (düşük segment), CSM kademeleri, VRS, renk uzayı, vis buffer A/B.
 
+## Girdi ve oynanabilir karakter (2026-09-14)
+
+Plan Faz 1 "timestamp'li callback input" ve ilk oyunun "dokunmatik joystick + eylem düğmeleri" gereği.
+
+| parça | yer | not |
+|---|---|---|
+| Dokunmatik durum | `platform/touch.hpp` (L0) | sabit 10 nokta, id'li begin/move/end; host doldurur |
+| Android | `app/android_main.cpp` | `onInputEvent` → AMotionEvent (DOWN/POINTER_DOWN/MOVE/UP/CANCEL) |
+| Masaüstü | `app/demo.cpp` | fare sol tuş = parmak 0; WASD + boşluk klavye yolu |
+| Sanal joystick | `app/virtual_stick.*` | sol yarım: dokunulan noktadan sürükleme = hareket (-1..1, 120 px tam sapma); sağ yarım: sürükleme = bakış, kısa dokunuş = eylem. Saf matematik, testli |
+| Oyuncu | `app/demo_scene.*` | dinamik Jolt kutusu; komut karede latch, **her tick** uygulanır (yatay hız doğrudan, düşey korunur, zıplama yerdeyken darbe) → deterministik |
+| Kamera | `app/demo_app.cpp` | oyuncuyu izleyen yörünge; hareket kameraya göre (sağ/ileri) |
+| Arena | `demo_scene.cpp` | fizik zemini görsel arena kadar + görünmez kenar duvarları (oyuncu -25 m'ye yürüyüp görüntüden çıkmıştı) |
+
+**Kapı:** `input_virtual_stick_move_look_and_tap` (kök 0, yarım sapma 0.5, doygunluk 1, bakış deltası,
+bırakınca sıfır, uzun sürüklemede eylem yok, kısa dokunuşta tek karelik eylem).
+
+**Cihazda uçtan uca (Huawei P20 Pro):** `adb shell input swipe` ile sol yarıma sürükleme → log
+`cubuk (0.81, 0.58) dokunus 1` → oyuncu (-4, 0.5, 4)'ten duvara kadar yürüdü ve **-9.62'de durdu**
+(arena kenarı -10, yarı genişlik 0.4). Sağ yarıma sürükleme kamerayı döndürdü. 59.8 fps korundu.
+Replay: komutlar tick başına latch'lendiği için `InputRecorder` ile kaydedilebilir; oyun katmanına kaldı.
+

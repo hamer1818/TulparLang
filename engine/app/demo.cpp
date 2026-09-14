@@ -19,6 +19,26 @@ bool glfw_surface(void *user, rhi::VkApi &, VkInstance inst, VkSurfaceKHR *out) 
   *out = static_cast<VkSurfaceKHR>(s);
   return true;
 }
+platform::TouchState g_touch;
+const platform::TouchState *glfw_touch(void *user) {
+  auto *win = static_cast<platform::Window *>(user);
+  const platform::InputState &in = win->input();
+  uint32_t w, h;
+  win->framebuffer_size(&w, &h);
+  g_touch.width = (float)w; g_touch.height = (float)h;
+  g_touch.time_ns = (uint64_t)(in.time_s * 1e9);
+  const bool down = in.mouse_down[0];
+  if (down && !g_touch.find(0)) g_touch.begin(0, (float)in.mouse_x, (float)in.mouse_y);
+  else if (down) g_touch.move(0, (float)in.mouse_x, (float)in.mouse_y);
+  else g_touch.end(0);
+  return &g_touch;
+}
+void glfw_keys(void *user, float *x, float *y, bool *jump) {
+  const platform::InputState &in = static_cast<platform::Window *>(user)->input();
+  *x = (in.key_down['D'] ? 1.0f : 0.0f) - (in.key_down['A'] ? 1.0f : 0.0f);
+  *y = (in.key_down['W'] ? 1.0f : 0.0f) - (in.key_down['S'] ? 1.0f : 0.0f);
+  *jump = in.key_down[32]; // bosluk
+}
 app::HostPoll glfw_poll(void *user, uint32_t *w, uint32_t *h) {
   auto *win = static_cast<platform::Window *>(user);
   win->poll();
@@ -56,6 +76,8 @@ int main(int argc, char **argv) {
   host.instance_extensions = glfw_exts;
   host.create_surface = glfw_surface;
   host.poll = glfw_poll;
+  host.touch = glfw_touch;
+  host.keyboard_move = glfw_keys;
   int rc = app::demo_run(o, &host);
   win.close();
   return rc;

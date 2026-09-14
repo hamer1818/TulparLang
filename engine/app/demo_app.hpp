@@ -6,6 +6,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include "platform/touch.hpp"
+
 namespace tulpar::engine::rhi { struct VkApi; }
 
 namespace tulpar::engine::app {
@@ -34,6 +36,10 @@ struct DemoHost {
   bool (*create_surface)(void *user, rhi::VkApi &api, VkInstance instance, VkSurfaceKHR *out) = nullptr;
   // Olaylari isler. *w/*h = framebuffer boyutu (0 = kucultulmus).
   HostPoll (*poll)(void *user, uint32_t *w, uint32_t *h) = nullptr;
+  // Dokunmatik durum (masaustunde fare = parmak 0). null = girdi yok.
+  const platform::TouchState *(*touch)(void *user) = nullptr;
+  // Klavye hareketi (masaustu): -1..1; null = yok.
+  void (*keyboard_move)(void *user, float *x, float *y, bool *jump) = nullptr;
 };
 
 // 0 = basari. host == nullptr → headless zorunlu (opts.headless_frames > 0 olmali).
