@@ -1,4 +1,5 @@
 #include "rhi/offscreen.hpp"
+#include "rhi/tile_budget.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -515,6 +516,11 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
       }
       r = a.vkBindBufferMemory(c.d, c.readback, c.readback_mem.memory, c.readback_mem.offset);
       if (r != VK_SUCCESS) { c.fail("vkBindBufferMemory", r); break; }
+    }
+    { // Mali tile butcesi (tile_budget.hpp): asim = hata, sessiz gecis yok.
+      const VkFormat fmts[2] = {color_fmt, depth_fmt};
+      const TileBudget tb = tile_budget(fmts, 2);
+      if (!tb.ok) { std::snprintf(out->error, sizeof out->error, "%s", tb.error); break; }
     }
     if (!make_render_pass(c, color_fmt, depth_fmt)) break;
     {

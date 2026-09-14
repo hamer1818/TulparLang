@@ -1,4 +1,5 @@
 #include "rhi/swapchain.hpp"
+#include "rhi/tile_budget.hpp"
 
 #include <cstdio>
 
@@ -42,6 +43,11 @@ bool Swapchain::init(Device &dev, Arena &, VkSurfaceKHR surface, uint32_t w, uin
 
 bool Swapchain::create_render_pass() {
   VkApi &a = dev_->api();
+  { // Mali tile butcesi: asim = init hatasi (tile_budget.hpp).
+    const VkFormat fmts[2] = {format_, VK_FORMAT_D32_SFLOAT};
+    const TileBudget tb = tile_budget(fmts, 2);
+    if (!tb.ok) { std::fprintf(stderr, "[swapchain] %s\n", tb.error); return false; }
+  }
   VkAttachmentDescription att[2]{};
   att[0].format = format_;
   att[0].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -121,7 +127,16 @@ bool Swapchain::create_swapchain(uint32_t w, uint32_t h) {
                         ? caps.currentTransform
                         : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
   pretransform_ = ci.preTransform;
-  ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  // Yuzeyin destekledigi ilk birlestirme kipi: Huawei/Android 10 OPAQUE vermiyor,
+  // yalniz INHERIT (dogrulama hatasi olarak telefonda goruldu 2026-09-14).
+  {
+    const VkCompositeAlphaFlagBitsKHR order[4] = {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+                                                 VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                                                 VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR};
+    ci.compositeAlpha = order[0];
+    for (int i = 0; i < 4; i++)
+      if (caps.supportedCompositeAlpha & order[i]) { ci.compositeAlpha = order[i]; break; }
+  }
   // Sunum kipi: istenen varsa o, yoksa FIFO (cekirdek, her zaman var).
   present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
   if (cfg_.preferred_present_mode != VK_PRESENT_MODE_FIFO_KHR) {

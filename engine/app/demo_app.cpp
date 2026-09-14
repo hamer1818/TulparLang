@@ -107,6 +107,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   rhi::DeviceConfig dc;
   dc.prefer = opts.gpu_prefer ? opts.gpu_prefer : "";
   dc.validation = opts.validation;
+  dc.best_practices = opts.validation; // dogrulama acikken Mali linter de acik (rapor sonda)
   if (!headless) {
     uint32_t n = 0;
     dc.instance_extensions = host->instance_extensions(host->user, &n);
@@ -375,6 +376,16 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   }
   double total_s = (platform::now_ns() - start_ns) / 1e9;
   std::printf("[engine_demo] toplam %u kare, %.1f s, ortalama %.1f fps\n", frame_i, total_s, total_s > 0 ? frame_i / total_s : 0.0);
+  if (dev.caps().validation_layer) {
+    std::printf("[engine_demo] dogrulama: %u hata, BestPractices %u uyari (%u Arm/Mali), messenger=%d\n",
+                dev.validation_errors(), dev.best_practice_warnings(), dev.best_practice_arm_warnings(),
+                (int)dev.caps().debug_messenger);
+    for (uint32_t i = 0; i < dev.best_practice_id_count(); i++)
+      std::printf("[engine_demo]   %s x%u%s\n", dev.best_practice_id(i).name, dev.best_practice_id(i).count,
+                  dev.best_practice_id(i).arm ? "  <- Mali" : "");
+    std::printf("[engine_demo] seyrek indeks (CPU, offset dogru): %u mesh; katman 'sparse-index-buffer' %u (0 mesh ise sahte pozitif, VVL 45)\n",
+                ren.sparse_mesh_count(), dev.best_practice_count("sparse-index-buffer"));
+  }
   if (headless && opts.out_path) {
     if (rhi::write_ppm(opts.out_path, ores.pixels, oc.width, oc.height)) std::printf("[engine_demo] goruntu: %s\n", opts.out_path);
   }

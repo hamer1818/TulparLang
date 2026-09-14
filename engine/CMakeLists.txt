@@ -72,6 +72,7 @@ add_library(engine_rhi STATIC
     rhi/command_pools.cpp
     rhi/offscreen.cpp
     rhi/swapchain.cpp
+    rhi/tile_budget.cpp
 )
 target_include_directories(engine_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)
 target_link_libraries(engine_rhi PUBLIC engine_core ${CMAKE_DL_LIBS})

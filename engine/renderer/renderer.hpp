@@ -85,6 +85,8 @@ public:
 
   // Yukleme: staging ile device-local. Kare icinde CAGRILMAZ.
   MeshHandle create_mesh(const Vertex *verts, uint32_t nverts, const uint32_t *indices, uint32_t nindices);
+  // Indeks araligi seyrek (Mali kurali, CPU'da olculur) mesh sayisi; kapi 0 bekler.
+  uint32_t sparse_mesh_count() const { return sparse_mesh_count_; }
   // RGBA8, mip zinciri blit ile uretilir (yukleme aninda). Mobil asil yol ASTC (Faz 6).
   TextureHandle create_texture(const uint8_t *rgba, uint32_t w, uint32_t h, bool mipmaps = true);
   MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1});
@@ -242,6 +244,7 @@ private:
   uint32_t point_light_count_ = 0;
   uint32_t render_w_ = 1, render_h_ = 1;
   uint32_t frame_ = 0;
+  uint32_t sparse_mesh_count_ = 0;
 };
 
 } // namespace tulpar::engine::renderer

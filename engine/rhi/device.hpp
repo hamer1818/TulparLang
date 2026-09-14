@@ -32,6 +32,8 @@ struct DeviceCaps {
   bool ext_graphics_pipeline_library = false;
   bool graphics_pipeline_library = false; // uzanti + feature acik (kullanilabilir)
   bool validation_layer = false;          // VK_LAYER_KHRONOS_validation etkin
+  bool best_practices = false;            // katmanin BestPractices + Arm kurallari acik (Mali linter)
+  bool debug_messenger = false;           // mesajlar sayiliyor (yoksa "0 hata" hicbir sey demek degil)
   bool ext_host_image_copy = false;
   bool khr_fragment_shading_rate = false;
   bool khr_portability_subset = false; // MoltenVK
@@ -49,6 +51,11 @@ struct DeviceConfig {
   // Dogrulama katmani (VK_LAYER_KHRONOS_validation) varsa etkinlestir; hatalar
   // sayilir (validation_errors) ve ilk birkaci basilir. Testler 0 bekler.
   bool validation = false;
+  // Mali "en iyi uygulama" denetimi: PerfDoc'un (Arm, arsivlendi) ardili olan
+  // Khronos katmani BestPractices + Arm satici kurallari (validate_best_practices_arm).
+  // Vulkan'in KOTU kullanimi test kapisini kirar (layer_check.py'nin GPU esi).
+  // validation ile birlikte; katman yoksa caps.best_practices=false (bilgi).
+  bool best_practices = false;
   // Pencere varsa: VK_KHR_surface + platform uzantilari (Window verir).
   const char *const *instance_extensions = nullptr;
   uint32_t instance_extension_count = 0;
@@ -84,6 +91,17 @@ public:
   const char *last_error() const { return err_; }
   uint32_t validation_errors() const { return validation_errors_; }
   void count_validation_error() { validation_errors_++; }
+  // BestPractices (performans) uyarilari: kimlik basina sayilir, ilk 8 benzersizi basilir.
+  // "-Arm-" kimlikleri Mali'ye ozgu; kapi bunlarin 0 olmasini bekler.
+  uint32_t validation_warnings() const { return validation_warnings_; }
+  uint32_t best_practice_warnings() const { return bp_warnings_; }
+  uint32_t best_practice_arm_warnings() const { return bp_arm_warnings_; }
+  static constexpr uint32_t kBpIds = 32;
+  struct BpId { char name[96]; uint32_t count; bool arm; };
+  uint32_t best_practice_id_count() const { return bp_id_n_; }
+  const BpId &best_practice_id(uint32_t i) const { return bp_ids_[i]; }
+  uint32_t best_practice_count(const char *id_substring) const; // kimlik altdizgisiyle toplam
+  void on_validation_message(uint32_t severity, const char *id, const char *message);
 
   VkApi &api() { return *api_; }
   VkInstance instance() const { return instance_; }
@@ -134,6 +152,8 @@ private:
   VkFence one_shot_fence_ = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
   uint32_t validation_errors_ = 0;
+  uint32_t validation_warnings_ = 0, bp_warnings_ = 0, bp_arm_warnings_ = 0, bp_id_n_ = 0;
+  BpId bp_ids_[kBpIds]{};
   VkPhysicalDeviceMemoryProperties mem_props_{};
   DeviceCaps caps_{};
   static constexpr uint32_t kMaxBlocks = 16;

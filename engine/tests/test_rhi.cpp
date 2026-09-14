@@ -10,6 +10,7 @@
 #include "core/memory/arena.hpp"
 #include "rhi/device.hpp"
 #include "rhi/offscreen.hpp"
+#include "rhi/tile_budget.hpp"
 #include "rhi/vk_api.hpp"
 #include "tests/test.hpp"
 
@@ -264,6 +265,8 @@ ENGINE_TEST(rhi_validation_layer_reports_zero_errors) {
     dev.shutdown();
     return;
   }
+  // Katman var ama mesaj kanali yoksa "0 hata" olcum degil (telefonda goruldu).
+  CHECK(dev.caps().debug_messenger);
   JobSystem js;
   CHECK(js.init(sys, JobSystemConfig{}));
   CommandPools pools;
@@ -327,4 +330,39 @@ ENGINE_TEST(rhi_dedicated_allocation_is_released) {
   std::printf("    [bilgi] adanmis ayirma: 8 dongu sonrasi blok %u -> %u (degismedi); blok ayiriciyla %u -> %u (pozitif kontrol)\n",
               blocks0, blocks0, blocks0, blocks1);
   dev.shutdown();
+}
+
+// Mali tile butcesi (Vulkan-Samples/Arm): <= 8 renk+girdi attachment, <= 128 bit/px
+// renk. Gecisler yaratilirken zorlanir (swapchain, offscreen). Burada kural
+// kendisi sinanir: bizim gecislerimiz sigar; pozitif kontrol asimi yakalar;
+// bilinmeyen bicim SESSIZCE gecmez.
+ENGINE_TEST(rhi_mali_tile_budget_rule) {
+  const VkFormat main_pass[2] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT}; // swapchain + offscreen
+  TileBudget tb = tile_budget(main_pass, 2);
+  std::printf("    [bilgi] ana gecis: %u attachment, %u bit/px renk, %u bit derinlik (butce %u / %u)\n", tb.attachments,
+              tb.color_bits, tb.depth_bits, kTileMaxAttachments, kTileMaxColorBits);
+  CHECK(tb.ok);
+  CHECK(tb.attachments == 1 && tb.color_bits == 32 && tb.depth_bits == 32);
+  const VkFormat shadow_pass[1] = {VK_FORMAT_D16_UNORM};
+  tb = tile_budget(shadow_pass, 1);
+  CHECK(tb.ok && tb.attachments == 0 && tb.depth_bits == 16);
+  // Plan vis buffer (64 bit) + isik (32) + hareket vektoru (16) + reaktif maske (8) = 120: sigar.
+  const VkFormat planned[5] = {VK_FORMAT_R32G32_UINT, VK_FORMAT_B10G11R11_UFLOAT_PACK32, VK_FORMAT_R8G8_UNORM,
+                               VK_FORMAT_R8_UNORM, VK_FORMAT_D32_SFLOAT};
+  tb = tile_budget(planned, 5);
+  CHECK(tb.ok && tb.color_bits == 120);
+  // POZITIF KONTROL 1: 2 x RGBA32F = 256 bit > 128 -> reddedilmeli.
+  const VkFormat fat[2] = {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT};
+  tb = tile_budget(fat, 2);
+  CHECK(!tb.ok);
+  std::printf("    [bilgi] pozitif kontrol: %s\n", tb.error);
+  // POZITIF KONTROL 2: 9 x R8 = 72 bit ama 9 attachment > 8 -> reddedilmeli.
+  VkFormat many[9];
+  for (int i = 0; i < 9; i++) many[i] = VK_FORMAT_R8_UNORM;
+  tb = tile_budget(many, 9);
+  CHECK(!tb.ok && tb.attachments == 9);
+  // Bilinmeyen bicim: hata, 0 bit sayip gecmek yok.
+  const VkFormat unknown[1] = {VK_FORMAT_ASTC_4x4_UNORM_BLOCK};
+  tb = tile_budget(unknown, 1);
+  CHECK(!tb.ok);
 }

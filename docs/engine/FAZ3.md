@@ -270,3 +270,39 @@ Telefonda HUD ekranda üstte, doğru yönde, 60 fps korundu (`phone_hud2`).
 uçuşu, entity listesi, tıklamayla seçim (ışın–AABB), eksen gizmosu, özellik paneli, kaydet, oynat/durdur;
 (3) Tulpar oyun betiği bağlaması. UI parçacıkları (düğme, kaydırıcı, metin girişi) bu çekirdeğin üstüne.
 
+## Mali linter (PerfDoc'un ardılı) + tile bütçesi — tarama belgesine karşı kapatılan boşluklar (2026-09-14)
+
+Kaynak: kullanıcının "GitHub Derinlik Taraması — Mobil" belgesi; madde madde karşılaştırma
+`docs/engine/BOSLUK-TARAMASI.md`, boyut tablosu `docs/engine/KARSILASTIRMA.md`.
+
+**Teslim edilen**
+- `DeviceConfig::best_practices`: Khronos doğrulama katmanının BestPractices + **Arm satıcı kuralları**
+  (`validate_best_practices_arm`, `VK_EXT_layer_settings` pNext ile). PerfDoc arşivlendi; ardılı bu.
+  Uyarılar kimlik başına sayılır (`Device::best_practice_id`, `best_practice_count`).
+- `rhi/tile_budget.hpp`: Arm birleştirme bütçesi (≤8 renk+girdi attachment, ≤128 bit/px renk) swapchain ve
+  offscreen geçişi yaratılırken **zorlanır**; aşım init hatası, bilinmeyen biçim hata.
+- Katman telefona: `engine/tools/fetch_vvl_android.sh` (Khronos Android ikilileri 1.4.357.0, gitignore'lu)
+  → `android_run.sh tests` ve `TULPAR_VALIDATION=1 … demo` APK'ya koyar. Masaüstünde katman kullanıcı
+  düzeyinde kuruldu (`~/.local/share/vulkan/explicit_layer.d`): masaüstü **64/64, 0 atlandı**.
+- Demo, doğrulama açıkken linter raporunu sonda basar (`debug.tulpar.validation=1` / `TULPAR_ENGINE_VK_VALIDATION`).
+
+**Kapılar:** `rhi_mali_tile_budget_rule` (ana geçiş 32+32 bit; plan zinciri 120 bit sığar; 256 bit ve 9
+attachment reddedilir; ASTC biçimi hata), `renderer_mali_best_practices_gate` (tam kare: gölge + doku +
+nokta ışık + UI → Arm uyarısı 0; pozitif kontrol: LOD kırpan sampler Arm uyarısı vermeli, 0→1).
+
+**Linterin ilk koşumunda bulduğu gerçek hatalar (üçü de düzeltildi)**
+1. İki sampler `maxLod` kırpıyordu (`BestPractices-Arm-vkCreateSampler-lod-clamping`) → `VK_LOD_CLAMP_NONE`.
+2. Telefonda katman "ETKİN" ama mesaj kanalı yoktu: `VK_EXT_debug_utils`'i ICD listesi vermiyor, katman
+   verir → katman adıyla enumerasyon; `caps.debug_messenger` yoksa doğrulama testleri geçmez (Tuzaklar 8s).
+3. `compositeAlpha=OPAQUE` Huawei yüzeyinde desteklenmiyor (yalnız INHERIT) — doğrulama hatası; artık
+   yüzeyin desteklediği ilk kip seçiliyor. Tanımsız davranışla çalışıyordu.
+
+**Katmanın kendi hatası:** `BestPractices-Arm-vkCmdDrawIndexed-sparse-index-buffer` taraması alt-ayırmalı
+tamponda bellek bloğunun **başını** indeks sanıyor (offset'i atlıyor, VVL issue 45); telefonda "%0.00" ×10
+sahte pozitif. Aynı kural CPU'da doğru offsetle ölçülüyor (`Renderer::sparse_mesh_count`, create_mesh'te);
+o 0 ise bu kimlik **açıkça** düşülür, başka hiçbir kimlik düşülmez.
+
+**Ölçüm (telefon, 2026-09-14):** testler 64/64 (3 atlandı: GPL yok, alt süreç yok ×2); demo katmanla 0
+doğrulama hatası, 0 gerçek Arm uyarısı; katmansız 600 kare **59.8 fps (FIFO)**, p50 16.8 ms (bekle 10.0 ms
+vsync), kayıt 2.4 ms, 0 kare içi `new`. Strip'li `libtulparengine.so` arm64 **2.7 MB** (KARSILASTIRMA.md).
+

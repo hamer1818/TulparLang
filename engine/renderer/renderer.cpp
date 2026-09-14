@@ -287,7 +287,9 @@ bool Renderer::make_material_layout() {
   si.magFilter = si.minFilter = VK_FILTER_LINEAR;
   si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
   si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-  si.maxLod = 16.0f;
+  // Mali kurali (BestPractices-Arm-vkCreateSampler-lod-clamping): LOD'u sampler'da
+  // kirpma (minLod=0, maxLod=VK_LOD_CLAMP_NONE); mip araligini image view sinirlar.
+  si.maxLod = VK_LOD_CLAMP_NONE;
   return a.vkCreateSampler(dev_->handle(), &si, nullptr, &tex_sampler_) == VK_SUCCESS;
 }
 
@@ -590,7 +592,7 @@ bool Renderer::make_shadow() {
   si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   si.compareEnable = VK_TRUE; // donanim PCF
   si.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-  si.maxLod = 0.0f;
+  si.maxLod = VK_LOD_CLAMP_NONE; // Mali kurali: sampler'da LOD kirpma yok (tek mip zaten)
   si.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
   if (a.vkCreateSampler(dev_->handle(), &si, nullptr, &shadow_sampler_) != VK_SUCCESS) return false;
   shadow_info_.enabled = cfg_.shadow_size > 0;
@@ -641,6 +643,15 @@ void Renderer::shutdown() {
 }
 
 MeshHandle Renderer::create_mesh(const Vertex *verts, uint32_t nverts, const uint32_t *indices, uint32_t nindices) {
+  // Mali kurali (sparse-index-buffer): indeks araligi (max-min+1) indeks sayisini
+  // asarsa G71 oncesi Mali aradaki BUTUN vertex'leri yukler. Denetim burada, CPU'da
+  // ve OFFSET DOGRU: katmanin kendi taramasi alt-ayirmali tamponda blok basini
+  // okuyor (VVL issue 45, telefonda %0.00 sahte uyari). Sayac raporlanir.
+  if (nindices > 0) {
+    uint32_t mn = 0xFFFFFFFFu, mx = 0;
+    for (uint32_t i = 0; i < nindices; i++) { if (indices[i] < mn) mn = indices[i]; if (indices[i] > mx) mx = indices[i]; }
+    if (mx - mn >= nindices) sparse_mesh_count_++;
+  }
   if (mesh_count_ >= cfg_.max_meshes) return MeshHandle{};
   Mesh &m = meshes_[mesh_count_];
   rhi::MemoryAlloc vm, im;

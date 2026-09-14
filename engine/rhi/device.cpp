@@ -5,18 +5,47 @@
 
 namespace tulpar::engine::rhi {
 
-// Dogrulama mesaji: hata SAYILIR (test 0 bekler), ilk 8'i basilir.
+// Dogrulama mesaji: hata SAYILIR (test 0 bekler), ilk 8'i basilir. BestPractices
+// uyarilari kimlik basina sayilir (Mali kapisi Arm kimliklerinde 0 bekler).
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
                                                      VkDebugUtilsMessageTypeFlagsEXT,
                                                      const VkDebugUtilsMessengerCallbackDataEXT *data,
                                                      void *user) {
   Device *d = static_cast<Device *>(user);
-  if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-    d->count_validation_error();
-    if (d->validation_errors() <= 8)
-      std::fprintf(stderr, "[vulkan-validation] %s\n", data && data->pMessage ? data->pMessage : "?");
-  }
+  d->on_validation_message((uint32_t)sev, data ? data->pMessageIdName : nullptr, data ? data->pMessage : nullptr);
   return VK_FALSE;
+}
+
+void Device::on_validation_message(uint32_t sev, const char *id, const char *message) {
+  if (!message) message = "?";
+  if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+    validation_errors_++;
+    if (validation_errors_ <= 8) std::fprintf(stderr, "[vulkan-validation] %s\n", message);
+    return;
+  }
+  if (id && std::strncmp(id, "BestPractices", 13) == 0) {
+    const bool arm = std::strstr(id, "-Arm-") != nullptr;
+    bp_warnings_++;
+    if (arm) bp_arm_warnings_++;
+    for (uint32_t i = 0; i < bp_id_n_; i++)
+      if (std::strcmp(bp_ids_[i].name, id) == 0) { bp_ids_[i].count++; return; }
+    if (bp_id_n_ < kBpIds) {
+      BpId &b = bp_ids_[bp_id_n_++];
+      std::snprintf(b.name, sizeof b.name, "%s", id);
+      b.count = 1;
+      b.arm = arm;
+      if (bp_id_n_ <= 8) std::fprintf(stderr, "[best-practices%s] %.400s\n", arm ? "/Arm" : "", message);
+    }
+    return;
+  }
+  if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) validation_warnings_++;
+}
+
+uint32_t Device::best_practice_count(const char *id_substring) const {
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < bp_id_n_; i++)
+    if (std::strstr(bp_ids_[i].name, id_substring)) n += bp_ids_[i].count;
+  return n;
 }
 
 void Device::fail(const char *msg, VkResult r) {
@@ -76,6 +105,18 @@ bool Device::init_instance(VkApi &api, const DeviceConfig &cfg) {
     for (uint32_t i = 0; i < n; i++)
       if (std::strcmp(lp[i].layerName, "VK_LAYER_KHRONOS_validation") == 0) {
         layers[layer_n++] = "VK_LAYER_KHRONOS_validation";
+        // VK_EXT_debug_utils'i ICD vermeyebilir (Huawei/Android 10 yukleyicisi,
+        // olculdu 2026-09-14: katman ETKIN ama mesaj yok = sahte yesil). Katmanin
+        // kendi uzanti listesine de bak: katman bu uzantiyi kendisi saglar.
+        if (!have_debug_utils && api.vkEnumerateInstanceExtensionProperties) {
+          uint32_t m = 0;
+          api.vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &m, nullptr);
+          VkExtensionProperties lprops[32];
+          if (m > 32) m = 32;
+          api.vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &m, lprops);
+          for (uint32_t k = 0; k < m; k++)
+            if (std::strcmp(lprops[k].extensionName, "VK_EXT_debug_utils") == 0) have_debug_utils = true;
+        }
         if (have_debug_utils) inst_exts[inst_ext_n++] = "VK_EXT_debug_utils";
         caps_.validation_layer = true;
       }
@@ -93,6 +134,21 @@ bool Device::init_instance(VkApi &api, const DeviceConfig &cfg) {
   ici.ppEnabledExtensionNames = inst_exts;
   ici.enabledLayerCount = layer_n;
   ici.ppEnabledLayerNames = layers;
+  // Mali linter: katman ayarlari pNext ile (VK_EXT_layer_settings; uzantinin
+  // etkin olmasi gerekmez, katman zinciri okur). Katman yoksa zincirlenmez.
+  VkBool32 on = VK_TRUE;
+  VkLayerSettingEXT settings[2] = {
+      {"VK_LAYER_KHRONOS_validation", "validate_best_practices", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &on},
+      {"VK_LAYER_KHRONOS_validation", "validate_best_practices_arm", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &on},
+  };
+  VkLayerSettingsCreateInfoEXT lsci{};
+  lsci.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+  lsci.settingCount = 2;
+  lsci.pSettings = settings;
+  if (cfg.best_practices && caps_.validation_layer) {
+    ici.pNext = &lsci;
+    caps_.best_practices = true;
+  }
   VkResult r = api.vkCreateInstance(&ici, nullptr, &instance_);
 #if defined(__APPLE__)
   // Loader + MoltenVK ICD: VK_ERROR_INCOMPATIBLE_DRIVER (olculdu CI macOS
@@ -132,12 +188,17 @@ bool Device::init_instance(VkApi &api, const DeviceConfig &cfg) {
   if (caps_.validation_layer && have_debug_utils && api.vkCreateDebugUtilsMessengerEXT) {
     VkDebugUtilsMessengerCreateInfoEXT mci{};
     mci.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    mci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
-    mci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
+    mci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                          VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT; // BestPractices bazen INFO
+    mci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT; // BestPractices = performans turu
     mci.pfnUserCallback = debug_callback;
     mci.pUserData = this;
     api.vkCreateDebugUtilsMessengerEXT(instance_, &mci, nullptr, &messenger_);
   }
+  caps_.debug_messenger = messenger_ != VK_NULL_HANDLE;
+  if (caps_.validation_layer && !caps_.debug_messenger)
+    std::fprintf(stderr, "[device] dogrulama katmani etkin ama VK_EXT_debug_utils/messenger yok: mesajlar GORUNMEZ\n");
   return true;
 }
 

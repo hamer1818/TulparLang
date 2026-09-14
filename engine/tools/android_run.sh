@@ -34,6 +34,14 @@ echo "[2/5] paketleme"
 STAGE="$BUILD/tulparengine_apk"
 rm -rf "$STAGE"; mkdir -p "$STAGE/lib/$ABI"
 cp "$BUILD/libtulparengine.so" "$STAGE/lib/$ABI/"
+# Dogrulama katmani (Khronos, BestPractices+Arm = Mali linter): tests kipinde ve
+# TULPAR_VALIDATION=1 ile APK'ya girer; yukleyici debuggable uygulamanin lib
+# dizininden katman alir (Android 9+). Yoksa test ATLANDI der (sessiz yesil yok).
+VVL="$ROOT/engine/third_party/vvl-android/$ABI/libVkLayer_khronos_validation.so"
+if [ "$MODE" = tests ] || [ "${TULPAR_VALIDATION:-0}" = 1 ]; then
+    if [ -f "$VVL" ]; then cp "$VVL" "$STAGE/lib/$ABI/"; echo "  dogrulama katmani APK'da ($(du -h "$VVL" | cut -f1))"
+    else echo "  UYARI: dogrulama katmani yok -> engine/tools/fetch_vvl_android.sh (BestPractices testi ATLANDI olacak)"; fi
+fi
 cp "$ROOT/engine/platform/android/AndroidManifest.xml" "$STAGE/"
 mkdir -p "$STAGE/assets" && cp "$ROOT"/engine/tests/assets/* "$ROOT"/engine/assets/fonts/*.ttf "$STAGE/assets/" # APK icine (host cikarir)
 "$ROOT/android/package_apk.sh" "$STAGE" "$BUILD/tulparengine.apk" | grep -E "^\s+\+|HATA|apk" || true
@@ -50,7 +58,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 # Bos deger adb shell'de kaybolur: tirnakla.
-adb shell "setprop debug.tulpar.mode '$MODE'; setprop debug.tulpar.filter '$FILTER'; setprop debug.tulpar.frames '$FRAMES'; setprop debug.tulpar.present '${TULPAR_PRESENT:-fifo}'; setprop debug.tulpar.prerotate '${TULPAR_PREROTATE:-1}'; setprop debug.tulpar.size '${TULPAR_SIZE:-2159x1080}'"
+adb shell "setprop debug.tulpar.mode '$MODE'; setprop debug.tulpar.filter '$FILTER'; setprop debug.tulpar.frames '$FRAMES'; setprop debug.tulpar.present '${TULPAR_PRESENT:-fifo}'; setprop debug.tulpar.prerotate '${TULPAR_PREROTATE:-1}'; setprop debug.tulpar.size '${TULPAR_SIZE:-2159x1080}'; setprop debug.tulpar.validation '${TULPAR_VALIDATION:-0}'"
 
 echo "[4/5] baslat: $MODE"
 # Cikti dosyasi: uygulamanin harici dizini (adb pull ile okunur; logcat halkasi

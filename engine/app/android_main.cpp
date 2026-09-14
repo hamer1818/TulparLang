@@ -245,13 +245,14 @@ extern "C" void android_main(android_app *app) {
   platform::crash_reporter_install(cc);
 
   char mode[PROP_VALUE_MAX], filter[PROP_VALUE_MAX], frames[PROP_VALUE_MAX];
-  char present[PROP_VALUE_MAX], prerot[PROP_VALUE_MAX], size[PROP_VALUE_MAX];
+  char present[PROP_VALUE_MAX], prerot[PROP_VALUE_MAX], size[PROP_VALUE_MAX], validation[PROP_VALUE_MAX];
   prop("debug.tulpar.mode", mode, sizeof mode, "demo");
   prop("debug.tulpar.filter", filter, sizeof filter, "");
   prop("debug.tulpar.frames", frames, sizeof frames, "600");
   prop("debug.tulpar.present", present, sizeof present, "fifo");
   prop("debug.tulpar.prerotate", prerot, sizeof prerot, "1");
   prop("debug.tulpar.size", size, sizeof size, "2159x1080");
+  prop("debug.tulpar.validation", validation, sizeof validation, "0"); // 1: katman + Mali linter (APK'da katman varsa)
   std::printf("[android] kip=%s dizin=%s\n", mode, dir);
 
   int rc = 0;
@@ -264,6 +265,7 @@ extern "C" void android_main(android_app *app) {
     static char out[512];
     std::snprintf(out, sizeof out, "%s/headless.ppm", dir);
     o.out_path = out;
+    o.validation = validation[0] == '1';
     rc = app::demo_run(o, nullptr);
     std::printf("[android] headless demo_run = %d\n", rc);
   } else if (std::strcmp(mode, "tests") == 0) {
@@ -278,6 +280,7 @@ extern "C" void android_main(android_app *app) {
       o.max_frames = (uint32_t)std::atoi(frames);
       o.present_mode = present;
       o.prerotate = prerot[0] != '0';
+      o.validation = validation[0] == '1';
       app::DemoHost dh;
       dh.user = &host;
       dh.instance_extensions = android_exts;

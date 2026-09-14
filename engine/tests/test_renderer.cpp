@@ -294,3 +294,107 @@ ENGINE_TEST(renderer_ui_text_draws_pixels) {
   offscreen_destroy(off);
   dev.shutdown();
 }
+
+// Mali "en iyi uygulama" kapisi — PerfDoc'un (Arm, arsivlendi) ardili: Khronos
+// dogrulama katmaninin BestPractices + Arm satici kurallari. Tam bir kare
+// (golge gecisi + doku + nokta isik + UI) kaydedilir; Arm kimlikli uyari 0
+// olmali. Genel BestPractices kimlikleri RAPORLANIR (bilgi; her biri ayri karar).
+// POZITIF KONTROL: 4 KiB'lik vkAllocateMemory katmanin "small-allocation"
+// uyarisini tetiklemeli — tetiklemiyorsa katman denetlemiyor, kapi bos.
+ENGINE_TEST(renderer_mali_best_practices_gate) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "renderer_bp")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  dc.validation = true;
+  dc.best_practices = true;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (!dev.caps().validation_layer) {
+    skip("VK_LAYER_KHRONOS_validation yok — Mali en iyi uygulama denetimi kosmadi");
+    dev.shutdown();
+    return;
+  }
+  CHECK(dev.caps().best_practices);
+  CHECK(dev.caps().debug_messenger); // mesaj kanali yoksa asagidaki 0'lar olcum degil
+
+  const uint32_t W = 128, H = 128;
+  OffscreenConfig oc;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); std::printf("    [bilgi] offscreen: %s\n", ores.error); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc; // gercek yapilandirma (golge 2048): kucuk golge
+  rc.frames_in_flight = 1;     // "small-dedicated-allocation" raporu verir, gercek degil
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::cube(v, idx);
+  renderer::MeshHandle cube = ren.create_mesh(v, 24, idx, n);
+  n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  static uint8_t tex[16 * 16 * 4];
+  for (uint32_t i = 0; i < 16 * 16; i++) { uint8_t c = ((i % 16) / 8 + (i / 16) / 8) % 2 ? 230 : 40; tex[i * 4] = tex[i * 4 + 1] = tex[i * 4 + 2] = c; tex[i * 4 + 3] = 255; }
+  renderer::TextureHandle th = ren.create_texture(tex, 16, 16, true);
+  renderer::MaterialHandle mh = ren.create_material(th, {1, 1, 1});
+  ren.set_light(normalize(Vec3{1.0f, 1.4f, 0.0f}), {0.10f, 0.10f, 0.12f}, 0.9f);
+  ren.set_shadow_volume({0, 1.0f, 0}, 9.0f, 40.0f);
+  ren.set_camera(Mat4::look_at({0, 7.0f, 9.0f}, {0, 0.5f, 0}, {0, 1, 0}),
+                 Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 100.0f));
+  ren.set_render_size(W, H);
+  Rec rr{&ren};
+  for (int frame = 0; frame < 3; frame++) {
+    ren.begin_frame(0);
+    ren.clear_point_lights();
+    ren.add_point_light({{2, 1.5f, 0}, 6.0f, {1, 0.2f, 0.2f}, 4.0f});
+    ren.draw(plane, mh, Mat4::scale({16, 1, 16}), {0.8f, 0.8f, 0.8f});
+    ren.draw(cube, Mat4::translate({0, 2.5f, 0}) * Mat4::scale({2.4f, 2.4f, 2.4f}), {0.9f, 0.3f, 0.2f});
+    ren.ui_begin((float)W, (float)H, 0.0f);
+    ren.ui_rect(4, 4, 40, 12, renderer::Renderer::rgba(255, 255, 255, 200));
+    bool ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
+    CHECK(ok);
+    if (!ok) { std::printf("    [bilgi] kare: %s\n", ores.error); break; }
+  }
+  const uint32_t bp_all = dev.best_practice_warnings(), bp_arm = dev.best_practice_arm_warnings();
+  std::printf("    [bilgi] BestPractices: %u uyari (%u Arm), %u benzersiz kimlik, %u dogrulama hatasi\n", bp_all, bp_arm,
+              dev.best_practice_id_count(), dev.validation_errors());
+  for (uint32_t i = 0; i < dev.best_practice_id_count(); i++) {
+    const Device::BpId &b = dev.best_practice_id(i);
+    std::printf("    [bilgi]   %s x%u%s\n", b.name, b.count, b.arm ? "  <- Mali" : "");
+  }
+  CHECK(dev.validation_errors() == 0);
+  // "sparse-index-buffer": katmanin taramasi alt-ayirma OFFSET'ini atliyor (VVL
+  // issue 45) — blok basini indeks sanip %0.00 der. Ayni kural CPU'da, dogru
+  // offsetle olculur (Renderer::sparse_mesh_count); o 0 ise katmanin bu kimligi
+  // sahte pozitiftir ve ACIKCA dusulur. Baska hicbir kimlik dusulmez.
+  const uint32_t sparse_layer = dev.best_practice_count("sparse-index-buffer");
+  std::printf("    [bilgi] seyrek indeks: CPU olcumu %u mesh, katman %u uyari%s\n", ren.sparse_mesh_count(), sparse_layer,
+              sparse_layer && ren.sparse_mesh_count() == 0 ? " (katman sahte pozitifi: alt-ayirma offset'i, VVL 45)" : "");
+  CHECK(ren.sparse_mesh_count() == 0);
+  const uint32_t bp_arm_effective = ren.sparse_mesh_count() == 0 ? bp_arm - sparse_layer : bp_arm;
+  CHECK(bp_arm_effective == 0); // Mali kurali ihlali = kapi kirmizi
+
+  // POZITIF KONTROL: Arm kurali gercekten acik mi? LOD kirpan sampler
+  // (minLod=maxLod=0) "BestPractices-Arm-vkCreateSampler-lod-clamping" vermeli.
+  // Vermezse Arm denetimi kapali demektir ve yukaridaki 0, hicbir seyi olcmuyor.
+  {
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+    si.maxLod = 0.0f;
+    VkSampler smp = VK_NULL_HANDLE;
+    const uint32_t before = dev.best_practice_arm_warnings();
+    if (dev.api().vkCreateSampler(dev.handle(), &si, nullptr, &smp) == VK_SUCCESS) dev.api().vkDestroySampler(dev.handle(), smp, nullptr);
+    const uint32_t after = dev.best_practice_arm_warnings();
+    std::printf("    [bilgi] pozitif kontrol (LOD kirpan sampler): Arm uyarisi %u -> %u\n", before, after);
+    bool control_fires = after > before;
+    CHECK(control_fires);
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}

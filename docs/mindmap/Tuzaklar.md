@@ -1980,3 +1980,22 @@ uzaydadir. (2) Font atlasi 28 px x 2x oversample x 213 glif 512x512'ye sigmadi; 
 0 dondurdu, `Font::load` false dondu ve demo "font yok" dedi — masaustunde 14 px'te siginca gorulmedi.
 Kural: sigmazsa atlasi buyut (2048'e kadar) ve sebebi bas; "yukleme basarisiz"i dosya yoklugu sanma.
 
+### 8s. Dogrulama katmani "ETKIN" ama mesaj kanali yok = sahte yesil; Mali linter iki gercek ihlal buldu
+Telefonda (Huawei P20 Pro, Android 10) Khronos dogrulama katmani APK'nin lib dizininden yuklendi,
+`caps.validation_layer=true` yazdi, "0 hata" dedi — ama hicbir mesaj gelmiyordu: `VK_EXT_debug_utils`'i
+ICD/yukleyici `vkEnumerateInstanceExtensionProperties(nullptr)` listesinde vermiyor, uzantiyi **katman**
+saglar ve o liste yalniz katman adiyla sorgulaninca gorunur. Messenger yaratilmadi, "0 hata" olcum degildi.
+Yakalayan sey pozitif kontroldu: LOD kirpan sampler Arm uyarisi vermeliydi, 0 -> 0 kaldi. Kural: (1) katman
+varsa uzantiyi katmanin kendi listesinden de ara; (2) `caps.debug_messenger` yoksa dogrulama testleri
+GECMEZ (0 hata iddiasi yok); (3) her "0 uyari" kapisinin yaninda uyariyi kasten tetikleyen kontrol olsun.
+Ayrica linterin ilk kosumu iki gercek Mali ihlali buldu: her iki sampler `maxLod`'u kirpiyordu
+(`BestPractices-Arm-vkCreateSampler-lod-clamping`; kural `maxLod = VK_LOD_CLAMP_NONE`, mip araligini
+image view sinirlar). PerfDoc arsivlenmis; ardili bu katmanin `validate_best_practices_arm` ayari
+(`rhi/device.cpp`, `VK_EXT_layer_settings` pNext ile). Masaustunde katman `~/.local/share/vulkan/explicit_layer.d`
+altinda (LunarG SDK'dan yalniz katman); telefona `engine/tools/fetch_vvl_android.sh` + `android_run.sh tests`.
+Ayni turda iki ek bulgu: (a) `compositeAlpha=OPAQUE` Huawei yuzeyinde desteklenmiyor (yalniz INHERIT) — yillarca
+tanimsiz davranisla calisirdi; yuzeyin `supportedCompositeAlpha`'sindan sec. (b) Katmanin
+`sparse-index-buffer` taramasi alt-ayirmali tamponun **blok basini** okur (offset yok, VVL issue 45): "%0.00"
+sahte pozitif. Kural: katmanin dogru olcemedigi seyi kendin olc (`Renderer::sparse_mesh_count`) ve dususu
+kimlik adiyla, gerekcesiyle yap; "Arm uyarilarini yok say" gibi genel filtre asla.
+
