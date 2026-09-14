@@ -20,6 +20,7 @@ enable_language(ASM)
 find_package(Threads REQUIRED)
 
 option(ENGINE_MEM_CANARY "Arena blok kanaryalari (tasma tespiti; ship'te kapat)" ON)
+option(ENGINE_TRACY "Tracy profiler istemcisi (third_party/tracy, BSD-3): profiler bolgeleri + kare isaretleri Tracy'ye de basilir" OFF)
 
 # Motorda exception ve RTTI YOK (plan L1). -Werror yok: derleyici surumune
 # bagli uyari CI'i kirmasin; kod uyarisiz tutulur.
@@ -57,6 +58,20 @@ add_library(engine_core STATIC
     core/jobs/fiber_switch_aarch64.S
 )
 target_link_libraries(engine_core PUBLIC engine_platform)
+if(ENGINE_TRACY)
+    # Kapaliyken sifir maliyet (makrolar bos). Acikken: talep uzerine (sunucu
+    # baglaninca kayit), ornekleme/sistem izleme/callstack kapali (mobilde izin yok),
+    # yayin yok (adb forward ile 8086). Fiber destegi acik: bolgeler fiber'a baglanir.
+    add_library(engine_tracy STATIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy/TracyClient.cpp)
+    target_include_directories(engine_tracy PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy)
+    target_compile_definitions(engine_tracy PUBLIC TRACY_ENABLE TRACY_ON_DEMAND TRACY_FIBERS TRACY_NO_SAMPLING
+        TRACY_NO_SYSTEM_TRACING TRACY_NO_CALLSTACK TRACY_NO_BROADCAST TRACY_NO_FRAME_IMAGE TRACY_NO_CODE_TRANSFER
+        TRACY_NO_CONTEXT_SWITCH TRACY_NO_VSYNC_CAPTURE TRACY_NO_VERIFY) # NO_EXIT YOK: sunucu yoksa surec cikista sonsuza dek beklerdi (engine_tests asili kaldi, 2026-09-14)
+    target_compile_options(engine_tracy PRIVATE -w)
+    target_link_libraries(engine_tracy PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+    target_link_libraries(engine_core PUBLIC engine_tracy)
+    target_compile_definitions(engine_core PUBLIC ENGINE_TRACY=1)
+endif()
 target_compile_options(engine_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
 if(ENGINE_MEM_CANARY)
     # PUBLIC: baslik (Arena yerlesimi) ve kutuphane ayni tanimi gormeli.

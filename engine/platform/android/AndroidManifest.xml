@@ -7,6 +7,8 @@
     android:versionCode="1"
     android:versionName="0.1">
   <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400000" android:required="true"/>
+  <!-- Tracy istemcisi (TULPAR_TRACY=1): 8086 dinler; adb forward ile masaustunden yakalanir. -->
+  <uses-permission android:name="android.permission.INTERNET" />
   <application android:label="Tulpar Engine" android:hasCode="false" android:debuggable="true"
       android:extractNativeLibs="true"
       android:theme="@android:style/Theme.NoTitleBar.Fullscreen">

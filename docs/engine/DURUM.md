@@ -8,13 +8,13 @@
 | katman | içerik | durum |
 |---|---|---|
 | L0 platform | zaman, bellek, thread, çökme raporu, **GLFW dlopen pencere**, **dokunmatik durum** | ✅ |
-| L1 core | arena ailesi + slotmap, **fiber job sistemi** (x86_64 + AArch64 asm), profiler, math, konteynerler, `AllocGate` | ✅ |
+| L1 core | arena ailesi + slotmap, **fiber job sistemi** (x86_64 + AArch64 asm), profiler (+ **Tracy** istemcisi, seçenek), math, konteynerler, `AllocGate` | ✅ |
 | L2 rhi | Vulkan **dlopen**, `Device` (iki aşama, yüzey), **Swapchain** (ön-döndürme, sunum kipi), offscreen, PSO cache, `allocate_dedicated`, **Mali linter** (BestPractices+Arm), **tile bütçesi** (kodla zorlanır) | ✅ |
 | L3 renderer | depth prepass → renk; **gölge haritası** (D16, PCF, dünya-uzayı normal eğilimi); **doku + malzeme** (klasik descriptor set, mip blit); **8–32 kümelenmiş nokta ışık** (CPU atama); **2B arayüz kuyruğu**; **doğrusal aydınlatma + sRGB hedef** | ✅ ilk dilim |
 | L4 sim | archetype ECS, sistem zamanlayıcı, sabit adım + replay, **Jolt** fiber job'larda, **Recast/Detour** navmesh, sıkıştırılmış animasyon | ✅ yazılım tarafı |
 | L6 content | **glTF 2.0** (cgltf + stb_image), **meshoptimizer + ayrık LOD**, **font atlası** (stb_truetype, Türkçe) | ✅ ilk dilim |
 | L6 app | `engine_demo` (masaüstü pencere / headless), **Android NativeActivity host**, sanal joystick, HUD | ✅ |
-| araçlar | `layer_check.py` (katman kuralı = build hatası), `compile_shaders.py`, `clang_syntax_check.sh`, `android_run.sh`, `make_test_gltf.py` | ✅ |
+| araçlar | `layer_check.py` (katman kuralı = build hatası), `compile_shaders.py`, `clang_syntax_check.sh`, `android_run.sh`, `make_test_gltf.py`, `fetch_vvl_android.sh`, `tracy_check.sh` | ✅ |
 
 ## 2. Telefonda çalışan sahne (tek APK)
 Zemin (dama doku), duvar, 40 dinamik Jolt kutusu (glTF dama küpü), 24 navmesh ajanı + eklem zinciri
@@ -46,10 +46,10 @@ sahte yeşil (8s); `compositeAlpha OPAQUE` Huawei'de yok; katmanın seyrek-indek
 3. **Tulpar bağlaması**: oyun mantığı Tulpar'da (dil bugün kutusuz struct/işaretçi vermiyor; C ABI köprüsü).
 4. glTF **iskelet + animasyon** içe aktarma (bugün yalnız statik mesh); karakter modeli yok.
 5. Ses (Faz 4: Oboe + miniaudio), CSM, render graph (Granite referans),
-   vis buffer A/B, ASTC/KTX2/lightmap (Faz 6), Tracy, Swappy, GameActivity göçü, Memory Advice,
+   vis buffer A/B, ASTC/KTX2/lightmap (Faz 6), Swappy, GameActivity göçü, Memory Advice,
    Adreno cihaz (Faz 1 kapısı), macOS CI çökmesi (yerelden ulaşılamıyor).
 
 ## 7. Çalışma kuralları (kullanıcı)
 CI yok, push yok ("gönder" denene kadar); doğrulama yerel + telefon (+ emülatör yalnız işlevsel);
 pencereyi ben açmam, ekran görüntüsü `adb screencap`; sayı yoksa iddia yok, her kapının kontrolü var.
-Yerelde bekleyen commit: 13 (`engine/faz2-anim`).
+Yerelde bekleyen commit: 14 (`engine/faz2-anim`).

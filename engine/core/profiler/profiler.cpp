@@ -7,6 +7,14 @@
 #include "platform/fatal.hpp"
 #include "platform/time.hpp"
 
+#if ENGINE_TRACY
+// Tracy istemcisi (BSD-3, vendored): kendi profiler'imiz her zaman calisir,
+// Tracy acikken ayni bolgeler/kareler ona da basilir (UI bedava, GPU bolgeleri
+// cihaz gelince). Bolge adlari dinamik srcloc ile (___tracy_alloc_srcloc_name).
+#include <cstring>
+#include <tracy/TracyC.h>
+#endif
+
 namespace tulpar::engine {
 
 Profiler *Profiler::instance_ = nullptr;
@@ -18,6 +26,7 @@ std::atomic<uint32_t> g_thread_ids{0};
 thread_local uint32_t t_thread_id = UINT32_MAX;
 thread_local uint32_t t_zone_stack[32];
 thread_local uint32_t t_zone_depth = 0;
+thread_local uint32_t t_tracy_ctx[32][4];
 
 uint32_t thread_id() {
   if (t_thread_id == UINT32_MAX) t_thread_id = g_thread_ids.fetch_add(1);
@@ -28,11 +37,37 @@ uint32_t thread_id() {
 struct ZoneStack {
   uint32_t *stack;
   uint32_t *depth;
+  uint32_t (*tracy_ctx)[4];
 };
 ZoneStack zone_stack() {
-  if (Fiber *f = JobSystem::current_fiber()) return ZoneStack{f->zone_stack, &f->zone_depth};
-  return ZoneStack{t_zone_stack, &t_zone_depth};
+  if (Fiber *f = JobSystem::current_fiber()) return ZoneStack{f->zone_stack, &f->zone_depth, f->tracy_ctx};
+  return ZoneStack{t_zone_stack, &t_zone_depth, t_tracy_ctx};
 }
+#if ENGINE_TRACY
+// Ad isaretcisi -> statik srcloc tablosu (256 benzersiz bolge adi; asilirsa
+// son giris paylasilir ve sayac artar). Kilit yok: yayinlama atomik indeksle.
+constexpr uint32_t kTracySrclocMax = 256;
+___tracy_source_location_data g_tracy_srcloc[kTracySrclocMax];
+std::atomic<uint32_t> g_tracy_srcloc_n{0};
+std::atomic<uint32_t> g_tracy_srcloc_overflow{0};
+const ___tracy_source_location_data *tracy_srcloc(const char *name) {
+  const uint32_t n = g_tracy_srcloc_n.load(std::memory_order_acquire);
+  for (uint32_t i = 0; i < n; i++)
+    if (g_tracy_srcloc[i].name == name) return &g_tracy_srcloc[i];
+  const uint32_t i = g_tracy_srcloc_n.fetch_add(1, std::memory_order_acq_rel);
+  if (i >= kTracySrclocMax) {
+    g_tracy_srcloc_overflow.fetch_add(1, std::memory_order_relaxed);
+    g_tracy_srcloc_n.store(kTracySrclocMax, std::memory_order_release);
+    return &g_tracy_srcloc[kTracySrclocMax - 1];
+  }
+  g_tracy_srcloc[i].name = name;
+  g_tracy_srcloc[i].function = "";
+  g_tracy_srcloc[i].file = "";
+  g_tracy_srcloc[i].line = 0;
+  g_tracy_srcloc[i].color = 0;
+  return &g_tracy_srcloc[i];
+}
+#endif
 } // namespace
 
 bool Profiler::init(Arena &arena, const ProfilerConfig &cfg) {
@@ -67,6 +102,9 @@ void Profiler::end_frame() {
   zones_dropped_ = g_zone_dropped.load(std::memory_order_relaxed);
   frames_total_++;
   in_frame_ = false;
+#if ENGINE_TRACY
+  ___tracy_emit_frame_mark(nullptr);
+#endif
 }
 
 void Profiler::zone_begin(const char *name) {
@@ -82,6 +120,18 @@ void Profiler::zone_begin(const char *name) {
   z.t1 = 0;
   z.thread = thread_id();
   z.depth = *zs.depth;
+#if ENGINE_TRACY
+  {
+    // Statik kaynak konumu (ad isaretcisi basina bir kez): dinamik srcloc
+    // (___tracy_alloc_srcloc_name) tracy-csvexport istatistiginde GORUNMUYOR
+    // (olculdu 2026-09-14: 4297 bolge yakalandi, disa aktarim bos) ve her
+    // bolgede ayirma yapiyordu. Adlar dize sabitidir (ENGINE_ZONE("...")).
+    const ___tracy_source_location_data *sl = tracy_srcloc(name);
+    TracyCZoneCtx c = ___tracy_emit_zone_begin(sl, 1);
+    static_assert(sizeof(TracyCZoneCtx) <= sizeof(zs.tracy_ctx[0]), "TracyCZoneCtx 16 bayti asti");
+    std::memcpy(zs.tracy_ctx[*zs.depth], &c, sizeof c);
+  }
+#endif
   zs.stack[(*zs.depth)++] = (uint32_t)(idx % cfg_.zone_capacity);
 }
 
@@ -90,6 +140,13 @@ void Profiler::zone_end() {
   if (*zs.depth == 0) return; // dusurulmus bolgenin kapanisi
   uint32_t idx = zs.stack[--(*zs.depth)];
   zones_[idx].t1 = platform::now_ns();
+#if ENGINE_TRACY
+  {
+    TracyCZoneCtx c;
+    std::memcpy(&c, zs.tracy_ctx[*zs.depth], sizeof c);
+    ___tracy_emit_zone_end(c);
+  }
+#endif
   // Fiber gocmusse kapanis thread'i farkli olabilir; bolge acildigi thread'de
   // kalir (zaman cizelgesinde tek satir), goc sayisi job istatistiginde.
 }

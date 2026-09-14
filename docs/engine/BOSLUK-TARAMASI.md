@@ -47,7 +47,7 @@
 
 | Belge | Bizde | Karar |
 |---|---|---|
-| **Tracy** | Kendi profiler (bölge + kare zamanlayıcı, UI yok) | 🟠 **İP-R sırada**: Tracy istemcisi vendored (BSD-3), profiler bölgeleri `TracyCZone` ile yansıtılır, derleme seçeneği (`TULPAR_ENGINE_TRACY`), kapalıyken sıfır maliyet. Doğrulama pencereyle değil `tracy-capture` + `tracy-csvexport` ile |
+| **Tracy** | ✅ **bugün**: istemci vendored, `ENGINE_TRACY=ON`; profiler bölgeleri + kare + fiber bağlama; `tracy_check.sh desktop|phone` uçtan uca (telefon 2187 bölge) | GPU bölgeleri zaman damgası olan cihazda (G72 yok) |
 | enkiTS | Kendi fiber job sistemi (x86_64 + AArch64), Jolt'u sürüyor | ✅ referans; İP-C ek yük ölçümü FAZ2'de var |
 | xxHash / zstd / LZ4 | Kendi FNV özeti; sıkıştırma yok | 🟢 pack formatı (Faz 6) ile |
 
@@ -88,7 +88,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 | Katman | Belge | Bizim | Bugün değişen |
 |---|---|---|---|
 | L0 | 🟡 | 🟡 NativeActivity çalışıyor, GameActivity/Swappy/MemAdvice yok | — |
-| L1 | 🟢 | 🟢 Tracy UI yok | — |
+| L1 | 🟢 | 🟢 **Tracy bugün** | ✅ |
 | L2 | 🟢 | 🟢 **+ Mali linter kapısı + tile bütçesi** | ✅ |
 | L3 | 🟢 | 🟡 **sRGB/doğrusal bugün**, render graph yok, 2 sampler ihlali **düzeltildi** | ✅ |
 | L4 | 🟡 | 🟡 ozz/ses yok | — |
@@ -101,6 +101,6 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 1. ~~sRGB / doğrusal aydınlatma~~ ✅ bugün.
 2. **Sahne veri modeli + format** → editör (DURUM §6.1–2; ImGui kararı burada).
 3. **ozz-animation + glTF iskelet** (karakter).
-4. **Tracy** (İP-R) — ölçüm altyapısı; kapalıyken sıfır maliyet.
+4. ~~Tracy (İP-R)~~ ✅ bugün.
 5. **Swappy** kare temposu, sonra **GameActivity** göçü (İP-P).
 6. Faz 4 ses (Oboe + miniaudio), Faz 6 içerik (ASTC/KTX2/meshoptimizer/lightmap).

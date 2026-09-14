@@ -342,3 +342,23 @@ küresi, rapor satırında `lod a/b/c` seçim sayısı; telefon 59.9 fps, 166 ç
 The Forge SRT ilkesi (CPU-GPU tek kaynak tablosu) için ilk mekanik adım: `FrameUbo` std140 ofsetleri
 `static_assert` ile derlemede sabitlendi (kayma = derleme hatası).
 
+## Tracy (İP-R, tarama belgesi §10) — 2026-09-14
+
+Vendored `engine/third_party/tracy` (v0.14.1 istemci, BSD-3). CMake `ENGINE_TRACY=ON` (varsayılan OFF, kapalıyken
+sıfır maliyet): kendi profiler'ımızın bölgeleri (`ENGINE_ZONE`) ve kare işaretleri Tracy'ye de basılır
+(`core/profiler/profiler.cpp`), fiber'lar `___tracy_fiber_enter/leave` ile bağlanır (göç olsa da bölge doğru),
+worker thread adları verilir. Ayarlar: talep üzerine (`TRACY_ON_DEMAND`), örnekleme/callstack/sistem izleme/
+yayın kapalı (mobilde izin yok, ağ gürültüsü yok). Araçlar `tracy-capture` + `tracy-csvexport` kaynaktan derlendi
+(`~/.local/opt/tracy-tools`; sistem capstone 5 eski, CPM ile capstone 6). **Uçtan uca kapı**
+`engine/tools/tracy_check.sh desktop|phone`: istemci → yakalama → CSV; `render` ve `sim` bölgeleri sayılır.
+
+**Ölçüm:** masaüstü 475 kare / 5543 bölge (anim, nav, phys, jolt, render, sim, frame); **telefon** (Mali,
+`adb forward tcp:8086`) 366 kare / 2187 bölge, demo 59.8 fps, 0 kare içi `new` (Tracy açıkken de).
+
+**Yol boyunca dört tuzak (Tuzaklar 8t):** (1) `adb forward 8086` masaüstünde kalınca yakalama sessizce telefona
+gider, iz boş; betik portu denetler ve sonda forward'ı kaldırır. (2) Dinamik srcloc (`___tracy_alloc_srcloc_name`)
+csvexport istatistiğinde görünmez → ad başına statik srcloc tablosu. (3) `TracyCZoneCtx` yalnız id+aktif olarak
+saklanınca `ON_DEMAND` bağlantı kimliği kaybolur, `zone_end` sessizce atlanır (5994 bölge yakalanıp hiçbiri
+kapanmadı) → bağlam ham kopyasıyla saklanır. (4) `TRACY_NO_EXIT` sunucu yoksa süreci çıkışta sonsuza dek
+bekletir (engine_tests asılı kaldı) → kullanılmaz; yakalama penceresi demonun içinde tutulur.
+

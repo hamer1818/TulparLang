@@ -1999,3 +1999,16 @@ tanimsiz davranisla calisirdi; yuzeyin `supportedCompositeAlpha`'sindan sec. (b)
 sahte pozitif. Kural: katmanin dogru olcemedigi seyi kendin olc (`Renderer::sparse_mesh_count`) ve dususu
 kimlik adiyla, gerekcesiyle yap; "Arm uyarilarini yok say" gibi genel filtre asla.
 
+### 8t. Tracy: bos iz dort ayri sebepten gelir — port kacirma, dinamik srcloc, kesik baglam, NO_EXIT
+Tracy istemcisi motora baglaninca (ENGINE_TRACY) yakalama uc saat boyunca "0 bolge" verdi; her seferinde sebep
+farkliydi. (1) Onceki telefon kosumundan kalan `adb forward tcp:8086` masaustunde 8086'yi tutuyordu:
+`tracy-capture 127.0.0.1` sessizce telefona (kapali uygulamaya) baglandi, iz 400 bayt. Kural: yakalamadan once
+`ss -ltnp | grep 8086` — kim dinliyor? Betik denetler ve forward'i sonda kaldirir. (2) Dinamik kaynak konumu
+(`___tracy_alloc_srcloc_name`) ile acilan bolgeler yakalanir (5994) ama `tracy-csvexport` istatistiginde
+gorunmez; ad basina statik `___tracy_source_location_data` tablosu kullan. (3) `TracyCZoneCtx` yalniz `id` +
+`active` olarak saklanip `zone_end`'de yeniden kurulunca `TRACY_ON_DEMAND` altindaki `connectionId` alani
+kaybolur ve `___tracy_emit_zone_end` sessizce doner: bolgeler acilir, hicbiri kapanmaz. Baglami ham bayt olarak
+butunuyle sakla (`memcpy`, sizeof static_assert). (4) `TRACY_NO_EXIT` sunucu yoksa cikista SONSUZA dek bekler
+(engine_tests asili kaldi); kullanma, yakalama penceresini kosumun icinde tut. Ayrica: `pkill -f <ad>` kendi
+kabuk komut satirini da eslestirir ve tool cagrisini oldurur (cikis 144); `pkill -x` kullan.
+
