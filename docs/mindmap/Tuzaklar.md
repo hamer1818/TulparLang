@@ -1971,3 +1971,12 @@ GPU'sunda dogrulanmissa **dogrulanmamistir**; ikinci saticinin GPU'su sart.
 koyulasan piksel sayar; kendi **negatif kontrolu** var (6 m kaydirma → golge kacar, koyulasan 0),
 yani ariza moduna duyarli oldugu gosteriliyor. Masaustu ve telefon ayni sayiyi verdi (2433 piksel).
 
+### 8r. 2B arayuz framebuffer uzayinda cizilirse on-dondurmede 90 derece yatar; atlas tasarsa "font yok"
+Iki cihaz-ozel tuzak, ikisi de yalniz telefonda gorundu. (1) HUD framebuffer piksel uzayinda
+ciziliyordu; Android on-dondurmede framebuffer dikeydir (1080x2159), gorunen ekran yatay — metin
+ekranin sol kenarinda 90 derece yatik cikti. Kural: UI **mantiksal** (gorunen) uzayda cizilir ve 3B
+projeksiyonla **ayni aci** kadar dondurulur (`ui.vert` push sabiti); dokunmatik koordinatlar da o
+uzaydadir. (2) Font atlasi 28 px x 2x oversample x 213 glif 512x512'ye sigmadi; `stbtt_PackFontRanges`
+0 dondurdu, `Font::load` false dondu ve demo "font yok" dedi — masaustunde 14 px'te siginca gorulmedi.
+Kural: sigmazsa atlasi buyut (2048'e kadar) ve sebebi bas; "yukleme basarisiz"i dosya yoklugu sanma.
+

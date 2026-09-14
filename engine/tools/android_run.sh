@@ -35,7 +35,7 @@ STAGE="$BUILD/tulparengine_apk"
 rm -rf "$STAGE"; mkdir -p "$STAGE/lib/$ABI"
 cp "$BUILD/libtulparengine.so" "$STAGE/lib/$ABI/"
 cp "$ROOT/engine/platform/android/AndroidManifest.xml" "$STAGE/"
-mkdir -p "$STAGE/assets" && cp "$ROOT"/engine/tests/assets/* "$STAGE/assets/" # APK icine (host cikarir)
+mkdir -p "$STAGE/assets" && cp "$ROOT"/engine/tests/assets/* "$ROOT"/engine/assets/fonts/*.ttf "$STAGE/assets/" # APK icine (host cikarir)
 "$ROOT/android/package_apk.sh" "$STAGE" "$BUILD/tulparengine.apk" | grep -E "^\s+\+|HATA|apk" || true
 
 echo "[3/5] kurulum"

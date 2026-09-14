@@ -7,6 +7,7 @@
 
 #include "app/demo_scene.hpp"
 #include "app/virtual_stick.hpp"
+#include "content/font.hpp"
 #include "content/gltf.hpp"
 #include "core/jobs/job_system.hpp"
 #include "core/memory/alloc_gate.hpp"
@@ -37,7 +38,36 @@ Mat4 cam_view(const Cam &c) {
 struct RecordCtx {
   renderer::Renderer *r;
 };
-void record_cb(VkCommandBuffer cb, void *user) { static_cast<RecordCtx *>(user)->r->record(cb); }
+void record_cb(VkCommandBuffer cb, void *user) {
+  auto *c = static_cast<RecordCtx *>(user);
+  c->r->record(cb);
+  c->r->ui_record(cb); // HUD ayni subpass'te, 3B'den sonra
+}
+// HUD: ust solda durum, etkilesimli ise joystick gostergesi.
+void draw_hud(renderer::Renderer &ren, const content::Font &font, float w, float h, float rot, float fps, float ms,
+              uint32_t lights, const VirtualStick *stick, Vec3 player, bool interactive) {
+  ren.ui_begin(w, h, rot); // w,h: GORUNEN olcu (dokunmatik koordinatlarla ayni uzay)
+  if (!font.loaded()) return;
+  const float s = h / 1080.0f; // olcek
+  const uint32_t white = renderer::Renderer::rgba(255, 255, 255), dim = renderer::Renderer::rgba(0, 0, 0, 120);
+  char line[160];
+  std::snprintf(line, sizeof line, "Tulpar Engine  %.0f fps  %.2f ms  isik %u", fps, ms, lights);
+  float tw = font.text_width(line);
+  ren.ui_set_atlas(font.atlas());
+  ren.ui_rect(16 * s, 16 * s, tw + 24 * s, font.line_height() + 12 * s, dim);
+  font.draw(ren, 28 * s, 22 * s, line, white);
+  if (interactive) {
+    std::snprintf(line, sizeof line, "oyuncu %.1f, %.1f   sol: yuru  sag: bak / dokun: zipla", player.x, player.z);
+    ren.ui_rect(16 * s, 16 * s + font.line_height() + 20 * s, font.text_width(line) + 24 * s, font.line_height() + 12 * s, dim);
+    font.draw(ren, 28 * s, 22 * s + font.line_height() + 20 * s, line, renderer::Renderer::rgba(220, 230, 255));
+    if (stick && stick->move_active) { // joystick: kok halkasi + topuz
+      float r = stick->stick_radius_px;
+      ren.ui_rect(stick->stick_origin.x - r, stick->stick_origin.y - r, 2 * r, 2 * r, renderer::Renderer::rgba(255, 255, 255, 40));
+      float kx = stick->stick_origin.x + stick->move.x * r, ky = stick->stick_origin.y - stick->move.y * r;
+      ren.ui_rect(kx - 24 * s, ky - 24 * s, 48 * s, 48 * s, renderer::Renderer::rgba(255, 255, 255, 170));
+    }
+  }
+}
 void shadow_cb(VkCommandBuffer cb, void *user) { static_cast<RecordCtx *>(user)->r->record_shadow(cb); }
 VkPresentModeKHR present_mode_of(const char *s) {
   if (!s || !*s) return VK_PRESENT_MODE_FIFO_KHR;
@@ -167,6 +197,17 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   std::printf("[engine_demo] golge: %s %ux%u format=%d dogrusal_suzme=%d%s\n", sh.enabled ? "acik" : "KAPALI", sh.size,
               sh.size, (int)sh.format, (int)sh.linear_filter, sh.enabled ? "" : sh.disabled_reason);
 
+  static content::Font font;
+  {
+    char fpath[1024];
+    const char *adir = std::getenv("TULPAR_ENGINE_ASSETS");
+    if (adir && *adir) std::snprintf(fpath, sizeof fpath, "%s/DejaVuSans.ttf", adir);
+    else std::snprintf(fpath, sizeof fpath, "%s/assets/fonts/DejaVuSans.ttf", ENGINE_SOURCE_DIR);
+    const float vis_h = headless ? (float)render_h : (float)swap.logical_extent().height;
+    const float ui_px = vis_h / 1080.0f * 28.0f; // GORUNEN yukseklige gore (on-dondurmede goruntu dikey)
+    if (font.load(sys, ren, fpath, ui_px > 12 ? ui_px : 12)) std::printf("[engine_demo] font: %s (%.0f px)\n", fpath, font.height());
+    else std::printf("[engine_demo] font yok (%s): HUD metinsiz\n", fpath);
+  }
   DemoScene scene;
   if (!scene.init(sys, &jobs)) { std::fprintf(stderr, "sahne\n"); return 1; }
   std::printf("[engine_demo] sahne: %u entity, kutu+ajan+eklem\n", scene.entities());
@@ -180,6 +221,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   uint32_t frame_i = 0, tick_i = 0;
   uint64_t frame_allocs_max = 0;
   uint64_t sim_ns = 0, render_ns = 0, acquire_ns = 0, ubo_ns = 0, draw_ns = 0, record_ns = 0, submit_ns = 0;
+  float hud_fps = 0, hud_ms = 0;
   uint32_t report_frames = 0;
   bool running = true;
   bool have_window = true;
@@ -265,6 +307,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       if (headless) {
         ren.begin_frame(frame_i);
         scene.draw(ren, ds);
+        draw_hud(ren, font, (float)render_w, (float)render_h, 0.0f, hud_fps, hud_ms, ren.point_light_count(), nullptr,
+                 scene.player_position(), false);
         RecordCtx rctx{&ren};
         // Golge gecisi ana render pass'ten ONCE (kendi pass'i var).
         if (!rhi::offscreen_render_custom(off, oc, record_cb, &rctx, &ores, shadow_cb)) {
@@ -282,10 +326,13 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           ren.begin_frame(fc.frame_index);
           uint64_t tc = platform::now_ns();
           scene.draw(ren, ds);
+          draw_hud(ren, font, (float)swap.logical_extent().width, (float)swap.logical_extent().height, swap.rotation_radians(),
+                   hud_fps, hud_ms, ren.point_light_count(), interactive ? &stick : nullptr, scene.player_position(), interactive);
           uint64_t td = platform::now_ns();
           ren.record_shadow(fc.cmd); // kendi pass'i: ana pass BASLAMADAN once
           swap.begin_render_pass(fc);
           ren.record(fc.cmd);
+          ren.ui_record(fc.cmd);
           uint64_t te = platform::now_ns();
           swap.end_frame(fc);
           uint64_t tf = platform::now_ns();
@@ -307,6 +354,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       static uint64_t scratch[1200];
       FrameStats st = prof.frame_stats(Span<uint64_t>(scratch, 1200), 120);
       double rf = report_frames ? (double)report_frames : 1.0;
+      hud_ms = (float)(st.p50_ns / 1e6);
+      hud_fps = hud_ms > 0 ? 1000.0f / hud_ms : 0;
       std::printf("[engine_demo] kare %u | p50 %.2f ms p99 %.2f ms max %.2f ms | sim %.2f render %.2f (bekle+acquire %.2f, ubo %.2f, draw-listesi %.2f, kayit %.2f, submit+present %.2f) ms/kare | cizim %u | isik %u (kume %u) | kare ici new (en cok) %llu | ozet %016llx\n",
                   frame_i, st.p50_ns / 1e6, st.p99_ns / 1e6, st.max_ns / 1e6, sim_ns / rf / 1e6, render_ns / rf / 1e6,
                   acquire_ns / rf / 1e6, ubo_ns / rf / 1e6, draw_ns / rf / 1e6, record_ns / rf / 1e6, submit_ns / rf / 1e6,

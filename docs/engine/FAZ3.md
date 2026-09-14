@@ -248,3 +248,25 @@ bırakınca sıfır, uzun sürüklemede eylem yok, kısa dokunuşta tek karelik 
 (arena kenarı -10, yarı genişlik 0.4). Sağ yarıma sürükleme kamerayı döndürdü. 59.8 fps korundu.
 Replay: komutlar tick başına latch'lendiği için `InputRecorder` ile kaydedilebilir; oyun katmanına kaldı.
 
+## 2B arayüz çekirdeği + font (Faz 4'ün ilk parçası, editörün önkoşulu) — 2026-09-14
+
+Kullanıcı yönü: "arayüz işlerini komple editör içinden yapmamız lazım." Editör (PLAN L7, Faz 9) öne
+çekildi; sıralama **UI çekirdeği → veri modeli/sahne formatı → editör**. Bu dilim UI çekirdeği.
+
+| parça | yer | not |
+|---|---|---|
+| Immediate-mode 2B | `Renderer::ui_*` | piksel uzayı dörtgen kuyruğu (`UiVertex` 20 B), kare başına sabit kapasite (32 768 köşe), alfa karışımlı, derinliksiz, **aynı subpass'te 3B'den sonra** (`ui_record`). Ana pipeline layout'u paylaşır (set 1 = atlas) |
+| Ön-döndürme | `ui.vert` | UI **mantıksal** (görünen) piksel uzayında çizilir, push sabitiyle 3B ile aynı açıda döndürülür; dokunmatik koordinatlarla aynı uzay. İlk sürüm framebuffer uzayındaydı: telefonda HUD 90° yatık çıktı (ölçüldü, düzeltildi) |
+| Font | `content/font.*` | **stb_truetype** vendored; ASCII + Latin-1 + Türkçe (ğ ı ş İ Ğ Ş), 2× oversample, RGBA8 atlas (beyaz + alfa; (0,0) texeli beyaz opak → `ui_rect`). UTF-8 çözücü. Atlas sığmazsa kenar ikiye katlanır (2048'e kadar): 28 px × 213 glif 512'ye sığmayıp telefonda "font yok" vermişti |
+| Varlık | `engine/assets/fonts/DejaVuSans.ttf` | Bitstream Vera lisansı (`DejaVu-LICENSE.txt`); APK'ya `.ttf` de giriyor |
+| HUD | `demo_app.cpp` `draw_hud` | fps / ms / ışık; etkileşimliyse oyuncu konumu + joystick halkası ve topuzu |
+
+**Kapı:** `renderer_ui_text_draws_pixels` — "Tulpar Engine ğüşİ" 807 parlak piksel, boş metin **0**
+(pozitif kontrol), 50×20 kutu 1000 piksel; genişlikler tekdüze. Telefonda aynı sayılar.
+Telefonda HUD ekranda üstte, doğru yönde, 60 fps korundu (`phone_hud2`).
+
+**Editöre giden yol (sıra):** (1) sahne veri modeli — entity/bileşen/transform/mesh/malzeme/ışık/fizik
+şekli, deterministik metin format, yükle/kaydet; (2) editör = masaüstünde motor uygulaması: kamera
+uçuşu, entity listesi, tıklamayla seçim (ışın–AABB), eksen gizmosu, özellik paneli, kaydet, oynat/durdur;
+(3) Tulpar oyun betiği bağlaması. UI parçacıkları (düğme, kaydırıcı, metin girişi) bu çekirdeğin üstüne.
+

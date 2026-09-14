@@ -131,7 +131,7 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/vendored_impl.c)
+add_library(engine_content STATIC content/gltf.cpp content/font.cpp content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)

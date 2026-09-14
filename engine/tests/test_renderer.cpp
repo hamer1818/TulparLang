@@ -222,3 +222,75 @@ ENGINE_TEST(renderer_point_light_lights_only_near_pixels) {
   offscreen_destroy(off);
   dev.shutdown();
 }
+
+// 2B arayuz + font: metin gercekten piksel uretiyor mu? Bos metin (POZITIF
+// KONTROL) hicbir sey cizmemeli; genislik olcumu tekduze.
+#include "content/font.hpp"
+ENGINE_TEST(renderer_ui_text_draws_pixels) {
+  char path[1024];
+  const char *adir = std::getenv("TULPAR_ENGINE_ASSETS");
+  if (adir && *adir) std::snprintf(path, sizeof path, "%s/DejaVuSans.ttf", adir);
+  else std::snprintf(path, sizeof path, "%s/assets/fonts/DejaVuSans.ttf", ENGINE_SOURCE_DIR);
+  if (FILE *f = std::fopen(path, "rb")) std::fclose(f); else { skip("font yok (assets/fonts/DejaVuSans.ttf)"); return; }
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "ui_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  const uint32_t W = 256, H = 128;
+  OffscreenConfig oc;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  content::Font font;
+  bool fok = font.load(sys, ren, path, 24.0f);
+  CHECK(fok);
+  if (!fok) { ren.shutdown(); offscreen_destroy(off); dev.shutdown(); return; }
+  float wT = font.text_width("T"), wTulpar = font.text_width("Tulpar"), wTr = font.text_width("Şığ");
+  bool widths = wT > 0 && wTulpar > 3 * wT && wTr > 0;
+  CHECK(widths);
+  ren.set_camera(Mat4::identity(), Mat4::identity());
+  (void)0;
+  auto bright = [&](const char *text) {
+    ren.begin_frame(0);
+    ren.ui_begin((float)W, (float)H);
+    if (text) font.draw(ren, 8, 40, text, renderer::Renderer::rgba(255, 255, 255));
+    struct Ctx { renderer::Renderer *r; } cx{&ren};
+    auto rec = [](VkCommandBuffer cb, void *u) { auto *c = static_cast<Ctx *>(u); c->r->record(cb); c->r->ui_record(cb); };
+    if (!offscreen_render_custom(off, oc, rec, &cx, &ores, rec_shadow)) return (uint32_t)0xFFFFFFFFu;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < W * H; i++) if (ores.pixels[i * 4] > 128) n++;
+    return n;
+  };
+  uint32_t with = bright("Tulpar Engine ğüşİ"), without = bright(nullptr), rect_only = 0;
+  { // duz kutu da cizilebilmeli (beyaz texel)
+    ren.begin_frame(0);
+    ren.ui_begin((float)W, (float)H);
+    ren.ui_set_atlas(font.atlas());
+    ren.ui_rect(10, 10, 50, 20, renderer::Renderer::rgba(255, 255, 255));
+    struct Ctx { renderer::Renderer *r; } cx{&ren};
+    auto rec = [](VkCommandBuffer cb, void *u) { auto *c = static_cast<Ctx *>(u); c->r->record(cb); c->r->ui_record(cb); };
+    if (offscreen_render_custom(off, oc, rec, &cx, &ores, rec_shadow))
+      for (uint32_t i = 0; i < W * H; i++) if (ores.pixels[i * 4] > 128) rect_only++;
+  }
+  std::printf("    [bilgi] font: T=%.1f Tulpar=%.1f Sig=%.1f px; parlak piksel metinli %u, bos %u, kutu %u\n", wT, wTulpar, wTr,
+              with, without, rect_only);
+  bool draws = with > 300;
+  CHECK(draws);
+  bool control = without == 0;
+  CHECK(control);
+  bool rect_ok = rect_only >= 50 * 20 - 40 && rect_only <= 50 * 20 + 40;
+  CHECK(rect_ok);
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}

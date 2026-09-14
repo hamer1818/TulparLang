@@ -47,6 +47,17 @@ struct RendererConfig {
   uint32_t shadow_size = 2048;
   float shadow_bias = 0.0008f;         // derinlik uzayinda kucuk sabit egilim
   float shadow_normal_offset = 0.06f;  // DUNYA birimi: normal boyunca kaydirma (akne)
+  uint32_t ui_max_vertices = 32768;    // 2B arayuz: kare basina (ucgen listesi, 6/dortgen)
+};
+
+// 2B arayuz koseleri: piksel uzayi, atlas uv, RGBA8. Immediate-mode: her kare
+// yeniden uretilir, sabit kapasite (A2), ayirma yok.
+struct UiVertex {
+  float x, y, u, v;
+  uint32_t rgba;
+};
+struct UiStats {
+  uint32_t vertices = 0, dropped = 0;
 };
 
 struct ShadowInfo {
@@ -114,6 +125,18 @@ public:
 
   RendererStats stats() const { return stats_; }
 
+  // --- 2B arayuz (HUD, editor). record() SONRA, ayni subpass'te ui_record(). ---
+  // screen: MANTIKSAL (gorunen) olcu; rotation: on-dondurme acisi (Swapchain::rotation_radians).
+  void ui_begin(float screen_w, float screen_h, float rotation_radians = 0.0f); // begin_frame sonrasi
+  void ui_set_atlas(MaterialHandle atlas);                    // glif atlasi (texel 0,0 beyaz)
+  void ui_quad(float x, float y, float w, float h, float u0, float v0, float u1, float v1, uint32_t rgba);
+  void ui_rect(float x, float y, float w, float h, uint32_t rgba); // duz kutu (beyaz texel)
+  void ui_record(VkCommandBuffer cb);
+  UiStats ui_stats() const { return ui_stats_; }
+  static uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
+    return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
+  }
+
   // Yerlesik mesh'ler (cagiranin dizilerine yazar): kup [-0.5,0.5]^3, duzlem 1x1 (y=0).
   static uint32_t cube(Vertex *v, uint32_t *idx);                         // 24 v, 36 idx (uv yuz basina 0..1)
   static uint32_t plane(Vertex *v, uint32_t *idx, float uv_repeat = 1.0f); // 4 v, 6 idx
@@ -159,6 +182,7 @@ private:
   bool make_pipelines(VkRenderPass rp);
   bool make_shadow(); // render pass + goruntu + sampler + boru hatti
   bool make_material_layout();
+  bool make_ui(VkRenderPass rp);
 
   rhi::Device *dev_ = nullptr;
   RendererConfig cfg_{};
@@ -203,6 +227,15 @@ private:
   VkBuffer cluster_buf_[kMaxFrames] = {};
   rhi::MemoryAlloc cluster_mem_[kMaxFrames] = {};
   VkDescriptorSet sets_[kMaxFrames] = {};
+  // UI
+  VkShaderModule ui_vs_ = VK_NULL_HANDLE, ui_fs_ = VK_NULL_HANDLE;
+  VkPipeline pipe_ui_ = VK_NULL_HANDLE;
+  VkBuffer ui_buf_[kMaxFrames] = {};
+  rhi::MemoryAlloc ui_mem_[kMaxFrames] = {};
+  uint32_t ui_count_ = 0;
+  float ui_w_ = 1, ui_h_ = 1, ui_rot_ = 0;
+  MaterialHandle ui_atlas_{};
+  UiStats ui_stats_{};
   ClusterGrid grid_{};
   uint32_t *cluster_masks_ = nullptr; // Arena, grid_.count()
   PointLight point_lights_[kMaxPointLights];

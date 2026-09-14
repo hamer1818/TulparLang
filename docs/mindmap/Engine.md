@@ -55,3 +55,6 @@ Kümelenmiş nokta ışıklar: 16×9×24 grid, küme başına 32-bit maske, atam
 ## Girdi + oynanabilir karakter (2026-09-14) → [FAZ3.md](../engine/FAZ3.md)
 `platform/touch.hpp` (10 nokta), Android `onInputEvent`, masaüstü fare/WASD; `app/virtual_stick` (sol yarım hareket, sağ yarım bakış/tap, testli); oyuncu = dinamik Jolt kutusu, komut tick başına latch (deterministik); kamera oyuncuyu izler; arena görünmez duvarla kapalı. Telefonda `adb shell input swipe` ile uçtan uca doğrulandı: oyuncu duvara kadar yürüdü, -9.62'de durdu.
 
+## 2B arayüz + font (2026-09-14) → [FAZ3.md](../engine/FAZ3.md)
+Immediate-mode dörtgen kuyruğu (`Renderer::ui_*`, aynı subpass, alfa), **mantıksal** uzayda ve ön-döndürmeyle döndürülmüş; stb_truetype atlas (Türkçe dahil), DejaVuSans bundle; HUD ve joystick göstergesi. Kullanıcı yönü: işler **editörden** yapılacak → sıra UI çekirdeği ✅ → sahne veri modeli → editör. Tuzaklar 8r.
+

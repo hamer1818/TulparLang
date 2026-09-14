@@ -1,10 +1,13 @@
 #include "renderer/renderer.hpp"
 
+#include <cmath>
 #include <cstring>
 
 #include "rhi/shaders/mesh_frag_spv.h"
 #include "rhi/shaders/mesh_vert_spv.h"
 #include "rhi/shaders/shadow_vert_spv.h"
+#include "rhi/shaders/ui_frag_spv.h"
+#include "rhi/shaders/ui_vert_spv.h"
 
 namespace tulpar::engine::renderer {
 
@@ -152,11 +155,112 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     a.vkUpdateDescriptorSets(dev.handle(), 4, w, 0, nullptr);
   }
   if (!make_pipelines(rp)) return false;
+  if (!make_ui(rp)) return false;
   // Varsayilan malzeme: 1x1 beyaz doku. Dokusuz cizimler bununla gider; shader tek yol.
   static const uint8_t white[4] = {255, 255, 255, 255};
   default_texture_ = create_texture(white, 1, 1, false);
   default_material_ = create_material(default_texture_, {1, 1, 1});
   return default_texture_.valid() && default_material_.valid();
+}
+
+bool Renderer::make_ui(VkRenderPass rp) {
+  rhi::VkApi &a = dev_->api();
+  VkShaderModuleCreateInfo smi{};
+  smi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  smi.codeSize = ui_vert_spv_size; smi.pCode = ui_vert_spv;
+  if (a.vkCreateShaderModule(dev_->handle(), &smi, nullptr, &ui_vs_) != VK_SUCCESS) return false;
+  smi.codeSize = ui_frag_spv_size; smi.pCode = ui_frag_spv;
+  if (a.vkCreateShaderModule(dev_->handle(), &smi, nullptr, &ui_fs_) != VK_SUCCESS) return false;
+  for (uint32_t i = 0; i < cfg_.frames_in_flight; i++)
+    if (!make_buffer(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, sizeof(UiVertex) * cfg_.ui_max_vertices,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ui_buf_[i], &ui_mem_[i]))
+      return false;
+  VkPipelineShaderStageCreateInfo st[2]{};
+  st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  st[0].stage = VK_SHADER_STAGE_VERTEX_BIT; st[0].module = ui_vs_; st[0].pName = "main";
+  st[1] = st[0];
+  st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = ui_fs_;
+  VkVertexInputBindingDescription vb{0, sizeof(UiVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+  VkVertexInputAttributeDescription va[3] = {{0, 0, VK_FORMAT_R32G32_SFLOAT, 0},
+                                             {1, 0, VK_FORMAT_R32G32_SFLOAT, 8},
+                                             {2, 0, VK_FORMAT_R8G8B8A8_UNORM, 16}};
+  VkPipelineVertexInputStateCreateInfo vi{};
+  vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+  vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
+  vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = va;
+  VkPipelineInputAssemblyStateCreateInfo ia{};
+  ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  VkPipelineViewportStateCreateInfo vp{};
+  vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  vp.viewportCount = 1; vp.scissorCount = 1;
+  VkPipelineRasterizationStateCreateInfo rs{};
+  rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  rs.polygonMode = VK_POLYGON_MODE_FILL;
+  rs.cullMode = VK_CULL_MODE_NONE;
+  rs.lineWidth = 1.0f;
+  VkPipelineMultisampleStateCreateInfo ms{};
+  ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  VkPipelineDepthStencilStateCreateInfo ds{};
+  ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO; // derinlik yok: en uste
+  VkPipelineColorBlendAttachmentState cba{};
+  cba.colorWriteMask = 0xF;
+  cba.blendEnable = VK_TRUE;
+  cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+  cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+  cba.colorBlendOp = VK_BLEND_OP_ADD;
+  cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+  cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+  cba.alphaBlendOp = VK_BLEND_OP_ADD;
+  VkPipelineColorBlendStateCreateInfo cb{};
+  cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  cb.attachmentCount = 1; cb.pAttachments = &cba;
+  VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+  VkPipelineDynamicStateCreateInfo dsci{};
+  dsci.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+  dsci.dynamicStateCount = 2; dsci.pDynamicStates = dyn;
+  VkGraphicsPipelineCreateInfo gp{};
+  gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  gp.stageCount = 2; gp.pStages = st;
+  gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia; gp.pViewportState = &vp;
+  gp.pRasterizationState = &rs; gp.pMultisampleState = &ms; gp.pDepthStencilState = &ds;
+  gp.pColorBlendState = &cb; gp.pDynamicState = &dsci;
+  gp.layout = layout_; gp.renderPass = rp; gp.subpass = 1; // renk subpass'i, 3B'den sonra
+  return a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, &pipe_ui_) == VK_SUCCESS;
+}
+
+void Renderer::ui_begin(float w, float h, float rot) {
+  ui_w_ = w > 0 ? w : 1; ui_h_ = h > 0 ? h : 1; ui_rot_ = rot;
+  ui_count_ = 0;
+  ui_stats_ = UiStats{};
+}
+void Renderer::ui_set_atlas(MaterialHandle atlas) { ui_atlas_ = atlas; }
+void Renderer::ui_quad(float x, float y, float w, float h, float u0, float v0, float u1, float v1, uint32_t c) {
+  if (ui_count_ + 6 > cfg_.ui_max_vertices) { ui_stats_.dropped++; return; }
+  UiVertex *v = static_cast<UiVertex *>(ui_mem_[frame_].mapped) + ui_count_;
+  v[0] = {x, y, u0, v0, c};         v[1] = {x + w, y, u1, v0, c};     v[2] = {x + w, y + h, u1, v1, c};
+  v[3] = {x, y, u0, v0, c};         v[4] = {x + w, y + h, u1, v1, c}; v[5] = {x, y + h, u0, v1, c};
+  ui_count_ += 6;
+}
+void Renderer::ui_rect(float x, float y, float w, float h, uint32_t c) {
+  // Atlasin (0,0) texeli beyaz opak (font yukleyici garanti eder); atlas yoksa varsayilan 1x1 beyaz.
+  const float t = 0.5f / 512.0f;
+  if (!ui_atlas_.valid()) ui_quad(x, y, w, h, 0.5f, 0.5f, 0.5f, 0.5f, c);
+  else ui_quad(x, y, w, h, t, t, t, t, c);
+}
+void Renderer::ui_record(VkCommandBuffer cb) {
+  ui_stats_.vertices = ui_count_;
+  if (ui_count_ == 0) return;
+  rhi::VkApi &a = dev_->api();
+  a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_ui_);
+  MaterialHandle m = ui_atlas_.valid() ? ui_atlas_ : default_material_;
+  a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1, 1, &materials_[m.id].set, 0, nullptr);
+  float push[4] = {ui_w_, ui_h_, std::cos(ui_rot_), std::sin(ui_rot_)};
+  a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, push);
+  VkDeviceSize off = 0;
+  a.vkCmdBindVertexBuffers(cb, 0, 1, &ui_buf_[frame_], &off);
+  a.vkCmdDraw(cb, ui_count_, 1, 0, 0);
 }
 
 bool Renderer::make_material_layout() {
@@ -517,6 +621,10 @@ void Renderer::shutdown() {
   if (pipe_depth_) a.vkDestroyPipeline(dev_->handle(), pipe_depth_, nullptr);
   if (pipe_color_) a.vkDestroyPipeline(dev_->handle(), pipe_color_, nullptr);
   if (pipe_shadow_) a.vkDestroyPipeline(dev_->handle(), pipe_shadow_, nullptr);
+  if (pipe_ui_) a.vkDestroyPipeline(dev_->handle(), pipe_ui_, nullptr);
+  if (ui_vs_) a.vkDestroyShaderModule(dev_->handle(), ui_vs_, nullptr);
+  if (ui_fs_) a.vkDestroyShaderModule(dev_->handle(), ui_fs_, nullptr);
+  for (uint32_t i = 0; i < kMaxFrames; i++) if (ui_buf_[i]) a.vkDestroyBuffer(dev_->handle(), ui_buf_[i], nullptr);
   if (shadow_fb_) a.vkDestroyFramebuffer(dev_->handle(), shadow_fb_, nullptr);
   if (shadow_view_) a.vkDestroyImageView(dev_->handle(), shadow_view_, nullptr);
   if (shadow_img_) a.vkDestroyImage(dev_->handle(), shadow_img_, nullptr);

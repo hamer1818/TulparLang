@@ -221,7 +221,8 @@ extern "C" void android_main(android_app *app) {
       const char *dot = std::strrchr(name, '.');
       if (!dot) continue;
       const bool ours = !std::strcmp(dot, ".gltf") || !std::strcmp(dot, ".glb") || !std::strcmp(dot, ".bin") ||
-                        !std::strcmp(dot, ".png") || !std::strcmp(dot, ".jpg") || !std::strcmp(dot, ".ktx2");
+                        !std::strcmp(dot, ".png") || !std::strcmp(dot, ".jpg") || !std::strcmp(dot, ".ktx2") ||
+                        !std::strcmp(dot, ".ttf");
       if (!ours) continue;
       AAsset *as = AAssetManager_open(app->activity->assetManager, name, AASSET_MODE_BUFFER);
       if (!as) continue;
