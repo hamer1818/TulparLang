@@ -395,3 +395,27 @@ Emülatör (x86_64, gfxstream) 67/67, aynı analitik/siluet sayıları, demo 60.
 dama küpü "skin 0" sanılıp `cgltf_accessor_read_uint(nullptr)` çöktü. Kural: zeroed dizide `-1` anlamlı alanları
 açıkça yaz (ya da 0'ı "yok" yap).
 
+## Editör iskeleti — Dear ImGui + ImGuizmo (tarama belgesi §14, PLAN L7) — 2026-09-14
+
+**Karar:** masaüstü editör arayüzü Dear ImGui (vendored v1.92.9, MIT) + ImGuizmo; oyun içi HUD kendi 2B
+çekirdeğimizde kalır (0 ayırma, telefon). ImGui `malloc` kullanır ve editör karesi 0-ayırma kapısının dışındadır;
+Android'e derlenmez (`if(NOT ANDROID)`).
+
+**Teslim edilen**
+- `app/editor_ui.hpp/.cpp`: ImGui bağlamı + Vulkan arka ucu **bizim dlopen'li yükleyiciden** (`ImGui_ImplVulkan_LoadFunctions`,
+  prototip yok); yüzeysiz instance'ta WSI fonksiyonları sesli çökme stub'una bağlanır (yardımcıları kullanmıyoruz);
+  girdi `platform::InputState`'ten (fare, tekerlek, GLFW tuş → ImGuiKey, karakter kuyruğu — `Window`'a
+  `glfwSetCharCallback` eklendi); renk subpass'inde 3B + HUD'dan sonra çizer.
+- `engine_editor` (`app/editor_app.cpp`, `app/editor.cpp`): motorun düzenleme kipi — demo sahnesi + düzenlenebilir
+  varlıklar (3 LOD küresi, 2 iskeletli boru); paneller: menü çubuğu (Oynat/Durdur, kare/tick/seçim), **Sahne**
+  (varlık listesi), **Özellikler** (ad, konum/dönüş/ölçek, faz), **ImGuizmo** gizmo (T/R/S; Vulkan y-ters projeksiyon
+  gizmo için GL gelenegine çevrilir), yörünge kamerası (sağ fare, tekerlek; ImGui üzerindeyken sahne girdi almaz).
+  Headless: `--headless N --out x.ppm`, betikli durum (seçili küre, oynatma).
+- Kapı `editor_imgui_draws_into_offscreen_pass`: pencere+metin+düğme karesi 114 vertex ve 24000 farklı piksel,
+  boş kare 0 vertex / 0 fark (kontrol). Headless editör doğrulama katmanıyla 0 hata (tek uyarı ImGui'nin kendi
+  font sampler'ı, Arm LOD kırpma — masaüstü, bilgi). Masaüstü 68/68.
+
+**Sırada (editörün geri kalanı):** sahne veri modeli + deterministik dosya (kaydet/yükle), tıklamayla seçim
+(ışın–AABB), geri al/yinele (PLAN "The Truth" işlem günlüğü), ışık/malzeme düzenleme, oynat/durdur sim geri
+sarımı, implot ile kare zamanı grafiği.
+

@@ -76,7 +76,7 @@ köprü C ABI ile. Sırada "Tulpar bağlaması" (DURUM §6.3). Emsaller okuma li
 
 | Belge | Bizde | Karar |
 |---|---|---|
-| **Dear ImGui + ImGuizmo + implot** | Kendi 2B arayüz çekirdeği (immediate-mode, font, Türkçe, telefonda çalışıyor) | 🟠 **Karar noktası.** Kendi çekirdeğimiz oyun içi HUD için doğru (0 ayırma, telefon). Masaüstü **editör** için ImGui hızlı; STL konteyner kullanmaz, `-fno-exceptions` ile derlenir, katman kuralına third_party muafiyetiyle sığar. Öneri: editör ImGui üstüne, oyun içi UI kendi çekirdek. Kullanıcı kararı bekliyor |
+| **Dear ImGui + ImGuizmo + implot** | ✅ **bugün**: ImGui + ImGuizmo vendored, `engine_editor` (paneller, gizmo, oynat/durdur, headless), kapı `editor_imgui_draws_into_offscreen_pass`; oyun içi HUD kendi çekirdek | implot sonra (kare grafiği); editörün veri modeli/kaydet sırada |
 | RenderDoc | Kullanılmadı | 🟢 masaüstünde `renderdoccmd capture` headless; Android'de RenderDoc Android sürümü |
 | AGI / Tracy / PerfDoc | Yukarıda | — |
 
@@ -94,12 +94,12 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 | L4 | 🟡 | 🟡 **iskelet/animasyon içe aktarma + skinning bugün**; ses yok | ✅ |
 | L5 | 🔴 | 🔴 Tulpar bağlaması yok | — |
 | L6 | 🟢 | 🟡 glTF + **meshopt/LOD bugün**; lightmap/ASTC/pack yok | ✅ |
-| L7 | 🟢 | 🟡 kendi UI; editör yok | — |
+| L7 | 🟢 | 🟡 **editör iskeleti bugün** (ImGui + ImGuizmo); veri modeli/kaydet yok | ✅ |
 | L8 | 🟡 | 🔴 yok (ilk oyun öncesi gerekmez) | — |
 
 ## 10. Sıra (kullanıcı onayına sunulan)
 1. ~~sRGB / doğrusal aydınlatma~~ ✅ bugün.
-2. **Sahne veri modeli + format** → editör (DURUM §6.1–2; ImGui kararı burada).
+2. **Sahne veri modeli + format** → editörün kaydet/yükle/geri al katmanı (editör iskeleti ✅ bugün, ImGui kararı verildi).
 3. ~~glTF iskelet + GPU skinning~~ ✅ bugün (kendi runtime; ozz gerekmedi). Karakter modeli: sanatçı varlığı bekliyor.
 4. ~~Tracy (İP-R)~~ ✅ bugün.
 5. **Swappy** kare temposu, sonra **GameActivity** göçü (İP-P).

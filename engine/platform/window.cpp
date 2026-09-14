@@ -33,10 +33,14 @@ struct Glfw {
   int (*vulkan_supported)() = nullptr;
   const char *(*get_error)(const char **) = nullptr;
   GLFWscrollfun (*set_scroll_callback)(GLFWwindow *, GLFWscrollfun) = nullptr;
+  GLFWcharfun (*set_char_callback)(GLFWwindow *, GLFWcharfun) = nullptr;
 };
 Glfw g;
 double g_scroll_accum = 0;
+uint32_t g_chars[InputState::kMaxChars];
+uint32_t g_char_count = 0;
 void on_scroll(GLFWwindow *, double, double y) { g_scroll_accum += y; }
+void on_char(GLFWwindow *, unsigned int cp) { if (g_char_count < InputState::kMaxChars) g_chars[g_char_count++] = cp; }
 
 bool load_glfw(char *err, size_t n) {
   if (g.lib) return true;
@@ -64,6 +68,7 @@ bool load_glfw(char *err, size_t n) {
   L(get_time, "glfwGetTime"); L(get_required_instance_extensions, "glfwGetRequiredInstanceExtensions");
   L(create_window_surface, "glfwCreateWindowSurface"); L(vulkan_supported, "glfwVulkanSupported");
   L(get_error, "glfwGetError"); L(set_scroll_callback, "glfwSetScrollCallback");
+  L(set_char_callback, "glfwSetCharCallback");
 #undef L
   return true;
 }
@@ -91,6 +96,7 @@ bool Window::open(const WindowConfig &cfg) {
     return false;
   }
   g.set_scroll_callback(w, on_scroll);
+  g.set_char_callback(w, on_char);
   win_ = w;
   return true;
 }
@@ -108,6 +114,9 @@ void Window::poll() {
   for (int b = 0; b < 3; b++) input_.mouse_down[b] = g.get_mouse_button(w, b) == GLFW_PRESS;
   input_.scroll_y = g_scroll_accum;
   input_.time_s = g.get_time();
+  input_.char_count = g_char_count;
+  for (uint32_t i = 0; i < g_char_count; i++) input_.chars[i] = g_chars[i];
+  g_char_count = 0;
 }
 
 bool Window::should_close() const { return win_ && g.window_should_close(static_cast<GLFWwindow *>(win_)); }

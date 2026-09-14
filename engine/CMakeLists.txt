@@ -203,8 +203,31 @@ set(ENGINE_TEST_SOURCES
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
 set(ENGINE_PHYSICS_GOLDEN_HASH "0x5dc41c2bddc345cb" CACHE STRING "Jolt sahnesinin platformlar arasi altin ozeti (x86_64'te hesaplandi)")
+# --- Dear ImGui + ImGuizmo (vendored, engine/third_party/imgui, MIT) — yalniz masaustu editor
+if(NOT ANDROID)
+    add_library(engine_imgui STATIC
+        third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp
+        third_party/imgui/imgui_widgets.cpp third_party/imgui/imgui_demo.cpp
+        third_party/imgui/imgui_impl_vulkan.cpp third_party/imgui/ImGuizmo.cpp)
+    target_include_directories(engine_imgui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)
+    # Prototip yok: Vulkan fonksiyonlari bizim dlopen'li yukleyiciden (ImGui_ImplVulkan_LoadFunctions).
+    target_compile_definitions(engine_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
+    target_compile_options(engine_imgui PRIVATE -fno-exceptions -fno-rtti -w)
+    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp app/editor_ui.cpp)
+endif()
+
 add_executable(engine_tests ${ENGINE_TEST_SOURCES} app/virtual_stick.cpp core/memory/alloc_gate_override.cpp)
 target_link_libraries(engine_tests PRIVATE engine_content engine_renderer engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
+if(NOT ANDROID)
+    target_link_libraries(engine_tests PRIVATE engine_imgui)
+    target_include_directories(engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
+    # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
+    add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/demo_scene.cpp)
+    target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})
+    target_include_directories(engine_editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
+    target_compile_options(engine_editor PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
+    target_compile_definitions(engine_editor PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
 target_compile_options(engine_tests PRIVATE -ffp-contract=off) # sim belirlenimliligi (strict FP, plan C.1.5)
 target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
 target_compile_options(engine_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)

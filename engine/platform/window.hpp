@@ -20,6 +20,10 @@ struct InputState {
   bool mouse_down[3] = {};
   double scroll_y = 0;       // birikimli
   double time_s = 0;         // son poll zamani
+  // Metin girisi (unicode kod noktasi), poll'lar arasi birikir; okuyan sifirlar.
+  static constexpr uint32_t kMaxChars = 32;
+  uint32_t chars[kMaxChars] = {};
+  uint32_t char_count = 0;
 };
 
 class Window {
