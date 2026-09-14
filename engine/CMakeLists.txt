@@ -128,6 +128,7 @@ add_executable(engine_tests
     tests/test_physics.cpp
     tests/test_navmesh.cpp
     tests/test_animation.cpp
+    tests/test_scene_faz2.cpp
     core/memory/alloc_gate_override.cpp
 )
 target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
