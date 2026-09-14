@@ -21,6 +21,14 @@ struct Vertex {
   Vec2 uv;
 };
 
+// Iskeletli vertex: 4 eklem (u8) + 4 agirlik (unorm16) = 40 bayt.
+struct SkinnedVertex {
+  Vec3 pos;
+  Vec3 nrm;
+  Vec2 uv;
+  uint8_t joints[4];
+  uint16_t weights[4];
+};
 struct MeshHandle {
   uint32_t id = 0xFFFFFFFFu;
   bool valid() const { return id != 0xFFFFFFFFu; }
@@ -52,7 +60,8 @@ struct RendererConfig {
   uint32_t shadow_size = 2048;
   float shadow_bias = 0.0008f;         // derinlik uzayinda kucuk sabit egilim
   float shadow_normal_offset = 0.06f;  // DUNYA birimi: normal boyunca kaydirma (akne)
-  uint32_t ui_max_vertices = 32768;    // 2B arayuz: kare basina (ucgen listesi, 6/dortgen)
+  uint32_t ui_max_vertices = 32768;
+  uint32_t max_skin_matrices = 4096;    // kare basina eklem matrisi (SSBO, set 0 binding 4)    // 2B arayuz: kare basina (ucgen listesi, 6/dortgen)
 };
 
 // 2B arayuz koseleri: piksel uzayi, atlas uv, RGBA8. Immediate-mode: her kare
@@ -90,6 +99,7 @@ public:
 
   // Yukleme: staging ile device-local. Kare icinde CAGRILMAZ.
   MeshHandle create_mesh(const Vertex *verts, uint32_t nverts, const uint32_t *indices, uint32_t nindices);
+  MeshHandle create_skinned_mesh(const SkinnedVertex *verts, uint32_t nverts, const uint32_t *indices, uint32_t nindices);
   // Indeks araligi seyrek (Mali kurali, CPU'da olculur) mesh sayisi; kapi 0 bekler.
   uint32_t sparse_mesh_count() const { return sparse_mesh_count_; }
   // RGBA8, mip zinciri blit ile uretilir (yukleme aninda). Mobil asil yol ASTC (Faz 6).
@@ -127,6 +137,10 @@ public:
   void begin_frame(uint32_t frame_index);
   void draw(MeshHandle mesh, const Mat4 &model, Vec3 color); // varsayilan malzeme
   void draw(MeshHandle mesh, MaterialHandle material, const Mat4 &model, Vec3 color = {1, 1, 1});
+  // Iskeletli cizim: joints[n] = model uzayi eklem matrisi * ters bind (skin
+  // matrisi). Kare SSBO'suna kopyalanir; kapasite asimi sayilir (dropped).
+  void draw_skinned(MeshHandle mesh, MaterialHandle material, const Mat4 &model, Vec3 color, const Mat4 *joints, uint32_t n);
+  uint32_t skin_matrices_used() const { return skin_count_; }
   // Golge gecisi: KENDI render pass'ini acar/kapatir. Ana render pass BASLAMADAN
   // once cagrilir (cizim listesi dolu olmali).
   void record_shadow(VkCommandBuffer cb);
@@ -161,6 +175,7 @@ private:
   struct Mesh {
     VkBuffer vbuf = VK_NULL_HANDLE, ibuf = VK_NULL_HANDLE;
     uint32_t index_count = 0;
+    bool skinned = false;
   };
   struct Texture {
     VkImage image = VK_NULL_HANDLE;
@@ -172,12 +187,20 @@ private:
     uint32_t texture = 0;
     Vec3 color{1, 1, 1};
   };
+  static constexpr uint32_t kNoSkin = 0xFFFFFFFFu;
   struct Draw {
     uint32_t mesh;
     uint32_t material;
     Mat4 model;
     Vec3 color;
+    uint32_t skin_offset; // kNoSkin = statik
   };
+  struct Push { // GLSL Push { mat4 model; vec4 color; uvec4 skin; } = 96 bayt
+    Mat4 model;
+    float color[4];
+    uint32_t skin[4];
+  };
+  static_assert(sizeof(Push) == 96, "push sabiti 96 bayt");
   struct FrameUbo {
     Mat4 viewproj;
     Mat4 view;
@@ -207,6 +230,7 @@ private:
                    rhi::MemoryAlloc *out);
   bool upload(VkBuffer dst, const void *data, VkDeviceSize size, VkBufferUsageFlags usage_dst);
   bool make_pipelines(VkRenderPass rp);
+  bool make_pipeline_set(VkRenderPass rp, bool skinned, VkPipeline *depth, VkPipeline *color, VkPipeline *shadow);
   bool make_shadow(); // render pass + goruntu + sampler + boru hatti
   bool make_material_layout();
   bool make_ui(VkRenderPass rp);
@@ -235,6 +259,9 @@ private:
   Mat4 light_vp_{};
   ShadowInfo shadow_info_{};
   VkShaderModule vs_ = VK_NULL_HANDLE, fs_ = VK_NULL_HANDLE, shadow_vs_ = VK_NULL_HANDLE;
+  VkShaderModule skin_vs_ = VK_NULL_HANDLE, skin_shadow_vs_ = VK_NULL_HANDLE;
+  VkPipeline pipe_skin_depth_ = VK_NULL_HANDLE, pipe_skin_color_ = VK_NULL_HANDLE, pipe_skin_shadow_ = VK_NULL_HANDLE;
+  uint32_t skin_count_ = 0;
   VkRenderPass shadow_rp_ = VK_NULL_HANDLE;
   VkImage shadow_img_ = VK_NULL_HANDLE;
   VkImageView shadow_view_ = VK_NULL_HANDLE;
@@ -254,6 +281,8 @@ private:
   VkBuffer cluster_buf_[kMaxFrames] = {};
   rhi::MemoryAlloc cluster_mem_[kMaxFrames] = {};
   VkDescriptorSet sets_[kMaxFrames] = {};
+  VkBuffer skin_buf_[kMaxFrames] = {};        // eklem matrisleri (kare basina, host-visible)
+  rhi::MemoryAlloc skin_mem_[kMaxFrames] = {};
   // UI
   VkShaderModule ui_vs_ = VK_NULL_HANDLE, ui_fs_ = VK_NULL_HANDLE;
   VkPipeline pipe_ui_ = VK_NULL_HANDLE;

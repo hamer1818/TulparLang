@@ -2012,3 +2012,10 @@ butunuyle sakla (`memcpy`, sizeof static_assert). (4) `TRACY_NO_EXIT` sunucu yok
 (engine_tests asili kaldi); kullanma, yakalama penceresini kosumun icinde tut. Ayrica: `pkill -f <ad>` kendi
 kabuk komut satirini da eslestirir ve tool cagrisini oldurur (cikis 144); `pkill -x` kullan.
 
+### 8u. `alloc_array_zeroed<T>` kurucu calistirmaz: `-1` varsayilani sessizce 0 olur
+`ModelMesh::skin = -1` (yok) varsayilaniyla eklendi; `out->meshes = arena.alloc_array_zeroed<ModelMesh>(n)` bellegi
+sifirlar, kurucuyu CAGIRMAZ — her mesh "skin 0" oldu, dama kupu icin `cgltf_accessor_read_uint(nullptr)` cokme.
+Testler 67/67'den "COKME testi: content_gltf_loads_checker_cube" a dustu; yeni test gecerken eski test cokuyordu.
+Kural: zeroed dizilerde "yok" anlami 0 olsun (indeks+1 sakla) ya da alani acikca yaz; `alloc_array_zeroed` ile
+"varsayilan uye degeri" birlikte kullanilmaz. Ayni sinif: `ModelClip::skin = -1`, `ModelMaterial::image = -1`.
+

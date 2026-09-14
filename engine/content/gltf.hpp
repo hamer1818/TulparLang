@@ -19,6 +19,10 @@ struct GltfLimits {
   bool optimize = true;
   bool lods = true;
   float lod_error = 0.05f;
+  // Iskelet/animasyon: glTF kanallari sabit hizda orneklenir, ClipBuilder sikistirir.
+  uint32_t max_skins = kModelMaxSkins;
+  uint32_t max_clips = 16;
+  float clip_sample_rate = 30.0f;
 };
 
 // .gltf (gomulu/data URI/dis .bin) ya da .glb. false: out->error dolu.

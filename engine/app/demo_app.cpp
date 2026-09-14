@@ -181,7 +181,10 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   }
   static content::Model sphere_model;
   static content::UploadedModel sphere_up;
-  bool have_sphere = false;
+  static content::Model tube_model; // iskeletli boru (glTF skin + "bend" klibi), GPU skinning
+  static content::UploadedModel tube_up;
+  static content::PoseScratch pose_scratch;
+  bool have_sphere = false, have_tube = false;
   uint32_t lod_counts[content::kModelMaxLods + 1] = {};
   { // glTF kup (tests/assets ya da TULPAR_ENGINE_ASSETS): kutular bununla cizilir
     char path[1024];
@@ -207,6 +210,15 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
                   mm.lod_index_count[0] / 3, mm.lod_index_count[1] / 3, mm.lod_error[0], mm.lod_error[1], sphere_model.opt.acmr_before,
                   sphere_model.opt.acmr_after);
     }
+    // Iskeletli boru: 4 boru farkli fazda "bend" klibini oynar (kare indeksinden, belirlenimli).
+    if (adir && *adir) std::snprintf(path, sizeof path, "%s/skin_tube.gltf", adir);
+    else std::snprintf(path, sizeof path, "%s/tests/assets/skin_tube.gltf", ENGINE_SOURCE_DIR);
+    if (content::gltf_load(sys, path, &tube_model) && tube_model.clip_count && content::upload_model(ren, sys, tube_model, &tube_up)) {
+      have_tube = true;
+      std::printf("[engine_demo] iskeletli boru: %u eklem, klip '%s' %.2f s (%zu -> %zu bayt)\n", tube_model.skins[0].joint_count,
+                  tube_model.clips[0].name, tube_model.clips[0].duration, tube_model.clips[0].stats.raw_bytes,
+                  tube_model.clips[0].stats.compressed_bytes);
+    }
   }
   auto draw_lod_spheres = [&](const Cam &c) {
     if (!have_sphere) return;
@@ -218,6 +230,19 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
     for (int k = 0; k < 3; k++)
       content::draw_model(ren, sphere_model, sphere_up, Mat4::translate({-8.0f + 8.0f * (float)k, 1.2f, -8.5f}), {0.85f, 0.9f, 1.0f},
                           &lod, lod_counts);
+  };
+  auto draw_skinned_tubes = [&](uint32_t frame_index) {
+    if (!have_tube) return;
+    const float dur = tube_model.clips[0].duration;
+    for (int k = 0; k < 4; k++) {
+      // Ileri-geri: 0..dur..0 (ucgen dalga), boru basina faz.
+      float t = std::fmod((float)frame_index / 60.0f + (float)k * 0.35f, 2.0f * dur);
+      if (t > dur) t = 2.0f * dur - t;
+      content::ModelPose pose;
+      if (!content::model_pose_evaluate(tube_model, 0, t, pose_scratch, &pose)) return;
+      content::draw_model(ren, tube_model, tube_up, Mat4::translate({-6.0f + 4.0f * (float)k, 0.0f, -3.5f}) * Mat4::scale({1.2f, 1.2f, 1.2f}),
+                          {1.0f, 0.75f, 0.35f}, nullptr, nullptr, &pose);
+    }
   };
   ren.set_light(normalize(Vec3{0.5f, 1.0f, 0.35f}), {0.16f, 0.17f, 0.2f}, 0.85f);
   // Golge kutusu sahneyi kapsamali: arena 20x20, duvar 3 m, kutular ~5 m'ye kadar.
@@ -337,6 +362,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
         ren.begin_frame(frame_i);
         scene.draw(ren, ds);
           draw_lod_spheres(cam);
+          draw_skinned_tubes(frame_i);
         draw_hud(ren, font, (float)render_w, (float)render_h, 0.0f, hud_fps, hud_ms, ren.point_light_count(), nullptr,
                  scene.player_position(), false);
         RecordCtx rctx{&ren};
@@ -357,6 +383,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           uint64_t tc = platform::now_ns();
           scene.draw(ren, ds);
           draw_lod_spheres(cam);
+          draw_skinned_tubes(frame_i);
           draw_hud(ren, font, (float)swap.logical_extent().width, (float)swap.logical_extent().height, swap.rotation_radians(),
                    hud_fps, hud_ms, ren.point_light_count(), interactive ? &stick : nullptr, scene.player_position(), interactive);
           uint64_t td = platform::now_ns();

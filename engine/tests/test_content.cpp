@@ -233,3 +233,118 @@ ENGINE_TEST(content_meshopt_lods_keep_silhouette) {
   rhi::offscreen_destroy(off);
   dev.shutdown();
 }
+
+// glTF iskelet + animasyon (kendi ACL-sinifi runtime'imiz; ozz vendored DEGIL —
+// sampling/to_model zaten var, ozz yalniz karistirma/IK gerekince): 2 eklemli boru,
+// "bend" klibi uc eklemi 1 s'de Z etrafinda 90 derece dondurur. Kapilar:
+// (1) ice aktarma: 2 eklem (ebeveyn -1, 0), 1 klip ~1 s, mesh iskeletli;
+// (2) CPU skinning: tepe vertex t=0'da (~0,2,0), t=1'de (~-1,1,0) — analitik;
+// (3) GPU: offscreen t=0 (dik) ve t=1 (bukuk) siluetleri: bukukte genislik >2x,
+//     tepe daha asagida. Iki durum farkli olmali (kontrol iki karede birden).
+ENGINE_TEST(content_skinned_gltf_bends) {
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "content_skin")) { CHECK(false); return; }
+  char path[512];
+  if (!asset_path(path, sizeof path, "skin_tube.gltf")) { CHECK(false); std::printf("    [bilgi] varlik yok: %s\n", path); return; }
+  static content::Model m;
+  bool loaded = content::gltf_load(sys, path, &m);
+  if (!loaded) std::printf("    [bilgi] glTF: %s\n", m.error);
+  CHECK(loaded);
+  if (!loaded) return;
+  std::printf("    [bilgi] iskelet %u (eklem %u: ebeveyn %d,%d), klip %u (%s %.2f s, %zu -> %zu bayt, sabit iz %u, donus hatasi %.3f deg)\n",
+              m.skin_count, m.skin_count ? m.skins[0].joint_count : 0, m.skin_count ? m.skins[0].joints[0].parent : 9,
+              m.skin_count && m.skins[0].joint_count > 1 ? m.skins[0].joints[1].parent : 9, m.clip_count,
+              m.clip_count ? m.clips[0].name : "-", m.clip_count ? m.clips[0].duration : 0.f,
+              m.clip_count ? m.clips[0].stats.raw_bytes : (size_t)0, m.clip_count ? m.clips[0].stats.compressed_bytes : (size_t)0,
+              m.clip_count ? m.clips[0].stats.const_tracks : 0u, m.clip_count ? m.clips[0].stats.max_rot_error_deg : 0.f);
+  CHECK(m.skin_count == 1 && m.skins[0].joint_count == 2);
+  CHECK(m.skins[0].joints[0].parent == -1 && m.skins[0].joints[1].parent == 0);
+  CHECK(m.clip_count == 1 && m.clips[0].duration > 0.99f && m.clips[0].duration < 1.01f);
+  CHECK(m.mesh_count == 1 && m.meshes[0].skin == 0 && m.meshes[0].skin_verts != nullptr);
+  if (m.skin_count != 1 || m.clip_count != 1 || m.mesh_count != 1 || m.meshes[0].skin != 0) return;
+
+  // (2) CPU skinning: en yuksek vertex.
+  static content::PoseScratch scratch;
+  const content::ModelMesh &mm = m.meshes[0];
+  uint32_t top = 0;
+  for (uint32_t i = 1; i < mm.vertex_count; i++) if (mm.verts[i].pos.y > mm.verts[top].pos.y) top = i;
+  auto skin_vertex = [&](float t) {
+    content::ModelPose pose;
+    CHECK(content::model_pose_evaluate(m, 0, t, scratch, &pose));
+    const renderer::SkinnedVertex &sv = mm.skin_verts[top];
+    Vec4 acc{0, 0, 0, 0};
+    for (int c = 0; c < 4; c++) {
+      const float w = (float)sv.weights[c] / 65535.0f;
+      if (w <= 0) continue;
+      Vec4 r = pose.skin_mats[0][sv.joints[c]] * Vec4{sv.pos.x, sv.pos.y, sv.pos.z, 1.0f};
+      acc = acc + r * w;
+    }
+    return Vec3{acc.x, acc.y, acc.z};
+  };
+  const Vec3 p0 = skin_vertex(0.0f), p1 = skin_vertex(1.0f);
+  std::printf("    [bilgi] tepe vertex: t=0 (%.3f, %.3f, %.3f) -> t=1 (%.3f, %.3f, %.3f); beklenen (~0,2,z) -> (~-1,1,z)\n", p0.x, p0.y,
+              p0.z, p1.x, p1.y, p1.z);
+  bool rest_ok = std::fabs(p0.y - 2.0f) < 0.01f && std::fabs(p0.x) < 0.2f;
+  bool bent_ok = std::fabs(p1.x + 1.0f) < 0.2f && std::fabs(p1.y - 1.0f) < 0.2f;
+  CHECK(rest_ok);
+  CHECK(bent_ok);
+
+  // (3) GPU skinning: siluet.
+  if (!rhi::vk_api_load(g_api)) { skip("Vulkan loader yok (GPU skinning atlandi)"); return; }
+  rhi::Device dev;
+  rhi::DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  const uint32_t W = 128, H = 128;
+  rhi::OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  oc.clear[0] = oc.clear[1] = oc.clear[2] = 0;
+  rhi::OffscreenResult ores;
+  rhi::OffscreenTarget *off = rhi::offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 512; // golge boru hatti da iskeletli olmali (cizim hatasi vermemeli)
+  if (!ren.init(dev, sys, rhi::offscreen_render_pass(off), rc)) { CHECK(false); rhi::offscreen_destroy(off); dev.shutdown(); return; }
+  static content::UploadedModel up;
+  CHECK(content::upload_model(ren, sys, m, &up));
+  ren.set_light({0, 1, 0}, {1, 1, 1}, 0.0f);
+  ren.set_camera(Mat4::look_at({0, 1.0f, 6.0f}, {0, 1.0f, 0}, {0, 1, 0}), Mat4::ortho(-2, 2, -2, 2, 0.1f, 20.0f));
+  ren.set_render_size(W, H);
+  Rec rr{&ren};
+  int minx[2] = {W, W}, maxx[2] = {-1, -1}, miny[2] = {H, H}, maxy[2] = {-1, -1};
+  for (int pass = 0; pass < 2; pass++) {
+    content::ModelPose pose;
+    CHECK(content::model_pose_evaluate(m, 0, pass == 0 ? 0.0f : 1.0f, scratch, &pose));
+    ren.begin_frame(0);
+    content::draw_model(ren, m, up, Mat4::identity(), {1, 1, 1}, nullptr, nullptr, &pose);
+    CHECK(ren.stats().dropped == 0);
+    if (!rhi::offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) { CHECK(false); break; }
+    for (uint32_t y = 0; y < H; y++)
+      for (uint32_t x = 0; x < W; x++) {
+        const uint8_t *px = ores.pixels + (y * W + x) * 4;
+        if (px[0] + px[1] + px[2] > 30) {
+          if ((int)x < minx[pass]) minx[pass] = (int)x;
+          if ((int)x > maxx[pass]) maxx[pass] = (int)x;
+          if ((int)y < miny[pass]) miny[pass] = (int)y;
+          if ((int)y > maxy[pass]) maxy[pass] = (int)y;
+        }
+      }
+  }
+  const int w0 = maxx[0] - minx[0] + 1, w1 = maxx[1] - minx[1] + 1;
+  const int h0 = maxy[0] - miny[0] + 1, h1 = maxy[1] - miny[1] + 1;
+  std::printf("    [bilgi] siluet: dik %dx%d (x %d..%d, y %d..%d), bukuk %dx%d (x %d..%d, y %d..%d)\n", w0, h0, minx[0], maxx[0],
+              miny[0], maxy[0], w1, h1, minx[1], maxx[1], miny[1], maxy[1]);
+  bool drawn = maxx[0] >= 0 && maxx[1] >= 0;
+  CHECK(drawn);
+  bool bends_wider = w1 > w0 * 2;          // ust yari sola yatar
+  bool bends_shorter = h1 < h0;            // tepe asagi iner
+  bool bends_left = minx[1] < minx[0] - 10; // sol kenar sola kayar (Z etrafinda + donus = sola)
+  CHECK(bends_wider);
+  CHECK(bends_shorter);
+  CHECK(bends_left);
+  ren.shutdown();
+  rhi::offscreen_destroy(off);
+  dev.shutdown();
+}

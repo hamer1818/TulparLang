@@ -91,6 +91,10 @@ public:
   static void sample(const ClipHeader *clip, float time_s, LocalPose &out);
   // Yerel poz -> model uzayi matrisleri (ebeveyn zinciri, ebeveyn indeksi < cocuk varsayilir).
   static void to_model(const Skeleton &sk, const LocalPose &local, Mat4 *out_model);
+  // Skin matrisleri: model[j] * ters_bind[j] (GPU skinning girdisi).
+  static void skin_matrices(const Mat4 *model, const Mat4 *inverse_bind, uint32_t joints, Mat4 *out_skin) {
+    for (uint32_t j = 0; j < joints; j++) out_skin[j] = model[j] * inverse_bind[j];
+  }
 };
 
 } // namespace tulpar::engine::sim

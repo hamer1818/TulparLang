@@ -4,7 +4,9 @@
 #include <cstring>
 
 #include "rhi/shaders/mesh_frag_spv.h"
+#include "rhi/shaders/mesh_skin_vert_spv.h"
 #include "rhi/shaders/mesh_vert_spv.h"
+#include "rhi/shaders/shadow_skin_vert_spv.h"
 #include "rhi/shaders/shadow_vert_spv.h"
 #include "rhi/shaders/ui_frag_spv.h"
 #include "rhi/shaders/ui_vert_spv.h"
@@ -62,11 +64,19 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   if (a.vkCreateShaderModule(dev.handle(), &smi, nullptr, &fs_) != VK_SUCCESS) return false;
   smi.codeSize = shadow_vert_spv_size; smi.pCode = shadow_vert_spv;
   if (a.vkCreateShaderModule(dev.handle(), &smi, nullptr, &shadow_vs_) != VK_SUCCESS) return false;
+  smi.codeSize = mesh_skin_vert_spv_size; smi.pCode = mesh_skin_vert_spv;
+  if (a.vkCreateShaderModule(dev.handle(), &smi, nullptr, &skin_vs_) != VK_SUCCESS) return false;
+  smi.codeSize = shadow_skin_vert_spv_size; smi.pCode = shadow_skin_vert_spv;
+  if (a.vkCreateShaderModule(dev.handle(), &smi, nullptr, &skin_shadow_vs_) != VK_SUCCESS) return false;
   // Golge hedefi UBO'dan ONCE: descriptor yazarken view+sampler hazir olmali.
   if (!make_shadow()) return false;
   // Set 0: binding 0 kare UBO, binding 1 golge haritasi (karsilastirmali sampler)
-  // Set 0: 0 kare UBO, 1 golge, 2 nokta isiklar (UBO), 3 kume maskeleri (SSBO)
-  VkDescriptorSetLayoutBinding b[4]{};
+  // Set 0: 0 kare UBO, 1 golge, 2 nokta isiklar (UBO), 3 kume maskeleri (SSBO), 4 eklem matrisleri (SSBO)
+  VkDescriptorSetLayoutBinding b[5]{};
+  b[4].binding = 4;
+  b[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  b[4].descriptorCount = 1;
+  b[4].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
   b[0].binding = 0;
   b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   b[0].descriptorCount = 1;
@@ -85,12 +95,12 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   b[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
   VkDescriptorSetLayoutCreateInfo sli{};
   sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  sli.bindingCount = 4;
+  sli.bindingCount = 5;
   sli.pBindings = b;
   if (a.vkCreateDescriptorSetLayout(dev.handle(), &sli, nullptr, &set_layout_) != VK_SUCCESS) return false;
   if (!make_material_layout()) return false;
   VkDescriptorSetLayout layouts[2] = {set_layout_, mat_layout_};
-  VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, 80};
+  VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Push)};
   VkPipelineLayoutCreateInfo pli{};
   pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   pli.setLayoutCount = 2;
@@ -101,7 +111,7 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   // UBO + descriptor (ucuslu kare basina)
   VkDescriptorPoolSize ps[3] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * kMaxFrames},
                                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFrames},
-                                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxFrames}};
+                                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * kMaxFrames}};
   VkDescriptorPoolCreateInfo dpi{};
   dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   dpi.maxSets = kMaxFrames;
@@ -123,11 +133,20 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
       return false;
     if (!make_buffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(uint32_t) * grid_.count(), host, &cluster_buf_[i], &cluster_mem_[i]))
       return false;
+    if (!make_buffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(Mat4) * cfg_.max_skin_matrices, host, &skin_buf_[i], &skin_mem_[i]))
+      return false;
+    VkDescriptorBufferInfo dsi{skin_buf_[i], 0, sizeof(Mat4) * cfg_.max_skin_matrices};
     VkDescriptorBufferInfo dbi{ubo_[i], 0, sizeof(FrameUbo)};
     VkDescriptorBufferInfo dli{lights_buf_[i], 0, sizeof(GpuPointLight) * kMaxPointLights};
     VkDescriptorBufferInfo dci{cluster_buf_[i], 0, sizeof(uint32_t) * grid_.count()};
     VkDescriptorImageInfo dii{shadow_sampler_, shadow_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w[4]{};
+    VkWriteDescriptorSet w[5]{};
+    w[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[4].dstSet = sets_[i];
+    w[4].dstBinding = 4;
+    w[4].descriptorCount = 1;
+    w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[4].pBufferInfo = &dsi;
     w[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w[2].dstSet = sets_[i];
     w[2].dstBinding = 2;
@@ -152,7 +171,7 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     w[1].descriptorCount = 1;
     w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[1].pImageInfo = &dii;
-    a.vkUpdateDescriptorSets(dev.handle(), 4, w, 0, nullptr);
+    a.vkUpdateDescriptorSets(dev.handle(), 5, w, 0, nullptr);
   }
   if (!make_pipelines(rp)) return false;
   if (!make_ui(rp)) return false;
@@ -419,20 +438,29 @@ MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
 }
 
 bool Renderer::make_pipelines(VkRenderPass rp) {
+  if (!make_pipeline_set(rp, false, &pipe_depth_, &pipe_color_, &pipe_shadow_)) return false;
+  return make_pipeline_set(rp, true, &pipe_skin_depth_, &pipe_skin_color_, &pipe_skin_shadow_);
+}
+
+// Statik ve iskeletli mesh icin ayni uc boru hatti (depth prepass, renk, golge):
+// tek fark vertex duzeni ve vertex shader'i.
+bool Renderer::make_pipeline_set(VkRenderPass rp, bool skinned, VkPipeline *depth, VkPipeline *color, VkPipeline *shadow) {
   rhi::VkApi &a = dev_->api();
   VkPipelineShaderStageCreateInfo stages[2]{};
   stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vs_; stages[0].pName = "main";
+  stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = skinned ? skin_vs_ : vs_; stages[0].pName = "main";
   stages[1] = stages[0];
   stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fs_;
-  VkVertexInputBindingDescription vb{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-  VkVertexInputAttributeDescription va[3] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+  VkVertexInputBindingDescription vb{0, skinned ? (uint32_t)sizeof(SkinnedVertex) : (uint32_t)sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
+  VkVertexInputAttributeDescription va[5] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
                                              {1, 0, VK_FORMAT_R32G32B32_SFLOAT, sizeof(Vec3)},
-                                             {2, 0, VK_FORMAT_R32G32_SFLOAT, 2 * sizeof(Vec3)}};
+                                             {2, 0, VK_FORMAT_R32G32_SFLOAT, 2 * sizeof(Vec3)},
+                                             {3, 0, VK_FORMAT_R8G8B8A8_UINT, (uint32_t)offsetof(SkinnedVertex, joints)},
+                                             {4, 0, VK_FORMAT_R16G16B16A16_UNORM, (uint32_t)offsetof(SkinnedVertex, weights)}};
   VkPipelineVertexInputStateCreateInfo vi{};
   vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
-  vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = va;
+  vi.vertexAttributeDescriptionCount = skinned ? 5 : 3; vi.pVertexAttributeDescriptions = va;
   VkPipelineInputAssemblyStateCreateInfo ia{};
   ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
   ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -474,16 +502,15 @@ bool Renderer::make_pipelines(VkRenderPass rp) {
   gp.stageCount = 1; gp.subpass = 0;
   ds.depthWriteEnable = VK_TRUE; ds.depthCompareOp = VK_COMPARE_OP_LESS;
   cb.attachmentCount = 0;
-  if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, &pipe_depth_) != VK_SUCCESS) return false;
+  if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, depth) != VK_SUCCESS) return false;
   // subpass 1: renk (depth EQUAL, yazma yok)
   gp.stageCount = 2; gp.subpass = 1;
   ds.depthWriteEnable = VK_FALSE; ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
   cb.attachmentCount = 1;
-  if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, &pipe_color_) != VK_SUCCESS) return false;
+  if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, color) != VK_SUCCESS) return false;
 
-  // Golge boru hatti: kendi render pass'i, yalniz derinlik, egilimli (akne).
-  // Egilim DINAMIK degil sabit: kayit yolunda ek komut olmasin.
-  stages[0].module = shadow_vs_;
+  // Golge boru hatti: kendi render pass'i, yalniz derinlik.
+  stages[0].module = skinned ? skin_shadow_vs_ : shadow_vs_;
   gp.stageCount = 1; gp.subpass = 0; gp.renderPass = shadow_rp_;
   ds.depthWriteEnable = VK_TRUE; ds.depthCompareOp = VK_COMPARE_OP_LESS;
   cb.attachmentCount = 0;
@@ -492,7 +519,7 @@ bool Renderer::make_pipelines(VkRenderPass rp) {
   // "calisiyor" masaustunde olculdu, cihazda degil. Egilim artik shader'da,
   // dunya uzayinda normal kaydirmasiyla (her cihazda ayni anlam). Tuzaklar 8q.
   rs.depthBiasEnable = VK_FALSE;
-  if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, &pipe_shadow_) != VK_SUCCESS) return false;
+  if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, shadow) != VK_SUCCESS) return false;
   return true;
 }
 
@@ -623,6 +650,12 @@ void Renderer::shutdown() {
   if (pipe_depth_) a.vkDestroyPipeline(dev_->handle(), pipe_depth_, nullptr);
   if (pipe_color_) a.vkDestroyPipeline(dev_->handle(), pipe_color_, nullptr);
   if (pipe_shadow_) a.vkDestroyPipeline(dev_->handle(), pipe_shadow_, nullptr);
+  if (pipe_skin_depth_) a.vkDestroyPipeline(dev_->handle(), pipe_skin_depth_, nullptr);
+  if (pipe_skin_color_) a.vkDestroyPipeline(dev_->handle(), pipe_skin_color_, nullptr);
+  if (pipe_skin_shadow_) a.vkDestroyPipeline(dev_->handle(), pipe_skin_shadow_, nullptr);
+  if (skin_vs_) a.vkDestroyShaderModule(dev_->handle(), skin_vs_, nullptr);
+  if (skin_shadow_vs_) a.vkDestroyShaderModule(dev_->handle(), skin_shadow_vs_, nullptr);
+  for (uint32_t i = 0; i < kMaxFrames; i++) if (skin_buf_[i]) a.vkDestroyBuffer(dev_->handle(), skin_buf_[i], nullptr);
   if (pipe_ui_) a.vkDestroyPipeline(dev_->handle(), pipe_ui_, nullptr);
   if (ui_vs_) a.vkDestroyShaderModule(dev_->handle(), ui_vs_, nullptr);
   if (ui_fs_) a.vkDestroyShaderModule(dev_->handle(), ui_fs_, nullptr);
@@ -666,12 +699,29 @@ MeshHandle Renderer::create_mesh(const Vertex *verts, uint32_t nverts, const uin
   return MeshHandle{mesh_count_ - 1};
 }
 
+MeshHandle Renderer::create_skinned_mesh(const SkinnedVertex *verts, uint32_t nverts, const uint32_t *indices, uint32_t nindices) {
+  if (mesh_count_ >= cfg_.max_meshes) return MeshHandle{};
+  Mesh &m = meshes_[mesh_count_];
+  rhi::MemoryAlloc vm, im;
+  if (!make_buffer(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(SkinnedVertex) * nverts,
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m.vbuf, &vm)) return MeshHandle{};
+  if (!make_buffer(VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(uint32_t) * nindices,
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m.ibuf, &im)) return MeshHandle{};
+  if (!upload(m.vbuf, verts, sizeof(SkinnedVertex) * nverts, 0) || !upload(m.ibuf, indices, sizeof(uint32_t) * nindices, 0))
+    return MeshHandle{};
+  m.index_count = nindices;
+  m.skinned = true;
+  stats_.meshes = ++mesh_count_;
+  return MeshHandle{mesh_count_ - 1};
+}
+
 void Renderer::set_camera(const Mat4 &view, const Mat4 &proj) { view_ = view; proj_ = proj; }
 void Renderer::set_light(Vec3 dir, Vec3 ambient, float diffuse_scale) { light_dir_ = dir; ambient_ = ambient; diffuse_scale_ = diffuse_scale; }
 
 void Renderer::begin_frame(uint32_t frame_index) {
   frame_ = frame_index % cfg_.frames_in_flight;
   draw_count_ = 0;
+  skin_count_ = 0;
   stats_.dropped = 0;
   FrameUbo u;
   u.viewproj = proj_ * view_;
@@ -747,19 +797,20 @@ void Renderer::record_shadow(VkCommandBuffer cb) {
   VkRect2D sc{{0, 0}, {shadow_info_.size, shadow_info_.size}};
   a.vkCmdSetViewport(cb, 0, 1, &vp);
   a.vkCmdSetScissor(cb, 0, 1, &sc);
-  a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_shadow_);
   a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &sets_[frame_], 0, nullptr);
-  struct Push { Mat4 model; float color[4]; };
   uint32_t bound = 0xFFFFFFFFu;
+  VkPipeline bound_pipe = VK_NULL_HANDLE;
   for (uint32_t i = 0; i < draw_count_; i++) {
     const Draw &d = draws_[i];
+    const VkPipeline want = d.skin_offset == kNoSkin ? pipe_shadow_ : pipe_skin_shadow_;
+    if (want != bound_pipe) { a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound_pipe = want; }
     if (d.mesh != bound) {
       VkDeviceSize off = 0;
       a.vkCmdBindVertexBuffers(cb, 0, 1, &meshes_[d.mesh].vbuf, &off);
       a.vkCmdBindIndexBuffer(cb, meshes_[d.mesh].ibuf, 0, VK_INDEX_TYPE_UINT32);
       bound = d.mesh;
     }
-    Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}};
+    Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.skin_offset, 0, 0, 0}};
     a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof p, &p);
     a.vkCmdDrawIndexed(cb, meshes_[d.mesh].index_count, 1, 0, 0, 0);
   }
@@ -774,21 +825,36 @@ void Renderer::draw(MeshHandle mesh, MaterialHandle material, const Mat4 &model,
   if (draw_count_ >= cfg_.max_draws) { stats_.dropped++; return; }
   const Vec3 mc = materials_[material.id].color; // zaten dogrusal
   const Vec3 lc = srgb_to_linear(color);
-  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}};
+  if (meshes_[mesh.id].skinned) { stats_.dropped++; return; } // iskeletli mesh draw_skinned ister
+  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}, kNoSkin};
+}
+
+void Renderer::draw_skinned(MeshHandle mesh, MaterialHandle material, const Mat4 &model, Vec3 color, const Mat4 *joints,
+                            uint32_t n) {
+  if (!mesh.valid() || mesh.id >= mesh_count_ || !meshes_[mesh.id].skinned || n == 0) { stats_.dropped++; return; }
+  if (!material.valid() || material.id >= material_count_) material = default_material_;
+  if (draw_count_ >= cfg_.max_draws || skin_count_ + n > cfg_.max_skin_matrices) { stats_.dropped++; return; }
+  std::memcpy(static_cast<Mat4 *>(skin_mem_[frame_].mapped) + skin_count_, joints, sizeof(Mat4) * n);
+  const Vec3 mc = materials_[material.id].color;
+  const Vec3 lc = srgb_to_linear(color);
+  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}, skin_count_};
+  skin_count_ += n;
 }
 
 void Renderer::record(VkCommandBuffer cb) {
   rhi::VkApi &a = dev_->api();
   stats_.draws = draw_count_;
-  struct Push { Mat4 model; float color[4]; };
   stats_.material_binds = 0;
   for (int pass = 0; pass < 2; pass++) {
     if (pass == 1) a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
-    a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pass == 0 ? pipe_depth_ : pipe_color_);
     a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &sets_[frame_], 0, nullptr);
     uint32_t bound = 0xFFFFFFFFu, bound_mat = 0xFFFFFFFFu;
+    VkPipeline bound_pipe = VK_NULL_HANDLE;
     for (uint32_t i = 0; i < draw_count_; i++) {
       const Draw &d = draws_[i];
+      const VkPipeline want = d.skin_offset == kNoSkin ? (pass == 0 ? pipe_depth_ : pipe_color_)
+                                                       : (pass == 0 ? pipe_skin_depth_ : pipe_skin_color_);
+      if (want != bound_pipe) { a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound_pipe = want; }
       if (pass == 1 && d.material != bound_mat) { // depth gecisi doku okumaz
         a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1, 1, &materials_[d.material].set, 0, nullptr);
         bound_mat = d.material;
@@ -800,7 +866,7 @@ void Renderer::record(VkCommandBuffer cb) {
         a.vkCmdBindIndexBuffer(cb, meshes_[d.mesh].ibuf, 0, VK_INDEX_TYPE_UINT32);
         bound = d.mesh;
       }
-      Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}};
+      Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.skin_offset, 0, 0, 0}};
       a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof p, &p);
       a.vkCmdDrawIndexed(cb, meshes_[d.mesh].index_count, 1, 0, 0, 0);
     }

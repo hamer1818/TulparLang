@@ -55,7 +55,7 @@
 
 | Belge | Bizde | Karar |
 |---|---|---|
-| **ozz-animation + ACL** | Kendi sıkıştırılmış animasyon (eklem zinciri, deterministik); glTF iskelet/animasyon içe aktarma yok | 🟠 İki yol: (a) ozz vendored, glTF→ozz iskelet; (b) kendi çözücüye glTF skin+animation. **Karar: (a)** — SoA, job dostu, allocation'sız; kendi yazmak aylar. Sırada, sahne modelinden sonra |
+| **ozz-animation + ACL** | ✅ **bugün, ozz'suz**: `sim/animation` (ACL sınıfı klip, örnekleme, to_model) zaten vardı; eksik olan glTF iskelet/animasyon içe aktarma + GPU skinning eklendi (`content_skinned_gltf_bends`) | ozz yalnız karıştırma/IK/SoA gerekince; karar FAZ3 "glTF iskelet" |
 | Oboe / miniaudio / Steam Audio / opus | Ses yok | Faz 4 |
 | GameNetworkingSockets / GGPO | Ağ yok; sim deterministik (üç platform bit eşit) | 🟢 GGPO neredeyse bedava, ama ilk oyunda ağ yok |
 
@@ -91,7 +91,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 | L1 | 🟢 | 🟢 **Tracy bugün** | ✅ |
 | L2 | 🟢 | 🟢 **+ Mali linter kapısı + tile bütçesi** | ✅ |
 | L3 | 🟢 | 🟡 **sRGB/doğrusal bugün**, render graph yok, 2 sampler ihlali **düzeltildi** | ✅ |
-| L4 | 🟡 | 🟡 ozz/ses yok | — |
+| L4 | 🟡 | 🟡 **iskelet/animasyon içe aktarma + skinning bugün**; ses yok | ✅ |
 | L5 | 🔴 | 🔴 Tulpar bağlaması yok | — |
 | L6 | 🟢 | 🟡 glTF + **meshopt/LOD bugün**; lightmap/ASTC/pack yok | ✅ |
 | L7 | 🟢 | 🟡 kendi UI; editör yok | — |
@@ -100,7 +100,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 ## 10. Sıra (kullanıcı onayına sunulan)
 1. ~~sRGB / doğrusal aydınlatma~~ ✅ bugün.
 2. **Sahne veri modeli + format** → editör (DURUM §6.1–2; ImGui kararı burada).
-3. **ozz-animation + glTF iskelet** (karakter).
+3. ~~glTF iskelet + GPU skinning~~ ✅ bugün (kendi runtime; ozz gerekmedi). Karakter modeli: sanatçı varlığı bekliyor.
 4. ~~Tracy (İP-R)~~ ✅ bugün.
 5. **Swappy** kare temposu, sonra **GameActivity** göçü (İP-P).
 6. Faz 4 ses (Oboe + miniaudio), Faz 6 içerik (ASTC/KTX2/meshoptimizer/lightmap).

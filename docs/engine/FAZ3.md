@@ -362,3 +362,36 @@ saklanınca `ON_DEMAND` bağlantı kimliği kaybolur, `zone_end` sessizce atlan�
 kapanmadı) → bağlam ham kopyasıyla saklanır. (4) `TRACY_NO_EXIT` sunucu yoksa süreci çıkışta sonsuza dek
 bekletir (engine_tests asılı kaldı) → kullanılmaz; yakalama penceresi demonun içinde tutulur.
 
+## glTF iskelet + animasyon içe aktarma ve GPU skinning (tarama belgesi §11) — 2026-09-14
+
+**Karar: ozz-animation vendored DEĞİL.** Belge "ozz + ACL hazır" diyordu; ama `sim/animation.hpp` zaten ACL
+sınıfı sıkıştırılmış klip + örnekleme + `to_model` içeriyor (PLAN §1.6 kararı: veri formatı bizim, sahne derleyicisi
+üretecek). Boşluk gerçekte **içe aktarma + GPU skinning**'di; o kapatıldı. ozz yalnız karıştırma/IK/SoA gerekince
+yeniden değerlendirilir (1.3 MB kaynak, STL, ayrı veri formatı).
+
+**Teslim edilen**
+- `content/gltf.cpp`: `skins` → `ModelSkin` (eklemler ebeveyn-önce yeniden sıralanır, `sim::to_model` kuralı; ters
+  bind matrisleri; dönüş/ölçek `matrix` verilmişse ayrıştırılır), `animations` → `ModelClip` (kanallar 30 Hz sabit
+  hızda örneklenir: LINEAR/STEP, CUBICSPLINE'da anahtar değeri; `ClipBuilder` sıkıştırır), `JOINTS_0/WEIGHTS_0` →
+  `renderer::SkinnedVertex` (u8 eklem yeniden eşlenmiş, unorm16 ağırlık, toplam 1). İskeletli mesh'te meshopt/LOD
+  atlanır (paralel dizi yeniden sıralanmıyor; sonraki iş).
+- `renderer`: set 0 binding 4 eklem SSBO'su (kare başına, `max_skin_matrices`), push sabiti 96 B (`skin.x` ofset),
+  `mesh_skin.vert` + `shadow_skin.vert` (gölge de iskeletli), statik/iskeletli boru hattı çiftleri tek
+  `make_pipeline_set`'ten; `draw_skinned(mesh, mat, model, color, joints, n)`.
+- `content::model_pose_evaluate(model, clip, t, PoseScratch, ModelPose)`: örnekle → model uzayı → skin matrisleri,
+  ayırma yok; `draw_model(..., pose)` iskeletli instance'ları `draw_skinned` ile çizer.
+- Test varlığı `tests/assets/skin_tube.gltf` (`make_test_gltf.py`): 2 eklemli boru, "bend" klibi (uç eklem 1 s'de
+  Z etrafında 90°).
+
+**Kapı `content_skinned_gltf_bends`:** içe aktarma (2 eklem, ebeveyn -1/0, klip 1.00 s, 2480 → 426 bayt, dönüş hatası
+0.04°); **CPU skinning analitik** — tepe vertex t=0 (0.15, 2, 0) → t=1 (−1.00, 1.15, 0) (beklenen (−1, 1+x, z));
+**GPU siluet** dik 10×64 px → bükük 37×37 px (genişlik >2×, tepe aşağıda, sol kenar sola). Masaüstü 67/67; doğrulama
+katmanıyla headless demo 0 hata, 0 BestPractices. Demo: 4 boru farklı fazda (kare indeksinden, belirlenimli).
+Emülatör (x86_64, gfxstream) 67/67, aynı analitik/siluet sayıları, demo 60.6 fps; ekran görüntüsü
+`build-android-x86_64/demo_skin_emu.png` (borular bükülüyor). **Telefon: USB düştü, skinning Mali'de bekliyor**
+(son telefon koşumu meshopt adımı 66/66).
+
+**Tuzak (8u):** `alloc_array_zeroed<ModelMesh>` varsayılan kurucuyu çalıştırmaz — `skin = -1` varsayılanı 0 oldu,
+dama küpü "skin 0" sanılıp `cgltf_accessor_read_uint(nullptr)` çöktü. Kural: zeroed dizide `-1` anlamlı alanları
+açıkça yaz (ya da 0'ı "yok" yap).
+
