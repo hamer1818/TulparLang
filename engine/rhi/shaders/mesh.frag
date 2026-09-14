@@ -3,15 +3,49 @@ layout(location = 0) in vec3 v_nrm;
 layout(location = 1) in vec3 v_color;
 layout(location = 2) in vec4 v_light_pos;
 layout(location = 3) in vec2 v_uv;
+layout(location = 4) in vec3 v_world;
+layout(location = 5) in float v_viewz;
 layout(set = 0, binding = 0) uniform Frame {
   mat4 viewproj;
+  mat4 view;
   mat4 light_viewproj;
   vec4 light_dir;
   vec4 ambient;
-  vec4 shadow_params; // x: 1/boyut, y: sabit egilim, z: golge acik mi, w: normal kaydirma (dunya)
+  vec4 shadow_params;  // x: 1/boyut, y: sabit egilim, z: golge acik mi, w: normal kaydirma (dunya)
+  vec4 cluster_params; // x: dilim olcegi, y: dilim sapmasi, z: tile genisligi px, w: tile yuksekligi px
+  uvec4 cluster_grid;  // x, y, z, isik sayisi
 } u;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow;
 layout(set = 1, binding = 0) uniform sampler2D u_albedo; // malzeme (klasik set, bindless yok)
+struct PointLight { vec4 pos_radius; vec4 color_intensity; };
+layout(set = 0, binding = 2) uniform Lights { PointLight l[32]; } u_lights;
+layout(std430, set = 0, binding = 3) readonly buffer Clusters { uint mask[]; } u_clusters;
+
+// Kumelenmis nokta isiklar: bu pikselin kumesinin 32-bit maskesi, set bitleri
+// icin Lambert + pencereli ters-kare sonum (yaricapta sifira iner).
+vec3 point_lights(vec3 n) {
+  if (u.cluster_grid.w == 0u) return vec3(0.0);
+  uint tx = min(uint(gl_FragCoord.x / u.cluster_params.z), u.cluster_grid.x - 1u);
+  uint ty = min(uint(gl_FragCoord.y / u.cluster_params.w), u.cluster_grid.y - 1u);
+  float fz = floor(log(max(v_viewz, 1e-6)) * u.cluster_params.x + u.cluster_params.y);
+  uint tz = uint(clamp(fz, 0.0, float(u.cluster_grid.z - 1u)));
+  uint mask = u_clusters.mask[(tz * u.cluster_grid.y + ty) * u.cluster_grid.x + tx];
+  vec3 sum = vec3(0.0);
+  while (mask != 0u) {
+    int i = findLSB(mask);
+    mask &= mask - 1u;
+    PointLight L = u_lights.l[i];
+    vec3 d = L.pos_radius.xyz - v_world;
+    float dist2 = dot(d, d);
+    float r = L.pos_radius.w;
+    float x = dist2 / (r * r);
+    float win = clamp(1.0 - x * x, 0.0, 1.0);
+    float att = win * win / (dist2 + 1.0);
+    float nl = max(dot(n, d * inversesqrt(max(dist2, 1e-8))), 0.0);
+    sum += L.color_intensity.rgb * (L.color_intensity.w * att * nl);
+  }
+  return sum;
+}
 layout(location = 0) out vec4 o_color;
 
 // 3x3 PCF; donanim karsilastirmali ornekleme (compareOp LESS_OR_EQUAL):
@@ -37,6 +71,6 @@ void main() {
   float nl = max(dot(n, normalize(u.light_dir.xyz)), 0.0);
   float vis = shadow_visibility(nl);
   vec3 albedo = texture(u_albedo, v_uv).rgb * v_color;
-  vec3 c = albedo * (u.ambient.rgb + nl * vis * u.ambient.a);
+  vec3 c = albedo * (u.ambient.rgb + nl * vis * u.ambient.a + point_lights(n));
   o_color = vec4(c, 1.0);
 }

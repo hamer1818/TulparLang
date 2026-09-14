@@ -103,17 +103,20 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   rhi::OffscreenConfig oc;
   rhi::OffscreenResult ores;
   VkRenderPass rp = VK_NULL_HANDLE;
+  uint32_t render_w = width, render_h = height;
   if (headless) {
     oc.width = width;
     oc.height = height;
     off = rhi::offscreen_create(dev, sys, oc, &ores);
     if (!off) { std::fprintf(stderr, "offscreen: %s\n", ores.error); return 1; }
     rp = rhi::offscreen_render_pass(off);
+    render_w = width; render_h = height;
   } else {
     uint32_t fw = 0, fh = 0;
     if (host->poll(host->user, &fw, &fh) == HostPoll::Quit) return 0;
     if (!swap.init(dev, sys, surface, fw, fh, swap_cfg)) { std::fprintf(stderr, "swapchain\n"); return 1; }
     rp = swap.render_pass();
+    render_w = swap.extent().width; render_h = swap.extent().height;
     std::printf("[engine_demo] swapchain goruntu %ux%u, gorunen %ux%u, on-dondurme %.0f derece, sunum %s\n",
                 swap.extent().width, swap.extent().height, swap.logical_extent().width, swap.logical_extent().height,
                 swap.rotation_radians() * 180.0f / kPi, present_name(swap.present_mode()));
@@ -121,6 +124,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   renderer::Renderer ren;
   renderer::RendererConfig rc;
   if (!ren.init(dev, sys, rp, rc)) { std::fprintf(stderr, "renderer\n"); return 1; }
+  ren.set_render_size(render_w, render_h);
   renderer::Vertex v[24];
   uint32_t idx[36];
   uint32_t n = renderer::Renderer::cube(v, idx);
@@ -197,6 +201,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
         if (!host->create_surface(host->user, api, dev.instance(), &ns)) { std::fprintf(stderr, "yuzey (yeniden)\n"); return 1; }
         dev.replace_surface(ns);
         if (!swap.init(dev, sys, ns, fw, fh)) { std::fprintf(stderr, "swapchain (yeniden)\n"); return 1; }
+        ren.set_render_size(swap.extent().width, swap.extent().height);
         std::printf("[engine_demo] pencere yeniden: swapchain %ux%u\n", swap.extent().width, swap.extent().height);
         have_window = true;
         break;
@@ -221,6 +226,13 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       Mat4 proj = Mat4::perspective(kPi / 3.5f, aspect, 0.1f, 200.0f);
       if (!headless && swap.rotation_radians() != 0.0f) proj = Mat4::rotate({0, 0, 1}, swap.rotation_radians()) * proj;
       ren.set_camera(cam_view(cam), proj);
+      // 8 renkli nokta isik kutularin uzerinde doner (ilk oyun 8-16 dinamik isik ister).
+      ren.clear_point_lights();
+      for (uint32_t li = 0; li < 8; li++) {
+        float a = cam.angle * 2.0f + (float)li * (kPi * 0.25f);
+        Vec3 hue = {0.5f + 0.5f * std::sin(a), 0.5f + 0.5f * std::sin(a + 2.1f), 0.5f + 0.5f * std::sin(a + 4.2f)};
+        ren.add_point_light(renderer::PointLight{{5.0f + 3.5f * std::cos(a), 1.6f, -4.0f + 3.5f * std::sin(a)}, 4.0f, hue, 5.0f});
+      }
       if (headless) {
         ren.begin_frame(frame_i);
         scene.draw(ren, ds);
@@ -250,7 +262,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           uint64_t tf = platform::now_ns();
           ubo_ns += tc - tb; draw_ns += td - tc; record_ns += te - td; submit_ns += tf - te;
         }
-        if (swap.needs_recreate() && fw && fh) swap.recreate(fw, fh);
+        if (swap.needs_recreate() && fw && fh) { swap.recreate(fw, fh); ren.set_render_size(swap.extent().width, swap.extent().height); }
       }
       render_ns += platform::now_ns() - t1;
       report_frames++;
@@ -266,10 +278,11 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       static uint64_t scratch[1200];
       FrameStats st = prof.frame_stats(Span<uint64_t>(scratch, 1200), 120);
       double rf = report_frames ? (double)report_frames : 1.0;
-      std::printf("[engine_demo] kare %u | p50 %.2f ms p99 %.2f ms max %.2f ms | sim %.2f render %.2f (bekle+acquire %.2f, ubo %.2f, draw-listesi %.2f, kayit %.2f, submit+present %.2f) ms/kare | cizim %u | kare ici new (en cok) %llu | ozet %016llx\n",
+      std::printf("[engine_demo] kare %u | p50 %.2f ms p99 %.2f ms max %.2f ms | sim %.2f render %.2f (bekle+acquire %.2f, ubo %.2f, draw-listesi %.2f, kayit %.2f, submit+present %.2f) ms/kare | cizim %u | isik %u (kume %u) | kare ici new (en cok) %llu | ozet %016llx\n",
                   frame_i, st.p50_ns / 1e6, st.p99_ns / 1e6, st.max_ns / 1e6, sim_ns / rf / 1e6, render_ns / rf / 1e6,
                   acquire_ns / rf / 1e6, ubo_ns / rf / 1e6, draw_ns / rf / 1e6, record_ns / rf / 1e6, submit_ns / rf / 1e6,
-                  ren.stats().draws, (unsigned long long)frame_allocs_max, (unsigned long long)scene.content_hash());
+                  ren.stats().draws, ren.point_light_count(), ren.stats().clusters.clusters_touched,
+                  (unsigned long long)frame_allocs_max, (unsigned long long)scene.content_hash());
       if (!headless && swap.suboptimal_frames())
         std::printf("[engine_demo] sunum SUBOPTIMAL %llu kare (preTransform 0x%x != yuzey) — kompozitor donduruyor\n",
                     (unsigned long long)swap.suboptimal_frames(), (unsigned)swap.pretransform());

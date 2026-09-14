@@ -8,6 +8,7 @@
 
 #include "core/math/vec.hpp"
 #include "core/memory/arena.hpp"
+#include "renderer/cluster.hpp"
 #include "rhi/device.hpp"
 
 namespace tulpar::engine::renderer {
@@ -63,6 +64,7 @@ struct RendererStats {
   uint32_t textures = 0;
   uint32_t materials = 0;
   uint32_t material_binds = 0; // son kare (siralama yoksa cizim sayisina yaklasir)
+  ClusterStats clusters;       // son kare isik atamasi
 };
 
 class Renderer {
@@ -80,6 +82,13 @@ public:
 
   void set_camera(const Mat4 &view, const Mat4 &proj);
   void set_light(Vec3 dir, Vec3 ambient, float diffuse_scale);
+  // Kume gridi framebuffer uzayinda: hedefin olcusu (swapchain goruntusu / offscreen).
+  void set_render_size(uint32_t width, uint32_t height);
+  // Nokta isiklar (kare basina en cok 32; kumelenmis, CPU atamali). begin_frame'de atanir.
+  static constexpr uint32_t kMaxPointLights = 32;
+  void clear_point_lights() { point_light_count_ = 0; }
+  bool add_point_light(const PointLight &l);
+  uint32_t point_light_count() const { return point_light_count_; }
   // Golge kutusu: isik yonu (isiga DOGRU), sahne merkezi, yaricap, derinlik.
   void set_shadow_volume(Vec3 center, float radius, float depth);
   ShadowInfo shadow() const { return shadow_info_; }
@@ -132,10 +141,17 @@ private:
   };
   struct FrameUbo {
     Mat4 viewproj;
+    Mat4 view;
     Mat4 light_viewproj;
     float light_dir[4];
     float ambient[4];
-    float shadow_params[4]; // x: 1/boyut, y: egilim, z: acik mi, w: normal kaydirma
+    float shadow_params[4];  // x: 1/boyut, y: egilim, z: acik mi, w: normal kaydirma
+    float cluster_params[4]; // x: dilim olcegi, y: dilim sapmasi, z: tile genisligi(px), w: tile yuksekligi(px)
+    uint32_t cluster_grid[4]; // x, y, z, isik sayisi
+  };
+  struct GpuPointLight {
+    float pos_radius[4];
+    float color_intensity[4];
   };
   bool make_buffer(VkBufferUsageFlags usage, VkDeviceSize size, VkMemoryPropertyFlags mem, VkBuffer *buf,
                    rhi::MemoryAlloc *out);
@@ -182,7 +198,16 @@ private:
   static constexpr uint32_t kMaxFrames = 3;
   VkBuffer ubo_[kMaxFrames] = {};
   rhi::MemoryAlloc ubo_mem_[kMaxFrames] = {};
+  VkBuffer lights_buf_[kMaxFrames] = {};
+  rhi::MemoryAlloc lights_mem_[kMaxFrames] = {};
+  VkBuffer cluster_buf_[kMaxFrames] = {};
+  rhi::MemoryAlloc cluster_mem_[kMaxFrames] = {};
   VkDescriptorSet sets_[kMaxFrames] = {};
+  ClusterGrid grid_{};
+  uint32_t *cluster_masks_ = nullptr; // Arena, grid_.count()
+  PointLight point_lights_[kMaxPointLights];
+  uint32_t point_light_count_ = 0;
+  uint32_t render_w_ = 1, render_h_ = 1;
   uint32_t frame_ = 0;
 };
 

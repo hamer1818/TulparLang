@@ -123,3 +123,102 @@ ENGINE_TEST(renderer_shadow_map_actually_darkens) {
   offscreen_destroy(off);
   dev.shutdown();
 }
+
+// Kume atamasi (CPU): ortadaki isik orta tile'i isaretler, koseleri isaretlemez;
+// kamera arkasindaki isik hicbir seyi isaretlemez; dev isik her seyi isaretler.
+#include "renderer/cluster.hpp"
+ENGINE_TEST(renderer_cluster_assignment_is_conservative_and_local) {
+  using namespace renderer;
+  ClusterGrid g;
+  g.znear = 0.1f; g.zfar = 100.0f;
+  static uint32_t masks[16 * 9 * 24];
+  Mat4 view = Mat4::look_at({0, 0, 0}, {0, 0, -1}, {0, 1, 0});
+  Mat4 proj = Mat4::perspective(1.2f, 16.0f / 9.0f, g.znear, g.zfar);
+  PointLight L[3];
+  L[0] = {{0, 0, -10}, 1.0f, {1, 1, 1}, 1.0f};      // onde, kucuk
+  L[1] = {{0, 0, +10}, 1.0f, {1, 1, 1}, 1.0f};      // arkada
+  L[2] = {{0, 0, -5}, 1000.0f, {1, 1, 1}, 1.0f};    // dev: her yer
+  ClusterStats st;
+  cluster_assign(view, proj, L, 1, g, masks, &st);
+  uint32_t s = cluster_slice_of(g, 10.0f);
+  bool center = (masks[(s * g.y + g.y / 2) * g.x + g.x / 2] & 1u) != 0;
+  bool corner = (masks[(s * g.y + 0) * g.x + 0] & 1u) != 0;
+  bool near_slice = (masks[(0 * g.y + g.y / 2) * g.x + g.x / 2] & 1u) != 0;
+  CHECK(center);
+  CHECK(!corner);
+  CHECK(!near_slice);
+  CHECK(st.lights_visible == 1);
+  std::printf("    [bilgi] kucuk isik: %u kume (%u toplam), dilim %u\n", st.clusters_touched, g.count(), s);
+  cluster_assign(view, proj, L + 1, 1, g, masks, &st);
+  bool none = st.clusters_touched == 0 && st.lights_visible == 0;
+  CHECK(none);
+  cluster_assign(view, proj, L + 2, 1, g, masks, &st);
+  bool all = st.clusters_touched == g.count();
+  CHECK(all);
+  // Dilim formulu tekduze ve sinirli
+  bool mono = cluster_slice_of(g, 0.1f) == 0 && cluster_slice_of(g, 100.0f) == g.z - 1 &&
+              cluster_slice_of(g, 1.0f) < cluster_slice_of(g, 10.0f);
+  CHECK(mono);
+}
+
+// Kumelenmis nokta isik gercekten aydinlatiyor mu? Karanlik sahne (ambient ~0,
+// yonlu isik 0) + kirmizi nokta isik: isigin altinda kirmizi pikseller olmali,
+// isik kaldirilinca (POZITIF KONTROL) olmamali; gorus disina konan isik da
+// hicbir seyi aydinlatmamali (kume atamasi ekran uzayinda dogru).
+ENGINE_TEST(renderer_point_light_lights_only_near_pixels) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "pl_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  const uint32_t W = 256, H = 256;
+  OffscreenConfig oc;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  ren.set_light({0, 1, 0}, {0.02f, 0.02f, 0.02f}, 0.0f); // karanlik: yalniz nokta isik
+  ren.set_camera(Mat4::look_at({0, 6.0f, 0.01f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto render_count_red = [&](bool with_light, Vec3 pos) {
+    ren.clear_point_lights();
+    if (with_light) ren.add_point_light(renderer::PointLight{pos, 2.5f, {1.0f, 0.05f, 0.05f}, 6.0f});
+    ren.begin_frame(0);
+    ren.draw(plane, Mat4::scale({12, 1, 12}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return (uint32_t)0xFFFFFFFFu;
+    uint32_t red = 0;
+    for (uint32_t i = 0; i < W * H; i++) {
+      const uint8_t *p = ores.pixels + i * 4;
+      if (p[0] > 60 && p[0] > p[1] * 3 && p[0] > p[2] * 3) red++;
+    }
+    return red;
+  };
+  uint32_t lit = render_count_red(true, {0, 0.8f, 0});
+  uint32_t dark = render_count_red(false, {0, 0.8f, 0});
+  uint32_t offscreen_light = render_count_red(true, {40.0f, 0.8f, 40.0f});
+  renderer::ClusterStats cs = ren.stats().clusters;
+  std::printf("    [bilgi] kirmizi piksel: isikli %u, isiksiz %u, gorus disi isik %u; kume: %u dokunuldu\n", lit, dark,
+              offscreen_light, cs.clusters_touched);
+  bool has_light = lit > 500 && lit < W * H / 2; // aydinlatir ama tum ekrani degil (sonum)
+  CHECK(has_light);
+  bool control = dark == 0;
+  CHECK(control);
+  bool culled = offscreen_light == 0;
+  CHECK(culled);
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}

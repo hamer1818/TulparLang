@@ -125,7 +125,7 @@ target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX
 add_dependencies(engine_sim engine_layer_check)
 
 # --- L3 RENDERER -----------------------------------------------------------------
-add_library(engine_renderer STATIC renderer/renderer.cpp)
+add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp)
 target_link_libraries(engine_renderer PUBLIC engine_rhi)
 target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_renderer engine_layer_check)

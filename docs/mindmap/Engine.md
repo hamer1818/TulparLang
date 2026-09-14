@@ -49,3 +49,6 @@ Tek kademeli yönlü ışık gölge haritası: ayrı render pass, **D16_UNORM** 
 ## İçerik: doku + malzeme + glTF (2026-09-14) → [FAZ3.md](../engine/FAZ3.md)
 Faz 6'nın içe aktarma dilimi Faz 3'e çekildi (dokusuz küple bant genişliği ölçülmez). `engine/content/` (L6): **cgltf + stb_image** vendored, glTF → `content::Model` (Arena) → `upload_model` → renderer doku/malzeme/mesh. Malzeme = **klasik descriptor set** (bindless yok, REV-3), mip zinciri blit ile. Test varlığı `tests/assets/checker_cube.gltf` (`make_test_gltf.py`, belirlenimli). Kapı: dokulu küp vs düz küp keskin-geçiş oranı ≥ 4× + iki dama rengi. `app` katmanı L6'ya alındı (birleştirme kökü).
 
+## Çok ışık (2026-09-14) → [FAZ3.md](../engine/FAZ3.md)
+Kümelenmiş nokta ışıklar: 16×9×24 grid, küme başına 32-bit maske, atama **CPU'da** (belirlenimli, compute/SSBO senkronu yok, Vulkan 1.1 yeter), shader `findLSB` döngüsü + pencereli ters-kare sönüm. Kapılar: küme ataması yerel ve konservatif; kırmızı ışık testi ışıksızda 0, görüş dışında 0. Mali'de 8 ışık ~%5. `set_render_size` ile grid framebuffer uzayında (ön-döndürme uyumlu).
+

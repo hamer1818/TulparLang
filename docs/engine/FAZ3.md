@@ -198,3 +198,31 @@ girer (`android_run.sh` stage eder), host açılışta `AAssetManager` ile **dah
 Emülatörü sandbox içinden arka planda başlatmak olmuyor (süreç 144 ile ölüyor); sandbox dışı arka plan
 görevle başlatılır.
 
+## Çok ışık — kümelenmiş (clustered) nokta ışıklar (2026-09-14)
+
+Faz 3'ün özü: PLAN §1 "clustered forward+ **AL**", ilk oyun 8–16 dinamik ışık ister (CIHAZ-MATRISI §1).
+
+| parça | yer | not |
+|---|---|---|
+| Küme atama | `renderer/cluster.*` | 16×9×24 grid (ekran tile × log derinlik dilimi), küme başına **32-bit ışık maskesi**. **CPU'da** atanır: bu ölçekte mikrosaniye, belirlenimli, compute + SSBO senkronu yok, Vulkan 1.1 cihazda ek özellik istemez. Işık sayısı büyürse aynı maskeler compute'ta üretilir (render pass **öncesi**, zinciri bölmez, §8/10) |
+| Konservatiflik | aynı | küre görünüm-uzayı AABB'siyle projekte edilir; yakın düzlem gerisine taşan köşe **tüm ekranı** işaretler (ışık zaten kamerada); ekran dışı / derinlik dışı ışık hiç işaretlemez |
+| GPU tarafı | `mesh.frag` | `gl_FragCoord` + görünüm derinliği (`v_viewz`) → küme; maskede `findLSB` döngüsü; Lambert + pencereli ters-kare sönüm (yarıçapta sıfır). Işıklar UBO (binding 2, 32×32 B), maskeler SSBO (binding 3, 13.8 KB), uçuşlu kare başına |
+| Grid uzayı | `set_render_size` | küme framebuffer uzayında: Android ön-döndürmede `proj` döndürülmüş olduğundan atama da otomatik döner |
+| API | `add_point_light` / `clear_point_lights` | kare başına en çok 32; `stats.clusters` (görünen ışık, dokunulan küme, küme başına en çok ışık) |
+
+**Kapılar:** `renderer_cluster_assignment_is_conservative_and_local` (ortadaki ışık orta tile'ı işaretler,
+köşeyi/yakın dilimi işaretlemez; arkadaki ışık hiçbir şeyi; dev ışık her şeyi; dilim formülü tekdüze) ve
+`renderer_point_light_lights_only_near_pixels` — karanlık sahnede kırmızı nokta ışık: ışıklı 14 821 kırmızı
+piksel, ışıksız **0** (pozitif kontrol), görüş dışına konan ışık **0** (küme ataması ekran uzayında doğru).
+Telefonda aynı: 14 824 / 0 / 0.
+
+**Maliyet (Mali-G72, 8 ışık, 2159×1080, doku + gölge açık):**
+
+| koşul | önce (doku+gölge) | + 8 küme ışığı |
+|---|---|---|
+| FIFO | 59.6 fps | **59.9 fps** |
+| MAILBOX | ~234 fps / 3.02 ms | ~223 fps / 3.80 ms → **~%5** |
+| kayıt CPU | 1.05 ms | 1.24 ms |
+
+Kalan (Faz 3): stochastic tile (düşük segment), CSM kademeleri, VRS, renk uzayı, vis buffer A/B.
+

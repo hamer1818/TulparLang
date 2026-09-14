@@ -47,7 +47,8 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   textures_ = arena.alloc_array_zeroed<Texture>(cfg.max_textures);
   materials_ = arena.alloc_array_zeroed<Material>(cfg.max_materials);
   draws_ = arena.alloc_array<Draw>(cfg.max_draws);
-  if (!meshes_ || !textures_ || !materials_ || !draws_) return false;
+  cluster_masks_ = arena.alloc_array_zeroed<uint32_t>(grid_.count());
+  if (!meshes_ || !textures_ || !materials_ || !draws_ || !cluster_masks_) return false;
   rhi::VkApi &a = dev.api();
   // Shader'lar
   VkShaderModuleCreateInfo smi{};
@@ -61,7 +62,8 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   // Golge hedefi UBO'dan ONCE: descriptor yazarken view+sampler hazir olmali.
   if (!make_shadow()) return false;
   // Set 0: binding 0 kare UBO, binding 1 golge haritasi (karsilastirmali sampler)
-  VkDescriptorSetLayoutBinding b[2]{};
+  // Set 0: 0 kare UBO, 1 golge, 2 nokta isiklar (UBO), 3 kume maskeleri (SSBO)
+  VkDescriptorSetLayoutBinding b[4]{};
   b[0].binding = 0;
   b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   b[0].descriptorCount = 1;
@@ -70,9 +72,17 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   b[1].descriptorCount = 1;
   b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  b[2].binding = 2;
+  b[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  b[2].descriptorCount = 1;
+  b[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  b[3].binding = 3;
+  b[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  b[3].descriptorCount = 1;
+  b[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
   VkDescriptorSetLayoutCreateInfo sli{};
   sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  sli.bindingCount = 2;
+  sli.bindingCount = 4;
   sli.pBindings = b;
   if (a.vkCreateDescriptorSetLayout(dev.handle(), &sli, nullptr, &set_layout_) != VK_SUCCESS) return false;
   if (!make_material_layout()) return false;
@@ -86,12 +96,13 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   pli.pPushConstantRanges = &pcr;
   if (a.vkCreatePipelineLayout(dev.handle(), &pli, nullptr, &layout_) != VK_SUCCESS) return false;
   // UBO + descriptor (ucuslu kare basina)
-  VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxFrames},
-                                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFrames}};
+  VkDescriptorPoolSize ps[3] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * kMaxFrames},
+                                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFrames},
+                                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxFrames}};
   VkDescriptorPoolCreateInfo dpi{};
   dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   dpi.maxSets = kMaxFrames;
-  dpi.poolSizeCount = 2;
+  dpi.poolSizeCount = 3;
   dpi.pPoolSizes = ps;
   if (a.vkCreateDescriptorPool(dev.handle(), &dpi, nullptr, &pool_) != VK_SUCCESS) return false;
   for (uint32_t i = 0; i < cfg_.frames_in_flight; i++) {
@@ -104,9 +115,28 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     dai.descriptorSetCount = 1;
     dai.pSetLayouts = &set_layout_;
     if (a.vkAllocateDescriptorSets(dev.handle(), &dai, &sets_[i]) != VK_SUCCESS) return false;
+    const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    if (!make_buffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GpuPointLight) * kMaxPointLights, host, &lights_buf_[i], &lights_mem_[i]))
+      return false;
+    if (!make_buffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(uint32_t) * grid_.count(), host, &cluster_buf_[i], &cluster_mem_[i]))
+      return false;
     VkDescriptorBufferInfo dbi{ubo_[i], 0, sizeof(FrameUbo)};
+    VkDescriptorBufferInfo dli{lights_buf_[i], 0, sizeof(GpuPointLight) * kMaxPointLights};
+    VkDescriptorBufferInfo dci{cluster_buf_[i], 0, sizeof(uint32_t) * grid_.count()};
     VkDescriptorImageInfo dii{shadow_sampler_, shadow_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w[2]{};
+    VkWriteDescriptorSet w[4]{};
+    w[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[2].dstSet = sets_[i];
+    w[2].dstBinding = 2;
+    w[2].descriptorCount = 1;
+    w[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[2].pBufferInfo = &dli;
+    w[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[3].dstSet = sets_[i];
+    w[3].dstBinding = 3;
+    w[3].descriptorCount = 1;
+    w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[3].pBufferInfo = &dci;
     w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w[0].dstSet = sets_[i];
     w[0].dstBinding = 0;
@@ -119,7 +149,7 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     w[1].descriptorCount = 1;
     w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[1].pImageInfo = &dii;
-    a.vkUpdateDescriptorSets(dev.handle(), 2, w, 0, nullptr);
+    a.vkUpdateDescriptorSets(dev.handle(), 4, w, 0, nullptr);
   }
   if (!make_pipelines(rp)) return false;
   // Varsayilan malzeme: 1x1 beyaz doku. Dokusuz cizimler bununla gider; shader tek yol.
@@ -472,7 +502,11 @@ void Renderer::shutdown() {
     if (meshes_[i].vbuf) a.vkDestroyBuffer(dev_->handle(), meshes_[i].vbuf, nullptr);
     if (meshes_[i].ibuf) a.vkDestroyBuffer(dev_->handle(), meshes_[i].ibuf, nullptr);
   }
-  for (uint32_t i = 0; i < kMaxFrames; i++) if (ubo_[i]) a.vkDestroyBuffer(dev_->handle(), ubo_[i], nullptr);
+  for (uint32_t i = 0; i < kMaxFrames; i++) {
+    if (ubo_[i]) a.vkDestroyBuffer(dev_->handle(), ubo_[i], nullptr);
+    if (lights_buf_[i]) a.vkDestroyBuffer(dev_->handle(), lights_buf_[i], nullptr);
+    if (cluster_buf_[i]) a.vkDestroyBuffer(dev_->handle(), cluster_buf_[i], nullptr);
+  }
   for (uint32_t i = 0; i < texture_count_; i++) {
     if (textures_[i].view) a.vkDestroyImageView(dev_->handle(), textures_[i].view, nullptr);
     if (textures_[i].image) a.vkDestroyImage(dev_->handle(), textures_[i].image, nullptr);
@@ -522,6 +556,27 @@ void Renderer::begin_frame(uint32_t frame_index) {
   stats_.dropped = 0;
   FrameUbo u;
   u.viewproj = proj_ * view_;
+  u.view = view_;
+  // Kumelenmis nokta isiklar: CPU atamasi (kare basina, deterministik), GPU okur.
+  ClusterStats cs;
+  cluster_assign(view_, proj_, point_lights_, point_light_count_, grid_, cluster_masks_, &cs);
+  stats_.clusters = cs;
+  std::memcpy(cluster_mem_[frame_].mapped, cluster_masks_, sizeof(uint32_t) * grid_.count());
+  GpuPointLight gl[kMaxPointLights];
+  for (uint32_t i = 0; i < point_light_count_; i++) {
+    const PointLight &L = point_lights_[i];
+    gl[i].pos_radius[0] = L.pos.x; gl[i].pos_radius[1] = L.pos.y; gl[i].pos_radius[2] = L.pos.z; gl[i].pos_radius[3] = L.radius;
+    gl[i].color_intensity[0] = L.color.x; gl[i].color_intensity[1] = L.color.y; gl[i].color_intensity[2] = L.color.z;
+    gl[i].color_intensity[3] = L.intensity;
+  }
+  if (point_light_count_) std::memcpy(lights_mem_[frame_].mapped, gl, sizeof(GpuPointLight) * point_light_count_);
+  float sc, bi;
+  cluster_slice_params(grid_, &sc, &bi);
+  u.cluster_params[0] = sc;
+  u.cluster_params[1] = bi;
+  u.cluster_params[2] = (float)render_w_ / (float)grid_.x;
+  u.cluster_params[3] = (float)render_h_ / (float)grid_.y;
+  u.cluster_grid[0] = grid_.x; u.cluster_grid[1] = grid_.y; u.cluster_grid[2] = grid_.z; u.cluster_grid[3] = point_light_count_;
   light_vp_ = directional_light_matrix(light_dir_, shadow_center_, shadow_radius_, shadow_depth_);
   u.light_viewproj = light_vp_;
   u.light_dir[0] = light_dir_.x; u.light_dir[1] = light_dir_.y; u.light_dir[2] = light_dir_.z; u.light_dir[3] = 0;
@@ -531,6 +586,14 @@ void Renderer::begin_frame(uint32_t frame_index) {
   u.shadow_params[2] = shadow_info_.enabled ? 1.0f : 0.0f;
   u.shadow_params[3] = cfg_.shadow_normal_offset;
   std::memcpy(ubo_mem_[frame_].mapped, &u, sizeof u);
+}
+
+void Renderer::set_render_size(uint32_t w, uint32_t h) { render_w_ = w ? w : 1; render_h_ = h ? h : 1; }
+
+bool Renderer::add_point_light(const PointLight &l) {
+  if (point_light_count_ >= kMaxPointLights) return false;
+  point_lights_[point_light_count_++] = l;
+  return true;
 }
 
 void Renderer::set_shadow_volume(Vec3 center, float radius, float depth) {
