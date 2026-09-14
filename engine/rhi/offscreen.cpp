@@ -489,7 +489,7 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
   Ctx &c = t->c;
   VkApi &a = *c.api;
   const uint32_t w = cfg.width, h = cfg.height;
-  const VkFormat color_fmt = VK_FORMAT_R8G8B8A8_UNORM;
+  const VkFormat color_fmt = cfg.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
   const VkFormat depth_fmt = VK_FORMAT_D32_SFLOAT;
   bool ok = false;
   do {

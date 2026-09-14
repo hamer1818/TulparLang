@@ -306,3 +306,24 @@ o 0 ise bu kimlik **açıkça** düşülür, başka hiçbir kimlik düşülmez.
 doğrulama hatası, 0 gerçek Arm uyarısı; katmansız 600 kare **59.8 fps (FIFO)**, p50 16.8 ms (bekle 10.0 ms
 vsync), kayıt 2.4 ms, 0 kare içi `new`. Strip'li `libtulparengine.so` arm64 **2.7 MB** (KARSILASTIRMA.md).
 
+## Renk uzayı — doğrusal aydınlatma + sRGB hedef (Filament tarifi, tarama belgesi İP-A) — 2026-09-14
+
+**Teslim edilen**
+- Swapchain `*_SRGB` yüzey biçimini tercih eder (`SwapchainConfig::srgb`, `srgb_output()`); offscreen
+  `OffscreenConfig::srgb` (RHI üçgen testleri UNORM'da kalır, renderer testleri ve demo sRGB).
+- Dokular: albedo `R8G8B8A8_SRGB` (örnekleme doğrusal döner), font atlası/veri `UNORM`
+  (`create_texture(..., srgb)`); mip blit biçim özelliklerine göre.
+- Yazarın verdiği renkler (malzeme, çizim, UI `rgba`) sRGB algısal → malzeme/çizim CPU'da, UI shader'da
+  doğrusala çevrilir; ışıklar doğrusal. Hedef SRGB biçimliyse donanım kodlar; UNORM yedeğinde shader
+  (`light_dir.w` / UI `encode` düz varyant).
+- Kapı `renderer_srgb_roundtrip_is_identity`: gri {32,128,200,255} ışıksız düz yüzeyde **aynen** geri okunur
+  (ürün yolu ve yedek yol); **pozitif kontrol** kodlamasız UNORM yolunda doğrusal çıkar (4 55 147 255).
+
+Mevcut kapılar (gölge, doku keskinliği, nokta ışık, UI metni) değişmeden yeşil; masaüstü **65/65** (katmanla),
+emülatör (x86_64, gfxstream, katmanla) **65/65** — gidiş-dönüş 32 128 200 255 aynen, kontrol 4 55 147 255.
+**Telefon: doğrulanmadı** — USB bağlantısı bu adımdan önce düştü (son telefon koşumu Mali linter adımı, 64/64).
+Telefon gelince ilk iş: `android_run.sh tests` + `demo 600 --screenshot` (Mali'de sRGB yüzey biçimi seçimi ve
+görünüm). Emülatör demosu: sRGB yüzey seçildi, 60 fps (vsync), 0 kare içi `new`.
+Görsel fark: orta tonlar açılır (0.5 albedo → 188), nokta ışık sönümü fiziksel; ekran testi kullanıcıda
+(`build-android/demo_srgb.png`).
+

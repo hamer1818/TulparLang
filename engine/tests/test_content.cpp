@@ -89,6 +89,7 @@ ENGINE_TEST(content_textured_cube_renders_checker) {
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
   const uint32_t W = 256, H = 256;
   rhi::OffscreenConfig oc;
+  oc.srgb = true; // ekranla ayni yol
   oc.width = W; oc.height = H;
   rhi::OffscreenResult ores;
   rhi::OffscreenTarget *off = rhi::offscreen_create(dev, sys, oc, &ores);

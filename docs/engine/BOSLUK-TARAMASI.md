@@ -12,13 +12,14 @@
 | 2 | **Mali birleştirme bütçesi ≤8 attachment, ≤128 bit/px** (§5, §7.1) | `rhi/tile_budget.hpp`: bütçe **kodla zorlanıyor** — swapchain ve offscreen geçişleri yaratılırken aşım = init hatası; bilinmeyen biçim sessizce 0 sayılmaz, hata | Test `rhi_mali_tile_budget_rule`: ana geçiş 1 att / 32 bit renk / 32 bit derinlik; plan zinciri (vis 64 + ışık 32 + hareket 16 + maske 8 = **120**) sığıyor; 2×RGBA32F (256) ve 9 attachment reddediliyor |
 | 3 | Katman telefona | `android_run.sh tests` Khronos Android katmanını (1.4.357.0, Apache-2.0, `engine/tools/fetch_vvl_android.sh`, gitignore'lu) APK'ya koyuyor; yükleyici debuggable uygulamanın lib dizininden alıyor | Telefonda: testler 64/64, pozitif kontrol 0→1 (Arm kuralları gerçekten açık); demo 0 doğrulama hatası. Yol boyunca **3 gerçek hata** çıktı: sampler LOD ×2, mesaj kanalı yok (sahte yeşil), `compositeAlpha` desteklenmiyor. Katmanın bir sahte pozitifi (VVL 45) CPU ölçümüyle açıkça düşülüyor |
 | 4 | **Defold 1 MB** karşılaştırması (§2, §7.3) | `KARSILASTIRMA.md` yazıldı, **ölçülmüş** boyutla | `libtulparengine.so` arm64 Release strip: **2.7 MB** (Jolt + Recast + renderer + testler dahil) |
+| 6 | **Filament renk uzayı** (İP-A) | Doğrusal aydınlatma + sRGB hedef/doku; yazar renkleri dönüştürülür | `renderer_srgb_roundtrip_is_identity`: 32 128 200 255 aynen; kontrol 4 55 147 255 (masaüstü + emülatör; telefon USB düştü, bekliyor) |
 | 5 | Masaüstünde doğrulama katmanı yoktu (testler ATLANDI diyordu) | LunarG SDK'dan yalnız katman `~/.local/lib/vulkan/` + `~/.local/share/vulkan/explicit_layer.d/` (kullanıcı düzeyi, açık katman; başka uygulamayı etkilemez) | Masaüstü artık **64/64, 0 atlandı** |
 
 ## 1. Renderer katmanı (belge §1–8)
 
 | Belge | Bizde | Durum / karar |
 |---|---|---|
-| **Filament** — doğrusal uzay + pozlama zinciri, `matc` offline malzeme | Swapchain `UNORM`, aydınlatma gamma uzayında; shader'lar build'de derleniyor (`compile_shaders.py`, PSO'lar init'te) | 🔴 **sRGB/doğrusal aydınlatma sırada** (İP-A). Filament PBR belgesi kaynak; kapı: orta gri çıktı değeri (doğrusal 0.5 → sRGB ≈188) + eski yolun 128'i pozitif kontrol |
+| **Filament** — doğrusal uzay + pozlama zinciri, `matc` offline malzeme | ✅ **bugün**: swapchain/offscreen sRGB biçim, albedo SRGB doku, aydınlatma doğrusal, yazar renkleri sRGB→doğrusal; kapı gri gidiş-dönüş birim + kodlamasız kontrol (FAZ3 "Renk uzayı"). Shader'lar build'de derleniyor | Pozlama/tonemap yok (HDR hedef yok; Faz 5). Filament PBR belgesi BRDF için sırada |
 | **Defold** boyut | 2.7 MB strip (ölçüldü) | ✅ KARSILASTIRMA.md. Hedef "12 MB" tahmindi; gerçek çok altında. Motor büyüdükçe bu satır her milestone'da yeniden ölçülür |
 | **The Forge** FSL/SRT — CPU-GPU tek kaynak tablosu | `FrameUbo` C++ struct + GLSL blok elle eşleniyor (offset drift riski) | 🟡 Faz 8 (Tulpar shader stage). Kısa vadede: UBO düzenini tek başlıktan üretme (`static_assert(offsetof)`) — küçük iş, sırada |
 | The Forge "shader dili GPU'ya benzemeli" uyarısı | — | Not alındı (PLAN EK B.1 karşı görüşü) |
@@ -89,7 +90,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 | L0 | 🟡 | 🟡 NativeActivity çalışıyor, GameActivity/Swappy/MemAdvice yok | — |
 | L1 | 🟢 | 🟢 Tracy UI yok | — |
 | L2 | 🟢 | 🟢 **+ Mali linter kapısı + tile bütçesi** | ✅ |
-| L3 | 🟢 | 🟡 sRGB yok, render graph yok, 2 sampler ihlali **düzeltildi** | ✅ |
+| L3 | 🟢 | 🟡 **sRGB/doğrusal bugün**, render graph yok, 2 sampler ihlali **düzeltildi** | ✅ |
 | L4 | 🟡 | 🟡 ozz/ses yok | — |
 | L5 | 🔴 | 🔴 Tulpar bağlaması yok | — |
 | L6 | 🟢 | 🟡 glTF var; lightmap/ASTC/pack yok | — |
@@ -97,7 +98,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 | L8 | 🟡 | 🔴 yok (ilk oyun öncesi gerekmez) | — |
 
 ## 10. Sıra (kullanıcı onayına sunulan)
-1. **sRGB / doğrusal aydınlatma** (Filament) — küçük, ölçülebilir, her sonraki görsel işin temeli.
+1. ~~sRGB / doğrusal aydınlatma~~ ✅ bugün.
 2. **Sahne veri modeli + format** → editör (DURUM §6.1–2; ImGui kararı burada).
 3. **ozz-animation + glTF iskelet** (karakter).
 4. **Tracy** (İP-R) — ölçüm altyapısı; kapalıyken sıfır maliyet.

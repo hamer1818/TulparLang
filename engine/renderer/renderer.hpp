@@ -4,6 +4,7 @@
 // kare UBO ucuslu kare basina, push sabitiyle model+renk. Bindless/kume
 // isiklandirma/CSM sonraki adimlar (PLAN.md Faz 3).
 #pragma once
+#include <cmath>
 #include <cstdint>
 
 #include "core/math/vec.hpp"
@@ -37,6 +38,9 @@ struct MaterialHandle {
 };
 
 struct RendererConfig {
+  // Hedef sRGB bicimli mi (swapchain/offscreen SRGB): donanim kodlar. false:
+  // UNORM hedef, shader kodlar (yedek yol; ayni goruntu, biraz daha pahali).
+  bool srgb_target = true;
   uint32_t max_meshes = 64;
   uint32_t max_textures = 64;
   uint32_t max_materials = 64;
@@ -88,7 +92,9 @@ public:
   // Indeks araligi seyrek (Mali kurali, CPU'da olculur) mesh sayisi; kapi 0 bekler.
   uint32_t sparse_mesh_count() const { return sparse_mesh_count_; }
   // RGBA8, mip zinciri blit ile uretilir (yukleme aninda). Mobil asil yol ASTC (Faz 6).
-  TextureHandle create_texture(const uint8_t *rgba, uint32_t w, uint32_t h, bool mipmaps = true);
+  // srgb: renk verisi (albedo) -> R8G8B8A8_SRGB, ornekleme dogrusal dondurur.
+  // false: veri (kaplama/alfa/normal) -> UNORM, oldugu gibi.
+  TextureHandle create_texture(const uint8_t *rgba, uint32_t w, uint32_t h, bool mipmaps = true, bool srgb = true);
   MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1});
   TextureHandle default_texture() const { return default_texture_; } // 1x1 beyaz
   MaterialHandle default_material() const { return default_material_; }
@@ -135,6 +141,13 @@ public:
   void ui_rect(float x, float y, float w, float h, uint32_t rgba); // duz kutu (beyaz texel)
   void ui_record(VkCommandBuffer cb);
   UiStats ui_stats() const { return ui_stats_; }
+  // Yazarin verdigi renkler (malzeme, cizim, UI) sRGB algisaldir; aydinlatma
+  // DOGRUSAL uzayda (Filament PBR tarifi). Bu donusum CPU'da malzeme/cizim
+  // rengine, UI'da shader'da uygulanir; dokular SRGB bicimiyle donanimda.
+  static float srgb_to_linear(float c) {
+    return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+  }
+  static Vec3 srgb_to_linear(Vec3 c) { return {srgb_to_linear(c.x), srgb_to_linear(c.y), srgb_to_linear(c.z)}; }
   static uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
     return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
   }

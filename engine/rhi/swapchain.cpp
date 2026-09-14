@@ -17,8 +17,12 @@ bool Swapchain::init(Device &dev, Arena &, VkSurfaceKHR surface, uint32_t w, uin
   if (n > 32) n = 32;
   a.vkGetPhysicalDeviceSurfaceFormatsKHR(dev.physical(), surface, &n, fmts);
   format_ = n ? fmts[0].format : VK_FORMAT_B8G8R8A8_UNORM;
-  for (uint32_t i = 0; i < n; i++)
-    if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM || fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM) { format_ = fmts[i].format; break; }
+  bool found = false;
+  if (cfg_.srgb)
+    for (uint32_t i = 0; i < n && !found; i++)
+      if (fmts[i].format == VK_FORMAT_B8G8R8A8_SRGB || fmts[i].format == VK_FORMAT_R8G8B8A8_SRGB) { format_ = fmts[i].format; found = true; }
+  for (uint32_t i = 0; i < n && !found; i++)
+    if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM || fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM) { format_ = fmts[i].format; found = true; }
   if (!create_render_pass()) return false;
   // Senkron nesneleri (kare basina)
   VkSemaphoreCreateInfo si{};

@@ -48,6 +48,13 @@ vec3 point_lights(vec3 n) {
 }
 layout(location = 0) out vec4 o_color;
 
+// Dogrusal aydinlatma (Filament): butun hesap dogrusal, hedef SRGB bicimliyse
+// donanim kodlar; UNORM yedeginde (light_dir.w = 1) burada kodlanir.
+vec3 linear_to_srgb(vec3 c) {
+  c = clamp(c, 0.0, 1.0);
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
+}
+
 // 3x3 PCF; donanim karsilastirmali ornekleme (compareOp LESS_OR_EQUAL):
 // texture() 1.0 = isikli. Harita disi = isikli (golge kutusu sahneyi kapsamali).
 float shadow_visibility(float nl) {
@@ -72,5 +79,6 @@ void main() {
   float vis = shadow_visibility(nl);
   vec3 albedo = texture(u_albedo, v_uv).rgb * v_color;
   vec3 c = albedo * (u.ambient.rgb + nl * vis * u.ambient.a + point_lights(n));
+  if (u.light_dir.w > 0.5) c = linear_to_srgb(c);
   o_color = vec4(c, 1.0);
 }

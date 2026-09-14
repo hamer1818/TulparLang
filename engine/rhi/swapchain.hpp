@@ -26,6 +26,10 @@ struct SwapchainConfig {
   // (rotation_radians()). false: IDENTITY iste, kompozitor dondursun (her kare
   // SUBOPTIMAL; A/B olcumu icin).
   bool prerotate = true;
+  // sRGB yuzey bicimi tercih et (dogrusal aydinlatma, Filament tarifi): shader
+  // dogrusal yazar, donanim kodlar. Yuzey vermezse UNORM'a duser ve
+  // srgb_output() false doner; renderer o zaman shader'da kodlar.
+  bool srgb = true;
   // Istenen sunum kipi; yoksa FIFO'ya duser. IMMEDIATE/MAILBOX: vsync kilidi
   // kalkar, GPU'nun gercek kare maliyeti olculur (A7: urun FIFO ile kilitli).
   VkPresentModeKHR preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
@@ -52,6 +56,7 @@ public:
 
   VkRenderPass render_pass() const { return rp_; }
   VkFormat color_format() const { return format_; }
+  bool srgb_output() const { return format_ == VK_FORMAT_B8G8R8A8_SRGB || format_ == VK_FORMAT_R8G8B8A8_SRGB; }
   // Goruntu (framebuffer) olcusu: viewport/scissor bunu kullanir. On-dondurmede
   // 90/270'te logical_extent'in devrigi.
   VkExtent2D extent() const { return extent_; }

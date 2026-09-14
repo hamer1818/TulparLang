@@ -256,7 +256,7 @@ void Renderer::ui_record(VkCommandBuffer cb) {
   a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_ui_);
   MaterialHandle m = ui_atlas_.valid() ? ui_atlas_ : default_material_;
   a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1, 1, &materials_[m.id].set, 0, nullptr);
-  float push[4] = {ui_w_, ui_h_, std::cos(ui_rot_), std::sin(ui_rot_)};
+  float push[5] = {ui_w_, ui_h_, std::cos(ui_rot_), std::sin(ui_rot_), cfg_.srgb_target ? 0.0f : 1.0f};
   a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, push);
   VkDeviceSize off = 0;
   a.vkCmdBindVertexBuffers(cb, 0, 1, &ui_buf_[frame_], &off);
@@ -310,7 +310,7 @@ void image_barrier(rhi::VkApi &a, VkCommandBuffer cb, VkImage img, uint32_t mip,
 }
 } // namespace
 
-TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t h, bool mipmaps) {
+TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t h, bool mipmaps, bool srgb) {
   if (texture_count_ >= cfg_.max_textures || !rgba || !w || !h) return TextureHandle{};
   rhi::VkApi &a = dev_->api();
   Texture &t = textures_[texture_count_];
@@ -318,7 +318,7 @@ TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t
   if (mipmaps) {
     // Blit ile mip: format BLIT_SRC/DST + dogrusal suzme vermeli (RGBA8 her yerde verir; yine de sor).
     VkFormatProperties fp{};
-    a.vkGetPhysicalDeviceFormatProperties(dev_->physical(), VK_FORMAT_R8G8B8A8_UNORM, &fp);
+    a.vkGetPhysicalDeviceFormatProperties(dev_->physical(), srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, &fp);
     const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
                                       VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
     if ((fp.optimalTilingFeatures & need) == need) {
@@ -329,7 +329,7 @@ TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t
   VkImageCreateInfo ii{};
   ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   ii.imageType = VK_IMAGE_TYPE_2D;
-  ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+  ii.format = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
   ii.extent = {w, h, 1};
   ii.mipLevels = mips;
   ii.arrayLayers = 1;
@@ -385,7 +385,7 @@ TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t
   vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
   vi.image = t.image;
   vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-  vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+  vi.format = ii.format;
   vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
   if (a.vkCreateImageView(dev_->handle(), &vi, nullptr, &t.view) != VK_SUCCESS) return TextureHandle{};
   t.w = w; t.h = h; t.mips = mips;
@@ -413,7 +413,7 @@ MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
   w.pImageInfo = &dii;
   a.vkUpdateDescriptorSets(dev_->handle(), 1, &w, 0, nullptr);
   m.texture = albedo.id;
-  m.color = color;
+  m.color = srgb_to_linear(color); // yazar sRGB verir, aydinlatma dogrusal
   stats_.materials = ++material_count_;
   return MaterialHandle{material_count_ - 1};
 }
@@ -698,7 +698,8 @@ void Renderer::begin_frame(uint32_t frame_index) {
   u.cluster_grid[0] = grid_.x; u.cluster_grid[1] = grid_.y; u.cluster_grid[2] = grid_.z; u.cluster_grid[3] = point_light_count_;
   light_vp_ = directional_light_matrix(light_dir_, shadow_center_, shadow_radius_, shadow_depth_);
   u.light_viewproj = light_vp_;
-  u.light_dir[0] = light_dir_.x; u.light_dir[1] = light_dir_.y; u.light_dir[2] = light_dir_.z; u.light_dir[3] = 0;
+  u.light_dir[0] = light_dir_.x; u.light_dir[1] = light_dir_.y; u.light_dir[2] = light_dir_.z;
+  u.light_dir[3] = cfg_.srgb_target ? 0.0f : 1.0f; // 1: shader sRGB kodlar (UNORM hedef yedegi)
   u.ambient[0] = ambient_.x; u.ambient[1] = ambient_.y; u.ambient[2] = ambient_.z; u.ambient[3] = diffuse_scale_;
   u.shadow_params[0] = shadow_info_.size ? 1.0f / (float)shadow_info_.size : 0.0f;
   u.shadow_params[1] = cfg_.shadow_bias;
@@ -771,8 +772,9 @@ void Renderer::draw(MeshHandle mesh, MaterialHandle material, const Mat4 &model,
   if (!mesh.valid() || mesh.id >= mesh_count_) return;
   if (!material.valid() || material.id >= material_count_) material = default_material_;
   if (draw_count_ >= cfg_.max_draws) { stats_.dropped++; return; }
-  const Vec3 mc = materials_[material.id].color;
-  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{color.x * mc.x, color.y * mc.y, color.z * mc.z}};
+  const Vec3 mc = materials_[material.id].color; // zaten dogrusal
+  const Vec3 lc = srgb_to_linear(color);
+  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}};
 }
 
 void Renderer::record(VkCommandBuffer cb) {

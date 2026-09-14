@@ -140,6 +140,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   if (headless) {
     oc.width = width;
     oc.height = height;
+    oc.srgb = true; // ekranla ayni: dogrusal aydinlatma, kodlu cikti
     off = rhi::offscreen_create(dev, sys, oc, &ores);
     if (!off) { std::fprintf(stderr, "offscreen: %s\n", ores.error); return 1; }
     rp = rhi::offscreen_render_pass(off);
@@ -156,7 +157,9 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   }
   renderer::Renderer ren;
   renderer::RendererConfig rc;
+  rc.srgb_target = headless ? true : swap.srgb_output(); // UNORM yuzeyde shader kodlar
   if (!ren.init(dev, sys, rp, rc)) { std::fprintf(stderr, "renderer\n"); return 1; }
+  std::printf("[engine_demo] renk: dogrusal aydinlatma, hedef %s\n", rc.srgb_target ? "sRGB bicim (donanim kodlar)" : "UNORM (shader kodlar)");
   ren.set_render_size(render_w, render_h);
   renderer::Vertex v[24];
   uint32_t idx[36];

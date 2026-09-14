@@ -107,7 +107,7 @@ bool Font::load(Arena &arena, renderer::Renderer &r, const char *ttf_path, float
         rgba[i * 4 + 3] = bitmap[i];
       }
       for (uint32_t y = 0; y < 2; y++) for (uint32_t x = 0; x < 2; x++) rgba[(y * atlas_size + x) * 4 + 3] = 255;
-      renderer::TextureHandle t = r.create_texture(rgba, atlas_size, atlas_size, false);
+      renderer::TextureHandle t = r.create_texture(rgba, atlas_size, atlas_size, false, /*srgb=*/false); // kaplama: veri, renk degil
       if (t.valid()) atlas_ = r.create_material(t, {1, 1, 1});
       std::free(rgba);
     }

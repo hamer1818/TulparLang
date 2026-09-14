@@ -37,6 +37,7 @@ ENGINE_TEST(renderer_shadow_map_actually_darkens) {
 
   const uint32_t W = 256, H = 256;
   OffscreenConfig oc;
+  oc.srgb = true; // ekranla ayni yol
   oc.width = W; oc.height = H;
   OffscreenResult ores;
   OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
@@ -174,6 +175,7 @@ ENGINE_TEST(renderer_point_light_lights_only_near_pixels) {
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
   const uint32_t W = 256, H = 256;
   OffscreenConfig oc;
+  oc.srgb = true; // ekranla ayni yol
   oc.width = W; oc.height = H;
   OffscreenResult ores;
   OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
@@ -240,6 +242,7 @@ ENGINE_TEST(renderer_ui_text_draws_pixels) {
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
   const uint32_t W = 256, H = 128;
   OffscreenConfig oc;
+  oc.srgb = true; // ekranla ayni yol
   oc.width = W; oc.height = H;
   OffscreenResult ores;
   OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
@@ -320,6 +323,7 @@ ENGINE_TEST(renderer_mali_best_practices_gate) {
 
   const uint32_t W = 128, H = 128;
   OffscreenConfig oc;
+  oc.srgb = true; // ekranla ayni yol
   oc.width = W; oc.height = H;
   OffscreenResult ores;
   OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
@@ -397,4 +401,94 @@ ENGINE_TEST(renderer_mali_best_practices_gate) {
   ren.shutdown();
   offscreen_destroy(off);
   dev.shutdown();
+}
+
+// Renk uzayi (Filament PBR tarifi): dokular sRGB bicimli (ornekleme dogrusal),
+// aydinlatma dogrusal, hedef sRGB bicimli (donanim kodlar). Kapi: gri doku
+// degerleri {32,128,200,255} isiksiz duz yuzeyde AYNEN geri okunmali (gidis-donus
+// birim). POZITIF KONTROL: UNORM hedefe kodlamadan yazinca degerler DOGRUSAL cikar
+// (128 -> ~55); olcum buna duyarli. Yedek yol (UNORM hedef + shader kodlama) da birim.
+static void srgb_scene(renderer::Renderer &ren, renderer::MeshHandle plane, renderer::MaterialHandle mat, uint32_t W,
+                       uint32_t H) {
+  ren.set_light({0, 1, 0}, {1, 1, 1}, 0.0f); // yalniz ambient = albedo
+  ren.set_shadows_enabled(false);
+  ren.set_camera(Mat4::look_at({0, 5.0f, 0}, {0, 0, 0}, {0, 0, -1}), Mat4::ortho(-8, 8, -8, 8, 0.1f, 20.0f));
+  ren.set_render_size(W, H);
+  ren.begin_frame(0);
+  ren.clear_point_lights();
+  ren.draw(plane, mat, Mat4::scale({16, 1, 16}), {1, 1, 1});
+}
+static void srgb_quadrants(const uint8_t *px, uint32_t W, uint32_t H, int out[4]) {
+  const uint32_t xs[2] = {W / 4, 3 * W / 4}, ys[2] = {H / 4, 3 * H / 4};
+  int k = 0;
+  for (int j = 0; j < 2; j++)
+    for (int i = 0; i < 2; i++) out[k++] = px[(ys[j] * W + xs[i]) * 4];
+  for (int a = 0; a < 4; a++) // sirala (yonelim onemsiz)
+    for (int b = a + 1; b < 4; b++)
+      if (out[b] < out[a]) { int t = out[a]; out[a] = out[b]; out[b] = t; }
+}
+ENGINE_TEST(renderer_srgb_roundtrip_is_identity) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "renderer_srgb")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  const uint32_t W = 64, H = 64;
+  static const uint8_t vals[4] = {32, 128, 200, 255};
+  // 64x64, dort tekduze ceyrek: ornekleme noktalari kenardan uzak, suzme karismaz.
+  static uint8_t tex[64 * 64 * 4];
+  for (uint32_t y = 0; y < 64; y++)
+    for (uint32_t x = 0; x < 64; x++) {
+      const uint8_t c = vals[(y / 32) * 2 + (x / 32)];
+      uint8_t *p = tex + (y * 64 + x) * 4;
+      p[0] = p[1] = p[2] = c; p[3] = 255;
+    }
+  // Uc yapilandirma: (0) sRGB hedef + donanim kodlama [urun], (1) UNORM hedef +
+  // kodlama YOK [pozitif kontrol: yanlis], (2) UNORM hedef + shader kodlama [yedek].
+  int q[3][4] = {};
+  bool ran[3] = {};
+  for (int cfg = 0; cfg < 3; cfg++) {
+    OffscreenConfig oc;
+    oc.width = W; oc.height = H;
+    oc.srgb = cfg == 0;
+    OffscreenResult ores;
+    OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+    if (!off) { CHECK(false); std::printf("    [bilgi] offscreen: %s\n", ores.error); break; }
+    renderer::Renderer ren;
+    renderer::RendererConfig rc;
+    rc.frames_in_flight = 1;
+    rc.shadow_size = 0;
+    rc.srgb_target = cfg != 2;
+    if (!ren.init(dev, sys, offscreen_render_pass(off), rc)) { CHECK(false); offscreen_destroy(off); break; }
+    renderer::Vertex v[4];
+    uint32_t idx[6];
+    uint32_t n = renderer::Renderer::plane(v, idx);
+    renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+    renderer::MaterialHandle mat = ren.create_material(ren.create_texture(tex, 64, 64, false, true), {1, 1, 1});
+    srgb_scene(ren, plane, mat, W, H);
+    Rec rr{&ren};
+    if (offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) {
+      srgb_quadrants(ores.pixels, W, H, q[cfg]);
+      ran[cfg] = true;
+    }
+    ren.shutdown();
+    offscreen_destroy(off);
+  }
+  dev.shutdown();
+  static const char *names[3] = {"sRGB hedef (urun)", "UNORM + kodlama yok (kontrol)", "UNORM + shader kodlama (yedek)"};
+  for (int cfg = 0; cfg < 3; cfg++)
+    std::printf("    [bilgi] %-32s -> %3d %3d %3d %3d (beklenen 32 128 200 255%s)\n", names[cfg], q[cfg][0], q[cfg][1],
+                q[cfg][2], q[cfg][3], cfg == 1 ? " DEGIL: dogrusal ~4 55 147 255" : "");
+  CHECK(ran[0] && ran[1] && ran[2]);
+  auto near4 = [&](const int *a, int tol) {
+    for (int i = 0; i < 4; i++) if (std::abs(a[i] - (int)vals[i]) > tol) return false;
+    return true;
+  };
+  bool product_identity = near4(q[0], 2);
+  CHECK(product_identity);
+  bool fallback_identity = near4(q[2], 3);
+  CHECK(fallback_identity);
+  bool control_is_linear = q[1][1] < 70 && q[1][2] < 165; // 128->55, 200->147: kodlanmamis
+  CHECK(control_is_linear);
 }

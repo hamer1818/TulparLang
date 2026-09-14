@@ -29,6 +29,9 @@ struct OffscreenConfig {
   // LINKLE (plan Faz 1: PSO yukleme ucuz olmali). Cihaz desteklemiyorsa
   // monolitik'e duser ve bunu raporlar.
   bool use_pipeline_library = false;
+  // Renk hedefi sRGB (R8G8B8A8_SRGB): shader dogrusal yazar, donanim kodlar; okunan
+  // bayt ekrandaki gibi kodludur. false: UNORM (RHI ucgen testleri tam renk bekler).
+  bool srgb = false;
 };
 
 struct OffscreenResult {
