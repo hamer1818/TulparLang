@@ -35,6 +35,7 @@ struct RecordCtx {
   renderer::Renderer *r;
 };
 void record_cb(VkCommandBuffer cb, void *user) { static_cast<RecordCtx *>(user)->r->record(cb); }
+void shadow_cb(VkCommandBuffer cb, void *user) { static_cast<RecordCtx *>(user)->r->record_shadow(cb); }
 VkPresentModeKHR present_mode_of(const char *s) {
   if (!s || !*s) return VK_PRESENT_MODE_FIFO_KHR;
   if (!std::strcmp(s, "mailbox")) return VK_PRESENT_MODE_MAILBOX_KHR;
@@ -126,6 +127,11 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   n = renderer::Renderer::plane(v, idx);
   renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
   ren.set_light(normalize(Vec3{0.5f, 1.0f, 0.35f}), {0.16f, 0.17f, 0.2f}, 0.85f);
+  // Golge kutusu sahneyi kapsamali: arena 20x20, duvar 3 m, kutular ~5 m'ye kadar.
+  ren.set_shadow_volume({0, 1.0f, -1.0f}, 17.0f, 70.0f);
+  renderer::ShadowInfo sh = ren.shadow();
+  std::printf("[engine_demo] golge: %s %ux%u format=%d dogrusal_suzme=%d%s\n", sh.enabled ? "acik" : "KAPALI", sh.size,
+              sh.size, (int)sh.format, (int)sh.linear_filter, sh.enabled ? "" : sh.disabled_reason);
 
   DemoScene scene;
   if (!scene.init(sys, &jobs)) { std::fprintf(stderr, "sahne\n"); return 1; }
@@ -191,7 +197,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
         ren.begin_frame(frame_i);
         scene.draw(ren, cube, plane);
         RecordCtx rctx{&ren};
-        if (!rhi::offscreen_render_custom(off, oc, record_cb, &rctx, &ores)) {
+        // Golge gecisi ana render pass'ten ONCE (kendi pass'i var).
+        if (!rhi::offscreen_render_custom(off, oc, record_cb, &rctx, &ores, shadow_cb)) {
           std::fprintf(stderr, "kare: %s\n", ores.error);
           return 1;
         }
@@ -199,7 +206,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
         // Kare yuvasi swapchain'den (fence beklenmis yuva) — Tuzaklar 8l.
         rhi::FrameContext fc;
         uint64_t ta = platform::now_ns();
-        bool ok = swap.begin_frame(&fc);
+        bool ok = swap.acquire(&fc);
         acquire_ns += platform::now_ns() - ta;
         if (ok) {
           uint64_t tb = platform::now_ns();
@@ -207,6 +214,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           uint64_t tc = platform::now_ns();
           scene.draw(ren, cube, plane);
           uint64_t td = platform::now_ns();
+          ren.record_shadow(fc.cmd); // kendi pass'i: ana pass BASLAMADAN once
+          swap.begin_render_pass(fc);
           ren.record(fc.cmd);
           uint64_t te = platform::now_ns();
           swap.end_frame(fc);

@@ -111,3 +111,34 @@ gelecek: harness çökme sinyalinde **kosan testin adını** basıyor (`COKME te
 bake düşerse sorgulara devam etmeden sebebini basıyor. Kural gereği (kullanıcı, 2026-09-14) CI'ya
 gidilmiyor; bu madde **açık** kalır.
 
+## Gölge haritası — Faz 3 çıktısının ilk yarısı (2026-09-14)
+
+Plan Faz 3'ün çıktısı "ışıklı, **gölgeli** sahne". Tek kademeli yönlü ışık gölge haritası geldi:
+
+| parça | yer | not |
+|---|---|---|
+| Gölge render pass'i | `renderer/renderer.cpp` `make_shadow()` | ayrı pass, tek derinlik eki, `storeOp = STORE` (örneklenecek, tile'da kalamaz) |
+| Format seçimi | aynı | önce **D16_UNORM** (mobil bant genişliği), yoksa D32; `SAMPLED` + `DEPTH_STENCIL_ATTACHMENT` şartı sorgulanır. Hem NVIDIA hem Mali D16 verdi |
+| Örnekleme | `mesh.frag` | `sampler2DShadow` + `compareOp LESS_OR_EQUAL` (donanım PCF) + 3×3 |
+| Eğilim | `mesh.vert` | **dünya uzayında normal kaydırması** (`shadow_params.w`, metre). `depthBias` KULLANILMIYOR — Tuzaklar 8q |
+| Işık matrisi | `Renderer::directional_light_matrix` | `Mat4::ortho` (Vulkan z∈[0,1], y aşağı) + `look_at`; dik ışıkta `up` değiştirilir (NaN) |
+| Pass sırası | `Swapchain::acquire` / `begin_render_pass` ayrıldı, `offscreen_render_custom(..., before)` | bir render pass içinde başka pass açılamaz |
+
+**Cihazda bulunan hata:** ilk sürüm NVIDIA'da doğru, **Mali-G72'de gölgesizdi**. Sebep boru hattının
+`depthBias`'ı: birimi sürücüye bağlı. Dünya uzayı normal kaydırmasına geçince iki cihazda da doğru.
+
+**Kapı:** `renderer_shadow_map_actually_darkens` — gölge açık/kapalı iki kareyi karşılaştırır,
+koyulaşan pikseli sayar, **açılan piksel 0 olmalı**, ve kendi negatif kontrolünü koşar (6 m kaydırma →
+koyulaşan 0). Masaüstü ve telefon **aynı sayıyı** verdi: 2437 farklı piksel, 2433 koyulaşan.
+
+**Maliyet (Huawei P20 Pro, Mali-G72, 2159×1080, 2048² D16 gölge, 162 çizim):**
+
+| ölçü | gölgesiz | gölgeli |
+|---|---|---|
+| FIFO (ürün yolu) | 59.9 fps | **59.9 fps** (vsync kilitli; iş ~5.5 → ~6.2 ms) |
+| MAILBOX (kilit açık) | ~242 fps | ~234 fps (tek koşu, yüksek varyans) |
+| CPU kayıt | 1.29 ms | 2.0 ms (ikinci geçişin çizimleri) |
+
+Yani 2018 orta segment telefonda gölge **%3 civarı** bir bedelle geldi ve 60 fps korundu.
+Kalan (PLAN.md Faz 3): kümelenmiş forward+ ve çok ışık, CSM kademeleri, PBR, VRS, vis buffer A/B.
+

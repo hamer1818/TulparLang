@@ -23,6 +23,7 @@ struct VkApi {
   PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2 = nullptr;
   PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties = nullptr;
   PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties = nullptr;
+  PFN_vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties = nullptr;
   PFN_vkEnumerateDeviceExtensionProperties vkEnumerateDeviceExtensionProperties = nullptr;
   PFN_vkCreateDevice vkCreateDevice = nullptr;
   PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr = nullptr;
@@ -64,6 +65,9 @@ struct VkApi {
   PFN_vkDestroyImage vkDestroyImage = nullptr;
   PFN_vkGetImageMemoryRequirements vkGetImageMemoryRequirements = nullptr;
   PFN_vkBindImageMemory vkBindImageMemory = nullptr;
+  PFN_vkCreateSampler vkCreateSampler = nullptr;
+  PFN_vkDestroySampler vkDestroySampler = nullptr;
+  PFN_vkCmdSetDepthBias vkCmdSetDepthBias = nullptr;
   PFN_vkCreateImageView vkCreateImageView = nullptr;
   PFN_vkDestroyImageView vkDestroyImageView = nullptr;
   PFN_vkCreateRenderPass2 vkCreateRenderPass2 = nullptr;

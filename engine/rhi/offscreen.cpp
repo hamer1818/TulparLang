@@ -698,7 +698,7 @@ void offscreen_destroy(OffscreenTarget *t) {
 VkRenderPass offscreen_render_pass(OffscreenTarget *t) { return t ? t->c.rp : VK_NULL_HANDLE; }
 
 bool offscreen_render_custom(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenRecordFn record, void *user,
-                             OffscreenResult *out) {
+                             OffscreenResult *out, OffscreenRecordFn before) {
   Ctx &c = t->c;
   c.out = out;
   VkApi &a = *c.api;
@@ -714,6 +714,7 @@ bool offscreen_render_custom(OffscreenTarget *t, const OffscreenConfig &cfg, Off
   clears[0].color.float32[2] = cfg.clear[2] / 255.0f;
   clears[0].color.float32[3] = cfg.clear[3] / 255.0f;
   clears[1].depthStencil = {1.0f, 0};
+  if (before) before(cb, user); // kendi render pass'i olan isler (golge haritasi)
   VkRenderPassBeginInfo rbi{};
   rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
   rbi.renderPass = c.rp;

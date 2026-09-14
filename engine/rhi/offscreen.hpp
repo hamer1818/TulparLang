@@ -73,8 +73,10 @@ VkRenderPass offscreen_render_pass(OffscreenTarget *t);
 // `record(cb, user)` cagrilir (prepass cizimleri, vkCmdNextSubpass, renk),
 // sonra bitirilip pikseller okunur. Renderer'in headless dogrulamasi icin.
 typedef void (*OffscreenRecordFn)(VkCommandBuffer cb, void *user);
+// `before` (varsa) render pass BASLAMADAN once cagrilir: kendi pass'i olan
+// isler (golge haritasi) buraya kaydedilir.
 bool offscreen_render_custom(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenRecordFn record, void *user,
-                             OffscreenResult *out);
+                             OffscreenResult *out, OffscreenRecordFn before = nullptr);
 
 // Basit PPM (P6) yazici — insan gozu icin; test artefakti.
 bool write_ppm(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);

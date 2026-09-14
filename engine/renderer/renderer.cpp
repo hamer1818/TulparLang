@@ -4,6 +4,7 @@
 
 #include "rhi/shaders/mesh_frag_spv.h"
 #include "rhi/shaders/mesh_vert_spv.h"
+#include "rhi/shaders/shadow_vert_spv.h"
 
 namespace tulpar::engine::renderer {
 
@@ -53,16 +54,24 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   if (a.vkCreateShaderModule(dev.handle(), &smi, nullptr, &vs_) != VK_SUCCESS) return false;
   smi.codeSize = mesh_frag_spv_size; smi.pCode = mesh_frag_spv;
   if (a.vkCreateShaderModule(dev.handle(), &smi, nullptr, &fs_) != VK_SUCCESS) return false;
-  // Set 0: kare UBO
-  VkDescriptorSetLayoutBinding b{};
-  b.binding = 0;
-  b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  b.descriptorCount = 1;
-  b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+  smi.codeSize = shadow_vert_spv_size; smi.pCode = shadow_vert_spv;
+  if (a.vkCreateShaderModule(dev.handle(), &smi, nullptr, &shadow_vs_) != VK_SUCCESS) return false;
+  // Golge hedefi UBO'dan ONCE: descriptor yazarken view+sampler hazir olmali.
+  if (!make_shadow()) return false;
+  // Set 0: binding 0 kare UBO, binding 1 golge haritasi (karsilastirmali sampler)
+  VkDescriptorSetLayoutBinding b[2]{};
+  b[0].binding = 0;
+  b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  b[0].descriptorCount = 1;
+  b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+  b[1].binding = 1;
+  b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  b[1].descriptorCount = 1;
+  b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
   VkDescriptorSetLayoutCreateInfo sli{};
   sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  sli.bindingCount = 1;
-  sli.pBindings = &b;
+  sli.bindingCount = 2;
+  sli.pBindings = b;
   if (a.vkCreateDescriptorSetLayout(dev.handle(), &sli, nullptr, &set_layout_) != VK_SUCCESS) return false;
   VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, 80};
   VkPipelineLayoutCreateInfo pli{};
@@ -73,12 +82,13 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   pli.pPushConstantRanges = &pcr;
   if (a.vkCreatePipelineLayout(dev.handle(), &pli, nullptr, &layout_) != VK_SUCCESS) return false;
   // UBO + descriptor (ucuslu kare basina)
-  VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxFrames};
+  VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxFrames},
+                                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFrames}};
   VkDescriptorPoolCreateInfo dpi{};
   dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   dpi.maxSets = kMaxFrames;
-  dpi.poolSizeCount = 1;
-  dpi.pPoolSizes = &ps;
+  dpi.poolSizeCount = 2;
+  dpi.pPoolSizes = ps;
   if (a.vkCreateDescriptorPool(dev.handle(), &dpi, nullptr, &pool_) != VK_SUCCESS) return false;
   for (uint32_t i = 0; i < cfg_.frames_in_flight; i++) {
     if (!make_buffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(FrameUbo),
@@ -91,14 +101,21 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     dai.pSetLayouts = &set_layout_;
     if (a.vkAllocateDescriptorSets(dev.handle(), &dai, &sets_[i]) != VK_SUCCESS) return false;
     VkDescriptorBufferInfo dbi{ubo_[i], 0, sizeof(FrameUbo)};
-    VkWriteDescriptorSet w{};
-    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w.dstSet = sets_[i];
-    w.dstBinding = 0;
-    w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    w.pBufferInfo = &dbi;
-    a.vkUpdateDescriptorSets(dev.handle(), 1, &w, 0, nullptr);
+    VkDescriptorImageInfo dii{shadow_sampler_, shadow_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w[2]{};
+    w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[0].dstSet = sets_[i];
+    w[0].dstBinding = 0;
+    w[0].descriptorCount = 1;
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[0].pBufferInfo = &dbi;
+    w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[1].dstSet = sets_[i];
+    w[1].dstBinding = 1;
+    w[1].descriptorCount = 1;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[1].pImageInfo = &dii;
+    a.vkUpdateDescriptorSets(dev.handle(), 2, w, 0, nullptr);
   }
   return make_pipelines(rp);
 }
@@ -163,7 +180,125 @@ bool Renderer::make_pipelines(VkRenderPass rp) {
   gp.stageCount = 2; gp.subpass = 1;
   ds.depthWriteEnable = VK_FALSE; ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
   cb.attachmentCount = 1;
-  return a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, &pipe_color_) == VK_SUCCESS;
+  if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, &pipe_color_) != VK_SUCCESS) return false;
+
+  // Golge boru hatti: kendi render pass'i, yalniz derinlik, egilimli (akne).
+  // Egilim DINAMIK degil sabit: kayit yolunda ek komut olmasin.
+  stages[0].module = shadow_vs_;
+  gp.stageCount = 1; gp.subpass = 0; gp.renderPass = shadow_rp_;
+  ds.depthWriteEnable = VK_TRUE; ds.depthCompareOp = VK_COMPARE_OP_LESS;
+  cb.attachmentCount = 0;
+  // Boru hatti depthBias'i KULLANILMIYOR: birimi (r) sürücüye bagli. Mali-G72'de
+  // 1.25/2.0 golgeyi tamamen yok etti (peter-panning), NVIDIA'da dogruydu — yani
+  // "calisiyor" masaustunde olculdu, cihazda degil. Egilim artik shader'da,
+  // dunya uzayinda normal kaydirmasiyla (her cihazda ayni anlam). Tuzaklar 8q.
+  rs.depthBiasEnable = VK_FALSE;
+  if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, &pipe_shadow_) != VK_SUCCESS) return false;
+  return true;
+}
+
+bool Renderer::make_shadow() {
+  rhi::VkApi &a = dev_->api();
+  const uint32_t size = cfg_.shadow_size ? cfg_.shadow_size : 1;
+  shadow_info_.size = size;
+  shadow_info_.enabled = false;
+  // Format: once D16 (mobil bant genisligi), sonra D32. Hem derinlik ekine hem
+  // ORNEKLEMEYE uygun olmali; degilse golge kapanir (sebebi raporlanir).
+  const VkFormat want[2] = {VK_FORMAT_D16_UNORM, VK_FORMAT_D32_SFLOAT};
+  VkFormat fmt = VK_FORMAT_UNDEFINED;
+  bool linear = false;
+  for (VkFormat f : want) {
+    VkFormatProperties fp{};
+    a.vkGetPhysicalDeviceFormatProperties(dev_->physical(), f, &fp);
+    const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    if ((fp.optimalTilingFeatures & need) == need) {
+      fmt = f;
+      linear = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+      break;
+    }
+  }
+  if (fmt == VK_FORMAT_UNDEFINED) {
+    shadow_info_.disabled_reason = "ornekleneblir derinlik formati yok (D16/D32)";
+    return false; // descriptor'a baglanacak gecerli goruntu uretilemez
+  }
+  shadow_info_.format = fmt;
+  shadow_info_.linear_filter = linear;
+
+  VkAttachmentDescription att{};
+  att.format = fmt;
+  att.samples = VK_SAMPLE_COUNT_1_BIT;
+  att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  att.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // orneklenecek: SAKLA
+  att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  att.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+  VkSubpassDescription sp{};
+  sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  sp.pDepthStencilAttachment = &ref;
+  VkSubpassDependency dep[2]{};
+  dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+  dep[0].dstSubpass = 0;
+  dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; // onceki karenin okumasi
+  dep[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+  dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  dep[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  dep[1].srcSubpass = 0;
+  dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+  dep[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+  dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; // ana gecisin okumasi
+  dep[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  VkRenderPassCreateInfo rpi{};
+  rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  rpi.attachmentCount = 1; rpi.pAttachments = &att;
+  rpi.subpassCount = 1; rpi.pSubpasses = &sp;
+  rpi.dependencyCount = 2; rpi.pDependencies = dep;
+  if (a.vkCreateRenderPass(dev_->handle(), &rpi, nullptr, &shadow_rp_) != VK_SUCCESS) return false;
+
+  VkImageCreateInfo ii{};
+  ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  ii.imageType = VK_IMAGE_TYPE_2D;
+  ii.format = fmt;
+  ii.extent = {size, size, 1};
+  ii.mipLevels = 1; ii.arrayLayers = 1;
+  ii.samples = VK_SAMPLE_COUNT_1_BIT;
+  ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+  // TRANSIENT DEGIL: ana gecis bunu ORNEKLIYOR, tile'da kalamaz.
+  ii.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  if (a.vkCreateImage(dev_->handle(), &ii, nullptr, &shadow_img_) != VK_SUCCESS) return false;
+  VkMemoryRequirements req;
+  a.vkGetImageMemoryRequirements(dev_->handle(), shadow_img_, &req);
+  if (!dev_->allocate_dedicated(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, &shadow_mem_)) return false;
+  a.vkBindImageMemory(dev_->handle(), shadow_img_, shadow_mem_.memory, shadow_mem_.offset);
+  VkImageViewCreateInfo vi{};
+  vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  vi.image = shadow_img_;
+  vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  vi.format = fmt;
+  vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+  if (a.vkCreateImageView(dev_->handle(), &vi, nullptr, &shadow_view_) != VK_SUCCESS) return false;
+  VkFramebufferCreateInfo fi{};
+  fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+  fi.renderPass = shadow_rp_;
+  fi.attachmentCount = 1; fi.pAttachments = &shadow_view_;
+  fi.width = size; fi.height = size; fi.layers = 1;
+  if (a.vkCreateFramebuffer(dev_->handle(), &fi, nullptr, &shadow_fb_) != VK_SUCCESS) return false;
+
+  VkSamplerCreateInfo si{};
+  si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  si.magFilter = si.minFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+  si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  si.compareEnable = VK_TRUE; // donanim PCF
+  si.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+  si.maxLod = 0.0f;
+  si.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+  if (a.vkCreateSampler(dev_->handle(), &si, nullptr, &shadow_sampler_) != VK_SUCCESS) return false;
+  shadow_info_.enabled = cfg_.shadow_size > 0;
+  if (!shadow_info_.enabled) shadow_info_.disabled_reason = "yapilandirmada kapali (shadow_size = 0)";
+  return true;
 }
 
 void Renderer::shutdown() {
@@ -177,11 +312,19 @@ void Renderer::shutdown() {
   for (uint32_t i = 0; i < kMaxFrames; i++) if (ubo_[i]) a.vkDestroyBuffer(dev_->handle(), ubo_[i], nullptr);
   if (pipe_depth_) a.vkDestroyPipeline(dev_->handle(), pipe_depth_, nullptr);
   if (pipe_color_) a.vkDestroyPipeline(dev_->handle(), pipe_color_, nullptr);
+  if (pipe_shadow_) a.vkDestroyPipeline(dev_->handle(), pipe_shadow_, nullptr);
+  if (shadow_fb_) a.vkDestroyFramebuffer(dev_->handle(), shadow_fb_, nullptr);
+  if (shadow_view_) a.vkDestroyImageView(dev_->handle(), shadow_view_, nullptr);
+  if (shadow_img_) a.vkDestroyImage(dev_->handle(), shadow_img_, nullptr);
+  dev_->free_dedicated(&shadow_mem_);
+  if (shadow_sampler_) a.vkDestroySampler(dev_->handle(), shadow_sampler_, nullptr);
+  if (shadow_rp_) a.vkDestroyRenderPass(dev_->handle(), shadow_rp_, nullptr);
   if (pool_) a.vkDestroyDescriptorPool(dev_->handle(), pool_, nullptr);
   if (layout_) a.vkDestroyPipelineLayout(dev_->handle(), layout_, nullptr);
   if (set_layout_) a.vkDestroyDescriptorSetLayout(dev_->handle(), set_layout_, nullptr);
   if (vs_) a.vkDestroyShaderModule(dev_->handle(), vs_, nullptr);
   if (fs_) a.vkDestroyShaderModule(dev_->handle(), fs_, nullptr);
+  if (shadow_vs_) a.vkDestroyShaderModule(dev_->handle(), shadow_vs_, nullptr);
   dev_ = nullptr;
 }
 
@@ -209,9 +352,65 @@ void Renderer::begin_frame(uint32_t frame_index) {
   stats_.dropped = 0;
   FrameUbo u;
   u.viewproj = proj_ * view_;
+  light_vp_ = directional_light_matrix(light_dir_, shadow_center_, shadow_radius_, shadow_depth_);
+  u.light_viewproj = light_vp_;
   u.light_dir[0] = light_dir_.x; u.light_dir[1] = light_dir_.y; u.light_dir[2] = light_dir_.z; u.light_dir[3] = 0;
   u.ambient[0] = ambient_.x; u.ambient[1] = ambient_.y; u.ambient[2] = ambient_.z; u.ambient[3] = diffuse_scale_;
+  u.shadow_params[0] = shadow_info_.size ? 1.0f / (float)shadow_info_.size : 0.0f;
+  u.shadow_params[1] = cfg_.shadow_bias;
+  u.shadow_params[2] = shadow_info_.enabled ? 1.0f : 0.0f;
+  u.shadow_params[3] = cfg_.shadow_normal_offset;
   std::memcpy(ubo_mem_[frame_].mapped, &u, sizeof u);
+}
+
+void Renderer::set_shadow_volume(Vec3 center, float radius, float depth) {
+  shadow_center_ = center;
+  shadow_radius_ = radius;
+  shadow_depth_ = depth;
+}
+
+Mat4 Renderer::directional_light_matrix(Vec3 dir, Vec3 center, float radius, float depth) {
+  Vec3 d = normalize(dir);
+  // dir dikeye yakinsa look_at'in up'i ile paralel olur (cross = 0, NaN).
+  Vec3 up = (d.y > 0.95f || d.y < -0.95f) ? Vec3{0, 0, 1} : Vec3{0, 1, 0};
+  Vec3 eye = center + d * (depth * 0.5f);
+  return Mat4::ortho(-radius, radius, -radius, radius, 0.05f, depth) * Mat4::look_at(eye, center, up);
+}
+
+void Renderer::record_shadow(VkCommandBuffer cb) {
+  if (!shadow_info_.enabled) return;
+  rhi::VkApi &a = dev_->api();
+  VkClearValue clear{};
+  clear.depthStencil = {1.0f, 0};
+  VkRenderPassBeginInfo rbi{};
+  rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  rbi.renderPass = shadow_rp_;
+  rbi.framebuffer = shadow_fb_;
+  rbi.renderArea = {{0, 0}, {shadow_info_.size, shadow_info_.size}};
+  rbi.clearValueCount = 1;
+  rbi.pClearValues = &clear;
+  a.vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+  VkViewport vp{0, 0, (float)shadow_info_.size, (float)shadow_info_.size, 0.0f, 1.0f};
+  VkRect2D sc{{0, 0}, {shadow_info_.size, shadow_info_.size}};
+  a.vkCmdSetViewport(cb, 0, 1, &vp);
+  a.vkCmdSetScissor(cb, 0, 1, &sc);
+  a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_shadow_);
+  a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &sets_[frame_], 0, nullptr);
+  struct Push { Mat4 model; float color[4]; };
+  uint32_t bound = 0xFFFFFFFFu;
+  for (uint32_t i = 0; i < draw_count_; i++) {
+    const Draw &d = draws_[i];
+    if (d.mesh != bound) {
+      VkDeviceSize off = 0;
+      a.vkCmdBindVertexBuffers(cb, 0, 1, &meshes_[d.mesh].vbuf, &off);
+      a.vkCmdBindIndexBuffer(cb, meshes_[d.mesh].ibuf, 0, VK_INDEX_TYPE_UINT32);
+      bound = d.mesh;
+    }
+    Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}};
+    a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof p, &p);
+    a.vkCmdDrawIndexed(cb, meshes_[d.mesh].index_count, 1, 0, 0, 0);
+  }
+  a.vkCmdEndRenderPass(cb);
 }
 
 void Renderer::draw(MeshHandle mesh, const Mat4 &model, Vec3 color) {

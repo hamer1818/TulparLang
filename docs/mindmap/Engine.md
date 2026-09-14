@@ -43,3 +43,6 @@ Huawei P20 Pro (Kirin 970, **Mali-G72**, Vulkan 1.1, Android 10) adb ile bağlı
 **Plan düzeltmesi (⚠️ REV-3):** L2 "zorunlu feature" listesi (descriptorIndexing/timelineSemaphore/bufferDeviceAddress) bu cihazda **yok**; kapı **rapora** çevrildi (`DeviceCaps::missing_mandatory`).
 Cihaz tuzakları: [[Tuzaklar]] 8m (SUBOPTIMAL'i recreate saymak = 20 fps), 8n (adb shell'den GPU görünmez), 8o (plan "zorunlu" dedi, cihaz vermedi).
 
+## Gölge (2026-09-14) → [FAZ3.md](../engine/FAZ3.md)
+Tek kademeli yönlü ışık gölge haritası: ayrı render pass, **D16_UNORM** (mobil), `sampler2DShadow` + donanım PCF 3×3, eğilim **dünya uzayında normal kaydırması**. Telefonda **%3 bedelle** geldi, 60 fps korundu. İlk sürüm NVIDIA'da doğru / Mali'de gölgesizdi ([[Tuzaklar]] 8q: `depthBias` birimi sürücüye bağlı) — bu yüzden kapı `renderer_shadow_map_actually_darkens` kendi negatif kontrolüyle eklendi ve iki cihazda aynı sayıyı veriyor.
+

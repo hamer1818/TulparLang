@@ -1957,3 +1957,17 @@ ayirma stratejisi de farkli olmali** — pencereye bagli olanlar `allocate_dedic
 ile. Testin pozitif kontrolu sart: ayni donguyu blok ayiriciyla kosup **buyudugunu** gosteremiyorsan
 test bir sey olcmuyor olabilir.
 
+### 8q. Boru hattinin `depthBias` birimi SURUCUYE baglidir — Mali'de golgeyi tamamen sildi
+Golge haritasi akne'sine karsi standart recete `VkPipelineRasterizationStateCreateInfo::depthBias`
+(constant 1.25 / slope 2.0). NVIDIA'da dogru gorundu; **Mali-G72'de golge hic cikmadi**. Sebep:
+`depthBiasConstantFactor` "en kucuk cozulebilir derinlik farki r" cinsindendir ve **r
+implementation-defined**'dir (D16 gibi sabit noktali formatlarda surucuye gore degisir). Mali'de r
+buyuk cikinca tum golge yuzeyi isik tarafina itildi (asiri peter-panning) ve sahne golgesiz kaldi —
+hicbir hata, hicbir uyari, yalniz "golge yok". **Kural:** egilim cihazdan bagimsiz birimde olsun —
+golge aramasini DUNYA uzayinda normal boyunca kaydir (`shadow_params.w` metre) + derinlik uzayinda
+kucuk sabit. `depthBias` kullanma. Genel ders: bir gorsel ozelligin "calistigi" yalniz gelistiricinin
+GPU'sunda dogrulanmissa **dogrulanmamistir**; ikinci saticinin GPU'su sart.
+**Kapi:** `renderer_shadow_map_actually_darkens` — golge ACIK/KAPALI iki kareyi karsilastirir ve
+koyulasan piksel sayar; kendi **negatif kontrolu** var (6 m kaydirma → golge kacar, koyulasan 0),
+yani ariza moduna duyarli oldugu gosteriliyor. Masaustu ve telefon ayni sayiyi verdi (2433 piksel).
+

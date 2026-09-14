@@ -67,6 +67,7 @@ ve **eski sürücü** vekili. Adreno ve gerçek düşük segment hâlâ gerekli.
 
 | ölçü | değer |
 |---|---|
+| gölgeli sahne (2048² D16) | FIFO 59.9 fps (değişmedi), MAILBOX ~234 fps (gölgesiz ~242) → **%3 bedel** |
 | kare içi `operator new` | **0** (sürücü dahil) |
 | `engine_tests` | 53/53 geçti, 4 görünür atlama (2 alt-süreç yok + GPL yok + doğrulama katmanı yok) |
 | Jolt altın özeti | `5dc41c2bddc345cb` — masaüstü x86_64 ve CI arm64 ile **eşit** |

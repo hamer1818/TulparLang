@@ -57,3 +57,30 @@ ENGINE_TEST(math_quat) {
   CHECK(nearly_equal(rotate(h1, {1, 0, 0}), {0, 1, 0}, 1e-4f));
   CHECK(nearly_equal(length(normalize(Quat{1, 2, 3, 4})), 1.0f));
 }
+
+// Golge haritasi ortografik projeksiyonu: Vulkan gelenegi (z in [0,1], y asagi).
+// Yanlis z esleme = golge haritasi ya hep 0 ya hep 1 olur ve "golge yok" gibi
+// gorunur; bu yuzden sinirlar sayisal olarak sinanir.
+ENGINE_TEST(math_ortho_matches_vulkan_depth_range) {
+  const float n = 1.0f, f = 21.0f;
+  Mat4 o = Mat4::ortho(-10, 10, -6, 6, n, f);
+  // Yakin duzlem -> z_ndc 0, uzak duzlem -> z_ndc 1 (goruntuleme uzayinda -z ileri).
+  Vec4 pn = o * Vec4{0, 0, -n, 1};
+  Vec4 pf = o * Vec4{0, 0, -f, 1};
+  bool near_zero = std::fabs(pn.z / pn.w - 0.0f) < 1e-5f;
+  bool far_one = std::fabs(pf.z / pf.w - 1.0f) < 1e-5f;
+  CHECK(near_zero);
+  CHECK(far_one);
+  // x sag kenar +1, y ust kenar -1 (y asagi: perspective ile ayni isaret).
+  Vec4 px = o * Vec4{10, 0, -5, 1};
+  Vec4 py = o * Vec4{0, 6, -5, 1};
+  bool x_right = std::fabs(px.x / px.w - 1.0f) < 1e-5f;
+  bool y_up_is_negative = py.y / py.w < -0.99f;
+  CHECK(x_right);
+  CHECK(y_up_is_negative);
+  // Perspektifle ayni y isareti: dunyada yukari olan ekranda yukari olmali.
+  Mat4 pp = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f);
+  Vec4 qy = pp * Vec4{0, 1, -5, 1};
+  bool same_sign = (qy.y / qy.w < 0) == (py.y / py.w < 0);
+  CHECK(same_sign);
+}

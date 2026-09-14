@@ -162,12 +162,13 @@ set(ENGINE_TEST_SOURCES
     tests/test_navmesh.cpp
     tests/test_animation.cpp
     tests/test_scene_faz2.cpp
+    tests/test_renderer.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
 set(ENGINE_PHYSICS_GOLDEN_HASH "0x5dc41c2bddc345cb" CACHE STRING "Jolt sahnesinin platformlar arasi altin ozeti (x86_64'te hesaplandi)")
 add_executable(engine_tests ${ENGINE_TEST_SOURCES} core/memory/alloc_gate_override.cpp)
-target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
+target_link_libraries(engine_tests PRIVATE engine_renderer engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
 target_compile_options(engine_tests PRIVATE -ffp-contract=off) # sim belirlenimliligi (strict FP, plan C.1.5)
 target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
 target_compile_options(engine_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)

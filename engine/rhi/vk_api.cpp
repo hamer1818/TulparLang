@@ -73,6 +73,7 @@ void vk_api_load_instance(VkApi &api, VkInstance inst) {
   G(vkGetPhysicalDeviceFeatures2);
   G(vkGetPhysicalDeviceQueueFamilyProperties);
   G(vkGetPhysicalDeviceMemoryProperties);
+  G(vkGetPhysicalDeviceFormatProperties);
   G(vkEnumerateDeviceExtensionProperties);
   G(vkCreateDevice);
   G(vkGetDeviceProcAddr);
@@ -93,6 +94,7 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
   G(vkCreateBuffer); G(vkDestroyBuffer); G(vkGetBufferMemoryRequirements); G(vkBindBufferMemory);
   G(vkCreateImage); G(vkDestroyImage); G(vkGetImageMemoryRequirements); G(vkBindImageMemory);
   G(vkCreateImageView); G(vkDestroyImageView);
+  G(vkCreateSampler); G(vkDestroySampler); G(vkCmdSetDepthBias);
   G(vkCreateRenderPass2); G(vkCreateRenderPass); G(vkDestroyRenderPass);
   G(vkCreateFramebuffer); G(vkDestroyFramebuffer);
   G(vkCreateShaderModule); G(vkDestroyShaderModule);

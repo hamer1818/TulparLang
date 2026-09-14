@@ -233,6 +233,12 @@ void Swapchain::shutdown() {
 }
 
 bool Swapchain::begin_frame(FrameContext *out) {
+  if (!acquire(out)) return false;
+  begin_render_pass(*out);
+  return true;
+}
+
+bool Swapchain::acquire(FrameContext *out) {
   VkApi &a = dev_->api();
   uint32_t f = frame_;
   a.vkWaitForFences(dev_->handle(), 1, &fences_[f], VK_TRUE, UINT64_MAX);
@@ -249,13 +255,26 @@ bool Swapchain::begin_frame(FrameContext *out) {
   bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   a.vkBeginCommandBuffer(cb, &bi);
+  out->cmd = cb;
+  out->image_index = idx;
+  out->frame_index = f;
+  out->extent = extent_;
+  out->framebuffer = fbs_[idx];
+  return true;
+}
+
+// Render pass'i AYRI baslatir: arada golge gecisi gibi kendi pass'i olan isler
+// kaydedilebilsin (bir render pass'in icinde baska pass baslatilamaz).
+void Swapchain::begin_render_pass(const FrameContext &fc) {
+  VkApi &a = dev_->api();
+  VkCommandBuffer cb = fc.cmd;
   VkClearValue clears[2]{};
   clears[0].color = {{0.05f, 0.06f, 0.09f, 1.0f}};
   clears[1].depthStencil = {1.0f, 0};
   VkRenderPassBeginInfo rbi{};
   rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
   rbi.renderPass = rp_;
-  rbi.framebuffer = fbs_[idx];
+  rbi.framebuffer = fc.framebuffer;
   rbi.renderArea = {{0, 0}, extent_};
   rbi.clearValueCount = 2;
   rbi.pClearValues = clears;
@@ -264,12 +283,6 @@ bool Swapchain::begin_frame(FrameContext *out) {
   VkRect2D sc{{0, 0}, extent_};
   a.vkCmdSetViewport(cb, 0, 1, &vp);
   a.vkCmdSetScissor(cb, 0, 1, &sc);
-  out->cmd = cb;
-  out->image_index = idx;
-  out->frame_index = f;
-  out->extent = extent_;
-  out->framebuffer = fbs_[idx];
-  return true;
 }
 
 bool Swapchain::end_frame(const FrameContext &fc) {

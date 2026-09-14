@@ -43,6 +43,10 @@ public:
   // Kare: acquire + komut tamponu baslat + render pass baslat (subpass 0).
   // false = yeniden kurulmali (recreate cagir) ya da hata.
   bool begin_frame(FrameContext *out);
+  // Ikiye ayrilmis hali: arada KENDI render pass'i olan isler (golge haritasi)
+  // kaydedilebilsin — bir render pass icinde baska pass baslatilamaz.
+  bool acquire(FrameContext *out);
+  void begin_render_pass(const FrameContext &fc);
   // Render pass bitir + gonder + sun. false = OUT_OF_DATE (recreate).
   bool end_frame(const FrameContext &fc);
 
