@@ -1,0 +1,53 @@
+# Tulpar Engine — Durum Özeti (2026-09-14, sonraki aşama için)
+
+> Tek sayfada "ne var, ne ölçüldü, ne yok". Ayrıntı: FAZ0–FAZ3.md, CIHAZ-MATRISI.md, PLAN.md.
+> Kural: her sayı ya masaüstünde (RTX 5080, Linux) ya telefonda (Huawei P20 Pro, Mali-G72) ölçüldü.
+
+## 1. Ne var (katman katman)
+
+| katman | içerik | durum |
+|---|---|---|
+| L0 platform | zaman, bellek, thread, çökme raporu, **GLFW dlopen pencere**, **dokunmatik durum** | ✅ |
+| L1 core | arena ailesi + slotmap, **fiber job sistemi** (x86_64 + AArch64 asm), profiler, math, konteynerler, `AllocGate` | ✅ |
+| L2 rhi | Vulkan **dlopen**, `Device` (iki aşama, yüzey), **Swapchain** (ön-döndürme, sunum kipi), offscreen, PSO cache, `allocate_dedicated` | ✅ |
+| L3 renderer | depth prepass → renk; **gölge haritası** (D16, PCF, dünya-uzayı normal eğilimi); **doku + malzeme** (klasik descriptor set, mip blit); **8–32 kümelenmiş nokta ışık** (CPU atama); **2B arayüz kuyruğu** | ✅ ilk dilim |
+| L4 sim | archetype ECS, sistem zamanlayıcı, sabit adım + replay, **Jolt** fiber job'larda, **Recast/Detour** navmesh, sıkıştırılmış animasyon | ✅ yazılım tarafı |
+| L6 content | **glTF 2.0** (cgltf + stb_image), **font atlası** (stb_truetype, Türkçe) | ✅ ilk dilim |
+| L6 app | `engine_demo` (masaüstü pencere / headless), **Android NativeActivity host**, sanal joystick, HUD | ✅ |
+| araçlar | `layer_check.py` (katman kuralı = build hatası), `compile_shaders.py`, `clang_syntax_check.sh`, `android_run.sh`, `make_test_gltf.py` | ✅ |
+
+## 2. Telefonda çalışan sahne (tek APK)
+Zemin (dama doku), duvar, 40 dinamik Jolt kutusu (glTF dama küpü), 24 navmesh ajanı + eklem zinciri
+animasyonu, oyuncu (dokunmatik joystick, kamera izler), gölge, 8 dönen nokta ışık, HUD.
+**60 fps (FIFO)**, vsync açıkken ~223 fps / 3.8 ms; kare içinde **0 `operator new`**.
+
+## 3. Ölçülmüş gerçekler (Mali-G72, Vulkan 1.1)
+- Sahne özeti 600 tick: **masaüstü = telefon = emülatör bit eşit** (`1513845f8ca5afd9`).
+- Jolt altın özeti x86_64 = arm64 = telefon.
+- Bedeller: gölge ~%3, doku ölçülemez, 8 ışık ~%5. CPU: kayıt ~1.2 ms, submit+present ~2.5 ms.
+- `LAZILY_ALLOCATED` bellek var (TBDR doğrulandı). Zaman damgası, GPL, subpass merge feedback **yok**.
+- Plan L2 "zorunlu" listesi (descriptorIndexing/timeline/BDA) bu cihazda **yok** → kapı rapora çevrildi (REV-3).
+
+## 4. Kapılar (engine_tests: masaüstü 62/62, telefon 62/62, emülatör 62/62)
+Her görsel özelliğin açık/kapalı karşılaştırmalı testi ve pozitif/negatif kontrolü var: gölge (koyulaşan
+piksel + 6 m kaydırma kontrolü), doku (keskin geçiş oranı), nokta ışık (kırmızı piksel, görüş dışı 0),
+UI metni (boş metin 0), kümeleme (yerel/konservatif), joystick, glTF sayıları, adanmış bellek serbest
+bırakma (blok ayırıcı pozitif kontrolü), fizik altın özeti, çökme adı basma (`--cokme-kontrol`).
+
+## 5. Öğrenilen cihaz tuzakları (Tuzaklar 8k–8r)
+y ters çevirme + CW; kare yuvası tek kaynaktan; SUBOPTIMAL = recreate değil (20→60 fps); adb shell GPU
+görmez; plan "zorunlu" dedi cihaz vermedi; bump ayırıcı + pencere ömrü; `depthBias` sürücüye bağlı
+(Mali'de gölge yok); UI framebuffer uzayında yatık, atlas taşınca "font yok".
+
+## 6. Ne yok (sonraki aşama adayları)
+1. **Sahne veri modeli + dosya formatı** (entity/transform/mesh/malzeme/ışık/fizik) — editörün önkoşulu.
+2. **Editör** (masaüstü, motorun kendisi): kamera uçuşu, seçim, gizmo, özellik paneli, kaydet, oynat/durdur.
+3. **Tulpar bağlaması**: oyun mantığı Tulpar'da (dil bugün kutusuz struct/işaretçi vermiyor; C ABI köprüsü).
+4. glTF **iskelet + animasyon** içe aktarma (bugün yalnız statik mesh); karakter modeli yok.
+5. Ses (Faz 4), renk uzayı (sRGB), CSM kademeleri, render graph, vis buffer A/B, ASTC/pack (Faz 6),
+   platform servisleri, Adreno cihaz (Faz 1 kapısı), macOS CI çökmesi (yerelden ulaşılamıyor).
+
+## 7. Çalışma kuralları (kullanıcı)
+CI yok, push yok ("gönder" denene kadar); doğrulama yerel + telefon (+ emülatör yalnız işlevsel);
+pencereyi ben açmam, ekran görüntüsü `adb screencap`; sayı yoksa iddia yok, her kapının kontrolü var.
+Yerelde bekleyen commit: 8 (`engine/faz2-anim`).
