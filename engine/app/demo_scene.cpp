@@ -146,14 +146,19 @@ void DemoScene::tick(float dt, uint32_t tick_index) { sched_.run(world_, dt, nul
 
 uint64_t DemoScene::content_hash() const { return world_.content_hash() ^ (phys_.state_hash() * 0x9E3779B97F4A7C15ull); }
 
-void DemoScene::draw(renderer::Renderer &r, renderer::MeshHandle cube, renderer::MeshHandle plane) {
-  r.draw(plane, Mat4::scale({20, 1, 20}), {0.42f, 0.44f, 0.47f});
+void DemoScene::draw(renderer::Renderer &r, const DrawSet &d) {
+  const renderer::MeshHandle cube = d.cube, plane = d.plane;
+  r.draw(plane, d.ground, Mat4::scale({20, 1, 20}), {0.62f, 0.64f, 0.67f});
   r.draw(cube, Mat4::translate({0, 1.5f, -2}) * Mat4::scale({1, 3, 16}), {0.55f, 0.5f, 0.45f});
   Skeleton sk{joints_, kJoints};
+  const renderer::MeshHandle bm = d.box_mesh.valid() ? d.box_mesh : cube;
   world_.each(mask_of(cid_phys()), [&](const ChunkView &v) {
     const PhysMirror *pm = v.col<PhysMirror>();
-    for (uint32_t i = 0; i < v.count; i++)
-      r.draw(cube, Mat4::translate(pm[i].pos) * to_mat4(pm[i].rot) * Mat4::scale({0.8f, 0.8f, 0.8f}), hue_color(pm[i].hue));
+    for (uint32_t i = 0; i < v.count; i++) {
+      Mat4 m = Mat4::translate(pm[i].pos) * to_mat4(pm[i].rot) * Mat4::scale({0.8f, 0.8f, 0.8f});
+      if (d.box_mat.valid()) r.draw(bm, d.box_mat, m, hue_color(pm[i].hue) * 0.5f + Vec3{0.5f, 0.5f, 0.5f});
+      else r.draw(bm, m, hue_color(pm[i].hue));
+    }
   });
   world_.each(mask_of(cid_agent()) | mask_of(cid_anim()), [&](const ChunkView &v) {
     const Agent *ag = v.col<Agent>();

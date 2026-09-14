@@ -55,7 +55,8 @@ echo "[4/5] baslat: $MODE"
 # Huawei'de dakikalar icinde tasiyor — dosya asil kaynak, logcat yedek).
 EXT="/sdcard/Android/data/$PKG/files"
 LOGF="$EXT/engine_log.txt"
-adb shell "rm -f '$LOGF'" 2>/dev/null || true
+adb shell "rm -f '$LOGF'; mkdir -p '$EXT/assets'" 2>/dev/null || true
+adb push "$ROOT/engine/tests/assets/." "$EXT/assets/" >/dev/null 2>&1 || echo "  (varliklar push edilemedi)"
 adb logcat -G 8M 2>/dev/null || true
 adb logcat -c 2>/dev/null || true
 adb shell am start -W -n "$ACT" >/dev/null

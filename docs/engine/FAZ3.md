@@ -142,3 +142,32 @@ koyulaşan 0). Masaüstü ve telefon **aynı sayıyı** verdi: 2437 farklı piks
 Yani 2018 orta segment telefonda gölge **%3 civarı** bir bedelle geldi ve 60 fps korundu.
 Kalan (PLAN.md Faz 3): kümelenmiş forward+ ve çok ışık, CSM kademeleri, PBR, VRS, vis buffer A/B.
 
+## Doku, malzeme ve glTF — Faz 6'nın içe aktarma dilimi Faz 3'e çekildi (2026-09-14)
+
+**Neden şimdi:** Faz 3'ün kapısı bant genişliği ölçümü; dokusuz küplerle o ölçüm anlamsız. Bir oyun
+motoru gerçek içerik yüklemeden motor değildir. Plan sırası (içerik Faz 6) bu dilim için öne alındı;
+pipeline'ın kalanı (pack, ASTC, scene compiler) Faz 6'da duruyor.
+
+| parça | yer | not |
+|---|---|---|
+| Vertex UV | `renderer::Vertex{pos, nrm, uv}` | 32 B; `cube()`/`plane(uv_repeat)` üreteçleri UV yazar |
+| Doku | `Renderer::create_texture` | RGBA8, staging → optimal tiling, **mip zinciri blit ile** (format `BLIT_SRC/DST` + doğrusal süzme sorgulanır) |
+| Malzeme | `Renderer::create_material` | **klasik descriptor set (set 1)** — bindless YOK: düşük sınıf `descriptorIndexing` vermiyor (REV-3). Malzeme değişiminde set bağlanır; `stats.material_binds` sayılır |
+| Varsayılan | 1×1 beyaz doku + malzeme | dokusuz çizim aynı shader yolundan gider (tek pipeline) |
+| glTF 2.0 | `engine/content/gltf.*` (L6) | **cgltf 1.14** + **stb_image 2.30** vendored (`third_party/cgltf`, `third_party/stb`; gövdeler `content/vendored_impl.c`, `-w`). Üçgen primitifleri, POSITION/NORMAL/TEXCOORD_0, indeks, baseColor faktör+doku, düğüm hiyerarşisi → dünya matrisli instance'lar, sınırlar. Data URI, dış dosya ve GLB görüntüleri |
+| Yükleme/çizim | `content::upload_model` / `draw_model` | dokular → malzemeler → mesh'ler; instance'lar `model * world` |
+| Test varlığı | `tests/assets/checker_cube.gltf` | `tools/make_test_gltf.py` üretir (belirlenimli, tek dosya, gömülü PNG) |
+| Katman | `layer_check.py`: `app` = L6 | app birleştirme kökü: content'i görür, tools'u görmez |
+
+**Kapılar:** `content_gltf_loads_checker_cube` (sayılar, dama pikselleri, UV aralığı, sınırlar) ve
+`content_textured_cube_renders_checker` — dokulu küp ile aynı küpün düz malzemesini karşılaştırır:
+keskin geçiş sayısı dokuluda ≥ 4× (ölçüldü 2142 / 384) ve hem turuncu hem lacivert piksel var.
+Düz küp **pozitif kontrol**: doku yolu kırılsa ikisi aynı çıkar ve test düşer.
+
+**Demo:** zemin yordamsal gri dama (dosyasız, cihazda da var), kutular glTF dama küpü ve malzemesiyle
+(`TULPAR_ENGINE_ASSETS` ya da kaynak ağacı). Masaüstü headless 600 kare: sahne özeti değişmedi
+(`1513845f8ca5afd9`) — doku sim'e dokunmaz.
+
+Bilinen boşluk: renk uzayı yok (UNORM doku × ışık → UNORM hedef, "ekran uzayında aydınlatma"); sRGB/linear
+ayrımı PBR ile gelir. Mobil asıl doku yolu ASTC/KTX2 (Faz 6).
+

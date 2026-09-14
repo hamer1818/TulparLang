@@ -2,6 +2,7 @@
 layout(location = 0) in vec3 v_nrm;
 layout(location = 1) in vec3 v_color;
 layout(location = 2) in vec4 v_light_pos;
+layout(location = 3) in vec2 v_uv;
 layout(set = 0, binding = 0) uniform Frame {
   mat4 viewproj;
   mat4 light_viewproj;
@@ -10,6 +11,7 @@ layout(set = 0, binding = 0) uniform Frame {
   vec4 shadow_params; // x: 1/boyut, y: sabit egilim, z: golge acik mi, w: normal kaydirma (dunya)
 } u;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow;
+layout(set = 1, binding = 0) uniform sampler2D u_albedo; // malzeme (klasik set, bindless yok)
 layout(location = 0) out vec4 o_color;
 
 // 3x3 PCF; donanim karsilastirmali ornekleme (compareOp LESS_OR_EQUAL):
@@ -34,6 +36,7 @@ void main() {
   vec3 n = normalize(v_nrm);
   float nl = max(dot(n, normalize(u.light_dir.xyz)), 0.0);
   float vis = shadow_visibility(nl);
-  vec3 c = v_color * (u.ambient.rgb + nl * vis * u.ambient.a);
+  vec3 albedo = texture(u_albedo, v_uv).rgb * v_color;
+  vec3 c = albedo * (u.ambient.rgb + nl * vis * u.ambient.a);
   o_color = vec4(c, 1.0);
 }

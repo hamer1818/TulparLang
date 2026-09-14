@@ -15,15 +15,30 @@ namespace tulpar::engine::renderer {
 struct Vertex {
   Vec3 pos;
   Vec3 nrm;
+  Vec2 uv;
 };
 
 struct MeshHandle {
   uint32_t id = 0xFFFFFFFFu;
   bool valid() const { return id != 0xFFFFFFFFu; }
 };
+struct TextureHandle {
+  uint32_t id = 0xFFFFFFFFu;
+  bool valid() const { return id != 0xFFFFFFFFu; }
+};
+// Malzeme = albedo dokusu + renk carpani. Klasik descriptor set (set 1) — bindless
+// YOK: Dusuk sinif cihaz descriptorIndexing vermiyor (PLAN.md REV-3), bu yol
+// her cihazda calisan yedek. Malzeme degisiminde set baglanir; cizim listesi
+// malzemeye gore siralanmaz (sonraki adim).
+struct MaterialHandle {
+  uint32_t id = 0xFFFFFFFFu;
+  bool valid() const { return id != 0xFFFFFFFFu; }
+};
 
 struct RendererConfig {
   uint32_t max_meshes = 64;
+  uint32_t max_textures = 64;
+  uint32_t max_materials = 64;
   uint32_t max_draws = 8192;
   uint32_t frames_in_flight = 2;
   // Yonlu isik golge haritasi (tek kademe). 0 = golge yok. Mobil: D16 tercih
@@ -45,6 +60,9 @@ struct RendererStats {
   uint32_t draws = 0;      // son kare
   uint32_t dropped = 0;    // kapasite asimi (sayilir, sessiz degil)
   uint32_t meshes = 0;
+  uint32_t textures = 0;
+  uint32_t materials = 0;
+  uint32_t material_binds = 0; // son kare (siralama yoksa cizim sayisina yaklasir)
 };
 
 class Renderer {
@@ -54,6 +72,11 @@ public:
 
   // Yukleme: staging ile device-local. Kare icinde CAGRILMAZ.
   MeshHandle create_mesh(const Vertex *verts, uint32_t nverts, const uint32_t *indices, uint32_t nindices);
+  // RGBA8, mip zinciri blit ile uretilir (yukleme aninda). Mobil asil yol ASTC (Faz 6).
+  TextureHandle create_texture(const uint8_t *rgba, uint32_t w, uint32_t h, bool mipmaps = true);
+  MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1});
+  TextureHandle default_texture() const { return default_texture_; } // 1x1 beyaz
+  MaterialHandle default_material() const { return default_material_; }
 
   void set_camera(const Mat4 &view, const Mat4 &proj);
   void set_light(Vec3 dir, Vec3 ambient, float diffuse_scale);
@@ -73,7 +96,8 @@ public:
 
   // Kare: begin (UBO yaz) -> draw*N -> record(cb): subpass0 depth, next, subpass1 renk.
   void begin_frame(uint32_t frame_index);
-  void draw(MeshHandle mesh, const Mat4 &model, Vec3 color);
+  void draw(MeshHandle mesh, const Mat4 &model, Vec3 color); // varsayilan malzeme
+  void draw(MeshHandle mesh, MaterialHandle material, const Mat4 &model, Vec3 color = {1, 1, 1});
   // Golge gecisi: KENDI render pass'ini acar/kapatir. Ana render pass BASLAMADAN
   // once cagrilir (cizim listesi dolu olmali).
   void record_shadow(VkCommandBuffer cb);
@@ -82,16 +106,27 @@ public:
   RendererStats stats() const { return stats_; }
 
   // Yerlesik mesh'ler (cagiranin dizilerine yazar): kup [-0.5,0.5]^3, duzlem 1x1 (y=0).
-  static uint32_t cube(Vertex *v, uint32_t *idx);  // 24 v, 36 idx
-  static uint32_t plane(Vertex *v, uint32_t *idx); // 4 v, 6 idx
+  static uint32_t cube(Vertex *v, uint32_t *idx);                         // 24 v, 36 idx (uv yuz basina 0..1)
+  static uint32_t plane(Vertex *v, uint32_t *idx, float uv_repeat = 1.0f); // 4 v, 6 idx
 
 private:
   struct Mesh {
     VkBuffer vbuf = VK_NULL_HANDLE, ibuf = VK_NULL_HANDLE;
     uint32_t index_count = 0;
   };
+  struct Texture {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    uint32_t w = 0, h = 0, mips = 0;
+  };
+  struct Material {
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    uint32_t texture = 0;
+    Vec3 color{1, 1, 1};
+  };
   struct Draw {
     uint32_t mesh;
+    uint32_t material;
     Mat4 model;
     Vec3 color;
   };
@@ -107,11 +142,21 @@ private:
   bool upload(VkBuffer dst, const void *data, VkDeviceSize size, VkBufferUsageFlags usage_dst);
   bool make_pipelines(VkRenderPass rp);
   bool make_shadow(); // render pass + goruntu + sampler + boru hatti
+  bool make_material_layout();
 
   rhi::Device *dev_ = nullptr;
   RendererConfig cfg_{};
   Mesh *meshes_ = nullptr;
   uint32_t mesh_count_ = 0;
+  Texture *textures_ = nullptr;
+  uint32_t texture_count_ = 0;
+  Material *materials_ = nullptr;
+  uint32_t material_count_ = 0;
+  VkSampler tex_sampler_ = VK_NULL_HANDLE;
+  VkDescriptorSetLayout mat_layout_ = VK_NULL_HANDLE;
+  VkDescriptorPool mat_pool_ = VK_NULL_HANDLE;
+  TextureHandle default_texture_{};
+  MaterialHandle default_material_{};
   Draw *draws_ = nullptr;
   uint32_t draw_count_ = 0;
   RendererStats stats_{};

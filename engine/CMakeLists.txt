@@ -130,6 +130,15 @@ target_link_libraries(engine_renderer PUBLIC engine_rhi)
 target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_renderer engine_layer_check)
 
+# --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
+add_library(engine_content STATIC content/gltf.cpp content/vendored_impl.c)
+target_include_directories(engine_content PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+target_link_libraries(engine_content PUBLIC engine_renderer)
+target_compile_options(engine_content PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
+add_dependencies(engine_content engine_layer_check)
+
 # --- Demo uygulamasi (L5): pencere (GLFW dlopen) ya da --headless -------------
 if(NOT ANDROID)
 add_executable(engine_demo
@@ -138,8 +147,9 @@ add_executable(engine_demo
     app/demo_scene.cpp
     core/memory/alloc_gate_override.cpp
 )
-target_link_libraries(engine_demo PRIVATE engine_renderer engine_sim engine_rhi engine_core ${CMAKE_DL_LIBS})
+target_link_libraries(engine_demo PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core ${CMAKE_DL_LIBS})
 target_compile_options(engine_demo PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
+target_compile_definitions(engine_demo PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 # --- Testler ------------------------------------------------------------------
@@ -163,12 +173,13 @@ set(ENGINE_TEST_SOURCES
     tests/test_animation.cpp
     tests/test_scene_faz2.cpp
     tests/test_renderer.cpp
+    tests/test_content.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
 set(ENGINE_PHYSICS_GOLDEN_HASH "0x5dc41c2bddc345cb" CACHE STRING "Jolt sahnesinin platformlar arasi altin ozeti (x86_64'te hesaplandi)")
 add_executable(engine_tests ${ENGINE_TEST_SOURCES} core/memory/alloc_gate_override.cpp)
-target_link_libraries(engine_tests PRIVATE engine_renderer engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
+target_link_libraries(engine_tests PRIVATE engine_content engine_renderer engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
 target_compile_options(engine_tests PRIVATE -ffp-contract=off) # sim belirlenimliligi (strict FP, plan C.1.5)
 target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
 target_compile_options(engine_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
@@ -190,7 +201,7 @@ if(ANDROID)
   target_compile_definitions(tulparengine PRIVATE ENGINE_TESTS_NO_MAIN=1
       ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
   target_compile_options(tulparengine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
-  target_link_libraries(tulparengine PRIVATE engine_renderer engine_sim engine_rhi engine_core android log ${CMAKE_DL_LIBS})
+  target_link_libraries(tulparengine PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core android log ${CMAKE_DL_LIBS})
   # --no-undefined: eksik sembol LINK'te dussun (cihazda UnsatisfiedLinkError degil);
   # 16 KB sayfa; glue'nun ANativeActivity_onCreate'i disari ver.
   target_link_options(tulparengine PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384 -u ANativeActivity_onCreate)

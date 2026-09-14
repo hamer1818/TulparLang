@@ -46,3 +46,6 @@ Cihaz tuzakları: [[Tuzaklar]] 8m (SUBOPTIMAL'i recreate saymak = 20 fps), 8n (a
 ## Gölge (2026-09-14) → [FAZ3.md](../engine/FAZ3.md)
 Tek kademeli yönlü ışık gölge haritası: ayrı render pass, **D16_UNORM** (mobil), `sampler2DShadow` + donanım PCF 3×3, eğilim **dünya uzayında normal kaydırması**. Telefonda **%3 bedelle** geldi, 60 fps korundu. İlk sürüm NVIDIA'da doğru / Mali'de gölgesizdi ([[Tuzaklar]] 8q: `depthBias` birimi sürücüye bağlı) — bu yüzden kapı `renderer_shadow_map_actually_darkens` kendi negatif kontrolüyle eklendi ve iki cihazda aynı sayıyı veriyor.
 
+## İçerik: doku + malzeme + glTF (2026-09-14) → [FAZ3.md](../engine/FAZ3.md)
+Faz 6'nın içe aktarma dilimi Faz 3'e çekildi (dokusuz küple bant genişliği ölçülmez). `engine/content/` (L6): **cgltf + stb_image** vendored, glTF → `content::Model` (Arena) → `upload_model` → renderer doku/malzeme/mesh. Malzeme = **klasik descriptor set** (bindless yok, REV-3), mip zinciri blit ile. Test varlığı `tests/assets/checker_cube.gltf` (`make_test_gltf.py`, belirlenimli). Kapı: dokulu küp vs düz küp keskin-geçiş oranı ≥ 4× + iki dama rengi. `app` katmanı L6'ya alındı (birleştirme kökü).
+

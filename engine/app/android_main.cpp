@@ -164,6 +164,9 @@ extern "C" void android_main(android_app *app) {
   const char *dir = app->activity->externalDataPath ? app->activity->externalDataPath : app->activity->internalDataPath;
   redirect_output(dir);
   setenv("TMPDIR", dir, 1);
+  static char assets[512];
+  std::snprintf(assets, sizeof assets, "%s/assets", dir); // android_run.sh push eder
+  setenv("TULPAR_ENGINE_ASSETS", assets, 1);
   platform::CrashConfig cc;
   cc.report_dir = dir;
   cc.build_id = "engine_android";

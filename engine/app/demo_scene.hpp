@@ -22,8 +22,14 @@ public:
   bool init(Arena &arena, JobSystem *jobs);
   void shutdown();
   void tick(float dt, uint32_t tick_index);
+  struct DrawSet {
+    renderer::MeshHandle cube, plane;
+    renderer::MaterialHandle ground;   // dama zemin
+    renderer::MeshHandle box_mesh;     // glTF kup (varsa), yoksa cube
+    renderer::MaterialHandle box_mat;  // glTF malzemesi (varsa)
+  };
   // Cizim listesine ekler (renderer.begin_frame sonra, record oncesi).
-  void draw(renderer::Renderer &r, renderer::MeshHandle cube, renderer::MeshHandle plane);
+  void draw(renderer::Renderer &r, const DrawSet &d);
   uint64_t content_hash() const;
   uint32_t entities() const { return world_.stats().entities; }
 

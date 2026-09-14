@@ -44,8 +44,10 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   cfg_ = cfg;
   if (cfg_.frames_in_flight > kMaxFrames) cfg_.frames_in_flight = kMaxFrames;
   meshes_ = arena.alloc_array_zeroed<Mesh>(cfg.max_meshes);
+  textures_ = arena.alloc_array_zeroed<Texture>(cfg.max_textures);
+  materials_ = arena.alloc_array_zeroed<Material>(cfg.max_materials);
   draws_ = arena.alloc_array<Draw>(cfg.max_draws);
-  if (!meshes_ || !draws_) return false;
+  if (!meshes_ || !textures_ || !materials_ || !draws_) return false;
   rhi::VkApi &a = dev.api();
   // Shader'lar
   VkShaderModuleCreateInfo smi{};
@@ -73,11 +75,13 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   sli.bindingCount = 2;
   sli.pBindings = b;
   if (a.vkCreateDescriptorSetLayout(dev.handle(), &sli, nullptr, &set_layout_) != VK_SUCCESS) return false;
+  if (!make_material_layout()) return false;
+  VkDescriptorSetLayout layouts[2] = {set_layout_, mat_layout_};
   VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, 80};
   VkPipelineLayoutCreateInfo pli{};
   pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  pli.setLayoutCount = 1;
-  pli.pSetLayouts = &set_layout_;
+  pli.setLayoutCount = 2;
+  pli.pSetLayouts = layouts;
   pli.pushConstantRangeCount = 1;
   pli.pPushConstantRanges = &pcr;
   if (a.vkCreatePipelineLayout(dev.handle(), &pli, nullptr, &layout_) != VK_SUCCESS) return false;
@@ -117,7 +121,165 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     w[1].pImageInfo = &dii;
     a.vkUpdateDescriptorSets(dev.handle(), 2, w, 0, nullptr);
   }
-  return make_pipelines(rp);
+  if (!make_pipelines(rp)) return false;
+  // Varsayilan malzeme: 1x1 beyaz doku. Dokusuz cizimler bununla gider; shader tek yol.
+  static const uint8_t white[4] = {255, 255, 255, 255};
+  default_texture_ = create_texture(white, 1, 1, false);
+  default_material_ = create_material(default_texture_, {1, 1, 1});
+  return default_texture_.valid() && default_material_.valid();
+}
+
+bool Renderer::make_material_layout() {
+  rhi::VkApi &a = dev_->api();
+  VkDescriptorSetLayoutBinding b{};
+  b.binding = 0;
+  b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  b.descriptorCount = 1;
+  b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  VkDescriptorSetLayoutCreateInfo sli{};
+  sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  sli.bindingCount = 1;
+  sli.pBindings = &b;
+  if (a.vkCreateDescriptorSetLayout(dev_->handle(), &sli, nullptr, &mat_layout_) != VK_SUCCESS) return false;
+  VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cfg_.max_materials};
+  VkDescriptorPoolCreateInfo dpi{};
+  dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  dpi.maxSets = cfg_.max_materials;
+  dpi.poolSizeCount = 1;
+  dpi.pPoolSizes = &ps;
+  if (a.vkCreateDescriptorPool(dev_->handle(), &dpi, nullptr, &mat_pool_) != VK_SUCCESS) return false;
+  VkSamplerCreateInfo si{};
+  si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+  si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  si.maxLod = 16.0f;
+  return a.vkCreateSampler(dev_->handle(), &si, nullptr, &tex_sampler_) == VK_SUCCESS;
+}
+
+namespace {
+void image_barrier(rhi::VkApi &a, VkCommandBuffer cb, VkImage img, uint32_t mip, uint32_t mip_count, VkImageLayout from,
+                   VkImageLayout to, VkAccessFlags src_access, VkAccessFlags dst_access, VkPipelineStageFlags src_stage,
+                   VkPipelineStageFlags dst_stage) {
+  VkImageMemoryBarrier br{};
+  br.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  br.oldLayout = from;
+  br.newLayout = to;
+  br.srcQueueFamilyIndex = br.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  br.image = img;
+  br.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip, mip_count, 0, 1};
+  br.srcAccessMask = src_access;
+  br.dstAccessMask = dst_access;
+  a.vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &br);
+}
+} // namespace
+
+TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t h, bool mipmaps) {
+  if (texture_count_ >= cfg_.max_textures || !rgba || !w || !h) return TextureHandle{};
+  rhi::VkApi &a = dev_->api();
+  Texture &t = textures_[texture_count_];
+  uint32_t mips = 1;
+  if (mipmaps) {
+    // Blit ile mip: format BLIT_SRC/DST + dogrusal suzme vermeli (RGBA8 her yerde verir; yine de sor).
+    VkFormatProperties fp{};
+    a.vkGetPhysicalDeviceFormatProperties(dev_->physical(), VK_FORMAT_R8G8B8A8_UNORM, &fp);
+    const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+                                      VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    if ((fp.optimalTilingFeatures & need) == need) {
+      uint32_t m = w > h ? w : h;
+      while (m > 1) { m >>= 1; mips++; }
+    }
+  }
+  VkImageCreateInfo ii{};
+  ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  ii.imageType = VK_IMAGE_TYPE_2D;
+  ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+  ii.extent = {w, h, 1};
+  ii.mipLevels = mips;
+  ii.arrayLayers = 1;
+  ii.samples = VK_SAMPLE_COUNT_1_BIT;
+  ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (mips > 1 ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+  if (a.vkCreateImage(dev_->handle(), &ii, nullptr, &t.image) != VK_SUCCESS) return TextureHandle{};
+  VkMemoryRequirements req;
+  a.vkGetImageMemoryRequirements(dev_->handle(), t.image, &req);
+  rhi::MemoryAlloc mem;
+  if (!dev_->allocate(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, &mem)) return TextureHandle{};
+  a.vkBindImageMemory(dev_->handle(), t.image, mem.memory, mem.offset);
+  // Staging
+  VkBuffer staging = VK_NULL_HANDLE;
+  rhi::MemoryAlloc sm;
+  const VkDeviceSize bytes = (VkDeviceSize)w * h * 4;
+  if (!make_buffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, bytes, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &staging, &sm))
+    return TextureHandle{};
+  std::memcpy(sm.mapped, rgba, (size_t)bytes);
+  VkCommandBuffer cb = dev_->begin_one_shot();
+  image_barrier(a, cb, t.image, 0, mips, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+  VkBufferImageCopy region{};
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  region.imageExtent = {w, h, 1};
+  a.vkCmdCopyBufferToImage(cb, staging, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  int32_t mw = (int32_t)w, mh = (int32_t)h;
+  for (uint32_t i = 1; i < mips; i++) {
+    image_barrier(a, cb, t.image, i - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT);
+    int32_t nw = mw > 1 ? mw / 2 : 1, nh = mh > 1 ? mh / 2 : 1;
+    VkImageBlit blit{};
+    blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
+    blit.srcOffsets[1] = {mw, mh, 1};
+    blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
+    blit.dstOffsets[1] = {nw, nh, 1};
+    a.vkCmdBlitImage(cb, t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                     VK_FILTER_LINEAR);
+    image_barrier(a, cb, t.image, i - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                  VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    mw = nw; mh = nh;
+  }
+  image_barrier(a, cb, t.image, mips - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+  bool ok = dev_->end_one_shot_and_wait(cb);
+  a.vkDestroyBuffer(dev_->handle(), staging, nullptr); // bellek blokta kalir (yukleme aninda, kabul)
+  if (!ok) return TextureHandle{};
+  VkImageViewCreateInfo vi{};
+  vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  vi.image = t.image;
+  vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+  vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
+  if (a.vkCreateImageView(dev_->handle(), &vi, nullptr, &t.view) != VK_SUCCESS) return TextureHandle{};
+  t.w = w; t.h = h; t.mips = mips;
+  stats_.textures = ++texture_count_;
+  return TextureHandle{texture_count_ - 1};
+}
+
+MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
+  if (material_count_ >= cfg_.max_materials || !albedo.valid() || albedo.id >= texture_count_) return MaterialHandle{};
+  rhi::VkApi &a = dev_->api();
+  Material &m = materials_[material_count_];
+  VkDescriptorSetAllocateInfo dai{};
+  dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  dai.descriptorPool = mat_pool_;
+  dai.descriptorSetCount = 1;
+  dai.pSetLayouts = &mat_layout_;
+  if (a.vkAllocateDescriptorSets(dev_->handle(), &dai, &m.set) != VK_SUCCESS) return MaterialHandle{};
+  VkDescriptorImageInfo dii{tex_sampler_, textures_[albedo.id].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  VkWriteDescriptorSet w{};
+  w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  w.dstSet = m.set;
+  w.dstBinding = 0;
+  w.descriptorCount = 1;
+  w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  w.pImageInfo = &dii;
+  a.vkUpdateDescriptorSets(dev_->handle(), 1, &w, 0, nullptr);
+  m.texture = albedo.id;
+  m.color = color;
+  stats_.materials = ++material_count_;
+  return MaterialHandle{material_count_ - 1};
 }
 
 bool Renderer::make_pipelines(VkRenderPass rp) {
@@ -128,12 +290,13 @@ bool Renderer::make_pipelines(VkRenderPass rp) {
   stages[1] = stages[0];
   stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fs_;
   VkVertexInputBindingDescription vb{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-  VkVertexInputAttributeDescription va[2] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
-                                             {1, 0, VK_FORMAT_R32G32B32_SFLOAT, sizeof(Vec3)}};
+  VkVertexInputAttributeDescription va[3] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+                                             {1, 0, VK_FORMAT_R32G32B32_SFLOAT, sizeof(Vec3)},
+                                             {2, 0, VK_FORMAT_R32G32_SFLOAT, 2 * sizeof(Vec3)}};
   VkPipelineVertexInputStateCreateInfo vi{};
   vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
-  vi.vertexAttributeDescriptionCount = 2; vi.pVertexAttributeDescriptions = va;
+  vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = va;
   VkPipelineInputAssemblyStateCreateInfo ia{};
   ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
   ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -310,6 +473,13 @@ void Renderer::shutdown() {
     if (meshes_[i].ibuf) a.vkDestroyBuffer(dev_->handle(), meshes_[i].ibuf, nullptr);
   }
   for (uint32_t i = 0; i < kMaxFrames; i++) if (ubo_[i]) a.vkDestroyBuffer(dev_->handle(), ubo_[i], nullptr);
+  for (uint32_t i = 0; i < texture_count_; i++) {
+    if (textures_[i].view) a.vkDestroyImageView(dev_->handle(), textures_[i].view, nullptr);
+    if (textures_[i].image) a.vkDestroyImage(dev_->handle(), textures_[i].image, nullptr);
+  }
+  if (mat_pool_) a.vkDestroyDescriptorPool(dev_->handle(), mat_pool_, nullptr);
+  if (mat_layout_) a.vkDestroyDescriptorSetLayout(dev_->handle(), mat_layout_, nullptr);
+  if (tex_sampler_) a.vkDestroySampler(dev_->handle(), tex_sampler_, nullptr);
   if (pipe_depth_) a.vkDestroyPipeline(dev_->handle(), pipe_depth_, nullptr);
   if (pipe_color_) a.vkDestroyPipeline(dev_->handle(), pipe_color_, nullptr);
   if (pipe_shadow_) a.vkDestroyPipeline(dev_->handle(), pipe_shadow_, nullptr);
@@ -413,23 +583,33 @@ void Renderer::record_shadow(VkCommandBuffer cb) {
   a.vkCmdEndRenderPass(cb);
 }
 
-void Renderer::draw(MeshHandle mesh, const Mat4 &model, Vec3 color) {
+void Renderer::draw(MeshHandle mesh, const Mat4 &model, Vec3 color) { draw(mesh, default_material_, model, color); }
+
+void Renderer::draw(MeshHandle mesh, MaterialHandle material, const Mat4 &model, Vec3 color) {
   if (!mesh.valid() || mesh.id >= mesh_count_) return;
+  if (!material.valid() || material.id >= material_count_) material = default_material_;
   if (draw_count_ >= cfg_.max_draws) { stats_.dropped++; return; }
-  draws_[draw_count_++] = Draw{mesh.id, model, color};
+  const Vec3 mc = materials_[material.id].color;
+  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{color.x * mc.x, color.y * mc.y, color.z * mc.z}};
 }
 
 void Renderer::record(VkCommandBuffer cb) {
   rhi::VkApi &a = dev_->api();
   stats_.draws = draw_count_;
   struct Push { Mat4 model; float color[4]; };
+  stats_.material_binds = 0;
   for (int pass = 0; pass < 2; pass++) {
     if (pass == 1) a.vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
     a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pass == 0 ? pipe_depth_ : pipe_color_);
     a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &sets_[frame_], 0, nullptr);
-    uint32_t bound = 0xFFFFFFFFu;
+    uint32_t bound = 0xFFFFFFFFu, bound_mat = 0xFFFFFFFFu;
     for (uint32_t i = 0; i < draw_count_; i++) {
       const Draw &d = draws_[i];
+      if (pass == 1 && d.material != bound_mat) { // depth gecisi doku okumaz
+        a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1, 1, &materials_[d.material].set, 0, nullptr);
+        bound_mat = d.material;
+        stats_.material_binds++;
+      }
       if (d.mesh != bound) {
         VkDeviceSize off = 0;
         a.vkCmdBindVertexBuffers(cb, 0, 1, &meshes_[d.mesh].vbuf, &off);
@@ -453,7 +633,7 @@ uint32_t Renderer::cube(Vertex *v, uint32_t *idx) {
     Vec3 N{n[f][0], n[f][1], n[f][2]}, U{u[f][0], u[f][1], u[f][2]}, W{w[f][0], w[f][1], w[f][2]};
     Vec3 c = N * 0.5f;
     Vec3 p0 = c - U * 0.5f - W * 0.5f, p1 = c + U * 0.5f - W * 0.5f, p2 = c + U * 0.5f + W * 0.5f, p3 = c - U * 0.5f + W * 0.5f;
-    v[vi + 0] = {p0, N}; v[vi + 1] = {p1, N}; v[vi + 2] = {p2, N}; v[vi + 3] = {p3, N};
+    v[vi + 0] = {p0, N, {0, 0}}; v[vi + 1] = {p1, N, {1, 0}}; v[vi + 2] = {p2, N, {1, 1}}; v[vi + 3] = {p3, N, {0, 1}};
     idx[ii++] = vi; idx[ii++] = vi + 1; idx[ii++] = vi + 2;
     idx[ii++] = vi; idx[ii++] = vi + 2; idx[ii++] = vi + 3;
     vi += 4;
@@ -461,9 +641,11 @@ uint32_t Renderer::cube(Vertex *v, uint32_t *idx) {
   return ii;
 }
 
-uint32_t Renderer::plane(Vertex *v, uint32_t *idx) {
+uint32_t Renderer::plane(Vertex *v, uint32_t *idx, float uv_repeat) {
   Vec3 N{0, 1, 0};
-  v[0] = {{-0.5f, 0, -0.5f}, N}; v[1] = {{-0.5f, 0, 0.5f}, N}; v[2] = {{0.5f, 0, 0.5f}, N}; v[3] = {{0.5f, 0, -0.5f}, N};
+  const float r = uv_repeat;
+  v[0] = {{-0.5f, 0, -0.5f}, N, {0, 0}}; v[1] = {{-0.5f, 0, 0.5f}, N, {0, r}};
+  v[2] = {{0.5f, 0, 0.5f}, N, {r, r}};   v[3] = {{0.5f, 0, -0.5f}, N, {r, 0}};
   uint32_t i[6] = {0, 1, 2, 0, 2, 3};
   std::memcpy(idx, i, sizeof i);
   return 6;

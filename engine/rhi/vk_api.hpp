@@ -65,6 +65,8 @@ struct VkApi {
   PFN_vkDestroyImage vkDestroyImage = nullptr;
   PFN_vkGetImageMemoryRequirements vkGetImageMemoryRequirements = nullptr;
   PFN_vkBindImageMemory vkBindImageMemory = nullptr;
+  PFN_vkCmdBlitImage vkCmdBlitImage = nullptr;
+  PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage = nullptr;
   PFN_vkCreateSampler vkCreateSampler = nullptr;
   PFN_vkDestroySampler vkDestroySampler = nullptr;
   PFN_vkCmdSetDepthBias vkCmdSetDepthBias = nullptr;

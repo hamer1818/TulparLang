@@ -95,6 +95,7 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
   G(vkCreateImage); G(vkDestroyImage); G(vkGetImageMemoryRequirements); G(vkBindImageMemory);
   G(vkCreateImageView); G(vkDestroyImageView);
   G(vkCreateSampler); G(vkDestroySampler); G(vkCmdSetDepthBias);
+  G(vkCmdBlitImage); G(vkCmdCopyBufferToImage);
   G(vkCreateRenderPass2); G(vkCreateRenderPass); G(vkDestroyRenderPass);
   G(vkCreateFramebuffer); G(vkDestroyFramebuffer);
   G(vkCreateShaderModule); G(vkDestroyShaderModule);

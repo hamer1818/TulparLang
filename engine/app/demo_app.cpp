@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "app/demo_scene.hpp"
+#include "content/gltf.hpp"
 #include "core/jobs/job_system.hpp"
 #include "core/memory/alloc_gate.hpp"
 #include "core/memory/arena.hpp"
@@ -123,9 +124,36 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   renderer::Vertex v[24];
   uint32_t idx[36];
   uint32_t n = renderer::Renderer::cube(v, idx);
-  renderer::MeshHandle cube = ren.create_mesh(v, 24, idx, n);
-  n = renderer::Renderer::plane(v, idx);
-  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  DemoScene::DrawSet ds;
+  ds.cube = ren.create_mesh(v, 24, idx, n);
+  n = renderer::Renderer::plane(v, idx, 10.0f); // 20 m zeminde 10 dama tekrari
+  ds.plane = ren.create_mesh(v, 4, idx, n);
+  { // Zemin damasi: yordamsal 64x64, iki gri ton (dosya gerekmez, cihazda da var)
+    static uint8_t px[64 * 64 * 4];
+    for (uint32_t y = 0; y < 64; y++)
+      for (uint32_t x = 0; x < 64; x++) {
+        bool on = ((x / 32) + (y / 32)) % 2 == 0;
+        uint8_t g = on ? 205 : 150;
+        uint8_t *p = px + (y * 64 + x) * 4;
+        p[0] = g; p[1] = g; p[2] = g + 8; p[3] = 255;
+      }
+    ds.ground = ren.create_material(ren.create_texture(px, 64, 64, true), {1, 1, 1});
+  }
+  { // glTF kup (tests/assets ya da TULPAR_ENGINE_ASSETS): kutular bununla cizilir
+    char path[1024];
+    const char *adir = std::getenv("TULPAR_ENGINE_ASSETS");
+    if (adir && *adir) std::snprintf(path, sizeof path, "%s/checker_cube.gltf", adir);
+    else std::snprintf(path, sizeof path, "%s/tests/assets/checker_cube.gltf", ENGINE_SOURCE_DIR);
+    static content::Model model;
+    static content::UploadedModel up;
+    if (content::gltf_load(sys, path, &model) && content::upload_model(ren, sys, model, &up) && up.mesh_count && up.material_count) {
+      ds.box_mesh = up.meshes[0];
+      ds.box_mat = up.materials[0];
+      std::printf("[engine_demo] glTF: %s (%u mesh, %u doku)\n", path, up.mesh_count, up.texture_count);
+    } else {
+      std::printf("[engine_demo] glTF yok (%s): kutular duz — %s\n", path, model.error);
+    }
+  }
   ren.set_light(normalize(Vec3{0.5f, 1.0f, 0.35f}), {0.16f, 0.17f, 0.2f}, 0.85f);
   // Golge kutusu sahneyi kapsamali: arena 20x20, duvar 3 m, kutular ~5 m'ye kadar.
   ren.set_shadow_volume({0, 1.0f, -1.0f}, 17.0f, 70.0f);
@@ -195,7 +223,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       ren.set_camera(cam_view(cam), proj);
       if (headless) {
         ren.begin_frame(frame_i);
-        scene.draw(ren, cube, plane);
+        scene.draw(ren, ds);
         RecordCtx rctx{&ren};
         // Golge gecisi ana render pass'ten ONCE (kendi pass'i var).
         if (!rhi::offscreen_render_custom(off, oc, record_cb, &rctx, &ores, shadow_cb)) {
@@ -212,7 +240,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           uint64_t tb = platform::now_ns();
           ren.begin_frame(fc.frame_index);
           uint64_t tc = platform::now_ns();
-          scene.draw(ren, cube, plane);
+          scene.draw(ren, ds);
           uint64_t td = platform::now_ns();
           ren.record_shadow(fc.cmd); // kendi pass'i: ana pass BASLAMADAN once
           swap.begin_render_pass(fc);
