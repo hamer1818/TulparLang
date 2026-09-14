@@ -416,6 +416,42 @@ int Device::find_memory_type(uint32_t mask, VkMemoryPropertyFlags flags) const {
   return -1;
 }
 
+bool Device::allocate_dedicated(const VkMemoryRequirements &req, VkMemoryPropertyFlags flags, bool lazily_ok,
+                                MemoryAlloc *out) {
+  int type = -1;
+  if (lazily_ok) type = find_memory_type(req.memoryTypeBits, flags | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT);
+  if (type < 0) type = find_memory_type(req.memoryTypeBits, flags);
+  if (type < 0) {
+    fail("uygun bellek turu yok (dedicated)", VK_ERROR_OUT_OF_DEVICE_MEMORY);
+    return false;
+  }
+  VkMemoryAllocateInfo mai{};
+  mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  mai.allocationSize = req.size;
+  mai.memoryTypeIndex = (uint32_t)type;
+  VkDeviceMemory mem = VK_NULL_HANDLE;
+  VkResult r = api_->vkAllocateMemory(device_, &mai, nullptr, &mem);
+  if (r != VK_SUCCESS) {
+    fail("vkAllocateMemory (dedicated)", r);
+    return false;
+  }
+  out->memory = mem;
+  out->offset = 0;
+  out->size = req.size;
+  out->mapped = nullptr;
+  dedicated_count_++;
+  return true;
+}
+
+void Device::free_dedicated(MemoryAlloc *a) {
+  if (!a || !a->memory) return;
+  api_->vkFreeMemory(device_, a->memory, nullptr);
+  a->memory = VK_NULL_HANDLE;
+  a->offset = a->size = 0;
+  a->mapped = nullptr;
+  if (dedicated_count_) dedicated_count_--;
+}
+
 bool Device::allocate(const VkMemoryRequirements &req, VkMemoryPropertyFlags flags, bool lazily_ok,
                       MemoryAlloc *out) {
   int type = -1;

@@ -80,6 +80,7 @@ private:
   VkImageView views_[kMaxImages] = {};
   VkFramebuffer fbs_[kMaxImages] = {};
   VkImage depth_ = VK_NULL_HANDLE;
+  MemoryAlloc depth_mem_{};
   VkImageView depth_view_ = VK_NULL_HANDLE;
   VkRenderPass rp_ = VK_NULL_HANDLE;
   // ucuslu kare

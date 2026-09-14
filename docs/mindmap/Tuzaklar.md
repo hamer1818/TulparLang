@@ -1948,3 +1948,12 @@ uzanti bicimleri de yok. Duzeltme: `require_mandatory` varsayilan **false**, eks
 verisi). Ders: "baseline sartimiz" cumlesi de bir hipotezdir; ilk cihaz onu curutebilir. Kapiyi
 silme — rapora cevir ve eksik yol yedegini yaz.
 
+### 8p. Bump ayirici + pencere omurlu kaynak = her yeniden boyutlandirmada sizinti
+`Device::allocate` blok ayiricidir (64 MB blok, bump, **geri vermez**) — sahne omurlu kaynaklar icin
+dogru, ucuz ve belirlenimli. Ama swapchain derinlik goruntusunun omru **pencereye** baglidir: her
+yeniden boyutlandirma/dondurme yeni bir derinlik ayirir ve eskisi blokta gomulu kalir. 2159x1080 D32
+= ~9 MB; birkac dondurme bir bloku, birkac blok yuz MB'lari yer. Kural: **omru farkli olan kaynak,
+ayirma stratejisi de farkli olmali** — pencereye bagli olanlar `allocate_dedicated`/`free_dedicated`
+ile. Testin pozitif kontrolu sart: ayni donguyu blok ayiriciyla kosup **buyudugunu** gosteremiyorsan
+test bir sey olcmuyor olabilir.
+

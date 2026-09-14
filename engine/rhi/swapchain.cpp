@@ -155,9 +155,10 @@ bool Swapchain::create_swapchain(uint32_t w, uint32_t h) {
   if (a.vkCreateImage(dev_->handle(), &ii, nullptr, &depth_) != VK_SUCCESS) return false;
   VkMemoryRequirements req;
   a.vkGetImageMemoryRequirements(dev_->handle(), depth_, &req);
-  MemoryAlloc m;
-  if (!dev_->allocate(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &m)) return false;
-  a.vkBindImageMemory(dev_->handle(), depth_, m.memory, m.offset);
+  // Derinlik belleginin omru PENCEREYE bagli: her yeniden boyutlandirmada serbest
+  // birakilabilmeli (blok ayirici bump'tir, geri vermez).
+  if (!dev_->allocate_dedicated(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &depth_mem_)) return false;
+  a.vkBindImageMemory(dev_->handle(), depth_, depth_mem_.memory, depth_mem_.offset);
   VkImageViewCreateInfo vi{};
   vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
   vi.image = depth_;
@@ -196,7 +197,7 @@ void Swapchain::destroy_swapchain() {
   if (depth_view_) a.vkDestroyImageView(dev_->handle(), depth_view_, nullptr);
   if (depth_) a.vkDestroyImage(dev_->handle(), depth_, nullptr);
   depth_view_ = VK_NULL_HANDLE; depth_ = VK_NULL_HANDLE;
-  // Depth bellegi Device blok ayiricisinda kalir (bump; boyut degisince yeni blok).
+  dev_->free_dedicated(&depth_mem_); // yeniden boyutlandirma sizdirmasin
   if (swap_) a.vkDestroySwapchainKHR(dev_->handle(), swap_, nullptr);
   swap_ = VK_NULL_HANDLE;
   image_count_ = 0;

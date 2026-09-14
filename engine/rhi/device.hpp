@@ -100,7 +100,14 @@ public:
   // flags: istenen ozellikler; lazily_ok: LAZILY_ALLOCATED tercih edilsin
   bool allocate(const VkMemoryRequirements &req, VkMemoryPropertyFlags flags, bool lazily_ok,
                 MemoryAlloc *out);
+  // Kendi vkAllocateMemory'si olan, SERBEST BIRAKILABILIR ayirma. Blok ayirici
+  // bump'tir ve geri vermez; omru sahnenin degil PENCERENIN olan seyler (swapchain
+  // derinligi) her yeniden boyutlandirmada blok yerdi. Bunlar bununla ayrilir.
+  bool allocate_dedicated(const VkMemoryRequirements &req, VkMemoryPropertyFlags flags, bool lazily_ok,
+                          MemoryAlloc *out);
+  void free_dedicated(MemoryAlloc *a);
   uint32_t memory_allocation_count() const { return block_count_; }
+  uint32_t dedicated_allocation_count() const { return dedicated_count_; }
 
   // Tek seferlik komut tamponu: kaydet, gonder, bekle (Faz 1 offscreen).
   VkCommandBuffer begin_one_shot();
@@ -133,6 +140,7 @@ private:
   static constexpr VkDeviceSize kBlockSize = 64ull << 20; // 64 MB
   MemoryBlock blocks_[kMaxBlocks];
   uint32_t block_count_ = 0;
+  uint32_t dedicated_count_ = 0;
   char err_[256] = {0};
 };
 

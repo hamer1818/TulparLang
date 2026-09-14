@@ -282,3 +282,49 @@ ENGINE_TEST(rhi_validation_layer_reports_zero_errors) {
   dev.shutdown();
 }
 
+
+// Pencereye bagli omur: swapchain derinligi her yeniden boyutlandirmada yeniden
+// ayrilir. Blok ayirici bump'tir ve GERI VERMEZ — o yolla her boyut degisimi
+// bellek yerdi (FAZ3 acik isi). `allocate_dedicated`/`free_dedicated` serbest
+// birakabilir. Bu test mekanizmayi sinar; pozitif kontrol eski yolun gercekten
+// buyudugunu gosterir (yoksa test hicbir sey olcmuyor olabilir).
+ENGINE_TEST(rhi_dedicated_allocation_is_released) {
+  if (!loader()) { test::skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  Device dev;
+  if (!open_device(sys, dev)) { test::skip("Vulkan cihazi yok"); return; }
+
+  VkMemoryRequirements req{};
+  req.size = 16u << 20; // ~2K derinlik tamponu mertebesi
+  req.alignment = 256;
+  req.memoryTypeBits = 0xFFFFFFFFu;
+
+  const uint32_t blocks0 = dev.memory_allocation_count();
+  CHECK(dev.dedicated_allocation_count() == 0);
+  for (int i = 0; i < 8; i++) { // 8 "yeniden boyutlandirma"
+    MemoryAlloc m;
+    bool ok = dev.allocate_dedicated(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &m);
+    CHECK(ok);
+    if (!ok) break;
+    bool one = dev.dedicated_allocation_count() == 1;
+    CHECK(one);
+    dev.free_dedicated(&m);
+    bool released = m.memory == VK_NULL_HANDLE && dev.dedicated_allocation_count() == 0;
+    CHECK(released);
+  }
+  // Blok ayirici hic buyumedi: 8 dongu tek bir blok bile yemedi.
+  bool blocks_same = dev.memory_allocation_count() == blocks0;
+  CHECK(blocks_same);
+
+  // POZITIF KONTROL: ayni 8 dongu blok ayiricidan gecerse bellek BUYUR.
+  for (int i = 0; i < 8; i++) {
+    MemoryAlloc m;
+    if (!dev.allocate(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &m)) break;
+  }
+  const uint32_t blocks1 = dev.memory_allocation_count();
+  bool grew = blocks1 > blocks0;
+  CHECK(grew); // buyumediyse test bir sey olcmuyor demektir
+  std::printf("    [bilgi] adanmis ayirma: 8 dongu sonrasi blok %u -> %u (degismedi); blok ayiriciyla %u -> %u (pozitif kontrol)\n",
+              blocks0, blocks0, blocks0, blocks1);
+  dev.shutdown();
+}
