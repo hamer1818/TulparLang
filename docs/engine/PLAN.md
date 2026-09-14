@@ -12,7 +12,7 @@
 > 5. Faz sırası değişti: simülasyon, UI ve platform servisleri öne; Tulpar shader stage, cluster geometri ve iOS sona; **ilk oyunun dikey dilimi** ayrı faz. "Oyun tasarımı Faz 5'te dondurulur" kalktı: ilk oyun Faz 0'da tanımlanır.
 > 6. Tulpar'ın derleyici önkoşulları (kutusuz struct, işaretçi, ayırmasız fonksiyon, reflection) **hazır sayılmıyor** → yeni §11.
 > 7. L1 job sistemi: little core pinleme kalktı (EK A.4 ile çelişiyordu); fiber havuzu tükenince satır içi yürütme.
-> 8. Jolt determinizmi aynı mimari + aynı ikili ile sınırlı; rollback için not.
+> 8. Jolt determinizmi: ⚠️ REV-2 (2026-09-14) **CI ile doğrulandı** — `JPH_CROSS_PLATFORM_DETERMINISTIC` + `-ffp-contract=off` + libm'siz girdiyle x86_64 (SSE4.2) ve arm64 (NEON) **bit eşit** (altın özet `5dc41c2bddc345cb` iki platformda). İlk REV "aynı mimari ile sınırlı" diyordu; o ihtiyat iki hatamızı ölçüyordu (libm'li girdi, FMA birleştirmesi), Jolt'u değil. Rollback netcode x86/arm karışık lobide mümkün; şartlar §11'in altında "Determinizm sözleşmesi".
 > 9. Web hedefi yok (karar 2026-09-13); masaüstü ürün değil, geliştirme platformu.
 > 10. **Her AL bir hipotezdir** — cihaz matrisinde ölçülene kadar (§1 kuralı).
 > 11. Faz 0 çıktısı "boş pencere" değil headless kare döngüsü; pencere ve timestamp'li input Faz 1 (Vulkan yüzeyi + Android host).
@@ -116,7 +116,7 @@ Sektörde "devrimsel" sayılan her şey ve bizim kararımız.
 
 | Teknoloji | Kaynak | Ne çözüyor | Karar | Not |
 |---|---|---|---|---|
-| **Jolt-style physics** | Horizon FW (Rouwe) | Fizik | **ADAPTE / entegre et** | Kendi fiziğini yazma. Jolt zaten SoA + job-friendly + deterministik. Bizim job system'imize bağla. ⚠️ REV: determinizm **aynı mimari + aynı ikili + aynı FP bayrakları** içinde geçerli; arm64 cihaz ↔ x86_64 emülatör ↔ iOS arasında garanti YOK. Rollback netcode aynı-mimari eşleşme ya da sabit noktalı sim ister |
+| **Jolt-style physics** | Horizon FW (Rouwe) | Fizik | **ADAPTE / entegre et** | Kendi fiziğini yazma. Jolt zaten SoA + job-friendly + deterministik. Bizim job system'imize bağla. ⚠️ REV-2: determinizm **platformlar arası** (x86_64 ↔ arm64) CI'da bit eşit doğrulandı — şartlar: `JPH_CROSS_PLATFORM_DETERMINISTIC`, `-ffp-contract=off`, aynı define'lar, girdide libm yok (Determinizm sözleşmesi, §11 altı). Bu şartlar dışında garanti yok |
 | **Motion matching** | Ubisoft For Honor (Clavet, GDC 2016) | Animasyon kalitesi | **ERTELE** | Bellek maliyeti yüksek. Faz 3, oyun türü gerektirirse |
 | **Animation compression (ACL sınıfı)** | Nicholas Frechette | Anim bellek | **AL** | Bellek bütçesinde ciddi kalem |
 | **GPU particle simulation** | Standart | Particle CPU maliyeti | **AL** | Compute + indirect draw |
@@ -561,6 +561,8 @@ Plan, Tulpar'dan aşağıdakileri bekliyor. **Hiçbiri bugün derleyicide yok.**
 | GPU stage (ortak tip sistemi) | Faz 8 | Yok | Faz 8 |
 
 **Dil kararı (kayıt):** L0 (platform) ve L1 (core) 2026-09-14'te **C++17** ile yazıldı, çünkü Tulpar bugün bunları yazamıyor. Bu bir tercih değil zorunluluktu ve kayda geçti. Alt küme geldiğinde L1 Tulpar'a taşınır (küçük: ~2 bin satır; bugünkü testler davranış sözleşmesi olarak kalır ve taşımayı doğrular). L2 ve üstünün dili o noktada karar verilir; "L0'ın üstü C++'ta kalır" **varsayılan değildir**. Alt küme, planın L5 / ECS / GPU stage isteklerinin de önkoşulu olduğu için her hâlükârda yapılacak iş; tek soru zamanlama. Emsal: Jai (EK G.2), Zig, Odin.
+
+**Determinizm sözleşmesi (⚠️ REV-2, 2026-09-14, CI ile doğrulandı):** simülasyon x86_64 ve arm64'te bit eşit — şartlar: (1) Jolt `JPH_CROSS_PLATFORM_DETERMINISTIC`; (2) sim/fizik/test hedeflerinde `-ffp-contract=off` (AArch64 derleyicileri FMA'ya birleştirir, x86'da `-mfma` yoksa birleşmez); (3) fast-math yok (plan C.1.5); (4) sim girdisi libm'den geçmez (`sinf/cosf` → glibc ↔ Apple libm son ulp farkı) — açılar/dönüşler sabit bit ya da kendi deterministik fonksiyonumuz; (5) aynı Jolt sürümü ve define'ları. Nöbetçi: `physics_cross_platform_golden_hash` (altın özet x86_64'te üretilir, macOS arm64 CI karşılaştırır). Tuzaklar 8d, 8j.
 
 **Ne değişmez:** L5 gameplay Tulpar'dadır, aynı ikiliye linklenir, script sınırı yoktur. Bu, planın diğer motorlara karşı ölçülebilir tek dil avantajı (Unity P/Invoke 20–100 ns, GDScript Variant 100–500 ns, Tulpar doğrudan çağrı) ve her iki yolda korunur.
 

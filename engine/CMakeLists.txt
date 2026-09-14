@@ -86,13 +86,25 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
 endif()
 target_link_libraries(engine_jolt PUBLIC Threads::Threads)
 
-# --- L4 SIM (ECS, zamanlayici, sabit adim, replay, fizik) --------------------
+# --- recastnavigation (vendored, engine/third_party/recast) ------------------
+# Recast = bake (sahne derleyicisi/test), Detour = runtime sorgu.
+file(GLOB ENGINE_RECAST_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/recast/Recast/Source/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/recast/Detour/Source/*.cpp)
+add_library(engine_recast STATIC ${ENGINE_RECAST_SOURCES})
+target_include_directories(engine_recast PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/recast/Recast/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/recast/Detour/Include)
+target_compile_options(engine_recast PRIVATE -fno-exceptions -fno-rtti -w -ffp-contract=off)
+
+# --- L4 SIM (ECS, zamanlayici, sabit adim, replay, fizik, navmesh) -----------
 add_library(engine_sim STATIC
     sim/ecs.cpp
     sim/schedule.cpp
     sim/physics.cpp
+    sim/navmesh.cpp
 )
-target_link_libraries(engine_sim PUBLIC engine_core engine_jolt)
+target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_sim engine_layer_check)
 
@@ -113,6 +125,7 @@ add_executable(engine_tests
     tests/test_rhi.cpp
     tests/test_sim.cpp
     tests/test_physics.cpp
+    tests/test_navmesh.cpp
     core/memory/alloc_gate_override.cpp
 )
 target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
