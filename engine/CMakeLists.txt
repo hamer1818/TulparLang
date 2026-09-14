@@ -63,6 +63,15 @@ target_link_libraries(engine_rhi PUBLIC engine_core ${CMAKE_DL_LIBS})
 target_compile_options(engine_rhi PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
 add_dependencies(engine_rhi engine_layer_check)
 
+# --- L4 SIM (ECS, zamanlayici, sabit adim, replay) ---------------------------
+add_library(engine_sim STATIC
+    sim/ecs.cpp
+    sim/schedule.cpp
+)
+target_link_libraries(engine_sim PUBLIC engine_core)
+target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
+add_dependencies(engine_sim engine_layer_check)
+
 # --- Testler ------------------------------------------------------------------
 # alloc_gate_override.cpp YURUTULEBILIRE eklenir: hangi ikilinin sayildigi
 # burada gorunur (A2 kapisi).
@@ -78,8 +87,9 @@ add_executable(engine_tests
     tests/test_math.cpp
     tests/test_containers.cpp
     tests/test_rhi.cpp
+    tests/test_sim.cpp
     core/memory/alloc_gate_override.cpp
 )
-target_link_libraries(engine_tests PRIVATE engine_rhi engine_core ${CMAKE_DL_LIBS})
+target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
 target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(engine_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
