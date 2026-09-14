@@ -23,7 +23,8 @@ void Device::fail(const char *msg, VkResult r) {
   std::snprintf(err_, sizeof err_, "%s (%s)", msg, vk_result_str(r));
 }
 
-bool Device::init(Arena &, VkApi &api, const DeviceConfig &cfg) {
+bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
+  (void)arena_unused_; // yalniz macOS yedeginin yeniden cagrisinda gecirilir
   api_ = &api;
   uint32_t loader_version = VK_API_VERSION_1_0;
   if (api.vkEnumerateInstanceVersion) api.vkEnumerateInstanceVersion(&loader_version);
@@ -85,11 +86,41 @@ bool Device::init(Arena &, VkApi &api, const DeviceConfig &cfg) {
   ici.enabledLayerCount = layer_n;
   ici.ppEnabledLayerNames = layers;
   VkResult r = api.vkCreateInstance(&ici, nullptr, &instance_);
+#if defined(__APPLE__)
+  // Loader + MoltenVK ICD: VK_ERROR_INCOMPATIBLE_DRIVER (olculdu CI macOS
+  // 2026-09-14, VK_ICD_FILENAMES verilmisken bile). Dogrudan MoltenVK calisiyor
+  // (ilk kosumda cizdi). Yedek burada da: instance kurulamazsa dogrudan yukle,
+  // bir kez bastan dene.
+  if (r != VK_SUCCESS && !vk_api_is_direct_moltenvk(api)) {
+    caps_ = DeviceCaps{};
+    if (vk_api_load_moltenvk_direct(api)) return init(arena_unused_, api, cfg);
+  }
+#endif
   if (r != VK_SUCCESS) {
     fail("vkCreateInstance", r);
     return false;
   }
   vk_api_load_instance(api, instance_);
+#if defined(__APPLE__)
+  // Loader var ama ICD yok (brew MoltenVK json'u loader'in aramadigi dizinde):
+  // olculdu CI macOS 2026-09-14, "Vulkan cihazi yok". MoltenVK'yi dogrudan
+  // yukleyip bastan dene — bir kez.
+  {
+    uint32_t n = 0;
+    api.vkEnumeratePhysicalDevices(instance_, &n, nullptr);
+    if (n == 0 && !vk_api_is_direct_moltenvk(api)) {
+      api.vkDestroyInstance(instance_, nullptr);
+      instance_ = VK_NULL_HANDLE;
+      messenger_ = VK_NULL_HANDLE;
+      caps_ = DeviceCaps{};
+      if (!vk_api_load_moltenvk_direct(api)) {
+        fail("loader cihaz gormuyor ve MoltenVK dogrudan yuklenemedi", VK_ERROR_INCOMPATIBLE_DRIVER);
+        return false;
+      }
+      return init(arena_unused_, api, cfg);
+    }
+  }
+#endif
   if (caps_.validation_layer && have_debug_utils && api.vkCreateDebugUtilsMessengerEXT) {
     VkDebugUtilsMessengerCreateInfoEXT mci{};
     mci.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;

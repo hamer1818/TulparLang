@@ -29,9 +29,21 @@ ucgen %17.6 piksel; GPU render pass 0.008 ms; vkAllocateMemory=2; PSO cache 2264
 2. cizim: cache yuklendi, bizim kodda 0 ayirma (surucu ici malloc sayilmaz)
 ```
 
+## CI ölçümleri (2026-09-14)
+
+```
+Linux lavapipe (llvmpipe, LLVM 20.1.2, Vulkan 1.4.318): 32/32, DOGRULAMA KATMANI ETKIN, 0 hata
+  GPL kullanilabilir; monolitik 0.170 ms, kutuphaneler 0.167 ms, link 0.026 ms
+  operator new: kurulum 1112, kare [428 113 113 112 113] (ilk kare JIT; sonra kararli)
+  8 ikincil tampon, 3 thread yuvasi (worker=3)
+macOS MoltenVK (Apple Paravirtual, Vulkan 1.3.357): piksel kapisi gecti; zaman damgasi farki 0;
+  kare basina 27-28 operator new; GPL YOK (gorunur atlandi)
+```
+
 ## Notlar
+- **Loader + brew (CI macOS):** `vulkan-loader` kurulunca loader bulundu ama MoltenVK ICD'sini görmedi (`/opt/homebrew/share/vulkan` loader'ın varsayılan arama yolunda değil) → 5 test **görünür** atlandı. İki düzeltme: CI `VK_ICD_FILENAMES`/`VK_DRIVER_FILES` ve `VK_LAYER_PATH` verir; kod, loader sıfır cihaz görürse MoltenVK'yi doğrudan yükleyip bir kez yeniden dener (geliştirici Mac'inde de aynı tuzak).
 - **A2 kapısı ve sürücü ayırmaları (CI lavapipe, 2026-09-14):** tek adımlı offscreen çizim `operator new` sayacında sıfır vermedi: lavapipe (Mesa + LLVM JIT) pipeline/image kurulumunda C++ `new` kullanıyor ve global override onu da sayıyor; NVIDIA sürücüsü saymadı (kendi ayırıcısı). Kurulum ile kare ayrıldı (`offscreen_create` / `offscreen_render_frame`): kurulumun ayırması ölçülüp **bilgi** basılır, **kare** için 0 iddia edilir. Ders: A2 iddiası "bizim kodumuz kare içinde ayırmaz"dır; sürücü içi ayırma ayrı kalem, cihazda ayrıca ölçülür (Mali/Adreno sürücüleri de sürece yüklenir).
-- **MoltenVK (CI macOS, Apple Paravirtual, 2026-09-14):** ilk piksel Metal üzerinden çizildi (piksel kapısı geçti). İki sürücü özelliği görüldü: (1) zaman damgası TOP/BOTTOM aynı değeri veriyor (fark 0) — test "okunabilir" ister, değeri bilgi basar; (2) kare başına **28** `operator new` (Metal nesneleri). NVIDIA 0/kare. Sürücü kare ayırması **cihaz verisi**: ölçülür, basılır, kararlılığı (büyüme yok) iddia edilir; sıfır iddiası bizim koda (sürücüsüz Faz 0 harness'ı) aittir. Mali/Adreno değerleri cihaz matrisine girecek.
+- **MoltenVK (CI macOS, Apple Paravirtual, 2026-09-14):** ilk piksel Metal üzerinden çizildi (piksel kapısı geçti). İki sürücü özelliği görüldü: (1) zaman damgası TOP/BOTTOM aynı değeri veriyor (fark 0) — test "okunabilir" ister, değeri bilgi basar; (2) kare başına **28** `operator new` (Metal nesneleri). NVIDIA 0/kare. Sürücü kare ayırması **cihaz verisi**: ölçülür, basılır, iddia edilmez (kararlılık bile: lavapipe `[425 113 113 112 114]`, JIT thread'leri oynatıyor); sıfır iddiası bizim koda (sürücüsüz Faz 0 harness'ı, sim testleri) aittir. Mali/Adreno değerleri cihaz matrisine girecek.
 - **macOS CI:** yalnız `molten-vk` kurulunca loader (`libvulkan.1.dylib`) bulunamadı ve 3 test **görünür** atlandı (harness sayacı işini yaptı). `vulkan-loader` eklendi; MoltenVK tam yol yedeği (`/opt/homebrew/lib/libMoltenVK.dylib`) kondu.
 - Shader'lar GLSL (`engine/rhi/shaders/*.vert|frag`) → `glslc` → depoya giren C dizileri (`compile_shaders.py`). Plan Faz 8'e kadar Slang diyordu; `slangc` bu makinede ve CI'da yok (Arch'taki `slang` paketi S-Lang kütüphanesi). Faz 8'de Slang'e geçilir; Faz 1 üçgeni için GLSL yeterli.
 - Depth `D32_SFLOAT`; LAZILY_ALLOCATED bellek masaüstünde yok (TBDR'da var) — kod tercih eder, yoksa DEVICE_LOCAL'a düşer ve bunu `caps.lazily_allocated_memory` ile raporlar.

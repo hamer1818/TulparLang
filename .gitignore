@@ -217,3 +217,7 @@ scene3d_vol_*.txt
 /scene3d_karakter
 /karakter_desktop
 /labirent_desktop
+android/host/.gradle/
+android/host/build/
+android/host/app/build/
+android/host/local.properties

@@ -57,7 +57,10 @@ private:
 struct JobSystemConfig {
   uint32_t worker_threads = 0;       // 0 = cekirdek-1 (en az 1)
   uint32_t fiber_count = 128;
-  uint32_t fiber_stack_bytes = 64 * 1024;
+  // 256 KB: Jolt'un carpisma job'lari (ProcessBodyPair) 64 KB'de bekci sayfaya
+  // carpiyor, 128 KB'de geciyor (olculdu 2026-09-14, 65 govde); pay birakildi.
+  // Sanal rezerv: 128 x 256 KB = 32 MB, fiziksel yalniz dokunulan.
+  uint32_t fiber_stack_bytes = 256 * 1024;
   uint32_t queue_capacity = 4096;
 };
 

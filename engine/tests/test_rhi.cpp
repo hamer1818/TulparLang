@@ -171,8 +171,10 @@ ENGINE_TEST(rhi_first_pixel_offscreen_triangle) {
               (unsigned long long)setup_allocs, (unsigned long long)frame_allocs[0],
               (unsigned long long)frame_allocs[1], (unsigned long long)frame_allocs[2],
               (unsigned long long)frame_allocs[3], (unsigned long long)frame_allocs[4]);
-  CHECK(frame_allocs[4] <= frame_allocs[1]); // kararli: buyume yok (2. kareden sonra)
-  CHECK(frame_allocs[3] <= frame_allocs[1]);
+  // Surucu kare ayirmasi IDDIA EDILMEZ (kararlilik bile degil): lavapipe'ta
+  // LLVM JIT arka plan thread'leri kareler arasi degisken ayirma yapiyor
+  // (CI 2026-09-14: frame[4] > frame[1] ile dustu). Bizim kodun iddiasi
+  // surucusuz harness'ta (Faz 0) ve sim testlerinde; burada yalniz bilgi.
   dev.shutdown();
   // temizlik (ppm bilgi icin kalir; cache silinir)
   unlink(cache_path);

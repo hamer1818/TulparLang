@@ -1859,7 +1859,44 @@ lavapipe'ta düştü, MoltenVK'da düştü, NVIDIA'da geçti — yani yerelde ye
 sürücüsünde kırmızı ([[#1p. "Bazen düşen" kapı gürültü değil MAKİNE SINIFI olabilir — [makine] satırıyla eşle]]
 ailesi, bu kez sürücü sınıfı). **Kural:** iddiayı ikiye ayır. (a) *bizim kod* kare içinde
 ayırmaz → sürücüsüz harness'ta 0 (Faz 0 kapısı, kesin). (b) *sürücünün* kare ayırması cihaz
-verisidir → ölçülür, basılır, **kararlılığı** iddia edilir (kareler arası büyüme = bizde sızıntı,
-ör. havuz sıfırlanmıyor), sıfırı değil. Kurulum (pipeline, image, JIT) kareden ayrılır; kurulum
+verisidir → ölçülür, basılır, **iddia edilmez** — ilk yazım "kararlı" (büyüme yok) diyordu, lavapipe
+`[425 113 113 112 114]` verdi ve 114 > 113 ile düştü: LLVM JIT arka plan thread'leri bir-iki ayırma
+oynatıyor. Sızıntı testi sürücüsüz yolda yapılır. Kurulum (pipeline, image, JIT) kareden ayrılır; kurulum
 ayırması serbest ve bilgi.
+
+### 8g. GCC'nin geçirdiği şablon başlığını Clang reddeder — push'tan önce clang sözdizimi
+`ecs.hpp`'de `World::each` şablonu, sınıftan **sonra** tanımlanan `Archetype`'ı kullanıyordu.
+GCC bağımlı olmayan adları örnekleme anına erteledi ve geçti (yerel 41/41); macOS CI (clang)
+tanım anında çözdü: `subscript of pointer to incomplete type 'Archetype'`. Bir CI turu gitti.
+**Kural:** yapılar şablonu kullanan sınıftan önce tanımlanır; push'tan önce
+`engine/tools/clang_syntax_check.sh` (clang++ varsa tüm engine kaynaklarını `-fsyntax-only`
+ile geçirir, third_party hariç). İkinci mimari/ikinci derleyici CI'ı burada da işini yaptı
+([[#8d. İkinci mimari, birinci mimarinin göremediğini bulur (libm ulp, FMA)]]).
+
+### 8h. Üçüncü parti job'lar fiber yığınını taşırır — bekçi sayfa yakaladı
+Jolt'un çarpışma job'ları (`PhysicsSystem::ProcessBodyPair`) büyük yerel yapılarla çalışır;
+64 KB fiber yığınında **bekçi sayfaya** çarptı ve SIGSEGV verdi (gdb: 4 thread aynı fonksiyonda).
+Ölçüm: 64 KB çöker, 128 KB geçer; varsayılan 256 KB. Bekçi sayfa olmasaydı komşu fiber'ın
+yığını sessizce ezilir, "bazen" bozulan fizik olurdu. **Kural:** üçüncü parti kodu fiber'da
+koşturmadan önce yığın ihtiyacını **ölç** (env ile boyut tara), bekçi sayfayı asla kaldırma;
+ağır işler için ayrı "büyük yığın" havuzu adayı. Sızma değil, sınır: Tuzaklar 8a'nın kardeşi.
+
+### 8i. Auto-merge ilk yeşilde birleştirir — sonraki push KAPALI PR'a gider ve kaybolur
+#319 için bir düzeltme daha push'landı (MoltenVK doğrudan yükleme + CI ICD yolları). Bir önceki
+commit'in koşumu o sırada yeşile dönmüştü; auto-merge PR'ı **hemen** birleştirdi. Sonraki push
+kapalı PR'ın dalına indi, hiçbir yere girmedi, hiçbir uyarı yoktu. Fark edilmesi: sonraki PR'da
+macOS "Vulkan cihazı yok" dedi; main'de `moltenvk_direct` yoktu, dalda vardı.
+**Kural:** PR yeşile döndükten sonra o dala push yapma; yeni değişiklik = yeni dal, yeni PR.
+Birleşme sonrası `git diff origin/main origin/<dal> --stat` **boş** olmalı (#318'de yapıldı, #319'da
+atlandı). Squash merge'te `git log main..dal` her zaman dolu görünür, kanıt **dosya farkı**dır.
+
+### 8j. "Cross-platform deterministic" define'ı tek başına yetmez — FMA birleştirmesi derleyicinin
+Jolt `JPH_CROSS_PLATFORM_DETERMINISTIC` ile x86 ↔ ARM bit eşitliği vaat eder; bizim vendored derlemede
+arm64 CI farklı özet verdi (`5dc4…` vs `4087…`). İki sebep, ikisi de bizim: (1) sahne kurulumunda
+`axis_angle` → `sinf/cosf` → libm (8d'nin aynısı, fizik sahnesinde); (2) AArch64'te GCC/Clang
+`a*b+c`'yi varsayılan olarak FMA'ya **birleştirir**, x86_64'te `-mfma` olmadığı için birleştirmez —
+aynı kaynak, farklı yuvarlama. Jolt'un resmi `Build/CMakeLists.txt`'i `-ffp-contract=off` koyuyor;
+upstream cmake'i atıp glob ile derleyince bayrak da gitti. **Kural:** üçüncü parti kütüphaneyi kendi
+CMake'inle derliyorsan upstream'in bayraklarını **oku ve taşı** (özellikle FP); belirlenimlilik
+iddiası ikinci mimaride altın özetle sınanmadan kabul edilmez; giriş verisi libm'den geçmemeli.
 
