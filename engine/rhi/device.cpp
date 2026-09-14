@@ -24,8 +24,13 @@ void Device::fail(const char *msg, VkResult r) {
 }
 
 bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
-  (void)arena_unused_; // yalniz macOS yedeginin yeniden cagrisinda gecirilir
+  (void)arena_unused_;
+  return init_instance(api, cfg) && init_device(VK_NULL_HANDLE);
+}
+
+bool Device::init_instance(VkApi &api, const DeviceConfig &cfg) {
   api_ = &api;
+  cfg_ = cfg;
   uint32_t loader_version = VK_API_VERSION_1_0;
   if (api.vkEnumerateInstanceVersion) api.vkEnumerateInstanceVersion(&loader_version);
   // Vulkan 1.1+ ister: GetPhysicalDeviceProperties2/Features2 cekirdekte.
@@ -35,12 +40,15 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
   }
   uint32_t want = loader_version >= VK_API_VERSION_1_3 ? VK_API_VERSION_1_3
                   : loader_version >= VK_API_VERSION_1_2 ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
+  instance_version_ = want;
 
   // MoltenVK: portability enumeration uzantisi + bayragi (yoksa cihaz gorunmez).
-  const char *inst_exts[4];
+  const char *inst_exts[12];
   uint32_t inst_ext_n = 0;
   VkInstanceCreateFlags inst_flags = 0;
   bool have_debug_utils = false;
+  for (uint32_t i = 0; i < cfg.instance_extension_count && inst_ext_n < 8; i++)
+    inst_exts[inst_ext_n++] = cfg.instance_extensions[i];
   {
     uint32_t n = 0;
     api.vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
@@ -93,7 +101,7 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
   // bir kez bastan dene.
   if (r != VK_SUCCESS && !vk_api_is_direct_moltenvk(api)) {
     caps_ = DeviceCaps{};
-    if (vk_api_load_moltenvk_direct(api)) return init(arena_unused_, api, cfg);
+    if (vk_api_load_moltenvk_direct(api)) return init_instance(api, cfg);
   }
 #endif
   if (r != VK_SUCCESS) {
@@ -117,7 +125,7 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
         fail("loader cihaz gormuyor ve MoltenVK dogrudan yuklenemedi", VK_ERROR_INCOMPATIBLE_DRIVER);
         return false;
       }
-      return init(arena_unused_, api, cfg);
+      return init_instance(api, cfg);
     }
   }
 #endif
@@ -130,20 +138,32 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
     mci.pUserData = this;
     api.vkCreateDebugUtilsMessengerEXT(instance_, &mci, nullptr, &messenger_);
   }
-  if (!pick_physical(cfg)) return false;
+  return true;
+}
 
-  // Kuyruk ailesi: grafik + compute + transfer tek aile (mobilde tipik).
+bool Device::init_device(VkSurfaceKHR surface) {
+  VkApi &api = *api_;
+  const DeviceConfig &cfg = cfg_;
+  surface_ = surface;
+  if (!pick_physical(cfg, surface)) return false;
+
+  // Kuyruk ailesi: grafik + compute (+ sunum, yuzey varsa) tek aile.
   uint32_t qn = 0;
   api.vkGetPhysicalDeviceQueueFamilyProperties(phys_, &qn, nullptr);
   VkQueueFamilyProperties qp[16];
   if (qn > 16) qn = 16;
   api.vkGetPhysicalDeviceQueueFamilyProperties(phys_, &qn, qp);
   queue_family_ = UINT32_MAX;
-  for (uint32_t i = 0; i < qn; i++)
-    if ((qp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && (qp[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
-      queue_family_ = i;
-      break;
+  for (uint32_t i = 0; i < qn; i++) {
+    if (!(qp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) || !(qp[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) continue;
+    if (surface) {
+      VkBool32 present = VK_FALSE;
+      api.vkGetPhysicalDeviceSurfaceSupportKHR(phys_, i, surface, &present);
+      if (!present) continue;
     }
+    queue_family_ = i;
+    break;
+  }
   if (queue_family_ == UINT32_MAX) {
     fail("grafik+compute kuyruk ailesi yok", VK_ERROR_INITIALIZATION_FAILED);
     return false;
@@ -153,6 +173,10 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
   // Uzantilar (varsa ac).
   const char *dev_exts[8];
   uint32_t dev_ext_n = 0;
+  if (surface) {
+    if (!has_swapchain_ext_) { fail("VK_KHR_swapchain yok", VK_ERROR_EXTENSION_NOT_PRESENT); return false; }
+    dev_exts[dev_ext_n++] = "VK_KHR_swapchain";
+  }
   if (caps_.ext_subpass_merge_feedback) dev_exts[dev_ext_n++] = "VK_EXT_subpass_merge_feedback";
   if (caps_.khr_portability_subset) dev_exts[dev_ext_n++] = "VK_KHR_portability_subset";
   // GPL: VK_KHR_pipeline_library + VK_EXT_graphics_pipeline_library + feature.
@@ -185,7 +209,7 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
   f12.bufferDeviceAddress = caps_.buffer_device_address;
   VkPhysicalDeviceFeatures2 f2{};
   f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-  f2.pNext = want >= VK_API_VERSION_1_2 ? &f12 : nullptr;
+  f2.pNext = instance_version_ >= VK_API_VERSION_1_2 ? &f12 : nullptr;
   f2.features.drawIndirectFirstInstance = VK_FALSE;
 
   float prio = 1.0f;
@@ -201,7 +225,7 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
   dci.pQueueCreateInfos = &qci;
   dci.enabledExtensionCount = dev_ext_n;
   dci.ppEnabledExtensionNames = dev_exts;
-  r = api.vkCreateDevice(phys_, &dci, nullptr, &device_);
+  VkResult r = api.vkCreateDevice(phys_, &dci, nullptr, &device_);
   if (r != VK_SUCCESS) {
     fail("vkCreateDevice", r);
     return false;
@@ -228,7 +252,8 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
   return true;
 }
 
-bool Device::pick_physical(const DeviceConfig &cfg) {
+bool Device::pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface) {
+  (void)surface;
   VkApi &api = *api_;
   uint32_t n = 0;
   api.vkEnumeratePhysicalDevices(instance_, &n, nullptr);
@@ -301,6 +326,7 @@ bool Device::pick_physical(const DeviceConfig &cfg) {
     else if (!std::strcmp(e, "VK_EXT_host_image_copy")) caps_.ext_host_image_copy = true;
     else if (!std::strcmp(e, "VK_KHR_fragment_shading_rate")) caps_.khr_fragment_shading_rate = true;
     else if (!std::strcmp(e, "VK_KHR_portability_subset")) caps_.khr_portability_subset = true;
+    else if (!std::strcmp(e, "VK_KHR_swapchain")) has_swapchain_ext_ = true;
   }
   if (!has_pipeline_library) caps_.ext_graphics_pipeline_library = false; // ikisi birlikte gerekir
   if (cfg.require_mandatory) {
@@ -418,6 +444,8 @@ void Device::shutdown() {
     device_ = VK_NULL_HANDLE;
   }
   if (instance_) {
+    if (surface_ && api.vkDestroySurfaceKHR) api.vkDestroySurfaceKHR(instance_, surface_, nullptr);
+    surface_ = VK_NULL_HANDLE;
     if (messenger_ && api.vkDestroyDebugUtilsMessengerEXT) api.vkDestroyDebugUtilsMessengerEXT(instance_, messenger_, nullptr);
     messenger_ = VK_NULL_HANDLE;
     api.vkDestroyInstance(instance_, nullptr);

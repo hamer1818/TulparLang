@@ -17,7 +17,7 @@ import re
 import sys
 
 LAYERS = {"platform": 0, "core": 1, "rhi": 2, "renderer": 3, "sim": 4,
-          "gameplay": 5, "content": 6, "tools": 7, "tests": 99}
+          "gameplay": 5, "app": 5, "content": 6, "tools": 7, "tests": 99}
 BANNED_STL = {"vector", "map", "unordered_map", "set", "unordered_set",
               "string", "list", "deque", "forward_list", "memory",
               "functional", "sstream", "iostream", "fstream", "queue",

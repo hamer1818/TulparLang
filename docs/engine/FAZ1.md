@@ -51,6 +51,6 @@ macOS MoltenVK (Apple Paravirtual, Vulkan 1.3.357): piksel kapisi gecti; zaman d
 
 ## Kalan (Faz 1 kapısı için)
 1. Üç gerçek cihaz (Mali, Adreno, düşük segment) ve NDK/SDK: host derlemesi + `subpass_merge_feedback` + GPU sayaçla "DRAM'e inmedi" kanıtı.
-2. Yüzeyli (swapchain) yol: Android `ANativeWindow` → `VK_KHR_android_surface`; masaüstünde açılmaz.
+2. Yüzeyli (swapchain) yol: masaüstünde GLFW (dlopen) + `Swapchain` ile geldi (FAZ3.md, 2026-09-14; kullanıcı çalıştırır, ben headless doğrularım); Android `ANativeWindow` → `VK_KHR_android_surface` aynı sınıfla.
 3. `VK_EXT_graphics_pipeline_library` ile parçalı PSO linkleme (cache yükleme süresi ölçümüyle).
 4. Komut tamponlarının job sisteminden paralel kaydı (thread başına pool).

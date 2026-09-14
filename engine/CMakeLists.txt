@@ -20,7 +20,9 @@ add_library(engine_platform STATIC
     platform/memory.cpp
     platform/thread.cpp
     platform/crash.cpp
+    platform/window.cpp
 )
+target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
 target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(engine_platform PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
 target_link_libraries(engine_platform PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
@@ -57,6 +59,7 @@ add_library(engine_rhi STATIC
     rhi/device.cpp
     rhi/command_pools.cpp
     rhi/offscreen.cpp
+    rhi/swapchain.cpp
 )
 target_include_directories(engine_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)
 target_link_libraries(engine_rhi PUBLIC engine_core ${CMAKE_DL_LIBS})
@@ -108,6 +111,21 @@ add_library(engine_sim STATIC
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_sim engine_layer_check)
+
+# --- L3 RENDERER -----------------------------------------------------------------
+add_library(engine_renderer STATIC renderer/renderer.cpp)
+target_link_libraries(engine_renderer PUBLIC engine_rhi)
+target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
+add_dependencies(engine_renderer engine_layer_check)
+
+# --- Demo uygulamasi (L5): pencere (GLFW dlopen) ya da --headless -------------
+add_executable(engine_demo
+    app/demo.cpp
+    app/demo_scene.cpp
+    core/memory/alloc_gate_override.cpp
+)
+target_link_libraries(engine_demo PRIVATE engine_renderer engine_sim engine_rhi engine_core ${CMAKE_DL_LIBS})
+target_compile_options(engine_demo PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 
 # --- Testler ------------------------------------------------------------------
 # alloc_gate_override.cpp YURUTULEBILIRE eklenir: hangi ikilinin sayildigi

@@ -440,7 +440,7 @@ Bu tablo motorun **neden hem daha hızlı hem daha küçük** olduğunun tamamı
 - **Çıktı:** fizikli, animasyonlu, gezinen test sahnesi (Faz 1 renderer'ıyla kutu/kapsül çizimi yeter)
 - **Kapı:** replay determinizmi doğrulanmış (aynı mimaride bit eşit)
 
-### Faz 3 — Renderer Çekirdeği
+### Faz 3 — Renderer Çekirdeği (ilk dilim başladı 2026-09-14: pencere + swapchain + forward Lambert + `engine_demo`; durum: `docs/engine/FAZ3.md`)
 - ⚠️ REV: **depth prepass + clustered forward+ (subpass içinde)** varsayılan; **visibility buffer A/B ölçümü** (bant genişliği + kare süresi, 3 cihaz). Kazanırsa geçilir, kaybederse §1.2 kararı kapanır
 - Stochastic tile-based lighting düşük segment yolu (HypeHype), ışık seçiminde temporal stabilizasyon
 - CSM gölge, PBR, **VRS baseline** (Mali'de FDM yoluyla değerlendir)

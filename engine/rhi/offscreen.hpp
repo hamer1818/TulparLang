@@ -68,6 +68,13 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
 // ayirma YOK (AllocGate ile test edilir); out->pixels arenadan (kurulumda).
 bool offscreen_render_frame(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenResult *out);
 void offscreen_destroy(OffscreenTarget *t);
+VkRenderPass offscreen_render_pass(OffscreenTarget *t);
+// Ozel kayit: render pass baslatilir (subpass 0, viewport/scissor ayarli),
+// `record(cb, user)` cagrilir (prepass cizimleri, vkCmdNextSubpass, renk),
+// sonra bitirilip pikseller okunur. Renderer'in headless dogrulamasi icin.
+typedef void (*OffscreenRecordFn)(VkCommandBuffer cb, void *user);
+bool offscreen_render_custom(OffscreenTarget *t, const OffscreenConfig &cfg, OffscreenRecordFn record, void *user,
+                             OffscreenResult *out);
 
 // Basit PPM (P6) yazici — insan gozu icin; test artefakti.
 bool write_ppm(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);

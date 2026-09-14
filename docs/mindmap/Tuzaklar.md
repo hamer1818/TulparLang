@@ -1900,3 +1900,19 @@ upstream cmake'i atıp glob ile derleyince bayrak da gitti. **Kural:** üçünc�
 CMake'inle derliyorsan upstream'in bayraklarını **oku ve taşı** (özellikle FP); belirlenimlilik
 iddiası ikinci mimaride altın özetle sınanmadan kabul edilmez; giriş verisi libm'den geçmemeli.
 
+### 8k. Vulkan'da y ters çevrilmiş projeksiyon + GL alışkanlığı `CLOCKWISE` = zemin kaybolur
+`Mat4::perspective` Vulkan NDC için y'yi ters çevirir. GL tarzı (çevirmeyen) projeksiyonda
+dünya-CCW üçgen framebuffer'da CW görünür ve `VK_FRONT_FACE_CLOCKWISE` doğrudur; y'yi ters
+çevirince sarım **geri** CCW olur. "Y'yi çevirdim, sarım da dönmüştür" diye CW koyunca tek yüzlü
+zemin kayboldu, küpler iç yüzleriyle karanlık çizildi (normal ışığa ters → yalnız ambient) —
+sahne "çalışıyor ama karanlık" göründü. **Sarım testi:** headless karede tek yüzlü zemin var mı.
+Kural: ters çevrilmiş projeksiyon + `COUNTER_CLOCKWISE`; ikisini aynı yerde belgele.
+
+### 8l. Swapchain kare yuvası ile renderer kare yuvası ayrı sayılırsa GPU'nun okuduğu UBO'ya yazılır
+Renderer `begin_frame(frame_i % 2)` ile UBO yuvasını, swapchain kendi `frame_` sayacıyla fence
+yuvasını seçiyordu. Acquire başarısız olunca (OUT_OF_DATE, yeniden boyutlandırma) swapchain
+sayacı durur, uygulama sayacı ilerler → iki yuva ayrışır, fence beklenen yuva ile yazılan yuva
+farklı olur. **Kural:** kare yuvası tek kaynaktan gelir (`FrameContext::frame_index`), renderer
+onu alır. Ayrıca fence'i **gönderimden hemen önce** sıfırla: acquire'da sıfırlayıp gönderemeyen
+kod bir sonraki `vkWaitForFences`'i sonsuza kadar takar.
+

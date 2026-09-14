@@ -44,6 +44,9 @@ struct DeviceConfig {
   // Dogrulama katmani (VK_LAYER_KHRONOS_validation) varsa etkinlestir; hatalar
   // sayilir (validation_errors) ve ilk birkaci basilir. Testler 0 bekler.
   bool validation = false;
+  // Pencere varsa: VK_KHR_surface + platform uzantilari (Window verir).
+  const char *const *instance_extensions = nullptr;
+  uint32_t instance_extension_count = 0;
 };
 
 // Bellek: tur basina buyuk blok, bump; serbest birakma yok (cihaz omru).
@@ -65,7 +68,11 @@ struct MemoryAlloc {
 
 class Device {
 public:
+  // Tek adim (yuzeysiz, offscreen/test).
   bool init(Arena &arena, VkApi &api, const DeviceConfig &cfg);
+  // Iki adim (pencere): once instance, uygulama yuzeyi kurar, sonra cihaz.
+  bool init_instance(VkApi &api, const DeviceConfig &cfg);
+  bool init_device(VkSurfaceKHR surface);
   void shutdown();
   bool ok() const { return device_ != VK_NULL_HANDLE; }
   const DeviceCaps &caps() const { return caps_; }
@@ -92,7 +99,10 @@ public:
   bool end_one_shot_and_wait(VkCommandBuffer cb, uint64_t timeout_ns = 5000000000ull);
 
 private:
-  bool pick_physical(const DeviceConfig &cfg);
+  bool pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface);
+  DeviceConfig cfg_{};
+  VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+  bool has_swapchain_ext_ = false;
   int find_memory_type(uint32_t mask, VkMemoryPropertyFlags flags) const;
   void fail(const char *msg, VkResult r);
 
@@ -102,6 +112,7 @@ private:
   VkDevice device_ = VK_NULL_HANDLE;
   VkQueue queue_ = VK_NULL_HANDLE;
   uint32_t queue_family_ = 0;
+  uint32_t instance_version_ = 0;
   VkCommandPool cmd_pool_ = VK_NULL_HANDLE;
   VkFence one_shot_fence_ = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;

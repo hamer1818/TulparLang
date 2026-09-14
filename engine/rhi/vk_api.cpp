@@ -78,6 +78,8 @@ void vk_api_load_instance(VkApi &api, VkInstance inst) {
   G(vkGetDeviceProcAddr);
   G(vkCreateDebugUtilsMessengerEXT);
   G(vkDestroyDebugUtilsMessengerEXT);
+  G(vkDestroySurfaceKHR); G(vkGetPhysicalDeviceSurfaceSupportKHR); G(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+  G(vkGetPhysicalDeviceSurfaceFormatsKHR); G(vkGetPhysicalDeviceSurfacePresentModesKHR);
 #undef G
 }
 
@@ -102,6 +104,12 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
   G(vkCmdBeginRenderPass); G(vkCmdNextSubpass); G(vkCmdEndRenderPass);
   G(vkCmdBindPipeline); G(vkCmdSetViewport); G(vkCmdSetScissor); G(vkCmdDraw);
   G(vkCmdPipelineBarrier); G(vkCmdCopyImageToBuffer); G(vkCmdExecuteCommands);
+  G(vkCreateSwapchainKHR); G(vkDestroySwapchainKHR); G(vkGetSwapchainImagesKHR); G(vkAcquireNextImageKHR); G(vkQueuePresentKHR);
+  G(vkCreateSemaphore); G(vkDestroySemaphore); G(vkResetCommandBuffer); G(vkFreeCommandBuffers);
+  G(vkCmdBindVertexBuffers); G(vkCmdBindIndexBuffer); G(vkCmdDrawIndexed); G(vkCmdPushConstants); G(vkCmdCopyBuffer);
+  G(vkFlushMappedMemoryRanges);
+  G(vkCreateDescriptorSetLayout); G(vkDestroyDescriptorSetLayout); G(vkCreateDescriptorPool); G(vkDestroyDescriptorPool);
+  G(vkAllocateDescriptorSets); G(vkUpdateDescriptorSets); G(vkCmdBindDescriptorSets);
 #undef G
 }
 
