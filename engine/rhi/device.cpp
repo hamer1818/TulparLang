@@ -24,6 +24,7 @@ void Device::fail(const char *msg, VkResult r) {
 }
 
 bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
+  (void)arena_unused_; // yalniz macOS yedeginin yeniden cagrisinda gecirilir
   api_ = &api;
   uint32_t loader_version = VK_API_VERSION_1_0;
   if (api.vkEnumerateInstanceVersion) api.vkEnumerateInstanceVersion(&loader_version);

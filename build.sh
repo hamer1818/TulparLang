@@ -218,7 +218,9 @@ if [ "$ACTION" = "suites" ]; then
             printf "%-42s ${RED}FAIL${NC} %s\n" "engine_tests" "$summary"
             # Teshis icin GPU/yetenek satirlari da basilir (ilk lavapipe
             # kosumunda hangi cihazin bulundugu gorunmedi).
-            echo "$out" | grep -E 'FAIL|FATAL|ATLANDI|\[bilgi\] (GPU|zorunlu|uzanti|operator)' | awk 'NR<=16' | sed 's/^/    /'
+            # Dusen kosumda TUM [bilgi] satirlari: teshis icin gereken sayilar
+            # (cihaz acilamadi sebebi, altin ozet farki) burada.
+            echo "$out" | grep -E 'FAIL|FATAL|ATLANDI|\[bilgi\]' | awk 'NR<=28' | sed 's/^/    /'
             SUITE_FAILED=1
         else
             printf "%-42s ${GREEN}PASS${NC} %s\n" "engine_tests" "$summary"

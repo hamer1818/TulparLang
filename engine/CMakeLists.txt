@@ -112,7 +112,7 @@ add_executable(engine_tests
 )
 target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 karsilastirir (0 = henuz yok).
-# 0xed7d5c5d0986ca44: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, 2026-09-14.
-set(ENGINE_PHYSICS_GOLDEN_HASH "0xed7d5c5d0986ca44" CACHE STRING "Jolt sahnesinin platformlar arasi altin ozeti (x86_64'te hesaplandi)")
+# 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
+set(ENGINE_PHYSICS_GOLDEN_HASH "0x5dc41c2bddc345cb" CACHE STRING "Jolt sahnesinin platformlar arasi altin ozeti (x86_64'te hesaplandi)")
 target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
 target_compile_options(engine_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)

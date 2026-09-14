@@ -29,8 +29,13 @@ uint64_t run_scene(Physics &ph, uint32_t threads, uint64_t *step_allocs_after_wa
   for (int x = 0; x < 4; x++)
     for (int y = 0; y < 4; y++)
       for (int z = 0; z < 4; z++) {
+        // Baslangic donusu SABIT bitlerle: axis_angle sin/cos (libm) kullanir ve
+        // glibc ile Apple libm son ulp'ta farkli olabilir — o zaman altin ozet
+        // Jolt'u degil libm'i olcer (Tuzaklar 8d). Dort donus, elle normalize.
+        static const Quat kRot[4] = {{0, 0, 0, 1}, {0, 0.0998334f, 0, 0.9950042f},
+                                     {0, 0.1986693f, 0, 0.9800666f}, {0, 0.2955202f, 0, 0.9553365f}};
         BodyId b = ph.add_box({0.5f, 0.5f, 0.5f}, {x * 1.1f - 1.65f, 2.0f + y * 1.2f, z * 1.1f - 1.65f + x * 0.05f},
-                              Quat::axis_angle({0, 1, 0}, 0.1f * x), true);
+                              kRot[x], true);
         if (!first.valid()) first = b;
       }
   uint64_t worst = 0;
