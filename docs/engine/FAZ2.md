@@ -12,7 +12,8 @@
 | Deterministik fixed-step | ✅ `FixedStep`: biriktirici, kare başına en çok N tick, fazlası **atılır ve sayılır** (sarmal yok) | `fixed_step_is_deterministic_and_clips` |
 | Kayıt / replay | ✅ `InputRecorder`: tick başına sabit blok; replay aynı girdiyle aynı `content_hash` | **Faz 2 kapısı** `faz2_gate_replay_is_bit_identical`: 1000 tick × 500 entity, seri = replay = paralel (3 aşama); pozitif kontrol: tek girdi bozulunca özet değişiyor |
 | Kare içinde 0 ayırma (sim) | ✅ 50 tick, 4 sistem, job'lı: `operator new` = 0 (sürücü yok, saf motor kodu) | `sim_tick_allocates_nothing` |
-| Jolt entegrasyonu | ⬜ sonraki adım (vendor + job sistemine bağlama + deterministik adım) | — |
+| Jolt entegrasyonu | ✅ Jolt 5.3.0 vendored (`engine/third_party/jolt`, MIT), `JPH_CROSS_PLATFORM_DETERMINISTIC` (FMA kapalı), x86_64 SSE4.2 / arm64 NEON; `Physics` sarmalayıcısı (Jolt tipleri dışarı sızmaz), sayan ayırıcı kancası. 65 gövde × 300 adım: kutular zemine oturuyor (y=0.486). **Thread sayısından bağımsız aynı özet** (1/4/auto). ⚠️ Jolt'un kendi thread havuzu; fiber job sistemine bağlama sonraki adım | `physics_boxes_settle_on_floor`, `faz2_gate_physics_is_deterministic_across_thread_counts` |
+| Platformlar arası determinizm (REV 8 sınaması) | 🔬 altın özet x86_64'te `ed7d5c5d0986ca44`; CI macOS arm64 aynı çıkarsa Jolt'un iddiası bayraklarımızla tutuyor, REV 8 gevşetilir; çıkmazsa REV 8 kalır | `physics_cross_platform_golden_hash` |
 | Animasyon (ACL sınıfı) + GPU skinning | ⬜ | — |
 | Recast/Detour navmesh | ⬜ | — |
 | GPU particle sim | ⬜ (çizim Faz 3/5) | — |
@@ -23,6 +24,10 @@
 1000 tick, 500 entity (350 mover + 150 soldier), 3 asama; ozet dd75193359610b81 (seri = replay = paralel)
 engine tests: 38 passed, 0 failed, 1 atlandi (dogrulama katmani yerelde yok)
 ```
+
+## Açık iş
+- **Jolt adım içi ayırma:** ısınma sonrası ~her 3 adımda bir 256 B + 1024 B çifti (`TULPAR_ENGINE_JOLT_ALLOC_TRACE=1` ile izlendi; 300 adımda 76 çift). Kaynak henüz bulunmadı (aday: contact cache / island splitter dizileri). Test şimdilik "adım başına ≤ 2" der; sıfıra indirmek için Jolt ayarları (`PhysicsSettings`, ön-boyutlandırma) incelenecek.
+- Jolt job'larını fiber job sistemine bağlamak (`JPH::JobSystem` uyarlayıcısı).
 
 ## Tasarım notları
 - **Belirlenimlilik sınırı:** aynı ikili + aynı mimari + aynı FP bayrakları (PLAN.md REV 8). Paralel aşama içindeki sistemler ayrık veriye dokunduğu için sıra önemsiz; **swap-remove sırayı değiştirir** — sistemler satır sırasına değil veriye bağlı olmalı (test dünyası buna uyar; kural Tuzaklar'a girecek).
