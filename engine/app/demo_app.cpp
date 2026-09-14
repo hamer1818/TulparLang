@@ -6,6 +6,8 @@
 #include <cstring>
 
 #include "app/demo_scene.hpp"
+#include "audio/clip.hpp"
+#include "audio/device.hpp"
 #include "app/virtual_stick.hpp"
 #include "content/font.hpp"
 #include "content/gltf.hpp"
@@ -262,6 +264,18 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
     if (font.load(sys, ren, fpath, ui_px > 12 ? ui_px : 12)) std::printf("[engine_demo] font: %s (%.0f px)\n", fpath, font.height());
     else std::printf("[engine_demo] font yok (%s): HUD metinsiz\n", fpath);
   }
+  // Ses (istege bagli): 440 Hz sinus dongude; cihaz/arka uc ve callback sayisi raporda.
+  audio::Mixer mixer;
+  audio::AudioDevice adev;
+  audio::Clip tone;
+  if (opts.audio) {
+    audio::DeviceConfig acfg;
+    if (adev.init(mixer, acfg)) {
+      if (audio::clip_sine(sys, 440.0f, 1.0f, mixer.rate(), 0.2f, &tone)) mixer.play(&tone, 1.0f, true);
+      std::printf("[engine_demo] ses: %s '%s' %u Hz %u kanal periyot %u kare\n", adev.info().backend, adev.info().name,
+                  adev.info().sample_rate, adev.info().channels, adev.info().period_frames);
+    } else std::printf("[engine_demo] ses cihazi acilamadi: %s\n", adev.last_error());
+  }
   DemoScene scene;
   if (!scene.init(sys, &jobs)) { std::fprintf(stderr, "sahne\n"); return 1; }
   std::printf("[engine_demo] sahne: %u entity, kutu+ajan+eklem\n", scene.entities());
@@ -433,6 +447,13 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   }
   double total_s = (platform::now_ns() - start_ns) / 1e9;
   std::printf("[engine_demo] toplam %u kare, %.1f s, ortalama %.1f fps\n", frame_i, total_s, total_s > 0 ? frame_i / total_s : 0.0);
+  if (adev.ok()) {
+    audio::MixerStats ms = mixer.stats();
+    std::printf("[engine_demo] ses: %llu callback, %llu kare (%.1f s), tepe %.2f, dusen komut %u\n", (unsigned long long)ms.callbacks,
+                (unsigned long long)ms.frames_rendered, (double)ms.frames_rendered / (double)(mixer.rate() ? mixer.rate() : 1), ms.peak,
+                ms.commands_dropped);
+    adev.shutdown();
+  }
   if (dev.caps().validation_layer) {
     std::printf("[engine_demo] dogrulama: %u hata, BestPractices %u uyari (%u Arm/Mali), messenger=%d\n",
                 dev.validation_errors(), dev.best_practice_warnings(), dev.best_practice_arm_warnings(),

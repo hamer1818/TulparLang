@@ -253,6 +253,8 @@ extern "C" void android_main(android_app *app) {
   prop("debug.tulpar.prerotate", prerot, sizeof prerot, "1");
   prop("debug.tulpar.size", size, sizeof size, "2159x1080");
   prop("debug.tulpar.validation", validation, sizeof validation, "0"); // 1: katman + Mali linter (APK'da katman varsa)
+  char audio_p[PROP_VALUE_MAX];
+  prop("debug.tulpar.audio", audio_p, sizeof audio_p, "0"); // 1: 440 Hz ton (AAudio yolu + callback sayimi)
   std::printf("[android] kip=%s dizin=%s\n", mode, dir);
 
   int rc = 0;
@@ -281,6 +283,7 @@ extern "C" void android_main(android_app *app) {
       o.present_mode = present;
       o.prerotate = prerot[0] != '0';
       o.validation = validation[0] == '1';
+      o.audio = audio_p[0] == '1';
       app::DemoHost dh;
       dh.user = &host;
       dh.instance_extensions = android_exts;

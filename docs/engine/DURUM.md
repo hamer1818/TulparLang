@@ -11,6 +11,7 @@
 | L1 core | arena ailesi + slotmap, **fiber job sistemi** (x86_64 + AArch64 asm), profiler (+ **Tracy** istemcisi, seçenek), math, konteynerler, `AllocGate` | ✅ |
 | L2 rhi | Vulkan **dlopen**, `Device` (iki aşama, yüzey), **Swapchain** (ön-döndürme, sunum kipi), offscreen, PSO cache, `allocate_dedicated`, **Mali linter** (BestPractices+Arm), **tile bütçesi** (kodla zorlanır) | ✅ |
 | L3 renderer | depth prepass → renk; **gölge haritası** (D16, PCF, dünya-uzayı normal eğilimi); **doku + malzeme** (klasik descriptor set, mip blit); **8–32 kümelenmiş nokta ışık** (CPU atama); **2B arayüz kuyruğu**; **doğrusal aydınlatma + sRGB hedef**; **GPU skinning** (gölge dahil) | ✅ ilk dilim |
+| L3 audio | **miniaudio** cihaz (AAudio/Pulse/ALSA/CoreAudio/null), kilitsiz **karıştırıcı** (32 ses, 0 ayırma), klip yükleme | ✅ ilk dilim |
 | L4 sim | archetype ECS, sistem zamanlayıcı, sabit adım + replay, **Jolt** fiber job'larda, **Recast/Detour** navmesh, sıkıştırılmış animasyon | ✅ yazılım tarafı |
 | L6 content | **glTF 2.0** (cgltf + stb_image; mesh, malzeme, doku, **iskelet + animasyon**), **meshoptimizer + ayrık LOD**, **font atlası** (stb_truetype, Türkçe) | ✅ ilk dilim |
 | L6 app | `engine_demo` (masaüstü pencere / headless), **Android NativeActivity host**, sanal joystick, HUD, **`engine_editor`** (ImGui + ImGuizmo iskeleti, headless) | ✅ |
@@ -28,7 +29,7 @@ animasyonu, oyuncu (dokunmatik joystick, kamera izler), gölge, 8 dönen nokta �
 - `LAZILY_ALLOCATED` bellek var (TBDR doğrulandı). Zaman damgası, GPL, subpass merge feedback **yok**.
 - Plan L2 "zorunlu" listesi (descriptorIndexing/timeline/BDA) bu cihazda **yok** → kapı rapora çevrildi (REV-3).
 
-## 4. Kapılar (engine_tests: masaüstü 68/68 (katmanla, 0 atlandı), emülatör 67/67 (katmanla; editör testi masaüstü), telefon 66/66 (skinning öncesi — USB düştü, telefon gelince tekrar))
+## 4. Kapılar (engine_tests: masaüstü 71/71 (katmanla, 0 atlandı), emülatör 67/67 (katmanla; editör testi masaüstü), telefon 66/66 (skinning öncesi — USB düştü, telefon gelince tekrar))
 Her görsel özelliğin açık/kapalı karşılaştırmalı testi ve pozitif/negatif kontrolü var: gölge (koyulaşan
 piksel + 6 m kaydırma kontrolü), doku (keskin geçiş oranı), nokta ışık (kırmızı piksel, görüş dışı 0),
 UI metni (boş metin 0), kümeleme (yerel/konservatif), joystick, glTF sayıları, adanmış bellek serbest
@@ -45,11 +46,11 @@ sahte yeşil (8s); `compositeAlpha OPAQUE` Huawei'de yok; katmanın seyrek-indek
 2. **Editör** (iskelet var: paneller, gizmo, yörünge kamera, oynat/durdur): tıklamayla seçim, kaydet/yükle, geri al.
 3. **Tulpar bağlaması**: oyun mantığı Tulpar'da (dil bugün kutusuz struct/işaretçi vermiyor; C ABI köprüsü).
 4. Karakter modeli yok (iskelet/animasyon içe aktarma ve GPU skinning var; sanatçı varlığı gerek).
-5. Ses (Faz 4: Oboe + miniaudio), CSM, render graph (Granite referans),
+5. Uzamsal ses/Steam Audio, CSM, render graph (Granite referans),
    vis buffer A/B, ASTC/KTX2/lightmap (Faz 6), Swappy, GameActivity göçü, Memory Advice,
    Adreno cihaz (Faz 1 kapısı), macOS CI çökmesi (yerelden ulaşılamıyor).
 
 ## 7. Çalışma kuralları (kullanıcı)
 CI yok, push yok ("gönder" denene kadar); doğrulama yerel + telefon (+ emülatör yalnız işlevsel);
 pencereyi ben açmam, ekran görüntüsü `adb screencap`; sayı yoksa iddia yok, her kapının kontrolü var.
-Yerelde bekleyen commit: 16 (`engine/faz2-anim`).
+Yerelde bekleyen commit: 19 (`engine/faz2-anim`).

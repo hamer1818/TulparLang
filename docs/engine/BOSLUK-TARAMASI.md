@@ -38,7 +38,7 @@
 | **GameController** | Yok | 🟢 sonra |
 | **Swappy** kare temposu | Yok; FIFO ile 60 fps ölçüldü, MAILBOX 223 fps | 🟠 `games-frame-pacing` AAR prefab ile `SwappyVk_queuePresent`; sabit 60/30 hedefi ve termal düşüşte adım. İP-P'den bağımsız yapılabilir |
 | **Memory Advice API** | Yok; bellek tepe değeri statik (arena rezervleri) | 🟡 AAR + JNI; `APP_CMD_LOW_MEMORY` bugün log. İP-T |
-| **Oboe** | Ses yok (Faz 4) | 🔴 Faz 4'ün Android tabanı; masaüstü/iOS için miniaudio |
+| **Oboe** | ✅ **bugün, miniaudio ile**: AAudio doğrudan (Oboe'nin sardığı API) + OpenSL yedek; FAZ4.md | Oboe yalnız cihaz tuzağı görülürse |
 | **Performance Tuner** | Yok (saha telemetrisi yok) | 🟡 L8, oyun yayınlanınca |
 | **AGI** | Kullanılmadı; G72'de timestamp yok | 🟡 Araç, kod değil: bir sonraki telefon ölçüm turunda denenecek (`adb` üstünden, pencere açılmadan) |
 | **ADPF** termal | Yok | 🟡 Faz 5 (termal sürdürülebilir 60 fps kapısı) |
@@ -56,7 +56,7 @@
 | Belge | Bizde | Karar |
 |---|---|---|
 | **ozz-animation + ACL** | ✅ **bugün, ozz'suz**: `sim/animation` (ACL sınıfı klip, örnekleme, to_model) zaten vardı; eksik olan glTF iskelet/animasyon içe aktarma + GPU skinning eklendi (`content_skinned_gltf_bends`) | ozz yalnız karıştırma/IK/SoA gerekince; karar FAZ3 "glTF iskelet" |
-| Oboe / miniaudio / Steam Audio / opus | Ses yok | Faz 4 |
+| Oboe / miniaudio / Steam Audio / opus | ✅ **miniaudio bugün** (karıştırıcı + cihaz + klip, 3 kapı); Steam Audio/Opus sonra | FAZ4.md |
 | GameNetworkingSockets / GGPO | Ağ yok; sim deterministik (üç platform bit eşit) | 🟢 GGPO neredeyse bedava, ama ilk oyunda ağ yok |
 
 ## 5. L5 Dil (belge §12)
@@ -91,7 +91,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 | L1 | 🟢 | 🟢 **Tracy bugün** | ✅ |
 | L2 | 🟢 | 🟢 **+ Mali linter kapısı + tile bütçesi** | ✅ |
 | L3 | 🟢 | 🟡 **sRGB/doğrusal bugün**, render graph yok, 2 sampler ihlali **düzeltildi** | ✅ |
-| L4 | 🟡 | 🟡 **iskelet/animasyon içe aktarma + skinning bugün**; ses yok | ✅ |
+| L4 | 🟡 | 🟢 **iskelet/animasyon + skinning**, **ses (miniaudio) bugün**; Steam Audio/ağ yok | ✅ |
 | L5 | 🔴 | 🔴 Tulpar bağlaması yok | — |
 | L6 | 🟢 | 🟡 glTF + **meshopt/LOD bugün**; lightmap/ASTC/pack yok | ✅ |
 | L7 | 🟢 | 🟡 **editör iskeleti bugün** (ImGui + ImGuizmo); veri modeli/kaydet yok | ✅ |
@@ -103,4 +103,4 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 3. ~~glTF iskelet + GPU skinning~~ ✅ bugün (kendi runtime; ozz gerekmedi). Karakter modeli: sanatçı varlığı bekliyor.
 4. ~~Tracy (İP-R)~~ ✅ bugün.
 5. **Swappy** kare temposu, sonra **GameActivity** göçü (İP-P).
-6. Faz 4 ses (Oboe + miniaudio), Faz 6 içerik (ASTC/KTX2/meshoptimizer/lightmap).
+6. ~~Faz 4 ses~~ ✅ ilk dilim bugün (miniaudio); Faz 6 içerik (ASTC/KTX2/lightmap).

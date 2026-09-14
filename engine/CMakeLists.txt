@@ -124,6 +124,13 @@ add_library(engine_meshopt STATIC ${ENGINE_MESHOPT_SOURCES})
 target_include_directories(engine_meshopt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/meshoptimizer)
 target_compile_options(engine_meshopt PRIVATE -fno-exceptions -fno-rtti -w)
 
+# --- audio (L3): miniaudio (vendored, engine/third_party/miniaudio, MIT-0) ---
+add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/miniaudio_impl.c)
+target_include_directories(engine_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio)
+target_link_libraries(engine_audio PUBLIC engine_core ${CMAKE_DL_LIBS})
+target_compile_options(engine_audio PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
+add_dependencies(engine_audio engine_layer_check)
+
 # --- recastnavigation (vendored, engine/third_party/recast) ------------------
 # Recast = bake (sahne derleyicisi/test), Detour = runtime sorgu.
 file(GLOB ENGINE_RECAST_SOURCES CONFIGURE_DEPENDS
@@ -171,7 +178,7 @@ add_executable(engine_demo
     app/virtual_stick.cpp
     core/memory/alloc_gate_override.cpp
 )
-target_link_libraries(engine_demo PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core ${CMAKE_DL_LIBS})
+target_link_libraries(engine_demo PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core ${CMAKE_DL_LIBS})
 target_compile_options(engine_demo PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 target_compile_definitions(engine_demo PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
@@ -191,6 +198,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_math.cpp
     tests/test_containers.cpp
     tests/test_rhi.cpp
+    tests/test_audio.cpp
     tests/test_sim.cpp
     tests/test_physics.cpp
     tests/test_navmesh.cpp
@@ -217,7 +225,7 @@ if(NOT ANDROID)
 endif()
 
 add_executable(engine_tests ${ENGINE_TEST_SOURCES} app/virtual_stick.cpp core/memory/alloc_gate_override.cpp)
-target_link_libraries(engine_tests PRIVATE engine_content engine_renderer engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
+target_link_libraries(engine_tests PRIVATE engine_content engine_renderer engine_rhi engine_sim engine_audio engine_core ${CMAKE_DL_LIBS})
 if(NOT ANDROID)
     target_link_libraries(engine_tests PRIVATE engine_imgui)
     target_include_directories(engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
@@ -250,7 +258,7 @@ if(ANDROID)
   target_compile_definitions(tulparengine PRIVATE ENGINE_TESTS_NO_MAIN=1
       ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
   target_compile_options(tulparengine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
-  target_link_libraries(tulparengine PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core android log ${CMAKE_DL_LIBS})
+  target_link_libraries(tulparengine PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core android log ${CMAKE_DL_LIBS})
   # --no-undefined: eksik sembol LINK'te dussun (cihazda UnsatisfiedLinkError degil);
   # 16 KB sayfa; glue'nun ANativeActivity_onCreate'i disari ver.
   target_link_options(tulparengine PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384 -u ANativeActivity_onCreate)

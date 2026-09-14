@@ -60,6 +60,7 @@ int main(int argc, char **argv) {
   }
   o.gpu_prefer = std::getenv("TULPAR_ENGINE_GPU");
   o.validation = std::getenv("TULPAR_ENGINE_VK_VALIDATION") != nullptr;
+  o.audio = std::getenv("TULPAR_ENGINE_AUDIO") != nullptr;
   platform::CrashConfig cc;
   cc.report_dir = ".";
   cc.build_id = "engine_demo";

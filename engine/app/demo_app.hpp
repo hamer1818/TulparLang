@@ -19,6 +19,7 @@ struct DemoOptions {
   uint32_t width = 1280, height = 720;
   const char *gpu_prefer = nullptr; // DeviceConfig::prefer ("cpu" vb.)
   bool validation = false;
+  bool audio = false; // 440 Hz ton (dongu): ses cihazi yolu + callback sayimi raporda
   bool prerotate = true;            // Android on-dondurme (A/B icin kapatilabilir)
   const char *present_mode = nullptr; // "fifo" (vars.), "mailbox", "immediate"
 };

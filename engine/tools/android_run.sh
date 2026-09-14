@@ -58,7 +58,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 # Bos deger adb shell'de kaybolur: tirnakla.
-adb shell "setprop debug.tulpar.mode '$MODE'; setprop debug.tulpar.filter '$FILTER'; setprop debug.tulpar.frames '$FRAMES'; setprop debug.tulpar.present '${TULPAR_PRESENT:-fifo}'; setprop debug.tulpar.prerotate '${TULPAR_PREROTATE:-1}'; setprop debug.tulpar.size '${TULPAR_SIZE:-2159x1080}'; setprop debug.tulpar.validation '${TULPAR_VALIDATION:-0}'"
+adb shell "setprop debug.tulpar.mode '$MODE'; setprop debug.tulpar.filter '$FILTER'; setprop debug.tulpar.frames '$FRAMES'; setprop debug.tulpar.present '${TULPAR_PRESENT:-fifo}'; setprop debug.tulpar.prerotate '${TULPAR_PREROTATE:-1}'; setprop debug.tulpar.size '${TULPAR_SIZE:-2159x1080}'; setprop debug.tulpar.validation '${TULPAR_VALIDATION:-0}'; setprop debug.tulpar.audio '${TULPAR_AUDIO:-0}'"
 
 if [ "${TULPAR_TRACY:-OFF}" = ON ]; then adb forward tcp:8086 tcp:8086 >/dev/null && echo "  tracy: adb forward 8086 (masaustunde tracy-capture -a 127.0.0.1)"; fi
 echo "[4/5] baslat: $MODE"
