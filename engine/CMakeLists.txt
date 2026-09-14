@@ -74,6 +74,11 @@ file(GLOB_RECURSE ENGINE_JOLT_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_D
 add_library(engine_jolt STATIC ${ENGINE_JOLT_SOURCES})
 target_include_directories(engine_jolt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/jolt)
 target_compile_definitions(engine_jolt PUBLIC JPH_CROSS_PLATFORM_DETERMINISTIC)
+# -ffp-contract=off PUBLIC: AArch64'te GCC/Clang a*b+c'yi varsayilan olarak FMA'ya
+# birlestirir, x86_64'te (-mfma yok) birlestirmez -> ayni kaynak, farkli yuvarlama.
+# Olculdu (CI 2026-09-14): sabit girdiyle x86_64 5dc41c2b... vs arm64 4087b9af...
+# Jolt'un kendi derlemesi de bunu kapatir; define tek basina yetmiyor.
+target_compile_options(engine_jolt PUBLIC -ffp-contract=off)
 target_compile_options(engine_jolt PRIVATE -fno-exceptions -fno-rtti -w)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_compile_definitions(engine_jolt PUBLIC JPH_USE_SSE4_1 JPH_USE_SSE4_2)
@@ -88,7 +93,7 @@ add_library(engine_sim STATIC
     sim/physics.cpp
 )
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt)
-target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
+target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_sim engine_layer_check)
 
 # --- Testler ------------------------------------------------------------------
@@ -111,6 +116,7 @@ add_executable(engine_tests
     core/memory/alloc_gate_override.cpp
 )
 target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
+target_compile_options(engine_tests PRIVATE -ffp-contract=off) # sim belirlenimliligi (strict FP, plan C.1.5)
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 karsilastirir (0 = henuz yok).
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
 set(ENGINE_PHYSICS_GOLDEN_HASH "0x5dc41c2bddc345cb" CACHE STRING "Jolt sahnesinin platformlar arasi altin ozeti (x86_64'te hesaplandi)")

@@ -86,6 +86,16 @@ bool Device::init(Arena &arena_unused_, VkApi &api, const DeviceConfig &cfg) {
   ici.enabledLayerCount = layer_n;
   ici.ppEnabledLayerNames = layers;
   VkResult r = api.vkCreateInstance(&ici, nullptr, &instance_);
+#if defined(__APPLE__)
+  // Loader + MoltenVK ICD: VK_ERROR_INCOMPATIBLE_DRIVER (olculdu CI macOS
+  // 2026-09-14, VK_ICD_FILENAMES verilmisken bile). Dogrudan MoltenVK calisiyor
+  // (ilk kosumda cizdi). Yedek burada da: instance kurulamazsa dogrudan yukle,
+  // bir kez bastan dene.
+  if (r != VK_SUCCESS && !vk_api_is_direct_moltenvk(api)) {
+    caps_ = DeviceCaps{};
+    if (vk_api_load_moltenvk_direct(api)) return init(arena_unused_, api, cfg);
+  }
+#endif
   if (r != VK_SUCCESS) {
     fail("vkCreateInstance", r);
     return false;

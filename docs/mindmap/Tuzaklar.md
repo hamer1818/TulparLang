@@ -1890,3 +1890,13 @@ macOS "Vulkan cihazı yok" dedi; main'de `moltenvk_direct` yoktu, dalda vardı.
 Birleşme sonrası `git diff origin/main origin/<dal> --stat` **boş** olmalı (#318'de yapıldı, #319'da
 atlandı). Squash merge'te `git log main..dal` her zaman dolu görünür, kanıt **dosya farkı**dır.
 
+### 8j. "Cross-platform deterministic" define'ı tek başına yetmez — FMA birleştirmesi derleyicinin
+Jolt `JPH_CROSS_PLATFORM_DETERMINISTIC` ile x86 ↔ ARM bit eşitliği vaat eder; bizim vendored derlemede
+arm64 CI farklı özet verdi (`5dc4…` vs `4087…`). İki sebep, ikisi de bizim: (1) sahne kurulumunda
+`axis_angle` → `sinf/cosf` → libm (8d'nin aynısı, fizik sahnesinde); (2) AArch64'te GCC/Clang
+`a*b+c`'yi varsayılan olarak FMA'ya **birleştirir**, x86_64'te `-mfma` olmadığı için birleştirmez —
+aynı kaynak, farklı yuvarlama. Jolt'un resmi `Build/CMakeLists.txt`'i `-ffp-contract=off` koyuyor;
+upstream cmake'i atıp glob ile derleyince bayrak da gitti. **Kural:** üçüncü parti kütüphaneyi kendi
+CMake'inle derliyorsan upstream'in bayraklarını **oku ve taşı** (özellikle FP); belirlenimlilik
+iddiası ikinci mimaride altın özetle sınanmadan kabul edilmez; giriş verisi libm'den geçmemeli.
+
