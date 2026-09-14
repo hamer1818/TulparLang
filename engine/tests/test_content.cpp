@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "content/gltf.hpp"
+#include "content/meshopt.hpp"
 #include "core/memory/arena.hpp"
 #include "renderer/renderer.hpp"
 #include "rhi/device.hpp"
@@ -143,6 +144,91 @@ ENGINE_TEST(content_textured_cube_renders_checker) {
   std::printf("    [bilgi] turuncu %u, lacivert %u piksel\n", orange, navy);
   bool both = orange > 300 && navy > 300;
   CHECK(both);
+  ren.shutdown();
+  rhi::offscreen_destroy(off);
+  dev.shutdown();
+}
+
+// meshoptimizer (Faz 6 dilimi): yuklemede vertex cache/overdraw/fetch iyilesir
+// (ACMR kotulesmez, overdraw kotulesmez), ayrik LOD'lar hedefe iner (%50/%25,
+// bagil hata siniri altinda) ve LOD2 uzaktan ayni siluetti verir (offscreen
+// kapli piksel farki < %3). POZITIF KONTROL: hata siniri cok kucukken
+// sadelestirici hedefe INEMEZ (sinir gercekten calisiyor). Kamera uzakligina
+// gore secim: yakin LOD0, uzak LOD2.
+ENGINE_TEST(content_meshopt_lods_keep_silhouette) {
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "content_lod")) { CHECK(false); return; }
+  char path[512];
+  const char *env = std::getenv("TULPAR_ENGINE_ASSETS");
+  if (env) std::snprintf(path, sizeof path, "%s/lod_sphere.gltf", env);
+  else std::snprintf(path, sizeof path, "%s/tests/assets/lod_sphere.gltf", ENGINE_SOURCE_DIR);
+  static content::Model m;
+  bool loaded = content::gltf_load(sys, path, &m);
+  if (!loaded) std::printf("    [bilgi] glTF: %s\n", m.error);
+  CHECK(loaded);
+  if (!loaded || m.mesh_count == 0) return;
+  const content::ModelMesh &mm = m.meshes[0];
+  std::printf("    [bilgi] kure: %u vertex (yuklenen %u), %u ucgen; ACMR %.3f -> %.3f, overdraw %.3f -> %.3f\n",
+              mm.vertex_count, m.opt.vertices_before, mm.index_count / 3, m.opt.acmr_before, m.opt.acmr_after,
+              m.opt.overdraw_before, m.opt.overdraw_after);
+  std::printf("    [bilgi] LOD: %u -> %u (hata %.4f) -> %u (hata %.4f)\n", mm.index_count, mm.lod_index_count[0], mm.lod_error[0],
+              mm.lod_index_count[1], mm.lod_error[1]);
+  CHECK(m.opt.acmr_after <= m.opt.acmr_before + 1e-4f);
+  CHECK(m.opt.overdraw_after <= m.opt.overdraw_before + 0.02f);
+  CHECK(mm.vertex_count <= m.opt.vertices_before);
+  CHECK(mm.lod_index_count[0] > 0 && mm.lod_index_count[0] <= mm.index_count * 55 / 100);
+  CHECK(mm.lod_index_count[1] > 0 && mm.lod_index_count[1] <= mm.index_count * 30 / 100);
+  CHECK(mm.lod_error[0] <= 0.05f && mm.lod_error[1] <= 0.05f);
+
+  // POZITIF KONTROL: hata 0.0001 ile %25 hedefe inilemez.
+  content::ModelMesh strict = mm;
+  const float ratios[1] = {0.25f};
+  CHECK(content::mesh_build_lods(sys, strict, ratios, 1, 0.0001f));
+  std::printf("    [bilgi] pozitif kontrol (hata 0.0001): %u indeks (hedef %u; ulasilamamali)\n", strict.lod_index_count[0],
+              mm.index_count / 4);
+  bool bound_matters = strict.lod_index_count[0] == 0 || strict.lod_index_count[0] > mm.index_count * 30 / 100;
+  CHECK(bound_matters);
+
+  // Siluet: LOD0 ve LOD2 ayni kamerayla; kapli piksel sayisi %3 icinde.
+  if (!rhi::vk_api_load(g_api)) { skip("Vulkan loader yok (siluet karsilastirmasi atlandi)"); return; }
+  rhi::Device dev;
+  rhi::DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  const uint32_t W = 160, H = 160;
+  rhi::OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  oc.clear[0] = oc.clear[1] = oc.clear[2] = 0;
+  rhi::OffscreenResult ores;
+  rhi::OffscreenTarget *off = rhi::offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 0;
+  if (!ren.init(dev, sys, rhi::offscreen_render_pass(off), rc)) { CHECK(false); rhi::offscreen_destroy(off); dev.shutdown(); return; }
+  static content::UploadedModel up;
+  CHECK(content::upload_model(ren, sys, m, &up));
+  ren.set_light({0, 1, 0}, {1, 1, 1}, 0.0f);
+  ren.set_camera(Mat4::look_at({0, 0, 4.0f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(0.8f, 1.0f, 0.1f, 50.0f));
+  ren.set_render_size(W, H);
+  Rec rr{&ren};
+  uint32_t covered[2] = {0, 0};
+  uint32_t counts[2][content::kModelMaxLods + 1] = {};
+  for (int pass = 0; pass < 2; pass++) {
+    ren.begin_frame(0);
+    content::ModelLod lod;
+    lod.camera_pos = pass == 0 ? Vec3{0, 0, 4.0f} : Vec3{0, 0, 100.0f}; // 2. gecis: "uzak" -> LOD2 secilir
+    content::draw_model(ren, m, up, Mat4::identity(), {1, 1, 1}, &lod, counts[pass]);
+    if (!rhi::offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) { CHECK(false); break; }
+    for (uint32_t i = 0; i < W * H; i++) if (ores.pixels[i * 4] + ores.pixels[i * 4 + 1] + ores.pixels[i * 4 + 2] > 30) covered[pass]++;
+  }
+  std::printf("    [bilgi] siluet: LOD0 %u px (secim %u/%u/%u), LOD2 %u px (secim %u/%u/%u)\n", covered[0], counts[0][0], counts[0][1],
+              counts[0][2], covered[1], counts[1][0], counts[1][1], counts[1][2]);
+  CHECK(counts[0][0] == 1 && counts[1][2] == 1);
+  const int diff = (int)covered[0] - (int)covered[1];
+  bool silhouette_kept = covered[0] > W * H / 20 && (diff < 0 ? -diff : diff) * 100 < (int)covered[0] * 3;
+  CHECK(silhouette_kept);
   ren.shutdown();
   rhi::offscreen_destroy(off);
   dev.shutdown();

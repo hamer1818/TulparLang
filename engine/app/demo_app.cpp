@@ -31,10 +31,10 @@ struct Cam {
   float height = 13.0f;
   Vec3 target{0, 0.5f, -1}; // yorunge merkezi (oyuncu varsa oyuncu)
 };
-Mat4 cam_view(const Cam &c) {
-  Vec3 eye{c.target.x + std::sin(c.angle) * c.radius, c.target.y + c.height, c.target.z + std::cos(c.angle) * c.radius};
-  return Mat4::look_at(eye, c.target, {0, 1, 0});
+Vec3 cam_eye(const Cam &c) {
+  return {c.target.x + std::sin(c.angle) * c.radius, c.target.y + c.height, c.target.z + std::cos(c.angle) * c.radius};
 }
+Mat4 cam_view(const Cam &c) { return Mat4::look_at(cam_eye(c), c.target, {0, 1, 0}); }
 struct RecordCtx {
   renderer::Renderer *r;
 };
@@ -179,6 +179,10 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       }
     ds.ground = ren.create_material(ren.create_texture(px, 64, 64, true), {1, 1, 1});
   }
+  static content::Model sphere_model;
+  static content::UploadedModel sphere_up;
+  bool have_sphere = false;
+  uint32_t lod_counts[content::kModelMaxLods + 1] = {};
   { // glTF kup (tests/assets ya da TULPAR_ENGINE_ASSETS): kutular bununla cizilir
     char path[1024];
     const char *adir = std::getenv("TULPAR_ENGINE_ASSETS");
@@ -193,7 +197,28 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
     } else {
       std::printf("[engine_demo] glTF yok (%s): kutular duz — %s\n", path, model.error);
     }
+    // LOD kuresi (meshoptimizer): uc kure, kameraya uzakliga gore LOD0/1/2.
+    if (adir && *adir) std::snprintf(path, sizeof path, "%s/lod_sphere.gltf", adir);
+    else std::snprintf(path, sizeof path, "%s/tests/assets/lod_sphere.gltf", ENGINE_SOURCE_DIR);
+    if (content::gltf_load(sys, path, &sphere_model) && content::upload_model(ren, sys, sphere_model, &sphere_up) && sphere_up.mesh_count) {
+      have_sphere = true;
+      const content::ModelMesh &mm = sphere_model.meshes[0];
+      std::printf("[engine_demo] LOD kuresi: %u ucgen -> %u -> %u (hata %.3f/%.3f), ACMR %.2f -> %.2f\n", mm.index_count / 3,
+                  mm.lod_index_count[0] / 3, mm.lod_index_count[1] / 3, mm.lod_error[0], mm.lod_error[1], sphere_model.opt.acmr_before,
+                  sphere_model.opt.acmr_after);
+    }
   }
+  auto draw_lod_spheres = [&](const Cam &c) {
+    if (!have_sphere) return;
+    content::ModelLod lod;
+    lod.camera_pos = cam_eye(c);
+    lod.distance1 = 24.0f;
+    lod.distance2 = 34.0f;
+    for (uint32_t k = 0; k <= content::kModelMaxLods; k++) lod_counts[k] = 0;
+    for (int k = 0; k < 3; k++)
+      content::draw_model(ren, sphere_model, sphere_up, Mat4::translate({-8.0f + 8.0f * (float)k, 1.2f, -8.5f}), {0.85f, 0.9f, 1.0f},
+                          &lod, lod_counts);
+  };
   ren.set_light(normalize(Vec3{0.5f, 1.0f, 0.35f}), {0.16f, 0.17f, 0.2f}, 0.85f);
   // Golge kutusu sahneyi kapsamali: arena 20x20, duvar 3 m, kutular ~5 m'ye kadar.
   ren.set_shadow_volume({0, 1.0f, -1.0f}, 17.0f, 70.0f);
@@ -311,6 +336,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       if (headless) {
         ren.begin_frame(frame_i);
         scene.draw(ren, ds);
+          draw_lod_spheres(cam);
         draw_hud(ren, font, (float)render_w, (float)render_h, 0.0f, hud_fps, hud_ms, ren.point_light_count(), nullptr,
                  scene.player_position(), false);
         RecordCtx rctx{&ren};
@@ -330,6 +356,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           ren.begin_frame(fc.frame_index);
           uint64_t tc = platform::now_ns();
           scene.draw(ren, ds);
+          draw_lod_spheres(cam);
           draw_hud(ren, font, (float)swap.logical_extent().width, (float)swap.logical_extent().height, swap.rotation_radians(),
                    hud_fps, hud_ms, ren.point_light_count(), interactive ? &stick : nullptr, scene.player_position(), interactive);
           uint64_t td = platform::now_ns();
@@ -360,10 +387,10 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       double rf = report_frames ? (double)report_frames : 1.0;
       hud_ms = (float)(st.p50_ns / 1e6);
       hud_fps = hud_ms > 0 ? 1000.0f / hud_ms : 0;
-      std::printf("[engine_demo] kare %u | p50 %.2f ms p99 %.2f ms max %.2f ms | sim %.2f render %.2f (bekle+acquire %.2f, ubo %.2f, draw-listesi %.2f, kayit %.2f, submit+present %.2f) ms/kare | cizim %u | isik %u (kume %u) | kare ici new (en cok) %llu | ozet %016llx\n",
+      std::printf("[engine_demo] kare %u | p50 %.2f ms p99 %.2f ms max %.2f ms | sim %.2f render %.2f (bekle+acquire %.2f, ubo %.2f, draw-listesi %.2f, kayit %.2f, submit+present %.2f) ms/kare | cizim %u | lod %u/%u/%u | isik %u (kume %u) | kare ici new (en cok) %llu | ozet %016llx\n",
                   frame_i, st.p50_ns / 1e6, st.p99_ns / 1e6, st.max_ns / 1e6, sim_ns / rf / 1e6, render_ns / rf / 1e6,
                   acquire_ns / rf / 1e6, ubo_ns / rf / 1e6, draw_ns / rf / 1e6, record_ns / rf / 1e6, submit_ns / rf / 1e6,
-                  ren.stats().draws, ren.point_light_count(), ren.stats().clusters.clusters_touched,
+                  ren.stats().draws, lod_counts[0], lod_counts[1], lod_counts[2], ren.point_light_count(), ren.stats().clusters.clusters_touched,
                   (unsigned long long)frame_allocs_max, (unsigned long long)scene.content_hash());
       if (interactive) {
         Vec3 pp = scene.player_position();

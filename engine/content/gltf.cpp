@@ -1,4 +1,5 @@
 #include "content/gltf.hpp"
+#include "content/meshopt.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -193,6 +194,11 @@ bool gltf_load(Arena &arena, const char *path, Model *out, const GltfLimits &lim
         for (uint32_t i = 0; i < mm.index_count; i++) mm.indices[i] = i;
       }
       mm.material = prim.material ? (int32_t)(prim.material - data->materials) : -1;
+      if (lim.optimize && !mesh_optimize(arena, mm, &out->opt)) { set_error(out, "arena dolu (meshopt)", nullptr); ok = false; break; }
+      if (lim.lods) {
+        const float ratios[kModelMaxLods] = {0.5f, 0.25f};
+        if (!mesh_build_lods(arena, mm, ratios, kModelMaxLods, lim.lod_error)) { set_error(out, "arena dolu (lod)", nullptr); ok = false; break; }
+      }
       mi++;
       mesh_n[m]++;
     }
@@ -228,7 +234,8 @@ bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedM
   out->textures = arena.alloc_array_zeroed<renderer::TextureHandle>(m.image_count ? m.image_count : 1);
   out->materials = arena.alloc_array_zeroed<renderer::MaterialHandle>(m.material_count ? m.material_count : 1);
   out->meshes = arena.alloc_array_zeroed<renderer::MeshHandle>(m.mesh_count ? m.mesh_count : 1);
-  if (!out->textures || !out->materials || !out->meshes) return false;
+  out->lod_meshes = arena.alloc_array_zeroed<renderer::MeshHandle>((m.mesh_count ? m.mesh_count : 1) * kModelMaxLods);
+  if (!out->textures || !out->materials || !out->meshes || !out->lod_meshes) return false;
   for (uint32_t i = 0; i < m.image_count; i++) {
     out->textures[i] = r.create_texture(m.images[i].rgba, m.images[i].width, m.images[i].height, true);
     if (!out->textures[i].valid()) return false;
@@ -243,18 +250,39 @@ bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedM
   for (uint32_t i = 0; i < m.mesh_count; i++) {
     out->meshes[i] = r.create_mesh(m.meshes[i].verts, m.meshes[i].vertex_count, m.meshes[i].indices, m.meshes[i].index_count);
     if (!out->meshes[i].valid()) return false;
+    for (uint32_t k = 0; k < kModelMaxLods; k++) {
+      if (!m.meshes[i].lod_index_count[k]) continue;
+      out->lod_meshes[i * kModelMaxLods + k] =
+          r.create_mesh(m.meshes[i].verts, m.meshes[i].vertex_count, m.meshes[i].lod_indices[k], m.meshes[i].lod_index_count[k]);
+      if (!out->lod_meshes[i * kModelMaxLods + k].valid()) return false;
+    }
   }
   out->mesh_count = m.mesh_count;
   return true;
 }
 
-void draw_model(renderer::Renderer &r, const Model &m, const UploadedModel &u, const Mat4 &model, Vec3 tint) {
+void draw_model(renderer::Renderer &r, const Model &m, const UploadedModel &u, const Mat4 &model, Vec3 tint,
+                const ModelLod *lod, uint32_t lod_counts[kModelMaxLods + 1]) {
   for (uint32_t i = 0; i < m.instance_count; i++) {
     const ModelInstance &inst = m.instances[i];
     if (inst.mesh >= u.mesh_count) continue;
     int32_t mat = m.meshes[inst.mesh].material;
     renderer::MaterialHandle mh = (mat >= 0 && (uint32_t)mat < u.material_count) ? u.materials[mat] : r.default_material();
-    r.draw(u.meshes[inst.mesh], mh, model * inst.world, tint);
+    const Mat4 world = model * inst.world;
+    renderer::MeshHandle mesh = u.meshes[inst.mesh];
+    uint32_t level = 0;
+    if (lod && u.lod_meshes) {
+      const Vec3 p{world.m[3][0], world.m[3][1], world.m[3][2]};
+      const Vec3 d{p.x - lod->camera_pos.x, p.y - lod->camera_pos.y, p.z - lod->camera_pos.z};
+      const float dist2 = d.x * d.x + d.y * d.y + d.z * d.z;
+      if (dist2 >= lod->distance2 * lod->distance2) level = 2;
+      else if (dist2 >= lod->distance1 * lod->distance1) level = 1;
+      // Istenen seviye yoksa bir alta dus (LOD2 yoksa LOD1, o da yoksa LOD0).
+      while (level > 0 && !u.lod_meshes[inst.mesh * kModelMaxLods + (level - 1)].valid()) level--;
+      if (level > 0) mesh = u.lod_meshes[inst.mesh * kModelMaxLods + (level - 1)];
+    }
+    if (lod_counts) lod_counts[level]++;
+    r.draw(mesh, mh, world, tint);
   }
 }
 

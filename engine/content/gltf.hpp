@@ -14,6 +14,11 @@ struct GltfLimits {
   uint32_t max_materials = 64;
   uint32_t max_meshes = 128;
   uint32_t max_instances = 512;
+  // Yukleme sonrasi meshoptimizer: tekillestir + vertex cache/overdraw/fetch
+  // (model.opt olcumu) ve ayrik LOD'lar (%50, %25; bagil hata lod_error).
+  bool optimize = true;
+  bool lods = true;
+  float lod_error = 0.05f;
 };
 
 // .gltf (gomulu/data URI/dis .bin) ya da .glb. false: out->error dolu.

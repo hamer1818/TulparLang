@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Test varligi uretici: dama dokulu kup -> engine/tests/assets/checker_cube.gltf
+                       UV kure (LOD/meshopt testi) -> engine/tests/assets/lod_sphere.gltf
 
 Tek dosya: tampon ve PNG data URI olarak gomulu (cgltf ikisini de acar). Depoya
 girer; belirlenimli (ayni girdi, ayni bayt). Yeniden uretmek:
@@ -9,6 +10,7 @@ import base64, json, os, struct, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(os.path.dirname(HERE), "tests", "assets", "checker_cube.gltf")
+OUT_SPHERE = os.path.join(os.path.dirname(HERE), "tests", "assets", "lod_sphere.gltf")
 
 
 def png_rgba(w, h, px):
@@ -82,5 +84,65 @@ def main():
     print("%s (%d bayt): %d vertex, %d indeks, %dx%d PNG" % (OUT, os.path.getsize(OUT), len(pos), len(idx), w, h))
 
 
+def sphere():
+    """UV kure: 48 dilim x 24 halka (~2300 ucgen). Dikis vertex'leri cift (uv icin);
+    meshopt tekillestirmesi bunlari BIRLESTIRMEZ (uv farkli) — normal. Disaridan CCW."""
+    import math
+    S, R = 48, 24
+    pos, nrm, uv, idx = [], [], [], []
+    for r in range(R + 1):
+        th = math.pi * r / R
+        for s_ in range(S + 1):
+            ph = 2 * math.pi * s_ / S
+            p = [math.sin(th) * math.cos(ph), math.cos(th), math.sin(th) * math.sin(ph)]
+            pos.append([round(c, 6) for c in p]); nrm.append([round(c, 6) for c in p]); uv.append([s_ / S, r / R])
+    for r in range(R):
+        for s_ in range(S):
+            a = r * (S + 1) + s_; b = a + S + 1; c = a + 1; d = b + 1
+            for tri in ([a, b, c], [c, b, d]):
+                p0, p1, p2 = pos[tri[0]], pos[tri[1]], pos[tri[2]]
+                if p0 == p1 or p1 == p2 or p0 == p2:
+                    continue  # kutup: yoz ucgen
+                e1 = [p1[i] - p0[i] for i in range(3)]; e2 = [p2[i] - p0[i] for i in range(3)]
+                n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]
+                cen = [(p0[i] + p1[i] + p2[i]) / 3 for i in range(3)]
+                if sum(n[i] * cen[i] for i in range(3)) < 0:
+                    tri = [tri[0], tri[2], tri[1]]  # icten CCW ise cevir
+                idx += tri
+    def f32s(rows):
+        return b"".join(struct.pack("<%df" % len(r), *r) for r in rows)
+    bpos, bnrm, buv = f32s(pos), f32s(nrm), f32s(uv)
+    bidx = struct.pack("<%dH" % len(idx), *idx)
+    buf = bpos + bnrm + buv + bidx + (b"\x00" * ((4 - len(bidx) % 4) % 4))
+    mn = [min(p[i] for p in pos) for i in range(3)]
+    mx = [max(p[i] for p in pos) for i in range(3)]
+    g = {
+        "asset": {"version": "2.0", "generator": "tulpar make_test_gltf.py"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "name": "lod_sphere"}],
+        "meshes": [{"name": "sphere", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+                                                       "indices": 3, "material": 0}]}],
+        "materials": [{"name": "flat", "pbrMetallicRoughness": {"baseColorFactor": [0.9, 0.9, 0.9, 1], "metallicFactor": 0}}],
+        "buffers": [{"byteLength": len(buf), "uri": "data:application/octet-stream;base64," + base64.b64encode(buf).decode()}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(bpos), "target": 34962},
+            {"buffer": 0, "byteOffset": len(bpos), "byteLength": len(bnrm), "target": 34962},
+            {"buffer": 0, "byteOffset": len(bpos) + len(bnrm), "byteLength": len(buv), "target": 34962},
+            {"buffer": 0, "byteOffset": len(bpos) + len(bnrm) + len(buv), "byteLength": len(bidx), "target": 34963},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(pos), "type": "VEC3", "min": mn, "max": mx},
+            {"bufferView": 1, "componentType": 5126, "count": len(nrm), "type": "VEC3"},
+            {"bufferView": 2, "componentType": 5126, "count": len(uv), "type": "VEC2"},
+            {"bufferView": 3, "componentType": 5123, "count": len(idx), "type": "SCALAR"},
+        ],
+    }
+    with open(OUT_SPHERE, "w") as f:
+        json.dump(g, f, separators=(",", ":"), sort_keys=True)
+    print("%s (%d bayt): %d vertex, %d indeks (%d ucgen)" % (OUT_SPHERE, os.path.getsize(OUT_SPHERE), len(pos), len(idx), len(idx) // 3))
+
+
 if __name__ == "__main__":
     main()
+    sphere()

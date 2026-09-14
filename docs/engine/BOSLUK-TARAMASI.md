@@ -21,7 +21,7 @@
 |---|---|---|
 | **Filament** — doğrusal uzay + pozlama zinciri, `matc` offline malzeme | ✅ **bugün**: swapchain/offscreen sRGB biçim, albedo SRGB doku, aydınlatma doğrusal, yazar renkleri sRGB→doğrusal; kapı gri gidiş-dönüş birim + kodlamasız kontrol (FAZ3 "Renk uzayı"). Shader'lar build'de derleniyor | Pozlama/tonemap yok (HDR hedef yok; Faz 5). Filament PBR belgesi BRDF için sırada |
 | **Defold** boyut | 2.7 MB strip (ölçüldü) | ✅ KARSILASTIRMA.md. Hedef "12 MB" tahmindi; gerçek çok altında. Motor büyüdükçe bu satır her milestone'da yeniden ölçülür |
-| **The Forge** FSL/SRT — CPU-GPU tek kaynak tablosu | `FrameUbo` C++ struct + GLSL blok elle eşleniyor (offset drift riski) | 🟡 Faz 8 (Tulpar shader stage). Kısa vadede: UBO düzenini tek başlıktan üretme (`static_assert(offsetof)`) — küçük iş, sırada |
+| **The Forge** FSL/SRT — CPU-GPU tek kaynak tablosu | `FrameUbo` std140 ofsetleri **static_assert** ile derlemede sabit (bugün) | 🟡 Tam SRT Faz 8 (Tulpar shader stage) |
 | The Forge "shader dili GPU'ya benzemeli" uyarısı | — | Not alındı (PLAN EK B.1 karşı görüşü) |
 | **Granite** render graph | Elle kurulmuş 2 geçiş (gölge → ana; 2 subpass) | 🟡 Faz 3 sonu / Faz 5 öncesi. Granite MIT referans; şimdilik geçiş sayısı 2, graph gerekmiyor |
 | **Vulkan-Samples** transient + `LAZILY_ALLOCATED` | ✅ derinlik transient + lazily (Mali'de tür var, ölçüldü) | ✅ |
@@ -69,7 +69,7 @@ köprü C ABI ile. Sırada "Tulpar bağlaması" (DURUM §6.3). Emsaller okuma li
 |---|---|---|
 | cgltf | ✅ | ✅ |
 | xatlas → lightmapper → seamoptimizer | Yok (dinamik gölge + nokta ışık var, lightmap yok) | 🟢 Faz 6; zincir hazır, tek dosya kütüphaneler |
-| meshoptimizer | Yok | 🟡 Faz 6/9 (LOD, meshlet); glTF yükleyiciye vertex cache optimizasyonu erken alınabilir |
+| meshoptimizer | ✅ **bugün**: vendored v1.2; yüklemede cache/overdraw/fetch + %50/%25 LOD, uzaklıkla seçim | Kapı: ACMR 1.06→0.71, LOD2 silueti %1.5 içinde, hata sınırı kontrolü. Meshlet/cluster DAG Faz 9 |
 | astc-encoder + libktx | Yok (RGBA8 + blit mip) | 🟡 Faz 6 pack; Mali'de ASTC ölçümü telefonda yapılır |
 
 ## 7. L7 Tooling (belge §14)
@@ -93,7 +93,7 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 | L3 | 🟢 | 🟡 **sRGB/doğrusal bugün**, render graph yok, 2 sampler ihlali **düzeltildi** | ✅ |
 | L4 | 🟡 | 🟡 ozz/ses yok | — |
 | L5 | 🔴 | 🔴 Tulpar bağlaması yok | — |
-| L6 | 🟢 | 🟡 glTF var; lightmap/ASTC/pack yok | — |
+| L6 | 🟢 | 🟡 glTF + **meshopt/LOD bugün**; lightmap/ASTC/pack yok | ✅ |
 | L7 | 🟢 | 🟡 kendi UI; editör yok | — |
 | L8 | 🟡 | 🔴 yok (ilk oyun öncesi gerekmez) | — |
 

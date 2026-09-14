@@ -327,3 +327,18 @@ demo sRGB yüzey biçimi seçti, 600 kare **59.8 fps** (FIFO), kayıt 1.9 ms, 0 
 Görsel fark: orta tonlar açılır (0.5 albedo → 188), nokta ışık sönümü fiziksel; ekran testi kullanıcıda
 (`build-android/demo_srgb.png`).
 
+## meshoptimizer + ayrık LOD (Faz 6 dilimi, tarama belgesi §13) — 2026-09-14
+
+Vendored `engine/third_party/meshoptimizer` (v1.2, MIT). glTF yüklemesinde (`GltfLimits::optimize/lods`):
+tekilleştirme → vertex cache → overdraw → vertex fetch (`content/meshopt.hpp`), ardından `meshopt_simplify`
+ile %50 ve %25 LOD (bağıl hata ≤ 0.05; hedefin %90'ının üstünde kalan seviye "yok"). `UploadedModel::lod_meshes`,
+`draw_model(..., ModelLod)` kameraya uzaklığa göre LOD0/1/2 seçer (istenen seviye yoksa alta düşer).
+
+**Kapı `content_meshopt_lods_keep_silhouette`** (kure 2208 üçgen, `make_test_gltf.py`): ACMR **1.064 → 0.707**,
+overdraw kötüleşmez, LOD1 3312 / LOD2 1656 indeks (hata 0.006 / 0.009), LOD2 silueti LOD0'ın **%1.5** içinde
+(7480 → 7365 px); **pozitif kontrol** hata sınırı 0.0001 ile hedefe inilemez (seviye yok). Masaüstü 66/66,
+telefon 66/66 (LOD2 hatası 0.0081 — sadeleştirici platforma göre son ondalıkta farklı; bilgi). Demo: üç LOD
+küresi, rapor satırında `lod a/b/c` seçim sayısı; telefon 59.9 fps, 166 çizim.
+The Forge SRT ilkesi (CPU-GPU tek kaynak tablosu) için ilk mekanik adım: `FrameUbo` std140 ofsetleri
+`static_assert` ile derlemede sabitlendi (kayma = derleme hatası).
+

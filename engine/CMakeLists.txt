@@ -102,6 +102,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
 endif()
 target_link_libraries(engine_jolt PUBLIC Threads::Threads)
 
+# --- meshoptimizer (vendored, engine/third_party/meshoptimizer, MIT) ---------
+# Yukleme aninda mesh optimizasyonu + LOD (Faz 6); cluster DAG'in temeli (Faz 9).
+file(GLOB ENGINE_MESHOPT_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/meshoptimizer/*.cpp)
+add_library(engine_meshopt STATIC ${ENGINE_MESHOPT_SOURCES})
+target_include_directories(engine_meshopt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/meshoptimizer)
+target_compile_options(engine_meshopt PRIVATE -fno-exceptions -fno-rtti -w)
+
 # --- recastnavigation (vendored, engine/third_party/recast) ------------------
 # Recast = bake (sahne derleyicisi/test), Detour = runtime sorgu.
 file(GLOB ENGINE_RECAST_SOURCES CONFIGURE_DEPENDS
@@ -132,11 +139,11 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/font.cpp content/vendored_impl.c)
+add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/font.cpp content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
-target_link_libraries(engine_content PUBLIC engine_renderer)
+target_link_libraries(engine_content PUBLIC engine_renderer engine_meshopt)
 target_compile_options(engine_content PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
 add_dependencies(engine_content engine_layer_check)
 

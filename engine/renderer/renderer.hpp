@@ -5,6 +5,7 @@
 // isiklandirma/CSM sonraki adimlar (PLAN.md Faz 3).
 #pragma once
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 #include "core/math/vec.hpp"
@@ -187,7 +188,18 @@ private:
     float cluster_params[4]; // x: dilim olcegi, y: dilim sapmasi, z: tile genisligi(px), w: tile yuksekligi(px)
     uint32_t cluster_grid[4]; // x, y, z, isik sayisi
   };
-  struct GpuPointLight {
+  // The Forge SRT ilkesi (CPU-GPU tek kaynak tablosu): GLSL std140 blogu ile bu
+  // struct'in ofsetleri DERLEME zamaninda eslesir; kayma = derleme hatasi.
+  // mesh.frag/mesh.vert "Frame" blogu: 3 x mat4 (192) + 4 x vec4 (64) + uvec4 (16) = 272.
+  static_assert(offsetof(FrameUbo, view) == 64, "std140: view");
+  static_assert(offsetof(FrameUbo, light_viewproj) == 128, "std140: light_viewproj");
+  static_assert(offsetof(FrameUbo, light_dir) == 192, "std140: light_dir");
+  static_assert(offsetof(FrameUbo, ambient) == 208, "std140: ambient");
+  static_assert(offsetof(FrameUbo, shadow_params) == 224, "std140: shadow_params");
+  static_assert(offsetof(FrameUbo, cluster_params) == 240, "std140: cluster_params");
+  static_assert(offsetof(FrameUbo, cluster_grid) == 256, "std140: cluster_grid");
+  static_assert(sizeof(FrameUbo) == 272, "std140: Frame blogu 272 bayt");
+  struct GpuPointLight { // GLSL PointLight { vec4 pos_radius; vec4 color_intensity; } = 32 bayt
     float pos_radius[4];
     float color_intensity[4];
   };
