@@ -20,7 +20,8 @@
 **Kapı `content_ktx2_astc_decodes_and_uploads`:** konteyner alanları (vkFormat 158, 7 seviye); CPU çözümü PSNR
 **999 dB** (dama iki renk ASTC'de tam temsil edilebilir → kayıpsız; kontrol: 8 px kaydırılmış dama 5.4 dB — metrik
 ayırt edici); bozuk kimlik reddedilir; GPU yolu 1:1 çizilip geri okunur PSNR 999 dB (masaüstü: CPU çözümü → RGBA8;
-Mali: donanım ASTC — telefon USB düştü, bekliyor). Masaüstü 72/72.
+Mali: donanım ASTC — telefon USB düştü, bekliyor). Masaüstü 72/72. **Emülatör (gfxstream, ASTC LDR var):** 71/71,
+**donanım ASTC yolu** geri okuma PSNR 999 dB — bloklar olduğu gibi yüklendi ve doğru örneklendi.
 
 **Sonraki:** pack formatı (tek dosya, mmap, varlık tablosu), glTF dokularının KTX2'ye yönlendirilmesi
 (sahne derleyicisi), 6x6/8x8 kalite-boyut ölçümü Mali'de, lightmap zinciri (xatlas + kendi GPU bake; `lightmapper`
