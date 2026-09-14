@@ -29,7 +29,9 @@ katmanı; şimdilik gereksiz bağımlılık). Steam Audio (HRTF/oklüzyon) ve ak
   callback/200 ms); yoksa **ATLANDI** görünür.
 
 **Ölçüm.** Masaüstü 71/71. Demo (masaüstü, ses açık) 120 kare: 82 callback, 73800 kare = 1.5 s, tepe 0.20, 0
-düşen komut. Emülatör/telefon: aşağıda güncellenir.
+düşen komut. **Emülatör (x86_64, API 37):** 70/70; **AAudio** açıldı (periyot 4360 kare), demo 300 kare: 57 callback,
+248520 kare = 5.2 s ses, tepe 0.20, 0 düşen komut. **Telefon (Mali/Kirin): USB düştü, bekliyor** — AAudio periyodu ve
+callback düzeni orada ölçülecek (asıl hedef).
 
 **Sonraki.** Uzamsal ses (mesafe sönümü + pan; Steam Audio HRTF sonra), akış (uzun müzik), pitch, kaynak
 öncelik/kısıtlama, `content` pack'ten klip yükleme, Opus.
