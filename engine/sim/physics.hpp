@@ -6,6 +6,7 @@
 #pragma once
 #include <cstdint>
 
+#include "core/jobs/job_system.hpp"
 #include "core/math/vec.hpp"
 #include "core/memory/arena.hpp"
 
@@ -16,7 +17,9 @@ struct PhysicsConfig {
   uint32_t max_body_pairs = 1024;
   uint32_t max_contacts = 1024;
   uint32_t temp_bytes = 8u << 20; // Jolt gecici ayirici (adim ici yigin)
-  uint32_t threads = 0;           // 0 = donanim-1 (Jolt thread havuzu; fiber job'a baglama: sonraki adim)
+  uint32_t threads = 0;           // Jolt thread havuzu icin (jobs == nullptr ise): 0 = donanim-1
+  JobSystem *jobs = nullptr;      // verilirse Jolt job'lari BIZIM fiber job sisteminde kosar
+  uint32_t max_jolt_jobs = 1024;  // Jolt Job havuzu (jobs != nullptr)
   Vec3 gravity = {0, -9.81f, 0};
 };
 

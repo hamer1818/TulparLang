@@ -1872,3 +1872,11 @@ tanım anında çözdü: `subscript of pointer to incomplete type 'Archetype'`. 
 ile geçirir, third_party hariç). İkinci mimari/ikinci derleyici CI'ı burada da işini yaptı
 ([[#8d. İkinci mimari, birinci mimarinin göremediğini bulur (libm ulp, FMA)]]).
 
+### 8h. Üçüncü parti job'lar fiber yığınını taşırır — bekçi sayfa yakaladı
+Jolt'un çarpışma job'ları (`PhysicsSystem::ProcessBodyPair`) büyük yerel yapılarla çalışır;
+64 KB fiber yığınında **bekçi sayfaya** çarptı ve SIGSEGV verdi (gdb: 4 thread aynı fonksiyonda).
+Ölçüm: 64 KB çöker, 128 KB geçer; varsayılan 256 KB. Bekçi sayfa olmasaydı komşu fiber'ın
+yığını sessizce ezilir, "bazen" bozulan fizik olurdu. **Kural:** üçüncü parti kodu fiber'da
+koşturmadan önce yığın ihtiyacını **ölç** (env ile boyut tara), bekçi sayfayı asla kaldırma;
+ağır işler için ayrı "büyük yığın" havuzu adayı. Sızma değil, sınır: Tuzaklar 8a'nın kardeşi.
+

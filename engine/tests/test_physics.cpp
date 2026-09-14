@@ -2,8 +2,11 @@
 // kosum + ALTIN ozet: platformlar arasi bit esitligi iddiasi CI'da
 // Linux x86_64 <-> macOS arm64 ile sinanir), adim icinde ayirma.
 #include <cstdio>
+#include <cstdlib>
 
+#include "core/jobs/job_system.hpp"
 #include "core/memory/arena.hpp"
+#include "platform/time.hpp"
 #include "sim/physics.hpp"
 #include "tests/test.hpp"
 
@@ -12,11 +15,14 @@ using namespace tulpar::engine::sim;
 
 namespace {
 // 4x4x4 kutu yigini zemine dusuyor; 300 adim @ 60 Hz.
-uint64_t run_scene(Physics &ph, uint32_t threads, uint64_t *step_allocs_after_warmup, Vec3 *first_box_pos) {
+uint64_t run_scene(Physics &ph, uint32_t threads, uint64_t *step_allocs_after_warmup, Vec3 *first_box_pos,
+                   JobSystem *fiber_jobs = nullptr, uint64_t *elapsed_ns = nullptr) {
   static SystemArena sys;
   if (sys.capacity() == 0) sys.reserve(16u << 20, "phys");
   PhysicsConfig cfg;
   cfg.threads = threads;
+  cfg.jobs = fiber_jobs;
+  uint64_t t0 = platform::now_ns();
   if (!ph.init(sys, cfg)) return 0;
   ph.add_box({50, 1, 50}, {0, -1, 0}, Quat::identity(), false); // zemin
   BodyId first{};
@@ -36,6 +42,7 @@ uint64_t run_scene(Physics &ph, uint32_t threads, uint64_t *step_allocs_after_wa
   if (first_box_pos) *first_box_pos = ph.position(first);
   uint64_t h = ph.state_hash();
   ph.shutdown();
+  if (elapsed_ns) *elapsed_ns = platform::now_ns() - t0;
   return h;
 }
 } // namespace
@@ -84,3 +91,28 @@ ENGINE_TEST(physics_cross_platform_golden_hash) {
                 (unsigned long long)golden);
   CHECK(h == golden);
 }
+
+// Jolt job'lari BIZIM fiber job sisteminde: ayni ozet, ayirma sinirli, sure bilgi.
+ENGINE_TEST(physics_runs_on_fiber_job_system_same_hash) {
+  static SystemArena jsys;
+  CHECK(jsys.reserve(8u << 20, "phys-js"));
+  JobSystem js;
+  JobSystemConfig jc;
+  // Jolt'un carpisma job'lari yigin-ac (ProcessBodyPair: buyuk yerel
+  // yapilar). 64 KB fiber yigini bekci sayfasina carpip SIGSEGV verdi
+  // (olculdu 2026-09-14, gdb: ProcessBodyPair). Gereken boyut asagida
+  // olculdu; TULPAR_ENGINE_FIBER_STACK_KB ile denenebilir.
+  const char *kb = std::getenv("TULPAR_ENGINE_FIBER_STACK_KB");
+  if (kb) jc.fiber_stack_bytes = (uint32_t)std::atoi(kb) * 1024u; // varsayilan 256 KB (job_system.hpp)
+  CHECK(js.init(jsys, jc));
+  Physics a, b;
+  uint64_t t_pool = 0, t_fiber = 0, allocs = 0;
+  uint64_t h_pool = run_scene(a, 0, nullptr, nullptr, nullptr, &t_pool);
+  uint64_t h_fiber = run_scene(b, 0, &allocs, nullptr, &js, &t_fiber);
+  CHECK(h_fiber != 0 && h_fiber == h_pool);
+  CHECK(allocs <= 2);
+  std::printf("    [bilgi] Jolt havuzu %.1f ms, fiber job sistemi %.1f ms (300 adim); ozet ayni\n",
+              t_pool / 1e6, t_fiber / 1e6);
+  js.shutdown();
+}
+

@@ -4,7 +4,9 @@
 #include <Jolt/Jolt.h>
 
 #include <Jolt/Core/Factory.h>
+#include <Jolt/Core/FixedSizeFreeList.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
+#include <Jolt/Core/JobSystemWithBarrier.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
@@ -16,12 +18,15 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
+#include <dlfcn.h>
+
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <new>
 
+#include "platform/crash.hpp"
 #include "platform/fatal.hpp"
 #include "platform/thread.hpp"
 
@@ -34,7 +39,18 @@ std::atomic<uint64_t> g_allocs{0}, g_frees{0};
 bool g_trace = false;
 void *jph_alloc(size_t n) {
   g_allocs.fetch_add(1, std::memory_order_relaxed);
-  if (g_trace) std::fprintf(stderr, "[jolt-alloc] %zu B\n", n);
+  if (g_trace) {
+    // Kim ayirdi? Cerceveler modul+ofset olarak; symbolize.py ile cozulur.
+    void *pcs[12];
+    int k = platform::crash_capture_frames(pcs, 12);
+    std::fprintf(stderr, "[jolt-alloc] %zu B", n);
+    for (int i = 1; i < k && i < 8; i++) {
+      Dl_info info;
+      if (dladdr(pcs[i], &info) && info.dli_fbase)
+        std::fprintf(stderr, " +0x%llx", (unsigned long long)((uintptr_t)pcs[i] - (uintptr_t)info.dli_fbase));
+    }
+    std::fprintf(stderr, "\n");
+  }
   return std::malloc(n);
 }
 void *jph_realloc(void *p, size_t, size_t n) { g_allocs.fetch_add(1, std::memory_order_relaxed); return std::realloc(p, n); }
@@ -96,6 +112,50 @@ public:
   }
 };
 
+// --- Jolt JobSystem -> fiber JobSystem uyarlayicisi -------------------------
+// Dikkat: bu sinif JPH::JobSystem'den turedigi icin ciplak `JobSystem` adi
+// JPH::JobSystem'e cozulur; bizimki tam nitelenir.
+using FiberJobSystem = ::tulpar::engine::JobSystem;
+class FiberJoltJobs final : public JPH::JobSystemWithBarrier {
+public:
+  FiberJoltJobs(FiberJobSystem *js, uint32_t max_jobs, uint32_t max_barriers) : js_(js) {
+    JobSystemWithBarrier::Init(max_barriers);
+    jobs_.Init(max_jobs, max_jobs); // sabit havuz; sayfa ayirmasi init'te
+  }
+  int GetMaxConcurrency() const override { return (int)js_->worker_count() + 1; }
+  JobHandle CreateJob(const char *name, JPH::ColorArg color, const JobFunction &fn, JPH::uint32 deps) override {
+    JPH::uint32 idx;
+    for (;;) {
+      idx = jobs_.ConstructObject(name, color, this, fn, deps);
+      if (idx != JPH::FixedSizeFreeList<Job>::cInvalidObjectIndex) break;
+      platform::thread_yield(); // havuz dolu: worker'lar bosaltir (kapasite init'te)
+    }
+    Job *job = &jobs_.Get(idx);
+    JobHandle h(job);
+    if (deps == 0) QueueJob(job);
+    return h;
+  }
+
+protected:
+  void QueueJob(Job *job) override {
+    job->AddRef(); // kuyrukta yasadigi surece
+    js_->run(::tulpar::engine::JobDecl{run_one, job, "jolt"}, nullptr);
+  }
+  void QueueJobs(Job **jobs, JPH::uint n) override {
+    for (JPH::uint i = 0; i < n; i++) QueueJob(jobs[i]);
+  }
+  void FreeJob(Job *job) override { jobs_.DestructObject(job); }
+
+private:
+  static void run_one(void *p) {
+    Job *job = static_cast<Job *>(p);
+    job->Execute();
+    job->Release();
+  }
+  FiberJobSystem *js_;
+  JPH::FixedSizeFreeList<Job> jobs_;
+};
+
 inline JPH::Vec3 to_jph(Vec3 v) { return JPH::Vec3(v.x, v.y, v.z); }
 inline JPH::Quat to_jph(Quat q) { return JPH::Quat(q.x, q.y, q.z, q.w); }
 inline Vec3 from_jph(JPH::Vec3 v) { return Vec3{v.GetX(), v.GetY(), v.GetZ()}; }
@@ -114,7 +174,7 @@ struct Physics::Impl {
   ObjectVsBPFilter obj_bp_filter;
   ObjectPairFilter pair_filter;
   JPH::TempAllocatorImpl *temp = nullptr;
-  JPH::JobSystemThreadPool *jobs = nullptr;
+  JPH::JobSystem *jobs = nullptr; // thread havuzu YA DA fiber uyarlayicisi
   JPH::PhysicsSystem system;
   uint64_t allocs_before_step = 0;
   uint64_t allocs_last_step = 0;
@@ -127,8 +187,12 @@ bool Physics::init(Arena &arena, const PhysicsConfig &cfg) {
   impl_ = new (mem) Impl();
   impl_->cfg = cfg;
   impl_->temp = new JPH::TempAllocatorImpl(cfg.temp_bytes);
-  uint32_t threads = cfg.threads ? cfg.threads : (platform::cpu_count() > 1 ? platform::cpu_count() - 1 : 1);
-  impl_->jobs = new JPH::JobSystemThreadPool(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, (int)threads);
+  if (cfg.jobs) {
+    impl_->jobs = new FiberJoltJobs(cfg.jobs, cfg.max_jolt_jobs, JPH::cMaxPhysicsBarriers);
+  } else {
+    uint32_t threads = cfg.threads ? cfg.threads : (platform::cpu_count() > 1 ? platform::cpu_count() - 1 : 1);
+    impl_->jobs = new JPH::JobSystemThreadPool(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, (int)threads);
+  }
   impl_->system.Init(cfg.max_bodies, 0, cfg.max_body_pairs, cfg.max_contacts, impl_->bp_iface,
                      impl_->obj_bp_filter, impl_->pair_filter);
   impl_->system.SetGravity(to_jph(cfg.gravity));
