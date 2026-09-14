@@ -53,17 +53,39 @@ template <class T> ComponentId component_id(const char *name = nullptr) {
   return ComponentTag<T>::id;
 }
 
-struct Chunk;
-struct Archetype;
+// --- Ic yapilar (World'den ONCE: Clang bagimli olmayan adlari sablon tanim
+// aninda cozer, tam tip ister; GCC gecirdi, macOS clang gecirmedi — 2026-09-14).
+struct Chunk {
+  uint8_t *data = nullptr;   // chunk_bytes
+  uint32_t count = 0;
+  uint32_t capacity = 0;
+  Chunk *next = nullptr;
+};
+
+struct Archetype {
+  ComponentMask mask = 0;
+  uint32_t comp_count = 0;
+  ComponentId comps[kMaxComponents];
+  uint32_t offsets[kMaxComponents]; // chunk icinde sutun baslangici
+  uint32_t entities_offset = 0;     // Entity sutunu
+  uint32_t row_capacity = 0;        // chunk basina satir
+  Chunk *first = nullptr;
+  Chunk *last = nullptr;
+  uint32_t chunk_n = 0;
+};
 
 // Bir chunk'a SoA gorunum: sistemler bununla gezer.
 struct ChunkView {
   uint32_t count = 0;
   const Entity *entities = nullptr;
-  void *column(ComponentId id) const;
-  template <class T> T *col() const { return static_cast<T *>(column(ComponentTag<T>::id)); }
   Archetype *arch = nullptr;
   Chunk *chunk = nullptr;
+  void *column(ComponentId id) const {
+    for (uint32_t i = 0; i < arch->comp_count; i++)
+      if (arch->comps[i] == id) return chunk->data + arch->offsets[i];
+    return nullptr;
+  }
+  template <class T> T *col() const { return static_cast<T *>(column(ComponentTag<T>::id)); }
 };
 
 struct WorldConfig {
@@ -132,32 +154,6 @@ private:
   uint32_t chunk_count_ = 0;
   WorldStats stats_{};
 };
-
-// --- ic yapilar (baslikta: sablon gezinti icin) -----------------------------
-struct Chunk {
-  uint8_t *data = nullptr;   // chunk_bytes
-  uint32_t count = 0;
-  uint32_t capacity = 0;
-  Chunk *next = nullptr;
-};
-
-struct Archetype {
-  ComponentMask mask = 0;
-  uint32_t comp_count = 0;
-  ComponentId comps[kMaxComponents];
-  uint32_t offsets[kMaxComponents]; // chunk icinde sutun baslangici
-  uint32_t entities_offset = 0;     // Entity sutunu
-  uint32_t row_capacity = 0;        // chunk basina satir
-  Chunk *first = nullptr;
-  Chunk *last = nullptr;
-  uint32_t chunk_n = 0;
-};
-
-inline void *ChunkView::column(ComponentId id) const {
-  for (uint32_t i = 0; i < arch->comp_count; i++)
-    if (arch->comps[i] == id) return chunk->data + arch->offsets[i];
-  return nullptr;
-}
 
 template <class F> void World::for_each_chunk(Archetype &a, F &fn) {
   for (Chunk *c = a.first; c; c = c->next) {

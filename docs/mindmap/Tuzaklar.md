@@ -1863,3 +1863,12 @@ verisidir → ölçülür, basılır, **kararlılığı** iddia edilir (kareler 
 ör. havuz sıfırlanmıyor), sıfırı değil. Kurulum (pipeline, image, JIT) kareden ayrılır; kurulum
 ayırması serbest ve bilgi.
 
+### 8g. GCC'nin geçirdiği şablon başlığını Clang reddeder — push'tan önce clang sözdizimi
+`ecs.hpp`'de `World::each` şablonu, sınıftan **sonra** tanımlanan `Archetype`'ı kullanıyordu.
+GCC bağımlı olmayan adları örnekleme anına erteledi ve geçti (yerel 41/41); macOS CI (clang)
+tanım anında çözdü: `subscript of pointer to incomplete type 'Archetype'`. Bir CI turu gitti.
+**Kural:** yapılar şablonu kullanan sınıftan önce tanımlanır; push'tan önce
+`engine/tools/clang_syntax_check.sh` (clang++ varsa tüm engine kaynaklarını `-fsyntax-only`
+ile geçirir, third_party hariç). İkinci mimari/ikinci derleyici CI'ı burada da işini yaptı
+([[#8d. İkinci mimari, birinci mimarinin göremediğini bulur (libm ulp, FMA)]]).
+

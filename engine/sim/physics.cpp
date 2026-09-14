@@ -64,7 +64,6 @@ void jolt_global_init() {
 namespace Layers {
 constexpr JPH::ObjectLayer NON_MOVING = 0;
 constexpr JPH::ObjectLayer MOVING = 1;
-constexpr JPH::ObjectLayer NUM = 2;
 } // namespace Layers
 namespace BPLayers {
 constexpr JPH::BroadPhaseLayer NON_MOVING(0);
