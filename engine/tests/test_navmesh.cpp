@@ -51,7 +51,14 @@ float path_len(const Vec3 *p, int n) {
 
 ENGINE_TEST(navmesh_builds_and_routes_around_wall) {
   NavMesh nm;
-  CHECK(build_scene(nm));
+  bool built = build_scene(nm);
+  CHECK(built);
+  if (!built) { // bake duserse sorgular anlamsiz: sebebi bas, devam etme
+    NavMeshStats s0 = nm.stats();
+    std::printf("    [bilgi] bake DUSTU: poly=%u vert=%u bayt=%zu ayirma=%llu\n", s0.polys, s0.verts, s0.data_bytes,
+                (unsigned long long)s0.build_allocs);
+    return;
+  }
   NavMeshStats st = nm.stats();
   CHECK(st.polys > 2);
   Vec3 pts[64];
