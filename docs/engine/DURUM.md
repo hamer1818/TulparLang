@@ -28,7 +28,7 @@ animasyonu, oyuncu (dokunmatik joystick, kamera izler), gölge, 8 dönen nokta �
 - `LAZILY_ALLOCATED` bellek var (TBDR doğrulandı). Zaman damgası, GPL, subpass merge feedback **yok**.
 - Plan L2 "zorunlu" listesi (descriptorIndexing/timeline/BDA) bu cihazda **yok** → kapı rapora çevrildi (REV-3).
 
-## 4. Kapılar (engine_tests: masaüstü 65/65 (katmanla, 0 atlandı), emülatör 65/65 (katmanla), telefon 64/64 — sRGB adımı telefonda bekliyor, USB düştü)
+## 4. Kapılar (engine_tests: masaüstü 65/65 (katmanla, 0 atlandı), telefon 65/65 (katmanla), emülatör 65/65 (katmanla))
 Her görsel özelliğin açık/kapalı karşılaştırmalı testi ve pozitif/negatif kontrolü var: gölge (koyulaşan
 piksel + 6 m kaydırma kontrolü), doku (keskin geçiş oranı), nokta ışık (kırmızı piksel, görüş dışı 0),
 UI metni (boş metin 0), kümeleme (yerel/konservatif), joystick, glTF sayıları, adanmış bellek serbest

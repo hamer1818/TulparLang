@@ -321,9 +321,9 @@ vsync), kayıt 2.4 ms, 0 kare içi `new`. Strip'li `libtulparengine.so` arm64 **
 
 Mevcut kapılar (gölge, doku keskinliği, nokta ışık, UI metni) değişmeden yeşil; masaüstü **65/65** (katmanla),
 emülatör (x86_64, gfxstream, katmanla) **65/65** — gidiş-dönüş 32 128 200 255 aynen, kontrol 4 55 147 255.
-**Telefon: doğrulanmadı** — USB bağlantısı bu adımdan önce düştü (son telefon koşumu Mali linter adımı, 64/64).
-Telefon gelince ilk iş: `android_run.sh tests` + `demo 600 --screenshot` (Mali'de sRGB yüzey biçimi seçimi ve
-görünüm). Emülatör demosu: sRGB yüzey seçildi, 60 fps (vsync), 0 kare içi `new`.
+**Telefon (Mali-G72, tekrar bağlanınca):** **65/65**, gidiş-dönüş 32 128 200 255 aynen, kontrol 4 55 147 255;
+demo sRGB yüzey biçimi seçti, 600 kare **59.8 fps** (FIFO), kayıt 1.9 ms, 0 kare içi `new`; ekran görüntüsü
+`build-android/demo_srgb_phone.png` (görsel değerlendirme kullanıcıda). Emülatör demosu da sRGB, 60 fps.
 Görsel fark: orta tonlar açılır (0.5 albedo → 188), nokta ışık sönümü fiziksel; ekran testi kullanıcıda
 (`build-android/demo_srgb.png`).
 
