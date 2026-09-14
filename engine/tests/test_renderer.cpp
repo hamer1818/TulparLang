@@ -34,6 +34,7 @@ ENGINE_TEST(renderer_shadow_map_actually_darkens) {
   Device dev;
   DeviceConfig dc;
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (Apple Paravirtual, CI macOS): piksel kapisi gercek cihazda olculur"); return; }
 
   const uint32_t W = 256, H = 256;
   OffscreenConfig oc;
@@ -173,6 +174,7 @@ ENGINE_TEST(renderer_point_light_lights_only_near_pixels) {
   Device dev;
   DeviceConfig dc;
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (Apple Paravirtual, CI macOS): piksel kapisi gercek cihazda olculur"); return; }
   const uint32_t W = 256, H = 256;
   OffscreenConfig oc;
   oc.srgb = true; // ekranla ayni yol
@@ -444,6 +446,7 @@ ENGINE_TEST(renderer_srgb_roundtrip_is_identity) {
   Device dev;
   DeviceConfig dc;
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (Apple Paravirtual, CI macOS): piksel kapisi gercek cihazda olculur"); return; }
   const uint32_t W = 64, H = 64;
   static const uint8_t vals[4] = {32, 128, 200, 255};
   // 64x64, dort tekduze ceyrek: ornekleme noktalari kenardan uzak, suzme karismaz.

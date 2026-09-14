@@ -1,6 +1,7 @@
 // Minimal test cercevesi: STL yok, ayirma yok (kayit sabit diziye).
 #pragma once
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 
 namespace tulpar::engine::test {
@@ -46,6 +47,14 @@ struct Registrar {
 // `new int(1); delete` sayaci artirmadi ve kapi testi yanlis dustu.
 inline void escape(const void *p) { __asm__ volatile("" : : "r"(p) : "memory"); }
 
+
+// CI macOS'un GPU'su bir VM cihazi ("Apple Paravirtual device", MoltenVK uzerinden):
+// golge karsilastirmasi, doku ornekleme, nokta isik gibi PIKSEL kapilari orada
+// farkli/bos sonuc verdi (2026-09-14, 6 test). Piksel kapilari gercek cihazda
+// olculur (RTX, Mali, gfxstream); sanal GPU'da gorunur ATLANDI, sessiz yesil degil.
+inline bool gpu_is_virtual(const char *device_name) {
+  return device_name && std::strstr(device_name, "Paravirtual") != nullptr;
+}
 } // namespace tulpar::engine::test
 
 #define ENGINE_TEST(name)                                                       \

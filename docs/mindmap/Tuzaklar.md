@@ -2029,3 +2029,11 @@ kullanmaz. Kural: Swappy varsayilan KAPALI (`ENGINE_SWAPPY`), yalniz gercek ciha
 sunumun calistigi anlamina gelmez — kare sayaci ilerlemeli. GameActivity gocu (IP-P, Gradle host) bu sinif
 yukleyici sorununu kokten cozer.
 
+### 8w. CI macOS'un GPU'su sanal ("Apple Paravirtual device"): piksel kapilari orada olculmez
+PR #321'in ilk tam macOS kosumunda (daha once engine_tests fizikten sonra cokuyordu; bu kosumda cokme yok,
+sebebi bilinmiyor) 6 renderer/content testi dustu: golge koyulasmadi, nokta isik kirmizi piksel vermedi, dama
+dokusu keskin gecis vermedi, LOD silueti, iskeletli boru hic cizilmedi, sRGB yedek yolu farkli — hepsi piksel
+sonucu. Ayni testler RTX (Linux), lavapipe (CI Linux), Mali (telefon) ve gfxstream (emulator) ile gecer. Karar:
+`test::gpu_is_virtual` ile bu cihazda piksel kapilari GORUNUR ATLANDI; CPU tarafi (analitik skinning, meshopt
+istatistigi, KTX2 cozumu) kosmaya devam eder. Gercek bir Mac'te MoltenVK sonucu ayri konu (olculmedi).
+

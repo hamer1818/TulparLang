@@ -91,6 +91,7 @@ ENGINE_TEST(content_textured_cube_renders_checker) {
   rhi::Device dev;
   rhi::DeviceConfig dc;
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (Apple Paravirtual, CI macOS): piksel kapisi gercek cihazda olculur"); return; }
   const uint32_t W = 256, H = 256;
   rhi::OffscreenConfig oc;
   oc.srgb = true; // ekranla ayni yol
@@ -197,6 +198,7 @@ ENGINE_TEST(content_meshopt_lods_keep_silhouette) {
   rhi::Device dev;
   rhi::DeviceConfig dc;
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (Apple Paravirtual, CI macOS): piksel kapisi gercek cihazda olculur"); return; }
   const uint32_t W = 160, H = 160;
   rhi::OffscreenConfig oc;
   oc.srgb = true;
@@ -297,6 +299,7 @@ ENGINE_TEST(content_skinned_gltf_bends) {
   rhi::Device dev;
   rhi::DeviceConfig dc;
   if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (Apple Paravirtual, CI macOS): piksel kapisi gercek cihazda olculur"); return; }
   const uint32_t W = 128, H = 128;
   rhi::OffscreenConfig oc;
   oc.srgb = true;
