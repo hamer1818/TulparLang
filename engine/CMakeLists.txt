@@ -103,6 +103,7 @@ add_library(engine_sim STATIC
     sim/schedule.cpp
     sim/physics.cpp
     sim/navmesh.cpp
+    sim/animation.cpp
 )
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
@@ -126,6 +127,7 @@ add_executable(engine_tests
     tests/test_sim.cpp
     tests/test_physics.cpp
     tests/test_navmesh.cpp
+    tests/test_animation.cpp
     core/memory/alloc_gate_override.cpp
 )
 target_link_libraries(engine_tests PRIVATE engine_rhi engine_sim engine_core ${CMAKE_DL_LIBS})
