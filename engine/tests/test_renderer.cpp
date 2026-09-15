@@ -126,6 +126,76 @@ ENGINE_TEST(renderer_shadow_map_actually_darkens) {
   dev.shutdown();
 }
 
+// Is 2: frustum culling gercekten cizim sayisini dusuruyor mu? Kamera onunde
+// bir kup + gorus disina konmus 3 kup (arkada/cok sagda/cok solda). Kapi:
+// elenen sayisi kamera yonune gore RAPORLANIR ve kamerayi cevirince degisir
+// (pozitif kontrol — hep ayni sonucu veren bir kapi hicbir sey sinamaz).
+ENGINE_TEST(renderer_frustum_culling_reduces_draw_count) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "renderer_cull_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: cizim sayisi kapisi gercek cihazda olculur"); return; }
+
+  const uint32_t W = 64, H = 64; // yalniz istatistik icin, piksel onemli degil
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0; // bu kapi yalniz ana (kamera) gecisi sinar
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::cube(v, idx);
+  renderer::MeshHandle cube = ren.create_mesh(v, 24, idx, n);
+  CHECK(cube.valid());
+  ren.set_light({0.4f, 1.0f, 0.3f}, {0.1f, 0.1f, 0.1f}, 0.8f);
+  Rec rr{&ren};
+
+  auto submit = [&](Mat4 view, Mat4 proj) {
+    ren.set_camera(view, proj);
+    ren.begin_frame(0);
+    ren.draw(cube, Mat4::translate({0, 0, -5}), {1, 1, 1});    // onde: gorunur olmali
+    ren.draw(cube, Mat4::translate({0, 0, 500}), {1, 1, 1});   // uzak duzlemin (100) cok otesinde
+    ren.draw(cube, Mat4::translate({500, 0, -5}), {1, 1, 1});  // derinlik 5'te frustum'un cok disinda (sag)
+    ren.draw(cube, Mat4::translate({-500, 0, -5}), {1, 1, 1}); // ayni, sol
+  };
+  Mat4 proj = Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 100.0f);
+
+  submit(Mat4::look_at({0, 0, 0}, {0, 0, -1}, {0, 1, 0}), proj); // -z'ye bakiyor
+  bool ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
+  CHECK(ok);
+  renderer::RendererStats forward = ren.stats();
+  std::printf("    [bilgi] kamera one bakarken: gonderilen %u, elenen %u\n", forward.draws, forward.culled);
+  CHECK(forward.draws == 4);
+  CHECK(forward.culled == 3); // yalniz onde olan kup kalmali
+
+  // Pozitif kontrol: kamerayi 180 derece cevir. Once gorunen kup artik elenmeli.
+  submit(Mat4::look_at({0, 0, 0}, {0, 0, 1}, {0, 1, 0}), proj); // +z'ye bakiyor
+  ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
+  CHECK(ok);
+  renderer::RendererStats turned = ren.stats();
+  std::printf("    [bilgi] kamera arkaya donunce: gonderilen %u, elenen %u\n", turned.draws, turned.culled);
+  CHECK(turned.draws == 4);
+  CHECK(turned.culled == 4); // hicbiri artik gorus alaninda degil
+  CHECK(turned.culled != forward.culled); // asil pozitif kontrol: sonuc gercekten degisti
+
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
 // Kume atamasi (CPU): ortadaki isik orta tile'i isaretler, koseleri isaretlemez;
 // kamera arkasindaki isik hicbir seyi isaretlemez; dev isik her seyi isaretler.
 #include "renderer/cluster.hpp"

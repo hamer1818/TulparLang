@@ -695,6 +695,9 @@ MeshHandle Renderer::create_mesh(const Vertex *verts, uint32_t nverts, const uin
   if (!upload(m.vbuf, verts, sizeof(Vertex) * nverts, 0) || !upload(m.ibuf, indices, sizeof(uint32_t) * nindices, 0))
     return MeshHandle{};
   m.index_count = nindices;
+  Aabb bounds{};
+  for (uint32_t i = 0; i < nverts; i++) bounds = merge(bounds, verts[i].pos);
+  m.local_bounds = bounds;
   stats_.meshes = ++mesh_count_;
   return MeshHandle{mesh_count_ - 1};
 }
@@ -711,6 +714,9 @@ MeshHandle Renderer::create_skinned_mesh(const SkinnedVertex *verts, uint32_t nv
     return MeshHandle{};
   m.index_count = nindices;
   m.skinned = true;
+  Aabb bounds{};
+  for (uint32_t i = 0; i < nverts; i++) bounds = merge(bounds, verts[i].pos);
+  m.local_bounds = bounds; // bind pozu (Is 2 notu: renderer.hpp'de aciklandi)
   stats_.meshes = ++mesh_count_;
   return MeshHandle{mesh_count_ - 1};
 }
@@ -776,7 +782,11 @@ TextureHandle Renderer::create_texture_levels(VkFormat fmt, uint32_t w, uint32_t
   return TextureHandle{texture_count_ - 1};
 }
 
-void Renderer::set_camera(const Mat4 &view, const Mat4 &proj) { view_ = view; proj_ = proj; }
+void Renderer::set_camera(const Mat4 &view, const Mat4 &proj) {
+  view_ = view;
+  proj_ = proj;
+  frustum_ = Frustum::from_viewproj(proj * view); // Is 2: ana gecis culling'i bunu kullanir
+}
 void Renderer::set_light(Vec3 dir, Vec3 ambient, float diffuse_scale) { light_dir_ = dir; ambient_ = ambient; diffuse_scale_ = diffuse_scale; }
 
 void Renderer::begin_frame(uint32_t frame_index) {
@@ -784,6 +794,8 @@ void Renderer::begin_frame(uint32_t frame_index) {
   draw_count_ = 0;
   skin_count_ = 0;
   stats_.dropped = 0;
+  stats_.culled = 0;
+  stats_.shadow_culled = 0;
   FrameUbo u;
   u.viewproj = proj_ * view_;
   u.view = view_;
@@ -808,6 +820,7 @@ void Renderer::begin_frame(uint32_t frame_index) {
   u.cluster_params[3] = (float)render_h_ / (float)grid_.y;
   u.cluster_grid[0] = grid_.x; u.cluster_grid[1] = grid_.y; u.cluster_grid[2] = grid_.z; u.cluster_grid[3] = point_light_count_;
   light_vp_ = directional_light_matrix(light_dir_, shadow_center_, shadow_radius_, shadow_depth_);
+  shadow_frustum_ = Frustum::from_viewproj(light_vp_); // Is 2: golge gecisi AYRI frustum kullanir
   u.light_viewproj = light_vp_;
   u.light_dir[0] = light_dir_.x; u.light_dir[1] = light_dir_.y; u.light_dir[2] = light_dir_.z;
   u.light_dir[3] = cfg_.srgb_target ? 0.0f : 1.0f; // 1: shader sRGB kodlar (UNORM hedef yedegi)
@@ -863,6 +876,8 @@ void Renderer::record_shadow(VkCommandBuffer cb) {
   VkPipeline bound_pipe = VK_NULL_HANDLE;
   for (uint32_t i = 0; i < draw_count_; i++) {
     const Draw &d = draws_[i];
+    // Is 2: golge, kamera degil ISIK frustum'una gore elenir.
+    if (!intersects(shadow_frustum_, transform(d.model, meshes_[d.mesh].local_bounds))) { stats_.shadow_culled++; continue; }
     const VkPipeline want = d.skin_offset == kNoSkin ? pipe_shadow_ : pipe_skin_shadow_;
     if (want != bound_pipe) { a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound_pipe = want; }
     if (d.mesh != bound) {
@@ -913,6 +928,12 @@ void Renderer::record(VkCommandBuffer cb) {
     VkPipeline bound_pipe = VK_NULL_HANDLE;
     for (uint32_t i = 0; i < draw_count_; i++) {
       const Draw &d = draws_[i];
+      // Is 2: frustum culling. Iki gecis AYNI cizim listesini dolasir; sayaci
+      // yalniz pass 0'da artir, yoksa ayni elenen cizim iki kez sayilir.
+      if (!intersects(frustum_, transform(d.model, meshes_[d.mesh].local_bounds))) {
+        if (pass == 0) stats_.culled++;
+        continue;
+      }
       const VkPipeline want = d.skin_offset == kNoSkin ? (pass == 0 ? pipe_depth_ : pipe_color_)
                                                        : (pass == 0 ? pipe_skin_depth_ : pipe_skin_color_);
       if (want != bound_pipe) { a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound_pipe = want; }

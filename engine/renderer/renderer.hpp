@@ -83,8 +83,10 @@ struct ShadowInfo {
 };
 
 struct RendererStats {
-  uint32_t draws = 0;      // son kare
+  uint32_t draws = 0;      // son kare, GONDERILEN (elenenler dahil)
   uint32_t dropped = 0;    // kapasite asimi (sayilir, sessiz degil)
+  uint32_t culled = 0;     // ana (kamera) gecisinde frustum disinda kalip cizilmeyen (Is 2)
+  uint32_t shadow_culled = 0; // golge (isik) gecisinde ayni sekilde elenen
   uint32_t meshes = 0;
   uint32_t textures = 0;
   uint32_t materials = 0;
@@ -180,6 +182,10 @@ private:
     VkBuffer vbuf = VK_NULL_HANDLE, ibuf = VK_NULL_HANDLE;
     uint32_t index_count = 0;
     bool skinned = false;
+    // Yerel (nesne) uzayinda sinirlayici kutu — create_mesh/create_skinned_mesh'te
+    // bir kez hesaplanir (Is 2). Iskeletli mesh icin BIND POZU sinirlarini kullanir;
+    // animasyon kutunun disina tasarsa (kol kaldirma vb.) bu bir yaklastirmadir.
+    Aabb local_bounds{};
   };
   struct Texture {
     VkImage image = VK_NULL_HANDLE;
@@ -296,6 +302,10 @@ private:
   float ui_w_ = 1, ui_h_ = 1, ui_rot_ = 0;
   MaterialHandle ui_atlas_{};
   UiStats ui_stats_{};
+  // Is 2: frustum culling. Kamera ve isik icin AYRI frustum (golge pass'i farkli
+  // gorunurluk kullanir) — set_camera()/begin_frame()'de proj*view'den cikarilir.
+  Frustum frustum_{};
+  Frustum shadow_frustum_{};
   ClusterGrid grid_{};
   uint32_t *cluster_masks_ = nullptr; // Arena, grid_.count()
   PointLight point_lights_[kMaxPointLights];
