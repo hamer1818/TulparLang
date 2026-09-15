@@ -287,6 +287,32 @@ inline bool intersect(Ray ray, Plane p, float *t_out = nullptr) {
   return true;
 }
 
+struct Sphere {
+  Vec3 center{0, 0, 0};
+  float radius = 0.0f;
+};
+// Klasik ikinci dereceden kok (L=O-C; |L+tD|^2=r^2 -> a*t^2+b*t+c=0). Aabb
+// ile AYNI sozlesme: ray kurenin ICINDE basliyorsa (c<0 -> kokler zit isaretli,
+// t0<0<t1) t=0 donuyoruz (bkz. yukaridaki Aabb intersect'in "tmin=0 baslar"
+// yorumu) -- "iceride baslama" ayri bir durum degil, en yakin GECERLI isabet.
+// dir'in normalize edilmis olmasi GEREKMEZ (Aabb/Plane ile ayni gelenek); t
+// o zaman `dir` biriminde parametrik olur, dunya mesafesi degil.
+inline bool intersect(Ray ray, Sphere s, float *t_out = nullptr) {
+  Vec3 l = ray.origin - s.center;
+  float a = dot(ray.dir, ray.dir);
+  if (a < 1e-12f) return false; // sifir uzunlukta yon
+  float b = 2.0f * dot(l, ray.dir);
+  float c = dot(l, l) - s.radius * s.radius;
+  float disc = b * b - 4.0f * a * c;
+  if (disc < 0.0f) return false; // kure hic kesilmiyor
+  float sq = std::sqrt(disc);
+  float t0 = (-b - sq) / (2.0f * a);
+  float t1 = (-b + sq) / (2.0f * a);
+  if (t1 < 0.0f) return false; // kure tamamen ray'in GERISINDE
+  if (t_out) *t_out = t0 < 0.0f ? 0.0f : t0;
+  return true;
+}
+
 enum class FrustumTest { kOutside, kInside, kIntersecting };
 // 6 duzlem: sol, sag, alt, ust, yakin, uzak. Dunya uzayinda, viewproj'dan
 // cikarilir (Gribb/Hartmann). Vulkan NDC z in [0,1] varsayimi (bu dosyanin

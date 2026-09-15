@@ -158,6 +158,25 @@ ENGINE_TEST(math_plane_and_ray) {
   CHECK(!intersect(Ray{{-5, 5, 0}, {1, 0, 0}}, box)); // kutunun ustunden gecer
 }
 
+ENGINE_TEST(math_sphere_and_ray) {
+  Sphere s{{0, 0, 0}, 2.0f};
+  float t = -1;
+  // Disaridan, merkeze dogru: -5'ten kurenin yakin yuzeyine (x=-2) 3 birim.
+  CHECK(intersect(Ray{{-5, 0, 0}, {1, 0, 0}}, s, &t));
+  CHECK(nearly_equal(t, 3.0f, 1e-4f));
+  // Tam tegetten kacirir (y=2, yaricap 2): matematiksel olarak tegetir (disc=0),
+  // ama ray x ekseninde ilerlerken kureyi (0,2,0) noktasindan SIYIRIR.
+  CHECK(intersect(Ray{{-5, 2, 0}, {1, 0, 0}}, s, &t));
+  CHECK(nearly_equal(t, 5.0f, 1e-3f)); // tegetten (0,2,0)'a: -5'ten 5 birim
+  // Acikca ISKALAR (y=3 > yaricap): kesisim yok.
+  CHECK(!intersect(Ray{{-5, 3, 0}, {1, 0, 0}}, s));
+  // Ray'in KENDISI kurenin icinde basliyor: sozlesme geregi t=0.
+  CHECK(intersect(Ray{{0, 0, 0}, {1, 0, 0}}, s, &t));
+  CHECK(nearly_equal(t, 0.0f, 1e-5f));
+  // Kure tamamen GERIDE (ray ondan uzaklasiyor): kesisim yok.
+  CHECK(!intersect(Ray{{-5, 0, 0}, {-1, 0, 0}}, s));
+}
+
 ENGINE_TEST(math_frustum_culls_known_aabbs) {
   Mat4 view = Mat4::look_at({0, 0, 10}, {0, 0, 0}, {0, 1, 0});
   Mat4 proj = Mat4::perspective(kPi * 0.5f, 1.0f, 0.1f, 100.0f);
