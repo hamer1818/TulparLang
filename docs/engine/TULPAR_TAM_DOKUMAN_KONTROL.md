@@ -39,24 +39,26 @@ Bu, aşağıdaki §1'deki 10. maddeyi çözüyor: PBR/GGX **motor yeteneği** ol
 
 Aşağıdaki 16 iş, orijinal Bölüm 0'daki sıra ve kapı testleriyle **aynı** — sadece §1'deki düzeltmeler uygulandı. Her iş: **amaç · yöntem (özet) · kapı**.
 
-| # | İş | Amaç | Kapı |
-|---|---|---|---|
-| **1 [M0]** | Matematik tamamlama | `Mat4::inverse`+`inverse_affine`, `Aabb`, `Plane`, `Frustum`, `Ray`+`intersect`, `decompose` ekle. ~~`ortho`~~ (zaten var, çıkarıldı) | `math_inverse_roundtrip`, `math_frustum_culls_known_aabbs` (poz. kontrol: kamera dönünce sonuç değişir) |
-| **2 [CULL]** | Frustum culling | SoA AABB, dünya uzayı, gölge pass'i ayrı frustum | `cull_reduces_draw_count` (sayı raporlu) |
-| **3 [FALL]** | Fiziksel ışık düşüşü | ters kare + yumuşak yarıçap kesme, `eps≈0.01` | `light_falloff_is_inverse_square`, yarıçap dışında tam 0 |
-| **4 [PBR]** | GGX specular + roughness/metallic | Cook-Torrance (Filament mobil kısaltması), fp16, ORM tek doku (R=AO,G=Rough,B=Metal) | `pbr_metal_vs_dielectric_differs`, `pbr_roughness_spreads_highlight` — **İŞ 5 ile birlikte** (metal yansımasız siyah çıkar) |
-| **5 [PROBE]** | Yansıma probe | Skybox'tan prefiltered cubemap (build'de), split-sum + BRDF LUT | `probe_metal_reflects_environment` |
-| **6 [SKY][FOG]** | Skybox + analitik sis | Prosedürel gökyüzü (Hosek-Wilkie/Preetham) build'de bake; sis **doğrusal uzayda, tonemap'ten önce** | `fog_is_applied_in_linear_space`, `sky_does_not_write_depth` |
-| **7 [TONE]** | Tonemapping + exposure | **Khronos PBR Neutral** (bkz §3) | `tonemap_no_double_srgb`, `tonemap_compresses_highlights` |
-| **8 [AA]** | MSAA | 4×, resolve attachment, `STORE_OP_DONT_CARE` multisample'da | `msaa_reduces_edge_aliasing` + bandwidth ölçümü |
-| **9 [TILE]** | Tile bütçesi denetimi | ≤8 attachment, ≤128 bit/px, build'de hesapla | `tile_budget_within_limits`. **Ek:** Mali Offline Compiler (`malioc`) build-gate (§1/#7) hâlâ yapılmadı, buraya eklenmeli |
-| **10 [NORM]** | Normal map + tangent | glTF'ten oku / build'de MikkTSpace üret, `_UNORM` doku | `normal_map_perturbs_lighting` |
-| **11 [AO]** | Ambient occlusion | ORM'deki bake AO (bedava) + opsiyonel quarter-res SSAO | `ao_darkens_creases_only` |
-| **12 [CONTACT]** | Contact shadow | Ekran uzayı kısa ray march (8-12 adım) | `contact_shadow_grounds_objects` |
-| **13 [POST][BLOOM]** | Post zinciri + Dual Filtering bloom | Kawase tabanlı downsample+upsample, **compute bloom yasak** | `bloom_dual_filter_vs_gaussian_ms` |
-| **14 [M1]** | Math SIMD + culling hızlandırma | NEON, SoA toplu `Frustum::intersects` | ölçülü kazanç |
-| **15 [BAKE0]** | Bake hattı başlangıcı | Prefiltered cubemap + BRDF LUT + AO bake + probe, hepsi build'de | — |
-| **16 [ADAPT]** | Oto-exposure + dynamic resolution | Histogram exposure; ADPF thermal + histerezis (bkz §3) | 🔴 temporal reset sinyali şimdiden tasarlanmalı |
+| # | İş | Amaç | Kapı | Durum (2026-09-15 oturumu) |
+|---|---|---|---|---|
+| **1 [M0]** | Matematik tamamlama | `Mat4::inverse`+`inverse_affine`, `Aabb`, `Plane`, `Frustum`, `Ray`+`intersect`, `decompose` ekle. ~~`ortho`~~ (zaten var, çıkarıldı) | `math_inverse_roundtrip`, `math_frustum_culls_known_aabbs` | ✅ Yapıldı — `core/math/vec.hpp` |
+| **2 [CULL]** | Frustum culling | SoA AABB, dünya uzayı, gölge pass'i ayrı frustum | `cull_reduces_draw_count` (sayı raporlu) | ✅ Yapıldı — `renderer/renderer.{hpp,cpp}` (skaler, per-draw; SoA/job dağıtımı İş 14'e bırakıldı) |
+| **3 [FALL]** | Fiziksel ışık düşüşü | ters kare + yumuşak yarıçap kesme, `eps≈0.01` | `light_falloff_is_inverse_square`, yarıçap dışında tam 0 | ✅ Yapıldı — `mesh.frag` |
+| **4 [PBR]** | GGX specular + roughness/metallic | Cook-Torrance (Filament mobil kısaltması), fp16, ORM tek doku (R=AO,G=Rough,B=Metal) | `pbr_metal_vs_dielectric_differs`, `pbr_roughness_spreads_highlight` | 🟡 Kısmi — GGX+roughness/metallic yapıldı (malzeme başına sabit değer, **doku yok**); İş 5 yerine ara-dönem sabit-ambiyans specular kullanıldı |
+| **5 [PROBE]** | Yansıma probe | Skybox'tan prefiltered cubemap (build'de), split-sum + BRDF LUT | `probe_metal_reflects_environment` | ❌ **Ertelendi** — gerçek cubemap render + build-time bake altyapısı sıfırdan yazılmalı, tek oturumda güvenle yapılamayacak kadar büyük |
+| **6 [SKY][FOG]** | Skybox + analitik sis | Prosedürel gökyüzü build'de bake; sis **doğrusal uzayda, tonemap'ten önce** | `fog_is_applied_in_linear_space`, `sky_does_not_write_depth` | 🟡 Kısmi — **sis yapıldı**; **skybox ERTELENDİ** (yeni shader dosyası + glslc engeli, bkz §4) |
+| **7 [TONE]** | Tonemapping + exposure | **Khronos PBR Neutral** (bkz §3) | `tonemap_no_double_srgb`, `tonemap_compresses_highlights` | ✅ Yapıldı — `mesh.frag` |
+| **8 [AA]** | MSAA | 4×, resolve attachment, `STORE_OP_DONT_CARE` multisample'da | `msaa_reduces_edge_aliasing` + bandwidth ölçümü | ❌ **Ertelendi** — `swapchain.cpp` + `offscreen.cpp`'nin render pass'lerini AYNI ANDA, tutarlı şekilde değiştirmek gerekiyor; bir hata TÜM render yolunu (ve ona bağlı tüm testleri) bozar, derleyicisiz risk çok yüksek |
+| **9 [TILE]** | Tile bütçesi denetimi | ≤8 attachment, ≤128 bit/px, build'de hesapla | — | ✅ **Zaten yapılmıştı** — `rhi/tile_budget.hpp/cpp`. Yalnız Mali Offline Compiler (`malioc`) alt-kontrolü hâlâ yok (harici araç gerekiyor) |
+| **10 [NORM]** | Normal map + tangent | glTF'ten oku / build'de MikkTSpace üret, `_UNORM` doku | `normal_map_perturbs_lighting` | ❌ Yapılmadı — vertex formatı + content pipeline değişikliği gerektiriyor, bu oturumda sıraya girmedi |
+| **11 [AO]** | Ambient occlusion | ORM'deki bake AO (bedava) + opsiyonel quarter-res SSAO | `ao_darkens_creases_only` | ❌ Yapılmadı — ORM dokusu yok (İş 4 notuna bkz), SSAO yeni bir pass ister |
+| **12 [CONTACT]** | Contact shadow | Ekran uzayı kısa ray march (8-12 adım) | `contact_shadow_grounds_objects` | ❌ Yapılmadı — derinliğin transient/tile-resident kalma ilkesiyle gerilimli, dikkatli tasarım ister |
+| **13 [POST][BLOOM]** | Post zinciri + Dual Filtering bloom | Kawase tabanlı downsample+upsample, **compute bloom yasak** | `bloom_dual_filter_vs_gaussian_ms` | ❌ **Ertelendi** — yeni shader dosyaları, aynı glslc engeli (bkz §4) |
+| **14 [M1]** | Math SIMD + culling hızlandırma | NEON, SoA toplu `Frustum::intersects` | ölçülü kazanç | ❌ **Ertelendi** — ARM NEON intrinsics bu x86_64 Windows makinesinde ne derlenebilir ne test edilebilir; körlemesine yazmak gerçek risk |
+| **15 [BAKE0]** | Bake hattı başlangıcı | Prefiltered cubemap + BRDF LUT + AO bake + probe, hepsi build'de | — | ❌ Yapılmadı — İş 5'e bağımlı, o da ertelendi |
+| **16 [ADAPT]** | Oto-exposure + dynamic resolution | Histogram exposure; ADPF thermal + histerezis (bkz §3) | 🔴 temporal reset sinyali şimdiden tasarlanmalı | ❌ Yapılmadı — histogram için yeni bir compute pass gerekiyor (glslc engeli) |
+
+**Özet: 16 işten 3'ü tam (1,3,7), 3'ü kısmi (2,4,6), 1'i zaten yapılmıştı (9), 8'i ertelendi.** Ertelenenlerin hepsi aynı üç nedenden biri: (a) yeni shader dosyası — bu makinede glslc yok, ilk SPIR-V derlemesi hiç yapılamaz (bkz §4); (b) MSAA gibi birden çok dosyayı aynı anda, tutarlı değiştirmesi gereken derin RHI cerrahisi — tek hata her şeyi bozar; (c) ARM NEON gibi bu platformda ne derlenebilen ne test edilebilen kod. Bunların hepsi gerçek bir derleyici + (mümkünse) gerçek cihaz gerektiriyor.
 
 **Yasaklar (değişmedi):** compute'a pass taşıma yok · runtime shader/PSO üretimi yok · kare içi allocation yok · determinizm bozulmaz · katman kuralı ihlali yok · `depthBias`'a güvenme (normal-offset bias zaten var) · ölçmeden iddia yok.
 
