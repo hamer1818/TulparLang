@@ -1044,6 +1044,22 @@ static const TameBuiltin *tame_builtin_lookup(const char *name) {
   return nullptr;
 }
 
+// Tulpar Engine (engine/) köprüsü — eng_* builtin ailesi. Tablo ÜRETİLİR:
+// engine/tools/gen_engine_bindings.py (tek kaynak SPEC) aynı anda binding'i,
+// typeinfer imzalarını ve LSP girdilerini de yazar; elle düzenlenmez. ABI ve
+// dispatch tame ile birebir aynı (N-ptr VMValue). Link: engine_link_flags().
+static const TameBuiltin k_engine_builtins[] = {
+#include "engine_builtins_table.inc"
+};
+#define ENGINE_BUILTIN_COUNT \
+  ((int)(sizeof(k_engine_builtins) / sizeof(k_engine_builtins[0])))
+static const TameBuiltin *engine_builtin_lookup(const char *name) {
+  for (int i = 0; i < ENGINE_BUILTIN_COUNT; i++) {
+    if (strcmp(k_engine_builtins[i].name, name) == 0) return &k_engine_builtins[i];
+  }
+  return nullptr;
+}
+
 // Declare external runtime functions
 void declare_runtime_functions(LLVMBackend *backend) {
   // printf: i32 printf(i8*, ...)
@@ -1605,6 +1621,12 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMTypeRef tm_ft = llvm_make_vmvalue_func_type(
           backend, tm_params, k_tame_builtins[i].argc, 0);
       LLVMAddFunction(backend->module, k_tame_builtins[i].sym, tm_ft);
+    }
+    // Tulpar Engine köprüsü (eng_*): aynı ABI, aynı döngü.
+    for (int i = 0; i < ENGINE_BUILTIN_COUNT; i++) {
+      LLVMTypeRef en_ft = llvm_make_vmvalue_func_type(
+          backend, tm_params, k_engine_builtins[i].argc, 0);
+      LLVMAddFunction(backend->module, k_engine_builtins[i].sym, en_ft);
     }
   }
 
@@ -2392,6 +2414,13 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
       LLVMPointerType(LLVMInt8TypeInContext(backend->context), 0);
   backend->string_type = backend->ptr_type;
 
+  // Web hedefi — MUTLAKA llvm_init_types'tan ÖNCE. ObjArray'in C tarafındaki
+  // düzeni işaretçi boyutuna bağlı (wasm32'de Obj başlığı 32 değil 20 bayt);
+  // tip gövdesi yanlış kurulursa satır içi GEP web'de YANLIŞ ofsete yazar.
+  // Eskiden bu atama llvm_init_types'tan SONRAYDI: web derlemesi runtime'ın
+  // static_assert'lerinde patlıyordu ve wasm/dist arşivleri tazelenemiyordu.
+  backend->target_web = g_backend_target_web;
+
   // Initialize VM Types
   llvm_init_types(backend);
 
@@ -2423,9 +2452,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->di_int_type = nullptr;
   backend->di_vmvalue_type = nullptr;
 
-  // Web hedefi — MUTLAKA declare_runtime_functions'tan önce (VMValue
-  // fonksiyon tiplerinin şekli buna bağlı; bkz. g_backend_target_web notu).
-  backend->target_web = g_backend_target_web;
+  // (target_web yukarıda, llvm_init_types'tan önce kuruldu.)
 
   // Declare Runtime
   declare_runtime_functions(backend);
@@ -6309,6 +6336,31 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                       (unsigned)tb->argc, "tm_res");
       }
     }
+    // Tulpar Engine köprüsü (eng_*): tame ile aynı tablo-güdümlü dispatch;
+    // görülmesi link satırına libtulpar_engine.a + engine/ arşivlerinin
+    // eklenmesi için yeterli sinyaldir (uses_engine).
+    if (node->name && strncmp(node->name, "eng_", 4) == 0) {
+      const TameBuiltin *eb = engine_builtin_lookup(node->name);
+      if (eb) {
+        backend->uses_engine = 1;
+        LLVMValueRef en_fn =
+            LLVMGetNamedFunction(backend->module, eb->sym);
+        LLVMValueRef en_args[TAME_MAX_ARGS];
+        for (int i = 0; i < eb->argc; i++) {
+          LLVMValueRef v = (i < node->argument_count)
+                               ? codegen_expression(backend,
+                                                    node->arguments[i])
+                               : llvm_vm_val_int(backend, 0);
+          LLVMValueRef slot = llvm_build_alloca_at_entry(
+              backend, backend->vm_value_type, "eng_arg");
+          LLVMBuildStore(backend->builder, v, slot);
+          en_args[i] = LLVMBuildBitCast(backend->builder, slot,
+                                        backend->ptr_type, "eng_arg_void");
+        }
+        return llvm_call_vmvalue_func(backend, en_fn, en_args,
+                                      (unsigned)eb->argc, "eng_res");
+      }
+    }
     if (node->name && strcmp(bi_name, "screen_open") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_open,
                                     nullptr, 0, "scropen_res");
@@ -10035,6 +10087,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // "tame" (2D oyun kütüphanesi) importu — link satırına libtulpar_tame.a
     // eklenmesi gerektiğini işaretle (dup-import erken dönse de idempotent).
     if (rel_path && strcmp(rel_path, "tame") == 0) backend->uses_tame = 1;
+    // "engine" (Tulpar Engine köprüsü) importu — libtulpar_engine.a + engine/ arşivleri.
+    if (rel_path && strcmp(rel_path, "engine") == 0) backend->uses_engine = 1;
     // Check duplication
     for (int i = 0; i < backend->imported_count; i++) {
       if (strcmp(backend->imported_files[i], rel_path) == 0)
@@ -12045,8 +12099,30 @@ int llvm_backend_emit_ir_file(LLVMBackend *backend, const char *filename) {
 // LLVMRelocDefault for executables and LLVMRelocPIC for the Android
 // shared-library objects (a non-PIC x86_64 object aborts the .so link with
 // "relocation R_X86_64_32 cannot be used against local symbol").
+// clone_module: modulu EMIT ETMEDEN ONCE kopyala ve kopyadan uret.
+//
+// NEDEN: `LLVMTargetMachineEmitToFile` saf bir okuma DEGILDIR. CodeGen boru
+// hatti modulu YERINDE degistiren IR gecisleri icerir (PreISelIntrinsicLowering,
+// AtomicExpand, ExpandLargeFpConvert, SelectOptimize, ...) ve ustelik
+// `LLVMSetModuleDataLayout` ile veri yerlesimi de hedefe gore damgalanir. Yani
+// bir emit'ten sonra elimizdeki artik "on uc IR'i" degil, O HEDEFE gore
+// alcaltilmis IR'dir.
+//
+// Android hedefi ayni modulden IKI ABI uretir (once arm64-v8a, sonra x86_64).
+// Kopyalamadan yapilinca ikinci emit, birincinin (AArch64) alcaltmasi uzerine
+// biniyordu. Olculen sonuc (2026-09-15, emulator): `t_menu_ciz` icinde 16 bayt
+// hizali `movapd` 8 mod 16 bir yuva olan `0x48(%rsp)`e dusuyor ve uygulama ilk
+// karede SIGSEGV veriyordu (fault_addr 0x0 = hizalama hatasi, null DEGIL).
+// Ayni IR `llc -mtriple=x86_64-linux-android34 -relocation-model=pic` ile TEK
+// BASINA derlendiginde dogru yuvayi (`0x40(%rsp)`) uretiyor — fark tam olarak
+// "modul daha once baska bir hedef icin emit edildi mi" farkiydi.
+//
+// Belirtinin sinsiligi: ILK ABI (arm64, gercek telefon) DOGRU uretiliyor, yalniz
+// IKINCISI (x86_64, emulator) bozuluyor. Yani gercek cihazda her sey calisirken
+// emulator cokuyor ve insan once emulatorden suphelenip hatayi ariyor.
 static int emit_object_with_triple(LLVMBackend *backend, const char *filename,
-                                   char *triple, LLVMRelocMode reloc) {
+                                   char *triple, LLVMRelocMode reloc,
+                                   bool clone_module) {
   LLVMTargetRef target;
   char *error = nullptr;
   if (LLVMGetTargetFromTriple(triple, &target, &error) != 0)
@@ -12054,24 +12130,27 @@ static int emit_object_with_triple(LLVMBackend *backend, const char *filename,
   LLVMTargetMachineRef machine = LLVMCreateTargetMachine(
       target, triple, "generic", "", LLVMCodeGenLevelDefault, reloc,
       LLVMCodeModelDefault);
-  LLVMSetModuleDataLayout(backend->module, LLVMCreateTargetDataLayout(machine));
-  LLVMSetTarget(backend->module, triple);
+  LLVMModuleRef module =
+      clone_module ? LLVMCloneModule(backend->module) : backend->module;
+  LLVMSetModuleDataLayout(module, LLVMCreateTargetDataLayout(machine));
+  LLVMSetTarget(module, triple);
 
   // Verify module
   char *verify_error = nullptr;
-  if (LLVMVerifyModule(backend->module, LLVMPrintMessageAction,
-                       &verify_error) != 0) {
+  if (LLVMVerifyModule(module, LLVMPrintMessageAction, &verify_error) != 0) {
     fprintf(stderr, "Global module verification failed: %s\n", verify_error);
     LLVMDisposeMessage(verify_error);
     // Continue anyway to see if it links? No, it usually crashes.
     // return 1;
   }
 
-  if (LLVMTargetMachineEmitToFile(machine, backend->module, filename,
-                                  LLVMObjectFile, &error) != 0) {
+  if (LLVMTargetMachineEmitToFile(machine, module, filename, LLVMObjectFile,
+                                  &error) != 0) {
     fprintf(stderr, "Error emitting object file: %s\n", error);
+    if (clone_module) LLVMDisposeModule(module);
     return 1;
   }
+  if (clone_module) LLVMDisposeModule(module);
   LLVMDisposeTargetMachine(machine);
   LLVMDisposeMessage(triple);
   return 0;
@@ -12096,7 +12175,25 @@ int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
     LLVMInitializeNativeAsmPrinter();
     triple = LLVMGetDefaultTargetTriple();
   }
-  return emit_object_with_triple(backend, filename, triple, LLVMRelocDefault);
+  // Tek emit: modul bundan sonra kullanilmiyor, kopyaya gerek yok.
+  return emit_object_with_triple(backend, filename, triple, LLVMRelocDefault,
+                                 /*clone_module=*/false);
+}
+
+// Modulun IR'inin FNV-1a ozeti. Tek amaci: "emit modulu degistirmez"
+// varsayimini MEKANIK olarak dogrulamak (bkz. Tuzaklar 8ap). Android yolu ayni
+// modulden iki ABI uretiyor; klonlama kaldirilir ya da baska bir yerde modulu
+// degistiren bir emit yolu eklenirse, bu ozet ABI dongusu boyunca DEGISIR ve
+// surucu sessiz bozuk kod uretmek yerine yuksek sesle durur.
+uint64_t llvm_backend_module_fingerprint(LLVMBackend *backend) {
+  char *ir = LLVMPrintModuleToString(backend->module);
+  uint64_t h = 1469598103934665603ULL;
+  for (const char *p = ir; *p; p++) {
+    h ^= (unsigned char)*p;
+    h *= 1099511628211ULL;
+  }
+  LLVMDisposeMessage(ir);
+  return h;
 }
 
 int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
@@ -12115,8 +12212,11 @@ int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
   LLVMInitializeX86TargetMC();
   LLVMInitializeX86AsmPrinter();
   LLVMInitializeX86AsmParser();
+  // Her ABI KENDI KOPYASINDAN uretilir: bir onceki hedefin alcaltmasi
+  // sonrakine sizmasin (yukaridaki gerekce).
   return emit_object_with_triple(backend, filename,
-                                 LLVMCreateMessage(triple_str), LLVMRelocPIC);
+                                 LLVMCreateMessage(triple_str), LLVMRelocPIC,
+                                 /*clone_module=*/true);
 }
 
 // Optimization Pass enabling using new LLVM Pass Manager

@@ -15,7 +15,23 @@ APK="${1:?kullanim: install_run.sh <out>.apk [--screenshot cikti.png]}"
 SHOT=""
 [ "${2:-}" = "--screenshot" ] && SHOT="${3:?--screenshot icin cikti yolu verin}"
 
-PKG="dev.tulparlang.game"
+# Paket adi APK'nin YANINDAKI staging manifest'inden okunur: `tulpar build
+# --target=android` paket adini CIKTI ADINDAN turetiyor (dev.tulparlang.<ad>),
+# dolayisiyla sabit "dev.tulparlang.game" yalniz eski oyunlar icin dogruydu ve
+# baska adli her APK'da "Activity class does not exist" veriyordu.
+# Sira: TULPAR_ANDROID_PKG > staging manifest > aapt2 > eski varsayilan.
+PKG="${TULPAR_ANDROID_PKG:-}"
+if [ -z "$PKG" ]; then
+    MANIFEST="${APK%.apk}_apk/AndroidManifest.xml"
+    if [ -f "$MANIFEST" ]; then
+        PKG=$(sed -n 's/.*package="\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)
+    fi
+fi
+if [ -z "$PKG" ] && command -v aapt2 >/dev/null 2>&1; then
+    PKG=$(aapt2 dump packagename "$APK" 2>/dev/null | head -1)
+fi
+[ -z "$PKG" ] && PKG="dev.tulparlang.game"
+echo "[0/3] paket: $PKG"
 ACT="$PKG/android.app.NativeActivity"
 
 # adb: PATH'ten ya da Windows SDK platform-tools

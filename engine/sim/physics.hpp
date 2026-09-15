@@ -28,6 +28,16 @@ struct BodyId {
   bool valid() const { return v != 0xFFFFFFFFu; }
 };
 
+// Isin testi sonucu. distance: origin'den carpma noktasina (dir normalize
+// edilir). Ses okluzyonu bunu kullanir: dinleyici -> kaynak isini bir govdeye
+// carparsa arada engel var demektir (bkz. audio/spatial.hpp katman notu).
+struct RayHit {
+  BodyId body{};
+  float distance = 0;
+  Vec3 point{};
+  Vec3 normal{};
+};
+
 struct PhysicsStats {
   uint32_t bodies = 0;
   uint64_t allocs_total = 0;    // Jolt allocator kancasindan
@@ -46,6 +56,12 @@ public:
   void remove(BodyId id);
 
   void step(float dt, int collision_steps = 1);
+
+  // Isin testi (Jolt NarrowPhaseQuery). Govdeler eklendikten SONRA en az bir
+  // step() gerekir (genis faz agaci orada guncellenir), yoksa yeni govde
+  // bulunmayabilir. Adimlamayi/durumu DEGISTIRMEZ: salt okunur sorgu, altin
+  // ozet etkilenmez. dir sifir uzunlukluysa ya da max_distance <= 0 ise false.
+  bool raycast(Vec3 origin, Vec3 dir, float max_distance, RayHit *hit = nullptr) const;
 
   Vec3 position(BodyId id) const;
   Quat rotation(BodyId id) const;

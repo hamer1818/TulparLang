@@ -3,6 +3,9 @@
 // gizmo. Veri modeli content::SceneDesc (.sahne dosyasi): yukle / kaydet /
 // geri al / yinele (SceneHistory), ekle / sil, oynat = govdeler fizige girer,
 // durdur = yazar donusumune doner (veri modeli gercek, sim turetilmis).
+// Dunya paneli (gunes/ortam/golge/kamera), Derle (Ctrl+B) = runtime blob .sahneb.
+// Coklu secim (Ctrl+tik; grup tasima/silme gunluge TEK eylem), Kaynaklar paneli
+// (sahne dizinindeki glTF'ler), isik yaricapi / golge hacmi / gunes yonu gizmolari.
 // Arka plan: Faz 2 demo sahnesi. Headless kip: betikli durumla N kare, PPM.
 #pragma once
 #include <cstdint>

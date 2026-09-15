@@ -1,6 +1,8 @@
 // Faz 3/6: glTF yukleme + dokulu cizim. Varlik: tests/assets/checker_cube.gltf
 // (make_test_gltf.py, belirlenimli). Cihazda: TULPAR_ENGINE_ASSETS dizini
 // (android_run.sh push eder); yoksa GORUNUR atlanir.
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -9,6 +11,8 @@
 #include "content/ktx2.hpp"
 
 #include <stb_image.h>
+#include "content/cluster_dag.hpp"
+#include "content/font.hpp"
 #include "content/meshopt.hpp"
 #include "core/memory/arena.hpp"
 #include "renderer/renderer.hpp"
@@ -460,4 +464,508 @@ ENGINE_TEST(content_ktx2_astc_decodes_and_uploads) {
   rhi::offscreen_destroy(off);
   dev.shutdown();
   stbi_image_free(png);
+}
+
+// ===========================================================================
+// Faz 9 — KUME (cluster) DAG (content/cluster_dag.hpp). Kapilar CPU tarafinda:
+// GPU cull + indirect renderer'in isi, burada olculen VERI.
+// Test mesh'i PROSEDUREL uretiliyor (yeni varlik dosyasi yok, tamamen
+// belirlenimli): 64x64 kareli yukseklik alani = 8192 ucgen — DAG'in birkac
+// seviye derinlesmesi icin yeterince yogun.
+// ===========================================================================
+namespace {
+// Belirlenimli yukseklik alani: [-1,1]^2 XZ, yukseklik iki sinusun carpimi.
+bool make_grid_mesh(Arena &a, uint32_t n, content::ModelMesh *out, float bump = 1.0f) {
+  const uint32_t vn = (n + 1) * (n + 1), tn = n * n * 2;
+  renderer::Vertex *v = a.alloc_array_zeroed<renderer::Vertex>(vn);
+  uint32_t *idx = a.alloc_array<uint32_t>(tn * 3);
+  if (!v || !idx) return false;
+  for (uint32_t z = 0; z <= n; z++)
+    for (uint32_t x = 0; x <= n; x++) {
+      const float fx = (float)x / (float)n * 2.0f - 1.0f, fz = (float)z / (float)n * 2.0f - 1.0f;
+      // sinus yerine polinom: libm surumune bagli olmayan bit-esit yukseklik.
+      const float h = bump * 0.35f * (1.0f - fx * fx) * (1.0f - fz * fz) * (1.0f + 0.5f * fx * fz);
+      v[z * (n + 1) + x].pos = {fx, h, fz};
+      v[z * (n + 1) + x].nrm = {0, 1, 0};
+      v[z * (n + 1) + x].uv = {(float)x / (float)n, (float)z / (float)n};
+    }
+  uint32_t k = 0;
+  for (uint32_t z = 0; z < n; z++)
+    for (uint32_t x = 0; x < n; x++) {
+      const uint32_t a0 = z * (n + 1) + x, b0 = a0 + 1, c0 = a0 + (n + 1), d0 = c0 + 1;
+      idx[k++] = a0; idx[k++] = c0; idx[k++] = b0;
+      idx[k++] = b0; idx[k++] = c0; idx[k++] = d0;
+    }
+  *out = content::ModelMesh{};
+  out->verts = v; out->vertex_count = vn;
+  out->indices = idx; out->index_count = k;
+  return true;
+}
+// Kapali UV kure: son sutun ilk sutunun vertex'lerini kullanir ve kutuplar tek
+// vertex — ayni pozisyondan iki kopya YOK, mesh su gecirmez (acik kenar 0).
+bool make_closed_sphere(Arena &a, uint32_t S, uint32_t R, content::ModelMesh *out) {
+  const uint32_t vn = 2 + (R - 1) * S, tn = 2 * S + (R - 2) * S * 2;
+  renderer::Vertex *v = a.alloc_array_zeroed<renderer::Vertex>(vn);
+  uint32_t *idx = a.alloc_array<uint32_t>(tn * 3);
+  if (!v || !idx) return false;
+  auto ring = [&](uint32_t r, uint32_t s) { return 2 + (r - 1) * S + (s % S); };
+  v[0].pos = {0, 1, 0}; v[0].nrm = {0, 1, 0};
+  v[1].pos = {0, -1, 0}; v[1].nrm = {0, -1, 0};
+  for (uint32_t r = 1; r < R; r++) {
+    const float th = 3.14159265358979f * (float)r / (float)R;
+    for (uint32_t s = 0; s < S; s++) {
+      const float ph = 6.28318530717959f * (float)s / (float)S;
+      const Vec3 p{std::sin(th) * std::cos(ph), std::cos(th), std::sin(th) * std::sin(ph)};
+      v[ring(r, s)].pos = p;
+      v[ring(r, s)].nrm = p;
+    }
+  }
+  uint32_t k = 0;
+  for (uint32_t s = 0; s < S; s++) { idx[k++] = 0; idx[k++] = ring(1, s); idx[k++] = ring(1, s + 1); }
+  for (uint32_t r = 1; r + 1 < R; r++)
+    for (uint32_t s = 0; s < S; s++) {
+      const uint32_t a0 = ring(r, s), b0 = ring(r, s + 1), c0 = ring(r + 1, s), d0 = ring(r + 1, s + 1);
+      idx[k++] = a0; idx[k++] = c0; idx[k++] = b0;
+      idx[k++] = b0; idx[k++] = c0; idx[k++] = d0;
+    }
+  for (uint32_t s = 0; s < S; s++) { idx[k++] = 1; idx[k++] = ring(R - 1, s + 1); idx[k++] = ring(R - 1, s); }
+  *out = content::ModelMesh{};
+  out->verts = v; out->vertex_count = vn;
+  out->indices = idx; out->index_count = k;
+  return true;
+}
+void dag_info(const char *tag, const content::ClusterDag &d) {
+  std::printf("    [bilgi] %s: %u kume, %u seviye, %u grup, %u kok, ozet %016llx\n", tag, d.node_count, d.levels, d.group_count,
+              d.root_count, (unsigned long long)d.hash);
+  for (uint32_t l = 0; l < d.levels; l++)
+    std::printf("    [bilgi]   seviye %u: %u kume, %u ucgen, en buyuk hata %.6f\n", l, d.level_count[l], d.level_tris[l],
+                (double)d.level_error[l]);
+}
+// Noktadan ucgene en kisa uzaklik (Ericson, Real-Time Collision Detection).
+float point_tri_dist(Vec3 p, Vec3 a, Vec3 b, Vec3 c) {
+  const Vec3 ab = b - a, ac = c - a, ap = p - a;
+  const float d1 = dot(ab, ap), d2 = dot(ac, ap);
+  if (d1 <= 0 && d2 <= 0) return length(ap);
+  const Vec3 bp = p - b;
+  const float d3 = dot(ab, bp), d4 = dot(ac, bp);
+  if (d3 >= 0 && d4 <= d3) return length(bp);
+  const float vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) return length(ap - ab * (d1 / (d1 - d3)));
+  const Vec3 cp = p - c;
+  const float d5 = dot(ab, cp), d6 = dot(ac, cp);
+  if (d6 >= 0 && d5 <= d6) return length(cp);
+  const float vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) return length(ap - ac * (d2 / (d2 - d6)));
+  const float va = d3 * d6 - d5 * d4;
+  if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) return length(p - (b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)))));
+  const float den = 1.0f / (va + vb + vc);
+  return length(p - (a + ab * (vb * den) + ac * (vc * den)));
+}
+// Seviyedeki ucgenlerden ornek noktalar (kose + agirlik merkezi) alip ORIJINAL
+// mesh'e en kisa uzakligi olcer (kaba kuvvet; Hausdorff yerine ornekleme).
+float level_deviation(const content::ClusterDag &d, const content::ModelMesh &mm, uint32_t level, uint32_t max_samples, float *mean) {
+  float worst = 0, sum = 0;
+  uint32_t taken = 0, tri_total = d.level_tris[level] ? d.level_tris[level] : 1;
+  const uint32_t stride = tri_total > max_samples ? tri_total / max_samples + 1 : 1;
+  uint32_t seen = 0;
+  for (uint32_t i = 0; i < d.level_count[level]; i++) {
+    const content::ClusterNode &nd = d.nodes[d.level_first[level] + i];
+    for (uint32_t t = 0; t < nd.index_count; t += 3, seen++) {
+      if (seen % stride) continue;
+      const Vec3 p0 = mm.verts[d.indices[nd.index_offset + t]].pos, p1 = mm.verts[d.indices[nd.index_offset + t + 1]].pos,
+                 p2 = mm.verts[d.indices[nd.index_offset + t + 2]].pos;
+      const Vec3 samples[2] = {(p0 + p1 + p2) * (1.0f / 3.0f), (p0 + p1) * 0.5f};
+      for (int s = 0; s < 2; s++) {
+        float best = 1e30f;
+        for (uint32_t o = 0; o < mm.index_count; o += 3) {
+          const float dd = point_tri_dist(samples[s], mm.verts[mm.indices[o]].pos, mm.verts[mm.indices[o + 1]].pos,
+                                          mm.verts[mm.indices[o + 2]].pos);
+          if (dd < best) best = dd;
+        }
+        if (best > worst) worst = best;
+        sum += best;
+        taken++;
+      }
+    }
+  }
+  if (mean) *mean = taken ? sum / (float)taken : 0.0f;
+  return worst;
+}
+} // namespace
+
+// KAPI (planin kendi kapisi): "cut gecislerinde crack yok". Olculen sey:
+// iki komsu GRUBUN paylastigi kenarlar sadelestirmeden sonra duruyor mu.
+// Kenar kilidi calisiyorsa kayip 0 olmali. KONTROL: kilit kapaliyken AYNI
+// olcum kayip GORMELI — gormezse kapi bir sey olcmuyordur.
+ENGINE_TEST(content_cluster_dag_locks_group_borders) {
+  static SystemArena sys;
+  if (!sys.reserve(128u << 20, "dag_seam")) { CHECK(false); return; }
+  content::ModelMesh mm;
+  CHECK(make_grid_mesh(sys, 64, &mm));
+  std::printf("    [bilgi] izgara mesh: %u vertex, %u ucgen\n", mm.vertex_count, mm.index_count / 3);
+
+  content::ClusterDagOptions opt = content::cluster_dag_preset(content::DeviceClass::Mid);
+  content::ClusterDag dag;
+  const bool built = content::cluster_dag_build(sys, mm, opt, &dag);
+  CHECK(built);
+  if (!built) return;
+  dag_info("kilitli DAG", dag);
+  CHECK(dag.levels >= 3);
+  CHECK(dag.node_count > 32);
+  // Kume buyuklugu plan araligi (~64-128 ucgen): seviye 0'da ortalama.
+  const uint32_t avg0 = dag.level_tris[0] / (dag.level_count[0] ? dag.level_count[0] : 1);
+  std::printf("    [bilgi] seviye 0 kume basina ortalama ucgen: %u (hedef <= %u)\n", avg0, opt.max_triangles);
+  CHECK(avg0 >= 32 && avg0 <= opt.max_triangles);
+
+  content::ClusterDagSeamReport rep;
+  CHECK(content::cluster_dag_check_seams(dag, mm, &rep));
+  std::printf("    [bilgi] KILITLI: %u seviye gecisi, %u sadelestirilmis grup, %u grup sinir kenari, KAYIP %u; sinir vertex %u, kayip %u\n",
+              rep.levels_checked, rep.groups_simplified, rep.border_edges, rep.border_edges_lost, rep.border_verts,
+              rep.border_verts_lost);
+  CHECK(rep.border_edges > 100);     // olculecek sinir var
+  CHECK(rep.groups_simplified >= 4); // birden fazla grup gercekten sadelesti
+  CHECK(rep.border_edges_lost == 0); // CATLAK YOK
+  CHECK(rep.border_verts_lost == 0);
+
+  // KONTROL: kilit kapali -> ayni olcum catlak gormeli.
+  content::ClusterDagOptions un = opt;
+  un.lock_group_border = false;
+  content::ClusterDag dag_un;
+  CHECK(content::cluster_dag_build(sys, mm, un, &dag_un));
+  content::ClusterDagSeamReport rep_un;
+  CHECK(content::cluster_dag_check_seams(dag_un, mm, &rep_un));
+  std::printf("    [bilgi] KONTROL (kilit kapali): %u grup sinir kenari, KAYIP %u; sinir vertex %u, kayip %u\n", rep_un.border_edges,
+              rep_un.border_edges_lost, rep_un.border_verts, rep_un.border_verts_lost);
+  CHECK(rep_un.border_edges > 100);
+  CHECK(rep_un.border_edges_lost > 0); // kontrol: kilit olmadan catlak OLUSUR
+
+  // Ayni olcum gercek varlikta (dikis vertex'li UV kure): pozisyon temsilcisi
+  // dikisleri birlestirmezse burada yanlis catlak sayilirdi.
+  char path[512];
+  if (asset_path(path, sizeof path, "lod_sphere.gltf")) {
+    static content::Model m;
+    if (content::gltf_load(sys, path, &m) && m.mesh_count) {
+      content::ClusterDag sd;
+      if (content::cluster_dag_build(sys, m.meshes[0], opt, &sd)) {
+        dag_info("kure DAG", sd);
+        content::ClusterDagSeamReport sr;
+        CHECK(content::cluster_dag_check_seams(sd, m.meshes[0], &sr));
+        std::printf("    [bilgi] kure: %u sinir kenari, KAYIP %u\n", sr.border_edges, sr.border_edges_lost);
+        CHECK(sr.border_edges > 50);
+        CHECK(sr.border_edges_lost == 0);
+        // Yukleyici yolu (GltfLimits::cluster_dag): model'e bake edilen DAG
+        // dogrudan kurulanla AYNI olmali (ayni onayar, ayni baytlar).
+        static content::Model m2;
+        content::GltfLimits lim;
+        lim.cluster_dag = true;
+        lim.cluster_class = 1; // orta
+        if (content::gltf_load(sys, path, &m2, lim) && m2.mesh_count) {
+          const bool baked = m2.meshes[0].dag != nullptr;
+          std::printf("    [bilgi] yukleyici bake'i: %s%s\n", baked ? "var" : "YOK",
+                      baked ? (m2.meshes[0].dag->hash == sd.hash ? " (ozet ayni)" : " (ozet FARKLI)") : "");
+          CHECK(baked);
+          CHECK(baked && m2.meshes[0].dag->hash == sd.hash);
+          CHECK(baked && m2.meshes[0].lod_index_count[0] > 0); // ayrik LOD'lar hala duruyor
+        }
+      }
+    }
+  }
+}
+
+// KAPI: hata metrigi ANLAMLI mi — ust seviyeye cikildikca (1) dugumlerdeki
+// hata artmali ve (2) gercek geometri sapmasi da artmali ama SINIRLI kalmali.
+// Yontem: her seviyenin ucgenlerinden ornek noktalar (agirlik merkezi + kenar
+// ortasi) alinip ORIJINAL mesh'e en kisa uzaklik kaba kuvvetle olculuyor
+// (Hausdorff degil, ornekleme — alt sinir; yeterli cunku artisi ve sinirliligi
+// gosteriyor). KONTROL: mutlak hata tavani kisilinca agac sigleseıyor, yani
+// sadelestirmeyi gercekten bu metrik durduruyor.
+ENGINE_TEST(content_cluster_dag_error_bounds_deviation) {
+  static SystemArena sys;
+  if (!sys.reserve(128u << 20, "dag_error")) { CHECK(false); return; }
+  content::ModelMesh mm;
+  CHECK(make_grid_mesh(sys, 48, &mm));
+  content::ClusterDagOptions opt = content::cluster_dag_preset(content::DeviceClass::Mid);
+  content::ClusterDag dag;
+  CHECK(content::cluster_dag_build(sys, mm, opt, &dag));
+  if (dag.levels < 3) { CHECK(false); return; }
+  Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+  for (uint32_t v = 0; v < mm.vertex_count; v++) { lo = vmin(lo, mm.verts[v].pos); hi = vmax(hi, mm.verts[v].pos); }
+  const float diag = length(hi - lo);
+  float dev[content::kClusterDagMaxLevels] = {};
+  bool error_grows = true, dev_grows = true;
+  for (uint32_t l = 0; l < dag.levels; l++) {
+    float mean = 0;
+    dev[l] = level_deviation(dag, mm, l, 96, &mean);
+    std::printf("    [bilgi] seviye %u: %u ucgen, bildirilen hata %.6f, olculen sapma en buyuk %.6f / ortalama %.6f (oran %.2f)\n", l,
+                dag.level_tris[l], (double)dag.level_error[l], (double)dev[l], (double)mean,
+                dag.level_error[l] > 0 ? (double)(dev[l] / dag.level_error[l]) : 0.0);
+    if (l && dag.level_error[l] < dag.level_error[l - 1]) error_grows = false;
+    if (l && dev[l] < dev[l - 1] - 1e-6f) dev_grows = false;
+  }
+  std::printf("    [bilgi] mesh kosegeni %.4f; en ust seviye sapmasi %.6f (kosegenin %%%.3f'u)\n", (double)diag,
+              (double)dev[dag.levels - 1], (double)(100.0f * dev[dag.levels - 1] / diag));
+  // Seviye 0 orijinal geometri: sapma sifir (kayan nokta yuvarlamasi kadar).
+  std::printf("    [bilgi] seviye 0 sapmasi %.3e (yuvarlama payi)\n", (double)dev[0]);
+  CHECK(dev[0] < 1e-5f);
+  CHECK(dag.level_error[0] == 0.0f);
+  CHECK(error_grows);                    // bildirilen hata monoton
+  CHECK(dev_grows);                      // olculen sapma da monoton
+  CHECK(dev[dag.levels - 1] > dev[1]);   // sapma gercekten buyuyor (olculebilir)
+  CHECK(dev[1] > 0.0f);
+  CHECK(dev[dag.levels - 1] < 0.05f * diag); // ama sinirli
+  // Bildirilen hata sapmayi orter mu (ornekleme + tahmin payi: 4 kat tolerans).
+  bool covered = true;
+  for (uint32_t l = 1; l < dag.levels; l++)
+    if (dev[l] > dag.level_error[l] * 4.0f + 1e-5f) covered = false;
+  CHECK(covered);
+  // Her dugumde cut kosulu gecerli mi: error < parent_error (esitlik olursa o
+  // kume HICBIR esikte secilmez -> delik).
+  bool cut_ok = true;
+  for (uint32_t i = 0; i < dag.node_count; i++)
+    if (!(dag.nodes[i].error < dag.nodes[i].parent_error)) cut_ok = false;
+  CHECK(cut_ok);
+
+  // KONTROL: mutlak hata tavani 0.002 -> sadelestirme erken durmali (daha sig agac).
+  content::ClusterDagOptions capped = opt;
+  capped.max_error = 0.002f;
+  content::ClusterDag dag_capped;
+  CHECK(content::cluster_dag_build(sys, mm, capped, &dag_capped));
+  std::printf("    [bilgi] KONTROL (hata tavani 0.002): %u seviye / %u kume (tavansiz %u / %u)\n", dag_capped.levels,
+              dag_capped.node_count, dag.levels, dag.node_count);
+  CHECK(dag_capped.levels < dag.levels);
+  CHECK(dag_capped.level_error[dag_capped.levels - 1] <= 0.002f + 1e-6f);
+}
+
+// KAPI: determinizm sozlesmesi — ayni girdi ayni DAG baytlarini vermeli.
+// KONTROL: tek vertex 1 mm oynatilinca baytlar DEGISMELI (yoksa ozet girdiyi
+// olcmuyordur). Ayrica cihaz sinifi onayarlari gercekten farkli DAG uretmeli.
+ENGINE_TEST(content_cluster_dag_is_deterministic) {
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "dag_det")) { CHECK(false); return; }
+  content::ModelMesh mm;
+  CHECK(make_grid_mesh(sys, 32, &mm));
+  const content::ClusterDagOptions opt = content::cluster_dag_preset(content::DeviceClass::Mid);
+  content::ClusterDag a, b;
+  CHECK(content::cluster_dag_build(sys, mm, opt, &a));
+  CHECK(content::cluster_dag_build(sys, mm, opt, &b));
+  const bool same = a.hash == b.hash && a.node_count == b.node_count && a.index_count == b.index_count &&
+                    a.child_count == b.child_count &&
+                    std::memcmp(a.nodes, b.nodes, sizeof(content::ClusterNode) * a.node_count) == 0 &&
+                    std::memcmp(a.indices, b.indices, sizeof(uint32_t) * a.index_count) == 0;
+  std::printf("    [bilgi] iki kurulum: ozet %016llx / %016llx, %u kume, %u indeks — bayt esit %s\n", (unsigned long long)a.hash,
+              (unsigned long long)b.hash, a.node_count, a.index_count, same ? "EVET" : "HAYIR");
+  CHECK(same);
+
+  // KONTROL: tek vertex oynadi -> ozet degismeli.
+  const Vec3 keep = mm.verts[mm.vertex_count / 2].pos;
+  mm.verts[mm.vertex_count / 2].pos = keep + Vec3{0, 0.001f, 0};
+  content::ClusterDag moved;
+  CHECK(content::cluster_dag_build(sys, mm, opt, &moved));
+  std::printf("    [bilgi] KONTROL (tek vertex +1 mm): ozet %016llx (%s)\n", (unsigned long long)moved.hash,
+              moved.hash != a.hash ? "DEGISTI" : "AYNI KALDI");
+  CHECK(moved.hash != a.hash);
+  mm.verts[mm.vertex_count / 2].pos = keep;
+
+  // Cihaz sinifi basina bake: ayni mesh, farkli kume buyuklugu / derinlik.
+  uint32_t nodes_by_class[3] = {0, 0, 0}, levels_by_class[3] = {0, 0, 0};
+  for (uint32_t c = 0; c < 3; c++) {
+    content::ClusterDag d;
+    const content::DeviceClass dc = c == 0 ? content::DeviceClass::Low : (c == 1 ? content::DeviceClass::Mid : content::DeviceClass::High);
+    CHECK(content::cluster_dag_build(sys, mm, content::cluster_dag_preset(dc), &d));
+    nodes_by_class[c] = d.node_count;
+    levels_by_class[c] = d.levels;
+    std::printf("    [bilgi] cihaz sinifi %s: %u kume, %u seviye, seviye 0 ucgen/kume %u\n", content::device_class_name(dc),
+                d.node_count, d.levels, d.level_tris[0] / (d.level_count[0] ? d.level_count[0] : 1));
+  }
+  CHECK(nodes_by_class[2] > nodes_by_class[0]);   // yuksek sinif: daha cok/kucuk kume
+  CHECK(levels_by_class[0] <= levels_by_class[1]); // dusuk sinif: daha sig agac
+}
+
+// KAPI (planin kapisinin DOGRUDAN hali): "cut gecislerinde crack yok".
+// Yukaridaki kapi grup sinirlarini olcer; bu kapi GERCEK CUT'i kurar — esik
+// suprulur, her kume `error <= t < parent_error` kuraliyla secilir (seviyeler
+// karisir) — ve secilen ucgen kumesinin SU GECIRMEZ oldugu olculur: her ic
+// kenar tam iki ucgende gorunmeli. Bir kenar tek ucgende kaliyorsa (ve
+// orijinal mesh'in acik kenari degilse) orada CATLAK var demektir.
+// KONTROL: kilit kapali kurulan DAG ayni suprumede catlak vermeli.
+namespace {
+// Kenar listesi: her ucgenin 3 kenari (pozisyon temsilcisi cifti), sirali.
+uint32_t cut_edges(const content::ClusterDag &d, const uint32_t *prep, float t, uint64_t *out, uint32_t cap, uint32_t *tris,
+                   uint32_t *clusters) {
+  uint32_t n = 0;
+  *tris = 0;
+  *clusters = 0;
+  for (uint32_t i = 0; i < d.node_count; i++) {
+    const content::ClusterNode &nd = d.nodes[i];
+    if (!(nd.error <= t && t < nd.parent_error)) continue;
+    (*clusters)++;
+    for (uint32_t k = 0; k < nd.index_count; k += 3) {
+      (*tris)++;
+      const uint32_t a = prep[d.indices[nd.index_offset + k]], b = prep[d.indices[nd.index_offset + k + 1]],
+                     c = prep[d.indices[nd.index_offset + k + 2]];
+      const uint32_t tri[3] = {a, b, c};
+      for (int e = 0; e < 3; e++) {
+        const uint32_t u = tri[e], v = tri[(e + 1) % 3];
+        if (u == v || n >= cap) continue;
+        out[n++] = u < v ? ((uint64_t)u << 32) | v : ((uint64_t)v << 32) | u;
+      }
+    }
+  }
+  std::sort(out, out + n);
+  return n;
+}
+// Tek ucgende kalan kenarlar (acik kenar) -> open[], donus sayi.
+uint32_t open_edges(const uint64_t *e, uint32_t n, uint64_t *open, uint32_t cap, uint32_t *over) {
+  uint32_t no = 0;
+  *over = 0;
+  for (uint32_t i = 0; i < n;) {
+    uint32_t j = i;
+    while (j < n && e[j] == e[i]) j++;
+    if (j - i == 1 && no < cap) open[no++] = e[i];
+    else if (j - i > 2) (*over)++;
+    i = j;
+  }
+  return no;
+}
+} // namespace
+
+ENGINE_TEST(content_cluster_dag_cut_is_watertight) {
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "dag_cut")) { CHECK(false); return; }
+  // KAPALI mesh (UV kure, dikis vertex'i YOK: son sutun ilkini kullanir,
+  // kutuplar tek vertex). Kapali olmasi kapiyi ikili yapar: SAGLAM cut'ta
+  // acik kenar SIFIR olmali, tek bir acik kenar bile catlaktir.
+  content::ModelMesh mm;
+  CHECK(make_closed_sphere(sys, 96, 48, &mm));
+  uint32_t *prep = sys.alloc_array<uint32_t>(mm.vertex_count);
+  CHECK(prep);
+  if (!prep) return;
+  for (uint32_t v = 0; v < mm.vertex_count; v++) prep[v] = v; // pozisyonlar zaten tekil
+
+  const uint32_t cap = mm.index_count * 2;
+  uint64_t *ebuf = sys.alloc_array<uint64_t>(cap);
+  uint64_t *obuf = sys.alloc_array<uint64_t>(cap);
+  float *thr = sys.alloc_array<float>(256);
+  CHECK(ebuf && obuf && thr);
+  if (!ebuf || !obuf || !thr) return;
+
+  auto sweep = [&](const content::ClusterDag &d, const char *tag, uint32_t *out_mixed) {
+    // Esikler: dugumlerdeki AYRIK hata degerleri — her gecis noktasina basilir.
+    uint32_t nt = 0;
+    for (uint32_t i = 0; i < d.node_count && nt < 254; i++) {
+      const float e = d.nodes[i].error;
+      bool have = false;
+      for (uint32_t k = 0; k < nt; k++) if (thr[k] == e) { have = true; break; }
+      if (!have) thr[nt++] = e;
+    }
+    std::sort(thr, thr + nt);
+    uint32_t worst = 0, mixed = 0, sweeps = 0, min_tri = 0xFFFFFFFFu, max_tri = 0;
+    for (uint32_t k = 0; k < nt; k++) {
+      const float t = thr[k];
+      uint32_t tris = 0, clusters = 0, over = 0;
+      const uint32_t n = cut_edges(d, prep, t, ebuf, cap, &tris, &clusters);
+      if (!tris) continue;
+      sweeps++;
+      uint32_t lvl_seen = 0;
+      for (uint32_t i = 0; i < d.node_count; i++)
+        if (d.nodes[i].error <= t && t < d.nodes[i].parent_error) lvl_seen |= 1u << d.nodes[i].level;
+      uint32_t lvl_n = 0;
+      for (uint32_t b = 0; b < 32; b++) lvl_n += (lvl_seen >> b) & 1u;
+      if (lvl_n > 1) mixed++;
+      const uint32_t no = open_edges(ebuf, n, obuf, cap, &over);
+      const uint32_t cracks = no + over; // kapali mesh: acik kenar = catlak
+      if (cracks > worst) worst = cracks;
+      if (tris < min_tri) min_tri = tris;
+      if (tris > max_tri) max_tri = tris;
+      if (cracks || k % 8 == 0)
+        std::printf("    [bilgi] %s t=%.6f: %u kume (%u seviye karisik), %u ucgen, CATLAK %u\n", tag, (double)t, clusters, lvl_n,
+                    tris, cracks);
+    }
+    std::printf("    [bilgi] %s: %u esik, %u tanesinde seviye KARISIK, ucgen %u..%u, EN KOTU CATLAK %u\n", tag, sweeps, mixed,
+                min_tri, max_tri, worst);
+    if (out_mixed) *out_mixed = mixed;
+    return worst;
+  };
+
+  content::ClusterDagOptions opt = content::cluster_dag_preset(content::DeviceClass::Mid);
+  content::ClusterDag dag;
+  CHECK(content::cluster_dag_build(sys, mm, opt, &dag));
+  dag_info("kapali kure DAG", dag);
+  uint32_t mixed = 0;
+  const uint32_t worst = sweep(dag, "KILITLI", &mixed);
+  CHECK(worst == 0);  // hicbir esikte catlak yok
+  CHECK(mixed >= 2);  // ve cut gercekten seviye karistiriyor (yoksa gecis olcmemis olurduk)
+
+  // Popping kapisi: ayni gruptaki butun kumeler AYNI parent_error'u tasimali
+  // (bit bit) — yoksa grup ikiye bolunerek gecer, hem popping hem catlak.
+  bool uniform = true;
+  for (uint32_t g = 0; g < dag.group_count; g++) {
+    float pe = -1;
+    for (uint32_t i = 0; i < dag.node_count; i++) {
+      if (dag.nodes[i].group != g) continue;
+      if (pe < 0) pe = dag.nodes[i].parent_error;
+      else if (std::memcmp(&pe, &dag.nodes[i].parent_error, 4) != 0) uniform = false;
+    }
+  }
+  std::printf("    [bilgi] grup esikleri tek degerli (birlikte gecis): %s (%u grup)\n", uniform ? "EVET" : "HAYIR", dag.group_count);
+  CHECK(uniform);
+
+  // KONTROL: kilit kapali -> ayni suprume catlak gormeli.
+  content::ClusterDagOptions un = opt;
+  un.lock_group_border = false;
+  content::ClusterDag dag_un;
+  CHECK(content::cluster_dag_build(sys, mm, un, &dag_un));
+  const uint32_t worst_un = sweep(dag_un, "KONTROL(kilitsiz)", nullptr);
+  CHECK(worst_un > 0);
+}
+
+// SDF yazitipi atlasi gercekten daha KESKIN mi? `font_measure_sdf_quality`
+// ayni glifi ayni hedef cozunurlukte iki yolla kurup yuksek cozunurluklu
+// gercek rasterle karsilastiriyor. Bu kapi o olcumu KOSTURUR — fonksiyon
+// yazildi ama hicbir yerden cagrilmiyordu, yani "olcen ama olculmeyen" koddu
+// (Tuzaklar: kapisi olmayan olcum, olmayan olcumdur).
+//
+// KONTROL: ayni olcum 1x buyutmede (atlas cozunurlugu = hedef cozunurluk)
+// iki yolu da benzer birakmali — SDF'in kazanci BUYUTMEDE ortaya cikar.
+// Boylece kapi "SDF her zaman daha iyi" gibi bos bir iddia olmuyor.
+ENGINE_TEST(content_sdf_atlas_is_sharper_when_magnified) {
+  char ttf[1024];
+  const char *adir = std::getenv("TULPAR_ENGINE_ASSETS");
+  if (adir && *adir) std::snprintf(ttf, sizeof ttf, "%s/DejaVuSans.ttf", adir);
+  else std::snprintf(ttf, sizeof ttf, "%s/assets/fonts/DejaVuSans.ttf", ENGINE_SOURCE_DIR);
+  FILE *f = std::fopen(ttf, "rb");
+  if (!f) { skip("DejaVuSans.ttf yok (TULPAR_ENGINE_ASSETS ya da engine/assets/fonts)"); return; }
+  std::fclose(f);
+
+  // 'B': hem duz kenar hem egri tasiyor; 8x buyutme UI'de tipik (32 px atlas -> 256 px baslik).
+  content::SdfQuality big{};
+  const bool ok = content::font_measure_sdf_quality(ttf, (uint32_t)'B', 32.0f, 8.0f, 6, &big);
+  CHECK(ok);
+  if (!ok) return;
+  std::printf("    [bilgi] 8x buyutme: kenar SDF %.2f px / bitmap %.2f px, yanlis piksel SDF %.4f / bitmap %.4f (%ux%u, cevre %u)\n",
+              big.sdf_edge_px, big.bitmap_edge_px, big.sdf_error, big.bitmap_error, big.width, big.height, big.perimeter);
+  // Kenar bandi belirgin daha dar olmali: SDF'in VAAT ETTIGI sey bu.
+  CHECK(big.sdf_edge_px * 4.0f < big.bitmap_edge_px);
+  // Siluet SADAKATI: keskinlik, dogruluk PAHASINA gelmemeli. Olculen (2026-09-15,
+  // DejaVuSans 'B', 32 px atlas -> 8x): SDF 0.157, bitmap 0.147 — SDF hafifce
+  // DAHA YUKSEK. Sebep beklenen: bulanik kenarda yanlis siniflandirma yumusak
+  // bir gecise yayilir ve ortalama konumu tutturur; keskin kenarda her konum
+  // hatasi TAM bir yanlis piksele doner. Yani bu sayi "SDF daha kotu" demiyor,
+  // "hata artik yumusatilmiyor" diyor. Kapi bu yuzden esitlik degil YAKINLIK
+  // arar: SDF cozme bozulursa (yanlis on_edge, yanlis olcek) bu oran patlar.
+  CHECK(big.sdf_error < big.bitmap_error * 1.25f);
+
+  // KONTROL: 1x'te buyutme yok, SDF'in ustunlugu de belirgin olmamali.
+  content::SdfQuality same{};
+  const bool ok1 = content::font_measure_sdf_quality(ttf, (uint32_t)'B', 32.0f, 1.0f, 6, &same);
+  CHECK(ok1);
+  if (ok1) {
+    const float buyutme_kazanci = big.bitmap_edge_px / (big.sdf_edge_px > 0 ? big.sdf_edge_px : 1.0f);
+    const float ayni_kazanc = same.bitmap_edge_px / (same.sdf_edge_px > 0 ? same.sdf_edge_px : 1.0f);
+    std::printf("    [bilgi] kenar keskinlik orani: 8x buyutmede %.2fx, 1x'te %.2fx (kontrol)\n", buyutme_kazanci, ayni_kazanc);
+    CHECK(buyutme_kazanci > ayni_kazanc);
+  }
+  // Olmayan dosya sessizce basarili donmemeli.
+  content::SdfQuality bad{};
+  CHECK(!content::font_measure_sdf_quality("/olmayan/font.ttf", (uint32_t)'B', 32.0f, 4.0f, 6, &bad));
 }

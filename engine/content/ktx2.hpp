@@ -28,6 +28,11 @@ struct Ktx2Image {
 // Dosyadan (Arena'ya kopyalanir). false: out->error.
 bool ktx2_load(Arena &arena, const char *path, Ktx2Image *out);
 bool ktx2_parse(Arena &arena, const uint8_t *bytes, size_t size, Ktx2Image *out);
+// KOPYASIZ ayristirma (Faz 6 "ASTC dogrudan"): seviye isaretcileri `bytes`in
+// icine bakar — arena kullanilmaz, AYIRMA YOK. Kaynak bellek (mmap'li pack
+// blogu) goruntu yasadigi surece yasamali ve salt okunur olabilir: ASTC
+// bloklari buradan dogrudan GPU'ya kopyalanir (ktx2_upload).
+bool ktx2_parse_inplace(const uint8_t *bytes, size_t size, Ktx2Image *out);
 // Yazici (arac): seviye verileri verilen bicimde.
 bool ktx2_write(const char *path, VkFormat fmt, uint32_t w, uint32_t h, uint32_t levels, const uint8_t *const *data,
                 const uint32_t *sizes, uint32_t block_w, uint32_t block_h);

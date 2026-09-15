@@ -10,8 +10,12 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -242,6 +246,27 @@ void Physics::step(float dt, int collision_steps) {
   impl_->system.Update(dt, collision_steps, impl_->temp, impl_->jobs);
   g_trace = false;
   impl_->allocs_last_step = g_allocs.load(std::memory_order_relaxed) - impl_->allocs_before_step;
+}
+
+bool Physics::raycast(Vec3 origin, Vec3 dir, float max_distance, RayHit *hit) const {
+  if (hit) *hit = RayHit{};
+  if (!impl_ || max_distance <= 0.0f) return false;
+  const float len = length(dir);
+  if (len <= 1e-8f) return false;
+  const JPH::Vec3 d = to_jph(dir * (1.0f / len)) * max_distance;
+  const JPH::RRayCast ray{to_jph(origin), d};
+  JPH::RayCastResult res;
+  if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, res)) return false;
+  if (hit) {
+    hit->body = BodyId{res.mBodyID.GetIndexAndSequenceNumber()};
+    hit->distance = res.mFraction * max_distance;
+    const JPH::RVec3 p = ray.GetPointOnRay(res.mFraction);
+    hit->point = Vec3{(float)p.GetX(), (float)p.GetY(), (float)p.GetZ()};
+    // Yuzey normali govde kilidi ister (sorgu baska thread'den de gelebilir).
+    JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), res.mBodyID);
+    if (lock.Succeeded()) hit->normal = from_jph(lock.GetBody().GetWorldSpaceSurfaceNormal(res.mSubShapeID2, p));
+  }
+  return true;
 }
 
 Vec3 Physics::position(BodyId id) const { return from_jph(impl_->system.GetBodyInterface().GetPosition(JPH::BodyID(id.v))); }

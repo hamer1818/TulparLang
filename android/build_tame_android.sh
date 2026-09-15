@@ -83,6 +83,7 @@ build_abi() {
         "$ROOT/src/common/diagnostics.cpp"
         "$ROOT/src/common/http_fetch.cpp"
         "$ROOT/src/vm/runtime_bindings.cpp"
+        "$ROOT/src/vm/runtime_net.cpp"
         "$ROOT/src/vm/vm.cpp"
         "$ROOT/src/vm/bytecode.cpp"
         "$ROOT/runtime/tulpar_arc.cpp"

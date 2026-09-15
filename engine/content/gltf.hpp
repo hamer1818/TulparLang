@@ -19,6 +19,11 @@ struct GltfLimits {
   bool optimize = true;
   bool lods = true;
   float lod_error = 0.05f;
+  // Kume (cluster) DAG bake'i (Faz 9, content/cluster_dag.hpp). Varsayilan
+  // KAPALI: yukleme suresini ve bellegi artirir, yalniz derleyici/arac yolu acar.
+  // cluster_class: 0 dusuk / 1 orta / 2 yuksek cihaz sinifi onayari.
+  bool cluster_dag = false;
+  uint32_t cluster_class = 1;
   // Iskelet/animasyon: glTF kanallari sabit hizda orneklenir, ClipBuilder sikistirir.
   uint32_t max_skins = kModelMaxSkins;
   uint32_t max_clips = 16;

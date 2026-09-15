@@ -11,6 +11,8 @@
 
 namespace tulpar::engine::content {
 
+struct ClusterDag; // content/cluster_dag.hpp (Faz 9: kume DAG'i; ileri bildirim)
+
 struct ModelImage {
   uint32_t width = 0, height = 0;
   uint8_t *rgba = nullptr; // Arena'da, width*height*4
@@ -50,6 +52,10 @@ struct ModelMesh {
   uint32_t *lod_indices[kModelMaxLods] = {};
   uint32_t lod_index_count[kModelMaxLods] = {};
   float lod_error[kModelMaxLods] = {}; // bagil (mesh olcegine gore)
+  // Kume (cluster) DAG: GltfLimits::cluster_dag acikken kurulur (Faz 9).
+  // Ayrik LOD'larin (lod_indices) YERINE GECMEZ, ustune gelir: LOD butun mesh'i
+  // birden degistirir, DAG kume kume ve cut'i runtime secer.
+  const ClusterDag *dag = nullptr;
   // Iskeletli: skin >= 0 ise skin_verts dolu (verts ile ayni sira/sayi; JOINTS_0
   // yeniden siralanmis, WEIGHTS_0 unorm16). Iskeletli mesh'te meshopt/LOD atlanir.
   int32_t skin = -1;

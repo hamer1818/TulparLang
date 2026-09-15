@@ -29,7 +29,10 @@ bool astc_format_info(VkFormat f, uint32_t *bw, uint32_t *bh, bool *srgb) {
 }
 } // namespace
 
-bool ktx2_parse(Arena &arena, const uint8_t *b, size_t n, Ktx2Image *out) {
+namespace {
+// Tek ayristirici: arena verilirse seviyeler KOPYALANIR, verilmezse
+// isaretciler kaynagin icine bakar (kopyasiz yol).
+bool ktx2_parse_common(Arena *arena, const uint8_t *b, size_t n, Ktx2Image *out) {
   *out = Ktx2Image{};
   if (n < 80 || std::memcmp(b, kKtx2Id, 12) != 0) { std::snprintf(out->error, sizeof out->error, "KTX2 kimligi yok"); return false; }
   out->vk_format = (VkFormat)rd32(b + 12);
@@ -56,14 +59,22 @@ bool ktx2_parse(Arena &arena, const uint8_t *b, size_t n, Ktx2Image *out) {
     const uint8_t *e = b + index_off + i * 24;
     const uint64_t off = rd64(e), len = rd64(e + 8);
     if (off + len > n || len == 0 || len > 0xFFFFFFFFu) { std::snprintf(out->error, sizeof out->error, "seviye %u dosya disinda", i); return false; }
-    uint8_t *copy = arena.alloc_array<uint8_t>((uint32_t)len);
-    if (!copy) { std::snprintf(out->error, sizeof out->error, "arena dolu"); return false; }
-    std::memcpy(copy, b + off, (size_t)len);
-    out->level_data[i] = copy;
+    if (arena) {
+      uint8_t *copy = arena->alloc_array<uint8_t>((uint32_t)len);
+      if (!copy) { std::snprintf(out->error, sizeof out->error, "arena dolu"); return false; }
+      std::memcpy(copy, b + off, (size_t)len);
+      out->level_data[i] = copy;
+    } else {
+      out->level_data[i] = b + off; // kopyasiz: kaynagin icine isaretci
+    }
     out->level_size[i] = (uint32_t)len;
   }
   return true;
 }
+} // namespace
+
+bool ktx2_parse(Arena &arena, const uint8_t *b, size_t n, Ktx2Image *out) { return ktx2_parse_common(&arena, b, n, out); }
+bool ktx2_parse_inplace(const uint8_t *b, size_t n, Ktx2Image *out) { return ktx2_parse_common(nullptr, b, n, out); }
 
 bool ktx2_load(Arena &arena, const char *path, Ktx2Image *out) {
   *out = Ktx2Image{};

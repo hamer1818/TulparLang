@@ -505,3 +505,183 @@ ENGINE_TEST(renderer_srgb_roundtrip_is_identity) {
   bool control_is_linear = q[1][1] < 70 && q[1][2] < 165; // 128->55, 200->147: kodlanmamis
   CHECK(control_is_linear);
 }
+
+// Kademeli golge (CSM) gercekten YAKIN ALANI keskinlestiriyor mu? Olcum
+// referansa yakinliktir: ayni sahne uc kurulumla cizilir —
+//   (R) referans: tek kademe, 2048 tile (ince texel, "dogru" cevap)
+//   (K) kaba:     tek kademe, 256 tile  (ayni hacim, 8x kaba texel)
+//   (C) kademeli: 3 kademe, 256 tile    (yakin kademe hacmin 1/9'u = ince)
+// Kapi: C, referansa K'dan BELIRGIN daha yakin olmali. Kontrol K'nin kendisi:
+// kaba kurulum gercekten bozuluyor mu (yoksa test hicbir sey olcmez).
+// Not: hepsi ayni bellek sinifinda degil — amac kalite/oran, mutlak bellek degil.
+ENGINE_TEST(renderer_cascades_sharpen_near_shadows) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "cascade_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+
+  const uint32_t W = 256, H = 256;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+
+  static uint8_t px[3][W * H * 4];
+  uint32_t casc_reported[3] = {0, 0, 0};
+  // Genis dunya (yaricap 45): tek kademe kaba texel demektir. Ince ayrinti icin
+  // ince direkler; golgeleri yakin kademede net, kaba haritada erimis cikar.
+  const struct { uint32_t cascades, size; } kSetup[3] = {{1, 2048}, {1, 256}, {3, 256}};
+  bool all_ok = true;
+  for (int pass = 0; pass < 3 && all_ok; pass++) {
+    renderer::Renderer ren;
+    renderer::RendererConfig rc;
+    rc.shadow_size = kSetup[pass].size;
+    rc.shadow_cascades = kSetup[pass].cascades;
+    rc.frames_in_flight = 1;
+    if (!ren.init(dev, sys, offscreen_render_pass(off), rc)) { CHECK(false); all_ok = false; break; }
+    casc_reported[pass] = ren.shadow().cascades;
+    renderer::Vertex v[24];
+    uint32_t idx[36];
+    uint32_t n = renderer::Renderer::cube(v, idx);
+    renderer::MeshHandle cube = ren.create_mesh(v, 24, idx, n);
+    n = renderer::Renderer::plane(v, idx);
+    renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+    ren.set_light(normalize(Vec3{1.0f, 1.4f, 0.0f}), {0.10f, 0.10f, 0.12f}, 0.9f);
+    ren.set_shadow_volume({0, 1.0f, 0}, 45.0f, 120.0f); // genis hacim: tek kademede kaba
+    ren.set_shadow_focus({0, 0.5f, 0});                 // yakin kademe kameranin baktigi yerde
+    ren.set_camera(Mat4::look_at({0, 5.0f, 7.0f}, {0, 0.5f, 0}, {0, 1, 0}),
+                   Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 100.0f));
+    ren.begin_frame(0);
+    ren.draw(plane, Mat4::scale({40, 1, 40}), {0.8f, 0.8f, 0.8f});
+    for (int i = -2; i <= 2; i++) // ince direkler: kaba texel bunlari yutar
+      ren.draw(cube, Mat4::translate({(float)i * 1.2f, 1.0f, 0}) * Mat4::scale({0.16f, 2.0f, 0.16f}), {0.9f, 0.3f, 0.2f});
+    Rec rr{&ren};
+    const bool ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
+    CHECK(ok);
+    if (ok) std::memcpy(px[pass], ores.pixels, sizeof px[0]);
+    else all_ok = false;
+    ren.shutdown();
+  }
+  if (!all_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  CHECK(casc_reported[0] == 1 && casc_reported[2] == 3);
+
+  // Referanstan sapma: mutlak parlaklik farkinin toplami (sadece ZEMIN bolgesi;
+  // direklerin kendisi her kurulumda ayni ciziliyor).
+  auto deviation = [&](int a) {
+    uint64_t sum = 0;
+    for (uint32_t i = 0; i < W * H; i++) {
+      const int la = px[a][i * 4] + px[a][i * 4 + 1] + px[a][i * 4 + 2];
+      const int lr = px[0][i * 4] + px[0][i * 4 + 1] + px[0][i * 4 + 2];
+      sum += (uint64_t)(la > lr ? la - lr : lr - la);
+    }
+    return sum;
+  };
+  const uint64_t d_coarse = deviation(1), d_casc = deviation(2);
+  std::printf("    [bilgi] referanstan sapma: kaba(1x256) %llu, kademeli(3x256) %llu (%.2fx daha yakin)\n",
+              (unsigned long long)d_coarse, (unsigned long long)d_casc,
+              d_casc ? (double)d_coarse / (double)d_casc : 0.0);
+  // KONTROL: kaba kurulum gercekten bozulmus olmali (yoksa karsilastirma bos).
+  CHECK(d_coarse > (uint64_t)W * H / 8);
+  // KAPI: kademeli, kabanin en fazla yarisi kadar sapmali.
+  CHECK(d_casc * 2 < d_coarse);
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
+// Paketlenmis vertex formati (plan Faz 3 "packed format bit butcesi"):
+// normal oktahedral SNORM16x2, UV yarim hassasiyet -> 32 bayt yerine 20.
+// Uc sey olculur: (1) kodek hassasiyeti (aci hatasi), KONTROL olarak ayni
+// kodlamanin 8-bitlik surumu belirgin kotu olmali — yoksa esik bir sey
+// olcmuyordur; (2) GPU'daki vertex bayti gercekten 20/vertex; (3) GPU'nun
+// cozmesi CPU'nun kodlamasiyla ORTUSUYOR: bilinen isikla aydinlatilan kupun
+// yuz parlakliklari analitik Lambert degerine oturmali (kodlama/cozme kayarsa
+// yuzler yanlis parlar).
+ENGINE_TEST(renderer_packed_vertex_keeps_normals) {
+  // (1) Kodek: kure uzerinde duzgun dagilmis yonlerde en buyuk aci hatasi.
+  double worst16 = 0.0, worst8 = 0.0;
+  for (int i = 0; i < 2000; i++) {
+    const float u = (float)((i * 7919) % 1000) / 1000.0f * 2.0f - 1.0f;
+    const float phi = (float)((i * 5077) % 1000) / 1000.0f * 6.2831853f;
+    const float r = std::sqrt(std::fmax(0.0f, 1.0f - u * u));
+    const Vec3 n{r * std::cos(phi), u, r * std::sin(phi)};
+    int16_t e[2];
+    renderer::Renderer::encode_normal(n, e);
+    const Vec3 d = renderer::Renderer::decode_normal(e);
+    worst16 = std::fmax(worst16, std::acos((double)std::fmin(1.0f, dot(n, d))) * 57.2957795);
+    // KONTROL: ayni kodlama 8 bite kirpilirsa (snorm8) hata buyumeli.
+    int16_t e8[2] = {(int16_t)((e[0] / 256) * 256), (int16_t)((e[1] / 256) * 256)};
+    const Vec3 d8 = renderer::Renderer::decode_normal(e8);
+    worst8 = std::fmax(worst8, std::acos((double)std::fmin(1.0f, dot(n, d8))) * 57.2957795);
+  }
+  std::printf("    [bilgi] normal kodek en buyuk aci hatasi: 16 bit %.3f derece, 8 bit %.3f derece\n", worst16, worst8);
+  CHECK(worst16 < 0.25);
+  CHECK(worst8 > 4.0 * worst16); // kontrol: esik gercekten hassasiyet olcuyor
+  CHECK(renderer::Renderer::gpu_vertex_bytes() == 20 && renderer::Renderer::author_vertex_bytes() == 32);
+
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "packed_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 128, H = 128;
+  OffscreenConfig oc;
+  oc.srgb = false; // dogrusal cikti: parlaklik analitik degerle DOGRUDAN karsilastirilir
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 0; // golge yok: yalniz normal/aydinlatma olculsun
+  if (!ren.init(dev, sys, offscreen_render_pass(off), rc)) { CHECK(false); offscreen_destroy(off); dev.shutdown(); return; }
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  const uint32_t n = renderer::Renderer::cube(v, idx);
+  renderer::MeshHandle cube = ren.create_mesh(v, 24, idx, n);
+  CHECK(cube.valid());
+  // (2) Bellek: 24 vertex x 20 bayt.
+  std::printf("    [bilgi] GPU vertex bayti: %llu (24 vertex x %u); yazar duzeni %u bayt olurdu\n",
+              (unsigned long long)ren.vertex_bytes(), renderer::Renderer::gpu_vertex_bytes(),
+              renderer::Renderer::author_vertex_bytes());
+  CHECK(ren.vertex_bytes() == 24ull * renderer::Renderer::gpu_vertex_bytes());
+
+  // (3) Piksel: isik +X'ten; ortam 0, diffuse 1 -> +X yuzu tam parlak, +Y yuzu koyu.
+  const Vec3 L = normalize(Vec3{1, 0, 0});
+  ren.set_light(L, {0.0f, 0.0f, 0.0f}, 1.0f);
+  ren.set_shadows_enabled(false);
+  ren.set_camera(Mat4::look_at({3.0f, 2.2f, 3.0f}, {0, 0, 0}, {0, 1, 0}),
+                 Mat4::perspective(0.9f, 1.0f, 0.1f, 50.0f));
+  ren.begin_frame(0);
+  ren.draw(cube, Mat4::scale({2, 2, 2}), {1.0f, 1.0f, 1.0f});
+  Rec rr{&ren};
+  const bool ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
+  CHECK(ok);
+  if (ok) {
+    // Kamera (3, 2.2, 3): +X, +Y ve +Z yuzleri gorunur. Analitik Lambert:
+    // +X: dot(+X, L) = 1 -> beyaz; +Y ve +Z: dot = 0 -> siyah.
+    uint32_t bright = 0, dark = 0, mid = 0;
+    for (uint32_t i = 0; i < W * H; i++) {
+      const uint8_t *p = ores.pixels + i * 4;
+      const int lum = (p[0] + p[1] + p[2]) / 3;
+      if (lum > 240) bright++;
+      else if (lum < 12) dark++;
+      else if (lum > 40 && lum < 200) mid++; // ne tam isikli ne tam golgede
+    }
+    std::printf("    [bilgi] kup yuzleri: parlak %u, koyu %u, ara ton %u piksel\n", bright, dark, mid);
+    CHECK(bright > 300);  // +X yuzu tam aydinlik (normal dogru cozuldu)
+    CHECK(dark > 300);    // +Y/+Z yuzleri karanlik
+    // Ara ton az olmali: normal kaymasi olsaydi duz yuzler ara tonlara dagilirdi.
+    CHECK(mid * 10 < bright);
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}

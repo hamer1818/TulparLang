@@ -955,12 +955,25 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
 // alternatifi, uretilen kodun sessizce yanlis adrese yazmasiydi.
 static_assert(sizeof(VMValue) == 16, "VMValue 16 bayt olmali (codegen varsayimi)");
 static_assert(offsetof(VMValue, as) == 8, "VMValue::as @8 olmali");
-static_assert(sizeof(ObjArray) == 64, "ObjArray 64 bayt olmali (codegen varsayimi)");
+// Ofsetler ISARETCI BOYUTUNA bagli: 64-bit'te Obj basligi 32 bayt, wasm32'de
+// 20. Codegen (llvm_types.cpp) dolguyu hedefe gore seciyor; buradaki kilit de
+// iki duzeni de ayri ayri sabitler. Tek bir 64-bit iddiasi yazmak web runtime
+// derlemesini KIRIYORDU (ve wasm/dist tazelenemiyordu).
+#if UINTPTR_MAX > 0xFFFFFFFFu
+static_assert(sizeof(ObjArray) == 64, "ObjArray 64 bayt olmali (codegen varsayimi, 64-bit)");
 static_assert(offsetof(ObjArray, count) == 32, "ObjArray::count @32 olmali");
 static_assert(offsetof(ObjArray, capacity) == 36, "ObjArray::capacity @36 olmali");
 static_assert(offsetof(ObjArray, items_) == 40, "ObjArray::items_ @40 olmali");
 static_assert(offsetof(ObjArray, idata) == 48, "ObjArray::idata @48 olmali");
 static_assert(offsetof(ObjArray, elem_bits) == 56, "ObjArray::elem_bits @56 olmali");
+#else
+static_assert(sizeof(ObjArray) == 40, "ObjArray 40 bayt olmali (codegen varsayimi, 32-bit)");
+static_assert(offsetof(ObjArray, count) == 20, "ObjArray::count @20 olmali (32-bit)");
+static_assert(offsetof(ObjArray, capacity) == 24, "ObjArray::capacity @24 olmali (32-bit)");
+static_assert(offsetof(ObjArray, items_) == 28, "ObjArray::items_ @28 olmali (32-bit)");
+static_assert(offsetof(ObjArray, idata) == 32, "ObjArray::idata @32 olmali (32-bit)");
+static_assert(offsetof(ObjArray, elem_bits) == 36, "ObjArray::elem_bits @36 olmali (32-bit)");
+#endif
 static_assert(offsetof(Obj, type) == 0, "Obj::type @0 olmali");
 static_assert((int)VM_VAL_INT == 0 && (int)VM_VAL_OBJ == 4,
               "VMValueType sirasi codegen ile uyusmali");

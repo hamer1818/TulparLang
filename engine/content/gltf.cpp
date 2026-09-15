@@ -1,4 +1,5 @@
 #include "content/gltf.hpp"
+#include "content/cluster_dag.hpp"
 #include "content/meshopt.hpp"
 
 #include <cmath>
@@ -434,6 +435,13 @@ bool gltf_load(Arena &arena, const char *path, Model *out, const GltfLimits &lim
       if (mm.skin < 0 && lim.lods) {
         const float ratios[kModelMaxLods] = {0.5f, 0.25f};
         if (!mesh_build_lods(arena, mm, ratios, kModelMaxLods, lim.lod_error)) { set_error(out, "arena dolu (lod)", nullptr); ok = false; break; }
+      }
+      if (mm.skin < 0 && lim.cluster_dag) {
+        const DeviceClass dc = lim.cluster_class == 0 ? DeviceClass::Low : (lim.cluster_class >= 2 ? DeviceClass::High : DeviceClass::Mid);
+        ClusterDag *dag = arena.alloc_array_zeroed<ClusterDag>(1);
+        if (!dag) { set_error(out, "arena dolu (kume DAG)", nullptr); ok = false; break; }
+        *dag = ClusterDag{};
+        if (cluster_dag_build(arena, mm, cluster_dag_preset(dc), dag)) mm.dag = dag;
       }
       mi++;
       mesh_n[m]++;

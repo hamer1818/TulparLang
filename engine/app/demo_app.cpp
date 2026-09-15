@@ -11,6 +11,8 @@
 #include "app/virtual_stick.hpp"
 #include "content/font.hpp"
 #include "content/gltf.hpp"
+#include "content/scene_blob.hpp"
+#include "content/scene_runtime.hpp"
 #include "core/jobs/job_system.hpp"
 #include "core/memory/alloc_gate.hpp"
 #include "core/memory/arena.hpp"
@@ -284,6 +286,23 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   DemoScene scene;
   if (!scene.init(sys, &jobs)) { std::fprintf(stderr, "sahne\n"); return 1; }
   std::printf("[engine_demo] sahne: %u entity, kutu+ajan+eklem\n", scene.entities());
+  // Derlenmis sahne (istege bagli): blob oldugu gibi belleğe, tablolar dogrudan renderer/fizige.
+  static content::SceneRuntime srt;
+  bool have_blob = false;
+  if (opts.scene_blob && *opts.scene_blob) {
+    content::SceneBlobView bv;
+    content::SceneError berr{};
+    char bdir[1024];
+    content::scene_dir_of(opts.scene_blob, bdir, sizeof bdir);
+    if (!content::scene_blob_load(sys, opts.scene_blob, &bv, &berr)) { std::fprintf(stderr, "sahne blob %s: %s\n", opts.scene_blob, berr.msg); return 1; }
+    if (!srt.init(sys, ren, bv, bdir)) { std::fprintf(stderr, "sahne runtime kurulamadi\n"); return 1; }
+    srt.apply_world(ren); // gunes/ortam/golge hacmi blob'dan (kod icindeki sabitlerin yerine)
+    const uint32_t nb = srt.spawn(scene.physics());
+    have_blob = true;
+    std::printf("[engine_demo] sahne blob: %s — %u varlik, %u cizim, %u isik, %u govde (%u fizige), kaynak %u/%u, ozet %016llx\n", opts.scene_blob,
+                bv.h->entity_count, bv.h->draw_count, bv.h->light_count, bv.h->body_count, nb, srt.stats().assets_loaded, bv.h->asset_count,
+                (unsigned long long)bv.hash());
+  }
 
   sim::FixedStep fs;
   Cam cam;
@@ -370,6 +389,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       Mat4 proj = Mat4::perspective(kPi / 3.5f, aspect, 0.1f, 200.0f);
       if (!headless && swap.rotation_radians() != 0.0f) proj = Mat4::rotate({0, 0, 1}, swap.rotation_radians()) * proj;
       ren.set_camera(cam_view(cam), proj);
+      ren.set_shadow_focus(cam.target); // yakin golge kademeleri oyuncunun etrafinda
       // 8 renkli nokta isik kutularin uzerinde doner (ilk oyun 8-16 dinamik isik ister).
       ren.clear_point_lights();
       for (uint32_t li = 0; li < 8; li++) {
@@ -380,8 +400,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       if (headless) {
         ren.begin_frame(frame_i);
         scene.draw(ren, ds);
-          draw_lod_spheres(cam);
-          draw_skinned_tubes(frame_i);
+        if (have_blob) { srt.draw(ren, cam_eye(cam), (float)frame_i / 60.0f, &scene.physics()); for (uint32_t k = 0; k <= content::kModelMaxLods; k++) lod_counts[k] = srt.stats().lod[k]; }
+        else { draw_lod_spheres(cam); draw_skinned_tubes(frame_i); }
         draw_hud(ren, font, (float)render_w, (float)render_h, 0.0f, hud_fps, hud_ms, ren.point_light_count(), nullptr,
                  scene.player_position(), false);
         RecordCtx rctx{&ren};
@@ -401,8 +421,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           ren.begin_frame(fc.frame_index);
           uint64_t tc = platform::now_ns();
           scene.draw(ren, ds);
-          draw_lod_spheres(cam);
-          draw_skinned_tubes(frame_i);
+          if (have_blob) { srt.draw(ren, cam_eye(cam), (float)frame_i / 60.0f, &scene.physics()); for (uint32_t k = 0; k <= content::kModelMaxLods; k++) lod_counts[k] = srt.stats().lod[k]; }
+          else { draw_lod_spheres(cam); draw_skinned_tubes(frame_i); }
           draw_hud(ren, font, (float)swap.logical_extent().width, (float)swap.logical_extent().height, swap.rotation_radians(),
                    hud_fps, hud_ms, ren.point_light_count(), interactive ? &stick : nullptr, scene.player_position(), interactive);
           uint64_t td = platform::now_ns();
@@ -452,6 +472,11 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   }
   double total_s = (platform::now_ns() - start_ns) / 1e9;
   std::printf("[engine_demo] toplam %u kare, %.1f s, ortalama %.1f fps\n", frame_i, total_s, total_s > 0 ? frame_i / total_s : 0.0);
+  if (have_blob) {
+    const content::SceneRuntimeStats ss = srt.stats();
+    std::printf("[engine_demo] sahne blob son kare: %u cizim, %u isik, %u govde\n", ss.draws, ss.lights, ss.bodies);
+    srt.despawn(scene.physics());
+  }
   if (adev.ok()) {
     audio::MixerStats ms = mixer.stats();
     std::printf("[engine_demo] ses: %llu callback, %llu kare (%.1f s), tepe %.2f, dusen komut %u\n", (unsigned long long)ms.callbacks,

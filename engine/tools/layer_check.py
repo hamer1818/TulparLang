@@ -20,7 +20,7 @@ import sys
 # gormez. content (L6) icerik boru hattinin runtime yuzu; gameplay icerik
 # yuklemeye ihtiyac duyarsa runtime yukleyici asagi (L3.5) ayrilir.
 LAYERS = {"platform": 0, "core": 1, "rhi": 2, "renderer": 3, "audio": 3, "sim": 4,
-          "gameplay": 5, "content": 6, "app": 6, "tools": 7, "tests": 99}
+          "gameplay": 5, "content": 6, "app": 6, "bridge": 6, "tools": 7, "tests": 99}
 BANNED_STL = {"vector", "map", "unordered_map", "set", "unordered_set",
               "string", "list", "deque", "forward_list", "memory",
               "functional", "sstream", "iostream", "fstream", "queue",

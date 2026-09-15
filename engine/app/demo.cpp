@@ -1,4 +1,5 @@
 // engine_demo (masaustu): GLFW penceresi ya da --headless N --out x.ppm.
+//   --scene x.sahneb (ya da TULPAR_ENGINE_SCENE): derlenmis sahne blob'u (engine_sahnec).
 // Kullanici pencereyi kendi makinesinde acar; ben yalniz headless yolu dogrularim.
 #include <cstdio>
 #include <cstdlib>
@@ -57,7 +58,9 @@ int main(int argc, char **argv) {
     else if (!std::strcmp(argv[i], "--size") && i + 2 < argc) { o.width = (uint32_t)std::atoi(argv[++i]); o.height = (uint32_t)std::atoi(argv[++i]); }
     else if (!std::strcmp(argv[i], "--present") && i + 1 < argc) o.present_mode = argv[++i];
     else if (!std::strcmp(argv[i], "--no-prerotate")) o.prerotate = false;
+    else if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) o.scene_blob = argv[++i];
   }
+  if (!o.scene_blob) o.scene_blob = std::getenv("TULPAR_ENGINE_SCENE");
   o.gpu_prefer = std::getenv("TULPAR_ENGINE_GPU");
   o.validation = std::getenv("TULPAR_ENGINE_VK_VALIDATION") != nullptr;
   o.audio = std::getenv("TULPAR_ENGINE_AUDIO") != nullptr;

@@ -49,6 +49,7 @@ RUNTIME_CPP=(
     "$ROOT/src/common/diagnostics.cpp"
     "$ROOT/src/common/http_fetch.cpp"
     "$ROOT/src/vm/runtime_bindings.cpp"
+    "$ROOT/src/vm/runtime_net.cpp"   # aot_http_request: arcade skor tablosu bunu cagiriyor
     "$ROOT/src/vm/vm.cpp"
     "$ROOT/src/vm/bytecode.cpp"
     "$ROOT/runtime/tulpar_arc.cpp"

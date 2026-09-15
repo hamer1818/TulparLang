@@ -1,6 +1,7 @@
 // Faz 2: Jolt sarmalayicisi — dusen kutular, belirlenimlilik (ayni surec iki
 // kosum + ALTIN ozet: platformlar arasi bit esitligi iddiasi CI'da
 // Linux x86_64 <-> macOS arm64 ile sinanir), adim icinde ayirma.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -121,3 +122,55 @@ ENGINE_TEST(physics_runs_on_fiber_job_system_same_hash) {
   js.shutdown();
 }
 
+
+// Isin testi (Faz 4 / ses okluzyonu): ANALITIK — bilinen konumdaki kure ve
+// kutuya atilan isinin mesafesi hesaplanabilir. KONTROL: iskalayan isin false
+// doner ve hicbir govdeyi isaretlemez. Altin ozet SAHNESINE dokunmaz: ayri
+// dunya, salt okunur sorgu.
+ENGINE_TEST(physics_raycast_hits_known_geometry) {
+  static SystemArena rsys;
+  CHECK(rsys.reserve(16u << 20, "phys-ray"));
+  Physics ph;
+  PhysicsConfig cfg;
+  cfg.threads = 1;
+  CHECK(ph.init(rsys, cfg));
+  if (!ph.ok()) return;
+  // Kure: merkez (0,0,-10), r=1 -> on yuzey z=-9 (mesafe 9).
+  // Kutu: merkez (5,0,0), yari kenar 1 -> on yuzey x=4 (mesafe 4).
+  BodyId sphere = ph.add_sphere(1.0f, {0, 0, -10}, false);
+  BodyId box = ph.add_box({1, 1, 1}, {5, 0, 0}, Quat::identity(), false);
+  CHECK(sphere.valid() && box.valid());
+  ph.step(1.0f / 60.0f); // genis faz agaci guncellensin
+
+  RayHit hit;
+  CHECK(ph.raycast({0, 0, 0}, {0, 0, -1}, 50.0f, &hit));
+  std::printf("    [bilgi] isin -Z: mesafe %.4f (beklenen 9), normal (%.2f %.2f %.2f), nokta z=%.3f\n", hit.distance,
+              hit.normal.x, hit.normal.y, hit.normal.z, hit.point.z);
+  CHECK(std::fabs(hit.distance - 9.0f) < 0.01f);
+  CHECK(hit.body.v == sphere.v);
+  CHECK(hit.normal.z > 0.99f); // kureye onden carpti
+
+  RayHit hb;
+  CHECK(ph.raycast({0, 0, 0}, {1, 0, 0}, 50.0f, &hb));
+  std::printf("    [bilgi] isin +X: mesafe %.4f (beklenen 4), normal x=%.2f\n", hb.distance, hb.normal.x);
+  CHECK(std::fabs(hb.distance - 4.0f) < 0.01f);
+  CHECK(hb.body.v == box.v && hb.normal.x < -0.99f);
+
+  // Normalize edilmemis yon ayni sonucu vermeli (dir icerde normalize edilir).
+  RayHit hn;
+  CHECK(ph.raycast({0, 0, 0}, {0, 0, -37.5f}, 50.0f, &hn));
+  CHECK(std::fabs(hn.distance - 9.0f) < 0.01f);
+
+  // KONTROL 1: yukari atilan isin hicbir seye carpmaz.
+  RayHit miss;
+  const bool up = ph.raycast({0, 0, 0}, {0, 1, 0}, 50.0f, &miss);
+  std::printf("    [bilgi] KONTROL isin +Y: %s (mesafe %.2f, govde gecerli %s)\n", up ? "CARPTI" : "iskaladi",
+              miss.distance, miss.body.valid() ? "evet" : "hayir");
+  CHECK(!up && !miss.body.valid() && miss.distance == 0.0f);
+  // KONTROL 2: menzil kisa -> kure menzil disinda.
+  CHECK(!ph.raycast({0, 0, 0}, {0, 0, -1}, 5.0f, &miss));
+  // KONTROL 3: sifir yon / sifir menzil.
+  CHECK(!ph.raycast({0, 0, 0}, {0, 0, 0}, 50.0f, &miss));
+  CHECK(!ph.raycast({0, 0, 0}, {0, 0, -1}, 0.0f, &miss));
+  ph.shutdown();
+}

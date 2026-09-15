@@ -52,7 +52,9 @@ struct SceneEntity {
 // Veri modeli esitligi: yalniz mevcut bilesenlerin alanlari (dosyaya yazilanlar).
 bool scene_entity_equal(const SceneEntity &a, const SceneEntity &b);
 
-struct SceneDesc {
+// Dunya ayarlari (varlik disi): gunes/ortam isigi, golge hacmi, yazar kamerasi.
+// Ayri struct: editorde tek islem olarak gunluge girer (SceneOp::World).
+struct SceneWorld {
   Vec3 sun_dir{0.5f, 1.0f, 0.35f};
   Vec3 ambient{0.16f, 0.17f, 0.2f};
   float sun_diffuse = 0.85f;
@@ -60,6 +62,12 @@ struct SceneDesc {
   float shadow_radius = 17.0f, shadow_depth = 70.0f;
   Vec3 cam_target{0, 1.0f, -3.0f};
   float cam_yaw = 0.7f, cam_pitch = 0.45f, cam_radius = 26.0f;
+};
+bool scene_world_equal(const SceneWorld &a, const SceneWorld &b); // bit-tam
+
+struct SceneDesc : SceneWorld {
+  const SceneWorld &world() const { return *this; }
+  void set_world(const SceneWorld &w) { static_cast<SceneWorld &>(*this) = w; }
   char assets[kSceneMaxAssets][kScenePathLen];
   uint32_t asset_count = 0;
   SceneEntity entities[kSceneMaxEntities];
@@ -113,10 +121,11 @@ Mat4 scene_body_matrix(const SceneEntity &e, const sim::Physics &ph, sim::BodyId
 // Islem gunlugu: her degisiklik once/sonra kopyasiyla kaydedilir. Yeni islem
 // yinele kuyrugunu siler; kapasite dolunca en eski dusuruIur.
 struct SceneOp {
-  enum Kind : uint32_t { Set = 0, Add = 1, Remove = 2 };
+  enum Kind : uint32_t { Set = 0, Add = 1, Remove = 2, World = 3 };
   Kind kind;
   uint32_t index;
   SceneEntity before, after;
+  SceneWorld world_before, world_after; // yalniz World
 };
 class SceneHistory {
 public:
@@ -125,6 +134,7 @@ public:
   bool set_entity(SceneDesc &d, uint32_t i, const SceneEntity &after);
   bool add_entity(SceneDesc &d, const SceneEntity &e); // sona
   bool remove_entity(SceneDesc &d, uint32_t i);
+  bool set_world(SceneDesc &d, const SceneWorld &after); // esitse kaydetmez (false)
   bool undo(SceneDesc &d);
   bool redo(SceneDesc &d);
   uint32_t undo_count() const { return cursor_; }

@@ -1,0 +1,104 @@
+#version 450
+// GPU GORUNURLUK KUMELEME (PLAN Faz 9, kare butcesi "Cluster cull (compute)").
+//
+// Yerlesim: is grubu X = KUME (batch), is grubu Y = FRUSTUM (0 kamera,
+// 1..N golge kademeleri). Bir is grubu tek bir kumenin tek bir frustum'a gore
+// gorunurlugunu cozer ve kume icinde SIRA KORUYARAK sikistirir.
+//
+// Neden atomik sayac degil de paylasimli on ek toplam (prefix sum)?
+// atomicAdd ile sikistirma kume ici cizim sirasini kareden kareye degistirir;
+// esit derinlikli yuzeylerde son yazan kazandigi icin cikti belirlenimsiz
+// olurdu ve "cull acik/kapali piksel farki 0" kapisi olcmeyen bir kapiya
+// donusurdu. Hillis-Steele taramasi sirayi aynen korur.
+//
+// Is grubu 64: Arm en iyi uygulama kurallari (BestPractices-Arm-
+// vkCreateComputePipelines-*) 4'un kati ve <= 64 ister.
+layout(local_size_x = 64) in;
+
+struct DrawItem {
+  mat4 model;
+  vec4 color;
+  vec4 sphere; // yerel merkez.xyz + yerel yaricap
+  uvec4 misc;
+};
+struct Batch {
+  uint first_draw;
+  uint draw_count;
+  uint index_count;
+  uint first_index;
+  int vertex_offset;
+  uint pad0;
+  uint pad1;
+  uint pad2;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer Draws { DrawItem d[]; } u_draws;
+layout(std430, set = 0, binding = 1) readonly buffer Batches { Batch b[]; } u_batches;
+layout(std430, set = 0, binding = 2) readonly buffer Frusta { vec4 plane[]; } u_frusta; // frustum basina 6
+// Dolayli komut dizisi: 5 uint = VkDrawIndexedIndirectCommand (duz uint dizisi
+// olarak yaziliyor ki std430 dolgusu komut adimini 20 bayttan kaydirmasin).
+layout(std430, set = 0, binding = 3) writeonly buffer Cmds { uint c[]; } u_cmd;
+layout(std430, set = 0, binding = 4) writeonly buffer Visible { uint v[]; } u_vis;
+
+layout(push_constant) uniform Push {
+  // x: kume sayisi, y: frustum sayisi, z: kume kapasitesi, w: cizim kapasitesi
+  uvec4 counts;
+} pc;
+
+shared uint s_flag[64];
+shared uint s_base;
+
+void main() {
+  uint bi = gl_WorkGroupID.x;
+  uint fi = gl_WorkGroupID.y;
+  // Is grubu BUTUNUYLE doner (kosul is grubu kimligine bagli, yani gruba gore
+  // tekduze): asagidaki barrier'lar icin guvenli.
+  if (bi >= pc.counts.x || fi >= pc.counts.y) return;
+  uint tid = gl_LocalInvocationID.x;
+  Batch B = u_batches.b[bi];
+  uint cmd = (fi * pc.counts.z + bi) * 5u;
+  if (tid == 0u) {
+    s_base = 0u;
+    u_cmd.c[cmd + 0u] = B.index_count;
+    u_cmd.c[cmd + 2u] = B.first_index;
+    u_cmd.c[cmd + 3u] = uint(B.vertex_offset);
+    // firstInstance 0 OLMAK ZORUNDA: drawIndirectFirstInstance ozelligi kapali.
+    u_cmd.c[cmd + 4u] = 0u;
+  }
+  barrier();
+  uint vbase = fi * pc.counts.w + B.first_draw;
+  for (uint chunk = 0u; chunk < B.draw_count; chunk += 64u) {
+    uint i = chunk + tid;
+    uint vis = 0u;
+    if (i < B.draw_count) {
+      DrawItem D = u_draws.d[B.first_draw + i];
+      vec3 c = (D.model * vec4(D.sphere.xyz, 1.0)).xyz;
+      float sx = length(D.model[0].xyz);
+      float sy = length(D.model[1].xyz);
+      float sz = length(D.model[2].xyz);
+      float r = D.sphere.w * max(sx, max(sy, sz));
+      vis = 1u;
+      for (uint k = 0u; k < 6u; k++) {
+        vec4 p = u_frusta.plane[fi * 6u + k];
+        if (dot(p.xyz, c) + p.w < -r) {
+          vis = 0u;
+          break;
+        }
+      }
+    }
+    s_flag[tid] = vis;
+    barrier();
+    // Kapsayici on ek toplam (Hillis-Steele, 64 eleman).
+    for (uint off = 1u; off < 64u; off <<= 1) {
+      uint add = (tid >= off) ? s_flag[tid - off] : 0u;
+      barrier();
+      s_flag[tid] += add;
+      barrier();
+    }
+    if (vis == 1u) u_vis.v[vbase + s_base + s_flag[tid] - 1u] = B.first_draw + i;
+    barrier();
+    if (tid == 63u) s_base += s_flag[63u];
+    barrier();
+  }
+  if (tid == 0u) u_cmd.c[cmd + 1u] = s_base;
+}

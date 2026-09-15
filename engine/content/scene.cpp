@@ -164,6 +164,12 @@ bool scene_entity_equal(const SceneEntity &a, const SceneEntity &b) {
   return true;
 }
 
+bool scene_world_equal(const SceneWorld &a, const SceneWorld &b) {
+  return veq(a.sun_dir, b.sun_dir) && veq(a.ambient, b.ambient) && feq(a.sun_diffuse, b.sun_diffuse) &&
+         veq(a.shadow_center, b.shadow_center) && feq(a.shadow_radius, b.shadow_radius) && feq(a.shadow_depth, b.shadow_depth) &&
+         veq(a.cam_target, b.cam_target) && feq(a.cam_yaw, b.cam_yaw) && feq(a.cam_pitch, b.cam_pitch) && feq(a.cam_radius, b.cam_radius);
+}
+
 int32_t SceneDesc::add_asset(const char *path) {
   for (uint32_t i = 0; i < asset_count; i++)
     if (std::strcmp(assets[i], path) == 0) return (int32_t)i;
@@ -472,20 +478,32 @@ bool SceneHistory::push(const SceneOp &op) {
 }
 bool SceneHistory::set_entity(SceneDesc &d, uint32_t i, const SceneEntity &after) {
   if (i >= d.entity_count || scene_entity_equal(d.entities[i], after)) return false;
-  SceneOp op{SceneOp::Set, i, d.entities[i], after};
+  SceneOp op{};
+  op.kind = SceneOp::Set; op.index = i; op.before = d.entities[i]; op.after = after;
   d.entities[i] = after;
   return push(op);
 }
 bool SceneHistory::add_entity(SceneDesc &d, const SceneEntity &e) {
   const uint32_t at = d.entity_count;
   if (!d.insert_entity(at, e)) return false;
-  SceneOp op{SceneOp::Add, at, SceneEntity{}, e};
+  SceneOp op{};
+  op.kind = SceneOp::Add; op.index = at; op.after = e;
   return push(op);
 }
 bool SceneHistory::remove_entity(SceneDesc &d, uint32_t i) {
   if (i >= d.entity_count) return false;
-  SceneOp op{SceneOp::Remove, i, d.entities[i], SceneEntity{}};
+  SceneOp op{};
+  op.kind = SceneOp::Remove; op.index = i; op.before = d.entities[i];
   d.remove_entity(i);
+  return push(op);
+}
+bool SceneHistory::set_world(SceneDesc &d, const SceneWorld &after) {
+  if (scene_world_equal(d.world(), after)) return false;
+  SceneOp op{};
+  op.kind = SceneOp::World;
+  op.world_before = d.world();
+  op.world_after = after;
+  d.set_world(after);
   return push(op);
 }
 bool SceneHistory::undo(SceneDesc &d) {
@@ -495,6 +513,7 @@ bool SceneHistory::undo(SceneDesc &d) {
   case SceneOp::Set: if (op.index >= d.entity_count) return false; d.entities[op.index] = op.before; break;
   case SceneOp::Add: if (!d.remove_entity(op.index)) return false; break;
   case SceneOp::Remove: if (!d.insert_entity(op.index, op.before)) return false; break;
+  case SceneOp::World: d.set_world(op.world_before); break;
   }
   cursor_--;
   return true;
@@ -506,6 +525,7 @@ bool SceneHistory::redo(SceneDesc &d) {
   case SceneOp::Set: if (op.index >= d.entity_count) return false; d.entities[op.index] = op.after; break;
   case SceneOp::Add: if (!d.insert_entity(op.index, op.after)) return false; break;
   case SceneOp::Remove: if (!d.remove_entity(op.index)) return false; break;
+  case SceneOp::World: d.set_world(op.world_after); break;
   }
   cursor_++;
   return true;

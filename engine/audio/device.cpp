@@ -6,6 +6,11 @@
 
 #include <miniaudio.h>
 
+#if !defined(_WIN32)
+#include <pthread.h>
+#include <sched.h>
+#endif
+
 namespace tulpar::engine::audio {
 
 namespace {
@@ -17,6 +22,35 @@ struct Impl {
 void data_callback(ma_device *dev, void *out, const void *, ma_uint32 frames) {
   Impl *im = static_cast<Impl *>(dev->pUserData);
   im->mixer->render(static_cast<float *>(out), frames);
+}
+
+// Ses thread'inin GERCEK zamanlama sinifini OKU (iddia degil olcum).
+// miniaudio thread'i kendi acar; POSIX'te ma_thread == pthread_t.
+void measure_thread_priority(ma_device &dev, DeviceInfo &info) {
+  std::snprintf(info.thread_policy, sizeof info.thread_policy, "?");
+  info.thread_priority = 0;
+  info.thread_realtime = false;
+#if !defined(_WIN32)
+  pthread_t th = (pthread_t)dev.thread;
+  if (th == (pthread_t)0) return; // arka uc kendi thread'ini yonetiyor
+  int policy = 0;
+  sched_param sp;
+  std::memset(&sp, 0, sizeof sp);
+  if (pthread_getschedparam(th, &policy, &sp) != 0) return;
+  const char *name = "OTHER";
+  if (policy == SCHED_FIFO) { name = "FIFO"; info.thread_realtime = true; }
+  else if (policy == SCHED_RR) { name = "RR"; info.thread_realtime = true; }
+#ifdef SCHED_IDLE
+  else if (policy == SCHED_IDLE) name = "IDLE";
+#endif
+#ifdef SCHED_BATCH
+  else if (policy == SCHED_BATCH) name = "BATCH";
+#endif
+  std::snprintf(info.thread_policy, sizeof info.thread_policy, "%s", name);
+  info.thread_priority = sp.sched_priority;
+#else
+  (void)dev;
+#endif
 }
 } // namespace
 
@@ -38,6 +72,10 @@ bool AudioDevice::init(Mixer &mixer, const DeviceConfig &cfg) {
 #endif
   }
   ma_context_config cc = ma_context_config_init();
+  // Ses thread'i onceligi: varsayilan miniaudio'nun `highest`i; istenirse
+  // gercek zamanli (SCHED_FIFO). Ayricalik yoksa miniaudio sessizce duser —
+  // bu yuzden sonuc asagida OLCULUR (measure_thread_priority).
+  cc.threadPriority = cfg.realtime_thread ? ma_thread_priority_realtime : ma_thread_priority_highest;
   ma_result r = ma_context_init(backends, nb, &cc, &im->context);
   if (r != MA_SUCCESS) { std::snprintf(err_, sizeof err_, "ma_context_init: %s", ma_result_description(r)); std::free(im); return false; }
   ma_device_config dc = ma_device_config_init(ma_device_type_playback);
@@ -62,6 +100,7 @@ bool AudioDevice::init(Mixer &mixer, const DeviceConfig &cfg) {
   info_.channels = im->device.playback.channels;
   info_.period_frames = im->device.playback.internalPeriodSizeInFrames;
   r = ma_device_start(&im->device);
+  measure_thread_priority(im->device, info_);
   if (r != MA_SUCCESS) {
     std::snprintf(err_, sizeof err_, "ma_device_start: %s", ma_result_description(r));
     ma_device_uninit(&im->device);

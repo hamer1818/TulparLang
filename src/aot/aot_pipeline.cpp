@@ -282,6 +282,9 @@ static std::string build_link_search_dirs() {
   auto add_dev = [&](const char *rel) {
     dev_dirs.push_back(std::string("./") + rel);
     if (!exe_dir.empty()) dev_dirs.push_back(exe_dir + "/" + rel);
+    // engine/ arsivleri (libengine_*.a) build-<platform>/engine altinda (add_subdirectory).
+    dev_dirs.push_back(std::string("./") + rel + "/engine");
+    if (!exe_dir.empty()) dev_dirs.push_back(exe_dir + "/" + rel + "/engine");
   };
 #if PLATFORM_WINDOWS
   add_dev("build-windows");
@@ -313,6 +316,10 @@ static std::string build_link_search_dirs() {
   if (!exe_dir.empty()) {
     add(exe_dir);          // installer drops libtulpar_runtime.a here
     add(exe_dir + "/lib"); // package-manager-style /lib subdir variant
+    // engine/ arsivleri (libengine_*.a): exe build-<platform>/ icindeyse motor
+    // alt dizininde (add_subdirectory(engine)); kurulumda lib/engine altinda.
+    add(exe_dir + "/engine");
+    add(exe_dir + "/lib/engine");
   }
   if (!dev_first) {
     for (const auto &d : dev_dirs) add(d);
@@ -1051,6 +1058,24 @@ static const char *tame_link_flags(int uses_tame) {
 #endif
 }
 
+// Tulpar Engine (engine/) link bayrakları — yalnız program "engine" import
+// ettiğinde (veya bir eng_* builtin çağırdığında). libtulpar_engine.a (VMValue
+// bindingleri) + engine_bridge (teng_* C ABI) + motor arşivleri. GNU ld arşivleri
+// soldan sağa tek geçişte çözer; motor arşivleri birbirine çapraz bağımlı olduğu
+// için grup içinde verilir. Vulkan ve GLFW dlopen'lanır: link zamanı bağımlılık yok.
+static const char *engine_link_flags(int uses_engine) {
+  if (!uses_engine) return "";
+#if PLATFORM_MACOS
+  return " -ltulpar_engine -lengine_bridge -lengine_content -lengine_renderer -lengine_sim"
+         " -lengine_rhi -lengine_audio -lengine_core -lengine_platform -lengine_jolt -lengine_recast"
+         " -lengine_meshopt -lengine_astcenc -lpthread";
+#else
+  return " -Wl,--start-group -ltulpar_engine -lengine_bridge -lengine_content -lengine_renderer"
+         " -lengine_sim -lengine_rhi -lengine_audio -lengine_core -lengine_platform -lengine_jolt"
+         " -lengine_recast -lengine_meshopt -lengine_astcenc -Wl,--end-group -lpthread";
+#endif
+}
+
 // Parse source code to AST. Caller-provided `source_filename` is
 // optional and only used by parse-time diagnostics for the file path
 // in `--> path:line` headers.
@@ -1277,6 +1302,14 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     };
     std::string stage = std::string(output_name) + "_apk";
     std::string extra = aot_extra_link_flags();
+    // KAPI: "emit modulu degistirmez" (Tuzaklar 8ap). Bu dongu AYNI modulden
+    // iki ABI uretiyor. LLVM'in CodeGen boru hatti modulu YERINDE degistiren IR
+    // gecisleri icerdigi icin bu varsayim bir zamanlar YANLISTI ve ikinci ABI
+    // (x86_64/emulator) sessizce bozuk kod aliyordu — hizali `movapd` hizasiz
+    // yuvaya dusuyor, uygulama ilk karede cokuyordu. Emit artik her hedef icin
+    // klon uzerinde calisiyor; asagidaki ozet o duzeltmenin BEKCISI: klonlama
+    // kaldirilirsa derleme burada yuksek sesle durur, cihazda degil.
+    const uint64_t ir_ozet_once = llvm_backend_module_fingerprint(backend);
     for (const AbiSpec &a : abis) {
       std::string libdir = stage + "/lib/" + a.abi;
       {
@@ -1307,8 +1340,14 @@ AOTResult aot_compile_with_filename_debug(const char *source,
                         " -Wl,-z,max-page-size=16384" + " -o \"" + libdir +
                         "/libtulpargame.so\" \"" + obj + "\" " +
                         build_android_link_search_dirs(a.abi) +
-                        "-ltulpar_tame_android -ltulpar_runtime_android "
-                        "-landroid -llog -lEGL -lGLESv2 -lOpenSLES -lm -ldl" +
+                        (backend->uses_engine
+                             ? "-Wl,--start-group -ltulpar_engine_android -lengine_content "
+                               "-lengine_renderer -lengine_sim -lengine_rhi -lengine_audio "
+                               "-lengine_core -lengine_platform -lengine_jolt -lengine_recast "
+                               "-lengine_meshopt -lengine_astcenc -Wl,--end-group -ltulpar_runtime_android "
+                               "-landroid -llog -lOpenSLES -lm -ldl"
+                             : "-ltulpar_tame_android -ltulpar_runtime_android "
+                               "-landroid -llog -lEGL -lGLESv2 -lOpenSLES -lm -ldl") +
                         extra + " 2>&1";
       {
         std::string dist = std::string("android/dist/") + a.abi;
@@ -1338,6 +1377,25 @@ AOTResult aot_compile_with_filename_debug(const char *source,
         return AOT_ERROR_LINK;
       }
     }
+    // KAPI (Tuzaklar 8ap): dongu bitti — modul hala ayni mi? Emit her hedef icin
+    // KLON uzerinde calisiyor; klonlama kaldirilirsa ikinci ABI birincinin
+    // alcaltilmis IR'i uzerine biner ve emulator ilk karede coker. Bu kontrol o
+    // hatayi CIHAZA varmadan, derleme aninda kirmizi yapar.
+    const uint64_t ir_ozet_sonra = llvm_backend_module_fingerprint(backend);
+    if (ir_ozet_once != ir_ozet_sonra) {
+      fprintf(stderr, "%s",
+              tulpar::i18n::tr_en(
+                  "[AOT] Hata: nesne uretimi MODULU DEGISTIRDI — ikinci ABI "
+                  "(x86_64) bozuk kod alir; bkz. Tuzaklar 8ap. "
+                  "emit_object_with_triple'daki klonlama kaldirilmis olmali.\n",
+                  "[AOT] Error: object emission MUTATED the module — the second "
+                  "ABI (x86_64) would get miscompiled code; see Tuzaklar 8ap. "
+                  "The clone in emit_object_with_triple must have been removed.\n"));
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_EMIT;
+    }
+
     // Uygulama kimliği: tulpar.toml [android] (yoksa tarihi varsayılanlar;
     // etiket çıktı adının taban kısmı). İkon varsa staging res/'ine kopyalanır.
     const char *label = output_name;
@@ -1513,10 +1571,10 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   } else {
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s%s -o %s%s %s %s%s%s%s 2>&1",
+      "clang++ %s%s -o %s%s %s %s%s%s%s%s 2>&1",
       debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, search_dirs.c_str(),
-      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
+      tame_link_flags(backend->uses_tame), engine_link_flags(backend->uses_engine), " " AOT_LINK_LIB_FLAGS,
       extra_flags.c_str());
   }
 
@@ -1624,18 +1682,18 @@ static AOTResult aot_compile_silent(const char *source,
 #if PLATFORM_WINDOWS
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s%s%s 2>NUL",
+      "clang++ %s -o %s%s %s %s%s%s%s%s 2>NUL",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
-      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
+      tame_link_flags(backend->uses_tame), engine_link_flags(backend->uses_engine), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str());
 #else
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s%s%s 2>/dev/null",
+      "clang++ %s -o %s%s %s %s%s%s%s%s 2>/dev/null",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
-      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
+      tame_link_flags(backend->uses_tame), engine_link_flags(backend->uses_engine), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str());
 #endif
 
