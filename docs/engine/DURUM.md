@@ -43,6 +43,7 @@ sahte yeşil (8s); `compositeAlpha OPAQUE` Huawei'de yok; katmanın seyrek-indek
 
 ## 6. Ne yok (sonraki aşama adayları; tarama belgesine karşı tam liste: `BOSLUK-TARAMASI.md`)
 > Düzeltilmiş, sıralı görev listesi (math/PBR/tonemap/MSAA/AO/... 16 iş) + somut sayısal kararlar: `TULPAR_TAM_DOKUMAN_KONTROL.md`.
+> Motorun genel devam planı (sahne kalıcılığı → oynanabilirlik → görsel tamamlama → içerik → platform, dil bağlaması hariç): `DEVAM_PLANI.md`.
 1. **Sahne veri modeli + dosya formatı** (entity/transform/mesh/malzeme/ışık/fizik) — editörün önkoşulu.
 2. **Editör** (iskelet var: paneller, gizmo, yörünge kamera, oynat/durdur): tıklamayla seçim, kaydet/yükle, geri al.
 3. **Tulpar bağlaması**: oyun mantığı Tulpar'da (dil bugün kutusuz struct/işaretçi vermiyor; C ABI köprüsü).
