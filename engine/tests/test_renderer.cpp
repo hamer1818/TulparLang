@@ -297,6 +297,72 @@ ENGINE_TEST(renderer_point_light_lights_only_near_pixels) {
   dev.shutdown();
 }
 
+// Is 3: fiziksel isik dususu gercekten TERS KARE mi? Isigi merkezin tam
+// ustune koyup yalniz yuksekligini degistiriyoruz (N.L = 1 iki durumda da,
+// yalniz mesafe degisiyor) — piksel dogrusala cozulup orani (uzak/yakin)^2
+// ile karsilastiriliyor. Pozitif kontrol: yaricap disindaki isik TAM sifir
+// vermeli (pencere fonksiyonu keskin kesiyor).
+ENGINE_TEST(renderer_light_falloff_is_inverse_square) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "falloff_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: piksel kapisi gercek cihazda olculur"); return; }
+  const uint32_t W = 64, H = 64;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  ren.set_light({0, 1, 0}, {0, 0, 0}, 0.0f); // tamamen karanlik: yalniz nokta isik katkida bulunsun
+  ren.set_camera(Mat4::look_at({0, 6.0f, 0.01f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto center_linear = [&](float light_height, float radius) -> float {
+    ren.clear_point_lights();
+    ren.add_point_light(renderer::PointLight{{0, light_height, 0}, radius, {1, 1, 1}, 2.0f});
+    ren.begin_frame(0);
+    ren.draw(plane, Mat4::scale({20, 1, 20}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return -1.0f;
+    const uint8_t *p = ores.pixels + (H / 2 * W + W / 2) * 4; // ekran ortasi = dunya (0,0,0) izdusumu
+    return renderer::Renderer::srgb_to_linear((float)p[0] / 255.0f);
+  };
+  // Genis yaricap (50): iki yukseklikte de pencere fonksiyonu ~1, yalniz 1/(d^2+eps) sinanir.
+  float near_v = center_linear(2.0f, 50.0f);
+  float far_v = center_linear(4.0f, 50.0f);
+  bool got_pixels = near_v >= 0.0f && far_v > 1e-6f;
+  CHECK(got_pixels);
+  if (got_pixels) {
+    float ratio = near_v / far_v; // beklenen (4/2)^2 = 4.0
+    std::printf("    [bilgi] yukseklik 2 -> dogrusal %.4f, yukseklik 4 -> dogrusal %.4f, oran %.3f (beklenen ~4.0)\n", near_v,
+                far_v, ratio);
+    bool inverse_square = ratio > 3.2f && ratio < 4.8f; // 8-bit kuantalama icin +-%20 tolerans
+    CHECK(inverse_square);
+  }
+  // Pozitif kontrol: yaricap 1, isik yuksekligi 2 (dikey mesafe > yaricap) —
+  // isigin kure-hacmi zemine hic degmiyor, cizim TAM siyah olmali.
+  float outside = center_linear(2.0f, 1.0f);
+  std::printf("    [bilgi] yaricap disinda dogrusal deger: %.4f (beklenen 0.0)\n", outside);
+  CHECK(outside == 0.0f);
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
 // 2B arayuz + font: metin gercekten piksel uretiyor mu? Bos metin (POZITIF
 // KONTROL) hicbir sey cizmemeli; genislik olcumu tekduze.
 #include "content/font.hpp"

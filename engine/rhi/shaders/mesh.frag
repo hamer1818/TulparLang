@@ -40,7 +40,14 @@ vec3 point_lights(vec3 n) {
     float r = L.pos_radius.w;
     float x = dist2 / (r * r);
     float win = clamp(1.0 - x * x, 0.0, 1.0);
-    float att = win * win / (dist2 + 1.0);
+    // Is 3: fiziksel ters-kare sonum. eps KUCUK (0.01) olmali — yalniz d=0
+    // tekilligini onler. Eskiden +1.0 idi: yaricapa yakin mesafelerde bile
+    // dist2'yle kiyaslanabilir buyuklukte oldugu icin sonum egrisini
+    // duzlestirip fiziksel olmayan genis/duz "boya lekesi" isik havuzlarina
+    // yol aciyordu (TULPAR_TAM_DOKUMAN_KONTROL.md Is 3). NOT: bu degisiklik
+    // isik siddetini etkiler — mevcut sahnelerdeki intensity degerleri
+    // gercek bir ekranda GORSEL olarak yeniden ayarlanmali (burada yapilamadi).
+    float att = win * win / (dist2 + 0.01);
     float nl = max(dot(n, d * inversesqrt(max(dist2, 1e-8))), 0.0);
     sum += L.color_intensity.rgb * (L.color_intensity.w * att * nl);
   }
