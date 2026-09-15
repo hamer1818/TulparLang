@@ -37,6 +37,29 @@ struct CameraShake {
   Vec3 update(float dt_s, double time_s, float max_offset = 0.3f);
 };
 
+// FOV/Zoom gecisi (500 madde listesi #174/#175 "Camera Zoom"/"Camera FOV"):
+// HER IKISI de exponential_smooth'un DOGRUDAN bir kullanimidir (tek skaler
+// deger tasidiklari icin ayri bir formul GEREKMEZ) -- burada yalniz
+// ISIMLENDIRILMIS, dar kapsamli birer sarmalayici, cagiran kodun niyetini
+// (hangi degerin nereye gittigini) netlestirir.
+struct FovController {
+  float fov_deg = 60.0f;
+  float half_life_s = 0.2f;
+  float update(float target_fov_deg, float dt_s) {
+    fov_deg = exponential_smooth(fov_deg, target_fov_deg, half_life_s, dt_s);
+    return fov_deg;
+  }
+};
+
+struct ZoomController {
+  float distance = 5.0f; // hedeften kameraya mesafe carpani (FollowCamera.offset ile carpilir)
+  float half_life_s = 0.2f;
+  float update(float target_distance, float dt_s) {
+    distance = exponential_smooth(distance, target_distance, half_life_s, dt_s);
+    return distance;
+  }
+};
+
 // Basit "arkadan takip" kamerasi: hedef+ofset noktasina ussel yumusatmayla
 // yaklasir, Mat4::look_at ile gorus matrisini uretir.
 struct FollowCamera {

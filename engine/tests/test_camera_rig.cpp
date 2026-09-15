@@ -67,6 +67,24 @@ ENGINE_TEST(camera_shake_decays_linearly_to_zero) {
   CHECK(nearly_equal(s.trauma, 0.0f, 1e-5f));
 }
 
+ENGINE_TEST(fov_and_zoom_controllers_follow_half_life_formula) {
+  // Ikisi de exponential_smooth'un dogrudan sarmalayicisi - AYNI yari-omur
+  // ozelligi (zaten yukarida kanitlandi) burada sadece DOGRU alanlara
+  // (fov_deg/distance) uygulandigini dogrular.
+  FovController fov;
+  fov.fov_deg = 60.0f;
+  fov.half_life_s = 1.0f;
+  float r1 = fov.update(90.0f, 1.0f); // 1 yari-omur: 60->90 mesafesinin yarisi
+  CHECK(nearly_equal(r1, 75.0f, 1e-4f));
+  CHECK(nearly_equal(fov.fov_deg, 75.0f, 1e-4f)); // uye de guncellendi
+
+  ZoomController zoom;
+  zoom.distance = 5.0f;
+  zoom.half_life_s = 1.0f;
+  float r2 = zoom.update(1.0f, 1.0f); // 5->1, 1 yari-omur: yariya (3)
+  CHECK(nearly_equal(r2, 3.0f, 1e-4f));
+}
+
 ENGINE_TEST(follow_camera_position_follows_half_life_formula) {
   FollowCamera rig;
   rig.position = Vec3{0, 0, 0};

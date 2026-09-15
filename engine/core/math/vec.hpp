@@ -287,6 +287,31 @@ inline bool intersect(Ray ray, Plane p, float *t_out = nullptr) {
   return true;
 }
 
+// 2B isaretli mesafe alanlari (SDF) — UI/vektor sekil render'i icin standart,
+// yaygin bilinen formuller (500 madde listesi #162 "SDF UI"; Inigo Quilez'in
+// "2D distance functions" makalesindeki kanitlanmis formuller — kendi
+// turetim degil, ama asagida (tests/test_math.cpp) elle nokta nokta
+// dogrulandi). Donus: NEGATIF = sekil ICINDE, POZITIF = DISINDA, 0 = sinirinda.
+inline float sdf_circle(Vec2 p, Vec2 center, float radius) { return length(p - center) - radius; }
+
+// half_extents: kutunun YARI-boyutlari (genislik/2, yukseklik/2). p, kutunun
+// MERKEZINE GORE verilir (cagiran donus/oteleme uygulamak icin p'yi kendi
+// tasir) — bu yuzden ayri bir "center" parametresi ALMAZ.
+inline float sdf_box(Vec2 p, Vec2 half_extents) {
+  Vec2 d{std::fabs(p.x) - half_extents.x, std::fabs(p.y) - half_extents.y};
+  Vec2 d_pos{d.x > 0.0f ? d.x : 0.0f, d.y > 0.0f ? d.y : 0.0f};
+  float outside = length(d_pos);
+  float inside = d.x > d.y ? d.x : d.y; // max(d.x,d.y)
+  inside = inside < 0.0f ? inside : 0.0f; // min(inside,0) — yalniz GERCEKTEN icerideyken katki verir
+  return outside + inside;
+}
+
+// Kutuyu `corner_radius` kadar kuculttup SDF'sini alir, sonra geri
+// corner_radius kadar "sisirir" (klasik yuvarlatilmis-kutu hilesi).
+inline float sdf_rounded_box(Vec2 p, Vec2 half_extents, float corner_radius) {
+  return sdf_box(p, {half_extents.x - corner_radius, half_extents.y - corner_radius}) - corner_radius;
+}
+
 struct Sphere {
   Vec3 center{0, 0, 0};
   float radius = 0.0f;

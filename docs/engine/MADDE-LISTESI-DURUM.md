@@ -70,7 +70,10 @@ Birebir `VIZYON.md` SS1 + SS1.1 ile eslesiyor.
 | 88 | PBR / Cook-Torrance GGX (zaten motorda - Is 4) | ✅ DONE |
 | 89-91 | Layered Materials, Material Layers, Shader Graph | 🔧 TODO |
 | 92-94 | Occlusion Culling: HZB, Software, Hybrid | 🔧 TODO |
-| 95-98 | LOD: Traditional, HLOD, Dithered, Cluster DAG LOD | 🔧 TODO |
+| 95 | Traditional LOD - content/lod_select.hpp select_lod_traditional(), KAYNAK+testler | ✅ DONE |
+| 96 | HLOD | 🔧 TODO |
+| 97 | Dithered LOD - content/lod_select.hpp select_lod_dithered() (bant icinde dogrusal karisim), KAYNAK+testler | ✅ DONE |
+| 98 | Cluster DAG LOD | 🔧 TODO |
 | 99 | Punctual Lights (nokta isik zaten var) | ✅ DONE |
 | 100-101 | IBL, Light Probes | 🔧 TODO |
 | 102 | Clustered Lighting (8-32 kumelenmis nokta isik, zaten motorda) | ✅ DONE |
@@ -80,14 +83,21 @@ Birebir `VIZYON.md` SS1 + SS1.1 ile eslesiyor.
 
 | Aralık | Madde | Durum |
 |---|---|---|
-| 107-160 | Terrain/sky/fog, particle/decal/foliage, su/sac/kumas/yikim, hava durumu, SSS/OIT/fur - standart teknikler, motorda yok | 🔧 TODO |
+| 107 | Heightmap Terrain - content/terrain.hpp generate_heightmap()+sample_height() (fbm_2d uzerine), KAYNAK+testler | ✅ DONE |
+| 108 | Splatting - content/terrain.hpp compute_splat_weights() (yukseklik-bantli yamuk agirlik), KAYNAK+testler | ✅ DONE |
+| 109-136 | Tessellation, Virtual Terrain, sky/fog, particle/decal/foliage - standart teknikler, motorda yok | 🔧 TODO |
+| 137 | Gerstner Dalgalari - content/water_wave.hpp (GPU Gems formulu), KAYNAK+testler | ✅ DONE |
+| 138-160 | FFT Waves, RT su yansimasi, kopuk/kirilma/underwater, sac/kumas/yikim, hava durumu, SSS/OIT/fur - standart teknikler, motorda yok | 🔧 TODO |
 | 161 | Morph Targets - content/morph.hpp (base+agirlikli delta toplami), KAYNAK+testler | ✅ DONE |
-| 162-167 | SDF UI, MSDF Text, H.264/H.265/VP9/AV1 Video | 🔧 TODO |
+| 162 | SDF UI - core/math/vec.hpp sdf_circle/sdf_box/sdf_rounded_box (Inigo Quilez formulleri), KAYNAK+testler | ✅ DONE |
+| 163-167 | MSDF Text, H.264/H.265/VP9/AV1 Video | 🔧 TODO |
 | 168 | First-person Camera | 🔧 TODO |
 | 169 | Third-person Camera - sim/camera_rig.hpp FollowCamera (ussel yumusatma), KAYNAK+testler | ✅ DONE |
 | 170-172 | Isometric Camera, Free Camera, Cinematic Camera | 🔧 TODO |
 | 173 | Camera Shake - sim/camera_rig.hpp CameraShake (Eiserloh trauma modeli), KAYNAK+testler | ✅ DONE |
-| 174-177 | Camera Zoom, Camera FOV, Camera DOF, Camera Motion Blur | 🔧 TODO |
+| 174 | Camera Zoom - sim/camera_rig.hpp ZoomController (exponential_smooth sarmalayici), KAYNAK+testler | ✅ DONE |
+| 175 | Camera FOV - sim/camera_rig.hpp FovController (exponential_smooth sarmalayici), KAYNAK+testler | ✅ DONE |
+| 176-177 | Camera DOF, Camera Motion Blur | 🔧 TODO |
 
 ## D. Donanim Hizlandirma (178-250)
 
@@ -271,12 +281,12 @@ Kategori D'nin 232-250 araligiyla icerik olarak buyuk olcude cakisiyor (ayni 20 
 
 ## Özet (kesin — kodla üretildi)
 
-`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 193 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
+`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 203 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
 
 | Durum | Madde sayısı |
 |---|---|
-| ✅ DONE | 37 |
-| 🔧 TODO | 170 |
+| ✅ DONE | 45 |
+| 🔧 TODO | 162 |
 | 🔍 VERIFIED | 76 |
 | 📗 STANDARD | 95 |
 | 📚 RESEARCH | 91 |

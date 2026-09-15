@@ -158,6 +158,26 @@ ENGINE_TEST(math_plane_and_ray) {
   CHECK(!intersect(Ray{{-5, 5, 0}, {1, 0, 0}}, box)); // kutunun ustunden gecer
 }
 
+ENGINE_TEST(math_sdf_2d_shapes) {
+  // Cember: merkezde -yaricap, sinirinda 0, 2*yaricap uzaklikta +yaricap.
+  CHECK(nearly_equal(sdf_circle({0, 0}, {0, 0}, 2.0f), -2.0f, 1e-5f));
+  CHECK(nearly_equal(sdf_circle({2, 0}, {0, 0}, 2.0f), 0.0f, 1e-5f));
+  CHECK(nearly_equal(sdf_circle({4, 0}, {0, 0}, 2.0f), 2.0f, 1e-5f));
+
+  // Kutu (yari-boy 2,3): merkezde -min(2,3)=-2, sag kenarda (2,0) 0,
+  // (3,0)'da +1, kose disi (3,4)'te tam dogrusal mesafe sqrt(2).
+  CHECK(nearly_equal(sdf_box({0, 0}, {2, 3}), -2.0f, 1e-5f));
+  CHECK(nearly_equal(sdf_box({2, 0}, {2, 3}), 0.0f, 1e-5f));
+  CHECK(nearly_equal(sdf_box({3, 0}, {2, 3}), 1.0f, 1e-5f));
+  CHECK(nearly_equal(sdf_box({3, 4}, {2, 3}), 1.41421356f, 1e-4f));
+
+  // Yuvarlatilmis kutu: orijinal SIVRI kosedeki (2,3) nokta, r=0.5 ile
+  // yuvarlatilmis yuzeyden TAM sqrt(0.5)-0.5 (~0.2071) uzakta olmali
+  // (elle turetildi: kuculmus kutunun kosesi (1.5,2.5), (2,3)'e mesafe
+  // sqrt(0.5^2+0.5^2)=sqrt(0.5), eksi yaricap 0.5).
+  CHECK(nearly_equal(sdf_rounded_box({2, 3}, {2, 3}, 0.5f), std::sqrt(0.5f) - 0.5f, 1e-4f));
+}
+
 ENGINE_TEST(math_sphere_and_ray) {
   Sphere s{{0, 0, 0}, 2.0f};
   float t = -1;
