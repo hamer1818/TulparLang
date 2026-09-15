@@ -196,51 +196,231 @@ app::HostPoll android_poll(void *user, uint32_t *w, uint32_t *h_) {
 }
 } // namespace
 
+// --- VK_GOOGLE_display_timing sondasi (Swappy KAPALI, debug.tulpar.dtprobe=1):
+// her sunuma presentID ekler ve gecmis sunum zamanlamasini okur. Swappy'nin
+// kare istatistigi bu veriye dayanir; 0 kayit = surucu vermiyor (Swappy sucu degil).
+#include <dlfcn.h>
+struct DtProbe {
+  VkDevice device = VK_NULL_HANDLE;
+  VkSwapchainKHR sc = VK_NULL_HANDLE;
+  PFN_vkQueuePresentKHR present = nullptr;
+  PFN_vkGetPastPresentationTimingGOOGLE past = nullptr;
+  PFN_vkGetRefreshCycleDurationGOOGLE refresh = nullptr;
+  uint32_t id = 0, records = 0, frames = 0, max_batch = 0, past_calls_ok = 0;
+  uint64_t last_actual = 0, last_desired = 0, refresh_ns = 0;
+  int64_t last_margin = 0;
+  bool ok = false;
+  // Sunum araligi histogrami (gercek sunum zamanlari arasi / yenileme): 1, 2, 3, >3
+  // periyot; >1 = gec kare (dusen vsync). Marj (hazir olma payi) kovalari ms.
+  uint32_t interval_hist[4] = {};
+  uint32_t margin_hist[5] = {}; // <0, 0-4, 4-8, 8-12, >12 ms
+  uint64_t prev_actual = 0;
+};
+static DtProbe g_dt;
+static void dt_on_create(void *user, VkPhysicalDevice, VkDevice dev, VkQueue, uint32_t, VkSwapchainKHR sc) {
+  DtProbe *p = static_cast<DtProbe *>(user);
+  void *lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+  auto gdpa = lib ? (PFN_vkGetDeviceProcAddr)dlsym(lib, "vkGetDeviceProcAddr") : nullptr;
+  if (!gdpa) { std::printf("[android] dt sondasi: vkGetDeviceProcAddr yok\n"); return; }
+  p->device = dev; p->sc = sc;
+  p->present = (PFN_vkQueuePresentKHR)gdpa(dev, "vkQueuePresentKHR");
+  p->past = (PFN_vkGetPastPresentationTimingGOOGLE)gdpa(dev, "vkGetPastPresentationTimingGOOGLE");
+  p->refresh = (PFN_vkGetRefreshCycleDurationGOOGLE)gdpa(dev, "vkGetRefreshCycleDurationGOOGLE");
+  p->ok = p->present && p->past;
+  if (p->refresh) { VkRefreshCycleDurationGOOGLE r{}; if (p->refresh(dev, sc, &r) == VK_SUCCESS) p->refresh_ns = r.refreshDuration; }
+  std::printf("[android] dt sondasi: vkQueuePresentKHR %d, vkGetPastPresentationTimingGOOGLE %d, vkGetRefreshCycleDurationGOOGLE %d (yenileme %.3f ms)\n",
+              p->present != nullptr, p->past != nullptr, p->refresh != nullptr, p->refresh_ns / 1e6);
+}
+static VkResult dt_present(void *user, VkQueue q, const VkPresentInfoKHR *pi) {
+  DtProbe *p = static_cast<DtProbe *>(user);
+  if (!p->ok) return VK_ERROR_DEVICE_LOST;
+  VkPresentTimeGOOGLE t{++p->id, 0};
+  VkPresentTimesInfoGOOGLE ti{VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE, pi->pNext, 1, &t};
+  VkPresentInfoKHR pi2 = *pi;
+  pi2.pNext = &ti;
+  const VkResult r = p->present(q, &pi2);
+  uint32_t n = 0;
+  if (p->past(p->device, p->sc, &n, nullptr) == VK_SUCCESS) {
+    p->past_calls_ok++;
+    if (n) {
+      VkPastPresentationTimingGOOGLE arr[16];
+      if (n > 16) n = 16;
+      const VkResult pr = p->past(p->device, p->sc, &n, arr);
+      if ((pr == VK_SUCCESS || pr == VK_INCOMPLETE) && n) {
+        p->records += n;
+        if (n > p->max_batch) p->max_batch = n;
+        for (uint32_t k = 0; k < n; k++) {
+          const uint64_t a = arr[k].actualPresentTime;
+          if (p->prev_actual && p->refresh_ns && a > p->prev_actual) {
+            const uint64_t periods = (a - p->prev_actual + p->refresh_ns / 2) / p->refresh_ns;
+            p->interval_hist[periods <= 1 ? 0 : periods == 2 ? 1 : periods == 3 ? 2 : 3]++;
+          }
+          p->prev_actual = a;
+          const double m = (double)(int64_t)arr[k].presentMargin / 1e6;
+          p->margin_hist[m < 0 ? 0 : m < 4 ? 1 : m < 8 ? 2 : m < 12 ? 3 : 4]++;
+        }
+        p->last_actual = arr[n - 1].actualPresentTime;
+        p->last_desired = arr[n - 1].desiredPresentTime;
+        p->last_margin = (int64_t)arr[n - 1].presentMargin;
+      }
+    }
+  }
+  p->frames++;
+  return r;
+}
+static void dt_on_destroy(void *, VkDevice, VkSwapchainKHR) {}
+static void dt_report() {
+  DtProbe *p = &g_dt;
+  std::printf("[android] dt sondasi: %u sunum (presentID ile), gecmis zamanlama sorgusu %u basarili, %u kayit (en cok %u/kare); son gercek sunum %llu ns, istenen %llu, marj %lld ns\n",
+              p->frames, p->past_calls_ok, p->records, p->max_batch, (unsigned long long)p->last_actual, (unsigned long long)p->last_desired,
+              (long long)p->last_margin);
+  std::printf("[android] dt sondasi: sunum araligi [1 2 3 >3 periyot]: %u %u %u %u (gec kare = 1 disindakiler) | marj [<0 0-4 4-8 8-12 >12 ms]: %u %u %u %u %u\n",
+              p->interval_hist[0], p->interval_hist[1], p->interval_hist[2], p->interval_hist[3], p->margin_hist[0], p->margin_hist[1],
+              p->margin_hist[2], p->margin_hist[3], p->margin_hist[4]);
+}
+
 #if ENGINE_SWAPPY
 // AGDK Swappy (kare temposu): swapchain yaratilinca baglam kurulur (JNI env bu
 // thread'e baglanir; NativeActivity jobject = activity->clazz), sunum
 // SwappyVk_queuePresent ile; sonda istatistik (gec kare / bekleme histogrami).
+#include <atomic>
+#include <csignal>
 #include <jni.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <dlfcn.h>
 #include <swappy/swappyVk.h>
+#include "platform/crash.hpp"
+#include "platform/time.hpp"
 struct SwappyCtx {
   android_app *app = nullptr;
   VkDevice device = VK_NULL_HANDLE;
   VkSwapchainKHR swapchain = VK_NULL_HANDLE;
   uint64_t refresh_ns = 0;
   bool ok = false;
+  // Bekci: sunum cagrisi 15 s icinde donmezse (ya da hic gelmezse) surec
+  // abort() ile dusurulur; debuggerd TUM thread'lerin yiginini logcat crash
+  // tamponuna yazar (android_run.sh basar). Takilma sessiz siyah ekran olmasin.
+  std::atomic<uint32_t> present_calls{0}, present_done{0};
+  uint64_t created_ns = 0;
+  bool watchdog = false;
+  pthread_t present_thread{};       // ilk sunumu cagiran (ana) thread — takilinca yigini basilir
+  pid_t present_tid = 0;            // /proc/self/task/<tid>/{stat,wchan,syscall} icin
+  std::atomic<bool> have_thread{false}, dumped{false};
+  bool set_family = true; // deney: debug.tulpar.swappy_family=0 -> SwappyVk_setQueueFamilyIndex atlanir
+  SwappyStats stats{};    // swapchain yok edilmeden once alinir (sonra 0 doner)
 };
 static SwappyCtx g_swappy;
-static void swappy_on_create(void *user, VkPhysicalDevice phys, VkDevice dev, VkQueue, VkSwapchainKHR sc) {
+// SIGUSR1: takilan thread kendi yiginini basar (dladdr ile lib+offset; masaustunde
+// llvm-symbolizer --obj=build-android/libtulparengine.so ile cozulur). Huawei'de
+// debuggerd tombstone'u logcat'e DUSMUYOR (olculdu 2026-09-15), bu yol kaldi.
+static void swappy_dump_handler(int) {
+  void *pcs[48];
+  const int n = platform::crash_capture_frames(pcs, 48);
+  char tname[32] = "?";
+  pthread_getname_np(pthread_self(), tname, sizeof tname);
+  std::printf("[android] swappy BEKCI yigin (thread %s, %d kare):\n", tname, n);
+  for (int i = 0; i < n; i++) {
+    Dl_info info{};
+    if (dladdr(pcs[i], &info) && info.dli_fname) {
+      const char *base = std::strrchr(info.dli_fname, '/');
+      std::printf("  #%02d %s+0x%lx %s\n", i, base ? base + 1 : info.dli_fname, (unsigned long)((uintptr_t)pcs[i] - (uintptr_t)info.dli_fbase),
+                  info.dli_sname ? info.dli_sname : "");
+    } else std::printf("  #%02d %p\n", i, pcs[i]);
+  }
+  std::fflush(stdout);
+  g_swappy.dumped = true;
+}
+static void *swappy_watchdog(void *user) {
+  SwappyCtx *c = static_cast<SwappyCtx *>(user);
+  uint32_t last_done = 0;
+  uint64_t last_progress_ns = c->created_ns;
+  for (;;) {
+    usleep(250 * 1000);
+    const uint32_t calls = c->present_calls.load(), done = c->present_done.load();
+    const uint64_t now = platform::now_ns();
+    if (done != last_done) { last_done = done; last_progress_ns = now; }
+    if (now - last_progress_ns > 15ull * 1000000000ull) {
+      std::printf("[android] swappy BEKCI: %u sunum cagrisi, %u tamamlandi; 15 s ilerleme yok -> abort (thread yiginlari logcat crash)\n", calls, done);
+      std::fflush(stdout);
+      if (c->have_thread.load()) {
+        // Cekirdek durumu: sinyal yanitsiz kalirsa (kesilemez uyku, surucu ioctl) bu kalir.
+        const char *files[] = {"stat", "wchan", "syscall"};
+        for (const char *f : files) {
+          char path[64], buf[512];
+          std::snprintf(path, sizeof path, "/proc/self/task/%d/%s", (int)c->present_tid, f);
+          FILE *fp = std::fopen(path, "r");
+          size_t n = fp ? std::fread(buf, 1, sizeof buf - 1, fp) : 0;
+          if (fp) std::fclose(fp);
+          buf[n] = 0;
+          for (size_t k = 0; k < n; k++) if (buf[k] == '\n') buf[k] = ' ';
+          std::printf("[android] swappy BEKCI %s(tid %d): %s\n", f, (int)c->present_tid, n ? buf : "(okunamadi)");
+        }
+        std::fflush(stdout);
+        struct sigaction sa{};
+        sa.sa_handler = swappy_dump_handler;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGUSR1, &sa, nullptr);
+        pthread_kill(c->present_thread, SIGUSR1);
+        for (int i = 0; i < 40 && !c->dumped.load(); i++) usleep(50 * 1000);
+        if (!c->dumped.load()) std::printf("[android] swappy BEKCI: yigin alinamadi (thread sinyale yanit vermedi)\n");
+      } else std::printf("[android] swappy BEKCI: sunum hic cagrilmadi (takilma init/acquire oncesi)\n");
+      std::fflush(stdout);
+      usleep(300 * 1000); // boru okuyucusu yazsin
+      _exit(3);
+    }
+  }
+  return nullptr;
+}
+static void swappy_on_create(void *user, VkPhysicalDevice phys, VkDevice dev, VkQueue q, uint32_t queue_family, VkSwapchainKHR sc) {
   SwappyCtx *c = static_cast<SwappyCtx *>(user);
   JNIEnv *env = nullptr;
   if (c->app->activity->vm->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) { std::printf("[android] swappy: JNI env yok\n"); return; }
+  // Bekci init'ten ONCE: init/setWindow icinde takilma da yakalansin.
+  c->created_ns = platform::now_ns();
+  if (!c->watchdog) {
+    pthread_t th;
+    if (pthread_create(&th, nullptr, swappy_watchdog, c) == 0) { pthread_detach(th); c->watchdog = true; }
+  }
+  if (c->set_family) SwappyVk_setQueueFamilyIndex(dev, q, queue_family);
+  else std::printf("[android] swappy DENEY: kuyruk ailesi bildirilmedi\n");
+  std::fflush(stdout);
   uint64_t refresh = 0;
   c->ok = SwappyVk_initAndGetRefreshCycleDuration(env, c->app->activity->clazz, phys, dev, sc, &refresh);
   c->device = dev;
   c->swapchain = sc;
   c->refresh_ns = refresh;
   if (!c->ok) { std::printf("[android] swappy: init basarisiz\n"); return; }
+  std::printf("[android] swappy: init tamam\n"); std::fflush(stdout);
   SwappyVk_setWindow(dev, sc, c->app->window);
+  std::printf("[android] swappy: setWindow tamam\n"); std::fflush(stdout);
   SwappyVk_setSwapIntervalNS(dev, sc, SWAPPY_SWAP_60FPS);
   SwappyVk_enableStats(sc, true);
-  std::printf("[android] swappy: yenileme %.2f ms, hedef 60 fps, istatistik acik\n", refresh / 1e6);
+  bool enabled = false;
+  SwappyVk_isEnabled(sc, &enabled);
+  std::printf("[android] swappy: yenileme %.2f ms, hedef 60 fps, istatistik acik, kuyruk ailesi %u, etkin %d, surum %u\n", refresh / 1e6, queue_family,
+              (int)enabled, Swappy_version());
+  std::fflush(stdout);
 }
 static void swappy_on_destroy(void *user, VkDevice dev, VkSwapchainKHR sc) {
   SwappyCtx *c = static_cast<SwappyCtx *>(user);
-  if (c->ok) SwappyVk_destroySwapchain(dev, sc);
+  if (c->ok) { SwappyVk_getStats(sc, &c->stats); SwappyVk_destroySwapchain(dev, sc); }
   c->swapchain = VK_NULL_HANDLE;
 }
 static VkResult swappy_present(void *user, VkQueue q, const VkPresentInfoKHR *pi) {
   SwappyCtx *c = static_cast<SwappyCtx *>(user);
   if (!c->ok) return VK_ERROR_DEVICE_LOST;
+  if (!c->have_thread.load()) { c->present_thread = pthread_self(); c->present_tid = gettid(); c->have_thread = true; }
+  c->present_calls++;
   SwappyVk_recordFrameStart(q, c->swapchain, pi->pImageIndices ? pi->pImageIndices[0] : 0);
-  return SwappyVk_queuePresent(q, pi);
+  const VkResult r = SwappyVk_queuePresent(q, pi);
+  c->present_done++;
+  return r;
 }
 static void swappy_report() {
   SwappyCtx *c = &g_swappy;
   if (!c->ok) return;
-  SwappyStats st{};
-  if (c->swapchain) SwappyVk_getStats(c->swapchain, &st);
+  const SwappyStats &st = c->stats;
   std::printf("[android] swappy istatistik: %llu kare | gec kare [0..5]: %llu %llu %llu %llu %llu %llu | onceki kareden kayma [0..5]: %llu %llu %llu %llu %llu %llu | bekleme [0..5]: %llu %llu %llu %llu %llu %llu\n",
               (unsigned long long)st.totalFrames, (unsigned long long)st.lateFrames[0], (unsigned long long)st.lateFrames[1],
               (unsigned long long)st.lateFrames[2], (unsigned long long)st.lateFrames[3], (unsigned long long)st.lateFrames[4],
@@ -281,7 +461,7 @@ extern "C" void android_main(android_app *app) {
       if (!dot) continue;
       const bool ours = !std::strcmp(dot, ".gltf") || !std::strcmp(dot, ".glb") || !std::strcmp(dot, ".bin") ||
                         !std::strcmp(dot, ".png") || !std::strcmp(dot, ".jpg") || !std::strcmp(dot, ".ktx2") ||
-                        !std::strcmp(dot, ".ttf");
+                        !std::strcmp(dot, ".ttf") || !std::strcmp(dot, ".sahne");
       if (!ours) continue;
       AAsset *as = AAssetManager_open(app->activity->assetManager, name, AASSET_MODE_BUFFER);
       if (!as) continue;
@@ -315,6 +495,8 @@ extern "C" void android_main(android_app *app) {
   char audio_p[PROP_VALUE_MAX], swappy_p[PROP_VALUE_MAX];
   prop("debug.tulpar.audio", audio_p, sizeof audio_p, "0"); // 1: 440 Hz ton (AAudio yolu + callback sayimi)
   prop("debug.tulpar.swappy", swappy_p, sizeof swappy_p, "0"); // 1: AGDK Swappy kare temposu (ENGINE_SWAPPY derlenmisse)
+  char dtprobe_p[8];
+  prop("debug.tulpar.dtprobe", dtprobe_p, sizeof dtprobe_p, "0"); // 1: VK_GOOGLE_display_timing sondasi (Swappy kapaliyken)
   std::printf("[android] kip=%s dizin=%s\n", mode, dir);
 
   int rc = 0;
@@ -344,9 +526,26 @@ extern "C" void android_main(android_app *app) {
       o.prerotate = prerot[0] != '0';
       o.validation = validation[0] == '1';
       o.audio = audio_p[0] == '1';
+      static const char *const kDtExts[] = {"VK_GOOGLE_display_timing"};
+      if (dtprobe_p[0] == '1' && swappy_p[0] != '1') {
+        o.device_extensions = kDtExts;
+        o.device_extension_count = 1;
+        o.swap_hooks.user = &g_dt;
+        o.swap_hooks.on_create = dt_on_create;
+        o.swap_hooks.on_destroy = dt_on_destroy;
+        o.swap_hooks.present = dt_present;
+        std::printf("[android] dt sondasi: acik (VK_GOOGLE_display_timing, presentID)\n");
+      }
 #if ENGINE_SWAPPY
       if (swappy_p[0] == '1') {
+        char fam_p[8];
+        prop("debug.tulpar.swappy_family", fam_p, sizeof fam_p, "1");
+        g_swappy.set_family = fam_p[0] != '0';
         g_swappy.app = app;
+        // Kare istatistigi ve hassas zamanlama yalniz VK_GOOGLE_display_timing ile (varsa acilir).
+        static const char *const kSwappyExts[] = {"VK_GOOGLE_display_timing"};
+        o.device_extensions = kSwappyExts;
+        o.device_extension_count = 1;
         o.swap_hooks.user = &g_swappy;
         o.swap_hooks.on_create = swappy_on_create;
         o.swap_hooks.on_destroy = swappy_on_destroy;
@@ -364,6 +563,7 @@ extern "C" void android_main(android_app *app) {
       dh.touch = android_touch;
       rc = app::demo_run(o, &dh);
       std::printf("[android] demo_run = %d\n", rc);
+      if (dtprobe_p[0] == '1' && swappy_p[0] != '1') dt_report();
 #if ENGINE_SWAPPY
       if (swappy_p[0] == '1') swappy_report();
 #endif

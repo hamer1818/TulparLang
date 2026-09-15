@@ -430,13 +430,33 @@ kare temposu katmanı sunumu sarar; `Swapchain` bunları yaratma/yok etme/sunumd
 AAR'ını (2.3.0-alpha01, Apache-2.0) Google Maven'dan indirir, prefab statik kütüphaneler gitignore'lu;
 `TULPAR_SWAPPY=ON android_run.sh demo`.
 
-**Ölçüm:** emülatörde (API 37) init başarılı (yenileme 16.67 ms) ama **ilk sunumda asılı kalıyor** (300 s):
-Swappy'nin bellekten yüklediği Java simi (`SwappyDisplayManager`, API ≥ 30 yolu) `System.loadLibrary("tulparengine")`
-ile kendi doğal metotlarını bağlamak istiyor; `InMemoryDexClassLoader`'ın `nativeLibraryDirectories`'i yalnız sistem
-dizinleri → "couldn't find libtulparengine.so" → vsync callback'i gelmez → `SwappyVk_queuePresent` bekler.
-Denenen: `hasCode=true` + boş `classes.dex` (javac+d8) — değişmedi; geri alındı. **Huawei P20 Pro Android 10
-(SDK 29)** Swappy'de Java sim yolunu **kullanmaz** (NDK Choreographer) → telefonda çalışması beklenir; ölçüm
-(p99/max, geç kare histogramı, FIFO ile A/B) telefon bağlanınca. Tuzaklar 8v.
+**Ölçüm (2026-09-15, Huawei P20 Pro, Android 10):** ilk koşum emülatördeki gibi ilk sunumda asıldı (siyah ekran,
+300 s). Kök neden **sınıf yükleyici değil**: `SwappyVk_setQueueFamilyIndex(dev, q, aile)` init'ten önce çağrılmamıştı.
+A/B ile ayrıldı: (A) Java simi `classes.dex` APK'da + aile bildirilmemiş → 3 sunum "tamamlanır", sonra ana thread
+binder ioctl'de (`wchan binder_ioctl_write_read`) sonsuza dek bekler (sunumlar ekrana ulaşmaz, acquire döner gelmez);
+(B) dex yok + aile bildirilmiş → 300 kare, 59.8 fps; logcat'teki `couldn't find libtulparengine.so` hatası **zararsız**
+(looper thread yine başlar). Düzeltme: `Hooks::on_create` kuyruk ailesini de verir; host `SwappyVk_setQueueFamilyIndex`
+çağırır. `fetch_swappy.sh` gömülü dex'i `classes.dex` olarak oyar ve `android_run.sh` `TULPAR_SWAPPY=ON` ile APK'ya
+koyar (hasCode=true) — gerekmediği ölçüldü ama sınıf yükleme hatasını susturur (`TULPAR_SWAPPY_DEX=0` ile kapatılır).
+
+| yol | ort. fps | p50 | p99 | max | bekle+acquire | submit+present | kare içi `new` |
+|---|---|---|---|---|---|---|---|
+| FIFO (Swappy yok) | 59.8 | 16.67 | 21.3–22.1 | 23.5–26.4 | 10.5–10.9 | 2.5–3.1 | 0 |
+| Swappy 60 fps | 59.2–59.6 | 16.7 | 18.2–19.7 | 18.9–21.9 | 1.9–3.0 | 9.9–11.4 | **7** (Swappy'nin kendi ayırmaları) |
+
+p99/max ~2–4 ms iyileşir (bekleme acquire'dan sunuma taşınır); bedel: sunum yolunda kare başına 7 `operator new`
+(0-ayırma kapısı Swappy açıkken tutmaz — rapor satırında görünür). **`VK_GOOGLE_display_timing` bu cihazda var ve
+açılıyor** (`DeviceConfig::optional_device_extensions`, `DeviceCaps::optional_extension_enabled`); Swappy
+`SwappyVk_getStats` yine 0 kare döndürüyor — sürücü tarafı değil: kendi sondamız (`debug.tulpar.dtprobe=1`,
+`TULPAR_DTPROBE=1`, presentID + `vkGetPastPresentationTimingGOOGLE`) 600 sunumda 596 kayıt aldı; FIFO'da sunum
+aralığı histogramı **595/595 tek periyot (0 geç kare)**, marj çoğunlukla 8–12+ ms. Swappy istatistiği açık soru
+(Swappy içi; kaynak koduna bakılmadı).
+
+**Bekçi:** `debug.tulpar.swappy=1` iken 15 s sunum ilerlemesi yoksa host takılan thread'in `/proc/self/task/<tid>/{stat,wchan,syscall}`
+satırlarını basar, SIGUSR1 ile yığın ister (binder beklemesinde yanıt vermedi), `_exit(3)`. Huawei'de `abort()` →
+debuggerd tombstone'u **logcat crash tamponuna düşmüyor** (0 satır); `android_run.sh` artık süreç ölünce beklemeyi keser
+("SUREC OLDU"). Emülatör bu düzeltmeyle yeniden denenmedi. Varsayılan hâlâ KAPALI (`ENGINE_SWAPPY`); açma kararı
+ayırma bedeli ile p99 kazancı tartılarak verilecek. Tuzaklar 8v (düzeltildi), 8y, 8z.
 
 
 ## Sahne veri modeli + `.sahne` dosyası + işlem günlüğü (PLAN L7 "The Truth", editörün 2. dilimi) — 2026-09-15

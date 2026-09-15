@@ -28,8 +28,9 @@ animasyonu, oyuncu (dokunmatik joystick, kamera izler), gölge, 8 dönen nokta �
 - Bedeller: gölge ~%3, doku ölçülemez, 8 ışık ~%5. CPU: kayıt ~1.2 ms, submit+present ~2.5 ms.
 - `LAZILY_ALLOCATED` bellek var (TBDR doğrulandı). Zaman damgası, GPL, subpass merge feedback **yok**.
 - Plan L2 "zorunlu" listesi (descriptorIndexing/timeline/BDA) bu cihazda **yok** → kapı rapora çevrildi (REV-3).
+- **Swappy** (2026-09-15): `SwappyVk_setQueueFamilyIndex` şart (yoksa binder beklemesi, siyah ekran); açıkken p99 18–20 ms / max 19–22 (FIFO 21–22 / 23–26), bedel kare başına 7 `new`; `VK_GOOGLE_display_timing` var; FIFO 10 s: 0 geç kare (sonda). Ses: AAudio 253 callback, düşen komut 0. Varsayılan Swappy KAPALI.
 
-## 4. Kapılar (engine_tests: masaüstü 80/80 (katmanla, 0 atlandı), emülatör 67/67 (katmanla; editör testi masaüstü), telefon 66/66 (skinning öncesi — USB düştü, telefon gelince tekrar))
+## 4. Kapılar (engine_tests: masaüstü 80/80 (katmanla, 0 atlandı), emülatör 67/67 (katmanla; editör testi masaüstü), telefon **78/78** (2026-09-15, katmanla, 3 görünür ATLANDI; skinning, ses, donanım ASTC, Mali kapısı, sahne testleri dahil))
 Her görsel özelliğin açık/kapalı karşılaştırmalı testi ve pozitif/negatif kontrolü var: gölge (koyulaşan
 piksel + 6 m kaydırma kontrolü), doku (keskin geçiş oranı), nokta ışık (kırmızı piksel, görüş dışı 0),
 UI metni (boş metin 0), kümeleme (yerel/konservatif), joystick, glTF sayıları, adanmış bellek serbest
@@ -53,4 +54,4 @@ sahte yeşil (8s); `compositeAlpha OPAQUE` Huawei'de yok; katmanın seyrek-indek
 ## 7. Çalışma kuralları (kullanıcı)
 CI yok, push yok ("gönder" denene kadar); doğrulama yerel + telefon (+ emülatör yalnız işlevsel);
 pencereyi ben açmam, ekran görüntüsü `adb screencap`; sayı yoksa iddia yok, her kapının kontrolü var.
-PR #321 main'e birleşti (2026-09-14, squash; CI Linux + macOS yeşil). Yeni dal: `engine/faz3-sahne`.
+PR #321 main'e birleşti (2026-09-14, squash; CI Linux + macOS yeşil). Yeni dal: `engine/faz3-sahne` (3 yerel commit, push yok).

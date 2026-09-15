@@ -232,8 +232,10 @@ bool Device::init_device(VkSurfaceKHR surface) {
   caps_.timestamps = qp[queue_family_].timestampValidBits > 0 && caps_.timestamp_period_ns > 0;
 
   // Uzantilar (varsa ac).
-  const char *dev_exts[12];
+  const char *dev_exts[12 + DeviceCaps::kMaxOptionalExtensions];
   uint32_t dev_ext_n = 0;
+  for (uint32_t i = 0; i < cfg_.optional_device_extension_count && i < DeviceCaps::kMaxOptionalExtensions; i++)
+    if (caps_.optional_extension_enabled[i]) dev_exts[dev_ext_n++] = cfg_.optional_device_extensions[i];
   if (surface) {
     if (!has_swapchain_ext_) { fail("VK_KHR_swapchain yok", VK_ERROR_EXTENSION_NOT_PRESENT); return false; }
     dev_exts[dev_ext_n++] = "VK_KHR_swapchain";
@@ -417,6 +419,8 @@ bool Device::pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface) {
     else if (!std::strcmp(e, "VK_KHR_fragment_shading_rate")) caps_.khr_fragment_shading_rate = true;
     else if (!std::strcmp(e, "VK_KHR_portability_subset")) caps_.khr_portability_subset = true;
     else if (!std::strcmp(e, "VK_KHR_swapchain")) has_swapchain_ext_ = true;
+    for (uint32_t k = 0; k < cfg_.optional_device_extension_count && k < DeviceCaps::kMaxOptionalExtensions; k++)
+      if (!std::strcmp(e, cfg_.optional_device_extensions[k])) caps_.optional_extension_enabled[k] = true;
   }
   if (!has_pipeline_library) caps_.ext_graphics_pipeline_library = false; // ikisi birlikte gerekir
 

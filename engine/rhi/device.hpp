@@ -38,6 +38,9 @@ struct DeviceCaps {
   bool ext_host_image_copy = false;
   bool khr_fragment_shading_rate = false;
   bool khr_portability_subset = false; // MoltenVK
+  // DeviceConfig::optional_device_extensions ile istenenlerden acilanlar (ayni sira).
+  static constexpr uint32_t kMaxOptionalExtensions = 8;
+  bool optional_extension_enabled[kMaxOptionalExtensions] = {};
 };
 
 struct DeviceConfig {
@@ -60,6 +63,10 @@ struct DeviceConfig {
   // Pencere varsa: VK_KHR_surface + platform uzantilari (Window verir).
   const char *const *instance_extensions = nullptr;
   uint32_t instance_extension_count = 0;
+  // Cihaz uzantilari: varsa acilir, yoksa sessizce atlanir (caps.optional_extension_enabled).
+  // Ornek: Swappy icin VK_GOOGLE_display_timing (kare istatistigi yalniz bununla).
+  const char *const *optional_device_extensions = nullptr;
+  uint32_t optional_device_extension_count = 0; // <= DeviceCaps::kMaxOptionalExtensions
 };
 
 // Bellek: tur basina buyuk blok, bump; serbest birakma yok (cihaz omru).

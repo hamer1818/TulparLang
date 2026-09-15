@@ -2019,15 +2019,16 @@ Testler 67/67'den "COKME testi: content_gltf_loads_checker_cube" a dustu; yeni t
 Kural: zeroed dizilerde "yok" anlami 0 olsun (indeks+1 sakla) ya da alani acikca yaz; `alloc_array_zeroed` ile
 "varsayilan uye degeri" birlikte kullanilmaz. Ayni sinif: `ModelClip::skin = -1`, `ModelMaterial::image = -1`.
 
-### 8v. AGDK Swappy NativeActivity'de (API >= 30) ilk sunumda asilir: Java simi kendi lib'ini bulamaz
-`SwappyVk_initAndGetRefreshCycleDuration` basarili (yenileme 16.67 ms), sonra `SwappyVk_queuePresent` sonsuza
-dek bekler. logcat: `SwappyDisplayManager: InMemoryDexClassLoader[... nativeLibraryDirectories=[/system/lib64,
-/system_ext/lib64]] couldn't find "libtulparengine.so"` — bellekten yuklenen Java simi dogal metotlarini
-`System.loadLibrary` ile baglamaya calisir, sinif yukleyicinin dogal yolu uygulama lib dizinini icermez, vsync
-callback'i gelmez. `hasCode=true` + bos classes.dex denendi, degismedi. API 29 (Android 10) bu Java yolunu
-kullanmaz. Kural: Swappy varsayilan KAPALI (`ENGINE_SWAPPY`), yalniz gercek cihazda olcumle acilir; "init basarili"
-sunumun calistigi anlamina gelmez — kare sayaci ilerlemeli. GameActivity gocu (IP-P, Gradle host) bu sinif
-yukleyici sorununu kokten cozer.
+### 8v. AGDK Swappy ilk sunumda asilir: sebep `SwappyVk_setQueueFamilyIndex` eksikligi, sinif yukleyici hatasi DEGIL
+Ilk teshis (emulator, 2026-09-14) logcat'teki `SwappyDisplayManager ... InMemoryDexClassLoader ... couldn't find
+"libtulparengine.so"` satirina takildi ve "API >= 30 Java simi" diye yazildi; telefon (Android 10) ayni sekilde asilinca
+varsayim coktu. A/B (2026-09-15): gomulu dex'i APK'ya koyup (`classes.dex`, hasCode=true) hata susturuldu ama asilma
+surdu; dex'siz + `SwappyVk_setQueueFamilyIndex(dev, queue, aile)` init'ten once → 59.8 fps. Aile bildirilmeyince 3
+sunum "tamamlanir" (SwappyVk_queuePresent doner), sonra ana thread `binder_ioctl_write_read` beklemesinde kalir —
+goruntu hic ekrana ulasmaz, acquire donmez, ekran siyah. Kural: (1) Swappy'de kuyruk ailesi ZORUNLU (basliktaki
+"needs to know" ciddiye alinir), (2) "init basarili" hicbir sey demek degil — kare sayaci ilerlemeli, (3) logcat'teki
+ilk kirmizi satir kok neden olmayabilir; A/B ile ayir. Bekci: 15 s ilerleme yoksa host /proc durumunu basar ve cikar
+(siyah ekranda 300 s bekleme yok). Swappy acikken sunum yolunda kare basina 7 `operator new` var (olculdu).
 
 ### 8w. CI macOS'un GPU'su sanal ("Apple Paravirtual device"): piksel kapilari orada olculmez
 PR #321'in ilk tam macOS kosumunda (daha once engine_tests fizikten sonra cokuyordu; bu kosumda cokme yok,
@@ -2044,3 +2045,16 @@ yazilir. Ilk `scene_entity_equal` her alani karsilastirdi: testin kopyalanan `e`
 (bileseni kapali) yaz→oku sonrasi varsayilana dondu, gidis-donus kapisi 3 varlikta dustu — metin baytlari ise
 AYNIYDI. Ayni hata gunlukte no-op tespitini de bozar (bilesen kapali alan degisince "islem" kaydedilir). Kural:
 esitlik = dosyaya giden alanlar; bit kapaliysa alan yok sayilir. Kapi: `scene_text_roundtrip_is_deterministic`.
+
+### 8y. fish kabugunda `set -- $x` bash degil: deney degiskenleri bos kalir, A/B ikisi de varsayilanla kosar
+Bash tool bu makinede fish acar. `for exp in "A VAR=0" "B VAR2=0"; do set -- $exp; kv=$2` fish'te bolme yapmaz:
+`$kv` bos, iki "farkli" kosum da ayni yapilandirmayla gecti ve sonuc "ikisi de calisiyor" gibi gorundu (2026-09-15,
+Swappy A/B). Kural: cok adimli/degiskenli deneyler `bash betik.sh` dosyasiyla kosulur; kosumun basinda etkin
+degiskenler loga basilir (`[android] swappy DENEY: ...` satiri gibi) — cikti tarafinda dogrulanmayan deney yok sayilir.
+
+### 8z. Huawei'de `abort()`/tombstone logcat crash tamponuna dusmez; takilan thread'i surec icinden teshis et
+Bekci `abort()` etti, surec oldu ama `logcat -b crash` 0 satir, "F DEBUG" yok; boru uzerinden yazilan son satirlar da
+surecle birlikte kayboldu (stdout okuyucu thread'i olur). Sonraki kosumun `logcat -c`'si onceki kaniti da sildi.
+Kural: (1) teshis surec icinden: `/proc/self/task/<tid>/{stat,wchan,syscall}` + SIGUSR1 ile `crash_capture_frames`
+(kesilemez beklemede yanit vermez, wchan yine konusur), sonra `usleep` + `_exit` (boru bosalsin), (2) kosum betigi
+surec olunce beklemeyi keser (`pidof`), (3) kanit iceren logcat'i bir sonraki kosumdan ONCE dosyaya cek.

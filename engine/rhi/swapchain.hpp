@@ -38,7 +38,7 @@ struct SwapchainConfig {
   // swapchain omrunu bildirir (Swappy swapchain basina baglam tutar).
   struct Hooks {
     void *user = nullptr;
-    void (*on_create)(void *user, VkPhysicalDevice phys, VkDevice dev, VkQueue q, VkSwapchainKHR sc) = nullptr;
+    void (*on_create)(void *user, VkPhysicalDevice phys, VkDevice dev, VkQueue q, uint32_t queue_family, VkSwapchainKHR sc) = nullptr;
     void (*on_destroy)(void *user, VkDevice dev, VkSwapchainKHR sc) = nullptr;
     VkResult (*present)(void *user, VkQueue q, const VkPresentInfoKHR *pi) = nullptr;
   } hooks;

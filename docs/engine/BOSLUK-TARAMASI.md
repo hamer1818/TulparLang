@@ -114,5 +114,5 @@ Hiçbiri yok; ilk oyun yayınlanmadan gerekmiyor. Sıra: Performance Tuner + Mem
 2. ~~Sahne veri modeli + format~~ ✅ 2026-09-15 (`.sahne` deterministik metin, işlem günlüğü, editörde kaydet/geri al/yinele/ekle/sil). Tıklamayla seçim ✅. Kalan: runtime blob.
 3. ~~glTF iskelet + GPU skinning~~ ✅ bugün (kendi runtime; ozz gerekmedi). Karakter modeli: sanatçı varlığı bekliyor.
 4. ~~Tracy (İP-R)~~ ✅ bugün.
-5. ~~Swappy~~ derlendi (telefon ölçümü bekliyor); **GameActivity** göçü (İP-P) Gradle host ile.
+5. ~~Swappy~~ ✅ telefonda ölçüldü 2026-09-15 (kuyruk ailesi şart; p99 −2..4 ms, kare başına 7 `new`; varsayılan kapalı, açma kararı bekliyor); **GameActivity** göçü (İP-P) Gradle host ile.
 6. ~~Faz 4 ses~~ ✅; ~~ASTC/KTX2~~ ✅ bugün; Faz 6 kalan: pack formatı, lightmap.

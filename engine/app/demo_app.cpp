@@ -110,6 +110,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   dc.prefer = opts.gpu_prefer ? opts.gpu_prefer : "";
   dc.validation = opts.validation;
   dc.best_practices = opts.validation; // dogrulama acikken Mali linter de acik (rapor sonda)
+  dc.optional_device_extensions = opts.device_extensions;
+  dc.optional_device_extension_count = opts.device_extension_count;
   if (!headless) {
     uint32_t n = 0;
     dc.instance_extensions = host->instance_extensions(host->user, &n);
@@ -128,6 +130,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
               caps.device_name, VK_API_VERSION_MAJOR(caps.api_version), VK_API_VERSION_MINOR(caps.api_version),
               jobs.worker_count(), (int)caps.lazily_allocated_memory, (int)caps.timestamps,
               (int)caps.graphics_pipeline_library, (int)caps.ext_subpass_merge_feedback);
+  for (uint32_t i = 0; i < opts.device_extension_count && i < rhi::DeviceCaps::kMaxOptionalExtensions; i++)
+    std::printf("[engine_demo] istege bagli uzanti %s: %s\n", opts.device_extensions[i], dev.caps().optional_extension_enabled[i] ? "ACIK" : "yok");
 
   uint32_t width = opts.width, height = opts.height;
   rhi::Swapchain swap;
