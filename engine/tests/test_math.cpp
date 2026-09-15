@@ -84,3 +84,115 @@ ENGINE_TEST(math_ortho_matches_vulkan_depth_range) {
   bool same_sign = (qy.y / qy.w < 0) == (py.y / py.w < 0);
   CHECK(same_sign);
 }
+
+ENGINE_TEST(math_inverse_roundtrip) {
+  Mat4 t = Mat4::translate({1, 2, 3});
+  Mat4 r = Mat4::rotate({0, 0, 1}, kPi * 0.5f);
+  Mat4 s = Mat4::scale({2, 2, 2});
+  Mat4 trs = t * r * s;
+  Mat4 inv = inverse(trs);
+  Mat4 id1 = trs * inv, id2 = inv * trs;
+  for (int c = 0; c < 4; c++)
+    for (int rr = 0; rr < 4; rr++) {
+      float expect = c == rr ? 1.0f : 0.0f;
+      CHECK(nearly_equal(id1.m[c][rr], expect, 1e-4f));
+      CHECK(nearly_equal(id2.m[c][rr], expect, 1e-4f));
+    }
+  // Afin olmayan (perspektif) matris de tersine cevrilebilmeli — inverse_affine
+  // bunu YAPAMAZ (asagida ayri test), genel inverse() yapmali.
+  Mat4 p = Mat4::perspective(kPi * 0.5f, 1.0f, 0.1f, 100.0f);
+  Mat4 pid = p * inverse(p);
+  for (int c = 0; c < 4; c++)
+    for (int rr = 0; rr < 4; rr++) CHECK(nearly_equal(pid.m[c][rr], c == rr ? 1.0f : 0.0f, 1e-3f));
+}
+
+ENGINE_TEST(math_inverse_affine_matches_general) {
+  Mat4 t = Mat4::translate({-3, 5, 2});
+  Mat4 r = Mat4::rotate({0, 1, 0}, kPi * 0.3f);
+  Mat4 s = Mat4::scale({2, 0.5f, 3});
+  Mat4 trs = t * r * s;
+  Mat4 fast = inverse_affine(trs);
+  Mat4 general = inverse(trs);
+  for (int c = 0; c < 4; c++)
+    for (int rr = 0; rr < 4; rr++) CHECK(nearly_equal(fast.m[c][rr], general.m[c][rr], 1e-3f));
+  Vec3 p{1, 1, 1};
+  CHECK(nearly_equal(transform_point(fast, transform_point(trs, p)), p, 1e-3f));
+}
+
+ENGINE_TEST(math_aabb_basics) {
+  Aabb a{{-1, -1, -1}, {1, 1, 1}};
+  Aabb b{{0, 0, 0}, {3, 2, 5}};
+  Aabb m = merge(a, b);
+  CHECK(nearly_equal(m.min, {-1, -1, -1}));
+  CHECK(nearly_equal(m.max, {3, 2, 5}));
+  CHECK(nearly_equal(center(a), {0, 0, 0}));
+  CHECK(nearly_equal(extent(a), {1, 1, 1}));
+  // 90 derece Y etrafinda donus: asimetrik kutuda X/Z yari-boyutlari yer degistirir.
+  Aabb box{{-1, -2, -3}, {1, 2, 3}}; // yari-boyut (1,2,3)
+  Mat4 rot90 = Mat4::rotate({0, 1, 0}, kPi * 0.5f);
+  Aabb rotated = transform(rot90, box);
+  CHECK(nearly_equal(extent(rotated), {3, 2, 1}, 1e-4f));
+  CHECK(nearly_equal(center(rotated), {0, 0, 0}, 1e-4f));
+  Mat4 tr = Mat4::translate({5, 0, 0});
+  Aabb moved = transform(tr, box);
+  CHECK(nearly_equal(center(moved), {5, 0, 0}, 1e-4f));
+  CHECK(nearly_equal(extent(moved), {1, 2, 3}, 1e-4f));
+}
+
+ENGINE_TEST(math_plane_and_ray) {
+  Plane ground = plane_from_point_normal({0, 5, 0}, {0, 1, 0}); // y=5 duzlemi
+  CHECK(nearly_equal(distance(ground, {3, 5, -2}), 0.0f, 1e-5f));
+  CHECK(nearly_equal(distance(ground, {0, 8, 0}), 3.0f, 1e-5f));
+
+  Ray down{{0, 10, 0}, {0, -1, 0}};
+  float t = -1;
+  CHECK(intersect(down, ground, &t));
+  CHECK(nearly_equal(t, 5.0f, 1e-4f));
+  CHECK(!intersect(Ray{{0, 10, 0}, {1, 0, 0}}, ground)); // duzleme paralel
+
+  Aabb box{{-1, -1, -1}, {1, 1, 1}};
+  Ray hit{{-5, 0, 0}, {1, 0, 0}};
+  float th = -1;
+  CHECK(intersect(hit, box, &th));
+  CHECK(nearly_equal(th, 4.0f, 1e-4f)); // -5'ten kutunun yakin yuzune (-1) 4 birim
+  CHECK(!intersect(Ray{{-5, 5, 0}, {1, 0, 0}}, box)); // kutunun ustunden gecer
+}
+
+ENGINE_TEST(math_frustum_culls_known_aabbs) {
+  Mat4 view = Mat4::look_at({0, 0, 10}, {0, 0, 0}, {0, 1, 0});
+  Mat4 proj = Mat4::perspective(kPi * 0.5f, 1.0f, 0.1f, 100.0f);
+  Frustum f = Frustum::from_viewproj(proj * view);
+
+  Aabb inside{{-1, -1, -1}, {1, 1, 1}}; // kamera onunde, derinlik ~10
+  CHECK(test(f, inside) == FrustumTest::kInside);
+
+  Aabb behind{{50, 50, 50}, {52, 52, 52}}; // kameranin arkasinda ve yaninda
+  CHECK(test(f, behind) == FrustumTest::kOutside);
+  CHECK(!intersects(f, behind));
+
+  Aabb straddle_far{{-5, -5, -95}, {5, 5, -85}}; // uzak duzlemi (derinlik 100) keser
+  CHECK(test(f, straddle_far) == FrustumTest::kIntersecting);
+  CHECK(intersects(f, straddle_far));
+
+  // Pozitif kontrol: kamera ters yone bakinca, once "inside" olan artik disarida.
+  Mat4 view2 = Mat4::look_at({0, 0, 10}, {0, 0, 20}, {0, 1, 0});
+  Frustum f2 = Frustum::from_viewproj(proj * view2);
+  CHECK(test(f2, inside) == FrustumTest::kOutside);
+}
+
+ENGINE_TEST(math_decompose_roundtrip) {
+  Vec3 pos{2, -3, 7};
+  Quat rot = Quat::axis_angle({0, 0, 1}, kPi * 0.25f);
+  Vec3 scl{1.5f, 2.0f, 0.5f};
+  Mat4 m = Mat4::translate(pos) * to_mat4(rot) * Mat4::scale(scl);
+  Transform t = decompose(m);
+  CHECK(nearly_equal(t.translation, pos, 1e-4f));
+  CHECK(nearly_equal(t.scale, scl, 1e-4f));
+  // q ve -q ayni donusu temsil eder; bilesen karsilastirmasi yanlis-pozitif
+  // verebilir, bir vektore uygulayip karsilastir.
+  Vec3 probe{1, 0, 0};
+  CHECK(nearly_equal(rotate(t.rotation, probe), rotate(rot, probe), 1e-3f));
+  Mat4 recomposed = Mat4::translate(t.translation) * to_mat4(t.rotation) * Mat4::scale(t.scale);
+  for (int c = 0; c < 4; c++)
+    for (int rr = 0; rr < 4; rr++) CHECK(nearly_equal(recomposed.m[c][rr], m.m[c][rr], 1e-3f));
+}
