@@ -412,7 +412,7 @@ TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t
   return TextureHandle{texture_count_ - 1};
 }
 
-MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
+MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color, float roughness, float metallic) {
   if (material_count_ >= cfg_.max_materials || !albedo.valid() || albedo.id >= texture_count_) return MaterialHandle{};
   rhi::VkApi &a = dev_->api();
   Material &m = materials_[material_count_];
@@ -433,6 +433,8 @@ MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
   a.vkUpdateDescriptorSets(dev_->handle(), 1, &w, 0, nullptr);
   m.texture = albedo.id;
   m.color = srgb_to_linear(color); // yazar sRGB verir, aydinlatma dogrusal
+  m.roughness = roughness;
+  m.metallic = metallic;
   stats_.materials = ++material_count_;
   return MaterialHandle{material_count_ - 1};
 }
@@ -695,6 +697,9 @@ MeshHandle Renderer::create_mesh(const Vertex *verts, uint32_t nverts, const uin
   if (!upload(m.vbuf, verts, sizeof(Vertex) * nverts, 0) || !upload(m.ibuf, indices, sizeof(uint32_t) * nindices, 0))
     return MeshHandle{};
   m.index_count = nindices;
+  Aabb bounds{};
+  for (uint32_t i = 0; i < nverts; i++) bounds = merge(bounds, verts[i].pos);
+  m.local_bounds = bounds;
   stats_.meshes = ++mesh_count_;
   return MeshHandle{mesh_count_ - 1};
 }
@@ -711,6 +716,9 @@ MeshHandle Renderer::create_skinned_mesh(const SkinnedVertex *verts, uint32_t nv
     return MeshHandle{};
   m.index_count = nindices;
   m.skinned = true;
+  Aabb bounds{};
+  for (uint32_t i = 0; i < nverts; i++) bounds = merge(bounds, verts[i].pos);
+  m.local_bounds = bounds; // bind pozu (Is 2 notu: renderer.hpp'de aciklandi)
   stats_.meshes = ++mesh_count_;
   return MeshHandle{mesh_count_ - 1};
 }
@@ -776,7 +784,11 @@ TextureHandle Renderer::create_texture_levels(VkFormat fmt, uint32_t w, uint32_t
   return TextureHandle{texture_count_ - 1};
 }
 
-void Renderer::set_camera(const Mat4 &view, const Mat4 &proj) { view_ = view; proj_ = proj; }
+void Renderer::set_camera(const Mat4 &view, const Mat4 &proj) {
+  view_ = view;
+  proj_ = proj;
+  frustum_ = Frustum::from_viewproj(proj * view); // Is 2: ana gecis culling'i bunu kullanir
+}
 void Renderer::set_light(Vec3 dir, Vec3 ambient, float diffuse_scale) { light_dir_ = dir; ambient_ = ambient; diffuse_scale_ = diffuse_scale; }
 
 void Renderer::begin_frame(uint32_t frame_index) {
@@ -784,6 +796,8 @@ void Renderer::begin_frame(uint32_t frame_index) {
   draw_count_ = 0;
   skin_count_ = 0;
   stats_.dropped = 0;
+  stats_.culled = 0;
+  stats_.shadow_culled = 0;
   FrameUbo u;
   u.viewproj = proj_ * view_;
   u.view = view_;
@@ -808,6 +822,7 @@ void Renderer::begin_frame(uint32_t frame_index) {
   u.cluster_params[3] = (float)render_h_ / (float)grid_.y;
   u.cluster_grid[0] = grid_.x; u.cluster_grid[1] = grid_.y; u.cluster_grid[2] = grid_.z; u.cluster_grid[3] = point_light_count_;
   light_vp_ = directional_light_matrix(light_dir_, shadow_center_, shadow_radius_, shadow_depth_);
+  shadow_frustum_ = Frustum::from_viewproj(light_vp_); // Is 2: golge gecisi AYRI frustum kullanir
   u.light_viewproj = light_vp_;
   u.light_dir[0] = light_dir_.x; u.light_dir[1] = light_dir_.y; u.light_dir[2] = light_dir_.z;
   u.light_dir[3] = cfg_.srgb_target ? 0.0f : 1.0f; // 1: shader sRGB kodlar (UNORM hedef yedegi)
@@ -816,6 +831,11 @@ void Renderer::begin_frame(uint32_t frame_index) {
   u.shadow_params[1] = cfg_.shadow_bias;
   u.shadow_params[2] = shadow_info_.enabled ? 1.0f : 0.0f;
   u.shadow_params[3] = cfg_.shadow_normal_offset;
+  u.fog_params[0] = fog_density_;
+  u.fog_params[1] = fog_height_falloff_;
+  u.fog_params[2] = exposure_; // Is 7: pozlama carpani (sis alaninda rezerve slotu, UBO buyumesin diye)
+  u.fog_params[3] = 0.0f;
+  u.fog_color[0] = fog_color_.x; u.fog_color[1] = fog_color_.y; u.fog_color[2] = fog_color_.z; u.fog_color[3] = 0.0f;
   std::memcpy(ubo_mem_[frame_].mapped, &u, sizeof u);
 }
 
@@ -863,6 +883,8 @@ void Renderer::record_shadow(VkCommandBuffer cb) {
   VkPipeline bound_pipe = VK_NULL_HANDLE;
   for (uint32_t i = 0; i < draw_count_; i++) {
     const Draw &d = draws_[i];
+    // Is 2: golge, kamera degil ISIK frustum'una gore elenir.
+    if (!intersects(shadow_frustum_, transform(d.model, meshes_[d.mesh].local_bounds))) { stats_.shadow_culled++; continue; }
     const VkPipeline want = d.skin_offset == kNoSkin ? pipe_shadow_ : pipe_skin_shadow_;
     if (want != bound_pipe) { a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound_pipe = want; }
     if (d.mesh != bound) {
@@ -871,7 +893,7 @@ void Renderer::record_shadow(VkCommandBuffer cb) {
       a.vkCmdBindIndexBuffer(cb, meshes_[d.mesh].ibuf, 0, VK_INDEX_TYPE_UINT32);
       bound = d.mesh;
     }
-    Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.skin_offset, 0, 0, 0}};
+    Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.roughness, d.metallic, 0.0f, 0.0f}, {d.skin_offset, 0, 0, 0}};
     a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof p, &p);
     a.vkCmdDrawIndexed(cb, meshes_[d.mesh].index_count, 1, 0, 0, 0);
   }
@@ -887,7 +909,9 @@ void Renderer::draw(MeshHandle mesh, MaterialHandle material, const Mat4 &model,
   const Vec3 mc = materials_[material.id].color; // zaten dogrusal
   const Vec3 lc = srgb_to_linear(color);
   if (meshes_[mesh.id].skinned) { stats_.dropped++; return; } // iskeletli mesh draw_skinned ister
-  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}, kNoSkin};
+  const Material &mat = materials_[material.id];
+  draws_[draw_count_++] =
+      Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}, kNoSkin, mat.roughness, mat.metallic};
 }
 
 void Renderer::draw_skinned(MeshHandle mesh, MaterialHandle material, const Mat4 &model, Vec3 color, const Mat4 *joints,
@@ -896,9 +920,15 @@ void Renderer::draw_skinned(MeshHandle mesh, MaterialHandle material, const Mat4
   if (!material.valid() || material.id >= material_count_) material = default_material_;
   if (draw_count_ >= cfg_.max_draws || skin_count_ + n > cfg_.max_skin_matrices) { stats_.dropped++; return; }
   std::memcpy(static_cast<Mat4 *>(skin_mem_[frame_].mapped) + skin_count_, joints, sizeof(Mat4) * n);
-  const Vec3 mc = materials_[material.id].color;
+  const Material &mat = materials_[material.id];
   const Vec3 lc = srgb_to_linear(color);
-  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}, skin_count_};
+  draws_[draw_count_++] = Draw{mesh.id,
+                               material.id,
+                               model,
+                               Vec3{lc.x * mat.color.x, lc.y * mat.color.y, lc.z * mat.color.z},
+                               skin_count_,
+                               mat.roughness,
+                               mat.metallic};
   skin_count_ += n;
 }
 
@@ -913,6 +943,12 @@ void Renderer::record(VkCommandBuffer cb) {
     VkPipeline bound_pipe = VK_NULL_HANDLE;
     for (uint32_t i = 0; i < draw_count_; i++) {
       const Draw &d = draws_[i];
+      // Is 2: frustum culling. Iki gecis AYNI cizim listesini dolasir; sayaci
+      // yalniz pass 0'da artir, yoksa ayni elenen cizim iki kez sayilir.
+      if (!intersects(frustum_, transform(d.model, meshes_[d.mesh].local_bounds))) {
+        if (pass == 0) stats_.culled++;
+        continue;
+      }
       const VkPipeline want = d.skin_offset == kNoSkin ? (pass == 0 ? pipe_depth_ : pipe_color_)
                                                        : (pass == 0 ? pipe_skin_depth_ : pipe_skin_color_);
       if (want != bound_pipe) { a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound_pipe = want; }
@@ -927,7 +963,7 @@ void Renderer::record(VkCommandBuffer cb) {
         a.vkCmdBindIndexBuffer(cb, meshes_[d.mesh].ibuf, 0, VK_INDEX_TYPE_UINT32);
         bound = d.mesh;
       }
-      Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.skin_offset, 0, 0, 0}};
+      Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.roughness, d.metallic, 0.0f, 0.0f}, {d.skin_offset, 0, 0, 0}};
       a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof p, &p);
       a.vkCmdDrawIndexed(cb, meshes_[d.mesh].index_count, 1, 0, 0, 0);
     }

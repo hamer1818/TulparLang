@@ -83,8 +83,10 @@ struct ShadowInfo {
 };
 
 struct RendererStats {
-  uint32_t draws = 0;      // son kare
+  uint32_t draws = 0;      // son kare, GONDERILEN (elenenler dahil)
   uint32_t dropped = 0;    // kapasite asimi (sayilir, sessiz degil)
+  uint32_t culled = 0;     // ana (kamera) gecisinde frustum disinda kalip cizilmeyen (Is 2)
+  uint32_t shadow_culled = 0; // golge (isik) gecisinde ayni sekilde elenen
   uint32_t meshes = 0;
   uint32_t textures = 0;
   uint32_t materials = 0;
@@ -110,7 +112,9 @@ public:
   // bayt dizisi, blit yok. fmt: VK_FORMAT_ASTC_*_SRGB_BLOCK / R8G8B8A8_SRGB...
   TextureHandle create_texture_levels(VkFormat fmt, uint32_t w, uint32_t h, uint32_t levels, const uint8_t *const *data,
                                       const uint32_t *sizes);
-  MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1});
+  // roughness/metallic: Is 4 (PBR). Algisal deger (0..1); GGX alpha=roughness^2
+  // shader'da hesaplanir. Doku YOK (ORM haritasi sonraki adim) — malzeme basina sabit.
+  MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1}, float roughness = 0.6f, float metallic = 0.0f);
   TextureHandle default_texture() const { return default_texture_; } // 1x1 beyaz
   MaterialHandle default_material() const { return default_material_; }
 
@@ -125,6 +129,16 @@ public:
   uint32_t point_light_count() const { return point_light_count_; }
   // Golge kutusu: isik yonu (isiga DOGRU), sahne merkezi, yaricap, derinlik.
   void set_shadow_volume(Vec3 center, float radius, float depth);
+  // Is 6: analitik sis. density<=0 -> kapali. Renk sRGB (yazar) verilir, dogrusala
+  // cevrilip saklanir (mesh.frag'ta dogrudan aydinlatmayla ayni uzayda karisir).
+  void set_fog(float density, float height_falloff, Vec3 color) {
+    fog_density_ = density;
+    fog_height_falloff_ = height_falloff;
+    fog_color_ = srgb_to_linear(color);
+  }
+  // Is 7: EV100 pozlama (Filament/Sozluk konvansiyonu). Varsayilan 1.0 (degisiklik yok).
+  void set_exposure_ev(float ev) { exposure_ = 1.0f / (1.2f * std::pow(2.0f, ev)); }
+  void set_exposure_multiplier(float m) { exposure_ = m; } // doğrudan carpan (test/hassas ayar icin)
   ShadowInfo shadow() const { return shadow_info_; }
   // A/B ve dusuk segment icin: hedef durur, gecis ve ornekleme kapanir.
   void set_shadows_enabled(bool on) { shadow_info_.enabled = on && cfg_.shadow_size > 0; }
@@ -180,6 +194,10 @@ private:
     VkBuffer vbuf = VK_NULL_HANDLE, ibuf = VK_NULL_HANDLE;
     uint32_t index_count = 0;
     bool skinned = false;
+    // Yerel (nesne) uzayinda sinirlayici kutu — create_mesh/create_skinned_mesh'te
+    // bir kez hesaplanir (Is 2). Iskeletli mesh icin BIND POZU sinirlarini kullanir;
+    // animasyon kutunun disina tasarsa (kol kaldirma vb.) bu bir yaklastirmadir.
+    Aabb local_bounds{};
   };
   struct Texture {
     VkImage image = VK_NULL_HANDLE;
@@ -190,6 +208,8 @@ private:
     VkDescriptorSet set = VK_NULL_HANDLE;
     uint32_t texture = 0;
     Vec3 color{1, 1, 1};
+    float roughness = 0.6f; // Is 4: algisal deger, shader'da karesi alinir
+    float metallic = 0.0f;
   };
   static constexpr uint32_t kNoSkin = 0xFFFFFFFFu;
   struct Draw {
@@ -198,13 +218,19 @@ private:
     Mat4 model;
     Vec3 color;
     uint32_t skin_offset; // kNoSkin = statik
+    float roughness, metallic; // Is 4: cizim anindaki malzemeden kopyalanir
   };
-  struct Push { // GLSL Push { mat4 model; vec4 color; uvec4 skin; } = 96 bayt
+  // GLSL Push { mat4 model; vec4 color; vec4 pbr; uvec4 skin; } = 112 bayt.
+  // Sira ONEMLI: mesh.vert/mesh.frag yalniz on-eki (model,color,pbr) bilir,
+  // skin'i hic gormez; mesh_skin.vert tamamini bilir. pbr, skin'den ONCE
+  // gelir ki iskeletsiz shader'lar skin alanini tanimlamak ZORUNDA kalmasin.
+  struct Push {
     Mat4 model;
     float color[4];
+    float pbr[4]; // x: roughness, y: metallic, z/w: rezerve (Is 4)
     uint32_t skin[4];
   };
-  static_assert(sizeof(Push) == 96, "push sabiti 96 bayt");
+  static_assert(sizeof(Push) == 112, "push sabiti 112 bayt");
   struct FrameUbo {
     Mat4 viewproj;
     Mat4 view;
@@ -214,10 +240,16 @@ private:
     float shadow_params[4];  // x: 1/boyut, y: egilim, z: acik mi, w: normal kaydirma
     float cluster_params[4]; // x: dilim olcegi, y: dilim sapmasi, z: tile genisligi(px), w: tile yuksekligi(px)
     uint32_t cluster_grid[4]; // x, y, z, isik sayisi
+    // Is 6: analitik sis. density=0 -> kapali (varsayilan). Uygulama DOGRUSAL
+    // uzayda, tonemap/sRGB kodlamadan ONCE (mesh.frag main()).
+    float fog_params[4]; // x: yogunluk, y: yukseklik sonumu, z/w: rezerve
+    float fog_color[4];  // rgb: sis rengi (DOGRUSAL), a: rezerve
   };
   // The Forge SRT ilkesi (CPU-GPU tek kaynak tablosu): GLSL std140 blogu ile bu
   // struct'in ofsetleri DERLEME zamaninda eslesir; kayma = derleme hatasi.
-  // mesh.frag/mesh.vert "Frame" blogu: 3 x mat4 (192) + 4 x vec4 (64) + uvec4 (16) = 272.
+  // mesh.frag "Frame" blogu (sis dahil): 3 x mat4 (192) + 6 x vec4 (96) + uvec4 (16) = 304.
+  // mesh.vert/shadow*.vert HALA eski 272 baytlik on-eki bilir (sis onlara gerekmiyor) —
+  // push constant'taki ayni "on-ek yeter" kurali (renderer.hpp Push notu) burada da gecerli.
   static_assert(offsetof(FrameUbo, view) == 64, "std140: view");
   static_assert(offsetof(FrameUbo, light_viewproj) == 128, "std140: light_viewproj");
   static_assert(offsetof(FrameUbo, light_dir) == 192, "std140: light_dir");
@@ -225,7 +257,9 @@ private:
   static_assert(offsetof(FrameUbo, shadow_params) == 224, "std140: shadow_params");
   static_assert(offsetof(FrameUbo, cluster_params) == 240, "std140: cluster_params");
   static_assert(offsetof(FrameUbo, cluster_grid) == 256, "std140: cluster_grid");
-  static_assert(sizeof(FrameUbo) == 272, "std140: Frame blogu 272 bayt");
+  static_assert(offsetof(FrameUbo, fog_params) == 272, "std140: fog_params");
+  static_assert(offsetof(FrameUbo, fog_color) == 288, "std140: fog_color");
+  static_assert(sizeof(FrameUbo) == 304, "std140: Frame blogu 304 bayt (sis dahil)");
   struct GpuPointLight { // GLSL PointLight { vec4 pos_radius; vec4 color_intensity; } = 32 bayt
     float pos_radius[4];
     float color_intensity[4];
@@ -260,6 +294,9 @@ private:
   float diffuse_scale_ = 0.9f;
   Vec3 shadow_center_{0, 0, 0};
   float shadow_radius_ = 16.0f, shadow_depth_ = 60.0f;
+  float fog_density_ = 0.0f, fog_height_falloff_ = 0.0f; // Is 6: 0 = kapali
+  Vec3 fog_color_{0.7f, 0.75f, 0.8f}; // zaten dogrusal (set_fog ceviriyor)
+  float exposure_ = 1.0f; // Is 7: carpan, fog_params.z uzerinden shader'a gider
   Mat4 light_vp_{};
   ShadowInfo shadow_info_{};
   VkShaderModule vs_ = VK_NULL_HANDLE, fs_ = VK_NULL_HANDLE, shadow_vs_ = VK_NULL_HANDLE;
@@ -296,6 +333,10 @@ private:
   float ui_w_ = 1, ui_h_ = 1, ui_rot_ = 0;
   MaterialHandle ui_atlas_{};
   UiStats ui_stats_{};
+  // Is 2: frustum culling. Kamera ve isik icin AYRI frustum (golge pass'i farkli
+  // gorunurluk kullanir) — set_camera()/begin_frame()'de proj*view'den cikarilir.
+  Frustum frustum_{};
+  Frustum shadow_frustum_{};
   ClusterGrid grid_{};
   uint32_t *cluster_masks_ = nullptr; // Arena, grid_.count()
   PointLight point_lights_[kMaxPointLights];

@@ -126,6 +126,76 @@ ENGINE_TEST(renderer_shadow_map_actually_darkens) {
   dev.shutdown();
 }
 
+// Is 2: frustum culling gercekten cizim sayisini dusuruyor mu? Kamera onunde
+// bir kup + gorus disina konmus 3 kup (arkada/cok sagda/cok solda). Kapi:
+// elenen sayisi kamera yonune gore RAPORLANIR ve kamerayi cevirince degisir
+// (pozitif kontrol — hep ayni sonucu veren bir kapi hicbir sey sinamaz).
+ENGINE_TEST(renderer_frustum_culling_reduces_draw_count) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "renderer_cull_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: cizim sayisi kapisi gercek cihazda olculur"); return; }
+
+  const uint32_t W = 64, H = 64; // yalniz istatistik icin, piksel onemli degil
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0; // bu kapi yalniz ana (kamera) gecisi sinar
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::cube(v, idx);
+  renderer::MeshHandle cube = ren.create_mesh(v, 24, idx, n);
+  CHECK(cube.valid());
+  ren.set_light({0.4f, 1.0f, 0.3f}, {0.1f, 0.1f, 0.1f}, 0.8f);
+  Rec rr{&ren};
+
+  auto submit = [&](Mat4 view, Mat4 proj) {
+    ren.set_camera(view, proj);
+    ren.begin_frame(0);
+    ren.draw(cube, Mat4::translate({0, 0, -5}), {1, 1, 1});    // onde: gorunur olmali
+    ren.draw(cube, Mat4::translate({0, 0, 500}), {1, 1, 1});   // uzak duzlemin (100) cok otesinde
+    ren.draw(cube, Mat4::translate({500, 0, -5}), {1, 1, 1});  // derinlik 5'te frustum'un cok disinda (sag)
+    ren.draw(cube, Mat4::translate({-500, 0, -5}), {1, 1, 1}); // ayni, sol
+  };
+  Mat4 proj = Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 100.0f);
+
+  submit(Mat4::look_at({0, 0, 0}, {0, 0, -1}, {0, 1, 0}), proj); // -z'ye bakiyor
+  bool ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
+  CHECK(ok);
+  renderer::RendererStats forward = ren.stats();
+  std::printf("    [bilgi] kamera one bakarken: gonderilen %u, elenen %u\n", forward.draws, forward.culled);
+  CHECK(forward.draws == 4);
+  CHECK(forward.culled == 3); // yalniz onde olan kup kalmali
+
+  // Pozitif kontrol: kamerayi 180 derece cevir. Once gorunen kup artik elenmeli.
+  submit(Mat4::look_at({0, 0, 0}, {0, 0, 1}, {0, 1, 0}), proj); // +z'ye bakiyor
+  ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
+  CHECK(ok);
+  renderer::RendererStats turned = ren.stats();
+  std::printf("    [bilgi] kamera arkaya donunce: gonderilen %u, elenen %u\n", turned.draws, turned.culled);
+  CHECK(turned.draws == 4);
+  CHECK(turned.culled == 4); // hicbiri artik gorus alaninda degil
+  CHECK(turned.culled != forward.culled); // asil pozitif kontrol: sonuc gercekten degisti
+
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
 // Kume atamasi (CPU): ortadaki isik orta tile'i isaretler, koseleri isaretlemez;
 // kamera arkasindaki isik hicbir seyi isaretlemez; dev isik her seyi isaretler.
 #include "renderer/cluster.hpp"
@@ -222,6 +292,257 @@ ENGINE_TEST(renderer_point_light_lights_only_near_pixels) {
   CHECK(control);
   bool culled = offscreen_light == 0;
   CHECK(culled);
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
+// Is 3: fiziksel isik dususu gercekten TERS KARE mi? Isigi merkezin tam
+// ustune koyup yalniz yuksekligini degistiriyoruz (N.L = 1 iki durumda da,
+// yalniz mesafe degisiyor) — piksel dogrusala cozulup orani (uzak/yakin)^2
+// ile karsilastiriliyor. Pozitif kontrol: yaricap disindaki isik TAM sifir
+// vermeli (pencere fonksiyonu keskin kesiyor).
+ENGINE_TEST(renderer_light_falloff_is_inverse_square) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "falloff_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: piksel kapisi gercek cihazda olculur"); return; }
+  const uint32_t W = 64, H = 64;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  ren.set_light({0, 1, 0}, {0, 0, 0}, 0.0f); // tamamen karanlik: yalniz nokta isik katkida bulunsun
+  ren.set_camera(Mat4::look_at({0, 6.0f, 0.01f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto center_linear = [&](float light_height, float radius) -> float {
+    ren.clear_point_lights();
+    ren.add_point_light(renderer::PointLight{{0, light_height, 0}, radius, {1, 1, 1}, 2.0f});
+    ren.begin_frame(0);
+    ren.draw(plane, Mat4::scale({20, 1, 20}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return -1.0f;
+    const uint8_t *p = ores.pixels + (H / 2 * W + W / 2) * 4; // ekran ortasi = dunya (0,0,0) izdusumu
+    return renderer::Renderer::srgb_to_linear((float)p[0] / 255.0f);
+  };
+  // Genis yaricap (50): iki yukseklikte de pencere fonksiyonu ~1, yalniz 1/(d^2+eps) sinanir.
+  float near_v = center_linear(2.0f, 50.0f);
+  float far_v = center_linear(4.0f, 50.0f);
+  bool got_pixels = near_v >= 0.0f && far_v > 1e-6f;
+  CHECK(got_pixels);
+  if (got_pixels) {
+    float ratio = near_v / far_v; // beklenen (4/2)^2 = 4.0
+    std::printf("    [bilgi] yukseklik 2 -> dogrusal %.4f, yukseklik 4 -> dogrusal %.4f, oran %.3f (beklenen ~4.0)\n", near_v,
+                far_v, ratio);
+    bool inverse_square = ratio > 3.2f && ratio < 4.8f; // 8-bit kuantalama icin +-%20 tolerans
+    CHECK(inverse_square);
+  }
+  // Pozitif kontrol: yaricap 1, isik yuksekligi 2 (dikey mesafe > yaricap) —
+  // isigin kure-hacmi zemine hic degmiyor, cizim TAM siyah olmali.
+  float outside = center_linear(2.0f, 1.0f);
+  std::printf("    [bilgi] yaricap disinda dogrusal deger: %.4f (beklenen 0.0)\n", outside);
+  CHECK(outside == 0.0f);
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
+// Is 4: metal ve dielektrik AYNI isik altinda gercekten farkli mi gorunuyor?
+// Ozdes albedo/roughness, yalniz metallic 0 vs 1: metal Lambert payini
+// TAMAMEN kaybeder (diffuse*(1-metallic)=0), specular tepe noktasindan uzakta
+// bakildiginda cok daha koyu kalmali. Specular tepesini tam yakalamaya
+// calismiyoruz (kirilgan geometri hizalamasi); byuk, saglam fark yeterli kapi.
+ENGINE_TEST(renderer_pbr_metal_vs_dielectric_differs) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "pbr_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: piksel kapisi gercek cihazda olculur"); return; }
+  const uint32_t W = 64, H = 64;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  CHECK(plane.valid());
+  // Isik dikeye yakin (0.3,1,0.2) — kamera 45 derece egik: specular tepesi
+  // BURADA degil, yani yakaladigimiz fark diffuse kaybindan geliyor.
+  ren.set_light(normalize(Vec3{0.3f, 1.0f, 0.2f}), {0.05f, 0.05f, 0.05f}, 1.0f);
+  ren.set_camera(Mat4::look_at({0, 6.0f, 6.0f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto render_avg = [&](float metallic) -> double {
+    renderer::MaterialHandle mat = ren.create_material(ren.default_texture(), {0.8f, 0.6f, 0.5f}, 0.5f, metallic);
+    ren.begin_frame(0);
+    ren.draw(plane, mat, Mat4::scale({12, 1, 12}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return -1.0;
+    double sum = 0.0;
+    for (uint32_t i = 0; i < W * H; i++) sum += ores.pixels[i * 4] + ores.pixels[i * 4 + 1] + ores.pixels[i * 4 + 2];
+    return sum / (double)(W * H * 3);
+  };
+  double dielectric_avg = render_avg(0.0f);
+  double metal_avg = render_avg(1.0f);
+  std::printf("    [bilgi] dielektrik ortalama %.2f, metal ortalama %.2f (0-255)\n", dielectric_avg, metal_avg);
+  bool got = dielectric_avg >= 0.0 && metal_avg >= 0.0;
+  CHECK(got);
+  if (got) {
+    bool differs = std::fabs(dielectric_avg - metal_avg) > 8.0; // 8-bit kanalda gozle gorulur fark
+    CHECK(differs);
+    bool metal_is_darker = metal_avg < dielectric_avg; // Lambert payi kaybi, tepe disinda
+    CHECK(metal_is_darker);
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
+// Is 6: sis DOGRUSAL uzayda mi uygulaniyor, egri beklendigi gibi mi? Duz bir
+// zeminde (y=0, yukseklik sonumu bu yuzden devre disi birakildi — exp(0)=1)
+// bilinen bir sissiz renk olcup, sis acildiktan sonraki degeri
+// 1-exp(-yogunluk*mesafe) formuluyle hesaplanan beklenen degerle karsilastirir.
+ENGINE_TEST(renderer_fog_is_applied_in_linear_space) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "fog_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: piksel kapisi gercek cihazda olculur"); return; }
+  const uint32_t W = 64, H = 64;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  ren.set_light({0, 1, 0}, {0.5f, 0.5f, 0.5f}, 0.0f); // yalniz ambiyans (yonlu isigin katkisi kapali)
+  ren.set_camera(Mat4::look_at({0, 10.0f, 0.01f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto center_linear = [&]() -> float {
+    ren.begin_frame(0);
+    ren.draw(plane, Mat4::scale({30, 1, 30}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return -1.0f;
+    const uint8_t *p = ores.pixels + (H / 2 * W + W / 2) * 4;
+    return renderer::Renderer::srgb_to_linear((float)p[0] / 255.0f);
+  };
+  float without_fog = center_linear();
+  ren.set_fog(0.1f, 0.0f, {0.5f, 0.5f, 0.5f});
+  float with_fog = center_linear();
+  const float dist = 10.0f; // kamera-zemin mesafesi (kamera kurulumundan)
+  const float expected_amt = 1.0f - std::exp(-0.1f * dist);
+  const float fog_lin = renderer::Renderer::srgb_to_linear(0.5f);
+  const float expected = without_fog * (1.0f - expected_amt) + fog_lin * expected_amt;
+  std::printf("    [bilgi] sissiz %.4f, sisli %.4f, beklenen %.4f (fog_amt=%.3f)\n", without_fog, with_fog, expected,
+              expected_amt);
+  bool got = without_fog >= 0.0f && with_fog >= 0.0f;
+  CHECK(got);
+  if (got) {
+    bool matches_formula = std::fabs(with_fog - expected) < 0.05f; // 8-bit kuantalama toleransi
+    CHECK(matches_formula);
+    bool control_fires = with_fog != without_fog; // pozitif kontrol
+    CHECK(control_fires);
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
+// Is 7: PBR Neutral tonemap gercekten SIKISTIRIYOR mu, yoksa kirpiyor mu?
+// Ayni beyaz isigi giderek parlaklastirip (2 -> 4 -> 8), CIKTININ da tekduze
+// ARTMAYA devam ettigini (naif clamp'te ucuncude ayni "255"e cakisirdi) ve
+// en parlakta bile tam doygunluga (255) VARMADIGINI dogruluyor.
+ENGINE_TEST(renderer_tonemap_compresses_highlights) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "tonemap_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: piksel kapisi gercek cihazda olculur"); return; }
+  const uint32_t W = 64, H = 64;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  ren.set_light({0, 1, 0}, {0, 0, 0}, 0.0f); // karanlik: yalniz nokta isik
+  ren.set_camera(Mat4::look_at({0, 6.0f, 0.01f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto center_pixel_r = [&](float intensity) -> int {
+    ren.clear_point_lights();
+    ren.add_point_light(renderer::PointLight{{0, 2.0f, 0}, 50.0f, {1, 1, 1}, intensity});
+    ren.begin_frame(0);
+    ren.draw(plane, Mat4::scale({20, 1, 20}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return -1;
+    return (int)ores.pixels[(H / 2 * W + W / 2) * 4];
+  };
+  int p_lo = center_pixel_r(2.0f);
+  int p_mid = center_pixel_r(4.0f);
+  int p_hi = center_pixel_r(8.0f);
+  std::printf("    [bilgi] parlaklik 2/4/8 -> piksel %d/%d/%d (255 = tam doygun)\n", p_lo, p_mid, p_hi);
+  bool got = p_lo >= 0 && p_mid >= 0 && p_hi >= 0;
+  CHECK(got);
+  if (got) {
+    bool monotonic = p_lo < p_mid && p_mid < p_hi; // naif clamp'te p_mid==p_hi==255 olurdu
+    CHECK(monotonic);
+    bool not_saturated = p_hi < 255; // en parlakta bile detay var, duz beyaz DEGIL
+    CHECK(not_saturated);
+  }
   ren.shutdown();
   offscreen_destroy(off);
   dev.shutdown();

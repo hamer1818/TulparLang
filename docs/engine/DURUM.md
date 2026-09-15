@@ -42,6 +42,10 @@ görmez; plan "zorunlu" dedi cihaz vermedi; bump ayırıcı + pencere ömrü; `d
 sahte yeşil (8s); `compositeAlpha OPAQUE` Huawei'de yok; katmanın seyrek-indeks taraması alt-ayırma offset'ini atlar.
 
 ## 6. Ne yok (sonraki aşama adayları; tarama belgesine karşı tam liste: `BOSLUK-TARAMASI.md`)
+> Düzeltilmiş, sıralı görev listesi (math/PBR/tonemap/MSAA/AO/... 16 iş) + somut sayısal kararlar: `TULPAR_TAM_DOKUMAN_KONTROL.md`.
+> Motorun genel devam planı (sahne kalıcılığı → oynanabilirlik → görsel tamamlama → içerik → platform, dil bağlaması hariç): `DEVAM_PLANI.md`.
+> AAA/devrimsel vizyon (yapısal avantajlar, doğrulanmış rakip/teknoloji araştırması, öncelikli bahisler): `VIZYON.md`.
+> Kullanıcının 500 maddelik tam listesinin (v18.0) her maddesi için durum (var/planlı/standart/araştırma/şüpheli/kapsam-dışı): `MADDE-LISTESI-DURUM.md`, makine-okunabilir/sorgulanabilir hali: `tools/feature_matrix.py --summary` (kayıt sayısı değişken, güncel değer `--check` çıktısında; 1-500 boşluksuz/çakışmasız garanti edilir).
 1. **Sahne veri modeli + dosya formatı** (entity/transform/mesh/malzeme/ışık/fizik) — editörün önkoşulu.
 2. **Editör** (iskelet var: paneller, gizmo, yörünge kamera, oynat/durdur): tıklamayla seçim, kaydet/yükle, geri al.
 3. **Tulpar bağlaması**: oyun mantığı Tulpar'da (dil bugün kutusuz struct/işaretçi vermiyor; C ABI köprüsü).

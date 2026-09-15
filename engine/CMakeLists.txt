@@ -34,6 +34,7 @@ add_library(engine_platform STATIC
     platform/thread.cpp
     platform/crash.cpp
     platform/window.cpp
+    platform/gesture.cpp
 )
 target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
 target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -168,6 +169,9 @@ add_library(engine_sim STATIC
     sim/physics.cpp
     sim/navmesh.cpp
     sim/animation.cpp
+    sim/ik.cpp
+    sim/lag_compensation.cpp
+    sim/camera_rig.cpp
 )
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
@@ -180,7 +184,9 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/vendored_impl.c)
+add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp
+    content/voxel.cpp content/morph.cpp content/terrain.cpp content/lod_select.cpp content/water_wave.cpp
+    content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
@@ -226,6 +232,17 @@ set(ENGINE_TEST_SOURCES
     tests/test_renderer.cpp
     tests/test_content.cpp
     tests/test_input.cpp
+    tests/test_ik.cpp
+    tests/test_lag_compensation.cpp
+    tests/test_camera_rig.cpp
+    tests/test_gesture.cpp
+    tests/test_voxel.cpp
+    tests/test_morph.cpp
+    tests/test_terrain.cpp
+    tests/test_lod_select.cpp
+    tests/test_water_wave.cpp
+    tests/test_random.cpp
+    tests/test_noise.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
