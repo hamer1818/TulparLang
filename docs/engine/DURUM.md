@@ -39,11 +39,13 @@ köprü (1) derlenmediği için **135**); Tulpar tarafında `tests/engine_bridge
 denetimi **159 dosya, 0 ihlal**; köprü `SPEC` = `engine_api.h` = **156 builtin**.
 
 **Kayıtlı tam koşular (2026-09-15 akşamı, GI / Faz 4 UI / GPU cull dilimleri dahil):**
-- masaüstü `engine_tests` **141/141**, **0 atlandı** — `141 RUN / 141 PASS` tek tek sayıldı. Vulkan
+- masaüstü `engine_tests` **149/149**, **0 atlandı** (2026-09-16; PBR, stokastik ışıklandırma, PSO
+  önbelleği ve glTF-PBR kapıları eklendikten sonra) — `141 RUN / 141 PASS` tek tek sayıldı. Vulkan
   yükleyicisi mevcut; `rhi_*`, `renderer_*`, `render_graph_*`, `temporal_*`, `editor_*`, `bridge_*`
   ailelerinin hepsi gerçekten koştu, yani 8al'deki "sonraki kapılar sessizce ATLANDI'ya düşer" sınıfı
   bu koşumda **görülmedi**.
-- Tulpar suite'leri **81/81**, toplam **1295 iddia**; `Tests:` özet satırı basmayan (dolayısıyla asla
+- `./build.sh suites` **82/82** (iki paket denetimi + Faz 8 shader kapısı dahil), Tulpar suite'leri
+  toplam **1295 iddia**; `Tests:` özet satırı basmayan (dolayısıyla asla
   kırmızı olamayacak) suite **yok**. `tests/engine_bridge.test.tpr` **17/17**.
 - Örnekler **102/102** yeşil (`build.sh`'in `COMPILE_ONLY_TESTS` filtresiyle).
 - Telefon **78/78** (2026-09-15 sabahı, katmanla, 3 görünür ATLANDI) — bu sayı hâlâ o günün kaydı;
@@ -94,6 +96,16 @@ karşılaştırıp klonlama kaldırılırsa derlemeyi kırmızıya çeviriyor (p
 **İlk ABI (arm64) her zaman doğruydu** — telefonda yapılmış doğrulamalar geçerli; şüpheli olan, bu
 tarihten önce emülatör için üretilmiş her şeydir. Ayrıntı: [FAZ3.md](FAZ3.md), tuzak kaydı
 [Tuzaklar](../mindmap/Tuzaklar.md) 8ap.
+
+## 5.3 Faz 6 kalanı ve Faz 8 fizibilitesi (2026-09-16)
+PBR (Cook-Torrance/GGX, malzeme başına seçilen gölgeleme modeli, glTF'ten akan metallic/roughness),
+düşük segment için **stokastik tile ışıklandırma** (varsayılan kapalı, kapalıyken bit-aynı), ve
+**PSO ön-üretimi** (`VkPipelineCache` + diske kalıcılık + kurulumda ön ısınma) geldi. Faz 8 için
+fizibilite dilimi bitti ve backend kararı **Slang'den GLSL+glslc'ye** döndü (PLAN ⚠️ REV-4).
+
+Android'de PSO önbelleğinin iki ayrı yoldan sessizce kapandığı bulundu ve kapatıldı; emülatörde
+süreçler-arası kazanç ölçüldü: boru hattı kurulumu soğuk **6.5 ms** → sıcak **1.1 ms**.
+Ayrıntı: [FAZ3.md](FAZ3.md) "Faz 6 kalanı + Faz 8 fizibilitesi", tuzaklar 8aq–8au.
 
 ## 6. Fazların durumu (PLAN §7'ye karşı)
 

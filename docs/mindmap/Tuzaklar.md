@@ -2208,3 +2208,76 @@ kopyasından üretiliyor (`emit_object_with_triple(..., clone_module)`).
 **Kural:** bir `LLVMModule`'den birden fazla hedef için nesne üretiyorsan **her hedef için klonla**. Aynı
 kural başka bir yerde daha geçerli: `llvm_backend_optimize` zaten bu yüzden `LLVMCloneModule` üstünde
 deneme yapıyor. Genel biçimi: *"aynı IR'i iki kez tüketmek" bir varsayımdır, ve LLVM'de yanlıştır.*
+
+### 8aq. Var olan bir sembolün İMZA değişikliği, "sembol var mı" denetiminden YEŞİL geçer
+`aot_input()` sıfır argümanlıydı; `input("You: ")` istemi sessizce düşüyordu. Düzeltme sembolü
+`aot_input(VMValue)` yapmak — **yeni sembol değil, var olanın imzası**. `wasm/dist` ve `android/dist`
+altındaki ön derlenmiş arşivler eski imzayı taşır ve `tests/dist_archive_audit.py` sembolün **varlığını**
+sınar: sembol hâlâ "var" göründüğü için denetim temiz der. Ölçüldü: bayat arşivle web derlemesi
+`wasm-ld: warning: function signature mismatch: aot_input — defined as (i32,i32)->void in <obj>, as
+(i32)->void in libtulpar_runtime_web.a` diyor ama **link yine de tutuyor** ve `.html` üretiliyor; hata
+ancak tarayıcıda, o çağrıya gelindiğinde ortaya çıkıyor.
+
+Kural: yeni builtin **eklemek** ile var olanın imzasını **değiştirmek** ayrı risk sınıflarıdır. İkincisi
+arşiv yenilemesiyle **aynı turda** yapılır; ayrı turda yapılırsa ortada hiçbir kırmızı olmadan bozuk bir
+ağaç kalır. Denetim tarafındaki karşılığı `check_archive_freshness()`: sembol denetimi "ne **eksik**"
+der, tazelik denetimi "ne **bayat**" der — bu sınıfı yalnız ikincisi görür. Kaynak listesi elle yazılmaz,
+sürücünün kendi `warn_if_prebuilt_archive_stale` listesinden okunur ki sürücüyle denetim ayrışamasın;
+desen tutmazsa denetim "temiz" demek yerine **kapsamını kaybettiğini** söyleyip kırmızı olur.
+
+### 8ar. `rm -rf <ortak dizin>` komşunun türetilmiş çıktısını da siler — ve bunu kimse görmez
+`android/build_tame_android.sh` her koşumda `rm -rf "dist/$abi"` yapıyordu. O dizin yalnız kendisinin
+değil: `engine/tools/build_bridge_android.sh`'ın ürettiği **11 motor arşivi** de orada yaşıyor. Betiği
+koşturmak motorun bütün arşivlerini siliyor, `import "engine"` eden her Android derlemesi link'te ölüyor
+ve **masaüstünde hiçbir şey kızarmıyor** — çünkü masaüstü o arşivlere hiç bakmıyor. Betik artık yalnız
+kendi çıktılarını siliyor (`rm -rf "$OBJ"` + kendi iki `.a`'sı).
+
+Genel biçim: bir dizin **paylaşılıyorsa** temizlik `rm -rf <dizin>` değil, **ürettiğin dosyaların adıyla**
+yapılır. Belirtisi sinsi çünkü hasar, betiği koşturan kişinin ilgilenmediği bir hedefte ortaya çıkıyor:
+tame'i yeniden kuran kişi motorun bozulduğunu göremez. `tests/dist_archive_audit.py` bunu "arşiv YOK"
+diye yakalar — ama ancak koşturulursa; `build.sh suites` içinde olmasının değeri tam olarak budur.
+
+### 8as. `vkGetDeviceProcAddr`'in verdiği yordam CİHAZA ÖZGÜDÜR — tek global "gerçek işaretçi" çökertir
+PSO önbelleğini bütün pipeline kurulumlarına bağlamak için `VkApi` tablosuna bir ara yordam (thunk)
+takıldı. İlk yazımı **tek global** bir "gerçek `vkCreateGraphicsPipelines`" işaretçisi tutuyordu. Oysa
+`vkGetDeviceProcAddr`'in döndürdüğü adres o **cihaza** aittir: kendi cihazını açıp kapatan bir test, globali
+kendi (artık ölü) cihazının yordamıyla değiştiriyor, ardından paylaşılan cihaz üstündeki ilk pipeline
+kurulumu **SIGSEGV** veriyordu (ölçüldü: `render_graph_gpu_cull_indirect_matches_cpu_path`).
+
+Çözüm: her kanca yuvası **kendi** gerçek işaretçisini tutar, thunk gelen `VkDevice`'a göre seçer; hiçbir
+yuvaya uymayan bir çağrı **çökmez** — hata döner ve sayılır (`pso_unrouted_calls()`, kapı 0 bekler). O
+sayaç olmasaydı yanlış yönlendirme sessiz kalırdı.
+
+Bu, 8an'in (aynı `VkApi` tablosuyla ikinci cihaz açmak giriş noktalarını ezer) aynı ailesi ve genel biçimi
+şu: **Vulkan'da cihaz düzeyindeki hiçbir fonksiyon işaretçisi süreç genelinde geçerli değildir.** Bir
+işaretçiyi global tutuyorsan, onu hangi cihazdan aldığını da tutmak zorundasın.
+
+### 8at. Aralanmamış A/B süreç ölçümü makine yükü kaymasını "kazanç" gibi gösterir
+PSO önbelleğinin uçtan uca kazancı önce SOĞUK→SICAK sırasıyla ölçüldü ve **21 ms kazanç** çıktı. Ölçüm
+A/B/**C** olarak aralanınca (soğuk / sıcak / bozuk-önbellek, üçü dönüşümlü) fark **sıfırlandı**: 203.3 /
+201.0 / 200.2 ms medyan. Yani 21 ms, önbelleğin değil makinenin o sırada boşalmasının eseriydi. Aynı
+ölçümün mutlak değeri yüke aşırı duyarlı: derleme CPU'yu doldururken pipeline kurulumu 98–120 ms, boş
+makinede ~11 ms.
+
+Kural: bir iyileştirmenin A/B'si **dönüşümlü** koşulur ve mümkünse **zamanlamadan bağımsız** bir kanıtla
+desteklenir. Burada asıl kanıt süre değil, **önbellek büyümesi** oldu: soğuk koşumda dosya 0 → 203 249 B
+büyüyor, sıcak koşumda **+0 B** — yani 15 varyantın hepsi diskten isabet ediyor. Bu sayı makine yükünden
+etkilenmez. Ölçemediğin şeyi iddia etme: süreçler arası uçtan uca kazanç bu masaüstünde **ölçülemedi** ve
+öyle kaydedildi.
+
+### 8au. Android'de `shutdown` çoğu zaman HİÇ koşmaz — kapanışta yazılan şey hiç yazılmaz
+Kalıcı PSO önbelleği `Device::shutdown()` içinde diske yazılıyordu; masaüstünde kusursuz çalışıyor.
+Emülatörde ölçüldü: uygulama iki kez açılıp kapandıktan sonra bile log hâlâ **"dosya yok (ilk çalıştırma)"**
+diyordu. Sebep: Android'de uygulamalar temiz kapanmaz — sistem (ya da `am force-stop`, ya da kullanıcının
+uygulamayı kapatması) **süreci öldürür**, `shutdown` hiç çağrılmaz. Yani önbellek, tam da en çok ihtiyaç
+duyduğu platformda **asla oluşmuyordu** ve bunu hiçbir şey kızartmıyordu: oyun her açılışta çalışıyor,
+sadece bütün boru hatlarını yeniden kuruyor.
+
+Düzeltme: kurulum biter bitmez yaz (o noktada ön ısınma bitmiş, bilinen bütün varyantlar kurulu), kapanıştaki
+yazma masaüstü için yedek kalsın. Ölçülen sonuç (emülatör, temiz kurulum → öldür → yeniden aç):
+soğuk **6.5 ms** / 168 495 B yazıldı, sıcak **1.1 ms** — 5.9x, ve bu kazanç süreçler arası, yani gerçek.
+(Aynı kazanç masaüstünde **ölçülemedi**; bkz. 8at. Ölçümün doğru platformda yapılması gerekiyordu.)
+
+Genel biçim: **mobilde "çıkışta yap" diye bir kanca yoktur.** Kalıcı olması gereken her şey (kayıt dosyası,
+önbellek, telemetri) üretildiği anda ya da bir yaşam döngüsü duraklamasında yazılır. Bir masaüstü kapanış
+yolunun çalıştığını görmek, mobilde çalıştığına dair hiçbir kanıt değildir.

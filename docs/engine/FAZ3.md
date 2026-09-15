@@ -1088,6 +1088,101 @@ ilgilendirir — tame/arcade oyunları dahil. İlk ABI (arm64, gerçek telefon) 
 o yüzden telefonda yapılan doğrulamalar geçerliliğini koruyor; şüpheli olan emülatör (x86_64) tarafıdır
 ve o taraf bu düzeltmeden sonra yeniden üretilmelidir.
 
+## Faz 6 kalanı + Faz 8 fizibilitesi — 2026-09-16
+
+Dört paralel iş: PBR, stokastik tile ışıklandırma, PSO ön-üretimi, Tulpar shader aşaması.
+
+### PBR (metallic-roughness) — Faz 6'nın açık kalemi
+`mesh.frag`'a Cook-Torrance: GGX (Filament'in yarım-duyarlılık yeniden düzenlemesi), Smith yükseklik-ilişkili
+görünürlük, Schlick Fresnel. Malzeme parametreleri set 1 binding 1'de **tek** 32 baytlık UBO'da, cihazın
+`minUniformBufferOffsetAlignment`'ına yuvarlanmış ofsetle — malzeme başına ayrı ayırma yok, bindless yok.
+
+**Enerji birimi kararı:** motorun mevcut sözleşmesi `çıktı = albedo·NoL·S`, yani 1/π ışık ölçeğinin içinde;
+spekülerin π'si D'nin 1/π'siyle sadeleşiyor, bu yüzden `d_ggx_pi()` doğrudan π·D döndürüyor ve **fazladan
+π çarpanı yok** (olsaydı enerji π² kayardı). Ortam terimi **GI sözleşmesine bağlı**: dağılımlı kısım
+doğrudan `u.ambient`, speküler aynı ışımayı analitik split-sum DFG ile ağırlıklandırıyor (6 ALU). DFG **LUT
+dokusu** reddedildi (TBDR'da fazladan sampler + tile dışı okuma); tek terimli "F0·ortam" da reddedildi,
+çünkü pürüzlülüğü hiç kullanmaz — mat metal ile ayna aynı parlardı.
+
+**Geriye uyumluluk ölçüldü:** gölgeleme modeli malzeme başına. `create_material(doku, renk)` Lambert kalıyor
+ve demo PPM'in md5'i **değişmedi**. PBR varsayılanına (m=0, r=1) geçildiğinde fark 18 616 piksel, **en büyük
+kanal farkı 9/255** — yani %4 dielektrik Fresnel + ortam DFG terimi kadar.
+
+Kapılar: enerji korunumu pürüzlülük taramasında **1.32x** (kontrol: normalize edilmemiş GGX **24.58x**);
+metal/dielektrik Fresnel ayrımı krom farkı **0.589** (kontrol: **0.185**'e çöküyor); PBR varsayılanı
+Lambert'e yakın, en büyük kanal **9** (kontrol: parlak PBR **63**). PBR yolu doğrulama katmanı altında
+**0 Arm uyarısı** veriyor.
+
+**İçerik bağlandı (2026-09-16):** PBR uzun süre renderer'da vardı ama `content/gltf.cpp` yalnız `base_color`
+okuyordu — yani yüklenen **her** model metallic=0/roughness=1 ile çiziliyordu ve PBR pratikte ölüydü.
+Artık `metallicFactor`/`roughnessFactor`/`emissiveFactor` okunuyor; dosyada `pbrMetallicRoughness` bloğu
+yoksa eski Lambert yolu korunuyor. Kapı `content_gltf_metallic_roughness_reaches_material` (GPU istemez)
+kontrolüyle birlikte geldi ve **hemen bir hata yakaladı**: `alloc_array_zeroed` yapıcı çalıştırmadığı için
+(Tuzaklar 8u) `roughness = 1.0f` varsayılanı uygulanmıyordu, alan 0 kalıyordu — yani PBR bloğu olmayan her
+malzeme sessizce **aynaya** dönerdi. Sıfırdan farklı her varsayılan elle atanıyor.
+`metallicRoughness` **dokusu** hâlâ okunmuyor (ikinci sampler bağlaması gerekir, TBDR bütçesinde ertelendi).
+
+### Stokastik tile ışıklandırma (PLAN EK A.1) — düşük segment
+Seçim CPU'da ve **tile başına** (piksel başına reservoir değil: compute §8/10 ile yasak, per-pixel gürültü
+denoiser'a bağımlı olurdu). Küme başına ışıklar öneme göre sıralanır, en önemli `keep` tanesi **kapa** olarak
+her kare tutulur, kalan kuyruktan öneme orantılı katmanlı örnekleme yapılır ve **oran tahmin edicisiyle**
+telafi edilir. Varsayılan **kapalı**; kapalıyken shader dalı specialization constant ile tamamen eleniyor ve
+Lambert döngüsü kelimesi kelimesine eski kod.
+
+Kapılar: parlaklık sapması **%1.95** ve değerlendirme yükü **%68 daha az** (kontrol: telafi kapatılınca
+**%64 karartma**); zamansal kararlılık kare-arası **2.34 bayt/kanal** (kontrol: 2 faz + kapasız **35.74**,
+15x); kapalıyken **0 fark** (kontrol: bütçe 3 → 84 271 bayt fark).
+
+**Tasarımı ölçüm belirledi:** önem metriği `intensity/(d²+1)` seçildi çünkü shader'ın gerçek sönümünü
+(`pencere²/(d²+1)`) kullanmak **%19.3 karartma** veriyordu — küme düzeyindeki mesafe kaba, pencere terimi
+onun ~8. kuvveti. Rank üzerinde düzgün örnekleme + ağırlık üst sınırı da reddedildi (**%30 sistematik
+karartma**: kırpma yalnız büyük ağırlıkları keser, küçükleri yükseltmez).
+
+### PSO ön-üretimi — Faz 6'nın diğer açık kalemi
+Faz 6 kapısı "runtime'da shader **derlemesi** yok" diyordu ve SPIR-V zaten derleme zamanında üretiliyordu;
+eksik olan **pipeline nesnesinin** kendisiydi. Ölçüldü: renderer kurulumunda **15 grafik boru hattı**
+kuruluyor ve hepsi `VK_NULL_HANDLE` önbellekle kuruluyordu — yani hiç önbellek yoktu.
+
+`engine/rhi/pipeline_cache.hpp`: `VkPipelineCache` + diske kalıcılık, üç katmanlı doğrulama (sarmalayıcı
+özeti; `vendorID`/`deviceID`/`driverVersion`/`pipelineCacheUUID`; Vulkan'ın kendi başlığı). `VkApi` üstüne
+takılan bir ara yordamla **tek çağrı yeri değişmeden** bütün pipeline'lar önbelleğe giriyor.
+
+Kapı, süreye güvenmiyor: süreç içinde dosyanın katkısı sürücünün kendi ısınmasından ayırt edilemiyor ve kapı
+bunu **kendi çıktısında söylüyor**. Geçerli kanıt **önbellek büyümesi**: soğuk koşumda 0 → 203 253 B, sıcak
+koşumda **+0 B** (15 varyantın hepsi isabet). Reddetme kontrolü 7 vaka + "bozulmamış dosya kabul edilir"
+pozitif kontrolü. İlk-kare sayacı: ön ısınma açıkken **0**, kontrol kolunda (`ui_prewarm_sdf=false`) **1**
+ve kare içinde **0.29 ms** takılma.
+
+**Android'de iki ayrı boşluk çıktı ve kapatıldı.** (1) `XDG_CACHE_HOME`/`HOME`/`TMPDIR` üçü de tanımsız
+olduğu için önbellek en çok işe yaradığı platformda sessizce kapanıyordu — son çare olarak çalışma dizini
+(barındırıcının chdir ettiği, uygulamaya özel yazılabilir dizin) eklendi. (2) Yazma yalnız `shutdown`'daydı
+ve Android'de uygulamalar temiz kapanmaz, yani dosya **hiç oluşmuyordu** (Tuzaklar 8au); artık kurulum biter
+bitmez yazılıyor. **Emülatörde uçtan uca ölçüldü** — temiz kurulum → öldür → yeniden aç: soğuk **6.5 ms**
+(168 495 B yazıldı), sıcak **1.1 ms**. Bu, masaüstünde ölçülemeyen süreçler-arası kazancın ta kendisi.
+
+Sahne bazlı varyant listesi **yapılmadı**: bu renderer'da varyantlar yapılandırmadan türüyor (skinned /
+gpu_cull / post / motion / ui-sdf), içerikten değil; içerikten türetilebilecek tek eksen "sahnede iskeletli
+mesh var mı" (1 bit) ve renderer düz + iskeletli kümeyi zaten koşulsuz kuruyor — kazanç en fazla 3 pipeline.
+
+### Faz 8 — fizibilite kapandı, backend kararı değişti
+Ayrıntı: [FAZ8.md](FAZ8.md), plan notu PLAN.md ⚠️ REV-4. Özet: **Slang değil, GLSL + `glslc`**.
+`engine/tools/tpr_shader.py` Tulpar sözdiziminin GPU alt kümesini GLSL'e çeviriyor; 21 shader'ın **19'u
+taşındı** ve çevrilenlerin SPIR-V'si depodaki `*_spv.h` ile **bayt bayt aynı** — o günün en ağır shader'ı
+olan `mesh.frag` dahil (7972 bayt: CSM atlası, kümelenmiş ışıklar, `findLSB` döngüsü, `sampler2DShadow`).
+Aynı gün `mesh.frag`'a PBR girince kapı onu **görünür şekilde atlamaya** başladı: her `.tprs` çevrildiği
+GLSL'in özetini taşıyor, özet tutmazsa "referans değişmiş" der. Yani bugün **18 bayt-aynı + 1 görünür
+atlama**. Bu doğru davranış — ne yanlış suçlama ne ölçmeden geçme; yeni PBR sürümünü taşımak 8.1'in `const`
+ve `out` parametre maddelerini gerektiriyor.
+Kapı `tests/faz8_shader_audit.py`, `build.sh suites` içinde; en kritik kontrolü aynı boyutta ama farklı
+içerikli bir SPIR-V üretip farkı görmesi — o olmadan "bayt aynı" doğrulanmamış bir iddia olurdu.
+
+**Gramer boşluğu küçük** (4 madde), **tip sistemi boşluğu büyük** ve §11'in sistem alt kümesiyle aynı iş.
+Yani Faz 8'i kritik yoldan çıkaran karar hâlâ doğru.
+
+### Tam koşu (2026-09-16)
+`engine_tests` **149/149, 0 atlandı**; `./build.sh suites` **82/82**; `./build.sh test` yeşil.
+Emülatörde "Gölge Salonları" PBR ve kalıcı PSO önbelleğiyle çalışıyor.
+
 ## Faz 3 kapanış durumu — ne kapandı, ne açık (2026-09-15)
 
 **Kapı sayımı (kaynaktan):** `engine/tests/*.cpp` içinde **141 `ENGINE_TEST` bloğu** tanımlı (masaüstü);

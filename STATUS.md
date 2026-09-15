@@ -38,8 +38,18 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > **GI sondaları**), **Faz 9** (küme DAG builder, GPU cull + dolaylı çizim).
 > Kapılar (kaynaktan): `engine/tests/*.cpp` **141 `ENGINE_TEST`**, Tulpar tarafında
 > `tests/engine_bridge.test.tpr` **17** test, katman denetimi **159 dosya / 0 ihlal**.
-> Tam koşu (2026-09-15 akşamı): `engine_tests` **141/141, 0 atlandı**, Tulpar suite'leri
-> **81/81** (1295 iddia), örnekler **102/102**.
+> Tam koşu (2026-09-16): `engine_tests` **149/149, 0 atlandı**, `./build.sh suites` **82/82**,
+> `./build.sh test` yeşil.
+>
+> **Faz 6 kalanı kapandı:** PBR (Cook-Torrance/GGX; glTF metallic/roughness artık malzemeye akıyor —
+> daha önce PBR renderer'da vardı ama içerik yolu okumadığı için **ölüydü**), düşük segment için
+> stokastik tile ışıklandırma (varsayılan kapalı, kapalıyken bit-aynı), ve **PSO ön-üretimi**
+> (`VkPipelineCache` + diske kalıcılık). Android'de önbellek iki ayrı yoldan sessizce kapanıyordu;
+> düzeltildikten sonra emülatörde süreçler-arası kazanç ölçüldü: **6.5 ms → 1.1 ms**.
+>
+> **Faz 8 fizibilitesi bitti:** Tulpar sözdiziminin GPU alt kümesi → GLSL → SPIR-V; 21 shader'ın 19'u
+> taşındı ve çevrilenler depodaki başlıklarla **bayt bayt aynı**. Backend kararı Slang'den
+> **GLSL + glslc**'ye döndü (gerekçe: `slangc` yok, ve MSL/WGSL çıkışının bugün alıcısı yok).
 >
 > **Açık kalanlar:** Faz 3 kapısı (üç cihazda bant genişliği), Faz 5 cihaz kapısı, PBR, PSO
 > üretimi — hepsi **üç fiziksel cihaz** bekliyor (kullanıcı kararı: şimdilik pas);
