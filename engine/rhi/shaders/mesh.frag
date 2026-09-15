@@ -16,6 +16,8 @@ layout(set = 0, binding = 0) uniform Frame {
   vec4 shadow_params;  // x: 1/boyut, y: sabit egilim, z: golge acik mi, w: normal kaydirma (dunya)
   vec4 cluster_params; // x: dilim olcegi, y: dilim sapmasi, z: tile genisligi px, w: tile yuksekligi px
   uvec4 cluster_grid;  // x, y, z, isik sayisi
+  vec4 fog_params; // x: yogunluk, y: yukseklik sonumu (Is 6). Yalniz bu dosya okur.
+  vec4 fog_color;  // rgb: sis rengi, DOGRUSAL
 } u;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow;
 layout(set = 1, binding = 0) uniform sampler2D u_albedo; // malzeme (klasik set, bindless yok)
@@ -148,6 +150,17 @@ void main() {
   vec3 ambient_specular = f0 * u.ambient.rgb;
 
   vec3 c = ambient_diffuse + ambient_specular + sun + point_lights(n, vdir, NoV, albedo, alpha, metallic, f0);
+
+  // Is 6: analitik sis. DOGRUSAL uzayda, sRGB kodlamadan ONCE (aksi halde
+  // kirli/gri gorunur). density<=0 -> fog_amt hep 0, katkisiz.
+  if (u.fog_params.x > 0.0) {
+    float dist = length(v_world - camera_world_pos());
+    float fog_amt = 1.0 - exp(-u.fog_params.x * dist);
+    fog_amt *= exp(-u.fog_params.y * v_world.y);
+    fog_amt = clamp(fog_amt, 0.0, 1.0);
+    c = mix(c, u.fog_color.rgb, fog_amt);
+  }
+
   if (u.light_dir.w > 0.5) c = linear_to_srgb(c);
   o_color = vec4(c, 1.0);
 }

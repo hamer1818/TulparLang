@@ -129,6 +129,13 @@ public:
   uint32_t point_light_count() const { return point_light_count_; }
   // Golge kutusu: isik yonu (isiga DOGRU), sahne merkezi, yaricap, derinlik.
   void set_shadow_volume(Vec3 center, float radius, float depth);
+  // Is 6: analitik sis. density<=0 -> kapali. Renk sRGB (yazar) verilir, dogrusala
+  // cevrilip saklanir (mesh.frag'ta dogrudan aydinlatmayla ayni uzayda karisir).
+  void set_fog(float density, float height_falloff, Vec3 color) {
+    fog_density_ = density;
+    fog_height_falloff_ = height_falloff;
+    fog_color_ = srgb_to_linear(color);
+  }
   ShadowInfo shadow() const { return shadow_info_; }
   // A/B ve dusuk segment icin: hedef durur, gecis ve ornekleme kapanir.
   void set_shadows_enabled(bool on) { shadow_info_.enabled = on && cfg_.shadow_size > 0; }
@@ -230,10 +237,16 @@ private:
     float shadow_params[4];  // x: 1/boyut, y: egilim, z: acik mi, w: normal kaydirma
     float cluster_params[4]; // x: dilim olcegi, y: dilim sapmasi, z: tile genisligi(px), w: tile yuksekligi(px)
     uint32_t cluster_grid[4]; // x, y, z, isik sayisi
+    // Is 6: analitik sis. density=0 -> kapali (varsayilan). Uygulama DOGRUSAL
+    // uzayda, tonemap/sRGB kodlamadan ONCE (mesh.frag main()).
+    float fog_params[4]; // x: yogunluk, y: yukseklik sonumu, z/w: rezerve
+    float fog_color[4];  // rgb: sis rengi (DOGRUSAL), a: rezerve
   };
   // The Forge SRT ilkesi (CPU-GPU tek kaynak tablosu): GLSL std140 blogu ile bu
   // struct'in ofsetleri DERLEME zamaninda eslesir; kayma = derleme hatasi.
-  // mesh.frag/mesh.vert "Frame" blogu: 3 x mat4 (192) + 4 x vec4 (64) + uvec4 (16) = 272.
+  // mesh.frag "Frame" blogu (sis dahil): 3 x mat4 (192) + 6 x vec4 (96) + uvec4 (16) = 304.
+  // mesh.vert/shadow*.vert HALA eski 272 baytlik on-eki bilir (sis onlara gerekmiyor) —
+  // push constant'taki ayni "on-ek yeter" kurali (renderer.hpp Push notu) burada da gecerli.
   static_assert(offsetof(FrameUbo, view) == 64, "std140: view");
   static_assert(offsetof(FrameUbo, light_viewproj) == 128, "std140: light_viewproj");
   static_assert(offsetof(FrameUbo, light_dir) == 192, "std140: light_dir");
@@ -241,7 +254,9 @@ private:
   static_assert(offsetof(FrameUbo, shadow_params) == 224, "std140: shadow_params");
   static_assert(offsetof(FrameUbo, cluster_params) == 240, "std140: cluster_params");
   static_assert(offsetof(FrameUbo, cluster_grid) == 256, "std140: cluster_grid");
-  static_assert(sizeof(FrameUbo) == 272, "std140: Frame blogu 272 bayt");
+  static_assert(offsetof(FrameUbo, fog_params) == 272, "std140: fog_params");
+  static_assert(offsetof(FrameUbo, fog_color) == 288, "std140: fog_color");
+  static_assert(sizeof(FrameUbo) == 304, "std140: Frame blogu 304 bayt (sis dahil)");
   struct GpuPointLight { // GLSL PointLight { vec4 pos_radius; vec4 color_intensity; } = 32 bayt
     float pos_radius[4];
     float color_intensity[4];
@@ -276,6 +291,8 @@ private:
   float diffuse_scale_ = 0.9f;
   Vec3 shadow_center_{0, 0, 0};
   float shadow_radius_ = 16.0f, shadow_depth_ = 60.0f;
+  float fog_density_ = 0.0f, fog_height_falloff_ = 0.0f; // Is 6: 0 = kapali
+  Vec3 fog_color_{0.7f, 0.75f, 0.8f}; // zaten dogrusal (set_fog ceviriyor)
   Mat4 light_vp_{};
   ShadowInfo shadow_info_{};
   VkShaderModule vs_ = VK_NULL_HANDLE, fs_ = VK_NULL_HANDLE, shadow_vs_ = VK_NULL_HANDLE;

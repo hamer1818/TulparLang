@@ -831,6 +831,10 @@ void Renderer::begin_frame(uint32_t frame_index) {
   u.shadow_params[1] = cfg_.shadow_bias;
   u.shadow_params[2] = shadow_info_.enabled ? 1.0f : 0.0f;
   u.shadow_params[3] = cfg_.shadow_normal_offset;
+  u.fog_params[0] = fog_density_;
+  u.fog_params[1] = fog_height_falloff_;
+  u.fog_params[2] = 0.0f; u.fog_params[3] = 0.0f;
+  u.fog_color[0] = fog_color_.x; u.fog_color[1] = fog_color_.y; u.fog_color[2] = fog_color_.z; u.fog_color[3] = 0.0f;
   std::memcpy(ubo_mem_[frame_].mapped, &u, sizeof u);
 }
 

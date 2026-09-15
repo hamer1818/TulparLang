@@ -426,6 +426,69 @@ ENGINE_TEST(renderer_pbr_metal_vs_dielectric_differs) {
   dev.shutdown();
 }
 
+// Is 6: sis DOGRUSAL uzayda mi uygulaniyor, egri beklendigi gibi mi? Duz bir
+// zeminde (y=0, yukseklik sonumu bu yuzden devre disi birakildi — exp(0)=1)
+// bilinen bir sissiz renk olcup, sis acildiktan sonraki degeri
+// 1-exp(-yogunluk*mesafe) formuluyle hesaplanan beklenen degerle karsilastirir.
+ENGINE_TEST(renderer_fog_is_applied_in_linear_space) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "fog_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: piksel kapisi gercek cihazda olculur"); return; }
+  const uint32_t W = 64, H = 64;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  ren.set_light({0, 1, 0}, {0.5f, 0.5f, 0.5f}, 0.0f); // yalniz ambiyans (yonlu isigin katkisi kapali)
+  ren.set_camera(Mat4::look_at({0, 10.0f, 0.01f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto center_linear = [&]() -> float {
+    ren.begin_frame(0);
+    ren.draw(plane, Mat4::scale({30, 1, 30}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return -1.0f;
+    const uint8_t *p = ores.pixels + (H / 2 * W + W / 2) * 4;
+    return renderer::Renderer::srgb_to_linear((float)p[0] / 255.0f);
+  };
+  float without_fog = center_linear();
+  ren.set_fog(0.1f, 0.0f, {0.5f, 0.5f, 0.5f});
+  float with_fog = center_linear();
+  const float dist = 10.0f; // kamera-zemin mesafesi (kamera kurulumundan)
+  const float expected_amt = 1.0f - std::exp(-0.1f * dist);
+  const float fog_lin = renderer::Renderer::srgb_to_linear(0.5f);
+  const float expected = without_fog * (1.0f - expected_amt) + fog_lin * expected_amt;
+  std::printf("    [bilgi] sissiz %.4f, sisli %.4f, beklenen %.4f (fog_amt=%.3f)\n", without_fog, with_fog, expected,
+              expected_amt);
+  bool got = without_fog >= 0.0f && with_fog >= 0.0f;
+  CHECK(got);
+  if (got) {
+    bool matches_formula = std::fabs(with_fog - expected) < 0.05f; // 8-bit kuantalama toleransi
+    CHECK(matches_formula);
+    bool control_fires = with_fog != without_fog; // pozitif kontrol
+    CHECK(control_fires);
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
 // 2B arayuz + font: metin gercekten piksel uretiyor mu? Bos metin (POZITIF
 // KONTROL) hicbir sey cizmemeli; genislik olcumu tekduze.
 #include "content/font.hpp"
