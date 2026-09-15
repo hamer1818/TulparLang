@@ -227,3 +227,18 @@ engine/third_party/vvl-android/
 
 # AGDK Swappy statik kutuphaneleri (engine/tools/fetch_swappy.sh)
 engine/third_party/swappy/libs/
+
+# Derlenmis sahne blob'lari (engine_sahnec / editor Derle; deterministik, kaynagi .sahne)
+*.sahneb
+
+# Cokme raporlari (platform/crash.cpp; calisma dizinine yazilir)
+crash_*.txt
+
+# İçerik içe aktarıcısının derleme önbelleği (engine/content/importer.hpp).
+# Türetilmiş ve deterministik: girdinin özeti + damga dosyaları. Depoya girerse
+# bayatladığında kapıları sessizce "atlandı"ya düşürür (Tuzaklar 8am).
+.tulpar_onbellek/
+
+# Motor köprüsünün kalıcı kaydı (eng_save_*): yol verilmezse çalışma dizinine
+# yazılır, yani örnek koşturan her komut depo kökünde bir tane bırakır.
+tulpar_kayit.txt

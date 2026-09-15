@@ -11,6 +11,66 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ## 📊 Mevcut durum (özet)
 
+> **Yeni (2026-09-15, `engine/faz3-sahne` dalı, yayınlanmadı): `import "engine"` — Tulpar
+> Engine köprüsü.** Ayrı C++ motor çekirdeği (`engine/`, Vulkan + Jolt) artık Tulpar
+> betiklerinden sürülüyor: **motor C++, oyun mantığı Tulpar**, aynı ikilide, script sınırı
+> yok. Düz skaler C ABI (`engine/bridge/engine_api.h`, **156 fonksiyon**), üretilmiş bağlama
+> katmanı (`engine/tools/gen_engine_bindings.py` tek `SPEC`'ten binding + backend tablosu +
+> typeinfer + LSP yazar — "5 noktada bağlama" bu ailede **mekanik**), gömülü `lib/engine.tpr`
+> sarmalayıcı (TR + EN adlar). Köprü aileleri: yaşam döngüsü, dünya/kamera, derlenmiş sahne +
+> **sıcak yükleme**, varlık/fizik, girdi, HUD, **anlık-kip arayüz** (düğme/onay/kaydırıcı),
+> **kalıcı kayıt**, ses, model animasyonu, bloom, **ışın/örtüşme/navmesh sorguları**, ölçüm.
+> Üç örnek oyun, hepsi **saf Tulpar**: `examples/engine_ilk_oyun.tpr` (94 satır),
+> `engine_arena.tpr` (editörde hazırlanan sahne → `engine_sahnec` → blob → oyun),
+> `engine_aksiyon.tpr` — **"Gölge Salonları"**, iki bölümlü aksiyon dikey dilimi (fizik tabanlı
+> vuruş, iki davranışlı düşman durum makinesi, navmesh yol bulma, ana menü/duraklat/ayarlar,
+> kalıcı rekor; 1070 satır). Android emülatöründe **60 fps**, dokunmatik ve skor döngüsü Tulpar
+> tarafında. Bu, raylib tabanlı `tame`/`arcade` hattının **yerini almaz** (o hat donduruldu ama
+> gönderilmeye devam ediyor); iki oyun hattı yan yana duruyor.
+>
+> Aynı dalda motor tarafında kapanan Faz kalemleri (hepsi cihaz gerektirmeyen yol, yenileri
+> **varsayılan kapalı** — açık/kapalı piksel farkı ölçülerek 0 doğrulandı): **kademeli gölge**
+> (CSM, 3 kademe tek atlas, 6 MB), **paketlenmiş vertex** (32 → 20 bayt), **derlenmiş render
+> graph + bloom**, **Faz 4 UI** (SDF atlas, tek batch, opak-önce, retained blok, ölçülmüş
+> overdraw — kapı: 7000 dörtgen / 2 batch / < 1,5 ms), **Faz 4 ses** (uzamsal + DSP + oklüzyon),
+> **Faz 5 temporal** (jitter, hareket vektörü, dinamik çözünürlük), **Faz 6 içerik** (`.tpak`
+> pack + delta yama + önbellek, sahne blob **sürüm 4**: yerleşik küme + navmesh + küme DAG +
+> **GI sondaları**), **Faz 9** (küme DAG builder, GPU cull + dolaylı çizim).
+> Kapılar (kaynaktan): `engine/tests/*.cpp` **141 `ENGINE_TEST`**, Tulpar tarafında
+> `tests/engine_bridge.test.tpr` **17** test, katman denetimi **159 dosya / 0 ihlal**.
+> Tam koşu (2026-09-15 akşamı): `engine_tests` **141/141, 0 atlandı**, Tulpar suite'leri
+> **81/81** (1295 iddia), örnekler **102/102**.
+>
+> **Açık kalanlar:** Faz 3 kapısı (üç cihazda bant genişliği), Faz 5 cihaz kapısı, PBR, PSO
+> üretimi — hepsi **üç fiziksel cihaz** bekliyor (kullanıcı kararı: şimdilik pas);
+> **Faz 8** (Tulpar shader stage — PLAN §11 dil alt kümesi gerekiyor, başlanmadı);
+> **Faz 10** (Metal/iOS — Mac + geliştirici hesabı gerekiyor, başlanmadı); mağaza/servis
+> kalemleri (Play Asset Delivery, Firebase, IAP — hesap gerekiyor).
+> Durum: [docs/engine/DURUM.md](docs/engine/DURUM.md) · Faz 3:
+> [docs/engine/FAZ3.md](docs/engine/FAZ3.md) · Köprü: [docs/engine/KOPRU.md](docs/engine/KOPRU.md).
+>
+> **Yan etki — web hedefi onarıldı.** Köprü çalışırken `tulpar build --target=web` **her** oyunda
+> `undefined symbol: aot_intern_string` ile düşüyordu ve `tests/dist_archive_audit.py` buna
+> "temiz" diyordu: denetim yalnız `aot_tm_*` ailesine bakıyor, codegen wasm32'de `ObjArray`
+> başlığını 20 yerine 28 bayt sanıyor ve `target_web` bayrağı tip kurulumundan **sonra**
+> atanıyordu; web runtime'ında `runtime_net.cpp` de yoktu (`aot_http_request`). Dördü de
+> düzeltildi; denetim artık codegen'in adıyla bildirdiği **çekirdek** sembolleri de sınıyor.
+> Yeni `tests/paket_boyut_audit.py` paket boyutu + açılış süresi + **SPIR-V tazeliği**
+> (21 shader) için eşik koyuyor; iki denetim de `build.sh suites` içinde koşuyor ve
+> kırmızıysa suite düşüyor (`build.sh:276` ve `:292`).
+>
+> **Yan etki 2 — Android x86_64 kod üretimi düzeltildi.** Motor oyunu emülatörde ilk
+> karede SIGSEGV veriyordu. Sebep hedefe özgü değil, **derleyicideydi**: Android yolu
+> aynı `LLVMModule`'den iki ABI üretiyor ve `LLVMTargetMachineEmitToFile` modülü
+> yerinde değiştirdiği için ikinci emisyon (x86_64) birincinin (arm64) alçaltılmış
+> IR'i üstüne biniyordu — 16 bayt hizalı bir `movapd` 8 mod 16 yuvaya düşüyordu.
+> Emit artık her hedef için `LLVMCloneModule` üstünde; `aot_pipeline.cpp` ABI
+> döngüsünün iki ucunda IR özetini karşılaştıran bir kapı klonlamanın kaldırılmasını
+> derleme anında yakalıyor. **İlk ABI (arm64) her zaman doğruydu**, yani telefon
+> doğrulamaları geçerli; emülatör için daha önce üretilmiş çıktılar yenilenmeli.
+> Düzeltmeden sonra hem `examples/engine_aksiyon.tpr` hem `examples/arcade_zipla.tpr`
+> emülatörde koşuyor (Tuzaklar 8ap).
+
 > **Geliştirme dalı (yayınlanmadı): ÜÇÜNCÜ mobil dalga** — app kabuğu + juice +
 > 3 yeni oyun + full-stack global skor tablosu; hepsi Android emülatöründe
 > canlı doğrulandı. (0) **Per-game efekt**: 10 oyunun tamamı çarpışma/skor/ölüm
@@ -1648,8 +1708,25 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     parametre>)` ve `if (<json>)` artık uyarı vermiyor (scene3d/arcade/wings'in
     on/off ev stili), `int x = <bool>` **store**'da serbest — AOT gerçekten
     dönüştürüyor (`tests/bool_to_int_coerce.test.tpr`), **call**'da değil.
-    Repoda kalan 6 uyarının hepsi bu çalışmadan önce de vardı (`bigint`,
-    `input` arity, `call` arg); ölçüldü ve doğrulandı.
+    Repoda kalan uyarılar bu çalışmadan önce de vardı (`bigint`,
+    `input` arity, `call` arg); ölçüldü ve doğrulandı. **2026-09-15'te ikisi
+    teşhis edildi:**
+    - `bigint` **DÜZELTİLDİ**: öyle bir tip hiç var olmadı, `examples/04_math_logic.tpr`
+      onu öğretiyor ve `123456789012345678901234567890 * 2` için **`-2`** basıyordu
+      (literal int64'e doyuyor, çarpım sarıyor). Bölüm, int64 sınırını ve taşma
+      davranışını doğru gösteren bir bölümle değiştirildi.
+    - `input` arity **AÇIK, kasten dokunulmadı**: `input("You: ")` istemi
+      **sessizce düşüyor** — `aot_input()` sıfır argümanlı (`runtime_bindings.cpp`)
+      ve codegen argümanı okumadan atıyor, yani kullanıcı istemi hiç görmüyor
+      (`examples/09_socket_server.tpr:38`, `09_socket_client.tpr:17`). Aile
+      tutarsız: `aot_input_int`/`aot_input_float` istemi alıp `printf` + `fflush`
+      ile **basıyor**. Doğru düzeltme `aot_input`'a aynı `VMValue` istem
+      parametresini vermek, ama bu **var olan bir sembolün imzasını** değiştirir
+      ve `wasm/dist` + `android/dist` ön-derlenmiş arşivleri eski imzayı taşır;
+      `dist_archive_audit.py` sembolün **varlığını** denetler, **imzasını**
+      denetlemez — yani arşivler aynı anda yenilenmezse ortaya tam olarak bu
+      projenin "sessiz yanlış" sınıfı çıkar. Bu yüzden imza değişikliği
+      arşiv yenilemesiyle **birlikte** yapılmalı, sonradan değil.
   - Regresyon: `tests/typeinfer/{pass,fail}/` altına 6 fixture. Üç `fail`
     fixture'ının **doğru mesajla** reddedildiği tek tek doğrulandı.
 

@@ -2058,3 +2058,153 @@ surecle birlikte kayboldu (stdout okuyucu thread'i olur). Sonraki kosumun `logca
 Kural: (1) teshis surec icinden: `/proc/self/task/<tid>/{stat,wchan,syscall}` + SIGUSR1 ile `crash_capture_frames`
 (kesilemez beklemede yanit vermez, wchan yine konusur), sonra `usleep` + `_exit` (boru bosalsin), (2) kosum betigi
 surec olunce beklemeyi keser (`pidof`), (3) kanit iceren logcat'i bir sonraki kosumdan ONCE dosyaya cek.
+
+### 8aa. Renderer istatistiği kayıtta sayılır: `record`tan önce okunan `draws` önceki karenindir
+`Renderer::draw()` kuyruğa ekler, `stats_.draws` ancak `record()`ta atanır. Blob runtime testi `rt.draw()`un hemen
+ardından `ren.stats().draws == 6` bekledi, 0 gördü — "runtime hiç çizmiyor" sanıldı; çizim kuyruktaydı, sayaç henüz
+güncellenmemişti (2026-09-15). Kural: istatistik kayıt/submit **sonrasında** okunur; "0 çizim" görünce önce sayacın
+ne zaman güncellendiğine bak, kuyruğun boş olduğuna değil. Kapı: `scene_runtime_draws_blob_entities_offscreen`
+(kayıt sonrası sayı + piksel farkı; boş-boş 0 kontrolü).
+
+### 8ab. Ön-döndürme unutulunca 3B yan yatar ama HUD DÜZGÜN görünür — ekran görüntüsü yanıltır
+Tulpar köprüsünün ilk emülatör koşumunda zemin neredeyse dikeydi, küre elipse dönmüştü; **HUD yazısı ise
+tertemiz ve düz** duruyordu. Sebep: projeksiyon fiziksel (döndürülmüş) framebuffer oranıyla kuruldu ve
+`swap.rotation_radians()` clip uzayında uygulanmadı — oysa `ui_begin` dönüşü zaten parametre olarak alıyor,
+o yüzden arayüz doğru çıktı. Kural: Android'de en-boy oranı **logical_extent**'ten, projeksiyon
+`Mat4::rotate({0,0,1}, rotation)` ile çarpılır (demo_app bunu yapıyordu, köprüye taşınmadı). "Arayüz düzgünse
+render de düzgündür" çıkarımı YANLIŞ; iki yol dönüşü ayrı alıyor. Tuzaklar 8k/8r'nin köprüdeki tekrarı.
+
+### 8ac. Tulpar'da bit kaydırma ve onaltılık literal yok; `log` doğal logaritmadır
+Köprü sarmalayıcısı ilk sürümde `(r << 24) | ...` ve `0xE63946FF` yazdı: **ikisi de lexer'da yok**, gömülü
+kütüphane sessizce ayrıştırılamadı ve hata "senin dosyanda 44. satır" diye değil, `(stdin):44` diye çıktı
+(gömülü kaynak). Ayrıca `log("...")` yazınca "fonksiyon bulunamadı" değil, **matematik `log`una** çakışma
+alınır — sarmalayıcı `logla()` oldu. Kural: yeni bir `lib/*.tpr` yazarken renk paketlemeyi `tame`'in
+`rgb()`'sinden (çarpma), ad seçimini ise typeinfer builtin tablosundan doğrula.
+
+### 8ad. Girdi cihazı yokken erken dönen doğrulayıcı, yanlış tuş adını SESSİZ yutar
+`teng_key_down` önce `if (!g->in) return 0;` yapıyordu: headless'ta (ve Android'de klavye yokken) yanlış
+yazılmış `"SPCAE"` hiç şikâyet etmeden hep false döndü — "tuş çalışmıyor" hatası saatlerce sürebilirdi.
+Kural: **ad/arg doğrulaması önce, cihaz kontrolü sonra**; doğrulama hatası her kipte loglanır. Kapı:
+`bridge_runs_a_scripted_game_headless` geçerli adın sayaç artırmadığını (kontrol) ve geçersizin artırdığını ölçer.
+
+### 8ae. `install_run.sh` paket adını sabit tutuyordu — her yeni oyunda "Activity does not exist"
+`tulpar build --target=android` paket adını **çıktı adından** türetiyor (`dev.tulparlang.<ad>`), oysa koşum
+betiği `dev.tulparlang.game` diye başlatmayı deniyordu; APK kuruluyor, `am start` "Error type 3" veriyordu.
+Betik artık paketi APK'nın yanındaki staging manifest'inden (ya da `TULPAR_ANDROID_PKG` / aapt2) okuyor ve
+başlarken basıyor. Kural: kurulum ile başlatma arasındaki kimlik **tek yerden** gelmeli.
+
+### 8af. Profiler çalışma tamponu kare kapasitesinin İKİ KATI olmalı; azı 300. karede süreci abort eder
+`Profiler::frame_stats(scratch, count)` tamponun ilk yarısını örnek, ikinci yarısını sıralama alanı olarak
+kullanır ve `scratch.size() >= count*2` assert'ler. Köprü 600 kapasiteyle 600'lük tampon verdi: 300 kareye
+kadar sorunsuz, sonrasında **kapanışta** `ENGINE_ASSERT` → SIGABRT. Sinsi tarafı: masaüstü koşumlarım 120–200
+kareydi, hiç düşmedi; emülatörde 1984 kare koşan oyun **kapanışta çöktü ve ben fark etmedim**, çünkü logda
+"kapanis" satırının yokluğuna değil, hata satırının varlığına bakmıştım. Aynı hata `editor_app.cpp`'de de
+duruyordu (3 karelik headless koşum yüzünden hiç patlamamıştı). Kural: tampon = 2 × `frame_capacity`; ve
+"bitiş satırı YOK" da bir hata işaretidir, sessiz başarı sayılmaz. Kapı: köprü testi 365 kare koşar.
+
+### 8ag. Android varlıkları ALT DİZİNE montaj edilir ama `AAssetManager_openDir` alt dizin adı vermez
+`tulpar build --target=android` varlık dizinini kaynak yoluyla montaj ediyor
+(`TULPAR_ANDROID_ASSETS=examples/assets` → APK'da `assets/examples/assets/...`), böylece masaüstündeki göreli
+yol cihazda da tutuyor. Ama native `AAssetManager_openDir(mgr, "")` yalnız **o dizindeki dosyaları** listeler,
+alt dizin adlarını vermez — kök taraması hiçbir şey bulamaz ve oyun "varlık yok" der. Dizin adlarını yalnız
+Java tarafındaki `AssetManager.list()` veriyor. Köprü host'u JNI ile özyinelemeli geziyor (dizin = list()
+boş değil), `mkdir` + çıkarma yapıyor ve sayıyı logluyor (`varlik 21 dosya, 7 dizin`).
+
+### 8ah. Gölge atlasında iki tuzak: komşu kademeye taşan PCF ve kenetlenmemiş kutunun "yürüyen" gölgesi
+Kademeler tek dokuda yan yana durunca 3x3 PCF tile sınırında **komşu kademenin** derinliğini okur ve orada
+ince bir yanlış gölge şeridi çıkar; çözüm örneklemeyi tile'ın bir texel içinde tutmak (`inset`). İkincisi:
+kademe kutusunun merkezi odakla (kamera) birlikte sürekli kayarsa gölge kenarları her karede yarım texel
+oynar ve statik sahnede bile "yürür"; çözüm merkezi **ışık uzayında texel katına yuvarlamak**
+(`cascade_matrix`). İkisi de açılışta görünmez, hareket edince ortaya çıkar — bu yüzden tek kare ekran
+görüntüsü bu sınıfı doğrulamaz.
+
+### 8ai. Son işlem yolu kendi temizleme rengini kullanır: bloom'u açınca gökyüzü siyaha döner
+Post açıkken sahne artık çağıranın hedefine değil **iç HDR hedefine** çiziliyor ve o hedef `post_clear` ile
+temizleniyor (varsayılan siyah). Bloom A/B ölçümünde 112 bin piksel fark çıktı; bakınca farkın çoğu hale değil
+**arka plandı** — post kapalıyken mavi-gri olan gökyüzü açıkken simsiyahtı. İç hedefin temizleme rengi, post
+kapalıyken kullanılan hedefin rengiyle eşitlenince fark 26 bine indi ve geriye yalnız gerçek hale kaldı.
+Kural: yeni bir geçiş zinciri eklerken **temizleme/clear değerleri de sözleşmenin parçasıdır**; A/B ölçümünde
+"fark var" yetmez, farkın NEREDE olduğuna bak.
+
+### 8aj. Bayat arşiv denetimi TEK sembol ailesine bakıyordu: "temiz" derken web hedefi tamamen kırıktı
+`tests/dist_archive_audit.py` tam olarak "arşiv bayat mı" sorusunu eyleme çevirmek için yazılmıştı, ama yalnız
+`aot_tm_*` (tame) tablosuna bakıyordu. Ölçüldü (2026-09-15): denetim **"dist arsiv denetimi temiz"** dedi, aynı
+anda `tulpar build --target=web` **her** oyunda `undefined symbol: aot_intern_string` ile düşüyordu — çekirdek
+runtime sembolü tablonun dışındaydı. Aynı kör nokta Android'de de vardı: `aot_http_request` yoktu, yani skor
+tablosu kullanan her Android derlemesi link'te ölecekti. Kural: denetim, **codegen'in adıyla bildirdiği** sembol
+kümesini (LLVMAddFunction literalleri + tablolar) hedefin arşiv kümesine karşı denetlemeli; `nm` çıktısında
+**tür harfi U olan satır TANIMSIZ demektir**, onu "var" saymak denetimi sahte yeşile çevirir. Hedefte bilerek
+olmayan aileler (async, TLS) sebebiyle listelenir, sessizce yok sayılmaz.
+
+### 8ak. wasm32'de işaretçi 4 bayt: codegen'in sabitlediği nesne başlığı 32 değil 20 bayt
+AOT, dizi erişiminin hızlı yolunu satır içi GEP ile yapıyor ve `ObjArray` düzenini kendi kuruyordu —
+başlık dolgusu **sabit 28 bayt** yazılmıştı, yani 64-bit varsayımı. wasm32'de `Obj` 20 bayt (işaretçi 4), bu
+yüzden runtime'ın `static_assert`'leri web derlemesini kırıyor, `wasm/dist` tazelenemiyor ve hedef sessizce
+çürüyordu. Üstelik `backend->target_web` **`llvm_init_types`'tan SONRA** atanıyordu: tip gövdesi kurulurken
+bayrak hep 0 görünüyordu. Kural: hedefe bağlı her düzen kararı, bayrağın **kurulduğundan emin olunan** noktadan
+sonra alınır; runtime'daki düzen kilidi de iki işaretçi boyutunu ayrı ayrı sabitler, tek bir 64-bit iddiası
+yazmak 32-bit hedefi kapatır.
+
+### 8al. Her GPU kapısı kendi `VkInstance`'ını açarsa, SONRAKİ kapılar sessizce ATLANDI'ya düşer
+Ölçüldü (2026-09-15, bu makine): her `vkCreateInstance` NVIDIA ICD'sini `dlopen`'lıyor, `libnvidia-tls.so`
+initial-exec TLS istiyor ve glibc'nin "static TLS surplus" alanı dlopen/dlclose döngülerinde **geri
+verilmiyor**. Süreçte belli sayıda instance'tan sonra yükleyici `cannot allocate memory in static TLS block`
+→ `Found no drivers!` diyor ve `vkCreateInstance` `VK_ERROR_INCOMPATIBLE_DRIVER` dönüyor. Sonuç sinsi: yeni
+bir GPU kapısı EKLEMEK, kendisi geçerken **sonradan koşan başkalarının** kapılarını (editör ImGui, ışık
+gizmosu, köprü) görünür `skip`'e düşürüyor — takım yeşil kalıyor ama kapı sayısı sessizce eriyor. Kural: yeni
+GPU kapıları **cihazı/instance'ı paylaşsın**; ayrı instance yalnız doğrulama sayaçlarını kirletmemek gibi
+gerçek bir sebep varsa açılsın. Belirti: "geçen test sayısı aynı ama ATLANDI arttı".
+
+### 8am. Türetilmiş ama DİSKTE DURAN dosya bayatlayınca kapı sessizce "atlandı"ya düşer
+`examples/assets/arena.sahneb` türetilmiş (gitignore'lu) bir dosya; sahne blob formatı **sürüm 2**'ye
+çıkınca diskteki kopya v1 kaldı. Motor onu doğru biçimde reddediyordu, ama `tests/engine_bridge.test.tpr`'nin
+sahne kapısı "dosya açılamadı → görünür atlama" yoluna düşüyor ve suite **yeşil** kalıyordu: kapı vardı, bir
+şey ölçmüyordu. Kural: türetilmiş girdi kullanan kapı, dosyayı **kendisi üretmeli** (test derleme adımını
+çağırmalı) ya da bulamadığında ATLAMAK yerine KIRMIZI olmalı. Aynı sınıf: `wasm/dist` ve `android/dist`
+arşivleri (Tuzaklar 8aj). Genel kural: "atlandı" sayısı sessizce artıyorsa, kapılar erimiş demektir.
+
+### 8an. Aynı `VkApi` tablosuyla ikinci cihaz açmak, paylaşılan cihazın giriş noktalarını EZER
+`VkApi` cihaz düzeyindeki fonksiyon işaretçilerini tek tabloda tutuyor. İki testin aynı tabloyla iki ayrı
+`VkDevice` açması, ikinci `init` sırasında tablodaki adresleri ikinci cihazınkilerle **değiştiriyor**; ikinci
+cihaz kapanınca ilk cihaz üstünden yapılan sonraki çağrı geçersiz adrese atlıyor (ölçüldü: `offscreen_create`
+içinde SIGSEGV). Kural: paylaşılan cihaz varken ayrı bir cihaz açman gerekiyorsa **ayrı bir `VkApi` tablosu**
+kullan. Bu, 8al'in (her kapının kendi instance'ını açması) ikizi: biri sessiz atlama, bu ise çökme üretir.
+
+### 8ao. Tazelik denetimi yanlış BİRİMİ karşılaştırınca her şeyi "bayat" ilan eder — ve inandırıcı görünür
+`tests/paket_boyut_audit.py`'ye SPIR-V tazelik denetimi eklerken üretilmiş `*_spv.h` başlıklarını **bayt**
+dizisi sanıp `0x[0-9a-f]{1,2}` ile taradım; başlıklar aslında 32-bit **kelime** tutuyor (`0x%08x`). Regex hiç
+eşleşme bulmadı, denetim 21 shader'ın 21'ini birden "BAYAT — GPU eski shader'i kosturur" diye bildirdi. Çıktı
+tamamen ikna edici: her satır gerçek bir bayt sayısı veriyordu (`0 != 1640 bayt`). Tuzağın asıl yüzü sessiz
+yeşilin **aynadaki hali**: yeni bir kapının ilk koşusu KIRMIZI olduğunda, refleks "demek ki gerçekten bozuk"
+olur ve insan kaynağı düzeltmeye girişir — oysa bozuk olan ölçüm. Kural: yeni bir kapının ilk sonucu
+**makullük sınavından** geçmeli. "Hepsi bozuk" (21/21) ile "hiçbiri bozuk değil" aynı şüpheyi hak eder;
+ikisi de tipik olarak ölçümün hiçbir şeye bakmadığı anlamına gelir. Somut kontrol: denetimin gördüğü ham
+veriyi bir kez yazdır (kaç kelime okundu?) — sıfır okuyorsan karşılaştırma değil ayrıştırma bozuktur.
+
+### 8ap. Aynı `LLVMModule`'ü İKİ hedef için emit etmek — ikinci hedef sessizce bozuk kod alır
+Android hedefi tek modülden iki ABI üretiyor: önce `arm64-v8a`, sonra `x86_64`. `LLVMTargetMachineEmitToFile`
+**saf bir okuma değildir**: CodeGen boru hattı modülü YERİNDE değiştiren IR geçişleri içerir
+(`PreISelIntrinsicLowering`, `AtomicExpand`, `ExpandLargeFpConvert`, `SelectOptimize`, …) ve `LLVMSetModuleDataLayout`
+veri yerleşimini de hedefe göre damgalar. Yani ilk emit'ten sonra elde kalan şey ön-uç IR'i değil, **o hedefe
+göre alçaltılmış IR**'dir; ikinci emit onun üstüne biner.
+
+**Ölçülen sonuç (2026-09-15, emülatör):** `examples/engine_aksiyon.tpr` ilk karede SIGSEGV veriyordu. Motorun
+kendi çökme raporu faili tam yerinden söyledi: `t_menu_ciz.f+576`. Disassembly: 16 bayt hizalı `movapd`,
+8 mod 16 olan `0x48(%rsp)` yuvasına yazıyordu. Masaüstü ikilisinde aynı fonksiyon `0x40(%rsp)` (hizalı)
+kullanıyor. Kanıt tek komutla kapandı: aynı optimize IR `llc -mtriple=x86_64-linux-android34
+-relocation-model=pic` ile **tek başına** derlendiğinde doğru yuvayı (`0x40`) üretti — fark yalnızca
+"bu modül daha önce başka bir hedef için emit edildi mi" idi. Düzeltme: her ABI kendi `LLVMCloneModule`
+kopyasından üretiliyor (`emit_object_with_triple(..., clone_module)`).
+
+**Neden bu kadar sinsi — üç ayrı maskeleme birden:**
+1. **İLK ABI doğru üretilir.** arm64 (gerçek telefon) kusursuz çalışır; yalnız ikinci sırada üretilen x86_64
+   (emülatör) bozulur. İnsanın refleksi "emülatör işte" olur ve hata emülatörde aranır.
+2. **`fault_addr: 0x0` null gibi görünür.** Hizalama hatası (GP fault) SIGSEGV'yi `si_addr = 0` ile verir;
+   yığın izi olmayan bir null dereference avına çıkılır. Ayırt edici işaret: faulting komut `rsp`-göreli
+   bir `movapd`/`movaps` ise sorun eksik bellek değil, YANLIŞ HİZADIR.
+3. **Link ve derleme yeşildir.** `-Wl,--no-undefined` dahil her şey geçer; hata yalnız o kod yolu ilk kez
+   çalıştığında görünür — burada ana menünün ilk çizimi, yani kurulumun tamamı loglandıktan SONRA.
+
+**Kural:** bir `LLVMModule`'den birden fazla hedef için nesne üretiyorsan **her hedef için klonla**. Aynı
+kural başka bir yerde daha geçerli: `llvm_backend_optimize` zaten bu yüzden `LLVMCloneModule` üstünde
+deneme yapıyor. Genel biçimi: *"aynı IR'i iki kez tüketmek" bir varsayımdır, ve LLVM'de yanlıştır.*
