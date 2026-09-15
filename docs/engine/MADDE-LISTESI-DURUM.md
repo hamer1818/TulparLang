@@ -251,7 +251,7 @@ Kategori D'nin 232-250 araligiyla icerik olarak buyuk olcude cakisiyor (ayni 20 
 | 434 | IPv6 Serverless Netcode (MAME4droid ile dogrulandi) | 🔍 VERIFIED |
 | 435 | Cihaz-Sinifi Bake | 🔧 TODO |
 | 436-437 | Shader DSL, Otomatik fp16 | 🔧 TODO |
-| 438 | PCG (Prosedurel Icerik) - core/math/random.hpp deterministik Rng+shuffle temel tasi, KAYNAK+testler, kablolama bekliyor | ✅ DONE |
+| 438 | PCG (Prosedurel Icerik) - core/math/random.hpp (Rng+shuffle) + core/math/noise.hpp (deger gurultusu+fBm), KAYNAK+testler, kablolama bekliyor | ✅ DONE |
 | 439 | Motion Matching | 🔧 TODO |
 | 440-449 | Bulut Kaydetme, Liderlik Tablolari, Mod Destegi, VR/AR Destegi, Erisilebilirlik, Analitik+A/B, Remote Config, Sesli Sohbet, Moderasyon, Sosyal Ozellikler | 🚫 OUT_OF_SCOPE |
 | 450 | Yuz Animasyonu | 🔧 TODO |

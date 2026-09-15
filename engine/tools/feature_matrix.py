@@ -273,7 +273,7 @@ FEATURES: list[Feature] = [
     Feature(434, 434, "J", "VERIFIED", "IPv6 Serverless Netcode (MAME4droid ile dogrulandi)"),
     Feature(435, 435, "J", "TODO", "Cihaz-Sinifi Bake"),
     Feature(436, 437, "J", "TODO", "Shader DSL, Otomatik fp16"),
-    Feature(438, 438, "J", "DONE", "PCG (Prosedurel Icerik) - core/math/random.hpp deterministik Rng+shuffle temel tasi, KAYNAK+testler, kablolama bekliyor"),
+    Feature(438, 438, "J", "DONE", "PCG (Prosedurel Icerik) - core/math/random.hpp (Rng+shuffle) + core/math/noise.hpp (deger gurultusu+fBm), KAYNAK+testler, kablolama bekliyor"),
     Feature(439, 439, "J", "TODO", "Motion Matching"),
     Feature(440, 449, "J", "OUT_OF_SCOPE",
             "Bulut Kaydetme, Liderlik Tablolari, Mod Destegi, VR/AR Destegi, Erisilebilirlik, "
