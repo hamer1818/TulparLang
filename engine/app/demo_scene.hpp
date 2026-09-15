@@ -32,6 +32,8 @@ public:
   void draw(renderer::Renderer &r, const DrawSet &d);
   uint64_t content_hash() const;
   uint32_t entities() const { return world_.stats().entities; }
+  sim::Physics &physics() { return phys_; } // editor: sahne govdeleri ayni dunyaya
+  const sim::Physics &physics() const { return phys_; }
   // Oyuncu: dinamik Jolt kutusu. Komut karede latch'lenir, her tick uygulanir
   // (deterministik: ayni komut dizisi = ayni ozet).
   void set_player_command(Vec2 move_world_xz, bool jump);

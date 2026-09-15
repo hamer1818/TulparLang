@@ -2037,3 +2037,10 @@ sonucu. Ayni testler RTX (Linux), lavapipe (CI Linux), Mali (telefon) ve gfxstre
 `test::gpu_is_virtual` ile bu cihazda piksel kapilari GORUNUR ATLANDI; CPU tarafi (analitik skinning, meshopt
 istatistigi, KTX2 cozumu) kosmaya devam eder. Gercek bir Mac'te MoltenVK sonucu ayri konu (olculmedi).
 
+
+### 8x. Bilesen bitleri kapaliyken alanlar veri degildir: esitlik/no-op tespiti bilesene gore
+`SceneEntity` tum bilesenlerin alanlarini tasir (model, animasyon, isik, govde); dosyaya yalniz biti acik olanlar
+yazilir. Ilk `scene_entity_equal` her alani karsilastirdi: testin kopyalanan `e`'sinde kalan `phase`/`asset`
+(bileseni kapali) yaz→oku sonrasi varsayilana dondu, gidis-donus kapisi 3 varlikta dustu — metin baytlari ise
+AYNIYDI. Ayni hata gunlukte no-op tespitini de bozar (bilesen kapali alan degisince "islem" kaydedilir). Kural:
+esitlik = dosyaya giden alanlar; bit kapaliysa alan yok sayilir. Kapi: `scene_text_roundtrip_is_deterministic`.

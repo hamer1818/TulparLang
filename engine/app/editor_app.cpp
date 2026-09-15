@@ -1,6 +1,7 @@
 #include "app/editor_app.hpp"
 
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include "app/demo_scene.hpp"
 #include "app/editor_ui.hpp"
 #include "content/gltf.hpp"
+#include "content/scene.hpp"
 #include "core/jobs/job_system.hpp"
 #include "core/memory/arena.hpp"
 #include "core/profiler/profiler.hpp"
@@ -26,6 +28,9 @@ namespace tulpar::engine::app {
 
 namespace {
 constexpr float kPi = 3.14159265358979f;
+using content::SceneDesc;
+using content::SceneEntity;
+
 struct Cam {
   float yaw = 0.7f, pitch = 0.45f, radius = 26.0f;
   Vec3 target{0, 1.0f, -3.0f};
@@ -47,17 +52,75 @@ void record_cb(VkCommandBuffer cb, void *user) {
 }
 void shadow_cb(VkCommandBuffer cb, void *user) { static_cast<RecordCtx *>(user)->r->record_shadow(cb); }
 
-Mat4 entity_matrix(const EditorEntity &e) {
-  float m[16];
-  ImGuizmo::RecomposeMatrixFromComponents(e.pos, e.rot_deg, e.scale, m);
-  Mat4 r;
-  for (int c = 0; c < 4; c++) for (int rr = 0; rr < 4; rr++) r.m[c][rr] = m[c * 4 + rr];
-  return r;
+void entity_from_matrix(SceneEntity &e, const Mat4 &mat) {
+  ImGuizmo::DecomposeMatrixToComponents(&mat.m[0][0], &e.pos.x, &e.rot_deg.x, &e.scale.x);
 }
-void entity_from_matrix(EditorEntity &e, const Mat4 &mat) {
-  float m[16];
-  for (int c = 0; c < 4; c++) for (int rr = 0; rr < 4; rr++) m[c * 4 + rr] = mat.m[c][rr];
-  ImGuizmo::DecomposeMatrixToComponents(m, e.pos, e.rot_deg, e.scale);
+
+// Editor durumu: veri modeli (gercek) + turetilmis sim/gpu kaynaklari.
+struct EditorState {
+  SceneDesc scene;
+  content::SceneHistory hist;
+  char scene_path[1024];
+  char scene_dir[1024];
+  content::Model models[content::kSceneMaxAssets];
+  content::UploadedModel ups[content::kSceneMaxAssets];
+  bool have[content::kSceneMaxAssets];
+  content::PoseScratch pose_scratch;
+  sim::BodyId bodies[content::kSceneMaxEntities];
+  bool bodies_live = false;
+  int selected = -1;
+  bool playing = false, dirty = false;
+  float play_time = 0;
+  // Surukleme / metin duzenleme: aktiflesince kopya, birakinca tek islem.
+  SceneEntity edit_before;
+  bool edit_active = false, gizmo_was_using = false;
+  char status[160];
+};
+
+void set_status(EditorState &st, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void set_status(EditorState &st, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  std::vsnprintf(st.status, sizeof st.status, fmt, ap);
+  va_end(ap);
+}
+
+void bodies_spawn(EditorState &st, sim::Physics &ph) {
+  if (st.bodies_live) return;
+  content::scene_spawn_bodies(st.scene, ph, st.bodies);
+  st.bodies_live = true;
+}
+void bodies_remove(EditorState &st, sim::Physics &ph) {
+  if (!st.bodies_live) return;
+  content::scene_remove_bodies(ph, st.bodies, st.scene.entity_count);
+  st.bodies_live = false;
+}
+// Varlik listesini degistiren islemler (ekle/sil/geri al/yinele) oynarken
+// govde indekslerini kaydirir: once govdeler cikar, sonra yeniden girer.
+template <class F> void with_bodies(EditorState &st, sim::Physics &ph, F &&f) {
+  const bool live = st.bodies_live;
+  if (live) bodies_remove(st, ph);
+  f();
+  if (live) bodies_spawn(st, ph);
+}
+
+// Ozellik paneli: surukleme/metin girisi bir islem olarak gunluge girer.
+void track_edit(EditorState &st, SceneEntity &e, int index) {
+  if (ImGui::IsItemActivated() && !st.edit_active) { st.edit_before = e; st.edit_active = true; }
+  if (ImGui::IsItemDeactivated() && st.edit_active) {
+    st.edit_active = false;
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+      const SceneEntity after = e;
+      e = st.edit_before;
+      if (st.hist.set_entity(st.scene, (uint32_t)index, after)) st.dirty = true;
+    }
+  }
+}
+// Ayrik widget (onay kutusu, secim): kopya uzerinde degisiklik, hemen islem.
+bool commit(EditorState &st, int index, const SceneEntity &after) {
+  if (!st.hist.set_entity(st.scene, (uint32_t)index, after)) return false;
+  st.dirty = true;
+  return true;
 }
 } // namespace
 
@@ -119,17 +182,30 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   if (!ren.init(dev, sys, rp, rc)) { std::fprintf(stderr, "renderer\n"); return 1; }
   ren.set_render_size(width, height);
 
-  // Varliklar (LOD kuresi, iskeletli boru) — demo ile ayni test varliklari.
-  char path[1024];
+  // --- Sahne dosyasi (veri modeli) ---
+  static EditorState st;
+  st.hist.init(sys, 256);
   const char *adir = std::getenv("TULPAR_ENGINE_ASSETS");
+  if (opts.scene_path) std::snprintf(st.scene_path, sizeof st.scene_path, "%s", opts.scene_path);
+  else if (adir && *adir) std::snprintf(st.scene_path, sizeof st.scene_path, "%s/editor.sahne", adir);
+  else std::snprintf(st.scene_path, sizeof st.scene_path, "%s/tests/assets/editor.sahne", ENGINE_SOURCE_DIR);
+  content::scene_dir_of(st.scene_path, st.scene_dir, sizeof st.scene_dir);
+  {
+    content::SceneError err{};
+    if (!content::scene_load(sys, st.scene_path, &st.scene, &err)) { std::fprintf(stderr, "sahne %s: %s\n", st.scene_path, err.msg); return 1; }
+  }
+  char path[1024];
   auto asset = [&](const char *name) {
-    if (adir && *adir) std::snprintf(path, sizeof path, "%s/%s", adir, name);
-    else std::snprintf(path, sizeof path, "%s/tests/assets/%s", ENGINE_SOURCE_DIR, name);
+    std::snprintf(path, sizeof path, "%s/%s", st.scene_dir, name);
     return path;
   };
-  static content::Model cube_model, sphere_model, tube_model;
-  static content::UploadedModel cube_up, sphere_up, tube_up;
-  static content::PoseScratch pose_scratch;
+  for (uint32_t i = 0; i < st.scene.asset_count; i++) {
+    st.have[i] = content::gltf_load(sys, asset(st.scene.assets[i]), &st.models[i]) && content::upload_model(ren, sys, st.models[i], &st.ups[i]);
+    if (!st.have[i]) std::printf("[engine_editor] kaynak yuklenemedi: %s\n", st.scene.assets[i]);
+  }
+  std::printf("[engine_editor] sahne %s: %u varlik, %u kaynak\n", st.scene_path, st.scene.entity_count, st.scene.asset_count);
+
+  // Arka plan: demo sahnesi (ajanlar, Jolt kutulari) — govdeler ayni fizik dunyasina.
   DemoScene::DrawSet ds;
   renderer::Vertex v[24];
   uint32_t idx[36];
@@ -144,34 +220,16 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   }
   ds.box_mesh = ds.cube;
   ds.box_mat = ren.default_material();
-  if (content::gltf_load(sys, asset("checker_cube.gltf"), &cube_model) && content::upload_model(ren, sys, cube_model, &cube_up) && cube_up.mesh_count) {
-    ds.box_mesh = cube_up.meshes[0]; ds.box_mat = cube_up.materials[0];
+  {
+    for (uint32_t i = 0; i < st.scene.asset_count; i++)
+      if (st.have[i] && std::strstr(st.scene.assets[i], "checker_cube") && st.ups[i].mesh_count) { ds.box_mesh = st.ups[i].meshes[0]; ds.box_mat = st.ups[i].materials[0]; }
   }
-  const bool have_sphere = content::gltf_load(sys, asset("lod_sphere.gltf"), &sphere_model) && content::upload_model(ren, sys, sphere_model, &sphere_up);
-  const bool have_tube = content::gltf_load(sys, asset("skin_tube.gltf"), &tube_model) && tube_model.clip_count &&
-                         content::upload_model(ren, sys, tube_model, &tube_up);
-  ren.set_light(normalize(Vec3{0.5f, 1.0f, 0.35f}), {0.16f, 0.17f, 0.2f}, 0.85f);
-  ren.set_shadow_volume({0, 1.0f, -1.0f}, 17.0f, 70.0f);
+  ren.set_light(normalize(st.scene.sun_dir), st.scene.ambient, st.scene.sun_diffuse);
+  ren.set_shadow_volume(st.scene.shadow_center, st.scene.shadow_radius, st.scene.shadow_depth);
 
   DemoScene scene;
   if (!scene.init(sys, &jobs)) { std::fprintf(stderr, "sahne\n"); return 1; }
-
-  // Editor veri modeli (ilk dilim): 3 kure + 2 boru.
-  static EditorEntity ents[5];
-  int ent_count = 0;
-  auto add_ent = [&](const char *name, int kind, float x, float y, float z, float phase) {
-    EditorEntity &e = ents[ent_count++];
-    std::snprintf(e.name, sizeof e.name, "%s", name);
-    e.pos[0] = x; e.pos[1] = y; e.pos[2] = z;
-    e.rot_deg[0] = e.rot_deg[1] = e.rot_deg[2] = 0;
-    e.scale[0] = e.scale[1] = e.scale[2] = kind == 1 ? 1.2f : 1.0f;
-    e.kind = kind; e.phase = phase;
-  };
-  add_ent("kure_1", 0, -8.0f, 1.2f, -8.5f, 0);
-  add_ent("kure_2", 0, 0.0f, 1.2f, -8.5f, 0);
-  add_ent("kure_3", 0, 8.0f, 1.2f, -8.5f, 0);
-  add_ent("boru_1", 1, -4.0f, 0.0f, -3.5f, 0.0f);
-  add_ent("boru_2", 1, 4.0f, 0.0f, -3.5f, 0.35f);
+  sim::Physics &phys = scene.physics();
 
   EditorUi ui;
   {
@@ -181,8 +239,18 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   }
 
   Cam cam;
-  int selected = headless ? 0 : -1;
-  bool playing = headless;
+  cam.target = st.scene.cam_target; cam.yaw = st.scene.cam_yaw; cam.pitch = st.scene.cam_pitch; cam.radius = st.scene.cam_radius;
+  st.selected = headless ? 0 : -1;
+  st.playing = headless;
+  if (st.playing) bodies_spawn(st, phys);
+  if (headless && st.scene.entity_count) {
+    // Betikli durum: bir islem + geri al (gunluk kapali dongude calisiyor mu).
+    SceneEntity e = st.scene.entities[0];
+    e.pos.x += 1.0f;
+    st.hist.set_entity(st.scene, 0, e);
+    st.hist.undo(st.scene);
+  }
+  set_status(st, "yuklendi: %s", st.scene_path);
   int gizmo_op = 0; // 0 tasi, 1 dondur, 2 olcekle
   sim::FixedStep fs;
   uint64_t last_ns = platform::now_ns();
@@ -191,6 +259,41 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   bool prev_rmb = false;
   RecordCtx rctx{&ren, &ui};
   bool running = true;
+  auto set_playing = [&](bool p) {
+    if (p == st.playing) return;
+    st.playing = p;
+    if (p) { st.play_time = 0; bodies_spawn(st, phys); }
+    else bodies_remove(st, phys); // durdur: veri modeli (yazar donusumu) gecerli
+  };
+  auto do_undo = [&]() { with_bodies(st, phys, [&] { if (st.hist.undo(st.scene)) { st.dirty = true; set_status(st, "geri alindi (%u kaldi)", st.hist.undo_count()); } }); };
+  auto do_redo = [&]() { with_bodies(st, phys, [&] { if (st.hist.redo(st.scene)) { st.dirty = true; set_status(st, "yinelendi (%u kaldi)", st.hist.redo_count()); } }); };
+  auto do_save = [&]() {
+    st.scene.cam_target = cam.target; st.scene.cam_yaw = cam.yaw; st.scene.cam_pitch = cam.pitch; st.scene.cam_radius = cam.radius;
+    content::SceneError err{};
+    if (content::scene_save(frame, st.scene, st.scene_path, &err)) { st.dirty = false; set_status(st, "kaydedildi: %s", st.scene_path); }
+    else set_status(st, "KAYDEDILEMEDI: %s", err.msg);
+  };
+  auto do_add = [&]() {
+    SceneEntity e{};
+    if (st.selected >= 0) { e = st.scene.entities[st.selected]; std::snprintf(e.name, sizeof e.name, "%.24s_kopya", st.scene.entities[st.selected].name); e.pos.x += 1.5f; }
+    else {
+      std::snprintf(e.name, sizeof e.name, "nesne_%u", st.scene.entity_count + 1);
+      e.pos = cam.target;
+      if (st.scene.asset_count) { e.components = content::kSceneModel; e.asset = 0; }
+    }
+    with_bodies(st, phys, [&] {
+      if (st.hist.add_entity(st.scene, e)) { st.selected = (int)st.scene.entity_count - 1; st.dirty = true; set_status(st, "eklendi: %s", e.name); }
+      else set_status(st, "eklenemedi (kapasite %u)", content::kSceneMaxEntities);
+    });
+  };
+  auto do_remove = [&]() {
+    if (st.selected < 0) return;
+    with_bodies(st, phys, [&] {
+      if (st.hist.remove_entity(st.scene, (uint32_t)st.selected)) { st.dirty = true; set_status(st, "silindi"); }
+    });
+    if (st.selected >= (int)st.scene.entity_count) st.selected = (int)st.scene.entity_count - 1;
+    if (st.selected < 0) st.selected = -1;
+  };
   while (running) {
     ENGINE_ZONE("frame");
     uint64_t now = platform::now_ns();
@@ -228,14 +331,14 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     if (in && !ui.wants_keyboard()) {
       if (in->key_down[GLFW_KEY_T]) gizmo_op = 0;
       if (in->key_down[GLFW_KEY_R]) gizmo_op = 1;
-      if (in->key_down[GLFW_KEY_S]) gizmo_op = 2;
+      if (in->key_down[GLFW_KEY_S] && !in->key_down[GLFW_KEY_LEFT_CONTROL] && !in->key_down[GLFW_KEY_RIGHT_CONTROL]) gizmo_op = 2;
     }
 
     // Sim: yalniz oynatilirken (sabit adim).
-    if (playing) {
+    if (st.playing) {
       ENGINE_ZONE("sim");
       uint32_t ticks = fs.advance(dt);
-      for (uint32_t t = 0; t < ticks; t++) scene.tick(fs.step_s, tick_i++);
+      for (uint32_t t = 0; t < ticks; t++) { scene.tick(fs.step_s, tick_i++); st.play_time += fs.step_s; }
     }
 
     const float aspect = (float)fw / (float)fh;
@@ -246,67 +349,153 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
 
     // --- ImGui paneller ---
     ui.begin_frame(in, (float)fw, (float)fh, dt);
+    // Kisayollar (metin girisi aktifken ImGui'nin kendi geri al'i calisir).
+    if (!ImGui::GetIO().WantTextInput) {
+      if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) do_save();
+      if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) do_undo();
+      if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y) || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) do_redo();
+      if (ImGui::IsKeyChordPressed(ImGuiKey_Delete)) do_remove();
+    }
     if (ImGui::BeginMainMenuBar()) {
-      if (ImGui::Button(playing ? "Durdur" : "Oynat")) playing = !playing;
-      ImGui::Text("| kare %u | tick %u | secili %s | gizmo %s (T/R/S)", frame_i, tick_i, selected >= 0 ? ents[selected].name : "-",
-                  gizmo_op == 0 ? "tasi" : gizmo_op == 1 ? "dondur" : "olcekle");
+      if (ImGui::Button(st.playing ? "Durdur" : "Oynat")) set_playing(!st.playing);
+      if (ImGui::Button("Kaydet")) do_save();
+      if (ImGui::Button("Geri al")) do_undo();
+      if (ImGui::Button("Yinele")) do_redo();
+      ImGui::Text("| %s%s | gunluk %u/%u | kare %u | tick %u | gizmo %s (T/R/S) | %s", st.dirty ? "*" : "",
+                  st.selected >= 0 ? st.scene.entities[st.selected].name : "-", st.hist.undo_count(), st.hist.redo_count(), frame_i, tick_i,
+                  gizmo_op == 0 ? "tasi" : gizmo_op == 1 ? "dondur" : "olcekle", st.status);
       ImGui::EndMainMenuBar();
     }
     ImGui::SetNextWindowPos(ImVec2(8, 30), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(220, 240), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(230, 300), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Sahne")) {
-      for (int i = 0; i < ent_count; i++)
-        if (ImGui::Selectable(ents[i].name, selected == i)) selected = i;
+      if (ImGui::Button("Ekle")) do_add();
+      ImGui::SameLine();
+      if (ImGui::Button("Sil")) do_remove();
+      ImGui::Separator();
+      for (uint32_t i = 0; i < st.scene.entity_count; i++) {
+        ImGui::PushID((int)i);
+        if (ImGui::Selectable(st.scene.entities[i].name, st.selected == (int)i)) st.selected = (int)i;
+        ImGui::PopID();
+      }
       ImGui::Separator();
       ImGui::Text("sim: %u entity", scene.entities());
       ImGui::Text("kamera %.1f/%.1f/%.1f", cam.eye().x, cam.eye().y, cam.eye().z);
     }
     ImGui::End();
-    ImGui::SetNextWindowPos(ImVec2((float)fw - 268, 30), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(260, 200), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2((float)fw - 300, 30), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(292, 360), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Ozellikler")) {
-      if (selected >= 0) {
-        EditorEntity &e = ents[selected];
-        ImGui::InputText("ad", e.name, sizeof e.name);
-        ImGui::DragFloat3("konum", e.pos, 0.05f);
-        ImGui::DragFloat3("donus", e.rot_deg, 0.5f);
-        ImGui::DragFloat3("olcek", e.scale, 0.02f, 0.05f, 20.0f);
-        ImGui::Text("tur: %s", e.kind == 0 ? "LOD kuresi" : "iskeletli boru");
-        if (e.kind == 1) ImGui::DragFloat("faz", &e.phase, 0.01f, 0.0f, 2.0f);
+      if (st.selected >= 0 && st.selected < (int)st.scene.entity_count) {
+        const int si = st.selected;
+        SceneEntity &e = st.scene.entities[si];
+        ImGui::InputText("ad", e.name, sizeof e.name); track_edit(st, e, si);
+        ImGui::DragFloat3("konum", &e.pos.x, 0.05f); track_edit(st, e, si);
+        ImGui::DragFloat3("donus", &e.rot_deg.x, 0.5f); track_edit(st, e, si);
+        ImGui::DragFloat3("olcek", &e.scale.x, 0.02f, 0.05f, 20.0f); track_edit(st, e, si);
+        ImGui::Separator();
+        SceneEntity after = e;
+        bool has = (e.components & content::kSceneModel) != 0;
+        if (ImGui::Checkbox("model", &has)) { after.components ^= content::kSceneModel; if (has && after.asset < 0) after.asset = 0; commit(st, si, after); }
+        if (e.components & content::kSceneModel) {
+          int a = e.asset;
+          if (ImGui::SliderInt("kaynak", &a, 0, (int)st.scene.asset_count - 1, st.scene.asset_count && a >= 0 ? st.scene.assets[a] : "-")) { after.asset = a; commit(st, si, after); }
+          ImGui::ColorEdit3("renk", &e.tint.x, ImGuiColorEditFlags_NoInputs); track_edit(st, e, si);
+        }
+        after = e;
+        has = (e.components & content::kSceneAnim) != 0;
+        if (ImGui::Checkbox("animasyon", &has)) { after.components ^= content::kSceneAnim; commit(st, si, after); }
+        if (e.components & content::kSceneAnim) {
+          ImGui::DragFloat("faz", &e.phase, 0.01f, 0.0f, 10.0f); track_edit(st, e, si);
+          ImGui::DragFloat("hiz", &e.speed, 0.01f, 0.0f, 10.0f); track_edit(st, e, si);
+        }
+        after = e;
+        has = (e.components & content::kSceneLight) != 0;
+        if (ImGui::Checkbox("isik", &has)) { after.components ^= content::kSceneLight; commit(st, si, after); }
+        if (e.components & content::kSceneLight) {
+          ImGui::ColorEdit3("isik rengi", &e.light_color.x, ImGuiColorEditFlags_NoInputs); track_edit(st, e, si);
+          ImGui::DragFloat("siddet", &e.light_intensity, 0.05f, 0.0f, 100.0f); track_edit(st, e, si);
+          ImGui::DragFloat("yaricap", &e.light_radius, 0.05f, 0.1f, 100.0f); track_edit(st, e, si);
+        }
+        after = e;
+        has = (e.components & content::kSceneBody) != 0;
+        if (ImGui::Checkbox("govde", &has)) { after.components ^= content::kSceneBody; commit(st, si, after); }
+        if (e.components & content::kSceneBody) {
+          int shape = (int)e.shape;
+          if (ImGui::Combo("sekil", &shape, "kutu\0kure\0")) { after.shape = (content::SceneShape)shape; commit(st, si, after); }
+          if (e.shape == content::SceneShape::Box) { ImGui::DragFloat3("yarim kenar", &e.half.x, 0.02f, 0.01f, 50.0f); track_edit(st, e, si); }
+          else { ImGui::DragFloat("yaricap ", &e.radius, 0.02f, 0.01f, 50.0f); track_edit(st, e, si); }
+          bool dyn = e.dynamic;
+          if (ImGui::Checkbox("dinamik", &dyn)) { after.dynamic = dyn; commit(st, si, after); }
+        }
       } else ImGui::TextUnformatted("Sahne listesinden sec");
     }
     ImGui::End();
     // Gizmo: ImGuizmo GL gelenegi (NDC y yukari) bekler; Vulkan projeksiyonun y'si tersken duzeltilir.
-    if (selected >= 0) {
+    // Surukleme tek islem: IsUsing baslarken kopya, bitince gunluge.
+    if (st.selected >= 0 && st.selected < (int)st.scene.entity_count) {
+      SceneEntity &e = st.scene.entities[st.selected];
       Mat4 proj_gl = proj;
       proj_gl.m[1][1] = -proj_gl.m[1][1];
       ImGuizmo::SetOrthographic(false);
       ImGuizmo::SetRect(0, 0, (float)fw, (float)fh);
-      Mat4 mtx = entity_matrix(ents[selected]);
+      Mat4 mtx = content::scene_entity_matrix(e);
       const ImGuizmo::OPERATION op = gizmo_op == 0 ? ImGuizmo::TRANSLATE : gizmo_op == 1 ? ImGuizmo::ROTATE : ImGuizmo::SCALE;
-      if (ImGuizmo::Manipulate(&view.m[0][0], &proj_gl.m[0][0], op, ImGuizmo::WORLD, &mtx.m[0][0])) entity_from_matrix(ents[selected], mtx);
-    }
+      const bool changed = ImGuizmo::Manipulate(&view.m[0][0], &proj_gl.m[0][0], op, ImGuizmo::WORLD, &mtx.m[0][0]);
+      const bool using_now = ImGuizmo::IsUsing();
+      if (using_now && !st.gizmo_was_using) st.edit_before = e;
+      if (changed) entity_from_matrix(e, mtx);
+      if (!using_now && st.gizmo_was_using) {
+        const SceneEntity after = e;
+        e = st.edit_before;
+        if (st.hist.set_entity(st.scene, (uint32_t)st.selected, after)) st.dirty = true;
+      }
+      st.gizmo_was_using = using_now;
+    } else st.gizmo_was_using = false;
     ui.end_frame();
 
-    // --- 3B cizim ---
+    // --- 3B cizim: veri modelinden ---
     ren.begin_frame(headless ? 0 : frame_i);
     scene.draw(ren, ds);
-    for (int i = 0; i < ent_count; i++) {
-      const EditorEntity &e = ents[i];
-      const Mat4 m = entity_matrix(e);
-      if (e.kind == 0 && have_sphere) {
+    for (uint32_t i = 0; i < st.scene.entity_count; i++) {
+      const SceneEntity &e = st.scene.entities[i];
+      const bool simulated = st.playing && st.bodies_live && st.bodies[i].valid() && e.dynamic;
+      const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_matrix(e);
+      const bool sel = st.selected == (int)i;
+      const Vec3 tint = sel ? Vec3{1.0f, 0.9f, 0.4f} : e.tint;
+      bool drew = false;
+      if ((e.components & content::kSceneModel) && e.asset >= 0 && e.asset < (int32_t)st.scene.asset_count && st.have[e.asset]) {
+        const content::Model &mdl = st.models[e.asset];
+        const content::UploadedModel &up = st.ups[e.asset];
         content::ModelLod lod;
         lod.camera_pos = cam.eye();
         lod.distance1 = 24.0f; lod.distance2 = 34.0f;
-        content::draw_model(ren, sphere_model, sphere_up, m, selected == i ? Vec3{1.0f, 0.9f, 0.4f} : Vec3{0.85f, 0.9f, 1.0f}, &lod);
-      } else if (e.kind == 1 && have_tube) {
-        const float dur = tube_model.clips[0].duration;
-        float t = std::fmod((playing ? (float)frame_i / 60.0f : 0.0f) + e.phase, 2.0f * dur);
-        if (t > dur) t = 2.0f * dur - t;
-        content::ModelPose pose;
-        if (content::model_pose_evaluate(tube_model, 0, t, pose_scratch, &pose))
-          content::draw_model(ren, tube_model, tube_up, m, selected == i ? Vec3{1.0f, 0.9f, 0.4f} : Vec3{1.0f, 0.75f, 0.35f}, nullptr,
-                              nullptr, &pose);
+        if ((e.components & content::kSceneAnim) && e.clip < mdl.clip_count) {
+          const float dur = mdl.clips[e.clip].duration;
+          float t = std::fmod((st.playing ? st.play_time * e.speed : 0.0f) + e.phase, 2.0f * dur);
+          if (t > dur) t = 2.0f * dur - t;
+          content::ModelPose pose;
+          if (content::model_pose_evaluate(mdl, e.clip, t, st.pose_scratch, &pose)) {
+            content::draw_model(ren, mdl, up, m, tint, nullptr, nullptr, &pose);
+            drew = true;
+          }
+        }
+        if (!drew) { content::draw_model(ren, mdl, up, m, tint, &lod); drew = true; }
+      }
+      if (!drew && (e.components & content::kSceneBody)) {
+        // Modelsiz govde: carpisan hacmi kutu olarak goster (kure de kutu, yaricap kadar).
+        const Vec3 s = e.shape == content::SceneShape::Box ? e.half * 2.0f : Vec3{e.radius * 2, e.radius * 2, e.radius * 2};
+        ren.draw(ds.cube, m * Mat4::scale(s), sel ? tint : Vec3{0.55f, 0.6f, 0.7f});
+        drew = true;
+      }
+      if (!drew) ren.draw(ds.cube, m * Mat4::scale({0.3f, 0.3f, 0.3f}), sel ? tint : Vec3{0.9f, 0.9f, 0.3f}); // bos/isik isareti
+      if (e.components & content::kSceneLight) {
+        renderer::PointLight pl;
+        pl.pos = {m.m[3][0], m.m[3][1], m.m[3][2]};
+        pl.radius = e.light_radius;
+        pl.color = e.light_color;
+        pl.intensity = e.light_intensity;
+        ren.add_point_light(pl);
       }
     }
     if (headless) {
@@ -328,15 +517,17 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     if (headless && frame_i >= opts.headless_frames) running = false;
   }
   static uint64_t scratch[600];
-  FrameStats st = prof.frame_stats(Span<uint64_t>(scratch, 600), 0);
+  FrameStats stt = prof.frame_stats(Span<uint64_t>(scratch, 600), 0);
   const EditorUiStats us = ui.stats();
-  std::printf("[engine_editor] %u kare | p50 %.2f ms p99 %.2f ms | ui %u vertex %u indeks %u liste | cizim %u | secili %s | tick %u\n", frame_i,
-              st.p50_ns / 1e6, st.p99_ns / 1e6, us.vertices, us.indices, us.draw_lists, ren.stats().draws,
-              selected >= 0 ? ents[selected].name : "-", tick_i);
+  std::printf("[engine_editor] %u kare | p50 %.2f ms p99 %.2f ms | ui %u vertex %u indeks %u liste | cizim %u | nesne %u | gunluk %u/%u%s | secili %s | tick %u\n",
+              frame_i, stt.p50_ns / 1e6, stt.p99_ns / 1e6, us.vertices, us.indices, us.draw_lists, ren.stats().draws, st.scene.entity_count,
+              st.hist.undo_count(), st.hist.redo_count(), st.dirty ? " (kaydedilmedi)" : "",
+              st.selected >= 0 ? st.scene.entities[st.selected].name : "-", tick_i);
   if (headless && opts.out_path) {
     if (rhi::write_ppm(opts.out_path, ores.pixels, oc.width, oc.height)) std::printf("[engine_editor] goruntu: %s\n", opts.out_path);
   }
   dev.api().vkDeviceWaitIdle(dev.handle());
+  bodies_remove(st, phys);
   ui.shutdown();
   scene.shutdown();
   ren.shutdown();

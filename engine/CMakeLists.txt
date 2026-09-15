@@ -180,11 +180,11 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/vendored_impl.c)
+add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
-target_link_libraries(engine_content PUBLIC engine_renderer engine_meshopt engine_astcenc)
+target_link_libraries(engine_content PUBLIC engine_renderer engine_sim engine_meshopt engine_astcenc)
 target_compile_options(engine_content PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
 add_dependencies(engine_content engine_layer_check)
 
@@ -225,6 +225,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_scene_faz2.cpp
     tests/test_renderer.cpp
     tests/test_content.cpp
+    tests/test_scene.cpp
     tests/test_input.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.

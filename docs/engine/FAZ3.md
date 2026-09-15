@@ -438,3 +438,46 @@ Denenen: `hasCode=true` + boş `classes.dex` (javac+d8) — değişmedi; geri al
 (SDK 29)** Swappy'de Java sim yolunu **kullanmaz** (NDK Choreographer) → telefonda çalışması beklenir; ölçüm
 (p99/max, geç kare histogramı, FIFO ile A/B) telefon bağlanınca. Tuzaklar 8v.
 
+
+## Sahne veri modeli + `.sahne` dosyası + işlem günlüğü (PLAN L7 "The Truth", editörün 2. dilimi) — 2026-09-15
+
+**Karar:** editörün tamamı tek bir veri modelinin (`content::SceneDesc`) üstünde; sim ve GPU kaynakları ondan
+**türetilir**, tersi değil. Durdur = yazar dönüşümüne dönüş (sim durumu atılır), oynat = gövdeler fiziğe girer.
+Dosya yazar formatıdır (L6 içerik boru hattı, offline); runtime'a derlenmiş blob sonraki dilim (PLAN §6).
+
+**Teslim edilen**
+- `content/scene.hpp/.cpp`: `SceneEntity` (ad, konum/dönüş(Euler °)/ölçek + bileşen bitleri: **model** (kaynak
+  indeksi + renk), **animasyon** (klip, faz, hız), **ışık** (nokta: renk, şiddet, yarıçap), **gövde** (kutu/küre,
+  dinamik/sabit)); `SceneDesc` (güneş/ortam/gölge hacmi/kamera + ≤16 kaynak + ≤256 varlık, sabit dizi — 0 ayırma).
+- Metin format `.sahne`: satır tabanlı ASCII (`tulpar-sahne 1`, `kaynak "yol"`, `nesne "ad" … son`, `# yorum`,
+  CRLF kabul). **Deterministik:** aynı `SceneDesc` → aynı bayt; sayılar `%.6g…%.9g` arasından **bit-tam geri
+  okunan en kısa** gösterim (strtof/snprintf doğru yuvarlar → glibc/musl/bionic/Apple aynı). Hata satır numaralı
+  (`SceneError{msg, line}`); bilinmeyen anahtar, yinelenen bileşen, tanımsız kaynak, NaN, kapanmamış tırnak,
+  sürüm, kapasite aşımı reddedilir.
+- `SceneHistory`: her değişiklik önce/sonra kopyasıyla (`Set/Add/Remove`), `undo/redo`, yeni işlem yinele kuyruğunu
+  siler, halka dolunca en eski düşer. Editörde sürükleme/metin girişi **tek işlem** (ImGui `IsItemActivated` →
+  kopya, `IsItemDeactivatedAfterEdit` → günlük), gizmo sürüklemesi de (`ImGuizmo::IsUsing` geçişleri); ayrık
+  widget'lar kopya üstünde değişip hemen işler.
+- Fizik: `scene_spawn_bodies` / `scene_remove_bodies` / `scene_body_matrix`; `DemoScene::physics()` ile aynı Jolt
+  dünyası. Ekle/sil/geri al/yinele oynarken gövde indekslerini kaydırır → önce çıkar, sonra yeniden girer.
+- Dönüşüm sırası `T·Rz·Ry·Rx·S` — ImGuizmo Recompose/Decompose geleneğiyle **ölçülerek** aynı (kapı; yanlış sıra
+  gizmoyu her karede "düzeltir", varlık titrer).
+- Editör: `--scene x.sahne` (varsayılan `tests/assets/editor.sahne`), menü **Kaydet (Ctrl+S) / Geri al (Ctrl+Z) /
+  Yinele (Ctrl+Y)**, Sahne paneli **Ekle / Sil (Delete)**, Özellikler panelinde bileşen onay kutuları + alanlar;
+  kirli (`*`) durumu ve son işlem çubukta. Modelsiz gövde çarpışma kutusu olarak, boş/ışık varlığı küçük işaretle
+  çizilir. Kaynak yolları sahne dosyasının dizinine göre.
+
+**Kapılar (masaüstü 79/79, doğrulama katmanıyla headless editör 0 hata):**
+`scene_text_roundtrip_is_deterministic` (yaz→oku→yaz aynı bayt, bit-tam sayılar; **kontrol:** tek ulp değişince metin
+değişir), `scene_parse_reports_bad_line_and_rejects_overflow` (satır 5 hatası "satir 5", 256 kabul / 257 red),
+`scene_history_undo_redo_restores_bytes` (4 işlem geri = başlangıç baytları, ileri = düzenlenmiş baytlar; **kontrol:**
+boş günlükte false; halka 6→4), `scene_file_editor_sahne_is_canonical` (depodaki dosya = yazıcı çıktısı; kaydet→yükle
+aynı; olmayan dosya false), `scene_bodies_spawn_and_settle_in_physics` (zeminli y=0.48, **kontrol:** zeminsiz −37),
+`scene_rotation_quat_matches_matrix`, `editor_scene_matrix_matches_gizmo_convention` (fark 3e-8; **kontrol:** ters
+sıra 1.2). Headless editör: 8 varlık, betikli işlem + geri al (`gunluk 0/1`), 171 çizim.
+
+**Öğrenilen:** olmayan bileşenin alanları veri değildir — eşitlik (`scene_entity_equal`) yalnız mevcut bileşenleri
+karşılaştırır; ilk sürüm hepsini karşılaştırınca gidiş-dönüş kapısı düştü (Tuzaklar 8x).
+
+**Sırada:** tıklamayla seçim (ışın–AABB), sahne → runtime blob derleyici (PLAN §6), ışık/gölge/kamera düzenleme
+paneli, Tulpar betik bağlaması.

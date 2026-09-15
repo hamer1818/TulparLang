@@ -1,6 +1,7 @@
 // Editor arayuzu (Dear ImGui) motorun offscreen gecisine ciziyor mu? Pencere
 // yok: bir pencere + metin + dugme cizilen kare, bos ImGui karesinden farkli
 // pikseller vermeli (>500); bos kare (kontrol) 0 fark ve 0 vertex vermeli.
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -80,4 +81,40 @@ ENGINE_TEST(editor_imgui_draws_into_offscreen_pass) {
   ren.shutdown();
   rhi::offscreen_destroy(off);
   dev.shutdown();
+}
+
+// Sahne veri modelinin donusum sirasi (T*Rz*Ry*Rx*S) ImGuizmo'nun
+// Recompose/Decompose gelenegiyle ayni olmali; yoksa gizmo her karede
+// Euler'i "duzeltir" ve varlik titrer. Kontrol: ters sira farkli matris verir.
+#include "content/scene.hpp"
+#include <ImGuizmo.h>
+ENGINE_TEST(editor_scene_matrix_matches_gizmo_convention) {
+  content::SceneEntity e{};
+  e.pos = {1, 2, 3}; e.rot_deg = {30, 45, 60}; e.scale = {1, 2, 0.5f};
+  const Mat4 ours = content::scene_entity_matrix(e);
+  float g[16];
+  ImGuizmo::RecomposeMatrixFromComponents(&e.pos.x, &e.rot_deg.x, &e.scale.x, g);
+  float max_d = 0;
+  for (int c = 0; c < 4; c++)
+    for (int r = 0; r < 4; r++) {
+      const float d = std::fabs(ours.m[c][r] - g[c * 4 + r]);
+      if (d > max_d) max_d = d;
+    }
+  CHECK(max_d < 1e-5f);
+  // Ayristir -> yeniden kur: ayni matris (Euler farkli olabilir, matris ayni).
+  float p[3], r[3], s[3], g2[16];
+  ImGuizmo::DecomposeMatrixToComponents(&ours.m[0][0], p, r, s);
+  ImGuizmo::RecomposeMatrixFromComponents(p, r, s, g2);
+  float max_d2 = 0;
+  for (int i = 0; i < 16; i++) { const float d = std::fabs(g2[i] - (&ours.m[0][0])[i]); if (d > max_d2) max_d2 = d; }
+  CHECK(max_d2 < 1e-4f);
+  // Kontrol: sira ters (Rx*Ry*Rz) olsaydi fark buyuk olurdu.
+  const float k = 3.14159265f / 180.0f;
+  const Mat4 wrong = Mat4::translate(e.pos) * Mat4::rotate({1, 0, 0}, 30 * k) * Mat4::rotate({0, 1, 0}, 45 * k) *
+                     Mat4::rotate({0, 0, 1}, 60 * k) * Mat4::scale(e.scale);
+  float max_w = 0;
+  for (int c = 0; c < 3; c++)
+    for (int rr = 0; rr < 3; rr++) { const float d = std::fabs(wrong.m[c][rr] - g[c * 4 + rr]); if (d > max_w) max_w = d; }
+  CHECK(max_w > 1e-2f);
+  std::printf("    [bilgi] gizmo gelenegi: en buyuk fark %.2e (ayristir/kur %.2e), ters sira %.3f\n", max_d, max_d2, max_w);
 }

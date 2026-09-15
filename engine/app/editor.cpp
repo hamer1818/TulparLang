@@ -1,5 +1,5 @@
 // engine_editor — masaustu editor (GLFW dlopen pencere) ya da headless.
-//   engine_editor [--headless N --out x.ppm] [--size WxH] [--validation]
+//   engine_editor [--scene x.sahne] [--headless N --out x.ppm] [--size WxH] [--validation]
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -33,6 +33,7 @@ int main(int argc, char **argv) {
     else if (!std::strcmp(argv[i], "--out") && i + 1 < argc) o.out_path = argv[++i];
     else if (!std::strcmp(argv[i], "--size") && i + 1 < argc) { unsigned w = 0, h = 0; if (std::sscanf(argv[++i], "%ux%u", &w, &h) == 2) { o.width = w; o.height = h; } }
     else if (!std::strcmp(argv[i], "--validation")) o.validation = true;
+    else if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) o.scene_path = argv[++i];
   }
   if (std::getenv("TULPAR_ENGINE_VK_VALIDATION")) o.validation = true;
   if (o.headless_frames > 0) return app::editor_run(o, nullptr);
