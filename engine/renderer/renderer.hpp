@@ -136,6 +136,9 @@ public:
     fog_height_falloff_ = height_falloff;
     fog_color_ = srgb_to_linear(color);
   }
+  // Is 7: EV100 pozlama (Filament/Sozluk konvansiyonu). Varsayilan 1.0 (degisiklik yok).
+  void set_exposure_ev(float ev) { exposure_ = 1.0f / (1.2f * std::pow(2.0f, ev)); }
+  void set_exposure_multiplier(float m) { exposure_ = m; } // doğrudan carpan (test/hassas ayar icin)
   ShadowInfo shadow() const { return shadow_info_; }
   // A/B ve dusuk segment icin: hedef durur, gecis ve ornekleme kapanir.
   void set_shadows_enabled(bool on) { shadow_info_.enabled = on && cfg_.shadow_size > 0; }
@@ -293,6 +296,7 @@ private:
   float shadow_radius_ = 16.0f, shadow_depth_ = 60.0f;
   float fog_density_ = 0.0f, fog_height_falloff_ = 0.0f; // Is 6: 0 = kapali
   Vec3 fog_color_{0.7f, 0.75f, 0.8f}; // zaten dogrusal (set_fog ceviriyor)
+  float exposure_ = 1.0f; // Is 7: carpan, fog_params.z uzerinden shader'a gider
   Mat4 light_vp_{};
   ShadowInfo shadow_info_{};
   VkShaderModule vs_ = VK_NULL_HANDLE, fs_ = VK_NULL_HANDLE, shadow_vs_ = VK_NULL_HANDLE;

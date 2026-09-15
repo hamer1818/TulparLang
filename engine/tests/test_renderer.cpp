@@ -489,6 +489,65 @@ ENGINE_TEST(renderer_fog_is_applied_in_linear_space) {
   dev.shutdown();
 }
 
+// Is 7: PBR Neutral tonemap gercekten SIKISTIRIYOR mu, yoksa kirpiyor mu?
+// Ayni beyaz isigi giderek parlaklastirip (2 -> 4 -> 8), CIKTININ da tekduze
+// ARTMAYA devam ettigini (naif clamp'te ucuncude ayni "255"e cakisirdi) ve
+// en parlakta bile tam doygunluga (255) VARMADIGINI dogruluyor.
+ENGINE_TEST(renderer_tonemap_compresses_highlights) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "tonemap_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: piksel kapisi gercek cihazda olculur"); return; }
+  const uint32_t W = 64, H = 64;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  ren.set_light({0, 1, 0}, {0, 0, 0}, 0.0f); // karanlik: yalniz nokta isik
+  ren.set_camera(Mat4::look_at({0, 6.0f, 0.01f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto center_pixel_r = [&](float intensity) -> int {
+    ren.clear_point_lights();
+    ren.add_point_light(renderer::PointLight{{0, 2.0f, 0}, 50.0f, {1, 1, 1}, intensity});
+    ren.begin_frame(0);
+    ren.draw(plane, Mat4::scale({20, 1, 20}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return -1;
+    return (int)ores.pixels[(H / 2 * W + W / 2) * 4];
+  };
+  int p_lo = center_pixel_r(2.0f);
+  int p_mid = center_pixel_r(4.0f);
+  int p_hi = center_pixel_r(8.0f);
+  std::printf("    [bilgi] parlaklik 2/4/8 -> piksel %d/%d/%d (255 = tam doygun)\n", p_lo, p_mid, p_hi);
+  bool got = p_lo >= 0 && p_mid >= 0 && p_hi >= 0;
+  CHECK(got);
+  if (got) {
+    bool monotonic = p_lo < p_mid && p_mid < p_hi; // naif clamp'te p_mid==p_hi==255 olurdu
+    CHECK(monotonic);
+    bool not_saturated = p_hi < 255; // en parlakta bile detay var, duz beyaz DEGIL
+    CHECK(not_saturated);
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
 // 2B arayuz + font: metin gercekten piksel uretiyor mu? Bos metin (POZITIF
 // KONTROL) hicbir sey cizmemeli; genislik olcumu tekduze.
 #include "content/font.hpp"

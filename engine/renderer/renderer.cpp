@@ -833,7 +833,8 @@ void Renderer::begin_frame(uint32_t frame_index) {
   u.shadow_params[3] = cfg_.shadow_normal_offset;
   u.fog_params[0] = fog_density_;
   u.fog_params[1] = fog_height_falloff_;
-  u.fog_params[2] = 0.0f; u.fog_params[3] = 0.0f;
+  u.fog_params[2] = exposure_; // Is 7: pozlama carpani (sis alaninda rezerve slotu, UBO buyumesin diye)
+  u.fog_params[3] = 0.0f;
   u.fog_color[0] = fog_color_.x; u.fog_color[1] = fog_color_.y; u.fog_color[2] = fog_color_.z; u.fog_color[3] = 0.0f;
   std::memcpy(ubo_mem_[frame_].mapped, &u, sizeof u);
 }

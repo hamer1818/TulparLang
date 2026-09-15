@@ -16,7 +16,7 @@ layout(set = 0, binding = 0) uniform Frame {
   vec4 shadow_params;  // x: 1/boyut, y: sabit egilim, z: golge acik mi, w: normal kaydirma (dunya)
   vec4 cluster_params; // x: dilim olcegi, y: dilim sapmasi, z: tile genisligi px, w: tile yuksekligi px
   uvec4 cluster_grid;  // x, y, z, isik sayisi
-  vec4 fog_params; // x: yogunluk, y: yukseklik sonumu (Is 6). Yalniz bu dosya okur.
+  vec4 fog_params; // x: yogunluk, y: yukseklik sonumu (Is 6), z: pozlama carpani (Is 7). Yalniz bu dosya okur.
   vec4 fog_color;  // rgb: sis rengi, DOGRUSAL
 } u;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow;
@@ -92,6 +92,25 @@ vec3 point_lights(vec3 n, vec3 vdir, float NoV, vec3 albedo, float alpha, float 
 }
 layout(location = 0) out vec4 o_color;
 
+// Is 7: Khronos PBR Neutral tonemap (Bolum 0B karari — ACES DEGIL: ACES ton
+// kaydiriyor/doygunlugu bozuyor, bu doygun renkli isik havuzlarimizin asil
+// sorunuydu). Khronos'un yayinladigi referans GLSL uygulamasi, degistirilmeden.
+// Orta tonlara (peak<0.76) dokunmaz, yalniz highlight'lari sikistirir.
+vec3 pbr_neutral_tonemap(vec3 color) {
+  const float startCompression = 0.8 - 0.04;
+  const float desaturation = 0.15;
+  float x = min(color.r, min(color.g, color.b));
+  float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+  color -= offset;
+  float peak = max(color.r, max(color.g, color.b));
+  if (peak < startCompression) return color;
+  float d = 1.0 - startCompression;
+  float newPeak = 1.0 - d * d / (peak + d - startCompression);
+  color *= newPeak / peak;
+  float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+  return mix(color, vec3(newPeak), g);
+}
+
 // Dogrusal aydinlatma (Filament): butun hesap dogrusal, hedef SRGB bicimliyse
 // donanim kodlar; UNORM yedeginde (light_dir.w = 1) burada kodlanir.
 vec3 linear_to_srgb(vec3 c) {
@@ -160,6 +179,10 @@ void main() {
     fog_amt = clamp(fog_amt, 0.0, 1.0);
     c = mix(c, u.fog_color.rgb, fog_amt);
   }
+
+  // Is 7: pozlama, SONRA tonemap — hala DOGRUSAL uzayda, sRGB kodlamadan once.
+  c *= u.fog_params.z;
+  c = pbr_neutral_tonemap(c);
 
   if (u.light_dir.w > 0.5) c = linear_to_srgb(c);
   o_color = vec4(c, 1.0);
