@@ -376,6 +376,60 @@ Mat4 scene_entity_matrix(const SceneEntity &e) {
          Mat4::rotate({1, 0, 0}, e.rot_deg.x * kDeg2Rad) * Mat4::scale(e.scale);
 }
 
+SceneBounds scene_entity_local_bounds(const SceneEntity &e, const SceneBounds *model) {
+  SceneBounds b{{-0.15f, -0.15f, -0.15f}, {0.15f, 0.15f, 0.15f}}; // isaret kutusu (bos / isik)
+  bool any = false;
+  auto grow = [&](Vec3 lo, Vec3 hi) {
+    if (!any) { b.lo = lo; b.hi = hi; any = true; return; }
+    b.lo = {b.lo.x < lo.x ? b.lo.x : lo.x, b.lo.y < lo.y ? b.lo.y : lo.y, b.lo.z < lo.z ? b.lo.z : lo.z};
+    b.hi = {b.hi.x > hi.x ? b.hi.x : hi.x, b.hi.y > hi.y ? b.hi.y : hi.y, b.hi.z > hi.z ? b.hi.z : hi.z};
+  };
+  if ((e.components & kSceneModel) && model) grow(model->lo, model->hi);
+  if (e.components & kSceneBody) {
+    if (e.shape == SceneShape::Box) grow(e.half * -1.0f, e.half);
+    else grow({-e.radius, -e.radius, -e.radius}, {e.radius, e.radius, e.radius});
+  }
+  return b;
+}
+SceneBounds scene_world_bounds(const SceneBounds &local, const Mat4 &m) {
+  SceneBounds w{{1e30f, 1e30f, 1e30f}, {-1e30f, -1e30f, -1e30f}};
+  for (int i = 0; i < 8; i++) {
+    const Vec4 c = m * Vec4{i & 1 ? local.hi.x : local.lo.x, i & 2 ? local.hi.y : local.lo.y, i & 4 ? local.hi.z : local.lo.z, 1.0f};
+    w.lo = {c.x < w.lo.x ? c.x : w.lo.x, c.y < w.lo.y ? c.y : w.lo.y, c.z < w.lo.z ? c.z : w.lo.z};
+    w.hi = {c.x > w.hi.x ? c.x : w.hi.x, c.y > w.hi.y ? c.y : w.hi.y, c.z > w.hi.z ? c.z : w.hi.z};
+  }
+  return w;
+}
+bool scene_ray_aabb(Vec3 o, Vec3 d, const SceneBounds &b, float *t) {
+  float tmin = 0.0f, tmax = 1e30f;
+  const float os[3] = {o.x, o.y, o.z}, ds[3] = {d.x, d.y, d.z};
+  const float lo[3] = {b.lo.x, b.lo.y, b.lo.z}, hi[3] = {b.hi.x, b.hi.y, b.hi.z};
+  for (int i = 0; i < 3; i++) {
+    if (std::fabs(ds[i]) < 1e-12f) {
+      if (os[i] < lo[i] || os[i] > hi[i]) return false; // eksene paralel, dilim disinda
+      continue;
+    }
+    const float inv = 1.0f / ds[i];
+    float t0 = (lo[i] - os[i]) * inv, t1 = (hi[i] - os[i]) * inv;
+    if (t0 > t1) { const float tmp = t0; t0 = t1; t1 = tmp; }
+    if (t0 > tmin) tmin = t0;
+    if (t1 < tmax) tmax = t1;
+    if (tmin > tmax) return false;
+  }
+  if (t) *t = tmin;
+  return true;
+}
+int32_t scene_pick(const SceneBounds *bounds, uint32_t n, Vec3 origin, Vec3 dir, float *t_out) {
+  int32_t best = -1;
+  float best_t = 1e30f;
+  for (uint32_t i = 0; i < n; i++) {
+    float t = 0;
+    if (scene_ray_aabb(origin, dir, bounds[i], &t) && t < best_t) { best_t = t; best = (int32_t)i; }
+  }
+  if (t_out) *t_out = best_t;
+  return best;
+}
+
 uint32_t scene_spawn_bodies(const SceneDesc &d, sim::Physics &ph, sim::BodyId *ids) {
   uint32_t n = 0;
   for (uint32_t i = 0; i < d.entity_count; i++) {

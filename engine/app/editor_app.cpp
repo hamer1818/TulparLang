@@ -74,8 +74,38 @@ struct EditorState {
   // Surukleme / metin duzenleme: aktiflesince kopya, birakinca tek islem.
   SceneEntity edit_before;
   bool edit_active = false, gizmo_was_using = false;
+  bool prev_lmb = false;
   char status[160];
 };
+
+// Fare pikselinden dunya isini (kamera tabanindan; matris tersi gerekmez).
+void camera_ray(const Cam &cam, float fovy, float aspect, float mx, float my, float fw, float fh, Vec3 *origin, Vec3 *dir) {
+  const Vec3 eye = cam.eye();
+  const Vec3 f = normalize(cam.target - eye);
+  const Vec3 r = normalize(cross(f, Vec3{0, 1, 0}));
+  const Vec3 u = cross(r, f);
+  const float th = std::tan(fovy * 0.5f);
+  const float nx = (2.0f * mx / fw - 1.0f) * th * aspect;
+  const float ny = (1.0f - 2.0f * my / fh) * th;
+  *origin = eye;
+  *dir = normalize(f + r * nx + u * ny);
+}
+// Tum varliklarin dunya AABB'si (secim icin) — model sinirlari yuklu modelden.
+uint32_t entity_world_bounds(const EditorState &st, const sim::Physics &phys, content::SceneBounds *out) {
+  for (uint32_t i = 0; i < st.scene.entity_count; i++) {
+    const SceneEntity &e = st.scene.entities[i];
+    const content::SceneBounds *mb = nullptr;
+    content::SceneBounds mbs;
+    if ((e.components & content::kSceneModel) && e.asset >= 0 && e.asset < (int32_t)st.scene.asset_count && st.have[e.asset]) {
+      mbs = {st.models[e.asset].bounds_min, st.models[e.asset].bounds_max};
+      mb = &mbs;
+    }
+    const bool simulated = st.playing && st.bodies_live && st.bodies[i].valid() && e.dynamic;
+    const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_matrix(e);
+    out[i] = content::scene_world_bounds(content::scene_entity_local_bounds(e, mb), m);
+  }
+  return st.scene.entity_count;
+}
 
 void set_status(EditorState &st, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void set_status(EditorState &st, const char *fmt, ...) {
@@ -452,6 +482,40 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       }
       st.gizmo_was_using = using_now;
     } else st.gizmo_was_using = false;
+    // Tiklamayla secim: sol tus basildi (gecis), ImGui/gizmo uzerinde degil.
+    {
+      const bool lmb = in && in->mouse_down[0];
+      const bool pressed = lmb && !st.prev_lmb;
+      st.prev_lmb = lmb;
+      if (pressed && !ui.wants_mouse() && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
+        static content::SceneBounds wb[content::kSceneMaxEntities];
+        const uint32_t nb = entity_world_bounds(st, phys, wb);
+        Vec3 o, d;
+        camera_ray(cam, kPi / 3.5f, aspect, (float)in->mouse_x, (float)in->mouse_y, (float)fw, (float)fh, &o, &d);
+        float t = 0;
+        const int32_t hit = content::scene_pick(wb, nb, o, d, &t);
+        st.selected = hit;
+        if (hit >= 0) set_status(st, "secildi: %s (%.1f m)", st.scene.entities[hit].name, t);
+        else set_status(st, "secim yok");
+      }
+    }
+    if (headless && frame_i == 0 && st.scene.entity_count) {
+      // Betikli secim kapisi: ilk varligin merkezi ekrana izdusurulur, o pikselden
+      // atilan isin ayni varligi secmeli (kamera isini + sinirlar + secim uctan uca).
+      static content::SceneBounds wb[content::kSceneMaxEntities];
+      const uint32_t nb = entity_world_bounds(st, phys, wb);
+      const Vec3 p0 = st.scene.entities[0].pos;
+      const Vec4 clip = proj * (view * Vec4{p0.x, p0.y, p0.z, 1.0f});
+      const float px = (clip.x / clip.w * 0.5f + 0.5f) * (float)fw, py = (clip.y / clip.w * 0.5f + 0.5f) * (float)fh; // Vulkan: NDC y asagi
+      Vec3 o, d;
+      camera_ray(cam, kPi / 3.5f, aspect, px, py, (float)fw, (float)fh, &o, &d);
+      float t = 0;
+      const int32_t hit = content::scene_pick(wb, nb, o, d, &t);
+      const bool ok = hit == 0;
+      std::printf("[engine_editor] secim kapisi: %s piksel (%.0f, %.0f) -> %s (t=%.2f) %s\n", st.scene.entities[0].name, px, py,
+                  hit >= 0 ? st.scene.entities[hit].name : "-", hit >= 0 ? t : 0.0f, ok ? "OK" : "HATA");
+      if (!ok) return 1;
+    }
     ui.end_frame();
 
     // --- 3B cizim: veri modelinden ---

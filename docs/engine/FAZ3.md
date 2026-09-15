@@ -479,5 +479,11 @@ sıra 1.2). Headless editör: 8 varlık, betikli işlem + geri al (`gunluk 0/1`)
 **Öğrenilen:** olmayan bileşenin alanları veri değildir — eşitlik (`scene_entity_equal`) yalnız mevcut bileşenleri
 karşılaştırır; ilk sürüm hepsini karşılaştırınca gidiş-dönüş kapısı düştü (Tuzaklar 8x).
 
-**Sırada:** tıklamayla seçim (ışın–AABB), sahne → runtime blob derleyici (PLAN §6), ışık/gölge/kamera düzenleme
-paneli, Tulpar betik bağlaması.
+**Tıklamayla seçim (aynı gün):** `SceneBounds` — yerel sınır = model sınırları (`Model::bounds_*`) ∪ gövde ∪ 0.3
+işaret kutusu; `scene_world_bounds` (8 köşe), `scene_ray_aabb` (slab), `scene_pick` (en yakın t). Editörde sol tık
+(geçiş; ImGui/gizmo üzerinde değilken) kamera tabanından üretilen ışınla (matris tersi yok) seçer. Kapılar:
+`scene_pick_returns_nearest_hit_and_misses` (3 kutu + 45° dönmüş kutu; **kontrol:** ters yön/boşluk −1) ve headless
+editörün uçtan uca **seçim kapısı**: ilk varlığın merkezi ekrana izdüşürülür, o pikselden atılan ışın aynı varlığı
+seçmeli (`kure_1 piksel (584, 267) -> kure_1 OK`; yanlışsa çıkış 1).
+
+**Sırada:** sahne → runtime blob derleyici (PLAN §6), ışık/gölge/kamera düzenleme paneli, Tulpar betik bağlaması.

@@ -91,6 +91,18 @@ void scene_dir_of(const char *path, char *out, size_t cap);
 Mat4 scene_entity_matrix(const SceneEntity &e);
 Quat scene_entity_rotation(const SceneEntity &e);
 
+// Secim: isin–AABB. Yerel sinir = model sinirlari (varsa) ∪ govde ∪ isaret
+// kutusu (bos/isik varligi 0.3). Dunya AABB yerel kutunun 8 kosesinden.
+struct SceneBounds {
+  Vec3 lo, hi;
+};
+SceneBounds scene_entity_local_bounds(const SceneEntity &e, const SceneBounds *model /* null = model yok */);
+SceneBounds scene_world_bounds(const SceneBounds &local, const Mat4 &m);
+// Slab testi; t >= 0 en yakin giris (isin icindeyse 0). dir normalize olmali.
+bool scene_ray_aabb(Vec3 origin, Vec3 dir, const SceneBounds &b, float *t);
+// En yakin vurusun indeksi, yoksa -1. bounds[n] dunya uzayinda.
+int32_t scene_pick(const SceneBounds *bounds, uint32_t n, Vec3 origin, Vec3 dir, float *t_out);
+
 // Fizik: govde bilesenli varliklari dunyaya koyar; ids[entity_count] doldurur
 // (govdesizler gecersiz). Donus: eklenen govde sayisi.
 uint32_t scene_spawn_bodies(const SceneDesc &d, sim::Physics &ph, sim::BodyId *ids);

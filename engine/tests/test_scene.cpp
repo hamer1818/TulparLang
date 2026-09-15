@@ -298,3 +298,39 @@ ENGINE_TEST(scene_rotation_quat_matches_matrix) {
       if (std::fabs(other.m[c][rr] - r.m[c][rr]) > 1e-3f) differs = true;
   CHECK(differs);
 }
+
+ENGINE_TEST(scene_pick_returns_nearest_hit_and_misses) {
+  // Uc kutu +z boyunca: 5, 10, 15 uzaklikta; isin +z'ye bakar -> en yakin (0).
+  SceneEntity e{};
+  e.components = kSceneBody; e.half = {0.5f, 0.5f, 0.5f};
+  SceneBounds w[4];
+  for (int i = 0; i < 3; i++) { e.pos = {0, 0, 5.0f + 5.0f * i}; w[i] = scene_world_bounds(scene_entity_local_bounds(e, nullptr), scene_entity_matrix(e)); }
+  // 4.: 45 derece donmus, 2 birim yana kaymis kutu — dunya AABB kose kapsar (yarim kenar 0.707).
+  e.pos = {3.0f, 0, 5.0f}; e.rot_deg = {0, 45, 0};
+  w[3] = scene_world_bounds(scene_entity_local_bounds(e, nullptr), scene_entity_matrix(e));
+  CHECK(std::fabs(w[3].hi.x - (3.0f + 0.70710678f)) < 1e-4f && std::fabs(w[3].lo.z - (5.0f - 0.70710678f)) < 1e-4f);
+  float t = 0;
+  CHECK(scene_pick(w, 4, {0, 0, 0}, {0, 0, 1}, &t) == 0);
+  CHECK(std::fabs(t - 4.5f) < 1e-4f);
+  CHECK(scene_pick(w, 4, {0, 0, 12}, {0, 0, 1}, &t) == 2);   // ortadakinin arkasindan: 3.
+  CHECK(scene_pick(w, 4, {0, 0, 7.5f}, {0, 0, -1}, &t) == 0); // geri: 1.
+  CHECK(scene_pick(w, 4, {0, 0, 5}, {1, 0, 0}, &t) == 0 && t == 0.0f); // isin kutunun icinde: t 0
+  CHECK(scene_pick(w, 4, {3.0f, 0, 0}, {0, 0, 1}, &t) == 3);  // donmus kutu (AABB kosesi)
+  // Kontrol: ters yon ve bosluktan gecen isin -1.
+  CHECK(scene_pick(w, 4, {0, 0, 0}, {0, 0, -1}, &t) == -1);
+  CHECK(scene_pick(w, 4, {0, 2, 0}, {0, 0, 1}, &t) == -1);
+  CHECK(scene_pick(w, 4, {0, 0, 0}, normalize(Vec3{1, 0, 1}), &t) == -1);
+  // Model sinirlari + isaret: modelli varlik model kutusunu, bos varlik 0.3 isaret kutusunu alir.
+  SceneBounds mdl{{-2, -1, -2}, {2, 1, 2}};
+  SceneEntity m{}; m.components = kSceneModel; m.asset = 0;
+  const SceneBounds lb = scene_entity_local_bounds(m, &mdl);
+  CHECK(std::fabs(lb.lo.x + 2) < 1e-6f && std::fabs(lb.hi.y - 1) < 1e-6f);
+  SceneEntity empty{};
+  const SceneBounds eb = scene_entity_local_bounds(empty, nullptr);
+  CHECK(std::fabs(eb.hi.x - 0.15f) < 1e-6f);
+  // Olcekli varlik: dunya AABB olcekle buyur.
+  m.scale = {2, 2, 2};
+  const SceneBounds sb = scene_world_bounds(lb, scene_entity_matrix(m));
+  CHECK(std::fabs(sb.hi.x - 4) < 1e-5f && std::fabs(sb.lo.y + 2) < 1e-5f);
+  std::printf("    [bilgi] secim: en yakin kutu t=%.3f; ters/bosluk isinlari -1\n", 4.5f);
+}

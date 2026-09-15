@@ -14,7 +14,7 @@
 | L3 audio | **miniaudio** cihaz (AAudio/Pulse/ALSA/CoreAudio/null), kilitsiz **karıştırıcı** (32 ses, 0 ayırma), klip yükleme | ✅ ilk dilim |
 | L4 sim | archetype ECS, sistem zamanlayıcı, sabit adım + replay, **Jolt** fiber job'larda, **Recast/Detour** navmesh, sıkıştırılmış animasyon | ✅ yazılım tarafı |
 | L6 content | **glTF 2.0** (cgltf + stb_image; mesh, malzeme, doku, **iskelet + animasyon**), **meshoptimizer + ayrık LOD**, **KTX2 + ASTC** (astc-encoder; `engine_texpack`), **font atlası** (stb_truetype, Türkçe), **sahne veri modeli** (`.sahne` deterministik metin, işlem günlüğü geri al/yinele, gövde kurulumu) | ✅ ilk dilim |
-| L6 app | `engine_demo` (masaüstü pencere / headless), **Android NativeActivity host** (+ **Swappy** seçenek), sanal joystick, HUD, **`engine_editor`** (ImGui + ImGuizmo; sahne yükle/kaydet/geri al/yinele/ekle/sil, oynat = gövdeler fizikte; headless) | ✅ |
+| L6 app | `engine_demo` (masaüstü pencere / headless), **Android NativeActivity host** (+ **Swappy** seçenek), sanal joystick, HUD, **`engine_editor`** (ImGui + ImGuizmo; sahne yükle/kaydet/geri al/yinele/ekle/sil, tıkla-seç, oynat = gövdeler fizikte; headless) | ✅ |
 | araçlar | `layer_check.py` (katman kuralı = build hatası), `compile_shaders.py`, `clang_syntax_check.sh`, `android_run.sh`, `make_test_gltf.py`, `fetch_vvl_android.sh`, `tracy_check.sh` | ✅ |
 
 ## 2. Telefonda çalışan sahne (tek APK)
@@ -29,7 +29,7 @@ animasyonu, oyuncu (dokunmatik joystick, kamera izler), gölge, 8 dönen nokta �
 - `LAZILY_ALLOCATED` bellek var (TBDR doğrulandı). Zaman damgası, GPL, subpass merge feedback **yok**.
 - Plan L2 "zorunlu" listesi (descriptorIndexing/timeline/BDA) bu cihazda **yok** → kapı rapora çevrildi (REV-3).
 
-## 4. Kapılar (engine_tests: masaüstü 79/79 (katmanla, 0 atlandı), emülatör 67/67 (katmanla; editör testi masaüstü), telefon 66/66 (skinning öncesi — USB düştü, telefon gelince tekrar))
+## 4. Kapılar (engine_tests: masaüstü 80/80 (katmanla, 0 atlandı), emülatör 67/67 (katmanla; editör testi masaüstü), telefon 66/66 (skinning öncesi — USB düştü, telefon gelince tekrar))
 Her görsel özelliğin açık/kapalı karşılaştırmalı testi ve pozitif/negatif kontrolü var: gölge (koyulaşan
 piksel + 6 m kaydırma kontrolü), doku (keskin geçiş oranı), nokta ışık (kırmızı piksel, görüş dışı 0),
 UI metni (boş metin 0), kümeleme (yerel/konservatif), joystick, glTF sayıları, adanmış bellek serbest
@@ -43,7 +43,7 @@ sahte yeşil (8s); `compositeAlpha OPAQUE` Huawei'de yok; katmanın seyrek-indek
 
 ## 6. Ne yok (sonraki aşama adayları; tarama belgesine karşı tam liste: `BOSLUK-TARAMASI.md`)
 1. ~~Sahne veri modeli + dosya formatı~~ ✅ 2026-09-15 (`content/scene`, `.sahne`, işlem günlüğü). Kalan: runtime blob derleyici (PLAN §6).
-2. **Editör** (var: paneller, gizmo, yörünge kamera, oynat/durdur, kaydet/yükle, geri al/yinele, ekle/sil): tıklamayla seçim (ışın–AABB), ışık/kamera paneli.
+2. **Editör** (var: paneller, gizmo, yörünge kamera, oynat/durdur, kaydet/yükle, geri al/yinele, ekle/sil, tıklamayla seçim): ışık/gölge/kamera paneli, runtime blob.
 3. **Tulpar bağlaması**: oyun mantığı Tulpar'da (dil bugün kutusuz struct/işaretçi vermiyor; C ABI köprüsü).
 4. Karakter modeli yok (iskelet/animasyon içe aktarma ve GPU skinning var; sanatçı varlığı gerek).
 5. Uzamsal ses/Steam Audio, CSM, render graph (Granite referans),
