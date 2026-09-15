@@ -8,6 +8,7 @@
 
 #include "core/memory/alloc_gate.hpp"
 #include "core/memory/arena.hpp"
+#include "renderer/renderer.hpp"
 #include "rhi/device.hpp"
 #include "rhi/offscreen.hpp"
 #include "rhi/tile_budget.hpp"
@@ -83,6 +84,12 @@ ENGINE_TEST(rhi_loader_and_device_caps) {
   // basilir, cihaz matrisine girer; eksik yol yedegiyle calismak zorunda.
   if (c.missing_mandatory[0])
     std::printf("    [bilgi] plan L2 'zorunlu' eksik (cihaz verisi, kapi degil): %s\n", c.missing_mandatory);
+  // Kalici PSO onbellegi nereye yaziliyor? Bos ise KAPALI demektir ($HOME ve
+  // $TMPDIR yoksa cozulemez) — bunu gormeden "onbellek var" varsayilamaz.
+  std::printf("    [bilgi] PSO onbellegi: %s (%s); pipelineCacheUUID %02x%02x%02x%02x...\n",
+              dev.pso_cache_path()[0] ? dev.pso_cache_path() : "(yol cozulemedi)",
+              dev.pso().stats().loaded ? "yuklendi" : pso_reject_str(dev.pso().stats().reject),
+              c.pipeline_cache_uuid[0], c.pipeline_cache_uuid[1], c.pipeline_cache_uuid[2], c.pipeline_cache_uuid[3]);
   std::printf("    [bilgi] surucu=%u gpl=%d merge_feedback=%d fsr=%d host_image_copy=%d\n", c.driver_version,
               c.graphics_pipeline_library, c.ext_subpass_merge_feedback, c.khr_fragment_shading_rate, c.ext_host_image_copy);
   dev.shutdown();
@@ -365,4 +372,410 @@ ENGINE_TEST(rhi_mali_tile_budget_rule) {
   const VkFormat unknown[1] = {VK_FORMAT_ASTC_4x4_UNORM_BLOCK};
   tb = tile_budget(unknown, 1);
   CHECK(!tb.ok);
+}
+
+// --- PSO ON-URETIMI (PLAN Faz 6) --------------------------------------------
+// SPIR-V derleme zamaninda uretiliyor (rhi/shaders/*_spv.h), ama PIPELINE
+// NESNESI surucu tarafindan ILK KULLANIMDA kuruluyordu ve surecin omruyle
+// sinirliydi. Iki maliyet: (a) her acilista ayni shader->ISA derlemesi,
+// (b) tembel kurulan pipeline'lar KARE ICINDE derleniyor (takilma).
+//
+// Bu kapi ikisini de OLCER. Olcum tek cihaz uzerinde yapilir: her kosum icin
+// yeni VkInstance acmak sonraki kapilari sessizce ATLANDI'ya dusurur
+// (Tuzaklar 8al) ve ayni VkApi tablosuyla ikinci cihaz acmak paylasilan
+// cihazin giris noktalarini ezer (8an). Onbellek `PsoCache::reinit` ile
+// degistirilir.
+//
+// Varyant kumesi TAHMIN EDILMEZ: gercek renderer kurulur ve VkApi tablosuna
+// takilan ara yordam kac pipeline kuruldugunu SAYAR. Sayi 0 cikarsa kanca
+// calismiyordur ve kapi duser (yoksa "0 pipeline, cok hizli" diye yanlis
+// yesil olurdu).
+//
+// ZAMANLAMA TEK BASINA YETMEZ: surucu surec icinde KENDI onbellegini de tutar,
+// yani ikinci kurulum dosyamiz olmasa da hizlanir. Bu yuzden asil olcum
+// ONBELLEK BUYUMESI: diskten yuklenen onbellege yeni girdi EKLENMIYORSA
+// (buyume ~0) kurulum gercekten ISABET etmistir. Ucuncu kosum (bos onbellek,
+// surucu ic onbellegi sicak) bu ayrimi gosteren kontroldur.
+namespace {
+struct PsoRec {
+  renderer::Renderer *r;
+  bool ui;
+};
+void pso_rec_main(VkCommandBuffer cb, void *u) {
+  PsoRec *p = static_cast<PsoRec *>(u);
+  p->r->record(cb);
+  if (p->ui) p->r->ui_record(cb);
+}
+void pso_rec_shadow(VkCommandBuffer cb, void *u) { static_cast<PsoRec *>(u)->r->record_shadow(cb); }
+
+// 8x8 beyaz atlas (UI dortgeni icin; icerik onemsiz, boru hatti onemli).
+const uint8_t *pso_white_atlas() {
+  static uint8_t px[8 * 8 * 4];
+  std::memset(px, 0xFF, sizeof px);
+  return px;
+}
+
+// Dosyanin `off` baytini XOR'lar (bozma). off < 0 ise sondan sayar.
+bool pso_poke(const char *path, long off, uint8_t x) {
+  FILE *f = std::fopen(path, "r+b");
+  if (!f) return false;
+  if (off < 0) std::fseek(f, off, SEEK_END);
+  else std::fseek(f, off, SEEK_SET);
+  int c = std::fgetc(f);
+  if (c == EOF) { std::fclose(f); return false; }
+  if (off < 0) std::fseek(f, off, SEEK_END);
+  else std::fseek(f, off, SEEK_SET);
+  std::fputc((uint8_t)c ^ x, f);
+  std::fclose(f);
+  return true;
+}
+bool pso_truncate(const char *path, long bytes) { return ::truncate(path, bytes) == 0; }
+
+bool pso_copy(const char *from, const char *to) {
+  FILE *in = std::fopen(from, "rb");
+  if (!in) return false;
+  FILE *out = std::fopen(to, "wb");
+  if (!out) { std::fclose(in); return false; }
+  char buf[8192];
+  size_t n;
+  while ((n = std::fread(buf, 1, sizeof buf, in)) > 0)
+    if (std::fwrite(buf, 1, n, out) != n) break;
+  std::fclose(in);
+  std::fclose(out);
+  return true;
+}
+
+// Kurulan onbellegi bir dosyaya yazip boyutunu doner (0 = yazilamadi).
+uint64_t pso_snapshot(Device &dev, const char *path) {
+  return dev.pso().save() && std::strcmp(dev.pso().path(), path) == 0 ? dev.pso().stats().saved_bytes : 0;
+}
+} // namespace
+
+ENGINE_TEST(rhi_pso_cache_warms_pipeline_creation) {
+  if (!loader()) { test::skip("Vulkan loader (libvulkan) yok — PSO on-uretim kapisi olculmedi"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "pso_cache")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  dc.pso_cache_path = ""; // varsayilan ($HOME/.cache) yolu DEVRE DISI: kapi kendi dosyasini yonetir
+  dc.validation = true;   // katman varsa yeni yol da dogrulanir (yoksa caps.validation_layer=false)
+  const char *pref = std::getenv("TULPAR_ENGINE_GPU");
+  dc.prefer = pref ? pref : "";
+  if (!dev.init(sys, g_api, dc)) {
+    std::printf("    [bilgi] cihaz acilamadi: %s\n", dev.last_error());
+    test::skip("Vulkan cihazi yok (ICD?) — PSO on-uretim kapisi olculmedi");
+    return;
+  }
+  char dir[512];
+  test::tmp_template(dir, sizeof dir, "engine_pso");
+  CHECK(mkdtemp(dir) != nullptr);
+  char cache_path[600], probe_path[600];
+  std::snprintf(cache_path, sizeof cache_path, "%s/pso.bin", dir);
+  std::snprintf(probe_path, sizeof probe_path, "%s/probe.bin", dir);
+
+  const uint32_t W = 192, H = 192;
+  OffscreenConfig oc;
+  oc.width = W;
+  oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) {
+    std::printf("    [bilgi] offscreen: %s\n", ores.error);
+    CHECK(false);
+    dev.shutdown();
+    return;
+  }
+
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 512;
+  rc.post = true; // bloom zinciri 4 boru hatti daha ekler (varyant kumesi buyusun)
+  rc.post_width = W;
+  rc.post_height = H;
+  rc.gpu_cull = true; // dolayli yol 3 boru hatti daha; cihaz vermezse kendi kapanir
+
+  struct Phase {
+    uint32_t created = 0;
+    uint64_t ns = 0;
+    uint64_t loaded = 0; // onbellege diskten giren
+    uint64_t after = 0;  // kurulumdan sonra onbellegin boyutu
+  };
+  // Bir kosum: onbellegi `path`ten kur, renderer'i kur, sayaclari topla.
+  auto run_phase = [&](const char *path, Phase *out, renderer::Renderer *keep) {
+    dev.pso().reinit(path, false);
+    const PsoCacheStats before = dev.pso().stats();
+    out->loaded = before.payload_bytes;
+    renderer::Renderer local;
+    renderer::Renderer &ren = keep ? *keep : local;
+    bool ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+    CHECK(ok);
+    const PsoCacheStats s = dev.pso().stats();
+    out->created = s.created;
+    out->ns = s.create_ns;
+    // Onbellegin kurulumdan SONRAKI boyutu: buyume = eklenen girdi = ISKA.
+    out->after = pso_snapshot(dev, path) ? dev.pso().stats().saved_bytes : 0;
+    if (!keep && ok) ren.shutdown();
+    return ok;
+  };
+
+  // --- 1. SOGUK: dosya yok. Surucu her pipeline'i sifirdan derler. ----------
+  Phase cold;
+  run_phase(cache_path, &cold, nullptr);
+  const PsoCacheStats cold_s = dev.pso().stats();
+  CHECK(!cold_s.loaded);
+  CHECK(cold_s.reject == PsoReject::NoFile);
+  // Kanca calisiyor mu? Calismiyorsa sayac 0 kalir ve butun olcum anlamsiz olur.
+  bool counted = cold.created > 0;
+  CHECK(counted);
+  CHECK(cold.after > 0); // soguk kosum onbellege girdi YAZMIS olmali
+  std::printf("    [bilgi] varyant kumesi: renderer kurulumunda %u grafik boru hatti kuruldu "
+              "(kaynaktan sayildi, tahmin degil)\n", cold.created);
+
+  // --- 2. SICAK: ayni dosya yuklenir. --------------------------------------
+  Phase warm;
+  run_phase(cache_path, &warm, nullptr);
+  const PsoCacheStats warm_s = dev.pso().stats();
+  bool warm_loaded = warm_s.loaded;
+  CHECK(warm_loaded);
+  CHECK(warm.created == cold.created); // ayni varyant kumesi
+  CHECK(warm.loaded > 0);
+
+  // --- 3. KONTROL: bos onbellek, ama surucunun IC onbellegi artik sicak. ----
+  // Sure farkini tek basina "dosya sayesinde" diye okumak bu yuzden yanlistir.
+  Phase ctrl;
+  run_phase("", &ctrl, nullptr);
+  ctrl.after = 0; // yol yok, olculemez
+
+  const double cold_ms = cold.ns / 1e6, warm_ms = warm.ns / 1e6, ctrl_ms = ctrl.ns / 1e6;
+  const long long cold_growth = (long long)cold.after - (long long)cold.loaded;
+  const long long warm_growth = (long long)warm.after - (long long)warm.loaded;
+  std::printf("    [bilgi] kurulum suresi: SOGUK %.2f ms | SICAK %.2f ms | KONTROL (bos onbellek, surucu ici sicak) %.2f ms\n",
+              cold_ms, warm_ms, ctrl_ms);
+  std::printf("    [bilgi] onbellek buyumesi: SOGUK %lld B (0 -> %llu) | SICAK %lld B (%llu -> %llu)\n", cold_growth,
+              (unsigned long long)cold.after, warm_growth, (unsigned long long)warm.loaded,
+              (unsigned long long)warm.after);
+  // ASIL IDDIA (zamanlamadan bagimsiz): diskten yuklenen onbellege kurulum
+  // sirasinda yeni girdi EKLENMEZ — yani her varyant ISABET etmistir. Soguk
+  // kosum ayni onbellege cold_growth bayt yazmisti; bu, olcumun bir sey
+  // olctugunun kaniti (pozitif kontrol).
+  bool hits = cold_growth > 0 && warm_growth * 4 < cold_growth;
+  CHECK(hits);
+  if (!hits)
+    std::printf("    [bilgi] SICAK kosum onbellege %lld bayt EKLEDI — diskten gelen girdiler kullanilmadi\n", warm_growth);
+  // Sure yorumu OLCUME dayanir: KONTROL soguga yakinsa hizlanma DOSYADAN gelir
+  // (surucunun surec ici durumu bu cihazda pipeline kurulumunu hizlandirmiyor);
+  // KONTROL sicaga yakinsa surec ici olcum ikisini ayirt EDEMEZ ve tek gecerli
+  // kanit buyume olcumu olur. Iddia ne olursa olsun sayilar basilir.
+  if (warm_ms >= cold_ms * 0.9)
+    std::printf("    [bilgi] sure farki olculemedi (soguk %.2f, sicak %.2f ms): bu surucu pipeline kurulumunu zaten"
+                " ucuz yapiyor — isabet iddiasi BUYUME olcumunde\n", cold_ms, warm_ms);
+  else if (ctrl_ms >= (cold_ms + warm_ms) * 0.5)
+    // KONTROL soguga sicaktan daha yakin: bos onbellekle kurulum yine pahali,
+    // yani hizlanmayi getiren sey DOSYA, surucunun surec ici durumu degil.
+    std::printf("    [bilgi] sicak kosum %.2fx hizli; KONTROL (%.2f ms) SOGUGA (%.2f) sicaktan (%.2f) daha yakin ->"
+                " hizlanma DISKTEKI DOSYADAN geliyor, surucunun surec ici durumundan degil\n",
+                cold_ms / warm_ms, ctrl_ms, cold_ms, warm_ms);
+  else
+    std::printf("    [bilgi] sicak kosum %.2fx hizli ama KONTROL de hizli (%.2f ms): surec ICINDE dosyanin katkisi"
+                " sureden AYIRT EDILEMEZ — gecerli kanit buyume olcumu\n", cold_ms / warm_ms, ctrl_ms);
+
+  // --- 4. KONTROL: bozuk / uyusmayan onbellek REDDEDILMELI -----------------
+  // Sessizce kabul etmek tanimsiz davranistir. Her vaka icin dosya bozulur,
+  // beklenen ret sebebi denetlenir ve motorun YINE DE dogru kuruldugu gosterilir.
+  {
+    PsoDeviceId id;
+    id.vendor_id = dev.caps().vendor_id;
+    id.device_id = dev.caps().device_id;
+    id.driver_version = dev.caps().driver_version;
+    id.api_version = dev.caps().api_version;
+    std::memcpy(id.cache_uuid, dev.caps().pipeline_cache_uuid, VK_UUID_SIZE);
+    // (a) yuk kurcalanmis -> ozet tutmaz
+    std::snprintf(probe_path, sizeof probe_path, "%s/bozuk_yuk.bin", dir);
+    char v_path[600], u_path[600], t_path[600], g_path[600];
+    std::snprintf(v_path, sizeof v_path, "%s/baska_satici.bin", dir);
+    std::snprintf(u_path, sizeof u_path, "%s/baska_uuid.bin", dir);
+    std::snprintf(t_path, sizeof t_path, "%s/kesik.bin", dir);
+    std::snprintf(g_path, sizeof g_path, "%s/copluk.bin", dir);
+    CHECK(pso_copy(cache_path, probe_path));
+    CHECK(pso_copy(cache_path, v_path));
+    CHECK(pso_copy(cache_path, u_path));
+    CHECK(pso_copy(cache_path, t_path));
+    CHECK(pso_poke(probe_path, (long)sizeof(PsoFileHeader) + 3, 0x5A)); // yuk baytini cevir
+    CHECK(pso_poke(v_path, 12, 0x01));  // PsoFileHeader::vendor_id
+    CHECK(pso_poke(u_path, 40, 0x01));  // PsoFileHeader::cache_uuid[0]
+    CHECK(pso_truncate(t_path, 512));   // kesik dosya
+    char k_path[600];
+    std::snprintf(k_path, sizeof k_path, "%s/minik.bin", dir);
+    { // magic denetimine ULASSIN diye baslik boyundan buyuk
+      FILE *f = std::fopen(g_path, "wb");
+      if (f) {
+        for (int i = 0; i < 8; i++) std::fwrite("bu bir PSO onbellegi degil, duz metin...\n", 1, 40, f);
+        std::fclose(f);
+      }
+    }
+    { FILE *f = std::fopen(k_path, "wb"); if (f) { std::fwrite("minik", 1, 5, f); std::fclose(f); } }
+    const struct { const char *path; const char *name; PsoReject want; } cases[] = {
+        {probe_path, "yuk kurcalanmis", PsoReject::PayloadHash},
+        {v_path, "baska satici (vendorID)", PsoReject::VendorId},
+        {u_path, "pipelineCacheUUID degismis", PsoReject::CacheUuid},
+        {t_path, "kesik dosya", PsoReject::SizeMismatch},
+        {g_path, "bizim dosya degil", PsoReject::Magic},
+        {k_path, "baslik kadar bile degil", PsoReject::TooSmall},
+        {"/dev/null/yok", "dosya yok", PsoReject::NoFile},
+    };
+    for (const auto &c : cases) {
+      void *payload = nullptr;
+      size_t pn = 0;
+      PsoReject got = pso_cache_read_file(c.path, id, &payload, &pn, nullptr);
+      bool rejected = got == c.want && payload == nullptr;
+      CHECK(rejected);
+      std::printf("    [bilgi] ret kontrolu \"%s\": %s%s\n", c.name, pso_reject_str(got),
+                  rejected ? "" : "  <-- BEKLENEN DEGIL");
+      std::free(payload);
+    }
+    // POZITIF KONTROL: bozulmamis kopya AYNI yoldan GECER — yoksa yukleyici
+    // her seyi reddediyor olabilirdi ve yukaridaki bes satir hicbir sey olcmezdi.
+    void *payload = nullptr;
+    size_t pn = 0;
+    PsoReject good = pso_cache_read_file(cache_path, id, &payload, &pn, nullptr);
+    bool accepted = good == PsoReject::None && payload != nullptr && pn > 0;
+    CHECK(accepted);
+    std::printf("    [bilgi] pozitif kontrol: bozulmamis dosya KABUL (%s, %llu B yuk)\n", pso_reject_str(good),
+                (unsigned long long)pn);
+    std::free(payload);
+  }
+
+  // Reddedilen dosyayla motor YINE DE kurulmali ve dogru cizmeli.
+  renderer::Renderer ren;
+  {
+    Phase bad;
+    dev.pso().reinit(probe_path, false);
+    const PsoCacheStats s = dev.pso().stats();
+    CHECK(!s.loaded);
+    CHECK(s.reject == PsoReject::PayloadHash);
+    std::printf("    [bilgi] bozuk onbellekle acilis: yuklenmedi (%s), onbellek BOS kuruldu\n", pso_reject_str(s.reject));
+    bool ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+    CHECK(ok);
+    bad.created = dev.pso().stats().created;
+    CHECK(bad.created == cold.created); // ayni varyant kumesi yeniden kuruldu
+    if (!ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  }
+
+  renderer::TextureHandle tex = ren.create_texture(pso_white_atlas(), 8, 8, false, false);
+  renderer::MaterialHandle atlas = ren.create_material(tex, {1, 1, 1});
+  renderer::Vertex vb[24];
+  uint32_t ib[36];
+  uint32_t n = renderer::Renderer::cube(vb, ib);
+  renderer::MeshHandle cube = ren.create_mesh(vb, 24, ib, n);
+  CHECK(cube.valid());
+  ren.set_light(normalize(Vec3{0.4f, 1.0f, 0.3f}), {0.15f, 0.15f, 0.18f}, 0.9f);
+  ren.set_camera(Mat4::look_at({0, 2.0f, 5.0f}, {0, 0, 0}, {0, 1, 0}),
+                 Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 100.0f));
+
+  // --- 5. KONTROL: ILK KARE icinde kac pipeline kuruluyor? -----------------
+  // On isinma ACIK (bugunku renderer: mesh/golge/UI/post boru hatlari init'te
+  // kurulur) -> ilk karede 0 olmali.
+  PsoRec rec{&ren, true};
+  ren.begin_frame(0);
+  ren.ui_begin((float)W, (float)H);
+  ren.ui_set_atlas(atlas);
+  ren.ui_rect(8, 8, 40, 20, renderer::Renderer::rgba(255, 255, 255));
+  ren.draw(cube, Mat4::scale({1.2f, 1.2f, 1.2f}), {0.9f, 0.4f, 0.2f});
+  dev.pso().begin_frame();
+  bool frame_ok = offscreen_render_custom(off, oc, pso_rec_main, &rec, &ores, pso_rec_shadow);
+  uint32_t first_frame = dev.pso().end_frame();
+  CHECK(frame_ok);
+  if (!frame_ok) std::printf("    [bilgi] kare: %s\n", ores.error);
+  bool warm_first_frame_clean = first_frame == 0;
+  CHECK(warm_first_frame_clean);
+  static uint8_t with_px[W * H * 4];
+  if (frame_ok) std::memcpy(with_px, ores.pixels, sizeof with_px);
+
+  // GORUNTU denetimi: reddedilen onbellekle kurulan boru hatlari gercekten
+  // ciziyor mu? Temizleme rengiyle karsilastirmak post acikken hicbir sey
+  // olcmez (birlestirme gecisi HER pikseli yazar). Bos kare KONTROL: cizimli
+  // kareyle farki = gercekten cizilmis geometri.
+  ren.begin_frame(0);
+  ren.ui_begin((float)W, (float)H);
+  dev.pso().begin_frame();
+  bool empty_ok = offscreen_render_custom(off, oc, pso_rec_main, &rec, &ores, pso_rec_shadow);
+  CHECK(dev.pso().end_frame() == 0);
+  CHECK(empty_ok);
+  uint32_t drawn = 0;
+  if (frame_ok && empty_ok)
+    for (uint32_t i = 0; i < W * H; i++)
+      if (!px_near(with_px + i * 4, ores.pixels[i * 4], ores.pixels[i * 4 + 1], ores.pixels[i * 4 + 2], 6)) drawn++;
+  bool image_ok = drawn > (W * H) / 50;
+  CHECK(image_ok);
+  std::printf("    [bilgi] ON ISINMA ACIK: ilk karede kurulan pipeline = %u; bozuk onbellekten sonra cizilen"
+              " geometri %u piksel (bos kare kontroluyle fark)\n", first_frame, drawn);
+
+  // POZITIF KONTROL: on isinmamis bir varyant istendiginde sayac 0 OLMAMALI.
+  //
+  // NOT (2026-09-16): bu kontrol eskiden SDF boru hattinin TEMBEL olmasina
+  // dayaniyordu. Artik `make_ui` onu KURULUMDA yaratiyor (ilk-kare takilmasi
+  // olcuyldu: 0.49 ms) — yani urun duzeldi ama kontrol olcumsuz kaldi. Kontrol
+  // kolu bu yuzden AYRI bir Renderer aciyor: `ui_prewarm_sdf = false` eski
+  // tembel yolu KONTROL KIPI olarak koruyor. Urun yolunu bozup kontrolu
+  // yasatmak yerine, kontrolun kendi kurulumunu vermek dogrusu.
+  renderer::RendererConfig rc_lazy = rc;
+  rc_lazy.ui_prewarm_sdf = false;
+  renderer::Renderer ren_lazy;
+  bool lazy_init = ren_lazy.init(dev, sys, offscreen_render_pass(off), rc_lazy);
+  CHECK(lazy_init);
+  PsoRec rec_lazy{&ren_lazy, true};
+  // Atlas KENDI renderer'indan alinmali: doku/malzeme descriptor set 1'i ILGILI
+  // renderer'in havuzundan ayirir, baskasininkini baglamak "set 1 bagli degil"
+  // dogrulama hatasi verir (olculdu).
+  renderer::TextureHandle tex_lazy = ren_lazy.create_texture(pso_white_atlas(), 8, 8, false, false);
+  renderer::MaterialHandle atlas_lazy = ren_lazy.create_material(tex_lazy, {1, 1, 1});
+  ren_lazy.begin_frame(0);
+  ren_lazy.ui_begin((float)W, (float)H);
+  ren_lazy.ui_set_sdf(true); // ui_begin bayragi her kare sifirlar: SONRA cagrilmali
+  ren_lazy.ui_set_atlas(atlas_lazy);
+  ren_lazy.ui_rect(8, 40, 40, 20, renderer::Renderer::rgba(255, 255, 255));
+  // Kup CIZILMIYOR: `cube`'un malzemesi (descriptor set 1) BIRINCI renderer'in
+  // havuzundan ayrildi; ikinci renderer uzerinden cizmek "set 1 bagli degil"
+  // dogrulama hatasi verir. Bu kolun olctugu sey zaten yalniz SDF boru hattinin
+  // TEMBEL kurulmasi — UI dortgeni tek basina yeterli.
+  dev.pso().begin_frame();
+  bool sdf_ok = lazy_init && offscreen_render_custom(off, oc, pso_rec_main, &rec_lazy, &ores, pso_rec_shadow);
+  uint32_t sdf_frame = dev.pso().end_frame();
+  const uint64_t hitch_ns = dev.pso().frame_create_ns();
+  CHECK(sdf_ok);
+  bool lazy_costs_a_frame = sdf_frame > 0;
+  CHECK(lazy_costs_a_frame);
+  std::printf("    [bilgi] POZITIF KONTROL (ui_prewarm_sdf=false ile TEMBEL SDF boru hatti): "
+              "ilk karede kurulan pipeline = %u, kare ICINDE gecen kurulum suresi %.3f ms (= takilma)\n",
+              sdf_frame, hitch_ns / 1e6);
+  if (!lazy_costs_a_frame)
+    std::printf("    [bilgi] sayac 0 kaldi: SDF boru hatti kurulamadi (%s) — kontrol bir sey olcmedi\n",
+                ren_lazy.ui_stats().sdf_reason[0] ? ren_lazy.ui_stats().sdf_reason : "sebep yok; SDF dortgeni uretilmedi");
+  ren_lazy.shutdown();
+
+  // Isinmis varyant artik kurulu: sonraki kare yine 0 olmali.
+  ren.begin_frame(0);
+  ren.ui_begin((float)W, (float)H);
+  ren.ui_set_atlas(atlas);
+  ren.ui_rect(8, 8, 40, 20, renderer::Renderer::rgba(255, 255, 255));
+  ren.draw(cube, Mat4::scale({1.2f, 1.2f, 1.2f}), {0.9f, 0.4f, 0.2f});
+  dev.pso().begin_frame();
+  CHECK(offscreen_render_custom(off, oc, pso_rec_main, &rec, &ores, pso_rec_shadow));
+  uint32_t steady = dev.pso().end_frame();
+  CHECK(steady == 0);
+
+  // "0 dogrulama hatasi" ancak katman ETKINSE bir sey demektir (Tuzaklar 8s).
+  CHECK(dev.validation_errors() == 0);
+  // Kanca her cagriyi DOGRU cihazin gercek yordamina yonlendirebildi mi?
+  // Yonlendirilemeyen cagri = yuva yetmedi; sessizce yanlis boru hatti degil,
+  // gorunur hata olur ama olcum de bozulur.
+  CHECK(pso_unrouted_calls() == 0);
+  std::printf("    [bilgi] dogrulama katmani=%s, hata=%u; onbellek dosyasi %s (%llu B yuk)\n",
+              dev.caps().validation_layer ? "ETKIN" : "YOK (0 hata bir sey demek degil)", dev.validation_errors(),
+              cache_path, (unsigned long long)cold.after);
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+  // temizlik: gecici dizin icerigi
+  std::remove(cache_path);
 }

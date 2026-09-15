@@ -1,0 +1,105 @@
+// kaynak-ozet: f31a2146e22f  (engine/rhi/shaders/mesh.frag @ b6f593e)
+// Forward parca asamasi: yonlu isik + kademeli golge (CSM atlasi) + kumelenmis
+// nokta isiklar. G1/G3/G4'un hepsini kullanir — motorun en agir shader'i.
+str asama = "frag";
+
+vec3 v_nrm = girdi(0);
+vec3 v_color = girdi(1);
+vec2 v_uv = girdi(2);
+vec3 v_world = girdi(3);
+float v_viewz = girdi(4);
+
+struct Frame {
+  mat4 viewproj;
+  mat4 view;
+  mat4[3] light_viewproj;
+  vec4 light_dir;
+  vec4 ambient;
+  vec4 shadow_params;
+  vec4 cluster_params;
+  uvec4 cluster_grid;
+  vec4 cascade_params;
+}
+Frame u = tekduze(0, 0);
+
+sampler2DShadow u_shadow = ornek(0, 1);
+sampler2D u_albedo = ornek(1, 0); // malzeme (klasik set, bindless yok)
+
+struct PointLight { vec4 pos_radius; vec4 color_intensity; }
+struct Lights { PointLight[32] l; }
+Lights u_lights = tekduze(0, 2);
+struct Clusters { uint[] mask; }
+Clusters u_clusters = depo(0, 3);
+
+vec4 o_color = cikti(0);
+
+// Kumelenmis nokta isiklar: bu pikselin kumesinin 32-bit maskesi.
+func point_lights(vec3 n): vec3 {
+  if (u.cluster_grid.w == 0u) { return vec3(0.0); }
+  uint tx = min(u32(gl_FragCoord.x / u.cluster_params.z), u.cluster_grid.x - 1u);
+  uint ty = min(u32(gl_FragCoord.y / u.cluster_params.w), u.cluster_grid.y - 1u);
+  float fz = floor(log(max(v_viewz, 1e-6)) * u.cluster_params.x + u.cluster_params.y);
+  uint tz = u32(clamp(fz, 0.0, f32(u.cluster_grid.z - 1u)));
+  uint mask = u_clusters.mask[(tz * u.cluster_grid.y + ty) * u.cluster_grid.x + tx];
+  vec3 sum = vec3(0.0);
+  while (mask != 0u) {
+    int i = findLSB(mask);
+    mask &= mask - 1u;
+    PointLight L = u_lights.l[i];
+    vec3 d = L.pos_radius.xyz - v_world;
+    float dist2 = dot(d, d);
+    float r = L.pos_radius.w;
+    float x = dist2 / (r * r);
+    float win = clamp(1.0 - x * x, 0.0, 1.0);
+    float att = win * win / (dist2 + 1.0);
+    float nl = max(dot(n, d * inversesqrt(max(dist2, 1e-8))), 0.0);
+    sum += L.color_intensity.rgb * (L.color_intensity.w * att * nl);
+  }
+  return sum;
+}
+
+// Dogrusal aydinlatma (Filament).
+func linear_to_srgb(vec3 c): vec3 {
+  c = clamp(c, 0.0, 1.0);
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
+}
+
+// Kademeli golge (CSM), ATLAS yerlesimi; secim KAPSAMAYA gore.
+func cascade_sample(int idx, vec3 wpos, float bias): float {
+  vec4 lp = u.light_viewproj[idx] * vec4(wpos, 1.0);
+  vec3 p = lp.xyz / lp.w;
+  if (p.z <= 0.0 || p.z >= 1.0) { return -1.0; }
+  vec2 uv = p.xy * 0.5 + 0.5;
+  float inset = u.cascade_params.w; // bir texel
+  if (uv.x < inset || uv.x > 1.0 - inset || uv.y < inset || uv.y > 1.0 - inset) { return -1.0; }
+  float inv_n = u.cascade_params.y;
+  float base_x = (f32(idx) + uv.x) * inv_n;
+  float tx = u.cascade_params.z; // atlas texel x
+  float ty = u.cascade_params.w; // atlas texel y
+  float s = 0.0;
+  for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++)
+      s += texture(u_shadow, vec3(base_x + f32(x) * tx, uv.y + f32(y) * ty, p.z - bias));
+  return s / 9.0;
+}
+func shadow_visibility(float nl, vec3 n): float {
+  if (u.shadow_params.z < 0.5) { return 1.0; }
+  float bias = u.shadow_params.y * clamp(1.0 - nl, 0.15, 1.0);
+  vec3 wpos = v_world + n * u.shadow_params.w;
+  int n_casc = i32(u.cascade_params.x);
+  for (int i = 0; i < 3; i++) {
+    if (i >= n_casc) { break; }
+    float v = cascade_sample(i, wpos, bias);
+    if (v >= 0.0) { return v; }
+  }
+  return 1.0; // hicbir kademe kapsamiyor: isikli
+}
+func main() {
+  vec3 n = normalize(v_nrm);
+  float nl = max(dot(n, normalize(u.light_dir.xyz)), 0.0);
+  float vis = shadow_visibility(nl, n);
+  vec3 albedo = texture(u_albedo, v_uv).rgb * v_color;
+  vec3 c = albedo * (u.ambient.rgb + nl * vis * u.ambient.a + point_lights(n));
+  if (u.light_dir.w > 0.5) { c = linear_to_srgb(c); }
+  o_color = vec4(c, 1.0);
+}

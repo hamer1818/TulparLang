@@ -1361,12 +1361,22 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_array_set_raw_fast = LLVMAddFunction(
       backend->module, "aot_array_set_raw_fast", set_raw_fast_type);
 
-  // aot_input() -> VMValue
-  LLVMTypeRef input_type = llvm_make_vmvalue_func_type(backend, nullptr, 0, 0);
+  // aot_input(prompt) -> VMValue
+  // Istem parametresi (2026-09-16): `input("You: ")` istemi basmaliydi ama
+  // aot_input SIFIR argumanliydi ve buradaki gonderim argumani atiyordu.
+  // Artik aot_input_int / aot_input_float ile AYNI 1-VMValue imzasi var;
+  // argumansiz `input()` cagrisinda VM_VAL_VOID gecilir (asagidaki gonderim).
+  // DIKKAT: bu tip ASAGIDAKI 0-argumanli `input_type` ile PAYLASILAMAZ —
+  // read_key / sys_lang / term_width / term_height / screen_open /
+  // screen_close hepsi o tipi kullaniyor ve gercekten argumansizlar.
+  LLVMTypeRef input_prompt_only_params[] = {backend->vm_value_type};
+  LLVMTypeRef input_with_prompt_type =
+      llvm_make_vmvalue_func_type(backend, input_prompt_only_params, 1, 0);
   backend->func_aot_input =
-      LLVMAddFunction(backend->module, "aot_input", input_type);
+      LLVMAddFunction(backend->module, "aot_input", input_with_prompt_type);
 
-  // aot_read_key() -> VMValue (single keypress, no echo) — same 0-arg ABI.
+  // aot_read_key() -> VMValue (single keypress, no echo) — 0-arg ABI.
+  LLVMTypeRef input_type = llvm_make_vmvalue_func_type(backend, nullptr, 0, 0);
   backend->func_aot_read_key =
       LLVMAddFunction(backend->module, "aot_read_key", input_type);
 
@@ -6222,7 +6232,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (node->name && strcmp(bi_name, "input") == 0) {
       if (!backend->func_aot_input)
         fprintf(stderr, "Fatal: func_aot_input is nullptr\n");
-      return llvm_call_vmvalue_func(backend, backend->func_aot_input, nullptr, 0, "input_res");
+      // Istem argumani VARSA runtime'a gecilir (orada basilir + fflush).
+      // YOKSA VM_VAL_VOID: IS_STRING false oldugundan runtime sessizce
+      // okumaya gecer, yani eski `input()` cagrilari aynen calisir.
+      // (input_int / input_float bu noktada VM_VAL_INT 0 geciyor; void daha
+      // dogru sentinel — "istem yok" bir sayi degil.)
+      LLVMValueRef prompt = node->argument_count >= 1
+                                ? codegen_expression(backend, node->arguments[0])
+                                : llvm_vm_val_void(backend);
+      LLVMValueRef args[] = {prompt};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_input, args, 1, "input_res");
     }
     if (node->name && strcmp(bi_name, "read_key") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_key, nullptr, 0, "readkey_res");

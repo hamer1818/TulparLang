@@ -1230,7 +1230,12 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"toFloat", TYPE_FLOAT, {TYPE_UNKNOWN}},
       {"toBool", TYPE_BOOL, {TYPE_UNKNOWN}},
       // I/O
-      {"input", TYPE_STRING, {}},
+      // input(prompt?) — istem ISTEGE BAGLI. "Cok argumani hata, az argumani
+      // serbest" kurali geregi tek parametreyle kayit hem `input()` hem
+      // `input("You: ")` cagrisini gecirir; ONCEDEN {} kayitliydi ve istem
+      // veren her cagri "expects 0 argument(s), got 1" diye isaretleniyordu
+      // (dogru uyariydi: runtime da o argumani okumuyordu).
+      {"input", TYPE_STRING, {TYPE_STRING}},
       {"read_key", TYPE_STRING, {}},
       {"sys_lang", TYPE_STRING, {}},
       {"read_key_timeout", TYPE_STRING, {TYPE_INT}},

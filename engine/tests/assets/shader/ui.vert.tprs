@@ -1,0 +1,26 @@
+// kaynak-ozet: 4031e110c73c  (engine/rhi/shaders/ui.vert)
+// 2B arayuz: piksel uzayinda dortgenler. Push sabiti: ekran olcusu + on-dondurme.
+str asama = "vert";
+
+vec2 in_pos = girdi(0);
+vec2 in_uv = girdi(1);
+vec4 in_color = girdi(2);
+
+struct Push {
+  vec2 screen;
+  vec2 rot;    // (cos, sin): Android on-dondurme
+  float encode;
+}
+Push pc = itme();
+
+vec2 v_uv = cikti(0);
+vec4 v_color = cikti(1);
+float v_encode = cikti_duz(2);
+
+func main() {
+  vec2 n = vec2(in_pos.x / pc.screen.x * 2.0 - 1.0, in_pos.y / pc.screen.y * 2.0 - 1.0);
+  gl_Position = vec4(pc.rot.x * n.x - pc.rot.y * n.y, pc.rot.y * n.x + pc.rot.x * n.y, 0.0, 1.0);
+  v_uv = in_uv;
+  v_color = in_color;
+  v_encode = pc.encode;
+}

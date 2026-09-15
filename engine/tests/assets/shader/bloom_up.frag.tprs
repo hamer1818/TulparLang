@@ -1,0 +1,30 @@
+// kaynak-ozet: 99bf7adbd36c  (engine/rhi/shaders/bloom_up.frag)
+// Toplamali yukari ornekleme: alt seviye 3x3 cadir suzgeciyle buyutulur.
+str asama = "frag";
+
+vec2 v_uv = girdi(0);
+sampler2D u_src = ornek(0, 0);
+sampler2D u_src2 = ornek(0, 1);
+
+struct Push { vec4 texel; vec4 p; }
+Push pc = itme();
+
+vec4 o_color = cikti(0);
+
+func tent(vec2 uv, vec2 o): vec3 {
+  vec3 s = texture(u_src2, uv + vec2(-o.x, -o.y)).rgb;
+  s += texture(u_src2, uv + vec2(0.0, -o.y)).rgb * 2.0;
+  s += texture(u_src2, uv + vec2(o.x, -o.y)).rgb;
+  s += texture(u_src2, uv + vec2(-o.x, 0.0)).rgb * 2.0;
+  s += texture(u_src2, uv).rgb * 4.0;
+  s += texture(u_src2, uv + vec2(o.x, 0.0)).rgb * 2.0;
+  s += texture(u_src2, uv + vec2(-o.x, o.y)).rgb;
+  s += texture(u_src2, uv + vec2(0.0, o.y)).rgb * 2.0;
+  s += texture(u_src2, uv + vec2(o.x, o.y)).rgb;
+  return s * (1.0 / 16.0);
+}
+func main() {
+  vec3 lo = tent(v_uv, pc.texel.zw * max(pc.p.z, 0.0));
+  vec3 hi = texture(u_src, v_uv).rgb;
+  o_color = vec4(hi + lo, 1.0);
+}

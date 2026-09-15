@@ -228,12 +228,27 @@ bool gltf_load(Arena &arena, const char *path, Model *out, const GltfLimits &lim
     ModelMaterial &mm = out->materials[i];
     mm.base_color = {1, 1, 1};
     mm.image = -1;
+    // TUZAK 8u: `alloc_array_zeroed` YAPICI CALISTIRMAZ — ModelMaterial'daki
+    // `roughness = 1.0f` varsayilani uygulanmaz, alan 0 kalir. roughness 0 =
+    // ayna; yani pbr blogu olmayan her malzeme sessizce AYNAYA donerdi.
+    // Sifirdan farkli her varsayilan ELLE atanmali (base_color/image zaten oyle).
+    mm.metallic = 0.0f;
+    mm.roughness = 1.0f;
+    mm.has_pbr = false;
     if (cm.has_pbr_metallic_roughness) {
       const cgltf_pbr_metallic_roughness &pbr = cm.pbr_metallic_roughness;
       mm.base_color = {pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2]};
       if (pbr.base_color_texture.texture && pbr.base_color_texture.texture->image)
         mm.image = (int32_t)(pbr.base_color_texture.texture->image - data->images);
+      // metallic/roughness CARPANLARI okunuyor; metallicRoughness DOKUSU
+      // okunmuyor: shader bugun malzeme basina tek skaler cift kullaniyor
+      // (set 1 binding 1 UBO), doku basina degisim icin ikinci bir sampler
+      // baglamasi gerekir — TBDR butcesinde bilincli olarak ertelendi.
+      mm.metallic = pbr.metallic_factor;
+      mm.roughness = pbr.roughness_factor;
+      mm.has_pbr = true;
     }
+    mm.emissive = {cm.emissive_factor[0], cm.emissive_factor[1], cm.emissive_factor[2]};
   }
   out->material_count = ok ? nmat : 0;
 
@@ -486,8 +501,19 @@ bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedM
   }
   out->texture_count = m.image_count;
   for (uint32_t i = 0; i < m.material_count; i++) {
-    renderer::TextureHandle t = m.materials[i].image >= 0 ? out->textures[m.materials[i].image] : r.default_texture();
-    out->materials[i] = r.create_material(t, m.materials[i].base_color);
+    const ModelMaterial &mm = m.materials[i];
+    renderer::TextureHandle t = mm.image >= 0 ? out->textures[mm.image] : r.default_texture();
+    // Dosyada pbr_metallic_roughness YOKSA eski Lambert yolu — boylece PBR'siz
+    // bir varlik bugunku goruntusunu KORUR (gate: pbr_default_material_stays_near_lambert).
+    if (mm.has_pbr) {
+      renderer::PbrParams pbr;
+      pbr.metallic = mm.metallic;
+      pbr.roughness = mm.roughness;
+      pbr.emissive = mm.emissive;
+      out->materials[i] = r.create_material(t, mm.base_color, pbr);
+    } else {
+      out->materials[i] = r.create_material(t, mm.base_color);
+    }
     if (!out->materials[i].valid()) return false;
   }
   out->material_count = m.material_count;

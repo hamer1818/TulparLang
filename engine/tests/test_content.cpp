@@ -969,3 +969,76 @@ ENGINE_TEST(content_sdf_atlas_is_sharper_when_magnified) {
   content::SdfQuality bad{};
   CHECK(!content::font_measure_sdf_quality("/olmayan/font.ttf", (uint32_t)'B', 32.0f, 4.0f, 6, &bad));
 }
+
+// glTF metallic-roughness CARPANLARI ModelMaterial'a akiyor mu — ve dosyada
+// pbrMetallicRoughness blogu YOKSA eski Lambert yoluna dusuluyor mu.
+//
+// NEDEN BU KAPI VAR: PBR golgeleme renderer'a girdi (Cook-Torrance/GGX), ama
+// icerik yolu uzun sure yalniz base_color okuyordu — yani yuklenen HER model
+// metallic=0/roughness=1 ile ciziliyordu ve PBR pratikte OLU kaliyordu.
+// Ekranda hicbir sey kizarmaz: goruntu "makul" gorunur, sadece yanlistir.
+// Kapi GPU istemez: okuma CPU tarafinda, tam da kirilan yerde olculuyor.
+ENGINE_TEST(content_gltf_metallic_roughness_reaches_material) {
+  static SystemArena sys;
+  if (!sys.reserve(8u << 20, "gltf_pbr_test")) { CHECK(false); return; }
+
+  // En kucuk gecerli glTF: tek ucgen, tek malzeme. %s -> malzeme blogu.
+  const char *kSablon =
+      "{\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"materials\":[%s],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"min\":[0,0,0],\"max\":[1,1,0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,"
+      "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA\"}]}";
+
+  auto yaz = [&](const char *mat, char *out, size_t n) -> bool {
+    std::snprintf(out, n, "/tmp/tulpar_gltf_pbr_%p.gltf", (void *)mat);
+    char json[2048];
+    std::snprintf(json, sizeof json, kSablon, mat);
+    FILE *f = std::fopen(out, "wb");
+    if (!f) return false;
+    std::fwrite(json, 1, std::strlen(json), f);
+    std::fclose(f);
+    return true;
+  };
+
+  // URUN: pbrMetallicRoughness VAR — metal, puruzsuz, isik yayan.
+  char p_pbr[256];
+  const char *mat_pbr =
+      "{\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.9,0.8,0.7,1],"
+      "\"metallicFactor\":1.0,\"roughnessFactor\":0.2},\"emissiveFactor\":[0.1,0.2,0.3]}";
+  if (!yaz(mat_pbr, p_pbr, sizeof p_pbr)) { skip("/tmp yazilamadi"); return; }
+  content::Model mp;
+  bool ok_pbr = content::gltf_load(sys, p_pbr, &mp);
+  if (!ok_pbr) std::printf("    [bilgi] yukleme hatasi (pbr): %s\n", mp.error);
+  CHECK(ok_pbr);
+  bool pbr_alanlari = ok_pbr && mp.material_count == 1 && mp.materials[0].has_pbr &&
+                      mp.materials[0].metallic > 0.99f && mp.materials[0].roughness > 0.19f &&
+                      mp.materials[0].roughness < 0.21f && mp.materials[0].emissive.z > 0.29f;
+  CHECK(pbr_alanlari);
+  if (ok_pbr)
+    std::printf("    [bilgi] pbr blogu VAR: metallic %.2f roughness %.2f emissive (%.2f %.2f %.2f) has_pbr %d\n",
+                mp.materials[0].metallic, mp.materials[0].roughness, mp.materials[0].emissive.x,
+                mp.materials[0].emissive.y, mp.materials[0].emissive.z, (int)mp.materials[0].has_pbr);
+
+  // KONTROL: pbrMetallicRoughness YOK. has_pbr false kalmali ve degerler
+  // Lambert'e en yakin varsayilanda durmali — yoksa "akiyor" olcumu, her
+  // malzemeye ayni sayiyi yazan bir koda da yesil verirdi.
+  char p_duz[256];
+  const char *mat_duz = "{\"name\":\"pbrsiz\"}";
+  if (!yaz(mat_duz, p_duz, sizeof p_duz)) { skip("/tmp yazilamadi"); return; }
+  content::Model md;
+  bool ok_duz = content::gltf_load(sys, p_duz, &md);
+  CHECK(ok_duz);
+  bool kontrol = ok_duz && md.material_count == 1 && !md.materials[0].has_pbr &&
+                 md.materials[0].metallic == 0.0f && md.materials[0].roughness == 1.0f;
+  CHECK(kontrol);
+  if (ok_duz)
+    std::printf("    [bilgi] KONTROL pbr blogu YOK: has_pbr %d, metallic %.2f roughness %.2f (Lambert yolu)\n",
+                (int)md.materials[0].has_pbr, md.materials[0].metallic, md.materials[0].roughness);
+  std::remove(p_pbr);
+  std::remove(p_duz);
+}

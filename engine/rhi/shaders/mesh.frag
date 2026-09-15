@@ -17,9 +17,28 @@ layout(set = 0, binding = 0) uniform Frame {
 } u;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow;
 layout(set = 1, binding = 0) uniform sampler2D u_albedo; // malzeme (klasik set, bindless yok)
+// Malzeme PBR parametreleri (klasik set 1, bindless YOK — Dusuk sinif cihaz
+// descriptorIndexing vermiyor, PLAN REV-3). Malzeme basina 32 bayt UBO.
+layout(set = 1, binding = 1) uniform MatBlock {
+  vec4 pbr;      // x metallic, y ALGISAL puruzluluk, z dielektrik yansitirlik, w model (0 Lambert, 1 PBR)
+  vec4 emissive; // rgb DOGRUSAL isima, w kullanilmiyor
+} u_mat;
+// KONTROL kipi (UiSortMode::BlendFirst ile ayni ruh): 1 = GGX'i BILEREK yanlis
+// normalize et (a^2 payi yok). Yalniz enerji kapisinin kendi duyarliligini
+// olcmek icin; urun yolunda her zaman 0.
+layout(constant_id = 0) const int PBR_NDF = 0;
 struct PointLight { vec4 pos_radius; vec4 color_intensity; };
 layout(set = 0, binding = 2) uniform Lights { PointLight l[32]; } u_lights;
 layout(std430, set = 0, binding = 3) readonly buffer Clusters { uint mask[]; } u_clusters;
+// Stokastik tile isiklandirma (PLAN EK A.1): kume basina ornege alinan KUYRUK
+// bitleri (x) ve kuyrukta KAC isik oldugu (y). Telafi agirligi = y / bitCount(x).
+// x = ornege alinan KUYRUK bitleri, y = telafi agirliginin FLOAT BIT DESENI
+// (oran tahmin edicisi: kuyruk onemi / secilen onem — cluster.cpp).
+layout(std430, set = 0, binding = 7) readonly buffer Stoch { uvec2 t[]; } u_stoch;
+// 0 = kapali. Bu bir OZELLESTIRME sabiti: kapaliyken asagidaki kuyruk dali ve
+// u_stoch okumasi boru hatti kurulumunda TAMAMEN elenir — yani kapali yol ne
+// fazladan bant genisligi harcar ne de aritmetigi degisir (bit bit ayni).
+layout(constant_id = 1) const int STOCHASTIC = 0;
 
 // Kumelenmis nokta isiklar: bu pikselin kumesinin 32-bit maskesi, set bitleri
 // icin Lambert + pencereli ters-kare sonum (yaricapta sifira iner).
@@ -29,9 +48,37 @@ vec3 point_lights(vec3 n) {
   uint ty = min(uint(gl_FragCoord.y / u.cluster_params.w), u.cluster_grid.y - 1u);
   float fz = floor(log(max(v_viewz, 1e-6)) * u.cluster_params.x + u.cluster_params.y);
   uint tz = uint(clamp(fz, 0.0, float(u.cluster_grid.z - 1u)));
-  uint mask = u_clusters.mask[(tz * u.cluster_grid.y + ty) * u.cluster_grid.x + tx];
+  uint ci = (tz * u.cluster_grid.y + ty) * u.cluster_grid.x + tx;
+  uint mask = u_clusters.mask[ci];
+  if (STOCHASTIC == 0) {
+    // KAPALI YOL — asagidaki dongu eski koddan kelimesi kelimesine ayni.
+    // Bilerek kopyalandi: agirlik carpani eklenmis TEK bir dongu, 1.0 ile de
+    // olsa, surucude farkli sirada katlanabilirdi; "bit bit ayni" iddiasi
+    // ancak ifade ayni kalirsa savunulabilir.
+    vec3 sum = vec3(0.0);
+    while (mask != 0u) {
+      int i = findLSB(mask);
+      mask &= mask - 1u;
+      PointLight L = u_lights.l[i];
+      vec3 d = L.pos_radius.xyz - v_world;
+      float dist2 = dot(d, d);
+      float r = L.pos_radius.w;
+      float x = dist2 / (r * r);
+      float win = clamp(1.0 - x * x, 0.0, 1.0);
+      float att = win * win / (dist2 + 1.0);
+      float nl = max(dot(n, d * inversesqrt(max(dist2, 1e-8))), 0.0);
+      sum += L.color_intensity.rgb * (L.color_intensity.w * att * nl);
+    }
+    return sum;
+  }
+  // STOKASTIK: kafa bitleri agirlik 1, ornege alinan kuyruk bitleri agirlik
+  // (kuyruktaki toplam / ornek sayisi) — yansiz tahmin edici.
+  uvec2 st = u_stoch.t[ci];
+  uint tail = st.x & mask;
+  float wt = uintBitsToFloat(st.y);
   vec3 sum = vec3(0.0);
   while (mask != 0u) {
+    uint bit = mask & (~mask + 1u);
     int i = findLSB(mask);
     mask &= mask - 1u;
     PointLight L = u_lights.l[i];
@@ -42,10 +89,141 @@ vec3 point_lights(vec3 n) {
     float win = clamp(1.0 - x * x, 0.0, 1.0);
     float att = win * win / (dist2 + 1.0);
     float nl = max(dot(n, d * inversesqrt(max(dist2, 1e-8))), 0.0);
-    sum += L.color_intensity.rgb * (L.color_intensity.w * att * nl);
+    float w = (tail & bit) != 0u ? wt : 1.0;
+    sum += L.color_intensity.rgb * (L.color_intensity.w * att * nl * w);
   }
   return sum;
 }
+
+// --- PBR: Cook-Torrance mikroyuzey (metallic-roughness, glTF 2.0) ----------
+// Mobil butce (PLAN §8/10): compute YOK, bindless YOK, LUT dokusu YOK. Butun
+// terimler ALU; ortam icin analitik split-sum kullanilir (asagida gerekce).
+//
+// ENERJI BIRIMI — motorun mevcut sozlesmesi korunur:
+//   Lambert yolu: cikti = albedo * NoL * S   (S = isik olcegi, 1/PI iceride)
+// yani S = E_isik/PI. Fizikte spekuler = D*V*F*NoL*E_isik = PI*D*V*F*NoL*S.
+// Bu yuzden D'nin 1/PI'si SADELESIR: asagidaki d_ggx_pi() dogrudan PI*D
+// dondurur ve iki terim ayni birimde toplanir. (Ayri bir "PI" carpani yok:
+// katlanmis olani tekrar carpmak enerjiyi PI^2 kaydirirdi.)
+float d_ggx_pi(float NoH, float a) {
+  // Filament'in yeniden duzenlemesi: (NoH*NoH - 1) float16'da hassasiyet
+  // kaybediyor; (NoH*a - NoH)*NoH + 1 ayni sonucu yarim duyarlilikta korur.
+  float a2 = a * a;
+  float f = (NoH * a2 - NoH) * NoH + 1.0;
+  if (PBR_NDF == 1) return 1.0 / (f * f); // KONTROL: a^2 normalizasyonu YOK
+  return a2 / (f * f);
+}
+// Smith-GGX yukseklik-iliskili gorunurluk: V = G / (4 NoL NoV) — 4 NoL NoV
+// boleni ICERIDE, yani spekuler = D * V * F.
+float v_smith(float NoV, float NoL, float a) {
+  float a2 = a * a;
+  float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+  float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+  return 0.5 / max(gv + gl, 1e-5);
+}
+vec3 f_schlick(vec3 f0, float u) {
+  float f = pow(1.0 - u, 5.0);
+  return f0 + (vec3(1.0) - f0) * f; // f90 = 1
+}
+// Ortam spekuleri: split-sum'in DFG terimi ANALITIK (Karis'in mobil uyumu).
+// NEDEN LUT DEGIL: DFG dokusu TBDR'da fazladan bir sampler + descriptor
+// baglamasi + tile disi okuma demek; bu uyum LUT'tan ~%1 sapiyor ve 6 ALU
+// tutuyor. NEDEN TEK TERIMLI "F0 * ortam" DEGIL: o yaklasiklamada puruzluluk
+// hicbir sey yapmaz (mat metal ile ayna ayni parlar) ve grazing acida Fresnel
+// yukselisi kaybolur — kapinin olctugu iki sey de olurdu.
+vec2 env_dfg(float rough, float NoV) {
+  const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+  const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+  vec4 r = rough * c0 + c1;
+  float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+  return vec2(-1.04, 1.04) * a004 + r.zw;
+}
+// Kumelenmis nokta isiklar, PBR: dagilimli ve spekuler AYNI dongude toplanir
+// (maske bir kez okunur, isik basina tek gecis). Sonum/pencere Lambert
+// yolundakiyle AYNI formul — iki yol arasindaki fark yalniz BRDF.
+void point_lights_pbr(vec3 n, vec3 vdir, float NoV, float a, vec3 f0, out vec3 dif, out vec3 spc) {
+  dif = vec3(0.0);
+  spc = vec3(0.0);
+  if (u.cluster_grid.w == 0u) return;
+  uint tx = min(uint(gl_FragCoord.x / u.cluster_params.z), u.cluster_grid.x - 1u);
+  uint ty = min(uint(gl_FragCoord.y / u.cluster_params.w), u.cluster_grid.y - 1u);
+  float fz = floor(log(max(v_viewz, 1e-6)) * u.cluster_params.x + u.cluster_params.y);
+  uint tz = uint(clamp(fz, 0.0, float(u.cluster_grid.z - 1u)));
+  uint ci = (tz * u.cluster_grid.y + ty) * u.cluster_grid.x + tx;
+  uint mask = u_clusters.mask[ci];
+  // Stokastik telafi PBR yolunda da gecerli (ayni maske, ayni agirlik).
+  uint tail = 0u;
+  float wt = 1.0;
+  if (STOCHASTIC == 1) {
+    uvec2 st = u_stoch.t[ci];
+    tail = st.x & mask;
+    wt = uintBitsToFloat(st.y);
+  }
+  while (mask != 0u) {
+    uint bit = mask & (~mask + 1u);
+    int i = findLSB(mask);
+    mask &= mask - 1u;
+    PointLight L = u_lights.l[i];
+    vec3 d = L.pos_radius.xyz - v_world;
+    float dist2 = dot(d, d);
+    float r = L.pos_radius.w;
+    float x = dist2 / (r * r);
+    float win = clamp(1.0 - x * x, 0.0, 1.0);
+    float att = win * win / (dist2 + 1.0);
+    vec3 ldir = d * inversesqrt(max(dist2, 1e-8));
+    float nl2 = max(dot(n, ldir), 0.0);
+    if (nl2 <= 0.0) continue;
+    float w = (STOCHASTIC == 1 && (tail & bit) != 0u) ? wt : 1.0;
+    vec3 e = L.color_intensity.rgb * (L.color_intensity.w * att * nl2 * w);
+    vec3 h = normalize(vdir + ldir);
+    float NoH = clamp(dot(n, h), 0.0, 1.0);
+    float VoH = clamp(dot(vdir, h), 0.0, 1.0);
+    dif += e;
+    spc += e * (d_ggx_pi(NoH, a) * v_smith(NoV, nl2, a)) * f_schlick(f0, VoH);
+  }
+}
+// Kamera dunya konumu: gorunum matrisi katidir (R|t, R ortonormal), yani
+// kamera = -R^T * t. Tam 4x4 tersi almaya gerek yok; tamamen uniform
+// aritmetik oldugu icin surucu bunu skaler birime tasiyabilir. Ayri bir
+// interpolant (v_view) eklenmedi: TBDR'da parametre tamponu bant genisligidir.
+vec3 camera_world() { return -(transpose(mat3(u.view)) * u.view[3].xyz); }
+
+vec3 shade_pbr(vec3 n, vec3 albedo, float nl, float vis) {
+  float metallic = clamp(u_mat.pbr.x, 0.0, 1.0);
+  // Algisal puruzluluk (glTF) -> a = rough^2. Alt sinir: a -> 0'da D patlar
+  // (tek piksellik sonsuz parlama, zamansal titreme); 0.045 Filament'in
+  // onerdigi mobil tabanidir.
+  float rough = clamp(u_mat.pbr.y, 0.045, 1.0);
+  float a = rough * rough;
+  float reflectance = clamp(u_mat.pbr.z, 0.0, 1.0);
+  // Metal dagilimli yansitmaz; dielektrigin F0'i renksizdir (Filament tarifi:
+  // F0 = 0.16 * reflectance^2, reflectance 0.5 -> %4).
+  vec3 diffuse_color = albedo * (1.0 - metallic);
+  vec3 f0 = mix(vec3(0.16 * reflectance * reflectance), albedo, metallic);
+  vec3 vdir = normalize(camera_world() - v_world);
+  float NoV = clamp(dot(n, vdir), 1e-4, 1.0);
+  // Gunes: Lambert yolundaki carpanin TA KENDISI (nl * golge * ambient.a).
+  float sun = nl * vis * u.ambient.a;
+  vec3 l = normalize(u.light_dir.xyz);
+  vec3 h = normalize(vdir + l);
+  float NoH = clamp(dot(n, h), 0.0, 1.0);
+  float VoH = clamp(dot(vdir, h), 0.0, 1.0);
+  vec3 spec_sun = (d_ggx_pi(NoH, a) * v_smith(NoV, nl, a)) * f_schlick(f0, VoH) * sun;
+  // ORTAM: u.ambient.rgb GI sozlesmesinin ta kendisi — "albedo 1 Lambert
+  // yuzeyin o yonde dondurdugu renk" = tekduze ortamin isimasi L
+  // (content/gi.hpp: yuz degeri E(n)/PI). Dagilimli terim DOGRUDAN oradan
+  // gelir; spekuler AYNI L'yi split-sum DFG ile agirliklandirir. Ikinci bir
+  // ortam UYDURULMAZ. (Onfiltrelenmis sonda gelirse tek degisiklik: L'yi
+  // yansima yonunde ornekle.)
+  vec2 dfg = env_dfg(rough, NoV);
+  vec3 pl_d, pl_s;
+  point_lights_pbr(n, vdir, NoV, a, f0, pl_d, pl_s);
+  vec3 c = diffuse_color * (u.ambient.rgb + sun + pl_d);
+  c += u.ambient.rgb * (f0 * dfg.x + vec3(dfg.y));
+  c += spec_sun + pl_s;
+  return c + u_mat.emissive.rgb;
+}
+
 layout(location = 0) out vec4 o_color;
 
 // Dogrusal aydinlatma (Filament): butun hesap dogrusal, hedef SRGB bicimliyse
@@ -101,7 +279,12 @@ void main() {
   float nl = max(dot(n, normalize(u.light_dir.xyz)), 0.0);
   float vis = shadow_visibility(nl, n);
   vec3 albedo = texture(u_albedo, v_uv).rgb * v_color;
-  vec3 c = albedo * (u.ambient.rgb + nl * vis * u.ambient.a + point_lights(n));
+  // Golgeleme modeli MALZEME basina. Lambert dali asagidaki ifadeyle BIREBIR
+  // ayni (kelimesi kelimesine): eski malzemeler bit bit eski goruntuyu verir.
+  // Dal malzeme basina tekduze, yani dalga icinde ayrisma yok.
+  vec3 c;
+  if (u_mat.pbr.w < 0.5) c = albedo * (u.ambient.rgb + nl * vis * u.ambient.a + point_lights(n));
+  else c = shade_pbr(n, albedo, nl, vis);
   if (u.light_dir.w > 0.5) c = linear_to_srgb(c);
   o_color = vec4(c, 1.0);
 }

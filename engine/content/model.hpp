@@ -20,6 +20,14 @@ struct ModelImage {
 struct ModelMaterial {
   int32_t image = -1; // -1: dokusuz (beyaz)
   Vec3 base_color{1, 1, 1};
+  // glTF metallic-roughness. Varsayilanlar glTF 2.0 spesifikasyonunun kendi
+  // varsayilanlari DEGIL (spec metallic=1, roughness=1 der); burada
+  // metallic=0/roughness=1 = Lambert'e en yakin nokta secildi, cunku PBR yolu
+  // motorda opsiyonel ve `has_pbr` yanlisken eski goruntu korunmali.
+  float metallic = 0.0f;
+  float roughness = 1.0f;
+  Vec3 emissive{0, 0, 0}; // glTF emissive_factor (dogrusal)
+  bool has_pbr = false;   // dosyada pbr_metallic_roughness blogu VAR miydi
 };
 constexpr uint32_t kModelMaxLods = 2; // LOD1, LOD2 (LOD0 = indices)
 constexpr uint32_t kModelMaxSkins = 4;

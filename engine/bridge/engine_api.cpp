@@ -798,6 +798,26 @@ int teng_init(const char *title, int width, int height) {
   b.inited = true;
   b.running = true;
   BINFO("motor hazir (%s, %s)", b.headless ? "headless" : "pencere", b.dev.caps().device_name);
+  {
+    // PSO onbellegi GORUNUR olmali: sessizce kapali kaldigi bir platformda
+    // (Android'de XDG_CACHE_HOME/HOME/TMPDIR uculu tanimsizdir) hicbir sey
+    // kizarmaz, yalnizca her acilista butun boru hatlari yeniden kurulur.
+    // Yolun ve isabetin loglanmasi, cihazda tek bakista dogrulanmasini saglar.
+    // KURULUM BITER BITMEZ DISKE YAZ — kapanisi bekleme.
+    // Sebep olculdu (2026-09-16, emulator): Android'de uygulamalar TEMIZ
+    // KAPANMAZ; sistem sureci oldurur, `Device::shutdown` cogu zaman hic
+    // kosmaz. Yazma yalnizca kapanista olsaydi onbellek, en cok ihtiyac duyan
+    // platformda ASLA olusmazdi — ve bunu hicbir sey kizartmazdi, cunku oyun
+    // yine calisir, sadece her acilista butun boru hatlarini yeniden kurar.
+    // Bu noktada on isinma bitmis, yani bilinen butun varyantlar zaten kurulu.
+    if (!b.dev.pso().stats().loaded && b.dev.pso().stats().created > 0) b.dev.pso().save();
+    const rhi::PsoCacheStats ps = b.dev.pso().stats();
+    const char *yol = b.dev.pso_cache_path();
+    BINFO("pso onbellegi: %s — %s (%u boru hatti %.1f ms'de kuruldu, diske yazilan %llu B)",
+          (yol && *yol) ? yol : "KAPALI (yazilabilir dizin bulunamadi)",
+          ps.loaded ? "diskten YUKLENDI" : rhi::pso_reject_str(ps.reject), ps.created, ps.create_ns / 1e6,
+          (unsigned long long)ps.saved_bytes);
+  }
   return 1;
 }
 

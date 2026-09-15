@@ -293,6 +293,9 @@ typedef struct {
   LLVMValueRef func_aot_to_json;
   LLVMValueRef func_aot_runtime_init;
   LLVMValueRef func_aot_register_func; // (name, ptr) -> void; seeds call() cache
+  // input(prompt?)->str : 1 VMValue argumanli (aot_input_int ile ayni imza).
+  // Istem argumansiz cagrida VM_VAL_VOID gecer; read_key/sys_lang'in 0-arg
+  // tipiyle KARISTIRMA (bkz. llvm_backend.cpp declare_runtime_functions).
   LLVMValueRef func_aot_input;
   LLVMValueRef func_aot_read_key; // read_key()->str : single keypress, no echo
   LLVMValueRef func_aot_sys_lang; // sys_lang()->str : OS UI language (iso-639)

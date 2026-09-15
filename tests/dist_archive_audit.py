@@ -307,6 +307,122 @@ def check_engine_companion_archives(libs):
     return bad
 
 
+# --- ARSIV TAZELIGI (sembol denetiminin KOR NOKTASI) -------------------------
+# Sembol denetimi "su sembol arsivde YOK" der. Ama bir builtin EKLENMEDEN,
+# var olan bir sembolun IMZASI degistiginde sembol hala ORADADIR ve denetim
+# YESIL verir — arsivdeki govde ise eski imzayla derlenmis eski kodtur.
+#
+# Olculdu 2026-09-16 (aot_input'a istem parametresi eklenirken):
+#   wasm-ld: warning: function signature mismatch: aot_input
+#   >>> defined as (i32, i32) -> void in oyun.o          (yeni codegen)
+#   >>> defined as (i32) -> void in libtulpar_runtime_web.a  (bayat arsiv)
+# Link YINE DE tuttu (uyari, hata degil) ve `.html` uretildi; cagri tarayicida
+# imza tuzagina dusup patlayacakti. Android'de ise ELF imza denetlemez: link
+# sessizce tutar ve fonksiyon argumani okumayan koda gider. Ikisi de bu deponun
+# "sessiz yanlis" sinifi (Tuzaklar 8aj) — ve o gun bu denetim "TEMIZ" diyordu.
+#
+# Cozum imza cozumleme degil (asiri muhendislik): arsiv, kaynagindan ESKI mi?
+# Sembol denetimi "ne eksik" der, bu "ne bayat" der; ikisi farkli sinif yakalar.
+#
+# KAYNAK LISTESI SURUCUDEN OKUNUYOR: aot_pipeline.cpp'deki
+# warn_if_prebuilt_archive_stale zaten ayni karsilastirmayi derleme aninda
+# yapiyor. Listeyi buraya ELLE kopyalamak, iki listenin ayrismasi demekti;
+# desen tutmazsa (asagida) KIRMIZI veriyoruz — "desen bulamadim, o yuzden
+# temiz" bu deponun en pahali hata sinifi.
+FRESHNESS_ENGINE_SOURCES = [
+    # Motor arsivinin ABI YUZEYI. Butun `engine/**` agacina bakmiyoruz
+    # BILEREK: o agac aktif gelistirmede her gun degisiyor ve her degisiklik
+    # ABI'yi bozmuyor; surekli kirmizi, kirmiziyi gurultuye cevirir. Burada
+    # yalnizca kopru sembollerinin IMZASINI belirleyen dosyalar var.
+    "runtime/engine_bindings.cpp",
+    "engine/bridge/engine_api.h",
+    "engine/bridge/engine_api.cpp",
+]
+
+# (arsiv yolu, insan adi, eksiklik HATA mi, tazeleme betigi, kaynak listesi
+#  "driver" ise surucuden okunan liste kullanilir)
+FRESHNESS_ARCHIVES = [
+    ("wasm/dist/libtulpar_runtime_web.a", "web-runtime", True,
+     "wasm/build_tame_web.sh", "driver"),
+    ("wasm/dist/libtulpar_tame_web.a", "web-tame", True,
+     "wasm/build_tame_web.sh", "driver"),
+    ("android/dist/arm64-v8a/libtulpar_runtime_android.a",
+     "android/arm64-v8a-runtime", False, "android/build_tame_android.sh", "driver"),
+    ("android/dist/arm64-v8a/libtulpar_tame_android.a",
+     "android/arm64-v8a-tame", False, "android/build_tame_android.sh", "driver"),
+    ("android/dist/x86_64/libtulpar_runtime_android.a",
+     "android/x86_64-runtime", False, "android/build_tame_android.sh", "driver"),
+    ("android/dist/x86_64/libtulpar_tame_android.a",
+     "android/x86_64-tame", False, "android/build_tame_android.sh", "driver"),
+    ("android/dist/arm64-v8a/libtulpar_engine_android.a",
+     "android/arm64-v8a-engine", False, "engine/tools/build_bridge_android.sh",
+     "engine"),
+    ("android/dist/x86_64/libtulpar_engine_android.a",
+     "android/x86_64-engine", False, "engine/tools/build_bridge_android.sh",
+     "engine"),
+]
+
+
+def driver_staleness_sources():
+    """aot_pipeline.cpp'deki `warn_if_prebuilt_archive_stale` srcs[] listesi.
+
+    None donerse cagiran KIRMIZI sayar: desen bayatlamissa bu denetim
+    kaynaksiz kalir ve sessizce hicbir sey karsilastirmaz.
+    """
+    path = os.path.join(ROOT, "src/aot/aot_pipeline.cpp")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        src = fh.read()
+    m = re.search(r"warn_if_prebuilt_archive_stale.*?srcs\[\]\s*=\s*\{(.*?)\}\s*;",
+                  src, re.S)
+    if not m:
+        return None
+    files = re.findall(r'"([^"]+\.(?:c|cpp|h|hpp))"', m.group(1))
+    return files or None
+
+
+def check_archive_freshness(driver_srcs):
+    """Var olan her arsiv, kaynaklarindan YENI mi?
+
+    Doner: (hata_var_mi, bayat_sayisi). Arsiv yoksa atlanir (o hedef
+    kullanilmiyor). Zaman damgasi kaba ama EYLEME GECIRILEBILIR bir olcut:
+    "tazele" komutu ekranda yaziyor.
+    """
+    bad = 0
+    stale = 0
+    for rel, label, hard, refresh, which in FRESHNESS_ARCHIVES:
+        full = os.path.join(ROOT, rel)
+        if not os.path.exists(full):
+            continue
+        srcs = FRESHNESS_ENGINE_SOURCES if which == "engine" else driver_srcs
+        amtime = os.path.getmtime(full)
+        newer = []
+        for s in srcs:
+            sp = os.path.join(ROOT, s)
+            if not os.path.exists(sp):
+                continue
+            if os.path.getmtime(sp) > amtime:
+                newer.append(s)
+        if not newer:
+            continue
+        head = "HATA" if hard else "UYARI"
+        print("%s: %s arsivi BAYAT — %d kaynak dosyasi arsivden YENI. Sembol "
+              "denetimi bunu goremez: var olan bir sembolun IMZASI degistiyse "
+              "sembol hala 'var' gorunur, ama web'de 'function signature "
+              "mismatch', android'de argumani okumayan kod demektir."
+              % (head, label, len(newer)))
+        for s in newer[:5]:
+            print("    %s" % s)
+        if len(newer) > 5:
+            print("    ... (+%d)" % (len(newer) - 5))
+        print("    tazele: %s" % refresh)
+        stale += 1
+        if hard:
+            bad += 1
+    return bad, stale
+
+
 # NDK araması İKİ yerde yazılı: sürücü (aot_pipeline.cpp, derlemeyi yapan) ve
 # betik (build_tame_android.sh, arşivleri üreten). Ayrışırlarsa biri NDK'yı
 # bulur öteki bulmaz — ölçüldü: ikisi de yalnız `~/Android/android-ndk-*`'a
@@ -438,6 +554,18 @@ def main():
     for label, why in ENGINE_ABSENT_TARGETS:
         print("dist denetimi: %s hedefinde motor koprusu ARANMADI — %s" % (label, why))
 
+    # --- Arsiv tazeligi (imza degisikligi sinifi) ---------------------------
+    driver_srcs = driver_staleness_sources()
+    if driver_srcs is None:
+        print("HATA: aot_pipeline.cpp'de warn_if_prebuilt_archive_stale srcs[] "
+              "listesi okunamadi — tazelik denetimi KAYNAKSIZ kaldi")
+        fail = True
+    else:
+        fbad, fstale = check_archive_freshness(driver_srcs)
+        if fbad:
+            fail = True
+        dirty += fstale
+
     if check_ndk_search_agrees():
         print("    surucu ve betik AYNI yerlere bakmali (ikisi de Android "
               "hedefinin parcasi)")
@@ -447,13 +575,14 @@ def main():
     if dirty:
         # "Temiz" YAZMA: uyarı basıp temiz demek, uyarıyı gürültüye çevirir —
         # bu denetimin kapatmaya çalıştığı hatanın ta kendisi.
-        print("dist arsiv denetimi: %d arsivin %d tanesi BAYAT (yukariya bak) "
-              "— motor koprusu: %d builtin denetlendi"
+        print("dist arsiv denetimi: %d arsiv denetlendi, %d sorun BAYAT/EKSIK "
+              "(yukariya bak) — motor koprusu: %d builtin denetlendi"
               % (checked, dirty, len(eng_wanted)))
         return 0
     print("dist arsiv denetimi temiz (%d arsiv, %d tame builtin, %d cekirdek "
-          "sembol, %d motor koprusu builtin x2 aile)"
-          % (checked, len(wanted), len(core), len(eng_wanted)))
+          "sembol, %d motor koprusu builtin x2 aile, %d arsivde tazelik)"
+          % (checked, len(wanted), len(core), len(eng_wanted),
+             sum(1 for r in FRESHNESS_ARCHIVES if os.path.exists(os.path.join(ROOT, r[0])))))
     return 0
 
 

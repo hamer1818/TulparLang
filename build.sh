@@ -293,6 +293,18 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Paket boyutu/SPIR-V/acilis denetimi basarisiz!${NC}"
             exit 1
         fi
+        # Faz 8 fizibilite kapisi: Tulpar sozdiziminin GPU alt kumesi (.tprs)
+        # -> GLSL -> SPIR-V cevirisi hala depodaki *_spv.h ile BAYT AYNI mi.
+        # Bayt esitligi secildi cunku `glslc -O` ciktisi isim bagimsiz ve
+        # yeniden uretilebilir (olculdu) — yani "benzer" degil "ayni" diyebiliyoruz.
+        # glslc yoksa GORUNUR atlar (CI'da glslc yok, bu bilinen ve yazili).
+        # Referans GLSL degismisse o dosya gorunur atlanir: ne yanlis suclama,
+        # ne olcmeden gecme. Prototip oldugu icin atlama suite'i DUSURMEZ,
+        # ama gercek bir ayrisma (cikis 1) duSurur.
+        if ! python3 tests/faz8_shader_audit.py; then
+            echo -e "${RED}Faz 8 shader cevirici denetimi basarisiz!${NC}"
+            exit 1
+        fi
         # Dongu-sekli gezicisi ASTNode_C'nin TUM cocuk alanlarini geziyor mu?
         # Bir dal atlanirsa "govdede cagri yok" kaniti delinir ve atlanan
         # dalda duran bir push bellek bozar — suitler yesil kalarak.

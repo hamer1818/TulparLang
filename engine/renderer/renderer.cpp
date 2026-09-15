@@ -155,7 +155,11 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   materials_ = arena.alloc_array_zeroed<Material>(cfg.max_materials);
   draws_ = arena.alloc_array<Draw>(cfg.max_draws);
   cluster_masks_ = arena.alloc_array_zeroed<uint32_t>(grid_.count());
-  if (!meshes_ || !textures_ || !materials_ || !draws_ || !cluster_masks_) return false;
+  // Stokastik yol: acikken kume basina 2 uint, kapaliyken tek hucrelik kukla
+  // (descriptor gecerli kalsin; shader onu zaten hic okumaz).
+  stoch_enabled_ = cfg_.stochastic_lights > 0;
+  cluster_stoch_ = arena.alloc_array_zeroed<uint32_t>(stoch_enabled_ ? 2 * grid_.count() : 2);
+  if (!meshes_ || !textures_ || !materials_ || !draws_ || !cluster_masks_ || !cluster_stoch_) return false;
   // --- Faz 9: GPU cull istegi (kurulum asagida; basarisizlik CPU yoluna duser) ---
   bool want_cull = cfg_.gpu_cull;
   if (!want_cull) cull_.disabled_reason = "yapilandirmada kapali (gpu_cull = false)";
@@ -196,7 +200,7 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   // Set 0: 0 kare UBO, 1 golge, 2 nokta isiklar (UBO), 3 kume maskeleri (SSBO), 4 eklem matrisleri (SSBO)
   // cull acikken +2: 5 cizim kayitlari (SSBO), 6 gorunurluk listesi (SSBO).
   // Ikisi de yalniz DOLAYLI yolun vertex shader'inin okudugu tamponlar.
-  VkDescriptorSetLayoutBinding b[7]{};
+  VkDescriptorSetLayoutBinding b[8]{};
   b[5].binding = 5;
   b[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   b[5].descriptorCount = 1;
@@ -225,9 +229,16 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   b[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   b[3].descriptorCount = 1;
   b[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  // binding 7: stokastik kuyruk tablosu (SSBO, fragment). Duzende HER ZAMAN
+  // var; shader ancak STOCHASTIC ozellestirme sabiti 1 iken okur.
+  const uint32_t nb = want_cull ? 7u : 5u;
+  b[nb].binding = 7;
+  b[nb].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  b[nb].descriptorCount = 1;
+  b[nb].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
   VkDescriptorSetLayoutCreateInfo sli{};
   sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  sli.bindingCount = want_cull ? 7 : 5;
+  sli.bindingCount = nb + 1;
   sli.pBindings = b;
   if (a.vkCreateDescriptorSetLayout(dev.handle(), &sli, nullptr, &set_layout_) != VK_SUCCESS) return false;
   if (!make_material_layout()) return false;
@@ -243,7 +254,7 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
   // UBO + descriptor (ucuslu kare basina)
   VkDescriptorPoolSize ps[3] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * kMaxFrames},
                                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFrames},
-                                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (want_cull ? 4u : 2u) * kMaxFrames}};
+                                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (want_cull ? 5u : 3u) * kMaxFrames}};
   VkDescriptorPoolCreateInfo dpi{};
   dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   dpi.maxSets = kMaxFrames;
@@ -264,6 +275,10 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     if (!make_buffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GpuPointLight) * kMaxPointLights, host, &lights_buf_[i], &lights_mem_[i]))
       return false;
     if (!make_buffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(uint32_t) * grid_.count(), host, &cluster_buf_[i], &cluster_mem_[i]))
+      return false;
+    if (!make_buffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                     sizeof(uint32_t) * 2 * (stoch_enabled_ ? grid_.count() : 1u), host, &stoch_buf_[i],
+                     &stoch_mem_[i]))
       return false;
     if (!make_buffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(Mat4) * cfg_.max_skin_matrices, host, &skin_buf_[i], &skin_mem_[i]))
       return false;
@@ -297,8 +312,9 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     VkDescriptorBufferInfo dbi{ubo_[i], 0, sizeof(FrameUbo)};
     VkDescriptorBufferInfo dli{lights_buf_[i], 0, sizeof(GpuPointLight) * kMaxPointLights};
     VkDescriptorBufferInfo dci{cluster_buf_[i], 0, sizeof(uint32_t) * grid_.count()};
+    VkDescriptorBufferInfo dsti{stoch_buf_[i], 0, sizeof(uint32_t) * 2 * (stoch_enabled_ ? grid_.count() : 1u)};
     VkDescriptorImageInfo dii{shadow_sampler_, shadow_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w[7]{};
+    VkWriteDescriptorSet w[8]{};
     w[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w[5].dstSet = sets_[i];
     w[5].dstBinding = 5;
@@ -341,7 +357,14 @@ bool Renderer::init(rhi::Device &dev, Arena &arena, VkRenderPass rp, const Rende
     w[1].descriptorCount = 1;
     w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[1].pImageInfo = &dii;
-    a.vkUpdateDescriptorSets(dev.handle(), want_cull ? 7 : 5, w, 0, nullptr);
+    const uint32_t nw = want_cull ? 7u : 5u;
+    w[nw].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[nw].dstSet = sets_[i];
+    w[nw].dstBinding = 7;
+    w[nw].descriptorCount = 1;
+    w[nw].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[nw].pBufferInfo = &dsti;
+    a.vkUpdateDescriptorSets(dev.handle(), nw + 1, w, 0, nullptr);
   }
   // Cull compute boru hatti + kendi descriptor kumesi. Basarisizsa CPU yolu
   // kosar ve sebep CullInfo::disabled_reason'da kalir (sessiz kapanma yok).
@@ -580,6 +603,18 @@ bool Renderer::make_ui(VkRenderPass rp, Arena &arena) {
   }
   pipe_ui_ = make_ui_pipeline(rp, UiPipeKind::Blend);
   pipe_ui_opaque_ = make_ui_pipeline(rp, UiPipeKind::Opaque);
+  // SDF boru hattini KURULUMDA yarat. Eskiden ilk SDF dortgeni cizilirken
+  // (ui_emit -> ui_ensure_sdf_pipeline, yani KAYIT yolunun icinde) kuruluyordu
+  // ve o karede 0.49-0.52 ms kare ici takilma uretiyordu (RTX 5080'de olculdu;
+  // mobilde katbekat fazlasi). Faz 6'nin "runtime'da pipeline kurulumu yok"
+  // hedefi tam olarak bunu yasakliyor. Basarisiz olursa harmanli yola dusulur
+  // ve sebep ui_stats_.sdf_reason'da kalir — davranis degismedi, yalniz maliyet
+  // kareden kurulum zamanina tasindi.
+  if (cfg_.ui_prewarm_sdf) ui_ensure_sdf_pipeline();
+  // Overdraw boru hatti BILEREK tembel kaldi: fragment shader'i vertex
+  // cikislarini tuketmiyor ve dogrulama katmani bunu uyari sayiyor. Normal
+  // kare onu ZATEN yaratmaz (tek cagiran ui_record_overdraw, yani acik OLCUM
+  // yolu), dolayisiyla "ilk karede kurulan pipeline" sayaci bundan etkilenmez.
   return pipe_ui_ != VK_NULL_HANDLE && pipe_ui_opaque_ != VK_NULL_HANDLE;
 }
 
@@ -946,23 +981,41 @@ const UiStats &Renderer::ui_fetch_stats() {
 
 bool Renderer::make_material_layout() {
   rhi::VkApi &a = dev_->api();
-  VkDescriptorSetLayoutBinding b{};
-  b.binding = 0;
-  b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  b.descriptorCount = 1;
-  b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  // binding 0: albedo dokusu, binding 1: PBR parametreleri (32 bayt, std140).
+  VkDescriptorSetLayoutBinding b[2]{};
+  b[0].binding = 0;
+  b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  b[0].descriptorCount = 1;
+  b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  b[1].binding = 1;
+  b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  b[1].descriptorCount = 1;
+  b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
   VkDescriptorSetLayoutCreateInfo sli{};
   sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  sli.bindingCount = 1;
-  sli.pBindings = &b;
+  sli.bindingCount = 2;
+  sli.pBindings = b;
   if (a.vkCreateDescriptorSetLayout(dev_->handle(), &sli, nullptr, &mat_layout_) != VK_SUCCESS) return false;
-  VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cfg_.max_materials};
+  VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cfg_.max_materials},
+                                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cfg_.max_materials}};
   VkDescriptorPoolCreateInfo dpi{};
   dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   dpi.maxSets = cfg_.max_materials;
-  dpi.poolSizeCount = 1;
-  dpi.pPoolSizes = &ps;
+  dpi.poolSizeCount = 2;
+  dpi.pPoolSizes = ps;
   if (a.vkCreateDescriptorPool(dev_->handle(), &dpi, nullptr, &mat_pool_) != VK_SUCCESS) return false;
+  // TEK tampon, malzeme basina ofset. Stride cihazin UBO ofset hizasina
+  // yuvarlanir (masaustu 64-256, Mali 256): hizalanmamis ofset dogrulama hatasi.
+  VkPhysicalDeviceProperties2 pp{};
+  pp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+  a.vkGetPhysicalDeviceProperties2(dev_->physical(), &pp);
+  uint32_t align = (uint32_t)pp.properties.limits.minUniformBufferOffsetAlignment;
+  if (align < 1) align = 1;
+  mat_ubo_stride_ = (uint32_t)((sizeof(MaterialUbo) + align - 1) / align * align);
+  if (!make_buffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, (VkDeviceSize)mat_ubo_stride_ * cfg_.max_materials,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &mat_ubo_,
+                   &mat_ubo_mem_))
+    return false;
   VkSamplerCreateInfo si{};
   si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
   si.magFilter = si.minFilter = VK_FILTER_LINEAR;
@@ -1075,6 +1128,40 @@ TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t
 }
 
 MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
+  // Varsayilan model: cfg_.pbr_default kapaliyken LAMBERT (bugunku goruntu).
+  PbrParams def;
+  MaterialHandle h = create_material_impl(albedo, color, def, cfg_.pbr_default);
+  return h;
+}
+MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color, const PbrParams &pbr) {
+  return create_material_impl(albedo, color, pbr, true);
+}
+// Malzeme UBO'suna (set 1, binding 1) yazar. is_pbr, shader'in model dalini secer.
+void Renderer::write_material_ubo(uint32_t id) {
+  const Material &m = materials_[id];
+  MaterialUbo u{};
+  u.pbr[0] = m.pbr.metallic;
+  u.pbr[1] = m.pbr.roughness;
+  u.pbr[2] = m.pbr.reflectance;
+  u.pbr[3] = m.is_pbr ? 1.0f : 0.0f;
+  const Vec3 e = srgb_to_linear(m.pbr.emissive); // yazar sRGB verir
+  u.emissive[0] = e.x; u.emissive[1] = e.y; u.emissive[2] = e.z; u.emissive[3] = 0.0f;
+  std::memcpy(static_cast<uint8_t *>(mat_ubo_mem_.mapped) + (size_t)id * mat_ubo_stride_, &u, sizeof u);
+}
+bool Renderer::set_material_pbr(MaterialHandle h, const PbrParams &pbr) {
+  if (!h.valid() || h.id >= material_count_) return false;
+  materials_[h.id].pbr = pbr;
+  materials_[h.id].is_pbr = true;
+  write_material_ubo(h.id);
+  return true;
+}
+PbrParams Renderer::material_pbr(MaterialHandle h) const {
+  return (h.valid() && h.id < material_count_) ? materials_[h.id].pbr : PbrParams{};
+}
+bool Renderer::material_is_pbr(MaterialHandle h) const {
+  return h.valid() && h.id < material_count_ && materials_[h.id].is_pbr;
+}
+MaterialHandle Renderer::create_material_impl(TextureHandle albedo, Vec3 color, const PbrParams &pbr, bool is_pbr) {
   if (material_count_ >= cfg_.max_materials || !albedo.valid() || albedo.id >= texture_count_) return MaterialHandle{};
   rhi::VkApi &a = dev_->api();
   Material &m = materials_[material_count_];
@@ -1085,18 +1172,29 @@ MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
   dai.pSetLayouts = &mat_layout_;
   if (a.vkAllocateDescriptorSets(dev_->handle(), &dai, &m.set) != VK_SUCCESS) return MaterialHandle{};
   VkDescriptorImageInfo dii{tex_sampler_, textures_[albedo.id].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-  VkWriteDescriptorSet w{};
-  w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  w.dstSet = m.set;
-  w.dstBinding = 0;
-  w.descriptorCount = 1;
-  w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  w.pImageInfo = &dii;
-  a.vkUpdateDescriptorSets(dev_->handle(), 1, &w, 0, nullptr);
+  VkDescriptorBufferInfo dbi{mat_ubo_, (VkDeviceSize)material_count_ * mat_ubo_stride_, sizeof(MaterialUbo)};
+  VkWriteDescriptorSet w[2]{};
+  w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  w[0].dstSet = m.set;
+  w[0].dstBinding = 0;
+  w[0].descriptorCount = 1;
+  w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  w[0].pImageInfo = &dii;
+  w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  w[1].dstSet = m.set;
+  w[1].dstBinding = 1;
+  w[1].descriptorCount = 1;
+  w[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  w[1].pBufferInfo = &dbi;
+  a.vkUpdateDescriptorSets(dev_->handle(), 2, w, 0, nullptr);
   m.texture = albedo.id;
   m.color = srgb_to_linear(color); // yazar sRGB verir, aydinlatma dogrusal
+  m.pbr = pbr;
+  m.is_pbr = is_pbr;
+  const uint32_t id = material_count_;
   stats_.materials = ++material_count_;
-  return MaterialHandle{material_count_ - 1};
+  write_material_ubo(id);
+  return MaterialHandle{id};
 }
 
 bool Renderer::make_pipelines(VkRenderPass rp) {
@@ -1129,6 +1227,17 @@ bool Renderer::make_pipeline_set(VkRenderPass rp, bool skinned, VkShaderModule m
   stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = main_vs; stages[0].pName = "main";
   stages[1] = stages[0];
   stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fs_;
+  // PBR_NDF ozellestirme sabiti (mesh.frag constant_id 0): 0 = dogru GGX
+  // (urun), 1 = KONTROL (normalize edilmemis). Boru hatti kurulumunda sabit.
+  // constant_id 0 = PBR_NDF (0 dogru GGX, 1 kontrol), 1 = STOCHASTIC (0 kapali).
+  const int32_t fs_spec_data[2] = {cfg_.pbr_ndf == NdfMode::Unnormalized ? 1 : 0, stoch_enabled_ ? 1 : 0};
+  const VkSpecializationMapEntry fs_entries[2] = {{0, 0, sizeof(int32_t)}, {1, sizeof(int32_t), sizeof(int32_t)}};
+  VkSpecializationInfo fs_spec{};
+  fs_spec.mapEntryCount = 2;
+  fs_spec.pMapEntries = fs_entries;
+  fs_spec.dataSize = sizeof fs_spec_data;
+  fs_spec.pData = fs_spec_data;
+  stages[1].pSpecializationInfo = &fs_spec;
   // PAKETLENMIS yerlesim: pos float3, normal oktahedral SNORM16x2, uv half2.
   // (R16G16_SNORM ve R16G16_SFLOAT Vulkan'da ZORUNLU vertex bicimleridir.)
   VkVertexInputBindingDescription vb{0, skinned ? (uint32_t)sizeof(GpuSkinnedVertex) : (uint32_t)sizeof(GpuVertex),
@@ -1327,11 +1436,13 @@ void Renderer::shutdown() {
     if (ubo_[i]) a.vkDestroyBuffer(dev_->handle(), ubo_[i], nullptr);
     if (lights_buf_[i]) a.vkDestroyBuffer(dev_->handle(), lights_buf_[i], nullptr);
     if (cluster_buf_[i]) a.vkDestroyBuffer(dev_->handle(), cluster_buf_[i], nullptr);
+    if (stoch_buf_[i]) a.vkDestroyBuffer(dev_->handle(), stoch_buf_[i], nullptr);
   }
   for (uint32_t i = 0; i < texture_count_; i++) {
     if (textures_[i].view) a.vkDestroyImageView(dev_->handle(), textures_[i].view, nullptr);
     if (textures_[i].image) a.vkDestroyImage(dev_->handle(), textures_[i].image, nullptr);
   }
+  if (mat_ubo_) a.vkDestroyBuffer(dev_->handle(), mat_ubo_, nullptr);
   if (mat_pool_) a.vkDestroyDescriptorPool(dev_->handle(), mat_pool_, nullptr);
   if (mat_layout_) a.vkDestroyDescriptorSetLayout(dev_->handle(), mat_layout_, nullptr);
   if (tex_sampler_) a.vkDestroySampler(dev_->handle(), tex_sampler_, nullptr);
@@ -1608,9 +1719,20 @@ void Renderer::begin_frame(uint32_t frame_index) {
   u.view = view_;
   // Kumelenmis nokta isiklar: CPU atamasi (kare basina, deterministik), GPU okur.
   ClusterStats cs;
-  cluster_assign(view_, proj_, point_lights_, point_light_count_, grid_, cluster_masks_, &cs);
+  StochasticConfig sconf;
+  sconf.budget = cfg_.stochastic_lights;
+  sconf.keep = cfg_.stochastic_keep;
+  sconf.phases = cfg_.stochastic_phases;
+  sconf.compensate = cfg_.stochastic_compensate;
+  // MONOTON sayac (ucuslu kare indeksi DEGIL): ornekleme deseni her karede bir
+  // adim doner, boylece kuyruktaki her isik sirayla ziyaret edilir.
+  sconf.frame = stoch_frame_++;
+  cluster_assign(view_, proj_, point_lights_, point_light_count_, grid_, cluster_masks_, &cs,
+                 stoch_enabled_ ? &sconf : nullptr, stoch_enabled_ ? cluster_stoch_ : nullptr);
   stats_.clusters = cs;
   std::memcpy(cluster_mem_[frame_].mapped, cluster_masks_, sizeof(uint32_t) * grid_.count());
+  if (stoch_enabled_)
+    std::memcpy(stoch_mem_[frame_].mapped, cluster_stoch_, sizeof(uint32_t) * 2 * grid_.count());
   GpuPointLight gl[kMaxPointLights];
   for (uint32_t i = 0; i < point_light_count_; i++) {
     const PointLight &L = point_lights_[i];

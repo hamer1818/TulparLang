@@ -1,0 +1,39 @@
+// kaynak-ozet: 11cf2d5f5f40  (engine/rhi/shaders/motion.vert)
+// EKRAN UZAYI HAREKET VEKTORU — vertex asamasi. gl_Position JITTER'LI
+// matristen; hareket vektoru JITTER'SIZ iki matristen.
+str asama = "vert";
+
+vec3 in_pos = girdi(0);
+
+struct Motion {
+  mat4 viewproj_jit;
+  mat4 viewproj;
+  mat4 prev_viewproj;
+  vec4 params; // xy: hedefin piksel olcusu, zw: ayrilmis
+}
+Motion u = tekduze(0, 0);
+
+struct Inst {
+  mat4 model;
+  mat4 prev_model;
+  vec4 misc; // x: reactive
+}
+struct Insts { Inst[] v; }   // calisma-zamani dizi (SSBO)
+Insts insts = depo(0, 1);
+
+struct Push { uvec4 idx; }
+Push pc = itme();
+
+vec4 v_cur = cikti(0);
+vec4 v_prev = cikti(1);
+float v_reactive = cikti_duz(2);
+
+func main() {
+  Inst it = insts.v[pc.idx.x];
+  vec4 p = vec4(in_pos, 1.0);
+  vec4 world = it.model * p;
+  gl_Position = u.viewproj_jit * world;
+  v_cur = u.viewproj * world;
+  v_prev = u.prev_viewproj * (it.prev_model * p);
+  v_reactive = it.misc.x;
+}

@@ -45,7 +45,8 @@ struct OffscreenResult {
   uint32_t post_merge_subpass_count = 0; // 1 = iki subpass birlesti
   int32_t subpass_merge_status[2] = {-1, -1}; // VkSubpassMergeStatusEXT
   // PSO cache:
-  bool pso_cache_loaded = false; // dosya vardi ve baslik cihazla eslesti
+  bool pso_cache_loaded = false; // dosya vardi ve TAM dogrulamadan gecti
+  const char *pso_cache_reject = "-"; // gecmediyse neden (pso_reject_str)
   uint64_t pso_cache_bytes = 0;  // yazilan
   uint32_t memory_allocations = 0; // vkAllocateMemory sayisi (cihaz toplam)
   uint32_t secondaries_recorded = 0; // paralel kayitta kullanilan ikincil tampon

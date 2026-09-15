@@ -69,6 +69,27 @@ struct MaterialHandle {
   bool valid() const { return id != 0xFFFFFFFFu; }
 };
 
+// --- PBR (metallic-roughness, glTF 2.0) -------------------------------------
+// Golgeleme modeli MALZEME basina secilir. create_material(doku, renk) eski
+// Lambert modelini korur — mevcut butun kapilar (srgb gidis-donus, golge,
+// icerik) BIT BIT ayni goruntuyu alir; PbrParams alan asiri yukleme
+// Cook-Torrance'a gecer. Bindless yok: parametreler malzeme basina 32 baytlik
+// bir UBO'dan (set 1, binding 1) okunur.
+//
+// Varsayilanlar bilerek Lambert'e yakinsar: metallic 0 + roughness 1'de GGX
+// D = 1/PI'ye duser ve geriye yalniz dielektrigin %4'luk Fresnel'i kalir.
+struct PbrParams {
+  float metallic = 0.0f;    // 0 dielektrik, 1 metal (dagilimli terim yok)
+  float roughness = 1.0f;   // ALGISAL puruzluluk (glTF); shader'da a = roughness^2
+  float reflectance = 0.5f; // dielektrik F0 = 0.16 * reflectance^2 (0.5 -> %4)
+  Vec3 emissive{0, 0, 0};   // YAZAR sRGB rengi; dogrusala cevrilip eklenir
+};
+
+// GGX normal dagiliminin normalizasyonu. Unnormalized = KONTROL kipi
+// (UiSortMode::BlendFirst ile ayni ruh): a^2 payini BILEREK dusurur, boylece
+// enerji kapisinin gercekten olcup olcmedigi gosterilebilir. Urunde hep Ggx.
+enum class NdfMode : uint8_t { Ggx = 0, Unnormalized = 1 };
+
 // --- FAZ 5 ZAMANSAL (temporal) — hepsi VARSAYILAN KAPALI -------------------
 // Yukseltici (upscaler) ARAYUZU. Arm ASR SDK'si depoda YOK; referans yollar
 // burada, gercek ASR entegrasyonu ayni arayuze bir kind ekleyerek girer
@@ -126,6 +147,13 @@ struct RendererConfig {
   // SDF ornekleme keskinligi (ozellestirme sabiti, boru hatti kurulumunda):
   // gecis genisligi = fwidth(mesafe) * bu carpan. Buyugu yumusak, kucugu keskin.
   float ui_sdf_sharpness = 1.0f;
+  // SDF boru hattini KURULUMDA yarat (Faz 6: "runtime'da pipeline kurulumu
+  // yok"). Eskiden ilk SDF dortgeninde, KAYIT yolunun icinde kuruluyordu ve o
+  // karede 0.49-0.52 ms takilma uretiyordu (RTX 5080'de olculdu).
+  // false = KONTROL kipi: eski TEMBEL davranis. Yalniz "ilk karede kurulan
+  // pipeline = 0" kapisinin pozitif kontrolu icindir (kare ici kurulumun
+  // gercekten sayilabildigini gostermek); urunde asla kapatilmaz.
+  bool ui_prewarm_sdf = true;
   uint32_t max_skin_matrices = 4096;    // kare basina eklem matrisi (SSBO, set 0 binding 4)    // 2B arayuz: kare basina (ucgen listesi, 6/dortgen)
 
   // --- Derlenmis render graph + son islem (bloom) — VARSAYILAN KAPALI ------
@@ -166,6 +194,27 @@ struct RendererConfig {
   // Kume (mesh+malzeme kosusu) kapasitesi. Asilirsa kalan cizimler CPU yoluna
   // duser ve CullInfo::cpu_draws'da sayilir — sessizce kaybolmaz.
   uint32_t max_cull_batches = 512;
+
+  // --- PBR ----------------------------------------------------------------
+  // false (varsayilan): create_material(doku, renk) LAMBERT malzeme uretir ve
+  // bugunku goruntu bit bit korunur. true: ayni cagri PBR malzeme uretir
+  // (metallic 0, roughness 1) — icerik tarafina dokunmadan butun sahneyi
+  // Cook-Torrance'a cevirmek icin (A/B olcumu bunu kullanir).
+  bool pbr_default = false;
+  // Enerji kapisinin KONTROLU. Urun yolunda asla degistirilmez.
+  NdfMode pbr_ndf = NdfMode::Ggx;
+
+  // --- Stokastik tile isiklandirma (PLAN EK A.1) — VARSAYILAN KAPALI -------
+  // 0: bugunku yol BIT BIT ayni (shader'daki kuyruk dali ozellestirme sabitiyle
+  // tamamen elenir, u_stoch hic okunmaz). > 0: kume basina en cok bu kadar isik
+  // degerlendirilir, geri kalani telafi agirligiyla ornekten kestirilir.
+  // Gerekce ve zamansal kararlilik mekanizmasi: renderer/cluster.hpp.
+  uint32_t stochastic_lights = 0;
+  uint32_t stochastic_keep = 2;    // her kare tutulan en onemli isik (zamansal capa)
+  uint32_t stochastic_phases = 128; // donme cozunurlugu (buyuk = kararli, yavas kapsama)
+  // KONTROL kipi (UiSortMode::BlendFirst / NdfMode::Unnormalized ile ayni ruh):
+  // ornekle ama TELAFI ETME. Urun yolunda asla degistirilmez.
+  bool stochastic_compensate = true;
 };
 
 // Son islem yolunun DISARI VERDIGI durum: acik mi, degilse NEDEN, hangi bicim
@@ -290,6 +339,13 @@ public:
   TextureHandle create_texture_levels(VkFormat fmt, uint32_t w, uint32_t h, uint32_t levels, const uint8_t *const *data,
                                       const uint32_t *sizes);
   MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1});
+  // PBR malzeme (Cook-Torrance). Yukleme aninda cagrilir.
+  MaterialHandle create_material(TextureHandle albedo, Vec3 color, const PbrParams &pbr);
+  // Parametreleri yerinde gunceller (malzeme UBO'suna yazar). KARE DISINDA
+  // cagrilir: tampon host-visible ve ucuslu kare basina KOPYALANMAZ.
+  bool set_material_pbr(MaterialHandle m, const PbrParams &pbr);
+  PbrParams material_pbr(MaterialHandle m) const;
+  bool material_is_pbr(MaterialHandle m) const;
   TextureHandle default_texture() const { return default_texture_; } // 1x1 beyaz
   MaterialHandle default_material() const { return default_material_; }
 
@@ -304,6 +360,8 @@ public:
   void clear_point_lights() { point_light_count_ = 0; }
   bool add_point_light(const PointLight &l);
   uint32_t point_light_count() const { return point_light_count_; }
+  // Stokastik yol gercekten acik mi (kurulum basarili ve shader ozellestirildi).
+  bool stochastic_lighting() const { return stoch_enabled_; }
   // Golge kutusu: isik yonu (isiga DOGRU), sahne merkezi, yaricap, derinlik.
   void set_shadow_volume(Vec3 center, float radius, float depth);
   // Yakin kademelerin merkezi (kamera hedefi / oyuncu). Kurulmazsa golge
@@ -496,7 +554,15 @@ private:
     VkDescriptorSet set = VK_NULL_HANDLE;
     uint32_t texture = 0;
     Vec3 color{1, 1, 1};
+    PbrParams pbr{};
+    bool is_pbr = false;
   };
+  // Malzeme basina GPU blogu (std140): set 1, binding 1 — mesh.frag MatBlock.
+  struct MaterialUbo {
+    float pbr[4];      // x metallic, y algisal puruzluluk, z yansitirlik, w model (0/1)
+    float emissive[4]; // rgb DOGRUSAL isima
+  };
+  static_assert(sizeof(MaterialUbo) == 32, "std140: MatBlock 32 bayt");
   static constexpr uint32_t kNoSkin = 0xFFFFFFFFu;
   static constexpr uint32_t kNoBatch = 0xFFFFFFFFu;
   struct Draw {
@@ -554,6 +620,8 @@ private:
                          VkPipeline *depth, VkPipeline *color, VkPipeline *shadow);
   bool make_shadow(); // render pass + goruntu + sampler + boru hatti
   static Mat4 cascade_matrix(Vec3 dir, Vec3 center, float radius, float depth, uint32_t tile);
+  MaterialHandle create_material_impl(TextureHandle albedo, Vec3 color, const PbrParams &pbr, bool is_pbr);
+  void write_material_ubo(uint32_t id);
   bool make_material_layout();
   bool make_ui(VkRenderPass rp, Arena &arena);
   enum class UiPipeKind : uint8_t { Blend = 0, Opaque = 1, Overdraw = 2, Sdf = 3 };
@@ -597,6 +665,12 @@ private:
   uint32_t material_count_ = 0;
   VkSampler tex_sampler_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout mat_layout_ = VK_NULL_HANDLE;
+  // Butun malzemelerin UBO'su TEK tampon; her malzeme kendi ofsetine bakar
+  // (stride cihazin minUniformBufferOffsetAlignment'ina yuvarlanir). Malzeme
+  // basina ayri vkAllocateMemory YOK — tahsis sayaci kapisi bunu olcuyor.
+  VkBuffer mat_ubo_ = VK_NULL_HANDLE;
+  rhi::MemoryAlloc mat_ubo_mem_{};
+  uint32_t mat_ubo_stride_ = 0;
   VkDescriptorPool mat_pool_ = VK_NULL_HANDLE;
   TextureHandle default_texture_{};
   MaterialHandle default_material_{};
@@ -692,6 +766,11 @@ private:
   uint32_t ui_query_frame_ = 0;
   ClusterGrid grid_{};
   uint32_t *cluster_masks_ = nullptr; // Arena, grid_.count()
+  uint32_t *cluster_stoch_ = nullptr;  // Arena, 2 * grid_.count(): (kuyruk maskesi, kuyruk toplami)
+  VkBuffer stoch_buf_[kMaxFrames] = {};
+  rhi::MemoryAlloc stoch_mem_[kMaxFrames] = {};
+  bool stoch_enabled_ = false;
+  uint32_t stoch_frame_ = 0; // MONOTON kare sayaci (begin_frame'de artar): desen bununla doner
   PointLight point_lights_[kMaxPointLights];
   uint32_t point_light_count_ = 0;
   uint32_t render_w_ = 1, render_h_ = 1;

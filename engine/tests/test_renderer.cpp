@@ -347,6 +347,15 @@ ENGINE_TEST(renderer_mali_best_practices_gate) {
   for (uint32_t i = 0; i < 16 * 16; i++) { uint8_t c = ((i % 16) / 8 + (i / 16) / 8) % 2 ? 230 : 40; tex[i * 4] = tex[i * 4 + 1] = tex[i * 4 + 2] = c; tex[i * 4 + 3] = 255; }
   renderer::TextureHandle th = ren.create_texture(tex, 16, 16, true);
   renderer::MaterialHandle mh = ren.create_material(th, {1, 1, 1});
+  // PBR malzeme de ayni karede cizilir: set 1 binding 1 (malzeme UBO'su, cihazin
+  // hizasina yuvarlanmis ofset) ve mesh.frag'in ozellestirme sabiti bu kapinin
+  // DOGRULAMA KATMANI altinda kosmali — yoksa PBR yolu hicbir yerde denetlenmez.
+  renderer::PbrParams bp_pbr;
+  bp_pbr.metallic = 1.0f;
+  bp_pbr.roughness = 0.3f;
+  bp_pbr.emissive = {0.1f, 0.05f, 0.0f};
+  renderer::MaterialHandle mh_pbr = ren.create_material(th, {1, 1, 1}, bp_pbr);
+  CHECK(mh_pbr.valid());
   ren.set_light(normalize(Vec3{1.0f, 1.4f, 0.0f}), {0.10f, 0.10f, 0.12f}, 0.9f);
   ren.set_shadow_volume({0, 1.0f, 0}, 9.0f, 40.0f);
   ren.set_camera(Mat4::look_at({0, 7.0f, 9.0f}, {0, 0.5f, 0}, {0, 1, 0}),
@@ -359,6 +368,7 @@ ENGINE_TEST(renderer_mali_best_practices_gate) {
     ren.add_point_light({{2, 1.5f, 0}, 6.0f, {1, 0.2f, 0.2f}, 4.0f});
     ren.draw(plane, mh, Mat4::scale({16, 1, 16}), {0.8f, 0.8f, 0.8f});
     ren.draw(cube, Mat4::translate({0, 2.5f, 0}) * Mat4::scale({2.4f, 2.4f, 2.4f}), {0.9f, 0.3f, 0.2f});
+    ren.draw(cube, mh_pbr, Mat4::translate({-3.0f, 1.2f, 1.5f}) * Mat4::scale({1.6f, 1.6f, 1.6f}), {1, 1, 1});
     ren.ui_begin((float)W, (float)H, 0.0f);
     ren.ui_rect(4, 4, 40, 12, renderer::Renderer::rgba(255, 255, 255, 200));
     bool ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
@@ -684,4 +694,607 @@ ENGINE_TEST(renderer_packed_vertex_keeps_normals) {
   ren.shutdown();
   offscreen_destroy(off);
   dev.shutdown();
+}
+
+// ===========================================================================
+// PBR (metallic-roughness) — Cook-Torrance mikroyuzey modeli
+// ===========================================================================
+// Olcum kuresi: UV kuresi (yaricap 1), normal = konum. Kup ve duzlemden farkli
+// olarak TUM normal yonlerini gosterir; hem parlama lobu hem de silueti (grazing
+// aci) tek karede olculebilir. Sarim kup ile ayni sozlesmede: (i,j)->(i,j+1)->
+// (i+1,j+1) disaridan bakildiginda CCW (T x B = sin(theta) * P, yani disa dogru).
+namespace {
+constexpr uint32_t kSphRings = 32, kSphSegs = 48;
+constexpr uint32_t kSphVerts = (kSphRings + 1) * (kSphSegs + 1);
+constexpr uint32_t kSphIdx = kSphRings * kSphSegs * 6;
+uint32_t make_sphere(renderer::Vertex *v, uint32_t *idx) {
+  uint32_t vi = 0;
+  for (uint32_t i = 0; i <= kSphRings; i++) {
+    const float th = 3.14159265f * (float)i / (float)kSphRings;
+    for (uint32_t j = 0; j <= kSphSegs; j++) {
+      const float ph = 6.28318531f * (float)j / (float)kSphSegs;
+      const Vec3 p{std::sin(th) * std::cos(ph), std::cos(th), std::sin(th) * std::sin(ph)};
+      v[vi++] = {p, p, {(float)j / (float)kSphSegs, (float)i / (float)kSphRings}};
+    }
+  }
+  uint32_t ii = 0;
+  for (uint32_t i = 0; i < kSphRings; i++)
+    for (uint32_t j = 0; j < kSphSegs; j++) {
+      const uint32_t a = i * (kSphSegs + 1) + j, b = a + 1, c = b + kSphSegs + 1, d = a + kSphSegs + 1;
+      idx[ii++] = a; idx[ii++] = b; idx[ii++] = c;
+      idx[ii++] = a; idx[ii++] = c; idx[ii++] = d;
+    }
+  return ii;
+}
+// sRGB bayt -> DOGRUSAL. Hedef sRGB bicimli oldugu icin geri okunan bayt
+// kodludur; enerji toplami dogrusal uzayda yapilmali (yoksa "enerji" olcumu
+// aslinda kodlama egrisini olcer).
+float px_linear(uint8_t b) {
+  const float c = (float)b / 255.0f;
+  return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+// Dogrusal -> yazar sRGB: istenen DOGRUSAL albedoyu malzeme rengine cevirir
+// (create_material girdiyi srgb_to_linear'dan geciriyor).
+float to_srgb(float c) {
+  return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+}
+struct PbrRig {
+  renderer::Renderer ren;
+  rhi::OffscreenTarget *off = nullptr;
+  rhi::OffscreenConfig oc;
+  renderer::MeshHandle sphere;
+  renderer::MaterialHandle mat;
+  bool ok = false;
+};
+// Kure + tek yonlu isik + siyah ortam: olculen her seyin kaynagi TEK terim.
+bool pbr_rig_init(PbrRig &r, Device &dev, SystemArena &sys, uint32_t W, uint32_t H, renderer::NdfMode ndf) {
+  r.oc = rhi::OffscreenConfig{};
+  r.oc.srgb = true;
+  r.oc.width = W; r.oc.height = H;
+  r.oc.clear[0] = r.oc.clear[1] = r.oc.clear[2] = 0;
+  rhi::OffscreenResult ores;
+  r.off = rhi::offscreen_create(dev, sys, r.oc, &ores);
+  if (!r.off) return false;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 0;
+  rc.pbr_ndf = ndf;
+  if (!r.ren.init(dev, sys, rhi::offscreen_render_pass(r.off), rc)) return false;
+  static renderer::Vertex sv[kSphVerts];
+  static uint32_t si[kSphIdx];
+  const uint32_t n = make_sphere(sv, si);
+  r.sphere = r.ren.create_mesh(sv, kSphVerts, si, n);
+  r.ren.set_render_size(W, H);
+  r.ren.set_shadows_enabled(false);
+  r.ok = r.sphere.valid();
+  return r.ok;
+}
+void pbr_rig_free(PbrRig &r) {
+  r.ren.shutdown();
+  if (r.off) rhi::offscreen_destroy(r.off);
+  r.off = nullptr;
+}
+// Tek kare cizer ve pikselleri kopyalar. Isik yonu kameraya dogru egik: parlama
+// lobu diskin icinde kalir, siluet halkasi da gorunur.
+bool pbr_frame(PbrRig &r, uint8_t *dst, uint32_t W, uint32_t H, float sun) {
+  r.ren.set_light(normalize(Vec3{0.35f, 0.45f, 1.0f}), {0, 0, 0}, sun);
+  r.ren.set_camera(Mat4::look_at({0, 0, 3.2f}, {0, 0, 0}, {0, 1, 0}),
+                   Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 50.0f));
+  r.ren.begin_frame(0);
+  r.ren.clear_point_lights();
+  r.ren.draw(r.sphere, r.mat, Mat4::identity(), {1, 1, 1});
+  rhi::OffscreenResult ores;
+  Rec rr{&r.ren};
+  if (!rhi::offscreen_render_custom(r.off, r.oc, rec_main, &rr, &ores, rec_shadow)) return false;
+  std::memcpy(dst, ores.pixels, (size_t)W * H * 4);
+  return true;
+}
+// Karedeki TOPLAM dogrusal enerji (butun kanallar, butun pikseller).
+double frame_energy(const uint8_t *px, uint32_t W, uint32_t H) {
+  double e = 0;
+  for (uint32_t i = 0; i < W * H; i++)
+    for (int c = 0; c < 3; c++) e += (double)px_linear(px[i * 4 + c]);
+  return e;
+}
+} // namespace
+
+// PBR enerji kapisi: GGX DOGRU normalize edilmis mi?
+// Kurulum: yaricap 1 kure, metallic 1 + albedo 1 (yani F0 = 1, Fresnel sabit)
+// -> olculen sey SAF D*V. Ortam siyah, nokta isik yok, golge yok: karedeki
+// butun enerji tek yonlu isigin spekuler lobundan gelir.
+// IDDIA: puruzluluk lobu YAYAR, enerji URETMEZ. Dogru normalize edilmis GGX'te
+// puruzluluk taranirken toplam dogrusal enerji dar bir bantta kalir.
+// KONTROL: ayni tarama NdfMode::Unnormalized ile (a^2 payi dusurulmus) kosar —
+// enerji puruzlulukle patlamali, yani kapinin esigini ACIKCA asmali. Kontrol
+// gecerse kapi hicbir sey olcmuyor demektir.
+ENGINE_TEST(renderer_pbr_conserves_energy_across_roughness) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "pbr_energy")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 256, H = 256;
+  static const float rough[4] = {0.35f, 0.5f, 0.7f, 1.0f};
+  static uint8_t px[W * H * 4];
+  double e[2][4] = {};
+  bool ran[2] = {};
+  // Gunes olcegi: en dar lobun tepesi kirpilmasin (kirpma enerji SILER ve
+  // olcumu asagi cekerdi). 0.035 -> r=0.35'te tepe ~0.6 dogrusal.
+  const float sun = 0.035f;
+  for (int mode = 0; mode < 2; mode++) {
+    PbrRig r;
+    if (!pbr_rig_init(r, dev, sys, W, H, mode == 0 ? renderer::NdfMode::Ggx : renderer::NdfMode::Unnormalized)) {
+      CHECK(false); pbr_rig_free(r); break;
+    }
+    renderer::PbrParams pp;
+    pp.metallic = 1.0f;      // dagilimli terim yok
+    pp.roughness = rough[0];
+    r.mat = r.ren.create_material(r.ren.default_texture(), {1, 1, 1}, pp); // albedo 1 -> F0 = 1
+    bool all = r.mat.valid();
+    for (int i = 0; i < 4 && all; i++) {
+      pp.roughness = rough[i];
+      all = r.ren.set_material_pbr(r.mat, pp) && pbr_frame(r, px, W, H, sun);
+      if (all) e[mode][i] = frame_energy(px, W, H);
+    }
+    ran[mode] = all;
+    pbr_rig_free(r);
+  }
+  dev.shutdown();
+  CHECK(ran[0] && ran[1]);
+  if (!(ran[0] && ran[1])) return;
+  auto span = [](const double *v) {
+    double lo = v[0], hi = v[0];
+    for (int i = 1; i < 4; i++) { if (v[i] < lo) lo = v[i]; if (v[i] > hi) hi = v[i]; }
+    return lo > 0 ? hi / lo : 1e9;
+  };
+  const double s_ok = span(e[0]), s_bad = span(e[1]);
+  for (int mode = 0; mode < 2; mode++)
+    std::printf("    [bilgi] %-28s enerji r=0.35 %.0f  r=0.50 %.0f  r=0.70 %.0f  r=1.00 %.0f  -> en buyuk/en kucuk %.2fx\n",
+                mode == 0 ? "GGX (urun)" : "normalize YOK (kontrol)", e[mode][0], e[mode][1], e[mode][2], e[mode][3],
+                span(e[mode]));
+  // Esik: 8 bit sRGB hedefte nicemleme + tek lobun ornekleme hatasi zaten
+  // birkac on yuzde getirir; 3.0 bunun uzerinde ama kontrolun cok altinda.
+  bool energy_stable = s_ok < 3.0;
+  CHECK(energy_stable);
+  // Kontrol GERCEKTEN dusmeli: ayni esikte kalmamali ve urunden belirgin buyuk.
+  bool control_breaks = s_bad >= 3.0 && s_bad > s_ok * 3.0;
+  CHECK(control_breaks);
+  std::printf("    [bilgi] kapi: urun %.2fx (< 3.0 gerekli), kontrol %.2fx (>= 3.0 ve urunun 3 katindan buyuk olmali)\n",
+              s_ok, s_bad);
+}
+
+// PBR Fresnel kapisi: metal ile dielektrik AYRISIYOR mu?
+// F0 = mix(0.16*reflectance^2, albedo, metallic). Kirmizi bir albedoda:
+//   metal      -> parlama KIRMIZI (F0 = albedo)
+//   dielektrik -> parlama BEYAZ   (F0 = %4 renksiz), kirmizi yalniz dagilimlida
+// Olcum: en parlak 300 pikselin dogrusal kromasi (R-B)/(R+G+B).
+// KONTROL: ayni olcum NdfMode::Unnormalized ile — lob 256 kat parlar, her sey
+// beyaza DOYAR ve krom farki COKER. Yani kapi gercekten Fresnel'i olcuyor,
+// "iki resim farkli" demiyor.
+ENGINE_TEST(renderer_pbr_metal_dielectric_split_in_fresnel) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "pbr_fresnel")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 256, H = 256;
+  static uint8_t px[W * H * 4];
+  // Hedef DOGRUSAL albedo: guclu kirmizi. Malzeme rengi yazar sRGB'sinde verilir.
+  const Vec3 lin{0.787f, 0.100f, 0.010f};
+  const Vec3 col{to_srgb(lin.x), to_srgb(lin.y), to_srgb(lin.z)};
+  const float sun = 0.018f; // metalin kirmizi tepesi (~50x) kirpilmasin
+  // En parlak N pikselin dogrusal kromasi.
+  auto chroma = [](const uint8_t *p, uint32_t n_px, uint32_t top) {
+    static uint32_t ord[W * H];
+    for (uint32_t i = 0; i < n_px; i++) ord[i] = i;
+    for (uint32_t a = 0; a < top; a++) { // kismi secim: en parlak `top` yeter
+      uint32_t best = a;
+      for (uint32_t b = a + 1; b < n_px; b++) {
+        const int sb = p[ord[b] * 4] + p[ord[b] * 4 + 1] + p[ord[b] * 4 + 2];
+        const int sa = p[ord[best] * 4] + p[ord[best] * 4 + 1] + p[ord[best] * 4 + 2];
+        if (sb > sa) best = b;
+      }
+      const uint32_t t = ord[a]; ord[a] = ord[best]; ord[best] = t;
+    }
+    double r = 0, g = 0, b = 0;
+    for (uint32_t a = 0; a < top; a++) {
+      r += px_linear(p[ord[a] * 4]); g += px_linear(p[ord[a] * 4 + 1]); b += px_linear(p[ord[a] * 4 + 2]);
+    }
+    const double s = r + g + b;
+    return s > 1e-9 ? (r - b) / s : 0.0;
+  };
+  double ch[2][2] = {}; // [mode][0 = metal, 1 = dielektrik]
+  bool ran[2] = {};
+  for (int mode = 0; mode < 2; mode++) {
+    PbrRig r;
+    if (!pbr_rig_init(r, dev, sys, W, H, mode == 0 ? renderer::NdfMode::Ggx : renderer::NdfMode::Unnormalized)) {
+      CHECK(false); pbr_rig_free(r); break;
+    }
+    bool all = true;
+    for (int k = 0; k < 2 && all; k++) {
+      renderer::PbrParams pp;
+      pp.metallic = k == 0 ? 1.0f : 0.0f;
+      pp.roughness = 0.25f;
+      pp.reflectance = 0.5f; // dielektrik F0 = %4
+      r.mat = r.ren.create_material(r.ren.default_texture(), col, pp);
+      all = r.mat.valid() && pbr_frame(r, px, W, H, sun);
+      if (all) ch[mode][k] = chroma(px, W * H, 300);
+    }
+    ran[mode] = all;
+    pbr_rig_free(r);
+  }
+  dev.shutdown();
+  CHECK(ran[0] && ran[1]);
+  if (!(ran[0] && ran[1])) return;
+  const double d_ok = ch[0][0] - ch[0][1], d_bad = ch[1][0] - ch[1][1];
+  std::printf("    [bilgi] GGX (urun)            : parlama kromasi metal %.3f, dielektrik %.3f -> fark %.3f\n",
+              ch[0][0], ch[0][1], d_ok);
+  std::printf("    [bilgi] normalize YOK (kontrol): parlama kromasi metal %.3f, dielektrik %.3f -> fark %.3f\n",
+              ch[1][0], ch[1][1], d_bad);
+  bool fresnel_splits = d_ok > 0.30; // metalin parlamasi albedoyla renklenmis
+  CHECK(fresnel_splits);
+  bool control_collapses = d_bad < d_ok * 0.5; // doyma ayrimi siliyor
+  CHECK(control_collapses);
+}
+
+// Geriye uyumluluk (A/B): PBR alanlari VERILMEMIS bir malzeme (metallic 0,
+// roughness 1, reflectance 0.5) bugunku Lambert goruntusune ne kadar yakin?
+// roughness 1'de GGX D = 1/PI'ye duser; geriye yalniz dielektrigin %4'luk
+// Fresnel'i ve analitik ortam DFG terimi kalir. Bu kapi o FARKI OLCER (sifir
+// oldugunu iddia etmez) ve olcumun kendisinin kor olmadigini gosterir.
+// KONTROL: ayni A/B, PBR tarafi roughness 0.1 (parlak) ile — fark BUYUMELI.
+ENGINE_TEST(renderer_pbr_default_material_stays_near_lambert) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "pbr_ab")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 256, H = 256;
+  static uint8_t lam[W * H * 4], pbr_def[W * H * 4], pbr_shiny[W * H * 4];
+  const Vec3 col{0.80f, 0.78f, 0.75f};
+  // Gercekci sahne aydinlatmasi: gunes + gorunur ortam (GI sozlesmesi).
+  const float sun = 0.9f;
+  bool ok = true;
+  {
+    PbrRig r;
+    ok = pbr_rig_init(r, dev, sys, W, H, renderer::NdfMode::Ggx);
+    if (ok) {
+      // Ortam SIFIR degil: ortam spekuleri (split-sum DFG) de A/B'ye girsin.
+      auto shot = [&](uint8_t *dst) {
+        r.ren.set_light(normalize(Vec3{0.35f, 0.45f, 1.0f}), {0.12f, 0.13f, 0.16f}, sun);
+        r.ren.set_camera(Mat4::look_at({0, 0, 3.2f}, {0, 0, 0}, {0, 1, 0}),
+                         Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 50.0f));
+        r.ren.begin_frame(0);
+        r.ren.clear_point_lights();
+        r.ren.draw(r.sphere, r.mat, Mat4::identity(), {1, 1, 1});
+        rhi::OffscreenResult ores;
+        Rec rr{&r.ren};
+        if (!rhi::offscreen_render_custom(r.off, r.oc, rec_main, &rr, &ores, rec_shadow)) return false;
+        std::memcpy(dst, ores.pixels, (size_t)W * H * 4);
+        return true;
+      };
+      r.mat = r.ren.create_material(r.ren.default_texture(), col);        // Lambert (bugunku yol)
+      ok = r.mat.valid() && shot(lam);
+      renderer::PbrParams pp;                                             // varsayilan: metallic 0, roughness 1
+      if (ok) { r.mat = r.ren.create_material(r.ren.default_texture(), col, pp); ok = r.mat.valid() && shot(pbr_def); }
+      pp.roughness = 0.1f;                                                // KONTROL: parlak
+      if (ok) { r.mat = r.ren.create_material(r.ren.default_texture(), col, pp); ok = r.mat.valid() && shot(pbr_shiny); }
+    }
+    pbr_rig_free(r);
+  }
+  dev.shutdown();
+  CHECK(ok);
+  if (!ok) return;
+  auto cmp = [&](const uint8_t *a, const uint8_t *b, uint32_t *diff_px, int *max_ch, double *mean) {
+    uint32_t d = 0; int mx = 0; double sum = 0;
+    for (uint32_t i = 0; i < W * H; i++) {
+      int worst = 0;
+      for (int c = 0; c < 3; c++) {
+        const int q = std::abs((int)a[i * 4 + c] - (int)b[i * 4 + c]);
+        if (q > worst) worst = q;
+        sum += q;
+      }
+      if (worst) d++;
+      if (worst > mx) mx = worst;
+    }
+    *diff_px = d; *max_ch = mx; *mean = sum / (double)(W * H * 3);
+  };
+  uint32_t d0 = 0, d1 = 0; int m0 = 0, m1 = 0; double a0 = 0, a1 = 0;
+  cmp(lam, pbr_def, &d0, &m0, &a0);
+  cmp(lam, pbr_shiny, &d1, &m1, &a1);
+  std::printf("    [bilgi] A/B Lambert vs PBR(varsayilan m=0 r=1): %u piksel farkli (%.1f%%), en buyuk kanal %d, ortalama %.2f\n",
+              d0, 100.0f * (float)d0 / (float)(W * H), m0, a0);
+  std::printf("    [bilgi] KONTROL Lambert vs PBR(r=0.10 parlak):  %u piksel farkli (%.1f%%), en buyuk kanal %d, ortalama %.2f\n",
+              d1, 100.0f * (float)d1 / (float)(W * H), m1, a1);
+  bool close_to_lambert = m0 <= 24 && a0 < 2.0; // gorunur ama kucuk: %4 Fresnel + ortam DFG
+  CHECK(close_to_lambert);
+  bool measurement_sees_material = m1 > m0 * 2 && m1 > 40; // olcum kor degil (olculen 63)
+  CHECK(measurement_sees_material);
+}
+
+// ===========================================================================
+// Stokastik tile isiklandirma (PLAN EK A.1) — VARSAYILAN KAPALI
+// ===========================================================================
+// Olcum sahnesi: genis zemin + ustunde ORTUSEN 24 nokta isik. Ortam ve gunes
+// SIFIR, golge kapali: karedeki her fotonun kaynagi nokta isiklardir, yani
+// stokastik yolun hatasi baska bir terimin arkasina saklanamaz.
+namespace {
+constexpr uint32_t kStochLights = 24;
+void stoch_place_lights(renderer::Renderer &ren) {
+  ren.clear_point_lights();
+  for (uint32_t i = 0; i < kStochLights; i++) {
+    const float ang = 0.83f * (float)i;
+    const float rad = 1.6f + 0.55f * (float)(i % 5);
+    renderer::PointLight L;
+    L.pos = {std::cos(ang) * rad, 0.8f + 0.4f * (float)(i % 3), std::sin(ang) * rad};
+    L.radius = (i % 6) == 0 ? 6.0f : 3.5f;
+    L.color = {0.45f + 0.55f * (float)((i * 7) % 5) / 4.0f, 0.45f + 0.55f * (float)((i * 3) % 4) / 3.0f,
+               0.45f + 0.55f * (float)((i * 5) % 6) / 5.0f};
+    // Siddet MERDIVENI: her 6 isiktan biri baskin, gerisi zayif. Gercek
+    // kullanim boyle (bir tile'da 12 isik var, 2-3'u onemli); butun isiklarin
+    // esit oldugu sahne stokastik yontemin en kotu halidir ve tipik degildir.
+    L.intensity = 1.6f / (1.0f + 1.6f * (float)(i % 6));
+    ren.add_point_light(L);
+  }
+}
+struct StochRig {
+  renderer::Renderer ren;
+  rhi::OffscreenTarget *off = nullptr;
+  rhi::OffscreenConfig oc;
+  renderer::MeshHandle plane, cube;
+};
+bool stoch_rig_init(StochRig &r, Device &dev, SystemArena &sys, uint32_t W, uint32_t H, uint32_t budget, uint32_t keep,
+                    uint32_t phases = 128, bool compensate = true) {
+  r.oc = rhi::OffscreenConfig{};
+  r.oc.srgb = true;
+  r.oc.width = W; r.oc.height = H;
+  r.oc.clear[0] = r.oc.clear[1] = r.oc.clear[2] = 0;
+  rhi::OffscreenResult ores;
+  r.off = rhi::offscreen_create(dev, sys, r.oc, &ores);
+  if (!r.off) return false;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 0;
+  rc.stochastic_lights = budget;
+  rc.stochastic_keep = keep;
+  rc.stochastic_phases = phases;
+  rc.stochastic_compensate = compensate;
+  if (!r.ren.init(dev, sys, rhi::offscreen_render_pass(r.off), rc)) return false;
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  r.plane = r.ren.create_mesh(v, 4, idx, n);
+  n = renderer::Renderer::cube(v, idx);
+  r.cube = r.ren.create_mesh(v, 24, idx, n);
+  r.ren.set_render_size(W, H);
+  r.ren.set_shadows_enabled(false);
+  return r.plane.valid() && r.cube.valid();
+}
+void stoch_rig_free(StochRig &r) {
+  r.ren.shutdown();
+  if (r.off) rhi::offscreen_destroy(r.off);
+  r.off = nullptr;
+}
+bool stoch_frame(StochRig &r, uint8_t *dst, uint32_t W, uint32_t H) {
+  r.ren.set_light({0, 1, 0}, {0, 0, 0}, 0.0f); // yalniz nokta isiklar
+  r.ren.set_camera(Mat4::look_at({0, 7.0f, 7.0f}, {0, 0, 0}, {0, 1, 0}),
+                   Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 60.0f));
+  stoch_place_lights(r.ren); // isiklar begin_frame'DEN ONCE: kume atamasi orada yapilir
+  r.ren.begin_frame(0);
+  r.ren.draw(r.plane, Mat4::scale({24, 1, 24}), {0.85f, 0.85f, 0.85f});
+  r.ren.draw(r.cube, Mat4::translate({1.4f, 0.5f, -0.6f}), {0.9f, 0.9f, 0.9f});
+  rhi::OffscreenResult ores;
+  Rec rr{&r.ren};
+  if (!rhi::offscreen_render_custom(r.off, r.oc, rec_main, &rr, &ores, rec_shadow)) return false;
+  std::memcpy(dst, ores.pixels, (size_t)W * H * 4);
+  return true;
+}
+double mean_linear(const uint8_t *px, uint32_t W, uint32_t H) {
+  double s = 0;
+  for (uint32_t i = 0; i < W * H; i++)
+    for (int c = 0; c < 3; c++) s += (double)px_linear(px[i * 4 + c]);
+  return s / (double)(W * H * 3);
+}
+} // namespace
+
+// KAPALI YOL: stokastik yapilandirma BIT BIT eski goruntuyu vermeli.
+// Iki iddia olculur:
+//  (1) budget = 0  -> referans (yol tamamen elenir, ozellestirme sabiti 0)
+//  (2) budget = 32 -> yol ACIK ama hicbir kumede butce asilmiyor; tahmin edici
+//      ornek almaz, agirlik 1 olur. Sonuc referansla BAYT BAYT ayni cikmali —
+//      yani "acik" olmanin kendisi goruntuye hicbir sey katmiyor.
+// KONTROL: ayni karsilastirma butce 3 ile — fark SIFIRDAN BUYUK olmali, yoksa
+// karsilastirma bayt dizisini degil kendi kendini olcuyordur.
+ENGINE_TEST(renderer_stochastic_lighting_is_bit_identical_when_unused) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(256u << 20, "stoch_off")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 192, H = 192;
+  static uint8_t ref[W * H * 4], wide[W * H * 4], tight[W * H * 4];
+  static const uint32_t budget[3] = {0, 32, 3};
+  uint8_t *dst[3] = {ref, wide, tight};
+  uint32_t ev[3] = {}, ev_full[3] = {};
+  bool ok = true;
+  for (int i = 0; i < 3 && ok; i++) {
+    StochRig r;
+    ok = stoch_rig_init(r, dev, sys, W, H, budget[i], 2) && stoch_frame(r, dst[i], W, H);
+    if (ok) {
+      ev[i] = r.ren.stats().clusters.lights_evaluated;
+      ev_full[i] = r.ren.stats().clusters.lights_evaluated_full;
+      CHECK(r.ren.stochastic_lighting() == (budget[i] > 0));
+    }
+    stoch_rig_free(r);
+  }
+  dev.shutdown();
+  CHECK(ok);
+  if (!ok) return;
+  auto bytes_differ = [&](const uint8_t *a, const uint8_t *b) {
+    uint32_t d = 0;
+    for (uint32_t i = 0; i < W * H * 4; i++) if (a[i] != b[i]) d++;
+    return d;
+  };
+  const uint32_t d_wide = bytes_differ(ref, wide), d_tight = bytes_differ(ref, tight);
+  std::printf("    [bilgi] kapali(butce 0) isik-kume degerlendirmesi %u; butce 32 -> %u (tam %u); butce 3 -> %u (tam %u)\n",
+              ev[0], ev[1], ev_full[1], ev[2], ev_full[2]);
+  std::printf("    [bilgi] referansa gore farkli BAYT: butce 32 -> %u (0 bekleniyor), KONTROL butce 3 -> %u (> 0 bekleniyor)\n",
+              d_wide, d_tight);
+  bool identical_when_unused = d_wide == 0 && ev[1] == ev[0];
+  CHECK(identical_when_unused);
+  bool comparison_can_see_a_difference = d_tight > 0; // kontrol: karsilastirma kor degil
+  CHECK(comparison_can_see_a_difference);
+}
+
+// ACIK YOL: degerlendirilen isik sayisi belirgin dusmeli, parlaklik ise
+// referansa yakin kalmali (telafi agirligi enerjiyi geri veriyor mu?).
+// KONTROL: ornek sayisi 1'e indirilince (butce 1, capa 0 -> tek isik, ham
+// telafi) hata BUYUMELI. Buyumezse kapi hicbir sey olcmuyor demektir.
+ENGINE_TEST(renderer_stochastic_lighting_keeps_brightness_with_fewer_lights) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(256u << 20, "stoch_on")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 192, H = 192;
+  const int kFrames = 24; // tahmin edici ZAMANSAL ortalamada yansiz: tek kare gurultulu bir ornektir
+  static uint8_t img[W * H * 4];
+  static uint8_t ref0[W * H * 4];
+  // [0] referans (tam degerlendirme), [1] urun, [2] KONTROL: ornekle ama TELAFI ETME
+  static const uint32_t budget[3] = {0, 4, 4};
+  static const bool comp[3] = {true, true, false};
+  double mean[3] = {}, lo[3] = {}, hi[3] = {};
+  uint32_t ev[3] = {}, evf[3] = {};
+  bool ok = true;
+  for (int i = 0; i < 3 && ok; i++) {
+    StochRig r;
+    ok = stoch_rig_init(r, dev, sys, W, H, budget[i], 2, 128, comp[i]);
+    double acc = 0;
+    lo[i] = 1e9; hi[i] = 0;
+    for (int f = 0; f < kFrames && ok; f++) {
+      ok = stoch_frame(r, img, W, H);
+      if (!ok) break;
+      const double m = mean_linear(img, W, H);
+      acc += m;
+      if (m < lo[i]) lo[i] = m;
+      if (m > hi[i]) hi[i] = m;
+      if (i == 0 && f == 0) std::memcpy(ref0, img, sizeof ref0);
+    }
+    if (ok) {
+      mean[i] = acc / (double)kFrames;
+      ev[i] = r.ren.stats().clusters.lights_evaluated;
+      evf[i] = r.ren.stats().clusters.lights_evaluated_full;
+    }
+    stoch_rig_free(r);
+  }
+  dev.shutdown();
+  CHECK(ok);
+  if (!ok) return;
+  // Olcum gecerlilik kontrolu: referans DOYMUS olmamali. Kirpma enerjiyi siler
+  // ve "sapma" sayisi aslinda kirpmayi olcmeye baslar (bu depoda tekrarlayan
+  // bir tuzak sinifi: olcum kendi kurulumunu olcer).
+  uint32_t sat = 0;
+  for (uint32_t i = 0; i < W * H; i++)
+    if (ref0[i * 4] >= 254 && ref0[i * 4 + 1] >= 254 && ref0[i * 4 + 2] >= 254) sat++;
+  std::printf("    [bilgi] referansta doymus piksel: %u (%%%.2f) — olcum ancak dusukken gecerli\n", sat,
+              100.0f * (float)sat / (float)(W * H));
+  bool not_saturated = sat * 100 < W * H; // %1'den az
+  CHECK(not_saturated);
+  const double err_ok = std::abs(mean[1] - mean[0]) / mean[0];
+  const double err_bad = std::abs(mean[2] - mean[0]) / mean[0];
+  const double load = (double)ev[1] / (double)(evf[1] ? evf[1] : 1u);
+  std::printf("    [bilgi] referans        : %d karenin ortalamasi %.5f (kare araligi %.5f..%.5f), %u degerlendirme\n",
+              kFrames, mean[0], lo[0], hi[0], ev[0]);
+  std::printf("    [bilgi] urun (butce 4)  : ortalama %.5f (aralik %.5f..%.5f), sapma %%%.2f, %u/%u degerlendirme (yuk %%%.1f)\n",
+              mean[1], lo[1], hi[1], 100.0 * err_ok, ev[1], evf[1], 100.0 * load);
+  std::printf("    [bilgi] KONTROL (telafi YOK): ortalama %.5f (aralik %.5f..%.5f), sapma %%%.2f\n", mean[2], lo[2],
+              hi[2], 100.0 * err_bad);
+  bool brightness_kept = err_ok < 0.16;
+  CHECK(brightness_kept);
+  bool work_dropped = load < 0.60; // degerlendirme yuku belirgin dusmeli
+  CHECK(work_dropped);
+  // KONTROL: telafi kapaliyken ayni secim kareyi belirgin KARARTMALI. Aksi
+  // halde "parlaklik korundu" cumlesi telafiyi degil, sahnenin sansini olcer.
+  bool control_is_worse = err_bad > err_ok * 2.5 && err_bad > 0.30;
+  CHECK(control_is_worse);
+}
+
+// ZAMANSAL KARARLILIK: duran bir sahnede kare kare titreme.
+// Mekanizma (cluster.hpp): capa (en onemli `keep` isik her kare) + katmanli
+// donme (kuyruk esit araliklarla, desen kare basina 1 kayar) + secimin TILE
+// basina olmasi. Olcum: ardisik kareler arasi ortalama mutlak piksel degisimi.
+//   referans (kapali)      -> TAM SIFIR olmali (duran sahne, deterministik yol)
+//   urun (butce 4, capa 2) -> kucuk
+//   KONTROL (butce 1, capa 0, capa YOK) -> belirgin BUYUK
+// Kontrol capasiz kosar: "titreme kucuk" iddiasinin capadan geldigini gosterir.
+ENGINE_TEST(renderer_stochastic_lighting_is_temporally_stable) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(256u << 20, "stoch_temporal")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 192, H = 192;
+  const int kFrames = 8;
+  static uint8_t a[W * H * 4], b[W * H * 4];
+  static const uint32_t budget[3] = {0, 4, 4};
+  static const uint32_t keep[3] = {2, 2, 0};
+  static const uint32_t phases[3] = {128, 128, 2}; // KONTROL: kaba donme (desen her karede yarim dilim atlar)
+  double flick_mean[3] = {};
+  int flick_max[3] = {};
+  uint32_t big[3] = {};
+  float wmax_[3] = {};
+  bool ok = true;
+  for (int i = 0; i < 3 && ok; i++) {
+    StochRig r;
+    ok = stoch_rig_init(r, dev, sys, W, H, budget[i], keep[i], phases[i]);
+    double acc = 0;
+    int mx = 0;
+    uint32_t nbig = 0;
+    for (int f = 0; f < kFrames && ok; f++) {
+      ok = stoch_frame(r, f % 2 ? b : a, W, H);
+      if (!ok || f == 0) continue;
+      const uint8_t *p = f % 2 ? b : a, *q = f % 2 ? a : b;
+      for (uint32_t k = 0; k < W * H * 4; k++) {
+        if ((k & 3u) == 3u) continue; // alfa
+        const int d = std::abs((int)p[k] - (int)q[k]);
+        acc += d;
+        if (d > 16) nbig++;
+        if (d > mx) mx = d;
+      }
+    }
+    flick_mean[i] = acc / (double)(W * H * 3 * (kFrames - 1));
+    flick_max[i] = mx;
+    big[i] = nbig;
+    wmax_[i] = r.ren.stats().clusters.max_weight;
+    stoch_rig_free(r);
+  }
+  dev.shutdown();
+  CHECK(ok);
+  if (!ok) return;
+  static const char *nm[3] = {"kapali (referans)", "urun (128 faz, capa 2)", "KONTROL (2 faz, CAPA YOK)"};
+  for (int i = 0; i < 3; i++)
+    std::printf("    [bilgi] %-28s titreme: ortalama %.3f bayt/kanal, en buyuk %d, >16 degisen %u (%%%.2f), en buyuk agirlik %.1f\n",
+                nm[i], flick_mean[i], flick_max[i], big[i], 100.0f * (float)big[i] / (float)(W * H * 3 * (kFrames - 1)),
+                (double)wmax_[i]);
+  bool reference_is_frozen = flick_mean[0] == 0.0 && flick_max[0] == 0;
+  CHECK(reference_is_frozen); // referans titriyorsa olcum baska bir seyi olcuyor
+  // Olcut DAYANIKLI: ortalama + "gozle gorulur degisen kanal orani". En buyuk
+  // degisim 110 bin pikselin 7 gecisindeki TEK uc degerdir; ona esik koymak
+  // kapiyi gurultuye baglar (bu depoda tekrarlayan tuzak) — bilgi olarak basilir.
+  bool stable = flick_mean[1] < 5.0 && (double)big[1] / (double)(W * H * 3 * (kFrames - 1)) < 0.08;
+  CHECK(stable);
+  bool control_flickers_far_more = flick_mean[2] > flick_mean[1] * 4.0 && big[2] > big[1] * 4;
+  CHECK(control_flickers_far_more); // kaba donme + capasiz kontrol kapiyi DUSURMELI
 }

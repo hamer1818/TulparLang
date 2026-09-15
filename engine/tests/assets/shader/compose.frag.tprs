@@ -1,0 +1,49 @@
+// kaynak-ozet: c0e4fd513e18  (engine/rhi/shaders/compose.frag)
+// Birlestirme: HDR sahne + bloom -> cagiranin hedefi. Dinamik cozunurlugun
+// yukseltme (upscale) noktasi da burasi (q.z: 0 None, 1 Bilinear, 2 Sharpen).
+str asama = "frag";
+
+vec2 v_uv = girdi(0);
+sampler2D u_hdr = ornek(0, 0);
+sampler2D u_bloom = ornek(0, 1);
+
+struct Push {
+  vec4 texel; // xy: 1/HDR olcusu, zw: 1/bloom olcusu
+  vec4 p;     // x: poz, y: bloom yogunlugu, z: shader sRGB kodlasin mi, w: tonemap
+  vec4 q;     // x: cozunurluk olcegi, y: keskinlik, z: upscaler turu
+}
+Push pc = itme();
+
+vec4 o_color = cikti(0);
+
+func linear_to_srgb(vec3 c): vec3 {
+  c = clamp(c, 0.0, 1.0);
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
+}
+// Dolu alt-dikdortgenin DISINA tasma engeli.
+func kenetle(vec2 uv): vec2 {
+  return clamp(uv, pc.texel.xy * 0.5, vec2(pc.q.x) - pc.texel.xy * 0.5);
+}
+func main() {
+  vec2 uv = kenetle(v_uv * pc.q.x);
+  int kind = i32(pc.q.z + 0.5);
+  vec3 c;
+  if (kind == 0) { // None: texel merkezine kenetlenmis nokta ornekleme
+    vec2 sz = vec2(1.0) / pc.texel.xy;
+    uv = (floor(uv * sz) + 0.5) * pc.texel.xy;
+    c = texture(u_hdr, uv).rgb;
+  } else if (kind == 2) { // Sharpen: 5 dokunus unsharp maske
+    vec3 c0 = texture(u_hdr, uv).rgb;
+    vec3 s = texture(u_hdr, kenetle(uv + vec2(pc.texel.x, 0.0))).rgb +
+             texture(u_hdr, kenetle(uv - vec2(pc.texel.x, 0.0))).rgb +
+             texture(u_hdr, kenetle(uv + vec2(0.0, pc.texel.y))).rgb +
+             texture(u_hdr, kenetle(uv - vec2(0.0, pc.texel.y))).rgb;
+    c = max(c0 + (c0 * 4.0 - s) * (pc.q.y * 0.25), vec3(0.0));
+  } else { // Bilinear: donanim suzmesi
+    c = texture(u_hdr, uv).rgb;
+  }
+  c = c * pc.p.x + texture(u_bloom, v_uv).rgb * pc.p.y;
+  if (pc.p.w > 0.5) { c = c / (1.0 + c); }
+  if (pc.p.z > 0.5) { c = linear_to_srgb(c); }
+  o_color = vec4(c, 1.0);
+}

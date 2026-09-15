@@ -26,6 +26,8 @@ struct Ctx {
   VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
   VkPipelineLayout layout = VK_NULL_HANDLE;
   VkPipelineCache cache = VK_NULL_HANDLE;
+  PsoDeviceId pso_id{}; // onbellek dosyasini muhurleyen cihaz kimligi
+  const char *pso_path = nullptr;
   VkPipeline pipe_depth = VK_NULL_HANDLE, pipe_color = VK_NULL_HANDLE;
   VkPipeline gpl_libs[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
   VkQueryPool queries = VK_NULL_HANDLE;
@@ -41,7 +43,7 @@ struct Ctx {
     if (pipe_depth) a.vkDestroyPipeline(d, pipe_depth, nullptr);
     if (pipe_color) a.vkDestroyPipeline(d, pipe_color, nullptr);
     for (VkPipeline &l : gpl_libs) if (l) a.vkDestroyPipeline(d, l, nullptr);
-    if (cache) a.vkDestroyPipelineCache(d, cache, nullptr);
+    if (cache) a.vkDestroyPipelineCache(d, cache, nullptr); // yazma kurulumda yapildi
     if (layout) a.vkDestroyPipelineLayout(d, layout, nullptr);
     if (vs) a.vkDestroyShaderModule(d, vs, nullptr);
     if (fs) a.vkDestroyShaderModule(d, fs, nullptr);
@@ -386,11 +388,10 @@ bool make_pipeline_gpl(Ctx &c, VkPipeline *out, uint64_t *lib_ns, uint64_t *link
   gp[3].pColorBlendState = &cb;
   gp[3].pMultisampleState = &ms;
 
-  uint64_t t0 = platform::now_ns();
-  for (int i = 0; i < 4; i++) {
-    VkResult r = a.vkCreateGraphicsPipelines(c.d, c.cache, 1, &gp[i], nullptr, &c.gpl_libs[i]);
-    if (r != VK_SUCCESS) return c.fail("vkCreateGraphicsPipelines (GPL kutuphane)", r);
-  }
+  // ON ISINMA: dort kutuphane TEK cagrida. Ayri ayri kurmak surucuye ayni
+  // hazirligi dort kez yaptirir; boru hattini kullanan kare henuz baslamadi.
+  if (pso_warmup_pipelines(a, c.d, c.cache, 4, gp, c.gpl_libs, lib_ns) != VK_SUCCESS)
+    return c.fail("vkCreateGraphicsPipelines (GPL kutuphane)", VK_ERROR_INITIALIZATION_FAILED);
   uint64_t t1 = platform::now_ns();
   VkPipelineLibraryCreateInfoKHR link{};
   link.sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR;
@@ -404,37 +405,10 @@ bool make_pipeline_gpl(Ctx &c, VkPipeline *out, uint64_t *lib_ns, uint64_t *link
   linked.subpass = 1;
   VkResult r = a.vkCreateGraphicsPipelines(c.d, c.cache, 1, &linked, nullptr, out);
   if (r != VK_SUCCESS) return c.fail("vkCreateGraphicsPipelines (GPL link)", r);
-  uint64_t t2 = platform::now_ns();
-  *lib_ns = t1 - t0;
-  *link_ns = t2 - t1;
+  *link_ns = platform::now_ns() - t1;
   return true;
 }
 
-// PSO cache dosyasi: [VkPipelineCacheHeaderVersionOne][veri]. Baslik cihazla
-// eslesmiyorsa (baska GPU/surucu) yuklenmez — yabanci cache sessizce kabul
-// edilmez.
-bool load_cache_file(Ctx &c, Arena &arena, const char *path, void **data, size_t *size) {
-  *data = nullptr;
-  *size = 0;
-  FILE *f = std::fopen(path, "rb");
-  if (!f) return false;
-  std::fseek(f, 0, SEEK_END);
-  long n = std::ftell(f);
-  std::fseek(f, 0, SEEK_SET);
-  if (n < (long)sizeof(VkPipelineCacheHeaderVersionOne)) { std::fclose(f); return false; }
-  void *buf = arena.alloc((size_t)n, 16);
-  if (!buf || std::fread(buf, 1, (size_t)n, f) != (size_t)n) { std::fclose(f); return false; }
-  std::fclose(f);
-  VkPipelineCacheHeaderVersionOne h;
-  std::memcpy(&h, buf, sizeof h);
-  const DeviceCaps &caps = c.dev->caps();
-  if (h.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE || h.vendorID != caps.vendor_id ||
-      h.deviceID != caps.device_id)
-    return false;
-  *data = buf;
-  *size = (size_t)n;
-  return true;
-}
 // Paralel kayit job'u: bir yatay bant icin ikincil tampon.
 struct BandJob {
   Ctx *c;
@@ -541,15 +515,23 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
       pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
       VkResult r = a.vkCreatePipelineLayout(c.d, &pli, nullptr, &c.layout);
       if (r != VK_SUCCESS) { c.fail("vkCreatePipelineLayout", r); break; }
-      void *cdata = nullptr;
-      size_t csize = 0;
-      if (cfg.pso_cache_path) out->pso_cache_loaded = load_cache_file(c, arena, cfg.pso_cache_path, &cdata, &csize);
-      VkPipelineCacheCreateInfo pcci{};
-      pcci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-      pcci.initialDataSize = csize;
-      pcci.pInitialData = cdata;
-      r = a.vkCreatePipelineCache(c.d, &pcci, nullptr, &c.cache);
-      if (r != VK_SUCCESS) { c.fail("vkCreatePipelineCache", r); break; }
+      // PSO onbellegi: dosya bicimi ve UC KATMANLI dogrulama rhi/pipeline_cache.hpp'de
+      // (sarmalayici ozeti + vendorID/deviceID/driverVersion/pipelineCacheUUID +
+      // Vulkan'in kendi basligi). Eskiden burada elle yazilmis bir yukleyici vardi
+      // ve YALNIZ vendorID+deviceID bakiyordu: surucu guncellendiginde ayni
+      // GPU'nun bayat onbellegi sessizce kabul ediliyordu.
+      c.pso_id.vendor_id = dev.caps().vendor_id;
+      c.pso_id.device_id = dev.caps().device_id;
+      c.pso_id.driver_version = dev.caps().driver_version;
+      c.pso_id.api_version = dev.caps().api_version;
+      std::memcpy(c.pso_id.cache_uuid, dev.caps().pipeline_cache_uuid, VK_UUID_SIZE);
+      c.pso_path = cfg.pso_cache_path;
+      PsoReject rej = PsoReject::Disabled;
+      uint64_t loaded = 0;
+      c.cache = pso_cache_create(a, c.d, c.pso_id, c.pso_path, &rej, &loaded);
+      if (!c.cache) { c.fail("vkCreatePipelineCache", VK_ERROR_INITIALIZATION_FAILED); break; }
+      out->pso_cache_loaded = rej == PsoReject::None;
+      out->pso_cache_reject = pso_reject_str(rej);
     }
     if (!make_pipeline(c, 0, false, &c.pipe_depth)) break;
     {
@@ -565,17 +547,7 @@ OffscreenTarget *offscreen_create(Device &dev, Arena &arena, const OffscreenConf
       c.pipe_color = linked;
       out->pipeline_library_used = true;
     }
-    if (cfg.pso_cache_path) {
-      size_t n = 0;
-      a.vkGetPipelineCacheData(c.d, c.cache, &n, nullptr);
-      if (n > 0) {
-        void *buf = arena.alloc(n, 16);
-        if (buf && a.vkGetPipelineCacheData(c.d, c.cache, &n, buf) == VK_SUCCESS) {
-          FILE *f = std::fopen(cfg.pso_cache_path, "wb");
-          if (f) { std::fwrite(buf, 1, n, f); std::fclose(f); out->pso_cache_bytes = n; }
-        }
-      }
-    }
+    pso_cache_write_file(a, c.d, c.cache, c.pso_id, c.pso_path, &out->pso_cache_bytes);
     if (dev.caps().timestamps) {
       VkQueryPoolCreateInfo qci{};
       qci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;

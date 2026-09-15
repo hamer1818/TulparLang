@@ -3630,8 +3630,25 @@ VMValue aot_env(VMValue nameVal) {
   return VM_OBJ((Obj *)aot_allocate_string(val, (int)strlen(val)));
 }
 
-// AOT Input: Reads a line from stdin
-VMValue aot_input() {
+// AOT Input: istemi (varsa) basar, sonra stdin'den bir satir okur.
+//
+// ISTEM PARAMETRESI (2026-09-16): once `aot_input` SIFIR argumanliydi ve
+// codegen cagridaki argumani hic okumadan atiyordu, yani `input("You: ")`
+// yazan program istemi EKRANA HIC BASMIYOR, kullanici bos ekrana yaziyordu.
+// Aile de tutarsizdi: aot_input_int / aot_input_float istemi ZATEN VMValue
+// olarak alip basiyor. Buraya onlarin BIREBIR ayni kalibi uygulandi.
+//
+// GERIYE UYUM: argumansiz `input()` cagrisinda codegen VM_VAL_VOID gecirir;
+// IS_STRING false olur ve fonksiyon sessizce okumaya gecer.
+//
+// fflush(stdout) SART: istem satir sonu tasimaz, satir tamponlu stdout onu
+// tutar ve istem ancak ilk `print`ten sonra gorunurdu.
+VMValue aot_input(VMValue promptVal) {
+  if (IS_STRING(promptVal)) {
+    printf("%s", AS_STRING(promptVal)->chars);
+    fflush(stdout);
+  }
+
   char buffer[1024];
   if (fgets(buffer, sizeof(buffer), stdin)) {
     size_t len = strlen(buffer);

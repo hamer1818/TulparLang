@@ -1,0 +1,21 @@
+// kaynak-ozet: 88b30ff90574  (engine/rhi/shaders/bloom_down.frag)
+// Yari cozunurluge indirgeme: 4 bilinear ornek (2x2 blok ortalamasi).
+str asama = "frag";
+
+vec2 v_uv = girdi(0);
+sampler2D u_src = ornek(0, 0);
+sampler2D u_src2 = ornek(0, 1); // kullanilmaz (ortak duzen)
+
+struct Push { vec4 texel; vec4 p; }
+Push pc = itme();
+
+vec4 o_color = cikti(0);
+
+func main() {
+  vec2 o = pc.texel.xy * 0.5;
+  vec3 c = texture(u_src, v_uv + vec2(-o.x, -o.y)).rgb;
+  c += texture(u_src, v_uv + vec2(o.x, -o.y)).rgb;
+  c += texture(u_src, v_uv + vec2(-o.x, o.y)).rgb;
+  c += texture(u_src, v_uv + vec2(o.x, o.y)).rgb;
+  o_color = vec4(c * 0.25, 1.0);
+}

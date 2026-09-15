@@ -15,9 +15,12 @@ namespace {
 const BuiltinEntry kBuiltins[] = {
     // ---- I/O ----
     {"print",        "print(value: any): void",                     "Stdout'a yazar (her tip; satır sonu eklenir)."},
-    {"input",        "input(): str",                                "Stdin'den bir satır okur."},
-    {"input_int",    "input_int(): int",                            "Stdin'den sayı okur."},
-    {"input_float",  "input_float(): float",                        "Stdin'den ondalıklı sayı okur."},
+    // Ucunun de istemi ISTEGE BAGLI ve ayni kalipta: arguman str ise ekrana
+    // basilir (fflush'lu), degilse sessiz okunur. `input` 2026-09-16'ya kadar
+    // istemi hic almiyordu; imza da burada 0-argumanli yaziliydi.
+    {"input",        "input(prompt?: str): str",                    "İstemi (varsa) basar, stdin'den bir satır okur."},
+    {"input_int",    "input_int(prompt?: str): int",                "İstemi (varsa) basar, stdin'den sayı okur."},
+    {"input_float",  "input_float(prompt?: str): float",            "İstemi (varsa) basar, stdin'den ondalıklı sayı okur."},
 
     // ---- String / collection ----
     {"len",          "len(value: any): int",                        "Dizi/JSON/string uzunluğu."},

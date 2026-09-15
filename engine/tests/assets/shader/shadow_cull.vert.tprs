@@ -1,0 +1,37 @@
+// kaynak-ozet: f78d3197f8d8  (engine/rhi/shaders/shadow_cull.vert)
+// Golge atlasinin DOLAYLI yolu: model cizim SSBO'sundan. G3 kullanir.
+str asama = "vert";
+
+vec3 in_pos = girdi(0);
+
+struct Frame {
+  mat4 viewproj;
+  mat4 view;
+  mat4[3] light_viewproj;
+  vec4 light_dir;
+  vec4 ambient;
+  vec4 shadow_params;
+  vec4 cluster_params;
+  uvec4 cluster_grid;
+  vec4 cascade_params;
+}
+Frame u = tekduze(0, 0);
+
+struct DrawItem {
+  mat4 model;
+  vec4 color;
+  vec4 sphere;
+  uvec4 misc;
+}
+struct Draws { DrawItem[] d; }
+Draws u_draws = depo(0, 5);
+struct Visible { uint[] v; }
+Visible u_vis = depo(0, 6);
+
+struct Push { mat4 model; vec4 color; uvec4 skin; }
+Push pc = itme();
+
+func main() {
+  DrawItem D = u_draws.d[u_vis.v[pc.skin.z + u32(gl_InstanceIndex)]];
+  gl_Position = u.light_viewproj[pc.skin.y] * D.model * vec4(in_pos, 1.0);
+}

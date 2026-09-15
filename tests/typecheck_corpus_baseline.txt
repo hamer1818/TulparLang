@@ -7,5 +7,3 @@ lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at li
 lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6309
 lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6432
 lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6503
-examples/09_socket_client.tpr :: Type Error: Function 'input' expects 0 argument(s), got 1 at line 17
-examples/09_socket_server.tpr :: Type Error: Function 'input' expects 0 argument(s), got 1 at line 38
