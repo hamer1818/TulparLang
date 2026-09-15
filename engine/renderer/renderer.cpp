@@ -412,7 +412,7 @@ TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t
   return TextureHandle{texture_count_ - 1};
 }
 
-MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
+MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color, float roughness, float metallic) {
   if (material_count_ >= cfg_.max_materials || !albedo.valid() || albedo.id >= texture_count_) return MaterialHandle{};
   rhi::VkApi &a = dev_->api();
   Material &m = materials_[material_count_];
@@ -433,6 +433,8 @@ MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
   a.vkUpdateDescriptorSets(dev_->handle(), 1, &w, 0, nullptr);
   m.texture = albedo.id;
   m.color = srgb_to_linear(color); // yazar sRGB verir, aydinlatma dogrusal
+  m.roughness = roughness;
+  m.metallic = metallic;
   stats_.materials = ++material_count_;
   return MaterialHandle{material_count_ - 1};
 }
@@ -886,7 +888,7 @@ void Renderer::record_shadow(VkCommandBuffer cb) {
       a.vkCmdBindIndexBuffer(cb, meshes_[d.mesh].ibuf, 0, VK_INDEX_TYPE_UINT32);
       bound = d.mesh;
     }
-    Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.skin_offset, 0, 0, 0}};
+    Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.roughness, d.metallic, 0.0f, 0.0f}, {d.skin_offset, 0, 0, 0}};
     a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof p, &p);
     a.vkCmdDrawIndexed(cb, meshes_[d.mesh].index_count, 1, 0, 0, 0);
   }
@@ -902,7 +904,9 @@ void Renderer::draw(MeshHandle mesh, MaterialHandle material, const Mat4 &model,
   const Vec3 mc = materials_[material.id].color; // zaten dogrusal
   const Vec3 lc = srgb_to_linear(color);
   if (meshes_[mesh.id].skinned) { stats_.dropped++; return; } // iskeletli mesh draw_skinned ister
-  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}, kNoSkin};
+  const Material &mat = materials_[material.id];
+  draws_[draw_count_++] =
+      Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}, kNoSkin, mat.roughness, mat.metallic};
 }
 
 void Renderer::draw_skinned(MeshHandle mesh, MaterialHandle material, const Mat4 &model, Vec3 color, const Mat4 *joints,
@@ -911,9 +915,15 @@ void Renderer::draw_skinned(MeshHandle mesh, MaterialHandle material, const Mat4
   if (!material.valid() || material.id >= material_count_) material = default_material_;
   if (draw_count_ >= cfg_.max_draws || skin_count_ + n > cfg_.max_skin_matrices) { stats_.dropped++; return; }
   std::memcpy(static_cast<Mat4 *>(skin_mem_[frame_].mapped) + skin_count_, joints, sizeof(Mat4) * n);
-  const Vec3 mc = materials_[material.id].color;
+  const Material &mat = materials_[material.id];
   const Vec3 lc = srgb_to_linear(color);
-  draws_[draw_count_++] = Draw{mesh.id, material.id, model, Vec3{lc.x * mc.x, lc.y * mc.y, lc.z * mc.z}, skin_count_};
+  draws_[draw_count_++] = Draw{mesh.id,
+                               material.id,
+                               model,
+                               Vec3{lc.x * mat.color.x, lc.y * mat.color.y, lc.z * mat.color.z},
+                               skin_count_,
+                               mat.roughness,
+                               mat.metallic};
   skin_count_ += n;
 }
 
@@ -948,7 +958,7 @@ void Renderer::record(VkCommandBuffer cb) {
         a.vkCmdBindIndexBuffer(cb, meshes_[d.mesh].ibuf, 0, VK_INDEX_TYPE_UINT32);
         bound = d.mesh;
       }
-      Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.skin_offset, 0, 0, 0}};
+      Push p{d.model, {d.color.x, d.color.y, d.color.z, 1.0f}, {d.roughness, d.metallic, 0.0f, 0.0f}, {d.skin_offset, 0, 0, 0}};
       a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof p, &p);
       a.vkCmdDrawIndexed(cb, meshes_[d.mesh].index_count, 1, 0, 0, 0);
     }

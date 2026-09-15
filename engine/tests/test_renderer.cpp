@@ -363,6 +363,69 @@ ENGINE_TEST(renderer_light_falloff_is_inverse_square) {
   dev.shutdown();
 }
 
+// Is 4: metal ve dielektrik AYNI isik altinda gercekten farkli mi gorunuyor?
+// Ozdes albedo/roughness, yalniz metallic 0 vs 1: metal Lambert payini
+// TAMAMEN kaybeder (diffuse*(1-metallic)=0), specular tepe noktasindan uzakta
+// bakildiginda cok daha koyu kalmali. Specular tepesini tam yakalamaya
+// calismiyoruz (kirilgan geometri hizalamasi); byuk, saglam fark yeterli kapi.
+ENGINE_TEST(renderer_pbr_metal_vs_dielectric_differs) {
+  if (!loader_ok()) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "pbr_test")) { CHECK(false); return; }
+  Device dev;
+  DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { dev.shutdown(); skip("sanal GPU: piksel kapisi gercek cihazda olculur"); return; }
+  const uint32_t W = 64, H = 64;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.shadow_size = 0;
+  rc.frames_in_flight = 1;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); dev.shutdown(); return; }
+  ren.set_render_size(W, H);
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  CHECK(plane.valid());
+  // Isik dikeye yakin (0.3,1,0.2) — kamera 45 derece egik: specular tepesi
+  // BURADA degil, yani yakaladigimiz fark diffuse kaybindan geliyor.
+  ren.set_light(normalize(Vec3{0.3f, 1.0f, 0.2f}), {0.05f, 0.05f, 0.05f}, 1.0f);
+  ren.set_camera(Mat4::look_at({0, 6.0f, 6.0f}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 50.0f));
+  Rec rr{&ren};
+  auto render_avg = [&](float metallic) -> double {
+    renderer::MaterialHandle mat = ren.create_material(ren.default_texture(), {0.8f, 0.6f, 0.5f}, 0.5f, metallic);
+    ren.begin_frame(0);
+    ren.draw(plane, mat, Mat4::scale({12, 1, 12}), {1, 1, 1});
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) return -1.0;
+    double sum = 0.0;
+    for (uint32_t i = 0; i < W * H; i++) sum += ores.pixels[i * 4] + ores.pixels[i * 4 + 1] + ores.pixels[i * 4 + 2];
+    return sum / (double)(W * H * 3);
+  };
+  double dielectric_avg = render_avg(0.0f);
+  double metal_avg = render_avg(1.0f);
+  std::printf("    [bilgi] dielektrik ortalama %.2f, metal ortalama %.2f (0-255)\n", dielectric_avg, metal_avg);
+  bool got = dielectric_avg >= 0.0 && metal_avg >= 0.0;
+  CHECK(got);
+  if (got) {
+    bool differs = std::fabs(dielectric_avg - metal_avg) > 8.0; // 8-bit kanalda gozle gorulur fark
+    CHECK(differs);
+    bool metal_is_darker = metal_avg < dielectric_avg; // Lambert payi kaybi, tepe disinda
+    CHECK(metal_is_darker);
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  dev.shutdown();
+}
+
 // 2B arayuz + font: metin gercekten piksel uretiyor mu? Bos metin (POZITIF
 // KONTROL) hicbir sey cizmemeli; genislik olcumu tekduze.
 #include "content/font.hpp"

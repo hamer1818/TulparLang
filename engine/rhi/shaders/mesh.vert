@@ -14,19 +14,26 @@ layout(set = 0, binding = 0) uniform Frame {
   vec4 cluster_params; // x: dilim olcegi, y: dilim sapmasi, z: tile genisligi px, w: tile yuksekligi px
   uvec4 cluster_grid;  // x, y, z, isik sayisi
 } u;
-layout(push_constant) uniform Push { mat4 model; vec4 color; } pc;
+// pbr: Is 4 (roughness, metallic, rezerve x2). skin bu shader'da hic
+// KULLANILMASA da Push'ta ONCEKI alandir; buraya eklenmez ki mesh_skin.vert'in
+// tanimladigi tam Push ile bayt duzeni celismesin (renderer.hpp'de aciklandi).
+layout(push_constant) uniform Push { mat4 model; vec4 color; vec4 pbr; } pc;
 layout(location = 0) out vec3 v_nrm;
 layout(location = 1) out vec3 v_color;
 layout(location = 2) out vec4 v_light_pos;
 layout(location = 3) out vec2 v_uv;
 layout(location = 4) out vec3 v_world;
 layout(location = 5) out float v_viewz;
+layout(location = 6) out float v_roughness;
+layout(location = 7) out float v_metallic;
 void main() {
   vec4 world = pc.model * vec4(in_pos, 1.0);
   gl_Position = u.viewproj * world;
   vec3 wn = normalize(mat3(pc.model) * in_nrm);
   v_nrm = wn;
   v_color = pc.color.rgb;
+  v_roughness = pc.pbr.x;
+  v_metallic = pc.pbr.y;
   v_uv = in_uv;
   v_world = world.xyz;
   v_viewz = -(u.view * world).z; // ileri derinlik (>0), kume dilimi icin

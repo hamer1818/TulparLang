@@ -112,7 +112,9 @@ public:
   // bayt dizisi, blit yok. fmt: VK_FORMAT_ASTC_*_SRGB_BLOCK / R8G8B8A8_SRGB...
   TextureHandle create_texture_levels(VkFormat fmt, uint32_t w, uint32_t h, uint32_t levels, const uint8_t *const *data,
                                       const uint32_t *sizes);
-  MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1});
+  // roughness/metallic: Is 4 (PBR). Algisal deger (0..1); GGX alpha=roughness^2
+  // shader'da hesaplanir. Doku YOK (ORM haritasi sonraki adim) — malzeme basina sabit.
+  MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1}, float roughness = 0.6f, float metallic = 0.0f);
   TextureHandle default_texture() const { return default_texture_; } // 1x1 beyaz
   MaterialHandle default_material() const { return default_material_; }
 
@@ -196,6 +198,8 @@ private:
     VkDescriptorSet set = VK_NULL_HANDLE;
     uint32_t texture = 0;
     Vec3 color{1, 1, 1};
+    float roughness = 0.6f; // Is 4: algisal deger, shader'da karesi alinir
+    float metallic = 0.0f;
   };
   static constexpr uint32_t kNoSkin = 0xFFFFFFFFu;
   struct Draw {
@@ -204,13 +208,19 @@ private:
     Mat4 model;
     Vec3 color;
     uint32_t skin_offset; // kNoSkin = statik
+    float roughness, metallic; // Is 4: cizim anindaki malzemeden kopyalanir
   };
-  struct Push { // GLSL Push { mat4 model; vec4 color; uvec4 skin; } = 96 bayt
+  // GLSL Push { mat4 model; vec4 color; vec4 pbr; uvec4 skin; } = 112 bayt.
+  // Sira ONEMLI: mesh.vert/mesh.frag yalniz on-eki (model,color,pbr) bilir,
+  // skin'i hic gormez; mesh_skin.vert tamamini bilir. pbr, skin'den ONCE
+  // gelir ki iskeletsiz shader'lar skin alanini tanimlamak ZORUNDA kalmasin.
+  struct Push {
     Mat4 model;
     float color[4];
+    float pbr[4]; // x: roughness, y: metallic, z/w: rezerve (Is 4)
     uint32_t skin[4];
   };
-  static_assert(sizeof(Push) == 96, "push sabiti 96 bayt");
+  static_assert(sizeof(Push) == 112, "push sabiti 112 bayt");
   struct FrameUbo {
     Mat4 viewproj;
     Mat4 view;

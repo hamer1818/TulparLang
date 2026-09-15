@@ -18,13 +18,17 @@ layout(set = 0, binding = 0) uniform Frame {
   uvec4 cluster_grid;
 } u;
 layout(std430, set = 0, binding = 4) readonly buffer Skin { mat4 m[]; } u_skin;
-layout(push_constant) uniform Push { mat4 model; vec4 color; uvec4 skin; } pc;
+// pbr, skin'DEN ONCE gelir (renderer.hpp Push duzeni) — mesh.vert'in (iskeletsiz)
+// skin'i hic tanimlamadan ayni pbr ofsetini gorebilmesi icin.
+layout(push_constant) uniform Push { mat4 model; vec4 color; vec4 pbr; uvec4 skin; } pc;
 layout(location = 0) out vec3 v_nrm;
 layout(location = 1) out vec3 v_color;
 layout(location = 2) out vec4 v_light_pos;
 layout(location = 3) out vec2 v_uv;
 layout(location = 4) out vec3 v_world;
 layout(location = 5) out float v_viewz;
+layout(location = 6) out float v_roughness;
+layout(location = 7) out float v_metallic;
 void main() {
   mat4 skin = in_weights.x * u_skin.m[pc.skin.x + in_joints.x] + in_weights.y * u_skin.m[pc.skin.x + in_joints.y] +
               in_weights.z * u_skin.m[pc.skin.x + in_joints.z] + in_weights.w * u_skin.m[pc.skin.x + in_joints.w];
@@ -34,6 +38,8 @@ void main() {
   vec3 wn = normalize(mat3(ms) * in_nrm);
   v_nrm = wn;
   v_color = pc.color.rgb;
+  v_roughness = pc.pbr.x;
+  v_metallic = pc.pbr.y;
   v_uv = in_uv;
   v_world = world.xyz;
   v_viewz = -(u.view * world).z;
