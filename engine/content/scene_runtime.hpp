@@ -28,6 +28,11 @@ public:
   // ayarlar (arama kutusu, filtre, kismi yol islemi) — kapi ikisini karsilastirir.
   int find_path(Vec3 from, Vec3 to, Vec3 *out, int max_points, bool *partial = nullptr) const;
   bool nearest_point(Vec3 p, Vec3 *out) const;
+  // Navmesh uzerinde dogru gorus (sim::NavMesh::raycast ile ayni sozlesme):
+  // donus true = ENGEL VAR, t_hit carpma parametresi (0..1). Engel yoksa
+  // false ve t_hit = 1. Yol bulmadan "su noktaya dumduz gidebilir miyim"
+  // sorusu bu; yol arama maliyeti odenmez.
+  bool raycast(Vec3 from, Vec3 to, float *t_hit) const;
   uint32_t polys() const { return polys_; }
   uint64_t data_hash() const { return data_hash_; }
 

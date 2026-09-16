@@ -241,6 +241,171 @@ func nav_kismi(): bool { return eng_nav_partial(); }
 func nav_x(i): float { return eng_nav_x(i); }
 func nav_y(i): float { return eng_nav_y(i); }
 func nav_z(i): float { return eng_nav_z(i); }
+// Navmesh'e en yakın nokta. Ajan mesh'in birkaç santim dışındaysa nav_yol()
+// 0 döner — önce buraya yapıştır, sonra yolu iste.
+func nav_yakin(x, y, z): bool { return eng_nav_nearest(x, y, z); }
+func nav_nearest(x, y, z): bool { return eng_nav_nearest(x, y, z); }
+func nav_yakin_x(): float { return eng_nav_near_x(); }
+func nav_yakin_y(): float { return eng_nav_near_y(); }
+func nav_yakin_z(): float { return eng_nav_near_z(); }
+func nav_near_x(): float { return eng_nav_near_x(); }
+func nav_near_y(): float { return eng_nav_near_y(); }
+func nav_near_z(): float { return eng_nav_near_z(); }
+// Doğru görüş: true = ENGEL VAR (yol ara), false = dümdüz gidilebilir.
+// Yol aramadan çok daha ucuz; kovalayan düşman her karede bunu sorup
+// yalnız engel varken yol arayabilir.
+func nav_gorus(fx, fy, fz, tx, ty, tz): bool { return eng_nav_raycast(fx, fy, fz, tx, ty, tz); }
+func nav_raycast(fx, fy, fz, tx, ty, tz): bool { return eng_nav_raycast(fx, fy, fz, tx, ty, tz); }
+func nav_gorus_t(): float { return eng_nav_ray_t(); }
+func nav_ray_t(): float { return eng_nav_ray_t(); }
+
+// ---- Navmesh ajanı: yol TAKİBİ ---------------------------------------------
+// Motorda ajan YOK ve bilerek yok. Yol ARAMA motorda (Detour, C++); yol
+// TAKİBİ burada, saf Tulpar'da. Sebep: takip oynanış politikasıdır — hız,
+// varış yarıçapı, yeniden yol arama sıklığı her oyunda farklıdır. Motora
+// gömmek her oyunu aynı davranışa mahkûm ederdi. Motor mekanizmayı verir,
+// bu katman politikayı kurar. Değiştirmek isteyen bu dosyayı kopyalar.
+//
+// Yol noktaları ajan başına KOPYALANIR: motorun nokta tamponu tektir ve bir
+// sonraki nav_yol() çağrısı üzerine yazar. İki ajan aynı karede yol ararsa
+// kopyalamayan bir tasarım sessizce birbirinin yolunu takip ederdi.
+int _AG_MAX_NOKTA = 32;   // motorun kMaxNavPoints'i ile aynı
+array _ag_x = [];
+array _ag_y = [];
+array _ag_z = [];
+array _ag_hiz = [];
+array _ag_yaricap = [];
+array _ag_n = [];        // yoldaki nokta sayısı (0 = yol yok)
+array _ag_i = [];        // sıradaki nokta indisi
+array _ag_px = [];       // düz saklama: ajan * _AG_MAX_NOKTA + k
+array _ag_py = [];
+array _ag_pz = [];
+
+func _ag_gecerli(a): bool {
+    if (a < 0) { return false; }
+    if (a >= len(_ag_x)) { return false; }
+    return true;
+}
+
+// Yeni ajan. hiz birim/sn, yaricap = "vardım" sayılan mesafe.
+func ajan_olustur(x, y, z, hiz, yaricap): int {
+    int a = len(_ag_x);
+    push(_ag_x, x); push(_ag_y, y); push(_ag_z, z);
+    push(_ag_hiz, hiz); push(_ag_yaricap, yaricap);
+    push(_ag_n, 0); push(_ag_i, 0);
+    int k = 0;
+    while (k < _AG_MAX_NOKTA) {
+        push(_ag_px, 0.0); push(_ag_py, 0.0); push(_ag_pz, 0.0);
+        k = k + 1;
+    }
+    return a;
+}
+func agent_create(x, y, z, speed, radius): int { return ajan_olustur(x, y, z, speed, radius); }
+
+// Hedef ata: navmesh'te yol ara ve ajana KOPYALA. false = yol yok.
+// Başlangıç ve hedef önce mesh'e yapıştırılır (ikisi de birkaç santim dışarıda
+// olabilir; yapıştırmadan istenen yol sessizce 0 nokta dönerdi).
+func ajan_hedef(a, hx, hy, hz): bool {
+    if (!_ag_gecerli(a)) { return false; }
+    _ag_n[a] = 0;
+    _ag_i[a] = 0;
+    if (!nav_var()) { return false; }
+    float bx = _ag_x[a]; float by = _ag_y[a]; float bz = _ag_z[a];
+    if (eng_nav_nearest(bx, by, bz)) {
+        bx = eng_nav_near_x(); by = eng_nav_near_y(); bz = eng_nav_near_z();
+    }
+    float gx = hx; float gy = hy; float gz = hz;
+    if (eng_nav_nearest(gx, gy, gz)) {
+        gx = eng_nav_near_x(); gy = eng_nav_near_y(); gz = eng_nav_near_z();
+    }
+    int n = eng_nav_path(bx, by, bz, gx, gy, gz);
+    if (n <= 0) { return false; }
+    if (n > _AG_MAX_NOKTA) { n = _AG_MAX_NOKTA; }
+    int taban = a * _AG_MAX_NOKTA;
+    int k = 0;
+    while (k < n) {
+        _ag_px[taban + k] = eng_nav_x(k);
+        _ag_py[taban + k] = eng_nav_y(k);
+        _ag_pz[taban + k] = eng_nav_z(k);
+        k = k + 1;
+    }
+    _ag_n[a] = n;
+    // 0. nokta ajanın kendi konumudur; ilk hedef 1. nokta.
+    if (n > 1) { _ag_i[a] = 1; } else { _ag_i[a] = 0; }
+    return true;
+}
+func agent_target(a, x, y, z): bool { return ajan_hedef(a, x, y, z); }
+
+// Bir kare ilerlet. false = yol bitti ya da yol yok (oyun yeni hedef verebilir).
+func ajan_ilerlet(a, dt): bool {
+    if (!_ag_gecerli(a)) { return false; }
+    if (_ag_n[a] <= 0) { return false; }
+    if (_ag_i[a] >= _ag_n[a]) { return false; }
+    int taban = a * _AG_MAX_NOKTA;
+    float adim = _ag_hiz[a] * dt;
+    // Bir karede birden fazla köşe geçilebilir (hızlı ajan, sık köşe):
+    // döngü, adım bütçesi bitene ya da yol tükenene kadar sürer.
+    while (adim > 0.0) {
+        if (_ag_i[a] >= _ag_n[a]) { return false; }
+        int h = taban + _ag_i[a];
+        float dx = _ag_px[h] - _ag_x[a];
+        float dy = _ag_py[h] - _ag_y[a];
+        float dz = _ag_pz[h] - _ag_z[a];
+        float uz = sqrt(dx * dx + dy * dy + dz * dz);
+        if (uz <= _ag_yaricap[a]) {
+            // Köşeye vardı: sonrakine geç. Konumu köşeye OTURTMA — yarıçap
+            // içindeyken zıplatmak titreme yapar.
+            _ag_i[a] = _ag_i[a] + 1;
+            if (_ag_i[a] >= _ag_n[a]) { return false; }
+            continue;
+        }
+        if (uz <= adim) {
+            _ag_x[a] = _ag_px[h]; _ag_y[a] = _ag_py[h]; _ag_z[a] = _ag_pz[h];
+            adim = adim - uz;
+            _ag_i[a] = _ag_i[a] + 1;
+            continue;
+        }
+        float t = adim / uz;
+        _ag_x[a] = _ag_x[a] + dx * t;
+        _ag_y[a] = _ag_y[a] + dy * t;
+        _ag_z[a] = _ag_z[a] + dz * t;
+        adim = 0.0;
+    }
+    return true;
+}
+func agent_step(a, dt): bool { return ajan_ilerlet(a, dt); }
+
+func ajan_x(a): float { if (!_ag_gecerli(a)) { return 0.0; } return _ag_x[a]; }
+func ajan_y(a): float { if (!_ag_gecerli(a)) { return 0.0; } return _ag_y[a]; }
+func ajan_z(a): float { if (!_ag_gecerli(a)) { return 0.0; } return _ag_z[a]; }
+func agent_x(a): float { return ajan_x(a); }
+func agent_y(a): float { return ajan_y(a); }
+func agent_z(a): float { return ajan_z(a); }
+// Ajanı ışınla (doğuş, geri sarma). Yol DÜŞER: eski yol yeni konumdan geçmiyor.
+func ajan_koy(a, x, y, z): bool {
+    if (!_ag_gecerli(a)) { return false; }
+    _ag_x[a] = x; _ag_y[a] = y; _ag_z[a] = z;
+    _ag_n[a] = 0; _ag_i[a] = 0;
+    return true;
+}
+func agent_place(a, x, y, z): bool { return ajan_koy(a, x, y, z); }
+func ajan_hiz_ayarla(a, h): bool {
+    if (!_ag_gecerli(a)) { return false; }
+    _ag_hiz[a] = h;
+    return true;
+}
+func agent_set_speed(a, s): bool { return ajan_hiz_ayarla(a, s); }
+// Yolda kalan nokta sayısı (0 = yol yok ya da bitti).
+func ajan_kalan(a): int {
+    if (!_ag_gecerli(a)) { return 0; }
+    if (_ag_i[a] >= _ag_n[a]) { return 0; }
+    return _ag_n[a] - _ag_i[a];
+}
+func agent_remaining(a): int { return ajan_kalan(a); }
+func ajan_vardi(a): bool { return ajan_kalan(a) == 0; }
+func agent_arrived(a): bool { return ajan_kalan(a) == 0; }
+func ajan_sayisi(): int { return len(_ag_x); }
+func agent_count(): int { return len(_ag_x); }
 
 // ---- Model animasyonu -------------------------------------------------------
 func klip_sayisi(m): int { return eng_model_clip_count(m); }

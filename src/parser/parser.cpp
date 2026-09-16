@@ -329,6 +329,25 @@ namespace {
 constexpr int kPrecBitOr = 3;
 
 // `&=` ailesi ve karsilik gelen ikili islec.
+// Dizi tipi mi (baslaticisiz bildirimde varsayilan deger uretmek icin).
+static bool is_array_type(DataType t) {
+    return t == TYPE_ARRAY || t == TYPE_ARRAY_INT || t == TYPE_ARRAY_FLOAT ||
+           t == TYPE_ARRAY_STR || t == TYPE_ARRAY_BOOL || t == TYPE_ARRAY_JSON;
+}
+
+// `T[N]` bildiriminin eleman varsayilani. Tip bilinmiyorsa null: uzunluk yine
+// dogru olur, eleman sonradan atanir.
+static std::unique_ptr<ASTNode> zero_literal_for(DataType arr, SourceLocation loc) {
+    switch (arr) {
+    case TYPE_ARRAY_INT: return std::make_unique<ASTNode>(IntLiteral(0, loc));
+    case TYPE_ARRAY_FLOAT: return std::make_unique<ASTNode>(FloatLiteral(0.0, loc));
+    case TYPE_ARRAY_STR: return std::make_unique<ASTNode>(StringLiteral("", loc));
+    case TYPE_ARRAY_BOOL: return std::make_unique<ASTNode>(BoolLiteral(false, loc));
+    default: return std::make_unique<ASTNode>(NullLiteral(loc));
+    }
+}
+
+
 bool is_bitwise_compound(TulparTokenType t) {
     return t == TOKEN_BIT_AND_EQUAL || t == TOKEN_BIT_OR_EQUAL ||
            t == TOKEN_BIT_XOR_EQUAL || t == TOKEN_SHIFT_LEFT_EQUAL ||
@@ -600,6 +619,7 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
 
     // Parse type
     DataType type = parse_type();
+    const int fixed_n = last_fixed_array_n_;  // `T[N]` ise N, degilse 0
 
     // Only keep the captured name when the parser actually resolved
     // to a custom type — otherwise `int x;` would store the spurious
@@ -641,6 +661,24 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     // `x` hala disaridaki x'tir; bu sira onu bozmuyor cunku baslatici
     // yukarida ayristi.
     scope_declare(name, is_const);
+
+    // BASLATICISIZ DIZI BILDIRIMI ARTIK KULLANILABILIR BIR DIZI URETIYOR.
+    // Once: `int[] a;` ve `int[4] a;` dizi DEGIL bir deger uretiyordu —
+    // `len(a)` 0 donuyor ama `a[0] = 1` ve `push(a, 1)` CALISMA ZAMANINDA
+    // "gecersiz hedef" ile dusuyordu. Derleyici kabul edip calisma zamani
+    // reddediyordu: hata en gec noktada ve en anlamsiz mesajla cikiyordu.
+    // Simdi baslatici SENTEZLENIYOR:
+    //   `int[] a;`   -> `int[] a = [];`          (push ile buyur)
+    //   `int[4] a;`  -> `int[4] a = [0,0,0,0];`  (N artik bir sey ifade ediyor)
+    // Eleman varsayilani tipe gore: sayi 0, metin "", bool false, digeri null.
+    // Ozel deger uretemedigimiz eleman tiplerinde bile UZUNLUK dogru olur,
+    // yani `p[i] = ...` gecerli hale gelir — asil kazanc bu.
+    if (!initializer && is_array_type(type)) {
+        std::vector<std::unique_ptr<ASTNode>> elems;
+        elems.reserve(fixed_n > 0 ? (size_t)fixed_n : 0u);
+        for (int i = 0; i < fixed_n; i++) elems.push_back(zero_literal_for(type, loc));
+        initializer = std::make_unique<ASTNode>(ArrayLiteral(std::move(elems), loc));
+    }
 
     VariableDecl vd(name, type, std::move(initializer), loc);
     vd.custom_type = std::move(custom_type_name);
@@ -1094,8 +1132,13 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
             // sokuyor, yani tek bir uretim yolu kaliyor.
             //
             // Hedef bir DEGISKEN ADI oldugu icin iki kez degerlendirme
-            // sorunu yok. `a[i] &= y` BILEREK YOK: orada indis ifadesi iki
-            // kez calisirdi (`a[f()] &= 1`).
+            // sorunu yok.
+            //
+            // `a[i] &= y` BASKA bir yoldan geliyor (asagidaki karmasik-lvalue
+            // dali): orada seker acilmiyor, CompoundAssign dugumu uretiliyor
+            // ve codegen kabi/indisi BIR KEZ degerlendirip bit islemini
+            // yerinde emit ediyor (codegen_elem_compound). Yani `a[f()] &= 1`
+            // icinde `f()` bir kez calisir ve vm_binary_op'a hic ugranmaz.
             if (is_bitwise_compound(next_type)) {
                 auto lhs = std::make_unique<ASTNode>(
                     Identifier(name_tok.value(), loc));
@@ -1124,7 +1167,7 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
         const bool is_compound =
             (t == TOKEN_PLUS_EQUAL || t == TOKEN_MINUS_EQUAL ||
              t == TOKEN_MULTIPLY_EQUAL || t == TOKEN_DIVIDE_EQUAL ||
-             t == TOKEN_MODULO_EQUAL);
+             t == TOKEN_MODULO_EQUAL || is_bitwise_compound(t));
         if ((is_plain || is_compound) &&
             std::holds_alternative<ArrayAccess>(expr->value)) {
             SourceLocation loc(current().line(), current().column());
@@ -1908,6 +1951,7 @@ DataType Parser::parse_type() {
     // T8) ayrisabilmesi; gercek sabit-boy semantigi kutusuz struct/yerlesim
     // isiyle (PLAN §11) birlikte gelir. Boyut SESSIZCE degil, bu yorumla
     // ve raporla dusuruluyor.
+    last_fixed_array_n_ = 0;
     while (check(TOKEN_LBRACKET)) {
         const TulparTokenType nxt = peek(1).type();
         if (nxt == TOKEN_RBRACKET) {
@@ -1928,6 +1972,11 @@ DataType Parser::parse_type() {
                     "sabit boy dizi uzunlugu pozitif bir tamsayi olmali",
                     "fixed-size array length must be a positive integer"));
             }
+            // N artik DUSMUYOR: bildirimde baslatici yoksa varsayilan degeri
+            // bu sayi uretiyor (`int[4] a;` -> dort sifir). Ic ice dizide
+            // (`int[2][3]`) sonuncu kazanir; o bicim zaten duz `array`'e
+            // dusuyor ve bir soz vermiyor.
+            last_fixed_array_n_ = std::atoi(n.c_str());
             base = array_of(base);
             continue;
         }

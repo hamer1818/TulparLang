@@ -355,6 +355,9 @@ struct Bridge {
   Vec3 nav_pts[kMaxNavPoints];
   uint32_t nav_n = 0;
   bool nav_partial = false;
+  Vec3 nav_near{};        // son teng_nav_nearest sonucu
+  bool nav_near_ok = false;
+  float nav_ray_t = 1.0f; // son teng_nav_raycast parametresi (engel yoksa 1)
   // anlik-kip arayuz
   Ui ui;
   // sahne sicak yeniden yukleme (editorde "Derle" -> oyun kendini yeniler)
@@ -1132,6 +1135,8 @@ int teng_scene_unload(void) {
   b.nav.shutdown(); // Detour nesneleri; veri arenada kalir (bir sonraki yukleme yeni kopya alir)
   b.nav_ok = false;
   b.nav_n = 0;
+  b.nav_near_ok = false;
+  b.nav_ray_t = 1.0f;
   b.scene_ok = false; // cizim + sorgular durur; teng_scene_load yeniden kabul eder
   // Betik bosalttiysa izleme hedefi de duser: bosaltilmis bir sahne, dosyasi
   // degisti diye kendiliginden GERI GELMEZ. Sicak yukleme kendi icinde bosaltir
@@ -2190,6 +2195,43 @@ static bool nav_idx_ok(int i, const char *fn) {
 double teng_nav_x(int i) { return nav_idx_ok(i, "teng_nav_x") ? g->nav_pts[i].x : 0.0; }
 double teng_nav_y(int i) { return nav_idx_ok(i, "teng_nav_y") ? g->nav_pts[i].y : 0.0; }
 double teng_nav_z(int i) { return nav_idx_ok(i, "teng_nav_z") ? g->nav_pts[i].z : 0.0; }
+
+int teng_nav_nearest(double x, double y, double z) {
+  CALLF("teng_nav_nearest", "(%.2f %.2f %.2f)", x, y, z);
+  if (!ready("teng_nav_nearest")) return 0;
+  Bridge &b = *g;
+  b.nav_near_ok = false;
+  b.nav_near = Vec3{(float)x, (float)y, (float)z};
+  if (!b.nav_ok) { BERR("teng_nav_nearest: yuklu sahnede navmesh yok (engine_sahnec bake etmedi)"); return 0; }
+  Vec3 out{};
+  if (!b.nav.nearest_point(Vec3{(float)x, (float)y, (float)z}, &out)) {
+    // Sessiz 0 degil: cagiran "nokta mesh'in cok uzaginda" ile "navmesh yok"u
+    // ayirt edebilmeli, ikisi de 0 donuyor.
+    BTRACE("navmesh en yakin nokta: arama kutusunda poligon yok");
+    return 0;
+  }
+  b.nav_near = out;
+  b.nav_near_ok = true;
+  BTRACE("navmesh en yakin nokta: (%.2f %.2f %.2f) -> (%.2f %.2f %.2f)", x, y, z, (double)out.x, (double)out.y, (double)out.z);
+  return 1;
+}
+double teng_nav_near_x(void) { return g ? (double)g->nav_near.x : 0.0; }
+double teng_nav_near_y(void) { return g ? (double)g->nav_near.y : 0.0; }
+double teng_nav_near_z(void) { return g ? (double)g->nav_near.z : 0.0; }
+
+int teng_nav_raycast(double fx, double fy, double fz, double tx, double ty, double tz) {
+  CALLF("teng_nav_raycast", "(%.2f %.2f %.2f) -> (%.2f %.2f %.2f)", fx, fy, fz, tx, ty, tz);
+  if (!ready("teng_nav_raycast")) return 0;
+  Bridge &b = *g;
+  b.nav_ray_t = 1.0f;
+  if (!b.nav_ok) { BERR("teng_nav_raycast: yuklu sahnede navmesh yok (engine_sahnec bake etmedi)"); return 0; }
+  float t = 1.0f;
+  const bool blocked = b.nav.raycast(Vec3{(float)fx, (float)fy, (float)fz}, Vec3{(float)tx, (float)ty, (float)tz}, &t);
+  b.nav_ray_t = t;
+  BTRACE("navmesh gorus: %s (t=%.3f)", blocked ? "ENGEL" : "temiz", (double)t);
+  return blocked ? 1 : 0;
+}
+double teng_nav_ray_t(void) { return g ? (double)g->nav_ray_t : 1.0; }
 
 // --- olcum ----------------------------------------------------------------------
 int teng_draw_count(void) { return g ? (int)g->ren.stats().draws : 0; }

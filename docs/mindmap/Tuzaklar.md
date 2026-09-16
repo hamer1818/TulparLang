@@ -2411,3 +2411,47 @@ bozuk metni verir.
 
 Kapı `tests/fmt_audit.py`: her `.tpr` biçimlendirilir, sonuç **typecheck'ten geçirilir** ve hata sayısı
 biçimlendirme öncesine göre ARTMAMALIDIR; ayrıca idempotans denetlenir. Kendi pozitif kontrolü var.
+
+### 8bd. Pozitif kontrolün kendisi boş olabilir — ölçütü, hedeflediği hatanın BOZDUĞUNDAN emin seç
+Navmesh ajan kapısında "yolların ajan başına kopyalandığını" şu ölçütle kanıtladığımı sanıyordum: karşılıklı
+iki ajan bırakılır, **birbirlerine yaklaşmalılar**. Kopyalamayı kasten bozdum (bütün ajanlar aynı yuvayı
+paylaşsın) — **kapı yine geçti**. Sebep: bozuk hâlde iki ajan da yolu bulamayıp (0,0,0)'a doğru yürüyordu,
+yani yine yaklaşıyorlardı. "Yaklaştılar" ölçütü, doğru davranış dışında en az bir yanlış dünya tarafından
+da sağlanıyordu.
+
+Düzeltme ölçütü sertleştirmekti: **her ajan KENDİ hedefine varmalı** (ikisi yer değiştirmeli). Bu, paylaşılan
+yuvayla sağlanamaz. Kontrol enjekte edilince kapı kırmızıya döndü (`expected 10 got -0.27`).
+
+Kural: bir kontrol yazarken "bu ölçüt, hedeflediğim hata dışında hangi yanlış dünyalarda da sağlanır?"
+diye sor. Cevap "hiçbiri" değilse ölçüt zayıftır. İlgili: 8ao (bir kapının ilk sonucu makullük ister).
+
+### 8be. Kontrol "ateşlemedi" demeden önce ikiliye ULAŞTIĞINI doğrula (`lib/*.tpr` yeniden yapılandırma ister)
+Yukarıdaki kontrolü ilk denediğimde kapı geçti ve "ölçüt zayıf" sonucuna atladım — **yanlış teşhis**.
+Gerçek sebep: kontrolü `lib/engine.tpr` içine yazmıştım ve yalnız `cmake --build --target tulpar`
+koşturmuştum. Gömülü stdlib `configure_file()` ile üretiliyor, yani **yeniden yapılandırma olmadan
+`src/embedded_libs.h` tazelenmiyor**: ikili hâlâ ESKİ kütüphaneyi taşıyordu. Kontrol koda hiç girmemişti.
+
+Teşhis tek komut: `grep -c "<kontrol metni>" src/embedded_libs.h`. 0 ise ölçtüğün şey eski kopyadır.
+Doğru sıra: `cmake -S . -B build-linux && cmake --build build-linux --target tulpar`.
+
+Genel kural: bir pozitif kontrol beklendiği gibi kırmızıya dönmüyorsa **önce kontrolün derlenmiş ürüne
+girdiğini kanıtla**, sonra ölçütü sorgula. İki farklı arıza aynı belirtiyi veriyor.
+
+### 8bf. Şeker açılan yol denetleniyor diye DÜĞÜM yolu da denetleniyor sanma
+`x &= 2.5` ayrıştırıcıda `x = x & 2.5` olarak şeker açılıyor, BinaryOp yolundan geçiyor ve `[typecheck]`
+uyarısı alıyor. `a[0] &= 2.5` ise şeker açılmıyor — `CompoundAssign` düğümü olarak kalıyor ve typeinfer o
+düğümü **hiç ziyaret etmiyordu**: sessizce geçiyordu (ölçüldü 2026-09-16). Aynı dilde aynı işlecin iki
+yazımı farklı şey söylüyordu.
+
+Bir özelliğin hem "şeker" hem "düğüm" yolu varsa denetim İKİSİNE de bağlanmalı; şeker yolundaki denetim
+düğüm yolunu kapsamaz. Kapı: `tests/gramer_bosluklari.test.tpr` içinde her iki yazım için ret kontrolü.
+
+### 8bg. Bozuk bir değerden okunan 0, geçerli boş durum gibi görünebilir
+`int[] a;` (başlatıcısız) dizi DEĞİL bir değer üretiyordu. `len(a)` **0 dönüyordu** — yani "boş dizi" gibi
+görünüyordu — ama `a[0] = 1` ve `push(a, 1)` çalışma zamanında "geçersiz hedef" ile düşüyordu. Derleyici
+kabul ediyor, typecheck susuyor, hata en geç noktada ve en anlamsız mesajla çıkıyordu.
+
+`len()`'in 0 dönmesi buradaki asıl tuzak: sağlıklı bir "boş dizi" ile bozuk bir değeri AYIRT EDİLEMEZ
+kılıyordu. Bir sondanın 0 dönmesi "geçerli ve boş" demek zorunda değil; "okunamadı" da 0 döndürebilir.
+Düzeltme (2026-09-16): başlatıcısız dizi bildirimi artık başlatıcı sentezliyor — `int[] a;` → `[]`,
+`int[4] a;` → `[0,0,0,0]`. Böylece `T[N]`'deki N ilk kez bir şey ifade ediyor.

@@ -475,6 +475,24 @@ VMValue aot_eng_nav_y_ptr(VMValue *i) {
 VMValue aot_eng_nav_z_ptr(VMValue *i) {
   return VM_FLOAT(teng_nav_z((int)tm_int(i)));
 }
+VMValue aot_eng_nav_nearest_ptr(VMValue *x, VMValue *y, VMValue *z) {
+  return VM_BOOL(teng_nav_nearest(tm_num(x), tm_num(y), tm_num(z)) != 0);
+}
+VMValue aot_eng_nav_near_x_ptr(void) {
+  return VM_FLOAT(teng_nav_near_x());
+}
+VMValue aot_eng_nav_near_y_ptr(void) {
+  return VM_FLOAT(teng_nav_near_y());
+}
+VMValue aot_eng_nav_near_z_ptr(void) {
+  return VM_FLOAT(teng_nav_near_z());
+}
+VMValue aot_eng_nav_raycast_ptr(VMValue *fx, VMValue *fy, VMValue *fz, VMValue *tx, VMValue *ty, VMValue *tz) {
+  return VM_BOOL(teng_nav_raycast(tm_num(fx), tm_num(fy), tm_num(fz), tm_num(tx), tm_num(ty), tm_num(tz)) != 0);
+}
+VMValue aot_eng_nav_ray_t_ptr(void) {
+  return VM_FLOAT(teng_nav_ray_t());
+}
 VMValue aot_eng_ui_begin_ptr(void) {
   teng_ui_begin();
   return VM_VOID();

@@ -126,11 +126,16 @@ Ayrıntı: [FAZ3.md](FAZ3.md) "Faz 6 kalanı + Faz 8 fizibilitesi", tuzaklar 8aq
 ## 6.1 Ne yok (sonraki aşama adayları; tarama belgesine karşı tam liste: `BOSLUK-TARAMASI.md`)
 1. ~~Sahne veri modeli + dosya formatı~~ ✅, ~~runtime blob derleyici~~ ✅, ~~bake çıktıları blob'a (navmesh, ışık haritası)~~ ✅ 2026-09-15 (navmesh v2, küme DAG v3, GI sondası v4). Kalan: **telefon demosunda blob**.
 2. ~~**Editör**~~ ✅ çoklu seçim, kaynak tarayıcı, ışık/gölge/güneş gizmoları geldi. Kalan: oynat/durdur sim geri sarımı, implot ile kare zamanı grafiği.
-3. ~~**Tulpar bağlaması**~~ ✅ 2026-09-15: `engine/bridge/` + `lib/engine.tpr` + üç örnek oyun; köprü **169 builtin** (ses, animasyon, navmesh, ışın/örtüşme sorguları, anlık-kip arayüz, kalıcı kayıt, sıcak yükleme, **çarpışma olayları** dahil — bkz. [KOPRU.md](KOPRU.md)).
+3. ~~**Tulpar bağlaması**~~ ✅ 2026-09-15: `engine/bridge/` + `lib/engine.tpr` + üç örnek oyun; köprü **175 builtin** (ses, animasyon, navmesh, ışın/örtüşme sorguları, anlık-kip arayüz, kalıcı kayıt, sıcak yükleme, **çarpışma olayları** dahil — bkz. [KOPRU.md](KOPRU.md)).
    **Çarpışma olayı geldi (2026-09-16):** callback FFI olmadığı için geri çağrım değil **kuyruk** — fizik
    adımında oluşan temaslar sabit boy halkaya yazılır, oyun karede okur. Halka dolarsa olaylar sessizce
-   kırpılmaz, `carpisma_dusen()` sayar ve motor karede bir kez hata logluyor. Kalan: ajan/yol takibi
-   köprüde yok.
+   kırpılmaz, `carpisma_dusen()` sayar ve motor karede bir kez hata logluyor.
+   **Ajan/yol takibi geldi (2026-09-16):** yol ARAMA motorda (Detour), yol TAKİBİ `lib/engine.tpr`
+   içinde saf Tulpar'da (`ajan_olustur` / `ajan_hedef` / `ajan_ilerlet`). Ayrım bilinçli: takip oynanış
+   politikasıdır (hız, varış yarıçapı, yeniden arama sıklığı) — motora gömülseydi her oyun aynı davranışa
+   mahkûm olurdu. Yollar ajan başına **kopyalanır**, çünkü motorun nokta tamponu tektir. Köprüye ayrıca
+   `eng_nav_nearest` (mesh dışındaki konumu yapıştır — yoksa yol sorgusu 0 döner) ve `eng_nav_raycast`
+   (doğru görüş; yol aramadan çok ucuz) eklendi.
 4. Karakter modeli yok (iskelet/animasyon içe aktarma ve GPU skinning var; sanatçı varlığı gerek).
 5. PBR, vis buffer A/B, VRS/FDM, VSM, virtual texture, PSO üretimi, gerçek HRTF/Steam Audio,
    GameActivity göçü, Memory Advice, mağaza/servis kalemleri (hesap gerekiyor),

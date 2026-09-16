@@ -683,6 +683,56 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     return;
   }
 
+  // BILESIK ATAMA. Degisken hedefli bicim (`x &= y`) ayristiricida
+  // `x = x & y` olarak seker aciliyor ve BinaryOp yolundan zaten deneteniyor;
+  // buraya YALNIZ eleman hedefli bicim (`a[i] &= y`) dusuyor. Denetim
+  // olmadan iki yol AYRISIYORDU: `x &= 2.5` uyari veriyor, `a[0] &= 2.5`
+  // sessizce geciyordu (olculdu 2026-09-16). Ayni dilde ayni islemin iki
+  // yazimi ayni seyi soylemeli.
+  if (const auto *ca = as_node<CompoundAssign>(stmt)) {
+    const bool bitwise =
+        ca->op == TOKEN_BIT_AND_EQUAL || ca->op == TOKEN_BIT_OR_EQUAL ||
+        ca->op == TOKEN_BIT_XOR_EQUAL || ca->op == TOKEN_SHIFT_LEFT_EQUAL ||
+        ca->op == TOKEN_SHIFT_RIGHT_EQUAL;
+    DataType lt = TYPE_UNKNOWN;
+    if (ca->target) {
+      if (const auto *acc = as_node<ArrayAccess>(ca->target.get())) {
+        // Eleman tipi kabin tipinden gelir; `int[]` -> int.
+        switch (infer_expr(ctx, acc->object.get())) {
+        case TYPE_ARRAY_INT:   lt = TYPE_INT;    break;
+        case TYPE_ARRAY_FLOAT: lt = TYPE_FLOAT;  break;
+        case TYPE_ARRAY_STR:   lt = TYPE_STRING; break;
+        case TYPE_ARRAY_BOOL:  lt = TYPE_BOOL;   break;
+        default: break;
+        }
+      }
+    } else if (!ca->name.empty()) {
+      lt = lookup_symbol_type(ctx, ca->name);
+    }
+    const DataType rt = infer_expr(ctx, ca->value.get());
+    if (bitwise) {
+      const char *spelling = ca->op == TOKEN_BIT_AND_EQUAL      ? "&="
+                             : ca->op == TOKEN_BIT_OR_EQUAL     ? "|="
+                             : ca->op == TOKEN_BIT_XOR_EQUAL    ? "^="
+                             : ca->op == TOKEN_SHIFT_LEFT_EQUAL ? "<<="
+                                                                : ">>=";
+      // BinaryOp yolundaki ile AYNI darlik: yalniz float/string reddediliyor.
+      auto bad = [](DataType t) { return t == TYPE_FLOAT || t == TYPE_STRING; };
+      if (bad(lt) || bad(rt)) {
+        report_error(
+            ctx,
+            tulpar::i18n::tr_en(
+                "'%s' bit islemi yalnizca tamsayi ile calisir ('%s' ve '%s' "
+                "verildi) - satir %d",
+                "bitwise '%s' works on integers only (got '%s' and '%s') "
+                "at line %d"),
+            spelling, datatype_to_string(lt), datatype_to_string(rt),
+            ca->loc.line);
+      }
+    }
+    return;
+  }
+
   if (const auto *assign = as_node<Assignment>(stmt)) {
     // KARMASIK HEDEF (`a[i] = x`, `o.f = y`): `name` bos, hedef bir ifade.
     // P22 (2026-09-09) bu yolun HIC denetlenmedigini gosterdi:

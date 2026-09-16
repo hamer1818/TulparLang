@@ -66,10 +66,11 @@ func run_g1_donusum() {
 // ---------------------------------------------------------------------------
 // [A2] G3 — sabit boy dizi TIPI `T[N]`
 //
-// KAPSAM: `T[N]` AYRISIYOR ve eleman tipi `T[]` ile AYNI belirleniyor.
-// YAPMADIGI: boyutu saklamak, yigina yerlestirmek, sinir denetimi, ilk
-// deger uretmek. Yani `int[3] a` bugun `int[] a` ile ayni seydir. Asagidaki
-// assert'ler tam olarak bu sozu olcuyor — daha fazlasini degil.
+// KAPSAM: `T[N]` AYRISIYOR, eleman tipi `T[]` ile AYNI belirleniyor VE
+// baslaticisiz bildirimde N eleman uretiliyor (2026-09-16).
+// YAPMADIGI: yigina yerlestirmek, sinir denetimi, uzunlugu ZORLAMAK
+// (acik baslatici hala kazanir). Asagidaki assert'ler tam olarak bu sozu
+// olcuyor — daha fazlasini degil.
 // ---------------------------------------------------------------------------
 type Kademe {
     int[3] idler;
@@ -94,6 +95,39 @@ func run_g3_sabit_boy() {
     Kademe k = { idler: [1, 2, 3], agirliklar: [0.5, 0.25, 0.125, 0.0] };
     assert_eq_int(k.idler[1], 2);
     assert_close(k.agirliklar[0], 0.5, 0.0001);
+
+    // BASLATICISIZ BILDIRIM (2026-09-16 duzeltmesi). Onceden `int[4] b;`
+    // dizi DEGIL bir deger uretiyordu: `len` 0 donuyor ama `b[0] = 1`
+    // CALISMA ZAMANINDA "gecersiz hedef" ile dusuyordu — derleyici kabul
+    // edip calisma zamani reddediyordu.
+    int[4] b;
+    assert_eq_int(len(b), 4);
+    assert_eq_int(b[0], 0);
+    assert_eq_int(b[3], 0);
+    b[2] = 9;                      // ASIL KAZANC: yazilabiliyor
+    assert_eq_int(b[2], 9);
+    assert_eq_int(b[1], 0);        // komsu bozulmadi
+    float[3] fv;
+    assert_eq_int(len(fv), 3);
+    assert_close(fv[2], 0.0, 0.0001);
+    str[2] sv;
+    assert_eq_int(len(sv), 2);
+    assert_eq_str(sv[0], "");
+    bool[2] bv;
+    assert_eq_int(len(bv), 2);
+    assert(!bv[0], "bool dizisi varsayilani false olmali");
+    // Boyutsuz bicim: BOS dizi (0 eleman) ama push CALISIR — once bu da
+    // "gecersiz hedef" veriyordu.
+    int[] d;
+    assert_eq_int(len(d), 0);
+    push(d, 5);
+    assert_eq_int(len(d), 1);
+    assert_eq_int(d[0], 5);
+    // KONTROL: N bir SINIR degil, yalnizca varsayilan uzunluk. Acik
+    // baslatici hala kazanir — yukaridaki `esnek` bunun kanitiydi, burada
+    // ters yonu de olcuyoruz: N'den KISA baslatici da gecerli.
+    int[4] kisa = [1];
+    assert_eq_int(len(kisa), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +265,15 @@ func run_b_bit_tipi_reddi() {
            "float operandli `~` REDDEDILMELIYDI");
     assert(derleme_kodu("str s = \"x\";\nprint(s | 1);\n") != 0,
            "metin operandli `|` REDDEDILMELIYDI");
+    // ELEMAN HEDEFI AYNI SEYI SOYLEMELI. `a[i] &= y` ayri bir codegen yolu
+    // (CompoundAssign, seker acilmiyor) ve 2026-09-16'ya kadar tip denetimine
+    // HIC ugramiyordu: `x &= 2.5` uyari veriyor, `a[0] &= 2.5` sessizce
+    // geciyordu. Ayni dilde ayni islemin iki yazimi ayrisamaz.
+    assert_eq_int(derleme_kodu("int[2] a = [1,2];\na[0] &= 3;\nprint(a[0]);\n"), 0);
+    assert(derleme_kodu("int[2] a = [1,2];\na[0] &= 2.5;\nprint(a[0]);\n") != 0,
+           "eleman hedefinde float operandli `&=` REDDEDILMELIYDI");
+    assert(derleme_kodu("int[2] a = [1,2];\na[0] <<= 1.5;\nprint(a[0]);\n") != 0,
+           "eleman hedefinde float kaydirma miktari REDDEDILMELIYDI");
 }
 
 test("G1: tip adiyla donusum", "run_g1_donusum");

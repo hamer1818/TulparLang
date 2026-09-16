@@ -673,6 +673,30 @@ ENGINE_TEST(scene_blob_navmesh_bake_matches_runtime_bake) {
   std::printf("    [bilgi] navmesh: %u ucgen -> %u poligon, %u bayt, ozet %016llx; blob yolu %d nokta %.2f birim, sim bake %d nokta %.2f birim\n",
               rep.nav_tris, rep.nav_polys, rep.nav_bytes, (unsigned long long)nav.data_hash(), blob_n, (double)blob_len, sim_n,
               (double)sim_len);
+
+  // DOGRU GORUS (raycast): blob yuzu ile sim bake'i AYNI cevabi vermeli.
+  // Duvarin ardina bakan isin ENGELLI, ayni acik zeminde kisa isin TEMIZ.
+  // Bu ikisi birlikte kapiyi olculebilir yapiyor: yalniz "engelli" baksaydik
+  // her zaman true donen bir gerceklestirme de gecerdi.
+  float t_blob = -1.0f, t_sim = -1.0f;
+  const bool blocked_blob = nav.raycast({-6, 0, 0}, {6, 0, 0}, &t_blob);
+  const bool blocked_sim = built && nm.raycast({-6, 0, 0}, {6, 0, 0}, &t_sim);
+  CHECK(blocked_blob && blocked_sim);
+  CHECK(std::fabs(t_blob - t_sim) < 1e-3f);
+  CHECK(t_blob > 0.0f && t_blob < 1.0f);
+  float t_clear = -1.0f;
+  const bool blocked_near = nav.raycast({-6, 0, 0}, {-5, 0, 0}, &t_clear);
+  CHECK(!blocked_near && std::fabs(t_clear - 1.0f) < 1e-3f); // KONTROL: temiz isin
+  // En yakin nokta: mesh'in 3 birim USTUNDEKI nokta zemine insin.
+  Vec3 snapped{};
+  const bool snap_ok = nav.nearest_point({-6, 3, 0}, &snapped);
+  CHECK(snap_ok && std::fabs(snapped.y) < 1.0f);
+  // KONTROL: arama kutusunun cok disindaki nokta BULUNMASIN (sessiz 0 degil).
+  Vec3 far_out{};
+  CHECK(!nav.nearest_point({-600, 300, 400}, &far_out));
+  std::printf("    [bilgi] navmesh gorus: duvar ardi ENGEL t=%.3f (sim t=%.3f), kisa isin temiz t=%.3f; (-6,3,0) -> y=%.3f\n",
+              (double)t_blob, (double)t_sim, (double)t_clear, (double)snapped.y);
+
   nm.shutdown();
   arena().reset_to(mark);
 

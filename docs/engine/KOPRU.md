@@ -131,7 +131,7 @@ Kapıların kontrolleri: kutu **zeminli** y=0.480 / **zeminsiz** y=−15.13; sah
 37 402 piksel fark, **iki boş kare arasında 0** (yazıcı sabit çıktı vermiyor); ölü id çağrısı hata sayacını
 **tam bir** artırır, canlı id **artırmaz**; geçersiz tuş adı hata, geçerli ad sessiz.
 
-## 8. Kapsam: `SPEC` = `engine_api.h` = **169 builtin**
+## 8. Kapsam: `SPEC` = `engine_api.h` = **175 builtin**
 
 Sayı iki yerde birden durur ve birbirine karşı denetlenebilir: `engine/bridge/engine_api.h`'deki `teng_*`
 bildirimleri ve `engine/tools/gen_engine_bindings.py`'deki `SPEC` satırları. Aile dağılımı (başlıktaki
@@ -151,12 +151,21 @@ bölüm yorumlarına göre):
 | sahne sıcak yeniden yükleme | 6 | izlemeyi aç, yenilendi mi (bir kez), yenileme sayısı, yol, dosya kopyala, dosya değişim zamanı |
 | ses | 13 | cihaz aç/kapat/durum/arka uç, klip yükle (WAV/FLAC/MP3), sentetik ton, çal, bip, durdur, hepsini durdur, ana seviye, çalan ses, tepe genlik |
 | sorgular: ışın + yakınlık | 13 | `eng_raycast` (+ nokta / normal / çarpılan köprü varlığı / çarpılan sahne varlığı), **küre örtüşmesi** (yakından uzağa sıralı), en yakın |
-| navmesh (blob'daki bake) | 7 | bake var mı, poligon sayısı, yol iste, yol kısmi mi, yol noktaları |
+| navmesh (blob'daki bake) | 13 | bake var mı, poligon sayısı, yol iste, yol kısmi mi, yol noktaları, **en yakın nokta** (mesh dışındaki konumu yapıştır), **doğru görüş** (`raycast` + çarpma parametresi) |
 | ölçüm | 4 | çizim / gövde / ışık sayısı, son kare p50 |
 
 **Ne verilmez (bilinçli):** struct, callback, işaretçi, çıktı parametresi — Tulpar'ın bugünkü FFI'si
-taşımıyor. Bunun iki görünür sonucu var: (1) **çarpışma olayı yok** — savaş ve yapay zekâ ışın + küre
-sorgusuyla yazılır; (2) onay kutusu ve kaydırıcı **yeni değeri döndürür**, betik geri yazar.
+taşımıyor. Bunun görünür sonuçları var: (1) **çarpışma olayı geri çağrım değil kuyruktur** — fizik
+adımındaki temaslar sabit boy halkaya yazılır, oyun karede okur (2026-09-16); (2) çok değerli sorgular
+"hesapla + erişimci" kalıbıyla verilir (`eng_nav_nearest` sonra `eng_nav_near_x/y/z`), çünkü çıktı
+parametresi yok; (3) onay kutusu ve kaydırıcı **yeni değeri döndürür**, betik geri yazar.
+
+**Ne motorda YOK ve bilerek yok:** yol TAKİBİ. Motor yol ARAR (Detour); ajanı yolda yürütmek
+`lib/engine.tpr` içinde saf Tulpar'dadır (`ajan_olustur` / `ajan_hedef` / `ajan_ilerlet`). Takip oynanış
+politikasıdır — hız, varış yarıçapı, yeniden arama sıklığı her oyunda farklıdır; motora gömmek her oyunu
+aynı davranışa mahkûm ederdi. Beğenmeyen bu katmanı kopyalar, motoru değiştirmez. Yol noktaları ajan
+başına **kopyalanır**: motorun nokta tamponu tektir, iki ajan aynı karede yol ararsa kopyalamayan bir
+tasarım sessizce birbirinin yolunu takip ederdi (kapı bunu ölçüyor — `tests/engine_bridge.test.tpr`).
 
 ### 8.1 Bir oyunun tam yaşam döngüsü (gerçek çağrı adlarıyla)
 

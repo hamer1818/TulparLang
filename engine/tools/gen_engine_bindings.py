@@ -168,6 +168,12 @@ SPEC = [
     ("eng_nav_x", "float", [("i", "int")], "Son yolun i. noktasinin x'i."),
     ("eng_nav_y", "float", [("i", "int")], "Son yolun i. noktasinin y'si."),
     ("eng_nav_z", "float", [("i", "int")], "Son yolun i. noktasinin z'si."),
+    ("eng_nav_nearest", "bool", [("x", "num"), ("y", "num"), ("z", "num")], "Navmesh'e en yakin noktayi bulur (konum mesh'in disindaysa yol aramadan once buna yapistir). Sonuc eng_nav_near_x/y/z."),
+    ("eng_nav_near_x", "float", [], "Son eng_nav_nearest sonucunun x'i."),
+    ("eng_nav_near_y", "float", [], "Son eng_nav_nearest sonucunun y'si."),
+    ("eng_nav_near_z", "float", [], "Son eng_nav_nearest sonucunun z'si."),
+    ("eng_nav_raycast", "bool", [("fx", "num"), ("fy", "num"), ("fz", "num"), ("tx", "num"), ("ty", "num"), ("tz", "num")], "Navmesh uzerinde dogru gorus: true = ENGEL VAR (yol ara), false = dumduz gidilebilir. Yol aramadan cok daha ucuz."),
+    ("eng_nav_ray_t", "float", [], "Son eng_nav_raycast'in carpma parametresi (0..1; engel yoksa 1)."),
     # anlik-kip (immediate mode) arayuz: menu / ayar / duraklat. Motorda yeni cizim
     # yolu yok: eng_rect + eng_text uzerine kurulu. Deger BETIKTE yasar (Tulpar'da
     # cikti parametresi yok): onay kutusu/kaydirici YENI degeri dondurur.

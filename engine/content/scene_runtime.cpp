@@ -203,6 +203,28 @@ bool SceneNav::nearest_point(Vec3 p, Vec3 *out) const {
   return true;
 }
 
+// sim::NavMesh::raycast'in birebir aynisi — SceneNav blob'daki ayni Detour
+// verisini sorguladigi icin iki yolun ayni cevabi vermesi bir KAPI ile
+// olculuyor (nav_scene_matches_sim). Kod kopyasi bilincli: iki sinif ayri
+// katmanlarda (sim L2 / content L6) ve birbirine bagimli degil.
+bool SceneNav::raycast(Vec3 from, Vec3 to, float *t_hit) const {
+  if (t_hit) *t_hit = 1.0f;
+  if (!query_) return false;
+  auto *q = static_cast<dtNavMeshQuery *>(query_);
+  const float ext[3] = {2.0f, 4.0f, 2.0f};
+  const float s[3] = {from.x, from.y, from.z};
+  const float e[3] = {to.x, to.y, to.z};
+  dtPolyRef sref = 0;
+  float sp[3];
+  if (dtStatusFailed(q->findNearestPoly(s, ext, &impl_->filter, &sref, sp)) || !sref) return false;
+  float t = 0, norm[3];
+  dtPolyRef path[64];
+  int npath = 0;
+  if (dtStatusFailed(q->raycast(sref, sp, e, &impl_->filter, &t, norm, path, &npath, 64))) return false;
+  if (t_hit) *t_hit = t > 1.0f ? 1.0f : t;
+  return t < 1.0f; // t >= 1 (FLT_MAX): engel yok
+}
+
 int SceneNav::find_path(Vec3 from, Vec3 to, Vec3 *out, int max_points, bool *partial) const {
   if (!query_) return 0;
   auto *q = static_cast<dtNavMeshQuery *>(query_);

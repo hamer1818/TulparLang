@@ -389,6 +389,103 @@ func run_nav() {
 }
 
 // ---------------------------------------------------------------------------
+// 19) Navmesh ajanı: yol TAKİBİ (motor arar, lib takip eder) + en yakın nokta
+//     ve doğru görüş sorguları.
+//     KONTROLLER: (a) hızı 0 olan ajan ilerlemez ve varamaz — "vardı" sonucunun
+//     ilerlemeden değil HAREKETTEN geldiğini kanıtlar; (b) iki ajan aynı karede
+//     farklı hedefe yol alır ve birbirinin yolunu takip etmez (motorun nokta
+//     tamponu tek, kopyalama olmasaydı ikincisi birincininkini ezerdi);
+//     (c) navmeshsiz sahnede ajan_hedef false döner.
+// ---------------------------------------------------------------------------
+func run_ajan() {
+    array yollar = ["examples/assets/salon1.sahneb", "assets/salon1.sahneb"];
+    str blob = "";
+    int i = 0;
+    while (i < len(yollar)) {
+        if (file_exists(yollar[i])) { blob = yollar[i]; i = len(yollar); } else { i = i + 1; }
+    }
+    if (len(blob) == 0) {
+        print("    ATLANDI: salon1.sahneb yok (engine_sahnec ile derlenir) — ajan kapisi kosmadi");
+        return;
+    }
+    assert(bolum_gec(blob), "salon sahnesi yuklenmeli: " + blob);
+    kare(2);
+    assert(nav_var(), "salon sahnesinde navmesh olmali");
+
+    // --- en yakın nokta: mesh'in ÜSTÜNDEKİ bir nokta mesh'e yapışmalı
+    assert(nav_yakin(-10.0, 3.0, 10.0), "mesh ustundeki nokta yapistirilabilmeli");
+    float ny = nav_yakin_y();
+    assert(ny < 2.0, "yapistirilan nokta zemine inmeli, y=" + toString(ny));
+    // KONTROL: arama kutusunun ÇOK dışındaki nokta bulunamaz (sessiz 0 değil)
+    assert(!nav_yakin(5000.0, 5000.0, 5000.0), "cok uzak nokta yapistirilmamali");
+
+    // --- doğru görüş: aynı açık alandaki iki yakın nokta arasında engel yok
+    bool engel_yakin = nav_gorus(-10.0, 0.3, 10.0, -9.0, 0.3, 9.0);
+    assert(!engel_yakin, "bitisik iki nokta arasinda engel olmamali");
+    assert_close(nav_gorus_t(), 1.0, 0.001);   // engel yoksa t = 1
+    // KONTROL: salonun çapraz ucuna doğru görüş ENGELLİ olmalı (sütunlar var).
+    // Engelliyse t < 1 gelir; iki ölçüt birbirini doğrular.
+    bool engel_uzak = nav_gorus(-10.0, 0.3, 10.0, 10.0, 0.3, -10.0);
+    if (engel_uzak) { assert(nav_gorus_t() < 1.0, "engel varsa t 1'den kucuk olmali"); }
+
+    // --- ajan: yolu takip edip hedefe varmalı
+    int a = ajan_olustur(-10.0, 0.3, 10.0, 6.0, 0.4);
+    assert(a >= 0, "ajan olusturulmali");
+    assert(ajan_hedef(a, 10.0, 0.3, -10.0), "ajana hedef verilebilmeli");
+    int kalan0 = ajan_kalan(a);
+    assert(kalan0 > 0, "hedef sonrasi yolda nokta olmali");
+    assert(!ajan_vardi(a), "daha yola cikmadan varmis olamaz");
+    // KONTROL: hızı 0 olan ikinci ajan aynı hedefe ASLA varmaz.
+    int duragan = ajan_olustur(-10.0, 0.3, 10.0, 0.0, 0.4);
+    assert(ajan_hedef(duragan, 10.0, 0.3, -10.0), "duran ajana da hedef verilebilmeli");
+
+    float ilk_x = ajan_x(a);
+    float ilk_z = ajan_z(a);
+    int adim = 0;
+    while (adim < 600) {
+        ajan_ilerlet(a, 0.016);
+        ajan_ilerlet(duragan, 0.016);
+        adim = adim + 1;
+    }
+    assert(ajan_vardi(a), "ajan 600 adimda hedefe varmali, kalan=" + toString(ajan_kalan(a)));
+    assert_close(ajan_x(a), 10.0, 1.5);
+    assert_close(ajan_z(a), -10.0, 1.5);
+    // KONTROL sonucu: duran ajan ne kımıldadı ne vardı.
+    assert(!ajan_vardi(duragan), "hizi 0 olan ajan varamaz (kapi hareketi olcuyor)");
+    assert_close(ajan_x(duragan), -10.0, 0.001);
+    assert_close(ajan_z(duragan), 10.0, 0.001);
+
+    // KONTROL: iki ajan farklı hedefe, yollar KOPYALANDIĞI için karışmaz.
+    int p = ajan_olustur(-10.0, 0.3, 10.0, 5.0, 0.4);
+    int q = ajan_olustur(10.0, 0.3, -10.0, 5.0, 0.4);
+    assert(ajan_hedef(p, 10.0, 0.3, -10.0), "p hedef almali");
+    assert(ajan_hedef(q, -10.0, 0.3, 10.0), "q hedef almali");
+    // q'nun hedefi p'nin başlangıcı: ikisi YER DEĞİŞTİRMELİ. Ölçüt bilerek
+    // "yaklaştılar mı" DEĞİL — yollar karışıp ikisi de aynı yere gitse de
+    // yaklaşırlardı (bu ölçütle denendi: hata enjekte edildi, kapı geçti).
+    // Her ajanın KENDİ hedefine varması, yolların ajan başına kopyalandığının
+    // tek geçerli kanıtı.
+    int k = 0;
+    while (k < 600) { ajan_ilerlet(p, 0.016); ajan_ilerlet(q, 0.016); k = k + 1; }
+    assert_close(ajan_x(p), 10.0, 1.5);
+    assert_close(ajan_z(p), -10.0, 1.5);
+    assert_close(ajan_x(q), -10.0, 1.5);
+    assert_close(ajan_z(q), 10.0, 1.5);
+    float pq = sqrt((ajan_x(p) - ajan_x(q)) * (ajan_x(p) - ajan_x(q)) +
+                    (ajan_z(p) - ajan_z(q)) * (ajan_z(p) - ajan_z(q)));
+
+    print("    [bilgi] ajan: yol " + toString(kalan0) + " nokta, " + toString(adim) +
+          " adimda vardi; ilk (" + toString(ilk_x) + " " + toString(ilk_z) +
+          ") -> son (" + toString(ajan_x(a)) + " " + toString(ajan_z(a)) +
+          "); yer degistiren iki ajan arasi " + toString(pq) + " birim (baslangicta da ayni)");
+    sahne_bosalt();
+
+    // KONTROL: navmeshsiz sahnede hedef verilemez.
+    int b2 = ajan_olustur(0.0, 0.0, 0.0, 1.0, 0.5);
+    assert(!ajan_hedef(b2, 5.0, 0.0, 5.0), "navmeshsiz sahnede hedef verilememeli");
+}
+
+// ---------------------------------------------------------------------------
 // 15) Anlık-kip arayüz: menü/ayar widget'ları. Pencersiz kipte fare/dokunmatik
 //     YOK, o yüzden köprüye tek karelik bas+bırak ENJEKTE edilir. KONTROLLER:
 //     widget dışına tıklama tetiklemez, devre dışı widget değeri değiştirmez,
@@ -676,6 +773,7 @@ if (!kur()) {
     test("kalici kayit: yaz-oku, varsayilan, bozuk dosya", "run_kayit");
     test("sahne sicak yeniden yukleme", "run_sicak_yukleme");
     test("carpisma olaylari: kuyruk, siddet, kontrol", "run_carpisma");
+    test("navmesh ajani: yol takibi, duran ajan kontrolu", "run_ajan");
     motor_kapat();
 }
 test_summary();

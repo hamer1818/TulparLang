@@ -4653,6 +4653,14 @@ static int compound_op_to_binary(int op) {
   case TOKEN_MULTIPLY_EQUAL: return TOKEN_MULTIPLY;
   case TOKEN_DIVIDE_EQUAL:   return TOKEN_DIVIDE;
   case TOKEN_MODULO_EQUAL:   return TOKEN_MODULO;
+  // Bit bicimleri: eleman yolunda (codegen_elem_compound) bunlar vm_binary_op'a
+  // HIC gitmiyor — yerinde emit ediliyor. Esleme yine de burada duruyor ki
+  // baska bir cagri yeri eklendiginde sessizce `&=` token'ini islem sanmasin.
+  case TOKEN_BIT_AND_EQUAL:     return TOKEN_BIT_AND;
+  case TOKEN_BIT_OR_EQUAL:      return TOKEN_PIPE;
+  case TOKEN_BIT_XOR_EQUAL:     return TOKEN_BIT_XOR;
+  case TOKEN_SHIFT_LEFT_EQUAL:  return TOKEN_SHIFT_LEFT;
+  case TOKEN_SHIFT_RIGHT_EQUAL: return TOKEN_SHIFT_RIGHT;
   default:                   return op;
   }
 }
@@ -4778,6 +4786,33 @@ static LLVMValueRef codegen_elem_compound(LLVMBackend *backend,
   LLVMValueRef L_ptr =
       llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.L");
   LLVMBuildStore(backend->builder, old, L_ptr);
+  // BIT BICIMLERI (`a[i] &= y`, `<<=`, ...) vm_binary_op'a GITMIYOR.
+  // Iki sebep: (1) o fonksiyon bit tokenlarini tanimiyor ve onceden derlenmis
+  // web/android arsivlerinde ESKI kopyasi duruyor — oraya yeni bir islem
+  // eklemek arsivleri tazelemeden sessizce yanlis cevap verirdi; (2) bit
+  // islemleri zaten tamsayi islemi, kutulu cagriya gerek yok. Kap ve indis bu
+  // noktada ZATEN bir kez degerlendirilip alloca'ya yazilmis durumda (ca.cont /
+  // ca.idx), yani `a[f()] &= 1` icinde `f()` bir kez calisiyor.
+  if (is_bitwise_binary_op(compound_op_to_binary(node->op))) {
+    LLVMValueRef old_i = llvm_vm_val_to_int_payload(backend, old);
+    LLVMValueRef rhs_i = llvm_vm_val_to_int_payload(backend, rhs);
+    LLVMValueRef bit_i =
+        emit_bitwise_i64(backend, compound_op_to_binary(node->op), old_i, rhs_i);
+    if (bit_i) {
+      LLVMValueRef bit_val = llvm_vm_val_int_val(backend, bit_i);
+      LLVMValueRef bit_p = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "ca.bitv");
+      LLVMBuildStore(backend->builder, bit_val, bit_p);
+      LLVMValueRef bargs[] = {LLVMConstNull(backend->ptr_type), cont_p, idx_p,
+                              bit_p};
+      LLVMBuildCall2(backend->builder,
+                     LLVMGlobalGetValueType(backend->func_vm_set_element),
+                     backend->func_vm_set_element, bargs, 4, "");
+      if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+      return bit_val;
+    }
+  }
+
   LLVMValueRef R_ptr =
       llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.R");
   LLVMBuildStore(backend->builder, rhs, R_ptr);

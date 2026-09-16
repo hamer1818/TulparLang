@@ -69,6 +69,10 @@ private:
     
     // Type parsing
     DataType parse_type();
+    // `T[N]` ayristirildiginda N burada kalir (yoksa 0). parse_type'in donus
+    // tipini degistirmemek icin uye: cagri yerlerinin cogu N'i umursamiyor.
+    // Yalniz bildirim yolu okuyor ve HEMEN tuketiyor.
+    int last_fixed_array_n_ = 0;
     std::string parse_custom_type_name();
     
     // Error handling

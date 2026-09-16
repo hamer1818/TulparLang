@@ -258,6 +258,18 @@ int teng_nav_partial(void); // son yol kismi mi (hedefe ulasilamadi)
 double teng_nav_x(int i);
 double teng_nav_y(int i);
 double teng_nav_z(int i);
+// Navmesh'e en yakin nokta: oyuncunun/ajanin konumu mesh'in birkac santim
+// disindaysa teng_nav_path 0 doner. Once buraya yapistirip yolu oradan iste.
+// 1 = bulundu (teng_nav_near_x/y/z okunur), 0 = arama kutusunda mesh yok.
+int teng_nav_nearest(double x, double y, double z);
+double teng_nav_near_x(void);
+double teng_nav_near_y(void);
+double teng_nav_near_z(void);
+// Navmesh uzerinde dogru gorus. 1 = ENGEL VAR (yol arama gerekir), 0 = temiz
+// (dumduz gidilebilir). Carpma parametresi teng_nav_ray_t() ile okunur (0..1;
+// engel yoksa 1). Yol aramadan cok daha ucuz — "string pulling" icin.
+int teng_nav_raycast(double fx, double fy, double fz, double tx, double ty, double tz);
+double teng_nav_ray_t(void);
 
 // --- olcum -----------------------------------------------------------------
 int teng_draw_count(void);

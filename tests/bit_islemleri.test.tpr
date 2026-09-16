@@ -167,6 +167,48 @@ func run_atamali() {
 }
 
 // ---------------------------------------------------------------------------
+// 6b. ELEMAN HEDEFI — `a[i] &= y` (2026-09-16'da geldi)
+//
+// Onceden ACIK ayristirma hatasiydi: `a[i] &= y` yazilamiyordu, cunku
+// degisken bicimi `x = x & y` olarak seker aciliyor ve eleman biciminde
+// INDIS IFADESI iki kez calisirdi. Cozum sekerle degil codegen'de: kap ve
+// indis bir kez degerlendirilip bit islemi yerinde emit ediliyor (kutulu
+// vm_binary_op'a HIC ugranmiyor — o fonksiyon bit tokenlarini tanimiyor ve
+// onceden derlenmis web/android arsivlerinde eski kopyasi duruyor).
+//
+// KONTROL: indis ifadesinin YAN ETKISI tam bir kez calismali. Bu olcum
+// olmadan kapi "sonuc dogru" derdi ve `a[f()] &= 1` icinde f iki kez
+// calissa bile gecerdi — asil tehlike oydu.
+// ---------------------------------------------------------------------------
+int _yan_etki = 0;
+func _indis(): int { _yan_etki = _yan_etki + 1; return 1; }
+
+func run_eleman_atamali() {
+    int[4] a = [0b1111, 8, 12, 1];
+    a[0] &= 0b1010;  assert_eq_int(a[0], 10);
+    a[1] |= 1;       assert_eq_int(a[1], 9);
+    a[2] ^= 10;      assert_eq_int(a[2], 6);
+    a[3] <<= 4;      assert_eq_int(a[3], 16);
+    int[1] b = [256];
+    b[0] >>= 3;      assert_eq_int(b[0], 32);
+    // Negatif elemanda aritmetik kaydirma (degisken yoluyla AYNI cevap)
+    int[1] c = [0 - 16];
+    c[0] >>= 2;      assert_eq_int(c[0], 0 - 4);
+    // Komsu elemanlar bozulmadi
+    assert_eq_int(a[1], 9);
+    // KONTROL: indis bir KEZ degerlendirilir
+    int[4] d = [7, 7, 7, 7];
+    assert_eq_int(_yan_etki, 0);
+    d[_indis()] &= 4;
+    assert_eq_int(_yan_etki, 1);
+    assert_eq_int(d[1], 4);
+    assert_eq_int(d[0], 7);
+    // Baslaticisiz bildirimle de calisir (T[N] varsayilani 0)
+    int[2] e;
+    e[0] |= 5;       assert_eq_int(e[0], 5);
+}
+
+// ---------------------------------------------------------------------------
 // 7. KUTULU YOL — operandin tipi calisma zamaninda belli oldugunda
 // ---------------------------------------------------------------------------
 func kimlik(x) { return x; }
@@ -272,6 +314,7 @@ test("negatif sayilar (aritmetik >>)", "run_negatif");
 test("kaydirma sinirlari (>=64, negatif)", "run_kaydirma_sinirlari");
 test("tabanli sabitler ve ayirici", "run_sabitler");
 test("atamali bicimler", "run_atamali");
+test("eleman hedefli atamali bicimler (indis bir kez)", "run_eleman_atamali");
 test("kutulu yol", "run_kutulu");
 test("renk paketleme: carpma == kaydirma", "run_renk_paketleme");
 test("gerileme: | eski anlamlari", "run_gerileme");
