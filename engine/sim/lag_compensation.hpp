@@ -4,20 +4,26 @@
 // GORUNTUYU/uzak varliklarin GORUNDUGU yeri yumusatir; bu dosya SUNUCUDAKI
 // VURUS KARARINI adalet icin geriye sarar).
 //
-// Standart FPS teknigi (Overwatch/CS-tarzi "favor the shooter"): DUSUK
-// gecikmeli atici, KENDI ekraninda hedefi X anindaki konumunda gorup ates
-// eder; sunucu bu isabeti hedefin O ANKI GUNCEL degil, atici gordugu ZAMANDAKI
-// (render_time_s = simdi - atici_gecikmesi) konumuyla test etmezse, hizli
-// hareket eden hedefler agdaki gecikme yuzunden GORUNURDE isabetli atislari
-// kacirir. Bilincli olarak DAR kapsam (interp.hpp'nin "yalniz pozisyon+yaw
-// tasir" kaydiyla ayni ruh): yalniz KURE (merkez+yaricap) hitbox, silah/hasar/
-// oyun mantigi TASIMAZ — core/math/vec.hpp'nin Ray/Sphere kesisimiyle yalniz
-// "bu isin, bu zamanda, hangi izlenen hedefe carpti" sorusuna cevap verir.
+// **DOGRULANDI, VARSAYILMADI:** teknik Valve'in kendi yayinladigi, sektorde
+// FIILEN standart referans olan Yahn Bernier'in 2001 makalesiyle ("Latency
+// Compensating Methods in Client/Server In-game Protocol Design and
+// Optimization", developer.valvesoftware.com/wiki/Lag_compensation) AYNI:
+// DUSUK gecikmeli atici, KENDI ekraninda hedefi X anindaki konumunda gorup
+// ates eder; sunucu bu isabeti hedefin O ANKI GUNCEL degil, atici gordugu
+// ZAMANDAKI (render_time_s = simdi - atici_gecikmesi) konumuyla test
+// etmezse, hizli hareket eden hedefler agdaki gecikme yuzunden GORUNURDE
+// isabetli atislari kacirir.
 //
 // max_rewind_s: istismar onlemi ("peeker's advantage"i sinirlar) — cok eski
 // bir render_time_s'e sarma sessizce REDDEDILIR (rewind()/raycast() false
-// doner), boylece bir istemci gercekci olmayan bir gecikme iddia edip
-// haksiz avantaj alamaz.
+// doner). Varsayilan deger (1.0 saniye) TESADUF DEGIL: Source motorunun
+// GERCEK `sv_maxunlag` degiskeninin (developer.valvesoftware.com/wiki/
+// Lag_compensation) varsayilan degeri VE ayni [0,1] araligi BIREBIR bu.
+//
+// Bilincli olarak DAR kapsam (interp.hpp'nin "yalniz pozisyon+yaw tasir"
+// kaydiyla ayni ruh): yalniz KURE (merkez+yaricap) hitbox, silah/hasar/
+// oyun mantigi TASIMAZ — core/math/vec.hpp'nin Ray/Sphere kesisimiyle yalniz
+// "bu isin, bu zamanda, hangi izlenen hedefe carpti" sorusuna cevap verir.
 //
 // Ayirma yok (A2): kMaxTracks*kHistoryPerTrack sabit boyutlu, sinif icinde.
 #pragma once

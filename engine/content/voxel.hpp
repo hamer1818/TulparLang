@@ -1,19 +1,27 @@
 // L6 CONTENT — Voksel teknolojisi (500 madde listesi #453 "Voxel
-// Teknolojisi"): yogun 3B izgara + "gorunen yuz" yuzey cikarma (surface
-// extraction). Minecraft-tarzi ilk dilim, kasitli basit: greedy meshleme
-// (komsu es-duzlemsel yuzleri birlestirme) SONRAKI optimizasyon, burada YOK.
+// Teknolojisi"): yogun 3B izgara + AC GOZLU (greedy) yuzey cikarma.
+//
+// **SIFIRDAN TASARIM DEGIL, GERCEK bir teknigin PORTU:** Mikola Lysenko'nun
+// "Meshing in a Minecraft Game" (0fps.net, 2012) makalesinde tanimlanan,
+// voksel motorlari camiasinda FIILEN standart olan yontem -- her 3 eksende
+// ayri ayri, eksen boyunca KESIT KESIT (2B maske) taranir; ayni malzeme +
+// ayni yon'e sahip KOMSU hucreler TEK BUYUK dortgene birlestirilir (naif
+// "her voksel 6 birim yuz" yontemine kiyasla, duz/tekduze bolgelerde ucgen
+// sayisini ONEMLI OLCUDE azaltir). Isaretli maske hilesi (mask degeri:
+// +malzeme = pozitif-eksen-yonlu yuz, -malzeme = negatif-eksen-yonlu yuz,
+// 0 = yuz yok) de MAKALENIN AYNI tekniği -- TEK gecişte HER IKI yon islenir.
 //
 // Iki gecisli API (A2 ilkesi: ayirma yok) -- cagiran once count_voxel_mesh
-// ile TAM vertex/indeks sayisini ogrenir, kendi arenasindan ayirir, sonra
-// build_voxel_mesh doldurur. Cikan VoxelVertex duzeni (pos+normal+uv)
-// renderer::Vertex ile AYNI alan sirasina sahiptir (kasitli) -- cagiran
-// gerekirse dogrudan Renderer::create_mesh()'e kopyalayabilir, ama bu dosya
-// renderer/'a BAGIMLI DEGIL (content katmani render'i bilmez, PLAN.md katman
-// kurali).
+// ile TAM vertex/indeks sayisini ogrenir (greedy birlesimi BIR KEZ calistirip
+// SAYAR, yazMAZ), kendi arenasindan ayirir, sonra build_voxel_mesh (AYNI
+// birlesimi bir KEZ DAHA calistirip bu sefer YAZAR) doldurur -- iki gecis de
+// ayni mask_scratch tamponunu (cagiranin ayirdigi, voxel_mesh_mask_capacity()
+// buyuklugunde) YENIDEN KULLANIR, deterministik ve ayirmasiz.
 //
-// Yuz tablosu (normal+teget eksenler) renderer::Renderer::cube()'daki AYNI,
-// KANITLANMIS sarma (winding) sirasini kullanir -- voksel meshleme icin
-// yeniden turetmeye GEREK yok, ayni pipeline'da AYNI on-yuz kurali gecerli olur.
+// Cikan VoxelVertex duzeni (pos+normal+uv) renderer::Vertex ile AYNI alan
+// sirasina sahiptir (kasitli) -- cagiran gerekirse dogrudan
+// Renderer::create_mesh()'e kopyalayabilir; bu dosya renderer/'a BAGIMLI
+// DEGIL (content katmani render'i bilmez, PLAN.md katman kurali).
 #pragma once
 #include <cstdint>
 
@@ -46,9 +54,23 @@ struct VoxelMeshCounts {
   uint32_t indices = 0;  // ayni sekilde TAM uint32_t indeks sayisi
 };
 
-VoxelMeshCounts count_voxel_mesh(const VoxelGrid &grid);
+// mask_scratch icin GEREKEN EN AZ int16_t eleman sayisi (3 eksenin en genis
+// kesitinin alani -- her eksen taramasi kendi kesit boyutunu kullanir,
+// ucu de bu tek tamponu SIRAYLA yeniden kullanir).
+inline uint32_t voxel_mesh_mask_capacity(const VoxelGrid &g) {
+  uint32_t m = g.nx * g.ny;
+  if (g.ny * g.nz > m) m = g.ny * g.nz;
+  if (g.nz * g.nx > m) m = g.nz * g.nx;
+  return m;
+}
+
+// mask_scratch: cagiranin ONCEDEN ayirdigi, en az voxel_mesh_mask_capacity(grid)
+// int16_t'lik gecici alan (bu fonksiyon SIFIRLAMAYA GEREK DUYMADAN kendi
+// yazdigi her hucreyi kullanmadan once BASTAN doldurur).
+VoxelMeshCounts count_voxel_mesh(const VoxelGrid &grid, int16_t *mask_scratch);
 // verts/indices: count_voxel_mesh() sonucuna gore cagiranin ONCEDEN ayirdigi
-// tam boyutlu diziler (bu fonksiyon ayirma yapmaz).
-void build_voxel_mesh(const VoxelGrid &grid, VoxelVertex *verts, uint32_t *indices);
+// tam boyutlu diziler. mask_scratch: count_voxel_mesh ile AYNI kurallar
+// (icerigi bu iki cagri arasinda ANLAMSIZ, temizlemeye GEREK YOK).
+void build_voxel_mesh(const VoxelGrid &grid, int16_t *mask_scratch, VoxelVertex *verts, uint32_t *indices);
 
 } // namespace tulpar::engine::content
