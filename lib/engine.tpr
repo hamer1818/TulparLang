@@ -168,6 +168,45 @@ func overlap_dist(i): float { return eng_overlap_dist(i); }
 func en_yakin(x, y, z, r, atla): int { return eng_nearest(x, y, z, r, atla); }
 func nearest(x, y, z, r, skip): int { return eng_nearest(x, y, z, r, skip); }
 
+// ---- Çarpışma olayları ------------------------------------------------------
+// Motor geri çağrım (callback) veremiyor — bugünkü FFI onu taşımıyor. Onun
+// yerine KUYRUK: fizik adımında oluşan temaslar halkaya yazılır, oyun karede
+// okur. Tipik kullanım:
+//
+//     int n = carpisma_sayisi();
+//     for (int i = 0; i < n; i = i + 1) {
+//         if (carpisma_siddeti(i) > 5.0) { hasar_ver(carpisma_a(i)); }
+//     }
+//
+// `carpisma_dusen()` 0 değilse halka dolmuş ve olay KAYBEDİLMİŞ demektir;
+// sessizce kırpılmıyor, motor da her karede bir kez hata logluyor.
+func carpisma_sayisi(): int { return eng_collision_count(); }
+func collision_count(): int { return eng_collision_count(); }
+func carpisma_dusen(): int { return eng_collision_dropped(); }
+func collision_dropped(): int { return eng_collision_dropped(); }
+func carpisma_a(i): int { return eng_collision_a(i); }
+func collision_a(i): int { return eng_collision_a(i); }
+func carpisma_b(i): int { return eng_collision_b(i); }
+func collision_b(i): int { return eng_collision_b(i); }
+func carpisma_sahne_a(i): int { return eng_collision_scene_a(i); }
+func collision_scene_a(i): int { return eng_collision_scene_a(i); }
+func carpisma_sahne_b(i): int { return eng_collision_scene_b(i); }
+func collision_scene_b(i): int { return eng_collision_scene_b(i); }
+func carpisma_x(i): float { return eng_collision_x(i); }
+func collision_x(i): float { return eng_collision_x(i); }
+func carpisma_y(i): float { return eng_collision_y(i); }
+func collision_y(i): float { return eng_collision_y(i); }
+func carpisma_z(i): float { return eng_collision_z(i); }
+func collision_z(i): float { return eng_collision_z(i); }
+func carpisma_nx(i): float { return eng_collision_nx(i); }
+func collision_nx(i): float { return eng_collision_nx(i); }
+func carpisma_ny(i): float { return eng_collision_ny(i); }
+func collision_ny(i): float { return eng_collision_ny(i); }
+func carpisma_nz(i): float { return eng_collision_nz(i); }
+func collision_nz(i): float { return eng_collision_nz(i); }
+func carpisma_siddeti(i): float { return eng_collision_speed(i); }
+func collision_speed(i): float { return eng_collision_speed(i); }
+
 // Yerde mi — ışınla: varlığın ALTINDAN (merkez - `alt`) aşağı `mesafe` kadar
 // ışın atar. `yerde()`nin dikey hız tahmininden sağlamdır (kutu üstünde
 // duruyorken de doğru). `alt` gövdenin yarı yüksekliği + küçük pay olmalı ki

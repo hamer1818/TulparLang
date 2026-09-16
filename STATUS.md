@@ -38,7 +38,12 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > **GI sondaları**), **Faz 9** (küme DAG builder, GPU cull + dolaylı çizim).
 > Kapılar (kaynaktan): `engine/tests/*.cpp` **141 `ENGINE_TEST`**, Tulpar tarafında
 > `tests/engine_bridge.test.tpr` **17** test, katman denetimi **159 dosya / 0 ihlal**.
-> Tam koşu (2026-09-16): `engine_tests` **149/149, 0 atlandı**, `./build.sh suites` **82/82**,
+> **Çarpışma olayları geldi (2026-09-16).** Köprü "neye çarptım"ı yalnız sorguyla verebiliyordu;
+> FFI geri çağrım taşımadığı için çözüm **kuyruk** oldu: fizik adımındaki temaslar sabit boy halkaya
+> yazılıyor, oyun karede okuyor. Ayırma yok, kilit yok (atomik yuva rezervasyonu), taşma **görünür**
+> (`carpisma_dusen()` sayar, motor karede bir kez loglar). Köprü **169 builtin**.
+>
+> Tam koşu (2026-09-16): `engine_tests` **164/164, 0 atlandı**, `./build.sh suites` **84/84**,
 > `./build.sh test` yeşil.
 >
 > **Faz 6 kalanı kapandı:** PBR (Cook-Torrance/GGX; glTF metallic/roughness artık malzemeye akıyor —

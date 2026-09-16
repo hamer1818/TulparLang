@@ -16,6 +16,10 @@ struct PhysicsConfig {
   uint32_t max_bodies = 1024;
   uint32_t max_body_pairs = 1024;
   uint32_t max_contacts = 1024;
+  // Bir karede tutulacak TEMAS OLAYI sayisi. Halka dolarsa olaylar DUSER ve
+  // `contact_overflow()` artar — sessizce kirpilmaz; kirpilma gorunur olmazsa
+  // oyun "carpma gelmedi" sanip yanlis mantik kurar.
+  uint32_t max_contact_events = 256;
   uint32_t temp_bytes = 8u << 20; // Jolt gecici ayirici (adim ici yigin)
   uint32_t threads = 0;           // Jolt thread havuzu icin (jobs == nullptr ise): 0 = donanim-1
   JobSystem *jobs = nullptr;      // verilirse Jolt job'lari BIZIM fiber job sisteminde kosar
@@ -36,6 +40,21 @@ struct RayHit {
   float distance = 0;
   Vec3 point{};
   Vec3 normal{};
+};
+
+// TEMAS OLAYI. Oyun tarafinin en cok istedigi sey "neye carptim": kopru
+// bugune kadar bunu yalnizca SORGUYLA (isin/ortusme) verebiliyordu, cunku
+// bugunku FFI callback tasimyor. Cozum callback degil KUYRUK: fizik adiminda
+// olusan temaslar sabit boy bir halkaya yazilir, oyun kareyi cizerken okur.
+//
+// `speed`: temas noktasindaki GORELI hizin normal boyu (m/s). "Sert carpma mi"
+// sorusunun cevabi bu; Jolt manifoldu itkiyi vermiyor, ama goreli hiz cozumden
+// ONCE dogru buyuklugu tasiyor ve belirlenimli.
+struct ContactEvent {
+  BodyId a{}, b{};
+  Vec3 point{};  // dunya uzayinda temas noktasi
+  Vec3 normal{}; // a'dan b'ye bakan yuzey normali
+  float speed = 0;
 };
 
 struct PhysicsStats {
@@ -68,6 +87,16 @@ public:
   Vec3 linear_velocity(BodyId id) const;
   void set_linear_velocity(BodyId id, Vec3 v);
   bool is_active(BodyId id) const;
+
+  // --- Temas olaylari ---------------------------------------------------
+  // `step()` sirasinda DOLDURULUR (Jolt geri cagrimlari is parcaciklarindan
+  // gelir; halkaya yazma atomik). Kendiliginden TEMIZLENMEZ: cagiran her kare
+  // `clear_contacts()` cagirir, boylece bir karede birden fazla adim atilsa da
+  // olaylar birikir ve hicbiri kaybolmaz.
+  uint32_t contact_count() const;
+  ContactEvent contact(uint32_t i) const;
+  uint32_t contact_overflow() const; // halkaya sigmayip DUSEN olay sayisi
+  void clear_contacts();
 
   // Belirlenimlilik olcusu: tum govdelerin konum/donus bitleri (FNV-1a).
   uint64_t state_hash() const;

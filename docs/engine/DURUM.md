@@ -114,19 +114,23 @@ Ayrıntı: [FAZ3.md](FAZ3.md) "Faz 6 kalanı + Faz 8 fizibilitesi", tuzaklar 8aq
 | Faz 0 — Ölçüm ve Temel | ✅ kapandı | `FAZ0.md`; kare içinde 0 ayırma, pozitif kontrollü |
 | Faz 1 — RHI, ilk piksel, Android host | 🟡 yazılım tarafı bitti | Kapı ("G-buffer DRAM'e inmedi", 3 cihaz) **cihaz bekliyor**; Kotlin host/JNI iskeleti derlenmedi (SDK yok) |
 | Faz 2 — Simülasyon | ✅ yazılım tarafı kapandı | ECS, zamanlayıcı, Jolt, navmesh, animasyon, replay bit eşit |
-| Faz 3 — Renderer çekirdeği | 🟡 cihaz gerektirmeyen kalemler kapandı | CSM, paketlenmiş vertex, render graph + bloom, kümelenmiş ışık, sRGB, skinning. **Açık:** bandwidth < 8 GB/s (3 cihaz), vis buffer A/B, VRS/FDM, PBR |
+| Faz 3 — Renderer çekirdeği | 🟡 cihaz gerektirmeyen kalemler kapandı | CSM, paketlenmiş vertex, render graph + bloom, kümelenmiş ışık, sRGB, skinning, **PBR (dokular dahil)**. **Açık:** bandwidth < 8 GB/s (3 cihaz), vis buffer A/B, VRS/FDM |
 | Faz 4 — UI ve Ses | ✅ kapı geçildi | UI: tek batch, opak-önce, retained, SDF, **ölçülmüş overdraw**, < 1,5 ms. Ses: uzamsal + DSP + oklüzyon. **Açık:** çok dilli metin shaping, gerçek HRTF |
 | Faz 5 — Temporal | 🟡 yazılım tarafı bitti | Jitter, hareket vektörü, dinamik çözünürlük, yükseltici arayüzü — hepsi varsayılan kapalı. Kapı (10 dk sustained, 99p < 18 ms, 3 cihaz) **cihaz bekliyor** |
-| Faz 6 — İçerik boru hattı | 🟡 büyük kısmı bitti | `.tpak` + delta yama + önbellek, blob v2/v3/v4 (yerleşik küme, navmesh, küme DAG, **GI sondaları**), KTX2 kopyasız, cihaz sınıfı başına bake. **Açık:** PSO üretimi, virtual texture, mağaza/servis kalemleri (hesap gerekiyor) |
+| Faz 6 — İçerik boru hattı | 🟡 büyük kısmı bitti | `.tpak` + delta yama + önbellek, blob v2/v3/v4 (yerleşik küme, navmesh, küme DAG, **GI sondaları**), KTX2 kopyasız, cihaz sınıfı başına bake. **PSO ön-üretimi geldi** (VkPipelineCache + diske kalıcılık; Android'de ölçülen kazanç 6.5 → 1.1 ms). **Açık:** virtual texture, mağaza/servis kalemleri (hesap gerekiyor) |
 | Faz 7 — İlk oyunun dikey dilimi | 🟡 oynanabilir dilim var | "Gölge Salonları" (`engine_aksiyon.tpr`) + oyun kabuğu. **Açık:** cihazda perf CI (3 cihaz) |
-| Faz 8 — Tulpar shader stage | ⛔ başlanmadı | Önkoşul PLAN §11 dil alt kümesi (kutusuz struct, işaretçi, atomik); shader'lar GLSL'de |
+| Faz 8 — Tulpar shader stage | 🟡 8.0 fizibilite + 8.1 gramer + 8.4 yerleşim geldi | Backend kararı **GLSL + glslc** (⚠️ REV-4). 21 shader'ın 19'u Tulpar alt kümesine taşındı, SPIR-V'leri bayt aynı; bit işlemleri/`T[N]`/`const` dile girdi (18/19 ayrışıyor); CPU-GPU yerleşim doğrulaması koşuyor. **Açık:** 8.2 GPU tip sistemi (= PLAN §11 sistem alt kümesi), `uint`, 8.5 permutation/reflection |
 | Faz 9 — Cluster geometri, VSM, tooling | 🟡 iki dilim geldi | Küme DAG builder + GPU cull/indirect (varsayılan kapalı), editör. **Açık:** VSM, üçgen/piksel oranı ölçümü |
 | Faz 10 — Metal / iOS | ⛔ başlanmadı | Mac + geliştirici hesabı gerekiyor |
 
 ## 6.1 Ne yok (sonraki aşama adayları; tarama belgesine karşı tam liste: `BOSLUK-TARAMASI.md`)
 1. ~~Sahne veri modeli + dosya formatı~~ ✅, ~~runtime blob derleyici~~ ✅, ~~bake çıktıları blob'a (navmesh, ışık haritası)~~ ✅ 2026-09-15 (navmesh v2, küme DAG v3, GI sondası v4). Kalan: **telefon demosunda blob**.
 2. ~~**Editör**~~ ✅ çoklu seçim, kaynak tarayıcı, ışık/gölge/güneş gizmoları geldi. Kalan: oynat/durdur sim geri sarımı, implot ile kare zamanı grafiği.
-3. ~~**Tulpar bağlaması**~~ ✅ 2026-09-15: `engine/bridge/` + `lib/engine.tpr` + üç örnek oyun; köprü **156 builtin** (ses, animasyon, navmesh, ışın/örtüşme sorguları, anlık-kip arayüz, kalıcı kayıt, sıcak yükleme dahil — bkz. [KOPRU.md](KOPRU.md)). Kalan: **çarpışma olayı yok** (callback FFI gelene kadar sorgu), ajan/yol takibi köprüde yok.
+3. ~~**Tulpar bağlaması**~~ ✅ 2026-09-15: `engine/bridge/` + `lib/engine.tpr` + üç örnek oyun; köprü **169 builtin** (ses, animasyon, navmesh, ışın/örtüşme sorguları, anlık-kip arayüz, kalıcı kayıt, sıcak yükleme, **çarpışma olayları** dahil — bkz. [KOPRU.md](KOPRU.md)).
+   **Çarpışma olayı geldi (2026-09-16):** callback FFI olmadığı için geri çağrım değil **kuyruk** — fizik
+   adımında oluşan temaslar sabit boy halkaya yazılır, oyun karede okur. Halka dolarsa olaylar sessizce
+   kırpılmaz, `carpisma_dusen()` sayar ve motor karede bir kez hata logluyor. Kalan: ajan/yol takibi
+   köprüde yok.
 4. Karakter modeli yok (iskelet/animasyon içe aktarma ve GPU skinning var; sanatçı varlığı gerek).
 5. PBR, vis buffer A/B, VRS/FDM, VSM, virtual texture, PSO üretimi, gerçek HRTF/Steam Audio,
    GameActivity göçü, Memory Advice, mağaza/servis kalemleri (hesap gerekiyor),

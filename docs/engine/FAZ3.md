@@ -1183,6 +1183,44 @@ Yani Faz 8'i kritik yoldan çıkaran karar hâlâ doğru.
 `engine_tests` **149/149, 0 atlandı**; `./build.sh suites` **82/82**; `./build.sh test` yeşil.
 Emülatörde "Gölge Salonları" PBR ve kalıcı PSO önbelleğiyle çalışıyor.
 
+## Çarpışma olayları — köprünün oyun tarafındaki son büyük boşluğu — 2026-09-16
+
+Köprü bugüne kadar "neye çarptım" sorusunu yalnızca **sorguyla** (ışın/örtüşme) cevaplayabiliyordu; bir
+oyun motoru için bu eksik. Engel şuydu: bugünkü FFI **geri çağrım taşımıyor** (düz skaler ABI).
+
+Çözüm callback değil **kuyruk**. `sim::Physics` artık Jolt'un `ContactListener`'ını taşıyor ve fizik
+adımında oluşan temasları sabit boy bir halkaya yazıyor; oyun kareyi çizerken okuyor. Halka arenada,
+kapasite init'te sabit, **ayırma yok**. Jolt geri çağrımları iş parçacıklarından ve eş zamanlı geldiği için
+yazma atomik (her yazar kendi yuvasını rezerve eder) — kilit yok, çünkü fizik adımında kilit beklemek adımı
+serileştirirdi.
+
+**Kalıcı temaslar kaydedilmiyor**, yalnız yeni temaslar: bir kutunun zeminde durması her adımda olay
+üretirdi ve halka tek karede dolardı. Oyunun sorduğu soru "ne zaman çarptım"; "hâlâ değiyor muyum" için
+örtüşme sorgusu zaten var.
+
+**Sessiz kırpılma yok.** Halka dolarsa olaylar düşer ve `contact_overflow()` sayar; köprü bunu her karede
+bir kez hata olarak logluyor. Sessiz kırpılma, oyunun "çarpma gelmedi" sanıp yanlış mantık kurması demekti
+ve hiçbir şey kızarmazdı.
+
+Köprü tarafı 13 builtin (`eng_collision_count/dropped/a/b/scene_a/scene_b/x/y/z/nx/ny/nz/speed`), toplam
+**169**. Şiddet ölçüsü olarak temas noktasındaki **normal boyu göreli hız** veriliyor: Jolt manifoldu itki
+taşımıyor, göreli hız çözümden önce doğru büyüklüğü veriyor ve belirlenimli.
+
+**Sıra bir kez yanlış kuruldu ve uçtan uca test yakaladı.** Halka önce `teng_frame_begin`'de
+temizleniyordu; oysa fizik `teng_frame_end` içinde adımlanıyor, yani olaylar önceki karenin sonunda
+oluşuyor ve kare başındaki temizlik onları oyun okumadan siliyordu. Belirti öğreticiydi: **C++ kapısı
+olayları görüyordu, Tulpar tarafı "0 çarpışma" diyordu** — aynı kodun iki ucu farklı cevap veriyordu.
+Temizlik adımlardan hemen öncesine alındı.
+
+**Kapılar (ikisi de kontrollü):**
+- C++ `physics_contact_events_fire_with_speed`: 4 m'den bırakılan küre 52. karede zemine çarpıyor,
+  şiddet 8.32 m/s, temas noktası y≈0, normal y=1. **Kontrol 1**: zeminsiz serbest düşüş **0 olay**
+  (bu olmadan kapı "adım koştu" ile "çarpma oldu"yu ayırt edemezdi). **Kontrol 2**: halka 1 yuvaya
+  düşürülünce görülen 1, **düşen 11** — taşma görünür. Ayrıca belirlenimlilik: aynı kurulum aynı kare,
+  aynı hız bitleri.
+- Tulpar `tests/engine_bridge.test.tpr`: 6 m'den bırakılan küre, ölçülen şiddet **10.34 m/s**, analitik
+  `sqrt(2·9.81·5.5) ≈ 10.39`. Kontrol olarak zemin silinip küre ışınlanınca 60 karede **0 olay**.
+
 ## Faz 3 kapanış durumu — ne kapandı, ne açık (2026-09-15)
 
 **Kapı sayımı (kaynaktan):** `engine/tests/*.cpp` içinde **141 `ENGINE_TEST` bloğu** tanımlı (masaüstü);

@@ -131,7 +131,7 @@ Kapıların kontrolleri: kutu **zeminli** y=0.480 / **zeminsiz** y=−15.13; sah
 37 402 piksel fark, **iki boş kare arasında 0** (yazıcı sabit çıktı vermiyor); ölü id çağrısı hata sayacını
 **tam bir** artırır, canlı id **artırmaz**; geçersiz tuş adı hata, geçerli ad sessiz.
 
-## 8. Kapsam: `SPEC` = `engine_api.h` = **156 builtin**
+## 8. Kapsam: `SPEC` = `engine_api.h` = **169 builtin**
 
 Sayı iki yerde birden durur ve birbirine karşı denetlenebilir: `engine/bridge/engine_api.h`'deki `teng_*`
 bildirimleri ve `engine/tools/gen_engine_bindings.py`'deki `SPEC` satırları. Aile dağılımı (başlıktaki

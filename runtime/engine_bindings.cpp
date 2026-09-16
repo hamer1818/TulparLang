@@ -415,6 +415,45 @@ VMValue aot_eng_overlap_dist_ptr(VMValue *i) {
 VMValue aot_eng_nearest_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *radius, VMValue *skip_id) {
   return VM_INT((int64_t)teng_nearest(tm_num(x), tm_num(y), tm_num(z), tm_num(radius), (int)tm_int(skip_id)));
 }
+VMValue aot_eng_collision_count_ptr(void) {
+  return VM_INT((int64_t)teng_collision_count());
+}
+VMValue aot_eng_collision_dropped_ptr(void) {
+  return VM_INT((int64_t)teng_collision_dropped());
+}
+VMValue aot_eng_collision_a_ptr(VMValue *i) {
+  return VM_INT((int64_t)teng_collision_a((int)tm_int(i)));
+}
+VMValue aot_eng_collision_b_ptr(VMValue *i) {
+  return VM_INT((int64_t)teng_collision_b((int)tm_int(i)));
+}
+VMValue aot_eng_collision_scene_a_ptr(VMValue *i) {
+  return VM_INT((int64_t)teng_collision_scene_a((int)tm_int(i)));
+}
+VMValue aot_eng_collision_scene_b_ptr(VMValue *i) {
+  return VM_INT((int64_t)teng_collision_scene_b((int)tm_int(i)));
+}
+VMValue aot_eng_collision_x_ptr(VMValue *i) {
+  return VM_FLOAT(teng_collision_x((int)tm_int(i)));
+}
+VMValue aot_eng_collision_y_ptr(VMValue *i) {
+  return VM_FLOAT(teng_collision_y((int)tm_int(i)));
+}
+VMValue aot_eng_collision_z_ptr(VMValue *i) {
+  return VM_FLOAT(teng_collision_z((int)tm_int(i)));
+}
+VMValue aot_eng_collision_nx_ptr(VMValue *i) {
+  return VM_FLOAT(teng_collision_nx((int)tm_int(i)));
+}
+VMValue aot_eng_collision_ny_ptr(VMValue *i) {
+  return VM_FLOAT(teng_collision_ny((int)tm_int(i)));
+}
+VMValue aot_eng_collision_nz_ptr(VMValue *i) {
+  return VM_FLOAT(teng_collision_nz((int)tm_int(i)));
+}
+VMValue aot_eng_collision_speed_ptr(VMValue *i) {
+  return VM_FLOAT(teng_collision_speed((int)tm_int(i)));
+}
 VMValue aot_eng_nav_ok_ptr(void) {
   return VM_BOOL(teng_nav_ok() != 0);
 }

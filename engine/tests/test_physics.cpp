@@ -174,3 +174,112 @@ ENGINE_TEST(physics_raycast_hits_known_geometry) {
   CHECK(!ph.raycast({0, 0, 0}, {0, 0, -1}, 0.0f, &miss));
   ph.shutdown();
 }
+
+// TEMAS OLAYLARI — fizik adiminda olusan carpmalar kuyruga dusuyor mu.
+//
+// NEDEN: koprunun oyun tarafindaki en buyuk boslugu "neye carptim" idi. Bugunku
+// FFI callback tasimadigi icin cozum kuyruk; bu kapi kuyrugun GERCEKTEN dolup
+// dogru sayilari tasidigini olcuyor. Kontrolsuz bir "olay geldi" iddiasi,
+// Jolt'un her adimda urettigi gurultuyu de yesil sayardi.
+ENGINE_TEST(physics_contact_events_fire_with_speed) {
+  static SystemArena sys;
+  if (sys.capacity() == 0) sys.reserve(32u << 20, "contact");
+
+  // --- URUN: yukaridan birakilan kure zemine carpiyor --------------------
+  Physics ph;
+  PhysicsConfig cfg;
+  cfg.threads = 1; // belirlenimli sayi icin tek parcacik
+  CHECK(ph.init(sys, cfg));
+  ph.add_box({20, 1, 20}, {0, -1, 0}, Quat::identity(), false); // zemin
+  BodyId top = ph.add_sphere(0.5f, {0, 4.0f, 0}, true);
+  CHECK(top.valid());
+
+  uint32_t ilk_kare = 0;
+  float carpma_hizi = 0;
+  Vec3 carpma_noktasi{};
+  Vec3 carpma_normali{};
+  for (int i = 0; i < 240 && ilk_kare == 0; i++) {
+    ph.clear_contacts();
+    ph.step(1.0f / 60.0f);
+    if (ph.contact_count() > 0) {
+      ilk_kare = (uint32_t)i + 1;
+      const ContactEvent e = ph.contact(0);
+      carpma_hizi = e.speed;
+      carpma_noktasi = e.point;
+      carpma_normali = e.normal;
+    }
+  }
+  CHECK(ilk_kare > 0);
+
+  // Serbest dusus: 4 m yukseklikten 0.5 yaricapli kure ~2.5 m duser.
+  // v = sqrt(2*g*h) ~= sqrt(2*9.81*2.5) ~= 7.0 m/s. Genis ama KOR OLMAYAN
+  // aralik: sifir ya da sacma bir sayi gecemez.
+  bool hiz_makul = carpma_hizi > 3.0f && carpma_hizi < 12.0f;
+  CHECK(hiz_makul);
+  // Temas zeminin ustunde (y ~= 0) ve normal dusey olmali.
+  bool nokta_makul = carpma_noktasi.y > -0.6f && carpma_noktasi.y < 0.6f;
+  CHECK(nokta_makul);
+  const float ny = carpma_normali.y < 0 ? -carpma_normali.y : carpma_normali.y;
+  CHECK(ny > 0.9f);
+  std::printf("    [bilgi] ilk temas kare %u: hiz %.2f m/s (serbest dusus ~7.0), nokta y %.3f, normal y %.3f\n",
+              ilk_kare, (double)carpma_hizi, (double)carpma_noktasi.y, (double)ny);
+
+  // --- KONTROL 1: hicbir seye degmeyen govde OLAY URETMEMELI -------------
+  // Bu olmadan kapi "adim kostu" ile "carpma oldu"yu ayirt edemezdi.
+  Physics bos;
+  PhysicsConfig bcfg;
+  bcfg.threads = 1;
+  CHECK(bos.init(sys, bcfg));
+  bos.add_sphere(0.5f, {0, 50.0f, 0}, true); // zemin YOK, serbest dusuyor
+  uint32_t bos_olay = 0;
+  for (int i = 0; i < 120; i++) {
+    bos.clear_contacts();
+    bos.step(1.0f / 60.0f);
+    bos_olay += bos.contact_count();
+  }
+  CHECK(bos_olay == 0);
+  std::printf("    [bilgi] KONTROL zeminsiz serbest dusus: %u olay (0 olmali)\n", bos_olay);
+
+  // --- KONTROL 2: halka dolunca DUSEN olay SAYILIYOR mu ------------------
+  // Sessiz kirpilma, oyunun "carpma gelmedi" sanmasi demek olurdu.
+  Physics dar;
+  PhysicsConfig dcfg;
+  dcfg.threads = 1;
+  dcfg.max_contact_events = 1; // bilerek yetersiz
+  CHECK(dar.init(sys, dcfg));
+  dar.add_box({20, 1, 20}, {0, -1, 0}, Quat::identity(), false);
+  for (int i = 0; i < 12; i++) dar.add_sphere(0.4f, {i * 1.0f - 5.5f, 1.0f, 0}, true);
+  uint32_t tasma = 0, gorulen = 0;
+  for (int i = 0; i < 180 && tasma == 0; i++) {
+    dar.clear_contacts();
+    dar.step(1.0f / 60.0f);
+    gorulen = dar.contact_count();
+    tasma = dar.contact_overflow();
+  }
+  CHECK(tasma > 0);
+  CHECK(gorulen <= 1);
+  std::printf("    [bilgi] KONTROL halka 1 yuva: gorulen %u, DUSEN %u (tasma gorunur)\n", gorulen, tasma);
+
+  // --- BELIRLENIMLILIK: ayni kurulum ayni sayiyi vermeli -----------------
+  Physics tekrar;
+  PhysicsConfig rcfg;
+  rcfg.threads = 1;
+  CHECK(tekrar.init(sys, rcfg));
+  tekrar.add_box({20, 1, 20}, {0, -1, 0}, Quat::identity(), false);
+  tekrar.add_sphere(0.5f, {0, 4.0f, 0}, true);
+  uint32_t r_kare = 0;
+  float r_hiz = 0;
+  for (int i = 0; i < 240 && r_kare == 0; i++) {
+    tekrar.clear_contacts();
+    tekrar.step(1.0f / 60.0f);
+    if (tekrar.contact_count() > 0) { r_kare = (uint32_t)i + 1; r_hiz = tekrar.contact(0).speed; }
+  }
+  bool ayni = r_kare == ilk_kare && r_hiz == carpma_hizi;
+  CHECK(ayni);
+  std::printf("    [bilgi] belirlenimlilik: kare %u==%u, hiz bitleri %s\n", r_kare, ilk_kare,
+              r_hiz == carpma_hizi ? "AYNI" : "FARKLI");
+  ph.shutdown();
+  bos.shutdown();
+  dar.shutdown();
+  tekrar.shutdown();
+}

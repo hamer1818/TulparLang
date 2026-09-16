@@ -345,6 +345,7 @@ struct Bridge {
   float ray_dist = -1;
   Vec3 ray_point{0, 0, 0}, ray_normal{0, 0, 0};
   int ray_id = 0, ray_scene = -1;
+  uint32_t collision_warn_frame = 0xFFFFFFFFu; // tasma uyarisi kare basina bir kez
   struct OverlapHit { int id; float dist; };
   OverlapHit ovl[kMaxOverlap];
   uint32_t ovl_n = 0;
@@ -880,6 +881,15 @@ void teng_frame_end(void) {
   {
     ENGINE_ZONE("sim");
     const uint32_t ticks = b.fs.advance(b.dt);
+    // Carpisma halkasi ADIMLARDAN HEMEN ONCE temizlenir, kare basinda DEGIL.
+    // Sira onemli ve bir kez yanlis kuruldu: fizik `teng_frame_end` icinde
+    // adimlaniyor, yani olaylar ONCEKI karenin sonunda olusuyor; kare basinda
+    // temizlemek onlari oyun okumadan siliyordu (olculdu: Tulpar tarafi
+    // "0 carpisma" goruyordu, C++ kapisi ise olaylari goruyordu — ayni kodun
+    // iki ucu farkli cevap veriyordu).
+    // Buradaki temizlik, olaylarin "son adimda olusanlar" olmasini saglar ve
+    // oyun onlari SONRAKI kare boyunca istedigi anda okuyabilir.
+    b.phys.clear_contacts();
     for (uint32_t t = 0; t < ticks; t++) { b.phys.step(b.fs.step_s, 1); b.tick++; }
     if (ticks == b.fs.max_ticks_per_frame) BDBG("kare %u: sim %u tick ile kirpildi (dt %.3f)", b.frame, ticks, b.dt);
   }
@@ -2084,6 +2094,78 @@ int teng_nearest(double x, double y, double z, double radius, int skip_id) {
 // --- navmesh (sahne blob'undaki bake; runtime yalniz sorgular) -------------------
 int teng_nav_ok(void) { return g && g->nav_ok ? 1 : 0; }
 int teng_nav_polys(void) { return g && g->nav_ok ? (int)g->nav.polys() : 0; }
+// --- Carpisma olaylari -------------------------------------------------------
+// Kuyruk okumasi: gecersiz indis SESSIZCE 0 donmez, hata loglar. Bir oyun
+// donguyu yanlis sinirlarsa bunu gormeli; sessiz 0 "carpma yok" gibi okunur.
+static const sim::ContactEvent *contact_at(const char *who, int i) {
+  if (!ready(who)) return nullptr;
+  const uint32_t n = g->phys.contact_count();
+  if (i < 0 || (uint32_t)i >= n) {
+    BERR("%s: carpisma dizini %d sinir disi (%u olay)", who, i, n);
+    return nullptr;
+  }
+  static sim::ContactEvent tmp;
+  tmp = g->phys.contact((uint32_t)i);
+  return &tmp;
+}
+int teng_collision_count(void) {
+  if (!ready("teng_collision_count")) return 0;
+  const uint32_t n = g->phys.contact_count();
+  const uint32_t d = g->phys.contact_overflow();
+  // Tasma BIR KEZ degil, oldugu her karede loglanir: sessiz kirpilma bu
+  // koprude en pahali hata sinifi olurdu (oyun "carpma gelmedi" sanir).
+  if (d && g->frame != g->collision_warn_frame) {
+    g->collision_warn_frame = g->frame;
+    BERR("teng_collision_count: %u carpisma olayi DUSTU (halka %u yuva) — kapasiteyi buyut ya da daha erken tuket", d, n);
+  }
+  return (int)n;
+}
+int teng_collision_dropped(void) { return g ? (int)g->phys.contact_overflow() : 0; }
+int teng_collision_a(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_a", i);
+  return e ? ent_id_of_body(e->a) : 0;
+}
+int teng_collision_b(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_b", i);
+  return e ? ent_id_of_body(e->b) : 0;
+}
+int teng_collision_scene_a(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_scene_a", i);
+  return e ? scene_idx_of_body(e->a) : -1;
+}
+int teng_collision_scene_b(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_scene_b", i);
+  return e ? scene_idx_of_body(e->b) : -1;
+}
+double teng_collision_x(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_x", i);
+  return e ? e->point.x : 0.0;
+}
+double teng_collision_y(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_y", i);
+  return e ? e->point.y : 0.0;
+}
+double teng_collision_z(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_z", i);
+  return e ? e->point.z : 0.0;
+}
+double teng_collision_nx(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_nx", i);
+  return e ? e->normal.x : 0.0;
+}
+double teng_collision_ny(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_ny", i);
+  return e ? e->normal.y : 0.0;
+}
+double teng_collision_nz(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_nz", i);
+  return e ? e->normal.z : 0.0;
+}
+double teng_collision_speed(int i) {
+  const sim::ContactEvent *e = contact_at("teng_collision_speed", i);
+  return e ? e->speed : 0.0;
+}
+
 int teng_nav_partial(void) { return g && g->nav_partial ? 1 : 0; }
 int teng_nav_path(double fx, double fy, double fz, double tx, double ty, double tz) {
   CALLF("teng_nav_path", "(%.2f %.2f %.2f) -> (%.2f %.2f %.2f)", fx, fy, fz, tx, ty, tz);

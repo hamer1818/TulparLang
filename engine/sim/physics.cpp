@@ -13,6 +13,7 @@
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/RayCast.h>
@@ -165,6 +166,61 @@ inline JPH::Quat to_jph(Quat q) { return JPH::Quat(q.x, q.y, q.z, q.w); }
 inline Vec3 from_jph(JPH::Vec3 v) { return Vec3{v.GetX(), v.GetY(), v.GetZ()}; }
 inline Quat from_jph(JPH::Quat q) { return Quat{q.GetX(), q.GetY(), q.GetZ(), q.GetW()}; }
 
+// TEMAS DINLEYICISI. Jolt bu geri cagrimlari IS PARCACIKLARINDAN ve es zamanli
+// cagirir, yani halka yazimi atomik olmak zorunda: her yazar `next_` uzerinden
+// kendi yuvasini rezerve eder. Kilit YOK (fizik adiminda kilit beklemek adimi
+// serilestirirdi) ve AYIRMA yok (halka arena'da, kapasite init'te sabit).
+//
+// Halka dolunca olay DUSER ve `dropped_` artar. Bu sayac disari veriliyor:
+// sessiz kirpilma, oyunun "carpma gelmedi" sanip yanlis mantik kurmasi demek
+// olurdu ve hicbir sey kizarmazdi.
+class ContactRing final : public JPH::ContactListener {
+public:
+  void setup(ContactEvent *buf, uint32_t cap) { buf_ = buf; cap_ = cap; }
+  void clear() { next_.store(0, std::memory_order_relaxed); dropped_.store(0, std::memory_order_relaxed); }
+  uint32_t count() const {
+    const uint32_t n = next_.load(std::memory_order_acquire);
+    return n < cap_ ? n : cap_;
+  }
+  uint32_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
+  const ContactEvent &at(uint32_t i) const { return buf_[i]; }
+
+  void OnContactAdded(const JPH::Body &b1, const JPH::Body &b2, const JPH::ContactManifold &m,
+                      JPH::ContactSettings &) override {
+    record(b1, b2, m);
+  }
+  // Kalici temaslar KAYDEDILMIYOR: bir kutunun zeminde durmasi her adimda olay
+  // uretirdi ve halka tek karede dolardi. Oyunun sordugu soru "ne zaman
+  // carptim", "hala degiyor muyum" degil (onun icin ortusme sorgusu var).
+
+private:
+  void record(const JPH::Body &b1, const JPH::Body &b2, const JPH::ContactManifold &m) {
+    if (!buf_ || !cap_) return;
+    const uint32_t slot = next_.fetch_add(1, std::memory_order_acq_rel);
+    if (slot >= cap_) {
+      dropped_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    ContactEvent &e = buf_[slot];
+    e.a.v = b1.GetID().GetIndexAndSequenceNumber();
+    e.b.v = b2.GetID().GetIndexAndSequenceNumber();
+    e.point = from_jph(JPH::Vec3(m.GetWorldSpaceContactPointOn1(0)));
+    e.normal = from_jph(m.mWorldSpaceNormal);
+    // Carpma SIDDETI: temas noktasindaki goreli hizin normal boyu. Jolt
+    // manifoldu itki tasimiyor; goreli hiz cozumden ONCE dogru buyuklugu
+    // veriyor ve belirlenimli (ayni girdi ayni sayi).
+    const JPH::Vec3 p = JPH::Vec3(m.GetWorldSpaceContactPointOn1(0));
+    const JPH::Vec3 v1 = b1.GetPointVelocity(p);
+    const JPH::Vec3 v2 = b2.GetPointVelocity(p);
+    const float rel = (v2 - v1).Dot(m.mWorldSpaceNormal);
+    e.speed = rel < 0 ? -rel : rel;
+  }
+  ContactEvent *buf_ = nullptr;
+  uint32_t cap_ = 0;
+  std::atomic<uint32_t> next_{0};
+  std::atomic<uint32_t> dropped_{0};
+};
+
 uint64_t fnv1a(const void *p, size_t n, uint64_t h) {
   const uint8_t *b = static_cast<const uint8_t *>(p);
   for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 0x100000001b3ull; }
@@ -182,6 +238,7 @@ struct Physics::Impl {
   JPH::PhysicsSystem system;
   uint64_t allocs_before_step = 0;
   uint64_t allocs_last_step = 0;
+  ContactRing contacts;
 };
 
 bool Physics::init(Arena &arena, const PhysicsConfig &cfg) {
@@ -200,6 +257,12 @@ bool Physics::init(Arena &arena, const PhysicsConfig &cfg) {
   impl_->system.Init(cfg.max_bodies, 0, cfg.max_body_pairs, cfg.max_contacts, impl_->bp_iface,
                      impl_->obj_bp_filter, impl_->pair_filter);
   impl_->system.SetGravity(to_jph(cfg.gravity));
+  if (cfg.max_contact_events) {
+    void *cbuf = arena.alloc(sizeof(ContactEvent) * cfg.max_contact_events, alignof(ContactEvent));
+    if (!cbuf) return false;
+    impl_->contacts.setup(static_cast<ContactEvent *>(cbuf), cfg.max_contact_events);
+    impl_->system.SetContactListener(&impl_->contacts);
+  }
   return true;
 }
 
@@ -246,6 +309,16 @@ void Physics::step(float dt, int collision_steps) {
   impl_->system.Update(dt, collision_steps, impl_->temp, impl_->jobs);
   g_trace = false;
   impl_->allocs_last_step = g_allocs.load(std::memory_order_relaxed) - impl_->allocs_before_step;
+}
+
+uint32_t Physics::contact_count() const { return impl_ ? impl_->contacts.count() : 0; }
+uint32_t Physics::contact_overflow() const { return impl_ ? impl_->contacts.dropped() : 0; }
+ContactEvent Physics::contact(uint32_t i) const {
+  if (!impl_ || i >= impl_->contacts.count()) return ContactEvent{};
+  return impl_->contacts.at(i);
+}
+void Physics::clear_contacts() {
+  if (impl_) impl_->contacts.clear();
 }
 
 bool Physics::raycast(Vec3 origin, Vec3 dir, float max_distance, RayHit *hit) const {

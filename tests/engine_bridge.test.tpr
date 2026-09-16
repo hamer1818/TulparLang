@@ -593,6 +593,68 @@ func run_renk() {
     assert_eq_int(renk_a(0, 0, 0, 120), SEFFAF_SIYAH);
 }
 
+// Çarpışma olayları: köprü callback taşıyamadığı için KUYRUK. Bu kapı
+// kuyruğun gerçekten dolduğunu, doğru tarafları ve FİZİKSEL OLARAK DOĞRU bir
+// şiddeti taşıdığını ölçüyor — ve KONTROL olarak hiçbir şeye değmeyen bir
+// gövdenin olay üretmediğini.
+func run_carpisma() {
+    // Ürün: bilinen yükseklikten bırakılan küre zemine çarpar.
+    // v = sqrt(2*g*h); h = 6.0 - 0.5 (yarıçap) = 5.5 -> ~10.39 m/s.
+    int zemin = kutu(30.0, 0.0 - 1.0, 30.0, 6.0, 1.0, 6.0, false, renk(90, 90, 100));
+    int top = kure(30.0, 6.0, 30.0, 0.5, true, renk(220, 80, 60));
+    int olay = 0;
+    float en_sert = 0.0;
+    int a_taraf = 0;
+    int b_taraf = 0;
+    float ny = 0.0;
+    int i = 0;
+    int k = 0;
+    while (k < 200 && olay == 0) {
+        kare(1);
+        int n = carpisma_sayisi();
+        i = 0;
+        while (i < n) {
+            olay = olay + 1;
+            float sd = carpisma_siddeti(i);
+            if (sd > en_sert) {
+                en_sert = sd;
+                a_taraf = carpisma_a(i);
+                b_taraf = carpisma_b(i);
+                ny = carpisma_ny(i);
+            }
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    assert(olay > 0, "carpisma olayi gelmeliydi");
+    assert(en_sert > 8.0 && en_sert < 13.0, "carpma siddeti ~10.4 m/s olmali, " + toString(en_sert));
+    assert(a_taraf != 0 && b_taraf != 0, "iki taraf da kopru varligi olmali");
+    assert(a_taraf != b_taraf, "taraflar farkli olmali");
+    float mutlak_ny = ny;
+    if (mutlak_ny < 0.0) { mutlak_ny = 0.0 - mutlak_ny; }
+    assert(mutlak_ny > 0.9, "zemin carpmasinin normali dusey olmali, ny=" + toString(ny));
+    assert(carpisma_dusen() == 0, "halka tasmamali");
+    print("    [bilgi] carpisma: " + toString(olay) + " olay, siddet " + toString(en_sert)
+        + " m/s (analitik ~10.39), taraflar " + toString(a_taraf) + "/" + toString(b_taraf));
+
+    // KONTROL: zemini sil, küreyi yukarı ışınla — hiçbir şeye değmeden düşerken
+    // olay ÜRETMEMELİ. Bu olmadan kapı "kuyruk doluyor" ile "fizik adımı koştu"yu
+    // ayırt edemezdi.
+    sil(zemin);
+    isinla(top, 30.0, 40.0, 30.0);
+    hiz_ver(top, 0, 0, 0);
+    int bos_olay = 0;
+    k = 0;
+    while (k < 60) {
+        kare(1);
+        bos_olay = bos_olay + carpisma_sayisi();
+        k = k + 1;
+    }
+    assert(bos_olay == 0, "serbest dususte olay olmamali, " + toString(bos_olay));
+    print("    [bilgi] KONTROL zeminsiz serbest dusus: " + toString(bos_olay) + " olay (0 olmali)");
+    sil(top);
+}
+
 if (!kur()) {
     print("  ATLANDI: motor kurulamadi (" + eng_last_error() + ") — GPU/Vulkan yok");
 } else {
@@ -613,6 +675,7 @@ if (!kur()) {
     test("arayuz: dugme/onay/kaydirici, enjekte tiklama", "run_ui");
     test("kalici kayit: yaz-oku, varsayilan, bozuk dosya", "run_kayit");
     test("sahne sicak yeniden yukleme", "run_sicak_yukleme");
+    test("carpisma olaylari: kuyruk, siddet, kontrol", "run_carpisma");
     motor_kapat();
 }
 test_summary();

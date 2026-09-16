@@ -224,6 +224,30 @@ int teng_overlap_id(int i);
 double teng_overlap_dist(int i);
 int teng_nearest(double x, double y, double z, double radius, int skip_id); // en yakin id (0 yok)
 
+// --- Carpisma olaylari -------------------------------------------------------
+// Bugunku FFI callback TASIMIYOR (duz skaler ABI), o yuzden carpisma bir geri
+// cagrim degil KUYRUK: fizik adiminda olusan temaslar halkaya yazilir, oyun
+// kare icinde okur. Halka her kare basinda (teng_frame_begin) temizlenir, yani
+// olaylar "bu karede olanlar"dir; bir karede birden cok fizik adimi atilsa da
+// hepsi birikir.
+//
+// Sessiz kirpilma YOK: halka dolarsa teng_collision_dropped() artar. Oyun bunu
+// okuyup kapasiteyi buyutmeli ya da olayi daha erken tuketmeli — "carpma
+// gelmedi" sanmak en kotu sonuctur.
+int teng_collision_count(void);      // bu karedeki olay sayisi
+int teng_collision_dropped(void);    // halkaya sigmayip DUSEN olay sayisi
+int teng_collision_a(int i);         // taraf A: kopru varlik id'si (0 = kopru varligi degil)
+int teng_collision_b(int i);         // taraf B
+int teng_collision_scene_a(int i);   // taraf A sahne varlik dizini (-1 = degil)
+int teng_collision_scene_b(int i);
+double teng_collision_x(int i);      // temas noktasi (dunya)
+double teng_collision_y(int i);
+double teng_collision_z(int i);
+double teng_collision_nx(int i);     // A'dan B'ye yuzey normali
+double teng_collision_ny(int i);
+double teng_collision_nz(int i);
+double teng_collision_speed(int i);  // temas noktasinda normal boyu goreli hiz (m/s) = carpma siddeti
+
 // --- navmesh (sahne blob'undaki bake; runtime yalniz SORGULAR) ---------------
 // Veri engine_sahnec'in Recast bake'i: sahnedeki SABIT KUTU govdelerden. Sahnede
 // yurunebilir zemin yoksa bake olmaz -> teng_nav_ok() 0 ve oyun duz yola duser.
