@@ -114,7 +114,9 @@ FEATURES: list[Feature] = [
     Feature(82, 87, "B", "TODO", "TAA, FXAA, SMAA, MSAA, NSS(AA), Hybrid AA"),
     Feature(88, 88, "B", "DONE", "PBR / Cook-Torrance GGX (zaten motorda - Is 4)"),
     Feature(89, 91, "B", "TODO", "Layered Materials, Material Layers, Shader Graph"),
-    Feature(92, 94, "B", "TODO", "Occlusion Culling: HZB, Software, Hybrid"),
+    Feature(92, 92, "B", "TODO", "Occlusion Culling: HZB"),
+    Feature(93, 93, "B", "DONE", "Occlusion Culling: Software - content/occlusion.hpp (kucuk CPU derinlik tamponu), KAYNAK+testler"),
+    Feature(94, 94, "B", "TODO", "Occlusion Culling: Hybrid"),
     Feature(95, 95, "B", "DONE", "Traditional LOD - content/lod_select.hpp select_lod_traditional(), KAYNAK+testler"),
     Feature(96, 96, "B", "TODO", "HLOD"),
     Feature(97, 97, "B", "DONE", "Dithered LOD - content/lod_select.hpp select_lod_dithered() (bant icinde dogrusal karisim), KAYNAK+testler"),
@@ -311,7 +313,9 @@ FEATURES: list[Feature] = [
             "MSDF Text, H.265/AV1, Camera Shake/DOF, Motion Blur, Lens Flare, Color Grading, TAA, "
             "NSS-AA, Hybrid AA (dup B/C)"),
     Feature(495, 495, "J", "DONE", "PBR (dup)"),
-    Feature(496, 500, "J", "TODO", "Layered Materials, Shader Graph, HZB/Software/Hybrid Occlusion (dup)"),
+    Feature(496, 498, "J", "TODO", "Layered Materials, Shader Graph, HZB Occlusion (dup)"),
+    Feature(499, 499, "J", "DONE", "Software Occlusion (dup) - content/occlusion.hpp, KAYNAK+testler"),
+    Feature(500, 500, "J", "TODO", "Hybrid Occlusion (dup)"),
 ]
 
 

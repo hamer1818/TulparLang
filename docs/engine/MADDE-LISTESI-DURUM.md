@@ -69,7 +69,9 @@ Birebir `VIZYON.md` SS1 + SS1.1 ile eslesiyor.
 | 82-87 | TAA, FXAA, SMAA, MSAA, NSS(AA), Hybrid AA | 🔧 TODO |
 | 88 | PBR / Cook-Torrance GGX (zaten motorda - Is 4) | ✅ DONE |
 | 89-91 | Layered Materials, Material Layers, Shader Graph | 🔧 TODO |
-| 92-94 | Occlusion Culling: HZB, Software, Hybrid | 🔧 TODO |
+| 92 | Occlusion Culling: HZB | 🔧 TODO |
+| 93 | Occlusion Culling: Software - content/occlusion.hpp (kucuk CPU derinlik tamponu), KAYNAK+testler | ✅ DONE |
+| 94 | Occlusion Culling: Hybrid | 🔧 TODO |
 | 95 | Traditional LOD - content/lod_select.hpp select_lod_traditional(), KAYNAK+testler | ✅ DONE |
 | 96 | HLOD | 🔧 TODO |
 | 97 | Dithered LOD - content/lod_select.hpp select_lod_dithered() (bant icinde dogrusal karisim), KAYNAK+testler | ✅ DONE |
@@ -281,16 +283,18 @@ Kategori D'nin 232-250 araligiyla icerik olarak buyuk olcude cakisiyor (ayni 20 
 | 472 | Wind Animation (dup) - content/wind.hpp, KAYNAK+testler | ✅ DONE |
 | 473-494 | God Rays, Aurora, Yildizlar, Volumetric Clouds, Height/Volumetric Fog, FFT Waves, Underwater, Neural Hair, GPU Cloth, Voronoi Fracture, MSDF Text, H.265/AV1, Camera Shake/DOF, Motion Blur, Lens Flare, Color Grading, TAA, NSS-AA, Hybrid AA (dup B/C) | 🔧 TODO |
 | 495 | PBR (dup) | ✅ DONE |
-| 496-500 | Layered Materials, Shader Graph, HZB/Software/Hybrid Occlusion (dup) | 🔧 TODO |
+| 496-498 | Layered Materials, Shader Graph, HZB Occlusion (dup) | 🔧 TODO |
+| 499 | Software Occlusion (dup) - content/occlusion.hpp, KAYNAK+testler | ✅ DONE |
+| 500 | Hybrid Occlusion (dup) | 🔧 TODO |
 
 ## Özet (kesin — kodla üretildi)
 
-`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 207 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
+`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 211 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
 
 | Durum | Madde sayısı |
 |---|---|
-| ✅ DONE | 48 |
-| 🔧 TODO | 159 |
+| ✅ DONE | 50 |
+| 🔧 TODO | 157 |
 | 🔍 VERIFIED | 76 |
 | 📗 STANDARD | 95 |
 | 📚 RESEARCH | 91 |
