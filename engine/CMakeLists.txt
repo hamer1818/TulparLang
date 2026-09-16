@@ -173,6 +173,7 @@ target_compile_options(engine_recast PRIVATE -fno-exceptions -fno-rtti -w -ffp-c
 add_library(engine_sim STATIC
     sim/ecs.cpp
     sim/schedule.cpp
+    sim/timers.cpp
     sim/physics.cpp
     sim/navmesh.cpp
     sim/animation.cpp
@@ -190,6 +191,11 @@ add_library(engine_sim STATIC
 )
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
+# ratas (jsnell/ratas, MIT) yalniz sim/timers.cpp'nin ICINDE kullanilir --
+# kendi ad alani olmadigi ve global alana `Tick`/`TimerWheel` koydugu icin
+# sim/timers.hpp onu GORMEZ. Bu yuzden PUBLIC degil PRIVATE: kutuphane
+# motorun geri kalanina SIZMAZ.
+target_include_directories(engine_sim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 add_dependencies(engine_sim engine_layer_check)
 
 # --- L3 RENDERER -----------------------------------------------------------------
@@ -285,6 +291,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_fixed.cpp
     tests/test_spatial_hash.cpp
     tests/test_debug_draw.cpp
+    tests/test_timers.cpp
     tests/test_anticheat.cpp
     tests/test_desync.cpp
     tests/test_device_tier.cpp

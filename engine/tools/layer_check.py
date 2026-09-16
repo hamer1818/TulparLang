@@ -26,6 +26,18 @@ BANNED_STL = {"vector", "map", "unordered_map", "set", "unordered_set",
               "functional", "sstream", "iostream", "fstream", "queue",
               "stack", "any", "variant", "optional", "regex", "thread",
               "mutex", "shared_mutex", "condition_variable", "future"}
+# Vendored (third_party) basliklar. Bunlar bir katman dizini DEGIL, ama
+# derleyiciye -I ile verildikleri icin `#include "x.h"` seklinde gorunurler.
+# Kapiyi "bilinmeyeni gecir" diye gevsetmek yerine, her vendored baslik icin
+# ONU KULLANMASINA IZIN VERILEN KATMANLAR acikca yazilir -- boylece denetim
+# ZAYIFLAMAZ, tam tersine vendored kutuphanelerin de katman atlamasini engeller.
+# Yeni bir kutuphane vendor edildiginde BURAYA eklenmesi ZORUNLUDUR.
+VENDORED = {
+    "debug_draw.hpp": {"renderer"},    # glampert/debug-draw (kamu mali)
+    "meshoptimizer.h": {"renderer"},   # zeux/meshoptimizer (MIT)
+    "ratas": {"sim"},                  # jsnell/ratas zamanlayici carki (MIT)
+}
+
 INC_RE = re.compile(r'^\s*#\s*include\s+([<"])([^>"]+)[>"]')
 
 
@@ -54,8 +66,13 @@ def main():
                     if kind == '"':
                         inc_top = target.split("/")[0]
                         inc_layer = LAYERS.get(inc_top)
-                        if inc_layer is None:
-                            violations.append(f"{rel}:{ln}: bilinmeyen katman dizini '{inc_top}' ({target})")
+                        if inc_top in VENDORED:
+                            allowed = VENDORED[inc_top]
+                            if top not in allowed and layer != 99:
+                                violations.append(
+                                    f"{rel}:{ln}: vendored '{inc_top}' yalniz {sorted(allowed)} katmanindan kullanilabilir ({target})")
+                        elif inc_layer is None:
+                            violations.append(f"{rel}:{ln}: bilinmeyen katman dizini '{inc_top}' ({target}) — vendored ise tools/layer_check.py'deki VENDORED'a ekle")
                         elif layer != 99 and inc_layer > layer:
                             violations.append(f"{rel}:{ln}: L{layer} dosyasi L{inc_layer} basligini iceriyor ({target}) — katman yalniz ALTINI cagirir")
                     else:

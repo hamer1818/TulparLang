@@ -2,11 +2,16 @@
 
 #include <cmath>
 
-#include "core/math/vec.hpp"
-
 namespace tulpar::engine::platform {
 
 namespace {
+// KATMAN KURALI: platform L0'dir, core L1'dir -- L0 YUKARI cagiramaz
+// (tools/layer_check.py bunu build hatasi yapar). Bu dosyanin
+// core/math/vec.hpp'den TEK ihtiyaci `kPi` sabitiydi; bir sabit ugruna
+// katman bagimliligi kurmak yerine burada yerel olarak tanimlaniyor.
+// Deger core/math/vec.hpp'deki kPi ile AYNI olmalidir.
+constexpr float kPi = 3.14159265358979323846f;
+
 // a-b farkini (-pi, pi] araligina sarar (interp.cpp'nin lerp_deg'iyle AYNI
 // "en kisa yol" ilkesi, ama fark icin -- 350->10 derece +20 olmali, -340 degil).
 float angle_diff(float a, float b) {
