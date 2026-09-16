@@ -58,6 +58,7 @@ add_library(engine_core STATIC
     core/jobs/job_system.cpp
     core/jobs/job_graph.cpp
     core/math/bvh.cpp
+    core/math/spatial_hash.cpp
     core/math/nn.cpp
     core/profiler/profiler.cpp
     core/jobs/fiber_switch_x86_64.S
@@ -281,6 +282,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_quantum_gen.cpp
     tests/test_lighting_pipeline.cpp
     tests/test_fixed.cpp
+    tests/test_spatial_hash.cpp
     tests/test_anticheat.cpp
     tests/test_desync.cpp
     tests/test_device_tier.cpp
