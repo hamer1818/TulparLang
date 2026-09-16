@@ -92,6 +92,7 @@ add_library(engine_rhi STATIC
     rhi/offscreen.cpp
     rhi/swapchain.cpp
     rhi/tile_budget.cpp
+    rhi/frame_graph.cpp
 )
 target_include_directories(engine_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)
 target_link_libraries(engine_rhi PUBLIC engine_core ${CMAKE_DL_LIBS})
@@ -257,6 +258,8 @@ set(ENGINE_TEST_SOURCES
     tests/test_random.cpp
     tests/test_noise.cpp
     tests/test_behavior_tree.cpp
+    tests/test_particles.cpp
+    tests/test_frame_graph.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
