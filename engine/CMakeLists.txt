@@ -244,6 +244,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_pack.cpp
     tests/test_wind.cpp
     tests/test_occlusion.cpp
+    tests/test_frame_pacer.cpp
     tests/test_water_wave.cpp
     tests/test_random.cpp
     tests/test_noise.cpp

@@ -119,7 +119,8 @@ Birebir `VIZYON.md` SS1 + SS1.1 ile eslesiyor.
 | 195-197 | ADPF, Thermal API, Performance Hint API | 🔍 VERIFIED |
 | 198 | PUMA (IEEE Access 2026) | 🔍 VERIFIED |
 | 199 | GameNative PID | 📚 RESEARCH |
-| 200-201 | Frame Pacing, Dynamic Quality Scaling | 🔧 TODO |
+| 200 | Frame Pacing - platform/frame_pacer.hpp (hedef kare suresi aritmetigi), KAYNAK+testler | ✅ DONE |
+| 201 | Dynamic Quality Scaling | 🔧 TODO |
 | 202-205 | Engine Code Stripping, Shader Memory Opt, IL2CPP Runtime Opt, Content Directories | 📗 STANDARD |
 | 206-211 | Bindless, Vulkan Driver Layer, SPIR-V, Loader, GPL, Uber Fetch Shader | 📗 STANDARD |
 | 212-214 | FlashMem (ASPLOS 2026), 2.5D Doku Bellegi, Mobil GPU Bellek Hiyerarsisi | 🔍 VERIFIED |
@@ -277,7 +278,8 @@ Kategori D'nin 232-250 araligiyla icerik olarak buyuk olcude cakisiyor (ayni 20 
 | 458 | Geriye Donuk Uyumluluk | 🚫 OUT_OF_SCOPE |
 | 459 | Coklu Dokunmatik (platform/touch.hpp - VAR) + Jest (platform/gesture.hpp Tap+Pinch - KAYNAK+testler, kablolama bekliyor) | ✅ DONE |
 | 460-463 | Oyun Ici Sohbet, Oyun Ici Ekonomi, Basarimlar, Analitik Dashboard | 🚫 OUT_OF_SCOPE |
-| 464-469 | Frame Pacing, Desync Detector, Contact Shadow, Shadow Atlas, Reflection Probe, Light Probes (dup) | 🔧 TODO |
+| 464 | Frame Pacing (dup) - platform/frame_pacer.hpp, KAYNAK+testler | ✅ DONE |
+| 465-469 | Desync Detector, Contact Shadow, Shadow Atlas, Reflection Probe, Light Probes (dup) | 🔧 TODO |
 | 470 | Clustered Lighting (dup) | ✅ DONE |
 | 471 | Weighted Blended OIT (dup) | 🔧 TODO |
 | 472 | Wind Animation (dup) - content/wind.hpp, KAYNAK+testler | ✅ DONE |
@@ -289,12 +291,12 @@ Kategori D'nin 232-250 araligiyla icerik olarak buyuk olcude cakisiyor (ayni 20 
 
 ## Özet (kesin — kodla üretildi)
 
-`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 211 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
+`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 213 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
 
 | Durum | Madde sayısı |
 |---|---|
-| ✅ DONE | 50 |
-| 🔧 TODO | 157 |
+| ✅ DONE | 52 |
+| 🔧 TODO | 155 |
 | 🔍 VERIFIED | 76 |
 | 📗 STANDARD | 95 |
 | 📚 RESEARCH | 91 |
