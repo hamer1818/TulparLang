@@ -197,12 +197,17 @@ struct VariableDecl {
     std::optional<std::string> custom_type;
     std::unique_ptr<ASTNode> initializer;
     bool is_moved;
+    // `const int x = 5;` — yeniden atama YASAK. Denetim ayristiricida
+    // (bkz. parser.cpp reject_const_write) yapiliyor, yani bu bayrak
+    // bugun codegen'i etkilemiyor; AST'de durmasinin sebebi LSP/fmt gibi
+    // sonraki tuketicilerin bilgiyi KAYBETMEMESI.
+    bool is_const;
     SourceLocation loc;
     
     VariableDecl(const std::string& n, DataType dt,
                  std::unique_ptr<ASTNode> init, SourceLocation l)
         : name(n), data_type(dt), initializer(std::move(init)),
-          is_moved(false), loc(l) {}
+          is_moved(false), is_const(false), loc(l) {}
 };
 
 struct Assignment {

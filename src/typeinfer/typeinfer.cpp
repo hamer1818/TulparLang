@@ -334,6 +334,44 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     case TOKEN_AND:
     case TOKEN_OR:
       return TYPE_BOOL;
+
+    // BIT ISLEMLERI — yalniz TAMSAYI.
+    //
+    // `float` operand HATA. Gerekce olcum: codegen bu operatorler icin her
+    // operandi `toInt` ile AYNI kurala gore (sifira dogru kirparak) tam
+    // sayiya ceviriyor, yani `1.5 & 1` sessizce `1 & 1` oluyordu. Sessiz
+    // bir kirpma degil, gorunur bir tani olmali.
+    //
+    // KASITLI DAR: yalniz FLOAT ve STRING reddediliyor. TYPE_UNKNOWN /
+    // TYPE_CUSTOM serbest — degilse tipi bilinmeyen her ifade (shader alt
+    // kumesindeki `gl_VertexIndex`, kutulu `var`) yanlis pozitif verirdi.
+    // BOOL da serbest: depoda bool->int etiket cevrimi zaten var.
+    case TOKEN_BIT_AND:
+    case TOKEN_PIPE:
+    case TOKEN_BIT_XOR:
+    case TOKEN_SHIFT_LEFT:
+    case TOKEN_SHIFT_RIGHT: {
+      const char *spelling = bin->op == TOKEN_BIT_AND     ? "&"
+                             : bin->op == TOKEN_PIPE      ? "|"
+                             : bin->op == TOKEN_BIT_XOR   ? "^"
+                             : bin->op == TOKEN_SHIFT_LEFT ? "<<"
+                                                           : ">>";
+      auto bad = [](DataType t) {
+        return t == TYPE_FLOAT || t == TYPE_STRING;
+      };
+      if (bad(left_type) || bad(right_type)) {
+        report_error(
+            ctx,
+            tulpar::i18n::tr_en(
+                "'%s' bit islemi yalnizca tamsayi ile calisir ('%s' ve '%s' "
+                "verildi) - satir %d",
+                "bitwise '%s' works on integers only (got '%s' and '%s') "
+                "at line %d"),
+            spelling, datatype_to_string(left_type),
+            datatype_to_string(right_type), bin->loc.line);
+      }
+      return TYPE_INT;
+    }
     default:
       break;
     }
@@ -363,6 +401,20 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     DataType operand_type = infer_expr(ctx, un->operand.get());
     if (un->op == TOKEN_BANG) {
       return TYPE_BOOL;
+    }
+    // `~x` — bit DEGIL. Ikili bit islemleriyle ayni kural: float/str hata,
+    // sonuc her zaman int.
+    if (un->op == TOKEN_BIT_NOT) {
+      if (operand_type == TYPE_FLOAT || operand_type == TYPE_STRING) {
+        report_error(ctx,
+                     tulpar::i18n::tr_en(
+                         "'~' bit islemi yalnizca tamsayi ile calisir ('%s' "
+                         "verildi) - satir %d",
+                         "bitwise '~' works on integers only (got '%s') "
+                         "at line %d"),
+                     datatype_to_string(operand_type), un->loc.line);
+      }
+      return TYPE_INT;
     }
     return operand_type;
   }

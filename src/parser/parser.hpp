@@ -74,6 +74,27 @@ private:
     // Error handling
     void error(const std::string& message);
 
+    // ---- `const` denetimi (G5) -------------------------------------------
+    // Ayristirici normalde sembol tablosu TUTMAZ; const icin minimal bir
+    // kapsam yigini tutuyor cunku "yeniden atama hatadir" kurali tip
+    // bilgisi ISTEMIYOR, yalniz baglamayi bilmeyi istiyor — ve
+    // ayristiricida yapilinca `--strict` bayragina bagli OLMAYAN sert bir
+    // hata oluyor (typeinfer'deki her sey varsayilan olarak UYARI).
+    //
+    // Her kapsam ad -> const_mu esleme listesi. Golgeleme calisir: icteki
+    // const OLMAYAN bildirim distaki const'u kapatir. Bildirimin
+    // KAYDEDILMEDIGI egzotik bir baglama bicimi (match yapisokum deseni)
+    // varsa sonuc YANLIS POZITIF olabilirdi; bu bugun imkansiz cunku const
+    // yeni ve depoda hic kullanilmiyor — yani mevcut kodun tamami icin bu
+    // yigin bostur.
+    std::vector<std::vector<std::pair<std::string, bool>>> decl_scopes_;
+    void scope_push();
+    void scope_pop();
+    void scope_declare(const std::string& name, bool is_const);
+    bool name_is_const(const std::string& name) const;
+    // Hedef const ise ayristirma hatasi firlatir.
+    void reject_const_write(const Token& name_tok);
+
 public:
     // Constructor
     explicit Parser(std::vector<Token> tokens);

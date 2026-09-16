@@ -3230,6 +3230,80 @@ static LLVMValueRef typed_to_int_payload(LLVMBackend *backend, TypedValue tv) {
   return LLVMConstInt(backend->int_type, 0, 0);
 }
 
+// ---------------------------------------------------------------------------
+// BIT ISLEMLERI (G4) — `& | ^ << >>` ve tekli `~`
+//
+// Hepsi SATIR ICI uretiliyor; hicbiri `vm_binary_op`'a gitmiyor. Bu bir
+// baglanti kurali: `vm_binary_op` onceden derlenmis `wasm/dist/` ve
+// `android/dist/` arsivlerinde de duruyor ve bu tokenlari TANIMIYOR. Oraya
+// dusselerdi masaustu yesil kalirken web/android SESSIZCE `default` dalina
+// dusup yanlis deger uretirdi (bkz. lexer.hpp'deki renumaralama notu).
+//
+// Operandlar `int`e ceviriliyor (kutulu float gelirse `toInt` ile AYNI
+// kural: sifira dogru kirpma). typeinfer float operandi zaten HATA olarak
+// bildiriyor; buradaki cevrim yalniz tipi calisma zamaninda belli olan
+// degerler icin son caredir, tanimsiz bir bit deseni degil.
+//
+// ISARET SECIMI — `>>` ARITMETIK (`ashr`), mantiksal degil.
+//   Tulpar'da tek bir tamsayi tipi var ve o ISARETLI 64 bit (`int` = i64,
+//   isaretsiz tip YOK). Mantiksal kaydirma secilseydi `-8 >> 1` 2^63-4
+//   gibi devasa bir pozitif sayi verirdi; aritmetik kaydirmayla -4 veriyor,
+//   yani "ikiye bol" beklentisi isaretli tipte KORUNUYOR. Isaretsiz
+//   kaydirma isteyen `(x >> n) & mask` yazabilir. Test: negatif sayilarla
+//   olculuyor (tests/bit_islemleri.test.tpr).
+//
+// KAYDIRMA MIKTARI — 64 ve uzeri TANIMSIZ DEGIL, SECILDI.
+//   LLVM'de `shl`/`ashr` bit genisliginden buyuk bir miktarla POISON verir
+//   (yani "ne cikarsa" degil, optimizasyonun her seyi yapmasina izin veren
+//   bir durum). Ikisi de kapatildi ve secilen davranis MATEMATIKSEL SINIR:
+//     `x << n`, n >= 64  -> 0            (butun bitler disari cikti)
+//     `x >> n`, n >= 64  -> 0 ya da -1   (isaret doldurur; n=63 ile ayni)
+//   Miktar ISARETSIZ okunuyor, yani negatif bir miktar (`x << -1`) da
+//   "cok buyuk" sayilip ayni sinira dusuyor — sessizce `x` DONMEZ.
+//   Uretilen IR'de poison hic olusmuyor: kaydirma once maskeleniyor,
+//   `select` ancak ondan sonra geliyor (secilmeyen kolun poison'ina
+//   guvenmek bu dosyanin zaten kacindigi bir sey — bkz. llvm_values.cpp).
+static LLVMValueRef emit_bitwise_i64(LLVMBackend *backend, int op,
+                                     LLVMValueRef li, LLVMValueRef ri) {
+  if (!li || !ri) return nullptr;
+  LLVMBuilderRef b = backend->builder;
+  switch (op) {
+  case TOKEN_BIT_AND:
+    return LLVMBuildAnd(b, li, ri, "bit.and");
+  case TOKEN_PIPE:  // `|` — match kolu ayraciyla AYNI token, bkz. lexer.hpp
+    return LLVMBuildOr(b, li, ri, "bit.or");
+  case TOKEN_BIT_XOR:
+    return LLVMBuildXor(b, li, ri, "bit.xor");
+  case TOKEN_SHIFT_LEFT: {
+    LLVMValueRef masked =
+        LLVMBuildAnd(b, ri, LLVMConstInt(backend->int_type, 63, 0), "shl.cnt");
+    LLVMValueRef sh = LLVMBuildShl(b, li, masked, "shl");
+    LLVMValueRef too_big =
+        LLVMBuildICmp(b, LLVMIntUGE, ri,
+                      LLVMConstInt(backend->int_type, 64, 0), "shl.big");
+    return LLVMBuildSelect(b, too_big,
+                           LLVMConstInt(backend->int_type, 0, 0), sh,
+                           "shl.res");
+  }
+  case TOKEN_SHIFT_RIGHT: {
+    LLVMValueRef too_big =
+        LLVMBuildICmp(b, LLVMIntUGT, ri,
+                      LLVMConstInt(backend->int_type, 63, 0), "shr.big");
+    LLVMValueRef cnt =
+        LLVMBuildSelect(b, too_big,
+                        LLVMConstInt(backend->int_type, 63, 0), ri, "shr.cnt");
+    return LLVMBuildAShr(b, li, cnt, "shr");
+  }
+  default:
+    return nullptr;
+  }
+}
+
+static bool is_bitwise_binary_op(int op) {
+  return op == TOKEN_BIT_AND || op == TOKEN_PIPE || op == TOKEN_BIT_XOR ||
+         op == TOKEN_SHIFT_LEFT || op == TOKEN_SHIFT_RIGHT;
+}
+
 // Box a typed value to VMValue when needed
 LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv) {
   if (tv.boxed)
@@ -3911,6 +3985,21 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     }
     TypedValue L = codegen_typed_expr(backend, node->left);
     TypedValue R = codegen_typed_expr(backend, node->right);
+
+    // BIT ISLEMLERI: operandlarin statik tipi ne olursa olsun BURADA biter.
+    // `typed_to_int_payload` int/bool'u oldugu gibi, float'i `toInt` kuraliyla,
+    // kutulu degeri de calisma zamaninda etiketine bakarak int'e ceviriyor.
+    if (is_bitwise_binary_op(node->op)) {
+      LLVMValueRef bits = emit_bitwise_i64(backend,
+                                           node->op,
+                                           typed_to_int_payload(backend, L),
+                                           typed_to_int_payload(backend, R));
+      if (bits) {
+        result.value = bits;
+        result.type = INFERRED_INT;
+        return result;
+      }
+    }
 
     // Fast path: both are known integers
     if (L.type == INFERRED_INT && R.type == INFERRED_INT) {
@@ -5522,6 +5611,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef inverted =
           LLVMBuildNot(backend->builder, truthy, "not_truthy");
       return llvm_vm_val_bool_val(backend, inverted);
+    }
+
+    // `~x` — bit DEGIL. Operand once int'e ceviriliyor (bkz.
+    // emit_bitwise_i64 basligi), sonuc her zaman int.
+    if (node->op == TOKEN_BIT_NOT) {
+      LLVMValueRef iv = llvm_vm_val_to_int_payload(backend, operand);
+      LLVMValueRef inv = LLVMBuildNot(backend->builder, iv, "bit.not");
+      return llvm_vm_val_int_val(backend, inv);
     }
 
     // Unary minus for int/float
