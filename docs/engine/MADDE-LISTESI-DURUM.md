@@ -108,7 +108,9 @@ Birebir `VIZYON.md` SS1 + SS1.1 ile eslesiyor.
 | Aralık | Madde | Durum |
 |---|---|---|
 | 178 | Job System (fiber job sistemi zaten var) | ✅ DONE |
-| 179-182 | Work-Stealing, Lock-free Queue, Job Dependency Graph, Deterministik Job Siralamasi | 🔧 TODO |
+| 179-180 | Work-Stealing, Lock-free Queue | 🔧 TODO |
+| 181 | Job Dependency Graph - core/jobs/job_graph.hpp (JobSystem'in run/wait/Counter'i uzerine, YENI senkronizasyon icermez), KAYNAK+test - GERCEK THREAD'LERLE TEST EDILMEDI (derleyici yok) | ✅ DONE |
+| 182 | Deterministik Job Siralamasi | 🔧 TODO |
 | 183 | big.LITTLE Optimizasyonu | 🔧 TODO |
 | 184 | Core Pinning | 🔧 TODO |
 | 185 | Tuanjie 1.10.0 Boids/JobWorker demosu | 🔍 VERIFIED |
@@ -291,12 +293,12 @@ Kategori D'nin 232-250 araligiyla icerik olarak buyuk olcude cakisiyor (ayni 20 
 
 ## Özet (kesin — kodla üretildi)
 
-`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 213 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
+`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 215 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
 
 | Durum | Madde sayısı |
 |---|---|
-| ✅ DONE | 52 |
-| 🔧 TODO | 155 |
+| ✅ DONE | 53 |
+| 🔧 TODO | 154 |
 | 🔍 VERIFIED | 76 |
 | 📗 STANDARD | 95 |
 | 📚 RESEARCH | 91 |

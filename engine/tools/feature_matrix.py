@@ -151,7 +151,9 @@ FEATURES: list[Feature] = [
 
     # --- D. Donanim Hizlandirma (178-250) ---
     Feature(178, 178, "D", "DONE", "Job System (fiber job sistemi zaten var)"),
-    Feature(179, 182, "D", "TODO", "Work-Stealing, Lock-free Queue, Job Dependency Graph, Deterministik Job Siralamasi"),
+    Feature(179, 180, "D", "TODO", "Work-Stealing, Lock-free Queue"),
+    Feature(181, 181, "D", "DONE", "Job Dependency Graph - core/jobs/job_graph.hpp (JobSystem'in run/wait/Counter'i uzerine, YENI senkronizasyon icermez), KAYNAK+test - GERCEK THREAD'LERLE TEST EDILMEDI (derleyici yok)"),
+    Feature(182, 182, "D", "TODO", "Deterministik Job Siralamasi"),
     Feature(183, 183, "D", "TODO", "big.LITTLE Optimizasyonu"),
     Feature(184, 184, "D", "TODO", "Core Pinning"),
     Feature(185, 185, "D", "VERIFIED", "Tuanjie 1.10.0 Boids/JobWorker demosu"),

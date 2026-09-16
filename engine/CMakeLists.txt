@@ -54,6 +54,7 @@ add_library(engine_core STATIC
     core/memory/alloc_gate.cpp
     core/jobs/fiber.cpp
     core/jobs/job_system.cpp
+    core/jobs/job_graph.cpp
     core/profiler/profiler.cpp
     core/jobs/fiber_switch_x86_64.S
     core/jobs/fiber_switch_aarch64.S
@@ -245,6 +246,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_wind.cpp
     tests/test_occlusion.cpp
     tests/test_frame_pacer.cpp
+    tests/test_job_graph.cpp
     tests/test_water_wave.cpp
     tests/test_random.cpp
     tests/test_noise.cpp
