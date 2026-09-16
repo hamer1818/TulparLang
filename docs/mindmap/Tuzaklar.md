@@ -2514,3 +2514,35 @@ atlanır. CI'daki apt katmanı (Ubuntu 24.04, VVL 1.3.275) tam olarak bu durumda
 Ayrıca dikkat: o kapılardaki ÜRÜN iddiası (`bp_arm_effective == 0`) katman kuralları tanımıyorken **boşa
 geçer** — 0 uyarı her zaman 0'dır. Kapıyı ayakta tutan tek şey kontroldür; o yüzden kontrolün sonucu
 `CHECK` değil **atlama** olmalı.
+
+### 8bl. "Son render'ın tepesi" + gerçek zamandan hızlı çeken cihaz = bazen düşen ses kapısı
+`audio_default_device_opens` 0,3 s'lik bir klip çalıp 200 ms sonra `MixerStats::peak`'e bakıyordu.
+`peak` **son render çağrısının** tepesidir, kümülatif değil. Yani "ölçüm anında klip hâlâ çalıyor mu"
+sorusu, cihazın ne kadar önden tampon doldurduğuna bağlanıyordu.
+
+CI macOS'un sanal ses cihazı gerçek zamandan hızlı çekiyor: 200 ms uykuda **33 callback × 480 = 15 840
+kare** (= 330 ms ses) render etti, 0,3 s'lik klip bitti, son render sessizdi → tepe **0,00000**, kapı
+kırmızı. Bir önceki koşumda aynı kapı 22 callback (220 ms) ile tepe 0,00050 verip geçmişti — klasik
+"bazen düşen", ama sebebi gürültü değil **yarış**.
+
+Yerelde birebir üretildi: klibi 0,01 s yapıp döngüsüz çalınca tepe 0,00000 ve kapı kırmızı; aynı klip
+**döngülü** çalınca tepe 0,00050 ve yeşil. Düzeltme döngülü çalmak — son render her zaman sinyal taşır,
+cihazın hızı ölçümü etkilemez.
+
+Ders: bir kapı "şu an" okunan bir değere bakıyorsa, o değerin **ne kadar süre geçerli kaldığını** sor.
+"Bazen düşüyor" demeden önce yarışı yerelde üretmeye çalış — burada üç dakika sürdü.
+
+### 8bm. Zamanlama eşiğini ÖLÇÜLEN birime bağlamak, kapıyı yük altında SERTLEŞTİRİR
+`gather` eşzamanlılık kapısı üç kez yanlış yazıldı, üçü de macOS/arm64 CI'da düştü. Üçüncüsü
+(`esz < birim * 2`) şu modeldeydi: birim = uyku + bir çağrı ek yükü, gather ≈ 1 birim. **Yanlış**:
+gather **üç** çağrı ek yükü öder (+ kendi kurulumu). 20 ms uykuda ek yük 11 ms olunca — sinyalin yarısı
+kadar — model kırıldı (birim=31 gather=82 eşik=62).
+
+İki ayrı hata vardı. (1) Ölçülen süre ek yükle **aynı büyüklük mertebesindeydi**; çözüm eşikle oynamak
+değil uykuyu 20 ms'den 120 ms'ye çıkarmak — ek yük sinyalin %55'inden %9'una düştü. (2) Eşik `birim`e
+bağlıydı; gerçek tasarruf (2 uyku) yükle **değişmez** ama `birim` yükle **büyür**, yani eşiği birime
+bağlamak kapıyı yük altında sertleştiriyordu — tam ters yön. Eşik artık nominal uykuya bağlı.
+
+Ayrıca seri kol artık **varsayılmıyor, ölçülüyor**: bir daha düştüğünde "gather gerçekten seri miydi"
+sorusu tahminle değil sayıyla cevaplanır. O koşumda gather aslında seriden hızlıydı (82 < ~93) — yani
+eşzamanlılık çalışıyordu, ölçüt bozuktu; seri kol ölçülseydi bu ilk bakışta görülürdü.

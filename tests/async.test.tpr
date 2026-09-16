@@ -82,23 +82,44 @@ func run_gather_order() {
 //      (20ms tabanli) yutmaz. Yani yuk altinda oran KORUNMAZ, eszamanli
 //      kolun aleyhine bozulur. Bu da macOS/arm64'te dustu.
 //
-// Dogru referans SERI KOL DEGIL, BIR BIRIM: tek bir awaited 20ms uykunun
-// gercek maliyeti (uyku + o platformun cagri basina ek yuku). Birim, ek yuku
-// TANIMI GEREGI icerir, yani platform ne kadar yavassa esik o kadar acilir.
+//   3) `esz < birim * 2` — BIRIM MALIYET. Bu da macOS/arm64'te dustu
+//      (2026-09-16: birim=31ms gather=82ms esik=62ms). Model yanlisti:
+//      birim = uyku + BIR cagri ek yuku, ama gather UC cagri ek yuku odiyor
+//      (+ kendi kurulumu). 20ms uykuda ek yuk 11ms olunca — yani sinyalin
+//      YARISI kadar — "1 birim" tahmini kirildi. Not: o kosumda gather yine
+//      seriden hizliydi (82 < ~93), yani eszamanlilik CALISIYORDU; olcut
+//      bozuktu.
 //
-//   seri olsaydi   -> ~3 birim
-//   eszamanli ise  -> ~1 birim
-//   esik 2 birimde -> her iki yonde de %100 pay
+// Asil hata hepsinde ayni: OLCULEN SURE, EK YUKLE AYNI BUYUKLUK MERTEBESINDE.
+// Cozum esikle oynamak degil, SINYALI GURULTUNUN COK USTUNE CIKARMAK:
+// uyku 20ms degil 120ms. Ek yuk 11ms iken sinyalin %55'iydi, simdi %9'u.
+// Ustune seri kol artik VARSAYILMIYOR, OLCULUYOR — boylece bir daha dusen
+// oldugunda "gather gercekten seri miydi" sorusu tahminle degil sayiyla
+// cevaplanir.
 //
-// Olculen degerler basiliyor: bu esigin tarihi, sayisi olmayan bir esigin
-// tahminle konuldugunda iki kez yanlis ciktigini gosteriyor.
+//   seri  = 3 uyku + 3 ek yuk   (olculuyor)
+//   esz   = 1 uyku + 3 ek yuk + kurulum
+//   fark  = 2 uyku              (ek yukten BAGIMSIZ — asil degismez buymus)
+//
+// Esik NOMINAL UYKUYA bagli, olculen birime DEGIL: gercek tasarruf (2 uyku)
+// yukle degismez, ama `birim` yukle BUYUR — esigi birime baglamak kapiyi yuk
+// altinda SERTLESTIRIRDI, yani tam ters yone calisirdi. Esik bir uyku: iki
+// bekleniyor, %100 pay var.
+int GATHER_UYKU = 120;
+
 func run_gather_concurrent() {
     int u0 = time_ms();
-    await wait_val(20, 1);
+    await wait_val(GATHER_UYKU, 1);
     int birim = time_ms() - u0;
 
+    int s0 = time_ms();
+    await wait_val(GATHER_UYKU, 1);
+    await wait_val(GATHER_UYKU, 1);
+    await wait_val(GATHER_UYKU, 1);
+    int seri = time_ms() - s0;
+
     int g0 = time_ms();
-    var r = await gather(wait_val(20, 1), wait_val(20, 1), wait_val(20, 1));
+    var r = await gather(wait_val(GATHER_UYKU, 1), wait_val(GATHER_UYKU, 1), wait_val(GATHER_UYKU, 1));
     int esz = time_ms() - g0;
 
     // Serbest satir YEREL kosum icin (`./tulpar tests/async.test.tpr`).
@@ -107,13 +128,13 @@ func run_gather_concurrent() {
     // IDDIA MESAJININ ICINE de konuyor — bir esik dustugunde teshis icin
     // gereken sey tam olarak o iki sayidir, ve bu esik sayisi olmadigi icin
     // iki kez tahminle konulup iki kez yanlis cikti.
-    print("      [olcum] birim=" + toString(birim) + "ms  gather=" + toString(esz) +
-          "ms  (seri olsaydi ~" + toString(birim * 3) + "ms)");
+    print("      [olcum] birim=" + toString(birim) + "ms  seri=" + toString(seri) +
+          "ms  gather=" + toString(esz) + "ms  (tasarruf=" + toString(seri - esz) + "ms)");
     assert_eq_int(length(r), 3);
-    assert(esz < birim * 2,
-           "gather should run children concurrently — gather ~1 birim olmali, seri ~3 (birim=" +
-           toString(birim) + "ms gather=" + toString(esz) + "ms esik=" +
-           toString(birim * 2) + "ms)");
+    assert(seri - esz > GATHER_UYKU,
+           "gather should run children concurrently — gather seriden en az BIR uyku kisa olmali (birim=" +
+           toString(birim) + "ms seri=" + toString(seri) + "ms gather=" + toString(esz) +
+           "ms tasarruf=" + toString(seri - esz) + "ms esik=" + toString(GATHER_UYKU) + "ms)");
 }
 
 // Non-promise arguments pass through unchanged.

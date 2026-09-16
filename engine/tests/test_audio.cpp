@@ -123,9 +123,23 @@ ENGINE_TEST(audio_default_device_opens) {
   const float genlik = (audible && *audible && *audible != '0') ? 0.2f : 0.0005f;
   audio::Clip a;
   CHECK(audio::clip_sine(sys, 440.0f, 0.3f, mx.rate(), genlik, &a));
-  mx.play(&a, 1.0f, false);
+  // DONGULU CALIYOR — ve bu bir zevk meselesi degil, YARISI kapatiyor.
+  //
+  // `MixerStats::peak` SON render cagrisinin tepesidir (kumulatif degil,
+  // mixer.hpp). Klip dongusuz calinca "olcum aninda klip hala caliyor mu"
+  // sorusu cihazin ne kadar ONDEN tampon doldurduguna baglanir. CI macOS'un
+  // sanal ses cihazi GERCEK ZAMANDAN HIZLI cekiyor: 200 ms uykuda 33 callback
+  // x 480 = 15 840 kare (= 330 ms ses) render etti, yani 0,3 s'lik klip bitti
+  // ve son render SESSIZDI -> tepe 0,00000 ve kapi kirmizi (2026-09-16).
+  // Ayni kapi bir onceki kosumda 22 callback (220 ms) ile tepe 0,00050 verip
+  // GECMISTI — yani "bazen dusen" bir kapiydi ve sebebi gurultu degil yaristi.
+  //
+  // Donguluyken son render her zaman sinyal tasir; cihazin hizi olcumu
+  // etkilemez. Olcumden sonra susturuluyor.
+  mx.play(&a, 1.0f, true);
   platform::thread_sleep_us(200000);
   audio::MixerStats st = mx.stats();
+  mx.stop_all();
   std::printf("    [bilgi] cihaz %s '%s' %u Hz %u kanal periyot %u: %llu callback, %llu kare, tepe %.5f (genlik %.4f%s)\n",
               dev.info().backend, dev.info().name, dev.info().sample_rate, dev.info().channels, dev.info().period_frames,
               (unsigned long long)st.callbacks, (unsigned long long)st.frames_rendered, st.peak, genlik,
