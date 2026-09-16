@@ -127,8 +127,11 @@ FEATURES: list[Feature] = [
     # --- C. Gorsel Sistemler (107-177) ---
     Feature(107, 107, "C", "DONE", "Heightmap Terrain - content/terrain.hpp generate_heightmap()+sample_height() (fbm_2d uzerine), KAYNAK+testler"),
     Feature(108, 108, "C", "DONE", "Splatting - content/terrain.hpp compute_splat_weights() (yukseklik-bantli yamuk agirlik), KAYNAK+testler"),
-    Feature(109, 136, "C", "TODO",
-            "Tessellation, Virtual Terrain, sky/fog, particle/decal/foliage - standart teknikler, motorda yok"),
+    Feature(109, 134, "C", "TODO",
+            "Tessellation, Virtual Terrain, sky/fog, particle/decal, Billboard/Cross-Quad/Mesh/Cluster-DAG Foliage - "
+            "standart teknikler, motorda yok"),
+    Feature(135, 135, "C", "DONE", "Wind Animation - content/wind.hpp sample_wind() (noise.hpp uzerine, foliage.vert'in ihtiyaci), KAYNAK+testler"),
+    Feature(136, 136, "C", "TODO", "Foliage Interaction"),
     Feature(137, 137, "C", "DONE", "Gerstner Dalgalari - content/water_wave.hpp (GPU Gems formulu), KAYNAK+testler"),
     Feature(138, 160, "C", "TODO",
             "FFT Waves, RT su yansimasi, kopuk/kirilma/underwater, sac/kumas/yikim, hava durumu, "
@@ -294,14 +297,16 @@ FEATURES: list[Feature] = [
     Feature(452, 452, "J", "DONE", "Ters Kinematik (IK) - sim/ik.hpp analitik iki-kemik cozucu, KAYNAK+testler, kablolama bekliyor"),
     Feature(453, 453, "J", "DONE", "Voxel Teknolojisi - content/voxel.hpp (gorunen-yuz meshleme) KAYNAK+testler, kablolama bekliyor"),
     Feature(454, 456, "J", "OUT_OF_SCOPE", "Katlanabilir Telefon, Derin Baglantilar, Uygulama Ici Guncellemeler"),
-    Feature(457, 457, "J", "TODO", "Varlik Paketleme"),
+    Feature(457, 457, "J", "DONE", "Varlik Paketleme - content/pack.hpp (isimle aranabilir tek-dosya format), KAYNAK+testler"),
     Feature(458, 458, "J", "OUT_OF_SCOPE", "Geriye Donuk Uyumluluk"),
     Feature(459, 459, "J", "DONE", "Coklu Dokunmatik (platform/touch.hpp - VAR) + Jest (platform/gesture.hpp Tap+Pinch - KAYNAK+testler, kablolama bekliyor)"),
     Feature(460, 463, "J", "OUT_OF_SCOPE", "Oyun Ici Sohbet, Oyun Ici Ekonomi, Basarimlar, Analitik Dashboard"),
     Feature(464, 469, "J", "TODO", "Frame Pacing, Desync Detector, Contact Shadow, Shadow Atlas, Reflection Probe, Light Probes (dup)"),
     Feature(470, 470, "J", "DONE", "Clustered Lighting (dup)"),
-    Feature(471, 494, "J", "TODO",
-            "Weighted Blended OIT, Wind Animation, God Rays, Aurora, Yildizlar, Volumetric Clouds, "
+    Feature(471, 471, "J", "TODO", "Weighted Blended OIT (dup)"),
+    Feature(472, 472, "J", "DONE", "Wind Animation (dup) - content/wind.hpp, KAYNAK+testler"),
+    Feature(473, 494, "J", "TODO",
+            "God Rays, Aurora, Yildizlar, Volumetric Clouds, "
             "Height/Volumetric Fog, FFT Waves, Underwater, Neural Hair, GPU Cloth, Voronoi Fracture, "
             "MSDF Text, H.265/AV1, Camera Shake/DOF, Motion Blur, Lens Flare, Color Grading, TAA, "
             "NSS-AA, Hybrid AA (dup B/C)"),

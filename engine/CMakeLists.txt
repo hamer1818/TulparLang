@@ -186,6 +186,7 @@ add_dependencies(engine_renderer engine_layer_check)
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
 add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp
     content/voxel.cpp content/morph.cpp content/terrain.cpp content/lod_select.cpp content/water_wave.cpp
+    content/pack.cpp content/wind.cpp
     content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
@@ -240,6 +241,8 @@ set(ENGINE_TEST_SOURCES
     tests/test_morph.cpp
     tests/test_terrain.cpp
     tests/test_lod_select.cpp
+    tests/test_pack.cpp
+    tests/test_wind.cpp
     tests/test_water_wave.cpp
     tests/test_random.cpp
     tests/test_noise.cpp

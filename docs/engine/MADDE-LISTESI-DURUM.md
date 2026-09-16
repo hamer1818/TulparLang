@@ -85,7 +85,9 @@ Birebir `VIZYON.md` SS1 + SS1.1 ile eslesiyor.
 |---|---|---|
 | 107 | Heightmap Terrain - content/terrain.hpp generate_heightmap()+sample_height() (fbm_2d uzerine), KAYNAK+testler | ✅ DONE |
 | 108 | Splatting - content/terrain.hpp compute_splat_weights() (yukseklik-bantli yamuk agirlik), KAYNAK+testler | ✅ DONE |
-| 109-136 | Tessellation, Virtual Terrain, sky/fog, particle/decal/foliage - standart teknikler, motorda yok | 🔧 TODO |
+| 109-134 | Tessellation, Virtual Terrain, sky/fog, particle/decal, Billboard/Cross-Quad/Mesh/Cluster-DAG Foliage - standart teknikler, motorda yok | 🔧 TODO |
+| 135 | Wind Animation - content/wind.hpp sample_wind() (noise.hpp uzerine, foliage.vert'in ihtiyaci), KAYNAK+testler | ✅ DONE |
+| 136 | Foliage Interaction | 🔧 TODO |
 | 137 | Gerstner Dalgalari - content/water_wave.hpp (GPU Gems formulu), KAYNAK+testler | ✅ DONE |
 | 138-160 | FFT Waves, RT su yansimasi, kopuk/kirilma/underwater, sac/kumas/yikim, hava durumu, SSS/OIT/fur - standart teknikler, motorda yok | 🔧 TODO |
 | 161 | Morph Targets - content/morph.hpp (base+agirlikli delta toplami), KAYNAK+testler | ✅ DONE |
@@ -269,24 +271,26 @@ Kategori D'nin 232-250 araligiyla icerik olarak buyuk olcude cakisiyor (ayni 20 
 | 452 | Ters Kinematik (IK) - sim/ik.hpp analitik iki-kemik cozucu, KAYNAK+testler, kablolama bekliyor | ✅ DONE |
 | 453 | Voxel Teknolojisi - content/voxel.hpp (gorunen-yuz meshleme) KAYNAK+testler, kablolama bekliyor | ✅ DONE |
 | 454-456 | Katlanabilir Telefon, Derin Baglantilar, Uygulama Ici Guncellemeler | 🚫 OUT_OF_SCOPE |
-| 457 | Varlik Paketleme | 🔧 TODO |
+| 457 | Varlik Paketleme - content/pack.hpp (isimle aranabilir tek-dosya format), KAYNAK+testler | ✅ DONE |
 | 458 | Geriye Donuk Uyumluluk | 🚫 OUT_OF_SCOPE |
 | 459 | Coklu Dokunmatik (platform/touch.hpp - VAR) + Jest (platform/gesture.hpp Tap+Pinch - KAYNAK+testler, kablolama bekliyor) | ✅ DONE |
 | 460-463 | Oyun Ici Sohbet, Oyun Ici Ekonomi, Basarimlar, Analitik Dashboard | 🚫 OUT_OF_SCOPE |
 | 464-469 | Frame Pacing, Desync Detector, Contact Shadow, Shadow Atlas, Reflection Probe, Light Probes (dup) | 🔧 TODO |
 | 470 | Clustered Lighting (dup) | ✅ DONE |
-| 471-494 | Weighted Blended OIT, Wind Animation, God Rays, Aurora, Yildizlar, Volumetric Clouds, Height/Volumetric Fog, FFT Waves, Underwater, Neural Hair, GPU Cloth, Voronoi Fracture, MSDF Text, H.265/AV1, Camera Shake/DOF, Motion Blur, Lens Flare, Color Grading, TAA, NSS-AA, Hybrid AA (dup B/C) | 🔧 TODO |
+| 471 | Weighted Blended OIT (dup) | 🔧 TODO |
+| 472 | Wind Animation (dup) - content/wind.hpp, KAYNAK+testler | ✅ DONE |
+| 473-494 | God Rays, Aurora, Yildizlar, Volumetric Clouds, Height/Volumetric Fog, FFT Waves, Underwater, Neural Hair, GPU Cloth, Voronoi Fracture, MSDF Text, H.265/AV1, Camera Shake/DOF, Motion Blur, Lens Flare, Color Grading, TAA, NSS-AA, Hybrid AA (dup B/C) | 🔧 TODO |
 | 495 | PBR (dup) | ✅ DONE |
 | 496-500 | Layered Materials, Shader Graph, HZB/Software/Hybrid Occlusion (dup) | 🔧 TODO |
 
 ## Özet (kesin — kodla üretildi)
 
-`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 203 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
+`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 207 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
 
 | Durum | Madde sayısı |
 |---|---|
-| ✅ DONE | 45 |
-| 🔧 TODO | 162 |
+| ✅ DONE | 48 |
+| 🔧 TODO | 159 |
 | 🔍 VERIFIED | 76 |
 | 📗 STANDARD | 95 |
 | 📚 RESEARCH | 91 |
