@@ -244,6 +244,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_temporal.cpp
     tests/test_pack.cpp
     tests/test_input.cpp
+    tests/test_layout.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.

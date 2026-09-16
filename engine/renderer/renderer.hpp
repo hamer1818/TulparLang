@@ -85,6 +85,28 @@ struct PbrParams {
   Vec3 emissive{0, 0, 0};   // YAZAR sRGB rengi; dogrusala cevrilip eklenir
 };
 
+// --- PBR DOKULARI (set 1, binding 2/3/4) ------------------------------------
+// glTF 2.0'in doku basina degisen malzeme kanallari. Hepsi OPSIYONEL: gecersiz
+// tutamac = o kanal icin CARPAN yolu (bugunku goruntu). Shader'da her biri
+// MALZEME BASINA TEKDUZE bir dal — yani dokusu olmayan malzeme ne ornekleme
+// ne de ALU odemez (dal draw icinde sabit, dalga ici ayrisma yok). Bu, bindless
+// olmayan klasik sette bir sampler daha eklemenin TBDR'daki tek makul sekli:
+// ucret yalnizca dokuyu GERCEKTEN kullanan malzemede.
+//
+// KANAL SOZLESMESI (glTF 2.0 spec; cgltf SAF AYRISTIRICI, kanal esleme
+// tasimaz — o yuzden burada yazili ve `content_gltf_orm_channel_mapping`
+// kapisi olcuyor):
+//   metallicRoughness dokusu: R = (kullanilmaz / occlusion), G = ROUGHNESS, B = METALLIC
+//   occlusionTexture:         R = occlusion (cogu varlikta AYNI goruntu)
+// Doku degerleri CARPANLARLA CARPILIR (spec: "multiplied with the texture values").
+struct PbrTextures {
+  TextureHandle orm{};      // metallicRoughness (G puruzluluk, B metal, R occlusion)
+  TextureHandle normal{};   // teget uzayi normal haritasi (DOGRUSAL yuklenmeli)
+  TextureHandle emissive{}; // isima dokusu (sRGB yuklenmeli), emissive carpaniyla carpilir
+  float normal_scale = 1.0f;       // glTF normalTexture.scale (xy'yi olcekler)
+  float occlusion_strength = 0.0f; // glTF occlusionTexture.strength; 0 = occlusion YOK
+};
+
 // GGX normal dagiliminin normalizasyonu. Unnormalized = KONTROL kipi
 // (UiSortMode::BlendFirst ile ayni ruh): a^2 payini BILEREK dusurur, boylece
 // enerji kapisinin gercekten olcup olcmedigi gosterilebilir. Urunde hep Ggx.
@@ -341,6 +363,16 @@ public:
   MaterialHandle create_material(TextureHandle albedo, Vec3 color = {1, 1, 1});
   // PBR malzeme (Cook-Torrance). Yukleme aninda cagrilir.
   MaterialHandle create_material(TextureHandle albedo, Vec3 color, const PbrParams &pbr);
+  // PBR malzeme + doku basina kanallar (ORM / normal / isima). Yukleme aninda.
+  MaterialHandle create_material(TextureHandle albedo, Vec3 color, const PbrParams &pbr, const PbrTextures &tex);
+  // Dokulari yerinde degistirir (descriptor yazimi + UBO maskesi). KARE DISINDA.
+  bool set_material_textures(MaterialHandle m, const PbrTextures &tex);
+  PbrTextures material_textures(MaterialHandle m) const;
+  // OLCUM: set 1'in baglama sayisi ve malzeme UBO'sunun cihaz hizasina
+  // yuvarlanmis adim boyu. Butce kapisi bunlari basar (once/sonra karsilastirma).
+  static constexpr uint32_t kMaterialBindings = 5; // albedo, UBO, ORM, normal, isima
+  uint32_t material_ubo_stride() const { return mat_ubo_stride_; }
+  static constexpr uint32_t kMaterialUboBytes = 64;
   // Parametreleri yerinde gunceller (malzeme UBO'suna yazar). KARE DISINDA
   // cagrilir: tampon host-visible ve ucuslu kare basina KOPYALANMAZ.
   bool set_material_pbr(MaterialHandle m, const PbrParams &pbr);
@@ -555,14 +587,20 @@ private:
     uint32_t texture = 0;
     Vec3 color{1, 1, 1};
     PbrParams pbr{};
+    PbrTextures tex{};
     bool is_pbr = false;
   };
   // Malzeme basina GPU blogu (std140): set 1, binding 1 — mesh.frag MatBlock.
   struct MaterialUbo {
     float pbr[4];      // x metallic, y algisal puruzluluk, z yansitirlik, w model (0/1)
     float emissive[4]; // rgb DOGRUSAL isima
+    // Doku maskeleri: shader'in MALZEME BASINA TEKDUZE dallari. 32 -> 64 bayt
+    // buyume GPU'da BEDAVA: adim boyu zaten cihazin minUniformBufferOffsetAlignment'i
+    // (masaustu 64, Mali 256) — olculen deger material_ubo_stride().
+    float tex[4];  // x ORM var mi, y normal var mi, z isima dokusu var mi, w normal olcegi
+    float tex2[4]; // x occlusion gucu (ORM.R; 0 = occlusion yok), y/z/w bos
   };
-  static_assert(sizeof(MaterialUbo) == 32, "std140: MatBlock 32 bayt");
+  static_assert(sizeof(MaterialUbo) == 64, "std140: MatBlock 64 bayt");
   static constexpr uint32_t kNoSkin = 0xFFFFFFFFu;
   static constexpr uint32_t kNoBatch = 0xFFFFFFFFu;
   struct Draw {
@@ -575,6 +613,16 @@ private:
     float reactive;       // 0..1 MV guvenilmezlik maskesi
     uint32_t batch;       // GPU cull kumesi; kNoBatch = CPU yolunda cizilir
   };
+  // ui.vert'in push blogu: GLSL Push { vec2 screen; vec2 rot; float encode; }.
+  // Eskiden burada ciplak bir `const float push[5]` vardi (renderer.cpp);
+  // adsiz oldugu icin yerlesim denetimi onu KAPSAYAMIYORDU — GLSL blogu
+  // degisirse hicbir sey uyarmazdi. Adlandirilmis struct denetlenebilir.
+  struct UiPush { // = 20 bayt
+    float screen[2]; // ui_w_, ui_h_
+    float rot[2];    // cos(ui_rot_), sin(ui_rot_)
+    float encode;    // hedef UNORM ise 1 (shader kodlar), SRGB ise 0
+  };
+  static_assert(sizeof(UiPush) == 20, "ui.vert push blogu 20 bayt");
   struct Push { // GLSL Push { mat4 model; vec4 color; uvec4 skin; } = 96 bayt
     Mat4 model;
     float color[4];
@@ -620,7 +668,9 @@ private:
                          VkPipeline *depth, VkPipeline *color, VkPipeline *shadow);
   bool make_shadow(); // render pass + goruntu + sampler + boru hatti
   static Mat4 cascade_matrix(Vec3 dir, Vec3 center, float radius, float depth, uint32_t tile);
-  MaterialHandle create_material_impl(TextureHandle albedo, Vec3 color, const PbrParams &pbr, bool is_pbr);
+  MaterialHandle create_material_impl(TextureHandle albedo, Vec3 color, const PbrParams &pbr, bool is_pbr,
+                                     const PbrTextures &tex);
+  void write_material_set(uint32_t id); // set 1'in 5 baglamasini yazar
   void write_material_ubo(uint32_t id);
   bool make_material_layout();
   bool make_ui(VkRenderPass rp, Arena &arena);

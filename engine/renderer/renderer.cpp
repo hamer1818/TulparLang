@@ -874,8 +874,8 @@ void Renderer::ui_emit(VkCommandBuffer cb, bool overdraw) {
   ui_stats_.opaque = opaque_n;
   ui_stats_.blended = n - opaque_n;
   ui_stats_.sdf_quads = sdf_n;
-  const float push[5] = {ui_w_, ui_h_, std::cos(ui_rot_), std::sin(ui_rot_), cfg_.srgb_target ? 0.0f : 1.0f};
-  a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, push);
+  const UiPush push{{ui_w_, ui_h_}, {std::cos(ui_rot_), std::sin(ui_rot_)}, cfg_.srgb_target ? 0.0f : 1.0f};
+  a.vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, &push);
   VkDeviceSize off = 0;
   a.vkCmdBindVertexBuffers(cb, 0, 1, &ui_buf_[frame_], &off);
   VkPipeline bound = VK_NULL_HANDLE;
@@ -981,22 +981,28 @@ const UiStats &Renderer::ui_fetch_stats() {
 
 bool Renderer::make_material_layout() {
   rhi::VkApi &a = dev_->api();
-  // binding 0: albedo dokusu, binding 1: PBR parametreleri (32 bayt, std140).
-  VkDescriptorSetLayoutBinding b[2]{};
-  b[0].binding = 0;
-  b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  b[0].descriptorCount = 1;
-  b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-  b[1].binding = 1;
-  b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  b[1].descriptorCount = 1;
-  b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  // binding 0: albedo, 1: PBR parametreleri (64 bayt std140), 2: ORM
+  // (metallicRoughness), 3: teget-uzayi normal, 4: isima dokusu.
+  //
+  // NEDEN 3 SAMPLER DAHA, TBDR'DA: sampler EKLENTI (attachment) DEGILDIR —
+  // rhi/tile_budget.hpp'nin saydigi iki sayi (eklenti adedi, bit/piksel renk
+  // deposu) BU DEGISIKLIKTE AYNEN KALIR; degisen sey yalnizca ornekleme
+  // maliyetidir ve o da shader'da malzeme basina TEKDUZE bir dalin ardindadir.
+  // Dokusuz malzeme 1x1 varsayilana baglanir ama ONU DA ORNEKLEMEZ (dal kapali).
+  constexpr uint32_t kNTex = kMaterialBindings - 1; // 4 combined image sampler
+  VkDescriptorSetLayoutBinding b[kMaterialBindings]{};
+  for (uint32_t i = 0; i < kMaterialBindings; i++) {
+    b[i].binding = i;
+    b[i].descriptorType = i == 1 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[i].descriptorCount = 1;
+    b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  }
   VkDescriptorSetLayoutCreateInfo sli{};
   sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  sli.bindingCount = 2;
+  sli.bindingCount = kMaterialBindings;
   sli.pBindings = b;
   if (a.vkCreateDescriptorSetLayout(dev_->handle(), &sli, nullptr, &mat_layout_) != VK_SUCCESS) return false;
-  VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cfg_.max_materials},
+  VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cfg_.max_materials * kNTex},
                                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cfg_.max_materials}};
   VkDescriptorPoolCreateInfo dpi{};
   dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1130,11 +1136,14 @@ TextureHandle Renderer::create_texture(const uint8_t *rgba, uint32_t w, uint32_t
 MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color) {
   // Varsayilan model: cfg_.pbr_default kapaliyken LAMBERT (bugunku goruntu).
   PbrParams def;
-  MaterialHandle h = create_material_impl(albedo, color, def, cfg_.pbr_default);
+  MaterialHandle h = create_material_impl(albedo, color, def, cfg_.pbr_default, PbrTextures{});
   return h;
 }
 MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color, const PbrParams &pbr) {
-  return create_material_impl(albedo, color, pbr, true);
+  return create_material_impl(albedo, color, pbr, true, PbrTextures{});
+}
+MaterialHandle Renderer::create_material(TextureHandle albedo, Vec3 color, const PbrParams &pbr, const PbrTextures &tex) {
+  return create_material_impl(albedo, color, pbr, true, tex);
 }
 // Malzeme UBO'suna (set 1, binding 1) yazar. is_pbr, shader'in model dalini secer.
 void Renderer::write_material_ubo(uint32_t id) {
@@ -1146,6 +1155,15 @@ void Renderer::write_material_ubo(uint32_t id) {
   u.pbr[3] = m.is_pbr ? 1.0f : 0.0f;
   const Vec3 e = srgb_to_linear(m.pbr.emissive); // yazar sRGB verir
   u.emissive[0] = e.x; u.emissive[1] = e.y; u.emissive[2] = e.z; u.emissive[3] = 0.0f;
+  // Doku maskeleri: shader bunlara gore MALZEME BASINA TEKDUZE dallanir.
+  // Maske 0 iken o sampler'a HIC dokunulmaz — dokusuz malzemenin goruntusu de
+  // maliyeti de degismez (A/B md5 kapisi bunu olcuyor).
+  u.tex[0] = m.tex.orm.valid() ? 1.0f : 0.0f;
+  u.tex[1] = m.tex.normal.valid() ? 1.0f : 0.0f;
+  u.tex[2] = m.tex.emissive.valid() ? 1.0f : 0.0f;
+  u.tex[3] = m.tex.normal_scale;
+  u.tex2[0] = m.tex.orm.valid() ? m.tex.occlusion_strength : 0.0f;
+  u.tex2[1] = u.tex2[2] = u.tex2[3] = 0.0f;
   std::memcpy(static_cast<uint8_t *>(mat_ubo_mem_.mapped) + (size_t)id * mat_ubo_stride_, &u, sizeof u);
 }
 bool Renderer::set_material_pbr(MaterialHandle h, const PbrParams &pbr) {
@@ -1155,13 +1173,63 @@ bool Renderer::set_material_pbr(MaterialHandle h, const PbrParams &pbr) {
   write_material_ubo(h.id);
   return true;
 }
+bool Renderer::set_material_textures(MaterialHandle h, const PbrTextures &tex) {
+  if (!h.valid() || h.id >= material_count_) return false;
+  if ((tex.orm.valid() && tex.orm.id >= texture_count_) || (tex.normal.valid() && tex.normal.id >= texture_count_) ||
+      (tex.emissive.valid() && tex.emissive.id >= texture_count_))
+    return false;
+  materials_[h.id].tex = tex;
+  write_material_set(h.id); // descriptor'lar (2/3/4) + UBO maskesi
+  write_material_ubo(h.id);
+  return true;
+}
+PbrTextures Renderer::material_textures(MaterialHandle h) const {
+  return (h.valid() && h.id < material_count_) ? materials_[h.id].tex : PbrTextures{};
+}
 PbrParams Renderer::material_pbr(MaterialHandle h) const {
   return (h.valid() && h.id < material_count_) ? materials_[h.id].pbr : PbrParams{};
 }
 bool Renderer::material_is_pbr(MaterialHandle h) const {
   return h.valid() && h.id < material_count_ && materials_[h.id].is_pbr;
 }
-MaterialHandle Renderer::create_material_impl(TextureHandle albedo, Vec3 color, const PbrParams &pbr, bool is_pbr) {
+// Set 1'in BUTUN baglamalarini yazar. Verilmeyen doku kanali 1x1 VARSAYILAN
+// dokuya baglanir: Vulkan'da shader'in STATIK olarak eristigi her baglama
+// gecerli bir descriptor istemeli, ama shader o baglamayi maske dali kapaliyken
+// ORNEKLEMEZ. Yani "gecerli ama okunmayan" bir descriptor: dogrulama sessiz,
+// GPU maliyeti sifir.
+void Renderer::write_material_set(uint32_t id) {
+  rhi::VkApi &a = dev_->api();
+  const Material &m = materials_[id];
+  const uint32_t def_tex = default_texture_.valid() ? default_texture_.id : m.texture;
+  const uint32_t ids[4] = {m.texture, m.tex.orm.valid() ? m.tex.orm.id : def_tex,
+                           m.tex.normal.valid() ? m.tex.normal.id : def_tex,
+                           m.tex.emissive.valid() ? m.tex.emissive.id : def_tex};
+  VkDescriptorImageInfo dii[4];
+  VkWriteDescriptorSet w[kMaterialBindings]{};
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < 4; i++) {
+    dii[i] = VkDescriptorImageInfo{tex_sampler_, textures_[ids[i]].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[n].dstSet = m.set;
+    w[n].dstBinding = i == 0 ? 0u : i + 1u; // 0 albedo, 2 ORM, 3 normal, 4 isima
+    w[n].descriptorCount = 1;
+    w[n].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[n].pImageInfo = &dii[i];
+    n++;
+  }
+  VkDescriptorBufferInfo dbi{mat_ubo_, (VkDeviceSize)id * mat_ubo_stride_, sizeof(MaterialUbo)};
+  w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  w[n].dstSet = m.set;
+  w[n].dstBinding = 1;
+  w[n].descriptorCount = 1;
+  w[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  w[n].pBufferInfo = &dbi;
+  n++;
+  a.vkUpdateDescriptorSets(dev_->handle(), n, w, 0, nullptr);
+}
+
+MaterialHandle Renderer::create_material_impl(TextureHandle albedo, Vec3 color, const PbrParams &pbr, bool is_pbr,
+                                              const PbrTextures &tex) {
   if (material_count_ >= cfg_.max_materials || !albedo.valid() || albedo.id >= texture_count_) return MaterialHandle{};
   rhi::VkApi &a = dev_->api();
   Material &m = materials_[material_count_];
@@ -1171,28 +1239,17 @@ MaterialHandle Renderer::create_material_impl(TextureHandle albedo, Vec3 color, 
   dai.descriptorSetCount = 1;
   dai.pSetLayouts = &mat_layout_;
   if (a.vkAllocateDescriptorSets(dev_->handle(), &dai, &m.set) != VK_SUCCESS) return MaterialHandle{};
-  VkDescriptorImageInfo dii{tex_sampler_, textures_[albedo.id].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-  VkDescriptorBufferInfo dbi{mat_ubo_, (VkDeviceSize)material_count_ * mat_ubo_stride_, sizeof(MaterialUbo)};
-  VkWriteDescriptorSet w[2]{};
-  w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  w[0].dstSet = m.set;
-  w[0].dstBinding = 0;
-  w[0].descriptorCount = 1;
-  w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  w[0].pImageInfo = &dii;
-  w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  w[1].dstSet = m.set;
-  w[1].dstBinding = 1;
-  w[1].descriptorCount = 1;
-  w[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  w[1].pBufferInfo = &dbi;
-  a.vkUpdateDescriptorSets(dev_->handle(), 2, w, 0, nullptr);
   m.texture = albedo.id;
   m.color = srgb_to_linear(color); // yazar sRGB verir, aydinlatma dogrusal
   m.pbr = pbr;
+  m.tex = tex;
+  if (m.tex.orm.valid() && m.tex.orm.id >= texture_count_) m.tex.orm = TextureHandle{};
+  if (m.tex.normal.valid() && m.tex.normal.id >= texture_count_) m.tex.normal = TextureHandle{};
+  if (m.tex.emissive.valid() && m.tex.emissive.id >= texture_count_) m.tex.emissive = TextureHandle{};
   m.is_pbr = is_pbr;
   const uint32_t id = material_count_;
   stats_.materials = ++material_count_;
+  write_material_set(id);
   write_material_ubo(id);
   return MaterialHandle{id};
 }

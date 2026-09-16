@@ -16,6 +16,11 @@ struct ClusterDag; // content/cluster_dag.hpp (Faz 9: kume DAG'i; ileri bildirim
 struct ModelImage {
   uint32_t width = 0, height = 0;
   uint8_t *rgba = nullptr; // Arena'da, width*height*4
+  // RENK UZAYI KULLANIMDAN turetilir, dosyadan degil: glTF goruntuleri renk
+  // uzayi tasimaz — baseColor/emissive sRGB, metallicRoughness/normal/occlusion
+  // DOGRUSAL veridir (spec). Yanlis uzay hicbir seyi kizartmaz, yalnizca
+  // puruzlulugu/normali sessizce egriltir; kapi: content_gltf_texture_colorspace.
+  bool srgb = true;
 };
 struct ModelMaterial {
   int32_t image = -1; // -1: dokusuz (beyaz)
@@ -28,6 +33,18 @@ struct ModelMaterial {
   float roughness = 1.0f;
   Vec3 emissive{0, 0, 0}; // glTF emissive_factor (dogrusal)
   bool has_pbr = false;   // dosyada pbr_metallic_roughness blogu VAR miydi
+  // Doku basina degisen kanallar (-1 = yok, o kanal yalniz carpandan gelir).
+  // ORM = glTF metallicRoughnessTexture: G ROUGHNESS, B METALLIC (spec);
+  // occlusionTexture AYNI goruntuyu gosteriyorsa R kanali occlusion olur ve
+  // ekstra sampler'a gerek kalmaz (yayginlasmis "ORM" paketlemesi).
+  int32_t orm_image = -1;
+  int32_t normal_image = -1;
+  int32_t emissive_image = -1;
+  float normal_scale = 1.0f;       // glTF normalTexture.scale
+  float occlusion_strength = 0.0f; // glTF occlusionTexture.strength; 0 = occlusion yok
+  // occlusionTexture ORM'den FARKLI bir goruntuyu gosteriyor: bugun okunmuyor
+  // (dorduncu sampler'a degmez). Sayilir, sessizce yutulmaz.
+  bool occlusion_separate = false;
 };
 constexpr uint32_t kModelMaxLods = 2; // LOD1, LOD2 (LOD0 = indices)
 constexpr uint32_t kModelMaxSkins = 4;
@@ -90,6 +107,9 @@ struct Model {
   ModelClip *clips = nullptr;        uint32_t clip_count = 0;
   Vec3 bounds_min{0, 0, 0}, bounds_max{0, 0, 0}; // ornek uzayinda, tum instance'lar
   ModelOptStats opt;
+  // Ayni goruntu hem renk (sRGB) hem veri (dogrusal) olarak kullanilmis:
+  // glTF'te gecersiz. Renk kazanir, sayac artar — sessiz yanlis yok.
+  uint32_t colorspace_conflicts = 0;
   char error[160] = {0};
 };
 

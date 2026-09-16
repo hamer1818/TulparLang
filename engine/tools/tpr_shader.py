@@ -923,14 +923,22 @@ def cmd_check(directory):
 
 
 def known_gaps(src):
-    """Bu .tprs hangi BILINEN Tulpar gramer bosluğunu kullaniyor?"""
+    """Bu .tprs hangi BILINEN ve HALA ACIK Tulpar bosluğunu kullaniyor?
+
+    Bu liste KAPANDIKCA KISALIR. 2026-09-16'da G3 (sabit boy dizi `T[N]`) ve
+    G4 (bit islemleri + tabanli sabitler) dile eklendi, yani o iki madde artik
+    bir bosluk DEGIL ve buradan cikarildi. Kapanmis bir boslugu listede
+    birakmak, denetimi "dusmesi beklenen" dosyalarla doldurup gercek bir
+    gerilemeyi gorunmez kilardi (bkz. Tuzaklar 8am: bayat beklenti = kor kapi).
+
+    Kalan tek acik madde `uint` ailesi: `0u`/`1u` isaretsiz sonekleri. Bu bir
+    GRAMER boslugu degil TIP SISTEMI boslugu (FAZ8.md T3) — `0u`'yu sessizce
+    `int` saymak yanlis bir zihin modeli kurar (`~0u == -1`).
+    """
     g = []
-    if re.search(r"\[\s*\d+\s*\]", src):
-        g.append("G3 sabit boy dizi")
-    body = re.sub(r"&&|\|\|", "", src)
-    body = re.sub(r"//[^\n]*", "", body)
-    if re.search(r"[&|^~]|<<|>>", body):
-        g.append("G4 bit islemleri")
+    body = re.sub(r"//[^\n]*", "", src)
+    if re.search(r"\b\d+[uU]\b", body):
+        g.append("T3 isaretsiz sonek (0u/1u)")
     return g
 
 
@@ -951,7 +959,12 @@ def cmd_tulpar_parse(directory):
     files = sorted(f for f in os.listdir(directory) if f.endswith(".tprs"))
     tmp = tempfile.mkdtemp(prefix="tprsparse")
     env = dict(os.environ, LC_ALL="C")
-    clean = expected = unexpected = 0
+    # IKI KOVA AYRI. Eskiden "beklenmeyen" hem IYILESMEYI (bosluk kapanmis,
+    # dosya artik geciyor) hem GERILEMEYI (bilinen boslugu olmayan dosya
+    # dusuyor) sayiyordu ve ikisi de cikisi 1 yapiyordu — yani iyi haber ile
+    # kotu haber ozet satirinda AYIRT EDILEMIYORDU. Gerileme kirmizi yapar;
+    # iyilesme yapmaz ama yuksek sesle "tabloyu guncelle" der.
+    clean = expected = iyilesme = gerileme = 0
     for f in files:
         src = open(os.path.join(directory, f)).read()
         dst = os.path.join(tmp, f[:-5] + ".tpr")
@@ -964,9 +977,10 @@ def cmd_tulpar_parse(directory):
         gaps = known_gaps(src)
         if n == 0:
             if gaps:
-                print("  SARI    %-24s parse hatasi yok ama %s bekleniyordu"
+                print("  IYILESME %-23s parse hatasi yok — %s artik bosluk DEGIL;"
+                      " known_gaps() guncellenmeli"
                       % (f[:-5], ", ".join(gaps)))
-                unexpected += 1
+                iyilesme += 1
             else:
                 print("  YESIL   %-24s Tulpar grameri kabul ediyor "
                       "(parse hatasi 0)" % f[:-5])
@@ -976,14 +990,18 @@ def cmd_tulpar_parse(directory):
                   % (f[:-5], n, ", ".join(gaps)))
             expected += 1
         else:
-            print("  KIRMIZI %-24s %d parse hatasi, bilinen bosluk YOK"
+            print("  KIRMIZI %-24s %d parse hatasi, bilinen bosluk YOK — GERILEME"
                   % (f[:-5], n))
-            unexpected += 1
+            gerileme += 1
     shutil.rmtree(tmp, ignore_errors=True)
-    print("\n%d dosya bugunku Tulpar grameriyle temiz, %d dosya BILINEN "
-          "bosluk (G3/G4) yuzunden dusuyor, %d beklenmeyen"
-          % (clean, expected, unexpected))
-    return 1 if unexpected else 0
+    print("\n%d dosya bugunku Tulpar grameriyle TEMIZ, %d dosya BILINEN acik "
+          "bosluk yuzunden dusuyor, %d gerileme, %d iyilesme (toplam %d)"
+          % (clean, expected, gerileme, iyilesme, len(files)))
+    if iyilesme:
+        print("UYARI: %d dosya beklenenden IYI — known_gaps() bayat, guncelle "
+              "(kapanmis bir bosluk listede kalirsa gercek gerileme gorunmez olur)."
+              % iyilesme)
+    return 1 if gerileme else 0
 
 
 def main():

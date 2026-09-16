@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Test varligi uretici: dama dokulu kup -> engine/tests/assets/checker_cube.gltf
                        UV kure (LOD/meshopt testi) -> engine/tests/assets/lod_sphere.gltf
+                       PBR dokulu duzlem       -> engine/tests/assets/pbr_plane.gltf
 
 Tek dosya: tampon ve PNG data URI olarak gomulu (cgltf ikisini de acar). Depoya
 girer; belirlenimli (ayni girdi, ayni bayt). Yeniden uretmek:
@@ -12,6 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(os.path.dirname(HERE), "tests", "assets", "checker_cube.gltf")
 OUT_SPHERE = os.path.join(os.path.dirname(HERE), "tests", "assets", "lod_sphere.gltf")
 OUT_SKIN = os.path.join(os.path.dirname(HERE), "tests", "assets", "skin_tube.gltf")
+OUT_PBR = os.path.join(os.path.dirname(HERE), "tests", "assets", "pbr_plane.gltf")
 
 
 def png_rgba(w, h, px):
@@ -245,8 +247,93 @@ def checker_png():
     print("%s (%d bayt)" % (out, os.path.getsize(out)))
 
 
+# --- PBR dokulu duzlem ------------------------------------------------------
+# NEDEN DUZLEM: geometrik normal SABIT, yani goruntudeki butun normal degisimi
+# NORMAL HARITASINDAN gelir — kapi baska hicbir seyi olcemez.
+#
+# Dokular (glTF 2.0 kanal sozlesmesi; cgltf bunu tasimaz, spec soyler):
+#   baseColor            sRGB  duz gri (ORM etkisini yalitmak icin)
+#   metallicRoughness    DOGRUSAL  R = occlusion rampasi (x), G = ROUGHNESS rampasi (x),
+#                                  B = METALLIC basamagi (y): alt yari dielektrik, ust yari metal
+#   normal               DOGRUSAL  sol yari DUZ (128,128,255), sag yari +X'e egik
+#   emissive             sRGB  dikey kirmizi seritler
+# occlusionTexture metallicRoughness ILE AYNI goruntuyu gosterir (yaygin "ORM"
+# paketlemesi) — motorun R kanalini bedavaya okudugu yol.
+NORMAL_TILT = (204, 128, 229)  # nx=+0.6, ny=0, nz=0.8 -> (n*0.5+0.5)*255
+
+
+def pbr_plane():
+    w = h = 64
+    base_px, orm_px, nrm_px, emi_px = [], [], [], []
+    for y in range(h):
+        for x in range(w):
+            base_px += [160, 160, 160, 255]
+            occ = 60 + (x * 195) // (w - 1)          # R: 60..255 rampa
+            rough = 10 + (x * 245) // (w - 1)        # G: 10..255 rampa (puruzluluk)
+            metal = 0 if y < h // 2 else 255         # B: basamak (metallic)
+            orm_px += [occ, rough, metal, 255]
+            nrm_px += list(NORMAL_TILT) + [255] if x >= w // 2 else [128, 128, 255, 255]
+            emi_px += [255, 30, 30, 255] if (x // 8) % 2 == 0 else [0, 0, 0, 255]
+    pngs = [png_rgba(w, h, base_px), png_rgba(w, h, orm_px), png_rgba(w, h, nrm_px), png_rgba(w, h, emi_px)]
+
+    # Duzlem: XZ, +Y'ye bakar, UV 0..1. Disaridan (yukaridan) CCW.
+    pos = [[-1, 0, 1], [1, 0, 1], [1, 0, -1], [-1, 0, -1]]
+    nrm = [[0, 1, 0]] * 4
+    uv = [[0, 1], [1, 1], [1, 0], [0, 0]]
+    idx = [0, 1, 2, 0, 2, 3]
+    bpos = b"".join(struct.pack("<3f", *p) for p in pos)
+    bnrm = b"".join(struct.pack("<3f", *n) for n in nrm)
+    buv = b"".join(struct.pack("<2f", *t) for t in uv)
+    bidx = struct.pack("<6H", *idx)
+    buf = bpos + bnrm + buv + bidx + b"\x00" * ((4 - len(bidx) % 4) % 4)
+    g = {
+        "asset": {"version": "2.0", "generator": "tulpar make_test_gltf.py"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "name": "pbr_plane"}],
+        "meshes": [{"name": "plane", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+                                                     "indices": 3, "material": 0}]}],
+        "materials": [{"name": "pbr_tex",
+                       "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "baseColorFactor": [1, 1, 1, 1],
+                                                "metallicRoughnessTexture": {"index": 1},
+                                                "metallicFactor": 1.0, "roughnessFactor": 1.0},
+                       "normalTexture": {"index": 2, "scale": 0.75},
+                       "occlusionTexture": {"index": 1, "strength": 0.6},
+                       "emissiveTexture": {"index": 3},
+                       "emissiveFactor": [1, 1, 1]}],
+        "textures": [{"source": i, "sampler": 0} for i in range(4)],
+        "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}],
+        "images": [{"uri": "data:image/png;base64," + base64.b64encode(p).decode(), "mimeType": "image/png"} for p in pngs],
+        "buffers": [{"byteLength": len(buf), "uri": "data:application/octet-stream;base64," + base64.b64encode(buf).decode()}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(bpos), "target": 34962},
+            {"buffer": 0, "byteOffset": len(bpos), "byteLength": len(bnrm), "target": 34962},
+            {"buffer": 0, "byteOffset": len(bpos) + len(bnrm), "byteLength": len(buv), "target": 34962},
+            {"buffer": 0, "byteOffset": len(bpos) + len(bnrm) + len(buv), "byteLength": len(bidx), "target": 34963},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3",
+             "min": [-1, 0, -1], "max": [1, 0, 1]},
+            {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
+            {"bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2"},
+            {"bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR"},
+        ],
+    }
+    with open(OUT_PBR, "w") as f:
+        json.dump(g, f, separators=(",", ":"), sort_keys=True)
+    print("%s (%d bayt): 4 vertex, 4 doku (base sRGB / ORM dogrusal / normal dogrusal / isima sRGB)"
+          % (OUT_PBR, os.path.getsize(OUT_PBR)))
+    # Normal ve ORM'nin PNG'leri texpack kapisi icin ayrica diske yazilir.
+    for name, px in (("normal_64.png", nrm_px), ("orm_64.png", orm_px)):
+        out = os.path.join(os.path.dirname(HERE), "tests", "assets", name)
+        with open(out, "wb") as f:
+            f.write(png_rgba(w, h, px))
+        print("%s (%d bayt)" % (out, os.path.getsize(out)))
+
+
 if __name__ == "__main__":
     main()
     sphere()
     skin_tube()
     checker_png()
+    pbr_plane()

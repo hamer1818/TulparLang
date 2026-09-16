@@ -1042,3 +1042,292 @@ ENGINE_TEST(content_gltf_metallic_roughness_reaches_material) {
   std::remove(p_pbr);
   std::remove(p_duz);
 }
+
+// --- PBR DOKULARI: glTF -> malzeme ------------------------------------------
+// NEDEN BU KAPI VAR: PBR carpanlari (metallic/roughness/emissive) bir onceki
+// dilimde akmaya basladi ama DOKULAR akmiyordu; her malzeme doku BASINA degil
+// malzeme basina tek skaler cift kullaniyordu. Ekranda yine hicbir sey
+// kizarmaz — yuzey "makul" gorunur, yalnizca duzdur. Okuma CPU tarafinda, tam
+// da kirildigi yerde olculuyor (GPU gerekmez).
+//
+// Ayrica burada SATICI AYRISTIRICISININ tuzagi var: cgltf `texture_view.scale`i
+// yalniz o JSON nesnesi VARSA 1'e kurar; normalTexture yazilmamissa alan SIFIR
+// kalir. Kosulsuz okunsa butun normal haritalari duzlesirdi — KONTROL bloku
+// tam olarak bunu olcuyor.
+ENGINE_TEST(content_gltf_pbr_textures_reach_material) {
+  char path[1024];
+  if (!asset_path(path, sizeof path, "pbr_plane.gltf")) { skip("varlik yok (make_test_gltf.py)"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(32u << 20, "pbr_tex_test")) { CHECK(false); return; }
+  content::Model m;
+  bool ok = content::gltf_load(sys, path, &m);
+  if (!ok) std::printf("    [bilgi] yukleme hatasi: %s\n", m.error);
+  CHECK(ok);
+  if (!ok) return;
+  CHECK(m.material_count == 1 && m.image_count == 4);
+  if (m.material_count != 1 || m.image_count != 4) return;
+  const content::ModelMaterial &mm = m.materials[0];
+  std::printf("    [bilgi] malzeme dokulari: albedo %d, ORM %d, normal %d, isima %d | normal olcegi %.2f, "
+              "occlusion gucu %.2f (ayri occlusion dokusu: %d)\n",
+              mm.image, mm.orm_image, mm.normal_image, mm.emissive_image, (double)mm.normal_scale,
+              (double)mm.occlusion_strength, (int)mm.occlusion_separate);
+  bool indices = mm.image == 0 && mm.orm_image == 1 && mm.normal_image == 2 && mm.emissive_image == 3;
+  CHECK(indices);
+  // normalTexture.scale = 0.75, occlusionTexture.strength = 0.6 (ayni goruntu -> ORM.R bedava)
+  bool scales = mm.normal_scale > 0.74f && mm.normal_scale < 0.76f && mm.occlusion_strength > 0.59f &&
+                mm.occlusion_strength < 0.61f && !mm.occlusion_separate;
+  CHECK(scales);
+
+  // KONTROL: ayni sema, DOKUSUZ malzeme. Indeksler -1 KALMALI ve normal olcegi
+  // 1.0 olmali (0.0 DEGIL) — cgltf'in kurmadigi varsayilan burada yakalanir.
+  // Bu blok gecmezse yukaridaki "akiyor" olcumu her malzemeye ayni sayiyi
+  // yazan bir koda da yesil verirdi.
+  const char *kSablon =
+      "{\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"metallicFactor\":0.5,\"roughnessFactor\":0.5}}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"min\":[0,0,0],\"max\":[1,1,0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,"
+      "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA\"}]}";
+  char kpath[256];
+  std::snprintf(kpath, sizeof kpath, "/tmp/tulpar_pbr_tex_kontrol.gltf");
+  FILE *f = std::fopen(kpath, "wb");
+  if (!f) { skip("/tmp yazilamadi"); return; }
+  std::fwrite(kSablon, 1, std::strlen(kSablon), f);
+  std::fclose(f);
+  content::Model k;
+  bool ok_k = content::gltf_load(sys, kpath, &k);
+  CHECK(ok_k);
+  bool kontrol = ok_k && k.material_count == 1 && k.materials[0].orm_image < 0 && k.materials[0].normal_image < 0 &&
+                 k.materials[0].emissive_image < 0 && k.materials[0].normal_scale == 1.0f &&
+                 k.materials[0].occlusion_strength == 0.0f;
+  CHECK(kontrol);
+  if (ok_k)
+    std::printf("    [bilgi] KONTROL dokusuz malzeme: ORM %d normal %d isima %d, normal olcegi %.2f "
+                "(cgltf'in kurmadigi varsayilan: 0.00 olsaydi butun normal haritalari duzlesirdi)\n",
+                k.materials[0].orm_image, k.materials[0].normal_image, k.materials[0].emissive_image,
+                (double)k.materials[0].normal_scale);
+  std::remove(kpath);
+}
+
+// --- RENK UZAYI: kullanimdan turetiliyor mu? --------------------------------
+// glTF goruntusu renk uzayi TASIMAZ; onu malzemedeki yeri belirler (spec):
+// baseColor/emissive = sRGB, metallicRoughness/normal = DOGRUSAL veri. Yanlis
+// uzay "goruntu biraz yanlis, hicbir sey kizarmaz" sinifinin ders kitabi
+// ornegidir: sRGB yuklenmis bir ORM dokusunda 0.5 puruzluluk GPU'da 0.21 olur.
+// Burada CPU siniflandirmasi, GPU tarafi renderer_texture_colorspace_shifts_roughness.
+ENGINE_TEST(content_gltf_texture_colorspace) {
+  char path[1024];
+  if (!asset_path(path, sizeof path, "pbr_plane.gltf")) { skip("varlik yok (make_test_gltf.py)"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(32u << 20, "colorspace_test")) { CHECK(false); return; }
+  content::Model m;
+  bool ok = content::gltf_load(sys, path, &m);
+  CHECK(ok);
+  if (!ok || m.image_count != 4) { CHECK(false); return; }
+  std::printf("    [bilgi] goruntu renk uzaylari: base %s, ORM %s, normal %s, isima %s (catisma %u)\n",
+              m.images[0].srgb ? "sRGB" : "DOGRUSAL", m.images[1].srgb ? "sRGB" : "DOGRUSAL",
+              m.images[2].srgb ? "sRGB" : "DOGRUSAL", m.images[3].srgb ? "sRGB" : "DOGRUSAL", m.colorspace_conflicts);
+  bool spaces = m.images[0].srgb && !m.images[1].srgb && !m.images[2].srgb && m.images[3].srgb;
+  CHECK(spaces);
+  CHECK(m.colorspace_conflicts == 0);
+
+  // KONTROL: AYNI goruntu hem baseColor hem metallicRoughness. glTF'te gecersiz;
+  // renk kazanmali (sRGB) ve catisma SAYILMALI. Bu blok olmadan siniflandirma
+  // "her seye dogrusal de" diyen bir koda da yesil verirdi.
+  const char *kSablon =
+      "{\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0},"
+      "\"metallicRoughnessTexture\":{\"index\":0}}}],"
+      "\"textures\":[{\"source\":0}],"
+      "\"images\":[{\"uri\":\"data:image/png;base64,"
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"min\":[0,0,0],\"max\":[1,1,0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,"
+      "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA\"}]}";
+  char kpath[256];
+  std::snprintf(kpath, sizeof kpath, "/tmp/tulpar_colorspace_kontrol.gltf");
+  FILE *f = std::fopen(kpath, "wb");
+  if (!f) { skip("/tmp yazilamadi"); return; }
+  std::fwrite(kSablon, 1, std::strlen(kSablon), f);
+  std::fclose(f);
+  content::Model k;
+  bool ok_k = content::gltf_load(sys, kpath, &k);
+  if (!ok_k) std::printf("    [bilgi] kontrol yukleme hatasi: %s\n", k.error);
+  CHECK(ok_k);
+  bool kontrol = ok_k && k.image_count == 1 && k.images[0].srgb && k.colorspace_conflicts == 1;
+  CHECK(kontrol);
+  if (ok_k)
+    std::printf("    [bilgi] KONTROL ayni goruntu iki rolde: %s, catisma %u (renk kazanir, sessiz degil)\n",
+                k.images[0].srgb ? "sRGB" : "DOGRUSAL", k.colorspace_conflicts);
+  std::remove(kpath);
+}
+
+// --- ASTC + NORMAL HARITASI: hangi kodlama? ---------------------------------
+// "Once olc, sonra karar ver." Normal haritasi RENK DEGILDIR ve dogru olcut
+// PSNR degil ACISAL hatadir. astcenc'in ASTCENC_FLG_MAP_NORMAL kipi tam bunun
+// icin var: iki kanal saklar (girdi duzeni rrrg — X parlaklikta, Y alfada),
+// Z'yi cozerken kurar ve hatayi acisal olarak azaltmaya calisir.
+//
+// Kapi ayni kaynagi UC blok boyunda, IKI kodlamayla olcer ve KARARI sayilarla
+// verir. Blok boyu onemli: iki kanalli kip bit butcesi SIKISINCA kazanir
+// (8x8'de blok basina ayni 128 bit, dort kat piksel); 4x4'te butce zaten bol.
+// KONTROL: ayni kodlama, daha KABA blok (8x8) 4x4'ten ACIKCA kotu olmali —
+// olmuyorsa olcut kodlama kalitesini hic gormuyordur ve butun tablo bostur.
+ENGINE_TEST(content_astc_normal_map_encoding) {
+  static SystemArena sys;
+  if (!sys.reserve(160u << 20, "astc_normal")) { CHECK(false); return; }
+  const uint32_t W = 128, H = 128;
+  uint8_t *src = sys.alloc_array<uint8_t>(W * H * 4);
+  float *nx = sys.alloc_array<float>(W * H), *ny = sys.alloc_array<float>(W * H), *nz = sys.alloc_array<float>(W * H);
+  if (!src || !nx || !ny || !nz) { CHECK(false); return; }
+  // Kaynak: 16 piksellik yarim kure tumsekler — acisal degisim BOL, yon blok
+  // icinde hizla doner. Duz bir harita her kodlayiciya "mukemmel" gorunurdu.
+  for (uint32_t y = 0; y < H; y++)
+    for (uint32_t x = 0; x < W; x++) {
+      const float u = ((float)(x % 16) + 0.5f) / 16.0f * 2.0f - 1.0f;
+      const float v = ((float)(y % 16) + 0.5f) / 16.0f * 2.0f - 1.0f;
+      const float r2 = u * u + v * v;
+      float ax = u, ay = v, az = 1.0f;
+      if (r2 < 1.0f) az = std::sqrt(1.0f - r2);
+      else { const float inv = 1.0f / std::sqrt(r2); ax = u * inv * 0.9f; ay = v * inv * 0.9f; az = 0.436f; }
+      const float len = std::sqrt(ax * ax + ay * ay + az * az);
+      ax /= len; ay /= len; az /= len;
+      const uint32_t i = y * W + x;
+      nx[i] = ax; ny[i] = ay; nz[i] = az;
+      src[i * 4 + 0] = (uint8_t)(ax * 0.5f * 255.0f + 127.5f + 0.5f);
+      src[i * 4 + 1] = (uint8_t)(ay * 0.5f * 255.0f + 127.5f + 0.5f);
+      src[i * 4 + 2] = (uint8_t)(az * 0.5f * 255.0f + 127.5f + 0.5f);
+      src[i * 4 + 3] = 255;
+    }
+  const uint32_t blocks_wh[3] = {4, 6, 8};
+  const content::AstcMap kinds[2] = {content::AstcMap::Data, content::AstcMap::Normal};
+  const char *kind_name[2] = {"dogrusal RGB veri", "MAP_NORMAL (rrrg) "};
+  double mean_deg[2][3] = {}, max_deg[2][3] = {};
+  uint32_t bytes[2][3] = {};
+  bool ok = true;
+  for (int k = 0; k < 2 && ok; k++)
+    for (int b = 0; b < 3 && ok; b++) {
+      uint8_t *blk = nullptr, *dec = nullptr;
+      uint32_t n = 0;
+      const uint32_t bw = blocks_wh[b];
+      ok = content::astc_encode_rgba(sys, src, W, H, bw, bw, false, 90.0f, &blk, &n, kinds[k]);
+      if (ok) ok = content::astc_decode_rgba(sys, blk, n, W, H, bw, bw, false, &dec, kinds[k]);
+      if (!ok) break;
+      bytes[k][b] = n;
+      double acc = 0, mx = 0;
+      for (uint32_t i = 0; i < W * H; i++) {
+        float dx = dec[i * 4 + 0] / 255.0f * 2.0f - 1.0f;
+        float dy = dec[i * 4 + 1] / 255.0f * 2.0f - 1.0f;
+        float dz = dec[i * 4 + 2] / 255.0f * 2.0f - 1.0f;
+        const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-6f) { acc += 90.0; mx = 90.0; continue; }
+        dx /= len; dy /= len; dz /= len;
+        float d = dx * nx[i] + dy * ny[i] + dz * nz[i];
+        d = d > 1.0f ? 1.0f : (d < -1.0f ? -1.0f : d);
+        const double deg = std::acos((double)d) * 180.0 / 3.14159265358979;
+        acc += deg;
+        if (deg > mx) mx = deg;
+      }
+      mean_deg[k][b] = acc / (double)(W * H);
+      max_deg[k][b] = mx;
+    }
+  CHECK(ok);
+  if (!ok) return;
+  for (int k = 0; k < 2; k++)
+    for (int b = 0; b < 3; b++)
+      std::printf("    [bilgi] %s  %ux%u: ortalama %.3f derece, en buyuk %.2f derece, %u bayt\n", kind_name[k],
+                  blocks_wh[b], blocks_wh[b], mean_deg[k][b], max_deg[k][b], bytes[k][b]);
+  // KONTROL: olcut kodlama kalitesini goruyor mu? 8x8, 4x4'ten (dort kat az bit)
+  // ACIKCA kotu olmali. Gormuyorsa yukaridaki butun tablo hicbir sey soylemez.
+  bool metric_sees_bit_budget = mean_deg[0][2] > mean_deg[0][0] * 1.5 && mean_deg[1][2] > mean_deg[1][0] * 1.5;
+  CHECK(metric_sees_bit_budget);
+  std::printf("    [bilgi] KONTROL bit butcesi: 4x4 -> 8x8 acisal hata %.2f kat (dogrusal), %.2f kat (MAP_NORMAL)\n",
+              mean_deg[0][0] > 0 ? mean_deg[0][2] / mean_deg[0][0] : 0.0,
+              mean_deg[1][0] > 0 ? mean_deg[1][2] / mean_deg[1][0] : 0.0);
+  // KARAR, sayilarla: her blok boyunda hangi kodlama kazaniyor?
+  for (int b = 0; b < 3; b++)
+    std::printf("    [bilgi] KARAR %ux%u: MAP_NORMAL / dogrusal = %.2f  -> %s\n", blocks_wh[b], blocks_wh[b],
+                mean_deg[0][b] > 0 ? mean_deg[1][b] / mean_deg[0][b] : 0.0,
+                mean_deg[1][b] < mean_deg[0][b] ? "MAP_NORMAL" : "dogrusal RGB");
+  // Urun yolunda kullanilan kodlama (engine_texpack --tur normal) MUTLAK olarak
+  // yeterli olmali: 4x4'te ortalama acisal hata 2 derecenin altinda.
+  bool product_quality_is_enough = mean_deg[content::kAstcNormalUsesMapMode ? 1 : 0][0] < 2.0;
+  CHECK(product_quality_is_enough);
+}
+
+// --- KTX2: iki kanalli normal haritasinin duzeni kayboluyor mu? -------------
+// MAP_NORMAL ile sikistirilan doku RGB'de X'in KOPYASINI, alfada Y'yi tutar
+// (G/B kanallarinin agirligi kodlayicida SIFIRLANIR — astcenc_entry.cpp). Bunu
+// BILMEYEN bir tuketici `texture(...).xyz` okur, duz bir gri harita gorur ve
+// aydinlatma sessizce yanlis cikar. Bu yuzden duzen konteynere yazilir
+// (KTX2 key/value "TULPAR_normalXY") ve okunur.
+//
+// Kapi iki seyi olcer: (1) bayrak dosyadan geri geliyor mu, (2) DONANIMIN
+// gordugu duzen gercekten X-tekrarli mi. KONTROL: ayni goruntu --tur orm ile
+// yazilirsa bayrak GELMEMELI ve kanallar birbirinin kopyasi OLMAMALI.
+ENGINE_TEST(content_ktx2_normal_layout_roundtrip) {
+  static SystemArena sys;
+  if (!sys.reserve(96u << 20, "ktx2_normal")) { CHECK(false); return; }
+  const uint32_t W = 64, H = 64;
+  uint8_t *src = sys.alloc_array<uint8_t>(W * H * 4);
+  if (!src) { CHECK(false); return; }
+  // X ve Y BIRBIRINDEN FARKLI degissin (X yatay, Y dikey): kanallar ayirt
+  // edilemezse asagidaki "X tekrarli mi" olcumu anlamsiz olurdu.
+  for (uint32_t y = 0; y < H; y++)
+    for (uint32_t x = 0; x < W; x++) {
+      const uint32_t i = y * W + x;
+      src[i * 4 + 0] = (uint8_t)(40 + x * 3);
+      src[i * 4 + 1] = (uint8_t)(200 - y * 2);
+      src[i * 4 + 2] = 255;
+      src[i * 4 + 3] = 255;
+    }
+  const content::AstcMap kinds[2] = {content::AstcMap::Normal, content::AstcMap::Data};
+  bool flag[2] = {false, false};
+  uint32_t xy_repeat[2] = {0, 0}; // R == G == B olan texel sayisi
+  bool ok = true;
+  for (int k = 0; k < 2 && ok; k++) {
+    uint8_t *blk = nullptr;
+    uint32_t n = 0;
+    ok = content::astc_encode_rgba(sys, src, W, H, 4, 4, false, 90.0f, &blk, &n, kinds[k]);
+    if (!ok) break;
+    char path[512];
+    std::snprintf(path, sizeof path, "%s/tulpar_ktx2_normal_%d.ktx2", tulpar::engine::test::tmp_dir(), k);
+    const uint8_t *data[1] = {blk};
+    const uint32_t sizes[1] = {n};
+    ok = content::ktx2_write(path, VK_FORMAT_ASTC_4x4_UNORM_BLOCK, W, H, 1, data, sizes, 4, 4,
+                             kinds[k] == content::AstcMap::Normal);
+    content::Ktx2Image img;
+    if (ok) ok = content::ktx2_load(sys, path, &img);
+    if (!ok) { std::printf("    [bilgi] ktx2: %s\n", img.error); std::remove(path); break; }
+    flag[k] = img.normal_xy;
+    // DONANIMIN gordugu duzen: bloklari duz swizzle ile coz (ktx2_upload'in
+    // CPU yedeginin yaptigi sey; GPU ASTC'yi de aynen boyle ornekler).
+    uint8_t *dec = nullptr;
+    ok = content::astc_decode_rgba(sys, img.level_data[0], img.level_size[0], W, H, 4, 4, false, &dec,
+                                   content::AstcMap::Data);
+    if (ok)
+      for (uint32_t i = 0; i < W * H; i++)
+        if (dec[i * 4] == dec[i * 4 + 1] && dec[i * 4 + 1] == dec[i * 4 + 2]) xy_repeat[k]++;
+    std::remove(path);
+  }
+  CHECK(ok);
+  if (!ok) return;
+  std::printf("    [bilgi] URUN    --tur normal: KVD bayragi %d, R==G==B texel %u/%u (X tekrarli duzen)\n",
+              (int)flag[0], xy_repeat[0], W * H);
+  std::printf("    [bilgi] KONTROL --tur orm   : KVD bayragi %d, R==G==B texel %u/%u (kanallar bagimsiz)\n",
+              (int)flag[1], xy_repeat[1], W * H);
+  bool flag_survives_the_container = flag[0] && !flag[1];
+  CHECK(flag_survives_the_container);
+  bool normal_layout_is_x_replicated = xy_repeat[0] > (W * H) * 9 / 10;
+  CHECK(normal_layout_is_x_replicated);
+  bool control_keeps_channels_apart = xy_repeat[1] < (W * H) / 10;
+  CHECK(control_keeps_channels_apart); // dusmezse "X tekrarli" olcumu bir sey olcmuyor
+}

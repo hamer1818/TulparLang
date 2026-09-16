@@ -4,6 +4,7 @@
 // acilir (yoksa ATLANDI, gorunur).
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 #include "audio/clip.hpp"
 #include "audio/device.hpp"
@@ -103,15 +104,37 @@ ENGINE_TEST(audio_default_device_opens) {
     skip("ses cihazi yok (arka uc acilamadi) — gercek cihaz yolu kosmadi");
     return;
   }
+  // GENLIK BILEREK DUYULMAZ.
+  //
+  // Bu kapi GERCEK ses cihazini aciyor (Linux'ta PulseAudio) — null arka ucla
+  // test etmek "ses calisiyor" demez, o yuzden gercek yol kosmali. Ama genlik
+  // uzun sure 0.2 idi ve 440 Hz (la notasi) 0.3 saniye CALINIYORDU: takimi her
+  // kosturan kisi kulakliginda bir bip duyuyordu (kullanici 2026-09-16'da
+  // bildirdi; ajanlar da paralel kosturunca rastgele araliklarla geliyordu).
+  //
+  // Genlik bu kapinin OLCTUGU sey degil: iddialar "cihaz acildi + geri cagrimlar
+  // akti + karistirici gercekten sinyal uretti". 0.0005 (~-66 dBFS) bunlarin
+  // ucunu de aynen saglar, duyulmaz. SIFIR YAPILMADI: sifir genlikte tepe de 0
+  // olurdu ve "karistirici sayisal sessizlik basiyor" durumu ile "karistirici
+  // dogru calisiyor" durumu AYIRT EDILEMEZDI — kapi kor kalirdi.
+  //
+  // Duymak isteyen: TULPAR_ENGINE_TEST_AUDIBLE=1
+  const char *audible = std::getenv("TULPAR_ENGINE_TEST_AUDIBLE");
+  const float genlik = (audible && *audible && *audible != '0') ? 0.2f : 0.0005f;
   audio::Clip a;
-  CHECK(audio::clip_sine(sys, 440.0f, 0.3f, mx.rate(), 0.2f, &a));
+  CHECK(audio::clip_sine(sys, 440.0f, 0.3f, mx.rate(), genlik, &a));
   mx.play(&a, 1.0f, false);
   platform::thread_sleep_us(200000);
   audio::MixerStats st = mx.stats();
-  std::printf("    [bilgi] cihaz %s '%s' %u Hz %u kanal periyot %u: %llu callback, %llu kare, tepe %.2f\n", dev.info().backend,
-              dev.info().name, dev.info().sample_rate, dev.info().channels, dev.info().period_frames, (unsigned long long)st.callbacks,
-              (unsigned long long)st.frames_rendered, st.peak);
+  std::printf("    [bilgi] cihaz %s '%s' %u Hz %u kanal periyot %u: %llu callback, %llu kare, tepe %.5f (genlik %.4f%s)\n",
+              dev.info().backend, dev.info().name, dev.info().sample_rate, dev.info().channels, dev.info().period_frames,
+              (unsigned long long)st.callbacks, (unsigned long long)st.frames_rendered, st.peak, genlik,
+              (audible && *audible && *audible != '0') ? ", DUYULUR" : ", duyulmaz");
   CHECK(st.callbacks > 0);
+  // Tepe > 0: karistirici sayisal sessizlik degil GERCEK sinyal uretti.
+  // Genlik dusurulunce bu iddia ONEM KAZANDI — yoksa "sessiz cal, yesil gec"
+  // yolu acik kalirdi.
+  CHECK(st.peak > 0.0f);
   dev.shutdown();
 }
 

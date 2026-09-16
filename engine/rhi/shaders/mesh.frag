@@ -18,11 +18,29 @@ layout(set = 0, binding = 0) uniform Frame {
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow;
 layout(set = 1, binding = 0) uniform sampler2D u_albedo; // malzeme (klasik set, bindless yok)
 // Malzeme PBR parametreleri (klasik set 1, bindless YOK — Dusuk sinif cihaz
-// descriptorIndexing vermiyor, PLAN REV-3). Malzeme basina 32 bayt UBO.
+// descriptorIndexing vermiyor, PLAN REV-3). Malzeme basina 64 bayt UBO
+// (eskiden 32; adim boyu cihazin UBO hizasi oldugu icin GPU'da bedava —
+// olculen deger Renderer::material_ubo_stride()).
 layout(set = 1, binding = 1) uniform MatBlock {
   vec4 pbr;      // x metallic, y ALGISAL puruzluluk, z dielektrik yansitirlik, w model (0 Lambert, 1 PBR)
   vec4 emissive; // rgb DOGRUSAL isima, w kullanilmiyor
+  vec4 tex;      // x ORM var, y normal var, z isima dokusu var, w normal olcegi
+  vec4 tex2;     // x occlusion gucu (ORM.R), y/z/w bos
 } u_mat;
+// Doku basina degisen malzeme kanallari (glTF 2.0). Hepsi MALZEME BASINA
+// TEKDUZE bir dalin ardinda: maske 0 iken bu sampler'lar HIC okunmaz, yani
+// dokusuz malzeme bugunku bant genisligini ve ALU'sunu aynen odemeye devam
+// eder (A/B md5 kapisi bunu olcuyor). Dal uniform tabanli oldugu icin dalga
+// ici ayrisma da yok — TBDR'da eklenen tek sey GERCEKTEN kullanan malzemenin
+// ornekleme maliyeti.
+//
+// KANAL SOZLESMESI glTF 2.0 spec'ten (cgltf saf ayristiricidir, esleme
+// tasimaz): metallicRoughness dokusunda G = ROUGHNESS, B = METALLIC,
+// R = occlusion (occlusionTexture cogunlukla ayni goruntu). Dokular
+// CARPANLARLA CARPILIR. Kapi: content_gltf_orm_channel_mapping.
+layout(set = 1, binding = 2) uniform sampler2D u_orm;      // DOGRUSAL (UNORM) yuklenir
+layout(set = 1, binding = 3) uniform sampler2D u_normal;   // DOGRUSAL (UNORM) yuklenir
+layout(set = 1, binding = 4) uniform sampler2D u_emissive; // sRGB yuklenir (renk)
 // KONTROL kipi (UiSortMode::BlendFirst ile ayni ruh): 1 = GGX'i BILEREK yanlis
 // normalize et (a^2 payi yok). Yalniz enerji kapisinin kendi duyarliligini
 // olcmek icin; urun yolunda her zaman 0.
@@ -188,12 +206,56 @@ void point_lights_pbr(vec3 n, vec3 vdir, float NoV, float a, vec3 f0, out vec3 d
 // interpolant (v_view) eklenmedi: TBDR'da parametre tamponu bant genisligidir.
 vec3 camera_world() { return -(transpose(mat3(u.view)) * u.view[3].xyz); }
 
-vec3 shade_pbr(vec3 n, vec3 albedo, float nl, float vis) {
-  float metallic = clamp(u_mat.pbr.x, 0.0, 1.0);
+// --- Teget uzayi: TUREVDEN, ek vertex verisi YOK ---------------------------
+// Mikkelsen'in ortonormalize edilmemis ters teget cercevesi (Schuler'in
+// "cotangent frame" turetimi). Neden vertex TANGENT'i DEGIL: paketlenmis GPU
+// vertex'i bugun 20 bayt (pos float3 + oktahedral snorm16x2 normal + yarim UV)
+// ve tek bir GLOBAL yerlesim — teget eklemek 4 bayt daha demek, yani normal
+// haritasi KULLANMAYAN her mesh'in de vertex okumasi %20 artar. Mali'de vertex
+// tamponu binning ve render gecislerinde IKI KEZ okunur, yani bedeli iki katina
+// cikar. Buradaki maliyet ise yalnizca normal haritali malzemenin fragment'inda
+// ~20 ALU + 4 turev. Olcum ve gerekce: renderer_normal_map_tangent_budget kapisi.
+//
+// Turev komutlari TEKDUZE akista olmali: dal u_mat.tex.y (UBO degeri) uzerine,
+// yani cizim boyunca sabit — SPIR-V'nin "uniform control flow" sarti saglanir.
+vec3 apply_normal_map(vec3 n, vec2 uv, float scale) {
+  vec3 dp1 = dFdx(v_world), dp2 = dFdy(v_world);
+  vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
+  vec3 dp2perp = cross(dp2, n);
+  vec3 dp1perp = cross(n, dp1);
+  vec3 t = dp2perp * duv1.x + dp1perp * duv2.x;
+  vec3 b = dp2perp * duv1.y + dp1perp * duv2.y;
+  float inv = inversesqrt(max(dot(t, t), dot(b, b)));
+  if (inv > 1e12) return n; // dejenere UV (sifir turev): geometrik normalde kal
+  vec3 m = texture(u_normal, uv).xyz * 2.0 - 1.0;
+  m.xy *= scale;
+  return normalize(t * (inv * m.x) + b * (inv * m.y) + n * m.z);
+}
+
+vec3 shade_pbr(vec3 n_geo, vec3 albedo, float nl_geo, float vis) {
+  // Doku kanallari CARPAN uzerine CARPILIR (glTF 2.0). Maske 0 iken asagidaki
+  // ifadeler tam olarak eski hallerine iner: rough = clamp(u_mat.pbr.y, ...),
+  // metallic = clamp(u_mat.pbr.x, ...), occ = 1.0, n = n_geo, nl = nl_geo.
+  float metallic = u_mat.pbr.x;
+  float rough = u_mat.pbr.y;
+  float occ = 1.0;
+  if (u_mat.tex.x > 0.5) {
+    vec3 orm = texture(u_orm, v_uv).rgb; // R occlusion, G roughness, B metallic
+    rough *= orm.g;
+    metallic *= orm.b;
+    occ = mix(1.0, orm.r, u_mat.tex2.x); // strength 0 = occlusion yok
+  }
+  vec3 n = n_geo;
+  float nl = nl_geo;
+  if (u_mat.tex.y > 0.5) {
+    n = apply_normal_map(n_geo, v_uv, u_mat.tex.w);
+    nl = max(dot(n, normalize(u.light_dir.xyz)), 0.0);
+  }
+  metallic = clamp(metallic, 0.0, 1.0);
   // Algisal puruzluluk (glTF) -> a = rough^2. Alt sinir: a -> 0'da D patlar
   // (tek piksellik sonsuz parlama, zamansal titreme); 0.045 Filament'in
   // onerdigi mobil tabanidir.
-  float rough = clamp(u_mat.pbr.y, 0.045, 1.0);
+  rough = clamp(rough, 0.045, 1.0);
   float a = rough * rough;
   float reflectance = clamp(u_mat.pbr.z, 0.0, 1.0);
   // Metal dagilimli yansitmaz; dielektrigin F0'i renksizdir (Filament tarifi:
@@ -218,10 +280,16 @@ vec3 shade_pbr(vec3 n, vec3 albedo, float nl, float vis) {
   vec2 dfg = env_dfg(rough, NoV);
   vec3 pl_d, pl_s;
   point_lights_pbr(n, vdir, NoV, a, f0, pl_d, pl_s);
-  vec3 c = diffuse_color * (u.ambient.rgb + sun + pl_d);
-  c += u.ambient.rgb * (f0 * dfg.x + vec3(dfg.y));
+  // occlusion YALNIZ dolayli (ortam) terimi kisar — glTF spec: "indirect light".
+  // Dogrudan gunes/nokta isik gomulmez. occ = 1.0 iken carpim IEEE754'te
+  // birebir kimliktir, yani ORM'siz malzemenin sayisi degismez.
+  vec3 amb = u.ambient.rgb * occ;
+  vec3 c = diffuse_color * (amb + sun + pl_d);
+  c += amb * (f0 * dfg.x + vec3(dfg.y));
   c += spec_sun + pl_s;
-  return c + u_mat.emissive.rgb;
+  vec3 emis = u_mat.emissive.rgb;
+  if (u_mat.tex.z > 0.5) emis *= texture(u_emissive, v_uv).rgb; // sRGB doku, ornekleme dogrusal dondurur
+  return c + emis;
 }
 
 layout(location = 0) out vec4 o_color;

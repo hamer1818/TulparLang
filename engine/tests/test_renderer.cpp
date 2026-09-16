@@ -3,14 +3,21 @@
 // "golge var" iddiasi yalniz gelistiricinin GPU'sunda dogrulanir: boru
 // hattinin depthBias birimi surucuye baglidir ve Mali-G72'de golgeyi
 // TAMAMEN yok etti (NVIDIA'da dogruydu) — Tuzaklar 8q.
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 
+#include "content/gltf.hpp"
 #include "core/memory/arena.hpp"
+#include "platform/time.hpp"
 #include "renderer/renderer.hpp"
 #include "rhi/device.hpp"
 #include "rhi/offscreen.hpp"
+#include "rhi/shaders/mesh_frag_spv.h"
+#include "rhi/shaders/mesh_vert_spv.h"
+#include "rhi/tile_budget.hpp"
 #include "rhi/vk_api.hpp"
 #include "tests/test.hpp"
 
@@ -356,6 +363,24 @@ ENGINE_TEST(renderer_mali_best_practices_gate) {
   bp_pbr.emissive = {0.1f, 0.05f, 0.0f};
   renderer::MaterialHandle mh_pbr = ren.create_material(th, {1, 1, 1}, bp_pbr);
   CHECK(mh_pbr.valid());
+  // DOKULU PBR malzeme de ayni karede cizilir: set 1'in binding 2/3/4
+  // descriptor yazimlari ve shader'in ORM/normal/isima dallari DOGRULAMA
+  // KATMANI altinda kosmali. Yoksa doku basina kanallarin tamami — uc sampler,
+  // uc descriptor yazimi — hicbir yerde denetlenmez.
+  static uint8_t orm_px[8 * 8 * 4], nrm_px[8 * 8 * 4], emi_px[8 * 8 * 4];
+  for (uint32_t i = 0; i < 8 * 8; i++) {
+    orm_px[i * 4] = 200; orm_px[i * 4 + 1] = 90; orm_px[i * 4 + 2] = 40; orm_px[i * 4 + 3] = 255;
+    nrm_px[i * 4] = 150; nrm_px[i * 4 + 1] = 120; nrm_px[i * 4 + 2] = 240; nrm_px[i * 4 + 3] = 255;
+    emi_px[i * 4] = 40; emi_px[i * 4 + 1] = 30; emi_px[i * 4 + 2] = 20; emi_px[i * 4 + 3] = 255;
+  }
+  renderer::PbrTextures bp_tex;
+  bp_tex.orm = ren.create_texture(orm_px, 8, 8, true, false);     // veri: DOGRUSAL
+  bp_tex.normal = ren.create_texture(nrm_px, 8, 8, true, false);  // veri: DOGRUSAL
+  bp_tex.emissive = ren.create_texture(emi_px, 8, 8, true, true); // renk: sRGB
+  bp_tex.normal_scale = 1.0f;
+  bp_tex.occlusion_strength = 1.0f;
+  renderer::MaterialHandle mh_pbr_tex = ren.create_material(th, {1, 1, 1}, bp_pbr, bp_tex);
+  CHECK(mh_pbr_tex.valid());
   ren.set_light(normalize(Vec3{1.0f, 1.4f, 0.0f}), {0.10f, 0.10f, 0.12f}, 0.9f);
   ren.set_shadow_volume({0, 1.0f, 0}, 9.0f, 40.0f);
   ren.set_camera(Mat4::look_at({0, 7.0f, 9.0f}, {0, 0.5f, 0}, {0, 1, 0}),
@@ -369,6 +394,7 @@ ENGINE_TEST(renderer_mali_best_practices_gate) {
     ren.draw(plane, mh, Mat4::scale({16, 1, 16}), {0.8f, 0.8f, 0.8f});
     ren.draw(cube, Mat4::translate({0, 2.5f, 0}) * Mat4::scale({2.4f, 2.4f, 2.4f}), {0.9f, 0.3f, 0.2f});
     ren.draw(cube, mh_pbr, Mat4::translate({-3.0f, 1.2f, 1.5f}) * Mat4::scale({1.6f, 1.6f, 1.6f}), {1, 1, 1});
+    ren.draw(cube, mh_pbr_tex, Mat4::translate({3.0f, 1.2f, 1.5f}) * Mat4::scale({1.6f, 1.6f, 1.6f}), {1, 1, 1});
     ren.ui_begin((float)W, (float)H, 0.0f);
     ren.ui_rect(4, 4, 40, 12, renderer::Renderer::rgba(255, 255, 255, 200));
     bool ok = offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow);
@@ -1297,4 +1323,638 @@ ENGINE_TEST(renderer_stochastic_lighting_is_temporally_stable) {
   CHECK(stable);
   bool control_flickers_far_more = flick_mean[2] > flick_mean[1] * 4.0 && big[2] > big[1] * 4;
   CHECK(control_flickers_far_more); // kaba donme + capasiz kontrol kapiyi DUSURMELI
+}
+
+// ===========================================================================
+// PBR DOKULARI (set 1, binding 2/3/4) — ORM / normal haritasi / isima
+// ===========================================================================
+namespace {
+// Tekduze RGBA dokusu (mip yok: olcum dokunun kendi degerini gormeli, mip
+// suzmesinin ortalamasini degil).
+renderer::TextureHandle solid_tex(renderer::Renderer &ren, uint8_t r, uint8_t g, uint8_t b, bool srgb) {
+  static uint8_t px[8 * 8 * 4];
+  for (uint32_t i = 0; i < 8 * 8; i++) { px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; px[i * 4 + 3] = 255; }
+  return ren.create_texture(px, 8, 8, false, srgb);
+}
+// Iki kare arasinda: kac piksel farkli, en buyuk kanal farki, kanal basina ortalama.
+void frame_diff(const uint8_t *a, const uint8_t *b, uint32_t n, uint32_t *diff_px, int *max_ch, double *mean) {
+  uint32_t d = 0; int mx = 0; double sum = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    int worst = 0;
+    for (int c = 0; c < 3; c++) {
+      const int q = std::abs((int)a[i * 4 + c] - (int)b[i * 4 + c]);
+      if (q > worst) worst = q;
+      sum += q;
+    }
+    if (worst) d++;
+    if (worst > mx) mx = worst;
+  }
+  *diff_px = d; *max_ch = mx; *mean = sum / (double)(n * 3);
+}
+} // namespace
+
+// PBR DOKU KAPILARININ PAYLASTIGI CIHAZ (Tuzaklar 8al): her vkCreateInstance
+// NVIDIA ICD'sini dlopen'liyor ve glibc'nin "static TLS surplus" alani geri
+// verilmiyor; belli sayidan sonra loader "Found no drivers!" der ve SONRADAN
+// kosan BASKA kapilar sessizce "Vulkan cihazi yok" diye atlanir. Olculdu: bu
+// dosyaya 5 yeni GPU kapisi eklemek 25 kapiyi ATLANDI'ya dusurdu (takim yine
+// yesil gorunuyordu — "gecen sayi ayni, ATLANDI artti" belirtisi). Bu yuzden
+// bes kapi TEK instance/cihaz paylasir ve o cihaz surec boyunca YASAR.
+//
+// AYRI VkApi TABLOSU (Tuzaklar 8an): VkApi cihaz seviyesi giris noktalarini
+// tutar ve her Device::init onlari YENIDEN YAZAR. Bu dosyadaki oteki kapilar
+// g_api ile kendi cihazlarini acip kapatiyor; paylasilan cihaz ayni tabloyu
+// kullansaydi ilk yabanci init'ten sonra isaretcileri cop olurdu.
+namespace {
+VkApi g_api_pbr;
+struct PbrOrtakGpu {
+  SystemArena sys;
+  Device dev;
+  bool denendi = false;
+  bool ok = false;
+};
+PbrOrtakGpu &pbr_ortak_gpu() {
+  static PbrOrtakGpu g;
+  if (!g.denendi) {
+    g.denendi = true;
+    if (!vk_api_load(g_api_pbr)) return g;
+    if (!g.sys.reserve(768u << 20, "pbr_ortak")) return g;
+    DeviceConfig dc;
+    g.ok = g.dev.init(g.sys, g_api_pbr, dc);
+  }
+  return g;
+}
+} // namespace
+
+// --- ORM KANAL ESLEMESI -----------------------------------------------------
+// glTF 2.0: metallicRoughness dokusunda G = ROUGHNESS, B = METALLIC ve degerler
+// CARPANLARLA CARPILIR. cgltf bunu SOYLEMEZ (saf ayristirici) — yani esleme
+// "ezberden" yazilan tam olarak o sinifta bir sey. Burada REFERANS zaten
+// kapisi olan CARPAN yoludur: metallic=1, roughness=0.2, doku yok.
+//   URUN  : carpanlar 1/1 + ORM dokusu (G=51 -> 0.2, B=255 -> 1.0)  -> referansa ESIT olmali
+//   KONTROL: ayni doku, G ve B TAKAS edilmis (G=255, B=51)          -> kapiyi DUSURMELI
+// Kontrol gecerse kapi kanal sirasini hic olcmuyor demektir.
+ENGINE_TEST(renderer_orm_texture_channels_match_factors) {
+  PbrOrtakGpu &g = pbr_ortak_gpu();
+  if (!g.ok) { skip("Vulkan cihazi yok (paylasilan PBR cihazi)"); return; }
+  Device &dev = g.dev;
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "orm_channels")) { CHECK(false); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 256, H = 256;
+  static uint8_t ref[W * H * 4], urun[W * H * 4], kontrol[W * H * 4];
+  bool ok = true;
+  {
+    PbrRig r;
+    ok = pbr_rig_init(r, dev, sys, W, H, renderer::NdfMode::Ggx);
+    if (ok) {
+      const Vec3 col{0.80f, 0.78f, 0.75f};
+      renderer::TextureHandle white = r.ren.default_texture();
+      // ORM dokulari DOGRUSAL (UNORM) yuklenir: 51/255 = 0.2 tam olarak.
+      renderer::TextureHandle orm = solid_tex(r.ren, 153, 51, 255, false);  // R occ, G rough 0.2, B metal 1
+      renderer::TextureHandle orm_swap = solid_tex(r.ren, 153, 255, 51, false); // KONTROL: G/B takas
+      renderer::PbrParams ref_p;
+      ref_p.metallic = 1.0f;
+      ref_p.roughness = 0.2f; // REFERANS: carpan yolu (kendi kapisi olan yol)
+      r.mat = r.ren.create_material(white, col, ref_p);
+      ok = r.mat.valid() && pbr_frame(r, ref, W, H, 0.9f);
+      renderer::PbrParams tex_p; // carpanlar 1/1: doku degeri dogrudan gecsin
+      tex_p.metallic = 1.0f;
+      tex_p.roughness = 1.0f;
+      renderer::PbrTextures t;
+      t.orm = orm;
+      if (ok) { r.mat = r.ren.create_material(white, col, tex_p, t); ok = r.mat.valid() && pbr_frame(r, urun, W, H, 0.9f); }
+      t.orm = orm_swap;
+      if (ok) { r.mat = r.ren.create_material(white, col, tex_p, t); ok = r.mat.valid() && pbr_frame(r, kontrol, W, H, 0.9f); }
+      CHECK(orm.valid() && orm_swap.valid());
+    }
+    pbr_rig_free(r);
+  }
+  // dev.shutdown() YOK: cihaz PAYLASILIYOR (Tuzaklar 8al) ve surec boyunca yasar.
+  CHECK(ok);
+  if (!ok) return;
+  uint32_t d0 = 0, d1 = 0; int m0 = 0, m1 = 0; double a0 = 0, a1 = 0;
+  frame_diff(ref, urun, W * H, &d0, &m0, &a0);
+  frame_diff(ref, kontrol, W * H, &d1, &m1, &a1);
+  std::printf("    [bilgi] URUN  ORM dokusu (G=51 rough, B=255 metal) vs carpan referansi: %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              d0, 100.0f * (float)d0 / (float)(W * H), m0, a0);
+  std::printf("    [bilgi] KONTROL G/B TAKAS (G=255, B=51)            vs ayni referans:    %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              d1, 100.0f * (float)d1 / (float)(W * H), m1, a1);
+  bool mapping_is_g_rough_b_metal = m0 <= 2 && a0 < 0.05; // UNORM8 yuvarlamasi disinda ayni
+  CHECK(mapping_is_g_rough_b_metal);
+  bool control_breaks_it = m1 > 40 && a1 > a0 * 20.0; // takas kapiyi acikca dusurmeli
+  CHECK(control_breaks_it);
+}
+
+// --- NORMAL HARITASI (turevden teget uzayi) ---------------------------------
+// Kurulum: kure + tek yonlu isik. Olculen sey aydinlatmanin normal haritasiyla
+// DEGISMESI. Uc kare:
+//   A = normal haritasi YOK                       (referans)
+//   B = DUZ normal haritasi (128,128,255)         -> A ile AYNI olmali (KONTROL)
+//   C = +X'e egik harita (204,128,229), olcek 1   -> A'dan ACIKCA farkli olmali
+//   D = ayni egik harita, olcek 0                 -> A'ya geri DONMELI (KONTROL)
+// B gecmezse "normal haritasi yolu dokusuz malzemeyi bozuyor" demektir; C
+// gecmezse yol hic calismiyordur; D gecmezse normalTexture.scale akmiyordur.
+ENGINE_TEST(renderer_normal_map_tilts_lighting) {
+  PbrOrtakGpu &g = pbr_ortak_gpu();
+  if (!g.ok) { skip("Vulkan cihazi yok (paylasilan PBR cihazi)"); return; }
+  Device &dev = g.dev;
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "normal_map")) { CHECK(false); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 256, H = 256;
+  static uint8_t pa[W * H * 4], pb[W * H * 4], pc[W * H * 4], pd[W * H * 4];
+  bool ok = true;
+  {
+    PbrRig r;
+    ok = pbr_rig_init(r, dev, sys, W, H, renderer::NdfMode::Ggx);
+    if (ok) {
+      const Vec3 col{0.80f, 0.78f, 0.75f};
+      renderer::TextureHandle white = r.ren.default_texture();
+      // Normal haritalari DOGRUSAL (UNORM): texel oldugu gibi gelir, 2x-1 ile acilir.
+      renderer::TextureHandle flat = solid_tex(r.ren, 128, 128, 255, false);
+      renderer::TextureHandle tilt = solid_tex(r.ren, 204, 128, 229, false); // nx=+0.6, nz=0.8
+      renderer::PbrParams pp;
+      pp.metallic = 0.0f;
+      pp.roughness = 0.45f; // yumusak parlama: egilme siluette degil, tonlamada gorunur
+      r.mat = r.ren.create_material(white, col, pp);
+      ok = r.mat.valid() && pbr_frame(r, pa, W, H, 0.9f);
+      renderer::PbrTextures t;
+      t.normal = flat;
+      t.normal_scale = 1.0f;
+      if (ok) { r.mat = r.ren.create_material(white, col, pp, t); ok = r.mat.valid() && pbr_frame(r, pb, W, H, 0.9f); }
+      t.normal = tilt;
+      if (ok) { r.mat = r.ren.create_material(white, col, pp, t); ok = r.mat.valid() && pbr_frame(r, pc, W, H, 0.9f); }
+      t.normal_scale = 0.0f; // KONTROL: olcek 0 -> xy sifirlanir, geometrik normale doner
+      if (ok) { r.mat = r.ren.create_material(white, col, pp, t); ok = r.mat.valid() && pbr_frame(r, pd, W, H, 0.9f); }
+      CHECK(flat.valid() && tilt.valid());
+    }
+    pbr_rig_free(r);
+  }
+  // dev.shutdown() YOK: cihaz PAYLASILIYOR (Tuzaklar 8al) ve surec boyunca yasar.
+  CHECK(ok);
+  if (!ok) return;
+  uint32_t db = 0, dc_ = 0, dd = 0; int mb = 0, mc = 0, md = 0; double ab = 0, ac = 0, ad = 0;
+  frame_diff(pa, pb, W * H, &db, &mb, &ab);
+  frame_diff(pa, pc, W * H, &dc_, &mc, &ac);
+  frame_diff(pa, pd, W * H, &dd, &md, &ad);
+  std::printf("    [bilgi] KONTROL duz harita (128,128,255): %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              db, 100.0f * (float)db / (float)(W * H), mb, ab);
+  std::printf("    [bilgi] URUN    egik harita (204,128,229): %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              dc_, 100.0f * (float)dc_ / (float)(W * H), mc, ac);
+  std::printf("    [bilgi] KONTROL egik harita + olcek 0:     %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              dd, 100.0f * (float)dd / (float)(W * H), md, ad);
+  // Duz haritanin artigi SIFIR DEGIL, cunku (128,128,255) UNORM8'de tam duz
+  // degil: 128/255 = 0.501961 -> xy = +0.003922, yani normal 0.225 derece egik.
+  // Bu DOKUNUN KODLAMA hatasidir, teget cercevesinin degil — KANIT ucuncu
+  // olcumdedir: ayni cerceve, ayni dal, olcek 0 ile kare BIT BIT referansa
+  // doner (0 piksel). Yani cerceve tam; geriye kalan tek sey 0.5'in 8 bitte
+  // gosterilemeyisi. Bu yuzden esik "sifir" degil o hatanin buyuklugunde, ve
+  // TEK BASINA mutlak esige guvenilmez: urun sinyalinden en az 20 kat kucuk
+  // olmasi AYRICA isteniyor (oran olcutu gurultuye bagli degil).
+  const double kFlatTiltDeg = 0.225; // atan(0.003922)
+  std::printf("    [bilgi] duz haritanin kodlama egimi %.3f derece; olcek 0 artigi %u piksel "
+              "(cerceve tamsa burasi 0 olmali), urun/duz orani %.1f kat\n",
+              kFlatTiltDeg, dd, ab > 0 ? ac / ab : 999.0);
+  bool flat_map_is_a_noop = mb <= 16 && ab < 0.5 && ac > ab * 20.0;
+  CHECK(flat_map_is_a_noop);
+  bool tilt_changes_lighting = mc > 24 && ac > 3.0;
+  CHECK(tilt_changes_lighting);
+  bool scale_zero_returns_to_geometric = md == 0 && ad == 0.0; // olcek akmiyorsa VE cerceve tam degilse duser
+  CHECK(scale_zero_returns_to_geometric);
+}
+
+// --- ISIMA DOKUSU -----------------------------------------------------------
+// glTF: emissiveTexture, emissiveFactor ile CARPILIR. Siyah ortam + sifir gunes:
+// karedeki her foton isimadandir, yani olculen sey yalnizca bu terim.
+// KONTROL: beyaz isima dokusu (255,255,255) yalniz carpan yoluyla AYNI olmali;
+// siyah doku ise kareyi SONDURMELI.
+ENGINE_TEST(renderer_emissive_texture_multiplies_factor) {
+  PbrOrtakGpu &g = pbr_ortak_gpu();
+  if (!g.ok) { skip("Vulkan cihazi yok (paylasilan PBR cihazi)"); return; }
+  Device &dev = g.dev;
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "emissive_tex")) { CHECK(false); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 192, H = 192;
+  static uint8_t ref[W * H * 4], beyaz[W * H * 4], siyah[W * H * 4];
+  bool ok = true;
+  {
+    PbrRig r;
+    ok = pbr_rig_init(r, dev, sys, W, H, renderer::NdfMode::Ggx);
+    if (ok) {
+      renderer::TextureHandle white = r.ren.default_texture();
+      renderer::TextureHandle e_white = solid_tex(r.ren, 255, 255, 255, true); // isima dokusu RENKTIR: sRGB
+      renderer::TextureHandle e_black = solid_tex(r.ren, 0, 0, 0, true);
+      renderer::PbrParams pp;
+      pp.emissive = {0.6f, 0.3f, 0.15f};
+      auto shot = [&](uint8_t *dst) {
+        r.ren.set_light(normalize(Vec3{0.35f, 0.45f, 1.0f}), {0, 0, 0}, 0.0f); // yalniz isima
+        r.ren.set_camera(Mat4::look_at({0, 0, 3.2f}, {0, 0, 0}, {0, 1, 0}),
+                         Mat4::perspective(1.0f, (float)W / (float)H, 0.1f, 50.0f));
+        r.ren.begin_frame(0);
+        r.ren.clear_point_lights();
+        r.ren.draw(r.sphere, r.mat, Mat4::identity(), {1, 1, 1});
+        rhi::OffscreenResult ores;
+        Rec rr{&r.ren};
+        if (!rhi::offscreen_render_custom(r.off, r.oc, rec_main, &rr, &ores, rec_shadow)) return false;
+        std::memcpy(dst, ores.pixels, (size_t)W * H * 4);
+        return true;
+      };
+      r.mat = r.ren.create_material(white, {1, 1, 1}, pp);
+      ok = r.mat.valid() && shot(ref);
+      renderer::PbrTextures t;
+      t.emissive = e_white;
+      if (ok) { r.mat = r.ren.create_material(white, {1, 1, 1}, pp, t); ok = r.mat.valid() && shot(beyaz); }
+      t.emissive = e_black;
+      if (ok) { r.mat = r.ren.create_material(white, {1, 1, 1}, pp, t); ok = r.mat.valid() && shot(siyah); }
+      CHECK(e_white.valid() && e_black.valid());
+    }
+    pbr_rig_free(r);
+  }
+  // dev.shutdown() YOK: cihaz PAYLASILIYOR (Tuzaklar 8al) ve surec boyunca yasar.
+  CHECK(ok);
+  if (!ok) return;
+  uint32_t d0 = 0, d1 = 0; int m0 = 0, m1 = 0; double a0 = 0, a1 = 0;
+  frame_diff(ref, beyaz, W * H, &d0, &m0, &a0);
+  frame_diff(ref, siyah, W * H, &d1, &m1, &a1);
+  // Referansin kendisi SIYAH OLMAMALI: yoksa asagidaki "siyah doku sonduruyor"
+  // olcumu hicbir sey olcmez (0'dan 0'a fark sifirdir).
+  double ref_mean = 0;
+  for (uint32_t i = 0; i < W * H; i++) for (int c = 0; c < 3; c++) ref_mean += ref[i * 4 + c];
+  ref_mean /= (double)(W * H * 3);
+  std::printf("    [bilgi] referans (yalniz isima carpani) ortalama parlaklik %.2f\n", ref_mean);
+  std::printf("    [bilgi] KONTROL beyaz isima dokusu: %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              d0, 100.0f * (float)d0 / (float)(W * H), m0, a0);
+  std::printf("    [bilgi] URUN    siyah isima dokusu: %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              d1, 100.0f * (float)d1 / (float)(W * H), m1, a1);
+  CHECK(ref_mean > 5.0);
+  bool white_texture_is_identity = m0 <= 2 && a0 < 0.05;
+  CHECK(white_texture_is_identity);
+  bool black_texture_extinguishes = a1 > ref_mean * 0.5; // isima gercekten carpiliyor
+  CHECK(black_texture_extinguishes);
+}
+
+// --- RENK UZAYI, GPU TARAFI -------------------------------------------------
+// ORM dokusu DOGRUSAL (UNORM) yuklenmeli. sRGB yuklenirse donanim texel'i
+// cozer: 128/255 = 0.502 yerine shader 0.216 gorur — yani puruzluluk sessizce
+// yer degistirir ve GORUNTU "biraz yanlis" olur, hicbir sey kizarmaz.
+// URUN : ORM dogrusal yuklenir -> carpan referansiyla (roughness 0.502) ESIT
+// KONTROL: AYNI baytlar sRGB yuklenir -> kapi DUSMELI
+ENGINE_TEST(renderer_texture_colorspace_shifts_roughness) {
+  PbrOrtakGpu &g = pbr_ortak_gpu();
+  if (!g.ok) { skip("Vulkan cihazi yok (paylasilan PBR cihazi)"); return; }
+  Device &dev = g.dev;
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "tex_colorspace")) { CHECK(false); return; }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  const uint32_t W = 256, H = 256;
+  static uint8_t ref[W * H * 4], lin[W * H * 4], srgb_[W * H * 4];
+  const float kTexel = 128.0f / 255.0f; // dogrusal okumada shader'in gordugu sayi
+  bool ok = true;
+  {
+    PbrRig r;
+    ok = pbr_rig_init(r, dev, sys, W, H, renderer::NdfMode::Ggx);
+    if (ok) {
+      const Vec3 col{0.80f, 0.78f, 0.75f};
+      renderer::TextureHandle white = r.ren.default_texture();
+      renderer::TextureHandle orm_lin = solid_tex(r.ren, 255, 128, 255, false);  // URUN: dogrusal
+      renderer::TextureHandle orm_srgb = solid_tex(r.ren, 255, 128, 255, true);  // KONTROL: ayni baytlar, sRGB
+      renderer::PbrParams ref_p;
+      ref_p.metallic = 1.0f;
+      ref_p.roughness = kTexel; // REFERANS: dokunun dogrusal degeri, carpan yolundan
+      r.mat = r.ren.create_material(white, col, ref_p);
+      ok = r.mat.valid() && pbr_frame(r, ref, W, H, 0.9f);
+      renderer::PbrParams tex_p;
+      tex_p.metallic = 1.0f;
+      tex_p.roughness = 1.0f;
+      renderer::PbrTextures t;
+      t.orm = orm_lin;
+      if (ok) { r.mat = r.ren.create_material(white, col, tex_p, t); ok = r.mat.valid() && pbr_frame(r, lin, W, H, 0.9f); }
+      t.orm = orm_srgb;
+      if (ok) { r.mat = r.ren.create_material(white, col, tex_p, t); ok = r.mat.valid() && pbr_frame(r, srgb_, W, H, 0.9f); }
+      CHECK(orm_lin.valid() && orm_srgb.valid());
+    }
+    pbr_rig_free(r);
+  }
+  // dev.shutdown() YOK: cihaz PAYLASILIYOR (Tuzaklar 8al) ve surec boyunca yasar.
+  CHECK(ok);
+  if (!ok) return;
+  uint32_t d0 = 0, d1 = 0; int m0 = 0, m1 = 0; double a0 = 0, a1 = 0;
+  frame_diff(ref, lin, W * H, &d0, &m0, &a0);
+  frame_diff(ref, srgb_, W * H, &d1, &m1, &a1);
+  std::printf("    [bilgi] URUN    ORM DOGRUSAL (texel %.3f): %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              (double)kTexel, d0, 100.0f * (float)d0 / (float)(W * H), m0, a0);
+  std::printf("    [bilgi] KONTROL ayni baytlar sRGB (GPU 0.216 gorur): %u piksel (%.2f%%), en buyuk kanal %d, ortalama %.3f\n",
+              d1, 100.0f * (float)d1 / (float)(W * H), m1, a1);
+  bool linear_upload_matches = m0 <= 2 && a0 < 0.05;
+  CHECK(linear_upload_matches);
+  bool srgb_upload_is_visibly_wrong = m1 > 20 && a1 > a0 * 20.0;
+  CHECK(srgb_upload_is_visibly_wrong); // dusmezse renk uzayi hic olculmuyor
+}
+
+// --- BUTCE: set 1 ne kadar buyudu, bedeli ne? -------------------------------
+// "Once olc, sonra ekle, sonra tekrar olc" kapisi. Degisiklikten ONCE (HEAD
+// 45e1070) set 1'de 2 baglama vardi (albedo sampler + 32 baytlik malzeme UBO'su)
+// ve malzeme basina 1 combined-image-sampler descriptor'i. SONRA 5 baglama
+// (albedo + UBO + ORM + normal + isima) ve malzeme basina 4 sampler.
+//
+// TBDR'da onemli olan uc sayi ve bu kapinin iddiasi:
+//   1) TILE BUTCESI (eklenti adedi, bit/piksel renk) DEGISMEZ — sampler
+//      attachment degildir. Olculur, uydurulmaz.
+//   2) Malzeme UBO'su 32 -> 64 bayt buyudu ama GPU'da BEDAVA: adim boyu zaten
+//      cihazin minUniformBufferOffsetAlignment'ina yuvarlaniyordu. Kapi bunu
+//      iddia etmez, HESAPLAR: yuvarlanmis(32) ile yuvarlanmis(64) esit mi?
+//      Esit degilse (ornegin hizasi 32 olan bir cihaz) kapi bunu SOYLER.
+//   3) Ornekleme maliyeti yalniz dokuyu GERCEKTEN kullanan malzemede olusur.
+//      Olcum: ayni sahne, ayni gecis, GPU zaman damgasi ile iki kurulum —
+//      (A) dokusuz malzeme (5 descriptor bagli, 3'u kullanilmiyor),
+//      (B) ORM + normal + isima gercekten orneklenen malzeme.
+//      B > A cikmiyorsa olcum kordur ve kapi bunu yazar (gizli yesil yok).
+ENGINE_TEST(renderer_pbr_texture_budget) {
+  PbrOrtakGpu &g = pbr_ortak_gpu();
+  if (!g.ok) { skip("Vulkan cihazi yok (paylasilan PBR cihazi)"); return; }
+  Device &dev = g.dev;
+  static SystemArena sys;
+  if (!sys.reserve(256u << 20, "pbr_budget")) { CHECK(false); return; }
+
+  // (1) Tile butcesi: ana gecisin eklentileri. Sampler eklemek burayi
+  // DEGISTIRMEZ; degistirseydi zaten gecis yaratimi hata verirdi.
+  const VkFormat main_pass[2] = {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_D24_UNORM_S8_UINT};
+  TileBudget tb = tile_budget(main_pass, 2);
+  std::printf("    [bilgi] tile butcesi (ana gecis): %u eklenti, %u bit/piksel renk (sinir %u / %u), derinlik %u bit -> %s\n",
+              tb.attachments, tb.color_bits, kTileMaxAttachments, kTileMaxColorBits, tb.depth_bits, tb.ok ? "TAMAM" : tb.error);
+  bool tile_unchanged = tb.ok && tb.attachments == 1 && tb.color_bits == 32;
+  CHECK(tile_unchanged);
+  // POZITIF KONTROL: butce denetiminin kendisi calisiyor mu? 5 x RGBA16F = 320
+  // bit/piksel REDDEDILMELI; edilmiyorsa yukaridaki "TAMAM" bir sey olcmuyor.
+  const VkFormat sisman[5] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+                              VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+                              VK_FORMAT_R16G16B16A16_SFLOAT};
+  bool budget_check_bites = !tile_budget(sisman, 5).ok;
+  CHECK(budget_check_bites);
+
+  const uint32_t W = 1024, H = 1024;
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); std::printf("    [bilgi] offscreen: %s\n", ores.error); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.max_draws = 4096;
+  rc.shadow_size = 0; // olculen sey FRAGMENT maliyeti olsun
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); return; }
+
+  // (2) Descriptor / UBO butcesi
+  VkPhysicalDeviceProperties2 pp{};
+  pp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+  dev.api().vkGetPhysicalDeviceProperties2(dev.physical(), &pp);
+  const uint32_t align = (uint32_t)pp.properties.limits.minUniformBufferOffsetAlignment;
+  const uint32_t stride_once = align ? (32u + align - 1) / align * align : 32u; // ONCE: 32 baytlik blok
+  const uint32_t stride_sonra = ren.material_ubo_stride();                      // SONRA: 64 baytlik blok
+  std::printf("    [bilgi] set 1 baglamalari: ONCE 2 (albedo + 32B UBO) -> SONRA %u (albedo + 64B UBO + ORM + normal + isima)\n",
+              renderer::Renderer::kMaterialBindings);
+  std::printf("    [bilgi] malzeme basina descriptor: ONCE 1 sampler + 1 UBO -> SONRA %u sampler + 1 UBO\n",
+              renderer::Renderer::kMaterialBindings - 1);
+  std::printf("    [bilgi] malzeme UBO'su: 32 -> %u bayt; cihaz UBO hizasi %u -> ADIM BOYU %u -> %u bayt (%s)\n",
+              renderer::Renderer::kMaterialUboBytes, align, stride_once, stride_sonra,
+              stride_once == stride_sonra ? "buyume GPU'da BEDAVA" : "ADIM BOYU BUYUDU: bellek bedeli var");
+  CHECK(stride_sonra >= renderer::Renderer::kMaterialUboBytes);
+  // Fragment asamasinda toplam sampled-image: set 0'da golge (1) + set 1'de 4.
+  const uint32_t need_sampled = 1 + (renderer::Renderer::kMaterialBindings - 1);
+  std::printf("    [bilgi] fragment asamasi sampled-image: %u gerekiyor, cihaz siniri %u\n", need_sampled,
+              pp.properties.limits.maxPerStageDescriptorSampledImages);
+  CHECK(need_sampled <= pp.properties.limits.maxPerStageDescriptorSampledImages);
+
+  // (3) Ornekleme maliyeti: ayni sahne, iki malzeme kurulumu, GPU zaman damgasi.
+  renderer::Vertex v[24];
+  uint32_t idx[36];
+  uint32_t n = renderer::Renderer::plane(v, idx);
+  renderer::MeshHandle plane = ren.create_mesh(v, 4, idx, n);
+  CHECK(plane.valid());
+  renderer::TextureHandle albedo = solid_tex(ren, 200, 190, 180, true);
+  renderer::TextureHandle orm = solid_tex(ren, 200, 90, 40, false);
+  renderer::TextureHandle nrm = solid_tex(ren, 150, 120, 240, false);
+  renderer::TextureHandle emi = solid_tex(ren, 40, 30, 20, true);
+  renderer::PbrParams pbr;
+  pbr.metallic = 0.5f;
+  pbr.roughness = 0.5f;
+  renderer::MaterialHandle mat_plain = ren.create_material(albedo, {1, 1, 1}, pbr);
+  renderer::PbrTextures t;
+  t.orm = orm; t.normal = nrm; t.emissive = emi; t.normal_scale = 1.0f; t.occlusion_strength = 1.0f;
+  renderer::MaterialHandle mat_tex = ren.create_material(albedo, {1, 1, 1}, pbr, t);
+  CHECK(mat_plain.valid() && mat_tex.valid());
+  ren.set_render_size(W, H);
+  ren.set_shadows_enabled(false);
+  ren.set_light(normalize(Vec3{0.35f, 0.45f, 1.0f}), {0.1f, 0.1f, 0.12f}, 0.9f);
+  // Kamera duzleme cok yakin ve tepeden: ekranin tamami dolar, yani olculen sey
+  // fragment maliyetidir (vertex/cizim sayisi degil).
+  ren.set_camera(Mat4::look_at({0, 1.2f, 0.001f}, {0, 0, 0}, {0, 1, 0}),
+                 Mat4::perspective(1.2f, (float)W / (float)H, 0.05f, 50.0f));
+  Rec rr{&ren};
+  // --- (3a) DETERMINIK ONCE/SONRA: shader'daki doku ornekleme komutu -------
+  // Zamanlama makineye baglidir; BU sayi degildir. Depoya GIREN SPIR-V'de doku
+  // ornekleme komutlarini sayiyoruz (OpImageSample* = 87..90). Olculdu:
+  //   ONCE (HEAD 45e1070): 2 = 1 duz (albedo) + 1 dref (golge PCF)
+  //   SONRA              : 5 = 4 duz (albedo + ORM + normal + isima) + 1 dref
+  // Golge PCF 3x3 dongusu ACILMIYOR, o yuzden tek komut sayilir — bu da
+  // "sayilan sey komut, ornek degil" demek; kapinin iddiasi tam olarak bu.
+  // KONTROL: ayni sayac mesh.vert'te 0 vermeli (vertex shader'inda doku yok).
+  // Vermezse sayac ornekleme komutunu degil "her komutu" sayiyordur.
+  auto sample_ops = [](const uint32_t *spv, uint32_t bytes, uint32_t *dref) -> uint32_t {
+    *dref = 0;
+    const uint32_t words = bytes / 4;
+    if (words < 5 || spv[0] != 0x07230203u) return 0xFFFFFFFFu;
+    uint32_t n = 0;
+    for (uint32_t w = 5; w < words;) {
+      const uint32_t len = spv[w] >> 16, op = spv[w] & 0xFFFFu;
+      if (len == 0) break;
+      // OpImageSample{Implicit,Explicit}Lod = 87/88, ...Dref... = 89/90
+      if (op >= 87u && op <= 90u) { n++; if (op >= 89u) (*dref)++; }
+      w += len;
+    }
+    return n;
+  };
+  uint32_t frag_dref = 0, vert_dref = 0;
+  const uint32_t frag_samples = sample_ops(mesh_frag_spv, mesh_frag_spv_size, &frag_dref);
+  const uint32_t vert_samples = sample_ops(mesh_vert_spv, mesh_vert_spv_size, &vert_dref);
+  std::printf("    [bilgi] mesh.frag SPIR-V doku ornekleme komutu: ONCE 2 (albedo + golge) -> SONRA %u (%u duz + %u dref/golge)\n",
+              frag_samples, frag_samples - frag_dref, frag_dref);
+  std::printf("    [bilgi] KONTROL mesh.vert doku ornekleme komutu: %u (vertex shader'inda doku yok -> 0 olmali)\n",
+              vert_samples);
+  CHECK(vert_samples == 0); // sayac gercekten ornekleme komutunu sayiyor mu
+  // 4 duz (albedo, ORM, normal, isima) + 1 dref (golge). Sayi tutmuyorsa ya bir
+  // sampler shader'a hic girmemis ya da beklenmedik bir ornekleme eklenmis.
+  bool three_new_samplers_are_in_the_shader = frag_samples == 5 && frag_dref == 1;
+  CHECK(three_new_samplers_are_in_the_shader);
+
+  // --- (3b) Ornekleme maliyeti (ZAMANLAMA; makineye bagli) ----------------
+  // offscreen_render_custom (rhi/, bu dilimin yazma alaninda degil) GPU zaman
+  // damgasi yazmiyor — yalniz offscreen_render_frame yaziyor. Gonderim SENKRON
+  // oldugu icin duvar suresi GPU calismasini kapsar, ama SABIT bir gonderim +
+  // geri okuma maliyeti de kapsar; hizli bir GPU'da o sabit kisim fragment
+  // isini bogar. Bu yuzden ortu sayisi SABIT DEGIL, KALIBRE edilir: bos kareye
+  // gore en az 3 kat yavaslayana kadar ikiye katlanir. Kalibrasyon tutmazsa
+  // sonuc KIRMIZI degil GORUNUR ATLAMA olur — urun kusurlu degil, olcum bu
+  // makinede ayirt edemiyor (PSO kapisiyla ayni ders).
+  const int kWarm = 3, kMeas = 9;
+  auto medyan = [&](int layers, renderer::MaterialHandle mh, bool *ok_out) -> uint64_t {
+    static uint64_t ns[kMeas];
+    int got = 0;
+    for (int f = 0; f < kWarm + kMeas; f++) {
+      ren.begin_frame(0);
+      ren.clear_point_lights();
+      for (int k = 0; k < layers; k++) // ayni pikselleri ust uste: fragment maliyeti belirginlessin
+        ren.draw(plane, mh, Mat4::scale({40, 1, 40}), {1, 1, 1});
+      const uint64_t t0 = platform::now_ns();
+      if (!offscreen_render_custom(off, oc, rec_main, &rr, &ores, rec_shadow)) { *ok_out = false; return 0; }
+      const uint64_t dt = platform::now_ns() - t0;
+      if (f >= kWarm) ns[got++] = dt;
+    }
+    std::sort(ns, ns + got);
+    return ns[got / 2];
+  };
+  bool run_ok = true;
+  const uint64_t empty_ns = medyan(0, mat_tex, &run_ok); // sabit gonderim + geri okuma maliyeti
+  int layers = 32;
+  uint64_t tex_ns = 0;
+  while (run_ok && layers <= 2048) {
+    tex_ns = medyan(layers, mat_tex, &run_ok);
+    if (!run_ok || tex_ns > empty_ns * 3) break;
+    layers *= 2;
+  }
+  CHECK(run_ok);
+  if (!run_ok) { ren.shutdown(); offscreen_destroy(off); return; }
+  std::printf("    [makine] %s\n", dev.caps().device_name);
+  std::printf("    [bilgi] kalibrasyon: bos kare %.3f ms; %d kat ortude dokulu kare %.3f ms (%.2f kat)\n",
+              (double)empty_ns / 1e6, layers, (double)tex_ns / 1e6,
+              empty_ns ? (double)tex_ns / (double)empty_ns : 0.0);
+  if (tex_ns <= empty_ns * 3) {
+    std::printf("    [bilgi] 2048 kat ortude bile kare suresi sabit maliyetin 3 katina cikmadi: bu makinede duvar saati "
+                "fragment maliyetine KOR\n");
+    skip("ornekleme maliyeti bu makinede olculemiyor (duvar saati sabit gonderim maliyetine bogulu)");
+  } else {
+    const uint64_t plain_ns = medyan(layers, mat_plain, &run_ok);
+    const uint64_t hi_ns = medyan(layers * 4 <= 4096 ? layers * 4 : 4096, mat_tex, &run_ok);
+    CHECK(run_ok);
+    if (run_ok) {
+      const double a = (double)plain_ns / 1e6, b = (double)tex_ns / 1e6, cc = (double)hi_ns / 1e6;
+      std::printf("    [bilgi] kare suresi (medyan %d kare, %ux%u, %d kat ortu): dokusuz %.3f ms -> ORM+normal+isima %.3f ms "
+                  "(%+.3f ms, %%%+.1f)\n", kMeas, W, H, layers, a, b, b - a, a > 0 ? 100.0 * (b - a) / a : 0.0);
+      std::printf("    [bilgi] KONTROL ayni dokulu malzeme %d kat ortu: %.3f ms (%.2f kat) — olcum fragment maliyetini goruyor mu\n",
+                  layers * 4 <= 4096 ? layers * 4 : 4096, cc, b > 0 ? cc / b : 0.0);
+      // KONTROLUN ISLEVI: dort kat ortude sure ACIKCA artmali. Artmiyorsa olcum
+      // fragment maliyetine kordur ve "dokular +x ms" sayisi da bir sey soylemez.
+      if (cc > b * 1.5) {
+        CHECK(b > a); // dokulu yol dokusuzdan pahali OLMALI (uc sampler bedava degil)
+      } else {
+        std::printf("    [bilgi] dort kat ortu artisi sureyi 1.5 kat buyutmedi: doku farki gurultunun icinde\n");
+        skip("ornekleme maliyetinin farki bu makinede gurultunun altinda");
+      }
+    }
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  // dev.shutdown() YOK: cihaz PAYLASILIYOR (Tuzaklar 8al) ve surec boyunca yasar.
+}
+
+// --- UCTAN UCA: glTF dokulari malzemeye YUKLENIYOR mu? ----------------------
+// Ayri ayri kapilar var: okuma (content_gltf_pbr_textures_reach_material),
+// golgeleme (renderer_orm_*/normal_*/emissive_*). Aradaki HALKA —
+// upload_model'in ModelMaterial'i renderer::PbrTextures'a cevirip
+// create_material'a vermesi — hicbirinde olculmuyordu; o halka kopuk olsaydi
+// butun oteki kapilar yine yesil kalirdi (elle kurulan dokularla kosuyorlar).
+// Kapi gercek varligi yukler, tutamaclari okur ve bir kare cizer.
+// KONTROL: ayni malzemenin dokulari BOSALTILIR (set_material_textures{}) ve
+// ayni kare yeniden cizilir — goruntu DEGISMELIDIR. Degismiyorsa dokular
+// zaten hicbir ise yaramiyordu.
+ENGINE_TEST(renderer_gltf_pbr_textures_upload_to_material) {
+  PbrOrtakGpu &g = pbr_ortak_gpu();
+  if (!g.ok) { skip("Vulkan cihazi yok (paylasilan PBR cihazi)"); return; }
+  Device &dev = g.dev;
+  char path[1024];
+  {
+    const char *dir = std::getenv("TULPAR_ENGINE_ASSETS");
+    if (dir && *dir) std::snprintf(path, sizeof path, "%s/pbr_plane.gltf", dir);
+    else std::snprintf(path, sizeof path, "%s/tests/assets/pbr_plane.gltf", ENGINE_SOURCE_DIR);
+    FILE *f = std::fopen(path, "rb");
+    if (!f) { skip("pbr_plane.gltf yok (make_test_gltf.py)"); return; }
+    std::fclose(f);
+  }
+  if (test::gpu_is_virtual(dev.caps().device_name)) { skip("sanal GPU (CI macOS): piksel kapisi gercek cihazda"); return; }
+  static SystemArena sys;
+  if (!sys.reserve(192u << 20, "gltf_pbr_upload")) { CHECK(false); return; }
+  content::Model m;
+  bool ok = content::gltf_load(sys, path, &m);
+  if (!ok) std::printf("    [bilgi] yukleme hatasi: %s\n", m.error);
+  CHECK(ok);
+  if (!ok) return;
+
+  const uint32_t W = 256, H = 256;
+  static uint8_t with_tex[W * H * 4], without_tex[W * H * 4];
+  OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  OffscreenResult ores;
+  OffscreenTarget *off = offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); std::printf("    [bilgi] offscreen: %s\n", ores.error); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 0;
+  bool ren_ok = ren.init(dev, sys, offscreen_render_pass(off), rc);
+  CHECK(ren_ok);
+  if (!ren_ok) { offscreen_destroy(off); return; }
+  content::UploadedModel up;
+  bool up_ok = content::upload_model(ren, sys, m, &up);
+  CHECK(up_ok);
+  if (!up_ok) { ren.shutdown(); offscreen_destroy(off); return; }
+  CHECK(up.material_count == 1);
+  const renderer::MaterialHandle mh = up.materials[0];
+  const renderer::PbrTextures t = ren.material_textures(mh);
+  std::printf("    [bilgi] yuklenen malzeme: ORM %s, normal %s, isima %s | normal olcegi %.2f, occlusion gucu %.2f\n",
+              t.orm.valid() ? "VAR" : "yok", t.normal.valid() ? "VAR" : "yok", t.emissive.valid() ? "VAR" : "yok",
+              (double)t.normal_scale, (double)t.occlusion_strength);
+  bool handles_arrived = t.orm.valid() && t.normal.valid() && t.emissive.valid() && t.normal_scale > 0.74f &&
+                         t.normal_scale < 0.76f && t.occlusion_strength > 0.59f && t.occlusion_strength < 0.61f;
+  CHECK(handles_arrived);
+
+  Rec rr{&ren};
+  auto shot = [&](uint8_t *dst) {
+    ren.set_light(normalize(Vec3{0.35f, 0.9f, 0.45f}), {0.10f, 0.11f, 0.13f}, 0.9f);
+    ren.set_camera(Mat4::look_at({0, 1.6f, 1.9f}, {0, 0, 0}, {0, 1, 0}),
+                   Mat4::perspective(1.0f, (float)W / (float)H, 0.05f, 50.0f));
+    ren.set_render_size(W, H);
+    ren.set_shadows_enabled(false);
+    ren.begin_frame(0);
+    ren.clear_point_lights();
+    content::draw_model(ren, m, up, Mat4::identity());
+    OffscreenResult r2;
+    if (!offscreen_render_custom(off, oc, rec_main, &rr, &r2, rec_shadow)) return false;
+    std::memcpy(dst, r2.pixels, (size_t)W * H * 4);
+    return true;
+  };
+  bool drew = shot(with_tex);
+  CHECK(drew);
+  // KONTROL: dokulari bosalt (carpanlar aynen kalir) ve ayni kareyi ciz.
+  if (drew) {
+    CHECK(ren.set_material_textures(mh, renderer::PbrTextures{}));
+    drew = shot(without_tex);
+    CHECK(drew);
+  }
+  ren.shutdown();
+  offscreen_destroy(off);
+  // dev.shutdown() YOK: cihaz PAYLASILIYOR (Tuzaklar 8al).
+  if (!drew) return;
+  uint32_t d = 0; int mx = 0; double mean = 0;
+  frame_diff(with_tex, without_tex, W * H, &d, &mx, &mean);
+  std::printf("    [bilgi] dokulu vs dokusuz ayni kare: %u piksel farkli (%.1f%%), en buyuk kanal %d, ortalama %.2f\n",
+              d, 100.0f * (float)d / (float)(W * H), mx, mean);
+  bool textures_actually_change_the_frame = mx > 24 && mean > 2.0;
+  CHECK(textures_actually_change_the_frame);
 }

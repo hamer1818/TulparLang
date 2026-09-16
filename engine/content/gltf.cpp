@@ -235,22 +235,78 @@ bool gltf_load(Arena &arena, const char *path, Model *out, const GltfLimits &lim
     mm.metallic = 0.0f;
     mm.roughness = 1.0f;
     mm.has_pbr = false;
+    mm.orm_image = mm.normal_image = mm.emissive_image = -1;
+    mm.normal_scale = 1.0f;
+    mm.occlusion_strength = 0.0f;
+    mm.occlusion_separate = false;
     if (cm.has_pbr_metallic_roughness) {
       const cgltf_pbr_metallic_roughness &pbr = cm.pbr_metallic_roughness;
       mm.base_color = {pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2]};
       if (pbr.base_color_texture.texture && pbr.base_color_texture.texture->image)
         mm.image = (int32_t)(pbr.base_color_texture.texture->image - data->images);
-      // metallic/roughness CARPANLARI okunuyor; metallicRoughness DOKUSU
-      // okunmuyor: shader bugun malzeme basina tek skaler cift kullaniyor
-      // (set 1 binding 1 UBO), doku basina degisim icin ikinci bir sampler
-      // baglamasi gerekir — TBDR butcesinde bilincli olarak ertelendi.
+      // metallic/roughness CARPANLARI. Doku varsa shader bunlarla CARPAR
+      // (glTF 2.0: "multiplied with the texture values").
       mm.metallic = pbr.metallic_factor;
       mm.roughness = pbr.roughness_factor;
+      // metallicRoughness DOKUSU: G = roughness, B = metallic (glTF 2.0 spec).
+      // cgltf bunu SOYLEMEZ — saf ayristiricidir, yalnizca doku isaretcisini ve
+      // `scale`i tasir; esleme spec'ten gelir ve `content_gltf_orm_channel_mapping`
+      // kapisi kanallari takas ederek olcer.
+      if (pbr.metallic_roughness_texture.texture && pbr.metallic_roughness_texture.texture->image)
+        mm.orm_image = (int32_t)(pbr.metallic_roughness_texture.texture->image - data->images);
       mm.has_pbr = true;
     }
     mm.emissive = {cm.emissive_factor[0], cm.emissive_factor[1], cm.emissive_factor[2]};
+    // TUZAK (Tuzaklar 8u'nun ayni sinifi, bu kez SATICI AYRISTIRICISINDA):
+    // cgltf `texture_view.scale`i YALNIZ o JSON nesnesi VARSA 1'e kurar
+    // (cgltf_parse_json_texture_view); malzeme duzeyinde varsayilan YOK. Yani
+    // normalTexture yazilmamissa `normal_texture.scale` SIFIR kalir — kosulsuz
+    // okumak butun normal haritalarini duzlestirirdi. Bu yuzden scale yalniz
+    // doku VARKEN okunur, yoksa 1 kalir.
+    if (cm.normal_texture.texture && cm.normal_texture.texture->image) {
+      mm.normal_image = (int32_t)(cm.normal_texture.texture->image - data->images);
+      mm.normal_scale = cm.normal_texture.scale;
+    }
+    if (cm.emissive_texture.texture && cm.emissive_texture.texture->image)
+      mm.emissive_image = (int32_t)(cm.emissive_texture.texture->image - data->images);
+    // occlusionTexture: R kanali. Varliklarin ezici cogunlugunda metallicRoughness
+    // ILE AYNI goruntudur ("ORM" paketlemesi) — o zaman bedava, ayni sampler'dan
+    // okunur. FARKLI bir goruntuyse bugun okunmuyor: besinci bir doku baglamasi
+    // TBDR'da bu kazanca degmez. Sessizce yutulmuyor, `occlusion_separate` ile
+    // isaretleniyor.
+    if (cm.occlusion_texture.texture && cm.occlusion_texture.texture->image) {
+      const int32_t occ = (int32_t)(cm.occlusion_texture.texture->image - data->images);
+      if (occ == mm.orm_image) mm.occlusion_strength = cm.occlusion_texture.scale; // scale == strength (cgltf)
+      else mm.occlusion_separate = true;
+    }
   }
   out->material_count = ok ? nmat : 0;
+  // --- Goruntu renk uzayi: KULLANIMDAN turetilir --------------------------
+  // glTF goruntusu renk uzayi tasimaz; onu MALZEMEDEKI YERI belirler (spec):
+  // baseColor + emissive = sRGB, metallicRoughness + normal + occlusion =
+  // DOGRUSAL veri. Bir goruntu yalniz VERI olarak kullanildiysa dogrusal olur;
+  // her iki rolde de geciyorsa (glTF'te gecersiz) renk kazanir ve sayac artar.
+  // TUZAK 8u: `alloc_array_zeroed` YAPICI CALISTIRMAZ, yani ModelImage'in
+  // `srgb = true` varsayilani uygulanmaz ve alan SIFIR (= dogrusal) gelir.
+  // Guvenli varsayilan ESKI davranistir (sRGB); dogrusal olan ACIKCA isaretlenir.
+  for (uint32_t i = 0; ok && i < out->image_count; i++) out->images[i].srgb = true;
+  {
+    bool *as_color = arena.alloc_array_zeroed<bool>(out->image_count ? out->image_count : 1);
+    bool *as_data = arena.alloc_array_zeroed<bool>(out->image_count ? out->image_count : 1);
+    if (as_color && as_data) {
+      for (uint32_t i = 0; ok && i < out->material_count; i++) {
+        const ModelMaterial &mm = out->materials[i];
+        if (mm.image >= 0 && (uint32_t)mm.image < out->image_count) as_color[mm.image] = true;
+        if (mm.emissive_image >= 0 && (uint32_t)mm.emissive_image < out->image_count) as_color[mm.emissive_image] = true;
+        if (mm.orm_image >= 0 && (uint32_t)mm.orm_image < out->image_count) as_data[mm.orm_image] = true;
+        if (mm.normal_image >= 0 && (uint32_t)mm.normal_image < out->image_count) as_data[mm.normal_image] = true;
+      }
+      for (uint32_t i = 0; ok && i < out->image_count; i++) {
+        out->images[i].srgb = as_color[i] || !as_data[i]; // hicbir yerde kullanilmayan: sRGB (eski davranis)
+        if (as_color[i] && as_data[i]) out->colorspace_conflicts++;
+      }
+    }
+  }
 
   // Iskeletler (skin): eklemler ebeveyn-once yeniden siralanir (sim::to_model
   // kurali); glTF eklem indeksi -> bizim indeks (skin_remap) vertex'lere uygulanir.
@@ -496,7 +552,11 @@ bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedM
   out->lod_meshes = arena.alloc_array_zeroed<renderer::MeshHandle>((m.mesh_count ? m.mesh_count : 1) * kModelMaxLods);
   if (!out->textures || !out->materials || !out->meshes || !out->lod_meshes) return false;
   for (uint32_t i = 0; i < m.image_count; i++) {
-    out->textures[i] = r.create_texture(m.images[i].rgba, m.images[i].width, m.images[i].height, true);
+    // RENK UZAYI: sRGB doku donanimda dogrusala cozer; ORM/normal UNORM kalir
+    // ve texel oldugu gibi gelir. Bu, "goruntu biraz yanlis ama hicbir sey
+    // kizarmaz" sinifinin ta kendisidir — bu yuzden kapiyla olculuyor
+    // (content_gltf_texture_colorspace).
+    out->textures[i] = r.create_texture(m.images[i].rgba, m.images[i].width, m.images[i].height, true, m.images[i].srgb);
     if (!out->textures[i].valid()) return false;
   }
   out->texture_count = m.image_count;
@@ -510,7 +570,16 @@ bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedM
       pbr.metallic = mm.metallic;
       pbr.roughness = mm.roughness;
       pbr.emissive = mm.emissive;
-      out->materials[i] = r.create_material(t, mm.base_color, pbr);
+      // Doku basina kanallar (set 1 binding 2/3/4). Tutamac gecersizse shader
+      // dali kapali kalir: dokusuz malzemenin goruntusu de maliyeti de ayni.
+      renderer::PbrTextures tex;
+      const uint32_t nt = m.image_count;
+      if (mm.orm_image >= 0 && (uint32_t)mm.orm_image < nt) tex.orm = out->textures[mm.orm_image];
+      if (mm.normal_image >= 0 && (uint32_t)mm.normal_image < nt) tex.normal = out->textures[mm.normal_image];
+      if (mm.emissive_image >= 0 && (uint32_t)mm.emissive_image < nt) tex.emissive = out->textures[mm.emissive_image];
+      tex.normal_scale = mm.normal_scale;
+      tex.occlusion_strength = mm.occlusion_strength;
+      out->materials[i] = r.create_material(t, mm.base_color, pbr, tex);
     } else {
       out->materials[i] = r.create_material(t, mm.base_color);
     }
