@@ -389,7 +389,16 @@ ENGINE_TEST(scene_runtime_draws_blob_entities_offscreen) {
   const uint32_t diff_scene = count_diff(px_scene, px_empty, W * H), diff_ctrl = count_diff(px_empty, px_empty2, W * H);
   std::printf("    [bilgi] cizim %u (beklenen %u), isik %u; piksel farki sahne-bos %u, bos-bos %u\n", gpu_draws, expected_draws,
               rt.stats().lights, diff_scene, diff_ctrl);
-  CHECK(diff_scene > 500 && diff_ctrl == 0);
+  // Sanal GPU'da (Apple Paravirtual, CI macOS) sahne karesi bos cikiyor;
+  // ayni sinif test.hpp'de belgelendi. ATLAMA YALNIZ PIKSEL OLCUMUNE —
+  // kaparin geri kalani (blob, cizim sayisi, isik, fizik, navmesh) macOS'ta
+  // da kosuyor. `diff_ctrl == 0` (iki bos kare ayni) sanal GPU'da da gecerli
+  // oldugu icin O KALIYOR: yazicinin sabit ciktigini hala olcuyoruz.
+  CHECK(diff_ctrl == 0);
+  if (test::gpu_is_virtual(dev.caps().device_name))
+    skip("sanal GPU (Apple Paravirtual, CI macOS): sahne-bos piksel farki gercek cihazda olculur");
+  else
+    CHECK(diff_scene > 500);
   // 3) fizik: govdeler sim'e, dusen kup 2 s sonra yazar konumundan asagida; sabit duvar yerinde.
   sim::Physics ph;
   sim::PhysicsConfig pc;

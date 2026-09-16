@@ -539,19 +539,15 @@ ENGINE_TEST(render_graph_post_mali_best_practices) {
   const uint32_t bp_arm_effective = ren.sparse_mesh_count() == 0 ? bp_arm - sparse_layer : bp_arm;
   CHECK(bp_arm_effective == 0);
 
-  // POZITIF KONTROL: Arm kurali gercekten acik mi? LOD kirpan sampler uyari vermeli.
-  {
-    VkSamplerCreateInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    si.magFilter = si.minFilter = VK_FILTER_NEAREST;
-    si.maxLod = 0.0f;
-    VkSampler smp = VK_NULL_HANDLE;
-    const uint32_t before = dev.best_practice_arm_warnings();
-    if (dev.api().vkCreateSampler(dev.handle(), &si, nullptr, &smp) == VK_SUCCESS)
-      dev.api().vkDestroySampler(dev.handle(), smp, nullptr);
-    const uint32_t after = dev.best_practice_arm_warnings();
-    std::printf("    [bilgi] pozitif kontrol (LOD kirpan sampler): Arm uyarisi %u -> %u\n", before, after);
-    CHECK(after > before);
+  // POZITIF KONTROL: Arm kurali gercekten acik mi? Kural TANINMIYORSA bu kapi
+  // hicbir sey olcemez — ustteki `bp_arm_effective == 0` de 0 uyari ile BOSA
+  // gecerdi. O yuzden sonuc CHECK degil GORUNUR ATLAMA (bkz. test.hpp).
+  if (test::arm_rules_missing(dev)) {
+    ren.shutdown();
+    offscreen_destroy(off);
+    dev.shutdown();
+    skip(test::kArmRulesMissingReason);
+    return;
   }
   ren.shutdown();
   offscreen_destroy(off);
@@ -1002,19 +998,15 @@ ENGINE_TEST(render_graph_gpu_cull_mali_best_practices) {
   CHECK(ren.sparse_mesh_count() == 0);
   const uint32_t bp_arm_effective = ren.sparse_mesh_count() == 0 ? bp_arm - sparse_layer : bp_arm;
   CHECK(bp_arm_effective == 0);
-  // POZITIF KONTROL: Arm kurali gercekten acik mi?
-  {
-    VkSamplerCreateInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    si.magFilter = si.minFilter = VK_FILTER_NEAREST;
-    si.maxLod = 0.0f;
-    VkSampler smp = VK_NULL_HANDLE;
-    const uint32_t before = dev.best_practice_arm_warnings();
-    if (dev.api().vkCreateSampler(dev.handle(), &si, nullptr, &smp) == VK_SUCCESS)
-      dev.api().vkDestroySampler(dev.handle(), smp, nullptr);
-    const uint32_t after = dev.best_practice_arm_warnings();
-    std::printf("    [bilgi] pozitif kontrol (LOD kirpan sampler): Arm uyarisi %u -> %u\n", before, after);
-    CHECK(after > before);
+  // POZITIF KONTROL: Arm kurali gercekten acik mi? Kural TANINMIYORSA bu kapi
+  // hicbir sey olcemez — ustteki `bp_arm_effective == 0` de 0 uyari ile BOSA
+  // gecerdi. O yuzden sonuc CHECK degil GORUNUR ATLAMA (bkz. test.hpp).
+  if (test::arm_rules_missing(dev)) {
+    ren.shutdown();
+    offscreen_destroy(off);
+    dev.shutdown();
+    skip(test::kArmRulesMissingReason);
+    return;
   }
   ren.shutdown();
   offscreen_destroy(off);

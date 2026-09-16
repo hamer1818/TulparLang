@@ -2482,3 +2482,35 @@ dizide 20 000 tur, eski ikili 30 ms, yeni ikili 30 ms. LLVM her iki yolu da ayn�
 
 Değişiklik tutarlılık için durdu, hız için değil, ve kaynak yorumu bunu böyle söylüyor. Ölçmeden
 "hızlandırdık" yazmak, bu depoda ölçmeden "düzelttik" yazmakla aynı sınıf.
+
+### 8bj. "Bit bit aynı" bir kapı ölçütü olamaz — sürücünün optimize edicisi bizim sözleşmemiz değil
+`renderer_normal_map_tilts_lighting` şunu istiyordu: normal ölçeği 0'ken kare, normal dokusu hiç
+olmayan referansa **bit bit** dönmeli (`md == 0 && ad == 0.0`). NVIDIA'da dönüyordu, lavapipe'ta (CI Linux)
+dönmüyordu ve kapı orada kırmızıydı.
+
+Sebep şu: iki kare **iki farklı shader dalından** geliyor — biri "normal dokusu yok", öteki "normal dokusu
+var, ölçek 0". Aritmetik olarak aynı sonucu verirler ama **metin olarak farklıdırlar**. İkisini aynı koda
+indirgemek sürücü derleyicisinin işidir; yaptığı da garanti değildir, yapmaya devam edeceği de. Yani kapı
+bizim renderer'ımızı değil sürücünün optimize edicisini sınıyordu.
+
+Yerine geçen ölçüt ayrımı koruyor ve sürücüden bağımsız: ölçek 0'ın artığı düz haritanınkinden **büyük
+olamaz** ve ürün sinyalinden en az 20 kat küçük olmalı. Ayırt etme gücü ölçüldü — ölçek okunmuyormuş gibi
+enjekte edince artık 0'dan **18 501 piksele** (ortalama 5.53) fırladı ve kapı kırmızıya döndü. Bit eşitlik
+hâlâ **raporlanıyor** ("bit bit eşit: EVET/hayır") ama hüküm değil: sayı var, iddia yok.
+
+Genel kural: bir kapı yalnızca **bizim ürettiğimiz** şeyi ölçmeli. Sürücünün/derleyicinin iki eşdeğer
+ifadeyi aynı koda indirgeyip indirgemediği bizim ürünümüz değil. İlgili: 8be (kopyalanan kontrol, korumasız).
+
+### 8bk. Aynı sınıf kontrol üç yere kopyalanınca koruması geride kalır
+CI Linux'ta dört Mali kapısı birden kırmızı döndü. Üçü yeniydi ve pozitif kontrolü
+(`renderer_mali_best_practices_gate`'teki "LOD kırpan sampler Arm uyarısı vermeli") **kopyalamıştı** — ama
+orijinaldeki **korumayı** kopyalamamıştı: katman Arm kurallarını tanımıyorsa kapı ölçemez ve görünür
+atlanır. CI'daki apt katmanı (Ubuntu 24.04, VVL 1.3.275) tam olarak bu durumda.
+
+İki ders. (1) Kopyalanan kontrol, korumasıyla birlikte kopyalanmalı — yoksa "aynı kontrol" değil, yarısıdır.
+(2) Bu sınıfın kalıcı çözümü kopya değil **ortak fonksiyon**: sonda artık `test::arm_rules_missing()`
+(gövdesi `test_main.cpp`), dördü de onu çağırıyor, bir daha ayrışamaz.
+
+Ayrıca dikkat: o kapılardaki ÜRÜN iddiası (`bp_arm_effective == 0`) katman kuralları tanımıyorken **boşa
+geçer** — 0 uyarı her zaman 0'dır. Kapıyı ayakta tutan tek şey kontroldür; o yüzden kontrolün sonucu
+`CHECK` değil **atlama** olmalı.

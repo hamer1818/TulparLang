@@ -423,28 +423,18 @@ ENGINE_TEST(renderer_mali_best_practices_gate) {
   // POZITIF KONTROL: Arm kurali gercekten acik mi? LOD kirpan sampler
   // (minLod=maxLod=0) "BestPractices-Arm-vkCreateSampler-lod-clamping" vermeli.
   // Vermezse Arm denetimi kapali demektir ve yukaridaki 0, hicbir seyi olcmuyor.
-  {
-    VkSamplerCreateInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    si.magFilter = si.minFilter = VK_FILTER_NEAREST;
-    si.maxLod = 0.0f;
-    VkSampler smp = VK_NULL_HANDLE;
-    const uint32_t before = dev.best_practice_arm_warnings();
-    if (dev.api().vkCreateSampler(dev.handle(), &si, nullptr, &smp) == VK_SUCCESS) dev.api().vkDestroySampler(dev.handle(), smp, nullptr);
-    const uint32_t after = dev.best_practice_arm_warnings();
-    std::printf("    [bilgi] pozitif kontrol (LOD kirpan sampler): Arm uyarisi %u -> %u\n", before, after);
-    if (after == before) {
-      // Katman Arm kurallarini bilmiyor (eski surum: VK_EXT_layer_settings /
-      // validate_best_practices_arm yok). Kapi OLCEMIYOR: sessiz yesil degil,
-      // gorunur atlama. (CI'daki apt katmani bu durumda; yerel/telefon 1.4.357.)
-      ren.shutdown();
-      offscreen_destroy(off);
-      dev.shutdown();
-      skip("dogrulama katmani Arm BestPractices kurallarini tanimiyor (surum) — Mali kapisi olculemedi");
-      return;
-    }
-    bool control_fires = after > before;
-    CHECK(control_fires);
+  // Sonda ARTIK ORTAK (test::arm_rules_missing, govdesi test_main.cpp): uc yeni
+  // Mali kapisi bu bloku kopyalayip KORUMAYI atlayinca CI Linux'ta dordu
+  // birden kirmizi dondu (2026-09-16). Tek yer = bir daha ayrisamaz.
+  if (test::arm_rules_missing(dev)) {
+    // Katman Arm kurallarini bilmiyor (eski surum: VK_EXT_layer_settings /
+    // validate_best_practices_arm yok). Kapi OLCEMIYOR: sessiz yesil degil,
+    // gorunur atlama. (CI'daki apt katmani bu durumda; yerel/telefon 1.4.357.)
+    ren.shutdown();
+    offscreen_destroy(off);
+    dev.shutdown();
+    skip(test::kArmRulesMissingReason);
+    return;
   }
   ren.shutdown();
   offscreen_destroy(off);
@@ -1507,20 +1497,35 @@ ENGINE_TEST(renderer_normal_map_tilts_lighting) {
   // Duz haritanin artigi SIFIR DEGIL, cunku (128,128,255) UNORM8'de tam duz
   // degil: 128/255 = 0.501961 -> xy = +0.003922, yani normal 0.225 derece egik.
   // Bu DOKUNUN KODLAMA hatasidir, teget cercevesinin degil — KANIT ucuncu
-  // olcumdedir: ayni cerceve, ayni dal, olcek 0 ile kare BIT BIT referansa
-  // doner (0 piksel). Yani cerceve tam; geriye kalan tek sey 0.5'in 8 bitte
-  // gosterilemeyisi. Bu yuzden esik "sifir" degil o hatanin buyuklugunde, ve
-  // TEK BASINA mutlak esige guvenilmez: urun sinyalinden en az 20 kat kucuk
-  // olmasi AYRICA isteniyor (oran olcutu gurultuye bagli degil).
+  // olcumdedir: olcek 0'da doku katkisi TAMAMEN kalkar, yani kare referansa
+  // duz haritadan bile DAHA YAKIN olmali.
+  //
+  // ⚠️ BU OLCUT BIR KEZ COK SERT YAZILDI (2026-09-16'da duzeltildi): eskiden
+  // `md == 0 && ad == 0.0`, yani BIT BIT esitlik isteniyordu. O, bizim
+  // renderer'imizin degil SURUCU DERLEYICISININ bir ozelligini sinaviyordu:
+  // referans kare "normal dokusu YOK" dalindan, olcek 0 karesi "normal dokusu
+  // VAR, olcek 0" dalindan geliyor. Iki dal aritmetik olarak ayni sonucu
+  // verir ama METIN olarak farklidir; NVIDIA ikisini ayni koda indirgiyor,
+  // lavapipe (CI Linux) indirgemiyor ve kapi orada kirmizi donuyordu.
+  // Surucunun optimize edicisi bizim sozlesmemiz degil.
+  //
+  // Yerine gecen olcut ayni seyi ayirt ediyor ve surucuden BAGIMSIZ:
+  //   * teget cercevesi bozuk olsaydi olcek 0 referansa donmezdi (ad > ab),
+  //   * olcek hic okunmasaydi olcek 0 karesi EGIK kare gibi olurdu (ad ~ ac).
+  // Bit esitlik yine RAPORLANIYOR (bazi surucularde saglaniyor), ama hukum
+  // degil: sayi var, iddia yok.
   const double kFlatTiltDeg = 0.225; // atan(0.003922)
   std::printf("    [bilgi] duz haritanin kodlama egimi %.3f derece; olcek 0 artigi %u piksel "
-              "(cerceve tamsa burasi 0 olmali), urun/duz orani %.1f kat\n",
-              kFlatTiltDeg, dd, ab > 0 ? ac / ab : 999.0);
+              "(ortalama %.4f), urun/duz orani %.1f kat; bit bit esit: %s\n",
+              kFlatTiltDeg, dd, ad, ab > 0 ? ac / ab : 999.0, (md == 0 && ad == 0.0) ? "EVET" : "hayir");
   bool flat_map_is_a_noop = mb <= 16 && ab < 0.5 && ac > ab * 20.0;
   CHECK(flat_map_is_a_noop);
   bool tilt_changes_lighting = mc > 24 && ac > 3.0;
   CHECK(tilt_changes_lighting);
-  bool scale_zero_returns_to_geometric = md == 0 && ad == 0.0; // olcek akmiyorsa VE cerceve tam degilse duser
+  // Olcek 0: doku katkisi yok -> artik duz haritanınkinden BUYUK OLAMAZ ve
+  // urun sinyalinden en az 20 kat kucuk olmali (oran olcutu gurultuye bagli
+  // degil, tipki ustteki duz-harita olcutu gibi).
+  bool scale_zero_returns_to_geometric = ad <= ab && md <= mb && ac > ad * 20.0;
   CHECK(scale_zero_returns_to_geometric);
 }
 
