@@ -173,3 +173,74 @@ Neden önce bu:
 - **Yeni dosya** → iki PR'la da çakışmaz, birleştirmeyi zorlaştırmaz.
 - **Tamamen tamsayı** → derleyicisiz ortamda bile elle doğrulanabilir.
 - Motorun **bir numaralı iddiasını** disiplinden yapıya taşır.
+
+---
+
+## 7. Dış belgelerden süzülenler (20 katmanlık iki doküman)
+
+Kullanıcı iki büyük "katmanlı bilimsel mimari" belgesi getirdi (Katman 0-10 ve
+11-20). İkisi de aynı desende: **gerçek bilim + çalışmayan kod + yanlış yere
+uygulama.** Aşağıda süzme sonucu.
+
+### 7.1 Neden belgelere olduğu gibi güvenilmedi
+
+Kod örneklerinde **15+ somut, doğrulanabilir hata** bulundu. Kaynak
+güvenilirliği tartışması değil — dosyayı okuyan herkesin görebileceği türden:
+
+- "Nöral denoise" GLSL'i aslında **sabit ağırlıklı kutu bulanıklığı** (ağ yok).
+- `PredictiveCodingAgent.act`: `predict(action)` parametresini hiç kullanmıyor →
+  tüm eylemler aynı enerjiyi veriyor → `argmin` hep 0. **Ajan karar veremez.**
+- Kuantum tünelleme kodu, metnin kendi formülündeki bariyer kalınlığı `L`'yi
+  ve `ħ`'yi düşürmüş.
+- `FibonacciAnyon`: `4j * Math.PI` — Python sözdizimi, JS'te parse edilmez.
+- `ORSet.remove` yalnız kendi etiketini siliyor → **CRDT semantiği bozuk.**
+- Şifreli (CKKS) skorlar `<` ile karşılaştırılıyor — **mümkün değil.**
+- `ThermalBudget`: hesaplanan `min_sigma` hiç kullanılmıyor, `self.kB` tanımsız.
+- `lyapunov_exponent`: ardışık noktaların mesafesini alıyor; Lyapunov üssü
+  *yakın iki ayrı yörüngenin* ıraksamasıdır.
+- Müzik `synthesize`: akorlar aynı `t` üzerinde → progresyon değil küme akoru.
+
+### 7.2 Belgelerin yapısal iddiası YANLIS
+
+Her iki belge de "her katman, altındakinin matematiksel genellemesidir" diyor.
+**Değil.** ECS, kuantum durum uzayının özel hali değil; SPH, tensör ağlarının
+özel hali değil. Bunlar matematiksel ilişki değil, retorik benzetme.
+
+Ayrıca belgeler kendi içlerinde çelişiyor: **Kaos (Katman 8) ile determinizm
+(Katman 0.7) yan yana konmuş.** Kaos = başlangıç koşullarına aşırı duyarlılık;
+determinizm = aynı girdi, aynı çıktı. Lockstep netcode ikincisi üzerine kurulu.
+
+### 7.3 SÜZÜLENLER — gerçekten alınacaklar
+
+Hiçbiri iki PR'da da yok (grep ile doğrulandı).
+
+| # | Ne | Neden uyuyor | Kaynak katman |
+|---|---|---|---|
+| 1 | **Uzamsal hash ızgarası** | Aşağıdaki 1, 2, 5'in **ortak önkoşulu**; SPH'i O(n²)→O(n·k) yapar | P1 (bu belge §2) |
+| 2 | **Boids (sürü davranışı)** | Ucuz, standart, kalabalık/düşman sürüsü. Komşu sorgusu gerektirir | 15 |
+| 3 | **Kum yığını / SOC** | **Tamsayı ızgarası → tam deterministik.** Güç yasası dağılımlı emergent olaylar | 16.2 |
+| 4 | **Reaksiyon-difüzyon** | Turing desenleri; prosedürel doku. Ucuz | 10.3 |
+| 5 | **Lotka-Volterra + SIR** | Birkaç ODE; ekosistem, salgın, kaynak tükenmesi | 19.2 |
+| 6 | **Neo-Riemannian müzik** | **Modüler tamsayı aritmetiği → deterministik.** Motorların çoğunda müzik teorisi HİÇ yok | 20.1 |
+| 7 | **TD-hatası = NPC motivasyonu** | Dopamin ≡ ödül tahmin hatası (Schultz 1997). Ucuz, yorumlanabilir | 18.2 |
+
+**İzleme listesi (kod değil, takip):**
+- **NVIDIA MotionBricks** — gerçek (SIGGRAPH 2026, doğrulandı: 350k klip, 9.300
+  skill, 15.000 FPS, 2 ms). Motorun en büyük eksiklerinden biri olan
+  animasyon geçişi/blend sorununa doğrudan bakıyor.
+
+**Çevrimdışı araç olarak değerli (runtime değil):** optimal transport (stil/renk
+transferi), kalıcı homoloji (bölüm topolojisi doğrulama), ağ analizi (sosyal graf).
+
+### 7.4 ALINMAYANLAR ve nedeni
+
+| Konu | Neden hayır |
+|---|---|
+| **Monad / Functor / Topos** (11) | Monadik soyutlama veri-odaklı tasarımın **tersi**: işaretçi takibi + tahsis. `AllocGate` tam da bunu engellemek için var. |
+| **Doğal gradyan / Fisher** (12) | Fisher matrisi O(n²), tersi O(n³), üstelik adım başına 1000 örnekleme. Mobilde imkânsız. |
+| **QFT / anyonlar** (13) | Klein-Gordon kodu aslında klasik 3B dalga denklemi — görsel efekt olarak kullanılabilir ama "QFT" değil. Anyon kodu derlenmiyor. |
+| **PBFT / blok zinciri** (14.2) | O(n²) mesajlaşma. Mobil oyun için fahiş. |
+| **PSO / ACO** (15) | PSO bir *optimizasyon* algoritması; oyuncunun yerini zaten biliyoruz. ACO, navmesh+A*'tan yavaş. |
+| **ZKP / FHE** (17) | Mobilde ispat üretimi saniyeler-dakikalar; FHE ~1000x yavaşlama. |
+| **FBA / DFT** (19.1, 7) | Karakter başına kare başına lineer program / molekül başına saatler. Oyunlar malzeme parametrelerini **yazar**. |
+| **Kuantum donanımı, metafizik** (3, 4) | Telefonda QPU yok; "déjà vu → bellek sızıntısı" test edilebilir bir mühendislik iddiası değil. |
