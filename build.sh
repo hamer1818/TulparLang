@@ -184,7 +184,36 @@ if [ "$ACTION" = "suites" ]; then
             if [ -n "$fails" ]; then
                 echo "$fails" | sed 's/^/    /'
             else
-                echo "$out" | grep -E 'hata|error|Error' | awk 'NR<=8' | sed 's/^/    /'
+                # PAKET COKTU (FAIL satiri YOK). Burada en cok ihtiyac duyulan
+                # iki sey CIKIS KODU ve ciktinin SONU — ikisi de eskiden
+                # basilmiyordu ve 2026-09-16'da bir CI turu tam olarak bunun
+                # yuzunden bosa gitti: macOS'ta engine_bridge ozetsiz dustu,
+                # elimizde yalnizca "hata" gecen 8 satir vardi ve onlar da
+                # kapanis raporunun ortasindan gelmisti, yani teshis icin
+                # HICBIR SEY soylemiyordu.
+                #
+                # Cikis kodu sinifi TEK BASINA belirliyor: 139 = SIGSEGV,
+                # 134 = abort, 124 = zaman asimi (timeout), 1 = normal hata.
+                sig=""
+                case $code in
+                    124) sig=" (ZAMAN ASIMI — $SUITE_TIMEOUT_CMD)";;
+                    134) sig=" (SIGABRT — abort/assert)";;
+                    139) sig=" (SIGSEGV — bellek erisimi)";;
+                    136) sig=" (SIGFPE)";;
+                    *) ;;
+                esac
+                echo "    cikis kodu $code$sig; FAIL satiri YOK -> paket ozetine varmadan oldu."
+                echo "    --- ciktinin son 12 satiri ---"
+                echo "$out" | tail -12 | sed 's/^/    /'
+                # Motor koprusu (teng_init) cokme raporcusunu KURUYOR ve
+                # rapor dosyasini CWD'ye yaziyor — ama onu kimse basmiyordu,
+                # yani saha kosumunda yigin izi uretilip cope gidiyordu.
+                for cr in crash_*.txt; do
+                    [ -f "$cr" ] || continue
+                    echo "    --- cokme raporu $cr ---"
+                    sed 's/^/    /' "$cr" | awk 'NR<=25'
+                    rm -f "$cr"
+                done
             fi
             SUITE_FAILED=1
         elif [ -z "$summary" ]; then
