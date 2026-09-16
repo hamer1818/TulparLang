@@ -177,14 +177,23 @@ add_library(engine_sim STATIC
     sim/lag_compensation.cpp
     sim/camera_rig.cpp
     sim/behavior_tree.cpp
+    sim/chaos_physics.cpp
+    sim/fluid_system.cpp
+    sim/quantum_gen.cpp
+    sim/ml_system.cpp
 )
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_sim engine_layer_check)
 
 # --- L3 RENDERER -----------------------------------------------------------------
-add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp renderer/indirect_cull.cpp)
-target_link_libraries(engine_renderer PUBLIC engine_rhi)
+# NOT: renderer/nextgen_render.cpp BILEREK bu listede YOK -- Intel
+# MaskedOcclusionCulling'e ihtiyac duyuyor, o kutuphane bu agacin
+# third_party/'sinde yok. Dosya kaynak olarak duruyor (sim/rollback.hpp ile
+# ayni durum: "kod hazir, bagimlilik/kablolama bekliyor").
+add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp renderer/indirect_cull.cpp
+    renderer/meshlet_pipeline.cpp renderer/lighting_pipeline.cpp)
+target_link_libraries(engine_renderer PUBLIC engine_rhi engine_meshopt)
 target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_renderer engine_layer_check)
 
@@ -261,6 +270,10 @@ set(ENGINE_TEST_SOURCES
     tests/test_particles.cpp
     tests/test_frame_graph.cpp
     tests/test_indirect_cull.cpp
+    tests/test_chaos_physics.cpp
+    tests/test_fluid_system.cpp
+    tests/test_quantum_gen.cpp
+    tests/test_lighting_pipeline.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
