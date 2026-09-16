@@ -2,9 +2,21 @@
 // Faz B madde 6'nin karsiligi: "Basit davranis sistemi (AI) — dil
 // baglamasi olmadan, C++ tarafinda basit bir state machine veya behavior
 // tree. Navmesh zaten var (yol bulma); eksik olan 'ne zaman saldir/kac/
-// devriye gez' karari." Standart, yaygin bilinen desen (Unreal Behavior
-// Tree, BehaviorTree.CPP kutuphanesiyle AYNI temel semantik: Sequence/
-// Selector/Inverter + Running durumunun KALDIGI YERDEN devam etmesi).
+// devriye gez' karari."
+//
+// **DOGRULANDI, VARSAYILMADI:** Sequence/Selector/Inverter'in tick()
+// semantigi, BehaviorTree.CPP'nin (MIT, github.com/BehaviorTree/
+// BehaviorTree.CPP, 4200+ yildiz -- C++ icin FIILEN standart BT
+// kutuphanesi) GERCEK kaynak kodu (src/controls/sequence_node.cpp,
+// fallback_node.cpp, src/decorators/inverter_node.cpp) SATIR SATIR
+// okunarak dogrulandi: RUNNING'de index SABIT kalir (ayni cocuktan devam),
+// FAILURE'da (Sequence) / SUCCESS'te (Fallback/Selector) index SIFIRLANIR,
+// SUCCESS'te (Sequence) / FAILURE'da (Fallback) bir sonraki cocuga
+// GECILIR. Bu dosyanin tick_node() fonksiyonu bu davranisla BIREBIR
+// eslesir. Kasitli DISARIDA birakilan (BehaviorTree.CPP'de olan ama
+// burada olmayan): SKIPPED durumu, async/wake-up sinyali (coklu-is-
+// parcaciği) -- Tulpar'in tek-is-parcacikli, senkron simulasyon adimiyla
+// ALAKASIZ.
 //
 // Veri-yonelimli tasarim: agac TANIMI (BehaviorTree) SABIT/PAYLASILIR,
 // calisma-zamani DURUMU (hangi Sequence/Selector "kaldigi" cocuk) CAGIRAN

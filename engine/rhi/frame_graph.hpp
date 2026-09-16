@@ -7,6 +7,24 @@
 // olu oldugunu CIKARIR. Coğu mobil motor (kucuk ekip, sinirli sure) bunu
 // HIC yapmaz -- pass sirasi ELLE, sabit kodlanir.
 //
+// **DOGRULANDI, VARSAYILMADI:** temel algoritma sekli Granite'in (MIT,
+// github.com/Themaister/Granite -- Hans-Kristian Arntzen'in gercek,
+// sevkiyat yapmis Vulkan motoru) renderer/render_graph.cpp'sinin GERCEK
+// kaynak kodu okunarak karsilastirildi: Granite'in bake() fonksiyonu da
+// AYNI iki adimi izler -- (1) "backbuffer"dan (bizim is_output) GERIYE
+// DOGRU bagimlilik gecisiyle gereken pass'lari bulup gerisini BUDAMAK
+// (traverse_dependencies + filter_passes), (2) bagimliliklara SAYGILI
+// bir calisma sirasi CIKARMAK (reorder_passes). Bir fark BULUNDU ve
+// BILEREK KORUNDU: Granite'in dongu tespiti sadece "yiginin derinligi
+// pass sayisini asarsa dongu VAR say" seklinde bir SEZGI (depend_passes_
+// recursive: stack_count > passes.size()) -- ziyaret edilen dugumleri
+// ISARETLEMEDIGI icin dallanmasi yuksek (elmas seklinde) ama DONGUSUZ bir
+// grafikte bile YANLIS POZITIF verebilir. Bu dosyadaki dfs_visit() UC-
+// RENKLI (Unvisited/Visiting/Visited) DFS kullanir -- her dugum EN FAZLA
+// BIR KEZ islenir (yanlis pozitif YOK) ve GERCEK geri-kenari (Visiting->
+// Visiting) tespit eder -- standart, ders-kitabi-dogru CLRS algoritmasi,
+// Granite'in sezgisel kisayolundan DAHA SIKI.
+//
 // **Somut fayda (mobilde bellek KIT):** resource_lifetime() iki kaynagin
 // YASAM ARALIGI KESISMIYORSA ayni GPU bellegini (render target/buffer)
 // PAYLASABILECEGINI SOYLER (bellek ALIASLAMA) -- ör. G-buffer'in normal
