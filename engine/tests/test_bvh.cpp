@@ -72,3 +72,62 @@ ENGINE_TEST(bvh_empty_build_is_safe) {
   float t;
   CHECK(!bvh.raycast_closest(nullptr, Ray{{0, 0, 0}, {1, 0, 0}}, &item, &t));
 }
+
+// SAH (bkz. bvh.hpp basligindaki NanoRT portu) ORTANCA-bolmeden (sayiya
+// gore 2+2) FARKLI, DAHA IYI bir agac uretmeli: box0,box1,box2 x-ekseninde
+// BITISIK (kompakt), box3 x=100'de UZAK bir aykiri deger. Ortanca-bolme
+// box2'yi (bitisik grubun bir parcasi) box3 (uzak) ile AYNI dala koyardi
+// -- devasa, israf edilen bos hacimli bir kutu (maliyet 816). SAH bunun
+// yerine box3'u TEK BASINA ayirir (maliyet 48) -- klasik SAH-vs-median
+// senaryosu (Wald 2007), sayilar ELLE hesaplanip dogrulandi (yorumlarda).
+ENGINE_TEST(bvh_sah_isolates_distant_outlier_unlike_median_split) {
+  const Aabb boxes[4] = {
+      {{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}},    // box0: x merkezi 0
+      {{0.5f, -0.5f, -0.5f}, {1.5f, 0.5f, 0.5f}},     // box1: x merkezi 1
+      {{1.5f, -0.5f, -0.5f}, {2.5f, 0.5f, 0.5f}},     // box2: x merkezi 2
+      {{99.5f, -0.5f, -0.5f}, {100.5f, 0.5f, 0.5f}},  // box3: x merkezi 100 -- UZAK aykiri deger
+  };
+  SystemArena sys;
+  CHECK(sys.reserve(1u << 16, "bvh_sah"));
+  Bvh bvh;
+  CHECK(bvh.build(sys, boxes, 4, /*leaf_threshold=*/1)); // MAKSIMUM dallanmayi ZORLA
+
+  const uint32_t root = bvh.root();
+  CHECK(root != UINT32_MAX);
+  const BvhNode &r = bvh.node(root);
+  CHECK(r.left != UINT32_MAX && r.right != UINT32_MAX); // ic dugum (yaprak degil)
+
+  // Sag cocuk: box3'u TEK BASINA iceren bir yaprak olmali (i=3 bolmesi,
+  // maliyet-48 -- YUKARIDAKI ELLE hesaplanan deger).
+  const BvhNode &right = bvh.node(r.right);
+  CHECK(right.left == UINT32_MAX); // yaprak
+  CHECK(right.count == 1);
+  CHECK(bvh.item_order(right.first) == 3);
+
+  // Sol cocuk {box0,box1,box2} -- KENDI icinde tekrar SAH ile bolunur:
+  // {box0} | {box1,box2} (maliyet 26, ELLE hesaplandi -- iki secenek de
+  // 26'ya esit, ilk bulunan -- i=1 -- kazanir).
+  const BvhNode &left = bvh.node(r.left);
+  CHECK(left.left != UINT32_MAX); // ic dugum
+
+  const BvhNode &ll = bvh.node(left.left);
+  CHECK(ll.left == UINT32_MAX && ll.count == 1);
+  CHECK(bvh.item_order(ll.first) == 0); // box0 yalniz
+
+  const BvhNode &lr = bvh.node(left.right);
+  CHECK(lr.left != UINT32_MAX); // {box1,box2} -- hala ic dugum, tekrar bolunur
+
+  const BvhNode &lrl = bvh.node(lr.left);
+  const BvhNode &lrr = bvh.node(lr.right);
+  CHECK(lrl.left == UINT32_MAX && lrl.count == 1);
+  CHECK(lrr.left == UINT32_MAX && lrr.count == 1);
+  CHECK(bvh.item_order(lrl.first) == 1); // box1
+  CHECK(bvh.item_order(lrr.first) == 2); // box2
+
+  // Sekil dogru OLDUGU KADAR, raycast SONUCU da hala dogru olmali (siradan
+  // testlerle AYNI garanti): box3'e giden bir ray onu bulmali.
+  uint32_t item;
+  float t;
+  CHECK(bvh.raycast_closest(boxes, Ray{{99, 0, 0}, {1, 0, 0}}, &item, &t));
+  CHECK(item == 3);
+}

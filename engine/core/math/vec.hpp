@@ -223,6 +223,13 @@ inline Aabb merge(Aabb a, Aabb b) { return {vmin(a.min, b.min), vmax(a.max, b.ma
 inline Aabb merge(Aabb a, Vec3 p) { return {vmin(a.min, p), vmax(a.max, p)}; }
 inline Vec3 center(Aabb a) { return (a.min + a.max) * 0.5f; }
 inline Vec3 extent(Aabb a) { return (a.max - a.min) * 0.5f; } // yari-boyut
+// Kutunun yuzey alani (bos kutu icin ANLAMSIZ -- en az 1 oge birlestirilmis
+// olmasi varsayilir). core/math/bvh.hpp'nin SAH insa maliyetinde kullanilir
+// (NanoRT'un (MIT, lighttransport/nanort) da kullandigi klasik formul).
+inline float surface_area(Aabb a) {
+  const Vec3 d = a.max - a.min;
+  return 2.0f * (d.x * d.y + d.y * d.z + d.z * d.x);
+}
 // Kutuyu matrisle donustur (Arvo yontemi: merkez+yari-boyut, 8 kose gerekmez).
 inline Aabb transform(const Mat4 &m, Aabb a) {
   Vec3 c = transform_point(m, center(a));
