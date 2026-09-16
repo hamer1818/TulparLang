@@ -12,6 +12,7 @@
 
 #include "app/demo_scene.hpp"
 #include "app/editor_ui.hpp"
+#include "app/scene_format.hpp"
 #include "content/gltf.hpp"
 #include "core/jobs/job_system.hpp"
 #include "core/memory/arena.hpp"
@@ -156,22 +157,35 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   DemoScene scene;
   if (!scene.init(sys, &jobs)) { std::fprintf(stderr, "sahne\n"); return 1; }
 
-  // Editor veri modeli (ilk dilim): 3 kure + 2 boru.
-  static EditorEntity ents[5];
+  // Editor veri modeli (ilk dilim): 3 kure + 2 boru, + UI'dan eklenebilir yenileri.
+  // kMaxEntities: sabit tavan (STL/dinamik ayirma yok, plan L1) — 64, "Ekle"
+  // dugmesiyle buyuyecek sahneler icin demo/test kapsamini asan bir pay birakir.
+  constexpr int kMaxEntities = 64;
+  static EditorEntity ents[kMaxEntities];
   int ent_count = 0;
-  auto add_ent = [&](const char *name, int kind, float x, float y, float z, float phase) {
+  int next_new_id = 1; // "Ekle" ile olusturulan varliklara essiz isim vermek icin
+  auto add_ent = [&](const char *name, int kind, float x, float y, float z, float phase) -> EditorEntity * {
+    if (ent_count >= kMaxEntities) return nullptr; // sessizce reddet: UI zaten dugmeyi devre disi birakir
     EditorEntity &e = ents[ent_count++];
     std::snprintf(e.name, sizeof e.name, "%s", name);
     e.pos[0] = x; e.pos[1] = y; e.pos[2] = z;
     e.rot_deg[0] = e.rot_deg[1] = e.rot_deg[2] = 0;
     e.scale[0] = e.scale[1] = e.scale[2] = kind == 1 ? 1.2f : 1.0f;
     e.kind = kind; e.phase = phase;
+    return &e;
   };
   add_ent("kure_1", 0, -8.0f, 1.2f, -8.5f, 0);
   add_ent("kure_2", 0, 0.0f, 1.2f, -8.5f, 0);
   add_ent("kure_3", 0, 8.0f, 1.2f, -8.5f, 0);
   add_ent("boru_1", 1, -4.0f, 0.0f, -3.5f, 0.0f);
   add_ent("boru_2", 1, 4.0f, 0.0f, -3.5f, 0.35f);
+
+  // Sahne kaydet/yukle (DEVAM_PLANI.md Faz A madde 1-2): sabit "scenes/" dizini,
+  // dosya adi UI'dan degistirilebilir. Faz A madde 5'te (icerik gezgini) gercek
+  // bir dosya diyaloguna cikar; simdilik bu ilk dilim yeterli.
+  static char scene_filename[64] = "editor_scene.tsc";
+  static char scene_status[160] = {};
+  static bool scene_status_ok = false;
 
   EditorUi ui;
   {
@@ -248,6 +262,37 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     ui.begin_frame(in, (float)fw, (float)fh, dt);
     if (ImGui::BeginMainMenuBar()) {
       if (ImGui::Button(playing ? "Durdur" : "Oynat")) playing = !playing;
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(140);
+      ImGui::InputText("##sahne_dosya", scene_filename, sizeof scene_filename);
+      ImGui::SameLine();
+      if (ImGui::Button("Kaydet")) {
+        char scene_path[1200];
+        std::snprintf(scene_path, sizeof scene_path, "%s/scenes/%s", ENGINE_SOURCE_DIR, scene_filename);
+        SceneIoResult sr = scene_save(scene_path, ents, ent_count);
+        scene_status_ok = sr.ok;
+        std::snprintf(scene_status, sizeof scene_status, sr.ok ? "kaydedildi: %s" : "kaydetme hatasi: %s",
+                     sr.ok ? scene_filename : sr.error);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Yukle")) {
+        char scene_path[1200];
+        std::snprintf(scene_path, sizeof scene_path, "%s/scenes/%s", ENGINE_SOURCE_DIR, scene_filename);
+        int loaded = 0;
+        SceneIoResult lr = scene_load(scene_path, ents, kMaxEntities, &loaded);
+        scene_status_ok = lr.ok;
+        if (lr.ok) {
+          ent_count = loaded;
+          if (selected >= ent_count) selected = ent_count > 0 ? 0 : -1;
+          std::snprintf(scene_status, sizeof scene_status, "yuklendi: %d entity", loaded);
+        } else {
+          std::snprintf(scene_status, sizeof scene_status, "yukleme hatasi: %s", lr.error);
+        }
+      }
+      if (scene_status[0]) {
+        ImGui::SameLine();
+        ImGui::TextColored(scene_status_ok ? ImVec4(0.4f, 0.9f, 0.4f, 1) : ImVec4(0.95f, 0.4f, 0.4f, 1), "%s", scene_status);
+      }
       ImGui::Text("| kare %u | tick %u | secili %s | gizmo %s (T/R/S)", frame_i, tick_i, selected >= 0 ? ents[selected].name : "-",
                   gizmo_op == 0 ? "tasi" : gizmo_op == 1 ? "dondur" : "olcekle");
       ImGui::EndMainMenuBar();
@@ -257,6 +302,23 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     if (ImGui::Begin("Sahne")) {
       for (int i = 0; i < ent_count; i++)
         if (ImGui::Selectable(ents[i].name, selected == i)) selected = i;
+      ImGui::Separator();
+      ImGui::BeginDisabled(ent_count >= kMaxEntities);
+      if (ImGui::Button("+ Ekle")) {
+        char nm[32];
+        std::snprintf(nm, sizeof nm, "yeni_%d", next_new_id++);
+        // Kamera hedefinde belirir: bos sahnede bile gorunur olsun.
+        if (add_ent(nm, 0, cam.target.x, cam.target.y, cam.target.z, 0.0f)) selected = ent_count - 1;
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      ImGui::BeginDisabled(selected < 0 || selected >= ent_count);
+      if (ImGui::Button("- Sil")) {
+        for (int i = selected; i + 1 < ent_count; i++) ents[i] = ents[i + 1];
+        ent_count--;
+        selected = -1;
+      }
+      ImGui::EndDisabled();
       ImGui::Separator();
       ImGui::Text("sim: %u entity", scene.entities());
       ImGui::Text("kamera %.1f/%.1f/%.1f", cam.eye().x, cam.eye().y, cam.eye().z);

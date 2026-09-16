@@ -10,6 +10,11 @@
 #include "rhi/shaders/shadow_vert_spv.h"
 #include "rhi/shaders/ui_frag_spv.h"
 #include "rhi/shaders/ui_vert_spv.h"
+#include "rhi/shaders/fullscreen_vert_spv.h"
+#include "rhi/shaders/bloom_threshold_frag_spv.h"
+#include "rhi/shaders/bloom_downsample_frag_spv.h"
+#include "rhi/shaders/bloom_upsample_frag_spv.h"
+#include "rhi/shaders/post_fx_frag_spv.h"
 
 namespace tulpar::engine::renderer {
 
@@ -522,6 +527,73 @@ bool Renderer::make_pipeline_set(VkRenderPass rp, bool skinned, VkPipeline *dept
   // dunya uzayinda normal kaydirmasiyla (her cihazda ayni anlam). Tuzaklar 8q.
   rs.depthBiasEnable = VK_FALSE;
   if (a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &gp, nullptr, shadow) != VK_SUCCESS) return false;
+
+  if (!skinned) {
+    // Post-FX and Bloom pipelines (Fullscreen quad)
+    VkShaderModule fs_vs = VK_NULL_HANDLE, fs_thresh = VK_NULL_HANDLE, fs_down = VK_NULL_HANDLE, fs_up = VK_NULL_HANDLE, fs_post = VK_NULL_HANDLE;
+    VkShaderModuleCreateInfo smi{};
+    smi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smi.codeSize = fullscreen_vert_spv_size; smi.pCode = fullscreen_vert_spv;
+    a.vkCreateShaderModule(dev_->handle(), &smi, nullptr, &fs_vs);
+    smi.codeSize = bloom_threshold_frag_spv_size; smi.pCode = bloom_threshold_frag_spv;
+    a.vkCreateShaderModule(dev_->handle(), &smi, nullptr, &fs_thresh);
+    smi.codeSize = bloom_downsample_frag_spv_size; smi.pCode = bloom_downsample_frag_spv;
+    a.vkCreateShaderModule(dev_->handle(), &smi, nullptr, &fs_down);
+    smi.codeSize = bloom_upsample_frag_spv_size; smi.pCode = bloom_upsample_frag_spv;
+    a.vkCreateShaderModule(dev_->handle(), &smi, nullptr, &fs_up);
+    smi.codeSize = post_fx_frag_spv_size; smi.pCode = post_fx_frag_spv;
+    a.vkCreateShaderModule(dev_->handle(), &smi, nullptr, &fs_post);
+
+    VkPipelineShaderStageCreateInfo fst[2]{};
+    fst[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fst[0].stage = VK_SHADER_STAGE_VERTEX_BIT; fst[0].module = fs_vs; fst[0].pName = "main";
+    fst[1] = fst[0]; fst[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkPipelineVertexInputStateCreateInfo fvi{};
+    fvi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    
+    // Create descriptor layout for post-fx (Set 1: sampler2D)
+    VkDescriptorSetLayoutBinding pb{};
+    pb.binding = 0; pb.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pb.descriptorCount = 1; pb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo psli{};
+    psli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    psli.bindingCount = 1; psli.pBindings = &pb;
+    a.vkCreateDescriptorSetLayout(dev_->handle(), &psli, nullptr, &post_layout_);
+
+    VkDescriptorSetLayout playouts[2] = {set_layout_, post_layout_};
+    VkPushConstantRange ppcr{VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, 16}; // vec4 params
+    VkPipelineLayoutCreateInfo ppli{};
+    ppli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    ppli.setLayoutCount = 2; ppli.pSetLayouts = playouts;
+    ppli.pushConstantRangeCount = 1; ppli.pPushConstantRanges = &ppcr;
+    a.vkCreatePipelineLayout(dev_->handle(), &ppli, nullptr, &post_pipe_layout_);
+
+    VkGraphicsPipelineCreateInfo fgp = gp;
+    fgp.pStages = fst; fgp.pVertexInputState = &fvi; fgp.layout = post_pipe_layout_;
+    fgp.stageCount = 2; fgp.renderPass = rp; fgp.subpass = 1; // Assuming it runs in the final subpass
+    ds.depthTestEnable = VK_FALSE; ds.depthWriteEnable = VK_FALSE;
+    fgp.pDepthStencilState = &ds;
+    
+    cb.attachmentCount = 1; cba.blendEnable = VK_FALSE; // No blend for post
+    fgp.pColorBlendState = &cb;
+
+    fst[1].module = fs_thresh;
+    a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &fgp, nullptr, &pipe_bloom_threshold_);
+    fst[1].module = fs_down;
+    a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &fgp, nullptr, &pipe_bloom_down_);
+    fst[1].module = fs_up;
+    a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &fgp, nullptr, &pipe_bloom_up_);
+    fst[1].module = fs_post;
+    a.vkCreateGraphicsPipelines(dev_->handle(), VK_NULL_HANDLE, 1, &fgp, nullptr, &pipe_post_fx_);
+
+    a.vkDestroyShaderModule(dev_->handle(), fs_vs, nullptr);
+    a.vkDestroyShaderModule(dev_->handle(), fs_thresh, nullptr);
+    a.vkDestroyShaderModule(dev_->handle(), fs_down, nullptr);
+    a.vkDestroyShaderModule(dev_->handle(), fs_up, nullptr);
+    a.vkDestroyShaderModule(dev_->handle(), fs_post, nullptr);
+  }
+
   return true;
 }
 
@@ -996,6 +1068,18 @@ uint32_t Renderer::plane(Vertex *v, uint32_t *idx, float uv_repeat) {
   uint32_t i[6] = {0, 1, 2, 0, 2, 3};
   std::memcpy(idx, i, sizeof i);
   return 6;
+}
+
+void Renderer::record_post_fx(VkCommandBuffer cb, VkPipeline pipe, MaterialHandle input_tex, const float* push_4_floats) {
+  if (!pipe || !input_tex.valid()) return;
+  rhi::VkApi &a = dev_->api();
+  a.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+  a.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, post_pipe_layout_, 1, 1, &materials_[input_tex.id].set, 0, nullptr);
+  if (push_4_floats) {
+    a.vkCmdPushConstants(cb, post_pipe_layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16, push_4_floats);
+  }
+  // Draw full-screen quad (3 vertices generated in the vertex shader)
+  a.vkCmdDraw(cb, 3, 1, 0, 0);
 }
 
 } // namespace tulpar::engine::renderer

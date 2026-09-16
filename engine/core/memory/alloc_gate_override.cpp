@@ -3,6 +3,7 @@
 // sayildigi CMake'te gorunur olsun.
 #include <cstdlib>
 #include <new>
+#include <mimalloc.h>
 
 #include "core/memory/alloc_gate.hpp"
 
@@ -11,13 +12,13 @@ using tulpar::engine::AllocGate;
 namespace {
 void *counted_alloc(std::size_t n) {
   AllocGate::on_alloc(n);
-  void *p = std::malloc(n ? n : 1);
+  void *p = mi_malloc(n ? n : 1);
   if (!p) std::abort(); // exception yok (motor kurali)
   return p;
 }
 void counted_free(void *p) noexcept {
   if (p) AllocGate::on_free();
-  std::free(p);
+  mi_free(p);
 }
 } // namespace
 

@@ -35,6 +35,8 @@ add_library(engine_platform STATIC
     platform/crash.cpp
     platform/window.cpp
     platform/gesture.cpp
+    platform/thermal.cpp
+    platform/perf_hint.cpp
 )
 target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
 target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -146,7 +148,7 @@ else()
 endif()
 
 # --- audio (L3): miniaudio (vendored, engine/third_party/miniaudio, MIT-0) ---
-add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/miniaudio_impl.c)
+add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/spatial.cpp audio/miniaudio_impl.c)
 target_include_directories(engine_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio)
 target_link_libraries(engine_audio PUBLIC engine_core ${CMAKE_DL_LIBS})
 if(APPLE) # CoreAudio arka ucu: cerceveler (CI macOS; yerelde denenmedi)
@@ -181,6 +183,9 @@ add_library(engine_sim STATIC
     sim/fluid_system.cpp
     sim/quantum_gen.cpp
     sim/ml_system.cpp
+    sim/anticheat.cpp
+    sim/desync.cpp
+    sim/interp.cpp
 )
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
@@ -201,6 +206,7 @@ add_dependencies(engine_renderer engine_layer_check)
 add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp
     content/voxel.cpp content/morph.cpp content/terrain.cpp content/lod_select.cpp content/water_wave.cpp
     content/pack.cpp content/wind.cpp content/occlusion.cpp
+    content/device_tier.cpp content/dynamic_quality.cpp
     content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
@@ -274,6 +280,18 @@ set(ENGINE_TEST_SOURCES
     tests/test_fluid_system.cpp
     tests/test_quantum_gen.cpp
     tests/test_lighting_pipeline.cpp
+    tests/test_anticheat.cpp
+    tests/test_desync.cpp
+    tests/test_device_tier.cpp
+    tests/test_dynamic_quality.cpp
+    tests/test_ecs_snapshot.cpp
+    tests/test_interp.cpp
+    tests/test_perf_hint.cpp
+    tests/test_spatial.cpp
+    tests/test_thermal.cpp
+    # sim/rollback.hpp ARTIK BLOKE DEGIL: bagli oldugu World::snapshot()/
+    # restore() bu commit'le sim/ecs.hpp'ye geldi.
+    tests/test_rollback.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
@@ -288,7 +306,7 @@ if(NOT ANDROID)
     # Prototip yok: Vulkan fonksiyonlari bizim dlopen'li yukleyiciden (ImGui_ImplVulkan_LoadFunctions).
     target_compile_definitions(engine_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
     target_compile_options(engine_imgui PRIVATE -fno-exceptions -fno-rtti -w)
-    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp app/editor_ui.cpp)
+    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp app/editor_ui.cpp tests/test_scene_format.cpp app/scene_format.cpp)
 endif()
 
 add_executable(engine_tests ${ENGINE_TEST_SOURCES} app/virtual_stick.cpp core/memory/alloc_gate_override.cpp)
@@ -301,7 +319,7 @@ if(NOT ANDROID)
     target_link_libraries(engine_texpack PRIVATE engine_content engine_core ${CMAKE_DL_LIBS})
     target_compile_options(engine_texpack PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
     # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
-    add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/demo_scene.cpp)
+    add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/demo_scene.cpp app/scene_format.cpp)
     target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})
     target_include_directories(engine_editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
     target_compile_options(engine_editor PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)

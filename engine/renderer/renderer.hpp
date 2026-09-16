@@ -163,6 +163,7 @@ public:
   // once cagrilir (cizim listesi dolu olmali).
   void record_shadow(VkCommandBuffer cb);
   void record(VkCommandBuffer cb);
+  void record_post_fx(VkCommandBuffer cb, VkPipeline pipe, MaterialHandle input_tex, const float* push_4_floats);
 
   RendererStats stats() const { return stats_; }
 
@@ -299,6 +300,25 @@ private:
   float exposure_ = 1.0f; // Is 7: carpan, fog_params.z uzerinden shader'a gider
   Mat4 light_vp_{};
   ShadowInfo shadow_info_{};
+  
+  // Offscreen HDR render pass
+  VkRenderPass scene_rp_ = VK_NULL_HANDLE;
+  VkImage scene_color_ = VK_NULL_HANDLE;
+  VkImageView scene_color_view_ = VK_NULL_HANDLE;
+  rhi::MemoryAlloc scene_color_mem_{};
+  VkImage scene_depth_ = VK_NULL_HANDLE;
+  VkImageView scene_depth_view_ = VK_NULL_HANDLE;
+  rhi::MemoryAlloc scene_depth_mem_{};
+  VkFramebuffer scene_fb_ = VK_NULL_HANDLE;
+
+  // Post FX / Bloom pipelines
+  VkPipeline pipe_bloom_threshold_ = VK_NULL_HANDLE;
+  VkPipeline pipe_bloom_down_ = VK_NULL_HANDLE;
+  VkPipeline pipe_bloom_up_ = VK_NULL_HANDLE;
+  VkPipeline pipe_post_fx_ = VK_NULL_HANDLE;
+  VkDescriptorSetLayout post_layout_ = VK_NULL_HANDLE;
+  VkPipelineLayout post_pipe_layout_ = VK_NULL_HANDLE;
+
   VkShaderModule vs_ = VK_NULL_HANDLE, fs_ = VK_NULL_HANDLE, shadow_vs_ = VK_NULL_HANDLE;
   VkShaderModule skin_vs_ = VK_NULL_HANDLE, skin_shadow_vs_ = VK_NULL_HANDLE;
   VkPipeline pipe_skin_depth_ = VK_NULL_HANDLE, pipe_skin_color_ = VK_NULL_HANDLE, pipe_skin_shadow_ = VK_NULL_HANDLE;
