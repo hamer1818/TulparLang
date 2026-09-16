@@ -251,6 +251,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_job_graph.cpp
     tests/test_bvh.cpp
     tests/test_nn.cpp
+    tests/test_replay.cpp
     tests/test_water_wave.cpp
     tests/test_random.cpp
     tests/test_noise.cpp
