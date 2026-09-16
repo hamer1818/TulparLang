@@ -374,6 +374,16 @@ inline FrustumTest test(const Frustum &f, Aabb box) {
   return any_intersecting ? FrustumTest::kIntersecting : FrustumTest::kInside;
 }
 inline bool intersects(const Frustum &f, Aabb box) { return test(f, box) != FrustumTest::kOutside; }
+// Kure-frustum testi: Sascha Willems'in (MIT, github.com/SaschaWillems/Vulkan,
+// examples/computecullandlod/cull.comp) frustumCheck() ile AYNI mantik --
+// her duzlem icin distance(plane,center)+radius<0 ise TAMAMEN disarida
+// (yukaridaki Aabb testindeki "pozitif/negatif kose" fikrinin kure karsiligi).
+inline bool intersects(const Frustum &f, Sphere s) {
+  for (int i = 0; i < 6; i++) {
+    if (distance(f.planes[i], s.center) + s.radius < 0.0f) return false;
+  }
+  return true;
+}
 
 struct Quat {
   float x = 0, y = 0, z = 0, w = 1;

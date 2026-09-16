@@ -219,6 +219,24 @@ ENGINE_TEST(math_frustum_culls_known_aabbs) {
   CHECK(test(f2, inside) == FrustumTest::kOutside);
 }
 
+// renderer/indirect_cull.hpp'nin (Sascha Willems cull.comp portu) dayandigi
+// kure-frustum testi -- ayni frustum/kamera kurulumunu math_frustum_culls_
+// known_aabbs ile PAYLASIR (zaten AABB'lerle dogrulanmis).
+ENGINE_TEST(math_frustum_culls_known_spheres) {
+  Mat4 view = Mat4::look_at({0, 0, 10}, {0, 0, 0}, {0, 1, 0});
+  Mat4 proj = Mat4::perspective(kPi * 0.5f, 1.0f, 0.1f, 100.0f);
+  Frustum f = Frustum::from_viewproj(proj * view);
+
+  CHECK(intersects(f, Sphere{{0, 0, 0}, 1.0f}));      // kamera onunde, derinlik ~10 -- ayni "inside" bolgesi
+  CHECK(!intersects(f, Sphere{{50, 50, 50}, 1.0f}));  // kucuk kure, kameranin cok disinda
+
+  // Merkezi ACIKCA disarida ama yaricapi o kadar BUYUK ki bilinen-ICERIDE
+  // noktayi (orijin) kapsiyor -- kure orijini icerdigine gore frustum'la
+  // KESISMEK ZORUNDA (frustum eşitliklerine GUVENMEDEN, salt geometriden
+  // cikan bir dogrulama): |((50,50,50)-(0,0,0)| = sqrt(7500) =~ 86.6 < 100.
+  CHECK(intersects(f, Sphere{{50, 50, 50}, 100.0f}));
+}
+
 ENGINE_TEST(math_decompose_roundtrip) {
   Vec3 pos{2, -3, 7};
   Quat rot = Quat::axis_angle({0, 0, 1}, kPi * 0.25f);

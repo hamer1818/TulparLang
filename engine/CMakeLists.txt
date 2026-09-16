@@ -183,7 +183,7 @@ target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX
 add_dependencies(engine_sim engine_layer_check)
 
 # --- L3 RENDERER -----------------------------------------------------------------
-add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp)
+add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp renderer/indirect_cull.cpp)
 target_link_libraries(engine_renderer PUBLIC engine_rhi)
 target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_renderer engine_layer_check)
@@ -260,6 +260,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_behavior_tree.cpp
     tests/test_particles.cpp
     tests/test_frame_graph.cpp
+    tests/test_indirect_cull.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
