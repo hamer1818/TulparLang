@@ -280,6 +280,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_fluid_system.cpp
     tests/test_quantum_gen.cpp
     tests/test_lighting_pipeline.cpp
+    tests/test_fixed.cpp
     tests/test_anticheat.cpp
     tests/test_desync.cpp
     tests/test_device_tier.cpp
