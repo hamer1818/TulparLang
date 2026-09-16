@@ -293,6 +293,27 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Paket boyutu/SPIR-V/acilis denetimi basarisiz!${NC}"
             exit 1
         fi
+        # BICIMLENDIRICI denetimi: `tulpar fmt` gecerli kaynagi DERLENMEYEN
+        # hale getirebiliyor (olculdu: `1.5e-8` -> `1.5e - 8`, `a <<= 1` ->
+        # `a < <= 1`). Idempotans TEK BASINA yetmez — bozuk bir ciktiyi ikinci
+        # kez bicimlendirmek ayni bozuk ciktiyi verir, yani "kararli" ile
+        # "dogru" karisir. Bu yuzden asil olcut: bicimlenmis metnin ayristirma
+        # hatasi sayisi ONCESINE gore ARTMAMALI.
+        if ! python3 tests/fmt_audit.py; then
+            echo -e "${RED}Bicimlendirici denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # CPU-GPU YERLESIM denetimi: shader'in std140/std430 yerlesimi ile C++
+        # struct'inin bayt yerlesimi ayrisirsa hicbir sey kizarmaz — GPU baska
+        # bir ofsetten okur, goruntu "biraz yanlis" olur. Yerlesim SPIR-V'den
+        # (glslc'nin gercekte urettigi ofsetler) okunuyor, C++ tarafi da derleyiciye
+        # sorduruluyor; iki taraf da elle hesaplanmiyor. `static_assert(sizeof)`
+        # bu sinifin yalniz YARISINI gorur: ayni boyutta alan sirasi degisimi
+        # ondan gecer (olculdu), bu denetimden gecmez.
+        if ! python3 tests/layout_audit.py; then
+            echo -e "${RED}CPU-GPU yerlesim denetimi basarisiz!${NC}"
+            exit 1
+        fi
         # Faz 8 fizibilite kapisi: Tulpar sozdiziminin GPU alt kumesi (.tprs)
         # -> GLSL -> SPIR-V cevirisi hala depodaki *_spv.h ile BAYT AYNI mi.
         # Bayt esitligi secildi cunku `glslc -O` ciktisi isim bagimsiz ve
@@ -1100,6 +1121,15 @@ fi
 
 if [ "$ACTION" = "test" ]; then
     hw_begin
+    # SESSIZ KOSUM. Ornek kosucusu pencere acan oyunlari 2 saniyelik bir
+    # "smoke" ile GERCEKTEN calistiriyor; arcade/tame oyunlari raylib ses
+    # aygitini acip carpisma/skor/olum sesleri caliyor. Otomatik bir kosumun
+    # makinenin basindaki insana ses dinletmesi icin hicbir sebep yok
+    # (kullanici 2026-09-16'da bildirdi). Aygit YINE aciliyor — kapanmasi
+    # kapsamayi sessizce dusururdu, cunku o zaman `load_sound` -1 doner ve ses
+    # yolu hic kosmaz; yalniz ana seviye 0'a cekiliyor.
+    # Duymak icin: TULPAR_TAME_MUTE=0 ./build.sh test
+    export TULPAR_TAME_MUTE="${TULPAR_TAME_MUTE:-1}"
     # Ensure tulpar exists
     if [ ! -f "tulpar" ]; then
         echo "Executable 'tulpar' not found. Building first..."

@@ -2155,6 +2155,19 @@ gizmosu, köprü) görünür `skip`'e düşürüyor — takım yeşil kalıyor a
 GPU kapıları **cihazı/instance'ı paylaşsın**; ayrı instance yalnız doğrulama sayaçlarını kirletmemek gibi
 gerçek bir sebep varsa açılsın. Belirti: "geçen test sayısı aynı ama ATLANDI arttı".
 
+**Mekanizma ölçüldü (2026-09-16):** sebep Vulkan değil, **glibc'nin statik-TLS fazlası**. NVIDIA ICD'si
+`dlopen` edildiğinde aldığı statik-TLS bloğunu kapanışta geri vermiyor; her yeni `VkInstance` bir tur daha
+tüketiyor ve süreç sınıra dayandığında sonraki `dlopen` başarısız oluyor — üst katmana "Vulkan cihazı yok"
+diye görünüyor. Yani hata, onu tetikleyen kapıda değil **ondan sonrakilerde** patlıyor; yeni bir kapı
+eklemek, kendisi geçerken başkalarının kapısını eritiyor. Somut vaka: beş yeni PBR kapısı kendi
+instance'ını açtı ve **25 kapı** sessizce ATLANDI'ya düştü (149/149/0 → 159/1/25). Düzeltme: beş kapı tek
+bir paylaşılan cihazı kullanıyor ve cihaz süreç boyunca yaşıyor. 8an yüzünden paylaşılan cihaz **kendi
+`VkApi` tablosunu** kullanmalı — aynı dosyadaki başka kapılar kendi cihazlarını açıp kapatıyorsa ortak
+tabloyu ezerler.
+
+Denetlenebilir kural: `engine_tests` özeti **atlanan sayısını da basıyor**; GPU'su olan bir makinede o sayı
+**0 olmalı**. "X passed" tek başına yeşil sayılmaz.
+
 ### 8am. Türetilmiş ama DİSKTE DURAN dosya bayatlayınca kapı sessizce "atlandı"ya düşer
 `examples/assets/arena.sahneb` türetilmiş (gitignore'lu) bir dosya; sahne blob formatı **sürüm 2**'ye
 çıkınca diskteki kopya v1 kaldı. Motor onu doğru biçimde reddediyordu, ama `tests/engine_bridge.test.tpr`'nin
@@ -2281,3 +2294,120 @@ soğuk **6.5 ms** / 168 495 B yazıldı, sıcak **1.1 ms** — 5.9x, ve bu kazan
 Genel biçim: **mobilde "çıkışta yap" diye bir kanca yoktur.** Kalıcı olması gereken her şey (kayıt dosyası,
 önbellek, telemetri) üretildiği anda ya da bir yaşam döngüsü duraklamasında yazılır. Bir masaüstü kapanış
 yolunun çalıştığını görmek, mobilde çalıştığına dair hiçbir kanıt değildir.
+
+### 8av. Ölçülen değerden türetilen eşik, mevcut yanlışı KUTSAR
+`tests/paket_boyut_audit.py`'ye eşikleri koyarken kural şuydu: "ölçülenin ~2 katı — amaç bir gün büyüdü
+demek değil, bir anda ZIPLADI demek". APK için ölçülen 71 MB'dı, eşik 96 MB kondu ve denetim **yeşil**
+verdi. Eşik doğru çalışıyordu; yanlış olan **71 MB'ın kendisiydi**: linkten çıkan `.so` hiç
+striplenmiyordu (arm64 36.3 MB, x86_64 33.8 MB — tamamı sembol ve hata ayıklama bilgisi). Strip'ten sonra
+5.4 / 5.7 MB, APK **71 MB → 11.6 MB** (6.1x).
+
+Tuzağın biçimi: bir eşiği "bugünkü ölçüm + pay" diye koymak, bugünkü değeri **normal ilan eder**. Denetim
+o andan sonra yalnızca *değişimi* görür, *yanlışlığı* değil — ve sayı ne kadar büyükse, ona eklenen pay da
+o kadar büyük olur, yani hata büyüdükçe denetim gevşer. Kural: bir eşik koyarken "bu sayı **olması
+gereken** sayı mı?" diye ayrıca sor. Cevabı bilmiyorsan eşiği koy ama **yanına sorusunu da yaz**; yoksa
+altı ay sonra kimse o 96'nın nereden geldiğini sorgulamaz.
+
+İkinci yarısı da kayda değer: çıplak strip **teşhis yeteneğini öldürür**. Bu depoda `t_menu_ciz.f+576`
+satırı Android x86_64 kod üretimindeki hizalama hatasını tam yerinden gösterdi (8ap); stripli bir `.so`'da
+o ad yoktur. Doğru çözüm ikisinden birini seçmek değil: striplenmemiş kopya `<stage>/symbols/<abi>/`
+altında saklanıyor, `android/symbolize.sh` adresi geri çözüyor, ve denetim **her ikisini birden** şart
+koşuyor — stripsiz `.so` da kırmızı, sembol kopyası olmayan stripli `.so` da kırmızı. İkinci kontrol
+olmasaydı "strip et, sembolleri at" yolu paketi küçültüp denetimi yeşil bırakır, kaybı ancak bir sahada
+çökme anında fark ederdik.
+
+### 8aw. `static_assert(sizeof(...))` yerleşimin yalnız YARISINI görür — alan sırası değişimi ondan geçer
+CPU-GPU arayüzünde bir shader bloğunun std140/std430 yerleşimi ile C++ struct'ının bayt yerleşimi
+**sessizce ayrışabilir**: ne derleyici, ne linker, ne Vulkan doğrulama katmanı bunu söyler. GPU başka bir
+ofsetten okur, görüntü "biraz yanlış" olur. Bu depoda tam bu sınıfın bir örneği yaşandı (Frame UBO'su için
+elle yazılan `static_assert` 80 bekliyordu, gerçek 96'ydı — 6 vec4).
+
+Asıl bulgu: `static_assert(sizeof(X) == N)` bu sınıfın **yarısını** yakalar. Ölçüldü (2026-09-16):
+`MaterialUbo`'nun iki alanı yer değiştirildi — boyut aynı kaldı, depodaki `static_assert(sizeof(...) == 64)`
+**hâlâ geçti**, ama GPU'nun okuduğu `pbr` alanı artık `emissive`'in baytlarını okuyordu. İddia edilmedi,
+**derleyiciye sorduruldu**: bozuk tanım + depodaki assert ayrı bir TU'da derlendi ve geçti.
+
+`tests/layout_audit.py` + `engine/tools/spirv_reflect.py` bunu alan alan denetliyor (ofset / boyut / dizi
+adımı / matris adımı). Üç tasarım kararı, hepsi bir kör noktayı kapatıyor:
+1. **Yerleşim SPIR-V'den okunuyor, GLSL metninden değil.** GLSL'den std140 kurallarını yeniden
+   hesaplasaydık denetim, denetlediği şeyin *aynı varsayımını tekrarlardı* — bu deponun
+   "tekrarlanan varsayım kendini gizler" sınıfı. `OpMemberDecorate Offset` glslc'nin gerçekten ürettiği
+   sayıdır.
+2. **C++ yerleşimi derleyiciye sorduruluyor** (struct başlıktan olduğu gibi alınıp geçici bir TU'ya
+   konuyor, `&üye - &nesne` / `sizeof` / `alignof` ölçülüyor) — elle hesaplanan tek bir sayı yok.
+3. **Kapsam sessizce daralamaz:** eşleşmeyen her blok ya gerekçesiyle `KAPSAM_DISI` sözlüğünde kayıtlı,
+   ya KIRMIZI. Aksi halde "eşleştiremedim, o hâlde temiz" yolu açık kalırdı.
+
+Operasyonel not: **`glslc -O` `OpName`/`OpMemberName`'i siler** — depodaki SPIR-V'de üye adı yoktur
+(`m0, m1, …`). SPIR-V üzerinden iş yapacak her araç bunu bilmeli; adlar GLSL kaynağından gelmek zorunda,
+ve GLSL üye sayısı SPIR-V üye sayısıyla tutmazsa ad eşlemesi sessizce kaymasın diye KIRMIZI olmalı.
+
+### 8ax. Vendor kütüphanesinde de 8u var: cgltf `texture_view.scale` malzeme düzeyinde varsayılansız
+`cgltf_parse_json_texture_view` `scale` alanını **yalnız o JSON nesnesi varsa** 1'e kuruyor; malzeme
+düzeyinde bir varsayılan yok. Yani bir glTF malzemesinde `normalTexture` yazılı DEĞİLSE
+`material.normal_texture.scale` **sıfır** kalır. Koşulsuz okuyan bir içe aktarıcı bütün normal haritalarını
+sıfır ölçekle uygular — yani **hepsini düzleştirir**, ve hiçbir şey kızarmaz: görüntü "biraz yanlış" olur.
+
+Bu, `alloc_array_zeroed` yapıcı çalıştırmaz (8u) kuralının **başkasının kodundaki** hâli: sıfırdan farklı
+her varsayılan, onu yazan katman tarafından açıkça atanmalı ve **sen o katman değilsen kontrol etmelisin**.
+Doğru kalıp: alanı okumadan önce ilgili bloğun varlığını (`has_*` / işaretçi) sor. Aynı sınıf bizim
+tarafımızda da vardı: `ModelImage::srgb = true` varsayılanı `alloc_array_zeroed` sonrası uygulanmıyordu
+(sıfır = doğrusal), güvenli varsayılan açıkça sRGB'ye kuruldu.
+
+Genel kural: **bir vendor struct'ını memset'lenmiş/zeroed bellekten okuyorsan, onun varsayılanları senin
+varsayılanların değildir.**
+
+### 8ay. Türetilmiş çıktı önbelleğinin anahtarı, çıktıyı belirleyen HER girdiyi içermeli
+`engine_texpack`'e `--tur albedo|orm|normal` eklendi (renk uzayı ve ASTC kipi buna göre değişiyor). Önbellek
+anahtarı önce yalnız kaynak PNG'nin özetiydi: aynı PNG'yi **önce albedo sonra normal** paketlemek **aynı
+anahtarı** üretiyor ve ikinci çağrı birincinin ürününü geri veriyordu — yani normal haritası istediğin yerde
+sRGB kodlanmış bir albedo alıyordun. Derleme yeşil, dosya yerinde, içerik yanlış.
+
+`--tur` anahtara eklendi ve `kTexpackVersion` 1→2'ye çıkarıldı (eski girdiler geçersiz sayılsın diye).
+Kural: bir önbellek anahtarı "girdi dosyası"nı değil, **çıktıyı belirleyen bütün parametre kümesini**
+özetlemeli — bayraklar, sürüm, profil, hedef. Eksik bir parametre, önbelleği sessiz bir yanlış-sonuç
+üreticisine çevirir. İlgili: [[8am]] (türetilmiş dosya bayatlayınca kapı sessizce atlanır).
+
+### 8az. Ölçüm, ölçtüğü şeyin temsil ettiği durumda yapılmalı — ASTC MAP_NORMAL örneği
+ASTC'nin normal-harita kipini (`ASTCENC_FLG_MAP_NORMAL`) değerlendirmek için üretilen ilk test kaynağında
+tümsek kenarlarında z ≈ 0.199 vardı ve ölçüm MAP_NORMAL'in **kaybettiğini** söylüyordu (açısal hata 1.460
+vs düz kodlamada 1.363). Sebep kipin kötülüğü değil: iki kanaldan z'yi yeniden kurmak z küçükken **kötü
+koşullu** bir işlem, yani hata z→0'da patlıyor. Kenar gerçekçi bir eğime (z = 0.436) çekilince MAP_NORMAL
+her blok boyunda kazanıyor.
+
+Ders: bir kodlama/sıkıştırma kararını, **üretimde karşılaşacağın veri dağılımında** ölç. Uç bir örnekte
+yapılan ölçüm doğru sayıyı verir ama **yanlış kararı** destekler. Kararın kapsamını da yaz: bu karar "çok
+sıyırtma açılı" normal haritaları için geçerli değildir.
+
+### 8ba. Token enum'unu ORTADAN genişletmek, önceden derlenmiş arşivlere sızar
+Bit işleçleri eklenirken yeni token'lar enum'un **sonuna** kondu, ortasına değil. Sebep somut:
+`vm_binary_op` (`src/vm/runtime_bindings.cpp`) işleci **ham `int` enum değeri** olarak alıyor ve o fonksiyon
+`wasm/dist/` + `android/dist/` altındaki **önceden derlenmiş** arşivlerde de duruyor. Ortadan bir değer
+eklemek bütün sonraki değerleri kaydırır: masaüstü (kaynaktan derlenen) yeşil kalır, web ve Android ise
+**sessizce yanlış işlemi** yapar — `+` yerine `-`, `<` yerine `<=` gibi. Hiçbir sembol eksilmediği için
+sembol denetimi de görmez (bu, 8aq'nun kardeşi: ABI yalnız isimlerden ibaret değildir).
+
+Kural: **arşiv sınırını geçen hiçbir sayısal sabit ortadan genişletilmez.** Enum'a ekleme sona yapılır; bir
+sıralamayı gerçekten değiştirmen gerekiyorsa arşivler aynı değişiklikte yeniden üretilir.
+
+### 8bb. Yeni anahtar kelime, çalışan bir kodda geçen bir ADI çalar
+`const` eklenirken Türkçe eşi olarak `sabit` de denendi ve paket **anında** düştü:
+`tests/engine_bridge.test.tpr` içinde `int sabit = -1;` diye bir değişken vardı. Aynı sınıf daha önce
+`move` ve `don` (=`return`) ile yaşandı — `bool don = ...` yazan bir modül sessizce kırılıyordu.
+
+Kural: yeni bir anahtar kelime eklemeden önce **depoyu tara**:
+`grep -rn --include='*.tpr' '\bKELIME\b' .` — `examples/`, `lib/`, `tests/`, `packages/` dahil. Türkçe
+sözcükler burada özellikle riskli, çünkü değişken adları da Türkçe. `sabit` bu yüzden alınmadı; dilde
+yalnız `const` var.
+
+### 8bc. Biçimlendiricinin çıktısı DERLENMEYİ bırakabiliyordu ve hiçbir şey sormuyordu
+`tulpar fmt` bilinmeyen bir işleci karakter karakter boşluklayınca geçerli kaynağı bozuyor. Ölçülen iki
+vaka: yeni bit işleçleri olmadan `a << 2` → `a < < 2` ve `a <<= 1` → `a < <= 1`; ve **önceden var olan**
+bir hata, `1.5e-8` → `1.5e - 8` (üs işareti ikili işleç sanılıyordu). İkincisi uzun süredir oradaydı:
+`tests/scientific_notation.test.tpr` biçimlendirildiğinde **20 ayrıştırma hatası** veriyordu ve kimse
+sormuyordu — çünkü biçimlendirici yalnız *idempotans* için denetleniyordu, "çıktısı hâlâ derleniyor mu"
+diye değil. İdempotans, bozuk bir çıktı için de sağlanabilir: bozuk metni ikinci kez biçimlendirmek aynı
+bozuk metni verir.
+
+Kapı `tests/fmt_audit.py`: her `.tpr` biçimlendirilir, sonuç **typecheck'ten geçirilir** ve hata sayısı
+biçimlendirme öncesine göre ARTMAMALIDIR; ayrıca idempotans denetlenir. Kendi pozitif kontrolü var.

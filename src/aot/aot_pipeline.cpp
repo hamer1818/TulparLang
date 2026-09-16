@@ -397,6 +397,13 @@ void aot_set_target_web(int enable) {
   llvm_backend_set_target_web(g_target_web);
 }
 
+// Dosya boyutu (bayt); yoksa -1. Strip oncesi/sonrasi olcumu icin.
+static long long file_size_bytes(const char *path) {
+  struct stat st;
+  if (stat(path, &st) != 0) return -1;
+  return (long long)st.st_size;
+}
+
 // --- Android hedefi (aarch64/x86_64-linux-android) --------------------------
 // `tulpar build --target=android` main.cpp'den bu bayrağı kurar. Aynı
 // derlenmiş modülden İKİ obje emit edilir (arm64-v8a = gerçek cihaz,
@@ -1375,6 +1382,59 @@ AOTResult aot_compile_with_filename_debug(const char *source,
         llvm_backend_destroy(backend);
         ast_node_free(ast);
         return AOT_ERROR_LINK;
+      }
+
+      // SEMBOLLERI AYIR, SONRA STRIPLE.
+      //
+      // Olculdu (2026-09-16, engine_aksiyon): linkten cikan .so arm64'te
+      // 36.3 MB, x86_64'te 33.8 MB — hepsi APK'ya giriyordu (71 MB APK).
+      // `--strip-unneeded` sonrasi 5.4 / 5.7 MB, yani ~6x. Kurulum boyutu
+      // PLAN EK G.3'te bir BUTCE (temel modul < 200 MB) ve butce ancak
+      // olculup uygulanirsa butcedir.
+      //
+      // Ama ciplak strip bir seyi OLDURUR: cihazdaki yigin izinde fonksiyon
+      // ADLARI kaybolur. Bu depoda o adlar bir ise yaradi — `t_menu_ciz.f+576`
+      // satiri Android x86_64 kod uretimindeki hizalama hatasini tam yerinden
+      // gosterdi (Tuzaklar 8ap). O yuzden striplenmemis kopya ATILMIYOR:
+      // `<stage>/symbols/<abi>/` altina konuyor ve `android/symbolize.sh`
+      // adresi geri cozuyor. Boyut kazanci alinir, teshis yetenegi kalir.
+      //
+      // TULPAR_ANDROID_NO_STRIP=1 ile kapatilir (cihazda ADLI iz gerekiyorsa).
+      {
+        const char *no_strip = getenv("TULPAR_ANDROID_NO_STRIP");
+        bool skip = no_strip && *no_strip && *no_strip != '0';
+        std::string so = libdir + "/libtulpargame.so";
+        std::string symdir = stage + "/symbols/" + a.abi;
+        long long before = file_size_bytes(so.c_str());
+        if (skip) {
+          AOT_PROGRESS("[AOT] %s: strip ATLANDI (TULPAR_ANDROID_NO_STRIP), %.1f MB\n", a.abi,
+                       before / 1048576.0);
+        } else {
+          std::string mk = "mkdir -p \"" + symdir + "\"";
+          if (system(mk.c_str()) != 0) { /* kopyalama asagida zaten hata verir */ }
+          std::string keep = "cp \"" + so + "\" \"" + symdir + "/libtulpargame.so\"";
+          int krc = system(keep.c_str());
+          if (krc != 0) {
+            // Sembolleri saklayamiyorsak STRIPLEMEYIZ: teshis yetenegini
+            // sessizce kaybetmektense buyuk .so ile devam etmek yeglenir.
+            fprintf(stderr, "%s\n",
+                    tulpar::i18n::tr_en(
+                        "[AOT] Uyari: sembol kopyasi alinamadi, strip yapilmadi (buyuk .so).",
+                        "[AOT] Warning: could not save the symbol copy, so no strip (large .so)."));
+          } else {
+            std::string scmd = tc + "llvm-strip --strip-unneeded \"" + so + "\" 2>&1";
+            int src2 = system(scmd.c_str());
+            long long after = file_size_bytes(so.c_str());
+            if (src2 != 0 || after <= 0 || after >= before) {
+              fprintf(stderr, "%s\n",
+                      tulpar::i18n::tr_en("[AOT] Uyari: llvm-strip basarisiz; .so striplenmemis halde.",
+                                          "[AOT] Warning: llvm-strip failed; the .so stays unstripped."));
+            } else {
+              AOT_PROGRESS("[AOT] %s: %.1f MB -> %.1f MB striplendi; semboller %s\n", a.abi,
+                           before / 1048576.0, after / 1048576.0, symdir.c_str());
+            }
+          }
+        }
       }
     }
     // KAPI (Tuzaklar 8ap): dongu bitti — modul hala ayni mi? Emit her hedef icin

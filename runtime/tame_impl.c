@@ -1618,6 +1618,18 @@ static int tame_audio_ready = 0;
 // değil (headless'ta açılamıyor ve hata basardı).
 static float tame_master_vol = 1.0f;
 
+// TULPAR_TAME_MUTE=1: ses aygıtı normal şekilde AÇILIR ama ana seviye 0'a
+// çekilir. Otomatik koşumlar (build.sh test, CI, ajan regresyon taramaları)
+// örnekleri 2 saniyelik "smoke" ile çalıştırıyor ve oyunlar çarpışma/skor/ölüm
+// sesleri çalıyor — makinenin başındaki insan bunu duyuyor (kullanıcı
+// 2026-09-16'da bildirdi). Aygıtı hiç AÇMAMAK yanlış olurdu: o zaman
+// `load_sound` -1 döner ve ses yolu test edilmemiş olur, yani kapsama sessizce
+// düşer. Seviyeyi sıfırlamak yolu aynen koşturur, yalnız duyulmaz.
+static int tame_mute_env(void) {
+  const char *e = getenv("TULPAR_TAME_MUTE");
+  return e && *e && *e != '0';
+}
+
 // Ses aygıtını ilk ihtiyaçta aç (load_sound/load_music). Başarısızlık
 // (aygıt yok / headless) -1 handle olarak yüzeye çıkar, çökmez.
 static int tame_ensure_audio(void) {
@@ -1628,7 +1640,7 @@ static int tame_ensure_audio(void) {
       fprintf(stderr, "[tame] Ses aygiti acilamadi. / Audio device could "
                       "not be opened.\n");
     /* Aygıt yeni açıldı: bekleyen seviye şimdi uygulanıyor. */
-    if (tame_audio_ready) SetMasterVolume(tame_master_vol);
+    if (tame_audio_ready) SetMasterVolume(tame_mute_env() ? 0.0f : tame_master_vol);
   }
   return tame_audio_ready;
 }
@@ -2707,7 +2719,9 @@ void tame_impl_master_volume(double v) {
   if (v < 0.0) v = 0.0;
   if (v > 1.0) v = 1.0;
   tame_master_vol = (float)v;
-  if (tame_audio_ready) SetMasterVolume(tame_master_vol);
+  /* MUTE sirasinda oyunun kendi seviye ayari da yok sayilir; yoksa
+     `ses_seviyesi(1.0)` cagiran bir oyun sessizligi bozardi. */
+  if (tame_audio_ready) SetMasterVolume(tame_mute_env() ? 0.0f : tame_master_vol);
 }
 
 // Ekran görüntüsünü PNG olarak kaydeder (çalışma dizinine göre yol).
