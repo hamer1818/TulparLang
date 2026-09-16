@@ -56,6 +56,7 @@ add_library(engine_core STATIC
     core/jobs/job_system.cpp
     core/jobs/job_graph.cpp
     core/math/bvh.cpp
+    core/math/nn.cpp
     core/profiler/profiler.cpp
     core/jobs/fiber_switch_x86_64.S
     core/jobs/fiber_switch_aarch64.S
@@ -249,6 +250,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_frame_pacer.cpp
     tests/test_job_graph.cpp
     tests/test_bvh.cpp
+    tests/test_nn.cpp
     tests/test_water_wave.cpp
     tests/test_random.cpp
     tests/test_noise.cpp

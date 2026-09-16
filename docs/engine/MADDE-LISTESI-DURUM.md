@@ -31,7 +31,8 @@ Birebir `VIZYON.md` SS1 + SS1.1 ile eslesiyor.
 | 10 | Sanal Doku + NTC | 🔧 TODO |
 | 11 | 3D Ses (HRTF + Oklüzyon) - dosya var ama bu oturumda icerigi okunup dogrulanmadi | 🔧 TODO |
 | 12 | Lag Compensation + Snapshot Interpolation (sim/interp.hpp OKUNUP dogrulandi + sim/lag_compensation.hpp KAYNAK yazildi) | ✅ DONE |
-| 13-15 | Termal/Guc Yonetimi, Anti-Cheat, Noral Rendering - dosyalar var ama bu oturumda icerigi okunup dogrulanmadi | 🔧 TODO |
+| 13-14 | Termal/Guc Yonetimi, Anti-Cheat - dosyalar var ama bu oturumda icerigi okunup dogrulanmadi | 🔧 TODO |
+| 15 | Noral Rendering - NPU/neural-accelerator (Mali G2-Ultra NX) HALA yok, madde TAM anlamiyla YAPILMADI. AMA core/math/nn.hpp (KAYNAK+testler) ile ALTERNATIF bir devrimsel bahis eklendi: NPU'suz, TAMAMEN CPU'da, ReLU ile TAM DETERMINISTIK (libm yok) kucuk sinir agi cikarimi -- rollback-sim (sim/rollback.hpp) ICINDE calisabilen, hicbir buyuk motorun sunmadigi bir bilesim (ogrenilmis/deterministik NPC davranisi icin). | 🔧 TODO |
 
 ## B. Render Mimarisi (16-106)
 
@@ -293,7 +294,7 @@ Kategori D'nin 232-250 araligiyla icerik olarak buyuk olcude cakisiyor (ayni 20 
 
 ## Özet (kesin — kodla üretildi)
 
-`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 215 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
+`tools/feature_matrix.py`, 1-500 arasındaki her id'yi tam bir kez kapsayan 216 kayıt tutuyor (`--check` ile denetlenir, boşluk/çakışma varsa hata verir). Bu doğrudan `--summary` çıktısıdır:
 
 | Durum | Madde sayısı |
 |---|---|

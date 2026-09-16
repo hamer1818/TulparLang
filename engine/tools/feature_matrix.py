@@ -79,7 +79,12 @@ FEATURES: list[Feature] = [
     Feature(10, 10, "A", "TODO", "Sanal Doku + NTC"),
     Feature(11, 11, "A", "TODO", "3D Ses (HRTF + Oklüzyon) - dosya var ama bu oturumda icerigi okunup dogrulanmadi"),
     Feature(12, 12, "A", "DONE", "Lag Compensation + Snapshot Interpolation (sim/interp.hpp OKUNUP dogrulandi + sim/lag_compensation.hpp KAYNAK yazildi)"),
-    Feature(13, 15, "A", "TODO", "Termal/Guc Yonetimi, Anti-Cheat, Noral Rendering - dosyalar var ama bu oturumda icerigi okunup dogrulanmadi"),
+    Feature(13, 14, "A", "TODO", "Termal/Guc Yonetimi, Anti-Cheat - dosyalar var ama bu oturumda icerigi okunup dogrulanmadi"),
+    Feature(15, 15, "A", "TODO",
+            "Noral Rendering - NPU/neural-accelerator (Mali G2-Ultra NX) HALA yok, madde TAM anlamiyla YAPILMADI. "
+            "AMA core/math/nn.hpp (KAYNAK+testler) ile ALTERNATIF bir devrimsel bahis eklendi: NPU'suz, TAMAMEN "
+            "CPU'da, ReLU ile TAM DETERMINISTIK (libm yok) kucuk sinir agi cikarimi -- rollback-sim (sim/rollback.hpp) "
+            "ICINDE calisabilen, hicbir buyuk motorun sunmadigi bir bilesim (ogrenilmis/deterministik NPC davranisi icin)."),
 
     # --- B. Render Mimarisi (16-106) ---
     Feature(16, 16, "B", "VERIFIED", "Frame Graph"),
