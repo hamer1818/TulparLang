@@ -175,6 +175,7 @@ add_library(engine_sim STATIC
     sim/ik.cpp
     sim/lag_compensation.cpp
     sim/camera_rig.cpp
+    sim/behavior_tree.cpp
 )
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
@@ -255,6 +256,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_water_wave.cpp
     tests/test_random.cpp
     tests/test_noise.cpp
+    tests/test_behavior_tree.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
