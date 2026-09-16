@@ -293,16 +293,26 @@ bool gltf_load(Arena &arena, const char *path, Model *out, const GltfLimits &lim
   {
     bool *as_color = arena.alloc_array_zeroed<bool>(out->image_count ? out->image_count : 1);
     bool *as_data = arena.alloc_array_zeroed<bool>(out->image_count ? out->image_count : 1);
-    if (as_color && as_data) {
+    // Normal haritalari AYRI izleniyor: renk uzayi acisindan ORM ile ayni
+    // (dogrusal veri) ama mip uretimi acisindan degil — bkz. ModelImage.
+    bool *as_normal = arena.alloc_array_zeroed<bool>(out->image_count ? out->image_count : 1);
+    if (as_color && as_data && as_normal) {
       for (uint32_t i = 0; ok && i < out->material_count; i++) {
         const ModelMaterial &mm = out->materials[i];
         if (mm.image >= 0 && (uint32_t)mm.image < out->image_count) as_color[mm.image] = true;
         if (mm.emissive_image >= 0 && (uint32_t)mm.emissive_image < out->image_count) as_color[mm.emissive_image] = true;
         if (mm.orm_image >= 0 && (uint32_t)mm.orm_image < out->image_count) as_data[mm.orm_image] = true;
-        if (mm.normal_image >= 0 && (uint32_t)mm.normal_image < out->image_count) as_data[mm.normal_image] = true;
+        if (mm.normal_image >= 0 && (uint32_t)mm.normal_image < out->image_count) {
+          as_data[mm.normal_image] = true;
+          as_normal[mm.normal_image] = true;
+        }
       }
       for (uint32_t i = 0; ok && i < out->image_count; i++) {
         out->images[i].srgb = as_color[i] || !as_data[i]; // hicbir yerde kullanilmayan: sRGB (eski davranis)
+        // Bir goruntu hem renk hem normal olarak kullaniliyorsa (catisma)
+        // normal mip yolu KAPALI kalir: sRGB texel'i normal sanip
+        // normallestirmek catismayi buyutur, kucultmez.
+        out->images[i].normal_map = as_normal[i] && !as_color[i];
         if (as_color[i] && as_data[i]) out->colorspace_conflicts++;
       }
     }
@@ -544,6 +554,75 @@ bool gltf_load(Arena &arena, const char *path, Model *out, const GltfLimits &lim
   return ok;
 }
 
+// NORMAL HARITASI MIP ZINCIRI — CPU'da, her seviyeden sonra YENIDEN
+// NORMALLESTIREREK.
+//
+// Neden blit yetmiyor: donanim blit'i dogrusal suzuyor, yani dort komsu
+// normalin BILESENLERINI ortaliyor. Iki komsu normal birbirine ters egimliyse
+// ortalama vektorun boyu 1 degil, ~0 olur; encode edilince (0.5,0.5,~1) yani
+// "duz yuzey" cikar. Sonuc: uzaktaki yuzey sessizce duzlesir ve isik yassilar.
+// Bu, hicbir seyin kizarmadigi, yalnizca goruntunun yanlis oldugu sinif.
+//
+// Cozum kucultmeden SONRA normallestirmek. Filtre kutu (2x2) — ilgi cekici bir
+// secim degil ama dogru olan: normal haritasinda yuksek frekansi korumaya
+// calismak (Kaiser vb.) aliasing'i artirir.
+//
+// Alfa kanali ortalanip birakiliyor: normal haritasinda kullanilmiyor, ama
+// sifirlamak da bilgiyi ATMAK olurdu.
+bool build_normal_mips(Arena &arena, const ModelImage &img, uint32_t levels,
+                              uint8_t **data, uint32_t *sizes) {
+  uint32_t w = img.width, h = img.height;
+  data[0] = img.rgba;
+  sizes[0] = w * h * 4;
+  for (uint32_t l = 1; l < levels; l++) {
+    const uint32_t pw = w, ph = h;
+    w = w > 1 ? w >> 1 : 1;
+    h = h > 1 ? h >> 1 : 1;
+    uint8_t *dst = arena.alloc_array<uint8_t>(w * h * 4);
+    if (!dst) return false;
+    const uint8_t *src = data[l - 1];
+    for (uint32_t y = 0; y < h; y++) {
+      for (uint32_t x = 0; x < w; x++) {
+        // Kaynak 2x2 (tek boyutta kenarda ayni piksel iki kez okunur).
+        const uint32_t x0 = x * 2, x1 = (x * 2 + 1 < pw) ? x * 2 + 1 : x * 2;
+        const uint32_t y0 = y * 2, y1 = (y * 2 + 1 < ph) ? y * 2 + 1 : y * 2;
+        const uint32_t idx[4] = {(y0 * pw + x0) * 4, (y0 * pw + x1) * 4,
+                                 (y1 * pw + x0) * 4, (y1 * pw + x1) * 4};
+        float nx = 0, ny = 0, nz = 0, na = 0;
+        for (int k = 0; k < 4; k++) {
+          // UNORM [0,1] -> [-1,1]
+          nx += (float)src[idx[k] + 0] / 255.0f * 2.0f - 1.0f;
+          ny += (float)src[idx[k] + 1] / 255.0f * 2.0f - 1.0f;
+          nz += (float)src[idx[k] + 2] / 255.0f * 2.0f - 1.0f;
+          na += (float)src[idx[k] + 3];
+        }
+        float len = nx * nx + ny * ny + nz * nz;
+        if (len > 1e-12f) {
+          len = 1.0f / sqrtf(len);
+          nx *= len; ny *= len; nz *= len;
+        } else {
+          // Dort normal birbirini tam goturdu: duz yuzey en az yanlis cevap.
+          nx = 0; ny = 0; nz = 1;
+        }
+        auto enc = [](float v) -> uint8_t {
+          float u = (v * 0.5f + 0.5f) * 255.0f + 0.5f;
+          if (u < 0) u = 0;
+          if (u > 255) u = 255;
+          return (uint8_t)u;
+        };
+        const uint32_t o = (y * w + x) * 4;
+        dst[o + 0] = enc(nx);
+        dst[o + 1] = enc(ny);
+        dst[o + 2] = enc(nz);
+        dst[o + 3] = (uint8_t)(na * 0.25f + 0.5f);
+      }
+    }
+    data[l] = dst;
+    sizes[l] = w * h * 4;
+  }
+  return true;
+}
+
 bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedModel *out) {
   *out = UploadedModel{};
   out->textures = arena.alloc_array_zeroed<renderer::TextureHandle>(m.image_count ? m.image_count : 1);
@@ -556,7 +635,26 @@ bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedM
     // ve texel oldugu gibi gelir. Bu, "goruntu biraz yanlis ama hicbir sey
     // kizarmaz" sinifinin ta kendisidir — bu yuzden kapiyla olculuyor
     // (content_gltf_texture_colorspace).
-    out->textures[i] = r.create_texture(m.images[i].rgba, m.images[i].width, m.images[i].height, true, m.images[i].srgb);
+    if (m.images[i].normal_map) {
+      // Seviye sayisi blit yolundakiyle AYNI hesap (en buyuk kenar).
+      uint32_t levels = 1, mm = m.images[i].width > m.images[i].height ? m.images[i].width : m.images[i].height;
+      while (mm > 1) { mm >>= 1; levels++; }
+      const size_t mark = arena.mark();
+      uint8_t **lv = arena.alloc_array_zeroed<uint8_t *>(levels);
+      uint32_t *sz = arena.alloc_array_zeroed<uint32_t>(levels);
+      if (lv && sz && build_normal_mips(arena, m.images[i], levels, lv, sz)) {
+        out->textures[i] = r.create_texture_levels(VK_FORMAT_R8G8B8A8_UNORM, m.images[i].width, m.images[i].height, levels,
+                                                   (const uint8_t *const *)lv, sz);
+      }
+      if (out->textures[i].valid()) out->normal_mip_textures++;
+      arena.reset_to(mark); // seviyeler GPU'ya kopyalandi
+      // Sessiz dusme yok: CPU yolu basarisizsa blit yoluna donuluyor, ama
+      // goruntu o zaman ESKI (normallestirilmemis) davranisi gosterir.
+      if (!out->textures[i].valid())
+        out->textures[i] = r.create_texture(m.images[i].rgba, m.images[i].width, m.images[i].height, true, false);
+    } else {
+      out->textures[i] = r.create_texture(m.images[i].rgba, m.images[i].width, m.images[i].height, true, m.images[i].srgb);
+    }
     if (!out->textures[i].valid()) return false;
   }
   out->texture_count = m.image_count;

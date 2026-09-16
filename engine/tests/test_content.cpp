@@ -1134,6 +1134,12 @@ ENGINE_TEST(content_gltf_texture_colorspace) {
   bool spaces = m.images[0].srgb && !m.images[1].srgb && !m.images[2].srgb && m.images[3].srgb;
   CHECK(spaces);
   CHECK(m.colorspace_conflicts == 0);
+  // NORMAL HARITASI BAYRAGI renk uzayindan AYRI: ORM de dogrusal veridir ama
+  // yeniden normallestirilmemelidir (puruzluluk/metaliklik birer skaler).
+  // Bayrak yalniz normal goruntusune konmali — yoksa mip yolu ORM'yi bozardi.
+  bool normal_flags = !m.images[0].normal_map && !m.images[1].normal_map &&
+                      m.images[2].normal_map && !m.images[3].normal_map;
+  CHECK(normal_flags);
 
   // KONTROL: AYNI goruntu hem baseColor hem metallicRoughness. glTF'te gecersiz;
   // renk kazanmali (sRGB) ve catisma SAYILMALI. Bu blok olmadan siniflandirma
@@ -1330,4 +1336,92 @@ ENGINE_TEST(content_ktx2_normal_layout_roundtrip) {
   CHECK(normal_layout_is_x_replicated);
   bool control_keeps_channels_apart = xy_repeat[1] < (W * H) / 10;
   CHECK(control_keeps_channels_apart); // dusmezse "X tekrarli" olcumu bir sey olcmuyor
+}
+
+// ---------------------------------------------------------------------------
+// NORMAL HARITASI MIP ZINCIRI — kucultmeden SONRA yeniden normallestirme.
+//
+// Donanim blit'i dogrusal suzuyor, yani dort komsu normalin BILESENLERINI
+// ortaliyor. Birbirine ters egimli normallerde ortalamanin BOYU 1 degil ~0
+// olur; encode edilince "duz yuzey" cikar ve uzaktaki yuzey sessizce duzlesir.
+//
+// Kapi iki seyi birden olcuyor, cunku ayri ayri her biri aldatici olurdu:
+//   (1) `build_normal_mips` ciktisinda her texel BIRIM uzunlukta mi,
+//   (2) KONTROL: ayni veriyi normallestirmeden ortalarsan boy belirgin
+//       kuculuyor mu. Bu olmadan "birim uzunluk" testi, girdi zaten duz bir
+//       harita oldugunda da gecerdi — yani hicbir sey olcmezdi.
+// ---------------------------------------------------------------------------
+ENGINE_TEST(content_normal_map_mips_stay_unit_length) {
+  static SystemArena sys;
+  if (!sys.reserve(16u << 20, "normal_mip_test")) { CHECK(false); return; }
+
+  // Dama deseni: komsu texel'ler ZIT yone egimli (x = +-0.8, z = kalan).
+  // Bu kasitli olarak en kotu durum: ortalama neredeyse sifirlanir.
+  const uint32_t W = 64, H = 64;
+  uint8_t *px = sys.alloc_array<uint8_t>(W * H * 4);
+  CHECK(px != nullptr);
+  if (!px) return;
+  auto enc = [](float v) { return (uint8_t)((v * 0.5f + 0.5f) * 255.0f + 0.5f); };
+  const float tilt = 0.8f, nz = std::sqrt(1.0f - tilt * tilt);
+  for (uint32_t y = 0; y < H; y++)
+    for (uint32_t x = 0; x < W; x++) {
+      const float sx = ((x + y) & 1) ? tilt : -tilt;
+      uint8_t *p = px + (y * W + x) * 4;
+      p[0] = enc(sx); p[1] = enc(0.0f); p[2] = enc(nz); p[3] = 255;
+    }
+  content::ModelImage img;
+  img.width = W; img.height = H; img.rgba = px; img.srgb = false; img.normal_map = true;
+
+  uint32_t levels = 1, mm = W > H ? W : H;
+  while (mm > 1) { mm >>= 1; levels++; }
+  CHECK(levels == 7); // 64 -> 1
+  uint8_t **data = sys.alloc_array_zeroed<uint8_t *>(levels);
+  uint32_t *sizes = sys.alloc_array_zeroed<uint32_t>(levels);
+  CHECK(data && sizes);
+  if (!data || !sizes) return;
+  CHECK(content::build_normal_mips(sys, img, levels, data, sizes));
+
+  // (1) URUN: her seviyede her texel birim uzunlukta.
+  float worst = 1.0f;
+  uint32_t lw = W, lh = H;
+  for (uint32_t l = 1; l < levels; l++) {
+    lw = lw > 1 ? lw >> 1 : 1;
+    lh = lh > 1 ? lh >> 1 : 1;
+    CHECK(sizes[l] == lw * lh * 4);
+    for (uint32_t i = 0; i < lw * lh; i++) {
+      const uint8_t *p = data[l] + i * 4;
+      const float nx = (float)p[0] / 255.0f * 2.0f - 1.0f;
+      const float ny = (float)p[1] / 255.0f * 2.0f - 1.0f;
+      const float nzz = (float)p[2] / 255.0f * 2.0f - 1.0f;
+      const float len = std::sqrt(nx * nx + ny * ny + nzz * nzz);
+      if (std::fabs(len - 1.0f) > std::fabs(worst - 1.0f)) worst = len;
+    }
+  }
+  // Tolerans 8 bit kuantizasyonundan: 1/255 adim, uc bilesende ~0.01.
+  CHECK(std::fabs(worst - 1.0f) < 0.02f);
+
+  // (2) KONTROL: normallestirmeyen ortalama AYNI veride belirgin kisalir.
+  // Tek seviye yeter — hata ilk kucultmede ortaya cikiyor.
+  float ctrl_worst = 1.0f;
+  const uint32_t cw = W / 2, ch = H / 2;
+  for (uint32_t y = 0; y < ch; y++)
+    for (uint32_t x = 0; x < cw; x++) {
+      float ax = 0, ay = 0, az = 0;
+      for (int k = 0; k < 4; k++) {
+        const uint32_t sx2 = x * 2 + (k & 1), sy2 = y * 2 + (k >> 1);
+        const uint8_t *p = px + (sy2 * W + sx2) * 4;
+        ax += (float)p[0] / 255.0f * 2.0f - 1.0f;
+        ay += (float)p[1] / 255.0f * 2.0f - 1.0f;
+        az += (float)p[2] / 255.0f * 2.0f - 1.0f;
+      }
+      ax *= 0.25f; ay *= 0.25f; az *= 0.25f;
+      const float len = std::sqrt(ax * ax + ay * ay + az * az);
+      if (len < ctrl_worst) ctrl_worst = len;
+    }
+  // Kontrol GERCEKTEN kisalmali: yoksa test verisi sorunu uretmiyor demektir
+  // ve (1) bos bir iddia olurdu.
+  CHECK(ctrl_worst < 0.75f);
+  std::printf("    [bilgi] normal mip: yeniden normallestirilmis en kotu boy %.4f (birim 1.0); "
+              "KONTROL normallestirmeyen ortalama %.4f (= uzakta yuzey duzlesir)\n",
+              (double)worst, (double)ctrl_worst);
 }

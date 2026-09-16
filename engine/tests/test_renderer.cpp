@@ -1912,6 +1912,13 @@ ENGINE_TEST(renderer_gltf_pbr_textures_upload_to_material) {
   if (!ren_ok) { offscreen_destroy(off); return; }
   content::UploadedModel up;
   bool up_ok = content::upload_model(ren, sys, m, &up);
+  // Normal haritasi CPU'da mip'lenip yuklendi mi? `build_normal_mips` dogru
+  // calissa bile YUKLEME YOLU onu hic cagirmazsa goruntu eski (blit, birim
+  // olmayan normaller) davranista kalirdi ve fonksiyonu dogrudan olcen kapi
+  // (content_normal_map_mips_stay_unit_length) bunu goremezdi.
+  std::printf("    [bilgi] CPU'da yeniden normallestirilmis mip zinciriyle yuklenen doku: %u (normal haritasi 1 adet)\n",
+              up.normal_mip_textures);
+  CHECK(up.normal_mip_textures == 1);
   CHECK(up_ok);
   if (!up_ok) { ren.shutdown(); offscreen_destroy(off); return; }
   CHECK(up.material_count == 1);

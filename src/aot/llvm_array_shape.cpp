@@ -251,7 +251,8 @@ static bool expr_is_int(ASTNode_C *n, IntCtx *ic) {
     // yapilmadi.
     return n->name && ic->ivar && strcmp(n->name, ic->ivar) == 0;
   case AST_UNARY_OP:
-    return n->op == TOKEN_MINUS && expr_is_int(n->left, ic);
+    // `~x` tamsayi uretir (bit degili), `-x` de oyle.
+    return (n->op == TOKEN_MINUS || n->op == TOKEN_BIT_NOT) && expr_is_int(n->left, ic);
   case AST_BINARY_OP:
     switch (n->op) {
     // Tulpar'da int/int TAMSAYI bolme (`7 / 2 == 3`), yani `/` de int
@@ -261,6 +262,22 @@ static bool expr_is_int(ASTNode_C *n, IntCtx *ic) {
     case TOKEN_MULTIPLY:
     case TOKEN_DIVIDE:
     case TOKEN_MODULO:
+    // BIT ISLECLERI (2026-09-16): iki taraf da tamsayi olarak KANITLIYSA
+    // sonuc da tamsayidir — kaydirma miktari ve maske dahil. typeinfer float
+    // operandi zaten reddediyor, ama buradaki kanit ondan BAGIMSIZ: yalniz
+    // kanitlanmis int ifadeler bu dala giriyor.
+    //
+    // OLCULDU ve HIZ KAZANCI GORULMEDI (2026-09-16): 4096 elemanli dizide
+    // 20 000 tur `a[i] = (i*3) & 4095` eski ve yeni ikilide 30 ms — LLVM her
+    // iki yolu da ayni sekilde indirgiyor. Burada durmasinin sebebi hiz degil
+    // TUTARLILIK: `expr_is_int`'in sozu "kanitlanmis int ifade" ve bit isleci
+    // tam olarak oydu; disarida birakmak kanitin kendisinde bir bosluktu.
+    // Hiz iddiasi yok, cunku sayi yok.
+    case TOKEN_BIT_AND:
+    case TOKEN_PIPE:
+    case TOKEN_BIT_XOR:
+    case TOKEN_SHIFT_LEFT:
+    case TOKEN_SHIFT_RIGHT:
       return expr_is_int(n->left, ic) && expr_is_int(n->right, ic);
     default:
       return false;
@@ -295,6 +312,15 @@ static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
     case TOKEN_MULTIPLY_EQUAL:
     case TOKEN_DIVIDE_EQUAL:
     case TOKEN_MODULO_EQUAL:
+    // BIT BICIMLERI (2026-09-16, `a[i] &= y` dile girdiginde): sol taraf
+    // kutusuz dizide int, bit isleci int koruyor, sag taraf kanitliysa
+    // sonuc int. Bu satirlar olmadan yeni sozdizim yazilabilir ama
+    // kutusuz yolu her seferinde dusururdu.
+    case TOKEN_BIT_AND_EQUAL:
+    case TOKEN_BIT_OR_EQUAL:
+    case TOKEN_BIT_XOR_EQUAL:
+    case TOKEN_SHIFT_LEFT_EQUAL:
+    case TOKEN_SHIFT_RIGHT_EQUAL:
       if (expr_is_int(n->right, &w->ic)) return true;
       break;
     default:

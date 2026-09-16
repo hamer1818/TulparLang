@@ -137,6 +137,11 @@ Ayrıntı: [FAZ3.md](FAZ3.md) "Faz 6 kalanı + Faz 8 fizibilitesi", tuzaklar 8aq
    `eng_nav_nearest` (mesh dışındaki konumu yapıştır — yoksa yol sorgusu 0 döner) ve `eng_nav_raycast`
    (doğru görüş; yol aramadan çok ucuz) eklendi.
 4. Karakter modeli yok (iskelet/animasyon içe aktarma ve GPU skinning var; sanatçı varlığı gerek).
+4b. **Normal haritası mip zinciri (2026-09-16):** blit ile üretilen mip'lerde ortalama normalin boyu 1
+   değildi (ölçüldü: ters eğimli dama deseninde **0.60**) — uzaktaki yüzey sessizce düzleşiyordu. Normal
+   haritaları artık CPU'da mip'lenip hazır seviye olarak yükleniyor (`build_normal_mips`), yeniden
+   normalleştirilmiş en kötü boy **1.0000**. ORM bu yolu ALMAZ (pürüzlülük/metaliklik skalerdir).
+   Kalan: ayrı `occlusionTexture` hâlâ okunmuyor — dördüncü sampler'a değmediği için bilinçli, sayılıyor.
 5. PBR, vis buffer A/B, VRS/FDM, VSM, virtual texture, PSO üretimi, gerçek HRTF/Steam Audio,
    GameActivity göçü, Memory Advice, mağaza/servis kalemleri (hesap gerekiyor),
    **üç fiziksel cihaz** (kullanıcı kararı: şimdilik pas), macOS CI çökmesi (yerelden ulaşılamıyor).

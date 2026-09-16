@@ -2455,3 +2455,30 @@ kabul ediyor, typecheck susuyor, hata en geç noktada ve en anlamsız mesajla ç
 kılıyordu. Bir sondanın 0 dönmesi "geçerli ve boş" demek zorunda değil; "okunamadı" da 0 döndürebilir.
 Düzeltme (2026-09-16): başlatıcısız dizi bildirimi artık başlatıcı sentezliyor — `int[] a;` → `[]`,
 `int[4] a;` → `[0,0,0,0]`. Böylece `T[N]`'deki N ilk kez bir şey ifade ediyor.
+
+### 8bh. Normal haritasının mip'i BLIT ile üretilemez — ortalama normalin boyu 1 değildir
+Donanım blit'i doğrusal süzüyor, yani dört komşu normalin **bileşenlerini** ortalıyor. İki komşu normal
+birbirine ters eğimliyse ortalama vektörün boyu 1 değil ~0 olur; encode edilince (0.5, 0.5, ~1) yani
+**düz yüzey** çıkar. Görünen sonuç: uzaktaki yüzey sessizce düzleşir, ışık "yassılaşır". Hiçbir şey
+kızarmaz, hiçbir doğrulama katmanı konuşmaz — yalnızca görüntü yanlıştır.
+
+Ölçüldü (2026-09-16): birbirine ters eğimli (±0.8) dama deseninde normalleştirmeyen ortalamanın boyu
+**0.60**; küçültmeden sonra yeniden normalleştirince **1.0000**. Çözüm normal haritalarını CPU'da
+mip'leyip hazır seviye olarak yüklemek (`content::build_normal_mips` → `create_texture_levels`).
+
+İki ayrı tuzak daha var: (1) **ORM bu işlemi ALMAMALI** — pürüzlülük/metaliklik birer skalerdir,
+normalleştirmek onları bozar; bayrak renk uzayından ayrı tutuluyor. (2) Fonksiyonu doğrudan ölçen bir kapı
+YETMEZ: yükleme yolu onu hiç çağırmazsa görüntü eski davranışta kalır ve kapı yine yeşil olur. O yüzden
+`UploadedModel::normal_mip_textures` sayılıyor ve GPU kapısı `== 1` diye bakıyor.
+
+### 8bi. Doğru bir optimizasyon ölçülebilir hiçbir kazanç vermeyebilir — sayıyı yaz, iddiayı yazma
+`expr_is_int` bit işleçlerini tanımıyordu, yani `a[i] = x & maske` kutusuz dizi yolunu kaybediyordu.
+Tanıtmak doğruydu (kanıt kuralının kendisinde boşluktu) ama **hız kazancı ölçülmedi**: 4096 elemanlı
+dizide 20 000 tur, eski ikili 30 ms, yeni ikili 30 ms. LLVM her iki yolu da aynı şekilde indirgiyor.
+
+İlk ölçümüm daha da yanıltıcıydı: ifadede döngü değişkeni olmayan bir ad (`n`) kullanmıştım, o yüzden
+`expr_is_int` iki sürümde de false dönüyordu — yani kıyas hiçbir şeyi ayırt etmiyordu. Kıyas kurarken
+"bu iki yol gerçekten farklı kodu mu çalıştırıyor?" sorusu, sonucu okumaktan önce gelir.
+
+Değişiklik tutarlılık için durdu, hız için değil, ve kaynak yorumu bunu böyle söylüyor. Ölçmeden
+"hızlandırdık" yazmak, bu depoda ölçmeden "düzelttik" yazmakla aynı sınıf.

@@ -21,6 +21,14 @@ struct ModelImage {
   // DOGRUSAL veridir (spec). Yanlis uzay hicbir seyi kizartmaz, yalnizca
   // puruzlulugu/normali sessizce egriltir; kapi: content_gltf_texture_colorspace.
   bool srgb = true;
+  // NORMAL HARITASI MI: mip zinciri BLIT ile uretilirse dogrusal suzme
+  // komsu normalleri ORTALAR ve ortalama vektorun boyu 1'den KUCUK olur —
+  // uzaktaki yuzey sessizce duzlesir (isik "yassilasir"). Tek dogrusu
+  // kucultmeden sonra YENIDEN NORMALLESTIRMEK; o yuzden bu goruntuler
+  // CPU'da mip'lenip hazir seviye olarak yukleniyor. ORM bu bayragi
+  // ALMAZ: puruzluluk/metaliklik birer skaler, normallestirilmeleri
+  // anlamsiz olurdu.
+  bool normal_map = false;
 };
 struct ModelMaterial {
   int32_t image = -1; // -1: dokusuz (beyaz)
@@ -120,10 +128,23 @@ struct UploadedModel {
   renderer::MaterialHandle *materials = nullptr;
   renderer::TextureHandle *textures = nullptr;
   uint32_t mesh_count = 0, material_count = 0, texture_count = 0;
+  // Kac doku CPU'da yeniden normallestirilmis mip zinciriyle yuklendi.
+  // Kapi bunu okuyor: `build_normal_mips` dogru calissa bile yukleme yolu
+  // onu hic CAGIRMAZSA goruntu eski davranista kalirdi ve dogrudan
+  // fonksiyonu olcen bir test bunu goremezdi.
+  uint32_t normal_mip_textures = 0;
 };
 
 // Modeli renderer'a yukler (dokular + malzemeler + mesh'ler). Yukleme aninda.
 bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedModel *out);
+
+// Normal haritasi icin CPU mip zinciri: her kucultmeden SONRA yeniden
+// normallestirir (donanim blit'i bunu yapamaz — bkz. ModelImage::normal_map).
+// data[0] goruntunun kendisi, geri kalan seviyeler arenada. levels seviye
+// sayisi, sizes[] bayt cinsinden boyutlar. Disari aciktir cunku kapi onu
+// dogrudan olcuyor (normallestirmeyen kontrolle karsilastirarak).
+bool build_normal_mips(Arena &arena, const ModelImage &img, uint32_t levels,
+                       uint8_t **data, uint32_t *sizes);
 // Poz: iskelet basina skin matrisleri (draw_model iskeletli mesh'lere bunu verir).
 struct ModelPose {
   const Mat4 *skin_mats[kModelMaxSkins] = {};
