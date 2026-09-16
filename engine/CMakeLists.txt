@@ -198,7 +198,8 @@ add_dependencies(engine_sim engine_layer_check)
 # third_party/'sinde yok. Dosya kaynak olarak duruyor (sim/rollback.hpp ile
 # ayni durum: "kod hazir, bagimlilik/kablolama bekliyor").
 add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp renderer/indirect_cull.cpp
-    renderer/meshlet_pipeline.cpp renderer/lighting_pipeline.cpp)
+    renderer/meshlet_pipeline.cpp renderer/lighting_pipeline.cpp renderer/debug_draw.cpp)
+target_include_directories(engine_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/debug_draw)
 target_link_libraries(engine_renderer PUBLIC engine_rhi engine_meshopt)
 target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_renderer engine_layer_check)
@@ -283,6 +284,7 @@ set(ENGINE_TEST_SOURCES
     tests/test_lighting_pipeline.cpp
     tests/test_fixed.cpp
     tests/test_spatial_hash.cpp
+    tests/test_debug_draw.cpp
     tests/test_anticheat.cpp
     tests/test_desync.cpp
     tests/test_device_tier.cpp
