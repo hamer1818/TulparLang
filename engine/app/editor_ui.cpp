@@ -284,6 +284,11 @@ bool EditorUi::init(rhi::Device &dev, VkRenderPass rp, uint32_t subpass, uint32_
   // hic calismazdi. False yapinca bayrak eski anlamina doner: "ImGui gercekten
   // bir ogeyi tutuyor" (metin kutusu / surukleme / kipli pencere).
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  // DOCKING: panellerin kullanici tarafindan surukleyip yeniden duzenlenebilmesi
+  // (Unity/Godot/Blender'in dordunde de var). Vendored ImGui docking dalinda.
+  // ⚠ ViewportsEnable ACILMIYOR: platform backend'imiz yok, bayrak set edilirse
+  // ImGui_ImplVulkan WSI cagrisina gidip abort-stub'i tetikler.
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   io.ConfigNavCaptureKeyboard = false;
   // Pencere yalniz BASLIGINDAN surukleniyor: bos zemine tiklamak pencereyi
   // kaydirmaz. 3B'ye gecen kazara surukleme sinifini bastan siler.

@@ -21,6 +21,7 @@
 #include "core/profiler/profiler.hpp"
 #include "platform/time.hpp"
 #include "rhi/device.hpp"
+#include "app/editor_layout.hpp"
 #include "app/editor_viewport.hpp"
 #include "rhi/offscreen.hpp"
 #include "rhi/swapchain.hpp"
@@ -501,7 +502,10 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       for (uint32_t t = 0; t < ticks; t++) { scene.tick(fs.step_s, tick_i++); st.play_time += fs.step_s; }
     }
 
-    const float aspect = (float)fw / (float)fh;
+    // En-boy orani artik PENCERENIN degil, sahnenin icinde yasadigi PANELIN
+    // orani: 3B viewport dokusuna ciziliyor ve o dokunun olcusu panelden geliyor.
+    // Pencere oranini kullanmak sahneyi panelde gerilmis gosterirdi.
+    const float aspect = vp.aspect();
     Mat4 proj = Mat4::perspective(kPi / 3.5f, aspect, 0.1f, 200.0f);
     Mat4 view = cam.view();
     ren.set_camera(view, proj);
@@ -540,8 +544,43 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
                   st.hist.redo_count(), frame_i, tick_i, gizmo_op == 0 ? "tasi" : gizmo_op == 1 ? "dondur" : "olcekle", st.status);
       ImGui::EndMainMenuBar();
     }
-    ImGui::SetNextWindowPos(ImVec2(8, 30), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(230, 300), ImGuiCond_FirstUseEver);
+    // --- DOCKSPACE -----------------------------------------------------------
+    // Paneller artik ekranda yuzen sabit pencereler degil; kullanici surukleyip
+    // yeniden duzenleyebiliyor (Unity/Godot/Blender'in dordunde de boyle).
+    // Varsayilan yerlesim ILK KAREDE programatik kuruluyor: ImGui'nin kendi
+    // imgui.ini'si kapali (io.IniFilename = nullptr), yani duzen diskten
+    // gelmiyor — kurulmazsa her acilista paneller serbest gelirdi.
+    const ImGuiID dock_id = ImGui::DockSpaceOverViewport(ImGui::GetID("TulparDock"), ImGui::GetMainViewport(), 0);
+    if (frame_i == 0) {
+      layout_set_dockspace_id(dock_id);
+      if (!layout_apply_default(dock_id, (float)fw, (float)fh))
+        std::fprintf(stderr, "[editor] varsayilan duzen: %s\n", layout_last_error());
+    }
+
+    // --- GORUNUM: 3B sahnenin YASADIGI panel --------------------------------
+    // Sahne viewport dokusuna ciziliyor ve burada gosteriliyor. Panel olcusu
+    // degisince hedef yeniden yaratiliyor (yalniz GERCEKTEN degistiyse) ve
+    // renderer'in cizim olcusu ona baglaniyor — en-boy orani artik pencerenin
+    // degil PANELIN orani.
+    ViewportRect view_rect{};
+    bool view_hovered = false;
+    if (ImGui::Begin(kPanelGorunum)) {
+      const ImVec2 avail = ImGui::GetContentRegionAvail();
+      const ImVec2 origin = ImGui::GetCursorScreenPos();
+      if (avail.x >= 1.0f && avail.y >= 1.0f) {
+        vp.resize((uint32_t)avail.x, (uint32_t)avail.y);
+        ren.set_render_size(vp.width(), vp.height());
+        if (vp.texture_id()) {
+          ImGui::Image((ImTextureID)vp.texture_id(), ImVec2((float)vp.width(), (float)vp.height()));
+          view_hovered = ImGui::IsItemHovered();
+        } else {
+          ImGui::TextUnformatted(vp.last_error()); // sessiz siyah panel YOK
+        }
+        view_rect = ViewportRect{origin.x, origin.y, (float)vp.width(), (float)vp.height()};
+      }
+    }
+    ImGui::End();
+
     if (ImGui::Begin("Sahne")) {
       if (ImGui::Button("Ekle")) do_add();
       ImGui::SameLine();
@@ -562,8 +601,6 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       ImGui::Text("kamera %.1f/%.1f/%.1f", cam.eye().x, cam.eye().y, cam.eye().z);
     }
     ImGui::End();
-    ImGui::SetNextWindowPos(ImVec2((float)fw - 300, 30), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(292, 360), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Ozellikler")) {
       const int si = (int)st.sel.primary();
       if (si >= 0 && si < (int)st.scene.entity_count) {
@@ -612,8 +649,6 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     }
     ImGui::End();
     // Dunya paneli: gunes/ortam/golge (gunluge SceneOp::World), kamera (canli; sahneye yazmak ayri islem).
-    ImGui::SetNextWindowPos(ImVec2(8, 340), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300, 330), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Dunya")) {
       ImGui::TextUnformatted("Isik");
       ImGui::DragFloat3("gunes yonu", &st.scene.sun_dir.x, 0.01f, -1.0f, 1.0f); track_world_edit(st);
@@ -648,8 +683,6 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // Kaynak tarayici: sahne dosyasinin dizinindeki glTF'ler + sahnenin kaynak
     // tablosu (yuklendi/yuklenemedi). Ekleme dongu icinde yapilmaz (liste
     // yeniden taranir): secilen dosya adi kopyalanip donguden sonra islenir.
-    ImGui::SetNextWindowPos(ImVec2(8, 676), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300, 240), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Kaynaklar")) {
       char add_file[content::kScenePathLen] = {0};
       ImGui::Text("dizin: %s", st.scene_dir);
@@ -722,11 +755,16 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       const bool lmb = in && in->mouse_down[0];
       const bool pressed = lmb && !st.prev_lmb;
       st.prev_lmb = lmb;
-      if (pressed && !ui.wants_mouse() && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
+      // Fare konumu GORUNUM PANELININ dikdortgenine cevrilir. Panel disindaki
+      // tik bir viewport tiklamasi DEGILDIR ve hicbir sey secmez — `map_mouse`
+      // orada valid=false donuyor (ve -1 sentinel veriyor, 0 degil: 0 gecerli
+      // bir piksel olurdu ve sessizce kosede bir isin atardik).
+      const ViewportPick pick = in ? vp.map_mouse(view_rect, (float)in->mouse_x, (float)in->mouse_y) : ViewportPick{};
+      if (pressed && pick.valid && view_hovered && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
         static content::SceneBounds wb[content::kSceneMaxEntities];
         const uint32_t nb = entity_world_bounds(st, phys, wb);
         Vec3 o, d;
-        camera_ray(cam, kPi / 3.5f, aspect, (float)in->mouse_x, (float)in->mouse_y, (float)fw, (float)fh, &o, &d);
+        camera_ray(cam, kPi / 3.5f, aspect, pick.x, pick.y, (float)vp.width(), (float)vp.height(), &o, &d);
         float t = 0;
         const int32_t hit = content::scene_pick(wb, nb, o, d, &t);
         const bool ctrl = ImGui::GetIO().KeyCtrl;
