@@ -54,6 +54,7 @@ int Registry::count = 0;
 int Registry::failures = 0;
 int Registry::failures_total = 0;
 int Registry::skipped = 0;
+int Registry::overflow = 0;
 } // namespace tulpar::engine::test
 
 using namespace tulpar::engine::test;
@@ -115,6 +116,15 @@ int engine_tests_main(int argc, char **argv) {
   }
   std::printf("engine tests: %d passed, %d failed, %d atlandi (%d/%d kosuldu)\n", passed, failed,
               Registry::skipped, ran, Registry::count);
+  // KAYIT TASMASI KIRMIZIDIR. Tasan test hic kosmaz, yani ozet satirindaki
+  // "passed" sayisi o testler hakkinda HICBIR SEY soylemez. Sessiz gecerse
+  // ozet, tavan sayisini olcum gibi gosterir (2026-09-17'de tam bu oldu).
+  if (Registry::overflow) {
+    std::printf("engine tests: KAYIT TASMASI — %d test kapasiteye (%d) sigmadi ve HIC KOSMADI; "
+                "tests/test.hpp icindeki Registry::kMax buyutulmeli\n",
+                Registry::overflow, Registry::kMax);
+    return 1;
+  }
   return failed == 0 && ran > 0 ? 0 : 1;
 }
 
