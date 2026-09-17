@@ -141,9 +141,28 @@ public:
     return h;
   }
 
+  // NOBETCI: bu nesne yok edilirken kuyrukta ya da calismakta olan Jolt isi
+  // KALMAMALI. `jobs_` havuzu bizimle birlikte gider ve kuyrukta duran her
+  // girdi CIPLAK bir `Job*`; sahibi olmeden calisirsa cop isaretci cagirilir.
+  //
+  // Bu tam olarak CI macOS/arm64'te olculen cokmenin sinifi (2026-09-16):
+  // `thread: tulpar-job`, SIGSEGV, fault_addr 0x8bc94512aa864210 — null degil,
+  // COP. Yigin izi iki cerceveydi (fiber yigini cozucuyu kesiyor), yani
+  // sessiz ve teshisi zor. Asil duzeltme sirada: `jobs.shutdown()` artik
+  // fizikten ONCE cagriliyor, yani bu sayac sifir olmak ZORUNDA. Nobetci o
+  // sozlesmeyi ayakta tutuyor: biri sirayi bozarsa sessiz UAF yerine tam
+  // burada, adiyla patlar.
+  ~FiberJoltJobs() override {
+    ENGINE_ASSERT_MSG(outstanding_.load(std::memory_order_acquire) == 0,
+                      "Jolt is uyarlayicisi yok edilirken %u is hala kuyrukta/calisiyor "
+                      "(is sistemi fizikten ONCE kapatilmali)",
+                      outstanding_.load(std::memory_order_acquire));
+  }
+
 protected:
   void QueueJob(Job *job) override {
     job->AddRef(); // kuyrukta yasadigi surece
+    outstanding_.fetch_add(1, std::memory_order_acq_rel);
     js_->run(::tulpar::engine::JobDecl{run_one, job, "jolt"}, nullptr);
   }
   void QueueJobs(Job **jobs, JPH::uint n) override {
@@ -154,10 +173,15 @@ protected:
 private:
   static void run_one(void *p) {
     Job *job = static_cast<Job *>(p);
+    // Sahibi Release'DEN ONCE okunur: Release son referansi dusurunce Job
+    // yok ediliyor ve `GetJobSystem()` serbest bellege bakardi.
+    auto *self = static_cast<FiberJoltJobs *>(job->GetJobSystem());
     job->Execute();
     job->Release();
+    self->outstanding_.fetch_sub(1, std::memory_order_acq_rel);
   }
   FiberJobSystem *js_;
+  std::atomic<uint32_t> outstanding_{0};
   JPH::FixedSizeFreeList<Job> jobs_;
 };
 

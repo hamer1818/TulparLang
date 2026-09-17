@@ -856,6 +856,23 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     if (rhi::write_ppm(opts.out_path, ores.pixels, oc.width, oc.height)) std::printf("[engine_editor] goruntu: %s\n", opts.out_path);
   }
   dev.api().vkDeviceWaitIdle(dev.handle());
+  // IS SISTEMI ONCE SUSTURULUR — alt sistemlerden ONCE.
+  //
+  // Eskiden en SONDA kapaniyordu: fizik, renderer ve cihaz yikilirken worker
+  // thread'leri HALA CALISIYORDU. Jolt'un is uyarlayicisi (FiberJoltJobs)
+  // bizim kuyruga CIPLAK Job* itiyor; `delete impl_->jobs` o havuzu yok
+  // ediyor. Bir worker o sirada elinde eski bir girdi tutuyorsa cop bir
+  // isaretciyi cagiriyor.
+  //
+  // Olculdu (CI macOS/arm64, 2026-09-16): `thread: tulpar-job`, SIGSEGV,
+  // fault_addr 0x8bc94512aa864210 (null degil — COP). Yigin izi iki cerceve,
+  // cunku fiber yigini cozucuyu kesiyor. Dort kosumun ikisinde dustu: yaris.
+  //
+  // `jobs.shutdown()` worker'lari JOIN eder ve hicbir fiber'in park halinde
+  // kalmadigini ENGINE_ASSERT ile dogrular. Ondan sonrasi tek thread'lidir,
+  // yani bu sinif tamamen kapanir. Kapanis yolunda is URETEN kimse yok
+  // (yikim yalniz Vulkan/arena nesnesi serbest birakiyor).
+  jobs.shutdown();
   bodies_remove(st, phys);
   ui.shutdown();
   scene.shutdown();
@@ -863,7 +880,6 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   if (off) rhi::offscreen_destroy(off);
   if (!headless) swap.shutdown();
   dev.shutdown();
-  jobs.shutdown();
   return 0;
 }
 

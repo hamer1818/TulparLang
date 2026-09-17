@@ -2546,3 +2546,26 @@ bağlamak kapıyı yük altında sertleştiriyordu — tam ters yön. Eşik art�
 Ayrıca seri kol artık **varsayılmıyor, ölçülüyor**: bir daha düştüğünde "gather gerçekten seri miydi"
 sorusu tahminle değil sayıyla cevaplanır. O koşumda gather aslında seriden hızlıydı (82 < ~93) — yani
 eşzamanlılık çalışıyordu, ölçüt bozuktu; seri kol ölçülseydi bu ilk bakışta görülürdü.
+
+### 8bn. İş sistemi EN SONDA kapanırsa, alt sistemler yıkılırken worker'lar hâlâ çalışıyordur
+Üç giriş noktasında da (`teng_shutdown`, `demo_app`, `editor_app`) `jobs.shutdown()` **en sonda**ydı:
+fizik, renderer ve Vulkan cihazı yok edilirken worker thread'leri hâlâ canlıydı. Jolt'un iş uyarlayıcısı
+(`FiberJoltJobs`) bizim kuyruğa **çıplak `Job*`** itiyor ve o işaretçiler `FiberJoltJobs::jobs_` havuzunu
+gösteriyor; `Physics::shutdown()` ise `delete impl_->jobs` ile o havuzu yok ediyor. Bir worker o sırada
+kuyrukta kalmış bir girdiyi çekerse çöp bir işaretçiyi çağırır.
+
+Ölçüldü (CI macOS/arm64, 2026-09-16): `thread: tulpar-job`, SIGSEGV, `fault_addr 0x8bc94512aa864210` —
+**null değil, çöp**; null olsaydı sıradan bir deref hatası derdik. Dört koşumun ikisinde düştü, ikisinde
+geçti: yarış. Yığın izi **iki çerçeveydi**, çünkü fiber yığını çözücüyü kesiyor — yani bu sınıfın izi
+doğal olarak fakir, teşhis buna hazır olmalı.
+
+Düzeltme sıra: `jobs.shutdown()` artık `vkDeviceWaitIdle`'dan hemen sonra, fizikten **önce**. O çağrı
+worker'ları JOIN eder ve hiçbir fiber'in park halinde kalmadığını `ENGINE_ASSERT` ile doğrular, yani
+sonrası tek thread'lidir. Kapanış yolunda iş ÜRETEN kimse yok (yıkım yalnız nesne serbest bırakıyor).
+
+Üstüne nöbetçi: `~FiberJoltJobs` kuyrukta/çalışmakta iş varsa `ENGINE_ASSERT_MSG` ile **abort** eder.
+Sessiz UAF yerine tam yerinde, adıyla patlar. Ateşlediği doğrulandı (sayacı elle bozunca çıkış 134 ve
+"1 is hala kuyrukta/calisiyor"). `ENGINE_ASSERT` bu depoda Release'te de AÇIK — o yüzden sahada da geçerli.
+
+**Genel kural:** bir alt sistem başka bir alt sisteme ham işaretçi veriyorsa, alan taraf VERENDEN önce
+susturulmalı. "En sonda kapat" sezgisi burada tam tersi.

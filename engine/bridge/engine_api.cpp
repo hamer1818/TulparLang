@@ -961,6 +961,23 @@ void teng_shutdown(void) {
   // Ses ONCE kapanir: cihaz thread'i klip orneklerini arenadan okuyor.
   if (b.audio_ok) { b.mixer.stop_all(); b.audio_dev.shutdown(); b.audio_ok = false; BINFO("ses kapatildi (%u cal, %u klip)", b.audio_plays, b.clip_count); }
   b.dev.api().vkDeviceWaitIdle(b.dev.handle());
+  // IS SISTEMI ONCE SUSTURULUR — alt sistemlerden ONCE.
+  //
+  // Eskiden en SONDA kapaniyordu: fizik, renderer ve cihaz yikilirken worker
+  // thread'leri HALA CALISIYORDU. Jolt'un is uyarlayicisi (FiberJoltJobs)
+  // bizim kuyruga CIPLAK Job* itiyor; `delete impl_->jobs` o havuzu yok
+  // ediyor. Bir worker o sirada elinde eski bir girdi tutuyorsa cop bir
+  // isaretciyi cagiriyor.
+  //
+  // Olculdu (CI macOS/arm64, 2026-09-16): `thread: tulpar-job`, SIGSEGV,
+  // fault_addr 0x8bc94512aa864210 (null degil — COP). Yigin izi iki cerceve,
+  // cunku fiber yigini cozucuyu kesiyor. Dort kosumun ikisinde dustu: yaris.
+  //
+  // `jobs.shutdown()` worker'lari JOIN eder ve hicbir fiber'in park halinde
+  // kalmadigini ENGINE_ASSERT ile dogrular. Ondan sonrasi tek thread'lidir,
+  // yani bu sinif tamamen kapanir. Kapanis yolunda is URETEN kimse yok
+  // (yikim yalniz Vulkan/arena nesnesi serbest birakiyor).
+  b.jobs.shutdown();
   b.nav.shutdown();
   b.nav_ok = false;
   if (b.scene_ok) b.srt.despawn(b.phys);
@@ -971,7 +988,6 @@ void teng_shutdown(void) {
   if (!b.headless) b.swap.shutdown();
   b.dev.shutdown();
   if (b.host_open) bridge::bridge_host_close(&b.host);
-  b.jobs.shutdown();
   b.inited = false;
   b.running = false;
   if (g_log.errors) dump_ring("kapanista hata vardi");
