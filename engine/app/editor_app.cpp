@@ -21,6 +21,7 @@
 #include "core/profiler/profiler.hpp"
 #include "platform/time.hpp"
 #include "rhi/device.hpp"
+#include "app/editor_viewport.hpp"
 #include "rhi/offscreen.hpp"
 #include "rhi/swapchain.hpp"
 #include "sim/schedule.hpp"
@@ -44,14 +45,38 @@ struct Cam {
 struct RecordCtx {
   renderer::Renderer *r;
   EditorUi *ui;
+  EditorViewport *vp;
+  rhi::Device *dev;
 };
+// ANA GECIS ARTIK YALNIZ ImGui ICERIYOR. 3B sahne kendi VIEWPORT gecisine,
+// yani ImGui'nin doku olarak ornekleyebilecegi offscreen hedefe ciziliyor.
+// Onceden ucu de (3B + HUD + ImGui) ayni renk subpass'indeydi: sahne tam ekran,
+// ImGui ustunde yuzuyordu — "debug kaplamali oyun" modeli. Sahne bir panele o
+// yuzden konamiyordu.
 void record_cb(VkCommandBuffer cb, void *user) {
   auto *c = static_cast<RecordCtx *>(user);
-  c->r->record(cb);
-  c->r->ui_record(cb);
-  c->ui->record(cb); // ImGui en ustte, ayni renk subpass'i
+  // SUBPASS'I BIZ ILERLETIYORUZ. Ana gecis (swapchain ve offscreen, ikisi de)
+  // IKI subpass tanimliyor: derinlik on-gecisi + renk. Eskiden ikinciye
+  // `Renderer::record` geciyordu (renderer.cpp:2407) ve ImGui'nin boru hatti da
+  // subpass 1 icin kurulmustu. Renderer artik VIEWPORT gecisine cizdigi icin
+  // ilerleten kimse kalmadi: ImGui subpass 0'da cizmeye calisip
+  // VUID-vkCmdDrawIndexed-subpass-02685 veriyordu ve KARE TAMAMEN SIYAH
+  // cikiyordu (olculdu: 9910 benzersiz renk -> 1). Ustelik Vulkan iki subpass'li
+  // bir gecisi subpass 0'da BITIRMEYE de izin vermez, yani ilerletmek sart.
+  c->dev->api().vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+  c->ui->record(cb);
 }
-void shadow_cb(VkCommandBuffer cb, void *user) { static_cast<RecordCtx *>(user)->r->record_shadow(cb); }
+// Ana gecis BASLAMADAN once kosan kayit: kendi gecisi olan her sey burada.
+// SIRA ONEMLI — golge once, sonra viewport; ikisi de ayri gecis.
+void before_cb(VkCommandBuffer cb, void *user) {
+  auto *c = static_cast<RecordCtx *>(user);
+  c->r->record_shadow(cb);
+  if (c->vp->begin_pass(cb)) {
+    c->r->record(cb);
+    c->r->ui_record(cb);
+    c->vp->end_pass(cb);
+  }
+}
 
 void entity_from_matrix(SceneEntity &e, const Mat4 &mat) {
   ImGuizmo::DecomposeMatrixToComponents(&mat.m[0][0], &e.pos.x, &e.rot_deg.x, &e.scale.x);
@@ -238,11 +263,23 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     image_count = swap.image_count();
     width = swap.extent().width; height = swap.extent().height;
   }
+  // --- VIEWPORT ONCE KURULUR, RENDERER ONUN GECISINE GORE ---------------------
+  // Vulkan'da gecis UYUMLULUGU subpass BAGIMLILIKLARINI da kapsar, yalniz
+  // formatlari degil. Renderer'i swapchain gecisine gore kurup viewport
+  // gecisine kaydetmek dogrulama katmanini kiriyor (olculdu):
+  //   srcStageMask incompatible: FRAGMENT_SHADER_BIT != COLOR_ATTACHMENT_OUTPUT_BIT
+  // Bu yuzden sira: vp.init -> ren.init(vp.render_pass()) -> ui.init(rp).
+  // vp.render_pass() yeniden boyutlanmada YENIDEN YARATILMAZ, yani renderer'in
+  // boru hatlari panel olcusu degisince gecerli kalir.
+  static EditorViewport vp;
+  EditorViewportConfig vc;
+  if (!vp.init(dev, vc, width, height)) { std::fprintf(stderr, "viewport: %s\n", vp.last_error()); return 1; }
+
   renderer::Renderer ren;
   renderer::RendererConfig rc;
-  rc.srgb_target = headless ? true : swap.srgb_output();
-  if (!ren.init(dev, sys, rp, rc)) { std::fprintf(stderr, "renderer\n"); return 1; }
-  ren.set_render_size(width, height);
+  rc.srgb_target = true; // hedef ARTIK viewport ve o *_SRGB (bkz. EditorViewportConfig)
+  if (!ren.init(dev, sys, vp.render_pass(), rc)) { std::fprintf(stderr, "renderer\n"); return 1; }
+  ren.set_render_size(vp.width(), vp.height());
 
   // --- Sahne dosyasi (veri modeli) ---
   static EditorState st;
@@ -322,7 +359,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   uint32_t frame_i = 0, tick_i = 0;
   double prev_mx = 0, prev_my = 0;
   bool prev_rmb = false;
-  RecordCtx rctx{&ren, &ui};
+  RecordCtx rctx{&ren, &ui, &vp, &dev};
   bool running = true;
   auto set_playing = [&](bool p) {
     if (p == st.playing) return;
@@ -827,18 +864,18 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // Isik yaricapi / golge hacmi / gunes yonu: motorun kendi draw'u ile ince kutular.
     st.gizmo_draws = editor_draw_gizmos(ren, ds.cube, st.scene, st.sel.items, st.sel.count, st.gizmos);
     if (headless) {
-      if (!rhi::offscreen_render_custom(off, oc, record_cb, &rctx, &ores, shadow_cb)) { std::fprintf(stderr, "kare: %s\n", ores.error); return 1; }
+      if (!rhi::offscreen_render_custom(off, oc, record_cb, &rctx, &ores, before_cb)) { std::fprintf(stderr, "kare: %s\n", ores.error); return 1; }
     } else {
       rhi::FrameContext fc;
       if (swap.acquire(&fc)) {
-        ren.record_shadow(fc.cmd);
+        before_cb(fc.cmd, &rctx);   // golge + viewport (ikisi de KENDI gecisi)
         swap.begin_render_pass(fc);
-        ren.record(fc.cmd);
-        ren.ui_record(fc.cmd);
-        ui.record(fc.cmd);
+        ui.record(fc.cmd);          // ana gecis: YALNIZ ImGui
         swap.end_frame(fc);
       }
-      if (swap.needs_recreate() && fw && fh) { swap.recreate(fw, fh); ren.set_render_size(swap.extent().width, swap.extent().height); }
+      // Swapchain yeniden yaratimi artik renderer'in cizim olcusunu DEGISTIRMEZ:
+      // renderer viewport'a ciziyor, onun olcusu panelden geliyor.
+      if (swap.needs_recreate() && fw && fh) swap.recreate(fw, fh);
     }
     prof.end_frame();
     frame_i++;
@@ -874,6 +911,11 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   // (yikim yalniz Vulkan/arena nesnesi serbest birakiyor).
   jobs.shutdown();
   bodies_remove(st, phys);
+  // VIEWPORT ImGui'DEN ONCE KAPANIR: doku descriptor'i ImGui'nin havuzundan
+  // geliyor, once ImGui kapanirsa o set'i iade edecek yer kalmaz. Eklenmedigi
+  // ilk halde dogrulama katmani kapanista VUID-vkDestroyDevice-device-05137
+  // veriyordu (cihaz yok edilirken cocuk nesneler duruyor).
+  vp.shutdown();
   ui.shutdown();
   scene.shutdown();
   ren.shutdown();

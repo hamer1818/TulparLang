@@ -154,7 +154,11 @@ private:
   uint32_t limit_ = 4096; // cihazin maxImageDimension2D / maxFramebuffer*
   uint32_t recreates_ = 0, requests_ = 0;
   bool ok_ = false;
-  char err_[192] = {0};
+  // 320: `dev_->last_error()` 256 bayta kadar olabiliyor ve mesajlar onun
+  // onune bir onek koyuyor ("renk bellegi: ..."). 192'de GCC
+  // -Wformat-truncation ile hakli olarak uyariyordu; kesilen hata mesaji
+  // teshisi zorlastirir, tampon kaynagi tam alacak kadar buyutuldu.
+  char err_[320] = {0};
 };
 
 } // namespace tulpar::engine::app
