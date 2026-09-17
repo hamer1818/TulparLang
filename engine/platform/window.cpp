@@ -24,6 +24,7 @@ struct Glfw {
   int (*window_should_close)(GLFWwindow *) = nullptr;
   void (*set_window_should_close)(GLFWwindow *, int) = nullptr;
   void (*get_framebuffer_size)(GLFWwindow *, int *, int *) = nullptr;
+  void (*get_window_size)(GLFWwindow *, int *, int *) = nullptr;
   int (*get_key)(GLFWwindow *, int) = nullptr;
   void (*get_cursor_pos)(GLFWwindow *, double *, double *) = nullptr;
   int (*get_mouse_button)(GLFWwindow *, int) = nullptr;
@@ -64,6 +65,7 @@ bool load_glfw(char *err, size_t n) {
   L(create_window, "glfwCreateWindow"); L(destroy_window, "glfwDestroyWindow");
   L(poll_events, "glfwPollEvents"); L(window_should_close, "glfwWindowShouldClose");
   L(set_window_should_close, "glfwSetWindowShouldClose"); L(get_framebuffer_size, "glfwGetFramebufferSize");
+  L(get_window_size, "glfwGetWindowSize");
   L(get_key, "glfwGetKey"); L(get_cursor_pos, "glfwGetCursorPos"); L(get_mouse_button, "glfwGetMouseButton");
   L(get_time, "glfwGetTime"); L(get_required_instance_extensions, "glfwGetRequiredInstanceExtensions");
   L(create_window_surface, "glfwCreateWindowSurface"); L(vulkan_supported, "glfwVulkanSupported");
@@ -125,6 +127,13 @@ void Window::request_close() { if (win_) g.set_window_should_close(static_cast<G
 void Window::framebuffer_size(uint32_t *w, uint32_t *h) const {
   int iw = 0, ih = 0;
   if (win_) g.get_framebuffer_size(static_cast<GLFWwindow *>(win_), &iw, &ih);
+  *w = (uint32_t)(iw < 0 ? 0 : iw);
+  *h = (uint32_t)(ih < 0 ? 0 : ih);
+}
+
+void Window::window_size(uint32_t *w, uint32_t *h) const {
+  int iw = 0, ih = 0;
+  if (win_) g.get_window_size(static_cast<GLFWwindow *>(win_), &iw, &ih);
   *w = (uint32_t)(iw < 0 ? 0 : iw);
   *h = (uint32_t)(ih < 0 ? 0 : ih);
 }

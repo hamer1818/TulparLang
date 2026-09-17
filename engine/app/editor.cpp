@@ -24,6 +24,7 @@ bool w_poll(void *user, uint32_t *w, uint32_t *h) {
   return !win->should_close();
 }
 const platform::InputState *w_input(void *user) { return &static_cast<platform::Window *>(user)->input(); }
+void w_window_size(void *user, uint32_t *w, uint32_t *h) { static_cast<platform::Window *>(user)->window_size(w, h); }
 } // namespace
 
 int main(int argc, char **argv) {
@@ -47,6 +48,7 @@ int main(int argc, char **argv) {
   host.create_surface = w_surface;
   host.poll = w_poll;
   host.input = w_input;
+  host.window_size = w_window_size;
   int rc = app::editor_run(o, &host);
   win.close();
   return rc;

@@ -207,13 +207,17 @@ bool capture_rec(const ImGuiDockNode *n, int32_t parent, LayoutFile *out, Layout
   for (int i = 0; i < n->Windows.Size; i++) {
     const ImGuiWindow *w = n->Windows[i];
     if (!w || !w->Name) continue;
-    if (!layout_is_panel(w->Name)) { g_skipped++; continue; }
+    // "Görünüm###Gorunum" gibi bir etikette kimlik ### sonrasidir (ImGui
+    // kurali); dosyaya KIMLIK yazilir, etiket degil (bkz. kPanel*Label).
+    const char *id_name = w->Name;
+    if (const char *h = std::strstr(w->Name, "###")) id_name = h + 3;
+    if (!layout_is_panel(id_name)) { g_skipped++; continue; }
     if (cnt >= kLayoutMaxWindows) {
       char b[80];
       std::snprintf(b, sizeof b, "pencere sayisi tavani asildi (%u)", kLayoutMaxWindows);
       return fail(err, 0, b);
     }
-    std::snprintf(names[cnt], kLayoutNameLen, "%s", w->Name);
+    std::snprintf(names[cnt], kLayoutNameLen, "%s", id_name);
     const int32_t o = tab_order_of(n, w);
     ord[cnt] = (o < 0) ? 0x7FFFFFFF : o; // sekme cubugu yok -> ada gore sirala
     cnt++;

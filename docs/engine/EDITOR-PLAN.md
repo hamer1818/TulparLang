@@ -95,6 +95,39 @@ Her fazın kapısı var; kapı yoksa faz bitmiş sayılmaz. Kapılar headless ko
    durum çubuğu. Düzen `imgui.ini` yerine **bizim** dosyamıza yazılır (belirlenimli).
    Kapı: düzen kaydedilip yüklendiğinde panel dikdörtgenleri **bit bit** aynı.
 
+**E1 durumu (2026-09-17, dal `engine/editor-ui`):** üçü de kapalı, kapılar headless koşuda:
+`panel secim kapisi` (panel içi piksel → `vp.map_mouse` → ışın → varlık 0; kontrol: panel dışı
+piksel geçersiz), `duzen kapisi` (kaydet→yükle bit-tam; kontrol: SizeRef'i %30 büyütülmüş mutant
+dosya farklı; geri yükle bit-tam). Komut tablosu bağlandı (13/13; elle kısayol ve ham GLFW T/R/S
+okuması silindi), HiDPI işaretçi ölçeği bağlı (`Window::window_size`).
+
+**E1.4 — Profesyonel yüzey (2026-09-17, üç ajan, dosya sahipliğiyle):** kullanıcının "profesyonel
+seviyede görünmüyor" geri bildirimi üzerine. Ölçülen kusurlar: menü çubuğu düğme + debug dökümüydü,
+Özellikler ham `DragFloat3` (etiket sağda), Sahne düz liste + debug satırları, Görünüm kaplamasız,
+Kaynaklar ham metin. Çözüm dört yeni birim, hepsi `editor_tone`/stil paletinden (ham renk yok):
+* `app/editor_chrome.*` — gerçek menüler (komut tablosundan üretilir, kısayol sütunlu), araç çubuğu
+  (oynat/durdur, Taşı/Döndür/Ölçekle segmentli, Yakala + adım, Gizmolar, Kaydet/Derle), alt durum
+  çubuğu (mesaj + sağdan düşen ölçümler). Üçü `BeginViewportSideBar` ile WorkRect'i daraltır;
+  dockspace aralarına oturur (ImGui bir kare gecikmeli uygular — kapı ölçüyor). 9 kapı.
+* `app/editor_widgets.*` — özellik ızgarası (etiket solda, X/Y/Z rozetli vec3, renk, combo, kaynak),
+  Unity tarzı bileşen başlığı (✕ kaldır) + "Bileşen ekle", hiyerarşi (arama, tür simgesi, bileşen
+  rozetleri, ＋/− araç satırı). **`PropItem` sözleşmesi:** bileşik widget'ta ImGui "son öge"si yalnız
+  Z alanıdır; Y sürüklenirken `IsItemActivated()` false kalır ve günlüğe işlem düşmezdi — `track_edit`
+  artık `PropItem` alır (kapı sentetik sürüklemeyle ölçüyor). 7 kapı.
+* `app/editor_overlay.*` — viewport kaplaması (yalnız çizim listesi: Perspektif/kip/istatistik
+  rozetleri, sağ üstte derinlik-sıralı eksen gizmosu, kamera rozeti, odak çerçevesi, ipucu) ve
+  Kaynaklar paneli (soldan kısaltılan yol, ↻, ızgara/liste, karo boyutu, arama; geniş panelde yan
+  yana "Sahnedeki kaynaklar" + kart ızgarası; çift tık ekler). 9 kapı.
+* `editor_ui.cpp` tema: dock sekmeleri (aktif sekme pencereyle kaynaşır, accent üst çizgi), gölge
+  hacmi ve seçili olmayan ışık kutuları inceltildi/soluklaştırıldı (kullanıcının gördüğü "kocaman
+  kırmızı kutu" `lamba_kirmizi`'nin 8 birimlik yarıçap gizmosuydu).
+* Sekme etiketleri Türkçe (`Görünüm###Gorunum`): kimlik ASCII kalır, düzen dosyası `###` sonrasını
+  yazar. Komut adları da diyakritikli.
+* Doğrulama altyapısı: `tests/editor_probe.*` (gerçek font + tema ile offscreen sonda, PPM) +
+  `tools/ppm2png.py` — ajanlar kendi çıktısına **baktı**. Toplam editör kapısı 40; `engine_tests`
+  431/431. Kare: 1600x900, 8 varlık, p50 19.6 ms (E1 hedefi "<8 ms 1080p boş sahne" henüz kendi
+  koşullarında ölçülmedi — açık).
+
 ### Faz E2 — Sahne ağacı (veri modeli)
 `SceneEntity`'ye `int32_t parent` + **ebeveyn-önce sıralama değişmezi** (blob dostu,
 `.sahne` metninde girinti ile okunur). Dönüşüm kalıtımı, sürükle-bırak yeniden

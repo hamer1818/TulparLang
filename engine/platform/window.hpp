@@ -36,6 +36,9 @@ public:
   bool should_close() const;
   void request_close();
   void framebuffer_size(uint32_t *w, uint32_t *h) const;
+  // Pencere olcusu MANTIKSAL pikselde (imlec konumu bu uzayda gelir); HiDPI'da
+  // framebuffer'dan kucuktur. Orani arayuz isaretci olcegidir.
+  void window_size(uint32_t *w, uint32_t *h) const;
   const InputState &input() const { return input_; }
   const char *last_error() const { return err_; }
 

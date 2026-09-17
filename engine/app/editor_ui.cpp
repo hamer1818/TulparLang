@@ -121,6 +121,13 @@ constexpr ImVec4 kAccentHi = rgb(0x46, 0xD6, 0xC6); // vurgu parlak: imlec, tik
 constexpr ImVec4 kAccentLo = rgb(0x1D, 0x7D, 0x74); // vurgu koyu: basili tutamak
 constexpr ImVec4 kWarn = rgb(0xE6, 0xA7, 0x3E);     // kaydedilmemis, surukle hedefi
 constexpr ImVec4 kWhite = rgb(0xFF, 0xFF, 0xFF);    // yalniz saydam katmanlar icin
+// Disa acik ek tonlar (editor_tone): stil tablosunda kullanilmazlar.
+constexpr ImVec4 kAxisX = rgb(0xE5, 0x5D, 0x5D);
+constexpr ImVec4 kAxisY = rgb(0x7F, 0xC8, 0x5A);
+constexpr ImVec4 kAxisZ = rgb(0x4F, 0x9C, 0xF0);
+constexpr ImVec4 kOk = rgb(0x5F, 0xC5, 0x7A);
+constexpr ImVec4 kErr = rgb(0xE5, 0x5D, 0x5D);
+bool g_theme_srgb = false; // son editor_apply_theme'in srgb_target'i (editor_tone bunu izler)
 
 // sRGB (8-bit yazarken kastettigimiz deger) -> dogrusal. Alfa CEVRILMEZ.
 float srgb_to_linear_ch(float c) {
@@ -133,7 +140,7 @@ void theme_sizes(ImGuiStyle &s) {
   s.FramePadding = ImVec2(8, 4);
   s.ItemSpacing = ImVec2(8, 5);
   s.ItemInnerSpacing = ImVec2(6, 4);
-  s.CellPadding = ImVec2(7, 3);
+  s.CellPadding = ImVec2(8, 4); // FramePadding ile ayni: tablo hucresi ve kutu ayni ritimde
   s.TouchExtraPadding = ImVec2(0, 0);
   s.IndentSpacing = 20.0f;
   s.ScrollbarSize = 12.0f;
@@ -144,17 +151,20 @@ void theme_sizes(ImGuiStyle &s) {
   s.PopupBorderSize = 1.0f;
   s.FrameBorderSize = 1.0f; // ince kenarlik: kutu/dugme zeminden ayrilsin
   s.TabBorderSize = 0.0f;
+  s.TabBarBorderSize = 1.0f;   // cubuk alt cizgisi: rengi TabSelected (= pencere zemini), yani sekme icerige AKAR
   s.TabBarOverlineSize = 2.0f; // secili sekmenin uzerinde vurgu cizgisi
   s.DockingSeparatorSize = 2.0f;
-  s.SeparatorTextBorderSize = 2.0f;
+  s.SeparatorTextBorderSize = 1.0f; // kalin cizgi baslik degil bolme gibi okunuyordu
   s.SeparatorTextPadding = ImVec2(16, 6);
-  s.WindowRounding = 5.0f;
-  s.ChildRounding = 5.0f;
-  s.PopupRounding = 5.0f;
+  // TEK yuvarlaklik (4): pencere, cocuk, acilir, kutu, tutamak, sekme — farkli
+  // yaricaplar yan yana gelince cerceve "duz/tutarsiz" okunuyordu.
+  s.WindowRounding = 4.0f;
+  s.ChildRounding = 4.0f;
+  s.PopupRounding = 4.0f;
   s.FrameRounding = 4.0f;
   s.GrabRounding = 4.0f;
-  s.TabRounding = 5.0f;
-  s.ScrollbarRounding = 9.0f;
+  s.TabRounding = 4.0f;
+  s.ScrollbarRounding = 6.0f;
   s.WindowTitleAlign = ImVec2(0.0f, 0.5f);          // sola dayali baslik (Unity/Godot)
   s.WindowMenuButtonPosition = ImGuiDir_None;       // daraltma oku yok: baslik temiz
   s.ColorButtonPosition = ImGuiDir_Right;
@@ -181,8 +191,12 @@ void theme_colors(ImGuiStyle &s) {
   c[ImGuiCol_FrameBg] = kBg3;
   c[ImGuiCol_FrameBgHovered] = kBg4;
   c[ImGuiCol_FrameBgActive] = fade(kAccent, 0.35f);
+  // Baslik / dock sekme SERIDI: odakli ya da degil, hep en dip ton. Odak
+  // sekmenin ustundeki cizgiyle (overline) gosterilir; serit rengi degisince
+  // (eski: aktif Bg2) odakli panelin sekme cubugu icerikten daha acik kaliyor ve
+  // pasif sekme seridin icinde kayboluyordu (Unity/Unreal: serit hep koyu).
   c[ImGuiCol_TitleBg] = kBg0;
-  c[ImGuiCol_TitleBgActive] = kBg2;
+  c[ImGuiCol_TitleBgActive] = kBg0;
   c[ImGuiCol_TitleBgCollapsed] = fade(kBg0, 0.75f);
   c[ImGuiCol_MenuBarBg] = kBg0;
   c[ImGuiCol_ScrollbarBg] = fade(kBg0, 0.45f);
@@ -206,13 +220,16 @@ void theme_colors(ImGuiStyle &s) {
   c[ImGuiCol_ResizeGripHovered] = kAccentLo;
   c[ImGuiCol_ResizeGripActive] = kAccent;
   c[ImGuiCol_InputTextCursor] = kAccentHi;
-  c[ImGuiCol_Tab] = kBg2;
-  c[ImGuiCol_TabHovered] = kBg4;
-  c[ImGuiCol_TabSelected] = kBg1; // secili sekme pencere zeminiyle birlesir
+  // Sekmeler: pasif sekme seritle AYNI (yalniz yazi), secili sekme pencere
+  // zeminiyle BIRLESIR (odakli/odaksiz fark etmez — Unity'de de panel odagini
+  // sekmenin rengi degil ustundeki cizgi soyler), ustunde bir ton acik.
+  c[ImGuiCol_Tab] = kBg0;
+  c[ImGuiCol_TabHovered] = kBg2;
+  c[ImGuiCol_TabSelected] = kBg1;
   c[ImGuiCol_TabSelectedOverline] = kAccent;
   c[ImGuiCol_TabDimmed] = kBg0;
-  c[ImGuiCol_TabDimmedSelected] = kBg2;
-  c[ImGuiCol_TabDimmedSelectedOverline] = fade(kAccentLo, 0.6f);
+  c[ImGuiCol_TabDimmedSelected] = kBg1;
+  c[ImGuiCol_TabDimmedSelectedOverline] = fade(kTextDim, 0.45f);
   c[ImGuiCol_DockingPreview] = fade(kAccent, 0.35f);
   c[ImGuiCol_DockingEmptyBg] = kBg0;
   c[ImGuiCol_PlotLines] = kTextDim;
@@ -249,12 +266,50 @@ void editor_apply_theme(float scale, bool srgb_target) {
   theme_sizes(s);
   theme_colors(s);
   s.ScaleAllSizes(scale); // yazi DISINDAKI her sey (bosluk, yuvarlaklik, kalinlik)
+  g_theme_srgb = srgb_target;
   if (srgb_target)
     for (int i = 0; i < ImGuiCol_COUNT; i++) {
       s.Colors[i].x = srgb_to_linear_ch(s.Colors[i].x);
       s.Colors[i].y = srgb_to_linear_ch(s.Colors[i].y);
       s.Colors[i].z = srgb_to_linear_ch(s.Colors[i].z);
     }
+}
+
+void editor_tone(Tone t, float out[4]) {
+  static constexpr ImVec4 kTable[(int)Tone::Count] = {kBg0,    kBg1,      kBg2,      kBg3,  kBg4,  kLine, kText, kTextDim, kAccent,
+                                                      kAccentHi, kAccentLo, kWarn,     kWhite, kAxisX, kAxisY, kAxisZ, kOk,     kErr};
+  const ImVec4 c = (int)t < (int)Tone::Count ? kTable[(int)t] : kText; // enum tabani uint8_t: negatif olamaz
+  out[0] = g_theme_srgb ? srgb_to_linear_ch(c.x) : c.x;
+  out[1] = g_theme_srgb ? srgb_to_linear_ch(c.y) : c.y;
+  out[2] = g_theme_srgb ? srgb_to_linear_ch(c.z) : c.z;
+  out[3] = c.w;
+}
+
+uint32_t editor_ellipsize(const char *s, float max_w, char *out, uint32_t cap) {
+  if (!out || cap == 0) return 0;
+  out[0] = 0;
+  if (!s) return 0;
+  const uint32_t n = (uint32_t)std::strlen(s);
+  if (!ImGui::GetCurrentContext() || ImGui::CalcTextSize(s).x <= max_w) {
+    const uint32_t m = n < cap - 1 ? n : cap - 1;
+    std::memcpy(out, s, m);
+    out[m] = 0;
+    return m;
+  }
+  static const char kDots[] = "\xE2\x80\xA6"; // U+2026
+  const float dots_w = ImGui::CalcTextSize(kDots).x;
+  // Sondan geri: UTF-8 devam baytlarini (10xxxxxx) atlayarak on-ek kisalt.
+  uint32_t m = n;
+  while (m > 0) {
+    m--;
+    while (m > 0 && ((unsigned char)s[m] & 0xC0) == 0x80) m--;
+    if (ImGui::CalcTextSize(s, s + m).x + dots_w <= max_w) break;
+  }
+  if (m + 3 >= cap) m = cap > 4 ? cap - 4 : 0;
+  std::memcpy(out, s, m);
+  std::memcpy(out + m, kDots, 3);
+  out[m + 3] = 0;
+  return m + 3;
 }
 
 bool EditorUi::init(rhi::Device &dev, VkRenderPass rp, uint32_t subpass, uint32_t image_count, const char *font_ttf, float font_px,
@@ -634,13 +689,22 @@ uint32_t editor_draw_gizmos(renderer::Renderer &ren, renderer::MeshHandle cube, 
       const Vec3 p{m.m[3][0], m.m[3][1], m.m[3][2]};
       bool is_sel = false;
       for (uint32_t k = 0; k < n && !is_sel; k++) is_sel = sel && sel[k] == (int32_t)i;
+      // Secili isik: tam kalinlik, tam renk (duzenlenen sey). Digerleri: yarim
+      // kalinlik, 0.35x renk. editor.sahne'deki kirmizi isik 8 birim yaricapli;
+      // tam kalinlikta 16 birimlik kirmizi kutu sahneye hakim oluyor ve hata
+      // gibi okunuyordu (kullanicinin gordugu "buyuk kalin kirmizi kutu" bu).
       const float r = e.light_radius;
-      wire_box(ren, cube, p, {r, r, r}, e.light_color * (is_sel ? 1.0f : 0.4f), th, &draws);
+      wire_box(ren, cube, p, {r, r, r}, e.light_color * (is_sel ? 1.0f : 0.35f), is_sel ? th : th * 0.5f, &draws);
     }
   }
   if (o.shadow_volume) {
+    // Golge hacmi bir KILAVUZ, alarm degil: sahnenin en buyuk kutusu oldugu
+    // icin tam kalinlik + doygun mavi (eski) goruntuye hakim oluyor ve hata
+    // gibi okunuyordu. Kalinlik 0.35x (0.06 -> ~0.02 dunya birimi), renk
+    // solgun kursuni-mavi. Isik yaricapi ve gunes oku tam kalinlikta kalir
+    // (onlar kucuk ve secilebilir; cizim sayisi degismez: 12 kenar).
     const float r = d.shadow_radius;
-    wire_box(ren, cube, d.shadow_center, {r, r, r}, {0.25f, 0.6f, 1.0f}, th, &draws);
+    wire_box(ren, cube, d.shadow_center, {r, r, r}, {0.30f, 0.38f, 0.50f}, th * 0.35f, &draws);
   }
   if (o.sun_dir) {
     const Vec3 dir = normalize(d.sun_dir); // isiga dogru (shader: dot(n, light_dir))

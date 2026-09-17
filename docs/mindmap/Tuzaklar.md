@@ -2602,3 +2602,32 @@ Düzeltme yalnız çağrıyı eklemek değil, **iki yolu tek kaynağa bağlamak*
 
 Genel kural: aynı işi yapan iki kod yolundan yalnız birini koşturabiliyorsan, onları **tek fonksiyona
 indirge**; yoksa koşturamadığın yol sessizce geride kalır ve farkı kullanıcı bulur.
+
+### 8bq. Testler arasında paylaşılan statik arena geri sarılmazsa, N. testte "taştı" ile çöker — tek başına koşan test bunu görmez
+
+`tests/editor_probe.cpp` sondası cihaz/offscreen/renderer için `static SystemArena sys` (64 MB)
+ayırıp bir daha geri sarmıyordu (2026-09-17). Her sonda ≈ 2×W×H×4 B + cihaz tüketir; ajanlar
+kendi 7–9 kapılık filtrelerini koşturunca yeşildi, `engine_tests editor` (40 sonda) 30. sondada
+`arena 'editor_probe' TASTI` + SIGABRT verdi. Ders: bir test yardımcısının kaynak sahipliği **çağrı
+başına** olmalı (`release()` + `reserve()` ya da `mark/reset_to`) — ve doğrulama, yardımcının
+**gerçek çağrı sayısıyla** (tam suite) koşmalı; filtreli koşu kapasite hatalarını gizler
+([[8af]] ile aynı sınıf: kapasite kare/oturum sayısıyla ölçeklenir).
+
+### 8br. ImGui `###` etiketi: kimlik ### SONRASIDIR — düzen/ayar dosyasına etiketi değil kimliği yaz
+
+Sekme başlıklarını Türkçeleştirmek için `ImGui::Begin("Görünüm###Gorunum")` kullanıldı (2026-09-17).
+`DockBuilderDockWindow("Gorunum", …)` ve `FindWindowByName("Gorunum")` `ImHashStr`'ın ### kuralıyla
+aynı pencereyi bulur, ama `ImGuiWindow::Name` **tam** etikettir: düzen kaydı `layout_is_panel(w->Name)`
+ile karşılaştırınca beş paneli de "tabloda yok" diye atlıyordu (sessizce, `layout_skipped()` sayacına
+gidiyor). Kayıt döngüsü artık `###` sonrasını alıyor. Kural: dosyaya giden her pencere adı için
+`###` kesimi yap; etiket dil/sürümle değişebilir, kimlik değişmez.
+
+### 8bs. Fontta glif VAR sanmak: ⏸ ⏹ ⤢ ⤡ ＋ ⌕ DejaVuSans'ta yok — cmap'e bak, boş kutuya değil
+
+Ajan görevine "DejaVuSans ▶ ■ ⏸ … glifleri var" yazılmıştı; ⏸/⏹ (U+23F8/23F9), ⤢/⤡, ＋ (tam
+genişlik), ⌕ (U+2315) fontta **yok** — ImGui eksik glifi `?`/boş kutu çizer, headless sonda buna
+"vertex var" der. İki ajan da fontTools/cmap ile ölçüp ■ ✥ ⇲ ✚ ve çizilmiş büyüteçle değiştirdi.
+Kural: bir glif kullanmadan önce `python3 -c "from fontTools.ttLib import TTFont; …getBestCmap()"`
+ile var mı diye bak; sondanın PNG'sine de bak. (ImGui 1.92 dinamik atlası glif ARALIĞI istemez —
+Türkçe ğüşiöç kendiliğinden gelir — ama fontta olmayan glifi yaratmaz.)
+

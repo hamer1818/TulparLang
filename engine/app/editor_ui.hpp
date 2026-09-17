@@ -28,6 +28,25 @@ struct EditorUiStats {
 //                 degerin ta kendisi cikar (kontrol: false, gozle acik/yikanmis).
 void editor_apply_theme(float scale, bool srgb_target);
 
+// --- Palet DISA ACIK ---------------------------------------------------------
+// Editorun uc arayuz katmani (cerceve: menu/arac/durum cubugu, ozellik
+// widget'lari, viewport kaplamasi) AYNI paletten beslensin diye. Renk, stilin
+// RENK UZAYINDADIR: editor_apply_theme(srgb_target=true) sonrasi dogrusaldir ve
+// dogrudan ImGui::PushStyleColor / ImDrawList'e verilir, bir daha CEVRILMEZ.
+// Tema uygulanmadan once (baglam yokken) ham sRGB doner.
+enum class Tone : uint8_t {
+  Bg0, Bg1, Bg2, Bg3, Bg4, Line, Text, TextDim, Accent, AccentHi, AccentLo, Warn, White,
+  AxisX, AxisY, AxisZ, // vec3 rozetleri + eksen gostergesi: kirmizi/yesil/mavi (Unity/Blender gelenegi)
+  Ok, Err,             // durum noktalari: yuklendi / yuklenemedi
+  Count
+};
+// out[4] = r,g,b,a (0..1). Gecersiz t: Text.
+void editor_tone(Tone t, float out[4]);
+// Metni max_w piksele sigacak sekilde "…" ile kirpar (UTF-8 sinirinda keser).
+// ImGui baglami gerekir (CalcTextSize). Sigiyorsa oldugu gibi kopyalar. out her
+// zaman NUL ile biter. Donus: yazilan uzunluk (bayt).
+uint32_t editor_ellipsize(const char *s, float max_w, char *out, uint32_t cap);
+
 class EditorUi {
 public:
   // rp/subpass: ImGui'nin cizecegi gecis (renk subpass'i). image_count: swapchain

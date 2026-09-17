@@ -61,24 +61,24 @@ constexpr CommandDesc k_defaults[] = {
     // taramasi ikisini de gorur.
     {CommandId::EditRedo, CommandCategory::Edit, kCmdNone, chord_of(kModCtrl, kKeyY), chord_of(kModCtrl | kModShift, kKeyZ), "duzen.yinele",
      "Yinele", "Geri alinan eylemi yeniden uygular"},
-    {CommandId::EditDuplicate, CommandCategory::Edit, kCmdUndoable, kChordNone, kChordNone, "duzen.ekle", "Ekle / cogalt",
+    {CommandId::EditDuplicate, CommandCategory::Edit, kCmdUndoable, kChordNone, kChordNone, "duzen.ekle", "Ekle / \xC3\xA7o\xC4\x9F""alt",
      "Secili varlik varsa kopyasini, yoksa yeni bir varlik ekler"},
     {CommandId::EditDelete, CommandCategory::Edit, kCmdUndoable | kCmdNeedsSelection, kKeyDelete, kChordNone, "duzen.sil", "Sil",
      "Secili varliklarin tamamini siler (tek geri al getirir)"},
-    {CommandId::SelectAll, CommandCategory::Select, kCmdNone, chord_of(kModCtrl, kKeyA), kChordNone, "secim.tumu", "Tumunu sec",
+    {CommandId::SelectAll, CommandCategory::Select, kCmdNone, chord_of(kModCtrl, kKeyA), kChordNone, "secim.tumu", "T\xC3\xBCm\xC3\xBCn\xC3\xBC se\xC3\xA7",
      "Sahnedeki butun varliklari secime alir"},
-    {CommandId::SelectClear, CommandCategory::Select, kCmdNeedsSelection, kKeyEscape, kChordNone, "secim.temizle", "Secimi temizle",
+    {CommandId::SelectClear, CommandCategory::Select, kCmdNeedsSelection, kKeyEscape, kChordNone, "secim.temizle", "Se\xC3\xA7imi temizle",
      "Secimi bosaltir"},
-    {CommandId::ViewGizmos, CommandCategory::View, kCmdCheckable, kKeyG, kChordNone, "gorunum.gizmolar", "Gizmolari ac/kapa",
+    {CommandId::ViewGizmos, CommandCategory::View, kCmdCheckable, kKeyG, kChordNone, "gorunum.gizmolar", "Gizmolar\xC4\xB1 a\xC3\xA7/kapa",
      "Isik yaricapi, golge hacmi ve gunes oku tel cizimleri"},
-    {CommandId::GizmoTranslate, CommandCategory::Gizmo, kCmdCheckable, kKeyT, kChordNone, "gizmo.tasi", "Tasi",
+    {CommandId::GizmoTranslate, CommandCategory::Gizmo, kCmdCheckable, kKeyT, kChordNone, "gizmo.tasi", "Ta\xC5\x9F\xC4\xB1",
      "ImGuizmo kipi: tasima"},
-    {CommandId::GizmoRotate, CommandCategory::Gizmo, kCmdCheckable, kKeyR, kChordNone, "gizmo.dondur", "Dondur", "ImGuizmo kipi: dondurme"},
+    {CommandId::GizmoRotate, CommandCategory::Gizmo, kCmdCheckable, kKeyR, kChordNone, "gizmo.dondur", "D\xC3\xB6nd\xC3\xBCr", "ImGuizmo kipi: dondurme"},
     // Dikkat: ham S. editor_app.cpp bugun bunu `key_down[S] && !key_down[CTRL]`
     // diye ELDE ayikliyordu (Ctrl+S kaydederken gizmo kipi de degismesin diye).
     // Bilesim esitligi degistiricileri DE karsilastirdigi icin o ayiklama artik
     // kendiliginden dogru: Ctrl basiliyken ham S ESLESMEZ.
-    {CommandId::GizmoScale, CommandCategory::Gizmo, kCmdCheckable, kKeyS, kChordNone, "gizmo.olcekle", "Olcekle", "ImGuizmo kipi: olcekleme"},
+    {CommandId::GizmoScale, CommandCategory::Gizmo, kCmdCheckable, kKeyS, kChordNone, "gizmo.olcekle", "\xC3\x96l\xC3\xA7""ekle", "ImGuizmo kipi: olcekleme"},
     {CommandId::PlayToggle, CommandCategory::Play, kCmdCheckable, kChordNone, kChordNone, "oynat.baslat_durdur", "Oynat / Durdur",
      "Sim'i sabit adimda calistirir; durunca govdeler kaldirilir"},
 };
@@ -159,7 +159,7 @@ const char *key_name(Chord k) {
   }
 }
 
-constexpr const char *k_category_names[kCommandCategoryCount] = {"Dosya", "Duzen", "Secim", "Gorunum", "Gizmo", "Oynat"};
+constexpr const char *k_category_names[kCommandCategoryCount] = {"Dosya", "D\xC3\xBCzen", "Se\xC3\xA7im", "G\xC3\xB6r\xC3\xBCn\xC3\xBCm", "Gizmo", "Oynat"};
 
 // id -> dizi indeksi. Gecersiz id icin kCommandCount (= "yok") doner.
 uint32_t index_of(CommandId id) {
