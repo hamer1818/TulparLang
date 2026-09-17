@@ -27,13 +27,44 @@ namespace tulpar::engine::renderer {
 constexpr uint32_t kMeshletMaxVertices = 64;
 constexpr uint32_t kMeshletMaxTriangles = 124;
 
+// Normal konisi: kumedeki TUM ucgen normallerini kapsayan en dar koni.
+// Kamera bu koninin "arka" tarafindaysa kumenin HER ucgeni arka yuzdur ve
+// kume HIC cizilmeden atlanabilir -- vertex donusumu bile yapilmaz.
+// meshoptimizer'in gercek davranisi (meshletutils.cpp:220 dogrulandi):
+//   * koni yarim kureden genisse (normaller cok dagilmis) DEJENERE sayilir:
+//     cutoff = 1 ve eksen SIFIR birakilir -> test hicbir zaman elemez.
+//   * tamamen DUZ bir kume icin cutoff = sqrt(1 - 1) = 0 -> tam arkadan
+//     bakildiginda elenir.
+// Bu yuzden varsayilan eksen {0,0,0}: insa edilmemis bir Meshlet ASLA
+// yanlislikla elenmez. (Eksen {0,0,1} olsaydi -Z'den bakan kamera onu
+// arka yuz sanardi.)
+struct MeshletCone {
+  Vec3 apex{0, 0, 0};
+  Vec3 axis{0, 0, 0};
+  float cutoff = 1.0f;
+};
+
 struct Meshlet {
   uint32_t vertex_offset = 0;   // meshlet_vertices[] icindeki baslangic
   uint32_t triangle_offset = 0; // meshlet_triangles[] icindeki baslangic (bayt)
   uint32_t vertex_count = 0;
   uint32_t triangle_count = 0;
-  Aabb bounds{}; // dunya/model uzayi kutusu -- kume basina kirpma icin
+  Aabb bounds{};   // model uzayi kutusu -- frustum kirpmasi icin
+  Sphere sphere{}; // meshoptimizer'in kure siniri -- koni testi BUNU ister
+  MeshletCone cone{};
 };
+
+// Arka-yuz kume elemesi. meshoptimizer'in kendi belgesindeki, TEPE NOKTASI
+// GEREKTIRMEYEN formul (Real-Time Rendering 4th ed., 19.3):
+//   dot(center - kamera, axis) >= cutoff * |center - kamera| + radius
+// Tepe noktali surum biraz daha kesin, ama zaten kure siniriyla frustum
+// kirpmasi yaptigimiz icin bu surum tercih edilir (tek veri kumesi).
+// true => kume TAMAMEN arka yuz, cizilmesine gerek YOK.
+inline bool meshlet_backfacing(const Meshlet &m, Vec3 camera_position) {
+  const Vec3 d = m.sphere.center - camera_position;
+  const float len = length(d);
+  return dot(d, m.cone.axis) >= m.cone.cutoff * len + m.sphere.radius;
+}
 
 // Cagiranin ayirmasi gereken EN KOTU DURUM boyutlari.
 struct MeshletCapacity {
@@ -54,11 +85,14 @@ struct MeshletBuildResult {
 // &verts[0].pos verilebilir).
 // cone_weight: 0 = yalnizca yerel yogunluk, 1 = normal konisine agirlik ver
 // (arka-yuz kume elemesi icin); meshoptimizer'in onerisi 0.0-0.5 arasi.
+// VARSAYILAN 0.25: 0 verilirse kumeler normal yonune hic bakilmadan
+// olusturulur, konileri genis cikar ve arka-yuz elemesi neredeyse HIC
+// calismaz -- yani hesaplanan koni verisi bosa gider.
 // out_* diziler meshlet_capacity() ile ONCEDEN ayrilmis olmalidir.
 MeshletBuildResult build_meshlets(const uint32_t *indices, uint32_t index_count, const float *positions,
                                   uint32_t vertex_count, uint32_t position_stride, Meshlet *out_meshlets,
                                   uint32_t *out_vertex_indices, uint8_t *out_triangles,
                                   uint32_t max_vertices = kMeshletMaxVertices,
-                                  uint32_t max_triangles = kMeshletMaxTriangles, float cone_weight = 0.0f);
+                                  uint32_t max_triangles = kMeshletMaxTriangles, float cone_weight = 0.25f);
 
 } // namespace tulpar::engine::renderer

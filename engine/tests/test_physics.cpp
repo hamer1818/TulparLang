@@ -121,3 +121,110 @@ ENGINE_TEST(physics_runs_on_fiber_job_system_same_hash) {
   js.shutdown();
 }
 
+ENGINE_TEST(physics_character_controller) {
+  static SystemArena sys;
+  sys.reserve(4u << 20, "phys-char");
+  PhysicsConfig cfg;
+  cfg.threads = 1;
+  cfg.max_characters = 1;
+  Physics ph;
+  CHECK(ph.init(sys, cfg));
+
+  // Zemin: 50x1x50 box at y=-1 (top surface is at y=0)
+  ph.add_box({50, 1, 50}, {0, -1, 0}, Quat::identity(), false);
+
+  // Karakter havada (y = 5) dogar
+  CharacterConfig ccfg;
+  ccfg.position = {0, 5, 0};
+  CharacterId cid = ph.add_character(ccfg);
+  CHECK(cid.valid());
+  CHECK(!ph.character_grounded(cid));
+
+  // 1 sn bekle, dusmesi lazim
+  for (int i = 0; i < 60; i++) {
+    ph.step(1.0f / 60.0f, 1);
+  }
+
+  // Havadan dustu ve zemine oturdu
+  CHECK(ph.character_grounded(cid));
+  Vec3 pos = ph.character_position(cid);
+  CHECK(pos.y > -0.1f && pos.y < 0.1f); // zeminin ustu 0
+
+  // saga yuru
+  ph.set_character_input(cid, {2, 0, 0}, false);
+  for (int i = 0; i < 30; i++) {
+    ph.step(1.0f / 60.0f, 1);
+  }
+
+  pos = ph.character_position(cid);
+  CHECK(pos.x > 0.5f); // saga hareket etmis olmali
+  CHECK(pos.y > -0.1f && pos.y < 0.1f);
+
+  // Ziplama tetikleyelim
+  ph.set_character_input(cid, {0, 0, 0}, true);
+  ph.step(1.0f / 60.0f, 1);
+  
+  // Havada olmali
+  CHECK(!ph.character_grounded(cid));
+  pos = ph.character_position(cid);
+  CHECK(pos.y > 0.05f);
+
+  ph.shutdown();
+}
+
+ENGINE_TEST(physics_raycast) {
+  SystemArena sys;
+  sys.reserve(16u << 20, "phys");
+  PhysicsConfig cfg;
+  Physics ph;
+  CHECK(ph.init(sys, cfg) == true);
+
+  // Kutu ekle: Merkez (0,0,0), boyut 2x2x2
+  BodyId box = ph.add_box({1.0f, 1.0f, 1.0f}, {0, 0, 0}, Quat::identity(), false);
+  
+  // Kutunun hemen ustunden (0,5,0) asagiya isin
+  auto hit1 = ph.raycast({0, 5.0f, 0}, {0, -1.0f, 0}, 10.0f);
+  CHECK(hit1.hit == true);
+  CHECK(hit1.body_id.v == box.v);
+  CHECK(hit1.point.y > 0.99f && hit1.point.y < 1.01f); // Yuzeye carpma noktasi: Y = 1
+  CHECK(hit1.normal.y > 0.99f); // Yuzey normali Y ekseni boyunca
+  CHECK(hit1.fraction > 0.39f && hit1.fraction < 0.41f); // (5 - 1) = 4 birim -> 4/10 = 0.4
+
+  // Uzaktan iskalayan isin
+  auto hit2 = ph.raycast({5.0f, 5.0f, 0}, {0, -1.0f, 0}, 10.0f);
+  CHECK(hit2.hit == false);
+
+  ph.shutdown();
+}
+
+ENGINE_TEST(physics_overlap_queries) {
+  SystemArena sys;
+  sys.reserve(16u << 20, "phys");
+  PhysicsConfig cfg;
+  Physics ph;
+  CHECK(ph.init(sys, cfg) == true);
+
+  BodyId floor = ph.add_box({50, 1, 50}, {0, -1, 0}, Quat::identity(), false);
+  BodyId b1 = ph.add_box({1, 1, 1}, {0, 2, 0}, Quat::identity(), true);
+  BodyId b2 = ph.add_box({1, 1, 1}, {5, 2, 0}, Quat::identity(), true);
+
+  Physics::OverlapResult box_results[4];
+  uint32_t count = ph.overlap_box({0, 2, 0}, {2.0f, 2.0f, 2.0f}, Quat::identity(), box_results, 4);
+  CHECK(count >= 1);
+  bool found_b1 = false;
+  for (uint32_t i = 0; i < count; i++) {
+    if (box_results[i].body_id.v == b1.v) found_b1 = true;
+  }
+  CHECK(found_b1 == true);
+
+  Physics::OverlapResult sphere_results[4];
+  count = ph.overlap_sphere({5, 2, 0}, 2.5f, sphere_results, 4);
+  CHECK(count >= 1);
+  bool found_b2 = false;
+  for (uint32_t i = 0; i < count; i++) {
+    if (sphere_results[i].body_id.v == b2.v) found_b2 = true;
+  }
+  CHECK(found_b2 == true);
+
+  ph.shutdown();
+}

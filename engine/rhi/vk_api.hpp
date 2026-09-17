@@ -85,6 +85,11 @@ struct VkApi {
   PFN_vkDestroyPipelineCache vkDestroyPipelineCache = nullptr;
   PFN_vkGetPipelineCacheData vkGetPipelineCacheData = nullptr;
   PFN_vkCreateGraphicsPipelines vkCreateGraphicsPipelines = nullptr;
+  // GPU-driven cizim (Vulkan 1.0 CEKIRDEGI -- uzanti gerekmez, %100 cihaz):
+  // compute ile kume elemesi + tek indirect cizim cagrisi.
+  PFN_vkCreateComputePipelines vkCreateComputePipelines = nullptr;
+  PFN_vkCmdDispatch vkCmdDispatch = nullptr;
+  PFN_vkCmdDrawIndexedIndirect vkCmdDrawIndexedIndirect = nullptr;
   PFN_vkDestroyPipeline vkDestroyPipeline = nullptr;
   PFN_vkCreateQueryPool vkCreateQueryPool = nullptr;
   PFN_vkDestroyQueryPool vkDestroyQueryPool = nullptr;

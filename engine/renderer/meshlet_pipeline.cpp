@@ -66,6 +66,22 @@ MeshletBuildResult build_meshlets(const uint32_t *indices, uint32_t index_count,
       box = merge(box, Vec3{p[0], p[1], p[2]});
     }
     out.bounds = box;
+
+    // Kume siniri + NORMAL KONISI. Bu veriyi meshoptimizer bedava uretiyor
+    // (kumeyi olustururken normalleri zaten tariyor); cagirmamak, hesaplanmis
+    // bir kazanci CÖPE ATMAK olurdu. Koni sayesinde tamamen arka yuze bakan
+    // kumeler vertex donusumune bile girmeden atlanir.
+    // NOT: out_vertex_indices / out_triangles bu dongude DEGISTIRILMIYOR,
+    // bu yuzden meshlet i'nin verisini okumak guvenlidir.
+    const meshopt_Bounds mb = meshopt_computeMeshletBounds(
+        out_vertex_indices + m.vertex_offset, out_triangles + m.triangle_offset, m.triangle_count,
+        positions, vertex_count, position_stride);
+    out.sphere.center = Vec3{mb.center[0], mb.center[1], mb.center[2]};
+    out.sphere.radius = mb.radius;
+    out.cone.apex = Vec3{mb.cone_apex[0], mb.cone_apex[1], mb.cone_apex[2]};
+    out.cone.axis = Vec3{mb.cone_axis[0], mb.cone_axis[1], mb.cone_axis[2]};
+    out.cone.cutoff = mb.cone_cutoff;
+
     out_meshlets[i] = out;
   }
 

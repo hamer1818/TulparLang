@@ -57,6 +57,8 @@ add_library(engine_core STATIC
     core/jobs/fiber.cpp
     core/jobs/job_system.cpp
     core/jobs/job_graph.cpp
+    core/memory/ebr.cpp
+    core/event.cpp
     core/math/bvh.cpp
     core/math/spatial_hash.cpp
     core/math/nn.cpp
@@ -149,7 +151,7 @@ else()
 endif()
 
 # --- audio (L3): miniaudio (vendored, engine/third_party/miniaudio, MIT-0) ---
-add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/spatial.cpp audio/miniaudio_impl.c)
+add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/spatial.cpp audio/dsp.cpp audio/miniaudio_impl.c)
 target_include_directories(engine_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio)
 target_link_libraries(engine_audio PUBLIC engine_core ${CMAKE_DL_LIBS})
 if(APPLE) # CoreAudio arka ucu: cerceveler (CI macOS; yerelde denenmedi)
@@ -181,6 +183,10 @@ add_library(engine_sim STATIC
     sim/lag_compensation.cpp
     sim/camera_rig.cpp
     sim/behavior_tree.cpp
+    sim/state_machine.cpp
+    sim/boids.cpp
+    sim/npc_motivation.cpp
+    sim/neo_riemannian.cpp
     sim/chaos_physics.cpp
     sim/fluid_system.cpp
     sim/quantum_gen.cpp
@@ -204,7 +210,8 @@ add_dependencies(engine_sim engine_layer_check)
 # third_party/'sinde yok. Dosya kaynak olarak duruyor (sim/rollback.hpp ile
 # ayni durum: "kod hazir, bagimlilik/kablolama bekliyor").
 add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp renderer/indirect_cull.cpp
-    renderer/meshlet_pipeline.cpp renderer/lighting_pipeline.cpp renderer/debug_draw.cpp)
+    renderer/meshlet_pipeline.cpp renderer/lighting_pipeline.cpp renderer/debug_draw.cpp
+    renderer/cluster_lod.cpp renderer/cluster_cull.cpp)
 target_include_directories(engine_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/debug_draw)
 target_link_libraries(engine_renderer PUBLIC engine_rhi engine_meshopt)
 target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
@@ -213,7 +220,7 @@ add_dependencies(engine_renderer engine_layer_check)
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
 add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp
     content/voxel.cpp content/morph.cpp content/terrain.cpp content/lod_select.cpp content/water_wave.cpp
-    content/pack.cpp content/wind.cpp content/occlusion.cpp
+    content/pack.cpp content/wind.cpp content/occlusion.cpp content/clod_format.cpp
     content/device_tier.cpp content/dynamic_quality.cpp
     content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
@@ -292,6 +299,17 @@ set(ENGINE_TEST_SOURCES
     tests/test_spatial_hash.cpp
     tests/test_debug_draw.cpp
     tests/test_timers.cpp
+    tests/test_state_machine.cpp
+    tests/test_event_bus.cpp
+    tests/test_boids.cpp
+    tests/test_npc_motivation.cpp
+    tests/test_neo_riemannian.cpp
+    tests/test_ebr.cpp
+    tests/test_dsp.cpp
+    tests/test_cluster_lod.cpp
+    tests/test_meshlet_pipeline.cpp
+    tests/test_clod_format.cpp
+    tests/test_cluster_cull.cpp
     tests/test_anticheat.cpp
     tests/test_desync.cpp
     tests/test_device_tier.cpp
@@ -330,6 +348,15 @@ if(NOT ANDROID)
     add_executable(engine_texpack tools/texpack.cpp)
     target_link_libraries(engine_texpack PRIVATE engine_content engine_core ${CMAKE_DL_LIBS})
     target_compile_options(engine_texpack PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
+    # --- engine_clodbake: glTF -> cluster LOD DAG -> .clod (sahne derleyicisinin
+    # GEOMETRI dilimi). MeshDecimationTools (MIT) burada derlenir; sadelestirme
+    # varlik basina BIR KEZ, cevrimdisi yapilir -- cihazda maliyeti sifirdir.
+    add_executable(engine_clodbake tools/clodbake.cpp third_party/mdt/MeshDecimationTools.cpp)
+    target_link_libraries(engine_clodbake PRIVATE engine_content engine_renderer engine_core ${CMAKE_DL_LIBS})
+    target_include_directories(engine_clodbake PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+    # MeshDecimationTools STL/exception KULLANMIYOR, bu yuzden motorun kendi
+    # derleme bayraklari burada da uygulanabilir.
+    target_compile_options(engine_clodbake PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
     # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
     add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/demo_scene.cpp app/scene_format.cpp)
     target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})

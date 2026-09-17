@@ -15,17 +15,50 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SHADERS = os.path.join(os.path.dirname(HERE), "rhi", "shaders")
 
 
-def main():
+# Iki derleyici de kabul edilir. glslc (shaderc) TERCIH EDILIR cunku
+# depodaki mevcut basliklar onunla uretildi; glslang ayni kaynagi GECERLI
+# ama BAYT OLARAK FARKLI SPIR-V'ye cevirir (farkli optimizasyon gecisleri).
+# Ikisi de yoksa betik, once oldugu gibi, calismaz -- ama artik SEBEBI
+# soyluyor ve glslang'in da aranmis oldugunu belirtiyor.
+def find_compiler():
     glslc = shutil.which("glslc")
-    if not glslc:
-        print("glslc yok (shaderc paketi)", file=sys.stderr)
+    if glslc:
+        return ("glslc", glslc)
+    glslang = shutil.which("glslang") or shutil.which("glslangValidator")
+    if glslang:
+        return ("glslang", glslang)
+    return (None, None)
+
+
+STAGE = {".vert": "vert", ".frag": "frag", ".comp": "comp"}
+
+
+def compile_one(kind, exe, src, ext):
+    if kind == "glslc":
+        return subprocess.run([exe, "-O", "--target-env=vulkan1.1", "-o", "-", src],
+                              capture_output=True)
+    # glslang stdout'a SPIR-V yazmaz; gecici dosya uzerinden gider.
+    tmp = src + ".tmp.spv"
+    r = subprocess.run([exe, "-V", "-O", "--target-env", "vulkan1.1",
+                        "-S", STAGE[ext], "-o", tmp, src], capture_output=True)
+    if r.returncode == 0:
+        with open(tmp, "rb") as f:
+            r.stdout = f.read()
+        os.remove(tmp)
+    return r
+
+
+def main():
+    kind, exe = find_compiler()
+    if not exe:
+        print("shader derleyicisi yok: glslc (shaderc) ya da glslang gerekli", file=sys.stderr)
         return 2
+    print("derleyici: %s (%s)" % (kind, exe))
     for name in sorted(os.listdir(SHADERS)):
         if not name.endswith((".vert", ".frag", ".comp")):
             continue
         src = os.path.join(SHADERS, name)
-        spv = subprocess.run([glslc, "-O", "--target-env=vulkan1.1", "-o", "-", src],
-                             capture_output=True)
+        spv = compile_one(kind, exe, src, os.path.splitext(name)[1])
         if spv.returncode != 0:
             print(spv.stderr.decode(), file=sys.stderr)
             return 1
