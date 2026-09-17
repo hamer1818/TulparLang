@@ -24,7 +24,12 @@ ViewportPick viewport_map_mouse(const ViewportRect &panel, float mouse_x, float 
   ViewportPick p; // varsayilan: gecersiz, -1 (bkz. baslikta SOZLESME)
   if (!(panel.w > 0.0f) || !(panel.h > 0.0f) || tex_w == 0 || tex_h == 0) return p;
   const float dx = mouse_x - panel.x, dy = mouse_y - panel.y;
-  if (dx < 0.0f || dy < 0.0f || dx >= panel.w || dy >= panel.h) return p; // yari-acik: sag/alt kenar disarida
+  // Kontrol OLUMLU yazildi ("icerde olmasi gereken sart saglaniyor mu"), cunku
+  // olumsuz bicim NaN'i ELEMIYORDU: `dx < 0` ve `dx >= panel.w` NaN icin ikisi
+  // de false, yani NaN bir fare konumu GECERLI secim sayilip NaN isin
+  // atiliyordu (olculdu). Olumlu bicimde NaN her kosulu dusuruyor. Normal
+  // noktalarda davranis BIREBIR ayni; yari-acik aralik korunuyor (sag/alt disarida).
+  if (!(dx >= 0.0f) || !(dy >= 0.0f) || !(dx < panel.w) || !(dy < panel.h)) return p;
   p.valid = true;
   p.u = dx / panel.w;
   p.v = dy / panel.h;

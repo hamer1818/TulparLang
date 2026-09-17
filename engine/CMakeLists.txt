@@ -351,7 +351,7 @@ if(NOT ANDROID)
     # Prototip yok: Vulkan fonksiyonlari bizim dlopen'li yukleyiciden (ImGui_ImplVulkan_LoadFunctions).
     target_compile_definitions(engine_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
     target_compile_options(engine_imgui PRIVATE -fno-exceptions -fno-rtti -w)
-    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp app/editor_ui.cpp app/editor_viewport.cpp tests/test_bridge.cpp)
+    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp app/editor_ui.cpp app/editor_viewport.cpp app/editor_commands.cpp tests/test_bridge.cpp)
 endif()
 
 add_executable(engine_tests ${ENGINE_TEST_SOURCES} app/virtual_stick.cpp core/memory/alloc_gate_override.cpp)
@@ -378,7 +378,7 @@ if(NOT ANDROID)
     # derleme bayraklari burada da uygulanabilir.
     target_compile_options(engine_clodbake PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
     # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
-    add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/editor_viewport.cpp app/demo_scene.cpp)
+    add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/editor_viewport.cpp app/editor_commands.cpp app/demo_scene.cpp)
     target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})
     target_include_directories(engine_editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
     target_compile_options(engine_editor PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
