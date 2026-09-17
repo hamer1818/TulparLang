@@ -84,9 +84,32 @@ struct FixedStep {
   uint32_t tick = 0;
   uint32_t max_ticks_per_frame = 4;
   uint32_t clipped = 0;
-  // Kare suresini ekler; kac tick kosulacagini doner.
+
+  // --- Zaman olcegi / duraklatma -------------------------------------
+  // 0.5 = agir cekim, 2.0 = iki kat hizli, 0 = donmus.
+  float time_scale = 1.0f;
+  bool paused = false;
+  // Duraklatmisken "bir kare ilerle" (hata ayiklama/editor). > 0 iken
+  // duraklatma gecici olarak delinir ve sayac azalir.
+  uint32_t pending_steps = 0;
+
+  // **KRITIK:** olcek `step_s`e DEGIL, GELEN KARE SURESINE uygulanir.
+  // `step_s`i olceklemek her tick'in integrasyon adimini degistirirdi;
+  // o zaman agir cekimde fizik BASKA bir sonuc verir, kayit/replay ve
+  // rollback gecersizlesirdi. Girdiyi olceklemek ise her tick'i BIT-TAM
+  // AYNI birakir; yalnizca kare basina DUSEN TICK SAYISI degisir.
+  // Yani agir cekim, belirlenimi BOZMAZ.
   uint32_t advance(float frame_s) {
-    accumulator += frame_s;
+    if (pending_steps > 0) { // kare-ilerlet duraklatmayi ezer
+      pending_steps--;
+      tick++;
+      return 1;
+    }
+    // Duraklatma birikimi ATMAZ, DONDURUR: devam edince kalinan yerden
+    // surer, sicrama olmaz.
+    if (paused || !(time_scale > 0.0f)) return 0;
+
+    accumulator += frame_s * time_scale;
     uint32_t n = 0;
     while (accumulator >= step_s && n < max_ticks_per_frame) {
       accumulator -= step_s;
@@ -96,8 +119,8 @@ struct FixedStep {
       clipped++;
       accumulator = 0; // birikimi at: yakalamaya calisma, sarmal olur
     }
+    tick += n;
     return n;
   }
 };
-
 } // namespace tulpar::engine::sim

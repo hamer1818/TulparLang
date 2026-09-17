@@ -56,9 +56,41 @@ KAPSAM_DISI = {
         "ui.vert — C++ tarafi struct DEGIL: renderer.cpp'de anonim `const float push[5]`.",
     "push_constant:Push(idx)":
         "motion.vert — C++ tarafi struct DEGIL: renderer.cpp'de anonim `const uint32_t idx[4]`.",
+    # --- PR #322 kume elemesi ------------------------------------------------
+    # cluster_cull.comp'un CPU karsiligi renderer/cluster_cull.hpp'de ve yerlesimi
+    # ORADA static_assert'lerle cakili (GpuCluster 72 B, DrawIndexedIndirectCommand
+    # 20 B, ClusterCullPush 128 B). Bu basligi CPP_HEADERS'a EKLEMEYI denedim ve
+    # GERI ALDIM: aday struct kumesi buyuyunce eslestirici main'in ZATEN TEMIZ
+    # olan PostPush ve MatBlock bloklarini yanlis struct'lara esledi (+4 ve +-16
+    # bayt sahte kayma bildirdi). Kapinin dogrulugunu dusuren bir genisletme,
+    # kapsam bosluğundan kotudur. Bu yuzden kapsam disi — ama SESSIZCE degil,
+    # gerekcesiyle; shader'in yerlesimi kendi static_assert'leriyle korunuyor.
+    "cluster_cull.comp:ssbo:set0.binding0":
+        "Kume SSBO'su: `GpuCluster clusters[]` — STRUCT DIZISI. Denetimin ad "
+        "cozucusu bu bicimi henuz adlandiramiyor ('m0[0].m9'); depodaki oteki "
+        "SSBO'lar duz skaler dizi. CPU karsiligi cluster_cull.hpp::GpuCluster ve "
+        "yerlesimi orada static_assert(sizeof)==72 ile cakili.",
+    "cluster_cull.comp:ssbo:set0.binding1":
+        "Cizim komutu SSBO'su: `DrawCmd draws[]` — ayni struct-dizisi sinirlamasi. "
+        "CPU karsiligi cluster_cull.hpp::DrawIndexedIndirectCommand, "
+        "static_assert(sizeof)==20.",
+    "push_constant:Push(planes,camera,proj,znear,screen_height,threshold_px,cluster_count)":
+        "cluster_cull.comp — CPU karsiligi cluster_cull.hpp::ClusterCullPush (static_assert(sizeof)==128).",
 }
 
 SCALAR_KIND = {"f32": "float", "i32": "int32_t", "u32": "uint32_t"}
+
+
+def _scope_key(shader, sb):
+    """KAPSAM_DISI anahtari — ad ayristirmasi asamasi icin. SHADER ADIYLA
+    nitelenir: glslc blok ADINI her zaman birakmiyor (`sb.name == "?"`), ve
+    nitelemeden `ssbo:set0.binding0:?` gibi bir anahtar BASKA shader'lari da
+    sessizce kapsam disina alirdi — kapsam genis yazilamaz.
+    Push sabitleri set/binding tasimaz; onlarin gruplamasi C++ karsiligina gore
+    kuruluyor (bkz. "C: gruplama"), bu asamada anahtarlanmazlar."""
+    if sb.kind == "push_constant":
+        return None
+    return "%s:%s:set%d.binding%d" % (shader, sb.kind, sb.set, sb.binding)
 
 
 # =========================================================================
@@ -91,7 +123,13 @@ def glsl_names(path):
         quals, _ro, kw, name, body, inst = m.groups()
         q = {k.strip(): True for k in quals.split(",")}
         push = any(k.startswith("push_constant") for k in q)
-        dset = binding = -1
+        # `set` YAZILMAZSA VARSAYILAN 0 (GLSL/Vulkan kurali) — SPIR-V yansimasi
+        # da 0 bildirir. Burada -1 birakmak, `set` yazmayan HER blogu
+        # "GLSL bildirimi 0 aday" ile KIRMIZI yapardi; depodaki ilk boyle
+        # shader (cluster_cull.comp, `layout(std430, binding = 0)`) tam olarak
+        # bunu tetikledi. `binding` -1 kalmaya devam ediyor: onun varsayilani
+        # yok, yazilmamissa gercekten eslestirilemez.
+        dset, binding = 0, -1
         for k in q:
             mm = re.match(r"set\s*=\s*(\d+)", k)
             if mm:
@@ -149,6 +187,13 @@ def collect_gpu_blocks(verbose=False):
         sblocks = mod.blocks()
         # SPIR-V blogunu GLSL bildirimiyle esle: push tek, otekiler set/binding.
         for sb in sblocks:
+            # GEREKCELI kapsam disi: ad ayristirmasi bu blok icin YAPILMIYOR.
+            # KAPSAM_DISI'na yazmak bilincli bir karar (sozlugun ustundeki nota
+            # bak); burada da onurlandirilmali, yoksa kayitli bir blok yine de
+            # "yolu adlandirilamadi" ile KIRMIZI olur ve kayit hicbir ise
+            # yaramaz. Kayitsiz eslesmeyen blok KIRMIZI olmaya devam ediyor.
+            if _scope_key(shader, sb) in KAPSAM_DISI:
+                continue
             cand = [g for g in gblocks if g["kind"] == sb.kind and
                     (sb.kind == "push_constant" or (g["set"] == sb.set and g["binding"] == sb.binding))]
             if len(cand) != 1:

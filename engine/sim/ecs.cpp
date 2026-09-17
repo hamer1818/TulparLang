@@ -1,4 +1,5 @@
 #include "sim/ecs.hpp"
+#include <cstddef> // size_t — libc++ (macOS) gecisli getirmiyor
 
 #include "platform/fatal.hpp"
 
@@ -194,6 +195,47 @@ uint64_t World::content_hash() const {
     }
   }
   return h;
+}
+
+uint64_t World::snapshot_bytes() const {
+  return (uint64_t)sizeof(EntityRec) * cfg_.max_entities + (uint64_t)sizeof(uint32_t) * cfg_.max_entities +
+         sizeof(free_top_) + (uint64_t)sizeof(Archetype) * cfg_.max_archetypes + sizeof(arch_count_) +
+         (uint64_t)sizeof(Chunk) * cfg_.max_chunks + sizeof(chunk_count_) +
+         (uint64_t)cfg_.max_chunks * cfg_.chunk_bytes + sizeof(stats_);
+}
+
+void World::snapshot(void *dst) const {
+  uint8_t *p = static_cast<uint8_t *>(dst);
+  auto put = [&](const void *src, size_t n) { std::memcpy(p, src, n); p += n; };
+  put(entities_, sizeof(EntityRec) * (size_t)cfg_.max_entities);
+  put(free_entities_, sizeof(uint32_t) * (size_t)cfg_.max_entities);
+  put(&free_top_, sizeof(free_top_));
+  put(archs_, sizeof(Archetype) * (size_t)cfg_.max_archetypes);
+  put(&arch_count_, sizeof(arch_count_));
+  put(chunks_, sizeof(Chunk) * (size_t)cfg_.max_chunks);
+  put(&chunk_count_, sizeof(chunk_count_));
+  // Chunk struct'lari (yukarida) kopyalandi ama gercek satir verisi ayri
+  // arena bloklarinda yasar (chunks_[i].data) -- bunlar da tek tek yazilir.
+  for (uint32_t i = 0; i < cfg_.max_chunks; i++) put(chunks_[i].data, cfg_.chunk_bytes);
+  put(&stats_, sizeof(stats_));
+}
+
+void World::restore(const void *src) {
+  const uint8_t *p = static_cast<const uint8_t *>(src);
+  auto get = [&](void *dst, size_t n) { std::memcpy(dst, p, n); p += n; };
+  get(entities_, sizeof(EntityRec) * (size_t)cfg_.max_entities);
+  get(free_entities_, sizeof(uint32_t) * (size_t)cfg_.max_entities);
+  get(&free_top_, sizeof(free_top_));
+  get(archs_, sizeof(Archetype) * (size_t)cfg_.max_archetypes);
+  get(&arch_count_, sizeof(arch_count_));
+  get(chunks_, sizeof(Chunk) * (size_t)cfg_.max_chunks);
+  get(&chunk_count_, sizeof(chunk_count_));
+  // chunks_[i].data'nin KENDISI (isaretci degeri) yukarida chunks_ ile
+  // birlikte geri yazildi -- ama arena adresleri hicbir zaman degismedigi
+  // icin bu her zaman AYNI degerdir; asagida yalniz o adreslerin ICERIGI
+  // (gercek satir baytlari) geri yaziliyor.
+  for (uint32_t i = 0; i < cfg_.max_chunks; i++) get(chunks_[i].data, cfg_.chunk_bytes);
+  get(&stats_, sizeof(stats_));
 }
 
 } // namespace tulpar::engine::sim

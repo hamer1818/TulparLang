@@ -1,0 +1,129 @@
+// GPU-driven kume elemesi: frustum + surekli LOD kesme (cut) -> indirect
+// cizim komutlari.
+//
+// Bu shader, renderer/cluster_lod.cpp'deki `cluster_lod_select_culled`in
+// BIREBIR GPU portudur. Kesme kurali MeshDecimationTools.h'nin sozlesmesi:
+//   ciz <=> eval(current) <= esik VE eval(coarser) > esik
+// CPU surumu test edilmis durumda (tests/test_cluster_lod.cpp); bu dosya
+// ayni matematigi tekrarlar, boylece ikisi karsilastirilabilir.
+//
+// **Neden compute + indirect, mesh shader degil:** VK_EXT_mesh_shader
+// Android'de ~%5 kapsama, iOS'ta %0. Compute + vkCmdDrawIndexedIndirect ise
+// Vulkan 1.0 CEKIRDEGI -- uzanti gerekmez, %100 cihazda calisir.
+//
+// **Neden sikistirma (compaction) YOK:** elenen kumeler icin komut
+// yazilmaz degil, `instanceCount = 0` yazilir. Sikistirma atomicAdd ile
+// yapilabilirdi ama o zaman CPU gercek cizim sayisini BILEMEZ; ya
+// VK_KHR_draw_indirect_count gerekir (Android'de ~%70, yani zorunlu
+// tutulamaz) ya da bir kare gecikmeli geri okuma. `instanceCount = 0`
+// yolu her cihazda calisir ve elenen kume icin vertex isi SIFIRDIR --
+// yalnizca komut getirme maliyeti kalir.
+//
+// **Belirlenim notu:** bu shader SIMULASYONUN parcasi DEGILDIR. Motorun
+// bit-tam determinizm iddiasi sim katmanini (sabit nokta, -ffp-contract=off)
+// kapsar; gorsel eleme kareden kareye ufak farklar gosterebilir ve bu
+// replay/rollback'i ETKILEMEZ.
+#version 450
+
+layout(local_size_x = 64) in;
+
+// Kume verisi -- content/clod_format.hpp'deki ClodClusterRaw ile AYNI
+// duzen (72 bayt). Yalniz skaler alanlar kullaniliyor: std430'da skaler
+// dizilerde gizli dolgu (padding) OLUSMAZ, bu yuzden C++ tarafiyla
+// yerlesim farki riski yoktur. vec3 kullanilsaydi 16 bayta hizalanirdi.
+struct GpuCluster {
+  float center_x, center_y, center_z;
+  float radius;
+
+  // bu seviyenin hatasi (MdtMeshlet::current_level_error_metric)
+  float cur_x, cur_y, cur_z;
+  float cur_radius;
+  float cur_error;
+
+  // bir ust (kaba) seviyenin hatasi; son seviyede FLT_MAX
+  float coa_x, coa_y, coa_z;
+  float coa_radius;
+  float coa_error;
+
+  uint index_offset;
+  uint index_count;
+  uint geometry;
+  uint level;
+};
+
+layout(std430, binding = 0) readonly buffer Clusters {
+  GpuCluster clusters[];
+};
+
+// VkDrawIndexedIndirectCommand ile ALAN ALAN AYNI (20 bayt):
+//   indexCount, instanceCount, firstIndex, vertexOffset, firstInstance
+struct DrawCmd {
+  uint index_count;
+  uint instance_count;
+  uint first_index;
+  int vertex_offset;
+  uint first_instance;
+};
+
+layout(std430, binding = 1) writeonly buffer Draws {
+  DrawCmd draws[];
+};
+
+layout(push_constant) uniform Push {
+  vec4 planes[6];       //  0..95  frustum, MESH uzayinda (xyz = normal, w = d)
+  vec3 camera;          // 96..107 kamera, MESH uzayinda
+  float proj;           //     108 projection[1][1] = cot(fovy/2)
+  float znear;          //     112 POZITIF
+  float screen_height;  //     116 piksel
+  float threshold_px;   //     120 kac piksel sapmaya izin var
+  uint cluster_count;   //     124
+} pc;                   // toplam 128 bayt = maxPushConstantsSize'in GARANTILI alt siniri
+
+// renderer::cluster_screen_error ile AYNI formul:
+//   error / max(dist - radius, znear) * (proj * 0.5) * yukseklik
+// `- radius`: kurenin kameraya EN YAKIN noktasi. Yoksa kamerayi iceren
+// buyuk bir kume "uzak" sayilip kucuk hata uretir ve yanlis elenir.
+float screen_error(vec3 center, float radius, float error) {
+  float dist = length(center - pc.camera);
+  float near_dist = dist - radius;
+  if (!(near_dist > pc.znear)) near_dist = pc.znear;
+  return error / near_dist * (pc.proj * 0.5) * pc.screen_height;
+}
+
+// Kure tamamen frustum disinda mi? (core/math/vec.hpp'deki
+// intersects(Frustum, Sphere) ile ayni test.)
+bool outside_frustum(vec3 center, float radius) {
+  for (int i = 0; i < 6; i++) {
+    if (dot(pc.planes[i].xyz, center) + pc.planes[i].w + radius < 0.0) return true;
+  }
+  return false;
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= pc.cluster_count) return; // 64'e yuvarlanmis dispatch'in artigi
+
+  GpuCluster c = clusters[i];
+
+  // Komut HER ZAMAN yazilir; eleme `instance_count = 0` ile ifade edilir.
+  // Yazmamak, tamponda onceki karenin verisini birakirdi.
+  DrawCmd cmd;
+  cmd.index_count = c.index_count;
+  cmd.instance_count = 0;
+  cmd.first_index = c.index_offset;
+  cmd.vertex_offset = 0;
+  cmd.first_instance = 0;
+
+  vec3 center = vec3(c.center_x, c.center_y, c.center_z);
+  bool visible = !outside_frustum(center, c.radius);
+
+  if (visible) {
+    // (1) BU seviye yeterince iyi mi?
+    float cur = screen_error(vec3(c.cur_x, c.cur_y, c.cur_z), c.cur_radius, c.cur_error);
+    // (2) Bir UST (kaba) seviye YETERSIZ mi? Yeterliyse onu cizecegiz, bunu degil.
+    float coa = screen_error(vec3(c.coa_x, c.coa_y, c.coa_z), c.coa_radius, c.coa_error);
+    if (cur <= pc.threshold_px && coa > pc.threshold_px) cmd.instance_count = 1;
+  }
+
+  draws[i] = cmd;
+}

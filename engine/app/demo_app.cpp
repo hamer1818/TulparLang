@@ -24,6 +24,7 @@
 #include "rhi/offscreen.hpp"
 #include "rhi/swapchain.hpp"
 #include "rhi/vk_api.hpp"
+#include "sim/camera_rig.hpp"
 #include "sim/schedule.hpp"
 
 namespace tulpar::engine::app {
@@ -379,8 +380,17 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
     }
     uint64_t t1 = platform::now_ns();
     sim_ns += t1 - t0;
-    if (interactive) { Vec3 p = scene.player_position(); cam.target = {p.x, p.y + 0.6f, p.z}; }
-    else cam.angle += dt * 0.15f;
+    if (interactive) {
+      // sim/camera_rig.hpp: DEVAM_PLANI.md Faz B madde 7'nin ("kamera sistemi
+      // -- cogu projenin GERCEKTE takildigi yer") en temel parcasi -- oyuncu
+      // pozisyonuna ANINDA ATLAMAK yerine kare-hizindan bagimsiz ussel
+      // yumusatmayla YAKLASIR (0.15s yari-omur -- FollowCamera'nin kendi
+      // varsayilaniyla AYNI). Carpisma-farkindalik BILINCLI KAPSAM DISI
+      // (camera_rig.hpp'nin kendi basligindaki NOT: fizik-raycast entegrasyonu
+      // gerektirir, ayri bir bahis -- burasi SADECE onun uzerine oturacagi temel).
+      Vec3 p = scene.player_position();
+      cam.target = sim::exponential_smooth(cam.target, Vec3{p.x, p.y + 0.6f, p.z}, 0.15f, dt);
+    } else cam.angle += dt * 0.15f;
     if (running && (headless || have_window)) {
       ENGINE_ZONE("render");
       // En-boy orani GORUNEN yonden; on-dondurmede projeksiyon clip uzayinda dondurulur.

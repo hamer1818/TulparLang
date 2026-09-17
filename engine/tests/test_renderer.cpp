@@ -1839,7 +1839,16 @@ ENGINE_TEST(renderer_pbr_texture_budget) {
   std::printf("    [bilgi] kalibrasyon: bos kare %.3f ms; %d kat ortude dokulu kare %.3f ms (%.2f kat)\n",
               (double)empty_ns / 1e6, layers, (double)tex_ns / 1e6,
               empty_ns ? (double)tex_ns / (double)empty_ns : 0.0);
-  if (tex_ns <= empty_ns * 3) {
+  // SANAL GPU'DA ZAMANLAMA BOLUMU OLCULMEZ. Tile butcesi (yukarisi) analitik ve
+  // her yerde gecerli; ama "uc sampler eklemek kareyi pahalilastirir mi" sorusu
+  // DUVAR SAATIYLE olculuyor ve Apple Paravirtual (CI macOS) o olcumu tasimiyor:
+  // ayni cihaz GPU zaman damgalarini 0.000 ms bildiriyor, yani fragment maliyeti
+  // zaman ekseninde GORUNMUYOR. Olculdu: dokulu yol dokusuzdan HIZLI cikti
+  // (b > a dustu), ki fiziksel olarak anlamsiz — olcum gurultuyu okuyordu.
+  // Ayni koruma test.hpp'de bu cihaz icin zaten belgeli (piksel kapilari).
+  if (test::gpu_is_virtual(dev.caps().device_name)) {
+    skip("sanal GPU (Apple Paravirtual, CI macOS): ornekleme maliyetinin ZAMAN olcumu gercek cihazda");
+  } else if (tex_ns <= empty_ns * 3) {
     std::printf("    [bilgi] 2048 kat ortude bile kare suresi sabit maliyetin 3 katina cikmadi: bu makinede duvar saati "
                 "fragment maliyetine KOR\n");
     skip("ornekleme maliyeti bu makinede olculemiyor (duvar saati sabit gonderim maliyetine bogulu)");

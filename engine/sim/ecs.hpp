@@ -129,6 +129,22 @@ public:
   // archetype/chunk/satir sirasi — ayni islem dizisi ayni ozeti verir.
   uint64_t content_hash() const;
 
+  // Rollback hazirligi (420 madde listesi #5/#391: "Rollback hazirligi",
+  // "Rollback Netcode"). World'un TUM runtime durumu init()'te AYRILAN
+  // sabit arena bolgelerinde yasar (entities_/archs_/chunks_ + chunk veri
+  // bloklari, hepsi bir kez ayrilir, HIC TASINMAZ) -- bu yuzden "anlik
+  // goruntu" tam bir bayt-kopyasi kadar basit ve GUVENLI: ic isaretciler
+  // (Archetype::first/last, Chunk::next/data) hep AYNI sabit adreslere
+  // isaret eder, restore SONRASI da gecerli kalirlar (tasima/duzeltme
+  // gerekmez). snapshot_bytes(): tampon boyutu (bir kez sorulur, WorldConfig
+  // sabit oldugu surece degismez). snapshot()/restore(): cagiranin ayni
+  // WorldConfig ile init edilmis BASKA (ya da ayni) bir World uzerinde
+  // kullanmasi beklenir -- boyut uyusmazligi KONTROL EDILMEZ (performans
+  // kritik ic API, guvenilir cagiran varsayimi diger arena API'leriyle ayni).
+  uint64_t snapshot_bytes() const;
+  void snapshot(void *dst) const;
+  void restore(const void *src);
+
 private:
   struct EntityRec {
     uint32_t arch;   // archetype indeksi

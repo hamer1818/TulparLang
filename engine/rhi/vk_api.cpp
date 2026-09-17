@@ -102,6 +102,7 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
   G(vkCreatePipelineLayout); G(vkDestroyPipelineLayout);
   G(vkCreatePipelineCache); G(vkDestroyPipelineCache); G(vkGetPipelineCacheData);
   G(vkCreateGraphicsPipelines); G(vkDestroyPipeline);
+  G(vkCreateComputePipelines); G(vkCmdDispatch); G(vkCmdDrawIndexedIndirect);
   G(vkCreateQueryPool); G(vkDestroyQueryPool); G(vkGetQueryPoolResults);
   G(vkCmdResetQueryPool); G(vkCmdWriteTimestamp);
   G(vkCmdBeginRenderPass); G(vkCmdNextSubpass); G(vkCmdEndRenderPass);

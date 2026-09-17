@@ -25,6 +25,7 @@ struct PhysicsConfig {
   JobSystem *jobs = nullptr;      // verilirse Jolt job'lari BIZIM fiber job sisteminde kosar
   uint32_t max_jolt_jobs = 1024;  // Jolt Job havuzu (jobs != nullptr)
   Vec3 gravity = {0, -9.81f, 0};
+  uint32_t max_characters = 8; // kinematik karakter slotu (bkz. CharacterConfig)
 };
 
 struct BodyId {
@@ -57,6 +58,37 @@ struct ContactEvent {
   float speed = 0;
 };
 
+// --- Karakter denetleyicisi tipleri (PR #322'den) -------------------------
+// Jolt'un `CharacterVirtual`i (third_party/jolt, MIT) — kutuphane zaten
+// vendored'di ama baglanmamisti. "Sanal": karakter rijit govde DEGIL, carpisma
+// cozumu sweep + kaydir. Rijit govdeli karakter rampalarda kayar, basamaklara
+// takilir ve kuvvetle itilince kontrolu kaybeder.
+struct CharacterId {
+  uint32_t v = 0xFFFFFFFFu;
+  bool valid() const { return v != 0xFFFFFFFFu; }
+};
+
+enum class GroundState : uint8_t {
+  OnGround,      // zeminde, serbest hareket
+  OnSteepGround, // cok dik yamac: tirmanamaz, kaymasi beklenir
+  NotSupported,  // bir seye degiyor ama tasinmiyor -> dusmeli
+  InAir,         // havada
+};
+
+struct CharacterConfig {
+  float radius = 0.3f;
+  // TOPLAM boy: ayak tabanindan tepeye. Kapsul yarim-silindiri buradan
+  // cikarilir, bu yuzden `height` > 2*radius OLMALIDIR; degilse
+  // add_character gecersiz kimlik doner (Jolt'un assert'ine dusmek yerine).
+  float height = 1.8f;
+  float max_slope_deg = 50.0f;
+  float mass = 70.0f;
+  // Cikilabilecek basamak yuksekligi (ExtendedUpdate'in merdiven yurumesi).
+  float step_up = 0.4f;
+  float jump_speed = 4.0f;
+  Vec3 position = {0, 0, 0};
+};
+
 struct PhysicsStats {
   uint32_t bodies = 0;
   uint64_t allocs_total = 0;    // Jolt allocator kancasindan
@@ -81,6 +113,27 @@ public:
   // bulunmayabilir. Adimlamayi/durumu DEGISTIRMEZ: salt okunur sorgu, altin
   // ozet etkilenmez. dir sifir uzunlukluysa ya da max_distance <= 0 ise false.
   bool raycast(Vec3 origin, Vec3 dir, float max_distance, RayHit *hit = nullptr) const;
+
+  // --- Karakter ------------------------------------------------------
+  // Gecersiz yapilandirmada (height <= 2*radius, radius <= 0, havuz dolu)
+  // GECERSIZ kimlik doner -- sessizce bozuk bir karakter YARATMAZ.
+  CharacterId add_character(const CharacterConfig &cfg);
+  void remove_character(CharacterId id);
+
+  // Kare basina girdi; step() icinde uygulanir.
+  // `desired_horizontal_velocity`in YUKARI bileseni YOK SAYILIR: dikey hiz
+  // yercekimi ve ziplamaya aittir, girdiye degil (aksi halde oyuncu
+  // havada surekli yukari "yuruyebilirdi").
+  // `jump` KENAR-TETIKLI: uygulandigi kare tuketilir, basili tutmak
+  // zincirleme ziplama yapmaz.
+  void set_character_input(CharacterId id, Vec3 desired_horizontal_velocity, bool jump);
+
+  Vec3 character_position(CharacterId id) const;
+  Vec3 character_velocity(CharacterId id) const;
+  GroundState character_ground_state(CharacterId id) const;
+  bool character_grounded(CharacterId id) const;
+  // Karakterin bastigi zeminin normali (havadayken yukari yonu).
+  Vec3 character_ground_normal(CharacterId id) const;
 
   Vec3 position(BodyId id) const;
   Quat rotation(BodyId id) const;
