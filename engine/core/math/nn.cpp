@@ -1,5 +1,6 @@
 #include "core/math/nn.hpp"
 
+#include <cstddef> // size_t — libc++ (clang/macOS) gecisli getirmiyor, libstdc++ getiriyor
 #include <cmath>
 
 namespace tulpar::engine {
