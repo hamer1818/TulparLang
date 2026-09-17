@@ -21,8 +21,11 @@
 #include "core/profiler/profiler.hpp"
 #include "platform/time.hpp"
 #include "rhi/device.hpp"
+#include "app/editor_camera.hpp"
 #include "app/editor_chrome.hpp"
+#include "app/editor_console.hpp"
 #include "app/editor_commands.hpp"
+#include "app/editor_files.hpp"
 #include "app/editor_layout.hpp"
 #include "app/editor_overlay.hpp"
 #include "app/editor_viewport.hpp"
@@ -38,15 +41,6 @@ constexpr float kPi = 3.14159265358979f;
 using content::SceneDesc;
 using content::SceneEntity;
 
-struct Cam {
-  float yaw = 0.7f, pitch = 0.45f, radius = 26.0f;
-  Vec3 target{0, 1.0f, -3.0f};
-  Vec3 eye() const {
-    return {target.x + std::cos(pitch) * std::sin(yaw) * radius, target.y + std::sin(pitch) * radius,
-            target.z + std::cos(pitch) * std::cos(yaw) * radius};
-  }
-  Mat4 view() const { return Mat4::look_at(eye(), target, {0, 1, 0}); }
-};
 struct RecordCtx {
   renderer::Renderer *r;
   EditorUi *ui;
@@ -120,7 +114,16 @@ struct EditorState {
   uint32_t browse_count = 0;
   char status[160];
   char filter[64] = {0}; // Sahne paneli suzgeci
+  HierarchyState tree;   // Sahne agaci: katlama bitleri + yerinde ad + surukleme
   AssetsView assets_view; // Kaynaklar paneli gorunumu (izgara/liste, karo, suzgec)
+  // Pano: editorun KENDI tamponu (isletim sistemi panosu degil — metin degil
+  // yapi tasiyoruz). Kes/kopyala secimi buraya yazar, yapistir buradan ekler.
+  SceneEntity clip[Selection::kMax];
+  uint32_t clip_count = 0;
+  // Duraklatma DURDURMAK DEGILDIR: playing true kalir, govdeler yerinde durur,
+  // yalniz zaman akmaz. step_request duraklatilmisken tek adim ilerletir.
+  bool paused = false;
+  uint32_t step_request = 0;
 };
 
 // Varlik silindikten / geri alindiktan sonra secimi gecerli tut.
@@ -130,17 +133,6 @@ void clamp_selection(EditorState &st) {
 }
 
 // Fare pikselinden dunya isini (kamera tabanindan; matris tersi gerekmez).
-void camera_ray(const Cam &cam, float fovy, float aspect, float mx, float my, float fw, float fh, Vec3 *origin, Vec3 *dir) {
-  const Vec3 eye = cam.eye();
-  const Vec3 f = normalize(cam.target - eye);
-  const Vec3 r = normalize(cross(f, Vec3{0, 1, 0}));
-  const Vec3 u = cross(r, f);
-  const float th = std::tan(fovy * 0.5f);
-  const float nx = (2.0f * mx / fw - 1.0f) * th * aspect;
-  const float ny = (1.0f - 2.0f * my / fh) * th;
-  *origin = eye;
-  *dir = normalize(f + r * nx + u * ny);
-}
 // Tum varliklarin dunya AABB'si (secim icin) — model sinirlari yuklu modelden.
 uint32_t entity_world_bounds(const EditorState &st, const sim::Physics &phys, content::SceneBounds *out) {
   for (uint32_t i = 0; i < st.scene.entity_count; i++) {
@@ -152,7 +144,7 @@ uint32_t entity_world_bounds(const EditorState &st, const sim::Physics &phys, co
       mb = &mbs;
     }
     const bool simulated = st.playing && st.bodies_live && st.bodies[i].valid() && e.dynamic;
-    const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_matrix(e);
+    const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_world_matrix(st.scene, i);
     out[i] = content::scene_world_bounds(content::scene_entity_local_bounds(e, mb), m);
   }
   return st.scene.entity_count;
@@ -164,6 +156,11 @@ void set_status(EditorState &st, const char *fmt, ...) {
   va_start(ap, fmt);
   std::vsnprintf(st.status, sizeof st.status, fmt, ap);
   va_end(ap);
+  // Durum cubugu yalniz SON iletiyi tutar: art arda iki hatada ilki okunmadan
+  // siliniyordu. Ayni satir konsola da dusuyor (gecmis orada kaliyor); duzey
+  // metinden turetiliyor ("KAYDEDILEMEDI" -> Hata), siniflandirici konsolunkiyle
+  // AYNI — iki yerde iki kural olmasin.
+  console_log_raw(console_classify_level(st.status, false), kConsoleTagEditor, st.status);
 }
 
 void bodies_spawn(EditorState &st, sim::Physics &ph) {
@@ -185,7 +182,6 @@ template <class F> void with_bodies(EditorState &st, sim::Physics &ph, F &&f) {
   if (live) bodies_spawn(st, ph);
 }
 
-// Ozellik paneli: surukleme/metin girisi bir islem olarak gunluge girer.
 // Ozellik paneli: PropItem uzerinden — ImGui "son oge"sine BAKMAZ. Bilesik bir
 // widget'ta (vec3 = uc surukleme) son oge yalniz Z alanidir; Y suruklenirken
 // IsItemActivated() false kalir ve gunluge islem dusmezdi (editor_widgets kapisi).
@@ -301,7 +297,11 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   content::scene_dir_of(st.scene_path, st.scene_dir, sizeof st.scene_dir);
   {
     content::SceneError err{};
-    if (!content::scene_load(sys, st.scene_path, &st.scene, &err)) { std::fprintf(stderr, "sahne %s: %s\n", st.scene_path, err.msg); return 1; }
+    if (!content::scene_load(sys, st.scene_path, &st.scene, &err)) {
+      console_log(ConsoleLevel::Hata, kConsoleTagScene, "sahne %s: %s", st.scene_path, err.msg);
+      std::fprintf(stderr, "sahne %s: %s\n", st.scene_path, err.msg);
+      return 1;
+    }
   }
   char path[1024];
   auto asset = [&](const char *name) {
@@ -312,12 +312,17 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   auto load_asset = [&](int32_t i) {
     if (i < 0 || i >= (int32_t)st.scene.asset_count) return false;
     st.have[i] = content::gltf_load(sys, asset(st.scene.assets[i]), &st.models[i]) && content::upload_model(ren, sys, st.models[i], &st.ups[i]);
-    if (!st.have[i]) std::printf("[engine_editor] kaynak yuklenemedi: %s\n", st.scene.assets[i]);
+    if (!st.have[i]) {
+      console_log(ConsoleLevel::Uyari, kConsoleTagScene, "kaynak yuklenemedi: %s", st.scene.assets[i]);
+      std::printf("[engine_editor] kaynak yuklenemedi: %s\n", st.scene.assets[i]);
+    }
     return st.have[i];
   };
   for (uint32_t i = 0; i < st.scene.asset_count; i++) load_asset((int32_t)i);
   st.browse_count = editor_scan_assets(st.scene_dir, st.scene, st.browse, 64);
   std::printf("[engine_editor] sahne %s: %u varlik, %u kaynak\n", st.scene_path, st.scene.entity_count, st.scene.asset_count);
+  console_log(ConsoleLevel::Bilgi, kConsoleTagEditor, "sahne %s: %u varlik, %u kaynak", st.scene_path, st.scene.entity_count,
+              st.scene.asset_count);
 
   // Arka plan: demo sahnesi (ajanlar, Jolt kutulari) — govdeler ayni fizik dunyasina.
   DemoScene::DrawSet ds;
@@ -349,7 +354,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     if (!ui.init(dev, rp, 1, image_count, fpath, 17.0f)) { std::fprintf(stderr, "editor ui: %s\n", ui.last_error()); return 1; }
   }
 
-  Cam cam;
+  EditorCamera cam;
   cam.target = st.scene.cam_target; cam.yaw = st.scene.cam_yaw; cam.pitch = st.scene.cam_pitch; cam.radius = st.scene.cam_radius;
   if (headless) st.sel.set_single(0);
   st.playing = headless;
@@ -369,13 +374,39 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   sim::FixedStep fs;
   uint64_t last_ns = platform::now_ns();
   uint32_t frame_i = 0, tick_i = 0;
-  double prev_mx = 0, prev_my = 0;
-  bool prev_rmb = false;
+  double prev_mx = 0, prev_my = 0, prev_scroll = 0;
+  GizmoSpace gizmo_space = GizmoSpace::World; // ImGuizmo: dunya / yerel eksen
+  // Kamera girdisi ONCEKI karenin panel durumunu okur (panel kare icinde daha
+  // sonra ciziliyor): bir kare gecikme gorunmez, yanlis kosul gorunur olurdu.
+  ViewportRect view_rect{};
+  bool view_hovered = false;
+  OverlayResult ovres;       // kaplamanin son karede urettigi etkilesim
+  bool cam_dragging = false; // kamera tusu basili: panelden cikmak donusu kesmesin
+  bool prev_f = false;
   RecordCtx rctx{&ren, &ui, &vp, &dev};
   bool running = true;
+  // Konsol + dosya islemleri durumu. static: ic tamponlari buyuk (halka ~150 KB,
+  // diyalogun dizin listesi 512 girdi) ve surec basina TEK editor kosuyor.
+  static ConsoleView console_view;
+  static ConsoleCapture console_cap;
+  static FileDialog dlg;
+  static ConfirmState confirm;
+  bool show_console = true;
+  enum PendingAction { PendingNone = 0, PendingNew = 1, PendingOpen = 2, PendingOpenPath = 3 };
+  int pending = PendingNone;
+  char pending_path[1024] = {0}; // "Son dosyalar"dan secilen yol
+  char recent_file[1024];
+  {
+    const char *home = std::getenv("HOME");
+    std::snprintf(recent_file, sizeof recent_file, "%s/.tulpar_son_sahneler", (home && *home) ? home : ENGINE_SOURCE_DIR);
+    recent_load(recent_file); // dosya yoksa false doner, liste bos kalir — HATA DEGIL
+    recent_push(st.scene_path);
+  }
   auto set_playing = [&](bool p) {
     if (p == st.playing) return;
     st.playing = p;
+    st.paused = false; // durdur/baslat duraklatmayi da sifirlar
+    st.step_request = 0;
     if (p) { st.play_time = 0; bodies_spawn(st, phys); }
     else bodies_remove(st, phys); // durdur: veri modeli (yazar donusumu) gecerli
   };
@@ -400,12 +431,84 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     });
     if (done) { st.dirty = true; clamp_selection(st); set_status(st, "yinelendi (%u islem, %u kaldi)", done, st.hist.redo_count()); }
   };
-  auto do_save = [&]() {
+  auto do_save_as = [&]() {
+    file_dialog_open(dlg, FileDialogMode::Kaydet, st.scene_path[0] ? st.scene_path : st.scene_dir, ".sahne", "Farkl\xC4\xB1 kaydet");
+  };
+  // Sahneyi verilen yola yazar ve editorun ACIK DOSYASINI oraya tasir (kaynak
+  // tarayicisi da yeni dizini gosterir — sahne dosyasi dizinini takip eder).
+  auto save_scene_to = [&](const char *path) {
     st.scene.cam_target = cam.target; st.scene.cam_yaw = cam.yaw; st.scene.cam_pitch = cam.pitch; st.scene.cam_radius = cam.radius;
     content::SceneError err{};
-    if (content::scene_save(frame, st.scene, st.scene_path, &err)) { st.dirty = false; set_status(st, "kaydedildi: %s", st.scene_path); }
-    else set_status(st, "KAYDEDILEMEDI: %s", err.msg);
+    if (!content::scene_save(frame, st.scene, path, &err)) { set_status(st, "KAYDEDILEMEDI: %s", err.msg); return false; }
+    std::snprintf(st.scene_path, sizeof st.scene_path, "%s", path);
+    content::scene_dir_of(st.scene_path, st.scene_dir, sizeof st.scene_dir);
+    st.browse_count = editor_scan_assets(st.scene_dir, st.scene, st.browse, 64);
+    st.dirty = false;
+    recent_push(st.scene_path);
+    recent_save(recent_file);
+    set_status(st, "kaydedildi: %s", st.scene_path);
+    return true;
   };
+  auto do_save = [&]() {
+    if (st.scene_path[0] == 0) { do_save_as(); return; } // adsiz sahne: once yer sor
+    save_scene_to(st.scene_path);
+  };
+  // Dosyadan yukleme: veri modeli + turetilmis her sey (kaynaklar, tarayici,
+  // kamera) yenilenir ve GUNLUK SIFIRLANIR — eski sahnenin geri al kayitlari
+  // yeni sahneye uygulanamaz (indeksler baska bir sahneye ait).
+  auto load_scene_from = [&](const char *path) {
+    content::SceneDesc nd;
+    content::SceneError err{};
+    if (!content::scene_load(sys, path, &nd, &err)) { set_status(st, "ACILAMADI: %s (%s)", path, err.msg); return false; }
+    with_bodies(st, phys, [&] {
+      st.scene = nd;
+      st.hist.clear();
+      st.groups.clear();
+      st.sel.clear();
+      st.dirty = false;
+    });
+    std::snprintf(st.scene_path, sizeof st.scene_path, "%s", path);
+    content::scene_dir_of(st.scene_path, st.scene_dir, sizeof st.scene_dir);
+    for (uint32_t i = 0; i < content::kSceneMaxAssets; i++) st.have[i] = false;
+    for (uint32_t i = 0; i < st.scene.asset_count; i++) load_asset((int32_t)i);
+    st.browse_count = editor_scan_assets(st.scene_dir, st.scene, st.browse, 64);
+    cam.target = st.scene.cam_target; cam.yaw = st.scene.cam_yaw; cam.pitch = st.scene.cam_pitch; cam.radius = st.scene.cam_radius;
+    st.clip_count = 0; // pano baska bir sahnenin varliklarini tasiyordu
+    recent_push(st.scene_path);
+    recent_save(recent_file);
+    set_status(st, "acildi: %s (%u varlik)", st.scene_path, st.scene.entity_count);
+    return true;
+  };
+  auto do_new = [&]() {
+    content::SceneDesc fresh; // varsayilan dunya + 0 varlik
+    with_bodies(st, phys, [&] {
+      st.scene = fresh;
+      st.hist.clear();
+      st.groups.clear();
+      st.sel.clear();
+      st.dirty = false;
+    });
+    st.scene_path[0] = 0; // ADSIZ: ilk Kaydet "Farkli kaydet"e duser
+    for (uint32_t i = 0; i < content::kSceneMaxAssets; i++) st.have[i] = false;
+    st.clip_count = 0;
+    st.browse_count = editor_scan_assets(st.scene_dir, st.scene, st.browse, 64);
+    set_status(st, "yeni sahne (henuz kaydedilmedi)");
+  };
+  auto run_pending = [&](int a) {
+    if (a == PendingNew) do_new();
+    else if (a == PendingOpen) file_dialog_open(dlg, FileDialogMode::Ac, st.scene_dir, ".sahne", "Sahne a\xC3\xA7");
+    else if (a == PendingOpenPath && pending_path[0]) load_scene_from(pending_path);
+  };
+  // KIRLI SAHNE KORUMASI: kaydedilmemis is varken Yeni/Ac ONCE sorar. Onay kipli
+  // oldugu icin eylem ERTELENIR (pending) ve cevap gelince calisir.
+  auto guard_then = [&](int action, const char *path = nullptr) {
+    std::snprintf(pending_path, sizeof pending_path, "%s", path ? path : "");
+    if (!st.dirty) { run_pending(action); return; }
+    pending = action;
+    confirm.open = true;
+  };
+  auto do_new_guarded = [&]() { guard_then(PendingNew); };
+  auto do_open_guarded = [&]() { guard_then(PendingOpen); };
   // Derle: veri modeli -> runtime blob (.sahneb, sahne dosyasinin yanina; PLAN §6).
   // Kaydet gibi kamerayi da yazar; dosyayi degil bellekteki sahneyi derler.
   auto do_compile = [&]() {
@@ -450,12 +553,108 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     const uint32_t n = st.sel.sorted_desc(idx);
     uint32_t ops = 0;
     with_bodies(st, phys, [&] { ops = selection_remove(st.scene, st.hist, idx, n); });
+    for (uint32_t k = 0; k < n; k++) st.tree.collapse.after_remove((uint32_t)idx[k]); // buyukten kucuge silindi
     if (ops) {
       st.groups.push(ops);
       st.dirty = true;
       set_status(st, "silindi (%u varlik)", ops);
     }
     st.sel.clear();
+  };
+  // Pano: kopyalama secimi ARTAN indeks sirasinda alir (belirlenimli — secim
+  // kumesinin kendi sirasi tiklama sirasidir, yapistirma sirasi ona bagli olmasin).
+  auto do_copy = [&]() {
+    if (st.sel.count == 0) return;
+    int32_t idx[Selection::kMax];
+    const uint32_t n = st.sel.sorted_desc(idx); // buyukten kucuge; tersten okuyacagiz
+    st.clip_count = 0;
+    for (uint32_t i = n; i > 0; i--) st.clip[st.clip_count++] = st.scene.entities[idx[i - 1]];
+    set_status(st, "panoya alindi (%u varlik)", st.clip_count);
+  };
+  auto do_cut = [&]() {
+    if (st.sel.count == 0) return;
+    do_copy();
+    do_remove();
+    set_status(st, "kesildi (%u varlik)", st.clip_count);
+  };
+  // Yapistir: her varlik yeni bir varliktir (kopya adi + kucuk otelemeyle
+  // ustuste binmesin). Gunluge N islem ama TEK eylem: geri al hepsini alir.
+  auto do_paste = [&]() {
+    if (st.clip_count == 0) return;
+    uint32_t ops = 0;
+    const uint32_t first = st.scene.entity_count;
+    with_bodies(st, phys, [&] {
+      for (uint32_t i = 0; i < st.clip_count; i++) {
+        SceneEntity e = st.clip[i];
+        e.pos.x += 1.0f;
+        if (st.hist.add_entity(st.scene, e)) ops++;
+        else break; // kapasite doldu: sessizce kirpma yok, asagida bildirilir
+      }
+    });
+    if (!ops) { set_status(st, "yapistirilamadi (kapasite %u)", content::kSceneMaxEntities); return; }
+    st.groups.push(ops);
+    st.dirty = true;
+    st.sel.clear();
+    for (uint32_t i = 0; i < ops; i++) st.sel.toggle((int32_t)(first + i));
+    if (ops < st.clip_count) set_status(st, "yapistirildi (%u/%u — kapasite %u doldu)", ops, st.clip_count, content::kSceneMaxEntities);
+    else set_status(st, "yapistirildi (%u varlik)", ops);
+  };
+  // Sahne panelinin dondurdugu NIYETI uygular. Panel sahneyi DEGISTIRMEZ; gunluk,
+  // secim ve govde yeniden kurulumu tek yerde — burada.
+  auto apply_hierarchy = [&](const HierarchyResult &r) {
+    const int32_t i = r.index;
+    const bool valid = i >= 0 && i < (int32_t)st.scene.entity_count;
+    if (!valid && r.action != HierarchyAction::None) return;
+    switch (r.action) {
+    case HierarchyAction::None: break;
+    case HierarchyAction::Select:
+      if (r.ctrl) st.sel.toggle(i);
+      else st.sel.set_single(i);
+      break;
+    case HierarchyAction::Toggle: st.tree.collapse.toggle((uint32_t)i); break;
+    case HierarchyAction::Rename: {
+      SceneEntity after = st.scene.entities[i];
+      std::snprintf(after.name, sizeof after.name, "%s", r.name);
+      if (st.hist.set_entity(st.scene, (uint32_t)i, after)) {
+        st.groups.push(1);
+        st.dirty = true;
+        set_status(st, "adlandirildi: %s", after.name);
+      }
+      break;
+    }
+    case HierarchyAction::Delete:
+      st.sel.set_single(i);
+      do_remove();
+      st.tree.collapse.after_remove((uint32_t)i);
+      break;
+    case HierarchyAction::Duplicate:
+      st.sel.set_single(i);
+      do_add(0);
+      break;
+    case HierarchyAction::Detach:
+    case HierarchyAction::Reparent: {
+      const int32_t par = (r.action == HierarchyAction::Detach) ? -1 : r.target;
+      bool ok = false;
+      with_bodies(st, phys, [&] { ok = st.hist.reparent(st.scene, (uint32_t)i, par); });
+      if (ok) {
+        st.groups.push(1);
+        st.dirty = true;
+        if (par < 0) set_status(st, "ebeveynden ayrildi: %s", st.scene.entities[i].name);
+        else set_status(st, "ebeveyn: %s", st.scene.entities[par].name);
+      } else if (par >= 0) set_status(st, "ebeveynlenemedi (dongu ya da derinlik tavani %u)", content::kSceneMaxDepth);
+      break;
+    }
+    case HierarchyAction::Visibility:
+    case HierarchyAction::Lock: {
+      SceneEntity after = st.scene.entities[i];
+      after.flags ^= (r.action == HierarchyAction::Visibility) ? content::kSceneHidden : content::kSceneLocked;
+      if (st.hist.set_entity(st.scene, (uint32_t)i, after)) {
+        st.groups.push(1);
+        st.dirty = true;
+      }
+      break;
+    }
+    }
   };
   // Kaynak tarayicidan ekleme: kaynak sahneye (varsa mevcut indeks) + o kaynakla
   // yeni varlik; kaynak henuz yuklenmemisse burada yuklenir.
@@ -486,9 +685,20 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     decltype(&do_add) add;
     decltype(&do_remove) remove;
     decltype(&set_playing) play;
-  } cc{&st, &gizmo_op, &do_save, &do_compile, &do_undo, &do_redo, &do_add, &do_remove, &set_playing};
+    decltype(&do_cut) cut;
+    decltype(&do_copy) copy;
+    decltype(&do_paste) paste;
+    decltype(&do_new_guarded) newscene;
+    decltype(&do_open_guarded) open;
+    decltype(&do_save_as) saveas;
+    bool *show_console;
+  } cc{&st,      &gizmo_op, &do_save, &do_compile,      &do_undo,         &do_redo,     &do_add,     &do_remove,
+       &set_playing, &do_cut,   &do_copy, &do_paste,    &do_new_guarded,  &do_open_guarded, &do_save_as, &show_console};
   CommandTable cmds;
+  cmds.bind(CommandId::FileNew, [](void *c) { (*static_cast<CmdCtx *>(c)->newscene)(); }, &cc);
+  cmds.bind(CommandId::FileOpen, [](void *c) { (*static_cast<CmdCtx *>(c)->open)(); }, &cc);
   cmds.bind(CommandId::FileSave, [](void *c) { (*static_cast<CmdCtx *>(c)->save)(); }, &cc);
+  cmds.bind(CommandId::FileSaveAs, [](void *c) { (*static_cast<CmdCtx *>(c)->saveas)(); }, &cc);
   cmds.bind(CommandId::FileCompile, [](void *c) { (*static_cast<CmdCtx *>(c)->compile)(); }, &cc);
   cmds.bind(CommandId::EditUndo, [](void *c) { (*static_cast<CmdCtx *>(c)->undo)(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->hist.undo_count() > 0; });
@@ -497,6 +707,12 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   cmds.bind(CommandId::EditDuplicate, [](void *c) { (*static_cast<CmdCtx *>(c)->add)(); }, &cc);
   cmds.bind(CommandId::EditDelete, [](void *c) { (*static_cast<CmdCtx *>(c)->remove)(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
+  cmds.bind(CommandId::EditCut, [](void *c) { (*static_cast<CmdCtx *>(c)->cut)(); }, &cc,
+            [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
+  cmds.bind(CommandId::EditCopy, [](void *c) { (*static_cast<CmdCtx *>(c)->copy)(); }, &cc,
+            [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
+  cmds.bind(CommandId::EditPaste, [](void *c) { (*static_cast<CmdCtx *>(c)->paste)(); }, &cc,
+            [](const void *c) { return static_cast<const CmdCtx *>(c)->st->clip_count > 0; });
   cmds.bind(CommandId::SelectAll,
             [](void *c) {
               EditorState *s = static_cast<CmdCtx *>(c)->st;
@@ -516,6 +732,8 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
               const GizmoOptions &g = static_cast<const CmdCtx *>(c)->st->gizmos;
               return g.light_radius || g.shadow_volume || g.sun_dir;
             });
+  cmds.bind(CommandId::ViewConsole, [](void *c) { bool *b = static_cast<CmdCtx *>(c)->show_console; *b = !*b; }, &cc, nullptr,
+            [](const void *c) { return *static_cast<const CmdCtx *>(c)->show_console; });
   cmds.bind(CommandId::GizmoTranslate, [](void *c) { *static_cast<CmdCtx *>(c)->gizmo_op = 0; }, &cc, nullptr,
             [](const void *c) { return *static_cast<const CmdCtx *>(c)->gizmo_op == 0; });
   cmds.bind(CommandId::GizmoRotate, [](void *c) { *static_cast<CmdCtx *>(c)->gizmo_op = 1; }, &cc, nullptr,
@@ -528,15 +746,60 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
               (*x->play)(!x->st->playing);
             },
             &cc, nullptr, [](const void *c) { return static_cast<const CmdCtx *>(c)->st->playing; });
+  cmds.bind(CommandId::PlayPause, [](void *c) { EditorState *s = static_cast<CmdCtx *>(c)->st; s->paused = !s->paused; }, &cc,
+            [](const void *c) { return static_cast<const CmdCtx *>(c)->st->playing; },
+            [](const void *c) { return static_cast<const CmdCtx *>(c)->st->paused; });
+  cmds.bind(CommandId::PlayStep, [](void *c) { static_cast<CmdCtx *>(c)->st->step_request++; }, &cc,
+            [](const void *c) {
+              const EditorState *s = static_cast<const CmdCtx *>(c)->st;
+              return s->playing && s->paused;
+            });
+  // Dosya menusune "Son dosyalar" alt menusu: komut tablosu KOMUT tasir, bu ise
+  // bir veri listesi — chrome'un ek oge kancasindan geliyor.
+  struct MenuExtraCtx {
+    decltype(&guard_then) guard;
+    int open_action;
+  } mx{&guard_then, PendingOpenPath};
+  ChromeMenuExtra menu_extra;
+  menu_extra.ctx = &mx;
+  menu_extra.fn = [](void *ctx, CommandCategory cat) {
+    if (cat != CommandCategory::File) return;
+    MenuExtraCtx *m = static_cast<MenuExtraCtx *>(ctx);
+    const char *rec[kRecentMax];
+    const uint32_t nrec = recent_list(rec, kRecentMax);
+    if (!ImGui::BeginMenu("Son dosyalar", nrec > 0)) return;
+    for (uint32_t i = 0; i < nrec; i++) {
+      const bool var = recent_exists(i);
+      char lbl[kFilePathLen + 16];
+      std::snprintf(lbl, sizeof lbl, "%u  %s", i + 1, rec[i]);
+      ImGui::BeginDisabled(!var); // eksik dosya SOLUK, gizli degil
+      if (ImGui::MenuItem(lbl)) (*m->guard)(m->open_action, rec[i]);
+      ImGui::EndDisabled();
+      if (!var && ImGui::IsItemHovered()) ImGui::SetTooltip("Dosya bulunamadi: %s", rec[i]);
+    }
+    ImGui::EndMenu();
+  };
   {
     // Kurulum denetimi: bagli kalmayan komut = menude tiklanmayan satir. Sessiz
     // gecmez; headless kosuda da gorunur.
     CommandId ub[kCommandCount];
     const uint32_t n = cmds.unbound(ub, kCommandCount);
-    if (n) std::fprintf(stderr, "[editor] %u komut BAGLANMADI (menude olu satir), ilki: %s\n", n, cmds.desc(ub[0]).name);
+    if (n) {
+      console_log(ConsoleLevel::Uyari, kConsoleTagEditor, "%u komut BAGLANMADI (menude olu satir), ilki: %s", n, cmds.desc(ub[0]).name);
+      std::fprintf(stderr, "[editor] %u komut BAGLANMADI (menude olu satir), ilki: %s\n", n, cmds.desc(ub[0]).name);
+    }
   }
+  // stdout/stderr yakalama: motorun printf'i ve dogrulama katmani konsola aksin.
+  // DONGUDEN HEMEN ONCE aciliyor — yukaridaki kurulum yollari `return 1` ile
+  // cikabiliyor ve borudaki bayt drain edilmeden kaybolurdu. HEADLESS'ta
+  // ACILMAZ: kapi satirlari ([engine_editor] ... OK) dogrudan akmali.
+  if (!headless && !console_capture_begin(&console_cap))
+    console_log(ConsoleLevel::Uyari, kConsoleTagEditor, "cikti yakalanamadi: %s", console_cap.err_msg);
+
   while (running) {
     ENGINE_ZONE("frame");
+    console_set_frame(frame_i);
+    console_capture_drain(); // kare basina BIR kez; yakalama kapaliysa no-op
     uint64_t now = platform::now_ns();
     float dt = (float)((now - last_ns) / 1e9);
     last_ns = now;
@@ -558,38 +821,64 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         if (ww > 0) ui.set_pointer_scale((float)fw / (float)ww);
       }
     }
-    // Kamera: sag fare surukle = yorunge, tekerlek = yakinlik (ImGui uzerinde degilken).
-    if (in && !ui.wants_mouse()) {
-      const bool rmb = in->mouse_down[1];
-      if (rmb && prev_rmb) {
-        cam.yaw -= (float)(in->mouse_x - prev_mx) * 0.005f;
-        cam.pitch += (float)(in->mouse_y - prev_my) * 0.005f;
-        if (cam.pitch < 0.05f) cam.pitch = 0.05f;
-        if (cam.pitch > 1.5f) cam.pitch = 1.5f;
-      }
-      prev_rmb = rmb;
+    // --- KAMERA: karar editor_camera.hpp'de (saf gecis fonksiyonu; kapilar orayi
+    // olcer, burasi yalniz girdiyi toplar).
+    if (in) {
+      CameraInput ci;
+      ci.dx = (float)(in->mouse_x - prev_mx);
+      ci.dy = (float)(in->mouse_y - prev_my);
+      ci.scroll = (float)(in->scroll_y - prev_scroll);
+      ci.lmb = in->mouse_down[0];
+      ci.rmb = in->mouse_down[1];
+      ci.mmb = in->mouse_down[2];
+      ci.shift = in->key_down[GLFW_KEY_LEFT_SHIFT] || in->key_down[GLFW_KEY_RIGHT_SHIFT];
+      ci.ctrl = in->key_down[GLFW_KEY_LEFT_CONTROL] || in->key_down[GLFW_KEY_RIGHT_CONTROL];
+      ci.alt = in->key_down[GLFW_KEY_LEFT_ALT] || in->key_down[GLFW_KEY_RIGHT_ALT];
+      ci.key_w = in->key_down[GLFW_KEY_W];
+      ci.key_a = in->key_down[GLFW_KEY_A];
+      ci.key_s = in->key_down[GLFW_KEY_S];
+      ci.key_d = in->key_down[GLFW_KEY_D];
+      ci.key_q = in->key_down[GLFW_KEY_Q];
+      ci.key_e = in->key_down[GLFW_KEY_E];
+      // DIKKAT: kosul !ui.wants_mouse() DEGIL. 3B artik bir ImGui panelinin
+      // icinde yasiyor, yani fare goruntunun uzerindeyken WantCaptureMouse
+      // ZATEN true olur ve kamera goruntude HIC donmezdi. Dogru kosul: fare
+      // goruntunun ustunde ve kaplama/gizmo onu almamis — ya da surukleme
+      // zaten basladi (panelden disari tasan surukleme kesilmesin).
+      const bool cam_btn = ci.rmb || ci.mmb;
+      const bool can_start = view_hovered && !ovres.consumed_mouse && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing();
+      if (!cam_btn) cam_dragging = false;
+      else if (can_start) cam_dragging = true;
+      ci.allow_mouse = cam_dragging || can_start;
+      ci.allow_keys = !ui.wants_text_input(); // WASD bir ad alanina yaziliyorsa ucus baslamasin
+      ci.dt = dt;
+      camera_update(cam, ci);
+      prev_mx = in->mouse_x;
+      prev_my = in->mouse_y;
+      prev_scroll = in->scroll_y;
     }
-    if (in) { prev_mx = in->mouse_x; prev_my = in->mouse_y; }
-    static double prev_scroll = 0;
-    if (in && !ui.wants_mouse()) {
-      const double ds_ = in->scroll_y - prev_scroll;
-      if (ds_ != 0) { cam.radius *= (float)std::pow(0.9, ds_); if (cam.radius < 3) cam.radius = 3; if (cam.radius > 80) cam.radius = 80; }
-    }
-    if (in) prev_scroll = in->scroll_y;
 
-    // Sim: yalniz oynatilirken (sabit adim).
-    if (st.playing) {
+    // Sim: yalniz oynatilirken (sabit adim). Duraklatilmisken zaman AKMAZ ama
+    // govdeler yerinde durur; F10 tek adim ilerletir. fs.advance duraklamada
+    // cagrilmaz — yoksa birikmis zaman devam edince bir anda bosalirdi.
+    if (st.playing && !st.paused) {
       ENGINE_ZONE("sim");
       uint32_t ticks = fs.advance(dt);
       for (uint32_t t = 0; t < ticks; t++) { scene.tick(fs.step_s, tick_i++); st.play_time += fs.step_s; }
+    } else if (st.playing && st.paused && st.step_request) {
+      ENGINE_ZONE("sim");
+      scene.tick(fs.step_s, tick_i++);
+      st.play_time += fs.step_s;
+      st.step_request--;
+      fs.advance(dt); // biriken zamani YUT: adim adim ilerlerken geri kalmasin
     }
 
     // En-boy orani artik PENCERENIN degil, sahnenin icinde yasadigi PANELIN
     // orani: 3B viewport dokusuna ciziliyor ve o dokunun olcusu panelden geliyor.
     // Pencere oranini kullanmak sahneyi panelde gerilmis gosterirdi.
     const float aspect = vp.aspect();
-    Mat4 proj = Mat4::perspective(kPi / 3.5f, aspect, 0.1f, 200.0f);
-    Mat4 view = cam.view();
+    Mat4 proj = camera_projection(cam, aspect, 0.1f, 200.0f);
+    Mat4 view = camera_view(cam);
     ren.set_camera(view, proj);
     ren.clear_point_lights();
 
@@ -605,6 +894,13 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     ChromeState cs;
     cs.playing = st.playing;
     cs.dirty = st.dirty;
+    // Duraklatma durum cubugunda gorunsun (arac cubugu henuz duraklatmayi
+    // cizmiyor; menude F6 var). Bos mesaj yerine acik bir ek.
+    char status_buf[200];
+    if (st.playing && st.paused) {
+      std::snprintf(status_buf, sizeof status_buf, "DURAKLATILDI (F10 kare ilerlet) \xC2\xB7 %s", st.status);
+      cs.status = status_buf;
+    } else cs.status = st.status;
     cs.scene_path = st.scene_path;
     const int32_t prim_i = st.sel.primary();
     cs.primary_name = (prim_i >= 0 && prim_i < (int32_t)st.scene.entity_count) ? st.scene.entities[prim_i].name : nullptr;
@@ -619,10 +915,9 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     cs.snap = snap_on;
     cs.snap_value = snap_step;
     cs.gizmos_visible = st.gizmos.light_radius || st.gizmos.shadow_volume || st.gizmos.sun_dir;
-    cs.status = st.status;
-    const Vec3 eye = cam.eye();
+    const Vec3 eye = camera_eye(cam);
     cs.cam_eye[0] = eye.x; cs.cam_eye[1] = eye.y; cs.cam_eye[2] = eye.z;
-    chrome_menu_bar(cmds, cs);
+    chrome_menu_bar(cmds, cs, menu_extra);
     ChromeOutput co;
     chrome_toolbar(cmds, cs, &co);
     if (co.snap_toggled) snap_on = !snap_on;
@@ -637,8 +932,10 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     const ImGuiID dock_id = ImGui::DockSpaceOverViewport(ImGui::GetID("TulparDock"), ImGui::GetMainViewport(), 0);
     if (frame_i == 0) {
       layout_set_dockspace_id(dock_id);
-      if (!layout_apply_default(dock_id, (float)fw, (float)fh))
+      if (!layout_apply_default(dock_id, (float)fw, (float)fh)) {
+        console_log(ConsoleLevel::Uyari, kConsoleTagEditor, "varsayilan duzen: %s", layout_last_error());
         std::fprintf(stderr, "[editor] varsayilan duzen: %s\n", layout_last_error());
+      }
     }
 
     // --- GORUNUM: 3B sahnenin YASADIGI panel --------------------------------
@@ -646,8 +943,9 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // degisince hedef yeniden yaratiliyor (yalniz GERCEKTEN degistiyse) ve
     // renderer'in cizim olcusu ona baglaniyor — en-boy orani artik pencerenin
     // degil PANELIN orani.
-    ViewportRect view_rect{};
-    bool view_hovered = false;
+    view_rect = ViewportRect{};
+    view_hovered = false;
+    ovres = OverlayResult{}; // panel kapaliyken bayat sonuc uygulanmasin
     if (ImGui::Begin(kPanelGorunumLabel)) {
       const ImVec2 avail = ImGui::GetContentRegionAvail();
       const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -660,9 +958,9 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           // Kaplama: yalniz cizim listesi (oge yok) — altindaki Image tiklamayi
           // ve hover'i almaya devam eder. Eksen gizmosu kameranin 3x3'unden.
           OverlayInfo oi;
-          const Mat4 vm = cam.view();
+          const Mat4 vm = camera_view(cam);
           std::memcpy(oi.view, &vm.m[0][0], sizeof oi.view);
-          const Vec3 eye = cam.eye();
+          const Vec3 eye = camera_eye(cam);
           oi.cam_eye[0] = eye.x; oi.cam_eye[1] = eye.y; oi.cam_eye[2] = eye.z;
           oi.cam_target[0] = cam.target.x; oi.cam_target[1] = cam.target.y; oi.cam_target[2] = cam.target.z;
           oi.gizmo_op = gizmo_op;
@@ -673,8 +971,13 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           oi.frame_ms = dt * 1000.0f;
           oi.draw_calls = ren.stats().draws; // onceki karenin kaydi (Tuzaklar 8aa)
           oi.entity_count = st.scene.entity_count;
-          oi.hint = "Sol t\xC4\xB1k se\xC3\xA7 \xC2\xB7 Ctrl+t\xC4\xB1k ekle \xC2\xB7 T/R/S gizmo";
-          viewport_overlay(ViewportRect{origin.x, origin.y, (float)vp.width(), (float)vp.height()}, oi);
+          oi.proj = cam.proj;
+          oi.cam_mode = cam.mode;
+          oi.gizmo_space = gizmo_space;
+          // Kisa tutuluyor: kaplama sigmayan hapi DUSURUR ve uzun ipucu kamera
+          // hapiyla birlikte sigmadiginda hic gorunmuyordu (olculdu 937 px panelde).
+          oi.hint = "Sa\xC4\x9F t\xC4\xB1k d\xC3\xB6nd\xC3\xBCr \xC2\xB7 orta tu\xC5\x9F kayd\xC4\xB1r \xC2\xB7 F odak";
+          viewport_overlay(ViewportRect{origin.x, origin.y, (float)vp.width(), (float)vp.height()}, oi, nullptr, &ovres);
         } else {
           ImGui::TextUnformatted(vp.last_error()); // sessiz siyah panel YOK
         }
@@ -682,17 +985,44 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       }
     }
     ImGui::End();
+    // --- Kaplamadan gelen gezinme eylemleri (cip/gosterge tiklamalari) ------
+    if (ovres.axis_clicked >= 0) {
+      camera_align(cam, (CameraAxis)ovres.axis_clicked);
+      static const char *const kAx[6] = {"+X", "-X", "Ust", "Alt", "On", "Arka"};
+      set_status(st, "eksen gorunusu: %s", kAx[ovres.axis_clicked]);
+    }
+    if (ovres.ortho_toggled) cam.proj = cam.proj == CameraProjection::Perspective ? CameraProjection::Ortho : CameraProjection::Perspective;
+    if (ovres.mode_toggled) cam.mode = cam.mode == CameraMode::Orbit ? CameraMode::Fly : CameraMode::Orbit;
+    if (ovres.gizmo_space_toggled) gizmo_space = gizmo_space == GizmoSpace::World ? GizmoSpace::Local : GizmoSpace::World;
 
     if (ImGui::Begin(kPanelSahneLabel)) {
       const int tb = hierarchy_toolbar(st.scene.entity_count, st.sel.count > 0);
       if (tb >= 1 && tb <= 4) do_add(tb);
       else if (tb == 5) do_remove();
       hierarchy_search(st.filter, sizeof st.filter);
-      uint32_t shown = 0;
-      for (uint32_t i = 0; i < st.scene.entity_count; i++) {
+      // Cizim sirasi belirlenimli ON-SIRADIR (kokler indeks sirasinda, cocuklar
+      // indeks sirasinda). SUZGEC ACIKKEN duz liste cizilir: katlanmis bir ata
+      // eslesmeyi gizlemesin.
+      const bool filtering = st.filter[0] != 0;
+      int32_t order[content::kSceneMaxEntities];
+      uint32_t n = 0;
+      if (filtering) {
+        for (uint32_t i = 0; i < st.scene.entity_count; i++) order[n++] = (int32_t)i;
+      } else n = content::scene_tree_order(st.scene, order, content::kSceneMaxEntities);
+      HierarchyResult act;
+      uint32_t shown = 0, hide_depth = 0; // hide_depth > 0: katlanmis alt agactayiz
+      for (uint32_t k = 0; k < n; k++) {
+        const uint32_t i = (uint32_t)order[k];
+        if (i >= st.scene.entity_count) continue;
         const SceneEntity &e = st.scene.entities[i];
-        if (!hierarchy_filter_match(e.name, st.filter)) continue;
-        shown++;
+        const uint32_t depth = filtering ? 0u : content::scene_tree_depth(st.scene, i);
+        if (hide_depth) {
+          if (depth >= hide_depth) continue;
+          hide_depth = 0;
+        }
+        if (filtering && !hierarchy_filter_match(e.name, st.filter)) continue;
+        bool kids = false;
+        for (uint32_t j = 0; j < st.scene.entity_count && !kids; j++) kids = st.scene.entities[j].parent == (int32_t)i;
         HierarchyRow row;
         row.name = e.name;
         row.selected = st.sel.contains((int32_t)i);
@@ -700,13 +1030,28 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         row.has_light = (e.components & content::kSceneLight) != 0;
         row.has_body = (e.components & content::kSceneBody) != 0;
         row.has_anim = (e.components & content::kSceneAnim) != 0;
-        // Ctrl+tik: secime ekle/cikar (3B tiklamayla ayni kural).
-        if (hierarchy_row((int)i, row)) {
-          if (ImGui::GetIO().KeyCtrl) st.sel.toggle((int32_t)i);
-          else st.sel.set_single((int32_t)i);
-        }
+        row.depth = depth;
+        row.has_children = kids && !filtering;
+        row.expanded = !st.tree.collapse.collapsed(i);
+        row.hidden = (e.flags & content::kSceneHidden) != 0;
+        row.locked = (e.flags & content::kSceneLocked) != 0;
+        shown++;
+        const HierarchyResult r = hierarchy_tree_row((int)i, row, &st.tree);
+        if (r.action != HierarchyAction::None) act = r;
+        if (row.has_children && !row.expanded) hide_depth = depth + 1;
       }
-      if (shown == 0) hierarchy_empty(st.scene.entity_count ? "S\xC3\xBCzge\xC3\xA7le e\xC5\x9Fle\xC5\x9Fen varl\xC4\xB1k yok" : "Sahne bo\xC5\x9F \xE2\x80\x94 \xE2\x80\x9C+\xE2\x80\x9D ile varl\xC4\xB1k ekle");
+      if (shown == 0)
+        hierarchy_empty(st.scene.entity_count ? "S\xC3\xBCzge\xC3\xA7le e\xC5\x9Fle\xC5\x9Fen varl\xC4\xB1k yok"
+                                              : "Sahne bo\xC5\x9F \xE2\x80\x94 \xE2\x80\x9C+\xE2\x80\x9D ile varl\xC4\xB1k ekle");
+      // Listenin altindaki bosluk: buraya birakmak KOKE tasir.
+      const HierarchyResult zone = hierarchy_root_drop_zone(&st.tree);
+      if (zone.action != HierarchyAction::None) act = zone;
+      // F2: secili varligin adini YERINDE duzenle (panel odakliyken).
+      if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::IsKeyPressed(ImGuiKey_F2)) {
+        const int32_t s0 = st.sel.primary();
+        if (s0 >= 0 && s0 < (int32_t)st.scene.entity_count) hierarchy_begin_rename(&st.tree, s0, st.scene.entities[s0].name);
+      }
+      apply_hierarchy(act);
     }
     ImGui::End();
     if (ImGui::Begin(kPanelOzelliklerLabel)) {
@@ -832,8 +1177,10 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       if (prop_begin("kamera")) {
         prop_vec3("Hedef", &cam.target.x, 0.05f, 0, 0, "%.2f");
         prop_float("Yaw", &cam.yaw, 0.01f, 0, 0, "%.2f");
-        prop_float("Pitch", &cam.pitch, 0.01f, 0.05f, 1.5f, "%.2f");
-        prop_float("Uzakl\xC4\xB1k", &cam.radius, 0.1f, 3.0f, 80.0f, "%.1f");
+        prop_float("Pitch", &cam.pitch, 0.01f, -cam.pitch_limit, cam.pitch_limit, "%.2f"); // ufkun ALTI da serbest
+        prop_float("Uzakl\xC4\xB1k", &cam.radius, 0.1f, cam.min_radius, cam.max_radius, "%.1f");
+        prop_float("G\xC3\xB6r\xC3\xBC\xC5\x9F a\xC3\xA7\xC4\xB1s\xC4\xB1", &cam.fov_y, 0.01f, 0.2f, 2.0f, "%.2f rad");
+        prop_float("U\xC3\xA7u\xC5\x9F h\xC4\xB1z\xC4\xB1", &cam.speed, 0.1f, 0.5f, 200.0f, "%.1f m/s");
         prop_end();
       }
       // Kamera sahneye yalniz istekle yazilir (gunluge girer); canli kamera
@@ -863,6 +1210,8 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       }
     }
     ImGui::End();
+    if (show_console && ImGui::Begin(kPanelKonsolLabel, &show_console)) console_panel(console_view);
+    if (show_console) ImGui::End(); // Begin false dondugunde de End ZORUNLU
     // Gizmo: ImGuizmo GL gelenegi (NDC y yukari) bekler; Vulkan projeksiyonun y'si tersken duzeltilir.
     // Surukleme tek islem: IsUsing baslarken kopya, bitince gunluge.
     const int32_t gz = st.sel.primary();
@@ -872,10 +1221,13 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       proj_gl.m[1][1] = -proj_gl.m[1][1];
       ImGuizmo::SetOrthographic(false);
       ImGuizmo::SetRect(0, 0, (float)fw, (float)fh);
-      Mat4 mtx = content::scene_entity_matrix(e);
+      Mat4 mtx = content::scene_entity_world_matrix(st.scene, (uint32_t)gz);
       const ImGuizmo::OPERATION op = gizmo_op == 0 ? ImGuizmo::TRANSLATE : gizmo_op == 1 ? ImGuizmo::ROTATE : ImGuizmo::SCALE;
       const float snap_vec[3] = {snap_step, snap_step, snap_step};
-      const bool changed = ImGuizmo::Manipulate(&view.m[0][0], &proj_gl.m[0][0], op, ImGuizmo::WORLD, &mtx.m[0][0], nullptr, snap_on ? snap_vec : nullptr);
+      ImGuizmo::SetOrthographic(cam.proj == CameraProjection::Ortho);
+      const bool changed = ImGuizmo::Manipulate(&view.m[0][0], &proj_gl.m[0][0], op,
+                                                gizmo_space == GizmoSpace::Local ? ImGuizmo::LOCAL : ImGuizmo::WORLD, &mtx.m[0][0], nullptr,
+                                                snap_on ? snap_vec : nullptr);
       const bool using_now = ImGuizmo::IsUsing();
       if (using_now && !st.gizmo_was_using) { // surukleme basi: grubun tamaminin kopyasi
         st.edit_before = e;
@@ -889,7 +1241,9 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         }
       }
       if (changed) {
-        entity_from_matrix(e, mtx);
+        // Gizmo DUNYA uzayinda calisir, varligin alanlari YERELDIR: ebeveynli bir
+        // varlikta dunya matrisini dogrudan yazmak konumu ebeveynin katina cikarirdi.
+        entity_from_matrix(e, content::scene_world_to_local_matrix(st.scene, (uint32_t)gz, mtx));
         // Grup: ana secilinin KONUM deltasi digerlerine (dondur/olcek ana varlikta kalir).
         const Vec3 delta = e.pos - st.edit_before.pos;
         for (uint32_t k = 0; k < st.drag_count; k++) {
@@ -920,11 +1274,23 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       // orada valid=false donuyor (ve -1 sentinel veriyor, 0 degil: 0 gecerli
       // bir piksel olurdu ve sessizce kosede bir isin atardik).
       const ViewportPick pick = in ? vp.map_mouse(view_rect, (float)in->mouse_x, (float)in->mouse_y) : ViewportPick{};
-      if (pressed && pick.valid && view_hovered && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
+      if (ovres.box_done) {
+        // Kutu (marquee) secim: kaplama dikdortgeni verdi, izdusum testi saf
+        // fonksiyonda (kamera ARKASINDAKI kutular orada eleniyor).
+        static content::SceneBounds bb[content::kSceneMaxEntities];
+        const uint32_t nb = entity_world_bounds(st, phys, bb);
+        static int32_t hits[Selection::kMax];
+        const uint32_t nh = viewport_box_select(proj * view, bb, nb, view_rect, ovres.box[0], ovres.box[1], ovres.box[2], ovres.box[3],
+                                                /*tam icerme*/ false, hits, Selection::kMax);
+        if (!ImGui::GetIO().KeyCtrl) st.sel.clear();
+        for (uint32_t k = 0; k < nh; k++)
+          if (!st.sel.contains(hits[k])) st.sel.toggle(hits[k]);
+        set_status(st, "kutu secim: %u varlik", st.sel.count);
+      } else if (pressed && pick.valid && view_hovered && !ovres.consumed_mouse && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
         static content::SceneBounds wb[content::kSceneMaxEntities];
         const uint32_t nb = entity_world_bounds(st, phys, wb);
         Vec3 o, d;
-        camera_ray(cam, kPi / 3.5f, aspect, pick.x, pick.y, (float)vp.width(), (float)vp.height(), &o, &d);
+        camera_ray(cam, aspect, pick.x, pick.y, (float)vp.width(), (float)vp.height(), &o, &d);
         float t = 0;
         const int32_t hit = content::scene_pick(wb, nb, o, d, &t);
         const bool ctrl = ImGui::GetIO().KeyCtrl;
@@ -938,6 +1304,32 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         }
       }
     }
+    // "F": secime odaklan (secim yoksa tum sahne) — Unity/Blender geleneği.
+    // Kenar tetikli: basili tutmak kamerayi surekli kenetlemesin.
+    {
+      const bool f_now = in && in->key_down[GLFW_KEY_F] && !ui.wants_text_input();
+      if (f_now && !prev_f) {
+        static content::SceneBounds fb[content::kSceneMaxEntities];
+        const uint32_t nb = entity_world_bounds(st, phys, fb);
+        bool any = false;
+        content::SceneBounds u{};
+        for (uint32_t k = 0; k < st.sel.count; k++) {
+          const int32_t i = st.sel.items[k];
+          if (i < 0 || i >= (int32_t)nb) continue;
+          if (!any) { u = fb[i]; any = true; }
+          else {
+            u.lo = Vec3{u.lo.x < fb[i].lo.x ? u.lo.x : fb[i].lo.x, u.lo.y < fb[i].lo.y ? u.lo.y : fb[i].lo.y,
+                        u.lo.z < fb[i].lo.z ? u.lo.z : fb[i].lo.z};
+            u.hi = Vec3{u.hi.x > fb[i].hi.x ? u.hi.x : fb[i].hi.x, u.hi.y > fb[i].hi.y ? u.hi.y : fb[i].hi.y,
+                        u.hi.z > fb[i].hi.z ? u.hi.z : fb[i].hi.z};
+          }
+        }
+        if (any) camera_focus(cam, u);
+        else camera_focus_all(cam, fb, nb);
+        set_status(st, any ? "odak: secim" : "odak: tum sahne");
+      }
+      prev_f = f_now;
+    }
     if (headless && frame_i == 0 && st.scene.entity_count) {
       // Betikli secim kapisi: ilk varligin merkezi ekrana izdusurulur, o pikselden
       // atilan isin ayni varligi secmeli (kamera isini + sinirlar + secim uctan uca).
@@ -947,7 +1339,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       const Vec4 clip = proj * (view * Vec4{p0.x, p0.y, p0.z, 1.0f});
       const float px = (clip.x / clip.w * 0.5f + 0.5f) * (float)fw, py = (clip.y / clip.w * 0.5f + 0.5f) * (float)fh; // Vulkan: NDC y asagi
       Vec3 o, d;
-      camera_ray(cam, kPi / 3.5f, aspect, px, py, (float)fw, (float)fh, &o, &d);
+      camera_ray(cam, aspect, px, py, (float)fw, (float)fh, &o, &d);
       float t = 0;
       const int32_t hit = content::scene_pick(wb, nb, o, d, &t);
       const bool ok = hit == 0;
@@ -1027,7 +1419,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       float t = 0;
       if (inside.valid) {
         Vec3 o, d;
-        camera_ray(cam, kPi / 3.5f, aspect, inside.x, inside.y, (float)vp.width(), (float)vp.height(), &o, &d);
+        camera_ray(cam, aspect, inside.x, inside.y, (float)vp.width(), (float)vp.height(), &o, &d);
         hit = content::scene_pick(wb2, nb, o, d, &t);
       }
       const bool pok = inside.valid && hit == 0 && !outside.valid;
@@ -1035,6 +1427,95 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
                   view_rect.h, view_rect.x, view_rect.y, view_rect.x + lx, view_rect.y + ly, hit >= 0 ? st.scene.entities[hit].name : "-",
                   outside.valid ? "HAYIR" : "evet", pok ? "OK" : "HATA");
       if (!pok) return 1;
+    }
+    if (headless && frame_i == 6 && st.scene.entity_count >= 2) {
+      // Pano kapisi: iki varlik kopyala -> yapistir -> sayi +2 ve yapistirilanin
+      // BAYTLARI kaynakla ayni (yalniz konum otelendi); geri al baslangica doner.
+      // Kontrol: pano BOSKEN yapistir hicbir sey eklemez.
+      char txt_before[8192], txt_after[8192];
+      content::scene_write(st.scene, txt_before, sizeof txt_before);
+      const uint32_t n0 = st.scene.entity_count;
+      st.clip_count = 0;
+      do_paste(); // KONTROL: bos pano
+      const bool empty_noop = st.scene.entity_count == n0;
+      st.sel.set_single(0);
+      st.sel.toggle(1);
+      do_copy();
+      const uint32_t copied = st.clip_count;
+      do_paste();
+      const uint32_t n_pasted = st.scene.entity_count; // geri al'DAN ONCE (rapor bunu yazsin)
+      const bool grew = n_pasted == n0 + 2;
+      bool same_fields = false;
+      if (grew) {
+        SceneEntity a = st.scene.entities[0], b = st.scene.entities[n0];
+        b.pos.x -= 1.0f; // yapistirmanin otelemesi
+        same_fields = content::scene_entity_equal(a, b);
+      }
+      do_undo();
+      content::scene_write(st.scene, txt_after, sizeof txt_after);
+      const bool back = std::strcmp(txt_before, txt_after) == 0 && st.scene.entity_count == n0;
+      const bool pok = empty_noop && copied == 2 && grew && same_fields && back;
+      std::printf("[engine_editor] pano kapisi: kopyalanan %u, yapistirinca %u -> %u, alanlar ayni %s, KONTROL bos pano eklemedi %s, geri al baslangica dondu %s %s\n",
+                  copied, n0, n_pasted, same_fields ? "evet" : "HAYIR", empty_noop ? "evet" : "HAYIR", back ? "evet" : "HAYIR",
+                  pok ? "OK" : "HATA");
+      if (!pok) return 1;
+      st.clip_count = 0;
+      st.sel.set_single(0);
+      st.dirty = false;
+    }
+    if (headless && frame_i == 10 && st.scene.entity_count >= 3) {
+      // Sahne agaci kapisi (EDITORUN kendi yolu): varlik 1'i varlik 0'a baglayinca
+      // DUNYA siniri yerinde kalmali (reparent yerel donusumu yeniden hesaplar);
+      // sonra EBEVEYNI oteleyince cocugun siniri da otelenmeli — kalitim
+      // editorun sinir/secim yolundan geciyor mu? Kontrol: bagsiz bir varligin
+      // siniri ayni otelemede KIPIRDAMAZ.
+      static content::SceneBounds b0[content::kSceneMaxEntities], b1[content::kSceneMaxEntities], b2[content::kSceneMaxEntities];
+      char txt_before[8192], txt_after[8192];
+      content::scene_write(st.scene, txt_before, sizeof txt_before);
+      entity_world_bounds(st, phys, b0);
+      const bool bound = st.hist.reparent(st.scene, 1, 0);
+      if (bound) st.groups.push(1);
+      entity_world_bounds(st, phys, b1);
+      const Vec3 d_keep = b1[1].lo - b0[1].lo;
+      const bool kept = length(d_keep) < 1e-3f;
+      SceneEntity par = st.scene.entities[0];
+      par.pos.x += 5.0f;
+      const bool moved_ok = st.hist.set_entity(st.scene, 0, par);
+      if (moved_ok) st.groups.push(1);
+      entity_world_bounds(st, phys, b2);
+      const float child_dx = b2[1].lo.x - b1[1].lo.x;
+      const float other_dx = b2[2].lo.x - b1[2].lo.x; // KONTROL: bagsiz varlik
+      const bool inherited = child_dx > 4.99f && child_dx < 5.01f && other_dx > -0.01f && other_dx < 0.01f;
+      do_undo();
+      do_undo();
+      content::scene_write(st.scene, txt_after, sizeof txt_after);
+      const bool back = std::strcmp(txt_before, txt_after) == 0;
+      const bool hok = bound && kept && moved_ok && inherited && back;
+      std::printf("[engine_editor] sahne agaci kapisi: baglandi %s, dunya siniri yerinde kaldi %s (sapma %.4f), ebeveyn +5 -> cocuk %+.2f, "
+                  "KONTROL bagsiz %+.2f, geri al baslangica dondu %s %s\n",
+                  bound ? "evet" : "HAYIR", kept ? "evet" : "HAYIR", (double)length(d_keep), (double)child_dx, (double)other_dx,
+                  back ? "evet" : "HAYIR", hok ? "OK" : "HATA");
+      if (!hok) return 1;
+      st.dirty = false;
+    }
+    // Duraklatma kapisi (kare 7-9): duraklatilmisken tick DURUR, F10 TEK adim
+    // ilerletir. Kontrol duraklatmanin kendisidir: duraklamadan once tick akiyor.
+    if (headless && frame_i >= 7 && frame_i <= 9 && st.playing) {
+      static uint32_t t_pause = 0, t_hold = 0;
+      if (frame_i == 7) {
+        t_pause = tick_i;
+        st.paused = true;
+      } else if (frame_i == 8) {
+        t_hold = tick_i;
+        st.step_request = 1;
+      } else {
+        const bool held = t_hold == t_pause;      // duraklatma: tick akmadi
+        const bool stepped = tick_i == t_hold + 1; // tek adim: tam bir tick
+        std::printf("[engine_editor] duraklatma kapisi: tick %u -> %u (duraklatildi, akmadi %s) -> %u (tek adim %s) %s\n", t_pause, t_hold,
+                    held ? "evet" : "HAYIR", tick_i, stepped ? "evet" : "HAYIR", (held && stepped) ? "OK" : "HATA");
+        if (!(held && stepped)) return 1;
+        st.paused = false;
+      }
     }
     if (headless && frame_i >= 2 && frame_i <= 5) {
       // E1 duzen kaliciligi kapisi: kaydet -> A; dosyadan yukle -> (bir kare sonra,
@@ -1110,6 +1591,27 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         if (!lok) return 1;
       }
     }
+    // --- Kipli pencereler: HER KARE AYNI YERDEN cagrilir (ImGui popup kimligi
+    // bulunulan pencere yiginindan turer; menu geri cagrisindan OpenPopup etmek
+    // kimligi kaydirirdi — ikisi de OpenPopup'i kendi icinde yapiyor).
+    if (dlg.open) {
+      const FileDialogAction fa = file_dialog_draw(dlg);
+      if (fa == FileDialogAction::Accepted) {
+        if (dlg.mode == FileDialogMode::Ac) load_scene_from(dlg.path);
+        else if (save_scene_to(dlg.path) && pending != PendingNone) { run_pending(pending); pending = PendingNone; }
+      } else if (fa == FileDialogAction::Cancelled) pending = PendingNone;
+    }
+    if (confirm.open) {
+      char msg[320];
+      std::snprintf(msg, sizeof msg, "\x22%s\x22 dosyasinda kaydedilmemis degisiklikler var.\nNe yapilsin?",
+                    st.scene_path[0] ? file_path_base(st.scene_path) : "adsiz sahne");
+      const ConfirmResult cr = confirm_modal(confirm, "Sahne kaydedilmedi", msg, "Kaydet", "Vazge\xC3\xA7", "Kaydetme");
+      if (cr == ConfirmResult::Ok) {
+        do_save(); // adsiz sahnede diyalog acar: bekleyen eylem orada kosar
+        if (!st.dirty && pending != PendingNone) { run_pending(pending); pending = PendingNone; }
+      } else if (cr == ConfirmResult::Third) { run_pending(pending); pending = PendingNone; }
+      else if (cr == ConfirmResult::Cancel) pending = PendingNone;
+    }
     ui.end_frame();
 
     // --- 3B cizim: veri modelinden (dunya isigi/golgesi de her kare modelden: panel canli) ---
@@ -1121,7 +1623,8 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     for (uint32_t i = 0; i < st.scene.entity_count; i++) {
       const SceneEntity &e = st.scene.entities[i];
       const bool simulated = st.playing && st.bodies_live && st.bodies[i].valid() && e.dynamic;
-      const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_matrix(e);
+      if (e.flags & content::kSceneHidden) continue; // panelde gozu kapatilmis varlik CIZILMEZ
+      const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_world_matrix(st.scene, i);
       const bool sel = st.sel.contains((int32_t)i);
       const Vec3 tint = sel ? Vec3{1.0f, 0.9f, 0.4f} : e.tint;
       bool drew = false;
@@ -1129,7 +1632,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         const content::Model &mdl = st.models[e.asset];
         const content::UploadedModel &up = st.ups[e.asset];
         content::ModelLod lod;
-        lod.camera_pos = cam.eye();
+        lod.camera_pos = camera_eye(cam);
         lod.distance1 = 24.0f; lod.distance2 = 34.0f;
         if ((e.components & content::kSceneAnim) && e.clip < mdl.clip_count) {
           const float dur = mdl.clips[e.clip].duration;

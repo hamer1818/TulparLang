@@ -588,19 +588,153 @@ bool hierarchy_filter_match(const char *name, const char *filter) {
   return std::strstr(fn, ff) != nullptr;
 }
 
-bool hierarchy_row(int id, const HierarchyRow &r) {
+// --- agac durumu (cagiran sahibi) --------------------------------------------
+void HierarchyCollapse::set(uint32_t i, bool v) {
+  if (i >= kMax) return;
+  if (v) bits[i >> 5] |= 1u << (i & 31);
+  else bits[i >> 5] &= ~(1u << (i & 31));
+}
+void HierarchyCollapse::clear() {
+  for (uint32_t k = 0; k < (kMax + 31) / 32; k++) bits[k] = 0;
+}
+void HierarchyCollapse::after_remove(uint32_t removed) {
+  if (removed >= kMax) return;
+  for (uint32_t i = removed; i + 1 < kMax; i++) set(i, collapsed(i + 1));
+  set(kMax - 1, false);
+}
+void HierarchyCollapse::after_insert(uint32_t at) {
+  if (at >= kMax) return;
+  for (uint32_t i = kMax - 1; i > at; i--) set(i, collapsed(i - 1));
+  set(at, false);
+}
+void HierarchyRename::begin(int32_t i, const char *name) {
+  index = i;
+  std::snprintf(buf, sizeof buf, "%s", name ? name : "");
+  focus = true;
+}
+void hierarchy_begin_rename(HierarchyState *st, int32_t index, const char *name) {
+  if (st) st->rename.begin(index, name);
+}
+
+namespace {
+// Satirin ortak govdesi. `st` null ise agac sureclerinin hicbiri acilmaz —
+// eski duz hierarchy_row tam olarak bu yoldan geciyor (ikinci bir kopya yok).
+HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState *st) {
+  HierarchyResult res;
+  res.index = id;
   const ImGuiStyle &s = ImGui::GetStyle();
   ImGui::PushID(id);
-  const float h = std::floor(ImGui::GetFontSize() + s.FramePadding.y * 1.5f);
+  const float fs = ImGui::GetFontSize();
+  const float h = std::floor(fs + s.FramePadding.y * 1.5f);
+  const float step = std::floor(fs * 0.85f); // bir derinlik kademesi
+  const float indent = step * (float)r.depth;
+  const float arrow_col = std::floor(fs * 0.9f);
+
+  // --- yerinde ad duzenleme: satirin YERINE metin kutusu -----------------------
+  if (st && st->rename.index == id) {
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(s.ItemSpacing.x, 2.0f));
+    if (indent + arrow_col > 0) { ImGui::Dummy(ImVec2(indent + arrow_col, h)); ImGui::SameLine(0, 0); }
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (st->rename.focus) { ImGui::SetKeyboardFocusHere(); st->rename.focus = false; }
+    const bool enter = ImGui::InputText("##ad", st->rename.buf, sizeof st->rename.buf,
+                                        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+    const bool left = ImGui::IsItemDeactivated();
+    ImGui::PopStyleVar();
+    g_row_layout.row = item_rect();
+    std::snprintf(g_row_layout.text, sizeof g_row_layout.text, "%s", st->rename.buf);
+    if (enter && st->rename.buf[0]) { // bos ad kabul edilmez (sessizce degil: kip acik kalir)
+      res.action = HierarchyAction::Rename;
+      std::snprintf(res.name, sizeof res.name, "%s", st->rename.buf);
+      st->rename.cancel();
+    } else if (enter || ImGui::IsKeyPressed(ImGuiKey_Escape) || (left && !enter)) {
+      st->rename.cancel(); // Esc ya da odagi birakma: vazgec
+    }
+    ImGui::PopID();
+    return res;
+  }
+
   // Satirlar sik: dikey bosluk 2px; Selectable zemini boslugun yarisini kaplar.
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(s.ItemSpacing.x, 2.0f));
-  const bool clicked = ImGui::Selectable("##satir", r.selected, ImGuiSelectableFlags_None, ImVec2(0, h));
+  ImGui::SetNextItemAllowOverlap(); // ok / gorunurluk / kilit satirin UZERINDE
+  const bool clicked = ImGui::Selectable("##satir", r.selected, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, h));
   ImGui::PopStyleVar();
   const WidgetRect rr = item_rect();
   g_row_layout.row = rr;
+  // Uzerinde olma KOSULU satirin DIKDORTGENI, ogenin kendisi degil: ok/goz/kilit
+  // dugmeleri satirin ustunde durur ve isaretci onlarin uzerindeyken Selectable'in
+  // IsItemHovered'i FALSE doner. Oge durumuna baglansaydi, fare kilide yaklasinca
+  // simgeler kaybolur, kaybolunca hover satira doner, simgeler geri gelir —
+  // titreyen ve TIKLANAMAYAN bir dugme (olculdu: goz kapisinin goruntusunde
+  // kilit hic cizilmemisti).
+  const bool hovered = ImGui::IsItemHovered() ||
+                       (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+                        ImGui::IsMouseHoveringRect(ImVec2(rr.x0, rr.y0), ImVec2(rr.x1, rr.y1)));
+  g_row_layout.arrow = g_row_layout.eye = g_row_layout.lock = WidgetRect{};
+  const bool dbl = clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+  if (clicked && !dbl) {
+    res.action = HierarchyAction::Select;
+    res.ctrl = ImGui::GetIO().KeyCtrl;
+  }
+  if (st) {
+    // Surukle-birak. Yuk = varlik indeksi. Satirin UZERINE birakmak = cocuk yap;
+    // listenin altindaki bos alan (hierarchy_root_drop_zone) = koke tasi.
+    // Satirlar ARASINA birakma YOK: varlik sirasi = dizi indeksi, araya birakmak
+    // butun indeksleri kaydirirdi (gunluk/blob/secim hepsi etkilenir) — bilincli
+    // olarak ertelendi, yerine baglam menusunde "Ebeveynden ayir" var.
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoHoldToOpenOthers)) {
+      st->drag_source = id;
+      ImGui::SetDragDropPayload("TULPAR_VARLIK", &id, sizeof id);
+      ImGui::TextUnformatted(r.name ? r.name : "");
+      ImGui::EndDragDropSource();
+    }
+    if (ImGui::BeginDragDropTarget()) {
+      if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("TULPAR_VARLIK")) {
+        int src = -1;
+        if (pl->DataSize == (int)sizeof src) std::memcpy(&src, pl->Data, sizeof src);
+        if (src >= 0 && src != id) {
+          res.action = HierarchyAction::Reparent;
+          res.index = src;
+          res.target = id;
+        }
+        st->drag_source = -1;
+      }
+      ImGui::EndDragDropTarget();
+    }
+    // Baglam menusu (sag tik). Eylemi DONDURUR, sahneye dokunmaz.
+    if (ImGui::BeginPopupContextItem("baglam")) {
+      if (ImGui::MenuItem("Yeniden adland\xC4\xB1r", "F2")) {
+        st->rename.begin(id, r.name);
+        ImGui::CloseCurrentPopup();
+      }
+      if (ImGui::MenuItem("\xC3\x87o\xC4\x9F" "alt", "Ctrl+D")) res.action = HierarchyAction::Duplicate;
+      if (ImGui::MenuItem("Ebeveynden ay\xC4\xB1r")) res.action = HierarchyAction::Detach;
+      ImGui::Separator();
+      if (ImGui::MenuItem("Sil", "Del")) res.action = HierarchyAction::Delete;
+      ImGui::EndPopup();
+    }
+    if (dbl) st->rename.begin(id, r.name); // cift tik: yerinde ad
+  }
+
   ImDrawList *dl = ImGui::GetWindowDrawList();
-  const float fs = ImGui::GetFontSize();
   const float ty = std::floor(rr.y0 + (rr.y1 - rr.y0 - fs) * 0.5f);
+  float x = rr.x0 + s.FramePadding.x + indent;
+
+  // --- acilir ok: yalniz cocugu olanda; sutun genisligi HER ZAMAN ayrilir ki
+  //     kardeslerin adlari hizali kalsin.
+  if (r.has_children) {
+    const char *arrow = r.expanded ? "\xE2\x96\xBE" : "\xE2\x96\xB8"; // ▾ / ▸
+    const ImVec2 asz = ImGui::CalcTextSize(arrow);
+    dl->AddText(ImVec2(std::floor(x + (arrow_col - asz.x) * 0.5f), ty), tone_u32(Tone::TextDim), arrow);
+    if (st) {
+      ImGui::SetCursorScreenPos(ImVec2(x, rr.y0));
+      if (ImGui::InvisibleButton("##ok", ImVec2(arrow_col, rr.y1 - rr.y0))) {
+        res.action = HierarchyAction::Toggle;
+        res.index = id;
+      }
+      g_row_layout.arrow = item_rect();
+    }
+  }
+  x += arrow_col;
 
   // Tur simgesi: sabit genislikli sutun (adlar hizali kalsin).
   const char *icon;
@@ -609,11 +743,41 @@ bool hierarchy_row(int id, const HierarchyRow &r) {
   else if (r.has_model) { icon = "\xE2\x97\x86"; it = Tone::Text; }  // ◆
   else if (r.has_body) { icon = "\xE2\x97\xBC"; it = Tone::AxisZ; }  // ◼
   else { icon = "\xE2\x97\x8B"; it = Tone::TextDim; }                // ○
-  float x = rr.x0 + s.FramePadding.x;
   const float icon_col = std::floor(fs * 1.05f);
   const ImVec2 isz = ImGui::CalcTextSize(icon);
-  dl->AddText(ImVec2(std::floor(x + (icon_col - isz.x) * 0.5f), ty), tone_u32(it), icon);
+  dl->AddText(ImVec2(std::floor(x + (icon_col - isz.x) * 0.5f), ty), tone_u32(it, r.hidden ? 0.45f : 1.0f), icon);
   x += icon_col + s.ItemInnerSpacing.x;
+
+  float right = rr.x1 - s.FramePadding.x;
+  // --- gorunurluk + kilit (en sagda). DejaVuSans'ta goz/asma kilit glifi YOK
+  //     (olculdu: U+1F441 ve U+1F512 fontta degil), bu yuzden ⊙ gorunur /
+  //     ◌ gizli, ⊘ kilitli kullaniliyor. Kilit yalniz KILITLIYKEN ya da fare
+  //     satirdayken cizilir: sakin listede gurultu yapmasin.
+  if (st) {
+    const float bw = std::floor(fs * 1.1f);
+    // Iki sutun HER satirda AYRILIR, cizim kosullu olsa da. Yerlesim de kosullu
+    // olsaydi fare satira girdiginde sutunlar acilir, ad daralir ve imlecin
+    // altindaki dugme KAYARDI (olculdu: goz kapisinin sentetik tiklamasi
+    // kilidin uzerine dusuyordu). Yerlesim sabit, gorunurluk degisken.
+    ImGui::SetCursorScreenPos(ImVec2(right - bw, rr.y0));
+    if (ImGui::InvisibleButton("##kilit", ImVec2(bw, rr.y1 - rr.y0))) { res.action = HierarchyAction::Lock; res.index = id; }
+    g_row_layout.lock = item_rect();
+    if (r.locked || hovered) {
+      const char *g = "\xE2\x8A\x98"; // ⊘
+      const ImVec2 gs2 = ImGui::CalcTextSize(g);
+      dl->AddText(ImVec2(std::floor(right - bw + (bw - gs2.x) * 0.5f), ty), tone_u32(r.locked ? Tone::Warn : Tone::TextDim, r.locked ? 1.0f : 0.5f), g);
+    }
+    right -= bw;
+    ImGui::SetCursorScreenPos(ImVec2(right - bw, rr.y0));
+    if (ImGui::InvisibleButton("##goz", ImVec2(bw, rr.y1 - rr.y0))) { res.action = HierarchyAction::Visibility; res.index = id; }
+    g_row_layout.eye = item_rect();
+    if (r.hidden || hovered) {
+      const char *g = r.hidden ? "\xE2\x97\x8C" : "\xE2\x8A\x99"; // ◌ gizli / ⊙ gorunur
+      const ImVec2 gs2 = ImGui::CalcTextSize(g);
+      dl->AddText(ImVec2(std::floor(right - bw + (bw - gs2.x) * 0.5f), ty), tone_u32(Tone::TextDim, r.hidden ? 1.0f : 0.5f), g);
+    }
+    right -= bw + s.ItemInnerSpacing.x;
+  }
 
   // Sag: bilesen glifleri, kucuk ve soluk (◆ model, ☀ isik, ◼ govde, ↻ animasyon).
   char glyphs[32] = {0};
@@ -621,7 +785,6 @@ bool hierarchy_row(int id, const HierarchyRow &r) {
   if (r.has_light) std::strcat(glyphs, "\xE2\x98\x80 ");
   if (r.has_body) std::strcat(glyphs, "\xE2\x97\xBC ");
   if (r.has_anim) std::strcat(glyphs, "\xE2\x86\xBB ");
-  float right = rr.x1 - s.FramePadding.x;
   if (glyphs[0]) {
     glyphs[std::strlen(glyphs) - 1] = 0; // son bosluk
     ImGui::PushFont(nullptr, s.FontSizeBase * 0.78f);
@@ -632,14 +795,43 @@ bool hierarchy_row(int id, const HierarchyRow &r) {
     right -= gs.x + s.ItemInnerSpacing.x;
   }
 
-  // Ad: kalan genislige kirp; kirpildiysa tam ad ipucunda.
+  // Ad: kalan genislige kirp; kirpildiysa tam ad ipucunda. Gizli varlik soluk.
   g_row_layout.text_max_w = right - x;
+  g_row_layout.text_x = x;
   editor_ellipsize(r.name ? r.name : "", g_row_layout.text_max_w, g_row_layout.text, sizeof g_row_layout.text);
   g_row_layout.ellipsized = r.name && std::strcmp(g_row_layout.text, r.name) != 0;
-  dl->AddText(ImVec2(x, ty), tone_u32(Tone::Text), g_row_layout.text);
-  if (g_row_layout.ellipsized && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", r.name);
+  dl->AddText(ImVec2(x, ty), tone_u32(r.hidden ? Tone::TextDim : Tone::Text), g_row_layout.text);
+  if (g_row_layout.ellipsized && hovered && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", r.name);
   ImGui::PopID();
-  return clicked;
+  return res;
+}
+} // namespace
+
+bool hierarchy_row(int id, const HierarchyRow &r) {
+  const HierarchyResult res = hierarchy_row_impl(id, r, nullptr);
+  return res.action == HierarchyAction::Select;
+}
+HierarchyResult hierarchy_tree_row(int id, const HierarchyRow &r, HierarchyState *st) { return hierarchy_row_impl(id, r, st); }
+
+HierarchyResult hierarchy_root_drop_zone(HierarchyState *st) {
+  HierarchyResult res;
+  if (!st) return res;
+  const float avail = ImGui::GetContentRegionAvail().y;
+  if (avail < 4.0f) return res; // yer yok: hicbir sey cizme (gorunmez oge de yok)
+  ImGui::InvisibleButton("##kok_birakma", ImVec2(-FLT_MIN, avail));
+  if (ImGui::BeginDragDropTarget()) {
+    // Cerceve: birakilabilir alan GORUNSUN (sessiz hedef kullanilamaz).
+    const WidgetRect z = item_rect();
+    ImGui::GetWindowDrawList()->AddRect(ImVec2(z.x0, z.y0), ImVec2(z.x1, z.y1), tone_u32(Tone::Accent, 0.6f), ImGui::GetStyle().FrameRounding);
+    if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("TULPAR_VARLIK")) {
+      int src = -1;
+      if (pl->DataSize == (int)sizeof src) std::memcpy(&src, pl->Data, sizeof src);
+      if (src >= 0) { res.action = HierarchyAction::Detach; res.index = src; }
+      st->drag_source = -1;
+    }
+    ImGui::EndDragDropTarget();
+  }
+  return res;
 }
 
 int hierarchy_toolbar(uint32_t entity_count, bool has_selection) {

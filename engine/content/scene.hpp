@@ -21,6 +21,10 @@ constexpr uint32_t kSceneMaxEntities = 256;
 constexpr uint32_t kSceneMaxAssets = 16;
 constexpr uint32_t kSceneNameLen = 32;   // NUL dahil
 constexpr uint32_t kScenePathLen = 128;  // NUL dahil
+// Agac derinligi TAVANI (kok = 0). Tavan OLMAK ZORUNDA: ebeveyn zinciri veri
+// dosyasindan gelir, yani dusmanca/bozuk girdi olabilir; ozyineleme yok, her
+// yurume bu sayida adimda durur. Asilmasi sessiz kirpma DEGIL, hatadir.
+constexpr uint32_t kSceneMaxDepth = 16;
 
 enum SceneComponentBits : uint32_t {
   kSceneModel = 1u << 0, // glTF model (kaynak indeksi + renk)
@@ -29,10 +33,24 @@ enum SceneComponentBits : uint32_t {
   kSceneBody = 1u << 3,  // fizik govdesi (kutu / kure)
 };
 enum class SceneShape : uint32_t { Box = 0, Sphere = 1 };
+// Varlik bayraklari — EDITOR gorunumu, oyun icerigi DEGIL: `.sahneb` derleyicisi
+// bunlara bakmaz (gizli bir varlik yine de blob'a girer), yalniz editor panelleri
+// okur. Sifir varsayilan ve dosyaya YAZILMAZ; boylece bayraksiz sahnelerin metni
+// Faz E2 oncesiyle bayt bayt aynidir.
+enum SceneEntityFlags : uint32_t {
+  kSceneHidden = 1u << 0, // editorde gizli (cizilmez, secilemez)
+  kSceneLocked = 1u << 1, // kilitli (gizmo/surukleme degistiremez)
+};
 
 struct SceneEntity {
   char name[kSceneNameLen];
-  Vec3 pos{0, 0, 0}, rot_deg{0, 0, 0}, scale{1, 1, 1};
+  Vec3 pos{0, 0, 0}, rot_deg{0, 0, 0}, scale{1, 1, 1}; // YEREL (ebeveyne gore)
+  // Sahne agaci: ebeveynin varlik DIZINI, -1 = kok. Dizin ileriyi de
+  // gosterebilir (ebeveyn-once siralama SART DEGIL); tutarliligi
+  // scene_tree_validate saglar. Varlik silinince/eklenince kaydirilir
+  // (SceneDesc::remove_entity / insert_entity).
+  int32_t parent = -1;
+  uint32_t flags = 0; // SceneEntityFlags
   uint32_t components = 0;
   // model
   int32_t asset = -1;
@@ -75,7 +93,17 @@ struct SceneDesc : SceneWorld {
 
   int32_t add_asset(const char *path); // varsa mevcut indeks; sigmazsa -1
   int32_t find_entity(const char *name) const;
+  // Ekleme. MEVCUT varliklarin `parent >= at` olanlari +1 kaydirilir; `e.parent`
+  // ise EKLEMEDEN SONRAKI indeks uzayinda yorumlanir (kaydirilmaz) — Remove
+  // isleminin geri alinmasi tam da bunu ister.
+  // SONA ekleme (at == entity_count) hicbir seyi kaydirmaz: ayristirma sirasinda
+  // henuz olusmamis bir varliga bakan ILERI ebeveyn referanslari bozulmasin.
   bool insert_entity(uint32_t at, const SceneEntity &e); // at <= entity_count
+  // Silme, AGACI TUTARLI birakir (secim burada; bkz. scene.cpp):
+  //   1. silinen dugumun cocuklari BUYUKBABAYA baglanir (silinen kok ise kok
+  //      olurlar) — alt agac SESSIZCE yok olmaz, kullanici gordugu varliklari
+  //      kaybetmez; alt agaci da silmek isteyen cagiran once onlari siler.
+  //   2. `parent > at` olan her ebeveyn -1 kaydirilir (diziler sikisti).
   bool remove_entity(uint32_t at);
 };
 
@@ -95,9 +123,52 @@ bool scene_save(Arena &scratch, const SceneDesc &d, const char *path, SceneError
 void scene_dir_of(const char *path, char *out, size_t cap);
 
 // Varlik donusumu: T * Rz * Ry * Rx * S (ImGuizmo ayristirmasiyla ayni sira;
-// kapisi test_editor'da). Donus Euler derece.
+// kapisi test_editor'da). Donus Euler derece. Bu YEREL donusumdur — ebeveyn
+// zinciri KATILMAZ (dunya icin scene_entity_world_matrix).
 Mat4 scene_entity_matrix(const SceneEntity &e);
 Quat scene_entity_rotation(const SceneEntity &e);
+
+// --- Sahne agaci (Faz E2) ----------------------------------------------------
+// Agac gecerli mi: her ebeveyn indeksi sinir icinde, kendine bakan yok, dongu
+// yok, derinlik <= kSceneMaxDepth. Bozuksa false ve *bad_index = ilk bozuk
+// varlik. Ayirma yok, ozyineleme yok (her yurume tavanda durur).
+bool scene_tree_validate(const SceneDesc &d, uint32_t *bad_index);
+// Varligin kok'e uzakligi (kok = 0). Bozuk/derin zincir: kSceneMaxDepth doner
+// (tavanda durur, asla donguye girmez).
+uint32_t scene_tree_depth(const SceneDesc &d, uint32_t i);
+// DUNYA donusumu: kok'ten asagi `M_kok * ... * M_i`. Her varligin kendi sirasi
+// T*Rz*Ry*Rx*S olarak kalir. Kok varlikta sonuc scene_entity_matrix ile
+// BIT-TAMDIR (erken donus) — duzlestirilmis sahne ile karsilastirma kapisi
+// buna dayanir.
+Mat4 scene_entity_world_matrix(const SceneDesc &d, uint32_t i);
+// Dunya donusu: zincirdeki kuaterniyonlarin carpimi. Kok: scene_entity_rotation
+// ile bit-tam.
+Quat scene_entity_world_rotation(const SceneDesc &d, uint32_t i);
+// Dunya olcegi: zincirdeki olceklerin bilesen carpimi. ⚠ SINIR: ebeveynde hem
+// donus hem esit-olmayan olcek varsa gercek dunya donusumu EGIKTIR (shear) ve
+// tek bir olcek vektorune sigmaz; bu durumda deger bir YAKLASIMDIR. Cizim
+// matrisi (scene_entity_world_matrix) her durumda tamdir; yaklasim yalniz
+// rijit govde / GI gibi T-R-S isteyen tuketicileri ilgilendirir.
+Vec3 scene_entity_world_scale(const SceneDesc &d, uint32_t i);
+// Belirlenimli on-sirali gezinti: kokler indeks sirasinda, her dugumun
+// cocuklari indeks sirasinda. Donus: dugum sayisi (cap asilsa da dogru sayar,
+// yalniz ilk cap tanesi yazilir). Panelin cizdigi sira budur.
+uint32_t scene_tree_order(const SceneDesc &d, int32_t *out, uint32_t cap);
+// Yeniden ebeveynleme: `child`'in DUNYA donusumu KORUNUR — yeni yerel
+// pos/rot_deg/scale, `inverse(dunya(new_parent)) * dunya(child)` matrisinin
+// T*Rz*Ry*Rx*S ayristirmasidir. Reddeder (ve HICBIR SEYI degistirmez):
+// sinir disi indeks, kendine ebeveyn, dongu (yeni ebeveyn cocugun altindaysa),
+// tavan asimi. ⚠ AYRISTIRMA SINIRI: ayna (negatif determinant) tek eksene — X —
+// yuklenir; egik (shear) bir matris T*R*S ile temsil edilemez, o durumda dunya
+// donusumu TAM korunmaz (ebeveynde donus + esit olmayan olcek birlikteyse).
+bool scene_reparent(SceneDesc &d, uint32_t child, int32_t new_parent);
+// Ayni hesap, UYGULAMADAN: sonucu *out'a yazar (gunluge tek islem olarak
+// girmek icin; bkz. SceneHistory::reparent).
+bool scene_reparent_entity(const SceneDesc &d, uint32_t child, int32_t new_parent, SceneEntity *out);
+// Gizmo DUNYA uzayinda calisir (ImGuizmo'ya dunya matrisi verilir); sonucu
+// varligin YEREL alanlarina yazmadan once bundan gecirmek ZORUNLU, yoksa
+// cocuk varlik ebeveyn donusumunu iki kez yer. Kok varlikta `world` aynen doner.
+Mat4 scene_world_to_local_matrix(const SceneDesc &d, uint32_t i, const Mat4 &world);
 
 // Secim: isin–AABB. Yerel sinir = model sinirlari (varsa) ∪ govde ∪ isaret
 // kutusu (bos/isik varligi 0.3). Dunya AABB yerel kutunun 8 kosesinden.
@@ -112,7 +183,9 @@ bool scene_ray_aabb(Vec3 origin, Vec3 dir, const SceneBounds &b, float *t);
 int32_t scene_pick(const SceneBounds *bounds, uint32_t n, Vec3 origin, Vec3 dir, float *t_out);
 
 // Fizik: govde bilesenli varliklari dunyaya koyar; ids[entity_count] doldurur
-// (govdesizler gecersiz). Donus: eklenen govde sayisi.
+// (govdesizler gecersiz). Donus: eklenen govde sayisi. Govde DUNYA donusumuyle
+// kurulur (konum/donus/olcek zincirden) — cocuk govde gorundugu yerde dogar,
+// yerel ofsetinde degil.
 uint32_t scene_spawn_bodies(const SceneDesc &d, sim::Physics &ph, sim::BodyId *ids);
 void scene_remove_bodies(sim::Physics &ph, sim::BodyId *ids, uint32_t n);
 // Dinamik govdenin sim'deki yeri: T(sim) * R(sim) * S(yazar).
@@ -126,6 +199,11 @@ struct SceneOp {
   uint32_t index;
   SceneEntity before, after;
   SceneWorld world_before, world_after; // yalniz World
+  // Yalniz Remove: silinen dugumun cocuklarinin SILINMEDEN ONCEKI indeksleri.
+  // Silme onlari buyukbabaya bagladigi icin sonradan bulunamazlar (gercek
+  // buyukbaba cocuklariyla karisirlar) — geri alma bit-tam olsun diye 32 bayt
+  // bit kumesi olarak saklanir (dizi kopyasi degil).
+  uint32_t child_mask[(kSceneMaxEntities + 31) / 32];
 };
 class SceneHistory {
 public:
@@ -134,6 +212,11 @@ public:
   bool set_entity(SceneDesc &d, uint32_t i, const SceneEntity &after);
   bool add_entity(SceneDesc &d, const SceneEntity &e); // sona
   bool remove_entity(SceneDesc &d, uint32_t i);
+  // Yeniden ebeveynleme TEK islemdir: scene_reparent_entity yalniz `child`
+  // varliginin alanlarini (parent + yerel donusum) degistirdigi icin mevcut
+  // Set islemine oturur — geri alma bayt-tamdir, yeni bir islem turu yok.
+  // Donus: gunluge islem girdi mi (ayni ebeveyn / gecersiz istek: false).
+  bool reparent(SceneDesc &d, uint32_t child, int32_t new_parent);
   bool set_world(SceneDesc &d, const SceneWorld &after); // esitse kaydetmez (false)
   bool undo(SceneDesc &d);
   bool redo(SceneDesc &d);

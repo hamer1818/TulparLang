@@ -39,6 +39,14 @@ constexpr Chord kKeyT = (Chord)ImGuiKey_T;
 constexpr Chord kKeyR = (Chord)ImGuiKey_R;
 constexpr Chord kKeyDelete = (Chord)ImGuiKey_Delete;
 constexpr Chord kKeyEscape = (Chord)ImGuiKey_Escape;
+constexpr Chord kKeyX = (Chord)ImGuiKey_X;
+constexpr Chord kKeyC = (Chord)ImGuiKey_C;
+constexpr Chord kKeyV = (Chord)ImGuiKey_V;
+constexpr Chord kKeyF5 = (Chord)ImGuiKey_F5;
+constexpr Chord kKeyF6 = (Chord)ImGuiKey_F6;
+constexpr Chord kKeyF10 = (Chord)ImGuiKey_F10;
+constexpr Chord kKeyN = (Chord)ImGuiKey_N;
+constexpr Chord kKeyO = (Chord)ImGuiKey_O;
 
 // --- VARSAYILAN TABLO -------------------------------------------------------
 // Buradaki her satir editor_app.cpp'de BUGUN VAR OLAN bir davranistir; hicbiri
@@ -49,8 +57,14 @@ constexpr Chord kKeyEscape = (Chord)ImGuiKey_Escape;
 // Sira = menu sirasi. Alanlar: id, kategori, bayraklar, kisayol, ikincil,
 // ascii kimlik, gorunen ad, aciklama.
 constexpr CommandDesc k_defaults[] = {
+    {CommandId::FileNew, CommandCategory::File, kCmdNone, chord_of(kModCtrl, kKeyN), kChordNone, "dosya.yeni", "Yeni",
+     "Bos sahne (kaydedilmemis degisiklik varsa sorulur)"},
+    {CommandId::FileOpen, CommandCategory::File, kCmdNone, chord_of(kModCtrl, kKeyO), kChordNone, "dosya.ac", "A\xC3\xA7\xE2\x80\xA6",
+     "Sahne dosyasi acar (kaydedilmemis degisiklik varsa sorulur)"},
     {CommandId::FileSave, CommandCategory::File, kCmdNone, chord_of(kModCtrl, kKeyS), kChordNone, "dosya.kaydet", "Kaydet",
      "Sahneyi .sahne dosyasina yazar (kamerayi da)"},
+    {CommandId::FileSaveAs, CommandCategory::File, kCmdNone, chord_of(kModCtrl | kModShift, kKeyS), kChordNone, "dosya.farkli_kaydet",
+     "Farkl\xC4\xB1 kaydet\xE2\x80\xA6", "Sahneyi baska bir dosyaya yazar ve o dosyayi acik tutar"},
     {CommandId::FileCompile, CommandCategory::File, kCmdNone, chord_of(kModCtrl, kKeyB), kChordNone, "dosya.derle", "Derle",
      "Bellekteki sahneyi .sahneb calisma blobuna derler"},
     {CommandId::EditUndo, CommandCategory::Edit, kCmdNone, chord_of(kModCtrl, kKeyZ), kChordNone, "duzen.geri_al", "Geri al",
@@ -65,12 +79,24 @@ constexpr CommandDesc k_defaults[] = {
      "Secili varlik varsa kopyasini, yoksa yeni bir varlik ekler"},
     {CommandId::EditDelete, CommandCategory::Edit, kCmdUndoable | kCmdNeedsSelection, kKeyDelete, kChordNone, "duzen.sil", "Sil",
      "Secili varliklarin tamamini siler (tek geri al getirir)"},
+    // Pano: kopyalanan varliklar editorun kendi tamponunda durur (isletim
+    // sistemi panosu DEGIL — metin degil yapi kopyaliyoruz). Ctrl+C/V metin
+    // kutusundayken tabloya GELMEZ (koruma !text_input), orada ImGui'nin kendi
+    // kopyala/yapistir'i calisir.
+    {CommandId::EditCut, CommandCategory::Edit, kCmdUndoable | kCmdNeedsSelection, chord_of(kModCtrl, kKeyX), kChordNone, "duzen.kes", "Kes",
+     "Secili varliklari panoya alir ve siler"},
+    {CommandId::EditCopy, CommandCategory::Edit, kCmdNeedsSelection, chord_of(kModCtrl, kKeyC), kChordNone, "duzen.kopyala", "Kopyala",
+     "Secili varliklari panoya alir"},
+    {CommandId::EditPaste, CommandCategory::Edit, kCmdUndoable, chord_of(kModCtrl, kKeyV), kChordNone, "duzen.yapistir", "Yap\xC4\xB1\xC5\x9Ft\xC4\xB1r",
+     "Panodaki varliklari sahneye ekler (tek geri al)"},
     {CommandId::SelectAll, CommandCategory::Select, kCmdNone, chord_of(kModCtrl, kKeyA), kChordNone, "secim.tumu", "T\xC3\xBCm\xC3\xBCn\xC3\xBC se\xC3\xA7",
      "Sahnedeki butun varliklari secime alir"},
     {CommandId::SelectClear, CommandCategory::Select, kCmdNeedsSelection, kKeyEscape, kChordNone, "secim.temizle", "Se\xC3\xA7imi temizle",
      "Secimi bosaltir"},
     {CommandId::ViewGizmos, CommandCategory::View, kCmdCheckable, kKeyG, kChordNone, "gorunum.gizmolar", "Gizmolar\xC4\xB1 a\xC3\xA7/kapa",
      "Isik yaricapi, golge hacmi ve gunes oku tel cizimleri"},
+    {CommandId::ViewConsole, CommandCategory::View, kCmdCheckable, kChordNone, kChordNone, "gorunum.konsol", "Konsol",
+     "Motor, Vulkan ve sahne iletilerini gosteren paneli ac/kapa"},
     {CommandId::GizmoTranslate, CommandCategory::Gizmo, kCmdCheckable, kKeyT, kChordNone, "gizmo.tasi", "Ta\xC5\x9F\xC4\xB1",
      "ImGuizmo kipi: tasima"},
     {CommandId::GizmoRotate, CommandCategory::Gizmo, kCmdCheckable, kKeyR, kChordNone, "gizmo.dondur", "D\xC3\xB6nd\xC3\xBCr", "ImGuizmo kipi: dondurme"},
@@ -79,8 +105,14 @@ constexpr CommandDesc k_defaults[] = {
     // Bilesim esitligi degistiricileri DE karsilastirdigi icin o ayiklama artik
     // kendiliginden dogru: Ctrl basiliyken ham S ESLESMEZ.
     {CommandId::GizmoScale, CommandCategory::Gizmo, kCmdCheckable, kKeyS, kChordNone, "gizmo.olcekle", "\xC3\x96l\xC3\xA7""ekle", "ImGuizmo kipi: olcekleme"},
-    {CommandId::PlayToggle, CommandCategory::Play, kCmdCheckable, kChordNone, kChordNone, "oynat.baslat_durdur", "Oynat / Durdur",
+    {CommandId::PlayToggle, CommandCategory::Play, kCmdCheckable, kKeyF5, kChordNone, "oynat.baslat_durdur", "Oynat / Durdur",
      "Sim'i sabit adimda calistirir; durunca govdeler kaldirilir"},
+    // Duraklat DURDURMAK DEGILDIR: govdeler yerinde kalir, yalniz zaman akmaz.
+    // Durdur (PlayToggle) govdeleri kaldirir ve veri modeli yeniden gecerlidir.
+    {CommandId::PlayPause, CommandCategory::Play, kCmdCheckable, kKeyF6, kChordNone, "oynat.duraklat", "Duraklat",
+     "Oynatmayi dondurur; govdeler yerinde kalir (F10 ile kare ilerlet)"},
+    {CommandId::PlayStep, CommandCategory::Play, kCmdNone, kKeyF10, kChordNone, "oynat.kare_ilerlet", "Kare ilerlet",
+     "Duraklatilmisken TEK sabit fizik adimi ilerletir"},
 };
 
 constexpr uint32_t k_default_count = (uint32_t)(sizeof(k_defaults) / sizeof(k_defaults[0]));

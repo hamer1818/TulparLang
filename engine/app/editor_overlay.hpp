@@ -5,9 +5,13 @@
 //  1) viewport_overlay: 3B goruntunun USTUNE bilgi katmani (Unity Scene view /
 //     Unreal viewport gelenegi): sol-ust "hap" satiri (izdusum, gizmo kipi,
 //     kare istatistigi, oynatma cipi), sag-ust EKSEN GOSTERGESI (X/Y/Z, derinlik
-//     sirali), sol-alt kamera okumasi, sag-alt ipucu ve odak cercevesi. Yalniz
-//     GetWindowDrawList ile cizilir — ETKILESIMLI OGE YOK, altindaki ImGui::Image
-//     tiklamayi/ustunde-durmayi almaya devam eder. Her sey GetFontSize ve stilden
+//     sirali), sol-alt kamera okumasi, sag-alt ipucu ve odak cercevesi. Neredeyse
+//     tamami GetWindowDrawList ile cizilir; ETKILESIMLI OGE yalniz UC YERDE ve
+//     yalniz FARE TAM USTUNDEYKEN eklenir (eksen gostergesinin DISKI + iki/uc
+//     cip). "Yalniz ustundeyken" sozlesmesi zorunlu: oge her karede eklenseydi
+//     goruntunun o kosesi tiklamayi/ustunde-durmayi kaybederdi ve orada secim
+//     yapilamazdi. Diskin DISINDA kalan her piksel altindaki ImGui::Image'e
+//     duser (kapi bunu olcer). Her sey GetFontSize ve stilden
 //     olceklenir; dikdortgen kucukse sigmayan parca ATLANIR (ustuste yazi yok)
 //     ve her cizim r'ye kirpilir (disina tek piksel tasmaz — kapi bunu olcer).
 //
@@ -23,9 +27,10 @@
 #pragma once
 #include <cstdint>
 
+#include "app/editor_camera.hpp"   // CameraAxis, CameraMode, CameraProjection, GizmoSpace
 #include "app/editor_ui.hpp"       // AssetFile, Tone, editor_ellipsize
 #include "app/editor_viewport.hpp" // ViewportRect
-#include "content/scene.hpp"       // kScenePathLen
+#include "content/scene.hpp"       // kScenePathLen, SceneBounds
 
 namespace tulpar::engine::app {
 
@@ -45,6 +50,14 @@ struct OverlayInfo {
   float frame_ms = 0;   // son kare suresi (0 = bilinmiyor: istatistik hapi gizlenir)
   uint32_t draw_calls = 0, entity_count = 0;
   const char *hint = nullptr; // sag-alt ipucu; nullptr = yok
+  // Tiklanabilir ciplerin ETIKETI buradan gelir — kaplama kamerayi DEGISTIRMEZ,
+  // yalniz "tiklandi" der (OverlayResult); durumu degistiren editor_app.cpp'dir.
+  CameraProjection proj = CameraProjection::Perspective;
+  CameraMode cam_mode = CameraMode::Orbit;
+  GizmoSpace gizmo_space = GizmoSpace::World;
+  // Golgeleme kipi etiketi ("Duz", "Tel kafes", ...). nullptr = hap cizilmez
+  // (bugun editorde tek kip var; alan ileriye donuk ve kapilari bozmuyor).
+  const char *shading = nullptr;
 };
 
 // Eksen gostergesinin SAF izdusumu (cihazsiz, ImGui'siz — kapi bunu olcer).
@@ -58,6 +71,13 @@ struct AxisProjection {
 };
 void overlay_project_axes(const float view[16], float radius, AxisProjection *out);
 
+// Ekran dikdortgeni (kaplamanin olcum ciktilari icin). x < 0 = yok.
+struct OverlayRect {
+  float x = -1, y = 0, w = 0, h = 0;
+  bool valid() const { return x >= 0 && w > 0 && h > 0; }
+  bool contains(float px, float py) const { return px >= x && px < x + w && py >= y && py < y + h; }
+};
+
 // Cizimin OLCUM ciktisi: neyin cizildigi ve nereye (kapilar piksel orneklerken
 // yerlesimi yeniden turetmez, buradan okur). nullptr verilebilir.
 struct OverlayLayout {
@@ -70,11 +90,64 @@ struct OverlayLayout {
   float gizmo_r = 0;                // eksen ucu yaricapi (merkezden uc merkezine)
   float gizmo_end_r = 0;            // uc diskinin yaricapi
   uint32_t pills = 0;               // cizilen hap sayisi (ust satir)
+  // Tiklanabilir ciplerin ekran dikdortgeni (kapilar sentetik tiki buraya atar,
+  // yerlesimi yeniden turetmez). x < 0 = o cip bu karede CIZILMEDI (dar panel).
+  OverlayRect chip_proj{}, chip_mode{}, chip_space{};
+  bool box = false; // kutu (marquee) secim dikdortgeni cizildi
+};
+
+// Kaplamanin bu karede urettigi ETKILESIM. Kaplama hicbir durumu degistirmez;
+// cagiran (editor_app.cpp) bunlari kamera/secim uzerinde uygular.
+struct OverlayResult {
+  int axis_clicked = -1; // -1 yok; degilse (int)CameraAxis — camera_align'a verilir
+  int axis_hovered = -1; // vurgulanan uc (yalniz gorsel; kapi bunu da olcer)
+  bool ortho_toggled = false;       // "Perspektif/Ortografik" cipine tiklandi
+  bool mode_toggled = false;        // "Yorunge/Ucus" cipine tiklandi
+  bool gizmo_space_toggled = false; // "Dunya/Yerel" cipine tiklandi
+  // Kutu (marquee) secim. box_active: surukleme SURUYOR (dikdortgen cizildi).
+  // box_done: BU KARE birakildi -> secim UYGULANIR. Ikisi de box[] doludur.
+  bool box_active = false, box_done = false;
+  float box[4] = {0, 0, 0, 0}; // x0, y0, x1, y1 EKRAN pikseli, min/max normalize
+  // Kaplamanin bir ogesi fareyi aldi (gosterge diski ya da bir cip). Cagiran bu
+  // karede 3B secim isini ATMAZ — yoksa gostergeye tiklamak ayni anda arkadaki
+  // nesneyi de secerdi.
+  bool consumed_mouse = false;
 };
 
 // ImGui::Image(...) HEMEN sonrasinda, ayni pencere icinde cagrilir. r = imgenin
-// ekran dikdortgeni (ViewportRect{origin.x, origin.y, w, h}).
-void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLayout *out_layout = nullptr);
+// ekran dikdortgeni (ViewportRect{origin.x, origin.y, w, h}). out_res verilirse
+// bu karenin etkilesimi doldurulur (bkz. OverlayResult).
+//
+// ⚠ Argumanlarin sirasi BILEREK (layout, result): eski iki/uc argumanli cagrilar
+// (editor_app.cpp ve mevcut kapilar) degismeden derlensin diye.
+//
+// CAGIRANIN SOZLESMESI (bu sirayla):
+//   if (res.axis_clicked >= 0) camera_align(cam, (CameraAxis)res.axis_clicked);
+//   if (res.ortho_toggled) cam.proj = ...; if (res.mode_toggled) cam.mode = ...;
+//   if (res.box_done) -> viewport_box_select ile secimi kur (tek tik YOK)
+//   else if (tek tik && !res.consumed_mouse) -> isinla sec
+// res.consumed_mouse true iken 3B secim isini ATMA ve kamerayi fareyle surme.
+void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLayout *out_layout = nullptr, OverlayResult *out_res = nullptr);
+
+// Kutu (marquee) secimin SAF matematigi — ImGui'siz, cihazsiz (kapi bunu olcer).
+//
+// Her sinir kutusunun 8 kosesi view_proj ile izdusurulur, ekran dikdortgenine
+// (view) eslenir ve dikdortgenle karsilastirilir.
+//
+// ⚠ KAMERANIN ARKASI: w <= 0 olan kose BOLUNEMEZ. Klasik hata bolmeyi yine de
+// yapmaktir — negatif w izdusumu kokten AYNALAR ve arkadaki nesne dikdortgenin
+// icine "dusermis" gibi gorunur (kullanici sahnenin yarisini kazara secer).
+// Burada: tum koseler arkadaysa kutu ASLA secilmez; bir kismi arkadaysa
+// (yakin duzlemi kesiyor) yalniz ONDEKI koselerin ekran kutusu kullanilir ve
+// "tam icerme" istendiginde kutu secilmez — cunku gorunmeyen parcasi
+// dikdortgenin icinde OLDUGU iddia edilemez.
+//
+// require_full_containment: true = kutu TAMAMEN dikdortgenin icinde olmali
+// (Unreal varsayilani), false = kesismesi yeter (Unity/Blender varsayilani).
+// out == nullptr verilebilir: yalniz SAYAR. Donus: out'a YAZILAN sayi (cap ile
+// sinirli; cap dolarsa kalanlar atlanir — cagiran cap'i secim tavani kadar versin).
+uint32_t viewport_box_select(const Mat4 &view_proj, const content::SceneBounds *bounds, uint32_t n, const ViewportRect &view, float x0, float y0,
+                             float x1, float y1, bool require_full_containment, int32_t *out, uint32_t cap);
 
 // Yolu SOLDAN "…" ile kirpar: kuyruk (dosya/dizin adi) kalir, tercihen bir '/'
 // sinirinda ("…/tests/assets"). ImGui baglami gerekir. out NUL ile biter;

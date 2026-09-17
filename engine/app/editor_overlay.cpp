@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include <imgui.h>
+#include <imgui_internal.h> // GetCurrentWindow: imlec/yerlesim durumunu TAM geri almak icin
 
 namespace tulpar::engine::app {
 
@@ -66,7 +67,9 @@ void sort_by_depth(AxisEnd *e, int n) { // arkadakiler ONCE cizilir (n = 6, yerl
 }
 Tone axis_tone(int a) { return a == 0 ? Tone::AxisX : a == 1 ? Tone::AxisY : Tone::AxisZ; }
 
-void draw_axis_gizmo(ImDrawList *dl, ImVec2 c, float R, float end_r, float font_px, const float view[16]) {
+// hover_axis: vurgulanacak uc (a*2 + (negatif?1:0)), -1 = yok. Vurgu YALNIZ fare
+// diskin ustundeyken gelir; kapilarin cogu faresiz kosar ve pikselleri degismez.
+void draw_axis_gizmo(ImDrawList *dl, ImVec2 c, float R, float end_r, float font_px, const float view[16], int hover_axis) {
   AxisProjection pr;
   overlay_project_axes(view, R, &pr);
   // Arka disk: gostergeyi goruntuden ayirir ama onu ortmez (alfa dusuk).
@@ -85,6 +88,9 @@ void draw_axis_gizmo(ImDrawList *dl, ImVec2 c, float R, float end_r, float font_
     const bool back = e.depth < -0.02f; // kameradan uzaga bakan uc: soluk
     const ImVec2 p(c.x + e.x, c.y + e.y);
     const Tone t = axis_tone(e.axis);
+    const int end_id = e.axis * 2 + (e.positive ? 0 : 1);
+    if (end_id == hover_axis) // vurgu: ucun arkasinda genis, yumusak halka
+      dl->AddCircleFilled(p, end_r * 1.45f, tone_u32(Tone::AccentHi, 0.55f), 24);
     if (e.positive) {
       const ImU32 fill = back ? tone_mix(t, Tone::Bg0, 0.55f) : tone_u32(t);
       dl->AddLine(c, p, back ? tone_mix(t, Tone::Bg0, 0.55f, 0.8f) : tone_u32(t, 0.95f), line_th);
@@ -99,6 +105,38 @@ void draw_axis_gizmo(ImDrawList *dl, ImVec2 c, float R, float end_r, float font_
     }
   }
 }
+
+// Fare hangi eksen UCUNUN uzerinde? Donus: a*2 + (negatif?1:0), yoksa -1.
+// Ust uste binen uclerde ONDEKI kazanir (skora derinlik yanliligi eklenir) —
+// yoksa arkadaki ucu tiklamak one gecmis gibi gorunur.
+int axis_end_at(const float view[16], float R, float end_r, ImVec2 c, ImVec2 m) {
+  AxisProjection pr;
+  overlay_project_axes(view, R, &pr);
+  const float reach = end_r * 1.35f;
+  int best = -1;
+  float best_score = 3.4e38f;
+  for (int a = 0; a < 3; a++)
+    for (int s = 0; s < 2; s++) {
+      const float ex = s ? -pr.x[a] : pr.x[a], ey = s ? -pr.y[a] : pr.y[a], dep = s ? -pr.depth[a] : pr.depth[a];
+      const float dx = m.x - (c.x + ex), dy = m.y - (c.y + ey);
+      const float d = std::sqrt(dx * dx + dy * dy);
+      if (d > reach) continue;
+      const float score = d - dep * end_r * 0.6f;
+      if (score < best_score) { best_score = score; best = a * 2 + s; }
+    }
+  return best;
+}
+
+// Kutu (marquee) suruklemesinin KARELERE YAYILAN durumu. Kaplama durumsuz bir
+// fonksiyon oldugu icin burada duruyor; editorde ayni anda tek "Gorunum" paneli
+// var, yani tek kayit yeter. Sol tus birakilinca her halukarda sifirlanir —
+// baska bir sondaya/kareye bulasik surukleme kalmaz.
+struct BoxDrag {
+  bool active = false;
+  float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+};
+BoxDrag g_box;
+constexpr float kBoxMin = 4.0f; // bu esigin altinda surukleme TIKTIR, kutu degil
 
 // ASCII buyuk/kucuk harf duyarsiz alt dizi (dosya adi suzgeci).
 bool contains_ci(const char *hay, const char *needle) {
@@ -134,14 +172,17 @@ void overlay_project_axes(const float view[16], float radius, AxisProjection *ou
   }
 }
 
-void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLayout *out_layout) {
+void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLayout *out_layout, OverlayResult *out_res) {
   OverlayLayout lay;
+  OverlayResult res;
   if (out_layout) *out_layout = lay;
+  if (out_res) *out_res = res;
   if (!ImGui::GetCurrentContext() || !(r.w >= 2.0f) || !(r.h >= 2.0f)) return;
   ImDrawList *dl = ImGui::GetWindowDrawList();
   const ImGuiStyle &st = ImGui::GetStyle();
   const float fs = ImGui::GetFontSize();
   const ImVec2 rmin(r.x, r.y), rmax(r.x + r.w, r.y + r.h);
+  const ImVec2 mouse = ImGui::GetIO().MousePos;
   // Her sey r'ye kirpilir: yuvarlatilmis kenar/ok ucu bile disari tasmaz.
   dl->PushClipRect(rmin, rmax, true);
 
@@ -150,6 +191,32 @@ void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLay
   const float gap = st.ItemInnerSpacing.x;
   const ImU32 pill_bg = tone_u32(Tone::Bg0, 0.75f), pill_border = tone_u32(Tone::Line, 0.9f);
   const ImU32 text = tone_u32(Tone::Text), dim = tone_u32(Tone::TextDim), accent = tone_u32(Tone::Accent);
+  // Tiklanabilir cip: kenarligi vurgu renginde (bakinca "buna tiklanir" belli).
+  const ImU32 chip_border = tone_u32(Tone::Accent, 0.55f);
+  const ImU32 chip_bg_hot = tone_u32(Tone::Bg3, 0.95f), chip_border_hot = tone_u32(Tone::AccentHi, 0.95f);
+
+  // Etkilesimli ogelerin ORTAK SOZLESMESI (bkz. baslik): oge yalniz fare TAM
+  // USTUNDEYKEN eklenir. Her karede eklenseydi goruntunun o parcasi tiklamayi
+  // ve ustunde-durmayi kaybederdi; boyleyken diskin/cipin disinda kalan her
+  // piksel altindaki ImGui::Image'e duser.
+  // Yerlesim durumu TAM geri alinir (imlec + CursorMaxPos + IsSetPos): kaplama
+  // pencerenin akisina hicbir iz birakmaz. SetCursorScreenPos ile geri almak
+  // yetmez — ImGui End()'te "SetCursorPos ile sinir buyutuldu" hatasi verir
+  // (son ISLEM imlec tasimasi olur, ardindan oge gelmez) ve CursorMaxPos
+  // dugmenin dikdortgenine buyumus kalir, yani panel bosuna kaydirilabilir olur.
+  auto hot_item = [&](const char *id, ImVec2 p, ImVec2 sz, bool *out_clicked) {
+    ImGuiWindow *w = ImGui::GetCurrentWindow();
+    const ImVec2 save_pos = w->DC.CursorPos, save_max = w->DC.CursorMaxPos;
+    const bool save_setpos = w->DC.IsSetPos;
+    ImGui::SetCursorScreenPos(p);
+    ImGui::InvisibleButton(id, sz);
+    const bool hov = ImGui::IsItemHovered();
+    if (out_clicked) *out_clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    w->DC.CursorPos = save_pos;
+    w->DC.CursorMaxPos = save_max;
+    w->DC.IsSetPos = save_setpos;
+    return hov;
+  };
 
   // --- b) Eksen gostergesi (sag-ust): sigarsa. Ust satir ve alt satir buna gore
   // yer birakir; sigmazsa hicbir sey cizilmez (yarim gosterge yok).
@@ -165,14 +232,40 @@ void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLay
     lay.gizmo_end_r = end_r;
   }
 
+  // --- b2) Gostergenin ETKILESIMI. Oge, karesel bir kutu degil DISKIN KENDISI
+  // kadar: once dairesel mesafe olculur, oge ancak fare diskin icindeyse eklenir.
+  // Kosedeki (diskin disindaki, kutunun icindeki) tiklama boylece goruntuye duser.
+  int axis_hover = -1;
+  if (lay.gizmo) {
+    const float disc_r = gizmo_box * 0.5f;
+    const float ddx = mouse.x - gizmo_c.x, ddy = mouse.y - gizmo_c.y;
+    if (ddx * ddx + ddy * ddy <= disc_r * disc_r) {
+      bool clicked = false;
+      if (hot_item("##eksen_gostergesi", ImVec2(gizmo_c.x - disc_r, gizmo_c.y - disc_r), ImVec2(disc_r * 2.0f, disc_r * 2.0f), &clicked)) {
+        res.consumed_mouse = true; // diskin GOVDESI de fareyi yutar (bu bir arac, delik degil)
+        axis_hover = axis_end_at(info.view, R, end_r, gizmo_c, mouse);
+        res.axis_hovered = axis_hover;
+        if (clicked && axis_hover >= 0) res.axis_clicked = axis_hover;
+      }
+    }
+  }
+
   // --- a) Ust satir haplari: adaylar oncelik sirasiyla; sigmayanlar dusurulur
-  // (once en az onemli), kalanlar gorsel sirayla cizilir.
+  // (once en az onemli), kalanlar gorsel sirayla cizilir. chip >= 0 olanlar
+  // TIKLANABILIR (izdusum / kamera kipi / gizmo uzayi).
+  //
+  // DUSURME SIRASI (drop_rank, buyuk = once dusur): 0 oynatiliyor, 1 gizmo kipi,
+  // 2 izdusum, 3 gizmo uzayi, 4 kamera kipi, 5 golgeleme, 6 "gizmolar kapali",
+  // 7 istatistik. Istatistik EN ONCE duser cunku hem en genisi odur hem de ayni
+  // kare suresi DURUM CUBUGUNDA zaten yaziyor; tiklanabilir cipler ise islev
+  // kaybi demektir, en sona kalirlar.
   struct Cand {
     const char *icon, *text;
     ImU32 icon_col, fg, bg, border;
     int drop_rank; // buyuk = once dusur
-    float w;
-    bool keep;
+    int chip;      // -1 pasif etiket; 0 izdusum, 1 kamera kipi, 2 gizmo uzayi
+    float w, x;
+    bool keep, hot;
   };
   char stats[96] = {0};
   if (info.frame_ms > 0.0f)
@@ -181,22 +274,30 @@ void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLay
   static const char *const kOpIcon[3] = {"\xE2\x9C\xA5", "\xE2\x86\xBB", "\xE2\x87\xB2"}; // ✥ ↻ ⇲ (DejaVuSans'ta var)
   static const char *const kOpName[3] = {"Ta\xC5\x9F\xC4\xB1", "D\xC3\xB6nd\xC3\xBCr", "\xC3\x96l\xC3\xA7""ekle"};
   const int op = info.gizmo_op >= 0 && info.gizmo_op < 3 ? info.gizmo_op : 0;
-  Cand cand[5] = {
-      {nullptr, "Perspektif", 0, text, pill_bg, pill_border, 2, 0, false},
-      {kOpIcon[op], kOpName[op], accent, text, pill_bg, pill_border, 1, 0, false},
-      {nullptr, stats, 0, dim, pill_bg, pill_border, 3, 0, false},
-      {"\xE2\x96\xB6", "OYNATILIYOR", tone_u32(Tone::Bg0), tone_u32(Tone::Bg0), tone_u32(Tone::Accent, 0.92f), 0, 0, 0, false},
-      {"\xE2\x97\x87", "gizmolar kapal\xC4\xB1", dim, dim, pill_bg, pill_border, 4, 0, false},
+  const char *proj_txt = info.proj == CameraProjection::Perspective ? "Perspektif" : "Ortografik";
+  const char *mode_txt = info.cam_mode == CameraMode::Orbit ? "Y\xC3\xB6r\xC3\xBCnge" : "U\xC3\xA7u\xC5\x9F";
+  const char *space_txt = info.gizmo_space == GizmoSpace::World ? "D\xC3\xBCnya" : "Yerel";
+  Cand cand[8] = {
+      {"\xE2\x96\xB6", "OYNATILIYOR", tone_u32(Tone::Bg0), tone_u32(Tone::Bg0), tone_u32(Tone::Accent, 0.92f), 0, 0, -1, 0, 0, false, false},
+      {nullptr, proj_txt, 0, text, pill_bg, chip_border, 2, 0, 0, 0, false, false},
+      {nullptr, mode_txt, 0, text, pill_bg, chip_border, 4, 1, 0, 0, false, false},
+      {kOpIcon[op], kOpName[op], accent, text, pill_bg, pill_border, 1, -1, 0, 0, false, false},
+      {nullptr, space_txt, 0, text, pill_bg, chip_border, 3, 2, 0, 0, false, false},
+      {nullptr, info.shading, 0, dim, pill_bg, pill_border, 5, -1, 0, 0, false, false},
+      {nullptr, stats, 0, dim, pill_bg, pill_border, 7, -1, 0, 0, false, false},
+      {"\xE2\x97\x87", "gizmolar kapal\xC4\xB1", dim, dim, pill_bg, pill_border, 6, -1, 0, 0, false, false},
   };
-  const int n_cand = 5;
+  const int n_cand = 8;
   const float top_limit = lay.gizmo ? (gizmo_c.x - gizmo_box * 0.5f - gap) : (rmax.x - pad);
   float top_avail = top_limit - (rmin.x + pad);
+  const float top_y = rmin.y + pad;
   if (r.h >= ps.h() + 2.0f * pad) {
     float total = 0;
     int n_keep = 0;
     for (int i = 0; i < n_cand; i++) {
       Cand &c = cand[i];
-      const bool wanted = (i != 2 || stats[0]) && (i != 3 || info.playing) && (i != 4 || !info.gizmos_visible);
+      const bool wanted = (i != 0 || info.playing) && (i != 5 || (info.shading && *info.shading)) && (i != 6 || stats[0]) &&
+                          (i != 7 || !info.gizmos_visible);
       if (!wanted) continue;
       c.w = pill_width(ps, c.icon, c.text);
       c.keep = true;
@@ -211,18 +312,45 @@ void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLay
       n_keep--;
       total -= cand[worst].w + (n_keep ? gap : 0.0f);
     }
+    // Once KONUM (cizim degil): ciplerin dikdortgeni etkilesim icin gerekli ve
+    // "ustunde" hali cizimi degistiriyor, yani hit-test cizimden ONCE olmali.
     float x = rmin.x + pad;
+    for (int i = 0; i < n_cand; i++) {
+      if (!cand[i].keep) continue;
+      cand[i].x = x;
+      x += cand[i].w + gap;
+    }
+    OverlayRect *const chip_out[3] = {&lay.chip_proj, &lay.chip_mode, &lay.chip_space};
+    static const char *const kChipId[3] = {"##kaplama_izdusum", "##kaplama_kip", "##kaplama_uzay"};
+    static const char *const kChipTip[3] = {"\xC4\xB0zd\xC3\xBC\xC5\x9F\xC3\xBCm: perspektif / ortografik", "Kamera: y\xC3\xB6r\xC3\xBCnge / u\xC3\xA7u\xC5\x9F",
+                                            "Gizmo ekseni: d\xC3\xBCnya / yerel"};
+    for (int i = 0; i < n_cand; i++) {
+      Cand &c = cand[i];
+      if (!c.keep || c.chip < 0) continue;
+      const OverlayRect cr{c.x, top_y, c.w, ps.h()};
+      *chip_out[c.chip] = cr;
+      if (!cr.contains(mouse.x, mouse.y)) continue;
+      bool clicked = false;
+      if (!hot_item(kChipId[c.chip], ImVec2(cr.x, cr.y), ImVec2(cr.w, cr.h), &clicked)) continue;
+      c.hot = true;
+      res.consumed_mouse = true;
+      ImGui::SetTooltip("%s", kChipTip[c.chip]);
+      if (clicked) {
+        if (c.chip == 0) res.ortho_toggled = true;
+        else if (c.chip == 1) res.mode_toggled = true;
+        else res.gizmo_space_toggled = true;
+      }
+    }
     for (int i = 0; i < n_cand; i++) {
       const Cand &c = cand[i];
       if (!c.keep) continue;
-      pill_draw(dl, ps, ImVec2(x, rmin.y + pad), c.w, c.icon, c.icon_col, c.text, c.fg, c.bg, c.border);
-      x += c.w + gap;
+      pill_draw(dl, ps, ImVec2(c.x, top_y), c.w, c.icon, c.icon_col, c.text, c.fg, c.hot ? chip_bg_hot : c.bg, c.hot ? chip_border_hot : c.border);
       lay.pills++;
     }
     lay.top_row = lay.pills > 0;
   }
 
-  if (lay.gizmo) draw_axis_gizmo(dl, gizmo_c, R, end_r, fs, info.view);
+  if (lay.gizmo) draw_axis_gizmo(dl, gizmo_c, R, end_r, fs, info.view, axis_hover);
 
   // --- c) + e) Alt satir: kamera hapi solda, ipucu sagda. Ust satirin ve
   // gostergenin ALTINDA kalmali (ust uste binme yok); sigmayan dusurulur.
@@ -236,7 +364,9 @@ void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLay
       std::snprintf(cam, sizeof cam, "kamera %.1f, %.1f, %.1f \xC2\xB7 hedef %.1f, %.1f, %.1f", (double)info.cam_eye[0], (double)info.cam_eye[1],
                     (double)info.cam_eye[2], (double)info.cam_target[0], (double)info.cam_target[1], (double)info.cam_target[2]);
       const float cam_w = pill_width(ps, nullptr, cam);
-      const float hint_w = info.hint && *info.hint ? text_size(info.hint, fs).x : 0.0f;
+      // Ipucu da KENDI hapinin icinde: cıplak metin acik zeminde (dama tahtasi
+      // zemin, gokyuzu) golgeye ragmen okunmuyordu — kamera hapiyla ayni zemin.
+      const float hint_w = info.hint && *info.hint ? pill_width(ps, nullptr, info.hint) : 0.0f;
       const float avail = r.w - 2.0f * pad;
       const bool both = hint_w > 0.0f && cam_w + gap + hint_w <= avail;
       const bool cam_only = !both && cam_w <= avail;
@@ -246,10 +376,56 @@ void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLay
         lay.camera = true;
       }
       if (both || hint_only) {
-        const ImVec2 hp(rmax.x - pad - hint_w, row_y + ps.pad_y);
-        dl->AddText(ImVec2(hp.x + 1.0f, hp.y + 1.0f), tone_u32(Tone::Bg0, 0.7f), info.hint); // golge: goruntu acikken de okunur
-        dl->AddText(hp, dim, info.hint);
+        pill_draw(dl, ps, ImVec2(rmax.x - pad - hint_w, row_y), hint_w, nullptr, 0, info.hint, dim, pill_bg, pill_border);
         lay.hint = true;
+      }
+    }
+  }
+
+  // --- f) Kutu (marquee) secim. KENDI OGESINI EKLEMEZ: altindaki ImGui::Image'in
+  // tiklamasini kullanir (bir oge eklenseydi tek tikla secim olmezdi). Surukleme
+  // durumu g_box'ta; sol tus birakilinca HER HALUKARDA sifirlanir, yani kareler
+  // arasi bulasik surukleme kalmaz.
+  {
+    const bool inside = mouse.x >= rmin.x && mouse.x < rmax.x && mouse.y >= rmin.y && mouse.y < rmax.y;
+    const bool down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    auto span = [](const BoxDrag &b, float *o) {
+      o[0] = b.x0 < b.x1 ? b.x0 : b.x1;
+      o[1] = b.y0 < b.y1 ? b.y0 : b.y1;
+      o[2] = b.x0 < b.x1 ? b.x1 : b.x0;
+      o[3] = b.y0 < b.y1 ? b.y1 : b.y0;
+    };
+    auto big_enough = [](const BoxDrag &b) {
+      const float w = b.x1 - b.x0 >= 0 ? b.x1 - b.x0 : b.x0 - b.x1, h = b.y1 - b.y0 >= 0 ? b.y1 - b.y0 : b.y0 - b.y1;
+      return w >= kBoxMin || h >= kBoxMin;
+    };
+    if (!down) {
+      // IsMouseReleased sart: yalniz GERCEKTEN bu karede birakilan bir surukleme
+      // secime doner. Yoksa panel bir kare cizilmeden kalip geri geldiginde
+      // (ya da baska bir baglamda) bayat bir g_box "birakilmis" gibi sayilir.
+      if (g_box.active && big_enough(g_box) && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) { // birakildi: secim BU KARE uygulanir
+        res.box_done = true;
+        span(g_box, res.box);
+      }
+      g_box.active = false;
+    } else if (!g_box.active) {
+      // Baslangic: goruntunun ustunde, kaplamanin bir ogesi fareyi ALMAMISKEN.
+      if (inside && info.hovered && !res.consumed_mouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        g_box.active = true;
+        g_box.x0 = g_box.x1 = mouse.x;
+        g_box.y0 = g_box.y1 = mouse.y;
+      }
+    } else {
+      g_box.x1 = mouse.x; // kirpilmaz: goruntunun disina surukleyip birakmak gecerli
+      g_box.y1 = mouse.y;
+      if (big_enough(g_box)) {
+        res.box_active = true;
+        span(g_box, res.box);
+        // Yari saydam dolgu + 1 px kenarlik; PushClipRect sayesinde r'nin disina
+        // tasmaz (kapi bunu da olcer).
+        dl->AddRectFilled(ImVec2(res.box[0], res.box[1]), ImVec2(res.box[2], res.box[3]), tone_u32(Tone::Accent, 0.16f));
+        dl->AddRect(ImVec2(res.box[0], res.box[1]), ImVec2(res.box[2], res.box[3]), tone_u32(Tone::AccentHi, 0.95f), 0.0f, 1.0f);
+        lay.box = true;
       }
     }
   }
@@ -264,6 +440,46 @@ void viewport_overlay(const ViewportRect &r, const OverlayInfo &info, OverlayLay
   }
   dl->PopClipRect();
   if (out_layout) *out_layout = lay;
+  if (out_res) *out_res = res;
+}
+
+uint32_t viewport_box_select(const Mat4 &view_proj, const content::SceneBounds *bounds, uint32_t n, const ViewportRect &view, float x0, float y0,
+                             float x1, float y1, bool require_full_containment, int32_t *out, uint32_t cap) {
+  if (!bounds || n == 0 || !(view.w > 0.0f) || !(view.h > 0.0f)) return 0;
+  const float rx0 = x0 < x1 ? x0 : x1, rx1 = x0 < x1 ? x1 : x0;
+  const float ry0 = y0 < y1 ? y0 : y1, ry1 = y0 < y1 ? y1 : y0;
+  uint32_t written = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    const content::SceneBounds &b = bounds[i];
+    float bx0 = 3.4e38f, by0 = 3.4e38f, bx1 = -3.4e38f, by1 = -3.4e38f;
+    uint32_t front = 0;
+    for (int k = 0; k < 8; k++) {
+      const Vec4 c = view_proj * Vec4{(k & 1) ? b.hi.x : b.lo.x, (k & 2) ? b.hi.y : b.lo.y, (k & 4) ? b.hi.z : b.lo.z, 1.0f};
+      // ⚠ w <= 0: kose kameranin ARKASINDA (ya da tam duzleminde). Bolmek
+      // izdusumu kokten aynalar ve arkadaki nesne dikdortgenin icine dusmus
+      // gibi gorunur — klasik "kutu secince sahnenin yarisi secildi" hatasi.
+      if (!(c.w > 1e-6f)) continue;
+      front++;
+      const float sx = view.x + (c.x / c.w * 0.5f + 0.5f) * view.w;
+      const float sy = view.y + (c.y / c.w * 0.5f + 0.5f) * view.h; // Vulkan: NDC y zaten ASAGI
+      if (sx < bx0) bx0 = sx;
+      if (sx > bx1) bx1 = sx;
+      if (sy < by0) by0 = sy;
+      if (sy > by1) by1 = sy;
+    }
+    if (front == 0) continue; // tamami arkada: ASLA secilmez
+    // Yakin duzlemi kesen kutu (0 < front < 8) TAM ICERME'yi saglayamaz:
+    // gorunmeyen parcasinin dikdortgenin icinde oldugu iddia edilemez.
+    const bool hit = require_full_containment ? (front == 8 && bx0 >= rx0 && bx1 <= rx1 && by0 >= ry0 && by1 <= ry1)
+                                              : (bx0 <= rx1 && bx1 >= rx0 && by0 <= ry1 && by1 >= ry0);
+    if (!hit) continue;
+    if (out) {
+      if (written >= cap) break; // tampon doldu: kalanlar ATLANIR (sozlesme)
+      out[written] = (int32_t)i;
+    }
+    written++;
+  }
+  return written;
 }
 
 uint32_t overlay_ellipsize_left(const char *s, float max_w, char *out, uint32_t cap) {

@@ -126,6 +126,11 @@ void write_entity(Out &o, const SceneEntity &e) {
   o.puts("  konum "); o.vec(e.pos); o.ch('\n');
   o.puts("  donus "); o.vec(e.rot_deg); o.ch('\n');
   o.puts("  olcek "); o.vec(e.scale); o.ch('\n');
+  // Ebeveyn/bayrak yalniz VARSA yazilir: duz sahnelerin (kok varliklar,
+  // bayraksiz) baytlari Faz E2 oncesiyle AYNI kalsin — editor.sahne kanonik
+  // kapisi bunu olcuyor.
+  if (e.parent >= 0) { o.puts("  ebeveyn "); o.num((float)e.parent); o.ch('\n'); }
+  if (e.flags) { o.puts("  bayrak "); o.num((float)e.flags); o.ch('\n'); }
   if (e.components & kSceneModel) {
     o.puts("  model "); o.num((float)e.asset); o.ch(' '); o.vec(e.tint); o.ch('\n');
   }
@@ -150,7 +155,7 @@ void write_entity(Out &o, const SceneEntity &e) {
 // (dosyaya yazilmaz), karsilastirilmaz. Gunluk no-op tespiti de bunu kullanir.
 bool scene_entity_equal(const SceneEntity &a, const SceneEntity &b) {
   if (std::strcmp(a.name, b.name) != 0 || !veq(a.pos, b.pos) || !veq(a.rot_deg, b.rot_deg) || !veq(a.scale, b.scale) ||
-      a.components != b.components)
+      a.parent != b.parent || a.flags != b.flags || a.components != b.components)
     return false;
   const uint32_t c = a.components;
   if ((c & kSceneModel) && (a.asset != b.asset || !veq(a.tint, b.tint))) return false;
@@ -184,13 +189,27 @@ int32_t SceneDesc::find_entity(const char *name) const {
 }
 bool SceneDesc::insert_entity(uint32_t at, const SceneEntity &e) {
   if (entity_count >= kSceneMaxEntities || at > entity_count) return false;
+  // Ortaya ekleme: mevcut ebeveyn indeksleri kayar. SONA ekleme HICBIR SEYI
+  // kaydirmaz — ayristirma sirasinda henuz olusmamis varliga bakan ileri
+  // referanslar (parent >= entity_count) bozulmasin diye (bkz. baslik).
+  if (at < entity_count)
+    for (uint32_t i = 0; i < entity_count; i++)
+      if (entities[i].parent >= (int32_t)at) entities[i].parent++;
   for (uint32_t i = entity_count; i > at; i--) entities[i] = entities[i - 1];
-  entities[at] = e;
+  entities[at] = e; // e.parent cagirandan geldigi gibi: yeni indeks uzayinda
   entity_count++;
   return true;
 }
 bool SceneDesc::remove_entity(uint32_t at) {
   if (at >= entity_count) return false;
+  // 1. Cocuklar buyukbabaya (alt agac sessizce yok olmasin).
+  const int32_t gp = entities[at].parent;
+  for (uint32_t i = 0; i < entity_count; i++)
+    if (entities[i].parent == (int32_t)at) entities[i].parent = gp;
+  // 2. Kaydirma. gp > at ise 1. adimda verilen deger de burada duzelir; bu
+  //    yuzden iki adim AYRI ve bu sirada.
+  for (uint32_t i = 0; i < entity_count; i++)
+    if (entities[i].parent > (int32_t)at) entities[i].parent--;
   for (uint32_t i = at + 1; i < entity_count; i++) entities[i - 1] = entities[i];
   entity_count--;
   return true;
@@ -216,7 +235,13 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
   bool in_entity = false, header = false;
   SceneEntity cur{};
   uint32_t seen = 0; // varlik icinde gorulen anahtarlar (yineleme yasak)
-  enum { kKonum = 1u << 8, kDonus = 1u << 9, kOlcek = 1u << 10 };
+  enum { kKonum = 1u << 8, kDonus = 1u << 9, kOlcek = 1u << 10, kEbeveyn = 1u << 11, kBayrak = 1u << 12 };
+  // Ebeveyn satirlari: ILERI referans serbest oldugu icin gecerlilik ancak
+  // dosya bitince olculebilir; hata yine de DOGRU satiri gostersin diye her
+  // varligin "ebeveyn" satiri saklanir (0 = satir yok).
+  static_assert(kSceneMaxEntities <= 4096, "parent_line yigin uzerinde");
+  uint32_t parent_line[kSceneMaxEntities] = {0};
+  uint32_t cur_parent_line = 0;
   size_t i = 0;
   while (i <= len) {
     size_t j = i;
@@ -239,7 +264,9 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
     if (in_entity) {
       if (tok_is(t[0], "son")) {
         if (n != 1) return p.fail("'son' tek basina olmali");
-        if (!out->insert_entity(out->entity_count, cur)) return p.fail("cok fazla varlik");
+        const uint32_t at = out->entity_count;
+        if (!out->insert_entity(at, cur)) return p.fail("cok fazla varlik");
+        parent_line[at] = cur_parent_line;
         in_entity = false;
         continue;
       }
@@ -255,6 +282,21 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
         if (n != 4 || (seen & kOlcek)) return p.fail("olcek x y z (bir kez)");
         seen |= kOlcek;
         if (!p.vec(t + 1, &cur.scale)) return false;
+      } else if (tok_is(t[0], "ebeveyn")) {
+        if (n != 2 || (seen & kEbeveyn)) return p.fail("ebeveyn <indeks> (bir kez)");
+        seen |= kEbeveyn;
+        uint32_t pi = 0;
+        if (!p.uint(t[1], &pi)) return false;
+        if (pi >= kSceneMaxEntities) return p.fail("ebeveyn indeksi sinir disi");
+        cur.parent = (int32_t)pi;
+        cur_parent_line = p.line; // gecerlilik dosya bitince olculur
+      } else if (tok_is(t[0], "bayrak")) {
+        if (n != 2 || (seen & kBayrak)) return p.fail("bayrak <maske> (bir kez)");
+        seen |= kBayrak;
+        uint32_t fl = 0;
+        if (!p.uint(t[1], &fl)) return false;
+        if (fl & ~(uint32_t)(kSceneHidden | kSceneLocked)) return p.fail("bilinmeyen bayrak biti");
+        cur.flags = fl;
       } else if (tok_is(t[0], "model")) {
         if (n != 5 || (seen & kSceneModel)) return p.fail("model kaynak r g b (bir kez)");
         uint32_t a = 0;
@@ -298,6 +340,7 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
       if (n != 2) return p.fail("nesne \"ad\"");
       cur = SceneEntity{};
       seen = 0;
+      cur_parent_line = 0;
       if (!p.str(t[1], cur.name, sizeof cur.name)) return false;
       if (cur.name[0] == 0) return p.fail("varlik adi bos");
       in_entity = true;
@@ -327,6 +370,21 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
   }
   if (!header) return p.fail("bos dosya: baslik yok");
   if (in_entity) return p.fail("varlik 'son' ile kapanmadi");
+  // Agac gecerliligi: SESSIZ degil. Bozuk bir ebeveyn zinciri kabul edilirse
+  // dunya matrisi hesabi ya yanlis olur ya donguye girer; ikisi de burada
+  // durur ve kullaniciya SATIR NUMARASIYLA soylenir.
+  uint32_t bad = 0;
+  if (!scene_tree_validate(*out, &bad)) {
+    p.line = parent_line[bad] ? parent_line[bad] : 0;
+    const int32_t pp = out->entities[bad].parent;
+    char what[120];
+    if (pp == (int32_t)bad) std::snprintf(what, sizeof what, "varlik kendi ebeveyni olamaz (\"%s\")", out->entities[bad].name);
+    else if (pp < 0 || (uint32_t)pp >= out->entity_count)
+      std::snprintf(what, sizeof what, "ebeveyn indeksi tanimsiz: %d (\"%s\")", pp, out->entities[bad].name);
+    else
+      std::snprintf(what, sizeof what, "ebeveyn dongusu ya da %u'dan derin zincir (\"%s\")", kSceneMaxDepth, out->entities[bad].name);
+    return p.fail(what);
+  }
   return true;
 }
 
@@ -380,6 +438,200 @@ Quat scene_entity_rotation(const SceneEntity &e) {
 Mat4 scene_entity_matrix(const SceneEntity &e) {
   return Mat4::translate(e.pos) * Mat4::rotate({0, 0, 1}, e.rot_deg.z * kDeg2Rad) * Mat4::rotate({0, 1, 0}, e.rot_deg.y * kDeg2Rad) *
          Mat4::rotate({1, 0, 0}, e.rot_deg.x * kDeg2Rad) * Mat4::scale(e.scale);
+}
+
+// --- sahne agaci (Faz E2) ----------------------------------------------------
+namespace {
+// Zinciri kok'e dogru yurur: out[0] = i, out[n-1] = kok. Donus adim sayisi
+// (kok icin 1), 0 = BOZUK (sinir disi indeks, dongu ya da tavan asimi).
+// Ozyineleme yok; tavan sayesinde dongude bile SONLU.
+uint32_t chain_up(const SceneDesc &d, uint32_t i, uint32_t *out) {
+  uint32_t n = 0;
+  int32_t cur = (int32_t)i;
+  while (cur >= 0) {
+    if ((uint32_t)cur >= d.entity_count) return 0;
+    if (n > kSceneMaxDepth) return 0; // derinlik kSceneMaxDepth -> n = tavan+1
+    out[n++] = (uint32_t)cur;
+    cur = d.entities[cur].parent;
+  }
+  return n;
+}
+// b (ve ustleri) a'ya ulasir mi — yani a, b'nin atasi mi / a == b mi.
+// Yeniden ebeveynleme dongu testi: yeni ebeveyn cocugun altindaysa yasak.
+// Bozuk zincir "evet" sayilir: supheli durumda REDDET.
+bool reaches(const SceneDesc &d, uint32_t a, int32_t b) {
+  uint32_t guard = 0;
+  while (b >= 0) {
+    if ((uint32_t)b >= d.entity_count) return true;
+    if ((uint32_t)b == a) return true;
+    if (++guard > kSceneMaxDepth + 1) return true;
+    b = d.entities[b].parent;
+  }
+  return false;
+}
+// T*Rz*Ry*Rx*S ayristirmasi — scene_entity_matrix'in tersi, ImGuizmo'nun
+// DecomposeMatrixToComponents'iyle ayni sozlesme (olcek = sutun boylari,
+// Euler ZYX). Ayna (det < 0) TEK eksene, X'e yuklenir: isaret bir yere
+// gitmek zorunda ve secimin belirlenimli olmasi kaynaktakiyle ayni eksen
+// olmasindan onemli. Gimbal kilidinde (|sin b| ~ 1) Rx ile Rz ayrisamaz;
+// X sifirlanip tum aci Z'ye verilir (tek cozum secilmis olur).
+void decompose_trs(const Mat4 &m, Vec3 *pos, Vec3 *rot_deg, Vec3 *scale) {
+  const Vec3 c0{m.m[0][0], m.m[0][1], m.m[0][2]};
+  const Vec3 c1{m.m[1][0], m.m[1][1], m.m[1][2]};
+  const Vec3 c2{m.m[2][0], m.m[2][1], m.m[2][2]};
+  float s0 = length(c0);
+  const float s1 = length(c1), s2 = length(c2);
+  if (dot(c0, cross(c1, c2)) < 0) s0 = -s0;
+  const float i0 = s0 != 0 ? 1.0f / s0 : 0.0f, i1 = s1 != 0 ? 1.0f / s1 : 0.0f, i2 = s2 != 0 ? 1.0f / s2 : 0.0f;
+  const Vec3 r0 = c0 * i0, r1 = c1 * i1, r2 = c2 * i2;
+  // Sutun-major: satir-sutun gosterimiyle R[sat][sut] = m[sut][sat].
+  float sy = -r0.z; // -R[2][0]
+  if (sy > 1.0f) sy = 1.0f;
+  else if (sy < -1.0f) sy = -1.0f;
+  const float ay = std::asin(sy);
+  float ax, az;
+  if (std::fabs(sy) > 0.999999f) {
+    ax = 0.0f;
+    az = std::atan2(-r1.x, r1.y); // b = ±90: yalniz (a ∓ c) olculebilir
+  } else {
+    ax = std::atan2(r1.z, r2.z);  // R[2][1], R[2][2]
+    az = std::atan2(r0.y, r0.x);  // R[1][0], R[0][0]
+  }
+  const float kRad2Deg = 180.0f / 3.14159265358979f;
+  *pos = {m.m[3][0], m.m[3][1], m.m[3][2]};
+  *rot_deg = {ax * kRad2Deg, ay * kRad2Deg, az * kRad2Deg};
+  *scale = {s0, s1, s2};
+}
+} // namespace
+
+bool scene_tree_validate(const SceneDesc &d, uint32_t *bad_index) {
+  uint32_t chain[kSceneMaxDepth + 2];
+  for (uint32_t i = 0; i < d.entity_count; i++) {
+    const int32_t p = d.entities[i].parent;
+    const bool range_bad = p < -1 || (p >= 0 && (uint32_t)p >= d.entity_count);
+    if (range_bad || p == (int32_t)i || chain_up(d, i, chain) == 0) {
+      if (bad_index) *bad_index = i;
+      return false;
+    }
+  }
+  if (bad_index) *bad_index = 0;
+  return true;
+}
+
+uint32_t scene_tree_depth(const SceneDesc &d, uint32_t i) {
+  if (i >= d.entity_count) return 0;
+  uint32_t chain[kSceneMaxDepth + 2];
+  const uint32_t n = chain_up(d, i, chain);
+  return n ? n - 1 : kSceneMaxDepth; // bozuk zincir: tavan (sessiz 0 degil)
+}
+
+Mat4 scene_entity_world_matrix(const SceneDesc &d, uint32_t i) {
+  if (i >= d.entity_count) return Mat4::identity();
+  const SceneEntity &e = d.entities[i];
+  if (e.parent < 0) return scene_entity_matrix(e); // kokte BIT-TAM erken donus
+  uint32_t chain[kSceneMaxDepth + 2];
+  const uint32_t n = chain_up(d, i, chain);
+  if (n == 0) return scene_entity_matrix(e); // bozuk zincir: yerelde kal
+  Mat4 m = scene_entity_matrix(d.entities[chain[n - 1]]);
+  for (uint32_t k = n - 1; k > 0; k--) m = m * scene_entity_matrix(d.entities[chain[k - 1]]);
+  return m;
+}
+
+Quat scene_entity_world_rotation(const SceneDesc &d, uint32_t i) {
+  if (i >= d.entity_count) return Quat::identity();
+  const SceneEntity &e = d.entities[i];
+  if (e.parent < 0) return scene_entity_rotation(e); // kokte BIT-TAM
+  uint32_t chain[kSceneMaxDepth + 2];
+  const uint32_t n = chain_up(d, i, chain);
+  if (n == 0) return scene_entity_rotation(e);
+  Quat q = scene_entity_rotation(d.entities[chain[n - 1]]);
+  for (uint32_t k = n - 1; k > 0; k--) q = q * scene_entity_rotation(d.entities[chain[k - 1]]);
+  return normalize(q);
+}
+
+Vec3 scene_entity_world_scale(const SceneDesc &d, uint32_t i) {
+  if (i >= d.entity_count) return Vec3{1, 1, 1};
+  const SceneEntity &e = d.entities[i];
+  if (e.parent < 0) return e.scale; // kokte BIT-TAM
+  uint32_t chain[kSceneMaxDepth + 2];
+  const uint32_t n = chain_up(d, i, chain);
+  if (n == 0) return e.scale;
+  Vec3 s = d.entities[chain[n - 1]].scale;
+  for (uint32_t k = n - 1; k > 0; k--) s = s * d.entities[chain[k - 1]].scale;
+  return s;
+}
+
+uint32_t scene_tree_order(const SceneDesc &d, int32_t *out, uint32_t cap) {
+  // Acik yigin: her seviyede "su ana kadar taranan varlik indeksi". Sira
+  // BELIRLENIMLI: kokler indeks sirasinda, cocuklar indeks sirasinda.
+  int32_t st_parent[kSceneMaxDepth + 2];
+  uint32_t st_scan[kSceneMaxDepth + 2];
+  uint32_t n = 0, sp = 1;
+  st_parent[0] = -1;
+  st_scan[0] = 0;
+  while (sp > 0) {
+    const uint32_t top = sp - 1;
+    bool descended = false;
+    while (st_scan[top] < d.entity_count) {
+      const uint32_t i = st_scan[top]++;
+      if (d.entities[i].parent != st_parent[top]) continue;
+      if (out && n < cap) out[n] = (int32_t)i;
+      n++;
+      // Tavan dolduysa bu dugumun cocuklarina INILMEZ ama kardes taramasi
+      // SURER (break atilirsa geri kalan kardesler sessizce duserdi).
+      if (sp <= kSceneMaxDepth) {
+        st_parent[sp] = (int32_t)i;
+        st_scan[sp] = 0;
+        sp++;
+        descended = true;
+        break;
+      }
+    }
+    if (!descended) sp--; // bu seviyede baska cocuk yok
+  }
+  return n;
+}
+
+bool scene_reparent_entity(const SceneDesc &d, uint32_t child, int32_t new_parent, SceneEntity *out) {
+  if (!out || child >= d.entity_count) return false;
+  if (new_parent < -1 || (new_parent >= 0 && (uint32_t)new_parent >= d.entity_count)) return false;
+  if (new_parent == (int32_t)child) return false;
+  if (new_parent >= 0 && reaches(d, child, new_parent)) return false; // dongu
+  if (new_parent == d.entities[child].parent) {                      // istek yok: dokunma
+    *out = d.entities[child];                                        // (ayristir/yeniden kur sapmasi olmasin)
+    return true;
+  }
+  // Derinlik tavani: yeni derinlik + alt agacin yuksekligi tavani asamaz.
+  const uint32_t base = new_parent < 0 ? 0u : scene_tree_depth(d, (uint32_t)new_parent) + 1u;
+  const uint32_t cd = scene_tree_depth(d, child);
+  uint32_t height = 0;
+  for (uint32_t i = 0; i < d.entity_count; i++) {
+    if (i == child || !reaches(d, child, (int32_t)i)) continue;
+    const uint32_t dd = scene_tree_depth(d, i);
+    if (dd > cd && dd - cd > height) height = dd - cd;
+  }
+  if (base + height > kSceneMaxDepth) return false;
+  // Dunya donusumu korunur: yeni yerel = ters(dunya(yeni ebeveyn)) * dunya(cocuk).
+  const Mat4 w = scene_entity_world_matrix(d, child);
+  const Mat4 local = new_parent < 0 ? w : inverse(scene_entity_world_matrix(d, (uint32_t)new_parent)) * w;
+  *out = d.entities[child];
+  out->parent = new_parent;
+  decompose_trs(local, &out->pos, &out->rot_deg, &out->scale);
+  return true;
+}
+
+Mat4 scene_world_to_local_matrix(const SceneDesc &d, uint32_t i, const Mat4 &world) {
+  if (i >= d.entity_count) return world;
+  const int32_t p = d.entities[i].parent;
+  if (p < 0 || (uint32_t)p >= d.entity_count) return world; // kok: dunya = yerel
+  return inverse(scene_entity_world_matrix(d, (uint32_t)p)) * world;
+}
+
+bool scene_reparent(SceneDesc &d, uint32_t child, int32_t new_parent) {
+  SceneEntity e{};
+  if (!scene_reparent_entity(d, child, new_parent, &e)) return false;
+  d.entities[child] = e;
+  return true;
 }
 
 SceneBounds scene_entity_local_bounds(const SceneEntity &e, const SceneBounds *model) {
@@ -442,8 +694,14 @@ uint32_t scene_spawn_bodies(const SceneDesc &d, sim::Physics &ph, sim::BodyId *i
     const SceneEntity &e = d.entities[i];
     ids[i] = sim::BodyId{};
     if (!(e.components & kSceneBody)) continue;
-    if (e.shape == SceneShape::Box) ids[i] = ph.add_box(e.half * e.scale, e.pos, scene_entity_rotation(e), e.dynamic);
-    else ids[i] = ph.add_sphere(e.radius * e.scale.x, e.pos, e.dynamic);
+    // DUNYA donusumu: cocuk govde gorundugu yerde dogar. Kok varlikta bu
+    // degerler yerel olanlarla bit-tam ayni (erken donus), yani duz sahnelerde
+    // sim davranisi degismez.
+    const Mat4 wm = scene_entity_world_matrix(d, i);
+    const Vec3 wp{wm.m[3][0], wm.m[3][1], wm.m[3][2]};
+    const Vec3 ws = scene_entity_world_scale(d, i);
+    if (e.shape == SceneShape::Box) ids[i] = ph.add_box(e.half * ws, wp, scene_entity_world_rotation(d, i), e.dynamic);
+    else ids[i] = ph.add_sphere(e.radius * ws.x, wp, e.dynamic);
     if (ids[i].valid()) n++;
   }
   return n;
@@ -494,8 +752,17 @@ bool SceneHistory::remove_entity(SceneDesc &d, uint32_t i) {
   if (i >= d.entity_count) return false;
   SceneOp op{};
   op.kind = SceneOp::Remove; op.index = i; op.before = d.entities[i];
+  // Cocuklar SILMEDEN ONCE isaretlenir: silme onlari buyukbabaya bagladigi
+  // icin sonradan gercek buyukbaba cocuklarindan ayirt edilemezler.
+  for (uint32_t k = 0; k < d.entity_count; k++)
+    if (d.entities[k].parent == (int32_t)i) op.child_mask[k >> 5] |= 1u << (k & 31);
   d.remove_entity(i);
   return push(op);
+}
+bool SceneHistory::reparent(SceneDesc &d, uint32_t child, int32_t new_parent) {
+  SceneEntity after{};
+  if (!scene_reparent_entity(d, child, new_parent, &after)) return false;
+  return set_entity(d, child, after); // tek Set islemi: geri alma bayt-tam
 }
 bool SceneHistory::set_world(SceneDesc &d, const SceneWorld &after) {
   if (scene_world_equal(d.world(), after)) return false;
@@ -512,7 +779,13 @@ bool SceneHistory::undo(SceneDesc &d) {
   switch (op.kind) {
   case SceneOp::Set: if (op.index >= d.entity_count) return false; d.entities[op.index] = op.before; break;
   case SceneOp::Add: if (!d.remove_entity(op.index)) return false; break;
-  case SceneOp::Remove: if (!d.insert_entity(op.index, op.before)) return false; break;
+  case SceneOp::Remove:
+    if (!d.insert_entity(op.index, op.before)) return false;
+    // insert_entity indeksleri eski uzaya geri tasidi; silmede buyukbabaya
+    // kaydirilan cocuklar simdi yeniden bu dugume baglanir (child_mask).
+    for (uint32_t k = 0; k < d.entity_count; k++)
+      if (op.child_mask[k >> 5] & (1u << (k & 31))) d.entities[k].parent = (int32_t)op.index;
+    break;
   case SceneOp::World: d.set_world(op.world_before); break;
   }
   cursor_--;

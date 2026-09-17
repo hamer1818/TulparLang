@@ -34,6 +34,13 @@ using app::CommandCategory;
 using app::CommandId;
 
 namespace {
+// Kategorideki komut sayisi TABLODAN gelir, elle yazilmaz: tabloya komut
+// eklenince kapi kendiliginden dogru sayiyi bekler (2026-09-17'de kes/kopyala/
+// yapistir eklenince elle yazilmis "4" duserdi — kapi tabloyla ayrisamasin).
+uint32_t category_item_count(app::CommandCategory k) {
+  const app::CommandDesc *out[app::kCommandCount];
+  return app::commands_in_category(app::command_defaults(), app::kCommandCount, k, out, app::kCommandCount);
+}
 
 // --- Sonda ciktisi -----------------------------------------------------------
 void probe_path(char *buf, size_t n, const char *name) {
@@ -397,8 +404,10 @@ ENGINE_TEST(editor_chrome_showcase_renders_menu_toolbar_status_dock) {
   cnt(c, CommandId::EditDelete).enabled = false; // pasif oge menude soluk gorunsun
   const ProbeStatus st = run_probe(c, 1280, 720, 5, "chrome_menu_open", nullptr);
   CHECK(st == ProbeStatus::Ok);
-  std::printf("    [bilgi] vitrin menu acik: cizilen oge %u (Duzen: 4 bekleniyor), menu %u\n", c.stats.items_submitted, c.stats.menus_submitted);
-  CHECK(c.stats.items_submitted == 4);
+  const uint32_t want_edit = category_item_count(CommandCategory::Edit);
+  std::printf("    [bilgi] vitrin menu acik: cizilen oge %u (Duzen: tablodan %u bekleniyor), menu %u\n", c.stats.items_submitted, want_edit,
+              c.stats.menus_submitted);
+  CHECK(c.stats.items_submitted == want_edit);
 }
 
 // Menu modeli: her komut tam bir kez, kategori sirasinda, ayiraclar uclarda degil.
@@ -466,7 +475,7 @@ ENGINE_TEST(editor_chrome_menu_item_click_invokes_command) {
   std::printf("    [bilgi] menu tiklama KONTROL (pasif): Geri al %u kez (0 olmali), cizilen oge %u\n", cnt(c, CommandId::EditUndo).hits,
               c.stats.items_submitted);
   CHECK(cnt(c, CommandId::EditUndo).hits == 0);
-  CHECK(c.stats.items_submitted == 4); // menu yine acildi, oge yine cizildi — sadece calismadi
+  CHECK(c.stats.items_submitted == category_item_count(CommandCategory::Edit)); // menu yine acildi, oge yine cizildi — sadece calismadi
 }
 
 // Oynat/Durdur ve bolumlu gizmo kontrolu: durum -> piksel. A durmus+Tasi, B oynatiliyor+Dondur.

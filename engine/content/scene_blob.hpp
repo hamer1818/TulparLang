@@ -130,11 +130,17 @@ struct SceneBlobAsset {
   uint32_t path_len; // NUL haric
   uint32_t reserved[2];
 };
+// SAHNE AGACI BURADA YOKTUR (Faz E2): `.sahne`'deki ebeveyn/cocuk iliskisi
+// DERLEME aninda duzlestirilir — asagidaki alanlarin hepsi DUNYA uzayindadir
+// (scene_entity_world_matrix / _rotation / _scale). Runtime zincir yurumez,
+// blob'da bir `parent` alani tasimaya da gerek yoktur; bu yuzden kayit boyu ve
+// blob surumu Faz E2'de DEGISMEDI. Kok varlikta dunya = yerel (bit-tam), yani
+// hiyerarsisiz sahnelerin blob baytlari da degismedi.
 struct SceneBlobEntity {
-  float world[16];   // T*Rz*Ry*Rx*S, Mat4 yerlesimi (sutun-major)
-  float pos[3];      uint32_t components;
-  float quat[4];     // scene_entity_rotation
-  float scale[3];    uint32_t name; // string ofseti
+  float world[16];   // T*Rz*Ry*Rx*S zinciri, Mat4 yerlesimi (sutun-major), DUNYA
+  float pos[3];      uint32_t components; // dunya matrisinin cevirisi
+  float quat[4];     // scene_entity_world_rotation
+  float scale[3];    uint32_t name; // dunya olcegi / string ofseti
   int32_t draw, anim, light, body;  // tablo dizinleri, -1 = bilesen yok
 };
 struct SceneBlobDraw {

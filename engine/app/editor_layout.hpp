@@ -58,7 +58,8 @@ constexpr const char *kPanelGorunum = "Gorunum";       // 3B goruntu kapisi
 constexpr const char *kPanelOzellikler = "Ozellikler"; // secili varlik
 constexpr const char *kPanelKaynaklar = "Kaynaklar";   // kaynak tarayici
 constexpr const char *kPanelDunya = "Dunya";           // gunes/golge/kamera
-constexpr uint32_t kLayoutPanelCount = 5;
+constexpr const char *kPanelKonsol = "Konsol";         // motor/Vulkan/sahne iletileri
+constexpr uint32_t kLayoutPanelCount = 6;
 // Gorunen ETIKETLER: ImGui'nin "###" kurali — kimlik ### SONRASIDIR, oncesi
 // yalniz gosterilir. Boylece sekmede "Görünüm" yazar, dosyada/kimlikte
 // "Gorunum" kalir: etiket dil ya da surumle degisse de kayitli duzen yuklenir.
@@ -67,6 +68,7 @@ constexpr const char *kPanelGorunumLabel = "G\xC3\xB6r\xC3\xBCn\xC3\xBCm###Gorun
 constexpr const char *kPanelOzelliklerLabel = "\xC3\x96zellikler###Ozellikler";           // Özellikler
 constexpr const char *kPanelKaynaklarLabel = "Kaynaklar";
 constexpr const char *kPanelDunyaLabel = "D\xC3\xBCnya###Dunya";                          // Dünya
+constexpr const char *kPanelKonsolLabel = "Konsol";
 const char *layout_panel_name(uint32_t i); // i < kLayoutPanelCount, yoksa null
 bool layout_is_panel(const char *name);
 

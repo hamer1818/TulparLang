@@ -11,7 +11,7 @@ namespace tulpar::engine::app {
 
 namespace {
 
-const char *const k_panels[kLayoutPanelCount] = {kPanelSahne, kPanelGorunum, kPanelOzellikler, kPanelKaynaklar, kPanelDunya};
+const char *const k_panels[kLayoutPanelCount] = {kPanelSahne, kPanelGorunum, kPanelOzellikler, kPanelKaynaklar, kPanelDunya, kPanelKonsol};
 
 // Modul durumu: host'un dockspace kimligi, son hata, son kayitta atlanan
 // pencere sayisi. Ucu de kare icinde DEGISMEZ (yalniz duzen islemlerinde).
@@ -355,7 +355,10 @@ bool layout_default(ImGuiID dockspace_id, float w, float h, LayoutFile *out, Lay
   n[5] = LayoutNode{3, {-1, -1}, 2, right, top};
   n[6] = LayoutNode{0, {-1, -1}, 2, W, bot};
   struct Slot { const char *name; uint32_t node, order; };
-  const Slot slots[] = {{kPanelSahne, 2, 0}, {kPanelGorunum, 4, 0}, {kPanelOzellikler, 5, 0}, {kPanelKaynaklar, 6, 0}, {kPanelDunya, 6, 1}};
+  // Alt sektor sekmeli: Kaynaklar / Dunya / Konsol (Unity'nin Project+Console
+  // sekmeleri gibi) — konsol ayri bir yer kaplamasin, gerektiginde one gelsin.
+  const Slot slots[] = {{kPanelSahne, 2, 0},      {kPanelGorunum, 4, 0}, {kPanelOzellikler, 5, 0},
+                        {kPanelKaynaklar, 6, 0}, {kPanelDunya, 6, 1},   {kPanelKonsol, 6, 2}};
   out->window_count = (uint32_t)(sizeof slots / sizeof slots[0]);
   for (uint32_t i = 0; i < out->window_count; i++) {
     // Kaynak BIZIM sabit tablomuz (k_panels), kirpma olamaz; yine de sinirli kopya.

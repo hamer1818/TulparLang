@@ -2631,3 +2631,27 @@ Kural: bir glif kullanmadan önce `python3 -c "from fontTools.ttLib import TTFon
 ile var mı diye bak; sondanın PNG'sine de bak. (ImGui 1.92 dinamik atlası glif ARALIĞI istemez —
 Türkçe ğüşiöç kendiliğinden gelir — ama fontta olmayan glifi yaratmaz.)
 
+### 8bt. C++ hex kaçışı AÇGÖZLÜDÜR: `"\xC4\x9Falt"` Türkçe dizgiyi sessizce bozar
+
+`"\xC4\x9F" + "alt"` diye okunmaz: `\x9Fa` tek kaçıştır ve derleyici 0x9FA'yı `char`a sığdırır
+(uyarı verse de çoğu yerde susar), sonra `lt` gelir. Sonuç ekranda `Ço?lt` (ölçüldü 2026-09-17,
+editör ağaç menüsündeki "Çoğalt"). Kural: `\x` kaçışından sonra **hex harfle** (a–f, A–F, 0–9)
+başlayan ASCII geliyorsa dizgiyi böl — `"\xC4\x9F" "alt"`. Bu sınıf yalnız **çıktıya bakınca**
+görülür; sonda PNG'sine bakmak (bkz. `tests/editor_probe.hpp`) tam da bunun içindir.
+
+### 8bu. ImGui'de "üzerine gelince beliren düğme" kendi kendini kaçırır
+
+Bir satırda göz/kilit düğmelerini *yalnız hover'da yerleştirmek* (koşullu YERLEŞİM) iki hata
+üretir: imleç satıra girince sütunlar açılır, ad daralır ve imlecin altındaki düğme kayar
+(titreme, tıklanamama); ayrıca alt düğme `IsItemHovered()`'ı satırdan çalar, satırın kendisi
+hover görünmez olur. Doğrusu: **yerleşim sabit, ÇİZİM koşullu** ve hover satırın kendi
+dikdörtgeninden (`IsMouseHoveringRect`) okunur (2026-09-17, hiyerarşi satırı).
+
+### 8bv. Kaplamada "sığmayanı düşür" kuralı, metni haplamak ölçüyü BÜYÜTÜR
+
+Viewport kaplamasındaki ipucu çıplak metinken sığıyordu; okunabilirlik için kamera hapıyla aynı
+zemine alınınca genişliği hap dolgusu kadar arttı ve düşürme kuralı onu **tamamen** düşürdü —
+ipucu ekrandan kayboldu (ölçüldü 937 px panelde, 2026-09-17). Ders: bir kaplama ögesinin görsel
+zeminini değiştirmek onun **yerleşim bütçesini** de değiştirir; değişiklikten sonra kareyi
+yeniden çıkarıp BAK (düşen öge sessizdir, hata vermez).
+

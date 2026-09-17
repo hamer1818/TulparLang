@@ -185,13 +185,19 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
   Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
   for (uint32_t i = 0; i < d.entity_count; i++) {
     const SceneEntity &e = d.entities[i];
-    const Mat4 m = scene_entity_matrix(e);
-    const Quat q = scene_entity_rotation(e);
+    // Sahne agaci burada DUZLESIR (PLAN §6 "sahne bir blob + kod"): blob'da
+    // ebeveyn alani YOK, cunku turetilmis her sey derleme aninda hesaplanmistir.
+    // Bu yuzden matris/kuaterniyon/olcek/konum DUNYA uzayindadir; kok varlikta
+    // bunlar yerel degerlerle BIT-TAM aynidir (scene_entity_world_* erken donus),
+    // yani hiyerarsisiz sahnelerin blob'u Faz E2 oncesiyle bayt bayt ayni kalir.
+    const Mat4 m = scene_entity_world_matrix(d, i);
+    const Quat q = scene_entity_world_rotation(d, i);
+    const Vec3 wscale = scene_entity_world_scale(d, i);
     SceneBlobEntity be{};
     std::memcpy(be.world, &m.m[0][0], sizeof be.world);
-    put3(be.pos, e.pos); be.components = e.components;
+    put3(be.pos, {m.m[3][0], m.m[3][1], m.m[3][2]}); be.components = e.components;
     be.quat[0] = q.x; be.quat[1] = q.y; be.quat[2] = q.z; be.quat[3] = q.w;
-    put3(be.scale, e.scale); be.name = intern(e.name);
+    put3(be.scale, wscale); be.name = intern(e.name);
     be.draw = be.anim = be.light = be.body = -1;
     if (e.components & kSceneModel) {
       SceneBlobDraw dr{};
@@ -212,10 +218,10 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
     if (e.components & kSceneBody) {
       SceneBlobBody bo{};
       bo.entity = i; bo.shape = (uint32_t)e.shape; bo.dynamic = e.dynamic ? 1u : 0u;
-      put3(bo.half, e.half * e.scale); bo.radius = e.radius * e.scale.x; // scene_spawn_bodies ile ayni
-      put3(bo.pos, e.pos);
+      put3(bo.half, e.half * wscale); bo.radius = e.radius * wscale.x; // scene_spawn_bodies ile ayni (DUNYA olcegi)
+      put3(bo.pos, {m.m[3][0], m.m[3][1], m.m[3][2]});
       bo.quat[0] = q.x; bo.quat[1] = q.y; bo.quat[2] = q.z; bo.quat[3] = q.w;
-      put3(bo.scale, e.scale);
+      put3(bo.scale, wscale);
       bodies[nb] = bo; be.body = (int32_t)nb++;
     }
     ents[i] = be;
@@ -505,7 +511,7 @@ uint32_t scene_nav_soup(const SceneDesc &d, float *verts, uint32_t max_verts, in
     const SceneEntity &e = d.entities[i];
     if (!(e.components & kSceneBody) || e.dynamic || e.shape != SceneShape::Box) continue;
     if (nv + 8 > max_verts || nt + 12 > max_tris) break;
-    const Mat4 m = scene_entity_matrix(e);
+    const Mat4 m = scene_entity_world_matrix(d, i); // navmesh DUNYA uzayinda: cocuk zemin de sayilir
     auto corner = [&](float sx, float sy, float sz) {
       const Vec3 l{sx * e.half.x, sy * e.half.y, sz * e.half.z};
       return transform_point(m, l);
@@ -983,11 +989,13 @@ uint32_t scene_gi_occluders(const SceneDesc &d, const SceneGiOptions &opt, GiOcc
     const SceneEntity &e = d.entities[i];
     if (!(e.components & kSceneBody) || e.dynamic) continue; // dinamik govde bake'e girmez
     GiOccluder o;
-    o.center = e.pos; // scene_spawn_bodies ile ayni: govde konumu = varlik konumu
-    o.rot = scene_entity_rotation(e);
+    const Mat4 wm = scene_entity_world_matrix(d, i);
+    const Vec3 ws = scene_entity_world_scale(d, i);
+    o.center = {wm.m[3][0], wm.m[3][1], wm.m[3][2]}; // scene_spawn_bodies ile ayni: govde DUNYA konumu
+    o.rot = scene_entity_world_rotation(d, i);
     o.kind = e.shape == SceneShape::Sphere ? 1u : 0u;
-    o.half = e.half * e.scale;
-    o.radius = e.radius * e.scale.x;
+    o.half = e.half * ws;
+    o.radius = e.radius * ws.x;
     o.albedo = (e.components & kSceneModel) ? gi_srgb_to_linear(e.tint) : Vec3{opt.surface_albedo, opt.surface_albedo, opt.surface_albedo};
     out[n++] = o;
   }
@@ -1004,7 +1012,7 @@ uint32_t scene_gi_model_tris(const SceneDesc &d, const SceneGiOptions &opt, cons
     if (!(e.components & kSceneModel) || e.asset < 0 || (uint32_t)e.asset >= asset_count) continue;
     const Model *m = models[e.asset];
     if (!m) continue;
-    const Mat4 em = scene_entity_matrix(e);
+    const Mat4 em = scene_entity_world_matrix(d, i);
     const Vec3 tint = gi_srgb_to_linear(e.tint);
     for (uint32_t k = 0; k < m->instance_count && n < max; k++) {
       const ModelInstance &in = m->instances[k];
@@ -1035,7 +1043,7 @@ uint32_t scene_gi_lights(const SceneDesc &d, GiLight *out, uint32_t max) {
   for (uint32_t i = 0; i < d.entity_count && n < max; i++) {
     const SceneEntity &e = d.entities[i];
     if (!(e.components & kSceneLight)) continue;
-    const Mat4 m = scene_entity_matrix(e);
+    const Mat4 m = scene_entity_world_matrix(d, i);
     GiLight l;
     l.pos = {m.m[3][0], m.m[3][1], m.m[3][2]};
     l.color = e.light_color;
@@ -1054,7 +1062,7 @@ void scene_gi_setup(const SceneDesc &d, GiScene *g) {
   g->ambient = d.ambient; // set_light ambient'i donusturmez: zaten dogrusal
   Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
   for (uint32_t i = 0; i < d.entity_count; i++) {
-    const SceneBounds wb = scene_world_bounds(scene_entity_local_bounds(d.entities[i], nullptr), scene_entity_matrix(d.entities[i]));
+    const SceneBounds wb = scene_world_bounds(scene_entity_local_bounds(d.entities[i], nullptr), scene_entity_world_matrix(d, i));
     lo = vmin(lo, wb.lo);
     hi = vmax(hi, wb.hi);
   }

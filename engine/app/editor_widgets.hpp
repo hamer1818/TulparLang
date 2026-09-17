@@ -94,11 +94,78 @@ struct HierarchyRow {
   const char *name = nullptr;
   bool selected = false;
   bool has_model = false, has_light = false, has_body = false, has_anim = false;
+  // --- sahne agaci (Faz E2); eski uc-alanli toplu ilklemeler derlenmeye devam eder
+  uint32_t depth = 0;         // girinti (content::scene_tree_depth)
+  bool has_children = false;  // acilir ok cizilsin mi
+  bool expanded = true;       // ok yonu (katlama durumu CAGIRANIN, bkz. HierarchyCollapse)
+  bool hidden = false, locked = false; // SceneEntity::flags
 };
 // Tam genislik Selectable: tur simgesi (isik ☀ Warn > model ◆ Text > govde ◼
 // AxisZ > bos ○ TextDim), ad (kalan genislige "…"), sagda soluk bilesen
 // glifleri. Donus: tiklandi. Cagiran secimi kendi kurar (Ctrl+tik vb.).
+// DUZ cesit: agac sureclerini (ok, surukle-birak, baglam menusu, yerinde ad)
+// ACMAZ — onlar icin hierarchy_tree_row. Eski cagrilar bozulmasin diye duruyor.
 bool hierarchy_row(int id, const HierarchyRow &r);
+
+// --- Sahne agaci paneli (Faz E2) ------------------------------------------------
+// Katlama durumu CAGIRANINDIR: sabit bit kumesi, ayirma yok. Widget durumu
+// tutmaz — editor "the truth"a sahiptir, panel yalniz gosterir ve NIYET
+// dondurur (sahneyi kendi degistirmez; gunluk/geri alma editorun isi).
+struct HierarchyCollapse {
+  static constexpr uint32_t kMax = content::kSceneMaxEntities;
+  uint32_t bits[(kMax + 31) / 32] = {0};
+  bool collapsed(uint32_t i) const { return i < kMax && (bits[i >> 5] & (1u << (i & 31))) != 0; }
+  void set(uint32_t i, bool v);
+  void toggle(uint32_t i) { set(i, !collapsed(i)); }
+  void clear();
+  // Varlik dizisi kaydiginda bitler de kayar; yoksa katlama YANLIS dugume
+  // yapisir (silinen komsudan sonra baska bir dal kapali gorunur).
+  void after_remove(uint32_t removed);
+  void after_insert(uint32_t at);
+};
+// Yerinde ad duzenleme (F2 / cift tik). index < 0: kapali.
+struct HierarchyRename {
+  int32_t index = -1;
+  char buf[content::kSceneNameLen] = {0};
+  bool focus = false; // ilk karede klavye odagi
+  void begin(int32_t i, const char *name);
+  void cancel() { index = -1; }
+  bool active() const { return index >= 0; }
+};
+struct HierarchyState {
+  HierarchyCollapse collapse;
+  HierarchyRename rename;
+  int32_t drag_source = -1; // suruklenen varlik (yalniz gosterim)
+};
+enum class HierarchyAction : uint32_t {
+  None = 0,
+  Select,     // index secildi (ctrl = secime ekle/cikar)
+  Toggle,     // index'in acilir oku tiklandi (katlama CAGIRANDA)
+  Rename,     // index'in yeni adi `name` (Enter ile onaylandi)
+  Delete,     // baglam menusu: Sil
+  Duplicate,  // baglam menusu: Cogalt
+  Detach,     // baglam menusu / kok bolgesine birakma: ebeveynden ayir
+  Reparent,   // index varligi target'in cocugu olsun (satir UZERINE birakildi)
+  Visibility, // gorunurluk simgesi tiklandi (kSceneHidden tersine cevrilsin)
+  Lock,       // kilit simgesi tiklandi (kSceneLocked tersine cevrilsin)
+};
+struct HierarchyResult {
+  HierarchyAction action = HierarchyAction::None;
+  int32_t index = -1;  // eylemin hedefi
+  int32_t target = -1; // yalniz Reparent: yeni ebeveyn
+  bool ctrl = false;   // yalniz Select: Ctrl+tik
+  char name[content::kSceneNameLen] = {0}; // yalniz Rename
+};
+// Agac satiri: derinlige gore girinti, cocugu olanda acilir ok (▾/▸), tur
+// simgesi, ad, sagda bilesen glifleri + gorunurluk/kilit. Surukle-birak
+// kaynagi VE hedefi (satir UZERINE birakmak = cocuk yap), sag tik baglam
+// menusu, cift tik/F2 ile yerinde ad. st null ise duz satir gibi davranir.
+HierarchyResult hierarchy_tree_row(int id, const HierarchyRow &r, HierarchyState *st);
+// Listenin altinda kalan bosluk: buraya birakmak KOKE tasir (Detach). Panelde
+// bos alan kalmadiysa hicbir sey cizmez. Cagiran listeden SONRA cagirir.
+HierarchyResult hierarchy_root_drop_zone(HierarchyState *st);
+// F2 gibi disaridan tetiklenen yeniden adlandirmayi baslatir.
+void hierarchy_begin_rename(HierarchyState *st, int32_t index, const char *name);
 // Ince arac satiri: "+" (acilir: Bos varlik=1, Model=2, Isik=3, Govde=4),
 // "−" (yalniz secim varken; 5), sagda soluk "N varlik". 0 = hicbir sey.
 int hierarchy_toolbar(uint32_t entity_count, bool has_selection);
@@ -125,6 +192,8 @@ struct HierarchyRowLayout {
   char text[96] = {0};     // gercekten cizilen (kirpilmis) ad
   float text_max_w = 0;    // adin sigmasi gereken genislik
   bool ellipsized = false; // ad kirpildi mi
+  float text_x = 0;        // adin sol kenari (girinti kapisi bunu olcer)
+  WidgetRect arrow, eye, lock; // agac dugmeleri (sentetik fare kapilari icin)
 };
 const PropVec3Layout &prop_vec3_last_layout();
 const ComponentHeaderLayout &component_header_last_layout();

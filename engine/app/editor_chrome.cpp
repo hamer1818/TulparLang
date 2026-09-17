@@ -232,7 +232,7 @@ uint32_t chrome_menu_model(const CommandDesc *descs, uint32_t n, CommandId *out,
 // Menu cubugu
 // ============================================================================
 
-void chrome_menu_bar(CommandTable &t, const ChromeState &s) {
+void chrome_menu_bar(CommandTable &t, const ChromeState &s, ChromeMenuExtra extra) {
   (void)s; // sag ucta urun adi; sahne adi + kirli noktasi arac cubugunda (tek yerde)
   rec_clear(g_menu_hdr, kCommandCategoryCount);
   rec_clear(g_menu_item, kCommandCount);
@@ -261,7 +261,10 @@ void chrome_menu_bar(CommandTable &t, const ChromeState &s) {
     }
     const CommandDesc &d = t.desc(id);
     if ((uint32_t)d.category != cur) {
-      if (cur != kCommandCategoryCount && open) ImGui::EndMenu();
+      if (cur != kCommandCategoryCount && open) {
+        if (extra.fn) extra.fn(extra.ctx, (CommandCategory)cur);
+        ImGui::EndMenu();
+      }
       cur = (uint32_t)d.category;
       const char *title = command_category_name(d.category);
       // Baslik dikdortgeni: BeginMenuEx menubar'da Selectable'i ItemSpacing*2 ile
@@ -288,7 +291,10 @@ void chrome_menu_bar(CommandTable &t, const ChromeState &s) {
       ImGui::SetItemTooltip("%s", tip);
     }
   }
-  if (open) ImGui::EndMenu();
+  if (open) {
+    if (extra.fn && cur < kCommandCategoryCount) extra.fn(extra.ctx, (CommandCategory)cur);
+    ImGui::EndMenu();
+  }
 
   // Sag uc: urun adi, soluk. Sahne adi arac cubugunda (kirli noktasiyla birlikte).
   static const char kBrand[] = "Tulpar Editör";

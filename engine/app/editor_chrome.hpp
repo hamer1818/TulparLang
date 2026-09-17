@@ -66,7 +66,15 @@ struct ChromeOutput {
 // Menu cubugu: ImGui::BeginMainMenuBar, CommandCategory sirasinda bir menu,
 // her menude o kategorinin komutlari (MenuItem: ad, kisayol, isaret, etkinlik).
 // Tiklanan oge t.invoke(id) ile calisir; etkin olmayanlar soluk cizilir.
-void chrome_menu_bar(CommandTable &t, const ChromeState &s);
+// Menude tablodan GELMEYEN ek oge (bugun: Dosya > "Son dosyalar" alt menusu).
+// Kategorinin son komutundan SONRA, EndMenu'den once cagrilir — yani yalniz o
+// menu ACIKKEN. Kanca olmasinin sebebi: menu cubugu komut tablosundan uretilir
+// ve tablo yalnizca KOMUT tasir; "son dosyalar" bir veri listesidir, komut degil.
+struct ChromeMenuExtra {
+  void (*fn)(void *ctx, CommandCategory cat) = nullptr;
+  void *ctx = nullptr;
+};
+void chrome_menu_bar(CommandTable &t, const ChromeState &s, ChromeMenuExtra extra = ChromeMenuExtra{});
 
 // Arac cubugu: menu cubugunun altinda tam genislik serit. Soldan saga: oynat/durdur,
 // gizmo kipi (uclu bolumlu dugme), yakalama (+ adim), gizmo gorunurlugu,

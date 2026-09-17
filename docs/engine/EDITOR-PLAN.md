@@ -135,6 +135,37 @@ ebeveynleme, klasör varlıkları. Kapasite 256 → ölçülerek artırılır.
 Kapı: kalıtımlı dönüşüm ile düz dönüşüm **bit bit** aynı dünya matrisi üretmeli
 (kontrol: ebeveyni döndürünce çocuk da dönmeli).
 
+**E2 durumu (2026-09-17):** kapandı. `SceneEntity::parent` (+ `flags`: gizli/kilitli), döngü ve
+derinlik (16) doğrulaması satır numaralı hata olarak, `scene_entity_world_matrix` zinciri besteler,
+`scene_tree_order` ön-sıra, `scene_reparent` **dünya dönüşümünü koruyarak** yeniden bağlar (sapma
+ölçüldü: 4.8e-07), silme çocukları büyükbabaya bağlar ve `parent` indekslerini kaydırır
+(undo bit-tam, `SceneOp::child_mask`). Metin formatı geriye uyumlu: `ebeveyn`/`bayrak` yalnız
+sıfırdan farklıysa yazılır — `editor.sahne` baytları değişmedi. **Faz E2 kapısı:** hiyerarşik
+`.sahneb` ile elle düzleştirilmiş ikizinin blob'u **bayt bayt aynı** (özet `203ed1610265cad9`);
+kontrol A ebeveyni oynatınca özet değişiyor, kontrol B naif düzleştirme farklı. Editör tarafı:
+Sahne paneli gerçek ağaç (girinti, ▾/▸, sürükle-bırak ebeveynleme, kök bırakma bölgesi, sağ tık
+menüsü, F2 yerinde adlandırma, göz/kilit), gizmo dünya uzayında çalışıp `scene_world_to_local_matrix`
+ile yerel alanlara yazıyor, gizli varlık çizilmiyor. Editör kapısı: bağla → dünya sınırı yerinde
+kalıyor (sapma 0.0000), ebeveyn +5 → çocuk +5.00, **kontrol** bağsız varlık +0.00.
+
+**E1.5 — Gezinme ve kabuk servisleri (2026-09-17, üç ajan):**
+* `app/editor_camera.*` — saf `camera_update`: yörünge + **kaydırma** (orta tuş / Shift+sağ tık),
+  **RMB+WASD serbest uçuş** (dt-bağımsız; 30 fps ↔ 120 fps farkı 3.5e-05), **F ile odaklanma**,
+  eksen görünümleri, **ortografik/perspektif** (orto ışınları paralel). Bu sırada gerçek bir hata
+  düzeldi: kamera koşulu `!ui.wants_mouse()` idi, 3B bir panelin içine taşındığından
+  `WantCaptureMouse` görüntü üzerindeyken zaten true oluyordu — kamera görüntüde hiç dönmüyordu.
+* `app/editor_overlay.*` — eksen göstergesi **tıklanabilir** (yalnız disk alanında öge ekler;
+  dışı `ImGui::Image`'e düşer), Perspektif/Yörünge/Gizmo-uzayı çipleri, **kutu (marquee) seçim**
+  (kamera arkasındaki kutular eleniyor).
+* `app/editor_console.*` — halka tamponlu Konsol paneli (seviye/etiket/kare, süzgeç, tekrar
+  toplama, düşen sayacı) ve motorun stdout/stderr'ini `pipe`+`dup2` ile yakalama: Vulkan doğrulama
+  iletileri artık editörün içinde. Headless'ta yakalama AÇILMAZ (kapı satırları akmalı).
+* `app/editor_files.*` — editör içi dosya seçici (sıralı `dirent`, kırıntı, uzantı süzgeci, üzerine
+  yazma şeridi), son dosyalar (bit-tam gidiş-dönüş), kaydedilmemiş değişiklik onayı; Yeni/Aç/
+  Farklı kaydet komutları ve Dosya > "Son dosyalar" alt menüsü.
+* Ana oturum: **pano** (Ctrl+X/C/V, tek geri-al grubu), **duraklat/kare ilerlet** (F6/F10, F5 oynat),
+  `Konsol` düzen tablosunda (6 panel, düzen kalıcılığı bit-tam).
+
 ### Faz E3 — Inspector + içerik
 Bileşen ekle/çıkar, alan tablosu güdümlü özellik editörü, her özellikte "geri döndür",
 kaynak içe aktarma (glTF/PNG → `engine_texpack`/`sahnec`), malzeme düzenleme.

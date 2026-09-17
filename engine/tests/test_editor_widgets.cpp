@@ -558,3 +558,368 @@ ENGINE_TEST(editor_widgets_hierarchy_row_selection_and_ellipsis) {
   CHECK(!e.short_row.ellipsized);
   CHECK(std::strcmp(e.short_row.text, "Zemin") == 0);
 }
+
+// =============================================================================
+// Faz E2 — sahne agaci paneli (girinti, ok, surukle-birak, baglam menusu, ad)
+// =============================================================================
+namespace {
+
+// Yedi satirlik agac: iki kok, bir dugumun iki cocugu, bir gizli, bir kilitli.
+struct TreeMock {
+  app::HierarchyState st;
+  app::HierarchyRowLayout rows[7];
+  app::HierarchyResult seen[16]; // kare basina SON eylem (None = yok)
+  uint32_t frames = 0;
+  bool flat = false;  // KONTROL: hepsi derinlik 0 (girinti olmamali)
+  bool tree_on = true; // false: eski duz hierarchy_row yolu
+  // Sentetik fare takvimi
+  int click_arrow = -1, click_eye = -1, click_lock = -1, click_row = -1;
+  int right_click_row = -1, menu_item = -1; // menu_item: 0 ad, 1 cogalt, 2 ayir, 3 sil
+  int drag_from = -1, drag_to = -1;
+  bool root_drop = false;
+  app::HierarchyResult zone_seen[16];
+  app::WidgetRect menu_rect{};
+};
+
+const app::HierarchyRow kTree[7] = {
+    // ad, secili, model, isik, govde, anim, derinlik, cocuk var, acik, gizli, kilitli
+    {"Sahne k\xC3\xB6k\xC3\xBC", false, false, false, false, false, 0, true, true, false, false},
+    {"Zemin", false, true, false, true, false, 1, false, true, false, false},
+    {"Kahraman", true, true, false, true, true, 1, true, true, false, false},
+    {"Silah", false, true, false, false, false, 2, false, true, false, false},
+    {"S\xC4\xB1rt \xC3\xA7""antas\xC4\xB1", false, true, false, false, false, 2, false, true, true, false},
+    {"G\xC3\xBCne\xC5\x9F \xC4\xB1\xC5\x9F\xC4\xB1\xC4\x9F\xC4\xB1", false, false, true, false, false, 1, false, true, false, true},
+    {"Kamera", false, false, false, false, false, 0, false, true, false, false},
+};
+
+void draw_tree(void *ctx, uint32_t frame) {
+  auto *m = static_cast<TreeMock *>(ctx);
+  m->frames = frame + 1;
+  ImGui::SetNextWindowPos(ImVec2(0, 0));
+  ImGui::SetNextWindowSize(ImVec2(320, 420));
+  ImGui::Begin("Sahne", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+  app::hierarchy_toolbar(7, true);
+  static char filter[64] = {0};
+  app::hierarchy_search(filter, sizeof filter);
+  app::HierarchyResult last;
+  for (int i = 0; i < 7; i++) {
+    app::HierarchyRow r = kTree[i];
+    if (m->flat) { r.depth = 0; r.has_children = false; }
+    const app::HierarchyResult res =
+        m->tree_on ? app::hierarchy_tree_row(i, r, &m->st) : app::HierarchyResult{app::HierarchyAction::None, i, -1, false, {0}};
+    if (!m->tree_on) app::hierarchy_row(i, r);
+    m->rows[i] = app::hierarchy_row_last_layout();
+    if (res.action != app::HierarchyAction::None) last = res;
+  }
+  const app::HierarchyResult zone = m->tree_on ? app::hierarchy_root_drop_zone(&m->st) : app::HierarchyResult{};
+  if (frame < 16) { m->seen[frame] = last; m->zone_seen[frame] = zone; }
+  ImGui::End();
+
+  // --- sentetik fare takvimi (her olay bir SONRAKI karede islenir) ---
+  ImGuiIO &io = ImGui::GetIO();
+  auto click_at = [&](app::WidgetRect w, uint32_t f0) {
+    if (frame == f0) io.AddMousePosEvent(w.cx(), w.cy());
+    if (frame == f0 + 1) io.AddMouseButtonEvent(0, true);
+    if (frame == f0 + 2) io.AddMouseButtonEvent(0, false);
+  };
+  if (m->click_arrow >= 0) click_at(m->rows[m->click_arrow].arrow, 2);
+  if (m->click_eye >= 0) click_at(m->rows[m->click_eye].eye, 2);
+  if (m->click_lock >= 0) click_at(m->rows[m->click_lock].lock, 2);
+  if (m->click_row >= 0) {
+    const app::WidgetRect w = m->rows[m->click_row].row;
+    if (frame == 2) io.AddMousePosEvent(w.x0 + (w.x1 - w.x0) * 0.4f, w.cy()); // ad alani (dugmelerin disi)
+    if (frame == 3) io.AddMouseButtonEvent(0, true);
+    if (frame == 4) io.AddMouseButtonEvent(0, false);
+  }
+  if (m->right_click_row >= 0) {
+    const app::WidgetRect w = m->rows[m->right_click_row].row;
+    if (frame == 2) io.AddMousePosEvent(w.x0 + (w.x1 - w.x0) * 0.4f, w.cy());
+    if (frame == 3) io.AddMouseButtonEvent(1, true);
+    if (frame == 4) io.AddMouseButtonEvent(1, false);
+    // Menu 5. karede acilir; ogeler satir yuksekligi kadar asagida siralanir.
+    if (m->menu_item >= 0) {
+      const float ih = ImGui::GetFrameHeight();
+      const float mx = w.x0 + (w.x1 - w.x0) * 0.4f + 12.0f;
+      const float my = w.cy() + ih * (0.6f + (float)m->menu_item) + (m->menu_item == 3 ? 6.0f : 0.0f);
+      if (frame == 6) io.AddMousePosEvent(mx, my);
+      if (frame == 7) io.AddMouseButtonEvent(0, true);
+      if (frame == 8) io.AddMouseButtonEvent(0, false);
+    }
+  }
+  if (m->drag_from >= 0) {
+    const app::WidgetRect a = m->rows[m->drag_from].row;
+    const app::WidgetRect b = m->drag_to >= 0 ? m->rows[m->drag_to].row : app::WidgetRect{};
+    const float tx = m->root_drop ? 160.0f : b.x0 + (b.x1 - b.x0) * 0.4f;
+    const float ty = m->root_drop ? 400.0f : b.cy();
+    if (frame == 2) io.AddMousePosEvent(a.x0 + (a.x1 - a.x0) * 0.4f, a.cy());
+    if (frame == 3) io.AddMouseButtonEvent(0, true);
+    if (frame == 4) io.AddMousePosEvent(tx, ty); // esigi (6 px) asan sicrama
+    if (frame == 6) io.AddMouseButtonEvent(0, false);
+  }
+}
+
+app::HierarchyResult first_action(const TreeMock &m, app::HierarchyAction a, bool zone = false) {
+  for (uint32_t i = 0; i < 16 && i < m.frames; i++) {
+    const app::HierarchyResult &r = zone ? m.zone_seen[i] : m.seen[i];
+    if (r.action == a) return r;
+  }
+  return app::HierarchyResult{};
+}
+bool any_action(const TreeMock &m, app::HierarchyAction a) { return first_action(m, a).action == a; }
+
+constexpr uint32_t kTreeW = 320, kTreeH = 420;
+uint8_t g_tree_px[kTreeW * kTreeH * 4];
+ProbeStatus run_tree(TreeMock &m, const char *stem, uint32_t frames = 10) {
+  EditorProbe p;
+  p.width = kTreeW; p.height = kTreeH;
+  static char path[512];
+  ppm_path(path, sizeof path, stem);
+  p.out_ppm = path;
+  p.draw = draw_tree;
+  p.ctx = &m;
+  p.frames = frames;
+  const ProbeStatus st = editor_probe_render(p);
+  if (st == ProbeStatus::Ok && p.pixels) std::memcpy(g_tree_px, p.pixels, sizeof g_tree_px);
+  if (st == ProbeStatus::Ok) std::printf("    [bilgi] %s: %u vertex -> %s\n", stem, p.vertices, path);
+  else if (st == ProbeStatus::Fail) std::printf("    [bilgi] sonda: %s\n", p.err);
+  return st;
+}
+} // namespace
+
+// Girinti: derinlik basina sabit kademe; KONTROL olarak ayni sahne duz
+// cizildiginde butun adlar AYNI x'te olmali (girinti gercekten olculuyor).
+ENGINE_TEST(editor_widgets_tree_rows_indent_by_depth) {
+  static TreeMock m;
+  m = TreeMock{};
+  if (run_tree(m, "agac") == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
+  const float d0 = m.rows[0].text_x, d1 = m.rows[1].text_x, d2 = m.rows[3].text_x;
+  const float step = d1 - d0;
+  CHECK(step > 4.0f);
+  CHECK(std::fabs((d2 - d0) - 2.0f * step) < 0.75f); // derinlik 2 = iki kademe
+  CHECK(std::fabs(m.rows[2].text_x - d1) < 0.01f);   // ayni derinlik = ayni x
+  CHECK(std::fabs(m.rows[6].text_x - d0) < 0.01f);
+  // Ok yalniz cocugu olan satirda oge birakir.
+  CHECK(m.rows[0].arrow.x1 > m.rows[0].arrow.x0 && m.rows[2].arrow.x1 > m.rows[2].arrow.x0);
+  CHECK(m.rows[1].arrow.x1 == m.rows[1].arrow.x0 && m.rows[6].arrow.x1 == m.rows[6].arrow.x0);
+  // Goz/kilit sutunlari HER satirda ayni yerde (fare girince kaymaz — kayarsa
+  // imlecin altindaki dugme kacar); gorunurluk degisken, YERLESIM sabit.
+  CHECK(m.rows[4].eye.x1 > m.rows[4].eye.x0 && m.rows[1].eye.x1 > m.rows[1].eye.x0);
+  CHECK(std::fabs(m.rows[1].eye.x0 - m.rows[4].eye.x0) < 0.01f);
+  CHECK(std::fabs(m.rows[1].lock.x0 - m.rows[5].lock.x0) < 0.01f);
+  CHECK(m.rows[1].lock.x0 > m.rows[1].eye.x0); // kilit en sagda
+  // ... ama SAKIN satirda hicbir sey CIZILMEZ: gizli satirin goz hucresi zeminden
+  // farkli, bayraksiz satirinki zeminle ayni (kontrol).
+  // Tek piksel YETMEZ (◌ ortasi bos bir daire): hucredeki zeminden FARKLI
+  // piksel SAYISI olculur.
+  auto ink = [](app::WidgetRect w, const uint8_t bg[4]) {
+    uint32_t n = 0;
+    for (int y = (int)w.y0; y < (int)w.y1 && y < (int)kTreeH; y++)
+      for (int x = (int)w.x0; x < (int)w.x1 && x < (int)kTreeW; x++) {
+        if (x < 0 || y < 0) continue;
+        const uint8_t *q = g_tree_px + ((size_t)y * kTreeW + (size_t)x) * 4;
+        if (std::abs(q[0] - bg[0]) + std::abs(q[1] - bg[1]) + std::abs(q[2] - bg[2]) > 12) n++;
+      }
+    return n;
+  };
+  uint8_t bg[4];
+  {
+    const uint32_t ix = (uint32_t)(m.rows[1].row.x0 + 4.0f), iy = (uint32_t)m.rows[1].row.cy();
+    std::memcpy(bg, g_tree_px + ((size_t)iy * kTreeW + ix) * 4, 4); // satir zemini
+  }
+  const uint32_t ink_quiet = ink(m.rows[1].eye, bg), ink_hidden = ink(m.rows[4].eye, bg);
+  CHECK(ink_quiet == 0);   // bayraksiz, faresiz satir: hucre BOS
+  CHECK(ink_hidden > 8);   // gizli satir: ◌ cizili (pozitif kontrol)
+  std::printf("    [bilgi] goz hucresi murekkebi: sakin satir %u piksel, gizli satir %u piksel\n", ink_quiet, ink_hidden);
+  // KONTROL: duz cizim -> girinti 0.
+  static TreeMock f;
+  f = TreeMock{};
+  f.flat = true;
+  CHECK(run_tree(f, "agac_duz") == ProbeStatus::Ok);
+  CHECK(std::fabs(f.rows[3].text_x - f.rows[0].text_x) < 0.01f);
+  std::printf("    [bilgi] girinti kademesi %.1f px (d0 %.1f, d1 %.1f, d2 %.1f); duz cizimde fark %.2f px\n", (double)step, (double)d0,
+              (double)d1, (double)d2, (double)(f.rows[3].text_x - f.rows[0].text_x));
+}
+
+// Ok / goz / kilit dugmeleri kendi eylemlerini dondurur; satir govdesi Select.
+ENGINE_TEST(editor_widgets_tree_arrow_eye_lock_return_actions) {
+  static TreeMock a;
+  a = TreeMock{};
+  a.click_arrow = 2;
+  if (run_tree(a, "agac_ok") == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
+  const app::HierarchyResult tg = first_action(a, app::HierarchyAction::Toggle);
+  CHECK(tg.action == app::HierarchyAction::Toggle && tg.index == 2);
+  CHECK(!any_action(a, app::HierarchyAction::Select)); // ok tiklamak secmez
+
+  static TreeMock e;
+  e = TreeMock{};
+  e.click_eye = 4; // gizli satir: simge hep cizili
+  CHECK(run_tree(e, "agac_goz") == ProbeStatus::Ok);
+  const app::HierarchyResult vis = first_action(e, app::HierarchyAction::Visibility);
+  CHECK(vis.action == app::HierarchyAction::Visibility && vis.index == 4);
+
+  static TreeMock l;
+  l = TreeMock{};
+  l.click_lock = 5; // kilitli satir
+  CHECK(run_tree(l, "agac_kilit") == ProbeStatus::Ok);
+  const app::HierarchyResult lk = first_action(l, app::HierarchyAction::Lock);
+  CHECK(lk.action == app::HierarchyAction::Lock && lk.index == 5);
+
+  // KONTROL: satirin ad alanina tiklamak Select verir, Toggle/Lock vermez.
+  static TreeMock s;
+  s = TreeMock{};
+  s.click_row = 1;
+  CHECK(run_tree(s, "agac_secim") == ProbeStatus::Ok);
+  const app::HierarchyResult sel = first_action(s, app::HierarchyAction::Select);
+  CHECK(sel.action == app::HierarchyAction::Select && sel.index == 1 && !sel.ctrl);
+  CHECK(!any_action(s, app::HierarchyAction::Toggle) && !any_action(s, app::HierarchyAction::Lock));
+  std::printf("    [bilgi] ok->Toggle(%d), goz->Visibility(%d), kilit->Lock(%d), govde->Select(%d)\n", tg.index, vis.index, lk.index,
+              sel.index);
+}
+
+// Sag tik menusu: "Sil" eylemi doner; KONTROL olarak menuyu acip HICBIR seye
+// tiklamamak eylem uretmez (menu kendiliginden bir sey yapmiyor).
+ENGINE_TEST(editor_widgets_tree_context_menu_returns_actions) {
+  static TreeMock d;
+  d = TreeMock{};
+  d.right_click_row = 1;
+  d.menu_item = 3; // Sil (ayirici yuzunden biraz asagida)
+  if (run_tree(d, "agac_menu_sil", 12) == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
+  const app::HierarchyResult del = first_action(d, app::HierarchyAction::Delete);
+  CHECK(del.action == app::HierarchyAction::Delete && del.index == 1);
+
+  static TreeMock c;
+  c = TreeMock{};
+  c.right_click_row = 1;
+  c.menu_item = 1; // Cogalt
+  CHECK(run_tree(c, "agac_menu_cogalt", 12) == ProbeStatus::Ok);
+  const app::HierarchyResult dup = first_action(c, app::HierarchyAction::Duplicate);
+  CHECK(dup.action == app::HierarchyAction::Duplicate && dup.index == 1);
+
+  static TreeMock n;
+  n = TreeMock{};
+  n.right_click_row = 1;
+  n.menu_item = -1; // menu acildi, tiklanmadi
+  CHECK(run_tree(n, "agac_menu_acik", 12) == ProbeStatus::Ok);
+  CHECK(!any_action(n, app::HierarchyAction::Delete) && !any_action(n, app::HierarchyAction::Duplicate));
+  CHECK(!any_action(n, app::HierarchyAction::Detach));
+  std::printf("    [bilgi] baglam menusu: Sil->%d, Cogalt->%d; tiklanmayan menu 0 eylem\n", del.index, dup.index);
+}
+
+// Yerinde ad: Enter onaylar (yeni ad eylemle gelir), Esc vazgecer (eylem yok).
+ENGINE_TEST(editor_widgets_tree_rename_commits_on_enter_and_cancels_on_esc) {
+  struct RenameMock : TreeMock {
+    bool esc = false;
+  };
+  static RenameMock m;
+  auto draw = [](void *ctx, uint32_t frame) {
+    auto *r = static_cast<RenameMock *>(ctx);
+    if (frame == 0) {
+      app::hierarchy_begin_rename(&r->st, 2, "Kahraman");
+      std::snprintf(r->st.rename.buf, sizeof r->st.rename.buf, "Kahraman2");
+    }
+    draw_tree(ctx, frame);
+    ImGuiIO &io = ImGui::GetIO();
+    const ImGuiKey k = r->esc ? ImGuiKey_Escape : ImGuiKey_Enter;
+    if (frame == 3) io.AddKeyEvent(k, true);
+    if (frame == 4) io.AddKeyEvent(k, false);
+  };
+  m = RenameMock{};
+  EditorProbe p;
+  p.width = 320; p.height = 420;
+  char path[512];
+  ppm_path(path, sizeof path, "agac_ad");
+  p.out_ppm = path;
+  p.draw = draw;
+  p.ctx = &m;
+  p.frames = 8;
+  const ProbeStatus st = editor_probe_render(p);
+  if (st == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
+  if (st != ProbeStatus::Ok) std::printf("    [bilgi] sonda: %s\n", p.err);
+  CHECK(st == ProbeStatus::Ok);
+  const app::HierarchyResult rn = first_action(m, app::HierarchyAction::Rename);
+  CHECK(rn.action == app::HierarchyAction::Rename && rn.index == 2 && std::strcmp(rn.name, "Kahraman2") == 0);
+  CHECK(!m.st.rename.active()); // kip kapandi
+  // KONTROL: Esc ile ayni takvim eylem URETMEZ ve kip yine kapanir.
+  static RenameMock e;
+  e = RenameMock{};
+  e.esc = true;
+  EditorProbe q = p;
+  char path2[512];
+  ppm_path(path2, sizeof path2, "agac_ad_esc");
+  q.out_ppm = path2;
+  q.ctx = &e;
+  CHECK(editor_probe_render(q) == ProbeStatus::Ok);
+  CHECK(!any_action(e, app::HierarchyAction::Rename));
+  CHECK(!e.st.rename.active());
+  // Goruntu: kip ACIKKEN dur (Enter'dan once) ki yazan kisi kutuyu GORSUN.
+  static RenameMock o;
+  o = RenameMock{};
+  EditorProbe w = p;
+  char path3[512];
+  ppm_path(path3, sizeof path3, "agac_ad_acik");
+  w.out_ppm = path3;
+  w.ctx = &o;
+  w.frames = 3; // Enter 3. karede gonderilir, 4'te islenir -> kutu acik kalir
+  CHECK(editor_probe_render(w) == ProbeStatus::Ok);
+  CHECK(o.st.rename.active() && o.st.rename.index == 2);
+  std::printf("    [bilgi] yerinde ad: Enter -> \"%s\" (varlik %d); Esc -> eylem yok; acik kip -> %s\n", rn.name, rn.index, path3);
+}
+
+// Surukle-birak: satir UZERINE birakmak Reparent, listenin altindaki bos alana
+// birakmak Detach. KONTROL: ayni satira birakmak hicbir sey uretmez.
+ENGINE_TEST(editor_widgets_tree_drag_drop_reparents) {
+  static TreeMock m;
+  m = TreeMock{};
+  m.drag_from = 6; // Kamera
+  m.drag_to = 2;   // Kahraman
+  if (run_tree(m, "agac_surukle", 12) == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
+  const app::HierarchyResult rp = first_action(m, app::HierarchyAction::Reparent);
+  if (rp.action != app::HierarchyAction::Reparent) std::printf("    [bilgi] surukleme eylem uretmedi (ImGui surukleme esigi/kare takvimi)\n");
+  CHECK(rp.action == app::HierarchyAction::Reparent);
+  CHECK(rp.index == 6 && rp.target == 2);
+
+  static TreeMock r;
+  r = TreeMock{};
+  r.drag_from = 3; // Silah (derinlik 2)
+  r.root_drop = true;
+  CHECK(run_tree(r, "agac_kok_birak", 12) == ProbeStatus::Ok);
+  const app::HierarchyResult dt = first_action(r, app::HierarchyAction::Detach, true);
+  CHECK(dt.action == app::HierarchyAction::Detach && dt.index == 3);
+
+  // KONTROL: kendi uzerine birakma -> eylem yok.
+  static TreeMock s;
+  s = TreeMock{};
+  s.drag_from = 6;
+  s.drag_to = 6;
+  CHECK(run_tree(s, "agac_kendine", 12) == ProbeStatus::Ok);
+  CHECK(!any_action(s, app::HierarchyAction::Reparent));
+  std::printf("    [bilgi] surukle-birak: %d -> ebeveyn %d; kok bolgesine birakma varlik %d; kendine birakma 0 eylem\n", rp.index,
+              rp.target, dt.index);
+}
+
+// Katlama bit kumesi (ImGui GEREKMEZ): silme/ekleme bitleri kaydirir.
+ENGINE_TEST(editor_widgets_hierarchy_collapse_bitset_shifts) {
+  app::HierarchyCollapse c;
+  CHECK(!c.collapsed(0) && !c.collapsed(app::HierarchyCollapse::kMax - 1));
+  c.set(3, true);
+  c.set(7, true);
+  CHECK(c.collapsed(3) && c.collapsed(7) && !c.collapsed(4));
+  c.toggle(3);
+  CHECK(!c.collapsed(3));
+  c.set(3, true);
+  // 1 silindi: 3->2, 7->6.
+  c.after_remove(1);
+  CHECK(c.collapsed(2) && c.collapsed(6) && !c.collapsed(3) && !c.collapsed(7));
+  // 1'e geri eklendi: 2->3, 6->7 (ve yeni satir acik).
+  c.after_insert(1);
+  CHECK(c.collapsed(3) && c.collapsed(7) && !c.collapsed(1) && !c.collapsed(2));
+  // KONTROL: sinir disi indeksler sessizce yutulur, bitleri bozmaz.
+  c.set(app::HierarchyCollapse::kMax, true);
+  c.after_remove(app::HierarchyCollapse::kMax + 5);
+  CHECK(c.collapsed(3) && c.collapsed(7));
+  CHECK(!c.collapsed(app::HierarchyCollapse::kMax));
+  c.clear();
+  CHECK(!c.collapsed(3) && !c.collapsed(7));
+  std::printf("    [bilgi] katlama kumesi %u bit (%zu bayt), silme/ekleme kaydirmasi dogru\n", app::HierarchyCollapse::kMax,
+              sizeof(app::HierarchyCollapse));
+}

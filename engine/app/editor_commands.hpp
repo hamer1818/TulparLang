@@ -58,19 +58,28 @@ constexpr bool chord_is_raw(Chord c) { return (c & (kModCtrl | kModAlt | kModSup
 // bu yuzden araya yeni komut eklemek serbesttir. Sira MENU SIRASIDIR.
 enum class CommandId : uint16_t {
   None = 0,
+  FileNew,        // Ctrl+N
+  FileOpen,       // Ctrl+O
   FileSave,       // Ctrl+S
+  FileSaveAs,     // Ctrl+Shift+S
   FileCompile,    // Ctrl+B
   EditUndo,       // Ctrl+Z
   EditRedo,       // Ctrl+Y / Ctrl+Shift+Z
   EditDuplicate,  // (kisayolsuz; "Ekle" dugmesi)
   EditDelete,     // Delete
+  EditCut,        // Ctrl+X
+  EditCopy,       // Ctrl+C
+  EditPaste,      // Ctrl+V (pano bossa etkin degil)
   SelectAll,      // Ctrl+A
   SelectClear,    // Esc
   ViewGizmos,     // G
+  ViewConsole,    // (kisayolsuz) Konsol panelini ac/kapa
   GizmoTranslate, // T
   GizmoRotate,    // R
   GizmoScale,     // S
-  PlayToggle,     // (kisayolsuz; "Oynat/Durdur" dugmesi)
+  PlayToggle,     // F5
+  PlayPause,      // F6  (oynatilirken duraklat; govdeler yerinde kalir)
+  PlayStep,       // F10 (duraklatilmisken TEK sabit adim ilerlet)
   Count
 };
 // Tablo boyu. None sayilmaz; descs[(uint32_t)id - 1] dogrudan indekstir

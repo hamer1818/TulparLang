@@ -73,18 +73,49 @@ void stand_in(ImDrawList *dl, ImVec2 a, ImVec2 b) {
 }
 
 // --- Kaplama sondasi ----------------------------------------------------------
+// aim: sentetik farenin NEREYE gidecegi. Konum ilk karede (yerlesim artik
+// biliniyor) gonderilir; olaylar BIR SONRAKI karede islenir (ImGui kuyrugu).
+enum class Aim {
+  None = 0,
+  AxisEnd,   // eksen ucu (aim_end: a*2 + (negatif?1:0))
+  ImageMid,  // goruntunun ortasi — gostergeden UZAK (kontrol)
+  DiscCorner, // gosterge KUTUSUNUN kosesi, DISKIN DISI (kontrol)
+  ChipProj,
+  ChipMode,
+  ChipSpace,
+};
 struct OverlayCtx {
   app::OverlayInfo info;
   app::OverlayLayout lay;
+  app::OverlayResult res;
   bool draw = true;          // false: yalniz zemin (fark olcumu icin)
   bool sub_rect = false;     // true: kaplama icerigin icinde kucuk bir dikdortgene
   app::ViewportRect sub{0, 0, 40, 20};
   app::ViewportRect rect{};  // kullanilan dikdortgen (cikti)
   uint8_t axis_x[3], bg1[3];
+  // --- sentetik girdi ---
+  Aim aim = Aim::None;
+  int aim_end = 0;
+  bool synth_click = false;  // kare 2 bas, kare 3 birak
+  bool synth_drag = false;   // kare 2 bas, 3..4 surukle, release_frame birak
+  float drag_dx = 0, drag_dy = 0; // basma noktasina gore (aim konumu kare 0'da belli olur)
+  int release_frame = 5;
+  // Tarama: alti eksen ucunun hepsini TEK sondada dolasir (her ucta ayri cihaz
+  // yaratmamak icin). Cift karede konum gonderilir, tek karede sonuc okunur.
+  bool sweep = false;
+  int end_seen[6] = {-1, -1, -1, -1, -1, -1};
+  // --- olculenler (kareler boyunca birikir) ---
+  int axis_seen = -1, axis_frame = -1, axis_hover_seen = -1;
+  bool consumed_seen = false, ortho_seen = false, mode_seen = false, space_seen = false;
+  bool box_active_seen = false;
+  int box_done_frame = -1;
+  float box_seen[4] = {0, 0, 0, 0};  // birakilan (box_done) kutu
+  float box_last[4] = {0, 0, 0, 0};  // SON gorulen kutu (surukleme suruyorken de)
+  float aim_x = -1, aim_y = -1;
 };
-void draw_overlay_probe(void *ctx, uint32_t) {
+void draw_overlay_probe(void *ctx, uint32_t frame) {
   auto *c = static_cast<OverlayCtx *>(ctx);
-  const ImGuiIO &io = ImGui::GetIO();
+  ImGuiIO &io = ImGui::GetIO();
   ImGui::SetNextWindowPos(ImVec2(0, 0));
   ImGui::SetNextWindowSize(io.DisplaySize);
   ImGui::Begin("G\xC3\xB6r\xC3\xBCn\xC3\xBCm", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
@@ -94,10 +125,72 @@ void draw_overlay_probe(void *ctx, uint32_t) {
   ImGui::Dummy(avail); // ImGui::Image'in yerine: etkilesimsiz oge, ayni olcu
   c->rect = c->sub_rect ? app::ViewportRect{origin.x + c->sub.x, origin.y + c->sub.y, c->sub.w, c->sub.h}
                         : app::ViewportRect{origin.x, origin.y, avail.x, avail.y};
-  if (c->draw) app::viewport_overlay(c->rect, c->info, &c->lay);
+  if (c->draw) app::viewport_overlay(c->rect, c->info, &c->lay, &c->res);
+  if (c->res.axis_clicked >= 0) { c->axis_seen = c->res.axis_clicked; c->axis_frame = (int)frame; }
+  if (c->res.axis_hovered >= 0) c->axis_hover_seen = c->res.axis_hovered;
+  if (c->res.consumed_mouse) c->consumed_seen = true;
+  if (c->res.ortho_toggled) c->ortho_seen = true;
+  if (c->res.mode_toggled) c->mode_seen = true;
+  if (c->res.gizmo_space_toggled) c->space_seen = true;
+  if (c->res.box_active) {
+    c->box_active_seen = true;
+    for (int i = 0; i < 4; i++) c->box_last[i] = c->res.box[i];
+  }
+  if (c->res.box_done) {
+    c->box_done_frame = (int)frame;
+    for (int i = 0; i < 4; i++) c->box_seen[i] = c->res.box[i];
+  }
   tone8(app::Tone::AxisX, c->axis_x);
   tone8(app::Tone::Bg1, c->bg1);
   ImGui::End();
+  // --- Sentetik girdi: konum ilk karede, tiklar sonra ------------------------
+  if (c->aim != Aim::None && frame == 0) {
+    float mx = 0, my = 0;
+    const float disc_r = c->lay.gizmo_r + c->lay.gizmo_end_r + (float)(int)(ImGui::GetFontSize() * 0.25f);
+    switch (c->aim) {
+    case Aim::AxisEnd: {
+      app::AxisProjection pr;
+      app::overlay_project_axes(c->info.view, c->lay.gizmo_r, &pr);
+      const int a = c->aim_end / 2, neg = c->aim_end & 1;
+      mx = c->lay.gizmo_cx + (neg ? -pr.x[a] : pr.x[a]);
+      my = c->lay.gizmo_cy + (neg ? -pr.y[a] : pr.y[a]);
+      break;
+    }
+    case Aim::ImageMid: mx = c->rect.x + c->rect.w * 0.5f; my = c->rect.y + c->rect.h * 0.5f; break;
+    // Kutunun kosesi: merkeze uzakligi disc_r * 1.06 — KARESEL kutunun icinde
+    // ama DISKIN disinda. "Yalniz disk oge ekler" iddiasini tam burada olcer.
+    case Aim::DiscCorner: mx = c->lay.gizmo_cx + disc_r * 0.75f; my = c->lay.gizmo_cy + disc_r * 0.75f; break;
+    case Aim::ChipProj: mx = c->lay.chip_proj.x + c->lay.chip_proj.w * 0.5f; my = c->lay.chip_proj.y + c->lay.chip_proj.h * 0.5f; break;
+    case Aim::ChipMode: mx = c->lay.chip_mode.x + c->lay.chip_mode.w * 0.5f; my = c->lay.chip_mode.y + c->lay.chip_mode.h * 0.5f; break;
+    case Aim::ChipSpace: mx = c->lay.chip_space.x + c->lay.chip_space.w * 0.5f; my = c->lay.chip_space.y + c->lay.chip_space.h * 0.5f; break;
+    default: break;
+    }
+    c->aim_x = mx;
+    c->aim_y = my;
+    io.AddMousePosEvent(mx, my);
+  }
+  if (c->synth_click) {
+    if (frame == 2) io.AddMouseButtonEvent(0, true);
+    if (frame == 3) io.AddMouseButtonEvent(0, false);
+  }
+  if (c->synth_drag) {
+    if (frame == 2) io.AddMouseButtonEvent(0, true);
+    if (frame >= 3 && frame <= 4) {
+      const float t = (float)(frame - 2) / 2.0f;
+      io.AddMousePosEvent(c->aim_x + c->drag_dx * t, c->aim_y + c->drag_dy * t);
+    }
+    if ((int)frame == c->release_frame) io.AddMouseButtonEvent(0, false);
+  }
+  if (c->sweep) {
+    if ((frame & 1u) && frame / 2u < 6u) c->end_seen[frame / 2u] = c->res.axis_hovered; // tek kare: oku
+    if (!(frame & 1u) && frame / 2u < 6u) { // cift kare: bir sonraki ucun konumunu gonder
+      app::AxisProjection pr;
+      app::overlay_project_axes(c->info.view, c->lay.gizmo_r, &pr);
+      const uint32_t e = frame / 2u;
+      const int a = (int)e / 2, neg = (int)e & 1;
+      io.AddMousePosEvent(c->lay.gizmo_cx + (neg ? -pr.x[a] : pr.x[a]), c->lay.gizmo_cy + (neg ? -pr.y[a] : pr.y[a]));
+    }
+  }
 }
 void fill_info(app::OverlayInfo &i, Vec3 eye, Vec3 target) {
   const Mat4 v = Mat4::look_at(eye, target, {0, 1, 0});
@@ -161,7 +254,10 @@ ENGINE_TEST(editor_overlay_axis_x_endpoint_pixel_matches_palette) {
   CHECK(st == ProbeStatus::Ok);
   if (st != ProbeStatus::Ok) return;
   CHECK(c.lay.gizmo && c.lay.top_row && c.lay.camera && c.lay.hint && c.lay.border);
-  CHECK(c.lay.pills == 3); // Perspektif + kip + istatistik (oynatma yok, gizmolar acik)
+  std::printf("    [bilgi] ust satir: %u hap (izdusum/kamera kipi/gizmo kipi/gizmo uzayi/istatistik)\n", c.lay.pills);
+  CHECK(c.lay.pills == 5); // izdusum + kamera kipi + gizmo kipi + gizmo uzayi + istatistik
+  // Tiklanabilir uc cip de yerini bildirdi (etkilesim kapisi bu dikdortgenleri kullanir).
+  CHECK(c.lay.chip_proj.valid() && c.lay.chip_mode.valid() && c.lay.chip_space.valid());
   app::AxisProjection pr;
   app::overlay_project_axes(c.info.view, c.lay.gizmo_r, &pr);
   const float ex = c.lay.gizmo_cx + pr.x[0], ey = c.lay.gizmo_cy + pr.y[0];
@@ -193,7 +289,14 @@ ENGINE_TEST(editor_overlay_axis_x_endpoint_pixel_matches_palette) {
   out_path(path, sizeof path, "overlay_hovered.ppm");
   st = editor_probe_render(p);
   CHECK(st == ProbeStatus::Ok);
-  CHECK(c.lay.pills == 5);
+  std::printf("    [bilgi] oynatiliyor + gizmolar kapali: %u hap (istatistik dusuyor: 960 px'e 7 hap sigmiyor)\n", c.lay.pills);
+  // 7 aday (OYNATILIYOR + izdusum + kamera kipi + gizmo kipi + gizmo uzayi +
+  // istatistik + "gizmolar kapali") 960 px'e sigmiyor; dusurme sirasinin en
+  // ustundeki ISTATISTIK atiliyor (ayni sayi durum cubugunda zaten var), geri
+  // kalan 6'si duruyor — yani "sigmayani atla" kurali tiklanabilir cipleri
+  // korumus oluyor.
+  CHECK(c.lay.pills == 6);
+  CHECK(c.lay.chip_proj.valid() && c.lay.chip_mode.valid() && c.lay.chip_space.valid());
 }
 
 ENGINE_TEST(editor_overlay_focus_border_changes_inner_edge_only) {
@@ -274,6 +377,264 @@ ENGINE_TEST(editor_overlay_tiny_rect_never_overflows) {
   CHECK(st == ProbeStatus::Ok);
   std::printf("    [bilgi] 360x240 kontrol: haplar %u gosterge %d kamera %d ipucu %d\n", c.lay.pills, (int)c.lay.gizmo, (int)c.lay.camera, (int)c.lay.hint);
   CHECK(c.lay.top_row && c.lay.gizmo && c.lay.camera);
+}
+
+ENGINE_TEST(editor_overlay_nav_gizmo_click_returns_axis_outside_disc_does_not) {
+  // Gosterge artik SUS DEGIL: +X ucuna tiklamak CameraAxis::PlusX dondurur ve
+  // kaplama "fareyi ben aldim" der (cagiran o karede 3B secim isini atmaz).
+  OverlayCtx c;
+  fill_info(c.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  c.info.hovered = true;
+  c.aim = Aim::AxisEnd;
+  c.aim_end = 0; // +X ucu
+  c.synth_click = true;
+  EditorProbe p;
+  p.width = 960; p.height = 600;
+  p.frames = 8;
+  char path[512];
+  out_path(path, sizeof path, "overlay_gizmo_hover.ppm");
+  p.out_ppm = path;
+  p.draw = draw_overlay_probe;
+  p.ctx = &c;
+  ProbeStatus st = editor_probe_render(p);
+  if (st == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
+  if (st != ProbeStatus::Ok) std::printf("    [bilgi] sonda: %s\n", p.err);
+  CHECK(st == ProbeStatus::Ok);
+  if (st != ProbeStatus::Ok) return;
+  std::printf("    [bilgi] +X ucuna tik (%.0f,%.0f): tiklanan eksen %d (beklenen %d), ustunde %d, fare yutuldu %d, kare %d; PPM %s\n", (double)c.aim_x,
+              (double)c.aim_y, c.axis_seen, (int)app::CameraAxis::PlusX, c.axis_hover_seen, (int)c.consumed_seen, c.axis_frame, path);
+  CHECK(c.axis_seen == (int)app::CameraAxis::PlusX);
+  CHECK(c.axis_hover_seen == (int)app::CameraAxis::PlusX);
+  CHECK(c.consumed_seen);
+
+  // KONTROL 1 — gosterge KUTUSUNUN kosesi ama DISKIN disi: oge eklenmez, tik
+  // altindaki goruntuye duser. "Yalniz disk kadar" iddiasi tam burada olculur.
+  OverlayCtx corner;
+  fill_info(corner.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  corner.info.hovered = true;
+  corner.aim = Aim::DiscCorner;
+  corner.synth_click = true;
+  p.ctx = &corner;
+  p.out_ppm = nullptr;
+  st = editor_probe_render(p);
+  CHECK(st == ProbeStatus::Ok);
+  if (st != ProbeStatus::Ok) return;
+  const float dcx = corner.aim_x - corner.lay.gizmo_cx, dcy = corner.aim_y - corner.lay.gizmo_cy;
+  const float disc_r = corner.lay.gizmo_r + corner.lay.gizmo_end_r + (float)(int)(17.0f * 0.25f);
+  std::printf("    [bilgi] KONTROL disk kosesi (%.0f,%.0f): merkeze uzaklik %.1f, disk yaricapi %.1f (disinda), tiklanan eksen %d, fare yutuldu %d\n",
+              (double)corner.aim_x, (double)corner.aim_y, (double)std::sqrt(dcx * dcx + dcy * dcy), (double)disc_r, corner.axis_seen,
+              (int)corner.consumed_seen);
+  CHECK(std::sqrt(dcx * dcx + dcy * dcy) > disc_r); // gercekten diskin DISINDA
+  CHECK(corner.axis_seen == -1 && !corner.consumed_seen);
+
+  // KONTROL 2 — goruntunun ortasi: hicbir sey yutulmaz (secim tiki oraya duser).
+  OverlayCtx mid;
+  fill_info(mid.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  mid.info.hovered = true;
+  mid.aim = Aim::ImageMid;
+  mid.synth_click = true;
+  p.ctx = &mid;
+  st = editor_probe_render(p);
+  CHECK(st == ProbeStatus::Ok);
+  std::printf("    [bilgi] KONTROL goruntu ortasi (%.0f,%.0f): tiklanan eksen %d, fare yutuldu %d (ikisi de bos olmali)\n", (double)mid.aim_x,
+              (double)mid.aim_y, mid.axis_seen, (int)mid.consumed_seen);
+  CHECK(mid.axis_seen == -1 && !mid.consumed_seen);
+
+  // Alti ucun HEPSI dogru eksene esleniyor mu (enum sirasi ile a*2+neg ayni mi).
+  OverlayCtx sw;
+  fill_info(sw.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  sw.info.hovered = true;
+  sw.sweep = true;
+  p.ctx = &sw;
+  p.frames = 12;
+  st = editor_probe_render(p);
+  CHECK(st == ProbeStatus::Ok);
+  if (st != ProbeStatus::Ok) return;
+  static const char *const kAxisName[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+  uint32_t ok = 0;
+  for (int i = 0; i < 6; i++) {
+    if (sw.end_seen[i] == i) ok++;
+    std::printf("    [bilgi] uc %s -> %d (beklenen %d) %s\n", kAxisName[i], sw.end_seen[i], i, sw.end_seen[i] == i ? "" : "FARKLI");
+  }
+  CHECK(ok == 6);
+}
+
+ENGINE_TEST(editor_overlay_chips_toggle_projection_mode_and_gizmo_space) {
+  // Uc cip de AYRI AYRI bildirilir: birine tiklamak digerlerini tetiklemez.
+  struct Case {
+    Aim aim;
+    const char *name;
+  };
+  const Case cases[3] = {{Aim::ChipProj, "Perspektif/Ortografik"}, {Aim::ChipMode, "Yorunge/Ucus"}, {Aim::ChipSpace, "Dunya/Yerel"}};
+  bool seen[3][3] = {};
+  EditorProbe p;
+  p.width = 960; p.height = 600;
+  p.frames = 8;
+  p.draw = draw_overlay_probe;
+  char path[512];
+  for (int k = 0; k < 3; k++) {
+    OverlayCtx c;
+    fill_info(c.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+    c.info.hovered = true;
+    c.aim = cases[k].aim;
+    c.synth_click = true;
+    p.ctx = &c;
+    out_path(path, sizeof path, "overlay_chip_izdusum.ppm");
+    p.out_ppm = k == 0 ? path : nullptr;
+    const ProbeStatus st = editor_probe_render(p);
+    if (st == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
+    CHECK(st == ProbeStatus::Ok);
+    if (st != ProbeStatus::Ok) return;
+    seen[k][0] = c.ortho_seen;
+    seen[k][1] = c.mode_seen;
+    seen[k][2] = c.space_seen;
+    std::printf("    [bilgi] %s cipine tik (%.0f,%.0f): izdusum %d, kip %d, uzay %d, fare yutuldu %d\n", cases[k].name, (double)c.aim_x,
+                (double)c.aim_y, (int)c.ortho_seen, (int)c.mode_seen, (int)c.space_seen, (int)c.consumed_seen);
+    CHECK(c.consumed_seen);
+  }
+  for (int k = 0; k < 3; k++)
+    for (int j = 0; j < 3; j++) CHECK(seen[k][j] == (k == j)); // yalniz KENDI bayragi
+
+  // Etiketler durumu izliyor: izdusum Ortografik'e gecince ust satirin pikselleri
+  // DEGISIR. KONTROL: ayni cagri ayni durumla iki kez cizilince fark 0.
+  OverlayCtx a, b, b2;
+  fill_info(a.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  fill_info(b.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  fill_info(b2.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  b.info.proj = app::CameraProjection::Ortho;
+  b.info.cam_mode = app::CameraMode::Fly;
+  b.info.gizmo_space = app::GizmoSpace::Local;
+  b2.info = b.info;
+  static uint8_t px[3][960 * 600 * 4];
+  OverlayCtx *ctxs[3] = {&a, &b, &b2};
+  p.frames = 2;
+  p.out_ppm = nullptr;
+  for (int k = 0; k < 3; k++) {
+    p.ctx = ctxs[k];
+    if (k == 1) { out_path(path, sizeof path, "overlay_chip_orto.ppm"); p.out_ppm = path; }
+    else p.out_ppm = nullptr;
+    const ProbeStatus st = editor_probe_render(p);
+    CHECK(st == ProbeStatus::Ok);
+    if (st != ProbeStatus::Ok) return;
+    std::memcpy(px[k], p.pixels, sizeof px[k]);
+  }
+  const uint32_t d_label = probe_diff(px[0], px[1], 960 * 600), d_same = probe_diff(px[1], px[2], 960 * 600);
+  std::printf("    [bilgi] etiketler: Perspektif/Yorunge/Dunya -> Ortografik/Ucus/Yerel piksel farki %u; KONTROL ayni durum iki kez %u (0 olmali)\n",
+              d_label, d_same);
+  CHECK(d_label > 200);
+  CHECK(d_same == 0);
+}
+
+ENGINE_TEST(editor_overlay_box_select_draws_and_reports_only_on_real_drag) {
+  // Sol tusla suruklemek dikdortgen cizer ve BIRAKILINCA secimi bildirir.
+  OverlayCtx c;
+  fill_info(c.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  c.info.hovered = true;
+  c.aim = Aim::ImageMid;
+  c.synth_drag = true;
+  c.drag_dx = 220.0f;
+  c.drag_dy = 140.0f;
+  c.release_frame = 5;
+  EditorProbe p;
+  p.width = 960; p.height = 600;
+  p.frames = 7;
+  p.draw = draw_overlay_probe;
+  p.ctx = &c;
+  p.out_ppm = nullptr;
+  ProbeStatus st = editor_probe_render(p);
+  if (st == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
+  if (st != ProbeStatus::Ok) std::printf("    [bilgi] sonda: %s\n", p.err);
+  CHECK(st == ProbeStatus::Ok);
+  if (st != ProbeStatus::Ok) return;
+  std::printf("    [bilgi] surukleme (%.0f,%.0f) -> (+%.0f,+%.0f): cizildi %d, birakildi kare %d, kutu (%.0f, %.0f)-(%.0f, %.0f)\n", (double)c.aim_x,
+              (double)c.aim_y, (double)c.drag_dx, (double)c.drag_dy, (int)c.box_active_seen, c.box_done_frame, (double)c.box_seen[0],
+              (double)c.box_seen[1], (double)c.box_seen[2], (double)c.box_seen[3]);
+  CHECK(c.box_active_seen);
+  CHECK(c.box_done_frame == 6);
+  CHECK(nearly_equal(c.box_seen[0], c.aim_x, 1.0f) && nearly_equal(c.box_seen[1], c.aim_y, 1.0f));
+  CHECK(nearly_equal(c.box_seen[2], c.aim_x + c.drag_dx, 1.0f) && nearly_equal(c.box_seen[3], c.aim_y + c.drag_dy, 1.0f));
+
+  // Piksel: surukleme SURERKEN dikdortgen gercekten cizilmis mi? Son kare
+  // surukleme ortasinda biten bir sonda ile duz cizimi karsilastir — fark
+  // YALNIZ kutunun icinde olmali (disarida 0: kaplamanin geri kalani ayni).
+  OverlayCtx dragging;
+  fill_info(dragging.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  dragging.info.hovered = true;
+  dragging.aim = Aim::ImageMid;
+  dragging.synth_drag = true;
+  dragging.drag_dx = 220.0f;
+  dragging.drag_dy = 140.0f;
+  dragging.release_frame = 99; // birakma yok: son kare surukleme ortasinda
+  OverlayCtx plain;
+  fill_info(plain.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  plain.info.hovered = true;
+  plain.aim = Aim::ImageMid; // fare AYNI yerde (fark yalniz suruklemeden gelsin)
+  static uint8_t px[2][960 * 600 * 4];
+  OverlayCtx *two[2] = {&plain, &dragging};
+  p.frames = 6;
+  char path[512];
+  for (int k = 0; k < 2; k++) {
+    p.ctx = two[k];
+    if (k == 1) { out_path(path, sizeof path, "overlay_box_select.ppm"); p.out_ppm = path; }
+    else p.out_ppm = nullptr;
+    st = editor_probe_render(p);
+    CHECK(st == ProbeStatus::Ok);
+    if (st != ProbeStatus::Ok) return;
+    std::memcpy(px[k], p.pixels, sizeof px[k]);
+  }
+  CHECK(dragging.box_active_seen);
+  const float bx0 = dragging.box_last[0] - 2.0f, by0 = dragging.box_last[1] - 2.0f;
+  const float bx1 = dragging.box_last[2] + 2.0f, by1 = dragging.box_last[3] + 2.0f;
+  uint32_t in_box = 0, out_box = 0;
+  for (int y = 0; y < 600; y++)
+    for (int x = 0; x < 960; x++) {
+      const size_t i = ((size_t)y * 960 + (size_t)x) * 4;
+      if (std::memcmp(px[0] + i, px[1] + i, 3) == 0) continue;
+      const bool inside = (float)x >= bx0 && (float)x <= bx1 && (float)y >= by0 && (float)y <= by1;
+      if (inside) in_box++;
+      else out_box++;
+    }
+  std::printf("    [bilgi] secim dikdortgeni: kutu (%.0f,%.0f)-(%.0f,%.0f), icinde %u piksel degisti, DISINDA %u (0 olmali); PPM %s\n",
+              (double)dragging.box_last[0], (double)dragging.box_last[1], (double)dragging.box_last[2], (double)dragging.box_last[3], in_box, out_box,
+              path);
+  CHECK(in_box > 1000);
+  CHECK(out_box == 0);
+
+  // KONTROL 1: 3 piksellik surukleme TIKTIR — kutu bildirilmez (yoksa her tek
+  // tik bir kutu secim olurdu ve tiklamayla secim calismazdi).
+  OverlayCtx tiny;
+  fill_info(tiny.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  tiny.info.hovered = true;
+  tiny.aim = Aim::ImageMid;
+  tiny.synth_drag = true;
+  tiny.drag_dx = 3.0f;
+  tiny.drag_dy = 2.0f;
+  tiny.release_frame = 5;
+  p.frames = 7;
+  p.out_ppm = nullptr;
+  p.ctx = &tiny;
+  st = editor_probe_render(p);
+  CHECK(st == ProbeStatus::Ok);
+  std::printf("    [bilgi] KONTROL 3 px surukleme: cizildi %d, birakildi kare %d (ikisi de bos olmali)\n", (int)tiny.box_active_seen,
+              tiny.box_done_frame);
+  CHECK(!tiny.box_active_seen && tiny.box_done_frame == -1);
+
+  // KONTROL 2: fare goruntunun USTUNDE degilken (hovered = false) surukleme
+  // hic baslamaz — baska panelden gelen bir surukleme goruntuyu secmez.
+  OverlayCtx off;
+  fill_info(off.info, {15.1f, 12.3f, 14.9f}, {0, 0, 0});
+  off.info.hovered = false;
+  off.aim = Aim::ImageMid;
+  off.synth_drag = true;
+  off.drag_dx = 220.0f;
+  off.drag_dy = 140.0f;
+  off.release_frame = 5;
+  p.ctx = &off;
+  st = editor_probe_render(p);
+  CHECK(st == ProbeStatus::Ok);
+  std::printf("    [bilgi] KONTROL goruntu ustunde degil: cizildi %d, birakildi kare %d (ikisi de bos olmali)\n", (int)off.box_active_seen,
+              off.box_done_frame);
+  CHECK(!off.box_active_seen && off.box_done_frame == -1);
 }
 
 // --- Kaynaklar sondasi ---------------------------------------------------------
