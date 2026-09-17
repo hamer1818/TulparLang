@@ -200,6 +200,12 @@ PropItem prop_vec3(const char *label, float v[3], float speed, float min, float 
   static const Tone kTone[3] = {Tone::AxisX, Tone::AxisY, Tone::AxisZ};
   // Rozet: harf + iki yanda yarim FramePadding. Alanin sol kenarina BINER
   // (yuvarlak koseyi orter) — tek parca [X|0.000] kapsulu, arada bosluk yok.
+  //
+  // Rozet zemini eksenin renginde DEGIL, alanin kendi (cokuk) zemininde;
+  // eksen rengi yalniz SOL KENARDAKI ince cubukta ve harfte gorunur. Dolu
+  // renkli blok, satirda uc koyu doygun dikdortgen olusturup ozellik
+  // panelini "oyuncak" gosteriyordu; sektor editorlerinde (UE5) eksen rengi
+  // ince bir kenar isaretidir, yuzey degil.
   const float badge_w = std::floor(ImGui::CalcTextSize("X").x + s.FramePadding.x);
   const float overlap = s.FrameRounding;
   const float gap = s.ItemInnerSpacing.x;
@@ -219,9 +225,19 @@ PropItem prop_vec3(const char *label, float v[3], float speed, float min, float 
     g_vec3_layout.field[a] = item_rect();
     // Rozet alandan SONRA cizilir ki alanin sol kosesini ortsun.
     const ImVec2 b0(p.x, p.y), b1(p.x + badge_w, p.y + h);
-    dl->AddRectFilled(b0, b1, tone_u32(kTone[a]), s.FrameRounding, ImDrawFlags_RoundCornersLeft);
+    dl->AddRectFilled(b0, b1, tone_u32(Tone::Input), s.FrameRounding, ImDrawFlags_RoundCornersLeft);
+    // Eksen cubugu: sol kenarda, cerceve yuksekliginin tamami boyunca.
+    // Genislik FramePadding'e oranli (olcekle buyur), en az 3 piksel:
+    // tests/test_editor_widgets.cpp rozeti `x0 + 2` pikselinden ornekliyor,
+    // daha ince bir cubuk o ornegi kenar yumusatmasinin icine dusururdu.
+    float bar_w = std::floor(s.FramePadding.x * 0.5f);
+    if (bar_w < 3.0f) bar_w = 3.0f;
+    dl->AddRectFilled(b0, ImVec2(b0.x + bar_w, b1.y), tone_u32(kTone[a]), s.FrameRounding,
+                      ImDrawFlags_RoundCornersLeft);
     const ImVec2 ts = ImGui::CalcTextSize(kAxis[a]);
-    dl->AddText(ImVec2(std::floor(b0.x + (badge_w - ts.x) * 0.5f), std::floor(b0.y + (h - ts.y) * 0.5f)), tone_u32(Tone::Bg0), kAxis[a]);
+    dl->AddText(ImVec2(std::floor(b0.x + bar_w + (badge_w - bar_w - ts.x) * 0.5f),
+                       std::floor(b0.y + (h - ts.y) * 0.5f)),
+                tone_u32(kTone[a]), kAxis[a]);
     g_vec3_layout.badge[a] = WidgetRect{b0.x, b0.y, b1.x, b1.y};
     p.x = fx + field_w + gap;
   }

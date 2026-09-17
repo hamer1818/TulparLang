@@ -98,35 +98,45 @@ ImGuiKey map_key(int k) {
 // ===========================================================================
 // TULPAR KOYU — editor paleti
 // ===========================================================================
-// ON UC isimli sabit; ImGuiCol_* girdilerinin TAMAMI bunlardan turer, tabloda
-// baska ham renk yok. Notrler hafif MAVIYE calan gri: motorun kendi HUD'i ve
-// gunes/golge gizmolari sicak sari-turuncu, soguk gri arayuz onlarla
-// carpismaz ve 3B goruntuyu "kirletmez". Vurgu tek renk (turkuaz) — secim,
-// etkin oge ve tutamaklarin hepsi ondan.
+// Isimli sabitler; ImGuiCol_* girdilerinin TAMAMI bunlardan turer, tabloda
+// baska ham renk yok. Notrler TAM GRI (mavi dokusu yok): renkli bir gri,
+// yanindaki 3B goruntuye ton katar ve arayuzu "temasi olan" degil "boyanmis"
+// gosterir. Yuzeyler UC kademe: cokuk (girdi) < panel < kabarik (dugme).
+// Vurgu tek renk ve SEYREK kullanilir.
 constexpr ImVec4 rgb(int r, int g, int b, float a = 1.0f) {
   return ImVec4((float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f, a);
 }
 constexpr ImVec4 fade(ImVec4 c, float a) { return ImVec4(c.x, c.y, c.z, a); }
 
-constexpr ImVec4 kBg0 = rgb(0x12, 0x15, 0x1A);      // en dip: menu cubugu, dok bosluğu
-constexpr ImVec4 kBg1 = rgb(0x1A, 0x1E, 0x25);      // pencere zemini
-constexpr ImVec4 kBg2 = rgb(0x22, 0x27, 0x30);      // baslik, sekme, tablo basligi
-constexpr ImVec4 kBg3 = rgb(0x2B, 0x31, 0x3C);      // cerceve: kutu, dugme, birlesik
-constexpr ImVec4 kBg4 = rgb(0x37, 0x3F, 0x4C);      // ustunde/etkin cerceve
-constexpr ImVec4 kLine = rgb(0x3C, 0x44, 0x52);     // kenarlik + ayirac
-constexpr ImVec4 kText = rgb(0xDA, 0xDF, 0xE8);     // ana metin
-constexpr ImVec4 kTextDim = rgb(0x79, 0x84, 0x95);  // pasif metin, ipucu
-constexpr ImVec4 kAccent = rgb(0x2E, 0xB2, 0xA4);   // vurgu (Tulpar turkuazi)
-constexpr ImVec4 kAccentHi = rgb(0x46, 0xD6, 0xC6); // vurgu parlak: imlec, tik
-constexpr ImVec4 kAccentLo = rgb(0x1D, 0x7D, 0x74); // vurgu koyu: basili tutamak
-constexpr ImVec4 kWarn = rgb(0xE6, 0xA7, 0x3E);     // kaydedilmemis, surukle hedefi
+constexpr ImVec4 kBg0 = rgb(0x0B, 0x0B, 0x0B);      // en dip: menu cubugu, dok boslugu, guclu ayirac
+constexpr ImVec4 kBg1 = rgb(0x1B, 0x1B, 0x1B);      // pencere/panel zemini
+constexpr ImVec4 kBg2 = rgb(0x24, 0x24, 0x24);      // baslik, sekme seridi, tablo basligi
+constexpr ImVec4 kBg3 = rgb(0x35, 0x35, 0x35);      // KABARIK yuzey: dugme, sekme hover
+constexpr ImVec4 kBg4 = rgb(0x43, 0x43, 0x43);      // kabarik yuzey, ustunde
+// COKUK yuzey: girdi kutusu, slider olugu, arama alani. Panelden KOYUdur.
+// Bu ayrim arayuzun "pahali" gorunmesinin en belirleyici teknik detayi:
+// UE5/Unity'de girdi alani iceri gomulu, dugme disari kabariktir. Ikisi ayni
+// tonda (ya da girdi panelden ACIK) olunca yuzey hiyerarsisi duzlesir ve
+// arayuz eski/ucuz okunur -- onceki paletin asil sorunu buydu.
+constexpr ImVec4 kInput = rgb(0x10, 0x10, 0x10);
+constexpr ImVec4 kLine = rgb(0x2E, 0x2E, 0x2E);     // ince kenarlik + ayirac
+constexpr ImVec4 kText = rgb(0xD4, 0xD4, 0xD4);     // ana metin
+constexpr ImVec4 kTextDim = rgb(0x87, 0x87, 0x87);  // pasif metin, ipucu
+// Vurgu: DOYGUNLUGU DUSUK mavi. Onceki turkuaz her etkin ogede genis alan
+// kapliyordu; sektor editorlerinde vurgu az ve seyrek kullanilir, arayuzun
+// %95'i notr gridir. Renk, 3B goruntudeki sicak gunes/golge tonlariyla da
+// carpismaz.
+constexpr ImVec4 kAccent = rgb(0x12, 0x72, 0xC8);
+constexpr ImVec4 kAccentHi = rgb(0x2E, 0x96, 0xF0); // imlec, tik, odak cizgisi
+constexpr ImVec4 kAccentLo = rgb(0x0C, 0x55, 0x96); // basili tutamak
+constexpr ImVec4 kWarn = rgb(0xE0, 0xA0, 0x30);     // kaydedilmemis, surukle hedefi
 constexpr ImVec4 kWhite = rgb(0xFF, 0xFF, 0xFF);    // yalniz saydam katmanlar icin
 // Disa acik ek tonlar (editor_tone): stil tablosunda kullanilmazlar.
-constexpr ImVec4 kAxisX = rgb(0xE5, 0x5D, 0x5D);
-constexpr ImVec4 kAxisY = rgb(0x7F, 0xC8, 0x5A);
-constexpr ImVec4 kAxisZ = rgb(0x4F, 0x9C, 0xF0);
-constexpr ImVec4 kOk = rgb(0x5F, 0xC5, 0x7A);
-constexpr ImVec4 kErr = rgb(0xE5, 0x5D, 0x5D);
+constexpr ImVec4 kAxisX = rgb(0xD9, 0x45, 0x3D);
+constexpr ImVec4 kAxisY = rgb(0x6B, 0xBF, 0x3F);
+constexpr ImVec4 kAxisZ = rgb(0x3E, 0x79, 0xD4);
+constexpr ImVec4 kOk = rgb(0x5A, 0xB8, 0x6A);
+constexpr ImVec4 kErr = rgb(0xD9, 0x45, 0x3D);
 bool g_theme_srgb = false; // son editor_apply_theme'in srgb_target'i (editor_tone bunu izler)
 
 // sRGB (8-bit yazarken kastettigimiz deger) -> dogrusal. Alfa CEVRILMEZ.
@@ -149,7 +159,10 @@ void theme_sizes(ImGuiStyle &s) {
   s.WindowBorderSize = 1.0f;
   s.ChildBorderSize = 1.0f;
   s.PopupBorderSize = 1.0f;
-  s.FrameBorderSize = 1.0f; // ince kenarlik: kutu/dugme zeminden ayrilsin
+  // Cerceve cizgisi YOK: ayrimi artik YUZEY TONU yapiyor (cokuk girdi /
+  // kabarik dugme). Ikisi birden olunca her kutunun etrafinda ikinci bir
+  // kontur olusuyor ve arayuz "cizgili" gorunuyordu.
+  s.FrameBorderSize = 0.0f;
   s.TabBorderSize = 0.0f;
   s.TabBarBorderSize = 1.0f;   // cubuk alt cizgisi: rengi TabSelected (= pencere zemini), yani sekme icerige AKAR
   s.TabBarOverlineSize = 2.0f; // secili sekmenin uzerinde vurgu cizgisi
@@ -158,13 +171,15 @@ void theme_sizes(ImGuiStyle &s) {
   s.SeparatorTextPadding = ImVec2(16, 6);
   // TEK yuvarlaklik (4): pencere, cocuk, acilir, kutu, tutamak, sekme — farkli
   // yaricaplar yan yana gelince cerceve "duz/tutarsiz" okunuyordu.
-  s.WindowRounding = 4.0f;
-  s.ChildRounding = 4.0f;
-  s.PopupRounding = 4.0f;
-  s.FrameRounding = 4.0f;
-  s.GrabRounding = 4.0f;
-  s.TabRounding = 4.0f;
-  s.ScrollbarRounding = 6.0f;
+  // Sektor editorleri neredeyse KARE koseler kullanir (UE5 ~2px). Genis
+  // yaricap arayuzu "uygulama" degil "widget seti" gosterir.
+  s.WindowRounding = 0.0f; // doklanmis panel: kare
+  s.ChildRounding = 2.0f;
+  s.PopupRounding = 3.0f;
+  s.FrameRounding = 2.0f;
+  s.GrabRounding = 2.0f;
+  s.TabRounding = 2.0f;
+  s.ScrollbarRounding = 2.0f;
   s.WindowTitleAlign = ImVec2(0.0f, 0.5f);          // sola dayali baslik (Unity/Godot)
   s.WindowMenuButtonPosition = ImGuiDir_None;       // daraltma oku yok: baslik temiz
   s.ColorButtonPosition = ImGuiDir_Right;
@@ -188,9 +203,11 @@ void theme_colors(ImGuiStyle &s) {
   c[ImGuiCol_PopupBg] = fade(kBg2, 0.98f);
   c[ImGuiCol_Border] = kLine;
   c[ImGuiCol_BorderShadow] = fade(kBg0, 0.0f);
-  c[ImGuiCol_FrameBg] = kBg3;
-  c[ImGuiCol_FrameBgHovered] = kBg4;
-  c[ImGuiCol_FrameBgActive] = fade(kAccent, 0.35f);
+  // Girdi alani COKUK (panelden koyu), dugme KABARIK (panelden acik).
+  c[ImGuiCol_FrameBg] = kInput;
+  c[ImGuiCol_FrameBgHovered] = rgb(0x18, 0x18, 0x18);
+  c[ImGuiCol_FrameBgActive] = rgb(0x0A, 0x0A, 0x0A); // yazarken daha da coker
+  c[ImGuiCol_InputTextCursor] = kAccentHi;
   // Baslik / dock sekme SERIDI: odakli ya da degil, hep en dip ton. Odak
   // sekmenin ustundeki cizgiyle (overline) gosterilir; serit rengi degisince
   // (eski: aktif Bg2) odakli panelin sekme cubugu icerikten daha acik kaliyor ve
@@ -199,27 +216,31 @@ void theme_colors(ImGuiStyle &s) {
   c[ImGuiCol_TitleBgActive] = kBg0;
   c[ImGuiCol_TitleBgCollapsed] = fade(kBg0, 0.75f);
   c[ImGuiCol_MenuBarBg] = kBg0;
-  c[ImGuiCol_ScrollbarBg] = fade(kBg0, 0.45f);
-  c[ImGuiCol_ScrollbarGrab] = kBg4;
-  c[ImGuiCol_ScrollbarGrabHovered] = kLine;
-  c[ImGuiCol_ScrollbarGrabActive] = kAccent;
+  c[ImGuiCol_ScrollbarBg] = fade(kBg0, 0.55f);
+  c[ImGuiCol_ScrollbarGrab] = rgb(0x3A, 0x3A, 0x3A);
+  c[ImGuiCol_ScrollbarGrabHovered] = rgb(0x4C, 0x4C, 0x4C);
+  c[ImGuiCol_ScrollbarGrabActive] = rgb(0x5E, 0x5E, 0x5E); // vurgu DEGIL: notr kalsin
   c[ImGuiCol_CheckMark] = kAccentHi;
   c[ImGuiCol_CheckboxSelectedBg] = fade(kAccent, 0.30f);
-  c[ImGuiCol_SliderGrab] = kAccentLo;
+  c[ImGuiCol_SliderGrab] = rgb(0x5A, 0x5A, 0x5A);
   c[ImGuiCol_SliderGrabActive] = kAccent;
   c[ImGuiCol_Button] = kBg3;
   c[ImGuiCol_ButtonHovered] = kBg4;
-  c[ImGuiCol_ButtonActive] = kAccentLo;
-  c[ImGuiCol_Header] = fade(kAccent, 0.26f); // liste secimi: vurgunun soluk hali
-  c[ImGuiCol_HeaderHovered] = fade(kAccent, 0.40f);
-  c[ImGuiCol_HeaderActive] = fade(kAccent, 0.58f);
-  c[ImGuiCol_Separator] = kLine;
+  c[ImGuiCol_ButtonActive] = rgb(0x28, 0x28, 0x28); // basilinca ICERI goker
+  // Liste/agac secimi: UE5'te secim DOYGUN DEGIL -- sakin bir mavi-gri seritle
+  // gosterilir, yazi okunur kalir. Doygun dolgu satiri "secili" degil
+  // "uyarilmis" gosterir ve uzun listede goz yorar.
+  c[ImGuiCol_Header] = rgb(0x2C, 0x3D, 0x4E);
+  c[ImGuiCol_HeaderHovered] = rgb(0x30, 0x30, 0x30);
+  c[ImGuiCol_HeaderActive] = rgb(0x35, 0x4A, 0x5F);
+  // Panel ayiraci UE5'te ACIK degil KOYU bir cizgidir: paneller birbirinden
+  // "isikla" degil "bosluk"la ayrilir.
+  c[ImGuiCol_Separator] = kBg0;
   c[ImGuiCol_SeparatorHovered] = kAccentLo;
   c[ImGuiCol_SeparatorActive] = kAccent;
   c[ImGuiCol_ResizeGrip] = fade(kLine, 0.55f);
   c[ImGuiCol_ResizeGripHovered] = kAccentLo;
   c[ImGuiCol_ResizeGripActive] = kAccent;
-  c[ImGuiCol_InputTextCursor] = kAccentHi;
   // Sekmeler: pasif sekme seritle AYNI (yalniz yazi), secili sekme pencere
   // zeminiyle BIRLESIR (odakli/odaksiz fark etmez — Unity'de de panel odagini
   // sekmenin rengi degil ustundeki cizgi soyler), ustunde bir ton acik.
@@ -276,8 +297,11 @@ void editor_apply_theme(float scale, bool srgb_target) {
 }
 
 void editor_tone(Tone t, float out[4]) {
-  static constexpr ImVec4 kTable[(int)Tone::Count] = {kBg0,    kBg1,      kBg2,      kBg3,  kBg4,  kLine, kText, kTextDim, kAccent,
-                                                      kAccentHi, kAccentLo, kWarn,     kWhite, kAxisX, kAxisY, kAxisZ, kOk,     kErr};
+  // SIRA, Tone enum'uyla BIREBIR aynidir; biri degisirse digeri de degismeli.
+  static constexpr ImVec4 kTable[(int)Tone::Count] = {
+      kBg0,   kBg1,      kBg2,      kBg3,  kBg4,   kLine,  kText,  kTextDim, kAccent,
+      kAccentHi, kAccentLo, kWarn,  kWhite, kAxisX, kAxisY, kAxisZ, kOk,      kErr, kInput};
+  static_assert((int)Tone::Count == 19, "Tone enum ile kTable AYRISTI");
   const ImVec4 c = (int)t < (int)Tone::Count ? kTable[(int)t] : kText; // enum tabani uint8_t: negatif olamaz
   out[0] = g_theme_srgb ? srgb_to_linear_ch(c.x) : c.x;
   out[1] = g_theme_srgb ? srgb_to_linear_ch(c.y) : c.y;

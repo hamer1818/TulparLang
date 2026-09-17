@@ -38,6 +38,7 @@ enum class Tone : uint8_t {
   Bg0, Bg1, Bg2, Bg3, Bg4, Line, Text, TextDim, Accent, AccentHi, AccentLo, Warn, White,
   AxisX, AxisY, AxisZ, // vec3 rozetleri + eksen gostergesi: kirmizi/yesil/mavi (Unity/Blender gelenegi)
   Ok, Err,             // durum noktalari: yuklendi / yuklenemedi
+  Input,               // COKUK yuzey: girdi kutusu zemini (panelden KOYU)
   Count
 };
 // out[4] = r,g,b,a (0..1). Gecersiz t: Text.
