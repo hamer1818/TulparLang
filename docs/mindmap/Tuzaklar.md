@@ -2569,3 +2569,17 @@ Sessiz UAF yerine tam yerinde, adıyla patlar. Ateşlediği doğrulandı (sayac�
 
 **Genel kural:** bir alt sistem başka bir alt sisteme ham işaretçi veriyorsa, alan taraf VERENDEN önce
 susturulmalı. "En sonda kapat" sezgisi burada tam tersi.
+
+**Devamı — sözleşmeyi önce fazla dar yazdım (2026-09-17).** Yıkımda "hiç iş kalmamalı" diye assert koydum;
+CI macOS onu **276 iş** ile düşürdü. Ama birikinti başlı başına hata değil: Jolt'un bariyeri beklerken
+işleri kendi thread'inde de koşuyor, bizim kuyruk girdileri bayat ama refli kalıyor. Tehlike o girdilerin
+**varlığı** değil, havuz öldükten sonra bir worker'ın onları **çekmesi**.
+
+Doğru sözleşme ikili: iş sistemi **koşuyorsa** birikinti tükenene kadar bekle (worker'lar boşaltır);
+**durmuşsa** girdiler atıldır ve beklemek kilitlenme olurdu. İkisi de yıkıcının içinde, yani doğruluk artık
+çağıranın kapanış **sırasına bağlı değil** — sıra düzeltmesi ikinci hat olarak duruyor. Bekleme sınırlı:
+sonsuz sessiz bekleme CI'da en kötü sonuç, sınıra dayanırsak adıyla patlıyoruz.
+
+Bir de ölçü notu: birikinti **yerelde hiç üremedi** — 15 worker'da 0, zorla 2 worker'da bile 0. macOS/arm64
+koşucusunda 276. "Yerelde üretemedim" bir düzeltmeyi geçersiz kılmaz ama sözleşmeyi ölçüyle değil
+**muhakemeyle** yazdığını bilerek yazmayı gerektirir.

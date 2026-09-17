@@ -87,6 +87,11 @@ public:
   void wait(Counter &counter, uint32_t target = 0);
 
   uint32_t worker_count() const { return worker_count_; }
+  // Worker'lar hala kuyruk cekiyor mu. `shutdown()` sonrasi false ve
+  // thread'ler JOIN edilmistir, yani kuyrukta kalmis girdiler ATIL olur —
+  // bunu bilmek, kuyruga ham isaretci koyan katmanlarin (sim/physics.cpp'deki
+  // Jolt uyarlayicisi) guvenle yikilip yikilamayacagini belirliyor.
+  bool running() const { return running_.load(std::memory_order_acquire); }
   JobSystemStats stats() const;
 
   // Su an bir job fiber'i uzerinde miyiz? (null = ana thread / worker scheduler)

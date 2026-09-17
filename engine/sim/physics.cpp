@@ -153,10 +153,39 @@ public:
   // sozlesmeyi ayakta tutuyor: biri sirayi bozarsa sessiz UAF yerine tam
   // burada, adiyla patlar.
   ~FiberJoltJobs() override {
-    ENGINE_ASSERT_MSG(outstanding_.load(std::memory_order_acquire) == 0,
-                      "Jolt is uyarlayicisi yok edilirken %u is hala kuyrukta/calisiyor "
-                      "(is sistemi fizikten ONCE kapatilmali)",
-                      outstanding_.load(std::memory_order_acquire));
+    // Bizim kuyrugumuzda, bu nesnenin `jobs_` havuzunu gosteren girdiler
+    // KALMIS olabilir ve bu NORMALDIR: Jolt'un bariyeri beklerken isleri
+    // kendi thread'inde de kosturuyor, bizim girdiler bayat ama refli kaliyor.
+    // Tehlike o girdilerin varligi degil, HAVUZ OLDUKTEN SONRA bir worker'in
+    // onlari cekmesi — o zaman `job->Execute()` serbest bellege gider.
+    //
+    // Olculdu (CI macOS/arm64): `thread: tulpar-job`, SIGSEGV, fault_addr
+    // 0x8bc94512aa864210 (null DEGIL, COP). Iki worker'li kosucuda kuyrukta
+    // 276 girdi birikmisti; 15 worker'li yerel makinede birikmedigi icin
+    // hic uretilemedi.
+    //
+    // Iki durumdan biri saglanmali, ikisini de BURADA garantiliyoruz:
+    //   * is sistemi KOSUYOR   -> birikinti tukenene kadar bekle (worker'lar
+    //                             bosaltir; kuyruk spin-poll'lu, ilerler),
+    //   * is sistemi DURMUS    -> thread'ler join edilmis, girdiler ATIL,
+    //                             beklemek KILITLENME olurdu.
+    // Boylece dogruluk cagiranin kapanis SIRASINA bagli kalmiyor. Sira yine
+    // de duzeltildi (jobs.shutdown() alt sistemlerden once) — bu ikinci hat.
+    //
+    // Bekleme SINIRLI: `shutdown` ana thread'den cagriliyor (worker degil), yani
+    // bosaltacak thread'ler serbest ve kuyruk spin-poll'lu — ilerlemeli. Yine de
+    // sonsuz sessiz bekleme CI'da en kotu sonuctur; sinira dayanirsak ADIYLA
+    // patliyoruz, cunku o noktada havuzu yikmak zaten UAF olurdu.
+    if (js_ && js_->running()) {
+      uint32_t spins = 0;
+      while (outstanding_.load(std::memory_order_acquire) != 0) {
+        platform::thread_yield();
+        if (++spins > 20u * 1000u * 1000u)
+          ENGINE_ASSERT_MSG(false,
+                            "Jolt is uyarlayicisi: %u is kuyrukta takildi (is sistemi kosuyor ama bosalmiyor)",
+                            outstanding_.load(std::memory_order_acquire));
+      }
+    }
   }
 
 protected:
