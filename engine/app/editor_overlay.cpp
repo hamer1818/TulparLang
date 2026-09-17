@@ -528,7 +528,8 @@ namespace {
 constexpr float kTileMin = 64.0f, kTileMax = 192.0f;
 
 // Karo adi: EN FAZLA iki satir, kucuk yazi (px). Ilk satir sigan en uzun
-// on-ek; mumkunse bir ayiracta ('_' '-' '.') kirilir. Ikinci satir sagdan "…"
+// on-ek; mumkunse bir ayiracta ('_' '-') kirilir -- NOKTA'da degil, uzanti
+// adindan kopmasin. Ikinci satir sagdan "…"
 // ile kirpik. Donus: ad kirpildi mi (cagiran ipucunda tamamini gosterir).
 bool tile_name(ImDrawList *dl, float px, const char *name, ImVec2 pos, float w, ImU32 col) {
   ImFont *font = ImGui::GetFont();
@@ -545,9 +546,14 @@ bool tile_name(ImDrawList *dl, float px, const char *name, ImVec2 pos, float w, 
     if (font->CalcTextSizeA(px, 3.4e38f, 0.0f, name, name + k).x > w) break;
     fit = k;
   }
+  // Kirilma NOKTA'da YAPILMAZ: nokta uzanti ayiracidir ve orada bolmek
+  // "checker_cube." / "gltf" gibi adi uzantisindan KOPARIR -- ekran
+  // goruntusunde gorulen hata buydu. Dosya tarayicilari uzantiyi hicbir
+  // zaman ayirmaz. Yalniz '_' ve '-' tercih edilir; ikisi de yoksa `fit`
+  // noktasindan sert kirilir (uzanti ikinci satirda adin devamiyla kalir).
   uint32_t brk = fit;
   for (uint32_t k = fit; k > fit / 2; k--)
-    if (name[k - 1] == '_' || name[k - 1] == '-' || name[k - 1] == '.') { brk = k; break; }
+    if (name[k - 1] == '_' || name[k - 1] == '-') { brk = k; break; }
   if (brk == 0) brk = fit > 0 ? fit : 1;
   const float w1 = font->CalcTextSizeA(px, 3.4e38f, 0.0f, name, name + brk).x;
   dl->AddText(font, px, ImVec2(pos.x + (w - w1) * 0.5f, pos.y), col, name, name + brk);
