@@ -1190,12 +1190,11 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         track_world_edit(st, prop_float("Derinlik", &st.scene.shadow_depth, 0.5f, 1.0f, 2000.0f, "%.1f m"));
         prop_end();
       }
-      section_label("G\xC4\xB0ZMOLAR");
-      // --- Gorüntü: motorun ayarlanabilir render ozellikleri ------------
+      // --- Gorunum: motorun ayarlanabilir render ozellikleri ------------
       // Bunlarin hepsi ZATEN kodlanmis ama editorde hic yuzu yoktu. Sektor
       // editorlerinde tam olarak burada dururlar (UE5: Post Process Volume +
-      // Scalability, Unity: Quality/Volume).
-      ImGui::SeparatorText("G\xC3\xB6r\xC3\xBCn\xC3\xBCm");
+      // Scalability; Unity: Quality/Volume).
+      section_label("G\xC3\x96R\xC3\x9CN\xC3\x9CM");
       if (prop_begin("golge_kalite")) {
         prop_help("G\xC3\xB6lge haritasi kapatilinca sahne duz aydinlanir; egilim degerleri golge akne/ayrilma dengesidir.");
         prop_check("G\xC3\xB6lgeler", &st.render.shadows);
@@ -1250,7 +1249,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
                               (double)ti.render_scale);
       }
 
-      ImGui::SeparatorText("Gizmo");
+      section_label("G\xC4\xB0ZMOLAR");
       if (prop_begin("gizmo")) {
         prop_check("I\xC5\x9F\xC4\xB1k yar\xC4\xB1\xC3\xA7""ap\xC4\xB1", &st.gizmos.light_radius);
         prop_check("G\xC3\xB6lge hacmi", &st.gizmos.shadow_volume);

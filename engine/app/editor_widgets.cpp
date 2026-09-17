@@ -394,11 +394,12 @@ PropItem prop_asset(const char *label, int *index, const char (*names)[128], uin
 void section_label(const char *text) {
   const ImGuiStyle &s = ImGui::GetStyle();
   ImGui::Dummy(ImVec2(0, s.ItemSpacing.y * 0.4f));
-  ImGui::PushFont(nullptr, s.FontSizeBase * 0.80f);
+  // Boyut TEK KAYNAKTAN: docs/engine/EDITOR-TASARIM.md §4 tipografi olcegi.
+  push_text_size(TextSize::Sm);
   ImGui::PushStyleColor(ImGuiCol_Text, tone(Tone::TextDim));
   ImGui::TextUnformatted(text);
   ImGui::PopStyleColor();
-  ImGui::PopFont();
+  pop_text_size();
   const ImVec2 t0 = ImGui::GetItemRectMin(), t1 = ImGui::GetItemRectMax();
   const float x_end = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
   const float y = std::floor((t0.y + t1.y) * 0.5f) + 0.5f;

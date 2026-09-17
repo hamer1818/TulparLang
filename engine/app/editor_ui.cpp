@@ -99,44 +99,46 @@ ImGuiKey map_key(int k) {
 // TULPAR KOYU — editor paleti
 // ===========================================================================
 // Isimli sabitler; ImGuiCol_* girdilerinin TAMAMI bunlardan turer, tabloda
-// baska ham renk yok. Notrler TAM GRI (mavi dokusu yok): renkli bir gri,
-// yanindaki 3B goruntuye ton katar ve arayuzu "temasi olan" degil "boyanmis"
-// gosterir. Yuzeyler UC kademe: cokuk (girdi) < panel < kabarik (dugme).
-// Vurgu tek renk ve SEYREK kullanilir.
+// baska ham renk yok. Tam sozlesme: docs/engine/EDITOR-TASARIM.md
+//
+// KIMLIK: notrler SICAK komur (R > G > B, bir-iki kademe). UE5, Unity ve
+// Godot'un UCU DE soguk mavi-gri + mavi vurguda duruyor; oraya benzemek hem
+// kopya riskine yaklasmak hem kendi kimligini silmek olurdu. Sicak notr +
+// turkuaz vurgu bu ucuyle karismaz ve 3B goruntudeki soguk gokyuzu / sicak
+// gunes tonlariyla da carpismaz.
+//
+// YUZEY ALTI KADEME, her biri oncekinden ~%35 acik:
+//   void < sunken(girdi) < panel < raised(baslik) < control(dugme) < control_hi
+// Kural tek cumle: GIRDI COKER, DUGME KABARIR, panel arada durur.
 constexpr ImVec4 rgb(int r, int g, int b, float a = 1.0f) {
   return ImVec4((float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f, a);
 }
 constexpr ImVec4 fade(ImVec4 c, float a) { return ImVec4(c.x, c.y, c.z, a); }
 
-constexpr ImVec4 kBg0 = rgb(0x0B, 0x0B, 0x0B);      // en dip: menu cubugu, dok boslugu, guclu ayirac
-constexpr ImVec4 kBg1 = rgb(0x1B, 0x1B, 0x1B);      // pencere/panel zemini
-constexpr ImVec4 kBg2 = rgb(0x24, 0x24, 0x24);      // baslik, sekme seridi, tablo basligi
-constexpr ImVec4 kBg3 = rgb(0x35, 0x35, 0x35);      // KABARIK yuzey: dugme, sekme hover
-constexpr ImVec4 kBg4 = rgb(0x43, 0x43, 0x43);      // kabarik yuzey, ustunde
-// COKUK yuzey: girdi kutusu, slider olugu, arama alani. Panelden KOYUdur.
-// Bu ayrim arayuzun "pahali" gorunmesinin en belirleyici teknik detayi:
-// UE5/Unity'de girdi alani iceri gomulu, dugme disari kabariktir. Ikisi ayni
-// tonda (ya da girdi panelden ACIK) olunca yuzey hiyerarsisi duzlesir ve
-// arayuz eski/ucuz okunur -- onceki paletin asil sorunu buydu.
-constexpr ImVec4 kInput = rgb(0x10, 0x10, 0x10);
-constexpr ImVec4 kLine = rgb(0x2E, 0x2E, 0x2E);     // ince kenarlik + ayirac
-constexpr ImVec4 kText = rgb(0xD4, 0xD4, 0xD4);     // ana metin
-constexpr ImVec4 kTextDim = rgb(0x87, 0x87, 0x87);  // pasif metin, ipucu
-// Vurgu: DOYGUNLUGU DUSUK mavi. Onceki turkuaz her etkin ogede genis alan
-// kapliyordu; sektor editorlerinde vurgu az ve seyrek kullanilir, arayuzun
-// %95'i notr gridir. Renk, 3B goruntudeki sicak gunes/golge tonlariyla da
-// carpismaz.
-constexpr ImVec4 kAccent = rgb(0x12, 0x72, 0xC8);
-constexpr ImVec4 kAccentHi = rgb(0x2E, 0x96, 0xF0); // imlec, tik, odak cizgisi
-constexpr ImVec4 kAccentLo = rgb(0x0C, 0x55, 0x96); // basili tutamak
-constexpr ImVec4 kWarn = rgb(0xE0, 0xA0, 0x30);     // kaydedilmemis, surukle hedefi
+constexpr ImVec4 kBg0 = rgb(0x0A, 0x09, 0x08);      // void: dok boslugu, panel arasi, guclu ayirac
+constexpr ImVec4 kInput = rgb(0x10, 0x0F, 0x0E);    // sunken: girdi kuyusu, liste zemini, arama
+constexpr ImVec4 kBg1 = rgb(0x1A, 0x19, 0x18);      // panel: ana zemin
+constexpr ImVec4 kBg2 = rgb(0x23, 0x22, 0x20);      // raised: baslik bandi, sekme seridi, tablo basligi
+constexpr ImVec4 kBg3 = rgb(0x30, 0x2E, 0x2B);      // control: dugme, birlesik denetim
+constexpr ImVec4 kBg4 = rgb(0x3C, 0x39, 0x36);      // control_hi: uzerine gelince
+constexpr ImVec4 kLine = rgb(0x2A, 0x28, 0x26);     // ince ayirac (tablo izgarasi, pencere kenari)
+constexpr ImVec4 kText = rgb(0xD8, 0xD5, 0xD0);     // ana metin (hafif SICAK beyaz)
+constexpr ImVec4 kTextDim = rgb(0x8C, 0x88, 0x82);  // etiket, ikincil bilgi
+constexpr ImVec4 kTextMute = rgb(0x5E, 0x5B, 0x57); // pasif, ipucu, yer tutucu
+// Vurgu: Tulpar turkuazi, DOYGUNLUGU DUSURULMUS. Bir karede ekranin
+// %5'inden azini kaplamali (bkz. docs/engine/EDITOR-TASARIM.md §3).
+constexpr ImVec4 kAccent = rgb(0x2F, 0x9B, 0x8F);
+constexpr ImVec4 kAccentHi = rgb(0x4F, 0xC4, 0xB6); // imlec, tik, baglanti
+constexpr ImVec4 kAccentLo = rgb(0x1E, 0x64, 0x5C); // basili tutamak
+constexpr ImVec4 kSelect = rgb(0x24, 0x40, 0x3D);   // liste/agac secim seridi -- DOYGUN DEGIL
+constexpr ImVec4 kWarn = rgb(0xD9, 0xA4, 0x41);     // kaydedilmemis, surukle hedefi
 constexpr ImVec4 kWhite = rgb(0xFF, 0xFF, 0xFF);    // yalniz saydam katmanlar icin
-// Disa acik ek tonlar (editor_tone): stil tablosunda kullanilmazlar.
-constexpr ImVec4 kAxisX = rgb(0xD9, 0x45, 0x3D);
-constexpr ImVec4 kAxisY = rgb(0x6B, 0xBF, 0x3F);
-constexpr ImVec4 kAxisZ = rgb(0x3E, 0x79, 0xD4);
-constexpr ImVec4 kOk = rgb(0x5A, 0xB8, 0x6A);
-constexpr ImVec4 kErr = rgb(0xD9, 0x45, 0x3D);
+// Eksen: doygunluk BILEREK dusuk -- eksen rengi bir KENAR ISARETI, yuzey degil.
+constexpr ImVec4 kAxisX = rgb(0xC0, 0x53, 0x4C);
+constexpr ImVec4 kAxisY = rgb(0x6B, 0x9E, 0x45);
+constexpr ImVec4 kAxisZ = rgb(0x4E, 0x79, 0xBE);
+constexpr ImVec4 kOk = rgb(0x5F, 0xA8, 0x5E);
+constexpr ImVec4 kErr = rgb(0xD2, 0x54, 0x4B);
 bool g_theme_srgb = false; // son editor_apply_theme'in srgb_target'i (editor_tone bunu izler)
 
 // sRGB (8-bit yazarken kastettigimiz deger) -> dogrusal. Alfa CEVRILMEZ.
@@ -146,13 +148,15 @@ float srgb_to_linear_ch(float c) {
 
 // Olculer: OLCEKSIZ taban. ScaleAllSizes bunlari scale ile carpar.
 void theme_sizes(ImGuiStyle &s) {
-  s.WindowPadding = ImVec2(10, 8);
-  s.FramePadding = ImVec2(8, 4);
-  s.ItemSpacing = ImVec2(8, 5);
-  s.ItemInnerSpacing = ImVec2(6, 4);
-  s.CellPadding = ImVec2(8, 4); // FramePadding ile ayni: tablo hucresi ve kutu ayni ritimde
+  // 4 piksellik izgara. Onceki degerler (8x4 / 8x5) profesyonel araclara gore
+  // GEVSEKTI; sikilastirma ekrana ~%15 daha fazla bilgi sigdirir.
+  s.WindowPadding = ImVec2(8, 6);
+  s.FramePadding = ImVec2(6, 3);
+  s.ItemSpacing = ImVec2(6, 3);
+  s.ItemInnerSpacing = ImVec2(4, 2);
+  s.CellPadding = ImVec2(6, 3); // FramePadding ile ayni: tablo hucresi ve kutu ayni ritimde
   s.TouchExtraPadding = ImVec2(0, 0);
-  s.IndentSpacing = 20.0f;
+  s.IndentSpacing = 14.0f;
   s.ScrollbarSize = 12.0f;
   s.GrabMinSize = 10.0f;
   s.WindowMinSize = ImVec2(180, 72);
@@ -197,7 +201,7 @@ void theme_sizes(ImGuiStyle &s) {
 void theme_colors(ImGuiStyle &s) {
   ImVec4 *c = s.Colors;
   c[ImGuiCol_Text] = kText;
-  c[ImGuiCol_TextDisabled] = kTextDim;
+  c[ImGuiCol_TextDisabled] = kTextMute;
   c[ImGuiCol_WindowBg] = kBg1;
   c[ImGuiCol_ChildBg] = fade(kBg0, 0.0f); // saydam: cocuk alan pencereyi bozmasin
   c[ImGuiCol_PopupBg] = fade(kBg2, 0.98f);
@@ -205,8 +209,8 @@ void theme_colors(ImGuiStyle &s) {
   c[ImGuiCol_BorderShadow] = fade(kBg0, 0.0f);
   // Girdi alani COKUK (panelden koyu), dugme KABARIK (panelden acik).
   c[ImGuiCol_FrameBg] = kInput;
-  c[ImGuiCol_FrameBgHovered] = rgb(0x18, 0x18, 0x18);
-  c[ImGuiCol_FrameBgActive] = rgb(0x0A, 0x0A, 0x0A); // yazarken daha da coker
+  c[ImGuiCol_FrameBgHovered] = rgb(0x17, 0x16, 0x15);
+  c[ImGuiCol_FrameBgActive] = kBg0; // yazarken daha da coker
   c[ImGuiCol_InputTextCursor] = kAccentHi;
   // Baslik / dock sekme SERIDI: odakli ya da degil, hep en dip ton. Odak
   // sekmenin ustundeki cizgiyle (overline) gosterilir; serit rengi degisince
@@ -217,12 +221,12 @@ void theme_colors(ImGuiStyle &s) {
   c[ImGuiCol_TitleBgCollapsed] = fade(kBg0, 0.75f);
   c[ImGuiCol_MenuBarBg] = kBg0;
   c[ImGuiCol_ScrollbarBg] = fade(kBg0, 0.55f);
-  c[ImGuiCol_ScrollbarGrab] = rgb(0x3A, 0x3A, 0x3A);
-  c[ImGuiCol_ScrollbarGrabHovered] = rgb(0x4C, 0x4C, 0x4C);
-  c[ImGuiCol_ScrollbarGrabActive] = rgb(0x5E, 0x5E, 0x5E); // vurgu DEGIL: notr kalsin
+  c[ImGuiCol_ScrollbarGrab] = kBg3;
+  c[ImGuiCol_ScrollbarGrabHovered] = kBg4;
+  c[ImGuiCol_ScrollbarGrabActive] = rgb(0x4A, 0x47, 0x43); // vurgu DEGIL: notr kalsin
   c[ImGuiCol_CheckMark] = kAccentHi;
   c[ImGuiCol_CheckboxSelectedBg] = fade(kAccent, 0.30f);
-  c[ImGuiCol_SliderGrab] = rgb(0x5A, 0x5A, 0x5A);
+  c[ImGuiCol_SliderGrab] = rgb(0x56, 0x52, 0x4E);
   c[ImGuiCol_SliderGrabActive] = kAccent;
   c[ImGuiCol_Button] = kBg3;
   c[ImGuiCol_ButtonHovered] = kBg4;
@@ -230,9 +234,9 @@ void theme_colors(ImGuiStyle &s) {
   // Liste/agac secimi: UE5'te secim DOYGUN DEGIL -- sakin bir mavi-gri seritle
   // gosterilir, yazi okunur kalir. Doygun dolgu satiri "secili" degil
   // "uyarilmis" gosterir ve uzun listede goz yorar.
-  c[ImGuiCol_Header] = rgb(0x2C, 0x3D, 0x4E);
-  c[ImGuiCol_HeaderHovered] = rgb(0x30, 0x30, 0x30);
-  c[ImGuiCol_HeaderActive] = rgb(0x35, 0x4A, 0x5F);
+  c[ImGuiCol_Header] = kSelect;
+  c[ImGuiCol_HeaderHovered] = kBg2; // uzerine gelme: yuzey BIR kademe yukari
+  c[ImGuiCol_HeaderActive] = kAccentLo;
   // Panel ayiraci UE5'te ACIK degil KOYU bir cizgidir: paneller birbirinden
   // "isikla" degil "bosluk"la ayrilir.
   c[ImGuiCol_Separator] = kBg0;
@@ -296,12 +300,31 @@ void editor_apply_theme(float scale, bool srgb_target) {
     }
 }
 
+
+// --- Tipografi olcegi --------------------------------------------------------
+// ImGui 1.92: PushFont(NULL, px) yalniz BOYUTU degistirir, yuzu korur.
+// Carpanlar tabandan (FontSizeBase) turer ki DPI olcegi kendiliginden gecsin.
+void push_text_size(TextSize t) {
+  if (!ImGui::GetCurrentContext()) return;
+  const float base = ImGui::GetStyle().FontSizeBase;
+  if (!(base > 0.0f)) { ImGui::PushFont(nullptr, 0.0f); return; } // 0 = degisme
+  float f = 1.0f;
+  if (t == TextSize::Sm) f = 11.0f / 13.0f;
+  else if (t == TextSize::Lg) f = 15.0f / 13.0f;
+  ImGui::PushFont(nullptr, base * f);
+}
+void pop_text_size() {
+  if (!ImGui::GetCurrentContext()) return;
+  ImGui::PopFont();
+}
+
 void editor_tone(Tone t, float out[4]) {
   // SIRA, Tone enum'uyla BIREBIR aynidir; biri degisirse digeri de degismeli.
   static constexpr ImVec4 kTable[(int)Tone::Count] = {
       kBg0,   kBg1,      kBg2,      kBg3,  kBg4,   kLine,  kText,  kTextDim, kAccent,
-      kAccentHi, kAccentLo, kWarn,  kWhite, kAxisX, kAxisY, kAxisZ, kOk,      kErr, kInput};
-  static_assert((int)Tone::Count == 19, "Tone enum ile kTable AYRISTI");
+      kAccentHi, kAccentLo, kWarn,  kWhite, kAxisX, kAxisY, kAxisZ, kOk,      kErr, kInput,
+      kTextMute, kSelect};
+  static_assert((int)Tone::Count == 21, "Tone enum ile kTable AYRISTI");
   const ImVec4 c = (int)t < (int)Tone::Count ? kTable[(int)t] : kText; // enum tabani uint8_t: negatif olamaz
   out[0] = g_theme_srgb ? srgb_to_linear_ch(c.x) : c.x;
   out[1] = g_theme_srgb ? srgb_to_linear_ch(c.y) : c.y;
