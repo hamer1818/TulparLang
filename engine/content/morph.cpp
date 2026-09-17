@@ -1,5 +1,7 @@
 #include "content/morph.hpp"
 
+#include <cstddef> // size_t — libc++ (macOS) gecisli getirmiyor
+
 namespace tulpar::engine::content {
 
 void blend_morph_targets(const Vec3 *base_positions, uint32_t vertex_count, const Vec3 *target_deltas,

@@ -1,4 +1,5 @@
 #include "sim/ecs.hpp"
+#include <cstddef> // size_t — libc++ (macOS) gecisli getirmiyor
 
 #include "platform/fatal.hpp"
 

@@ -1,4 +1,5 @@
 #include "platform/perf_hint.hpp"
+#include <cstddef> // size_t — libc++ (macOS) gecisli getirmiyor
 
 #if defined(__ANDROID__)
 #include <dlfcn.h>
