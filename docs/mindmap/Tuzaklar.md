@@ -2019,15 +2019,16 @@ Testler 67/67'den "COKME testi: content_gltf_loads_checker_cube" a dustu; yeni t
 Kural: zeroed dizilerde "yok" anlami 0 olsun (indeks+1 sakla) ya da alani acikca yaz; `alloc_array_zeroed` ile
 "varsayilan uye degeri" birlikte kullanilmaz. Ayni sinif: `ModelClip::skin = -1`, `ModelMaterial::image = -1`.
 
-### 8v. AGDK Swappy NativeActivity'de (API >= 30) ilk sunumda asilir: Java simi kendi lib'ini bulamaz
-`SwappyVk_initAndGetRefreshCycleDuration` basarili (yenileme 16.67 ms), sonra `SwappyVk_queuePresent` sonsuza
-dek bekler. logcat: `SwappyDisplayManager: InMemoryDexClassLoader[... nativeLibraryDirectories=[/system/lib64,
-/system_ext/lib64]] couldn't find "libtulparengine.so"` — bellekten yuklenen Java simi dogal metotlarini
-`System.loadLibrary` ile baglamaya calisir, sinif yukleyicinin dogal yolu uygulama lib dizinini icermez, vsync
-callback'i gelmez. `hasCode=true` + bos classes.dex denendi, degismedi. API 29 (Android 10) bu Java yolunu
-kullanmaz. Kural: Swappy varsayilan KAPALI (`ENGINE_SWAPPY`), yalniz gercek cihazda olcumle acilir; "init basarili"
-sunumun calistigi anlamina gelmez — kare sayaci ilerlemeli. GameActivity gocu (IP-P, Gradle host) bu sinif
-yukleyici sorununu kokten cozer.
+### 8v. AGDK Swappy ilk sunumda asilir: sebep `SwappyVk_setQueueFamilyIndex` eksikligi, sinif yukleyici hatasi DEGIL
+Ilk teshis (emulator, 2026-09-14) logcat'teki `SwappyDisplayManager ... InMemoryDexClassLoader ... couldn't find
+"libtulparengine.so"` satirina takildi ve "API >= 30 Java simi" diye yazildi; telefon (Android 10) ayni sekilde asilinca
+varsayim coktu. A/B (2026-09-15): gomulu dex'i APK'ya koyup (`classes.dex`, hasCode=true) hata susturuldu ama asilma
+surdu; dex'siz + `SwappyVk_setQueueFamilyIndex(dev, queue, aile)` init'ten once → 59.8 fps. Aile bildirilmeyince 3
+sunum "tamamlanir" (SwappyVk_queuePresent doner), sonra ana thread `binder_ioctl_write_read` beklemesinde kalir —
+goruntu hic ekrana ulasmaz, acquire donmez, ekran siyah. Kural: (1) Swappy'de kuyruk ailesi ZORUNLU (basliktaki
+"needs to know" ciddiye alinir), (2) "init basarili" hicbir sey demek degil — kare sayaci ilerlemeli, (3) logcat'teki
+ilk kirmizi satir kok neden olmayabilir; A/B ile ayir. Bekci: 15 s ilerleme yoksa host /proc durumunu basar ve cikar
+(siyah ekranda 300 s bekleme yok). Swappy acikken sunum yolunda kare basina 7 `operator new` var (olculdu).
 
 ### 8w. CI macOS'un GPU'su sanal ("Apple Paravirtual device"): piksel kapilari orada olculmez
 PR #321'in ilk tam macOS kosumunda (daha once engine_tests fizikten sonra cokuyordu; bu kosumda cokme yok,
@@ -2037,3 +2038,548 @@ sonucu. Ayni testler RTX (Linux), lavapipe (CI Linux), Mali (telefon) ve gfxstre
 `test::gpu_is_virtual` ile bu cihazda piksel kapilari GORUNUR ATLANDI; CPU tarafi (analitik skinning, meshopt
 istatistigi, KTX2 cozumu) kosmaya devam eder. Gercek bir Mac'te MoltenVK sonucu ayri konu (olculmedi).
 
+
+### 8x. Bilesen bitleri kapaliyken alanlar veri degildir: esitlik/no-op tespiti bilesene gore
+`SceneEntity` tum bilesenlerin alanlarini tasir (model, animasyon, isik, govde); dosyaya yalniz biti acik olanlar
+yazilir. Ilk `scene_entity_equal` her alani karsilastirdi: testin kopyalanan `e`'sinde kalan `phase`/`asset`
+(bileseni kapali) yaz→oku sonrasi varsayilana dondu, gidis-donus kapisi 3 varlikta dustu — metin baytlari ise
+AYNIYDI. Ayni hata gunlukte no-op tespitini de bozar (bilesen kapali alan degisince "islem" kaydedilir). Kural:
+esitlik = dosyaya giden alanlar; bit kapaliysa alan yok sayilir. Kapi: `scene_text_roundtrip_is_deterministic`.
+
+### 8y. fish kabugunda `set -- $x` bash degil: deney degiskenleri bos kalir, A/B ikisi de varsayilanla kosar
+Bash tool bu makinede fish acar. `for exp in "A VAR=0" "B VAR2=0"; do set -- $exp; kv=$2` fish'te bolme yapmaz:
+`$kv` bos, iki "farkli" kosum da ayni yapilandirmayla gecti ve sonuc "ikisi de calisiyor" gibi gorundu (2026-09-15,
+Swappy A/B). Kural: cok adimli/degiskenli deneyler `bash betik.sh` dosyasiyla kosulur; kosumun basinda etkin
+degiskenler loga basilir (`[android] swappy DENEY: ...` satiri gibi) — cikti tarafinda dogrulanmayan deney yok sayilir.
+
+### 8z. Huawei'de `abort()`/tombstone logcat crash tamponuna dusmez; takilan thread'i surec icinden teshis et
+Bekci `abort()` etti, surec oldu ama `logcat -b crash` 0 satir, "F DEBUG" yok; boru uzerinden yazilan son satirlar da
+surecle birlikte kayboldu (stdout okuyucu thread'i olur). Sonraki kosumun `logcat -c`'si onceki kaniti da sildi.
+Kural: (1) teshis surec icinden: `/proc/self/task/<tid>/{stat,wchan,syscall}` + SIGUSR1 ile `crash_capture_frames`
+(kesilemez beklemede yanit vermez, wchan yine konusur), sonra `usleep` + `_exit` (boru bosalsin), (2) kosum betigi
+surec olunce beklemeyi keser (`pidof`), (3) kanit iceren logcat'i bir sonraki kosumdan ONCE dosyaya cek.
+
+### 8aa. Renderer istatistiği kayıtta sayılır: `record`tan önce okunan `draws` önceki karenindir
+`Renderer::draw()` kuyruğa ekler, `stats_.draws` ancak `record()`ta atanır. Blob runtime testi `rt.draw()`un hemen
+ardından `ren.stats().draws == 6` bekledi, 0 gördü — "runtime hiç çizmiyor" sanıldı; çizim kuyruktaydı, sayaç henüz
+güncellenmemişti (2026-09-15). Kural: istatistik kayıt/submit **sonrasında** okunur; "0 çizim" görünce önce sayacın
+ne zaman güncellendiğine bak, kuyruğun boş olduğuna değil. Kapı: `scene_runtime_draws_blob_entities_offscreen`
+(kayıt sonrası sayı + piksel farkı; boş-boş 0 kontrolü).
+
+### 8ab. Ön-döndürme unutulunca 3B yan yatar ama HUD DÜZGÜN görünür — ekran görüntüsü yanıltır
+Tulpar köprüsünün ilk emülatör koşumunda zemin neredeyse dikeydi, küre elipse dönmüştü; **HUD yazısı ise
+tertemiz ve düz** duruyordu. Sebep: projeksiyon fiziksel (döndürülmüş) framebuffer oranıyla kuruldu ve
+`swap.rotation_radians()` clip uzayında uygulanmadı — oysa `ui_begin` dönüşü zaten parametre olarak alıyor,
+o yüzden arayüz doğru çıktı. Kural: Android'de en-boy oranı **logical_extent**'ten, projeksiyon
+`Mat4::rotate({0,0,1}, rotation)` ile çarpılır (demo_app bunu yapıyordu, köprüye taşınmadı). "Arayüz düzgünse
+render de düzgündür" çıkarımı YANLIŞ; iki yol dönüşü ayrı alıyor. Tuzaklar 8k/8r'nin köprüdeki tekrarı.
+
+### 8ac. Tulpar'da bit kaydırma ve onaltılık literal yok; `log` doğal logaritmadır
+Köprü sarmalayıcısı ilk sürümde `(r << 24) | ...` ve `0xE63946FF` yazdı: **ikisi de lexer'da yok**, gömülü
+kütüphane sessizce ayrıştırılamadı ve hata "senin dosyanda 44. satır" diye değil, `(stdin):44` diye çıktı
+(gömülü kaynak). Ayrıca `log("...")` yazınca "fonksiyon bulunamadı" değil, **matematik `log`una** çakışma
+alınır — sarmalayıcı `logla()` oldu. Kural: yeni bir `lib/*.tpr` yazarken renk paketlemeyi `tame`'in
+`rgb()`'sinden (çarpma), ad seçimini ise typeinfer builtin tablosundan doğrula.
+
+### 8ad. Girdi cihazı yokken erken dönen doğrulayıcı, yanlış tuş adını SESSİZ yutar
+`teng_key_down` önce `if (!g->in) return 0;` yapıyordu: headless'ta (ve Android'de klavye yokken) yanlış
+yazılmış `"SPCAE"` hiç şikâyet etmeden hep false döndü — "tuş çalışmıyor" hatası saatlerce sürebilirdi.
+Kural: **ad/arg doğrulaması önce, cihaz kontrolü sonra**; doğrulama hatası her kipte loglanır. Kapı:
+`bridge_runs_a_scripted_game_headless` geçerli adın sayaç artırmadığını (kontrol) ve geçersizin artırdığını ölçer.
+
+### 8ae. `install_run.sh` paket adını sabit tutuyordu — her yeni oyunda "Activity does not exist"
+`tulpar build --target=android` paket adını **çıktı adından** türetiyor (`dev.tulparlang.<ad>`), oysa koşum
+betiği `dev.tulparlang.game` diye başlatmayı deniyordu; APK kuruluyor, `am start` "Error type 3" veriyordu.
+Betik artık paketi APK'nın yanındaki staging manifest'inden (ya da `TULPAR_ANDROID_PKG` / aapt2) okuyor ve
+başlarken basıyor. Kural: kurulum ile başlatma arasındaki kimlik **tek yerden** gelmeli.
+
+### 8af. Profiler çalışma tamponu kare kapasitesinin İKİ KATI olmalı; azı 300. karede süreci abort eder
+`Profiler::frame_stats(scratch, count)` tamponun ilk yarısını örnek, ikinci yarısını sıralama alanı olarak
+kullanır ve `scratch.size() >= count*2` assert'ler. Köprü 600 kapasiteyle 600'lük tampon verdi: 300 kareye
+kadar sorunsuz, sonrasında **kapanışta** `ENGINE_ASSERT` → SIGABRT. Sinsi tarafı: masaüstü koşumlarım 120–200
+kareydi, hiç düşmedi; emülatörde 1984 kare koşan oyun **kapanışta çöktü ve ben fark etmedim**, çünkü logda
+"kapanis" satırının yokluğuna değil, hata satırının varlığına bakmıştım. Aynı hata `editor_app.cpp`'de de
+duruyordu (3 karelik headless koşum yüzünden hiç patlamamıştı). Kural: tampon = 2 × `frame_capacity`; ve
+"bitiş satırı YOK" da bir hata işaretidir, sessiz başarı sayılmaz. Kapı: köprü testi 365 kare koşar.
+
+### 8ag. Android varlıkları ALT DİZİNE montaj edilir ama `AAssetManager_openDir` alt dizin adı vermez
+`tulpar build --target=android` varlık dizinini kaynak yoluyla montaj ediyor
+(`TULPAR_ANDROID_ASSETS=examples/assets` → APK'da `assets/examples/assets/...`), böylece masaüstündeki göreli
+yol cihazda da tutuyor. Ama native `AAssetManager_openDir(mgr, "")` yalnız **o dizindeki dosyaları** listeler,
+alt dizin adlarını vermez — kök taraması hiçbir şey bulamaz ve oyun "varlık yok" der. Dizin adlarını yalnız
+Java tarafındaki `AssetManager.list()` veriyor. Köprü host'u JNI ile özyinelemeli geziyor (dizin = list()
+boş değil), `mkdir` + çıkarma yapıyor ve sayıyı logluyor (`varlik 21 dosya, 7 dizin`).
+
+### 8ah. Gölge atlasında iki tuzak: komşu kademeye taşan PCF ve kenetlenmemiş kutunun "yürüyen" gölgesi
+Kademeler tek dokuda yan yana durunca 3x3 PCF tile sınırında **komşu kademenin** derinliğini okur ve orada
+ince bir yanlış gölge şeridi çıkar; çözüm örneklemeyi tile'ın bir texel içinde tutmak (`inset`). İkincisi:
+kademe kutusunun merkezi odakla (kamera) birlikte sürekli kayarsa gölge kenarları her karede yarım texel
+oynar ve statik sahnede bile "yürür"; çözüm merkezi **ışık uzayında texel katına yuvarlamak**
+(`cascade_matrix`). İkisi de açılışta görünmez, hareket edince ortaya çıkar — bu yüzden tek kare ekran
+görüntüsü bu sınıfı doğrulamaz.
+
+### 8ai. Son işlem yolu kendi temizleme rengini kullanır: bloom'u açınca gökyüzü siyaha döner
+Post açıkken sahne artık çağıranın hedefine değil **iç HDR hedefine** çiziliyor ve o hedef `post_clear` ile
+temizleniyor (varsayılan siyah). Bloom A/B ölçümünde 112 bin piksel fark çıktı; bakınca farkın çoğu hale değil
+**arka plandı** — post kapalıyken mavi-gri olan gökyüzü açıkken simsiyahtı. İç hedefin temizleme rengi, post
+kapalıyken kullanılan hedefin rengiyle eşitlenince fark 26 bine indi ve geriye yalnız gerçek hale kaldı.
+Kural: yeni bir geçiş zinciri eklerken **temizleme/clear değerleri de sözleşmenin parçasıdır**; A/B ölçümünde
+"fark var" yetmez, farkın NEREDE olduğuna bak.
+
+### 8aj. Bayat arşiv denetimi TEK sembol ailesine bakıyordu: "temiz" derken web hedefi tamamen kırıktı
+`tests/dist_archive_audit.py` tam olarak "arşiv bayat mı" sorusunu eyleme çevirmek için yazılmıştı, ama yalnız
+`aot_tm_*` (tame) tablosuna bakıyordu. Ölçüldü (2026-09-15): denetim **"dist arsiv denetimi temiz"** dedi, aynı
+anda `tulpar build --target=web` **her** oyunda `undefined symbol: aot_intern_string` ile düşüyordu — çekirdek
+runtime sembolü tablonun dışındaydı. Aynı kör nokta Android'de de vardı: `aot_http_request` yoktu, yani skor
+tablosu kullanan her Android derlemesi link'te ölecekti. Kural: denetim, **codegen'in adıyla bildirdiği** sembol
+kümesini (LLVMAddFunction literalleri + tablolar) hedefin arşiv kümesine karşı denetlemeli; `nm` çıktısında
+**tür harfi U olan satır TANIMSIZ demektir**, onu "var" saymak denetimi sahte yeşile çevirir. Hedefte bilerek
+olmayan aileler (async, TLS) sebebiyle listelenir, sessizce yok sayılmaz.
+
+### 8ak. wasm32'de işaretçi 4 bayt: codegen'in sabitlediği nesne başlığı 32 değil 20 bayt
+AOT, dizi erişiminin hızlı yolunu satır içi GEP ile yapıyor ve `ObjArray` düzenini kendi kuruyordu —
+başlık dolgusu **sabit 28 bayt** yazılmıştı, yani 64-bit varsayımı. wasm32'de `Obj` 20 bayt (işaretçi 4), bu
+yüzden runtime'ın `static_assert`'leri web derlemesini kırıyor, `wasm/dist` tazelenemiyor ve hedef sessizce
+çürüyordu. Üstelik `backend->target_web` **`llvm_init_types`'tan SONRA** atanıyordu: tip gövdesi kurulurken
+bayrak hep 0 görünüyordu. Kural: hedefe bağlı her düzen kararı, bayrağın **kurulduğundan emin olunan** noktadan
+sonra alınır; runtime'daki düzen kilidi de iki işaretçi boyutunu ayrı ayrı sabitler, tek bir 64-bit iddiası
+yazmak 32-bit hedefi kapatır.
+
+### 8al. Her GPU kapısı kendi `VkInstance`'ını açarsa, SONRAKİ kapılar sessizce ATLANDI'ya düşer
+Ölçüldü (2026-09-15, bu makine): her `vkCreateInstance` NVIDIA ICD'sini `dlopen`'lıyor, `libnvidia-tls.so`
+initial-exec TLS istiyor ve glibc'nin "static TLS surplus" alanı dlopen/dlclose döngülerinde **geri
+verilmiyor**. Süreçte belli sayıda instance'tan sonra yükleyici `cannot allocate memory in static TLS block`
+→ `Found no drivers!` diyor ve `vkCreateInstance` `VK_ERROR_INCOMPATIBLE_DRIVER` dönüyor. Sonuç sinsi: yeni
+bir GPU kapısı EKLEMEK, kendisi geçerken **sonradan koşan başkalarının** kapılarını (editör ImGui, ışık
+gizmosu, köprü) görünür `skip`'e düşürüyor — takım yeşil kalıyor ama kapı sayısı sessizce eriyor. Kural: yeni
+GPU kapıları **cihazı/instance'ı paylaşsın**; ayrı instance yalnız doğrulama sayaçlarını kirletmemek gibi
+gerçek bir sebep varsa açılsın. Belirti: "geçen test sayısı aynı ama ATLANDI arttı".
+
+**Mekanizma ölçüldü (2026-09-16):** sebep Vulkan değil, **glibc'nin statik-TLS fazlası**. NVIDIA ICD'si
+`dlopen` edildiğinde aldığı statik-TLS bloğunu kapanışta geri vermiyor; her yeni `VkInstance` bir tur daha
+tüketiyor ve süreç sınıra dayandığında sonraki `dlopen` başarısız oluyor — üst katmana "Vulkan cihazı yok"
+diye görünüyor. Yani hata, onu tetikleyen kapıda değil **ondan sonrakilerde** patlıyor; yeni bir kapı
+eklemek, kendisi geçerken başkalarının kapısını eritiyor. Somut vaka: beş yeni PBR kapısı kendi
+instance'ını açtı ve **25 kapı** sessizce ATLANDI'ya düştü (149/149/0 → 159/1/25). Düzeltme: beş kapı tek
+bir paylaşılan cihazı kullanıyor ve cihaz süreç boyunca yaşıyor. 8an yüzünden paylaşılan cihaz **kendi
+`VkApi` tablosunu** kullanmalı — aynı dosyadaki başka kapılar kendi cihazlarını açıp kapatıyorsa ortak
+tabloyu ezerler.
+
+Denetlenebilir kural: `engine_tests` özeti **atlanan sayısını da basıyor**; GPU'su olan bir makinede o sayı
+**0 olmalı**. "X passed" tek başına yeşil sayılmaz.
+
+### 8am. Türetilmiş ama DİSKTE DURAN dosya bayatlayınca kapı sessizce "atlandı"ya düşer
+`examples/assets/arena.sahneb` türetilmiş (gitignore'lu) bir dosya; sahne blob formatı **sürüm 2**'ye
+çıkınca diskteki kopya v1 kaldı. Motor onu doğru biçimde reddediyordu, ama `tests/engine_bridge.test.tpr`'nin
+sahne kapısı "dosya açılamadı → görünür atlama" yoluna düşüyor ve suite **yeşil** kalıyordu: kapı vardı, bir
+şey ölçmüyordu. Kural: türetilmiş girdi kullanan kapı, dosyayı **kendisi üretmeli** (test derleme adımını
+çağırmalı) ya da bulamadığında ATLAMAK yerine KIRMIZI olmalı. Aynı sınıf: `wasm/dist` ve `android/dist`
+arşivleri (Tuzaklar 8aj). Genel kural: "atlandı" sayısı sessizce artıyorsa, kapılar erimiş demektir.
+
+### 8an. Aynı `VkApi` tablosuyla ikinci cihaz açmak, paylaşılan cihazın giriş noktalarını EZER
+`VkApi` cihaz düzeyindeki fonksiyon işaretçilerini tek tabloda tutuyor. İki testin aynı tabloyla iki ayrı
+`VkDevice` açması, ikinci `init` sırasında tablodaki adresleri ikinci cihazınkilerle **değiştiriyor**; ikinci
+cihaz kapanınca ilk cihaz üstünden yapılan sonraki çağrı geçersiz adrese atlıyor (ölçüldü: `offscreen_create`
+içinde SIGSEGV). Kural: paylaşılan cihaz varken ayrı bir cihaz açman gerekiyorsa **ayrı bir `VkApi` tablosu**
+kullan. Bu, 8al'in (her kapının kendi instance'ını açması) ikizi: biri sessiz atlama, bu ise çökme üretir.
+
+### 8ao. Tazelik denetimi yanlış BİRİMİ karşılaştırınca her şeyi "bayat" ilan eder — ve inandırıcı görünür
+`tests/paket_boyut_audit.py`'ye SPIR-V tazelik denetimi eklerken üretilmiş `*_spv.h` başlıklarını **bayt**
+dizisi sanıp `0x[0-9a-f]{1,2}` ile taradım; başlıklar aslında 32-bit **kelime** tutuyor (`0x%08x`). Regex hiç
+eşleşme bulmadı, denetim 21 shader'ın 21'ini birden "BAYAT — GPU eski shader'i kosturur" diye bildirdi. Çıktı
+tamamen ikna edici: her satır gerçek bir bayt sayısı veriyordu (`0 != 1640 bayt`). Tuzağın asıl yüzü sessiz
+yeşilin **aynadaki hali**: yeni bir kapının ilk koşusu KIRMIZI olduğunda, refleks "demek ki gerçekten bozuk"
+olur ve insan kaynağı düzeltmeye girişir — oysa bozuk olan ölçüm. Kural: yeni bir kapının ilk sonucu
+**makullük sınavından** geçmeli. "Hepsi bozuk" (21/21) ile "hiçbiri bozuk değil" aynı şüpheyi hak eder;
+ikisi de tipik olarak ölçümün hiçbir şeye bakmadığı anlamına gelir. Somut kontrol: denetimin gördüğü ham
+veriyi bir kez yazdır (kaç kelime okundu?) — sıfır okuyorsan karşılaştırma değil ayrıştırma bozuktur.
+
+### 8ap. Aynı `LLVMModule`'ü İKİ hedef için emit etmek — ikinci hedef sessizce bozuk kod alır
+Android hedefi tek modülden iki ABI üretiyor: önce `arm64-v8a`, sonra `x86_64`. `LLVMTargetMachineEmitToFile`
+**saf bir okuma değildir**: CodeGen boru hattı modülü YERİNDE değiştiren IR geçişleri içerir
+(`PreISelIntrinsicLowering`, `AtomicExpand`, `ExpandLargeFpConvert`, `SelectOptimize`, …) ve `LLVMSetModuleDataLayout`
+veri yerleşimini de hedefe göre damgalar. Yani ilk emit'ten sonra elde kalan şey ön-uç IR'i değil, **o hedefe
+göre alçaltılmış IR**'dir; ikinci emit onun üstüne biner.
+
+**Ölçülen sonuç (2026-09-15, emülatör):** `examples/engine_aksiyon.tpr` ilk karede SIGSEGV veriyordu. Motorun
+kendi çökme raporu faili tam yerinden söyledi: `t_menu_ciz.f+576`. Disassembly: 16 bayt hizalı `movapd`,
+8 mod 16 olan `0x48(%rsp)` yuvasına yazıyordu. Masaüstü ikilisinde aynı fonksiyon `0x40(%rsp)` (hizalı)
+kullanıyor. Kanıt tek komutla kapandı: aynı optimize IR `llc -mtriple=x86_64-linux-android34
+-relocation-model=pic` ile **tek başına** derlendiğinde doğru yuvayı (`0x40`) üretti — fark yalnızca
+"bu modül daha önce başka bir hedef için emit edildi mi" idi. Düzeltme: her ABI kendi `LLVMCloneModule`
+kopyasından üretiliyor (`emit_object_with_triple(..., clone_module)`).
+
+**Neden bu kadar sinsi — üç ayrı maskeleme birden:**
+1. **İLK ABI doğru üretilir.** arm64 (gerçek telefon) kusursuz çalışır; yalnız ikinci sırada üretilen x86_64
+   (emülatör) bozulur. İnsanın refleksi "emülatör işte" olur ve hata emülatörde aranır.
+2. **`fault_addr: 0x0` null gibi görünür.** Hizalama hatası (GP fault) SIGSEGV'yi `si_addr = 0` ile verir;
+   yığın izi olmayan bir null dereference avına çıkılır. Ayırt edici işaret: faulting komut `rsp`-göreli
+   bir `movapd`/`movaps` ise sorun eksik bellek değil, YANLIŞ HİZADIR.
+3. **Link ve derleme yeşildir.** `-Wl,--no-undefined` dahil her şey geçer; hata yalnız o kod yolu ilk kez
+   çalıştığında görünür — burada ana menünün ilk çizimi, yani kurulumun tamamı loglandıktan SONRA.
+
+**Kural:** bir `LLVMModule`'den birden fazla hedef için nesne üretiyorsan **her hedef için klonla**. Aynı
+kural başka bir yerde daha geçerli: `llvm_backend_optimize` zaten bu yüzden `LLVMCloneModule` üstünde
+deneme yapıyor. Genel biçimi: *"aynı IR'i iki kez tüketmek" bir varsayımdır, ve LLVM'de yanlıştır.*
+
+### 8aq. Var olan bir sembolün İMZA değişikliği, "sembol var mı" denetiminden YEŞİL geçer
+`aot_input()` sıfır argümanlıydı; `input("You: ")` istemi sessizce düşüyordu. Düzeltme sembolü
+`aot_input(VMValue)` yapmak — **yeni sembol değil, var olanın imzası**. `wasm/dist` ve `android/dist`
+altındaki ön derlenmiş arşivler eski imzayı taşır ve `tests/dist_archive_audit.py` sembolün **varlığını**
+sınar: sembol hâlâ "var" göründüğü için denetim temiz der. Ölçüldü: bayat arşivle web derlemesi
+`wasm-ld: warning: function signature mismatch: aot_input — defined as (i32,i32)->void in <obj>, as
+(i32)->void in libtulpar_runtime_web.a` diyor ama **link yine de tutuyor** ve `.html` üretiliyor; hata
+ancak tarayıcıda, o çağrıya gelindiğinde ortaya çıkıyor.
+
+Kural: yeni builtin **eklemek** ile var olanın imzasını **değiştirmek** ayrı risk sınıflarıdır. İkincisi
+arşiv yenilemesiyle **aynı turda** yapılır; ayrı turda yapılırsa ortada hiçbir kırmızı olmadan bozuk bir
+ağaç kalır. Denetim tarafındaki karşılığı `check_archive_freshness()`: sembol denetimi "ne **eksik**"
+der, tazelik denetimi "ne **bayat**" der — bu sınıfı yalnız ikincisi görür. Kaynak listesi elle yazılmaz,
+sürücünün kendi `warn_if_prebuilt_archive_stale` listesinden okunur ki sürücüyle denetim ayrışamasın;
+desen tutmazsa denetim "temiz" demek yerine **kapsamını kaybettiğini** söyleyip kırmızı olur.
+
+### 8ar. `rm -rf <ortak dizin>` komşunun türetilmiş çıktısını da siler — ve bunu kimse görmez
+`android/build_tame_android.sh` her koşumda `rm -rf "dist/$abi"` yapıyordu. O dizin yalnız kendisinin
+değil: `engine/tools/build_bridge_android.sh`'ın ürettiği **11 motor arşivi** de orada yaşıyor. Betiği
+koşturmak motorun bütün arşivlerini siliyor, `import "engine"` eden her Android derlemesi link'te ölüyor
+ve **masaüstünde hiçbir şey kızarmıyor** — çünkü masaüstü o arşivlere hiç bakmıyor. Betik artık yalnız
+kendi çıktılarını siliyor (`rm -rf "$OBJ"` + kendi iki `.a`'sı).
+
+Genel biçim: bir dizin **paylaşılıyorsa** temizlik `rm -rf <dizin>` değil, **ürettiğin dosyaların adıyla**
+yapılır. Belirtisi sinsi çünkü hasar, betiği koşturan kişinin ilgilenmediği bir hedefte ortaya çıkıyor:
+tame'i yeniden kuran kişi motorun bozulduğunu göremez. `tests/dist_archive_audit.py` bunu "arşiv YOK"
+diye yakalar — ama ancak koşturulursa; `build.sh suites` içinde olmasının değeri tam olarak budur.
+
+### 8as. `vkGetDeviceProcAddr`'in verdiği yordam CİHAZA ÖZGÜDÜR — tek global "gerçek işaretçi" çökertir
+PSO önbelleğini bütün pipeline kurulumlarına bağlamak için `VkApi` tablosuna bir ara yordam (thunk)
+takıldı. İlk yazımı **tek global** bir "gerçek `vkCreateGraphicsPipelines`" işaretçisi tutuyordu. Oysa
+`vkGetDeviceProcAddr`'in döndürdüğü adres o **cihaza** aittir: kendi cihazını açıp kapatan bir test, globali
+kendi (artık ölü) cihazının yordamıyla değiştiriyor, ardından paylaşılan cihaz üstündeki ilk pipeline
+kurulumu **SIGSEGV** veriyordu (ölçüldü: `render_graph_gpu_cull_indirect_matches_cpu_path`).
+
+Çözüm: her kanca yuvası **kendi** gerçek işaretçisini tutar, thunk gelen `VkDevice`'a göre seçer; hiçbir
+yuvaya uymayan bir çağrı **çökmez** — hata döner ve sayılır (`pso_unrouted_calls()`, kapı 0 bekler). O
+sayaç olmasaydı yanlış yönlendirme sessiz kalırdı.
+
+Bu, 8an'in (aynı `VkApi` tablosuyla ikinci cihaz açmak giriş noktalarını ezer) aynı ailesi ve genel biçimi
+şu: **Vulkan'da cihaz düzeyindeki hiçbir fonksiyon işaretçisi süreç genelinde geçerli değildir.** Bir
+işaretçiyi global tutuyorsan, onu hangi cihazdan aldığını da tutmak zorundasın.
+
+### 8at. Aralanmamış A/B süreç ölçümü makine yükü kaymasını "kazanç" gibi gösterir
+PSO önbelleğinin uçtan uca kazancı önce SOĞUK→SICAK sırasıyla ölçüldü ve **21 ms kazanç** çıktı. Ölçüm
+A/B/**C** olarak aralanınca (soğuk / sıcak / bozuk-önbellek, üçü dönüşümlü) fark **sıfırlandı**: 203.3 /
+201.0 / 200.2 ms medyan. Yani 21 ms, önbelleğin değil makinenin o sırada boşalmasının eseriydi. Aynı
+ölçümün mutlak değeri yüke aşırı duyarlı: derleme CPU'yu doldururken pipeline kurulumu 98–120 ms, boş
+makinede ~11 ms.
+
+Kural: bir iyileştirmenin A/B'si **dönüşümlü** koşulur ve mümkünse **zamanlamadan bağımsız** bir kanıtla
+desteklenir. Burada asıl kanıt süre değil, **önbellek büyümesi** oldu: soğuk koşumda dosya 0 → 203 249 B
+büyüyor, sıcak koşumda **+0 B** — yani 15 varyantın hepsi diskten isabet ediyor. Bu sayı makine yükünden
+etkilenmez. Ölçemediğin şeyi iddia etme: süreçler arası uçtan uca kazanç bu masaüstünde **ölçülemedi** ve
+öyle kaydedildi.
+
+### 8au. Android'de `shutdown` çoğu zaman HİÇ koşmaz — kapanışta yazılan şey hiç yazılmaz
+Kalıcı PSO önbelleği `Device::shutdown()` içinde diske yazılıyordu; masaüstünde kusursuz çalışıyor.
+Emülatörde ölçüldü: uygulama iki kez açılıp kapandıktan sonra bile log hâlâ **"dosya yok (ilk çalıştırma)"**
+diyordu. Sebep: Android'de uygulamalar temiz kapanmaz — sistem (ya da `am force-stop`, ya da kullanıcının
+uygulamayı kapatması) **süreci öldürür**, `shutdown` hiç çağrılmaz. Yani önbellek, tam da en çok ihtiyaç
+duyduğu platformda **asla oluşmuyordu** ve bunu hiçbir şey kızartmıyordu: oyun her açılışta çalışıyor,
+sadece bütün boru hatlarını yeniden kuruyor.
+
+Düzeltme: kurulum biter bitmez yaz (o noktada ön ısınma bitmiş, bilinen bütün varyantlar kurulu), kapanıştaki
+yazma masaüstü için yedek kalsın. Ölçülen sonuç (emülatör, temiz kurulum → öldür → yeniden aç):
+soğuk **6.5 ms** / 168 495 B yazıldı, sıcak **1.1 ms** — 5.9x, ve bu kazanç süreçler arası, yani gerçek.
+(Aynı kazanç masaüstünde **ölçülemedi**; bkz. 8at. Ölçümün doğru platformda yapılması gerekiyordu.)
+
+Genel biçim: **mobilde "çıkışta yap" diye bir kanca yoktur.** Kalıcı olması gereken her şey (kayıt dosyası,
+önbellek, telemetri) üretildiği anda ya da bir yaşam döngüsü duraklamasında yazılır. Bir masaüstü kapanış
+yolunun çalıştığını görmek, mobilde çalıştığına dair hiçbir kanıt değildir.
+
+### 8av. Ölçülen değerden türetilen eşik, mevcut yanlışı KUTSAR
+`tests/paket_boyut_audit.py`'ye eşikleri koyarken kural şuydu: "ölçülenin ~2 katı — amaç bir gün büyüdü
+demek değil, bir anda ZIPLADI demek". APK için ölçülen 71 MB'dı, eşik 96 MB kondu ve denetim **yeşil**
+verdi. Eşik doğru çalışıyordu; yanlış olan **71 MB'ın kendisiydi**: linkten çıkan `.so` hiç
+striplenmiyordu (arm64 36.3 MB, x86_64 33.8 MB — tamamı sembol ve hata ayıklama bilgisi). Strip'ten sonra
+5.4 / 5.7 MB, APK **71 MB → 11.6 MB** (6.1x).
+
+Tuzağın biçimi: bir eşiği "bugünkü ölçüm + pay" diye koymak, bugünkü değeri **normal ilan eder**. Denetim
+o andan sonra yalnızca *değişimi* görür, *yanlışlığı* değil — ve sayı ne kadar büyükse, ona eklenen pay da
+o kadar büyük olur, yani hata büyüdükçe denetim gevşer. Kural: bir eşik koyarken "bu sayı **olması
+gereken** sayı mı?" diye ayrıca sor. Cevabı bilmiyorsan eşiği koy ama **yanına sorusunu da yaz**; yoksa
+altı ay sonra kimse o 96'nın nereden geldiğini sorgulamaz.
+
+İkinci yarısı da kayda değer: çıplak strip **teşhis yeteneğini öldürür**. Bu depoda `t_menu_ciz.f+576`
+satırı Android x86_64 kod üretimindeki hizalama hatasını tam yerinden gösterdi (8ap); stripli bir `.so`'da
+o ad yoktur. Doğru çözüm ikisinden birini seçmek değil: striplenmemiş kopya `<stage>/symbols/<abi>/`
+altında saklanıyor, `android/symbolize.sh` adresi geri çözüyor, ve denetim **her ikisini birden** şart
+koşuyor — stripsiz `.so` da kırmızı, sembol kopyası olmayan stripli `.so` da kırmızı. İkinci kontrol
+olmasaydı "strip et, sembolleri at" yolu paketi küçültüp denetimi yeşil bırakır, kaybı ancak bir sahada
+çökme anında fark ederdik.
+
+### 8aw. `static_assert(sizeof(...))` yerleşimin yalnız YARISINI görür — alan sırası değişimi ondan geçer
+CPU-GPU arayüzünde bir shader bloğunun std140/std430 yerleşimi ile C++ struct'ının bayt yerleşimi
+**sessizce ayrışabilir**: ne derleyici, ne linker, ne Vulkan doğrulama katmanı bunu söyler. GPU başka bir
+ofsetten okur, görüntü "biraz yanlış" olur. Bu depoda tam bu sınıfın bir örneği yaşandı (Frame UBO'su için
+elle yazılan `static_assert` 80 bekliyordu, gerçek 96'ydı — 6 vec4).
+
+Asıl bulgu: `static_assert(sizeof(X) == N)` bu sınıfın **yarısını** yakalar. Ölçüldü (2026-09-16):
+`MaterialUbo`'nun iki alanı yer değiştirildi — boyut aynı kaldı, depodaki `static_assert(sizeof(...) == 64)`
+**hâlâ geçti**, ama GPU'nun okuduğu `pbr` alanı artık `emissive`'in baytlarını okuyordu. İddia edilmedi,
+**derleyiciye sorduruldu**: bozuk tanım + depodaki assert ayrı bir TU'da derlendi ve geçti.
+
+`tests/layout_audit.py` + `engine/tools/spirv_reflect.py` bunu alan alan denetliyor (ofset / boyut / dizi
+adımı / matris adımı). Üç tasarım kararı, hepsi bir kör noktayı kapatıyor:
+1. **Yerleşim SPIR-V'den okunuyor, GLSL metninden değil.** GLSL'den std140 kurallarını yeniden
+   hesaplasaydık denetim, denetlediği şeyin *aynı varsayımını tekrarlardı* — bu deponun
+   "tekrarlanan varsayım kendini gizler" sınıfı. `OpMemberDecorate Offset` glslc'nin gerçekten ürettiği
+   sayıdır.
+2. **C++ yerleşimi derleyiciye sorduruluyor** (struct başlıktan olduğu gibi alınıp geçici bir TU'ya
+   konuyor, `&üye - &nesne` / `sizeof` / `alignof` ölçülüyor) — elle hesaplanan tek bir sayı yok.
+3. **Kapsam sessizce daralamaz:** eşleşmeyen her blok ya gerekçesiyle `KAPSAM_DISI` sözlüğünde kayıtlı,
+   ya KIRMIZI. Aksi halde "eşleştiremedim, o hâlde temiz" yolu açık kalırdı.
+
+Operasyonel not: **`glslc -O` `OpName`/`OpMemberName`'i siler** — depodaki SPIR-V'de üye adı yoktur
+(`m0, m1, …`). SPIR-V üzerinden iş yapacak her araç bunu bilmeli; adlar GLSL kaynağından gelmek zorunda,
+ve GLSL üye sayısı SPIR-V üye sayısıyla tutmazsa ad eşlemesi sessizce kaymasın diye KIRMIZI olmalı.
+
+### 8ax. Vendor kütüphanesinde de 8u var: cgltf `texture_view.scale` malzeme düzeyinde varsayılansız
+`cgltf_parse_json_texture_view` `scale` alanını **yalnız o JSON nesnesi varsa** 1'e kuruyor; malzeme
+düzeyinde bir varsayılan yok. Yani bir glTF malzemesinde `normalTexture` yazılı DEĞİLSE
+`material.normal_texture.scale` **sıfır** kalır. Koşulsuz okuyan bir içe aktarıcı bütün normal haritalarını
+sıfır ölçekle uygular — yani **hepsini düzleştirir**, ve hiçbir şey kızarmaz: görüntü "biraz yanlış" olur.
+
+Bu, `alloc_array_zeroed` yapıcı çalıştırmaz (8u) kuralının **başkasının kodundaki** hâli: sıfırdan farklı
+her varsayılan, onu yazan katman tarafından açıkça atanmalı ve **sen o katman değilsen kontrol etmelisin**.
+Doğru kalıp: alanı okumadan önce ilgili bloğun varlığını (`has_*` / işaretçi) sor. Aynı sınıf bizim
+tarafımızda da vardı: `ModelImage::srgb = true` varsayılanı `alloc_array_zeroed` sonrası uygulanmıyordu
+(sıfır = doğrusal), güvenli varsayılan açıkça sRGB'ye kuruldu.
+
+Genel kural: **bir vendor struct'ını memset'lenmiş/zeroed bellekten okuyorsan, onun varsayılanları senin
+varsayılanların değildir.**
+
+### 8ay. Türetilmiş çıktı önbelleğinin anahtarı, çıktıyı belirleyen HER girdiyi içermeli
+`engine_texpack`'e `--tur albedo|orm|normal` eklendi (renk uzayı ve ASTC kipi buna göre değişiyor). Önbellek
+anahtarı önce yalnız kaynak PNG'nin özetiydi: aynı PNG'yi **önce albedo sonra normal** paketlemek **aynı
+anahtarı** üretiyor ve ikinci çağrı birincinin ürününü geri veriyordu — yani normal haritası istediğin yerde
+sRGB kodlanmış bir albedo alıyordun. Derleme yeşil, dosya yerinde, içerik yanlış.
+
+`--tur` anahtara eklendi ve `kTexpackVersion` 1→2'ye çıkarıldı (eski girdiler geçersiz sayılsın diye).
+Kural: bir önbellek anahtarı "girdi dosyası"nı değil, **çıktıyı belirleyen bütün parametre kümesini**
+özetlemeli — bayraklar, sürüm, profil, hedef. Eksik bir parametre, önbelleği sessiz bir yanlış-sonuç
+üreticisine çevirir. İlgili: [[8am]] (türetilmiş dosya bayatlayınca kapı sessizce atlanır).
+
+### 8az. Ölçüm, ölçtüğü şeyin temsil ettiği durumda yapılmalı — ASTC MAP_NORMAL örneği
+ASTC'nin normal-harita kipini (`ASTCENC_FLG_MAP_NORMAL`) değerlendirmek için üretilen ilk test kaynağında
+tümsek kenarlarında z ≈ 0.199 vardı ve ölçüm MAP_NORMAL'in **kaybettiğini** söylüyordu (açısal hata 1.460
+vs düz kodlamada 1.363). Sebep kipin kötülüğü değil: iki kanaldan z'yi yeniden kurmak z küçükken **kötü
+koşullu** bir işlem, yani hata z→0'da patlıyor. Kenar gerçekçi bir eğime (z = 0.436) çekilince MAP_NORMAL
+her blok boyunda kazanıyor.
+
+Ders: bir kodlama/sıkıştırma kararını, **üretimde karşılaşacağın veri dağılımında** ölç. Uç bir örnekte
+yapılan ölçüm doğru sayıyı verir ama **yanlış kararı** destekler. Kararın kapsamını da yaz: bu karar "çok
+sıyırtma açılı" normal haritaları için geçerli değildir.
+
+### 8ba. Token enum'unu ORTADAN genişletmek, önceden derlenmiş arşivlere sızar
+Bit işleçleri eklenirken yeni token'lar enum'un **sonuna** kondu, ortasına değil. Sebep somut:
+`vm_binary_op` (`src/vm/runtime_bindings.cpp`) işleci **ham `int` enum değeri** olarak alıyor ve o fonksiyon
+`wasm/dist/` + `android/dist/` altındaki **önceden derlenmiş** arşivlerde de duruyor. Ortadan bir değer
+eklemek bütün sonraki değerleri kaydırır: masaüstü (kaynaktan derlenen) yeşil kalır, web ve Android ise
+**sessizce yanlış işlemi** yapar — `+` yerine `-`, `<` yerine `<=` gibi. Hiçbir sembol eksilmediği için
+sembol denetimi de görmez (bu, 8aq'nun kardeşi: ABI yalnız isimlerden ibaret değildir).
+
+Kural: **arşiv sınırını geçen hiçbir sayısal sabit ortadan genişletilmez.** Enum'a ekleme sona yapılır; bir
+sıralamayı gerçekten değiştirmen gerekiyorsa arşivler aynı değişiklikte yeniden üretilir.
+
+### 8bb. Yeni anahtar kelime, çalışan bir kodda geçen bir ADI çalar
+`const` eklenirken Türkçe eşi olarak `sabit` de denendi ve paket **anında** düştü:
+`tests/engine_bridge.test.tpr` içinde `int sabit = -1;` diye bir değişken vardı. Aynı sınıf daha önce
+`move` ve `don` (=`return`) ile yaşandı — `bool don = ...` yazan bir modül sessizce kırılıyordu.
+
+Kural: yeni bir anahtar kelime eklemeden önce **depoyu tara**:
+`grep -rn --include='*.tpr' '\bKELIME\b' .` — `examples/`, `lib/`, `tests/`, `packages/` dahil. Türkçe
+sözcükler burada özellikle riskli, çünkü değişken adları da Türkçe. `sabit` bu yüzden alınmadı; dilde
+yalnız `const` var.
+
+### 8bc. Biçimlendiricinin çıktısı DERLENMEYİ bırakabiliyordu ve hiçbir şey sormuyordu
+`tulpar fmt` bilinmeyen bir işleci karakter karakter boşluklayınca geçerli kaynağı bozuyor. Ölçülen iki
+vaka: yeni bit işleçleri olmadan `a << 2` → `a < < 2` ve `a <<= 1` → `a < <= 1`; ve **önceden var olan**
+bir hata, `1.5e-8` → `1.5e - 8` (üs işareti ikili işleç sanılıyordu). İkincisi uzun süredir oradaydı:
+`tests/scientific_notation.test.tpr` biçimlendirildiğinde **20 ayrıştırma hatası** veriyordu ve kimse
+sormuyordu — çünkü biçimlendirici yalnız *idempotans* için denetleniyordu, "çıktısı hâlâ derleniyor mu"
+diye değil. İdempotans, bozuk bir çıktı için de sağlanabilir: bozuk metni ikinci kez biçimlendirmek aynı
+bozuk metni verir.
+
+Kapı `tests/fmt_audit.py`: her `.tpr` biçimlendirilir, sonuç **typecheck'ten geçirilir** ve hata sayısı
+biçimlendirme öncesine göre ARTMAMALIDIR; ayrıca idempotans denetlenir. Kendi pozitif kontrolü var.
+
+### 8bd. Pozitif kontrolün kendisi boş olabilir — ölçütü, hedeflediği hatanın BOZDUĞUNDAN emin seç
+Navmesh ajan kapısında "yolların ajan başına kopyalandığını" şu ölçütle kanıtladığımı sanıyordum: karşılıklı
+iki ajan bırakılır, **birbirlerine yaklaşmalılar**. Kopyalamayı kasten bozdum (bütün ajanlar aynı yuvayı
+paylaşsın) — **kapı yine geçti**. Sebep: bozuk hâlde iki ajan da yolu bulamayıp (0,0,0)'a doğru yürüyordu,
+yani yine yaklaşıyorlardı. "Yaklaştılar" ölçütü, doğru davranış dışında en az bir yanlış dünya tarafından
+da sağlanıyordu.
+
+Düzeltme ölçütü sertleştirmekti: **her ajan KENDİ hedefine varmalı** (ikisi yer değiştirmeli). Bu, paylaşılan
+yuvayla sağlanamaz. Kontrol enjekte edilince kapı kırmızıya döndü (`expected 10 got -0.27`).
+
+Kural: bir kontrol yazarken "bu ölçüt, hedeflediğim hata dışında hangi yanlış dünyalarda da sağlanır?"
+diye sor. Cevap "hiçbiri" değilse ölçüt zayıftır. İlgili: 8ao (bir kapının ilk sonucu makullük ister).
+
+### 8be. Kontrol "ateşlemedi" demeden önce ikiliye ULAŞTIĞINI doğrula (`lib/*.tpr` yeniden yapılandırma ister)
+Yukarıdaki kontrolü ilk denediğimde kapı geçti ve "ölçüt zayıf" sonucuna atladım — **yanlış teşhis**.
+Gerçek sebep: kontrolü `lib/engine.tpr` içine yazmıştım ve yalnız `cmake --build --target tulpar`
+koşturmuştum. Gömülü stdlib `configure_file()` ile üretiliyor, yani **yeniden yapılandırma olmadan
+`src/embedded_libs.h` tazelenmiyor**: ikili hâlâ ESKİ kütüphaneyi taşıyordu. Kontrol koda hiç girmemişti.
+
+Teşhis tek komut: `grep -c "<kontrol metni>" src/embedded_libs.h`. 0 ise ölçtüğün şey eski kopyadır.
+Doğru sıra: `cmake -S . -B build-linux && cmake --build build-linux --target tulpar`.
+
+Genel kural: bir pozitif kontrol beklendiği gibi kırmızıya dönmüyorsa **önce kontrolün derlenmiş ürüne
+girdiğini kanıtla**, sonra ölçütü sorgula. İki farklı arıza aynı belirtiyi veriyor.
+
+### 8bf. Şeker açılan yol denetleniyor diye DÜĞÜM yolu da denetleniyor sanma
+`x &= 2.5` ayrıştırıcıda `x = x & 2.5` olarak şeker açılıyor, BinaryOp yolundan geçiyor ve `[typecheck]`
+uyarısı alıyor. `a[0] &= 2.5` ise şeker açılmıyor — `CompoundAssign` düğümü olarak kalıyor ve typeinfer o
+düğümü **hiç ziyaret etmiyordu**: sessizce geçiyordu (ölçüldü 2026-09-16). Aynı dilde aynı işlecin iki
+yazımı farklı şey söylüyordu.
+
+Bir özelliğin hem "şeker" hem "düğüm" yolu varsa denetim İKİSİNE de bağlanmalı; şeker yolundaki denetim
+düğüm yolunu kapsamaz. Kapı: `tests/gramer_bosluklari.test.tpr` içinde her iki yazım için ret kontrolü.
+
+### 8bg. Bozuk bir değerden okunan 0, geçerli boş durum gibi görünebilir
+`int[] a;` (başlatıcısız) dizi DEĞİL bir değer üretiyordu. `len(a)` **0 dönüyordu** — yani "boş dizi" gibi
+görünüyordu — ama `a[0] = 1` ve `push(a, 1)` çalışma zamanında "geçersiz hedef" ile düşüyordu. Derleyici
+kabul ediyor, typecheck susuyor, hata en geç noktada ve en anlamsız mesajla çıkıyordu.
+
+`len()`'in 0 dönmesi buradaki asıl tuzak: sağlıklı bir "boş dizi" ile bozuk bir değeri AYIRT EDİLEMEZ
+kılıyordu. Bir sondanın 0 dönmesi "geçerli ve boş" demek zorunda değil; "okunamadı" da 0 döndürebilir.
+Düzeltme (2026-09-16): başlatıcısız dizi bildirimi artık başlatıcı sentezliyor — `int[] a;` → `[]`,
+`int[4] a;` → `[0,0,0,0]`. Böylece `T[N]`'deki N ilk kez bir şey ifade ediyor.
+
+### 8bh. Normal haritasının mip'i BLIT ile üretilemez — ortalama normalin boyu 1 değildir
+Donanım blit'i doğrusal süzüyor, yani dört komşu normalin **bileşenlerini** ortalıyor. İki komşu normal
+birbirine ters eğimliyse ortalama vektörün boyu 1 değil ~0 olur; encode edilince (0.5, 0.5, ~1) yani
+**düz yüzey** çıkar. Görünen sonuç: uzaktaki yüzey sessizce düzleşir, ışık "yassılaşır". Hiçbir şey
+kızarmaz, hiçbir doğrulama katmanı konuşmaz — yalnızca görüntü yanlıştır.
+
+Ölçüldü (2026-09-16): birbirine ters eğimli (±0.8) dama deseninde normalleştirmeyen ortalamanın boyu
+**0.60**; küçültmeden sonra yeniden normalleştirince **1.0000**. Çözüm normal haritalarını CPU'da
+mip'leyip hazır seviye olarak yüklemek (`content::build_normal_mips` → `create_texture_levels`).
+
+İki ayrı tuzak daha var: (1) **ORM bu işlemi ALMAMALI** — pürüzlülük/metaliklik birer skalerdir,
+normalleştirmek onları bozar; bayrak renk uzayından ayrı tutuluyor. (2) Fonksiyonu doğrudan ölçen bir kapı
+YETMEZ: yükleme yolu onu hiç çağırmazsa görüntü eski davranışta kalır ve kapı yine yeşil olur. O yüzden
+`UploadedModel::normal_mip_textures` sayılıyor ve GPU kapısı `== 1` diye bakıyor.
+
+### 8bi. Doğru bir optimizasyon ölçülebilir hiçbir kazanç vermeyebilir — sayıyı yaz, iddiayı yazma
+`expr_is_int` bit işleçlerini tanımıyordu, yani `a[i] = x & maske` kutusuz dizi yolunu kaybediyordu.
+Tanıtmak doğruydu (kanıt kuralının kendisinde boşluktu) ama **hız kazancı ölçülmedi**: 4096 elemanlı
+dizide 20 000 tur, eski ikili 30 ms, yeni ikili 30 ms. LLVM her iki yolu da aynı şekilde indirgiyor.
+
+İlk ölçümüm daha da yanıltıcıydı: ifadede döngü değişkeni olmayan bir ad (`n`) kullanmıştım, o yüzden
+`expr_is_int` iki sürümde de false dönüyordu — yani kıyas hiçbir şeyi ayırt etmiyordu. Kıyas kurarken
+"bu iki yol gerçekten farklı kodu mu çalıştırıyor?" sorusu, sonucu okumaktan önce gelir.
+
+Değişiklik tutarlılık için durdu, hız için değil, ve kaynak yorumu bunu böyle söylüyor. Ölçmeden
+"hızlandırdık" yazmak, bu depoda ölçmeden "düzelttik" yazmakla aynı sınıf.
+
+### 8bj. "Bit bit aynı" bir kapı ölçütü olamaz — sürücünün optimize edicisi bizim sözleşmemiz değil
+`renderer_normal_map_tilts_lighting` şunu istiyordu: normal ölçeği 0'ken kare, normal dokusu hiç
+olmayan referansa **bit bit** dönmeli (`md == 0 && ad == 0.0`). NVIDIA'da dönüyordu, lavapipe'ta (CI Linux)
+dönmüyordu ve kapı orada kırmızıydı.
+
+Sebep şu: iki kare **iki farklı shader dalından** geliyor — biri "normal dokusu yok", öteki "normal dokusu
+var, ölçek 0". Aritmetik olarak aynı sonucu verirler ama **metin olarak farklıdırlar**. İkisini aynı koda
+indirgemek sürücü derleyicisinin işidir; yaptığı da garanti değildir, yapmaya devam edeceği de. Yani kapı
+bizim renderer'ımızı değil sürücünün optimize edicisini sınıyordu.
+
+Yerine geçen ölçüt ayrımı koruyor ve sürücüden bağımsız: ölçek 0'ın artığı düz haritanınkinden **büyük
+olamaz** ve ürün sinyalinden en az 20 kat küçük olmalı. Ayırt etme gücü ölçüldü — ölçek okunmuyormuş gibi
+enjekte edince artık 0'dan **18 501 piksele** (ortalama 5.53) fırladı ve kapı kırmızıya döndü. Bit eşitlik
+hâlâ **raporlanıyor** ("bit bit eşit: EVET/hayır") ama hüküm değil: sayı var, iddia yok.
+
+Genel kural: bir kapı yalnızca **bizim ürettiğimiz** şeyi ölçmeli. Sürücünün/derleyicinin iki eşdeğer
+ifadeyi aynı koda indirgeyip indirgemediği bizim ürünümüz değil. İlgili: 8be (kopyalanan kontrol, korumasız).
+
+### 8bk. Aynı sınıf kontrol üç yere kopyalanınca koruması geride kalır
+CI Linux'ta dört Mali kapısı birden kırmızı döndü. Üçü yeniydi ve pozitif kontrolü
+(`renderer_mali_best_practices_gate`'teki "LOD kırpan sampler Arm uyarısı vermeli") **kopyalamıştı** — ama
+orijinaldeki **korumayı** kopyalamamıştı: katman Arm kurallarını tanımıyorsa kapı ölçemez ve görünür
+atlanır. CI'daki apt katmanı (Ubuntu 24.04, VVL 1.3.275) tam olarak bu durumda.
+
+İki ders. (1) Kopyalanan kontrol, korumasıyla birlikte kopyalanmalı — yoksa "aynı kontrol" değil, yarısıdır.
+(2) Bu sınıfın kalıcı çözümü kopya değil **ortak fonksiyon**: sonda artık `test::arm_rules_missing()`
+(gövdesi `test_main.cpp`), dördü de onu çağırıyor, bir daha ayrışamaz.
+
+Ayrıca dikkat: o kapılardaki ÜRÜN iddiası (`bp_arm_effective == 0`) katman kuralları tanımıyorken **boşa
+geçer** — 0 uyarı her zaman 0'dır. Kapıyı ayakta tutan tek şey kontroldür; o yüzden kontrolün sonucu
+`CHECK` değil **atlama** olmalı.
+
+### 8bl. "Son render'ın tepesi" + gerçek zamandan hızlı çeken cihaz = bazen düşen ses kapısı
+`audio_default_device_opens` 0,3 s'lik bir klip çalıp 200 ms sonra `MixerStats::peak`'e bakıyordu.
+`peak` **son render çağrısının** tepesidir, kümülatif değil. Yani "ölçüm anında klip hâlâ çalıyor mu"
+sorusu, cihazın ne kadar önden tampon doldurduğuna bağlanıyordu.
+
+CI macOS'un sanal ses cihazı gerçek zamandan hızlı çekiyor: 200 ms uykuda **33 callback × 480 = 15 840
+kare** (= 330 ms ses) render etti, 0,3 s'lik klip bitti, son render sessizdi → tepe **0,00000**, kapı
+kırmızı. Bir önceki koşumda aynı kapı 22 callback (220 ms) ile tepe 0,00050 verip geçmişti — klasik
+"bazen düşen", ama sebebi gürültü değil **yarış**.
+
+Yerelde birebir üretildi: klibi 0,01 s yapıp döngüsüz çalınca tepe 0,00000 ve kapı kırmızı; aynı klip
+**döngülü** çalınca tepe 0,00050 ve yeşil. Düzeltme döngülü çalmak — son render her zaman sinyal taşır,
+cihazın hızı ölçümü etkilemez.
+
+Ders: bir kapı "şu an" okunan bir değere bakıyorsa, o değerin **ne kadar süre geçerli kaldığını** sor.
+"Bazen düşüyor" demeden önce yarışı yerelde üretmeye çalış — burada üç dakika sürdü.
+
+### 8bm. Zamanlama eşiğini ÖLÇÜLEN birime bağlamak, kapıyı yük altında SERTLEŞTİRİR
+`gather` eşzamanlılık kapısı üç kez yanlış yazıldı, üçü de macOS/arm64 CI'da düştü. Üçüncüsü
+(`esz < birim * 2`) şu modeldeydi: birim = uyku + bir çağrı ek yükü, gather ≈ 1 birim. **Yanlış**:
+gather **üç** çağrı ek yükü öder (+ kendi kurulumu). 20 ms uykuda ek yük 11 ms olunca — sinyalin yarısı
+kadar — model kırıldı (birim=31 gather=82 eşik=62).
+
+İki ayrı hata vardı. (1) Ölçülen süre ek yükle **aynı büyüklük mertebesindeydi**; çözüm eşikle oynamak
+değil uykuyu 20 ms'den 120 ms'ye çıkarmak — ek yük sinyalin %55'inden %9'una düştü. (2) Eşik `birim`e
+bağlıydı; gerçek tasarruf (2 uyku) yükle **değişmez** ama `birim` yükle **büyür**, yani eşiği birime
+bağlamak kapıyı yük altında sertleştiriyordu — tam ters yön. Eşik artık nominal uykuya bağlı.
+
+Ayrıca seri kol artık **varsayılmıyor, ölçülüyor**: bir daha düştüğünde "gather gerçekten seri miydi"
+sorusu tahminle değil sayıyla cevaplanır. O koşumda gather aslında seriden hızlıydı (82 < ~93) — yani
+eşzamanlılık çalışıyordu, ölçüt bozuktu; seri kol ölçülseydi bu ilk bakışta görülürdü.
+
+### 8bn. İş sistemi EN SONDA kapanırsa, alt sistemler yıkılırken worker'lar hâlâ çalışıyordur
+Üç giriş noktasında da (`teng_shutdown`, `demo_app`, `editor_app`) `jobs.shutdown()` **en sonda**ydı:
+fizik, renderer ve Vulkan cihazı yok edilirken worker thread'leri hâlâ canlıydı. Jolt'un iş uyarlayıcısı
+(`FiberJoltJobs`) bizim kuyruğa **çıplak `Job*`** itiyor ve o işaretçiler `FiberJoltJobs::jobs_` havuzunu
+gösteriyor; `Physics::shutdown()` ise `delete impl_->jobs` ile o havuzu yok ediyor. Bir worker o sırada
+kuyrukta kalmış bir girdiyi çekerse çöp bir işaretçiyi çağırır.
+
+Ölçüldü (CI macOS/arm64, 2026-09-16): `thread: tulpar-job`, SIGSEGV, `fault_addr 0x8bc94512aa864210` —
+**null değil, çöp**; null olsaydı sıradan bir deref hatası derdik. Dört koşumun ikisinde düştü, ikisinde
+geçti: yarış. Yığın izi **iki çerçeveydi**, çünkü fiber yığını çözücüyü kesiyor — yani bu sınıfın izi
+doğal olarak fakir, teşhis buna hazır olmalı.
+
+Düzeltme sıra: `jobs.shutdown()` artık `vkDeviceWaitIdle`'dan hemen sonra, fizikten **önce**. O çağrı
+worker'ları JOIN eder ve hiçbir fiber'in park halinde kalmadığını `ENGINE_ASSERT` ile doğrular, yani
+sonrası tek thread'lidir. Kapanış yolunda iş ÜRETEN kimse yok (yıkım yalnız nesne serbest bırakıyor).
+
+Üstüne nöbetçi: `~FiberJoltJobs` kuyrukta/çalışmakta iş varsa `ENGINE_ASSERT_MSG` ile **abort** eder.
+Sessiz UAF yerine tam yerinde, adıyla patlar. Ateşlediği doğrulandı (sayacı elle bozunca çıkış 134 ve
+"1 is hala kuyrukta/calisiyor"). `ENGINE_ASSERT` bu depoda Release'te de AÇIK — o yüzden sahada da geçerli.
+
+**Genel kural:** bir alt sistem başka bir alt sisteme ham işaretçi veriyorsa, alan taraf VERENDEN önce
+susturulmalı. "En sonda kapat" sezgisi burada tam tersi.
+
+**Devamı — sözleşmeyi önce fazla dar yazdım (2026-09-17).** Yıkımda "hiç iş kalmamalı" diye assert koydum;
+CI macOS onu **276 iş** ile düşürdü. Ama birikinti başlı başına hata değil: Jolt'un bariyeri beklerken
+işleri kendi thread'inde de koşuyor, bizim kuyruk girdileri bayat ama refli kalıyor. Tehlike o girdilerin
+**varlığı** değil, havuz öldükten sonra bir worker'ın onları **çekmesi**.
+
+Doğru sözleşme ikili: iş sistemi **koşuyorsa** birikinti tükenene kadar bekle (worker'lar boşaltır);
+**durmuşsa** girdiler atıldır ve beklemek kilitlenme olurdu. İkisi de yıkıcının içinde, yani doğruluk artık
+çağıranın kapanış **sırasına bağlı değil** — sıra düzeltmesi ikinci hat olarak duruyor. Bekleme sınırlı:
+sonsuz sessiz bekleme CI'da en kötü sonuç, sınıra dayanırsak adıyla patlıyoruz.
+
+Bir de ölçü notu: birikinti **yerelde hiç üremedi** — 15 worker'da 0, zorla 2 worker'da bile 0. macOS/arm64
+koşucusunda 276. "Yerelde üretemedim" bir düzeltmeyi geçersiz kılmaz ama sözleşmeyi ölçüyle değil
+**muhakemeyle** yazdığını bilerek yazmayı gerektirir.

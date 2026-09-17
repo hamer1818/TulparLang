@@ -1,0 +1,26 @@
+// kaynak-ozet: 1c4144f1b6d2  (engine/rhi/shaders/motion.frag)
+// Hareket vektoru + reactive maske. RG = PIKSEL kaymasi, A = reactive.
+str asama = "frag";
+
+vec4 v_cur = girdi(0);
+vec4 v_prev = girdi(1);
+float v_reactive = girdi_duz(2);
+
+struct Motion {
+  mat4 viewproj_jit;
+  mat4 viewproj;
+  mat4 prev_viewproj;
+  vec4 params; // xy: hedefin piksel olcusu
+}
+Motion u = tekduze(0, 0);
+
+vec4 o_mv = cikti(0);
+
+func main() {
+  float wc = abs(v_cur.w) < 1e-6 ? 1e-6 : v_cur.w;
+  float wp = abs(v_prev.w) < 1e-6 ? 1e-6 : v_prev.w;
+  vec2 c = v_cur.xy / wc;   // NDC [-1,1]
+  vec2 p = v_prev.xy / wp;
+  vec2 mv = (c - p) * 0.5 * u.params.xy; // NDC farki -> piksel
+  o_mv = vec4(mv, 0.0, v_reactive);
+}

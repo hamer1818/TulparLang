@@ -1,0 +1,32 @@
+// KONTROL (18/19_bitwise_*.tpr'nin ikizi): tamsayi operandlarla bit
+// islemleri UYARI URETMEMELI.
+//
+// Bu dosya olmadan "float reddediliyor" kapisi sahte yesil verebilirdi:
+// kural fazla genis yazilsaydi (ornegin TYPE_UNKNOWN'i da reddetseydi)
+// asagidaki tamamen gecerli kodun hepsi uyari basardi ve kimse gormezdi.
+// Ozellikle son iki satir onemli — tipi calisma zamaninda belli olan
+// degerler (`var`, tipsiz fonksiyon donusu) UYARI ALMAMALI.
+
+int a = 12;
+int b = 10;
+bool bayrak = true;
+
+print(a & b);
+print(a | b);
+print(a ^ b);
+print(a << 2);
+print(a >> 2);
+print(~a);
+print(0xFF & 0b1010);
+print(a & bayrak);          // bool -> int etiket cevrimi zaten var
+
+var kutulu = 7;
+print(kutulu & 3);
+
+func kimlik(x) { return x; }
+print(kimlik(6) | 1);
+
+int m = 0b1111;
+m &= 0b1010;
+m <<= 1;
+print(m);

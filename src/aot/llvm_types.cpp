@@ -56,25 +56,25 @@ void llvm_init_types(LLVMBackend *backend) {
   backend->obj_string_type = LLVMStructCreateNamed(ctx, "struct.ObjString");
 
   // struct ObjArray — dizi erisiminin SATIR ICI hizli yolu bu tip uzerinden
-  // GEP yapiyor. C tarafindaki duzen (olculdu):
-  //   Obj obj;      // 32 bayt basik
-  //   int count;    // @32
-  //   int capacity; // @36
-  //   VMValue *items_;   // @40  (NULL ise dizi KUTULANMAMIS)
-  //   long long *idata;  // @48  (NULL ise dizi kutulu) -> sizeof 56
-  // Basligi opak 28 baytlik dolgu + basindaki i32 (obj.type) olarak
-  // modelliyoruz: OBJ_ARRAY denetimi icin yalnizca o alan lazim.
-  // Duzen degisirse runtime_bindings.cpp'deki static_assert'ler derlemeyi
-  // kirar — sessizce yanlis ofsete GEP yapilmasin diye.
+  // GEP yapiyor. C tarafindaki duzen ISARETCI BOYUTUNA BAGLI (olculdu):
+  //   64-bit: Obj basligi 32 bayt -> count@32 capacity@36 items_@40 idata@48
+  //           elem_bits@56, sizeof 64
+  //   wasm32: Obj basligi 20 bayt -> count@20 capacity@24 items_@28 idata@32
+  //           elem_bits@36, sizeof 40
+  // Basligi opak dolgu + basindaki i32 (obj.type) olarak modelliyoruz:
+  // OBJ_ARRAY denetimi icin yalnizca o alan lazim. Dolgunun BOYUTU hedefe
+  // gore secilir; sabit 28 yazmak wasm32'de GEP'i yanlis ofsete goturuyordu
+  // (ve runtime'in static_assert'leri web derlemesini kiriyordu).
+  const unsigned obj_header_pad = backend->target_web ? 16 : 28;
   backend->obj_array_type = LLVMStructCreateNamed(ctx, "struct.ObjArray");
   LLVMTypeRef obj_arr_elements[] = {
-      LLVMInt32TypeInContext(ctx),                    // obj.type   @0
-      LLVMArrayType(LLVMInt8TypeInContext(ctx), 28),  // baslik kalani
-      LLVMInt32TypeInContext(ctx),                    // count      @32
-      LLVMInt32TypeInContext(ctx),                    // capacity   @36
-      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0), // items_     @40
-      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0), // idata      @48
-      LLVMInt32TypeInContext(ctx)                     // elem_bits  @56 -> sizeof 64
+      LLVMInt32TypeInContext(ctx),                              // obj.type   @0
+      LLVMArrayType(LLVMInt8TypeInContext(ctx), obj_header_pad), // baslik kalani
+      LLVMInt32TypeInContext(ctx),                              // count
+      LLVMInt32TypeInContext(ctx),                              // capacity
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),           // items_
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),           // idata
+      LLVMInt32TypeInContext(ctx)                               // elem_bits
   };
   LLVMStructSetBody(backend->obj_array_type, obj_arr_elements, 7, 0);
 

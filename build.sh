@@ -184,7 +184,36 @@ if [ "$ACTION" = "suites" ]; then
             if [ -n "$fails" ]; then
                 echo "$fails" | sed 's/^/    /'
             else
-                echo "$out" | grep -E 'hata|error|Error' | awk 'NR<=8' | sed 's/^/    /'
+                # PAKET COKTU (FAIL satiri YOK). Burada en cok ihtiyac duyulan
+                # iki sey CIKIS KODU ve ciktinin SONU — ikisi de eskiden
+                # basilmiyordu ve 2026-09-16'da bir CI turu tam olarak bunun
+                # yuzunden bosa gitti: macOS'ta engine_bridge ozetsiz dustu,
+                # elimizde yalnizca "hata" gecen 8 satir vardi ve onlar da
+                # kapanis raporunun ortasindan gelmisti, yani teshis icin
+                # HICBIR SEY soylemiyordu.
+                #
+                # Cikis kodu sinifi TEK BASINA belirliyor: 139 = SIGSEGV,
+                # 134 = abort, 124 = zaman asimi (timeout), 1 = normal hata.
+                sig=""
+                case $code in
+                    124) sig=" (ZAMAN ASIMI — $SUITE_TIMEOUT_CMD)";;
+                    134) sig=" (SIGABRT — abort/assert)";;
+                    139) sig=" (SIGSEGV — bellek erisimi)";;
+                    136) sig=" (SIGFPE)";;
+                    *) ;;
+                esac
+                echo "    cikis kodu $code$sig; FAIL satiri YOK -> paket ozetine varmadan oldu."
+                echo "    --- ciktinin son 12 satiri ---"
+                echo "$out" | tail -12 | sed 's/^/    /'
+                # Motor koprusu (teng_init) cokme raporcusunu KURUYOR ve
+                # rapor dosyasini CWD'ye yaziyor — ama onu kimse basmiyordu,
+                # yani saha kosumunda yigin izi uretilip cope gidiyordu.
+                for cr in crash_*.txt; do
+                    [ -f "$cr" ] || continue
+                    echo "    --- cokme raporu $cr ---"
+                    sed 's/^/    /' "$cr" | awk 'NR<=25'
+                    rm -f "$cr"
+                done
             fi
             SUITE_FAILED=1
         elif [ -z "$summary" ]; then
@@ -269,8 +298,61 @@ if [ "$ACTION" = "suites" ]; then
         # "kaynak daha yeni" diyebiliyordu); bu, EKSİK SEMBOLLERİ adıyla
         # sayıyor. Ayrım işe yaradı: wasm/dist beş gün bayat kaldı, scene3d'nin
         # her web derlemesi link'te patlıyordu ve sarı satırı kimse okumadı.
+        # Uc aileyi de sayiyor: tame (aot_tm_*), cekirdek runtime ve motor
+        # koprusu (aot_eng_* + teng_*, 156 builtin). Ucuncusu 2026-09-15'e
+        # kadar ELENIYORDU: denetim "temiz" derken `import "engine"` eden her
+        # android derlemesi bayat arsivde link'te patlayabilirdi.
         if ! python3 tests/dist_archive_audit.py; then
             echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # PAKET BOYUTU + SPIR-V TAZELIK + ACILIS SURESI.
+        #
+        # Ucu de "sessizce bozulan" sinifindan ve hicbiri otomasyonda degildi:
+        #  • boyut  — mobil kurulum butcesi ancak OLCULUP esige baglanirsa butce.
+        #  • SPIR-V — GLSL kaynagi degisip *_spv.h yeniden uretilmezse derleme
+        #             YESIL kalir ve GPU ESKI shader'i kosturur (sessiz yanlis
+        #             sonuc; ayrica "runtime'da shader derlemesi yok" kapisinin
+        #             kaniti uretilmis basligin depoda TAZE durmasidir).
+        #  • acilis — motor kurulumu uzarsa kimse fark etmez, oyun yine calisir.
+        #
+        # Cikis kodu KAPI: 0 disi ise suite duser. Atlamalar (emsdk/NDK/GPU yok)
+        # sebebiyle birlikte basiliyor, gorunmez `return` ile degil.
+        if ! python3 tests/paket_boyut_audit.py; then
+            echo -e "${RED}Paket boyutu/SPIR-V/acilis denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # BICIMLENDIRICI denetimi: `tulpar fmt` gecerli kaynagi DERLENMEYEN
+        # hale getirebiliyor (olculdu: `1.5e-8` -> `1.5e - 8`, `a <<= 1` ->
+        # `a < <= 1`). Idempotans TEK BASINA yetmez — bozuk bir ciktiyi ikinci
+        # kez bicimlendirmek ayni bozuk ciktiyi verir, yani "kararli" ile
+        # "dogru" karisir. Bu yuzden asil olcut: bicimlenmis metnin ayristirma
+        # hatasi sayisi ONCESINE gore ARTMAMALI.
+        if ! python3 tests/fmt_audit.py; then
+            echo -e "${RED}Bicimlendirici denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # CPU-GPU YERLESIM denetimi: shader'in std140/std430 yerlesimi ile C++
+        # struct'inin bayt yerlesimi ayrisirsa hicbir sey kizarmaz — GPU baska
+        # bir ofsetten okur, goruntu "biraz yanlis" olur. Yerlesim SPIR-V'den
+        # (glslc'nin gercekte urettigi ofsetler) okunuyor, C++ tarafi da derleyiciye
+        # sorduruluyor; iki taraf da elle hesaplanmiyor. `static_assert(sizeof)`
+        # bu sinifin yalniz YARISINI gorur: ayni boyutta alan sirasi degisimi
+        # ondan gecer (olculdu), bu denetimden gecmez.
+        if ! python3 tests/layout_audit.py; then
+            echo -e "${RED}CPU-GPU yerlesim denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # Faz 8 fizibilite kapisi: Tulpar sozdiziminin GPU alt kumesi (.tprs)
+        # -> GLSL -> SPIR-V cevirisi hala depodaki *_spv.h ile BAYT AYNI mi.
+        # Bayt esitligi secildi cunku `glslc -O` ciktisi isim bagimsiz ve
+        # yeniden uretilebilir (olculdu) — yani "benzer" degil "ayni" diyebiliyoruz.
+        # glslc yoksa GORUNUR atlar (CI'da glslc yok, bu bilinen ve yazili).
+        # Referans GLSL degismisse o dosya gorunur atlanir: ne yanlis suclama,
+        # ne olcmeden gecme. Prototip oldugu icin atlama suite'i DUSURMEZ,
+        # ama gercek bir ayrisma (cikis 1) duSurur.
+        if ! python3 tests/faz8_shader_audit.py; then
+            echo -e "${RED}Faz 8 shader cevirici denetimi basarisiz!${NC}"
             exit 1
         fi
         # Dongu-sekli gezicisi ASTNode_C'nin TUM cocuk alanlarini geziyor mu?
@@ -1068,6 +1150,15 @@ fi
 
 if [ "$ACTION" = "test" ]; then
     hw_begin
+    # SESSIZ KOSUM. Ornek kosucusu pencere acan oyunlari 2 saniyelik bir
+    # "smoke" ile GERCEKTEN calistiriyor; arcade/tame oyunlari raylib ses
+    # aygitini acip carpisma/skor/olum sesleri caliyor. Otomatik bir kosumun
+    # makinenin basindaki insana ses dinletmesi icin hicbir sebep yok
+    # (kullanici 2026-09-16'da bildirdi). Aygit YINE aciliyor — kapanmasi
+    # kapsamayi sessizce dusururdu, cunku o zaman `load_sound` -1 doner ve ses
+    # yolu hic kosmaz; yalniz ana seviye 0'a cekiliyor.
+    # Duymak icin: TULPAR_TAME_MUTE=0 ./build.sh test
+    export TULPAR_TAME_MUTE="${TULPAR_TAME_MUTE:-1}"
     # Ensure tulpar exists
     if [ ! -f "tulpar" ]; then
         echo "Executable 'tulpar' not found. Building first..."
@@ -1094,7 +1185,7 @@ if [ "$ACTION" = "test" ]; then
     # program, but we still verify it parses/lowers). We verify the build
     # succeeds (catches regressions in the embedded server/router/api
     # stdlib path) but do not run the binary.
-    COMPILE_ONLY_TESTS=("09_socket_simple.tpr" "09_socket_server.tpr" \
+    COMPILE_ONLY_TESTS=("engine_ilk_oyun.tpr" "engine_arena.tpr" "engine_aksiyon.tpr" "09_socket_simple.tpr" "09_socket_server.tpr" \
                         "09_socket_client.tpr" "11_router_app.tpr" \
                         "12_threaded_server.tpr" "14_api_server.tpr" \
                         "api_wings.tpr" "api_wings_crud.tpr" \

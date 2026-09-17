@@ -157,7 +157,7 @@ bool Swapchain::create_swapchain(uint32_t w, uint32_t h) {
   ci.oldSwapchain = swap_;
   VkSwapchainKHR ns = VK_NULL_HANDLE;
   if (a.vkCreateSwapchainKHR(dev_->handle(), &ci, nullptr, &ns) != VK_SUCCESS) return false;
-  if (cfg_.hooks.on_create) cfg_.hooks.on_create(cfg_.hooks.user, dev_->physical(), dev_->handle(), dev_->queue(), ns);
+  if (cfg_.hooks.on_create) cfg_.hooks.on_create(cfg_.hooks.user, dev_->physical(), dev_->handle(), dev_->queue(), dev_->queue_family(), ns);
   destroy_swapchain();
   swap_ = ns;
   image_count_ = kMaxImages;

@@ -11,13 +11,48 @@
 
 namespace tulpar::engine::content {
 
+struct ClusterDag; // content/cluster_dag.hpp (Faz 9: kume DAG'i; ileri bildirim)
+
 struct ModelImage {
   uint32_t width = 0, height = 0;
   uint8_t *rgba = nullptr; // Arena'da, width*height*4
+  // RENK UZAYI KULLANIMDAN turetilir, dosyadan degil: glTF goruntuleri renk
+  // uzayi tasimaz — baseColor/emissive sRGB, metallicRoughness/normal/occlusion
+  // DOGRUSAL veridir (spec). Yanlis uzay hicbir seyi kizartmaz, yalnizca
+  // puruzlulugu/normali sessizce egriltir; kapi: content_gltf_texture_colorspace.
+  bool srgb = true;
+  // NORMAL HARITASI MI: mip zinciri BLIT ile uretilirse dogrusal suzme
+  // komsu normalleri ORTALAR ve ortalama vektorun boyu 1'den KUCUK olur —
+  // uzaktaki yuzey sessizce duzlesir (isik "yassilasir"). Tek dogrusu
+  // kucultmeden sonra YENIDEN NORMALLESTIRMEK; o yuzden bu goruntuler
+  // CPU'da mip'lenip hazir seviye olarak yukleniyor. ORM bu bayragi
+  // ALMAZ: puruzluluk/metaliklik birer skaler, normallestirilmeleri
+  // anlamsiz olurdu.
+  bool normal_map = false;
 };
 struct ModelMaterial {
   int32_t image = -1; // -1: dokusuz (beyaz)
   Vec3 base_color{1, 1, 1};
+  // glTF metallic-roughness. Varsayilanlar glTF 2.0 spesifikasyonunun kendi
+  // varsayilanlari DEGIL (spec metallic=1, roughness=1 der); burada
+  // metallic=0/roughness=1 = Lambert'e en yakin nokta secildi, cunku PBR yolu
+  // motorda opsiyonel ve `has_pbr` yanlisken eski goruntu korunmali.
+  float metallic = 0.0f;
+  float roughness = 1.0f;
+  Vec3 emissive{0, 0, 0}; // glTF emissive_factor (dogrusal)
+  bool has_pbr = false;   // dosyada pbr_metallic_roughness blogu VAR miydi
+  // Doku basina degisen kanallar (-1 = yok, o kanal yalniz carpandan gelir).
+  // ORM = glTF metallicRoughnessTexture: G ROUGHNESS, B METALLIC (spec);
+  // occlusionTexture AYNI goruntuyu gosteriyorsa R kanali occlusion olur ve
+  // ekstra sampler'a gerek kalmaz (yayginlasmis "ORM" paketlemesi).
+  int32_t orm_image = -1;
+  int32_t normal_image = -1;
+  int32_t emissive_image = -1;
+  float normal_scale = 1.0f;       // glTF normalTexture.scale
+  float occlusion_strength = 0.0f; // glTF occlusionTexture.strength; 0 = occlusion yok
+  // occlusionTexture ORM'den FARKLI bir goruntuyu gosteriyor: bugun okunmuyor
+  // (dorduncu sampler'a degmez). Sayilir, sessizce yutulmaz.
+  bool occlusion_separate = false;
 };
 constexpr uint32_t kModelMaxLods = 2; // LOD1, LOD2 (LOD0 = indices)
 constexpr uint32_t kModelMaxSkins = 4;
@@ -50,6 +85,10 @@ struct ModelMesh {
   uint32_t *lod_indices[kModelMaxLods] = {};
   uint32_t lod_index_count[kModelMaxLods] = {};
   float lod_error[kModelMaxLods] = {}; // bagil (mesh olcegine gore)
+  // Kume (cluster) DAG: GltfLimits::cluster_dag acikken kurulur (Faz 9).
+  // Ayrik LOD'larin (lod_indices) YERINE GECMEZ, ustune gelir: LOD butun mesh'i
+  // birden degistirir, DAG kume kume ve cut'i runtime secer.
+  const ClusterDag *dag = nullptr;
   // Iskeletli: skin >= 0 ise skin_verts dolu (verts ile ayni sira/sayi; JOINTS_0
   // yeniden siralanmis, WEIGHTS_0 unorm16). Iskeletli mesh'te meshopt/LOD atlanir.
   int32_t skin = -1;
@@ -76,6 +115,9 @@ struct Model {
   ModelClip *clips = nullptr;        uint32_t clip_count = 0;
   Vec3 bounds_min{0, 0, 0}, bounds_max{0, 0, 0}; // ornek uzayinda, tum instance'lar
   ModelOptStats opt;
+  // Ayni goruntu hem renk (sRGB) hem veri (dogrusal) olarak kullanilmis:
+  // glTF'te gecersiz. Renk kazanir, sayac artar — sessiz yanlis yok.
+  uint32_t colorspace_conflicts = 0;
   char error[160] = {0};
 };
 
@@ -86,10 +128,23 @@ struct UploadedModel {
   renderer::MaterialHandle *materials = nullptr;
   renderer::TextureHandle *textures = nullptr;
   uint32_t mesh_count = 0, material_count = 0, texture_count = 0;
+  // Kac doku CPU'da yeniden normallestirilmis mip zinciriyle yuklendi.
+  // Kapi bunu okuyor: `build_normal_mips` dogru calissa bile yukleme yolu
+  // onu hic CAGIRMAZSA goruntu eski davranista kalirdi ve dogrudan
+  // fonksiyonu olcen bir test bunu goremezdi.
+  uint32_t normal_mip_textures = 0;
 };
 
 // Modeli renderer'a yukler (dokular + malzemeler + mesh'ler). Yukleme aninda.
 bool upload_model(renderer::Renderer &r, Arena &arena, const Model &m, UploadedModel *out);
+
+// Normal haritasi icin CPU mip zinciri: her kucultmeden SONRA yeniden
+// normallestirir (donanim blit'i bunu yapamaz — bkz. ModelImage::normal_map).
+// data[0] goruntunun kendisi, geri kalan seviyeler arenada. levels seviye
+// sayisi, sizes[] bayt cinsinden boyutlar. Disari aciktir cunku kapi onu
+// dogrudan olcuyor (normallestirmeyen kontrolle karsilastirarak).
+bool build_normal_mips(Arena &arena, const ModelImage &img, uint32_t levels,
+                       uint8_t **data, uint32_t *sizes);
 // Poz: iskelet basina skin matrisleri (draw_model iskeletli mesh'lere bunu verir).
 struct ModelPose {
   const Mat4 *skin_mats[kModelMaxSkins] = {};

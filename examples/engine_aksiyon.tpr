@@ -1,0 +1,1102 @@
+// Tulpar Engine — "Gölge Salonları": üçüncü şahıs aksiyon dikey dilimi.
+// Motor C++ (engine/), OYUN MANTIĞININ TAMAMI bu dosyada, Tulpar'da.
+//
+//   ./tulpar examples/engine_aksiyon.tpr                     # oyna (pencere)
+//   engine_sahnec examples/assets/salon1.sahne               # bölüm 1 blob'u
+//   engine_sahnec examples/assets/salon2.sahne               # bölüm 2 blob'u
+//
+// Pencersiz doğrulama (OTOPİLOT açılır: betik kendi oynar, sayılar ölçülür):
+//   TULPAR_ENGINE_HEADLESS=1800 TULPAR_ENGINE_OUT=/tmp/aksiyon.ppm DISPLAY= ./tulpar examples/engine_aksiyon.tpr
+// Ayrıntılı log: TULPAR_ENGINE_LOG=2 (durum değişimi), 3 (her API çağrısı).
+// Android:  ./tulpar build --target=android examples/engine_aksiyon.tpr out/aksiyon --apk
+//
+// OYNANIŞ
+//   WASD / sol yarım ekran  yürü (kameraya göre)      SPACE  zıpla
+//   SOL-SAĞ ok ya da Q/E    kamerayı döndür           SHIFT  atılma (dash)
+//   J / fare sol / sağ yarım ekrana dokunuş           vuruş (fizik tabanlı: düşmanı savurur)
+//   R oyun sonunda yeniden başlatır, ESC duraklatır (menüde çıkar).
+//
+// OYUN KABUĞU: ana menü (Başla / Ayarlar / Çıkış), duraklat (ESC ya da sağ
+// üstteki "||" düğmesi — dokunmatikte ESC yok) ve ayarlar (ses seviyesi,
+// parlama, motorun verdikleri). Widget'lar köprünün anlık-kip arayüzü
+// (`ui_basla` / `dugme` / `kaydirici` / `onay_kutusu`); ayarlar ve en yüksek
+// skor kalıcı kayıtta (`kayit_*`) durur. Pencersiz doğrulamada menüyü betik
+// ENJEKTE tıklamayla geçer (`ui_test_tikla`), böylece menü akışı da ölçülür.
+//
+// SAHNE SICAK YÜKLEME: `.sahneb` değişirse (editörde "Derle") oyun sahneyi
+// kendiliğinden yeniler; olay `sahne_yenilendi()` ile gelir ve navmesh yeniden
+// sorulur — "The Truth" döngüsünün oyun ayağı.
+//
+// BÖLÜM HEDEFİ: önce salondaki bütün düşmanları temizle, sonra açılan
+// KAPI ŞERİDİNE bas. Bölüm 1 -> bölüm 2 geçişi `bolum_gec()` ile.
+//
+// YAPAY ZEKÂ: iki davranış — DEVRİYE (iki nokta arası) ve KOVALAMA. Geçiş
+// koşulu görüş mesafesi + görüş açısı + ışınla görüş hattı (`gorus_var`).
+// Yol bulma: sahnede bake edilmiş navmesh varsa (engine_sahnec, sabit kutu
+// gövdelerden) Detour düz yolu kullanılır; YOKSA (kodda kurulan yedek düzen)
+// düz çizgi + ışınla engelden kaçınma devreye girer. Neden böyle: navmesh
+// bake'i DERLEME işidir, çalışma anında kurulacak bir şey değil; yedek düzende
+// derlenmiş sahne olmadığı için bake de yoktur, o yüzden iki yol da gerekli.
+//
+// `.sahneb` TÜRETİLMİŞ dosyadır (gitignore'lu): yoksa oyun aynı salonu KODDA
+// kurar ve derleme komutunu loglar — örnek her koşulda çalışır.
+//
+// Not: test koşucusunda pencere/GPU ister; build.sh COMPILE_ONLY_TESTS listesine
+// "engine_aksiyon.tpr" satırı eklenmelidir.
+
+import "engine";
+
+// ---- Ayarlar ----------------------------------------------------------------
+float OYUNCU_R = 0.45;
+float OYUNCU_HIZ = 6.0;
+float ZIPLAMA = 6.4;
+float ATILMA_GUC = 9.5;
+float ATILMA_BEKLE = 1.1;
+float VURUS_ON = 1.0;        // vuruş küresinin merkezi oyuncunun kaç metre önünde
+float VURUS_R = 1.25;        // vuruş küresinin yarıçapı
+float VURUS_BEKLE = 0.40;
+float VURUS_ITME = 9.0;
+int VURUS_HASAR = 34;
+int OYUNCU_CAN_MAX = 100;
+int DUSMAN_CAN_MAX = 100;
+float DUSMAN_R = 0.5;
+float DUSMAN_HIZ_DEVRIYE = 2.2;
+float DUSMAN_HIZ_KOVALA = 4.2;
+float GORUS_MENZIL = 13.0;
+float GORUS_COS = 0.30;      // bakış yönüyle nokta çarpım eşiği (~±72 derece)
+float KAYIP_SURE = 2.5;      // kaç saniye göremezse devriyeye döner
+float TEMAS_MENZIL = 1.25;
+int TEMAS_HASAR = 11;
+float HASAR_BEKLE = 0.85;
+float AFIS_SURE = 2.2;
+
+// ---- Durum ------------------------------------------------------------------
+int g_oyuncu = 0;
+int g_can = 100;
+int g_skor = 0;
+int g_oldurulen = 0;
+int g_bolum = 1;
+int g_durum = 0;             // 0 oyna, 1 bölüm afişi, 2 oyun sonu, 3 kazandın
+float g_afis_t = 0.0;
+float g_hasar_t = 0.0;
+float g_vurus_t = 0.0;
+float g_atilma_t = 0.0;
+float g_bolum_t = 0.0;
+float g_kam_yaw = 0.0;
+float g_oyuncu_yaw = 0.0;
+bool g_sahneden = false;
+bool g_nav = false;
+bool g_otopilot = false;
+int g_gecis_sayisi = 0;
+// Ekran (oyun kabugu): 0 ana menu, 1 oyun, 2 duraklat, 3 ayarlar.
+int EKRAN_MENU = 0;
+int EKRAN_OYUN = 1;
+int EKRAN_DURAKLAT = 2;
+int EKRAN_AYAR = 3;
+int g_ekran = 0;
+int g_ayar_donus = 0;        // ayarlardan hangi ekrana donulecek
+bool g_oynandi = false;      // bir kez oynandiysa "Basla" bastan kurar
+// Ayarlar + rekor: kalici kayitta (eng_save_*). Parlama motor_ac'tan ONCE okunur.
+float g_ses_ayari = 0.7;
+bool g_parlama_ayari = true;
+int g_rekor = 0;
+bool g_ses_var = false;
+int g_kurulum_hatasi_ek = 0; // motor kurulumunda (parlama/font) loglanan hata
+// Sahne sicak yeniden yukleme (editorde "Derle" -> oyun kendini yeniler)
+int g_yenileme = 0;
+float g_yenileme_t = 0.0;
+// Menu yerlesimi: otopilotun tiklayacagi nokta cizim aninda kaydedilir
+// (pencersiz kipte fare yok, kopruye tiklama ENJEKTE edilir).
+float g_c_basla_x = 0.0;  float g_c_basla_y = 0.0;
+float g_c_ayar_x = 0.0;   float g_c_ayar_y = 0.0;
+float g_c_geri_x = 0.0;   float g_c_geri_y = 0.0;
+float g_c_ses_x = 0.0;    float g_c_ses_y = 0.0;
+int g_op_adim = 0;        // otopilot menu adimi: 0 ayarlar, 1 kaydirici, 2 geri, 3 basla, 4 bitti
+float g_kayit_ses = -1.0; // kapida olculen: diske yazilan ses ayari geri okundu
+int g_kurulum_hatasi = 0;    // bölüm kurarken motorun logladığı hata (bozuk blob vb.)
+// Kapı (bölüm çıkışı)
+float g_kapi_x = 0.0;
+float g_kapi_z = 0.0;
+float g_kapi_r = 2.0;
+bool g_kapi_acik = false;
+// Yön hesabının çıktısı (Tulpar'da çoklu dönüş yok: iki global)
+float g_yon_x = 0.0;
+float g_yon_z = 0.0;
+// Kodda kurulan yedek düzenin varlıkları (bölüm geçişinde silinir)
+array g_kod = [];
+
+// ---- Düşmanlar: paralel diziler (arcade deseni; kutulu struct dizisi yok) ----
+array d_id = [];
+array d_can = [];
+array d_hal = [];            // 0 devriye, 1 kovala
+array d_ax = [];
+array d_az = [];
+array d_bx = [];
+array d_bz = [];
+array d_hedef = [];          // 0 -> A noktası, 1 -> B noktası
+array d_yaw = [];            // bakış yönü (radyan)
+array d_kayip = [];          // kaç saniyedir göremiyor
+array d_flas = [];           // vuruş flaşı süresi
+
+// ---- Renkler ----------------------------------------------------------------
+int RENK_OYUNCU = 0;
+int RENK_DEVRIYE = 0;
+int RENK_KOVALA = 0;
+int RENK_FLAS = 0;
+int RENK_CAN = 0;
+int RENK_CAN_ZEMIN = 0;
+int RENK_KAPI = 0;
+
+func renkleri_kur() {
+    RENK_OYUNCU = renk(232, 74, 64);
+    RENK_DEVRIYE = renk(120, 96, 200);
+    RENK_KOVALA = renk(232, 132, 40);
+    RENK_FLAS = renk(255, 250, 220);
+    RENK_CAN = renk(64, 200, 128);
+    RENK_CAN_ZEMIN = renk_a(0, 0, 0, 150);
+    RENK_KAPI = renk(80, 220, 140);
+}
+
+// ---- Küçük yardımcılar ------------------------------------------------------
+func uzaklik2b(ax, az, bx, bz): float {
+    float dx = bx - ax;
+    float dz = bz - az;
+    return sqrt(dx * dx + dz * dz);
+}
+
+// Hedefe doğru yatay birim yön; sonuç g_yon_x / g_yon_z.
+// Navmesh varsa Detour düz yolunun ilk anlamlı köşesine, yoksa düz çizgiye;
+// düz çizgide önünde duvar varsa yüzey normali boyunca kayar (engelden kaçınma).
+func yon_hesapla(id, fx, fz, tx, tz) {
+    float hx = tx - fx;
+    float hz = tz - fz;
+    if (g_nav) {
+        int n = nav_yol(fx, 0.3, fz, tx, 0.3, tz);
+        if (n >= 2) {
+            int k = 1;
+            while (k < n) {
+                float wx = nav_x(k) - fx;
+                float wz = nav_z(k) - fz;
+                if (wx * wx + wz * wz > 0.36) {
+                    hx = wx;
+                    hz = wz;
+                    k = n;
+                } else {
+                    k = k + 1;
+                }
+            }
+        }
+    }
+    float uz = sqrt(hx * hx + hz * hz);
+    if (uz < 0.0001) {
+        g_yon_x = 0.0;
+        g_yon_z = 0.0;
+        return;
+    }
+    hx = hx / uz;
+    hz = hz / uz;
+    // Engelden kaçınma: ilerideki duvarın normali boyunca kay (sürtün, takılma).
+    float d = isin(fx, 0.55, fz, hx, 0, hz, 1.5, id);
+    if (d >= 0.0) {
+        float nx = isin_nx();
+        float nz = isin_nz();
+        float nok = hx * nx + hz * nz;
+        hx = hx - nx * nok * 1.7;
+        hz = hz - nz * nok * 1.7;
+        float u2 = sqrt(hx * hx + hz * hz);
+        if (u2 > 0.0001) {
+            hx = hx / u2;
+            hz = hz / u2;
+        }
+    }
+    g_yon_x = hx;
+    g_yon_z = hz;
+}
+
+// ---- Düşman kurulumu --------------------------------------------------------
+func dusman_ekle(x, z, ax, az, bx, bz) {
+    int id = kutu(x, DUSMAN_R, z, DUSMAN_R, DUSMAN_R, DUSMAN_R, true, RENK_DEVRIYE);
+    if (id == 0) {
+        logla("UYARI dusman kurulamadi (" + toString(x) + "," + toString(z) + ")");
+        return;
+    }
+    push(d_id, id);
+    push(d_can, DUSMAN_CAN_MAX);
+    push(d_hal, 0);
+    push(d_ax, ax);
+    push(d_az, az);
+    push(d_bx, bx);
+    push(d_bz, bz);
+    push(d_hedef, 0);
+    push(d_yaw, 0.0);
+    push(d_kayip, 0.0);
+    push(d_flas, 0.0);
+}
+
+func dusmanlari_bosalt() {
+    int i = 0;
+    while (i < len(d_id)) {
+        if (canli(d_id[i])) { sil(d_id[i]); }
+        i = i + 1;
+    }
+    d_id = [];
+    d_can = [];
+    d_hal = [];
+    d_ax = [];
+    d_az = [];
+    d_bx = [];
+    d_bz = [];
+    d_hedef = [];
+    d_yaw = [];
+    d_kayip = [];
+    d_flas = [];
+}
+
+func canli_dusman(): int {
+    int n = 0;
+    int i = 0;
+    while (i < len(d_id)) {
+        if (d_can[i] > 0) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+// ---- Bölüm kurulumu ---------------------------------------------------------
+// Sahne adaylarını sırayla dener (masaüstünde depo kökü, cihazda çıkarma kökü).
+// Önce `file_exists`: olmayan dosyayı motora sormayız, yoksa türetilmiş blob'un
+// yokluğu HATA sayacını doldurur ve doğrulama kapısının ölçtüğü sayıyı bozar.
+func sahne_dene(ad): bool {
+    array yollar = ["examples/assets/" + ad, "assets/" + ad, ad];
+    int i = 0;
+    while (i < len(yollar)) {
+        if (file_exists(yollar[i])) {
+            if (sahne_yukle(yollar[i])) {
+                logla("sahne yuklendi: " + yollar[i]);
+                return true;
+            }
+            logla("sahne acilamadi (bozuk/eski blob): " + yollar[i]);
+        } else {
+            logla("sahne adayi yok: " + yollar[i]);
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+func kod_varliklarini_sil() {
+    int i = 0;
+    while (i < len(g_kod)) {
+        if (canli(g_kod[i])) { sil(g_kod[i]); }
+        i = i + 1;
+    }
+    g_kod = [];
+}
+
+// Yedek düzen: sahne blob'u yoksa aynı salonu KODDA kur (navmesh olmaz).
+func salonu_kodda_kur(n) {
+    float yari = 13.0;
+    int renk_duvar = renk(76, 84, 100);
+    int renk_sutun = renk(128, 100, 82);
+    if (n == 2) { yari = 16.0; }
+    push(g_kod, zemin_kur(yari, renk(104, 112, 126)));
+    push(g_kod, kutu(0, 1.25, 0 - yari, yari, 1.25, 0.5, false, renk_duvar));
+    push(g_kod, kutu(0, 1.25, yari, yari, 1.25, 0.5, false, renk_duvar));
+    push(g_kod, kutu(0 - yari, 1.25, 0, 0.5, 1.25, yari, false, renk_duvar));
+    push(g_kod, kutu(yari, 1.25, 0, 0.5, 1.25, yari, false, renk_duvar));
+    if (n == 1) {
+        push(g_kod, kutu(-6, 1.5, -6, 1.2, 1.5, 1.2, false, renk_sutun));
+        push(g_kod, kutu(6, 1.5, -6, 1.2, 1.5, 1.2, false, renk_sutun));
+        push(g_kod, kutu(-6, 1.5, 6, 1.2, 1.5, 1.2, false, renk_sutun));
+        push(g_kod, kutu(6, 1.5, 6, 1.2, 1.5, 1.2, false, renk_sutun));
+        push(g_kod, kutu(0, 0.6, 0, 3.0, 0.6, 0.6, false, renk_sutun));
+        push(g_kod, isik(0, 4, -8, renk(255, 198, 114), 4.0, 14.0));
+    } else {
+        push(g_kod, kutu(-3, 1.25, -2, 10.0, 1.25, 0.6, false, renk_duvar));
+        push(g_kod, kutu(6.4, 1.25, 4, 0.6, 1.25, 6.5, false, renk_duvar));
+        push(g_kod, kutu(-11, 1.5, 8, 1.1, 1.5, 1.1, false, renk_sutun));
+        push(g_kod, kutu(11, 1.5, -9, 1.1, 1.5, 1.1, false, renk_sutun));
+        push(g_kod, kutu(-9, 1.5, -10, 1.1, 1.5, 1.1, false, renk_sutun));
+        push(g_kod, isik(-9, 4.5, 2, renk(255, 128, 90), 4.5, 16.0));
+    }
+}
+
+// Bölümü kurar: sahne (ya da kod yedeği) + oyuncu + düşmanlar + kapı.
+func bolum_kur(n) {
+    dusmanlari_bosalt();
+    kod_varliklarini_sil();
+    if (g_oyuncu != 0 && canli(g_oyuncu)) {
+        sil(g_oyuncu);
+        g_oyuncu = 0;
+    }
+    str dosya = "salon1.sahneb";
+    if (n == 2) { dosya = "salon2.sahneb"; }
+    if (sahne_yuklu()) {
+        sahne_bosalt();
+    }
+    int hata_once = hata_sayisi();
+    g_sahneden = sahne_dene(dosya);
+    g_kurulum_hatasi = g_kurulum_hatasi + (hata_sayisi() - hata_once);
+    if (g_sahneden) {
+        g_nav = nav_var();
+        logla("bolum " + toString(n) + ": sahneden " + toString(sahne_sayisi()) + " varlik, navmesh " + toString(g_nav) + " (" + toString(nav_poligon()) + " poligon)");
+    } else {
+        g_nav = false;
+        logla("UYARI " + dosya + " yok -> salon KODDA kuruldu (navmesh yok, duz yol + isin). Derlemek icin:");
+        logla("  engine_sahnec examples/assets/salon" + toString(n) + ".sahne");
+        salonu_kodda_kur(n);
+    }
+
+    float bx = 0.0;
+    float bz = 9.0;
+    if (n == 2) {
+        bx = -12.0;
+        bz = 12.0;
+    }
+    g_oyuncu = kure(bx, 1.0, bz, OYUNCU_R, true, RENK_OYUNCU);
+    g_oyuncu_yaw = 0.0;
+    g_kam_yaw = 0.0;
+    g_kapi_acik = false;
+    g_bolum_t = 0.0;
+
+    if (n == 1) {
+        g_kapi_x = 0.0;
+        g_kapi_z = -11.5;
+        g_kapi_r = 2.2;
+        dusman_ekle(-8.0, -8.0, -10.0, -8.0, -3.0, -9.5);
+        dusman_ekle(8.0, -8.0, 10.0, -8.0, 3.0, -9.5);
+        dusman_ekle(-9.5, 4.0, -10.0, 1.5, -10.0, 9.5);
+        dusman_ekle(9.5, 4.0, 10.0, 1.5, 10.0, 9.5);
+    } else {
+        g_kapi_x = 12.0;
+        g_kapi_z = 12.0;
+        g_kapi_r = 2.4;
+        dusman_ekle(-12.0, -8.0, -13.0, -10.0, -6.0, -6.0);
+        dusman_ekle(10.0, -10.0, 12.0, -12.5, 9.0, -5.0);
+        dusman_ekle(-8.0, 8.0, -12.0, 6.0, -4.0, 11.0);
+        dusman_ekle(2.0, 8.0, 0.0, 5.0, 4.0, 12.0);
+        dusman_ekle(12.0, 2.0, 13.0, -1.0, 11.0, 6.0);
+    }
+    // Sahne SICAK yeniden yukleme: editorde "Derle" -> .sahneb degisir -> oyun
+    // kendini yeniler ("The Truth" dongusunun oyun ayagi). Kodda kurulan yedek
+    // duzende izlenecek dosya yoktur.
+    if (g_sahneden) { sahne_izle(true); }
+    logla("bolum " + toString(n) + " hazir: " + toString(len(d_id)) + " dusman, kapi (" + toString(g_kapi_x) + "," + toString(g_kapi_z) + ")");
+}
+
+// ---- Ayarlar: kalici kayit --------------------------------------------------
+// Ayar dosyasi: normalde eng_save_* varsayilani (calisma dizini ya da
+// TULPAR_ENGINE_SAVE). Pencersiz (otopilot) kosumda GECICI dizine yazilir:
+// dogrulama kosumu oyuncunun gercek kaydina dokunmasin.
+func ayar_dosyasi(): str {
+    str tmp = env("TMPDIR");
+    if (len(tmp) == 0) { tmp = "/tmp"; }
+    return tmp + "/tulpar_aksiyon_kayit.txt";
+}
+
+func ayarlari_oku() {
+    if (len(env("TULPAR_ENGINE_HEADLESS")) > 0) { kayit_ac(ayar_dosyasi()); }
+    g_ses_ayari = kayit_oku_sayi("aksiyon_ses", 0.7);
+    g_parlama_ayari = kayit_oku_sayi("aksiyon_parlama", 1.0) > 0.5;
+    g_rekor = toInt(kayit_oku_sayi("aksiyon_rekor", 0));
+}
+
+func ayarlari_yaz() {
+    kayit_yaz_sayi("aksiyon_ses", g_ses_ayari);
+    float p = 0.0;
+    if (g_parlama_ayari) { p = 1.0; }
+    kayit_yaz_sayi("aksiyon_parlama", p);
+    kayit_kaydet();
+    g_kayit_ses = kayit_oku_sayi("aksiyon_ses", -1.0);
+    logla("ayarlar kaydedildi: ses " + toString(g_ses_ayari) + ", parlama " + toString(g_parlama_ayari) + " -> " + kayit_yolu());
+}
+
+// Ses seviyesi yalniz cihaz ACIKKEN uygulanir: kapali cihazda ses cagrisi
+// HATA loglar (kopru sessiz yutmaz) ve dogrulama kapisinin sayisini bozar.
+func ses_uygula() {
+    if (g_ses_var) { ses_seviyesi(g_ses_ayari); }
+}
+
+// ---- Oyun kabugu: ana menu, duraklat, ayarlar -------------------------------
+func oyuna_basla() {
+    if (g_oynandi) {
+        yeniden_basla();
+    } else {
+        g_oynandi = true;
+        g_durum = 1;
+        g_afis_t = AFIS_SURE;
+    }
+    g_ekran = EKRAN_OYUN;
+    logla("oyun basladi (menuden)");
+}
+
+func menu_ciz() {
+    float w = 380.0;
+    float x = ui_orta_x(w);
+    float y = yukseklik() * 0.30;
+    panel(x - 26, y - 104, w + 52, 400, renk_a(10, 12, 18, 225));
+    etiket("GOLGE SALONLARI", x, y - 86, 1.7, BEYAZ);
+    etiket("rekor " + toString(g_rekor) + "   |   Tulpar Engine", x, y - 44, 0.85, ACIK_GRI);
+    g_c_basla_x = x + w / 2;
+    g_c_basla_y = y + 28;
+    if (dugme("Basla", x, y, w, 56)) { oyuna_basla(); }
+    g_c_ayar_x = x + w / 2;
+    g_c_ayar_y = y + 98;
+    if (dugme("Ayarlar", x, y + 70, w, 56)) {
+        g_ayar_donus = EKRAN_MENU;
+        g_ekran = EKRAN_AYAR;
+    }
+    if (dugme("Cikis", x, y + 140, w, 56)) {
+        ayarlari_yaz();
+        cikis_iste();
+    }
+    etiket("WASD yuru  SPACE zipla  SHIFT atilma  J vurus  ESC duraklat", x - 10, y + 220, 0.72, GRI);
+}
+
+func duraklat_ciz() {
+    float w = 340.0;
+    float x = ui_orta_x(w);
+    float y = yukseklik() * 0.30;
+    dikdortgen(0, 0, genislik(), yukseklik(), renk_a(0, 0, 0, 120));
+    panel(x - 24, y - 70, w + 48, 330, renk_a(10, 12, 18, 230));
+    etiket("DURAKLADI", x, y - 54, 1.5, BEYAZ);
+    if (dugme("Devam", x, y, w, 56)) { g_ekran = EKRAN_OYUN; }
+    if (dugme("Ayarlara git", x, y + 70, w, 56)) {
+        g_ayar_donus = EKRAN_DURAKLAT;
+        g_ekran = EKRAN_AYAR;
+    }
+    if (dugme("Ana menu", x, y + 140, w, 56)) {
+        g_rekor = rekor_guncelle("aksiyon_rekor", g_skor);
+        g_oynandi = true;
+        g_ekran = EKRAN_MENU;
+    }
+}
+
+// Ayarlar: ses seviyesi (kaydirici), parlama (onay kutusu; motor parlamayi
+// kurulumda acar, o yuzden YENIDEN BASLATINCA etkir) ve motorun verdikleri.
+func ayar_ciz() {
+    float w = 420.0;
+    float x = ui_orta_x(w);
+    float y = yukseklik() * 0.22;
+    dikdortgen(0, 0, genislik(), yukseklik(), renk_a(0, 0, 0, 120));
+    panel(x - 26, y - 70, w + 52, 420, renk_a(10, 12, 18, 232));
+    etiket("AYARLAR", x, y - 54, 1.5, BEYAZ);
+    // Kaydiricinin izi: sol/sag 12 piksel pay (kopru sozlesmesi).
+    g_c_ses_x = x + 12 + (w - 24) * 0.25;
+    g_c_ses_y = y + 24;
+    float onceki = g_ses_ayari;
+    g_ses_ayari = kaydirici("Ses seviyesi", x, y, w, 48, g_ses_ayari, 0.0, 1.0);
+    if (g_ses_ayari != onceki) { ses_uygula(); }
+    g_parlama_ayari = onay_kutusu("Parlama (yeniden baslatinca)", x, y + 62, w, 46, g_parlama_ayari);
+    etiket("motor: " + eng_gpu_name(), x + 10, y + 124, 0.72, ACIK_GRI);
+    etiket("cozunurluk " + toString(genislik()) + "x" + toString(yukseklik()) + "   parlama simdi " + toString(parlama_acik()), x + 10, y + 150, 0.72, ACIK_GRI);
+    str nav_metni = "yok";
+    if (g_nav) { nav_metni = toString(nav_poligon()) + " poligon"; }
+    etiket("navmesh " + nav_metni + "   ses cihazi " + toString(g_ses_var), x + 10, y + 176, 0.72, ACIK_GRI);
+    etiket("sahne izleme acik — editorde Derle, oyun kendini yeniler (" + toString(g_yenileme) + ")", x + 10, y + 202, 0.72, ACIK_GRI);
+    g_c_geri_x = x + w / 2;
+    g_c_geri_y = y + 262;
+    if (dugme("Geri", x, y + 234, w, 56)) {
+        ayarlari_yaz();
+        g_ekran = g_ayar_donus;
+    }
+}
+
+// Pencersiz (otopilot) kosumda menuyu BETIK gecer: fare/dokunmatik yok, koprye
+// tek karelik bas+birak enjekte edilir. Tiklama bir SONRAKI karede tuketilir,
+// o yuzden nokta bu karede cizilen widget'in merkezidir.
+func otopilot_menu() {
+    if (!g_otopilot || g_op_adim >= 4) { return; }
+    if (g_ekran == EKRAN_MENU && g_op_adim == 0) {
+        ui_test_tikla(g_c_ayar_x, g_c_ayar_y);
+        g_op_adim = 1;
+        return;
+    }
+    if (g_ekran == EKRAN_AYAR && g_op_adim == 1) {
+        ui_test_tikla(g_c_ses_x, g_c_ses_y);   // izin %25'i: ses ayari olculebilir degisir
+        g_op_adim = 2;
+        return;
+    }
+    if (g_ekran == EKRAN_AYAR && g_op_adim == 2) {
+        ui_test_tikla(g_c_geri_x, g_c_geri_y); // "Geri": ayarlar diske yazilir
+        g_op_adim = 3;
+        return;
+    }
+    if (g_ekran == EKRAN_MENU && g_op_adim == 3) {
+        ui_test_tikla(g_c_basla_x, g_c_basla_y);
+        g_op_adim = 4;
+        return;
+    }
+}
+
+// ---- Girdi ------------------------------------------------------------------
+func girdi_ileri(): float {
+    float v = cubuk_y();
+    if (tus("W")) { v = v + 1.0; }
+    if (tus("S")) { v = v - 1.0; }
+    if (v > 1.0) { v = 1.0; }
+    if (v < -1.0) { v = -1.0; }
+    return v;
+}
+
+func girdi_yan(): float {
+    float v = cubuk_x();
+    if (tus("D")) { v = v + 1.0; }
+    if (tus("A")) { v = v - 1.0; }
+    if (v > 1.0) { v = 1.0; }
+    if (v < -1.0) { v = -1.0; }
+    return v;
+}
+
+func vurus_istendi(): bool {
+    return tus_basildi("J") || eylem() || eng_mouse_down(0);
+}
+
+// ---- Savaş ------------------------------------------------------------------
+// Fizik tabanlı vuruş: oyuncunun ÖNÜNDEKİ küre sorgusu; bulunan her düşmana
+// dürtü (savurur) + hasar. Çarpışma olayı köprüde yok, sorgu onun yerini tutar.
+func vurus_yap() {
+    if (g_vurus_t > 0.0) { return; }
+    g_vurus_t = VURUS_BEKLE;
+    float px = konum_x(g_oyuncu);
+    float py = konum_y(g_oyuncu);
+    float pz = konum_z(g_oyuncu);
+    float ox = 0.0 - sin(g_oyuncu_yaw);
+    float oz = 0.0 - cos(g_oyuncu_yaw);
+    int n = yakinlar(px + ox * VURUS_ON, py, pz + oz * VURUS_ON, VURUS_R, g_oyuncu);
+    int vuran = 0;
+    int k = 0;
+    while (k < n) {
+        int id = yakin_id(k);
+        int i = 0;
+        while (i < len(d_id)) {
+            if (d_id[i] == id && d_can[i] > 0) {
+                float dx = konum_x(id) - px;
+                float dz = konum_z(id) - pz;
+                float uz = sqrt(dx * dx + dz * dz);
+                if (uz < 0.001) { uz = 1.0; }
+                itme(id, dx / uz * VURUS_ITME, 3.2, dz / uz * VURUS_ITME);
+                d_can[i] = d_can[i] - VURUS_HASAR;
+                d_flas[i] = 0.14;
+                d_hal[i] = 1;
+                d_kayip[i] = 0.0;
+                renk_ver(id, RENK_FLAS);
+                vuran = vuran + 1;
+                if (d_can[i] <= 0) {
+                    g_skor = g_skor + 100;
+                    g_oldurulen = g_oldurulen + 1;
+                    sil(id);
+                    logla("dusman " + toString(i) + " dustu (kalan " + toString(canli_dusman()) + ")");
+                }
+                i = len(d_id);
+            } else {
+                i = i + 1;
+            }
+        }
+        k = k + 1;
+    }
+    if (vuran == 0) { g_vurus_t = VURUS_BEKLE * 0.6; }
+}
+
+func oyuncuya_hasar(kaynak_x, kaynak_z, hasar) {
+    if (g_hasar_t > 0.0) { return; }
+    g_hasar_t = HASAR_BEKLE;
+    g_can = g_can - hasar;
+    float dx = konum_x(g_oyuncu) - kaynak_x;
+    float dz = konum_z(g_oyuncu) - kaynak_z;
+    float uz = sqrt(dx * dx + dz * dz);
+    if (uz < 0.001) { uz = 1.0; }
+    itme(g_oyuncu, dx / uz * 5.0, 2.6, dz / uz * 5.0);
+    if (g_can <= 0) {
+        g_can = 0;
+        g_durum = 2;
+        logla("OYUNCU OLDU — bolum " + toString(g_bolum) + ", skor " + toString(g_skor));
+    }
+}
+
+// ---- Oyuncu -----------------------------------------------------------------
+func oyuncu_guncelle(d) {
+    float px = konum_x(g_oyuncu);
+    float py = konum_y(g_oyuncu);
+    float pz = konum_z(g_oyuncu);
+    float ix = girdi_yan();
+    float iy = girdi_ileri();
+    if (g_otopilot) {
+        otopilot(d);
+        return;
+    }
+    // Kameraya göre hareket: ileri = -sin/-cos(yaw), sağ = cos/-sin(yaw).
+    float ilx = 0.0 - sin(g_kam_yaw);
+    float ilz = 0.0 - cos(g_kam_yaw);
+    float sgx = cos(g_kam_yaw);
+    float sgz = 0.0 - sin(g_kam_yaw);
+    float hx = sgx * ix + ilx * iy;
+    float hz = sgz * ix + ilz * iy;
+    float uz = sqrt(hx * hx + hz * hz);
+    if (uz > 0.001) {
+        hx = hx / uz;
+        hz = hz / uz;
+        g_oyuncu_yaw = atan2(0.0 - hx, 0.0 - hz);
+        yuru(g_oyuncu, hx * OYUNCU_HIZ, hz * OYUNCU_HIZ);
+    }
+    bool yerde_mi = yerde_isin(g_oyuncu, OYUNCU_R + 0.06, 0.22);
+    if (tus_basildi("SPACE") && yerde_mi) {
+        itme(g_oyuncu, 0, ZIPLAMA, 0);
+    }
+    if (tus_basildi("SHIFT") && g_atilma_t <= 0.0 && uz > 0.001) {
+        g_atilma_t = ATILMA_BEKLE;
+        itme(g_oyuncu, hx * ATILMA_GUC, 1.2, hz * ATILMA_GUC);
+        logla("atilma");
+    }
+    if (vurus_istendi()) { vurus_yap(); }
+    // Arenadan düşerse geri getir (ve biraz canını al: ceza görünür olsun).
+    if (py < -4.0) {
+        isinla(g_oyuncu, 0, 2.0, 8.0);
+        oyuncuya_hasar(0.0, 8.0, 10);
+        logla("oyuncu dustu, geri getirildi");
+    }
+}
+
+// Pencersiz doğrulama kipinde betik kendi oynar: en yakın düşmana gider, vurur;
+// düşman kalmadıysa açılan kapıya yürür. Aynı yön hesabı (navmesh + ışın) ile.
+func otopilot(d) {
+    float px = konum_x(g_oyuncu);
+    float pz = konum_z(g_oyuncu);
+    int hedef = -1;
+    float en_yakin_uz = 9999.0;
+    int i = 0;
+    while (i < len(d_id)) {
+        if (d_can[i] > 0) {
+            float u = uzaklik2b(px, pz, konum_x(d_id[i]), konum_z(d_id[i]));
+            if (u < en_yakin_uz) {
+                en_yakin_uz = u;
+                hedef = i;
+            }
+        }
+        i = i + 1;
+    }
+    float tx = g_kapi_x;
+    float tz = g_kapi_z;
+    if (hedef >= 0) {
+        tx = konum_x(d_id[hedef]);
+        tz = konum_z(d_id[hedef]);
+    } else {
+        if (!g_kapi_acik) { return; }
+    }
+    yon_hesapla(g_oyuncu, px, pz, tx, tz);
+    if (g_yon_x != 0.0 || g_yon_z != 0.0) {
+        g_oyuncu_yaw = atan2(0.0 - g_yon_x, 0.0 - g_yon_z);
+        yuru(g_oyuncu, g_yon_x * OYUNCU_HIZ, g_yon_z * OYUNCU_HIZ);
+        g_kam_yaw = g_oyuncu_yaw;
+    }
+    if (hedef >= 0 && en_yakin_uz < VURUS_ON + VURUS_R) { vurus_yap(); }
+    if (konum_y(g_oyuncu) < -4.0) {
+        isinla(g_oyuncu, 0, 2.0, 8.0);
+        oyuncuya_hasar(0.0, 8.0, 10);
+    }
+}
+
+// ---- Düşman yapay zekâsı ----------------------------------------------------
+// Durum makinesi: 0 DEVRİYE (A<->B), 1 KOVALAMA. Geçiş: mesafe + görüş açısı +
+// ışın görüş hattı. Kovalamadan devriyeye: KAYIP_SURE boyunca görememe.
+func dusman_guncelle(i, d) {
+    int id = d_id[i];
+    if (d_can[i] <= 0) { return; }
+    if (!canli(id)) {
+        d_can[i] = 0;
+        return;
+    }
+    float ex = konum_x(id);
+    float ez = konum_z(id);
+    float px = konum_x(g_oyuncu);
+    float pz = konum_z(g_oyuncu);
+    float uz = uzaklik2b(ex, ez, px, pz);
+
+    // Görüş: mesafe + açı + ışın hattı. Kovalarken açı şartı aranmaz (peşinde).
+    bool goruyor = false;
+    if (uz < GORUS_MENZIL) {
+        float gx = (px - ex) / uz;
+        float gz = (pz - ez) / uz;
+        float bx = 0.0 - sin(d_yaw[i]);
+        float bz = 0.0 - cos(d_yaw[i]);
+        float nok = gx * bx + gz * bz;
+        if (d_hal[i] == 1 || nok > GORUS_COS) {
+            if (gorus_var(id, g_oyuncu)) { goruyor = true; }
+        }
+    }
+    if (goruyor) {
+        if (d_hal[i] == 0) {
+            d_hal[i] = 1;
+            logla("dusman " + toString(i) + " KOVALAMAYA gecti (uz " + toString(uz) + ")");
+        }
+        d_kayip[i] = 0.0;
+    } else {
+        if (d_hal[i] == 1) {
+            d_kayip[i] = d_kayip[i] + d;
+            if (d_kayip[i] > KAYIP_SURE) {
+                d_hal[i] = 0;
+                logla("dusman " + toString(i) + " oyuncuyu kaybetti, DEVRIYEYE dondu");
+            }
+        }
+    }
+
+    float hx = d_ax[i];
+    float hz = d_az[i];
+    float hiz = DUSMAN_HIZ_DEVRIYE;
+    if (d_hal[i] == 1) {
+        hx = px;
+        hz = pz;
+        hiz = DUSMAN_HIZ_KOVALA;
+    } else {
+        if (d_hedef[i] == 1) {
+            hx = d_bx[i];
+            hz = d_bz[i];
+        }
+        if (uzaklik2b(ex, ez, hx, hz) < 1.0) {
+            if (d_hedef[i] == 0) { d_hedef[i] = 1; } else { d_hedef[i] = 0; }
+        }
+    }
+
+    yon_hesapla(id, ex, ez, hx, hz);
+    if (g_yon_x != 0.0 || g_yon_z != 0.0) {
+        d_yaw[i] = atan2(0.0 - g_yon_x, 0.0 - g_yon_z);
+        if (d_hal[i] != 1 || uz > TEMAS_MENZIL * 0.8) {
+            yuru(id, g_yon_x * hiz, g_yon_z * hiz);
+        }
+    }
+    don_ver(id, d_yaw[i] * 57.29578);
+
+    // Temas hasarı (çarpışma olayı yok: mesafe eşiği + hasar beklemesi).
+    if (uz < TEMAS_MENZIL && g_durum == 0) {
+        oyuncuya_hasar(ex, ez, TEMAS_HASAR);
+    }
+
+    // Vuruş flaşı bitince rengi durumuna göre geri koy.
+    if (d_flas[i] > 0.0) {
+        d_flas[i] = d_flas[i] - d;
+        if (d_flas[i] <= 0.0) {
+            d_flas[i] = 0.0;
+            if (d_hal[i] == 1) { renk_ver(id, RENK_KOVALA); } else { renk_ver(id, RENK_DEVRIYE); }
+        }
+    } else {
+        if (d_hal[i] == 1) { renk_ver(id, RENK_KOVALA); } else { renk_ver(id, RENK_DEVRIYE); }
+    }
+
+    // Arenadan düşen düşman (savurulmuş olabilir) ölmüş sayılır.
+    if (konum_y(id) < -4.0) {
+        d_can[i] = 0;
+        g_skor = g_skor + 100;
+        g_oldurulen = g_oldurulen + 1;
+        sil(id);
+        logla("dusman " + toString(i) + " arenadan dustu");
+    }
+}
+
+// ---- Kamera -----------------------------------------------------------------
+func kamera_guncelle(d) {
+    float donus = 0.0;
+    if (tus("LEFT") || tus("Q")) { donus = donus - 1.0; }
+    if (tus("RIGHT") || tus("E")) { donus = donus + 1.0; }
+    g_kam_yaw = g_kam_yaw + donus * 2.3 * d + eng_look_dx() * 0.006;
+    kamera_yorunge(konum_x(g_oyuncu), konum_y(g_oyuncu) + 1.0, konum_z(g_oyuncu), g_kam_yaw, 0.40, 9.5);
+}
+
+// ---- HUD --------------------------------------------------------------------
+func can_cubugu() {
+    float w = 260.0;
+    dikdortgen(20, 56, w + 8, 26, RENK_CAN_ZEMIN);
+    float oran = g_can * 1.0 / OYUNCU_CAN_MAX;
+    if (oran < 0.0) { oran = 0.0; }
+    int c = RENK_CAN;
+    if (oran < 0.35) { c = renk(232, 90, 70); }
+    dikdortgen(24, 60, w * oran, 18, c);
+    yazi("CAN " + toString(g_can), 30, 60, 0.85, BEYAZ);
+}
+
+func hud_ciz() {
+    durum_seridi();
+    can_cubugu();
+    int kalan = canli_dusman();
+    str hedef_metni = "dusman " + toString(kalan);
+    if (kalan == 0) { hedef_metni = "KAPIYA GIT"; }
+    yazi("bolum " + toString(g_bolum) + "   " + hedef_metni + "   skor " + toString(g_skor), 20, 92, 1.1, SARI);
+    yazi("WASD yuru  SPACE zipla  SHIFT atilma  J/fare vurus  Q-E kamera", 20, 122, 0.8, ACIK_GRI);
+    if (g_kapi_acik) {
+        float uz = uzaklik2b(konum_x(g_oyuncu), konum_z(g_oyuncu), g_kapi_x, g_kapi_z);
+        yazi("kapi acik — " + toString(toInt(uz)) + " m", 20, 146, 0.9, RENK_KAPI);
+    }
+    if (g_atilma_t > 0.0) {
+        yazi("atilma hazir degil", 20, 170, 0.75, GRI);
+    }
+    if (g_hasar_t > 0.0) {
+        dikdortgen(0, 0, genislik(), 6, renk(232, 74, 64));
+    }
+    if (g_yenileme_t > 0.0) {
+        yazi("SAHNE YENIDEN YUKLENDI (" + toString(g_yenileme) + ")", 20, 196, 1.0, RENK_KAPI);
+    }
+    // Dokunmatikte ESC yok: duraklat dugmesi sag ustte.
+    if (g_ekran == EKRAN_OYUN) {
+        if (dugme("||", genislik() - 76, 14, 56, 40)) { g_ekran = EKRAN_DURAKLAT; }
+    }
+    if (g_durum == 1) {
+        yazi("BOLUM " + toString(g_bolum), 20, 210, 2.4, BEYAZ);
+    }
+    if (g_durum == 2) {
+        dikdortgen(0, 0, genislik(), yukseklik(), RENK_CAN_ZEMIN);
+        yazi("OYUN BITTI", 20, 220, 2.6, KIRMIZI);
+        yazi("skor " + toString(g_skor) + "   dusman " + toString(g_oldurulen), 20, 280, 1.3, BEYAZ);
+        yazi("R: yeniden basla    ESC: cik", 20, 316, 1.0, ACIK_GRI);
+    }
+    if (g_durum == 3) {
+        dikdortgen(0, 0, genislik(), yukseklik(), RENK_CAN_ZEMIN);
+        yazi("KAZANDIN", 20, 220, 2.6, RENK_KAPI);
+        yazi("skor " + toString(g_skor) + "   dusman " + toString(g_oldurulen) + "   sure " + toString(toInt(zaman())) + " s", 20, 280, 1.3, BEYAZ);
+        yazi("R: bastan oyna    ESC: cik", 20, 316, 1.0, ACIK_GRI);
+    }
+}
+
+// ---- Akış -------------------------------------------------------------------
+func yeniden_basla() {
+    g_bolum = 1;
+    g_can = OYUNCU_CAN_MAX;
+    g_skor = 0;
+    g_oldurulen = 0;
+    g_hasar_t = 0.0;
+    g_vurus_t = 0.0;
+    g_atilma_t = 0.0;
+    g_durum = 1;
+    g_afis_t = AFIS_SURE;
+    bolum_kur(1);
+    logla("yeniden baslandi");
+}
+
+func bolum_bitti_mi(): bool {
+    if (canli_dusman() > 0) { return false; }
+    if (!g_kapi_acik) {
+        g_kapi_acik = true;
+        logla("butun dusmanlar temizlendi — KAPI ACILDI (bolum " + toString(g_bolum) + ")");
+    }
+    float uz = uzaklik2b(konum_x(g_oyuncu), konum_z(g_oyuncu), g_kapi_x, g_kapi_z);
+    return uz < g_kapi_r;
+}
+
+// ---- Doğrulama kapısı: ön koşul ---------------------------------------------
+// Kapinin DIKEY DILIM bolumu (4 dusman + 1 bolum gecisi) kac kare ister?
+// OLCULDU (2026-09-15): otopilot bolum 1'i k906'da temizleyip bolum 2'ye
+// geciyor; pencersiz kipte dt sabit 1/60 ve sim deterministik oldugu icin
+// iki ayri kosumda da AYNI kare (k906) cikti.
+//
+// Esik eskiden 600 idi ve bu YANLIS bir ON KOSULDU: 600 kare bolum gecisine
+// YETMIYOR, yani kapi kendi "en az bir bolum gecisi" iddiasini saglayamayacak
+// bir butceyi yeterli sayiyordu. 700 karelik kosum tam da bu yuzden
+// "oldurulen 3" ve "gecis yok" diye KIRMIZI doguyordu — olcum dogruydu,
+// iddia degil ON KOSUL bozuktu. Iddialar aynen duruyor; yalniz on kosul
+// olculen degere (%10 pay ile) cekildi.
+int KAPI_MIN_KARE = 1000;
+
+// ---- Doğrulama kapısı -------------------------------------------------------
+// Pencersiz koşumda otopilotun ÖLÇTÜĞÜ sayılar beklenen aralıkta mı.
+func kapi_raporu() {
+    // Kalicilik kapisi: depo DISKTEN tazelenir, bellekteki degerle karsilastirilir
+    // (yazma gercekten dosyaya indi mi, yoksa yalniz bellekte mi kaldi).
+    kayit_ac(kayit_yolu());
+    g_kayit_ses = kayit_oku_sayi("aksiyon_ses", -1.0);
+    int disk_rekor = toInt(kayit_oku_sayi("aksiyon_rekor", -1.0));
+    // Oyun DÖNGÜSÜNÜN logladığı hata: toplamdan kurulum hataları düşülür
+    // (eksik/bozuk .sahneb ortam durumudur, oyun mantığının hatası değil).
+    int hata = hata_sayisi() - g_kurulum_hatasi - g_kurulum_hatasi_ek;
+    int kare = kare_no();
+    print("[kapi] kare=" + toString(kare) + " bolum=" + toString(g_bolum) + " gecis=" + toString(g_gecis_sayisi) + " oldurulen=" + toString(g_oldurulen) + " kalan_dusman=" + toString(canli_dusman()) + " can=" + toString(g_can) + " skor=" + toString(g_skor) + " durum=" + toString(g_durum) + " navmesh=" + toString(g_nav) + " dongu_hatasi=" + toString(hata) + " kurulum_hatasi=" + toString(g_kurulum_hatasi + g_kurulum_hatasi_ek) + " uyari=" + toString(uyari_sayisi()));
+    print("[kapi] kayit: dosyadan ses=" + toString(g_kayit_ses) + " rekor=" + toString(disk_rekor) + " (bellekte ses=" + toString(g_ses_ayari) + " rekor=" + toString(g_rekor) + ")");
+    print("[kapi] menu: adim=" + toString(g_op_adim) + " ui_tik=" + toString(ui_tiklama()) + " ekran=" + toString(g_ekran) + " ses_ayari=" + toString(g_ses_ayari) + " kayitli_ses=" + toString(g_kayit_ses) + " rekor=" + toString(g_rekor) + " kayit=" + kayit_yolu() + " sahne_yenileme=" + toString(g_yenileme));
+    bool ok = true;
+    if (hata != 0) {
+        print("[kapi] BASARISIZ: oyun dongusu hata sayaci " + toString(hata) + " (0 olmali)");
+        ok = false;
+    }
+    // Dikey dilim bolumu YALNIZ butce yetiyorsa kosar. Pencere acilamayinca
+    // kopru 60 karelik YEDEK headless kosuma duser (engine_api.cpp): o
+    // kosumda otopilotun 4 dusman oldurup bolum gecirmesi YAPISAL OLARAK
+    // imkansizdir. Eskiden kapi bunu dort "BASARISIZ" satiri + exit(1) diye
+    // raporluyordu, yani `./build.sh test` display'siz her makinede bu
+    // ornekte kirmizi doguyordu. Atlama SESSIZ degil: sebebi ve tam kapiyi
+    // kosturacak komut basiliyor.
+    bool dilim_kosuldu = kare >= KAPI_MIN_KARE;
+    if (!dilim_kosuldu) {
+        print("[kapi] ATLANDI: dikey dilim kapisi >= " + toString(KAPI_MIN_KARE) + " kare ister, bu kosumda " + toString(kare) + " kare var (pencere acilamazsa kopru 60 karelik yedege duser). Tam kapi icin: TULPAR_ENGINE_HEADLESS=" + toString(KAPI_MIN_KARE) + " ./tulpar examples/engine_aksiyon.tpr");
+    }
+    if (dilim_kosuldu && g_oldurulen < 4) {
+        print("[kapi] BASARISIZ: otopilot en az 4 dusman oldurmeliydi, " + toString(g_oldurulen));
+        ok = false;
+    }
+    if (dilim_kosuldu && g_gecis_sayisi < 1) {
+        print("[kapi] BASARISIZ: en az bir bolum gecisi bekleniyordu");
+        ok = false;
+    }
+    if (g_can < 1 || g_can > OYUNCU_CAN_MAX) {
+        print("[kapi] BASARISIZ: can araligi disi: " + toString(g_can));
+        ok = false;
+    }
+    // Oyun kabugu: otopilot menuyu enjekte tiklamayla gecti mi (Ayarlar ->
+    // kaydirici -> Geri -> Basla) ve ayar diske gercekten yazildi mi.
+    if (g_op_adim < 4) {
+        print("[kapi] BASARISIZ: otopilot menu akisini bitirmedi, adim=" + toString(g_op_adim));
+        ok = false;
+    }
+    if (ui_tiklama() < 3) {
+        print("[kapi] BASARISIZ: en az 3 arayuz tiklamasi bekleniyordu (Ayarlar/Geri/Basla), " + toString(ui_tiklama()));
+        ok = false;
+    }
+    if (g_ekran != EKRAN_OYUN) {
+        print("[kapi] BASARISIZ: menuden oyuna gecilmemis, ekran=" + toString(g_ekran));
+        ok = false;
+    }
+    if (g_ses_ayari < 0.05 || g_ses_ayari > 0.95) {
+        print("[kapi] BASARISIZ: kaydirici ses ayarini beklenen aralikta degistirmedi: " + toString(g_ses_ayari));
+        ok = false;
+    }
+    if (g_kayit_ses < g_ses_ayari - 0.001 || g_kayit_ses > g_ses_ayari + 0.001) {
+        print("[kapi] BASARISIZ: ayar diske yazilip geri okunamadi: " + toString(g_kayit_ses) + " != " + toString(g_ses_ayari));
+        ok = false;
+    }
+    if (g_rekor < g_skor) {
+        print("[kapi] BASARISIZ: rekor skordan kucuk: " + toString(g_rekor) + " < " + toString(g_skor));
+        ok = false;
+    }
+    // Rekor diske YALNIZ "skor > eski rekor" oldugunda yazilir
+    // (rekor_guncelle, lib/engine.tpr). Skoru 0 kalan kisa bir kosumda hic
+    // yazma olmaz; depo dosyasi bos kalir ve kayit_oku_sayi -1 sentinel'ini
+    // dondurur. Eskiden bu -1, bellekteki 0 ile karsilastirilip "rekor diske
+    // yazilmamis" diye raporlaniyordu — yazilacak bir sey OLMADIGI icin bu
+    // yanlis bir iddiaydi. Kontrol, gercekten bir yazma beklenen duruma
+    // (g_rekor > 0) baglandi; o durumda eskisi kadar sert.
+    if (g_rekor > 0 && disk_rekor != g_rekor) {
+        print("[kapi] BASARISIZ: rekor diske yazilmamis: dosyada " + toString(disk_rekor) + ", bellekte " + toString(g_rekor));
+        ok = false;
+    }
+    if (!ok) {
+        exit(1);
+    }
+    if (dilim_kosuldu) {
+        print("[kapi] TAMAM — dikey dilim pencersiz kostu, olculen sayilar araliginda");
+    } else {
+        print("[kapi] TAMAM (yalniz kabuk kapisi: menu akisi, arayuz tiklamalari, ayar kaliciligi) — dikey dilim ATLANDI");
+    }
+}
+
+// ---- main -------------------------------------------------------------------
+func main() {
+    renkleri_kur();
+    log_seviyesi(1);
+    // Ayarlar motor_ac'tan ONCE okunur: parlama ic HDR hedefi KURULUMDA acilir
+    // (kare icinde yalniz esik/yogunluk degisir), o yuzden onay kutusu
+    // "yeniden baslatinca" etkir.
+    ayarlari_oku();
+    parlama(g_parlama_ayari, 1.0, 0.55);
+    if (!motor_ac("Tulpar Engine — Golge Salonlari", 1280, 720)) {
+        print("motor acilamadi: " + eng_last_error());
+        return;
+    }
+    // Kurulumda loglanan hata (parlama bicimi yok, font yok...) ORTAM
+    // durumudur; oyun dongusunun kapisi onu ayri sayar.
+    g_kurulum_hatasi_ek = hata_sayisi();
+    g_otopilot = eng_headless();
+    logla("GPU: " + eng_gpu_name() + " " + toString(genislik()) + "x" + toString(yukseklik()) + ", otopilot " + toString(g_otopilot));
+    logla("ayarlar: ses " + toString(g_ses_ayari) + ", parlama " + toString(g_parlama_ayari) + " (simdi " + toString(parlama_acik()) + "), rekor " + toString(g_rekor) + " — " + kayit_yolu());
+    // Ses cihazi: pencersiz kosumda ACILMAZ (dogrulama hoparlore ses basmasin).
+    if (!g_otopilot) { g_ses_var = ses_ac(); }
+    ses_uygula();
+    g_can = OYUNCU_CAN_MAX;
+    g_durum = 1;
+    g_afis_t = AFIS_SURE;
+    g_ekran = EKRAN_MENU;
+    bolum_kur(1);
+
+    while (calisiyor()) {
+        kare_basla();
+        float d = dt();
+        // Sahne sicak yuklendi mi (editorde "Derle"): sahne varlik dizinleri
+        // degisir, navmesh yeniden kurulur — betik burada haberdar olur.
+        if (sahne_yenilendi()) {
+            g_yenileme = g_yenileme + 1;
+            g_yenileme_t = 3.0;
+            g_nav = nav_var();
+            logla("SICAK YUKLEME: sahne yenilendi (" + toString(sahne_sayisi()) + " varlik, navmesh " + toString(g_nav) + ")");
+        }
+        if (g_yenileme_t > 0.0) { g_yenileme_t = g_yenileme_t - d; }
+
+        if (g_ekran == EKRAN_OYUN) {
+            g_bolum_t = g_bolum_t + d;
+            if (g_vurus_t > 0.0) { g_vurus_t = g_vurus_t - d; }
+            if (g_hasar_t > 0.0) { g_hasar_t = g_hasar_t - d; }
+            if (g_atilma_t > 0.0) { g_atilma_t = g_atilma_t - d; }
+
+            if (g_durum == 1) {
+                g_afis_t = g_afis_t - d;
+                if (g_afis_t <= 0.0) { g_durum = 0; }
+            }
+
+            if (g_durum == 0) {
+                oyuncu_guncelle(d);
+                int i = 0;
+                while (i < len(d_id)) {
+                    dusman_guncelle(i, d);
+                    i = i + 1;
+                }
+                if (bolum_bitti_mi()) {
+                    if (g_bolum == 1) {
+                        g_bolum = 2;
+                        g_gecis_sayisi = g_gecis_sayisi + 1;
+                        g_durum = 1;
+                        g_afis_t = AFIS_SURE;
+                        g_can = g_can + 25;
+                        if (g_can > OYUNCU_CAN_MAX) { g_can = OYUNCU_CAN_MAX; }
+                        logla("BOLUM GECISI 1 -> 2 (can " + toString(g_can) + ")");
+                        bolum_kur(2);
+                    } else {
+                        g_durum = 3;
+                        g_rekor = rekor_guncelle("aksiyon_rekor", g_skor);
+                        logla("KAZANDIN — skor " + toString(g_skor) + ", rekor " + toString(g_rekor) + ", sure " + toString(zaman()));
+                    }
+                }
+            }
+            if (g_durum == 2 && g_rekor < g_skor) { g_rekor = rekor_guncelle("aksiyon_rekor", g_skor); }
+        }
+
+        // Menude kamera salonu yavasca gezer (arka plan canli kalsin).
+        if (g_ekran == EKRAN_MENU) { g_kam_yaw = g_kam_yaw + d * 0.25; }
+        kamera_guncelle(d);
+
+        // Arayuz: HER widget bu blok icinde (anlik-kip sozlesmesi).
+        ui_basla();
+        if (g_ekran == EKRAN_OYUN || g_ekran == EKRAN_DURAKLAT) { hud_ciz(); }
+        if (g_ekran == EKRAN_MENU) { menu_ciz(); }
+        if (g_ekran == EKRAN_DURAKLAT) { duraklat_ciz(); }
+        if (g_ekran == EKRAN_AYAR) { ayar_ciz(); }
+        ui_bitir();
+        otopilot_menu();
+
+        if ((g_durum == 2 || g_durum == 3) && g_ekran == EKRAN_OYUN && tus_basildi("R")) {
+            yeniden_basla();
+        }
+        // ESC: oyunda duraklatir, duraklatta devam eder, ayarlardan geri doner,
+        // menude cikar (eskiden her yerde cikisti).
+        if (tus_basildi("ESC")) {
+            if (g_ekran == EKRAN_OYUN) { g_ekran = EKRAN_DURAKLAT; }
+            else { if (g_ekran == EKRAN_DURAKLAT) { g_ekran = EKRAN_OYUN; }
+            else { if (g_ekran == EKRAN_AYAR) { ayarlari_yaz(); g_ekran = g_ayar_donus; }
+            else { ayarlari_yaz(); cikis_iste(); } } }
+        }
+        kare_bitir();
+    }
+
+    // Kosum bittiginde skor rekor olarak kalir (pencersiz dogrulama da dahil):
+    // bir sonraki acilis onu menude gosterir — kalicilik boyle olculur.
+    g_rekor = rekor_guncelle("aksiyon_rekor", g_skor);
+    logla("bitis: bolum " + toString(g_bolum) + ", skor " + toString(g_skor) + ", oldurulen " + toString(g_oldurulen) + ", can " + toString(g_can) + ", kare " + toString(kare_no()) + ", hata " + toString(hata_sayisi()));
+    if (g_ses_var) { ses_kapat(); }
+    if (g_otopilot) { kapi_raporu(); }
+    motor_kapat();
+}
+
+main();

@@ -1,0 +1,286 @@
+import "test";
+
+// GRAMER BOSLUKLARI: G1 (tip adiyla donusum), G3 (sabit boy dizi tipi),
+// G5 (`const` yerel).  Bkz. docs/engine/FAZ8.md §2 T19 / T8 / T16.
+//
+// Bu paketin IKI yarisi var ve ikincisi olmadan birincisi eksik olurdu:
+//
+//   [A] CALISAN YAZIMLAR — dosyanin kendisi derlendigi icin bunlar zaten
+//       "ayrisiyor" demek; degerleri de assert'lerle sinaniyor.
+//   [B] REDDEDILMESI GEREKEN YAZIMLAR — `const` yeniden atamasi bir
+//       AYRISTIRMA HATASI. Bir `.test.tpr` derlenmeyen kaynagi iceremez,
+//       bu yuzden [B] derleyiciyi ALT SUREC olarak cagiriyor
+//       (`sys_run` + `tulpar typecheck`) ve cikis kodunu olcuyor.
+//       Her reddin yaninda GECMESI GEREKEN bir ikiz var; boylece kapi
+//       "her seyi reddediyor" diye sahte yesil veremiyor.
+//
+// [B] hangi ikiliyi sinar: `TULPAR_BIN` ortam degiskeni varsa onu, yoksa
+// `./tulpar`. `build.sh suites` depo kokunden kostugu ve ./tulpar'i once
+// derledigi icin varsayilan DOGRU ikiliyi gosteriyor; ayri bir yapi
+// dizinini sinamak icin `TULPAR_BIN=build-x/tulpar` verilir.
+//
+// YANLIS IKILI SESSIZ GECMEZ: her reddin yanindaki "KONTROL (gecmeli)"
+// satiri, bu ozellikleri TANIMAYAN eski bir ikilide 0 yerine 2 doner ve
+// paket KIRMIZI olur. Olculdu — depo kokundeki eski ikili ile kosturuldu
+// ve dort KONTROL birden dustu. Yani bu kapi ya dogru ikiliyi olcer ya da
+// olcmedigini SOYLER.
+
+// ---------------------------------------------------------------------------
+// [A1] G1 — `int(x)` / `float(x)` / `str(x)` / `bool(x)`
+//
+// `int`/`float` ANAHTAR KELIME oldugu icin `float(x)` ayrismiyordu. Artik
+// cagri konumunda tip adi bir donusturucu; mevcut `toInt`/`toFloat`/
+// `toString`/`toBool` ailesine YONLENDIRILIYOR — yani iki yazim AYNI
+// sonucu vermek ZORUNDA. Asagisi tam olarak bunu olcuyor.
+// ---------------------------------------------------------------------------
+func run_g1_donusum() {
+    assert_eq_int(int(3.9), toInt(3.9));
+    assert_eq_int(int(3.9), 3);
+    assert_eq_int(int("42"), toInt("42"));
+    assert_eq_int(int(0 - 2.7), toInt(0 - 2.7));
+    assert_eq_float(float("3.5"), toFloat("3.5"));
+    assert_close(float("3.5"), 3.5, 0.0001);
+    assert_eq_float(float(7), toFloat(7));
+    assert_eq_str(str(42), toString(42));
+    assert_eq_str(str(42), "42");
+    assert_eq_bool(bool(0), toBool(0));
+    assert_eq_bool(bool(1), toBool(1));
+    assert_eq_bool(bool(""), false);
+    assert_eq_bool(bool("x"), true);
+    // Turkce yazimlar ayni tokenlar, yani bedava geliyor.
+    assert_eq_int(tamsayi(3.9), 3);
+    assert_close(ondalik("2.5"), 2.5, 0.0001);
+    assert_eq_str(metin(7), "7");
+    assert_eq_bool(mantiksal(0), false);
+    // Ic ice ve ifade icinde
+    assert_eq_int(int(float("2.9")), 2);
+    assert_eq_int(int(3.9) + int(1.2), 4);
+    assert_eq_str("n=" + str(int("5")), "n=5");
+    // `int x = 5;` bildirimi BOZULMADI (asagidaki satir onu kanitliyor)
+    int x = 5;
+    assert_eq_int(x, 5);
+    float f = 1.5;
+    assert_close(f, 1.5, 0.0001);
+}
+
+// ---------------------------------------------------------------------------
+// [A2] G3 — sabit boy dizi TIPI `T[N]`
+//
+// KAPSAM: `T[N]` AYRISIYOR, eleman tipi `T[]` ile AYNI belirleniyor VE
+// baslaticisiz bildirimde N eleman uretiliyor (2026-09-16).
+// YAPMADIGI: yigina yerlestirmek, sinir denetimi, uzunlugu ZORLAMAK
+// (acik baslatici hala kazanir). Asagidaki assert'ler tam olarak bu sozu
+// olcuyor — daha fazlasini degil.
+// ---------------------------------------------------------------------------
+type Kademe {
+    int[3] idler;
+    float[4] agirliklar;
+}
+
+func run_g3_sabit_boy() {
+    int[3] a = [10, 20, 30];
+    assert_eq_int(len(a), 3);
+    assert_eq_int(a[0], 10);
+    assert_eq_int(a[2], 30);
+    float[4] v = [1.0, 2.0, 3.0, 4.0];
+    assert_eq_int(len(v), 4);
+    assert_close(v[3], 4.0, 0.0001);
+    str[2] s = ["bir", "iki"];
+    assert_eq_str(s[1], "iki");
+    // `[]` ile AYNI anlam: boyut bugun bir SOZ degil, yalnizca belge.
+    // Bu satir o sinirin kaniti — 3 yazip 4 eleman koymak hata DEGIL.
+    int[3] esnek = [1, 2, 3, 4];
+    assert_eq_int(len(esnek), 4);
+    // Struct alani olarak (shader alt kumesinin asil ihtiyaci)
+    Kademe k = { idler: [1, 2, 3], agirliklar: [0.5, 0.25, 0.125, 0.0] };
+    assert_eq_int(k.idler[1], 2);
+    assert_close(k.agirliklar[0], 0.5, 0.0001);
+
+    // BASLATICISIZ BILDIRIM (2026-09-16 duzeltmesi). Onceden `int[4] b;`
+    // dizi DEGIL bir deger uretiyordu: `len` 0 donuyor ama `b[0] = 1`
+    // CALISMA ZAMANINDA "gecersiz hedef" ile dusuyordu — derleyici kabul
+    // edip calisma zamani reddediyordu.
+    int[4] b;
+    assert_eq_int(len(b), 4);
+    assert_eq_int(b[0], 0);
+    assert_eq_int(b[3], 0);
+    b[2] = 9;                      // ASIL KAZANC: yazilabiliyor
+    assert_eq_int(b[2], 9);
+    assert_eq_int(b[1], 0);        // komsu bozulmadi
+    float[3] fv;
+    assert_eq_int(len(fv), 3);
+    assert_close(fv[2], 0.0, 0.0001);
+    str[2] sv;
+    assert_eq_int(len(sv), 2);
+    assert_eq_str(sv[0], "");
+    bool[2] bv;
+    assert_eq_int(len(bv), 2);
+    assert(!bv[0], "bool dizisi varsayilani false olmali");
+    // Boyutsuz bicim: BOS dizi (0 eleman) ama push CALISIR — once bu da
+    // "gecersiz hedef" veriyordu.
+    int[] d;
+    assert_eq_int(len(d), 0);
+    push(d, 5);
+    assert_eq_int(len(d), 1);
+    assert_eq_int(d[0], 5);
+    // KONTROL: N bir SINIR degil, yalnizca varsayilan uzunluk. Acik
+    // baslatici hala kazanir — yukaridaki `esnek` bunun kanitiydi, burada
+    // ters yonu de olcuyoruz: N'den KISA baslatici da gecerli.
+    int[4] kisa = [1];
+    assert_eq_int(len(kisa), 1);
+}
+
+// ---------------------------------------------------------------------------
+// [A3] G5 — `const` OKUNABILIR ve golgeleme dogru calisiyor
+// ---------------------------------------------------------------------------
+const int KURESEL_N = 5;
+
+// Parametre adi kuresel bir `const` ile AYNI olabilir ve ICERIDE yazilabilir.
+// Bu satir yanlis pozitif korumasi: kapsam yigini parametreleri kaydetmeseydi
+// bu dosya HIC derlenmezdi.
+func golgeleyen(int KURESEL_N): int {
+    KURESEL_N = 99;
+    return KURESEL_N;
+}
+
+func run_g5_const() {
+    assert_eq_int(KURESEL_N, 5);
+    assert_eq_int(golgeleyen(1), 99);
+    // Yerel `const`
+    const int yerel = 7;
+    const float oran = 0.5;
+    const str ad = "tulpar";
+    assert_eq_int(yerel, 7);
+    assert_close(oran, 0.5, 0.0001);
+    assert_eq_str(ad, "tulpar");
+    assert_eq_int(yerel * 2, 14);
+    // Ic blok golgelemesi: icteki `yerel` const DEGIL, yazilabilmeli.
+    int toplam = 0;
+    if (true) {
+        int yerel = 1;
+        yerel = 2;
+        toplam = yerel;
+    }
+    assert_eq_int(toplam, 2);
+    assert_eq_int(yerel, 7);          // disaridaki degismedi
+    // `const` tipi zorunlu degil
+    const degerli = 3;
+    assert_eq_int(degerli, 3);
+    // DERIN DEGISMEZLIK YOK ve bu bilerek: `const` BAGLAMAYI kilitler,
+    // icerigi degil. Asagidaki satir gecerli — sozun siniri budur.
+    const int[3] kutu = [1, 2, 3];
+    kutu[0] = 9;
+    assert_eq_int(kutu[0], 9);
+}
+
+// ---------------------------------------------------------------------------
+// [B] REDDEDILMESI GEREKENLER — derleyici alt surec olarak cagriliyor
+// ---------------------------------------------------------------------------
+str _bin = "";
+
+func _derleyici(): str {
+    if (_bin == "") {
+        _bin = env("TULPAR_BIN");
+        if (_bin == "") { _bin = "./tulpar"; }
+    }
+    return _bin;
+}
+
+// Kaynagi gecici bir dosyaya yazip `tulpar typecheck` cikis kodunu dondurur.
+// 0 = kabul edildi, 0 disi = reddedildi.
+func derleme_kodu(str kaynak): int {
+    str yol = "/tmp/tulpar_gramer_" + toString(timestamp()) + "_" +
+              toString(randint(1, 999999)) + ".tpr";
+    write_file(yol, kaynak);
+    int rc = sys_run(_derleyici() + " typecheck " + yol + " > /dev/null 2>&1");
+    sys_run("rm -f " + yol);
+    return rc;
+}
+
+func run_b_const_reddi() {
+    // KONTROL (gecmeli): const bildirimi + okuma
+    assert_eq_int(derleme_kodu("const int N = 5;\nprint(N);\n"), 0);
+    // KONTROL (gecmeli): const OLMAYAN degiskene atama serbest
+    assert_eq_int(derleme_kodu("int N = 5;\nN = 6;\nprint(N);\n"), 0);
+
+    // REDDEDILMELI: yeniden atama
+    assert(derleme_kodu("const int N = 5;\nN = 6;\nprint(N);\n") != 0,
+           "const yeniden atamasi REDDEDILMELIYDI");
+    // REDDEDILMELI: bilesik atama
+    assert(derleme_kodu("const int N = 5;\nN += 1;\nprint(N);\n") != 0,
+           "const bilesik atamasi REDDEDILMELIYDI");
+    // REDDEDILMELI: `++` de bir yazmadir
+    assert(derleme_kodu("const int N = 5;\nN++;\nprint(N);\n") != 0,
+           "const uzerinde ++ REDDEDILMELIYDI");
+    assert(derleme_kodu("const int N = 5;\nN--;\nprint(N);\n") != 0,
+           "const uzerinde -- REDDEDILMELIYDI");
+    // REDDEDILMELI: bit atamali bicimi
+    assert(derleme_kodu("const int N = 5;\nN &= 1;\nprint(N);\n") != 0,
+           "const uzerinde &= REDDEDILMELIYDI");
+    // REDDEDILMELI: baslangic degeri olmayan const (kalici 0 olurdu)
+    assert(derleme_kodu("const int N;\nprint(N);\n") != 0,
+           "baslaticisiz const REDDEDILMELIYDI");
+    // REDDEDILMELI: fonksiyon govdesinde de ayni kural
+    assert(derleme_kodu("func f(): int { const int k = 1; k = 2; return k; }\n" +
+                        "print(f());\n") != 0,
+           "govde icindeki const yeniden atamasi REDDEDILMELIYDI");
+}
+
+func run_b_sayi_reddi() {
+    // KONTROL (gecmeli): tabanli sabitler
+    assert_eq_int(derleme_kodu("print(0xFF);\nprint(0b1010);\nprint(1_000);\n"), 0);
+
+    // REDDEDILMELI: isaretsiz sonek — Tulpar'da isaretsiz tip YOK
+    // (docs/engine/FAZ8.md T3). Sessizce `1` saymiyoruz.
+    assert(derleme_kodu("print(1u);\n") != 0, "`1u` REDDEDILMELIYDI");
+    // REDDEDILMELI: eksik us / asili ayirici / bos taban
+    assert(derleme_kodu("int x = 1e;\nprint(x);\n") != 0, "`1e` REDDEDILMELIYDI");
+    assert(derleme_kodu("print(1_);\n") != 0, "asili `_` REDDEDILMELIYDI");
+    assert(derleme_kodu("print(0x);\n") != 0, "basamaksiz `0x` REDDEDILMELIYDI");
+    assert(derleme_kodu("print(0b);\n") != 0, "basamaksiz `0b` REDDEDILMELIYDI");
+    // REDDEDILMELI: 64 bite sigmayan tabanli sabit
+    assert(derleme_kodu("print(0x1FFFFFFFFFFFFFFFF);\n") != 0,
+           "64 bit tasmasi REDDEDILMELIYDI");
+}
+
+func run_b_dizi_reddi() {
+    // KONTROL (gecmeli): pozitif boy
+    assert_eq_int(derleme_kodu("int[3] a = [1,2,3];\nprint(len(a));\n"), 0);
+    assert_eq_int(derleme_kodu("type T { int[2] xs; }\nprint(1);\n"), 0);
+    // REDDEDILMELI: sifir/negatif boy bir yazim hatasidir, sessizce
+    // dinamik diziye donusmemeli.
+    assert(derleme_kodu("int[0] a = [];\nprint(1);\n") != 0,
+           "`int[0]` REDDEDILMELIYDI");
+}
+
+func run_b_bit_tipi_reddi() {
+    // KONTROL (gecmeli): tamsayi operandlar
+    assert_eq_int(derleme_kodu("int a = 6;\nint b = 3;\nprint(a & b);\n"), 0);
+    // REDDEDILMELI: float operand — codegen onu sessizce kirpardi.
+    assert(derleme_kodu("float f = 1.5;\nprint(f & 1);\n") != 0,
+           "float operandli `&` REDDEDILMELIYDI");
+    assert(derleme_kodu("float f = 1.5;\nprint(1 << f);\n") != 0,
+           "float kaydirma miktari REDDEDILMELIYDI");
+    assert(derleme_kodu("float f = 1.5;\nprint(~f);\n") != 0,
+           "float operandli `~` REDDEDILMELIYDI");
+    assert(derleme_kodu("str s = \"x\";\nprint(s | 1);\n") != 0,
+           "metin operandli `|` REDDEDILMELIYDI");
+    // ELEMAN HEDEFI AYNI SEYI SOYLEMELI. `a[i] &= y` ayri bir codegen yolu
+    // (CompoundAssign, seker acilmiyor) ve 2026-09-16'ya kadar tip denetimine
+    // HIC ugramiyordu: `x &= 2.5` uyari veriyor, `a[0] &= 2.5` sessizce
+    // geciyordu. Ayni dilde ayni islemin iki yazimi ayrisamaz.
+    assert_eq_int(derleme_kodu("int[2] a = [1,2];\na[0] &= 3;\nprint(a[0]);\n"), 0);
+    assert(derleme_kodu("int[2] a = [1,2];\na[0] &= 2.5;\nprint(a[0]);\n") != 0,
+           "eleman hedefinde float operandli `&=` REDDEDILMELIYDI");
+    assert(derleme_kodu("int[2] a = [1,2];\na[0] <<= 1.5;\nprint(a[0]);\n") != 0,
+           "eleman hedefinde float kaydirma miktari REDDEDILMELIYDI");
+}
+
+test("G1: tip adiyla donusum", "run_g1_donusum");
+test("G3: sabit boy dizi tipi", "run_g3_sabit_boy");
+test("G5: const okuma ve golgeleme", "run_g5_const");
+test("G5 KONTROL: const yazmalari reddediliyor", "run_b_const_reddi");
+test("G4 KONTROL: bozuk sayi sabitleri reddediliyor", "run_b_sayi_reddi");
+test("G3 KONTROL: gecersiz boy reddediliyor", "run_b_dizi_reddi");
+test("G4 KONTROL: float operand reddediliyor", "run_b_bit_tipi_reddi");
+test_summary();

@@ -576,6 +576,17 @@ install(TARGETS tulpar RUNTIME DESTINATION bin)
 install(TARGETS tulpar_runtime ARCHIVE DESTINATION lib)
 install(TARGETS tulpar_tame ARCHIVE DESTINATION lib)
 
+# libtulpar_engine.a = Tulpar Engine (engine/) koprusunun VMValue bindingleri
+# (runtime/engine_bindings.cpp, uretilmis: engine/tools/gen_engine_bindings.py).
+# `import "engine"` eden program bununla + engine/ arsivleriyle linklenir
+# (engine_link_flags(), src/aot/aot_pipeline.cpp); sirdan binary'ler dokunmaz.
+if(NOT MSVC)
+    add_library(tulpar_engine STATIC runtime/engine_bindings.cpp)
+    target_include_directories(tulpar_engine PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/engine)
+    target_compile_definitions(tulpar_engine PRIVATE TULPAR_RUNTIME_ONLY)
+    install(TARGETS tulpar_engine ARCHIVE DESTINATION lib)
+endif()
+
 install(DIRECTORY examples/
     DESTINATION share/tulpar/examples
     FILES_MATCHING PATTERN "*.tpr"

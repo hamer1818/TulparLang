@@ -57,6 +57,30 @@ inline bool gpu_is_virtual(const char *device_name) {
 }
 } // namespace tulpar::engine::test
 
+namespace tulpar::engine::rhi { class Device; }
+
+namespace tulpar::engine::test {
+// Katmanin Arm (Mali) BestPractices kurallari GERCEKTEN acik mi?
+//
+// LOD kirpan bir sampler yaratir ve Arm uyari sayacinin artip artmadigina
+// bakar. `true` = kurallar TANINMIYOR, yani Mali kapisi hicbir sey OLCEMEZ ve
+// gorunur atlanmalidir. CI'daki apt katmani (Ubuntu 24.04, VVL 1.3.275) bu
+// durumda; yerel LunarG SDK'si ve telefon (1.4.357) kurallari biliyor.
+//
+// TEK BIR YERDE duruyor cunku bu tam olarak surukleniden dogan bir hataydi:
+// uc yeni kapi (render_graph_post / gpu_cull / temporal) pozitif kontrolu
+// `renderer_mali_best_practices_gate`'ten KOPYALADI ama korumayi kopyalamadi
+// ve CI Linux'ta dordu birden kirmizi dondu (2026-09-16). Kopya yerine ortak
+// fonksiyon: bir daha ayrisamaz.
+//
+// Cagiran, `true` donerse KENDI temizligini yapip skip() cagirir — kaynaklari
+// burada serbest birakamayiz.
+bool arm_rules_missing(rhi::Device &dev);
+// Yukaridaki atlama icin ortak metin (uc kapi ayni seyi soylesin).
+inline const char *kArmRulesMissingReason =
+    "dogrulama katmani Arm BestPractices kurallarini tanimiyor (surum) — Mali kapisi olculemedi";
+} // namespace tulpar::engine::test
+
 #define ENGINE_TEST(name)                                                       \
   static void name();                                                           \
   static ::tulpar::engine::test::Registrar _reg_##name(#name, name);            \

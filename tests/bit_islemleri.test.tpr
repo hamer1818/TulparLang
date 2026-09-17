@@ -1,0 +1,321 @@
+import "test";
+
+// BIT ISLEMLERI VE TABANLI SAYI SABITLERI (G4).
+//
+// Bu paket dile 2026-09-16'da eklenen `& | ^ ~ << >>` islecleri, atamali
+// bicimleri (`&=` ...) ve `0x` / `0b` / `1_000` yazimlarini olcuyor.
+//
+// NEDEN ONEMLI: bu islecler YOKTU. Tek basina `&` "Unknown character"
+// hatasi veriyordu, `0xFF` ayrismiyordu. Motorun renk paketlemesi bu
+// yuzden carpmayla yaziliyor (`r*16777216 + g*65536 + ...`) — asagida
+// "renk paketleme" bolumu iki yazimin AYNI sayiyi urettigini sayiyla
+// gosteriyor.
+//
+// OLCULEN KARARLAR (hepsi burada yazili beklentiyle sinaniyor):
+//   1) Oncelik C/GLSL sirasi:  * /  >  + -  >  << >>  >  < >  >  == !=
+//      >  &  >  ^  >  |  >  &&  >  ||
+//      C'nin bilinen carpikligi dahil: `4 & 2 == 2` -> `4 & (2 == 2)`.
+//   2) `>>` ARITMETIK (isaret dolduruyor), mantiksal degil.
+//   3) Kaydirma miktari >= 64 TANIMSIZ DEGIL: `<<` 0 verir, `>>` isaret
+//      doldurur. Miktar ISARETSIZ okunur, yani negatif miktar da "cok
+//      buyuk" sayilir ve ayni sinira duser.
+//   4) `0xFFFFFFFFFFFFFFFF` -1'dir: `int` ISARETLI 64 bit, isaretsiz tip yok.
+
+// ---------------------------------------------------------------------------
+// 1. Temel islecler
+// ---------------------------------------------------------------------------
+func run_temel() {
+    int a = 12;          // 1100
+    int b = 10;          // 1010
+    assert_eq_int(a & b, 8);
+    assert_eq_int(a | b, 14);
+    assert_eq_int(a ^ b, 6);
+    assert_eq_int(a << 1, 24);
+    assert_eq_int(a >> 2, 3);
+    assert_eq_int(~0, 0 - 1);
+    assert_eq_int(~5, 0 - 6);
+    assert_eq_int(~(0 - 1), 0);
+    // `~x == -x - 1` ozdesligi
+    assert_eq_int(~7, 0 - 7 - 1);
+    assert_eq_int(~(0 - 100), 99);
+}
+
+// ---------------------------------------------------------------------------
+// 2. ONCELIK — merdivenin her basamagi ayri ayri
+// ---------------------------------------------------------------------------
+func run_oncelik() {
+    // `&` `|`den SIKI baglar:  1 | (2 & 3) = 1 | 2 = 3
+    assert_eq_int(1 | 2 & 3, 3);
+    // `^` `|`den siki, `&`den gevsek:  1 | (2 ^ 3) = 1 | 1 = 1
+    assert_eq_int(1 | 2 ^ 3, 1);
+    //                        (3 & 1) = 1 ; 1 ^ 1 = 0
+    assert_eq_int(1 ^ 3 & 1, 0);
+    // Toplama kaydirmadan SIKI baglar:  1 << (2 + 3) = 32
+    assert_eq_int(1 << 2 + 3, 32);
+    assert_eq_int(2 + 3 << 1, 10);       // (2+3) << 1
+    // Carpma toplamadan siki:  1 << (2 * 3) = 64
+    assert_eq_int(1 << 2 * 3, 64);
+    // Kaydirma karsilastirmadan SIKI baglar: (1 << 3) > 4  ->  true
+    assert_eq_bool(1 << 3 > 4, true);
+    // C'NIN CARPIKLIGI, BILEREK KORUNDU: `&` karsilastirmadan GEVSEK.
+    // 4 & (2 == 2) = 4 & 1 = 0.  GLSL de boyle davraniyor; shader alt
+    // kumesi ayni metni iki tarafta ayni hesaplasin diye sira C'den alindi.
+    assert_eq_int(4 & 2 == 2, 0);
+    assert_eq_int(5 & 2 == 2, 1);
+    // `&&` bit islemlerinden GEVSEK: (1 & 0) && 1  ->  false
+    assert_eq_bool(1 & 0 && 1, false);
+    assert_eq_bool(1 & 1 && 1, true);
+    // Parantez her zaman kazanir
+    assert_eq_int((1 | 2) & 3, 3);
+    assert_eq_int((1 << 2) + 3, 7);
+}
+
+// ---------------------------------------------------------------------------
+// 3. NEGATIF SAYILAR — `>>` aritmetik mi?
+// ---------------------------------------------------------------------------
+func run_negatif() {
+    // Mantiksal kaydirma olsaydi bu 9223372036854775804 cikardi.
+    assert_eq_int((0 - 8) >> 1, 0 - 4);
+    assert_eq_int((0 - 1) >> 1, 0 - 1);
+    assert_eq_int((0 - 1) >> 62, 0 - 1);
+    assert_eq_int((0 - 1) >> 63, 0 - 1);
+    assert_eq_int((0 - 16) >> 3, 0 - 2);
+    assert_eq_int((0 - 8) << 1, 0 - 16);
+    // Maske alma: negatif sayinin alt baytini cek
+    assert_eq_int((0 - 1) & 0xFF, 255);
+    assert_eq_int((0 - 256) & 0xFF, 0);
+    assert_eq_int((0 - 2) & 0xFF, 254);
+    // Isaretsiz kaydirma isteyen maskeler: (x >> n) & maske
+    assert_eq_int(((0 - 1) >> 56) & 0xFF, 255);
+}
+
+// ---------------------------------------------------------------------------
+// 4. KAYDIRMA SINIRLARI — >= 64 ve negatif miktar
+// ---------------------------------------------------------------------------
+func run_kaydirma_sinirlari() {
+    assert_eq_int(1 << 62, 4611686018427387904);
+    // 1 << 63 = INT64_MIN. Sabiti dogrudan yazmiyoruz (ayristiricida
+    // -9223372036854775808 once tasan bir pozitif sabit olurdu); onaltilik
+    // yazimi tam olarak bu bit desenini veriyor.
+    assert_eq_int(1 << 63, 0x8000000000000000);
+    // >= 64: butun bitler disari cikti -> 0 (poison/tanimsiz DEGIL).
+    assert_eq_int(1 << 64, 0);
+    assert_eq_int(1 << 65, 0);
+    assert_eq_int(1 << 100, 0);
+    assert_eq_int(0x7FFFFFFFFFFFFFFF << 64, 0);
+    // >> >= 64: isaret doldurur (n = 63 ile ayni sonuc).
+    assert_eq_int(8 >> 64, 0);
+    assert_eq_int(8 >> 200, 0);
+    assert_eq_int((0 - 8) >> 64, 0 - 1);
+    assert_eq_int((0 - 8) >> 999, 0 - 1);
+    // NEGATIF MIKTAR: isaretsiz okunur, yani "cok buyuk" -> ayni sinir.
+    // Sessizce `x` DONMUYOR; bu bilerek secildi.
+    assert_eq_int(1 << (0 - 1), 0);
+    assert_eq_int(8 >> (0 - 1), 0);
+    assert_eq_int((0 - 8) >> (0 - 1), 0 - 1);
+    // Miktar 0: hicbir sey degismez
+    assert_eq_int(12345 << 0, 12345);
+    assert_eq_int(12345 >> 0, 12345);
+}
+
+// ---------------------------------------------------------------------------
+// 5. TABANLI SABITLER + BASAMAK AYIRICI
+// ---------------------------------------------------------------------------
+func run_sabitler() {
+    assert_eq_int(0xFF, 255);
+    assert_eq_int(0xff, 255);
+    assert_eq_int(0XfF, 255);
+    assert_eq_int(0x0, 0);
+    assert_eq_int(0x10, 16);
+    assert_eq_int(0xDEADBEEF, 3735928559);
+    assert_eq_int(0b0, 0);
+    assert_eq_int(0b1010, 10);
+    assert_eq_int(0B1111, 15);
+    assert_eq_int(0b1000000, 64);
+    assert_eq_int(1_000_000, 1000000);
+    assert_eq_int(0xFF_FF, 65535);
+    assert_eq_int(0b1010_1010, 170);
+    assert_close(1_000.5, 1000.5, 0.0001);
+    // Onluk yolun eski davranisi BOZULMADI
+    assert_eq_int(1000000, 1000000);
+    assert_close(1.5e-8, 0.000000015, 0.0000000001);
+    assert_eq_int(0 - 0x10, 0 - 16);
+    // 64 bitin tamami yazilabilir; isaretli okunur.
+    assert_eq_int(0xFFFFFFFFFFFFFFFF, 0 - 1);
+    assert_eq_int(0x7FFFFFFFFFFFFFFF, 9223372036854775807);
+    // Onaltilik sabit maske olarak
+    assert_eq_int(0xABCD & 0x00FF, 0xCD);
+    assert_eq_int(0b1100 | 0b0011, 0b1111);
+}
+
+// ---------------------------------------------------------------------------
+// 6. ATAMALI BICIMLER
+// ---------------------------------------------------------------------------
+func run_atamali() {
+    int m = 0b1111;
+    m &= 0b1010;  assert_eq_int(m, 10);
+    m |= 0b0101;  assert_eq_int(m, 15);
+    m ^= 0b0011;  assert_eq_int(m, 12);
+    m <<= 2;      assert_eq_int(m, 48);
+    m >>= 3;      assert_eq_int(m, 6);
+    // Sag taraf tam bir ifade olabilir (oncelik korunur)
+    int k = 1;
+    k <<= 2 + 1;  assert_eq_int(k, 8);
+    // Negatif hedefte de aritmetik kaydirma
+    int n = 0 - 16;
+    n >>= 2;      assert_eq_int(n, 0 - 4);
+}
+
+// ---------------------------------------------------------------------------
+// 6b. ELEMAN HEDEFI — `a[i] &= y` (2026-09-16'da geldi)
+//
+// Onceden ACIK ayristirma hatasiydi: `a[i] &= y` yazilamiyordu, cunku
+// degisken bicimi `x = x & y` olarak seker aciliyor ve eleman biciminde
+// INDIS IFADESI iki kez calisirdi. Cozum sekerle degil codegen'de: kap ve
+// indis bir kez degerlendirilip bit islemi yerinde emit ediliyor (kutulu
+// vm_binary_op'a HIC ugranmiyor — o fonksiyon bit tokenlarini tanimiyor ve
+// onceden derlenmis web/android arsivlerinde eski kopyasi duruyor).
+//
+// KONTROL: indis ifadesinin YAN ETKISI tam bir kez calismali. Bu olcum
+// olmadan kapi "sonuc dogru" derdi ve `a[f()] &= 1` icinde f iki kez
+// calissa bile gecerdi — asil tehlike oydu.
+// ---------------------------------------------------------------------------
+int _yan_etki = 0;
+func _indis(): int { _yan_etki = _yan_etki + 1; return 1; }
+
+func run_eleman_atamali() {
+    int[4] a = [0b1111, 8, 12, 1];
+    a[0] &= 0b1010;  assert_eq_int(a[0], 10);
+    a[1] |= 1;       assert_eq_int(a[1], 9);
+    a[2] ^= 10;      assert_eq_int(a[2], 6);
+    a[3] <<= 4;      assert_eq_int(a[3], 16);
+    int[1] b = [256];
+    b[0] >>= 3;      assert_eq_int(b[0], 32);
+    // Negatif elemanda aritmetik kaydirma (degisken yoluyla AYNI cevap)
+    int[1] c = [0 - 16];
+    c[0] >>= 2;      assert_eq_int(c[0], 0 - 4);
+    // Komsu elemanlar bozulmadi
+    assert_eq_int(a[1], 9);
+    // KONTROL: indis bir KEZ degerlendirilir
+    int[4] d = [7, 7, 7, 7];
+    assert_eq_int(_yan_etki, 0);
+    d[_indis()] &= 4;
+    assert_eq_int(_yan_etki, 1);
+    assert_eq_int(d[1], 4);
+    assert_eq_int(d[0], 7);
+    // Baslaticisiz bildirimle de calisir (T[N] varsayilani 0)
+    int[2] e;
+    e[0] |= 5;       assert_eq_int(e[0], 5);
+}
+
+// ---------------------------------------------------------------------------
+// 7. KUTULU YOL — operandin tipi calisma zamaninda belli oldugunda
+// ---------------------------------------------------------------------------
+func kimlik(x) { return x; }
+
+func run_kutulu() {
+    var a = 12;
+    var b = 10;
+    assert_eq_int(a & b, 8);
+    assert_eq_int(a | b, 14);
+    assert_eq_int(a ^ b, 6);
+    assert_eq_int(a << 2, 48);
+    assert_eq_int(a >> 2, 3);
+    assert_eq_int(~a, 0 - 13);
+    // Tipi bilinmeyen fonksiyon donusu
+    assert_eq_int(kimlik(12) & kimlik(10), 8);
+    assert_eq_int(kimlik(1) << kimlik(5), 32);
+    var c = 0xF0;
+    c &= 0x3C;
+    assert_eq_int(c, 0x30);
+}
+
+// ---------------------------------------------------------------------------
+// 8. SOMUT FAYDA — RENK PAKETLEME
+//
+// Motorun bugunku yazimi (lib/engine.tpr `renk`) carpmayla:
+//     r * 16777216 + g * 65536 + b * 256 + a
+// Bit yazimi ayni sayiyi vermeli. Ayristirma da (bugun `/` ve `mod()` ile
+// yapiliyor) `>>` + `&` ile ayni sonucu vermeli.
+// ---------------------------------------------------------------------------
+func renk_carpma(int r, int g, int b, int a): int {
+    return r * 16777216 + g * 65536 + b * 256 + a;
+}
+
+func renk_bit(int r, int g, int b, int a): int {
+    return (r << 24) | (g << 16) | (b << 8) | a;
+}
+
+func run_renk_paketleme() {
+    // Kose durumlar + bir tarama
+    assert_eq_int(renk_bit(0, 0, 0, 0), renk_carpma(0, 0, 0, 0));
+    assert_eq_int(renk_bit(255, 255, 255, 255), renk_carpma(255, 255, 255, 255));
+    assert_eq_int(renk_bit(255, 246, 224, 255), renk_carpma(255, 246, 224, 255));
+    assert_eq_int(renk_bit(18, 20, 28, 255), renk_carpma(18, 20, 28, 255));
+    assert_eq_int(renk_bit(255, 255, 255, 255), 4294967295);
+    int fark = 0;
+    for (int i = 0; i < 256; i = i + 1) {
+        int r = i;
+        int g = (i * 7) & 0xFF;
+        int b = (i * 13) & 0xFF;
+        int a = (i * 29) & 0xFF;
+        if (renk_bit(r, g, b, a) != renk_carpma(r, g, b, a)) { fark = fark + 1; }
+    }
+    assert_eq_int(fark, 0);
+    // Ayristirma: kaydir + maskele
+    int c = renk_bit(200, 150, 100, 50);
+    assert_eq_int((c >> 24) & 0xFF, 200);
+    assert_eq_int((c >> 16) & 0xFF, 150);
+    assert_eq_int((c >> 8) & 0xFF, 100);
+    assert_eq_int(c & 0xFF, 50);
+    // Bugunku bolme/mod yazimiyla ayni sonuc (lib/scene3d.tpr `_col_r3`)
+    assert_eq_int((c >> 24) & 0xFF, mod(toInt(c / 16777216), 256));
+    assert_eq_int((c >> 16) & 0xFF, mod(toInt(c / 65536), 256));
+}
+
+// ---------------------------------------------------------------------------
+// 9. GERILEME KORUMASI — yeni tokenlar eskileri CALMADI
+// ---------------------------------------------------------------------------
+func siniflandir(int n): str {
+    // `|` HALA match kolu ayraci. Bit VEYA ile ayni karakter oldugu icin
+    // desen atomlari `|`den once duracak sekilde ayrisiyor; bu satirlar
+    // o ayrimi olcuyor.
+    return match n {
+        1 | 2 => "kucuk",
+        3 | 4 | 5 => "orta",
+        10..20 => "aralik",
+        _ => "diger"
+    };
+}
+
+func run_gerileme() {
+    assert_eq_str(siniflandir(1), "kucuk");
+    assert_eq_str(siniflandir(2), "kucuk");
+    assert_eq_str(siniflandir(4), "orta");
+    assert_eq_str(siniflandir(15), "aralik");
+    assert_eq_str(siniflandir(99), "diger");
+    // `&&` / `||` bozulmadi
+    assert_eq_bool(true && false, false);
+    assert_eq_bool(true || false, true);
+    assert_eq_bool(1 < 2 && 3 > 2, true);
+    // `<=` / `>=` `<<` / `>>` ile karismadi
+    assert_eq_bool(2 <= 2, true);
+    assert_eq_bool(2 >= 3, false);
+    // `%` ve `%=` bozulmadi
+    int q = 17;
+    assert_eq_int(q % 5, 2);
+    q %= 5;
+    assert_eq_int(q, 2);
+}
+
+test("temel islecler", "run_temel");
+test("oncelik merdiveni", "run_oncelik");
+test("negatif sayilar (aritmetik >>)", "run_negatif");
+test("kaydirma sinirlari (>=64, negatif)", "run_kaydirma_sinirlari");
+test("tabanli sabitler ve ayirici", "run_sabitler");
+test("atamali bicimler", "run_atamali");
+test("eleman hedefli atamali bicimler (indis bir kez)", "run_eleman_atamali");
+test("kutulu yol", "run_kutulu");
+test("renk paketleme: carpma == kaydirma", "run_renk_paketleme");
+test("gerileme: | eski anlamlari", "run_gerileme");
+test_summary();

@@ -1,0 +1,94 @@
+// Tulpar Engine — ilk oyun betiği: motor C++ (engine/), oyun mantığı Tulpar.
+//
+// Çalıştır (masaüstü, pencere):   ./tulpar examples/engine_ilk_oyun.tpr
+// Pencersiz doğrulama (CI/benim):  TULPAR_ENGINE_HEADLESS=120 TULPAR_ENGINE_OUT=/tmp/oyun.ppm ./tulpar examples/engine_ilk_oyun.tpr
+// Android:                          ./tulpar build --target=android examples/engine_ilk_oyun.tpr out/ilk_oyun --apk
+// Ayrıntılı log:                    TULPAR_ENGINE_LOG=3 ./tulpar examples/engine_ilk_oyun.tpr
+//
+// Oyun: zemin + kutu yığını + kırmızı top (oyuncu). WASD / ok tuşları / sanal
+// joystick yürütür, boşluk / sağ yarım ekran zıplatır. Kutuları devir; her kutu
+// düşünce puan. 30 s'de biter. Kamera topu izler.
+//
+// Not: test koşucusunda COMPILE_ONLY (pencere/GPU ister; headless yol TULPAR_ENGINE_HEADLESS ile).
+
+import "engine";
+
+int SURE_S = 30;
+float HIZ = 4.5;
+float ZIPLAMA = 6.0;
+
+func main() {
+    log_seviyesi(2);
+    if (!motor_ac("Tulpar Engine — ilk oyun", 1280, 720)) {
+        print("motor acilamadi: " + eng_last_error());
+        return;
+    }
+    logla("kurulum: " + eng_gpu_name() + " " + toString(genislik()) + "x" + toString(yukseklik()));
+    gunes(0.5, 1.0, 0.35, 0.85);
+    ortam(renk(42, 46, 56));
+    golge_hacmi(0, 1, 0, 18, 70);
+
+    int zemin = zemin_kur(14, ACIK_GRI);
+    // Kutu yığını: 4x3 piramit
+    array kutular = [];
+    int kat = 0;
+    while (kat < 3) {
+        int i = 0;
+        while (i < 4 - kat) {
+            float x = -1.5 + kat * 0.5 + i * 1.0;
+            push(kutular, kutu(x, 0.5 + kat * 1.0, -4, 0.45, 0.45, 0.45, true, renk(230 - kat * 40, 120 + kat * 40, 60)));
+            i = i + 1;
+        }
+        kat = kat + 1;
+    }
+    logla("kutu yigini: " + toString(len(kutular)) + " kutu");
+    int top = kure(0, 1.0, 4, 0.5, true, KIRMIZI);
+    int lamba = isik(0, 3, -4, TURUNCU, 3.0, 8.0);
+    int puan = 0;
+    float kamera_yaw = 0.0;
+    array devrildi = [];
+    int k = 0;
+    while (k < len(kutular)) { push(devrildi, false); k = k + 1; }
+
+    while (calisiyor()) {
+        kare_basla();
+        float d = dt();
+        // Girdi -> topa yatay hız (kamera yönüne göre)
+        float vx = yon_x() * HIZ;
+        float vz = -yon_y() * HIZ;
+        if (vx != 0.0 || vz != 0.0) { yuru(top, vx, vz); }
+        if (eylem_basildi() && yerde(top)) { itme(top, 0, ZIPLAMA, 0); logla("zipla"); }
+        if (tus_basildi("R")) { isinla(top, 0, 1.0, 4); logla("sifirla"); }
+        if (tus("ESC")) { cikis_iste(); }
+        // Puan: yığından düşen kutu (y < 0.3 ve ilk konumundan uzak)
+        int j = 0;
+        while (j < len(kutular)) {
+            if (!devrildi[j] && konum_y(kutular[j]) < 0.3) {
+                devrildi[j] = true;
+                puan = puan + 1;
+                logla("kutu devrildi: " + toString(j) + " puan " + toString(puan));
+            }
+            j = j + 1;
+        }
+        // Kamera topu izler
+        float tx = konum_x(top);
+        float tz = konum_z(top);
+        kamera(tx + 0.0, 6.0, tz + 10.0, tx, 0.8, tz - 2.0);
+        // Düşen top: sıfırla
+        if (konum_y(top) < -5.0) { isinla(top, 0, 1.0, 4); logla("top dustu, sifirlandi"); }
+        // HUD
+        durum_seridi();
+        int kalan = SURE_S - toInt(zaman());
+        yazi("puan " + toString(puan) + "   sure " + toString(kalan), 22, 56, 1.2, SARI);
+        yazi("WASD/ok: yuru   bosluk/dokun: zipla   R: sifirla", 22, 92, 0.9, ACIK_GRI);
+        if (kalan <= 0) {
+            yazi("BITTI — puan " + toString(puan), 22, 130, 1.6, BEYAZ);
+            if (zaman() > SURE_S + 3) { cikis_iste(); }
+        }
+        kare_bitir();
+    }
+    logla("son puan " + toString(puan) + ", kare " + toString(kare_no()));
+    motor_kapat();
+}
+
+main();

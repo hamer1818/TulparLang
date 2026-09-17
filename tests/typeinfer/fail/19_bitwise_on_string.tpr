@@ -1,0 +1,13 @@
+// Beklenen: metin operandli bit islemi reddedilmeli.
+//
+// `s | 1` calisma zamaninda metnin etiketini gorup tam sayiya cevirmeye
+// calisirdi; sonuc anlamsiz bir sayi olurdu ve hicbir yerde hata cikmazdi.
+// Ayri bir fixture cunku metin yolu float yolundan BASKA bir daldan
+// geciyor (VM_VAL_STRING etiketi) ve ikisi ayri ayri gerileyebilir.
+
+// EXPECT: [typecheck]
+// EXPECT: bitwise '|' works on integers only
+
+str s = "maske";
+
+print(s | 1);

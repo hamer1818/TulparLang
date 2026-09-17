@@ -100,6 +100,18 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         // declaration semantics.
         {"struct", TOKEN_TYPE_KW},
         {"var", TOKEN_VAR},
+        // `const x` — DEGERI degil BAGLAMAYI sabitler: `const int n = 5;`
+        // sonrasinda `n = 6;` bir AYRISTIRMA HATASIDIR. Derin degismezlik
+        // YOK: `const` bir dizinin icerigini dondurmaz.
+        //
+        // TURKCE TAKMA AD YOK ve bu bir ihmal DEGIL, olcum: `sabit`
+        // denendi ve `tests/engine_bridge.test.tpr` ANINDA dustu — orada
+        // `int sabit = -1;` diye bir DEGISKEN var. Yani `sabit`i anahtar
+        // kelime yapmak calisan bir testi kiriyor. Bu, deponun bilinen
+        // tuzagi (`move`/`don` ayni sekilde adlari calmisti); yeni bir
+        // anahtar kelime eklerken once `grep -rn --include='*.tpr'`
+        // yapilmali. `degismez` de ayni riski tasidigi icin secilmedi.
+        {"const", TOKEN_CONST},
         // `let` is an alias for `var` (type-inferred local) — familiar to
         // JS/Rust/Swift users. Same token, same codegen as `var`.
         {"let", TOKEN_VAR},
@@ -180,6 +192,15 @@ void Token::print() const {
         "EOF", "ERROR"
     };
     
+    // SINIR DENETIMI: bu tablo enum ile zaten SENKRON DEGIL (MODULO,
+    // FAT_ARROW, PIPE, DOTDOT ve yeni bit tokenlari yok). Tablo disina
+    // dusen bir token'i yazdirmak tanimsiz okuma demekti.
+    const size_t kNames = sizeof(type_names) / sizeof(type_names[0]);
+    if (static_cast<size_t>(type_) >= kNames) {
+        printf("Token(#%d, \"%s\", line: %d, col: %d)\n",
+               static_cast<int>(type_), value_.c_str(), line_, column_);
+        return;
+    }
     printf("Token(%s, \"%s\", line: %d, col: %d)\n",
            type_names[type_],
            value_.c_str(),
@@ -265,14 +286,141 @@ void Lexer::skip_block_comment() {
     }
 }
 
+// Sayinin hemen ardindan gelemeyecek karakterler (tanimlayici baslangici).
+static bool ident_start_char(char c) {
+    return std::isalpha(static_cast<unsigned char>(c)) || c == '_' ||
+           static_cast<unsigned char>(c) > 127;
+}
+
+// Bir karakterin verilen tabandaki basamak degeri; degilse -1.
+static int digit_value_in_base(char c, int base) {
+    int v;
+    if (c >= '0' && c <= '9')      v = c - '0';
+    else if (c >= 'a' && c <= 'f') v = 10 + (c - 'a');
+    else if (c >= 'A' && c <= 'F') v = 10 + (c - 'A');
+    else return -1;
+    return (v < base) ? v : -1;
+}
+
+// SAYI-HARF BITISIKLIGI TEK BIR ACIK TANIYA CEVRILIYOR.
+//
+// `1u`, `2f`, `1e` (eksik us), `1_` (asili ayirici), `0xFFg` — hepsi bugun
+// sayiyi bitirip ardindan bir TANIMLAYICI okuyordu ve kullanici
+// "Expected ')' after condition" gibi ilgisiz bir mesaj goruyordu.
+// Ozellikle `1u` onemli: GLSL/C'deki isaretsiz sonek ve Tulpar'da isaretsiz
+// tip YOK (docs/engine/FAZ8.md T3) — sessizce `1` saymak yanlis bir zihin
+// modeli kurardi, bu yuzden ACIK hata.
+//
+// Yanlis pozitif riski yok: Tulpar'da "sayi hemen ardindan tanimlayici"
+// dizilimi HICBIR gecerli programda yok (olculdu: examples/, lib/, tests/,
+// packages/ icinde tek ornek cikmadi; `camera3d`/`sha1` gibi adlar HARFLE
+// basladigi icin bu yola hic girmiyor).
+static Token number_suffix_error(int line, int column) {
+    fprintf(stderr,
+            tulpar::i18n::tr_en(
+                "Sozcukleyici Hatasi: sayidan hemen sonra harf gelemez — "
+                "sayi soneki (`1u`, `2f`) desteklenmiyor (satir %d, sutun %d)\n",
+                "Lexer Error: a letter cannot follow a number directly — "
+                "numeric suffixes (`1u`, `2f`) are not supported "
+                "(line %d, col %d)\n"),
+            line, column);
+    return Token(TOKEN_ERROR, "", line, column);
+}
+
 Token Lexer::read_number() {
     int start_line = line_;
     int start_column = column_;
     std::string buffer;
     bool is_float = false;
-    
+
+    // ------------------------------------------------------------------
+    // TABAN ONEKLERI: `0xFF` (onaltilik) ve `0b1010` (ikilik).
+    //
+    // Neden ikilik de var: bit islemleri gelince maske yazmanin dogal
+    // bicimi bu (`0b1011`), ve ayni tarama dongusunu paylastigi icin
+    // maliyeti tek bir `base` degiskeni. Sekizlik (`0o`) EKLENMEDI —
+    // bugunku kodda hicbir kullanimi yok ve C'nin "bassiz sifir sekizlik"
+    // kurali (`010` == 8) sessiz bir tuzak; onu hic acmamak daha iyi.
+    //
+    // Degeri BURADA cozup onluk metne ceviriyoruz. Ayristirici sayi
+    // metnini `std::stoll(deger)` ile okuyor (taban 10); `0x`li metni ona
+    // vermek ya sessizce 0 verirdi ya da ikinci bir tabanli okuma yolu
+    // acardi. Onluk sayilar ESKI YOLDA kaliyor — us/ondalik/tasma
+    // davranisi hic degismesin diye.
+    if (current_char_ == '0' && (peek() == 'x' || peek() == 'X' ||
+                                 peek() == 'b' || peek() == 'B')) {
+        char kind = peek();
+        int base = (kind == 'x' || kind == 'X') ? 16 : 2;
+        advance(); // '0'
+        advance(); // 'x' / 'b'
+        unsigned long long acc = 0;
+        int digits = 0;
+        bool overflow = false;
+        while (current_char_ != '\0') {
+            if (current_char_ == '_') {
+                // Ayirici YALNIZ iki basamak ARASINDA. `0x_F` ve `0xF_`
+                // basamak sayilmaz; asagidaki "basamak yok" / kalan `_`
+                // tanimlayici yolu bunlari GORUNUR hataya cevirir.
+                if (digits == 0 || digit_value_in_base(peek(), base) < 0) break;
+                advance();
+                continue;
+            }
+            int d = digit_value_in_base(current_char_, base);
+            if (d < 0) break;
+            if (acc > (~0ULL - (unsigned long long)d) / (unsigned long long)base)
+                overflow = true;
+            acc = acc * (unsigned long long)base + (unsigned long long)d;
+            digits++;
+            advance();
+        }
+        if (digits == 0) {
+            fprintf(stderr,
+                    tulpar::i18n::tr_en(
+                        "Sozcukleyici Hatasi: '0%c' onekinden sonra basamak "
+                        "yok (satir %d, sutun %d)\n",
+                        "Lexer Error: no digits after '0%c' prefix "
+                        "(line %d, col %d)\n"),
+                    kind, start_line, start_column);
+            return Token(TOKEN_ERROR, std::string("0") + kind,
+                         start_line, start_column);
+        }
+        if (overflow) {
+            fprintf(stderr,
+                    tulpar::i18n::tr_en(
+                        "Sozcukleyici Hatasi: tabanli sayi 64 bite sigmiyor "
+                        "(satir %d, sutun %d)\n",
+                        "Lexer Error: base-prefixed number does not fit in "
+                        "64 bits (line %d, col %d)\n"),
+                    start_line, start_column);
+            return Token(TOKEN_ERROR, "0", start_line, start_column);
+        }
+        if (ident_start_char(current_char_))
+            return number_suffix_error(start_line, start_column);
+        // 64 bitin TAMAMI yazilabilir: `0xFFFFFFFFFFFFFFFF` -> -1.
+        // Tulpar'in `int`i ISARETLI 64 bit ve isaretsiz tip YOK; maske
+        // yazan kullanicinin istedigi bit deseni tam olarak budur.
+        return Token(TOKEN_INT_LITERAL,
+                     std::to_string(static_cast<long long>(acc)),
+                     start_line, start_column);
+    }
+
+    // Onluk yol (degismedi) + BASAMAK AYIRICI `_`.
+    //
+    // `1_000_000`. Ayirici yalniz iki BASAMAK arasinda gecerli; `1_`,
+    // `1._0`, `_1` degil. Bu kosul yuk tasiyor: gevsek birakilsaydi `x = 1_;`
+    // sessizce 1 olurdu. Su anki halde `_` sayinin disinda kalir, ardindan
+    // tanimlayici olarak okunur ve ayristirici GORUNUR hata verir.
     while (current_char_ != '\0' &&
-           (std::isdigit(current_char_) || current_char_ == '.')) {
+           (std::isdigit(current_char_) || current_char_ == '.' ||
+            current_char_ == '_')) {
+        if (current_char_ == '_') {
+            if (buffer.empty() ||
+                !std::isdigit(static_cast<unsigned char>(buffer.back())) ||
+                !std::isdigit(static_cast<unsigned char>(peek())))
+                break;
+            advance();
+            continue;
+        }
         if (current_char_ == '.') {
             if (is_float) break; // Second dot - error
             if (peek() == '.') break; // `..` range op — leave for the lexer
@@ -314,6 +462,9 @@ Token Lexer::read_number() {
             }
         }
     }
+
+    if (ident_start_char(current_char_))
+        return number_suffix_error(start_line, start_column);
 
     return Token(is_float ? TOKEN_FLOAT_LITERAL : TOKEN_INT_LITERAL,
                  buffer, start_line, start_column);
@@ -581,6 +732,43 @@ Token Lexer::next_token() {
             advance(); advance();
             return Token(TOKEN_DOTDOT, "..", start_line, start_column);
         }
+        // Uc karakterli atamali kaydirma — `<<` / `>>`DEN ONCE sinanmali,
+        // yoksa `x <<= 2` once `<<` sonra `=` olarak cikar ve ayristirma
+        // hatasi verir.
+        if (ch == '<' && next_ch == '<' && peek(2) == '=') {
+            advance(); advance(); advance();
+            return Token(TOKEN_SHIFT_LEFT_EQUAL, "<<=", start_line, start_column);
+        }
+        if (ch == '>' && next_ch == '>' && peek(2) == '=') {
+            advance(); advance(); advance();
+            return Token(TOKEN_SHIFT_RIGHT_EQUAL, ">>=", start_line, start_column);
+        }
+        // Atamali bit bicimleri. `&&`/`||` YUKARIDA yakalandigi icin
+        // `&=` ile cakisma yok.
+        if (ch == '&' && next_ch == '=') {
+            advance(); advance();
+            return Token(TOKEN_BIT_AND_EQUAL, "&=", start_line, start_column);
+        }
+        if (ch == '|' && next_ch == '=') {
+            advance(); advance();
+            return Token(TOKEN_BIT_OR_EQUAL, "|=", start_line, start_column);
+        }
+        if (ch == '^' && next_ch == '=') {
+            advance(); advance();
+            return Token(TOKEN_BIT_XOR_EQUAL, "^=", start_line, start_column);
+        }
+        // Kaydirma. SIRA ONEMLI: `<=` / `>=` YUKARIDA sinandi, `<` / `>` ise
+        // ASAGIDAKI tek karakter switch'inde. Ikisinin arasina girmezse
+        // `a << 2` iki ayri `<` olarak cikar ve ayristirici "ifade bekleniyor"
+        // der. `>>=` gibi atamali bicimler YOK (bkz. rapor: kapsam disi).
+        if (ch == '<' && next_ch == '<') {
+            advance(); advance();
+            return Token(TOKEN_SHIFT_LEFT, "<<", start_line, start_column);
+        }
+        if (ch == '>' && next_ch == '>') {
+            advance(); advance();
+            return Token(TOKEN_SHIFT_RIGHT, ">>", start_line, start_column);
+        }
 
         // Single-character operators
         advance();
@@ -607,7 +795,15 @@ Token Lexer::next_token() {
             case ':': return Token(TOKEN_COLON, value, start_line, start_column);
             case '?': return Token(TOKEN_QUESTION, value, start_line, start_column);
             case '.': return Token(TOKEN_DOT, value, start_line, start_column);
+            // `|` TEK token: hem match kolu ayraci hem bit VEYA. Ayrimi
+            // ayristirici baglamdan yapiyor (bkz. lexer.hpp'deki not).
             case '|': return Token(TOKEN_PIPE, value, start_line, start_column);
+            // Bit islemleri. `&&` ve `||` YUKARIDA yakalandi; buraya yalniz
+            // TEK BASINA gelen `&` dusuyor. Once bu satirlar yoktu ve tek
+            // basina `&` "Unknown character" hatasi veriyordu.
+            case '&': return Token(TOKEN_BIT_AND, value, start_line, start_column);
+            case '^': return Token(TOKEN_BIT_XOR, value, start_line, start_column);
+            case '~': return Token(TOKEN_BIT_NOT, value, start_line, start_column);
             default:
                 fprintf(stderr, tulpar::i18n::tr_for_en("Lexer Error: Unknown character '%c' at line %d, col %d\n"),
                         ch, start_line, start_column);

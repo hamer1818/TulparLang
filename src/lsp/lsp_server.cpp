@@ -819,6 +819,10 @@ void handle_completion(DocumentStore &docs, cJSON *id, cJSON *params) {
         "func", "return", "if", "else", "while", "for", "in", "break",
         "continue", "import", "type", "var", "true", "false", "null",
         "try", "catch", "finally", "throw",
+        // `const` (2026-09-16, G5): yeniden atanamaz yerel. Listede
+        // olmasaydi tamamlama onu HIC onermezdi ve dilde var olmayan bir
+        // kelime gibi gorunurdu.
+        "const",
         "int", "float", "str", "bool", "json", "void",
     };
     for (auto kw : kKeywords) {

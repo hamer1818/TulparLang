@@ -11,6 +11,8 @@
 #include "app/virtual_stick.hpp"
 #include "content/font.hpp"
 #include "content/gltf.hpp"
+#include "content/scene_blob.hpp"
+#include "content/scene_runtime.hpp"
 #include "core/jobs/job_system.hpp"
 #include "core/memory/alloc_gate.hpp"
 #include "core/memory/arena.hpp"
@@ -110,6 +112,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   dc.prefer = opts.gpu_prefer ? opts.gpu_prefer : "";
   dc.validation = opts.validation;
   dc.best_practices = opts.validation; // dogrulama acikken Mali linter de acik (rapor sonda)
+  dc.optional_device_extensions = opts.device_extensions;
+  dc.optional_device_extension_count = opts.device_extension_count;
   if (!headless) {
     uint32_t n = 0;
     dc.instance_extensions = host->instance_extensions(host->user, &n);
@@ -128,6 +132,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
               caps.device_name, VK_API_VERSION_MAJOR(caps.api_version), VK_API_VERSION_MINOR(caps.api_version),
               jobs.worker_count(), (int)caps.lazily_allocated_memory, (int)caps.timestamps,
               (int)caps.graphics_pipeline_library, (int)caps.ext_subpass_merge_feedback);
+  for (uint32_t i = 0; i < opts.device_extension_count && i < rhi::DeviceCaps::kMaxOptionalExtensions; i++)
+    std::printf("[engine_demo] istege bagli uzanti %s: %s\n", opts.device_extensions[i], dev.caps().optional_extension_enabled[i] ? "ACIK" : "yok");
 
   uint32_t width = opts.width, height = opts.height;
   rhi::Swapchain swap;
@@ -280,6 +286,23 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   DemoScene scene;
   if (!scene.init(sys, &jobs)) { std::fprintf(stderr, "sahne\n"); return 1; }
   std::printf("[engine_demo] sahne: %u entity, kutu+ajan+eklem\n", scene.entities());
+  // Derlenmis sahne (istege bagli): blob oldugu gibi belleğe, tablolar dogrudan renderer/fizige.
+  static content::SceneRuntime srt;
+  bool have_blob = false;
+  if (opts.scene_blob && *opts.scene_blob) {
+    content::SceneBlobView bv;
+    content::SceneError berr{};
+    char bdir[1024];
+    content::scene_dir_of(opts.scene_blob, bdir, sizeof bdir);
+    if (!content::scene_blob_load(sys, opts.scene_blob, &bv, &berr)) { std::fprintf(stderr, "sahne blob %s: %s\n", opts.scene_blob, berr.msg); return 1; }
+    if (!srt.init(sys, ren, bv, bdir)) { std::fprintf(stderr, "sahne runtime kurulamadi\n"); return 1; }
+    srt.apply_world(ren); // gunes/ortam/golge hacmi blob'dan (kod icindeki sabitlerin yerine)
+    const uint32_t nb = srt.spawn(scene.physics());
+    have_blob = true;
+    std::printf("[engine_demo] sahne blob: %s — %u varlik, %u cizim, %u isik, %u govde (%u fizige), kaynak %u/%u, ozet %016llx\n", opts.scene_blob,
+                bv.h->entity_count, bv.h->draw_count, bv.h->light_count, bv.h->body_count, nb, srt.stats().assets_loaded, bv.h->asset_count,
+                (unsigned long long)bv.hash());
+  }
 
   sim::FixedStep fs;
   Cam cam;
@@ -366,6 +389,7 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       Mat4 proj = Mat4::perspective(kPi / 3.5f, aspect, 0.1f, 200.0f);
       if (!headless && swap.rotation_radians() != 0.0f) proj = Mat4::rotate({0, 0, 1}, swap.rotation_radians()) * proj;
       ren.set_camera(cam_view(cam), proj);
+      ren.set_shadow_focus(cam.target); // yakin golge kademeleri oyuncunun etrafinda
       // 8 renkli nokta isik kutularin uzerinde doner (ilk oyun 8-16 dinamik isik ister).
       ren.clear_point_lights();
       for (uint32_t li = 0; li < 8; li++) {
@@ -376,8 +400,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       if (headless) {
         ren.begin_frame(frame_i);
         scene.draw(ren, ds);
-          draw_lod_spheres(cam);
-          draw_skinned_tubes(frame_i);
+        if (have_blob) { srt.draw(ren, cam_eye(cam), (float)frame_i / 60.0f, &scene.physics()); for (uint32_t k = 0; k <= content::kModelMaxLods; k++) lod_counts[k] = srt.stats().lod[k]; }
+        else { draw_lod_spheres(cam); draw_skinned_tubes(frame_i); }
         draw_hud(ren, font, (float)render_w, (float)render_h, 0.0f, hud_fps, hud_ms, ren.point_light_count(), nullptr,
                  scene.player_position(), false);
         RecordCtx rctx{&ren};
@@ -397,8 +421,8 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           ren.begin_frame(fc.frame_index);
           uint64_t tc = platform::now_ns();
           scene.draw(ren, ds);
-          draw_lod_spheres(cam);
-          draw_skinned_tubes(frame_i);
+          if (have_blob) { srt.draw(ren, cam_eye(cam), (float)frame_i / 60.0f, &scene.physics()); for (uint32_t k = 0; k <= content::kModelMaxLods; k++) lod_counts[k] = srt.stats().lod[k]; }
+          else { draw_lod_spheres(cam); draw_skinned_tubes(frame_i); }
           draw_hud(ren, font, (float)swap.logical_extent().width, (float)swap.logical_extent().height, swap.rotation_radians(),
                    hud_fps, hud_ms, ren.point_light_count(), interactive ? &stick : nullptr, scene.player_position(), interactive);
           uint64_t td = platform::now_ns();
@@ -448,6 +472,11 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
   }
   double total_s = (platform::now_ns() - start_ns) / 1e9;
   std::printf("[engine_demo] toplam %u kare, %.1f s, ortalama %.1f fps\n", frame_i, total_s, total_s > 0 ? frame_i / total_s : 0.0);
+  if (have_blob) {
+    const content::SceneRuntimeStats ss = srt.stats();
+    std::printf("[engine_demo] sahne blob son kare: %u cizim, %u isik, %u govde\n", ss.draws, ss.lights, ss.bodies);
+    srt.despawn(scene.physics());
+  }
   if (adev.ok()) {
     audio::MixerStats ms = mixer.stats();
     std::printf("[engine_demo] ses: %llu callback, %llu kare (%.1f s), tepe %.2f, dusen komut %u\n", (unsigned long long)ms.callbacks,
@@ -469,12 +498,28 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
     if (rhi::write_ppm(opts.out_path, ores.pixels, oc.width, oc.height)) std::printf("[engine_demo] goruntu: %s\n", opts.out_path);
   }
   dev.api().vkDeviceWaitIdle(dev.handle());
+  // IS SISTEMI ONCE SUSTURULUR — alt sistemlerden ONCE.
+  //
+  // Eskiden en SONDA kapaniyordu: fizik, renderer ve cihaz yikilirken worker
+  // thread'leri HALA CALISIYORDU. Jolt'un is uyarlayicisi (FiberJoltJobs)
+  // bizim kuyruga CIPLAK Job* itiyor; `delete impl_->jobs` o havuzu yok
+  // ediyor. Bir worker o sirada elinde eski bir girdi tutuyorsa cop bir
+  // isaretciyi cagiriyor.
+  //
+  // Olculdu (CI macOS/arm64, 2026-09-16): `thread: tulpar-job`, SIGSEGV,
+  // fault_addr 0x8bc94512aa864210 (null degil — COP). Yigin izi iki cerceve,
+  // cunku fiber yigini cozucuyu kesiyor. Dort kosumun ikisinde dustu: yaris.
+  //
+  // `jobs.shutdown()` worker'lari JOIN eder ve hicbir fiber'in park halinde
+  // kalmadigini ENGINE_ASSERT ile dogrular. Ondan sonrasi tek thread'lidir,
+  // yani bu sinif tamamen kapanir. Kapanis yolunda is URETEN kimse yok
+  // (yikim yalniz Vulkan/arena nesnesi serbest birakiyor).
+  jobs.shutdown();
   scene.shutdown();
   ren.shutdown();
   if (off) rhi::offscreen_destroy(off);
   if (!headless) swap.shutdown();
   dev.shutdown();
-  jobs.shutdown();
   return 0;
 }
 

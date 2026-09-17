@@ -24,6 +24,11 @@ struct DemoOptions {
   bool prerotate = true;            // Android on-dondurme (A/B icin kapatilabilir)
   const char *present_mode = nullptr; // "fifo" (vars.), "mailbox", "immediate"
   rhi::SwapchainConfig::Hooks swap_hooks; // Android: Swappy sunum kancalari (host doldurur)
+  const char *const *device_extensions = nullptr; // istege bagli cihaz uzantilari (varsa acilir, raporlanir)
+  uint32_t device_extension_count = 0;
+  // Derlenmis sahne (.sahneb, engine_sahnec / editor Derle): varsa kureler, borular, isiklar ve
+  // govdeler blob'dan gelir ("sahne = blob + kod"); yoksa kod icindeki sabit yerlesim.
+  const char *scene_blob = nullptr;
 };
 
 enum class HostPoll : uint8_t {

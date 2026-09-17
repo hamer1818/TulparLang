@@ -1,0 +1,779 @@
+// Tulpar Engine köprüsü — Tulpar TARAFINDAN uçtan uca: motor C++, oyun Tulpar.
+//
+// Bu suite, C++ kapısının (engine/tests/test_bridge.cpp) göremediğini ölçer:
+// builtin dispatch (eng_* -> aot_eng_*_ptr -> teng_*), tip çıkarımı imzaları,
+// lib/engine.tpr sarmalayıcıları ve VMValue ABI'si gerçekten çalışıyor mu.
+// Pencere AÇILMAZ: eng_set_headless(...) init'ten önce çağrılır.
+//
+// GPU/sürücü yoksa (CI konteyneri) kurulum başarısızdır: o durumda GÖRÜNÜR
+// "ATLANDI" basılır ve suite yeşil sayılır — ama `Tests:` özeti yine basılır
+// (Tuzaklar: özetsiz suite hiç kırmızıya dönemez).
+import "test";
+import "engine";
+
+int g_kutu = 0;
+int g_zemin = 0;
+bool g_hazir = false;
+str g_blob = "";
+
+// Motoru bir kez kurar (100 kare tavanı: döngüyü test sürüyor).
+func kur(): bool {
+    pencersiz(100000, "");
+    log_seviyesi(1);
+    g_hazir = motor_ac("kopru testi", 320, 200);
+    return g_hazir;
+}
+
+func kare(n) {
+    int i = 0;
+    while (i < n) {
+        kare_basla();
+        kare_bitir();
+        i = i + 1;
+    }
+}
+
+// 1) Kurulum: headless, ölçüler, GPU adı dolu.
+func run_kurulum() {
+    assert(eng_headless(), "headless kipte olmali");
+    assert(calisiyor(), "kurulumdan sonra calisiyor() true olmali");
+    assert_eq_int(genislik(), 320);
+    assert_eq_int(yukseklik(), 200);
+    assert(len(eng_gpu_name()) > 0, "GPU adi bos");
+}
+
+// 2) Varlık kurma + nesil etiketli id.
+func run_varlik() {
+    g_zemin = zemin_kur(8.0, ACIK_GRI);
+    g_kutu = kutu(0, 4.0, 0, 0.5, 0.5, 0.5, true, KIRMIZI);
+    int lamba = isik(0, 3, 2, TURUNCU, 3.0, 8.0);
+    assert(g_zemin > 0, "zemin id gecerli olmali");
+    assert(g_kutu > 0, "kutu id gecerli olmali");
+    assert(lamba > 0, "isik id gecerli olmali");
+    assert(g_kutu != g_zemin, "id'ler cakismamali");
+    assert_eq_int(eng_count(), 3);
+    assert(canli(g_kutu), "kutu canli olmali");
+}
+
+// 3) Fizik: zeminli oturur. KONTROL: zemin silinince düşer.
+func run_fizik() {
+    kare(120);
+    float y_zeminli = konum_y(g_kutu);
+    assert(y_zeminli > 0.3 && y_zeminli < 0.8, "kutu zemine oturmali, y=" + toString(y_zeminli));
+    sil(g_zemin);
+    assert(!canli(g_zemin), "zemin silinmis olmali");
+    isinla(g_kutu, 0, 4.0, 0);
+    kare(120);
+    float y_zeminsiz = konum_y(g_kutu);
+    assert(y_zeminsiz < -3.0, "zeminsiz kutu dusmeli, y=" + toString(y_zeminsiz));
+    print("    [bilgi] kutu y: zeminli " + toString(y_zeminli) + ", zeminsiz " + toString(y_zeminsiz));
+}
+
+// 4) Hız / itme: dürtü yatay hız verir, kutu +x'e gider.
+func run_itme() {
+    hiz_ver(g_kutu, 0, 0, 0);
+    isinla(g_kutu, 0, 2.0, 0);
+    itme(g_kutu, 3.0, 0, 0);
+    assert(hiz_x(g_kutu) > 2.5, "itme sonrasi vx > 2.5 olmali");
+    float x0 = konum_x(g_kutu);
+    kare(30);
+    assert(konum_x(g_kutu) > x0 + 0.5, "kutu +x'e gitmeli");
+}
+
+// 5) Zaman ve kare sayacı ilerledi; ölçüm alanları dolu.
+func run_olcum() {
+    assert(kare_no() > 250, "kare sayaci ilerlemeli");
+    assert(zaman() > 4.0, "zaman ilerlemeli (headless dt=1/60)");
+    assert(eng_body_count() >= 1, "en az bir govde olmali");
+}
+
+// 6) Kasıtlı hata: ölü id çağrısı HATA sayacını bir artırır (sessiz yutma yok).
+//    KONTROL: canlı id çağrısı sayacı artırmaz.
+func run_hata_sayaci() {
+    int once = hata_sayisi();
+    float canli_x = konum_x(g_kutu);
+    assert_eq_int(hata_sayisi(), once);
+    int olu = g_zemin;
+    float olu_x = konum_x(olu);
+    assert_eq_float(olu_x, 0.0);
+    assert_eq_int(hata_sayisi(), once + 1);
+}
+
+// 7) Girdi: geçerli tuş adı sessiz (headless'ta false), geçersiz ad HATA.
+func run_tus() {
+    int once = hata_sayisi();
+    assert(!tus("W"), "headless'ta tus basili olmamali");
+    assert(!tus("SPACE"), "headless'ta bosluk basili olmamali");
+    assert_eq_int(hata_sayisi(), once);
+    assert(!tus("YOKTUS"), "bilinmeyen tus false donmeli");
+    assert_eq_int(hata_sayisi(), once + 1);
+}
+
+// 9) Ses: cihaz açılırsa çalan ses sayacı ve tepe değer artar.
+//    KONTROL: durdurunca ikisi de sıfıra döner.
+//    Cihaz yoksa (CI) görünür ATLANDI — ama kapalı cihazda çağrının SESSİZCE
+//    yutulmadığı (hata sayacı artar) yine ölçülür.
+func run_ses() {
+    if (!ses_ac()) {
+        print("    ATLANDI: ses cihazi acilamadi (" + eng_last_error() + ")");
+        int yok = hata_sayisi();
+        assert_eq_int(cal(0, 1.0, false), 0);
+        assert(hata_sayisi() > yok, "kapali cihazda cal() hata loglamali (sessiz yutma yok)");
+        return;
+    }
+    assert(ses_var(), "ses_ac sonrasi ses_var true olmali");
+    assert(len(ses_cihazi()) > 0, "ses cihazi adi bos olmamali");
+    int klip = ton(440.0, 1.0);
+    assert(klip >= 0, "ton klibi olusmali");
+    assert_eq_int(ton(440.0, 1.0), klip);  // aynı (frekans, süre) = aynı tutamaç
+    sleep(150);
+    assert_eq_int(calan_ses(), 0);         // KONTROL: hiçbir ses çalmıyorken 0
+    int ses = cal(klip, 0.4, true);
+    assert(ses != 0, "cal() ses id dondurmeli");
+    sleep(250);
+    int calan = calan_ses();
+    float tepe = ses_tepe();
+    assert(calan >= 1, "calan ses sayaci artmali, calan=" + toString(calan));
+    assert(tepe > 0.05, "tepe deger artmali, tepe=" + toString(tepe));
+    ses_durdur(ses);
+    sleep(250);
+    assert_eq_int(calan_ses(), 0);         // KONTROL: durdurunca sayaç düşer
+    assert(ses_tepe() < 0.001, "durdurunca tepe sifirlanmali");
+    print("    [bilgi] ses " + ses_cihazi() + ": calan " + toString(calan) + " tepe " + toString(tepe) + " -> 0");
+    // WAV yükleme (dosya varsa): aynı yol iki kez yüklenmez, tutamaç kararlı.
+    str wav = "examples/assets/sesler/altin.wav";
+    if (file_exists(wav)) {
+        int wklip = ses_yukle(wav);
+        assert(wklip >= 0, "wav klibi yuklenmeli: " + wav);
+        assert_eq_int(ses_yukle(wav), wklip);
+        assert(wklip != klip, "wav klibi ton klibinden farkli tutamac almali");
+    } else {
+        print("    [bilgi] wav yok, yalniz ton klibi olculdu: " + wav);
+    }
+    int once = hata_sayisi();
+    assert_eq_int(cal(999, 1.0, false), 0);  // olmayan klip: hata
+    assert_eq_int(hata_sayisi(), once + 1);
+    sesleri_durdur();
+    ses_seviyesi(0.5);
+    ses_kapat();
+    assert(!ses_var(), "ses_kapat sonrasi kapali olmali");
+}
+
+// 10) Model animasyonu: klip bilgileri + varlığa klip atama.
+//     KONTROL: olmayan klip hata verir; döngülü klip bitmez, döngüsüz biter.
+func run_animasyon() {
+    int m = model_yukle("engine/tests/assets/skin_tube.gltf");
+    if (m < 0) {
+        print("    ATLANDI: skin_tube.gltf yok — animasyon kapisi kosmadi");
+        return;
+    }
+    assert_eq_int(klip_sayisi(m), 1);
+    assert_eq_str(klip_adi(m, 0), "bend");
+    float sure = klip_suresi(m, 0);
+    assert(sure > 0.5, "klip suresi > 0.5 olmali, sure=" + toString(sure));
+    int once = hata_sayisi();
+    assert_eq_float(klip_suresi(m, 9), 0.0);   // KONTROL: olmayan klip
+    assert_eq_int(hata_sayisi(), once + 1);
+    int e = model_koy(m, 0, 0, 0, 1.0, BEYAZ);
+    assert(e > 0, "model varligi kurulmali");
+    animasyon(e, 0, 1.0, true);
+    assert_eq_float(animasyon_zamani(e), 0.0);
+    kare(30);                                   // headless dt = 1/60 -> 0.5 s
+    float t = animasyon_zamani(e);
+    assert(t > 0.4 && t < 0.6, "klip zamani ~0.5 olmali, t=" + toString(t));
+    assert(!animasyon_bitti(e), "dongulu klip bitmemeli");
+    animasyon(e, 0, 4.0, false);                // tek sefer, 4x hız
+    kare(60);
+    assert(animasyon_bitti(e), "dongusuz klip sure dolunca bitmeli");
+    animasyon_dur(e);
+    assert_eq_float(animasyon_zamani(e), 0.0);
+    print("    [bilgi] animasyon: klip " + klip_adi(m, 0) + " " + toString(sure) + " s, t=" + toString(t));
+    sil(e);
+}
+
+// Derlenmiş sahne adayları (türetilmiş dosya: yoksa kapı görünür atlanır).
+func sahne_blob_bul(): str {
+    array yollar = ["examples/assets/arena.sahneb", "assets/arena.sahneb"];
+    int i = 0;
+    while (i < len(yollar)) {
+        if (sahne_yukle(yollar[i])) { return yollar[i]; }
+        i = i + 1;
+    }
+    return "";
+}
+
+// 11) Sahne varlığına kuvvet + bölüm geçişi.
+//     KONTROL: sabit gövde kımıldamaz ve çağrı hata sayar; boşaltma sonrası
+//     sahne varlığı 0, gövde sayısı düşer, yeniden yükleme başarılı.
+func run_sahne() {
+    int once = hata_sayisi();
+    assert(!sahne_yuklu(), "baslangicta sahne yuklu olmamali");
+    assert(!sahne_bosalt(), "yuklu sahne yokken bosaltma false donmeli");
+    assert_eq_int(hata_sayisi(), once + 1);   // KONTROL: sessiz gecmez
+    g_blob = sahne_blob_bul();
+    if (len(g_blob) == 0) {
+        print("    ATLANDI: derlenmis sahne (.sahneb) yok — bolum gecisi kapisi kosmadi");
+        return;
+    }
+    assert(sahne_yuklu(), "sahne yuklu olmali: " + g_blob);
+    int n = sahne_sayisi();
+    assert(n > 0, "sahnede varlik olmali");
+    int dinamik = -1;
+    int sabit = -1;
+    int i = 0;
+    while (i < n) {
+        if (sahne_dinamik(i)) {
+            if (dinamik < 0) { dinamik = i; }
+        } else {
+            if (sabit < 0) { sabit = i; }
+        }
+        i = i + 1;
+    }
+    if (dinamik >= 0) {
+        sahne_hiz_ver(dinamik, 0, 0, 0);
+        float x0 = sahne_x(dinamik);
+        sahne_itme(dinamik, 4.0, 0, 0);
+        assert(sahne_hiz_x(dinamik) > 3.0, "durtu hiz vermeli");
+        kare(30);
+        float x1 = sahne_x(dinamik);
+        assert(x1 > x0 + 0.5, "sahne govdesi durtuyle yer degistirmeli: " + toString(x0) + " -> " + toString(x1));
+        print("    [bilgi] sahne kuvveti: " + sahne_adi(dinamik) + " x " + toString(x0) + " -> " + toString(x1));
+    } else {
+        print("    ATLANDI: sahnede dinamik govde yok — kuvvet kapisi kosmadi");
+    }
+    if (sabit >= 0) {
+        float sx = sahne_x(sabit);
+        int h0 = hata_sayisi();
+        sahne_itme(sabit, 9.0, 0, 0);
+        assert_eq_int(hata_sayisi(), h0 + 1);  // KONTROL: dinamik olmayan = hata
+        kare(30);
+        assert_eq_float(sahne_x(sabit), sx);   // KONTROL: kimildamadi
+    }
+    int govde0 = eng_body_count();
+    assert(sahne_bosalt(), "bosaltma basarili olmali");
+    assert(!sahne_yuklu(), "bosaltma sonrasi sahne yuklu olmamali");
+    assert_eq_int(sahne_sayisi(), 0);
+    int govde1 = eng_body_count();
+    assert(govde1 < govde0, "sahne govdeleri fizikten cikmali: " + toString(govde0) + " -> " + toString(govde1));
+    assert(bolum_gec(g_blob), "bolum gecisi (yeniden yukleme) basarili olmali");
+    assert_eq_int(sahne_sayisi(), n);
+    kare(1);
+    assert_eq_int(eng_body_count(), govde0);
+    print("    [bilgi] bolum gecisi: govde " + toString(govde0) + " -> " + toString(govde1) + " -> " + toString(eng_body_count()));
+}
+
+// 12) Işın testi: ANALİTİK — bilinen konumdaki kutuya atılan ışının mesafesi
+//     hesaplanabilir. KONTROLLER: ıskalayan ışın -1 döner ve id tutmaz; menzil
+//     kısaysa bulmaz; sıfır yön/menzil hata sayar; `atla` kendi gövdesini geçer
+//     ve atlamadan aynı ışın KENDİ gövdesini bulur.
+func run_isin() {
+    // Sahnenin geri kalanından uzakta kur (z=-40 civarı boş).
+    int hedef = kutu(0, 0.5, -46.0, 0.5, 0.5, 0.5, false, TURUNCU);  // ön yüz z=-45.5
+    kare(2);                                   // geniş faz ağacı güncellensin
+    float d = isin(0, 0.5, -40.0, 0, 0, -1, 20.0, 0);
+    assert_close(d, 5.5, 0.05);
+    assert_eq_int(isin_id(), hedef);
+    assert_close(isin_z(), -45.5, 0.05);
+    assert(isin_nz() > 0.99, "carpma normali +z olmali, nz=" + toString(isin_nz()));
+    assert_eq_int(isin_sahne(), -1);            // kopru varligi, sahne govdesi degil
+    // KONTROL 1: ters yönde hiçbir şey yok.
+    float iska = isin(0, 0.5, -40.0, 0, 0, 1, 20.0, 0);
+    assert_eq_float(iska, -1.0);
+    assert_eq_int(isin_id(), 0);
+    // KONTROL 2: menzil kısa -> hedef menzil dışında.
+    assert_eq_float(isin(0, 0.5, -40.0, 0, 0, -1, 3.0, 0), -1.0);
+    // KONTROL 3: sıfır yön ve sıfır menzil HATA sayar (sessiz yutma yok).
+    int once = hata_sayisi();
+    assert_eq_float(isin(0, 0.5, -40.0, 0, 0, 0, 20.0, 0), -1.0);
+    assert_eq_float(isin(0, 0.5, -40.0, 0, 0, -1, 0.0, 0), -1.0);
+    assert_eq_int(hata_sayisi(), once + 2);
+    // `atla`: ışın kendi gövdesinin içinden başlasa bile onu geçer.
+    int kendi = kure(0, 0.5, -40.0, 0.4, false, KIRMIZI);
+    kare(2);
+    float atlamali = isin(0, 0.5, -40.0, 0, 0, -1, 20.0, kendi);
+    assert_close(atlamali, 5.5, 0.1);
+    assert_eq_int(isin_id(), hedef);
+    // KONTROL: atlamadan aynı ışın KENDİ gövdesini bulur (mesafe 0).
+    assert_eq_float(isin(0, 0.5, -40.0, 0, 0, -1, 20.0, 0), 0.0);
+    assert_eq_int(isin_id(), kendi);
+    // Görüş hattı: arada duvar varken kapalı, duvar silinince açık.
+    int duvar = kutu(0, 1.0, -43.0, 3.0, 1.0, 0.25, false, GRI);
+    kare(2);
+    assert(!gorus_var(kendi, hedef), "duvar arkasindaki hedefe gorus kapali olmali");
+    sil(duvar);
+    kare(2);
+    assert(gorus_var(kendi, hedef), "duvar silininca gorus acik olmali");
+    print("    [bilgi] isin: hedef " + toString(d) + " m, atlamali " + toString(atlamali) + " m, iska " + toString(iska));
+    sil(kendi);
+    sil(hedef);
+}
+
+// 13) Küre sorgusu: yakındaki gövde bulunur, KONTROL: uzaktaki bulunmaz.
+//     Sıralama yakından uzağa; silinen varlık bir daha çıkmaz.
+func run_yakinlik() {
+    int yakin = kutu(0, 0.5, -60.0, 0.4, 0.4, 0.4, false, TURUNCU);   // merkeze 1.0
+    int orta = kutu(0, 0.5, -62.5, 0.4, 0.4, 0.4, false, MAVI);       // merkeze 3.5
+    int uzak = kutu(0, 0.5, -70.0, 0.4, 0.4, 0.4, false, YESIL);      // merkeze 11.0
+    kare(2);
+    int n = yakinlar(0, 0.5, -59.0, 5.0, 0);
+    assert_eq_int(n, 2);                         // yakin + orta; uzak menzil disi
+    assert_eq_int(yakin_id(0), yakin);           // yakindan uzaga sirali
+    assert_eq_int(yakin_id(1), orta);
+    assert_close(yakin_uzaklik(0), 1.0, 0.05);
+    assert_close(yakin_uzaklik(1), 3.5, 0.05);
+    assert_eq_int(en_yakin(0, 0.5, -59.0, 5.0, 0), yakin);
+    // KONTROL 1: küçük yarıçapla hiçbiri BULUNMAZ. Ölçüt varlığın SINIR
+    // KÜRESİ olduğu için eşik merkez uzaklığı değil: yarım kenarı 0.4 olan
+    // kutunun sınır yarıçapı 0.693, merkez uzaklığı 1.0 -> 0.2 yarıçap dışarıda.
+    assert_eq_int(yakinlar(0, 0.5, -59.0, 0.2, 0), 0);
+    assert_eq_int(en_yakin(0, 0.5, -59.0, 0.2, 0), 0);
+    // KONTROL 2: `atla` en yakını eler, sonraki öne geçer.
+    assert_eq_int(en_yakin(0, 0.5, -59.0, 5.0, yakin), orta);
+    // KONTROL 3: sınır dışı dizin ve sıfır yarıçap HATA sayar.
+    int once = hata_sayisi();
+    assert_eq_int(yakin_id(9), 0);
+    assert_eq_int(yakinlar(0, 0.5, -59.0, 0.0, 0), 0);
+    assert_eq_int(hata_sayisi(), once + 2);
+    // Silinen varlık sonuçlardan düşer.
+    sil(orta);
+    assert_eq_int(yakinlar(0, 0.5, -59.0, 5.0, 0), 1);
+    print("    [bilgi] yakinlik: r=5 -> 2 sonuc (1.0 / 3.5 m), r=0.2 -> 0, uzak 11 m disarida");
+    sil(yakin);
+    sil(uzak);
+}
+
+// 14) Navmesh: derlenmiş sahnedeki bake'in sorgusu.
+//     KONTROLLER: navmesh'i OLMAYAN sahnede nav_var() false ve nav_yol() hata
+//     sayar; navmesh'i olan sahnede iki köşe arası yol bulunur ve ilk nokta
+//     başlangıca yakındır; mesh dışındaki hedef kısmi/boş yol verir.
+func run_nav() {
+    // Önce navmeshsiz sahne (arena: zemini betikten gelir, sabit kutu zemin yok).
+    if (sahne_yuklu()) {
+        assert(!nav_var(), "arena sahnesinde navmesh olmamali (zemin betikten)");
+        int once = hata_sayisi();
+        assert_eq_int(nav_yol(0, 0.2, 0, 1.0, 0.2, 1.0), 0);
+        assert_eq_int(hata_sayisi(), once + 1);   // KONTROL: sessiz gecmez
+        sahne_bosalt();
+    }
+    array yollar = ["examples/assets/salon1.sahneb", "assets/salon1.sahneb"];
+    str blob = "";
+    int i = 0;
+    while (i < len(yollar)) {
+        if (file_exists(yollar[i])) { blob = yollar[i]; i = len(yollar); } else { i = i + 1; }
+    }
+    if (len(blob) == 0) {
+        print("    ATLANDI: salon1.sahneb yok (engine_sahnec ile derlenir) — navmesh kapisi kosmadi");
+        return;
+    }
+    assert(bolum_gec(blob), "salon sahnesi yuklenmeli: " + blob);
+    kare(2);
+    assert(nav_var(), "salon sahnesinde navmesh olmali (sabit kutu zemin bake edildi)");
+    assert(nav_poligon() > 4, "navmesh poligon sayisi anlamli olmali: " + toString(nav_poligon()));
+    // Çapraz iki köşe: sütunların arasından geçen yol en az iki nokta.
+    int n = nav_yol(-10.0, 0.3, 10.0, 10.0, 0.3, -10.0);
+    assert(n >= 2, "kosegen yol bulunmali, nokta=" + toString(n));
+    assert(!nav_kismi(), "salon icindeki hedefe tam yol olmali");
+    assert_close(nav_x(0), -10.0, 1.5);
+    assert_close(nav_z(0), 10.0, 1.5);
+    assert_close(nav_x(n - 1), 10.0, 1.5);
+    assert_close(nav_z(n - 1), -10.0, 1.5);
+    // KONTROL: mesh'in ÇOK dışındaki hedefe yol yok (ya da kısmi).
+    int disari = nav_yol(-10.0, 0.3, 10.0, 400.0, 0.3, 400.0);
+    assert(disari == 0 || nav_kismi(), "mesh disindaki hedef yol vermemeli ya da kismi olmali");
+    // KONTROL: sınır dışı nokta dizini hata sayar.
+    int h0 = hata_sayisi();
+    assert_eq_float(nav_x(999), 0.0);
+    assert_eq_int(hata_sayisi(), h0 + 1);
+    print("    [bilgi] navmesh: " + toString(nav_poligon()) + " poligon, kosegen yol " + toString(n) + " nokta, mesh disi " + toString(disari));
+    sahne_bosalt();
+}
+
+// ---------------------------------------------------------------------------
+// 19) Navmesh ajanı: yol TAKİBİ (motor arar, lib takip eder) + en yakın nokta
+//     ve doğru görüş sorguları.
+//     KONTROLLER: (a) hızı 0 olan ajan ilerlemez ve varamaz — "vardı" sonucunun
+//     ilerlemeden değil HAREKETTEN geldiğini kanıtlar; (b) iki ajan aynı karede
+//     farklı hedefe yol alır ve birbirinin yolunu takip etmez (motorun nokta
+//     tamponu tek, kopyalama olmasaydı ikincisi birincininkini ezerdi);
+//     (c) navmeshsiz sahnede ajan_hedef false döner.
+// ---------------------------------------------------------------------------
+func run_ajan() {
+    array yollar = ["examples/assets/salon1.sahneb", "assets/salon1.sahneb"];
+    str blob = "";
+    int i = 0;
+    while (i < len(yollar)) {
+        if (file_exists(yollar[i])) { blob = yollar[i]; i = len(yollar); } else { i = i + 1; }
+    }
+    if (len(blob) == 0) {
+        print("    ATLANDI: salon1.sahneb yok (engine_sahnec ile derlenir) — ajan kapisi kosmadi");
+        return;
+    }
+    assert(bolum_gec(blob), "salon sahnesi yuklenmeli: " + blob);
+    kare(2);
+    assert(nav_var(), "salon sahnesinde navmesh olmali");
+
+    // --- en yakın nokta: mesh'in ÜSTÜNDEKİ bir nokta mesh'e yapışmalı
+    assert(nav_yakin(-10.0, 3.0, 10.0), "mesh ustundeki nokta yapistirilabilmeli");
+    float ny = nav_yakin_y();
+    assert(ny < 2.0, "yapistirilan nokta zemine inmeli, y=" + toString(ny));
+    // KONTROL: arama kutusunun ÇOK dışındaki nokta bulunamaz (sessiz 0 değil)
+    assert(!nav_yakin(5000.0, 5000.0, 5000.0), "cok uzak nokta yapistirilmamali");
+
+    // --- doğru görüş: aynı açık alandaki iki yakın nokta arasında engel yok
+    bool engel_yakin = nav_gorus(-10.0, 0.3, 10.0, -9.0, 0.3, 9.0);
+    assert(!engel_yakin, "bitisik iki nokta arasinda engel olmamali");
+    assert_close(nav_gorus_t(), 1.0, 0.001);   // engel yoksa t = 1
+    // KONTROL: salonun çapraz ucuna doğru görüş ENGELLİ olmalı (sütunlar var).
+    // Engelliyse t < 1 gelir; iki ölçüt birbirini doğrular.
+    bool engel_uzak = nav_gorus(-10.0, 0.3, 10.0, 10.0, 0.3, -10.0);
+    if (engel_uzak) { assert(nav_gorus_t() < 1.0, "engel varsa t 1'den kucuk olmali"); }
+
+    // --- ajan: yolu takip edip hedefe varmalı
+    int a = ajan_olustur(-10.0, 0.3, 10.0, 6.0, 0.4);
+    assert(a >= 0, "ajan olusturulmali");
+    assert(ajan_hedef(a, 10.0, 0.3, -10.0), "ajana hedef verilebilmeli");
+    int kalan0 = ajan_kalan(a);
+    assert(kalan0 > 0, "hedef sonrasi yolda nokta olmali");
+    assert(!ajan_vardi(a), "daha yola cikmadan varmis olamaz");
+    // KONTROL: hızı 0 olan ikinci ajan aynı hedefe ASLA varmaz.
+    int duragan = ajan_olustur(-10.0, 0.3, 10.0, 0.0, 0.4);
+    assert(ajan_hedef(duragan, 10.0, 0.3, -10.0), "duran ajana da hedef verilebilmeli");
+
+    float ilk_x = ajan_x(a);
+    float ilk_z = ajan_z(a);
+    int adim = 0;
+    while (adim < 600) {
+        ajan_ilerlet(a, 0.016);
+        ajan_ilerlet(duragan, 0.016);
+        adim = adim + 1;
+    }
+    assert(ajan_vardi(a), "ajan 600 adimda hedefe varmali, kalan=" + toString(ajan_kalan(a)));
+    assert_close(ajan_x(a), 10.0, 1.5);
+    assert_close(ajan_z(a), -10.0, 1.5);
+    // KONTROL sonucu: duran ajan ne kımıldadı ne vardı.
+    assert(!ajan_vardi(duragan), "hizi 0 olan ajan varamaz (kapi hareketi olcuyor)");
+    assert_close(ajan_x(duragan), -10.0, 0.001);
+    assert_close(ajan_z(duragan), 10.0, 0.001);
+
+    // KONTROL: iki ajan farklı hedefe, yollar KOPYALANDIĞI için karışmaz.
+    int p = ajan_olustur(-10.0, 0.3, 10.0, 5.0, 0.4);
+    int q = ajan_olustur(10.0, 0.3, -10.0, 5.0, 0.4);
+    assert(ajan_hedef(p, 10.0, 0.3, -10.0), "p hedef almali");
+    assert(ajan_hedef(q, -10.0, 0.3, 10.0), "q hedef almali");
+    // q'nun hedefi p'nin başlangıcı: ikisi YER DEĞİŞTİRMELİ. Ölçüt bilerek
+    // "yaklaştılar mı" DEĞİL — yollar karışıp ikisi de aynı yere gitse de
+    // yaklaşırlardı (bu ölçütle denendi: hata enjekte edildi, kapı geçti).
+    // Her ajanın KENDİ hedefine varması, yolların ajan başına kopyalandığının
+    // tek geçerli kanıtı.
+    int k = 0;
+    while (k < 600) { ajan_ilerlet(p, 0.016); ajan_ilerlet(q, 0.016); k = k + 1; }
+    assert_close(ajan_x(p), 10.0, 1.5);
+    assert_close(ajan_z(p), -10.0, 1.5);
+    assert_close(ajan_x(q), -10.0, 1.5);
+    assert_close(ajan_z(q), 10.0, 1.5);
+    float pq = sqrt((ajan_x(p) - ajan_x(q)) * (ajan_x(p) - ajan_x(q)) +
+                    (ajan_z(p) - ajan_z(q)) * (ajan_z(p) - ajan_z(q)));
+
+    print("    [bilgi] ajan: yol " + toString(kalan0) + " nokta, " + toString(adim) +
+          " adimda vardi; ilk (" + toString(ilk_x) + " " + toString(ilk_z) +
+          ") -> son (" + toString(ajan_x(a)) + " " + toString(ajan_z(a)) +
+          "); yer degistiren iki ajan arasi " + toString(pq) + " birim (baslangicta da ayni)");
+    sahne_bosalt();
+
+    // KONTROL: navmeshsiz sahnede hedef verilemez.
+    int b2 = ajan_olustur(0.0, 0.0, 0.0, 1.0, 0.5);
+    assert(!ajan_hedef(b2, 5.0, 0.0, 5.0), "navmeshsiz sahnede hedef verilememeli");
+}
+
+// ---------------------------------------------------------------------------
+// 15) Anlık-kip arayüz: menü/ayar widget'ları. Pencersiz kipte fare/dokunmatik
+//     YOK, o yüzden köprüye tek karelik bas+bırak ENJEKTE edilir. KONTROLLER:
+//     widget dışına tıklama tetiklemez, devre dışı widget değeri değiştirmez,
+//     eng_ui_begin'siz widget hata sayar.
+func run_ui() {
+    int once = ui_tiklama();
+    // (a) tıklama olmadan düğme tetiklenmez
+    kare_basla();
+    ui_basla();
+    bool t0 = dugme("Basla", 60, 40, 200, 60);
+    ui_bitir();
+    kare_bitir();
+    assert(!t0, "tiklama yokken dugme tetiklenmemeli");
+    assert_eq_int(ui_tiklama(), once);
+    // (b) düğmenin İÇİNE tıklama tetikler ve sayaç artar
+    ui_test_tikla(160, 70);
+    kare_basla();
+    ui_basla();
+    bool t1 = dugme("Basla", 60, 40, 200, 60);
+    ui_bitir();
+    kare_bitir();
+    assert(t1, "dugme icine tiklama tetiklemeli");
+    assert_eq_int(ui_tiklama(), once + 1);
+    // (c) KONTROL: düğmenin DIŞINA tıklama tetiklemez
+    ui_test_tikla(300, 180);
+    kare_basla();
+    ui_basla();
+    bool t2 = dugme("Basla", 60, 40, 200, 60);
+    ui_bitir();
+    kare_bitir();
+    assert(!t2, "dugme disina tiklama tetiklememeli (yanlis pozitif yok)");
+    assert_eq_int(ui_tiklama(), once + 1);
+    // (d) onay kutusu: tıklama değeri çevirir, dışına tıklama çevirmez
+    bool ac = false;
+    ui_test_tikla(160, 70);
+    kare_basla();
+    ui_basla();
+    ac = onay_kutusu("Parlama", 60, 40, 200, 60, ac);
+    ui_bitir();
+    kare_bitir();
+    assert(ac, "onay kutusu tiklamayla acilmali");
+    ui_test_tikla(300, 180);
+    kare_basla();
+    ui_basla();
+    ac = onay_kutusu("Parlama", 60, 40, 200, 60, ac);
+    ui_bitir();
+    kare_bitir();
+    assert(ac, "KONTROL: disariya tiklama onay kutusunu degistirmemeli");
+    // (e) kaydırıcı: izin ORTASINA tıklama ortadaki değeri verir
+    float ses = 0.1;
+    ui_test_tikla(160, 130);
+    kare_basla();
+    ui_basla();
+    ses = kaydirici("Ses", 60, 110, 200, 44, ses, 0.0, 1.0);
+    ui_bitir();
+    kare_bitir();
+    assert_close(ses, 0.5, 0.03);
+    // (f) KONTROL: devre dışı kaydırıcı AYNI tıklamayla değişmez
+    float kilitli = 0.1;
+    ui_test_tikla(160, 130);
+    kare_basla();
+    ui_basla();
+    ui_etkin(false);
+    kilitli = kaydirici("Ses", 60, 110, 200, 44, kilitli, 0.0, 1.0);
+    ui_etkin(true);
+    ui_bitir();
+    kare_bitir();
+    assert_eq_float(kilitli, 0.1);
+    // (g) KONTROL: eng_ui_begin'siz widget sessizce çalışmaz, HATA sayar
+    int h0 = hata_sayisi();
+    kare_basla();
+    bool bos = dugme("Baslasiz", 60, 40, 200, 60);
+    kare_bitir();
+    assert(!bos, "ui_basla olmadan dugme tetiklenmemeli");
+    assert_eq_int(hata_sayisi(), h0 + 1);
+    print("    [bilgi] ui: tiklama sayaci " + toString(once) + " -> " + toString(ui_tiklama()) + ", kaydirici orta " + toString(ses) + ", devre disi " + toString(kilitli));
+}
+
+// Geçici dosya yolu (TMPDIR, yoksa /tmp).
+func gecici_yol(ad): str {
+    str d = env("TMPDIR");
+    if (len(d) == 0) { d = "/tmp"; }
+    return d + "/" + ad;
+}
+
+// 16) Kalıcı kayıt: yaz -> diske -> geri oku. KONTROLLER: olmayan anahtar
+//     varsayılanı döner (hata DEĞİL), sayısal olmayan değer hata sayar, bozuk
+//     dosya sessizce yutulmaz (hata sayacı artar, sağlam satırlar okunur).
+func run_kayit() {
+    str yol = gecici_yol("tulpar_kayit_test.txt");
+    int h0 = hata_sayisi();
+    kayit_ac(yol);
+    kayit_temizle();
+    kayit_yaz_sayi("ses", 0.42);
+    kayit_yaz_sayi("rekor", 1234);
+    kayit_yaz_metin("ad", "gezgin");
+    assert(kayit_kaydet(), "kayit diske yazilmali: " + yol);
+    assert_eq_int(hata_sayisi(), h0);              // saglam yolda hata yok
+    // Başka bir depoya geç ve geri dön: değerler gerçekten DOSYADAN geliyor.
+    kayit_ac(gecici_yol("tulpar_kayit_bos.txt"));
+    kayit_temizle();
+    assert_eq_int(kayit_sayisi(), 0);
+    assert(kayit_ac(yol), "yazilan dosya yeniden okunmali");
+    assert_eq_int(kayit_sayisi(), 3);
+    assert_close(kayit_oku_sayi("ses", 0.0), 0.42, 0.00001);
+    assert_eq_int(toInt(kayit_oku_sayi("rekor", 0)), 1234);
+    assert_eq_str(kayit_oku_metin("ad", ""), "gezgin");
+    assert(kayit_var("ses"), "yazilan anahtar var olmali");
+    // KONTROL 1: olmayan anahtar varsayılanı döner ve HATA SAYMAZ.
+    int h1 = hata_sayisi();
+    assert(!kayit_var("boyle_bir_anahtar_yok"), "olmayan anahtar bulunmamali");
+    assert_close(kayit_oku_sayi("boyle_bir_anahtar_yok", 7.5), 7.5, 0.00001);
+    assert_eq_str(kayit_oku_metin("boyle_bir_anahtar_yok", "vars"), "vars");
+    assert_eq_int(hata_sayisi(), h1);
+    // KONTROL 2: sayısal olmayan değer HATA sayar ve varsayılanı döndürür.
+    assert_close(kayit_oku_sayi("ad", 3.0), 3.0, 0.00001);
+    assert_eq_int(hata_sayisi(), h1 + 1);
+    // KONTROL 3: BOZUK dosya sessizce yutulmaz — bozuk satır hata sayar,
+    // sağlam satırlar yine okunur.
+    str bozuk = gecici_yol("tulpar_kayit_bozuk.txt");
+    assert(write_file(bozuk, "# yorum satiri\nses=0.5\nbu satirda esittir yok\nrekor=9\n"), "bozuk dosya yazilmali");
+    int h2 = hata_sayisi();
+    kayit_ac(bozuk);
+    assert_eq_int(hata_sayisi(), h2 + 1);
+    assert_eq_int(kayit_sayisi(), 2);
+    assert_close(kayit_oku_sayi("rekor", 0.0), 9.0, 0.00001);
+    print("    [bilgi] kayit: " + yol + " 3 anahtar gidip geldi; bozuk dosyada 1 hata, 2 saglam satir");
+    kayit_ac(yol);
+}
+
+// Derlenmiş sahne dizini (masaüstünde depo kökü, cihazda çıkarma kökü).
+func sahne_dizini(): str {
+    array dizinler = ["examples/assets", "assets"];
+    int i = 0;
+    while (i < len(dizinler)) {
+        if (file_exists(dizinler[i] + "/salon1.sahneb") && file_exists(dizinler[i] + "/sicak_kucuk.sahneb")) { return dizinler[i]; }
+        i = i + 1;
+    }
+    return "";
+}
+
+// 17) Sahne sıcak yeniden yükleme: izlenen .sahneb değişince sahne kendini
+//     yeniler (editörde "Derle" -> oyun yenilenir). KONTROLLER: dosya
+//     değişmezken olay false kalır (yanlış pozitif yok), olay BİR KEZ true
+//     döner, varlık sayısı YENİ sahneninkine döner, değişim durunca ikinci
+//     yükleme olmaz.
+func run_sicak_yukleme() {
+    str d = sahne_dizini();
+    if (len(d) == 0) {
+        print("    ATLANDI: salon1/sicak_kucuk blob'lari yok (engine_sahnec ile derlenir) — sicak yukleme kapisi kosmadi");
+        return;
+    }
+    // Hedef, blob'ların YANINDA olmalı: sahne kaynakları (gltf) blob'un
+    // dizinine göre çözülür.
+    str hedef = d + "/sicak_izleme.sahneb";
+    assert(dosya_kopyala(d + "/salon1.sahneb", hedef), "ilk blob kopyalanmali");
+    if (sahne_yuklu()) { sahne_bosalt(); }
+    assert(sahne_yukle(hedef), "kopyalanan sahne yuklenmeli: " + hedef);
+    int n1 = sahne_sayisi();
+    str ad1 = sahne_adi(0);
+    assert(n1 > 3, "ilk sahnede varlik olmali");
+    sahne_izle(true);
+    assert(!sahne_yenilendi(), "izleme acilir acilmaz olay olmamali");
+    // KONTROL: dosya DEĞİŞMEDİĞİ sürece yeniden yükleme yok.
+    kare(40);
+    assert(!sahne_yenilendi(), "dosya degismeden yeniden yukleme olmamali (yanlis pozitif)");
+    assert_eq_int(sahne_yenileme_sayisi(), 0);
+    assert_eq_int(sahne_sayisi(), n1);
+    // Beklenen yeni sayı: küçük sahnenin kendi varlık sayısı (3).
+    float t0 = dosya_zamani(hedef);
+    assert(dosya_kopyala(d + "/sicak_kucuk.sahneb", hedef), "yeni blob ustune kopyalanmali");
+    assert(dosya_zamani(hedef) > t0, "kopya dosya damgasini ilerletmeli");
+    kare(40);
+    assert(sahne_yenilendi(), "dosya degisince sahne yeniden yuklenmeli");
+    assert(!sahne_yenilendi(), "olay BIR KEZ true olmali (tuketilir)");
+    assert_eq_int(sahne_yenileme_sayisi(), 1);
+    int n2 = sahne_sayisi();
+    assert_eq_int(n2, 3);
+    assert(n2 != n1, "varlik sayisi yeni sahneninki olmali: " + toString(n1) + " -> " + toString(n2));
+    assert(sahne_adi(0) != ad1 || n2 != n1, "sahne icerigi degismeli");
+    assert(sahne_yolu() == hedef, "izlenen yol korunmali");
+    // KONTROL: değişim durunca ikinci bir yükleme olmaz.
+    kare(40);
+    assert(!sahne_yenilendi(), "degisim yokken ikinci yukleme olmamali");
+    assert_eq_int(sahne_yenileme_sayisi(), 1);
+    sahne_izle(false);
+    print("    [bilgi] sicak yukleme: " + toString(n1) + " varlik (" + ad1 + ") -> " + toString(n2) + " varlik (" + sahne_adi(0) + "), yenileme " + toString(sahne_yenileme_sayisi()));
+    sahne_bosalt();
+    // KONTROL: boşaltıldıktan sonra dosya değişse bile sahne GERİ GELMEZ.
+    sahne_izle(true);
+    assert(dosya_kopyala(d + "/salon1.sahneb", hedef), "blob yeniden kopyalanmali");
+    kare(40);
+    assert(!sahne_yenilendi(), "bosaltilmis sahne kendiliginden geri gelmemeli");
+    assert(!sahne_yuklu(), "bosaltilmis sahne yuklu olmamali");
+    sahne_izle(false);
+}
+
+// 8) Renk paketleme: bit kaydırma yok, çarpma ile (tame rgb() ile aynı).
+func run_renk() {
+    assert_eq_int(renk(255, 255, 255), BEYAZ);
+    assert_eq_int(renk(0, 0, 0), SIYAH);
+    assert_eq_int(renk_a(0, 0, 0, 120), SEFFAF_SIYAH);
+}
+
+// Çarpışma olayları: köprü callback taşıyamadığı için KUYRUK. Bu kapı
+// kuyruğun gerçekten dolduğunu, doğru tarafları ve FİZİKSEL OLARAK DOĞRU bir
+// şiddeti taşıdığını ölçüyor — ve KONTROL olarak hiçbir şeye değmeyen bir
+// gövdenin olay üretmediğini.
+func run_carpisma() {
+    // Ürün: bilinen yükseklikten bırakılan küre zemine çarpar.
+    // v = sqrt(2*g*h); h = 6.0 - 0.5 (yarıçap) = 5.5 -> ~10.39 m/s.
+    int zemin = kutu(30.0, 0.0 - 1.0, 30.0, 6.0, 1.0, 6.0, false, renk(90, 90, 100));
+    int top = kure(30.0, 6.0, 30.0, 0.5, true, renk(220, 80, 60));
+    int olay = 0;
+    float en_sert = 0.0;
+    int a_taraf = 0;
+    int b_taraf = 0;
+    float ny = 0.0;
+    int i = 0;
+    int k = 0;
+    while (k < 200 && olay == 0) {
+        kare(1);
+        int n = carpisma_sayisi();
+        i = 0;
+        while (i < n) {
+            olay = olay + 1;
+            float sd = carpisma_siddeti(i);
+            if (sd > en_sert) {
+                en_sert = sd;
+                a_taraf = carpisma_a(i);
+                b_taraf = carpisma_b(i);
+                ny = carpisma_ny(i);
+            }
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    assert(olay > 0, "carpisma olayi gelmeliydi");
+    assert(en_sert > 8.0 && en_sert < 13.0, "carpma siddeti ~10.4 m/s olmali, " + toString(en_sert));
+    assert(a_taraf != 0 && b_taraf != 0, "iki taraf da kopru varligi olmali");
+    assert(a_taraf != b_taraf, "taraflar farkli olmali");
+    float mutlak_ny = ny;
+    if (mutlak_ny < 0.0) { mutlak_ny = 0.0 - mutlak_ny; }
+    assert(mutlak_ny > 0.9, "zemin carpmasinin normali dusey olmali, ny=" + toString(ny));
+    assert(carpisma_dusen() == 0, "halka tasmamali");
+    print("    [bilgi] carpisma: " + toString(olay) + " olay, siddet " + toString(en_sert)
+        + " m/s (analitik ~10.39), taraflar " + toString(a_taraf) + "/" + toString(b_taraf));
+
+    // KONTROL: zemini sil, küreyi yukarı ışınla — hiçbir şeye değmeden düşerken
+    // olay ÜRETMEMELİ. Bu olmadan kapı "kuyruk doluyor" ile "fizik adımı koştu"yu
+    // ayırt edemezdi.
+    sil(zemin);
+    isinla(top, 30.0, 40.0, 30.0);
+    hiz_ver(top, 0, 0, 0);
+    int bos_olay = 0;
+    k = 0;
+    while (k < 60) {
+        kare(1);
+        bos_olay = bos_olay + carpisma_sayisi();
+        k = k + 1;
+    }
+    assert(bos_olay == 0, "serbest dususte olay olmamali, " + toString(bos_olay));
+    print("    [bilgi] KONTROL zeminsiz serbest dusus: " + toString(bos_olay) + " olay (0 olmali)");
+    sil(top);
+}
+
+if (!kur()) {
+    print("  ATLANDI: motor kurulamadi (" + eng_last_error() + ") — GPU/Vulkan yok");
+} else {
+    test("kurulum headless", "run_kurulum");
+    test("varlik kurma ve id", "run_varlik");
+    test("fizik: zeminli oturur, zeminsiz duser", "run_fizik");
+    test("itme ve hiz", "run_itme");
+    test("zaman/kare olcumu", "run_olcum");
+    test("hata sayaci: olu id", "run_hata_sayaci");
+    test("tus adi dogrulamasi", "run_tus");
+    test("renk paketleme", "run_renk");
+    test("ses: cal ve durdur", "run_ses");
+    test("model animasyonu", "run_animasyon");
+    test("sahne kuvveti ve bolum gecisi", "run_sahne");
+    test("isin testi: bilinen mesafe, iska kontrolu", "run_isin");
+    test("kure sorgusu: yakin bulunur, uzak bulunmaz", "run_yakinlik");
+    test("navmesh: sahne yolu, meshsiz sahne kontrolu", "run_nav");
+    test("arayuz: dugme/onay/kaydirici, enjekte tiklama", "run_ui");
+    test("kalici kayit: yaz-oku, varsayilan, bozuk dosya", "run_kayit");
+    test("sahne sicak yeniden yukleme", "run_sicak_yukleme");
+    test("carpisma olaylari: kuyruk, siddet, kontrol", "run_carpisma");
+    test("navmesh ajani: yol takibi, duran ajan kontrolu", "run_ajan");
+    motor_kapat();
+}
+test_summary();

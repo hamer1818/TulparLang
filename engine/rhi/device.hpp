@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "core/memory/arena.hpp"
+#include "rhi/pipeline_cache.hpp"
 #include "rhi/vk_api.hpp"
 
 namespace tulpar::engine::rhi {
@@ -19,6 +20,9 @@ struct DeviceCaps {
   uint32_t driver_version = 0;
   uint32_t vendor_id = 0;
   uint32_t device_id = 0;
+  // Surucunun boru hatti onbellegi kimligi: bu degistiyse diskteki PSO
+  // onbellegi BASKA bir surucuye aittir (surucu guncellemesi) ve kullanilamaz.
+  uint8_t pipeline_cache_uuid[VK_UUID_SIZE] = {};
   VkPhysicalDeviceType device_type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
   float timestamp_period_ns = 0;  // 0 = zaman damgasi yok
   bool timestamps = false;
@@ -38,6 +42,9 @@ struct DeviceCaps {
   bool ext_host_image_copy = false;
   bool khr_fragment_shading_rate = false;
   bool khr_portability_subset = false; // MoltenVK
+  // DeviceConfig::optional_device_extensions ile istenenlerden acilanlar (ayni sira).
+  static constexpr uint32_t kMaxOptionalExtensions = 8;
+  bool optional_extension_enabled[kMaxOptionalExtensions] = {};
 };
 
 struct DeviceConfig {
@@ -60,6 +67,14 @@ struct DeviceConfig {
   // Pencere varsa: VK_KHR_surface + platform uzantilari (Window verir).
   const char *const *instance_extensions = nullptr;
   uint32_t instance_extension_count = 0;
+  // Cihaz uzantilari: varsa acilir, yoksa sessizce atlanir (caps.optional_extension_enabled).
+  // Ornek: Swappy icin VK_GOOGLE_display_timing (kare istatistigi yalniz bununla).
+  const char *const *optional_device_extensions = nullptr;
+  uint32_t optional_device_extension_count = 0; // <= DeviceCaps::kMaxOptionalExtensions
+  // Kalici boru hatti (PSO) onbellegi dosyasi. nullptr = varsayilani coz
+  // (TULPAR_ENGINE_PSO_CACHE, yoksa $XDG_CACHE_HOME/$HOME/.cache, yoksa $TMPDIR);
+  // "" = KAPALI (yalniz bellek ici onbellek). Bkz. rhi/pipeline_cache.hpp.
+  const char *pso_cache_path = nullptr;
 };
 
 // Bellek: tur basina buyuk blok, bump; serbest birakma yok (cihaz omru).
@@ -114,6 +129,14 @@ public:
   VkQueue queue() const { return queue_; }
   uint32_t queue_family() const { return queue_family_; }
   VkCommandPool command_pool() const { return cmd_pool_; }
+  // Kalici PSO onbellegi: cihaz acilirken kurulur, kapanirken diske yazilir.
+  // VkApi tablosuna takilan ara yordam sayesinde cache vermeyen HER
+  // vkCreateGraphicsPipelines cagrisi (renderer, editor, offscreen) bunu
+  // kullanir ve sayaclarina girer.
+  PsoCache &pso() { return pso_; }
+  const PsoCache &pso() const { return pso_; }
+  // Cozulmus onbellek yolu ("" = kapali).
+  const char *pso_cache_path() const { return pso_.path(); }
 
   // required: bellek turu maskesi (VkMemoryRequirements.memoryTypeBits)
   // flags: istenen ozellikler; lazily_ok: LAZILY_ALLOCATED tercih edilsin
@@ -150,6 +173,7 @@ private:
   // 1.1 cihazda uzanti bicimleri (1.2 cekirdegi yoksa): init_device bunlari acar.
   bool ext_descriptor_indexing_ = false, ext_timeline_semaphore_ = false, ext_buffer_device_address_ = false;
   VkCommandPool cmd_pool_ = VK_NULL_HANDLE;
+  PsoCache pso_;
   VkFence one_shot_fence_ = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
   uint32_t validation_errors_ = 0;

@@ -482,8 +482,27 @@ Bu tablo motorun **neden hem daha hızlı hem daha küçük** olduğunun tamamı
 - **Kapı:** Faz 1–6'nın tüm kapıları bu dilimle yeniden geçilmiş
 
 ### Faz 8 — Tulpar Shader Stage (eski Faz 2; ⚠️ REV: kritik yoldan çıktı)
-- O zamana kadar shader'lar doğrudan Slang'de yazılır. Önkoşul: §11 sistem alt kümesi
-- Tulpar → Slang → SPIR-V / MSL; otomatik precision (fp16), permutation üretimi (sahne bilgisiyle), CPU-GPU layout doğrulaması, uniform packing
+> ⚠️ REV-4 (2026-09-16, **fizibilite ölçüldü** — ayrıntı: `FAZ8.md`): backend olarak **Slang DEĞİL,
+> GLSL üretip `glslc`'ye vermek** seçildi. Üç ölçüme dayanıyor: (1) `slangc` bu makinede yok ve Arch'taki
+> `slang` paketi S-Lang yorumlayıcısı, shader Slang değil; (2) motorun bugün tek çıktı biçimi SPIR-V
+> (macOS MoltenVK üstünden, Metal backend'i Faz 10'da ve web hedefi planda düşürülmüş) — yani Slang'in
+> asıl kazancı olan MSL/WGSL'in **bugün alıcısı yok**; (3) planın Faz 8 kapısının ihtiyaç duyduğu iki şey
+> GLSL yolundan geçiyor: fp16 (`GL_EXT_shader_explicit_arithmetic_types_float16` → `OpCapability Float16`)
+> ve wave genişliği (`local_size_x_id` + subgroup) derleniyor.
+>
+> **Fizibilite dilimi bitti (8.0):** `engine/tools/tpr_shader.py` Tulpar sözdiziminin bir GPU alt kümesini
+> (`.tprs`) GLSL'e çeviriyor; motorun 21 shader'ından **19'u taşındı** ve çevrilenlerin SPIR-V'si depodaki
+> `*_spv.h` ile **bayt bayt aynı** (en ağırı `mesh.frag` dahil). Taşınamayan ikisi: dizi kurucu literali ve
+> compute. Kapı: `tests/faz8_shader_audit.py` (`build.sh suites` içinde; glslc yoksa görünür atlar).
+>
+> **Sıralamanın sonucu, kararı değiştirmiyor:** gramer boşluğu küçük (4 madde: `float(x)` çağrısı, `T[N]`,
+> bit işlemleri, `const`), ama tip sistemi boşluğu (f32/vektör/matris/swizzle/kutusuz struct) **§11'in
+> sistem alt kümesiyle aynı iş**. Yani Faz 8'i kritik yoldan çıkaran karar hâlâ doğru: o iş L1'in Tulpar'a
+> taşınması için nasıl olsa yapılacak. Faz 8'in ilk **gerçek** kazancı CPU-GPU yerleşim doğrulaması —
+> bugün onu hiçbir şey denetlemiyor.
+- ~~O zamana kadar shader'lar doğrudan Slang'de yazılır~~ → shader'lar GLSL'de yazılır (bugünkü durum).
+  Önkoşul değişmedi: §11 sistem alt kümesi
+- Tulpar → **GLSL → glslc** → SPIR-V; otomatik precision (fp16), permutation üretimi (sahne bilgisiyle), CPU-GPU layout doğrulaması, uniform packing
 - Wave genişliği: specialization constant + `VK_EXT_subgroup_size_control`
 - Mali Offline Compiler build-gate (EK C.1)
 - **Kapı:** aynı ALU işi elle yazılmış Slang'e karşı ölçülüp fp16 kazancı gösterilmiş
@@ -668,6 +687,13 @@ Bu alan hızlı hareket ediyor, envanteri yıllık tazelemek gerekiyor:
 Eylül 2026 taraması. **Sadece kararı değiştiren şeyler var.** Yeni ve parlak ama bizim ligimizde olmayan teknolojiler için B.4'e bak — orada neden almadığımız tek satırla yazılı, tekrar gündeme gelmesin diye.
 
 ## B.1 Slang — Faz 2'yi yeniden yazıyor
+
+> ⚠️ REV-4 (2026-09-16): **bu bölümün sonucu ölçümle değişti.** Aşağıdaki Slang değerlendirmesi kendi
+> içinde hâlâ geçerli, ama Faz 8 için **alınmadı**: `slangc` elde yok, ve Slang'in asıl kazancı olan
+> çok-hedefli çıkış (MSL/WGSL) bu motorun bugünkü tek çıktısı SPIR-V olduğu için karşılıksız kalıyor.
+> Seçilen yol GLSL + `glslc` ve fizibilitesi bayt eşitliğiyle kanıtlandı (Faz 8 maddesine ve `FAZ8.md`'ye
+> bakın). Slang, Metal backend'i (Faz 10) gerçekten gündeme geldiğinde **yeniden** değerlendirilmeli:
+> o noktada MSL çıkışı karşılıksız olmaktan çıkar.
 
 En önemli bulgu. Slang, NVIDIA'dan Khronos'a devredildi ve artık çok-şirketli açık yönetimde. 2026 Khronos anketinde %34 kullanım oranıyla HLSL'i (%41) yakalamak üzere.
 

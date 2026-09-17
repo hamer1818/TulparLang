@@ -1,0 +1,95 @@
+tulpar-sahne 1
+isik-yon 0.4 1 0.3
+isik-ortam 0.12 0.13 0.17
+isik-gunes 0.9
+golge 0 1 0 18 60
+kamera 0 1 6 0 0.5 12
+kaynak "checker_cube.gltf"
+nesne "zemin"
+  konum 0 -0.5 0
+  donus 0 0 0
+  olcek 26 1 26
+  model 0 0.42 0.45 0.5
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "duvar_kuzey"
+  konum 0 1.25 -13
+  donus 0 0 0
+  olcek 26 2.5 1
+  model 0 0.3 0.33 0.4
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "duvar_guney"
+  konum 0 1.25 13
+  donus 0 0 0
+  olcek 26 2.5 1
+  model 0 0.3 0.33 0.4
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "duvar_bati"
+  konum -13 1.25 0
+  donus 0 0 0
+  olcek 1 2.5 26
+  model 0 0.3 0.33 0.4
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "duvar_dogu"
+  konum 13 1.25 0
+  donus 0 0 0
+  olcek 1 2.5 26
+  model 0 0.3 0.33 0.4
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "sutun_kb"
+  konum -6 1.5 -6
+  donus 0 0 0
+  olcek 2.4 3 2.4
+  model 0 0.5 0.4 0.32
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "sutun_kd"
+  konum 6 1.5 -6
+  donus 0 0 0
+  olcek 2.4 3 2.4
+  model 0 0.5 0.4 0.32
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "sutun_gb"
+  konum -6 1.5 6
+  donus 0 0 0
+  olcek 2.4 3 2.4
+  model 0 0.5 0.4 0.32
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "sutun_gd"
+  konum 6 1.5 6
+  donus 0 0 0
+  olcek 2.4 3 2.4
+  model 0 0.5 0.4 0.32
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "siper_orta"
+  konum 0 0.6 0
+  donus 0 0 0
+  olcek 6 1.2 1.2
+  model 0 0.46 0.36 0.3
+  govde kutu 0.5 0.5 0.5 sabit
+son
+nesne "kapi_serit"
+  konum 0 0.04 -11.5
+  donus 0 0 0
+  olcek 5 0.08 1.6
+  model 0 0.2 0.85 0.45
+son
+nesne "lamba_kuzey"
+  konum 0 4 -8
+  donus 0 0 0
+  olcek 1 1 1
+  isik 1 0.78 0.45 4 14
+son
+nesne "lamba_guney"
+  konum 0 4 8
+  donus 0 0 0
+  olcek 1 1 1
+  isik 0.45 0.62 1 3.5 14
+son

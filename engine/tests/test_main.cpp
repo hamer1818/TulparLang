@@ -121,3 +121,25 @@ int engine_tests_main(int argc, char **argv) {
 #if !defined(ENGINE_TESTS_NO_MAIN)
 int main(int argc, char **argv) { return engine_tests_main(argc, argv); }
 #endif
+
+// --- Arm (Mali) BestPractices sondasi -------------------------------------
+// Bildirimi tests/test.hpp'de; govdesi burada cunku Vulkan basliklarini
+// test.hpp'ye sokmak istemiyoruz (o baslik her testte var).
+#include "rhi/device.hpp"
+#include "rhi/vk_api.hpp"
+
+namespace tulpar::engine::test {
+bool arm_rules_missing(rhi::Device &dev) {
+  VkSamplerCreateInfo si{};
+  si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+  si.maxLod = 0.0f; // Arm kurali: LOD kirpmak mip zincirini bosa cikarir
+  VkSampler smp = VK_NULL_HANDLE;
+  const uint32_t before = dev.best_practice_arm_warnings();
+  if (dev.api().vkCreateSampler(dev.handle(), &si, nullptr, &smp) == VK_SUCCESS)
+    dev.api().vkDestroySampler(dev.handle(), smp, nullptr);
+  const uint32_t after = dev.best_practice_arm_warnings();
+  std::printf("    [bilgi] pozitif kontrol (LOD kirpan sampler): Arm uyarisi %u -> %u\n", before, after);
+  return after == before;
+}
+} // namespace tulpar::engine::test

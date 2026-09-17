@@ -1,0 +1,590 @@
+// ============================================
+// Tulpar Engine — motor köprüsü (engine/, C++ çekirdek; oyun mantığı Tulpar'da)
+//
+// Native katman: aot_eng_* builtin'leri (runtime/engine_bindings.cpp, ÜRETİLMİŞ:
+// engine/tools/gen_engine_bindings.py) -> engine/bridge/engine_api.h (teng_*).
+// Bu dosya o katmanın üstündeki ergonomik sarmalayıcıdır: kısa TR/EN adlar,
+// renkler, küçük yardımcılar. `import "engine"` eden program otomatik olarak
+// libtulpar_engine.a + motor arşivleriyle linklenir; motoru kullanmayan
+// binary'ler Vulkan/pencere bağımlılığı almaz (zaten dlopen).
+//
+// Kullanım:
+//   import "engine";
+//   motor_ac("Oyunum", 1280, 720);
+//   int zemin = zemin_kur(20, GRI);
+//   int top = kure(0, 5, 0, 0.5, true, KIRMIZI);
+//   while (calisiyor()) {
+//       kare_basla();
+//       if (tus("SPACE")) { itme(top, 0, 5, 0); }
+//       yazi("merhaba", 20, 20, 1, BEYAZ);
+//       kare_bitir();
+//   }
+//   motor_kapat();
+//
+// Loglama: TULPAR_ENGINE_LOG=0..3 (3 = her çağrı), betikten `logla("...")` (log() doğal logaritmadır).
+// Pencersiz: TULPAR_ENGINE_HEADLESS=N (N kare) + TULPAR_ENGINE_OUT=x.ppm.
+// Renkler paketlenmiş int: (r<<24)|(g<<16)|(b<<8)|a — onaltılık literal yok, renk(r,g,b) kullan.
+// ============================================
+
+// ---- Renkler ----------------------------------------------------------------
+// Onaltilik literal yok (lexer): degerler ondalik, yorumda r,g,b. rgb icin renk(r,g,b).
+int BEYAZ = 4294967295;  int WHITE_E = 4294967295;   // 255,255,255
+int SIYAH = 255;  int BLACK_E = 255;   // 0,0,0
+int KIRMIZI = 3862513407;  int RED_E = 3862513407;   // 230,57,70
+int YESIL = 714969087;  int GREEN_E = 714969087;   // 42,157,143
+int MAVI = 1165729279;  int BLUE_E = 1165729279;   // 69,123,157
+int SARI = 4107493119;  int YELLOW_E = 4107493119;   // 244,211,94
+int TURUNCU = 4152295679;  int ORANGE_E = 4152295679;   // 247,127,0
+int MOR = 2386865663;  int PURPLE_E = 2386865663;   // 142,68,173
+int GRI = 2594219775;  int GRAY_E = 2594219775;   // 154,160,166
+int ACIK_GRI = 3470056191;   // 206,212,218
+int KOYU = 572926975;   // 34,38,43
+int SEFFAF_SIYAH = 120;   // 0,0,0,120
+
+// Bit kaydirma operatoru YOK (lexer): tame'in rgb()'siyle ayni carpma bicimi.
+func renk(r, g, b): int { return r * 16777216 + g * 65536 + b * 256 + 255; }
+func renk_a(r, g, b, a): int { return r * 16777216 + g * 65536 + b * 256 + a; }
+
+// ---- Yaşam döngüsü ----------------------------------------------------------
+func motor_ac(baslik, w, h): bool { return eng_init(baslik, w, h); }
+func engine_open(title, w, h): bool { return eng_init(title, w, h); }
+func calisiyor(): bool { return eng_running(); }
+func running_e(): bool { return eng_running(); }
+func motor_kapat() { eng_shutdown(); }
+func engine_close() { eng_shutdown(); }
+func cikis_iste() { eng_close(); }
+func kare_basla(): bool { return eng_frame_begin(); }
+func kare_bitir() { eng_frame_end(); }
+func frame_begin_e(): bool { return eng_frame_begin(); }
+func frame_end_e() { eng_frame_end(); }
+func dt(): float { return eng_dt(); }
+func zaman(): float { return eng_time(); }
+func kare_no(): int { return eng_frame(); }
+func fps_e(): float { return eng_fps(); }
+func genislik(): int { return eng_width(); }
+func yukseklik(): int { return eng_height(); }
+func logla(msg) { eng_log(msg); }
+func engine_log(msg) { eng_log(msg); }
+func log_seviyesi(n) { eng_log_level(n); }
+func pencersiz(kare, cikti) { eng_set_headless(kare, cikti); }
+func hata_sayisi(): int { return eng_error_count(); }
+func uyari_sayisi(): int { return eng_warning_count(); }
+func ekran_goruntusu(yol): bool { return eng_screenshot(yol); }
+
+// ---- Dünya / kamera ---------------------------------------------------------
+func yercekimi(gx, gy, gz) { eng_gravity(gx, gy, gz); }
+func gunes(dx, dy, dz, siddet) { eng_sun(dx, dy, dz, siddet); }
+func ortam(renk_) { eng_ambient(renk_); }
+func golge_hacmi(cx, cy, cz, r, d) { eng_shadow_volume(cx, cy, cz, r, d); }
+// Parlama (bloom): motor_ac'tan ONCE cagir. Esik dogrusal parlaklik (1.0 =
+// yalniz cok parlak yerler yayilir), yogunluk 0 = kapali.
+func parlama(ac, esik, yogunluk) { eng_bloom(ac, esik, yogunluk); }
+func bloom(on, threshold, intensity) { eng_bloom(on, threshold, intensity); }
+func parlama_acik(): bool { return eng_bloom_on(); }
+func kamera(ex, ey, ez, tx, ty, tz) { eng_camera(ex, ey, ez, tx, ty, tz); }
+func kamera_yorunge(tx, ty, tz, yaw, pitch, uzaklik) { eng_camera_orbit(tx, ty, tz, yaw, pitch, uzaklik); }
+func camera(ex, ey, ez, tx, ty, tz) { eng_camera(ex, ey, ez, tx, ty, tz); }
+// Kamera hedefi takip etsin: hedefin arkasında/üstünde (yaw radyan).
+func kamera_takip(tx, ty, tz, uzaklik, yukseklik_, yaw) {
+    eng_camera(tx + sin(yaw) * uzaklik, ty + yukseklik_, tz + cos(yaw) * uzaklik, tx, ty, tz);
+}
+
+// ---- Sahne (.sahneb) --------------------------------------------------------
+func sahne_yukle(yol): bool { return eng_scene_load(yol); }
+func scene_load(path): bool { return eng_scene_load(path); }
+func sahne_bul(ad): int { return eng_scene_find(ad); }
+func sahne_adi(i): str { return eng_scene_name(i); }
+func sahne_sayisi(): int { return eng_scene_count(); }
+func sahne_x(i): float { return eng_scene_x(i); }
+func sahne_y(i): float { return eng_scene_y(i); }
+func sahne_z(i): float { return eng_scene_z(i); }
+func sahne_hiz_x(i): float { return eng_scene_vx(i); }
+func sahne_hiz_y(i): float { return eng_scene_vy(i); }
+func sahne_hiz_z(i): float { return eng_scene_vz(i); }
+func sahne_dinamik(i): bool { return eng_scene_is_dynamic(i); }
+func sahne_hiz_ver(i, vx, vy, vz) { eng_scene_set_velocity(i, vx, vy, vz); }
+func sahne_itme(i, ix, iy, iz) { eng_scene_impulse(i, ix, iy, iz); }
+func scene_impulse(i, ix, iy, iz) { eng_scene_impulse(i, ix, iy, iz); }
+// Bolum gecisi: once bosalt (govdeler fizikten cikar), sonra yenisini yukle.
+func sahne_bosalt(): bool { return eng_scene_unload(); }
+func scene_unload(): bool { return eng_scene_unload(); }
+func sahne_yuklu(): bool { return eng_scene_loaded(); }
+func bolum_gec(yol): bool {
+    if (eng_scene_loaded()) { eng_scene_unload(); }
+    return eng_scene_load(yol);
+}
+func next_level(path): bool { return bolum_gec(path); }
+
+// ---- Varlıklar --------------------------------------------------------------
+func kutu(x, y, z, hx, hy, hz, dinamik, renk_): int { return eng_spawn_box(x, y, z, hx, hy, hz, dinamik, renk_); }
+func box(x, y, z, hx, hy, hz, dynamic, color): int { return eng_spawn_box(x, y, z, hx, hy, hz, dynamic, color); }
+func kure(x, y, z, r, dinamik, renk_): int { return eng_spawn_sphere(x, y, z, r, dinamik, renk_); }
+func sphere(x, y, z, r, dynamic, color): int { return eng_spawn_sphere(x, y, z, r, dynamic, color); }
+func zemin_kur(yarim, renk_): int { return eng_spawn_ground(yarim, renk_); }
+func ground(half, color): int { return eng_spawn_ground(half, color); }
+func model_yukle(yol): int { return eng_load_model(yol); }
+func model_koy(m, x, y, z, olcek, renk_): int { return eng_spawn_model(m, x, y, z, olcek, renk_); }
+func isik(x, y, z, renk_, siddet, yaricap): int { return eng_spawn_light(x, y, z, renk_, siddet, yaricap); }
+func light(x, y, z, color, intensity, radius): int { return eng_spawn_light(x, y, z, color, intensity, radius); }
+func sil(id) { eng_despawn(id); }
+func canli(id): bool { return eng_alive(id); }
+func konum_x(id): float { return eng_x(id); }
+func konum_y(id): float { return eng_y(id); }
+func konum_z(id): float { return eng_z(id); }
+func isinla(id, x, y, z) { eng_set_pos(id, x, y, z); }
+func renk_ver(id, renk_) { eng_set_color(id, renk_); }
+func olcek_ver(id, s) { eng_set_scale(id, s); }
+func don_ver(id, derece) { eng_set_yaw(id, derece); }
+func hiz_ver(id, vx, vy, vz) { eng_set_velocity(id, vx, vy, vz); }
+func itme(id, ix, iy, iz) { eng_impulse(id, ix, iy, iz); }
+func hiz_x(id): float { return eng_vx(id); }
+func hiz_y(id): float { return eng_vy(id); }
+func hiz_z(id): float { return eng_vz(id); }
+
+// ---- Sorgular: ışın testi ve yakınlık ---------------------------------------
+// Köprüde çarpışma OLAYI yok (callback FFI yok); savaş ve yapay zekâ bu iki
+// SORGU ile yazılır: "önümde ne var" (ışın) ve "yakınımda kim var" (küre).
+// Işın testi gövdeler eklendikten sonra EN AZ BİR kare ister (geniş faz).
+func isin(ox, oy, oz, dx, dy, dz, uzaklik, atla): float { return eng_raycast(ox, oy, oz, dx, dy, dz, uzaklik, atla); }
+func raycast(ox, oy, oz, dx, dy, dz, max_dist, skip): float { return eng_raycast(ox, oy, oz, dx, dy, dz, max_dist, skip); }
+func isin_x(): float { return eng_ray_x(); }
+func isin_y(): float { return eng_ray_y(); }
+func isin_z(): float { return eng_ray_z(); }
+func isin_nx(): float { return eng_ray_nx(); }
+func isin_ny(): float { return eng_ray_ny(); }
+func isin_nz(): float { return eng_ray_nz(); }
+func isin_id(): int { return eng_ray_id(); }
+func isin_sahne(): int { return eng_ray_scene(); }
+func ray_x(): float { return eng_ray_x(); }
+func ray_y(): float { return eng_ray_y(); }
+func ray_z(): float { return eng_ray_z(); }
+func ray_id(): int { return eng_ray_id(); }
+func yakinlar(x, y, z, r, atla): int { return eng_overlap(x, y, z, r, atla); }
+func overlap(x, y, z, r, skip): int { return eng_overlap(x, y, z, r, skip); }
+func yakin_id(i): int { return eng_overlap_id(i); }
+func overlap_id(i): int { return eng_overlap_id(i); }
+func yakin_uzaklik(i): float { return eng_overlap_dist(i); }
+func overlap_dist(i): float { return eng_overlap_dist(i); }
+func en_yakin(x, y, z, r, atla): int { return eng_nearest(x, y, z, r, atla); }
+func nearest(x, y, z, r, skip): int { return eng_nearest(x, y, z, r, skip); }
+
+// ---- Çarpışma olayları ------------------------------------------------------
+// Motor geri çağrım (callback) veremiyor — bugünkü FFI onu taşımıyor. Onun
+// yerine KUYRUK: fizik adımında oluşan temaslar halkaya yazılır, oyun karede
+// okur. Tipik kullanım:
+//
+//     int n = carpisma_sayisi();
+//     for (int i = 0; i < n; i = i + 1) {
+//         if (carpisma_siddeti(i) > 5.0) { hasar_ver(carpisma_a(i)); }
+//     }
+//
+// `carpisma_dusen()` 0 değilse halka dolmuş ve olay KAYBEDİLMİŞ demektir;
+// sessizce kırpılmıyor, motor da her karede bir kez hata logluyor.
+func carpisma_sayisi(): int { return eng_collision_count(); }
+func collision_count(): int { return eng_collision_count(); }
+func carpisma_dusen(): int { return eng_collision_dropped(); }
+func collision_dropped(): int { return eng_collision_dropped(); }
+func carpisma_a(i): int { return eng_collision_a(i); }
+func collision_a(i): int { return eng_collision_a(i); }
+func carpisma_b(i): int { return eng_collision_b(i); }
+func collision_b(i): int { return eng_collision_b(i); }
+func carpisma_sahne_a(i): int { return eng_collision_scene_a(i); }
+func collision_scene_a(i): int { return eng_collision_scene_a(i); }
+func carpisma_sahne_b(i): int { return eng_collision_scene_b(i); }
+func collision_scene_b(i): int { return eng_collision_scene_b(i); }
+func carpisma_x(i): float { return eng_collision_x(i); }
+func collision_x(i): float { return eng_collision_x(i); }
+func carpisma_y(i): float { return eng_collision_y(i); }
+func collision_y(i): float { return eng_collision_y(i); }
+func carpisma_z(i): float { return eng_collision_z(i); }
+func collision_z(i): float { return eng_collision_z(i); }
+func carpisma_nx(i): float { return eng_collision_nx(i); }
+func collision_nx(i): float { return eng_collision_nx(i); }
+func carpisma_ny(i): float { return eng_collision_ny(i); }
+func collision_ny(i): float { return eng_collision_ny(i); }
+func carpisma_nz(i): float { return eng_collision_nz(i); }
+func collision_nz(i): float { return eng_collision_nz(i); }
+func carpisma_siddeti(i): float { return eng_collision_speed(i); }
+func collision_speed(i): float { return eng_collision_speed(i); }
+
+// Yerde mi — ışınla: varlığın ALTINDAN (merkez - `alt`) aşağı `mesafe` kadar
+// ışın atar. `yerde()`nin dikey hız tahmininden sağlamdır (kutu üstünde
+// duruyorken de doğru). `alt` gövdenin yarı yüksekliği + küçük pay olmalı ki
+// ışın kendi gövdesinin DIŞINDAN başlasın (içeriden başlarsa Jolt mesafe 0
+// verir ve köprü gövdeyi komple atlamak zorunda kalır).
+func yerde_isin(id, alt, mesafe): bool { return eng_raycast(eng_x(id), eng_y(id) - alt, eng_z(id), 0, -1, 0, mesafe, id) >= 0.0; }
+func grounded(id, below, dist): bool { return yerde_isin(id, below, dist); }
+
+// Görüş hattı: kaynaktan hedefe ışın; ilk çarptığı HEDEFİN kendisiyse görüş
+// açıktır (arada duvar varsa ışın ona takılır ve id tutmaz).
+func gorus_var(kaynak, hedef): bool {
+    float ax = eng_x(kaynak); float ay = eng_y(kaynak) + 0.4; float az = eng_z(kaynak);
+    float bx = eng_x(hedef);  float by = eng_y(hedef) + 0.4;  float bz = eng_z(hedef);
+    float dx = bx - ax; float dy = by - ay; float dz = bz - az;
+    float uz = sqrt(dx * dx + dy * dy + dz * dz);
+    if (uz < 0.001) { return true; }
+    float d = eng_raycast(ax, ay, az, dx, dy, dz, uz, kaynak);
+    if (d < 0.0) { return true; }
+    return eng_ray_id() == hedef;
+}
+func has_line_of_sight(src, dst): bool { return gorus_var(src, dst); }
+
+// ---- Navmesh (sahnedeki bake; runtime yalnız sorgular) ----------------------
+// Bake engine_sahnec'te yapılır: sahnedeki SABİT KUTU gövdelerden. Sahnede
+// yürünebilir zemin yoksa bake olmaz -> nav_var() false, oyun düz yola düşer.
+func nav_var(): bool { return eng_nav_ok(); }
+func nav_ok(): bool { return eng_nav_ok(); }
+func nav_poligon(): int { return eng_nav_polys(); }
+func nav_yol(fx, fy, fz, tx, ty, tz): int { return eng_nav_path(fx, fy, fz, tx, ty, tz); }
+func nav_path(fx, fy, fz, tx, ty, tz): int { return eng_nav_path(fx, fy, fz, tx, ty, tz); }
+func nav_kismi(): bool { return eng_nav_partial(); }
+func nav_x(i): float { return eng_nav_x(i); }
+func nav_y(i): float { return eng_nav_y(i); }
+func nav_z(i): float { return eng_nav_z(i); }
+// Navmesh'e en yakın nokta. Ajan mesh'in birkaç santim dışındaysa nav_yol()
+// 0 döner — önce buraya yapıştır, sonra yolu iste.
+func nav_yakin(x, y, z): bool { return eng_nav_nearest(x, y, z); }
+func nav_nearest(x, y, z): bool { return eng_nav_nearest(x, y, z); }
+func nav_yakin_x(): float { return eng_nav_near_x(); }
+func nav_yakin_y(): float { return eng_nav_near_y(); }
+func nav_yakin_z(): float { return eng_nav_near_z(); }
+func nav_near_x(): float { return eng_nav_near_x(); }
+func nav_near_y(): float { return eng_nav_near_y(); }
+func nav_near_z(): float { return eng_nav_near_z(); }
+// Doğru görüş: true = ENGEL VAR (yol ara), false = dümdüz gidilebilir.
+// Yol aramadan çok daha ucuz; kovalayan düşman her karede bunu sorup
+// yalnız engel varken yol arayabilir.
+func nav_gorus(fx, fy, fz, tx, ty, tz): bool { return eng_nav_raycast(fx, fy, fz, tx, ty, tz); }
+func nav_raycast(fx, fy, fz, tx, ty, tz): bool { return eng_nav_raycast(fx, fy, fz, tx, ty, tz); }
+func nav_gorus_t(): float { return eng_nav_ray_t(); }
+func nav_ray_t(): float { return eng_nav_ray_t(); }
+
+// ---- Navmesh ajanı: yol TAKİBİ ---------------------------------------------
+// Motorda ajan YOK ve bilerek yok. Yol ARAMA motorda (Detour, C++); yol
+// TAKİBİ burada, saf Tulpar'da. Sebep: takip oynanış politikasıdır — hız,
+// varış yarıçapı, yeniden yol arama sıklığı her oyunda farklıdır. Motora
+// gömmek her oyunu aynı davranışa mahkûm ederdi. Motor mekanizmayı verir,
+// bu katman politikayı kurar. Değiştirmek isteyen bu dosyayı kopyalar.
+//
+// Yol noktaları ajan başına KOPYALANIR: motorun nokta tamponu tektir ve bir
+// sonraki nav_yol() çağrısı üzerine yazar. İki ajan aynı karede yol ararsa
+// kopyalamayan bir tasarım sessizce birbirinin yolunu takip ederdi.
+int _AG_MAX_NOKTA = 32;   // motorun kMaxNavPoints'i ile aynı
+array _ag_x = [];
+array _ag_y = [];
+array _ag_z = [];
+array _ag_hiz = [];
+array _ag_yaricap = [];
+array _ag_n = [];        // yoldaki nokta sayısı (0 = yol yok)
+array _ag_i = [];        // sıradaki nokta indisi
+array _ag_px = [];       // düz saklama: ajan * _AG_MAX_NOKTA + k
+array _ag_py = [];
+array _ag_pz = [];
+
+func _ag_gecerli(a): bool {
+    if (a < 0) { return false; }
+    if (a >= len(_ag_x)) { return false; }
+    return true;
+}
+
+// Yeni ajan. hiz birim/sn, yaricap = "vardım" sayılan mesafe.
+func ajan_olustur(x, y, z, hiz, yaricap): int {
+    int a = len(_ag_x);
+    push(_ag_x, x); push(_ag_y, y); push(_ag_z, z);
+    push(_ag_hiz, hiz); push(_ag_yaricap, yaricap);
+    push(_ag_n, 0); push(_ag_i, 0);
+    int k = 0;
+    while (k < _AG_MAX_NOKTA) {
+        push(_ag_px, 0.0); push(_ag_py, 0.0); push(_ag_pz, 0.0);
+        k = k + 1;
+    }
+    return a;
+}
+func agent_create(x, y, z, speed, radius): int { return ajan_olustur(x, y, z, speed, radius); }
+
+// Hedef ata: navmesh'te yol ara ve ajana KOPYALA. false = yol yok.
+// Başlangıç ve hedef önce mesh'e yapıştırılır (ikisi de birkaç santim dışarıda
+// olabilir; yapıştırmadan istenen yol sessizce 0 nokta dönerdi).
+func ajan_hedef(a, hx, hy, hz): bool {
+    if (!_ag_gecerli(a)) { return false; }
+    _ag_n[a] = 0;
+    _ag_i[a] = 0;
+    if (!nav_var()) { return false; }
+    float bx = _ag_x[a]; float by = _ag_y[a]; float bz = _ag_z[a];
+    if (eng_nav_nearest(bx, by, bz)) {
+        bx = eng_nav_near_x(); by = eng_nav_near_y(); bz = eng_nav_near_z();
+    }
+    float gx = hx; float gy = hy; float gz = hz;
+    if (eng_nav_nearest(gx, gy, gz)) {
+        gx = eng_nav_near_x(); gy = eng_nav_near_y(); gz = eng_nav_near_z();
+    }
+    int n = eng_nav_path(bx, by, bz, gx, gy, gz);
+    if (n <= 0) { return false; }
+    if (n > _AG_MAX_NOKTA) { n = _AG_MAX_NOKTA; }
+    int taban = a * _AG_MAX_NOKTA;
+    int k = 0;
+    while (k < n) {
+        _ag_px[taban + k] = eng_nav_x(k);
+        _ag_py[taban + k] = eng_nav_y(k);
+        _ag_pz[taban + k] = eng_nav_z(k);
+        k = k + 1;
+    }
+    _ag_n[a] = n;
+    // 0. nokta ajanın kendi konumudur; ilk hedef 1. nokta.
+    if (n > 1) { _ag_i[a] = 1; } else { _ag_i[a] = 0; }
+    return true;
+}
+func agent_target(a, x, y, z): bool { return ajan_hedef(a, x, y, z); }
+
+// Bir kare ilerlet. false = yol bitti ya da yol yok (oyun yeni hedef verebilir).
+func ajan_ilerlet(a, dt): bool {
+    if (!_ag_gecerli(a)) { return false; }
+    if (_ag_n[a] <= 0) { return false; }
+    if (_ag_i[a] >= _ag_n[a]) { return false; }
+    int taban = a * _AG_MAX_NOKTA;
+    float adim = _ag_hiz[a] * dt;
+    // Bir karede birden fazla köşe geçilebilir (hızlı ajan, sık köşe):
+    // döngü, adım bütçesi bitene ya da yol tükenene kadar sürer.
+    while (adim > 0.0) {
+        if (_ag_i[a] >= _ag_n[a]) { return false; }
+        int h = taban + _ag_i[a];
+        float dx = _ag_px[h] - _ag_x[a];
+        float dy = _ag_py[h] - _ag_y[a];
+        float dz = _ag_pz[h] - _ag_z[a];
+        float uz = sqrt(dx * dx + dy * dy + dz * dz);
+        if (uz <= _ag_yaricap[a]) {
+            // Köşeye vardı: sonrakine geç. Konumu köşeye OTURTMA — yarıçap
+            // içindeyken zıplatmak titreme yapar.
+            _ag_i[a] = _ag_i[a] + 1;
+            if (_ag_i[a] >= _ag_n[a]) { return false; }
+            continue;
+        }
+        if (uz <= adim) {
+            _ag_x[a] = _ag_px[h]; _ag_y[a] = _ag_py[h]; _ag_z[a] = _ag_pz[h];
+            adim = adim - uz;
+            _ag_i[a] = _ag_i[a] + 1;
+            continue;
+        }
+        float t = adim / uz;
+        _ag_x[a] = _ag_x[a] + dx * t;
+        _ag_y[a] = _ag_y[a] + dy * t;
+        _ag_z[a] = _ag_z[a] + dz * t;
+        adim = 0.0;
+    }
+    return true;
+}
+func agent_step(a, dt): bool { return ajan_ilerlet(a, dt); }
+
+func ajan_x(a): float { if (!_ag_gecerli(a)) { return 0.0; } return _ag_x[a]; }
+func ajan_y(a): float { if (!_ag_gecerli(a)) { return 0.0; } return _ag_y[a]; }
+func ajan_z(a): float { if (!_ag_gecerli(a)) { return 0.0; } return _ag_z[a]; }
+func agent_x(a): float { return ajan_x(a); }
+func agent_y(a): float { return ajan_y(a); }
+func agent_z(a): float { return ajan_z(a); }
+// Ajanı ışınla (doğuş, geri sarma). Yol DÜŞER: eski yol yeni konumdan geçmiyor.
+func ajan_koy(a, x, y, z): bool {
+    if (!_ag_gecerli(a)) { return false; }
+    _ag_x[a] = x; _ag_y[a] = y; _ag_z[a] = z;
+    _ag_n[a] = 0; _ag_i[a] = 0;
+    return true;
+}
+func agent_place(a, x, y, z): bool { return ajan_koy(a, x, y, z); }
+func ajan_hiz_ayarla(a, h): bool {
+    if (!_ag_gecerli(a)) { return false; }
+    _ag_hiz[a] = h;
+    return true;
+}
+func agent_set_speed(a, s): bool { return ajan_hiz_ayarla(a, s); }
+// Yolda kalan nokta sayısı (0 = yol yok ya da bitti).
+func ajan_kalan(a): int {
+    if (!_ag_gecerli(a)) { return 0; }
+    if (_ag_i[a] >= _ag_n[a]) { return 0; }
+    return _ag_n[a] - _ag_i[a];
+}
+func agent_remaining(a): int { return ajan_kalan(a); }
+func ajan_vardi(a): bool { return ajan_kalan(a) == 0; }
+func agent_arrived(a): bool { return ajan_kalan(a) == 0; }
+func ajan_sayisi(): int { return len(_ag_x); }
+func agent_count(): int { return len(_ag_x); }
+
+// ---- Model animasyonu -------------------------------------------------------
+func klip_sayisi(m): int { return eng_model_clip_count(m); }
+func clip_count(m): int { return eng_model_clip_count(m); }
+func klip_suresi(m, k): float { return eng_model_clip_duration(m, k); }
+func klip_adi(m, k): str { return eng_model_clip_name(m, k); }
+// Varlığa klip ata: hız 1.0 normal, döngü true = sürekli.
+func animasyon(id, klip, hiz, dongu) { eng_set_anim(id, klip, hiz, dongu); }
+func anim(id, clip, speed, loop) { eng_set_anim(id, clip, speed, loop); }
+func animasyon_dur(id) { eng_set_anim(id, -1, 1.0, false); }
+func anim_stop(id) { eng_set_anim(id, -1, 1.0, false); }
+func animasyon_zamani(id): float { return eng_anim_time(id); }
+func animasyon_bitti(id): bool { return eng_anim_done(id); }
+func anim_done(id): bool { return eng_anim_done(id); }
+
+// ---- Ses ---------------------------------------------------------------------
+// Cihaz açılamazsa oyun SESSİZ devam eder (hata loglanır, çağrılar yok sayılır).
+func ses_ac(): bool { return eng_audio_open(0, 0); }
+func audio_open(): bool { return eng_audio_open(0, 0); }
+func ses_kapat() { eng_audio_close(); }
+func audio_close() { eng_audio_close(); }
+func ses_var(): bool { return eng_audio_ok(); }
+func audio_ok(): bool { return eng_audio_ok(); }
+func ses_cihazi(): str { return eng_audio_backend(); }
+func ses_yukle(yol): int { return eng_audio_load(yol); }
+func audio_load(path): int { return eng_audio_load(path); }
+func ton(hz, saniye): int { return eng_audio_tone(hz, saniye); }
+func tone(hz, seconds): int { return eng_audio_tone(hz, seconds); }
+func cal(klip, seviye, dongu): int { return eng_audio_play(klip, seviye, dongu); }
+func play_sound(clip, gain, loop): int { return eng_audio_play(clip, gain, loop); }
+func bip(hz, saniye, seviye): int { return eng_audio_beep(hz, saniye, seviye); }
+func beep(hz, seconds, gain): int { return eng_audio_beep(hz, seconds, gain); }
+func ses_durdur(id) { eng_audio_stop(id); }
+func sesleri_durdur() { eng_audio_stop_all(); }
+func stop_sounds() { eng_audio_stop_all(); }
+func ses_seviyesi(s) { eng_audio_master(s); }
+func master_volume(g) { eng_audio_master(g); }
+func calan_ses(): int { return eng_audio_playing(); }
+func playing_count(): int { return eng_audio_playing(); }
+func ses_tepe(): float { return eng_audio_peak(); }
+
+// Yatay yürüme: dikey hızı korur, x/z hızını verir (karakter kontrolü).
+func yuru(id, vx, vz) { eng_set_velocity(id, vx, eng_vy(id), vz); }
+// Yerde mi: dikey hız ~0 (basit; zıplama kilidi için yeterli).
+func yerde(id): bool { float vy = eng_vy(id); return vy > -0.05 && vy < 0.05; }
+
+// ---- Girdi -------------------------------------------------------------------
+func tus(ad): bool { return eng_key_down(ad); }
+func tus_basildi(ad): bool { return eng_key_pressed(ad); }
+func key(name): bool { return eng_key_down(name); }
+func dokunus_sayisi(): int { return eng_touch_count(); }
+func cubuk_x(): float { return eng_stick_x(); }
+func cubuk_y(): float { return eng_stick_y(); }
+func eylem(): bool { return eng_stick_action(); }
+// Klavye VEYA dokunmatik: WASD / ok tuşları / sanal joystick tek yön vektörü.
+func yon_x(): float {
+    float v = eng_stick_x();
+    if (eng_key_down("D") || eng_key_down("RIGHT")) { v = v + 1.0; }
+    if (eng_key_down("A") || eng_key_down("LEFT")) { v = v - 1.0; }
+    if (v > 1.0) { v = 1.0; }
+    if (v < -1.0) { v = -1.0; }
+    return v;
+}
+func yon_y(): float {
+    float v = eng_stick_y();
+    if (eng_key_down("W") || eng_key_down("UP")) { v = v + 1.0; }
+    if (eng_key_down("S") || eng_key_down("DOWN")) { v = v - 1.0; }
+    if (v > 1.0) { v = 1.0; }
+    if (v < -1.0) { v = -1.0; }
+    return v;
+}
+// Zıpla/eylem: boşluk tuşu (kenar) VEYA sağ yarım ekrana dokunuş.
+func eylem_basildi(): bool { return eng_key_pressed("SPACE") || eng_stick_action(); }
+
+// ---- HUD ----------------------------------------------------------------------
+func yazi(s, x, y, olcek, renk_) { eng_text(s, x, y, olcek, renk_); }
+func text_e(s, x, y, scale, color) { eng_text(s, x, y, scale, color); }
+func dikdortgen(x, y, w, h, renk_) { eng_rect(x, y, w, h, renk_); }
+func rect_e(x, y, w, h, color) { eng_rect(x, y, w, h, color); }
+// Sol üstte durum şeridi: FPS, çizim, gövde.
+func durum_seridi() {
+    str s = "fps " + toString(toInt(eng_fps())) + "  cizim " + toString(eng_draw_count()) + "  govde " + toString(eng_body_count()) + "  varlik " + toString(eng_count());
+    float w = eng_text_width(s, 1.0);
+    eng_rect(12, 12, w + 20, 34, SEFFAF_SIYAH);
+    eng_text(s, 22, 18, 1.0, BEYAZ);
+}
+
+// ---- Anlık-kip (immediate mode) arayüz: menü, ayarlar, duraklat -------------
+// Motorda YENİ çizim yolu yok: her widget `eng_rect` + `eng_text` kuyruklar.
+// Değer BETİKTE yaşar (Tulpar'da çıktı parametresi yok): onay kutusu ve
+// kaydırıcı YENİ değeri DÖNDÜRÜR, betik geri yazar:
+//     ses = kaydirici("Ses", 40, 200, 380, 46, ses, 0.0, 1.0);
+// Sıra her karede: ui_basla() -> widget'lar -> ui_bitir(). İşaretçi sırası:
+// enjeksiyon (pencersiz test) > dokunmatik parmak 0 > fare sol tuşu.
+func ui_basla() { eng_ui_begin(); }
+func ui_bitir() { eng_ui_end(); }
+func ui_begin() { eng_ui_begin(); }
+func ui_end() { eng_ui_end(); }
+func ui_tema(panel_renk, yazi_renk, vurgu) { eng_ui_theme(panel_renk, yazi_renk, vurgu); }
+func ui_theme(panel_color, text_color, accent) { eng_ui_theme(panel_color, text_color, accent); }
+// Devre dışı widget SOLUK çizilir ve değeri DEĞİŞMEZ (tıklama yutulur).
+func ui_etkin(ac) { eng_ui_enable(ac); }
+func ui_enable(on) { eng_ui_enable(on); }
+func panel(x, y, w, h, renk_) { eng_ui_panel(x, y, w, h, renk_); }
+func etiket(yazi_, x, y, olcek, renk_) { eng_ui_label(yazi_, x, y, olcek, renk_); }
+func label(text, x, y, scale, color) { eng_ui_label(text, x, y, scale, color); }
+func dugme(ad, x, y, w, h): bool { return eng_ui_button(ad, x, y, w, h); }
+func button(label_, x, y, w, h): bool { return eng_ui_button(label_, x, y, w, h); }
+func onay_kutusu(ad, x, y, w, h, deger): bool { return eng_ui_checkbox(ad, x, y, w, h, deger); }
+func checkbox(label_, x, y, w, h, value): bool { return eng_ui_checkbox(label_, x, y, w, h, value); }
+func kaydirici(ad, x, y, w, h, deger, en_az, en_cok): float { return eng_ui_slider(ad, x, y, w, h, deger, en_az, en_cok); }
+func slider(label_, x, y, w, h, value, min_v, max_v): float { return eng_ui_slider(label_, x, y, w, h, value, min_v, max_v); }
+// Bir widget basılı/sürükleniyor mu — menü açıkken oyun girdisini bastırmak için.
+func ui_basili(): bool { return eng_ui_active(); }
+func ui_active(): bool { return eng_ui_active(); }
+func ui_tiklama(): int { return eng_ui_clicks(); }
+func ui_clicks(): int { return eng_ui_clicks(); }
+// Pencersiz doğrulama: fare/dokunmatik yok, betik tek karelik bas+bırak enjekte
+// eder (sonraki ui_basla() tüketir). Widget DIŞINA tıklama tetiklemez.
+func ui_test_tikla(x, y) { eng_ui_test_click(x, y); }
+func ui_test_click(x, y) { eng_ui_test_click(x, y); }
+// Ekranda yatay ortalanmış bir kutunun sol kenarı (menü yerleşimi).
+func ui_orta_x(w): float { return (genislik() - w) / 2.0; }
+func ui_center_x(w): float { return (genislik() - w) / 2.0; }
+
+// ---- Kalıcı kayıt: ayarlar ve en yüksek skor -------------------------------
+// Motor KURULMADAN da çalışır: parlama gibi ayarlar `motor_ac`'tan ÖNCE okunur.
+// Yol: TULPAR_ENGINE_SAVE, yoksa çalışma dizininde "tulpar_kayit.txt"
+// (Android'de çalışma dizini APK çıkarma köküdür: yazılabilir dahili dizin).
+// Bozuk satır sessizce yutulmaz: hata loglanır ve hata_sayisi() artar.
+func kayit_ac(yol): bool { return eng_save_open(yol); }
+func save_open(path): bool { return eng_save_open(path); }
+func kayit_yolu(): str { return eng_save_path(); }
+func save_path(): str { return eng_save_path(); }
+// Ad notu: `kayit_yaz/kayit_oku` tame'de BASKA anlamda var (dosya kaydi); iki
+// modul birlikte import edilirse ad sessizce cakisirdi — burada adlar ayrik.
+func kayit_yaz_sayi(anahtar, deger) { eng_save_set(anahtar, deger); }
+func save_set(key, value) { eng_save_set(key, value); }
+func kayit_oku_sayi(anahtar, varsayilan): float { return eng_save_get(anahtar, varsayilan); }
+func save_get(key, def): float { return eng_save_get(key, def); }
+func kayit_yaz_metin(anahtar, deger) { eng_save_set_str(anahtar, deger); }
+func kayit_oku_metin(anahtar, varsayilan): str { return eng_save_get_str(anahtar, varsayilan); }
+func save_set_str(key, value) { eng_save_set_str(key, value); }
+func save_get_str(key, def): str { return eng_save_get_str(key, def); }
+func kayit_var(anahtar): bool { return eng_save_has(anahtar); }
+func save_has(key): bool { return eng_save_has(key); }
+func kayit_kaydet(): bool { return eng_save_write(); }
+func save_write(): bool { return eng_save_write(); }
+func kayit_temizle() { eng_save_clear(); }
+func save_clear() { eng_save_clear(); }
+func kayit_sayisi(): int { return eng_save_count(); }
+func save_count(): int { return eng_save_count(); }
+// En yüksek skor: yeni rekorsa yazar + diske kaydeder, rekoru döndürür.
+func rekor_guncelle(anahtar, skor): int {
+    int eski = toInt(eng_save_get(anahtar, 0));
+    if (skor > eski) {
+        eng_save_set(anahtar, skor);
+        eng_save_write();
+        return skor;
+    }
+    return eski;
+}
+
+// ---- Sahne sıcak yeniden yükleme (editörde "Derle" -> oyun yenilenir) ------
+// İzleme açıkken yüklü `.sahneb` dosyasının damgası (zaman + boyut) izlenir;
+// değişim görülünce bir kontrol daha beklenir (yarım yazılmış blob yüklenmesin),
+// sonra sahne boşaltılıp yeniden yüklenir. Olay: `sahne_yenilendi()` BİR KEZ
+// true döner. Sahne varlığı dizinleri değişir: adla yeniden bulun.
+func sahne_izle(ac) { eng_scene_watch(ac); }
+func scene_watch(on) { eng_scene_watch(on); }
+func sahne_yenilendi(): bool { return eng_scene_reloaded(); }
+func scene_reloaded(): bool { return eng_scene_reloaded(); }
+func sahne_yenileme_sayisi(): int { return eng_scene_reload_count(); }
+func scene_reload_count(): int { return eng_scene_reload_count(); }
+func sahne_yolu(): str { return eng_scene_path(); }
+func scene_path(): str { return eng_scene_path(); }
+// İkili dosya kopyalama: .sahneb gibi NUL içeren bloblar Tulpar string'ine
+// sığmaz (read_file/write_file metin içindir).
+func dosya_kopyala(kaynak, hedef): bool { return eng_file_copy(kaynak, hedef); }
+func file_copy(src, dst): bool { return eng_file_copy(src, dst); }
+func dosya_zamani(yol): float { return eng_file_mtime(yol); }
+func file_mtime(path): float { return eng_file_mtime(path); }

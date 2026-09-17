@@ -8,16 +8,22 @@ print("=== Math & Logic Demo ===");
 
 print("Basic Math: 10 + 5 * 2 = " + toString(10 + 5 * 2));
 
-// 2. BigInt
-print("\n--- BigInt ---");
-// BigInt 64-bit integer limitini aşan işlemler için
-bigint b1 = 123456789012345678901234567890;
-bigint b2 = 2;
-bigint b3 = b1 * b2;
+// 2. Tamsayı sınırı (int = 64 bit işaretli)
+print("\n--- Tamsayi siniri ---");
+// Tulpar'da BÜYÜK SAYI (bigint) TİPİ YOKTUR: `int` 64 bit işaretlidir ve
+// aralığı -9223372036854775808 .. 9223372036854775807'dir. Bu örnek önceden
+// olmayan bir `bigint` tipini öğretiyor ve sessizce yanlış sonuç basıyordu
+// (aralık dışı bir literal doyuma gidiyor, çarpım da taşıp sarıyordu).
+// Doğru olan davranışı GÖSTERMEK, var olmayan bir tip uydurmak değil.
+int en_buyuk = 9223372036854775807;
+print("int en buyuk deger: " + toString(en_buyuk));
+print("Tasma sarar (en_buyuk + 1): " + toString(en_buyuk + 1));
 
-print("BigInt 1: " + toString(b1));
-print("BigInt 2: " + toString(b2));
-print("Result (Mul): " + toString(b3));
+// 64 biti aşan bir aralık gerekiyorsa sayıyı kendin parçalamalısın —
+// örneğin iki yarıda tutup basamak basamak toplamak gibi.
+int yuksek = 1234567890;
+int alcak = 987654321;
+print("Iki parcali gosterim: " + toString(yuksek) + toString(alcak));
 
 // 3. Logic & Boolean
 print("\n--- Logic ---");

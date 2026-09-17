@@ -430,11 +430,827 @@ kare temposu katmanı sunumu sarar; `Swapchain` bunları yaratma/yok etme/sunumd
 AAR'ını (2.3.0-alpha01, Apache-2.0) Google Maven'dan indirir, prefab statik kütüphaneler gitignore'lu;
 `TULPAR_SWAPPY=ON android_run.sh demo`.
 
-**Ölçüm:** emülatörde (API 37) init başarılı (yenileme 16.67 ms) ama **ilk sunumda asılı kalıyor** (300 s):
-Swappy'nin bellekten yüklediği Java simi (`SwappyDisplayManager`, API ≥ 30 yolu) `System.loadLibrary("tulparengine")`
-ile kendi doğal metotlarını bağlamak istiyor; `InMemoryDexClassLoader`'ın `nativeLibraryDirectories`'i yalnız sistem
-dizinleri → "couldn't find libtulparengine.so" → vsync callback'i gelmez → `SwappyVk_queuePresent` bekler.
-Denenen: `hasCode=true` + boş `classes.dex` (javac+d8) — değişmedi; geri alındı. **Huawei P20 Pro Android 10
-(SDK 29)** Swappy'de Java sim yolunu **kullanmaz** (NDK Choreographer) → telefonda çalışması beklenir; ölçüm
-(p99/max, geç kare histogramı, FIFO ile A/B) telefon bağlanınca. Tuzaklar 8v.
+**Ölçüm (2026-09-15, Huawei P20 Pro, Android 10):** ilk koşum emülatördeki gibi ilk sunumda asıldı (siyah ekran,
+300 s). Kök neden **sınıf yükleyici değil**: `SwappyVk_setQueueFamilyIndex(dev, q, aile)` init'ten önce çağrılmamıştı.
+A/B ile ayrıldı: (A) Java simi `classes.dex` APK'da + aile bildirilmemiş → 3 sunum "tamamlanır", sonra ana thread
+binder ioctl'de (`wchan binder_ioctl_write_read`) sonsuza dek bekler (sunumlar ekrana ulaşmaz, acquire döner gelmez);
+(B) dex yok + aile bildirilmiş → 300 kare, 59.8 fps; logcat'teki `couldn't find libtulparengine.so` hatası **zararsız**
+(looper thread yine başlar). Düzeltme: `Hooks::on_create` kuyruk ailesini de verir; host `SwappyVk_setQueueFamilyIndex`
+çağırır. `fetch_swappy.sh` gömülü dex'i `classes.dex` olarak oyar ve `android_run.sh` `TULPAR_SWAPPY=ON` ile APK'ya
+koyar (hasCode=true) — gerekmediği ölçüldü ama sınıf yükleme hatasını susturur (`TULPAR_SWAPPY_DEX=0` ile kapatılır).
 
+| yol | ort. fps | p50 | p99 | max | bekle+acquire | submit+present | kare içi `new` |
+|---|---|---|---|---|---|---|---|
+| FIFO (Swappy yok) | 59.8 | 16.67 | 21.3–22.1 | 23.5–26.4 | 10.5–10.9 | 2.5–3.1 | 0 |
+| Swappy 60 fps | 59.2–59.6 | 16.7 | 18.2–19.7 | 18.9–21.9 | 1.9–3.0 | 9.9–11.4 | **7** (Swappy'nin kendi ayırmaları) |
+
+p99/max ~2–4 ms iyileşir (bekleme acquire'dan sunuma taşınır); bedel: sunum yolunda kare başına 7 `operator new`
+(0-ayırma kapısı Swappy açıkken tutmaz — rapor satırında görünür). **`VK_GOOGLE_display_timing` bu cihazda var ve
+açılıyor** (`DeviceConfig::optional_device_extensions`, `DeviceCaps::optional_extension_enabled`); Swappy
+`SwappyVk_getStats` yine 0 kare döndürüyor — sürücü tarafı değil: kendi sondamız (`debug.tulpar.dtprobe=1`,
+`TULPAR_DTPROBE=1`, presentID + `vkGetPastPresentationTimingGOOGLE`) 600 sunumda 596 kayıt aldı; FIFO'da sunum
+aralığı histogramı **595/595 tek periyot (0 geç kare)**, marj çoğunlukla 8–12+ ms. Swappy istatistiği açık soru
+(Swappy içi; kaynak koduna bakılmadı).
+
+**Bekçi:** `debug.tulpar.swappy=1` iken 15 s sunum ilerlemesi yoksa host takılan thread'in `/proc/self/task/<tid>/{stat,wchan,syscall}`
+satırlarını basar, SIGUSR1 ile yığın ister (binder beklemesinde yanıt vermedi), `_exit(3)`. Huawei'de `abort()` →
+debuggerd tombstone'u **logcat crash tamponuna düşmüyor** (0 satır); `android_run.sh` artık süreç ölünce beklemeyi keser
+("SUREC OLDU"). Emülatör bu düzeltmeyle yeniden denenmedi. Varsayılan hâlâ KAPALI (`ENGINE_SWAPPY`); açma kararı
+ayırma bedeli ile p99 kazancı tartılarak verilecek. Tuzaklar 8v (düzeltildi), 8y, 8z.
+
+
+## Sahne veri modeli + `.sahne` dosyası + işlem günlüğü (PLAN L7 "The Truth", editörün 2. dilimi) — 2026-09-15
+
+**Karar:** editörün tamamı tek bir veri modelinin (`content::SceneDesc`) üstünde; sim ve GPU kaynakları ondan
+**türetilir**, tersi değil. Durdur = yazar dönüşümüne dönüş (sim durumu atılır), oynat = gövdeler fiziğe girer.
+Dosya yazar formatıdır (L6 içerik boru hattı, offline); runtime'a derlenmiş blob sonraki dilim (PLAN §6).
+
+**Teslim edilen**
+- `content/scene.hpp/.cpp`: `SceneEntity` (ad, konum/dönüş(Euler °)/ölçek + bileşen bitleri: **model** (kaynak
+  indeksi + renk), **animasyon** (klip, faz, hız), **ışık** (nokta: renk, şiddet, yarıçap), **gövde** (kutu/küre,
+  dinamik/sabit)); `SceneDesc` (güneş/ortam/gölge hacmi/kamera + ≤16 kaynak + ≤256 varlık, sabit dizi — 0 ayırma).
+- Metin format `.sahne`: satır tabanlı ASCII (`tulpar-sahne 1`, `kaynak "yol"`, `nesne "ad" … son`, `# yorum`,
+  CRLF kabul). **Deterministik:** aynı `SceneDesc` → aynı bayt; sayılar `%.6g…%.9g` arasından **bit-tam geri
+  okunan en kısa** gösterim (strtof/snprintf doğru yuvarlar → glibc/musl/bionic/Apple aynı). Hata satır numaralı
+  (`SceneError{msg, line}`); bilinmeyen anahtar, yinelenen bileşen, tanımsız kaynak, NaN, kapanmamış tırnak,
+  sürüm, kapasite aşımı reddedilir.
+- `SceneHistory`: her değişiklik önce/sonra kopyasıyla (`Set/Add/Remove`), `undo/redo`, yeni işlem yinele kuyruğunu
+  siler, halka dolunca en eski düşer. Editörde sürükleme/metin girişi **tek işlem** (ImGui `IsItemActivated` →
+  kopya, `IsItemDeactivatedAfterEdit` → günlük), gizmo sürüklemesi de (`ImGuizmo::IsUsing` geçişleri); ayrık
+  widget'lar kopya üstünde değişip hemen işler.
+- Fizik: `scene_spawn_bodies` / `scene_remove_bodies` / `scene_body_matrix`; `DemoScene::physics()` ile aynı Jolt
+  dünyası. Ekle/sil/geri al/yinele oynarken gövde indekslerini kaydırır → önce çıkar, sonra yeniden girer.
+- Dönüşüm sırası `T·Rz·Ry·Rx·S` — ImGuizmo Recompose/Decompose geleneğiyle **ölçülerek** aynı (kapı; yanlış sıra
+  gizmoyu her karede "düzeltir", varlık titrer).
+- Editör: `--scene x.sahne` (varsayılan `tests/assets/editor.sahne`), menü **Kaydet (Ctrl+S) / Geri al (Ctrl+Z) /
+  Yinele (Ctrl+Y)**, Sahne paneli **Ekle / Sil (Delete)**, Özellikler panelinde bileşen onay kutuları + alanlar;
+  kirli (`*`) durumu ve son işlem çubukta. Modelsiz gövde çarpışma kutusu olarak, boş/ışık varlığı küçük işaretle
+  çizilir. Kaynak yolları sahne dosyasının dizinine göre.
+
+**Kapılar (masaüstü 79/79, doğrulama katmanıyla headless editör 0 hata):**
+`scene_text_roundtrip_is_deterministic` (yaz→oku→yaz aynı bayt, bit-tam sayılar; **kontrol:** tek ulp değişince metin
+değişir), `scene_parse_reports_bad_line_and_rejects_overflow` (satır 5 hatası "satir 5", 256 kabul / 257 red),
+`scene_history_undo_redo_restores_bytes` (4 işlem geri = başlangıç baytları, ileri = düzenlenmiş baytlar; **kontrol:**
+boş günlükte false; halka 6→4), `scene_file_editor_sahne_is_canonical` (depodaki dosya = yazıcı çıktısı; kaydet→yükle
+aynı; olmayan dosya false), `scene_bodies_spawn_and_settle_in_physics` (zeminli y=0.48, **kontrol:** zeminsiz −37),
+`scene_rotation_quat_matches_matrix`, `editor_scene_matrix_matches_gizmo_convention` (fark 3e-8; **kontrol:** ters
+sıra 1.2). Headless editör: 8 varlık, betikli işlem + geri al (`gunluk 0/1`), 171 çizim.
+
+**Öğrenilen:** olmayan bileşenin alanları veri değildir — eşitlik (`scene_entity_equal`) yalnız mevcut bileşenleri
+karşılaştırır; ilk sürüm hepsini karşılaştırınca gidiş-dönüş kapısı düştü (Tuzaklar 8x).
+
+**Tıklamayla seçim (aynı gün):** `SceneBounds` — yerel sınır = model sınırları (`Model::bounds_*`) ∪ gövde ∪ 0.3
+işaret kutusu; `scene_world_bounds` (8 köşe), `scene_ray_aabb` (slab), `scene_pick` (en yakın t). Editörde sol tık
+(geçiş; ImGui/gizmo üzerinde değilken) kamera tabanından üretilen ışınla (matris tersi yok) seçer. Kapılar:
+`scene_pick_returns_nearest_hit_and_misses` (3 kutu + 45° dönmüş kutu; **kontrol:** ters yön/boşluk −1) ve headless
+editörün uçtan uca **seçim kapısı**: ilk varlığın merkezi ekrana izdüşürülür, o pikselden atılan ışın aynı varlığı
+seçmeli (`kure_1 piksel (584, 267) -> kure_1 OK`; yanlışsa çıkış 1).
+
+**Sırada:** sahne → runtime blob derleyici (PLAN §6), ışık/gölge/kamera düzenleme paneli, Tulpar betik bağlaması.
+
+## Sahne → runtime blob (`.sahneb`) + Dünya paneli (PLAN §6 "sahne bir blob + kod", editörün 3. dilimi) — 2026-09-15
+
+**Karar:** yazar formatı (`.sahne` metni, `SceneDesc`) runtime'a **gitmez**. `engine_sahnec` (ya da editörde **Derle**,
+Ctrl+B) onu `.sahneb` blob'una derler; runtime blob'u olduğu gibi belleğe alır (16 hizalı) ve başlık/tablo işaretçileriyle
+okur: ayrıştırma yok, ayırma yok, kare içinde 0 `new`. Türetilmiş veri **derlemede** hesaplanır: dünya matrisi
+(`T·Rz·Ry·Rx·S`, `scene_entity_matrix` ile bit-tam), kuaterniyon, ölçekli gövde boyutları (`scene_spawn_bodies` ile aynı),
+ışığın dünya konumu, tüm sahnenin dünya AABB'si; bileşen tabloları (çizim / animasyon / ışık / gövde) varlık taraması
+gerektirmez. `*.sahneb` gitignore'lu: türetilmiş ve deterministik, kaynağı `.sahne`.
+
+**Teslim edilen**
+- `content/scene_blob.hpp/.cpp`: format — magic `TSHN`, sürüm 1, endian işareti, toplam boyut, **FNV-1a 64 özeti**
+  (özet alanından sonraki tüm baytlar), yalnız 4 baytlık alanlar (8 bayt hizalama şartı yok; özet iki u32), 16 hizalı
+  bölümler, dolgu/rezerve 0 → aynı `SceneDesc` **aynı bayt**. `scene_blob_compile` (snprintf gibi gereken boyutu döner),
+  `scene_blob_open` (bütünlük: magic / sürüm / endian / boyut / özet / tablo sınırı + hiza / dizin tutarlılığı — özet tek
+  savunma değil, özet yeniden hesaplanmış bozuk ofset de reddedilir), `scene_blob_save` / `scene_blob_load`,
+  `scene_blob_path_for`. `editor.sahne` → **1792 bayt** (8 varlık, 3 kaynak, 6 çizim, 2 animasyon, 1 ışık, 2 gövde).
+- `content/scene_runtime.hpp/.cpp`: `SceneRuntime` — `init` (kaynaklar sahne dizininden glTF → GPU; yüklenemeyen atlanır,
+  raporlanır), `apply_world` (güneş/ortam/gölge hacmi), `spawn` / `despawn` (gövdeler Jolt'a), `draw` (modeller LOD ya da
+  animasyonla, ışıklar; dinamik gövdeli varlık sim'den), `entity_matrix`, istatistik (çizim/ışık/gövde/LOD).
+- `engine_sahnec` (L7 aracı): `in.sahne [out.sahneb]`, `--check in.sahne` (derle+aç, dosya yazmaz), `--dump x.sahneb`.
+- `engine_demo --scene x.sahneb` (ya da `TULPAR_ENGINE_SCENE`): küreler / borular / ışıklar / gövdeler **blob'dan**, kod
+  içindeki sabit yerleşim yerine — "sahne = blob + kod": ajanlar, Jolt kutuları, oyuncu **kod**; yazar içeriği **blob**.
+  Ölçüm (headless 120 kare, RTX 5080): 169 çizim (163 kod + 6 blob), 9 ışık (8 dönen + 1 blob), LOD 1/2/1, kare içi
+  **0 `new`**. Sim özeti blob'la değişir (2 ek gövde aynı dünyada) — altın 600-tick özeti blob'suz yol içindir.
+- Veri modeli: `SceneWorld` (güneş / ortam / gölge hacmi / yazar kamerası) ayrı struct, `SceneDesc : SceneWorld`;
+  `SceneOp::World` — günlükte dünya işlemi (`SceneHistory::set_world`, bit-eşitse no-op).
+- Editör: **Dünya** paneli — güneş yönü/şiddeti, ortam, gölge merkez/yarıçap/derinlik (sürükleme/metin **tek işlem**,
+  geri al/yinele); kamera canlı, "sahneye yaz" bir işlem, "sahnedekine git"; ışık ve gölge hacmi **her kare veri modelinden**
+  (panel canlı). Menüde **Derle** (durum satırında yol, bayt, sayılar, özet), Ctrl+B. Headless kip **derleme kapısı**:
+  derle → aç → sayılar veri modeliyle tutarlı, değilse çıkış 1.
+
+**Kapılar (masaüstü 85/85; headless editör seçim + derleme kapısı OK; clang sözdizimi 68 dosya temiz):**
+`scene_blob_compile_is_deterministic_and_matches_desc` (iki derleme aynı bayt; matris / kuaterniyon / konum / ölçek /
+tablolar bit-tam; ışık konumu = matris çevirisi; gövde ölçekli; **kontrol:** tek ulp → farklı bayt **ve** özet; boş sahne
+224 bayt açılır), `scene_blob_open_rejects_corruption` (10 bozulma: magic, sürüm, kesik, içerik biti → özet, ofset sınır
+dışı, sayı taşması, hizasız tablo, tanımsız kaynak dizini, tablo dışı bileşen dizini, endian, hizasız işaretçi, boş/kısa;
+**pozitif kontrol:** bozulmamış kopya öncesinde ve sonrasında açılır), `scene_blob_file_roundtrip_and_path` (dosya =
+bellek baytları; kesik dosya ve olmayan dosya red; `editor.sahne` sayıları), `scene_history_world_op_undo_redo_restores_bytes`
+(dünya + varlık + dünya karışık sıra; geri al = başlangıç baytları, yinele = düzenlenmiş; **kontrol:** eşit dünya no-op),
+`scene_runtime_draws_blob_entities_offscreen` (`editor.sahne` → blob → runtime: 6 çizim = instance toplamı, 1 ışık, piksel
+farkı 836; **kontrol:** boş-boş 0; fizik: `kup_dusen` 2 s'de y 6.0 → −13.1, sabit duvar yazar matrisiyle bit-eşit).
+
+**Öğrenilen:** `Renderer::stats().draws` **kayıtta** (`record`) sayılır, `draw()` çağrısında değil — kayıttan önce okunan
+sayı önceki karenindir; ilk test 0 gördü ve "runtime çizmiyor" sandı. Tuzaklar 8aa.
+
+**Sırada:** blob'a bake çıktıları (navmesh, ışık haritası; PLAN §6), telefon demosunda blob (`android_run.sh` push +
+`TULPAR_ENGINE_SCENE`), Tulpar betik bağlaması.
+
+## Tulpar köprüsü — motor C++, oyun betiği Tulpar (PLAN L5; ayrıntı: [KOPRU.md](KOPRU.md)) — 2026-09-15
+
+**Karar (kullanıcı):** motor C++ kalır, oyun mantığı Tulpar'da yazılır; ikisi aynı ikilide, script sınırı yok.
+PLAN §11 bunu zaten söylüyordu — eksik olan taşıyıcı arayüzdü.
+
+**Teslim edilen**
+- `engine/bridge/`: `engine_api.h` (79 fonksiyonluk **düz skaler** C ABI — struct/callback yok, Tulpar'ın bugünkü
+  FFI'si bunu taşır), `engine_api.cpp` (tek global bağlam, nesil etiketli varlık tablosu, kare döngüsü, HUD kuyruğu,
+  **log**), `bridge_host.hpp` + `desktop_host.cpp` (GLFW dlopen) + `android_host.cpp` (NativeActivity → oyunun `main`i).
+- **Üretilmiş bağlama:** `engine/tools/gen_engine_bindings.py` içindeki `SPEC` tek kaynak; dört dosyayı birden yazar
+  (`runtime/engine_bindings.cpp`, `src/aot/engine_builtins_table.inc`, `src/typeinfer/engine_builtins_sigs.inc`,
+  `src/lsp/engine_builtins.inc`). "5 noktada bağlama" böylece **mekanik** — noktalar birbirinden kayamaz.
+- AOT: `import "engine"` ya da bir `eng_*` çağrısı `backend->uses_engine`i kurar; `engine_link_flags()` motor
+  arşivlerini (`--start-group`, çapraz bağımlı) link satırına ekler. Android kolunda tame yerine motor arşivleri.
+- `lib/engine.tpr` (gömülü): TR + EN sarmalayıcılar, renk sabitleri, `yon_x/yon_y` (klavye **veya** joystick),
+  `durum_seridi()`, `yerde()`, `yuru()`.
+- `examples/engine_ilk_oyun.tpr`: zemin + 9 kutu piramidi + oyuncu topu, WASD/dokunmatik, zıplama, skor, 30 s.
+- Araç: `engine/tools/build_bridge_android.sh` (iki ABI arşivi → `android/dist/<abi>/`).
+
+**Ölçüm:** masaüstü pencersiz 120 kare, p50 13.1 ms, 11 çizim, 0 hata. **Emülatörde (x86_64) 60 fps**, p50 16.66 ms;
+dokunmatik joystick yürüttü, tap zıplattı, kutu devrilince **puan 1** (skor döngüsü Tulpar'da).
+
+**Kapılar:** `engine_tests` **86/86** — yeni `bridge_runs_a_scripted_game_headless` (kurulum, varlık, fizik
+zeminli 0.480 / **zeminsiz −15.13 kontrolü**, ölü id hata sayacı **+1** / canlı id **+0 kontrolü**, kare dışı HUD reddi,
+tuş adı doğrulaması, piksel farkı 37 402 / **boş-boş 0 kontrolü**). Tulpar tarafında
+`tests/engine_bridge.test.tpr` 8/8 (builtin dispatch + typeinfer + sarmalayıcılar uçtan uca; GPU yoksa görünür ATLANDI).
+
+**Öğrenilen (Tuzaklar 8ab–8ae):** ön-döndürme köprüde uygulanmayınca **3B yan yatar ama HUD düzgün görünür**
+(UI yolu dönüşü zaten alıyor — yanıltıcı); Tulpar'da bit kaydırma ve onaltılık literal **yok**, `log()` doğal
+logaritma (sarmalayıcı `logla`); girdi cihazı yokken erken dönen `key_down` **ad doğrulamasını atlıyordu**
+(sessiz false); `install_run.sh` paket adını sabit tutuyordu.
+
+**Döngü kapandı (aynı gün):** `examples/engine_arena.tpr` + `examples/assets/arena.sahne` — sahne editörde
+hazırlanır, `engine_sahnec` ile derlenir, oyun mantığı Tulpar'da koşar. Emülatörde APK içindeki blob'dan
+59–60 fps, kasa hedefe itildi (skor 1/6), 2880 karede temiz kapanış. `engine_sahnec --kanonik` elle yazılan
+sahneyi yazıcının biçimine sokar. Kapıya `eng_scene_load` bölümü eklendi (sahne yüklenir, dinamik gövde
+sim'den düşer / sabit yerinde kalır, ikinci yükleme ve olmayan dosya reddedilir — kontroller).
+
+**İki gerçek hata kapıda yakalandı:** (1) profiler çalışma tamponu kare kapasitesinin iki katı olmalıydı,
+köprü bir katını veriyordu — 300+ kare koşan her oturum **kapanışta** abort ediyordu (emülatörde 1984 karelik
+koşum sessizce çökmüştü); aynı hata `editor_app.cpp`'de de vardı, düzeltildi (Tuzaklar 8af). (2) Android
+varlıkları alt dizine montaj ediliyor ama native API alt dizin adı vermiyor; host artık JNI ile özyinelemeli
+çıkarıyor (Tuzaklar 8ag).
+
+**Sırada:** ses/animasyon/navmesh'i `SPEC`'e eklemek, çarpışma olayı (callback FFI gelene kadar sorgu),
+sahne varlıklarına kuvvet uygulama, bölüm geçişi (sahneyi boşalt + yeniden yükle), telefonda köprü doğrulaması.
+
+## Kademeli gölge (CSM) — Faz 3 kaleminin ilki, cihaz gerektirmeyen yol — 2026-09-15
+
+**Karar:** kademeler **tek dokuda atlas** (yan yana tile), seçim **kapsamaya** göre. Kamera frustum'u derinlikten
+bölünmüyor; bunun yerine iç içe kutular kullanılıyor: en yakın kademe **odak** noktasında (kameranın baktığı yer)
+ve küçük yarıçaplı, en dıştaki kademe tüm gölge hacmini kapsıyor (bugünkü tek-kademe kutusunun aynısı).
+Fragment shader en yakın kademeden başlayıp ışık uzayında `[0,1]` içinde kalan **ilk** kademeyi kullanıyor.
+
+Neden frustum bölme değil: projeksiyon matrisinin tersi gerekmez. Android ön-döndürmede projeksiyon clip
+uzayında döndürülüyor (Tuzaklar 8ab), frustum köşelerini oradan geri çözmek kırılgan olurdu. Oyun tanımı da
+yörünge kameralı arena ölçeğinde (CIHAZ-MATRISI §1), iç içe kutular o şekle birebir oturuyor.
+
+**Teslim edilen**
+- `RendererConfig::shadow_cascades` (varsayılan **3**; 1 = eski tek kademe yolu, bayt bayt aynı yerleşim),
+  `shadow_size` artık **kademe başına** tile. Atlas görüntü `(size * cascades) x size`, tek framebuffer,
+  tek render pass, tek örnekleyici bağlama — dizi katmanı yok.
+- Varsayılan bellek **3 x 1024 = 6 MB** (D16). Bugünkü tek 2048 harita 8 MB'tı: **daha az bellek**, yakın alanda
+  ~3 kat daha ince texel (yakın kademe hacmin 1/9'u).
+- `Renderer::set_shadow_focus(p)`: yakın kademelerin merkezi. Köprü, demo ve editör bunu **kamera hedefine**
+  bağlıyor, yani oyuncunun etrafı her zaman en yüksek çözünürlüklü kademede.
+- Kademe kutuları ışık uzayında **texel katına kenetleniyor** (`cascade_matrix`): odak kımıldadıkça gölge
+  kenarlarının her karede yarım texel kayması (shadow crawl) böyle kesiliyor.
+- UBO: `mat4 light_viewproj[3]` + `cascade_params` (kademe sayısı, 1/kademe, atlas texel x/y). Gölge geçişi
+  kademe indeksini **push sabitinden** (`skin.y`, zaten boştu) alıyor; kayıt döngüsü kademe başına viewport/scissor
+  kuruyor. std140 ofsetleri derleme zamanı `static_assert`'lerle sabit (ilk denemede boyut assert'i yakaladı).
+- `mesh.vert`/`mesh_skin.vert`den `v_light_pos` varyanı kalktı: kademe seçimi piksel başına olduğu için ışık
+  uzayı konumu fragment'ta hesaplanıyor.
+
+**Kapı (yeni):** `renderer_cascades_sharpen_near_shadows` — aynı sahne üç kurulumla çizilir: referans
+(tek kademe, 2048), kaba (tek kademe, 256), kademeli (3 x 256). Kademeli kurulum referanstan **8.34 kat** daha az
+sapıyor (kaba 5 271 896, kademeli 632 479). **Kontrol:** kaba kurulumun gerçekten bozulduğu ayrıca ölçülüyor,
+yoksa karşılaştırma boş olurdu. Mevcut `renderer_shadow_map_actually_darkens` (negatif kontrolüyle) ve Mali
+linter kapısı (0 Arm uyarısı, pozitif kontrol çalışıyor) kademelerle de yeşil. Masaüstü **87/87**.
+
+**Ölçüm:** arena örneği masaüstünde p50 13.4 ms, emülatörde **60 fps** (p50 16.66 ms) kademeli gölgeyle.
+
+**Sırada (Faz 3, cihaz gerektirmeyen):** derlenmiş render graph, bloom mip zinciri + paketlenmiş format bütçesi,
+düşük segment için stokastik tile ışıklandırma. Cihaza bağlı olanlar (bant genişliği kapısı, visibility buffer
+A/B, VRS/FDM) üç gerçek telefon gelene kadar bekliyor.
+
+## Paketlenmiş vertex formatı (Faz 3 "packed format bit bütçesi") — 2026-09-15
+
+**Karar:** yazar tarafı (`renderer::Vertex`) düz float kalır, **yükleme anında** GPU biçimine paketlenir.
+API değişmiyor: `create_mesh` hâlâ float alıyor, paketleme staging belleğine doğrudan yazılıyor (ara dizi yok).
+
+| alan | önce | sonra |
+|---|---|---|
+| konum | float3, 12 bayt | float3, 12 bayt (değişmedi) |
+| normal | float3, 12 bayt | **oktahedral SNORM16x2**, 4 bayt |
+| UV | float2, 8 bayt | **yarım hassasiyet**, 4 bayt |
+| toplam | 32 bayt | **20 bayt** (%37 daha az) |
+| iskeletli | 44 bayt | **32 bayt** (%27 daha az) |
+
+Vertex okuma bant genişliği mobilde kare bütçesinin görünür kalemi; bu, geometri başına sabit kazanç.
+`R16G16_SNORM` ve `R16G16_SFLOAT` Vulkan'da **zorunlu** vertex biçimleridir, yedek yola gerek yok.
+Oktahedral kodlama birim küreyi oktahedron üzerinden kareye açar; CPU tarafı `Renderer::encode_normal`,
+GPU tarafı `oct_decode` (mesh.vert / mesh_skin.vert) aynı sözleşmeyi paylaşır.
+
+**Kapı (yeni):** `renderer_packed_vertex_keeps_normals` üç şeyi ölçer. (1) Kodek hassasiyeti: kürede 2000 yönde
+en büyük açı hatası **0.034 derece**; **kontrol** olarak aynı kodlamanın 8 bitlik sürümü **1.743 derece** verir
+(51 kat kötü), yani eşik gerçekten hassasiyeti ölçüyor. (2) Bellek: GPU'daki vertex baytı 24 x **20**.
+(3) Piksel: bilinen ışıkla aydınlatılan küpün yüzleri analitik Lambert'e oturuyor — 2112 tam parlak, 3256 karanlık,
+**0 ara ton** piksel; kodlama ile çözme kayarsa düz yüzler ara tonlara dağılırdı.
+
+Mevcut kapılar bu değişikliği aynen geçti (doku UV'si, skinning, LOD silüeti, gölge): masaüstü **88/88**.
+Arena örneği masaüstünde ve emülatörde (59-60 fps) paketleme öncesiyle **görsel olarak aynı**.
+
+## Derlenmiş render graph (ilk sürüm) + bloom — 2026-09-15
+
+**Karar:** geçişler **veri**, kod değil. `engine/renderer/graph.hpp` içinde tablo (ad, tür, girdi/çıktı hedefi,
+mip); tablo kurulumda bir kez üretilir, üretici–okuyucu eşleşmesi ve geçiş sonu layout'u oradan **türetilir**.
+Kayıt sırasında çözücü, arama ya da ayırma yok — plan §6'daki "build'de derlenmiş graph" fikrinin ilk adımı.
+`graph_validate` tutarsız tabloyu reddeder: üreticisi olmayan girdi, okuyucusu olmayan (ölü) geçiş, ileri bağımlılık.
+
+Geçiş dizisi (post + gölge açık, 4 mip → **10 geçiş**):
+`golge → sahne_hdr → parlak → indirge1..3 → yukari2..0 → birlestir`. Hepsi **grafik** boru hattı, compute yok
+(plan §8/10). İç hedef `B10G11R11_UFLOAT_PACK32` (mobilde RGBA16F'in yarı bant genişliği), yoksa RGBA16F,
+o da yoksa post kapanır ve sebep `PostInfo::disabled_reason` ile **dışarı verilir** — sessiz kapanma yok.
+
+**Çağıran sözleşmesi korundu:** `record_shadow()` gölgeden sonra sahneyi iç HDR hedefine çizip bloom zincirini
+koşturur, `record()` çağıranın geçişinde yalnız tam ekran birleştirmeyi çizer. Demo, editör ve köprü kodu
+değişmeden çalışır. `RendererConfig::post` **varsayılan kapalı**: kapalıyken bugünkü yol bit bit aynı.
+
+**Kapılar** (`engine/tests/test_render_graph.cpp`, hepsi kontrollü): post kapalıyken iki kare farkı **0 bayt**
+(kontrol: post açıkken 105 632 bayt); bloom halkası **14 119 piksel** (kontrol: yoğunluk 0 → 0, eşik 100 → 0);
+seçici bloom eşik 1.0'da 0 piksel (kontrol: eşik 0.05 → 10 451); tablo doğrulaması bozuk tabloyu reddediyor;
+biçim/bellek raporu (256x256'da 0.67 MB). Post açık tam karede **0 Arm uyarısı, 0 doğrulama hatası**.
+
+**Tulpar'a bağlandı:** `parlama(ac, esik, yogunluk)` / `eng_bloom` — `motor_ac`'tan önce açılır, eşik ve yoğunluk
+kare içinde değişebilir. Ölçüm: aynı sahne bloom açık/kapalı **26 857 piksel** fark, halenin görünür kısmı üstte.
+
+**Öğrenilen (Tuzaklar 8ai):** post yolu kendi temizleme rengini kullandığı için bloom açılınca gökyüzü siyaha
+döndü; ilk A/B ölçümündeki 112 bin piksel farkın çoğu bloom değil arka plandı. İç hedefin temizleme rengi,
+post kapalıyken kullanılan hedefin rengiyle eşitlendi, fark 26 bine indi.
+
+## Editör: çoklu seçim, kaynak tarayıcı, gizmolar — 2026-09-15
+
+- **Çoklu seçim:** Ctrl+tık (3B'de ve sahne listesinde), Ctrl+A tümü, Esc temizler. Gizmo ana seçiliye bağlı,
+  sürüklemede ana seçilinin **konum deltası** gruba uygulanır. Bir kullanıcı eylemi günlükte **tek grup**
+  (`OpGroups`): grup taşıma sürükleme bitince yazılır, grup silme büyükten küçüğe; geri al/yinele grubu birlikte işler.
+- **Kaynak tarayıcı:** sahne dizinindeki `.gltf`/`.glb` dosyaları (POSIX `dirent`, **ada göre sıralı** — `readdir`
+  sırası dosya sistemine bağlı, deterministik olsun diye), "Ekle" kaynağı tabloya koyar + `kSceneModel` varlık kurar
+  + modeli anında yükler. Sahne kaynakları yüklendi/yüklenemedi durumuyla listelenir.
+- **Gizmolar:** ışık yarıçapı ve gölge hacmi tel kutuları, güneş yönü oku — motorun kendi `draw`'u ile ince
+  kutulardan, ayrı çizgi boru hattı yok. **G** ile hepsi açılıp kapanır.
+- **Kapılar:** grup taşıma/silme bayt karşılaştırmasıyla (**kontrol:** tek geri al başlangıca dönmüyor, iki geri al
+  dönüyor), kaynak tarayıcı (**kontrol:** olmayan dizin 0, aynı dizindeki `.png` listeye girmiyor — dosyanın varlığı
+  ayrıca doğrulanıyor), gizmo çizimi 1/1/27 ve piksel farkı **0 (kapalı) / 3515 (açık)**. Headless editörde de iki
+  yeni kapı; yanlışsa çıkış 1. Çizim sayısı 171 → **197**, fark tam gizmoların.
+
+## Köprü: ses, animasyon, sahne kuvveti, bölüm geçişi — 2026-09-15
+
+`SPEC` 79 → **108** builtin. `docs/engine/KOPRU.md` §8'deki dört boşluk kapandı:
+- **Ses (13):** cihaz aç/kapat/durum, WAV-FLAC-MP3 klip yükleme, sentetik ton, çal/durdur/hepsini durdur, ana
+  seviye, çalan ses sayısı, tepe genlik. Cihaz açılamazsa **oyun sessiz sürer** (hata loglanır); log seli hata
+  sayacını gizlemesin diye cihaz kapalıyken gelen çağrıların ilk 3'ü HATA, sonrası ayrıntı.
+- **Animasyon (6):** klip sayısı/süresi/adı, varlığa klip atama (hız, döngü), klip zamanı ve bitti mi. Poz her kare
+  değerlendirilip `draw_model`'e verilir; klip zamanı çizimden bağımsız ilerler (arka planda kare atlanırsa durmaz).
+- **Sahne kuvveti (6):** sahne varlıkları artık yalnız okunmuyor, itilebiliyor; dinamik olmayan gövdede hata loglanıp
+  çağrı yok sayılıyor.
+- **Bölüm geçişi (2):** `eng_scene_unload` + `eng_scene_loaded`; `lib/engine.tpr`'de `bolum_gec(yol)` boşalt+yükle'yi
+  tek çağrı yapıyor.
+
+**Ölçüldü:** sahne kuvveti kutu x 6.00 → **7.97** (kontrol: sabit duvar kımıldamadı, hata +1); bölüm geçişi çizim
+8 → 2 → 8, gövde 4 → 2 → 4; animasyon pozlu-statik **2514 piksel** fark (kontrol: aynı poz 0 fark); ses çalan 1 /
+tepe 0.25, durdurunca 0 / 0.00. Emülatörde **AAudio** açıldı, WAV klip APK'dan yüklendi, oyun 60 fps sürdü.
+
+**Toplam kapı durumu:** masaüstü `engine_tests` **95/95**, Tulpar `tests/engine_bridge.test.tpr` **11/11**,
+katman denetimi 141 dosya 0 ihlal, clang sözdizimi temiz.
+
+## Faz 5 (Temporal) yazılım dilimi — cihaz kapısı hariç — 2026-09-15
+
+Faz 5'in kapısı (10 dk sustained, 99p < 18 ms, üç cihaz) fiziksel cihaz ister; **yazılım tarafı** bitti ve
+yerelde ölçüldü. Hepsi **varsayılan kapalı**, bugünkü yol bit bit aynı.
+
+- **Jitter**: Halton(2,3), projeksiyonun **solundan** clip uzayı ötelemesiyle — Android ön-döndürme içeride
+  olsa bile kaydırma gerçek framebuffer ekseninde kalıyor (Tuzaklar 8ab'nin tersten sınanması). Ölçüldü:
+  NDC kayması dört farklı derinlikte sabit (hata 7.5e-08), 8 faz 4x4 gridde 8 ayrı hücreye düşüyor
+  (**kontrol:** sabit dizi tek hücreye yığılır).
+- **Hareket vektörü**: ayrı geçiş, kendi transient derinliği, RGBA16F = piksel kayması + reactive maske;
+  temizleme `(0,0,0,0)` = "hareketsiz + güvenilir" (Tuzaklar 8ai'nin uygulanışı). `gl_Position` jitter'li,
+  MV jitter'siz iki matristen. Ölçüldü: MV **3.254 piksel**, analitik **3.254** (tolerans 0.35);
+  **kontrol:** duran nesne 0.0000, boş piksel (0,0,0).
+- **Çağıran sözleşmesi korundu**: `draw(...)`/`draw_skinned(...)` sonuna `prev_model` ve `reactive`
+  **varsayılan argüman** olarak eklendi. Renderer kalıcı nesne kimliği tutmuyor: çizim listesi kare başına
+  sıfırlanıyor, önceki matrisi zaten tutan çağıran.
+- **Dinamik çözünürlük**: hedefler en büyük ölçüde bir kez kurulur, ölçek yalnız viewport + birleştirmenin
+  uv çarpanı — ölçüldü: ölçek değişiminde **0 yeni ayırma**. %50'de 96x96 (tam/4), referanstan %4.68 bayt
+  sapma; **kontrol:** %100'de sapma 0.
+- **Yükseltici arayüzü** `None/Bilinear/Sharpen` (Arm ASR entegrasyon noktası işaretli, SDK yok). Ölçüldü:
+  %50'de üç kip birbirinden farklı; **kontrol:** %100'de None ile Bilinear 0 bayt fark.
+- Graph'a `PassKind::Motion` + `GraphPass::out_external` (tüketicisi graph dışında olan çıktı "ölü geçiş"
+  sayılmaz) eklendi; tablo artık post kapalıyken de kuruluyor.
+
+**Bilinen boşluklar (uydurulmadı, sayılıyor):** iskeletli mesh'lerde MV yok (önceki eklem matrisleri
+saklanmıyor — atlanan çizim `TemporalInfo::motion_skipped_skinned` ile dışarı veriliyor, kapı 0 doğruluyor);
+MV hedefi dinamik çözünürlükle ölçeklenmiyor; dinamik çözünürlük `post = true` istiyor; MV hedefinin
+`redundant-store x2`'si tüketici (yükseltici/TAA) yazılana kadar bilinen ve attribute edilmiş bedel.
+
+## Faz 4 ses dilimi — uzamsal ses, DSP zinciri, oklüzyon — 2026-09-15
+
+- **3B ses**: `Mixer::play_3d / set_listener / set_spatial / set_voice_position`. Mesafe sönümü genlikte
+  1/d (enerjide ters kare), min/max mesafe ve max'ta yumuşak pencere; sabit güç panlama. Ölçüldü: mesafe
+  iki katına çıkınca **−6.02 dB** (analitik −6.02); **kontrol:** sönüm kapalıyken 0.00 dB.
+- **HRTF DEĞİL, basit kafa gölgesi**: karşı kulakta tek kutuplu alçak geçiren (18 kHz → 700 Hz). Yükseklik
+  ve ön/arka ayrımı **yok**. Ölçüldü: 6 kHz'de kulaklar arası oran 0.3249 → **0.1311**; 200 Hz'de −0.03 dB
+  (etkinin yüksek frekansa özgü olduğunun kontrolü). Gerçek HRTF yapılmadı: lisansı uygun HRIR veri kümesi
+  vendor edilmedi. Doppler yapılmadı: karıştırıcıda kesirli okuma/interpolasyon yok.
+- **DSP zinciri** (`audio/dsp.hpp`): 8 düğümlük sabit dizi (kazanç / tek kutuplu LP / tanh limiter), çalışma
+  sırası **veri** (tek 64-bit atomik kelimede 8 yuva). Ölçüldü: LP 2 kHz'de 8 kHz **−11.91 dB** iken 100 Hz
+  **−0.01 dB**; limiter sınır 0.5'te tepe 0.4734, **kontrol:** kapalıyken 0.9000.
+- **Oklüzyon katman sınırında**: `audio` L3, `sim` L4 — audio, sim'i include **edemez**. Işını üst katman
+  atar (`sim::Physics::raycast`, Jolt NarrowPhaseQuery — bu dilimde eklendi) ve sonucu
+  `Mixer::set_occlusion(voice, 0..1)` ile parametre verir. Ölçüldü: duvar arkasında **−14.79 dB**,
+  duvar kalkınca 0.00 dB. Raycast analitik: −Z küre 9.0000, +X kutu 4.0000; **kontrol:** ıskalayan ışın false.
+- **Cihaz geri çağrısında 0 ayırma** (8 uzamsal ses + 3 DSP düğümü, 25 blok; pozitif kontrol 1 ayırma).
+- Ses thread'i önceliği **ölçülüyor** (`pthread_getschedparam` → `DeviceInfo::thread_policy`), tahmin
+  edilmiyor; SCHED_FIFO opt-in, ayrıcalık yoksa görünür atlama. Bu makinede FIFO/99 alındı.
+
+## Faz 6 içerik boru hattı — pack, delta yama, önbellek, blob v2 — 2026-09-15
+
+- **`.tpak` blok adreslenebilir arşiv**: 16 hizalı bloklar, dizin **ad özetine göre sıralı** (ekleme sırası
+  baytları değiştirmez), **mmap** ile açılır ve okuma yolunda **ayırma yapmaz** (ölçüldü: 0; kontrol olarak
+  bilerek yapılan ayırma 1 sayıldı). Bütünlük iki katmanlı: açılışta başlık + dizin + ad tablosu özeti (tüm
+  dosyayı okumak mmap'i boşa çıkarırdı), blok başına özet talep üzerine. 9 bozulma türü reddediliyor.
+- **Delta yama**: yama da bir pack; 20 256 baytlık arşiv için **8 528 bayt** yama (değişen 1/3 blok), uygulanan
+  sonuç yeni arşivle **bayt eşit**. Kontroller: fark yokken 0 blok, her şey farklıyken 3 blok; yanlış taban red.
+- **İçe aktarma önbelleği** (`.tulpar_onbellek/`): anahtar = girdi baytları + ayar bloğu + içe aktarıcı sürümü.
+  İkinci çalıştırmada glTF ölçümü ve ASTC sıkıştırma **atlanıyor** (`engine_texpack` 9 ms → 1 ms, ürün bayt
+  eşit); **kontrol:** girdi ya da ayar değişince atlamıyor, ürün bozulursa isabet sayılmıyor.
+- **Sahne blob v2**: yerleşik küme (kaynak başına ölçülmüş CPU/GPU baytı), tepe bellek ve **derleme anında
+  bake edilmiş navmesh**. Runtime artık bake etmiyor: `content::SceneNav` blob'dan sorguluyor ve sonuç
+  `sim::NavMesh`'in runtime bake'iyle **bit eşit** (24 üçgen → 6 poligon, yol 5 nokta / 18.75 birim;
+  **kontrol:** geçide engel konunca 2 nokta / 4.88 birim). Ölçülen yerleşik küme, testin bağımsız formülüyle
+  birebir tutuyor (CPU 314 080 bayt). v1 blob açılışta anlamlı hatayla reddediliyor.
+- **KTX2 kopyasız**: `ktx2_parse_inplace` ASTC bloklarını pack eşlemesinden doğrudan GPU'ya taşıyor
+  (PSNR 999 dB = bit eşit; **kontrol:** kaydırılmış görüntü 5.4 dB).
+- `engine_sahnec` artık ölçüm + navmesh bake yapıyor (`--hizli` kapatır), `--onbellek`, `--pack`, `--yama`,
+  `--yama-uygula` alt komutları var.
+
+**Yapılmayanlar (bu dilimde):** PSO üretimi; mağaza/servis kalemleri (Play Asset Delivery, Firebase, IAP)
+hesap ister. Navmesh çorbası şimdilik yalnız sabit kutu gövdelerden çıkıyor (küreler ve model üçgenleri dahil
+değil) — bilinçli sınır, kodda yazılı. **GI probe bake aynı gün kapandı** (blob sürüm 4; aşağıda kendi
+bölümü) — bu satırdaki "yapılmadı" artık yalnız PSO üretimi için geçerli.
+
+## Faz 7 — ilk oyunun dikey dilimi: "Gölge Salonları" — 2026-09-15
+
+`examples/engine_aksiyon.tpr` (**saf Tulpar**; oyun kabuğu dilimiyle birlikte 1070 satır) + `examples/assets/salon1.sahne`, `salon2.sahne`.
+Oyun tanımının (CIHAZ-MATRISI §1) oynanabilir dilimi: yörünge kamera, kameraya göre hareket, zıplama,
+bekleme süreli atılma, **fizik tabanlı vuruş** (önde küre sorgusu → dürtü + hasar + savurma), oyuncu canı ve
+geri tepme, **iki davranışlı düşman durum makinesi** (devriye ↔ kovalama; geçiş mesafe + görüş açısı + ışın
+görüş hattı, kayıp süresiyle geri dönüş), iki bölüm ve `bolum_gec()` geçişi, iki hedef tipi (düşmanları
+temizle, sonra açılan kapıya bas), HUD ve oyun sonu akışı.
+
+**Yol bulma:** sahne blob'unda `engine_sahnec`'in Recast bake'i varsa **navmesh** (Detour düz yolu), yoksa
+(kodda kurulan yedek düzen) **düz yol + ışınla engelden kaçınma**. Sebep: bake bir derleme işidir, çalışma
+anında kurulmaz. İkisi de ölçüldü.
+
+**Köprüye eklenen sorgular (SPEC 108 → 128):** `eng_raycast` (+ nokta/normal/id/sahne erişimcileri, `skip_id`
+ile kendini vurmama), `eng_overlap`/`eng_nearest` (küre sorgusu, yakından uzağa sıralı; ölçüt varlığın **sınır
+küresi**, zemin ve ışık sorgu dışı), `eng_nav_*` (bake edilmiş navmesh sorgusu). Çarpışma **olayı** hâlâ yok
+(callback FFI yok) — savaş ve yapay zekâ bu iki sorguyla yazıldı.
+
+**Kapılar:** Tulpar suite 11 → **14/14** (ışın 5.5 m analitik, ıska −1, `atla` kendi gövdesini geçiyor, duvar
+görüşü kapatıp silinince açıyor; küre sorgusu 1.0/3.5 m sıralı, r=0.2'de hiçbiri; navmesh'siz sahnede hata
+sayılıyor, salon1'de 28 poligon / 5 noktalı yol). Oyunun kendi **otopilot kapısı** pencersiz koşuyor:
+`kare=3200 bolum=2 gecis=1 oldurulen=9 kalan_dusman=0 can=26 skor=900 navmesh=true hata=0 → [kapi] TAMAM`
+(p50 12.9 ms). Yedek düzende: 2400 kare, `navmesh=false`, öldürülen 6, geçiş 1, hata 0.
+
+**Öğrenilen (kodda yazılı):** Jolt'ta ışın filtresi yok; `skip_id` çarpma noktasının ötesinden yeniden atmayla
+yapılıyor ve **ışın atlanacak gövdenin içinden başlarsa Jolt mesafe 0 verir** — 0.01 ilerlemek sonsuz döngü,
+gövdenin sınır küresi kadar ilerlemek gerekir. Ayrıca depodaki `arena.sahneb` türetilmiş dosyası v1 kalmıştı ve
+bir kapı sessizce atlanıyordu (Tuzaklar 8am).
+
+## Faz 9 (içerik) — küme DAG builder — 2026-09-15
+
+Mesh ~64–128 üçgenlik kümelere bölünüyor (`meshopt_buildMeshlets`; her kümede sınır küresi + normal konisi),
+komşu kümeler gruplanıyor ve her grup **grup sınırı kilitli** sadeleştiriliyor (`simplifyWithAttributes` +
+`vertex_lock`) → üst seviye kümeler. Hata **mutlak** (dünya birimi) ve **monoton**; aynı grubun kümeleri aynı
+üst hatayı taşıdığı için cut kuralı tek eşitsizliğe iniyor: `error <= t < parent_error`. LOD cut **seçimi**
+runtime'ın (cull geçişi) işi, bake yalnız veriyi üretir — planın ⚠️ REV kararı bu.
+
+**Planın kapısı ölçüldü:** kapalı küre (9024 üçgen → 157 küme, 8 seviye, 38 grup) üzerinde 39 eşik süpürüldü,
+**32'sinde cut seviye karıştırdı** ve hiçbirinde açık kenar (çatlak) çıkmadı. **Kontrol:** kenar kilidi
+kapatılınca aynı süpürme **249 açık kenara** kadar çıktı — yani kapı gerçekten kilidi ölçüyor. Popping için:
+grup eşiklerinin 38/38'i bit-tek değerli, yani bir grubun kümeleri hep birlikte geçiyor.
+
+Hata metriği gerçekten sınırlıyor: bildirilen hata 0 → 0.0158 iken **örneklenen sapma** 0 → 0.0173 (oran
+1.01–2.07, kapı ≤4×), en üst seviyede sapma köşegenin **%0.61'i**. **Kontrol:** hata tavanı 0.002'ye çekilince
+7 seviye yerine 5 seviye üretiliyor. Determinizm: iki kurulum bayt eşit, tek vertex 1 mm oynayınca özet değişiyor.
+
+**Blob sürüm 3**: mesh başına DAG dilimi + düğüm/indeks/çocuk tabloları; açılışta 7 yeni doğrulama (dilim
+sınırları, düğüm indeks aralığı, çocuk bağlantısı, indeks < vertex sayısı, hata monotonluğu). Sürüm 1 ve 2
+anlamlı hatayla reddediliyor. **Cihaz sınıfı başına bake**: `engine_sahnec --kume=dusuk|orta|yuksek`
+(lod_sphere: 37/40/74 küme, 4/6/7 seviye) — CIHAZ-MATRISI §2 sınıflarına göre.
+
+**Yapılmayanlar:** üçgen/piksel oranı ölçümü (TBDR binning bütçesi GPU geçişi ister, renderer tarafı);
+iskeletli mesh'lerde DAG yok (poz başına değişir).
+
+## Faz 9 (renderer) — GPU görünürlük elemesi + dolaylı çizim — 2026-09-15
+
+`RendererConfig::gpu_cull` (**varsayılan kapalı**; kapalıyken bugünkü yol aynı SPIR-V ve aynı komut akışıyla
+koşuyor). Çizim verisi (model, renk, yerel sınır küresi, malzeme) SSBO'da; compute geçişi frustum testini yapıp
+`VkDrawIndexedIndirectCommand` dizisini ve örnek sayısını yazıyor. Graph'a `cull` geçişi eklendi (tablonun ilk
+geçişi; çıktısı görüntü değil tampon olduğu için `out_external`).
+
+**Cihaz kısıtı tasarımı belirledi:** bu yapılandırmada `multiDrawIndirect`, `drawIndirectFirstInstance`,
+`drawIndirectCount` ve `shaderDrawParameters` açık değil. Bu yüzden ardışık aynı (mesh, malzeme) çizimleri bir
+**küme** sayılıyor, küme başına tek dolaylı komut veriliyor ve hayatta kalanlar compute'ta **sıra koruyarak**
+sıkıştırılıyor (paylaşımlı bellekte ön ek toplam — `atomicAdd` belirlenimsiz sıra verip piksel kapısını
+sahteleştirirdi). Tek dispatch dört frustum'u birden çözüyor: kamera + 3 gölge kademesi, yani **gölge geçişi de
+dolaylı**.
+
+**Ölçüm:** 1024 çizimde CPU tarafı 1024 `vkCmdDrawIndexed` yerine **1** dolaylı komut veriyor; 512 eleniyor,
+cull compute **0.031 ms** (25 çizimde 0.006 ms). Gölge tarafında 75 aday → 41 hayatta kalan.
+**Kapılar:** cull açık/kapalı **piksel farkı 0 bayt** (post açıkken de 0), elenen sayısı `cull.hpp`'deki CPU
+referansıyla birebir (17/17 — çapraz doğrulama), **kontrol:** hepsi içerideyken elenen 0, kamera çevrilince
+hayatta kalan 0 ve ekran boş kareyle 0 bayt fark. Mali linteri 0 Arm uyarısı (pozitif kontrol çalışıyor).
+
+**Sınırlar (kodda yazılı):** örnek başına LOD cut seçimi `multiDrawIndirect` açılana kadar yapılamıyor (bir küme
+tek komut); iskeletli çizimler cull dışında ve CPU yolunda **sayılıyor** (`CullInfo::cpu_draws`).
+
+## Oyun kabuğu: arayüz, kalıcı kayıt, sahne sıcak yükleme — 2026-09-15
+
+Köprü 128 → **156 builtin**. Ayrıntı `KOPRU.md` §8; ölçümler: arayüzlü kare ile boş kare arası **44 800
+piksel** fark (**kontrol:** iki boş kare arası 0), düğme dışına tıklama tetiklemiyor ve sayaç artmıyor,
+kaydırıcı devre dışıyken değer değişmiyor. Kalıcı kayıt iki koşum arasında taşındı (ses 0.25, rekor 900).
+Sıcak yükleme: dosya değişmezken 40 karede yanlış pozitif yok, değişince **bir kez** olay ve varlık sayısı
+13 → 3; oyun koşarken `.sahneb` dokunulduğunda k84'te değişim görüldü, k90'da yüklendi ve oynanış kesilmedi.
+
+"Gölge Salonları" artık ana menü, duraklat ve ayarlar taşıyor (ses seviyesi, parlama, motor bilgileri);
+ayarlar ve rekor kalıcı. Pencersiz koşumda menü enjekte tıklamayla geçiliyor, oyun sayıları menüsüz koşumla
+birebir aynı kalıyor. Tulpar suite 14 → **17/17**.
+
+## Faz 4 UI dilimi — SDF atlası, tek batch, retained yerleşim, overdraw ölçümü — 2026-09-15
+
+PLAN Faz 4'ün UI maddesi tek tek yazılmıştı: "SDF font atlası, tek batch çizim, retained layout (yalnız
+dirty'de hesap), opak önce / blend sonra, tam ekran şeffaf katman yasak". Bu dilim o maddeyi kapatıyor;
+**kuyruk hâlâ immediate-mode**, değişen şey kayıt anında kurulan SIRA ve ölçüm yüzeyi.
+
+| parça | yer | not |
+|---|---|---|
+| Sıralama kipi | `UiSortMode{Source, OpaqueFirst, BlendFirst}` | `OpaqueFirst` **güvenli** opak yükseltme: bir opak dörtgen yalnız kendinden önceki ve akışta kalan hiçbir dörtgenle **örtüşmüyorsa** öne alınır ve harmanlamasız çizilir (tile belleğinden okuma yok). `BlendFirst` **kontrol kipi**: bilerek yanlış sıra |
+| Atlas gruplama | `ui_group_by_atlas` | atlasa göre **kararlı** sıralama, yalnız güvenliyse (ayrık bölgeler); en çok 8 atlas grubu |
+| Retained blok | `ui_block_begin(id, hash)` / `ui_block_end()` | `true` = blok kirli (içeriği üret), `false` = önceki karenin dörtgenleri önbellekten kuyruğa kopyalandı ve **içerideki kod koşmaz**. `ui_begin`de ekran ölçüsü/döndürmesi değişirse bütün bloklar geçersizlenir |
+| Overdraw | `ui_record_overdraw` + `ui_overdraw_measure` | tahmini alan toplamı DEĞİL: aynı dörtgen akışı "her fragment +1" boru hattıyla UNORM hedefe çizilir, geri okunan R baytı o pikseldeki **fragment sayısıdır**. `saturated > 0` ise sayım eksik — sessiz değil |
+| Tam ekran harmanlı katman | `ui_warning()`, `UiStats::fullscreen_blended` | TBDR yasağı: ekranı kaplayan harmanlı katman sayılır ve sebebiyle dışarı verilir |
+| Süre | `ui_timing_reset` / `ui_fetch_stats` | `cpu_gen_ms` (dörtgen üretimi), `cpu_build_ms` (sırala + vertex yaz + komut), `gpu_ms` (zaman damgası). Damga okunamazsa `gpu_timing_reason` yazılır |
+| SDF örnekleme | `ui_set_sdf(bool)`, `ui_sdf.frag` | boru hattı **tembel** yaratılır; kurulamazsa harmanlı yola **düşer** ve sebep `UiStats::sdf_reason`'a yazılır (sessiz kapanma yok) |
+| SDF atlas üretimi | `content/font.*` | `font_build_sdf_atlas` (raf paketleyici, sığmazsa kenar 2048'e kadar ikiye katlanır), `Font::load_sdf`; shader'ın ihtiyaç duyduğu iki sayı dışarı verilir: `on_edge` ve `pixel_dist_scale` → `alpha = clamp(0.5 + (d − on_edge) · 255 / (pixel_dist_scale · fwidth_px))`. Bitmap ve SDF atlasları **aynı kod noktası listesini** kullanır (Türkçe dahil), iki yol karşılaştırılabilir kalsın |
+| SDF kalite ölçümü | `font_measure_sdf_quality` | **GPU gerekmez**: aynı glifi aynı hedef çözünürlükte iki yolla yeniden kurar (bitmap kapsama bilineer büyütme vs SDF uzaklık + türev genişliği) ve yüksek çözünürlüklü **gerçek** rasterle karşılaştırır. `edge_px` = geçiş bandındaki piksel / gerçek siluetin çevresi — küçük = keskin |
+
+**Kapılar (`engine/tests/test_render_graph.cpp` + `test_content.cpp`, hepsi kontrollü):**
+- `renderer_ui_opaque_first_is_pixel_identical` — opak-önce sıralama kaynak sırasıyla **piksel aynı**
+  (en büyük kanal farkı ≤ 1), iki panel güvenle öne alınır ve **batch sayısı düşer**; **kontrol:**
+  `BlendFirst` (bilerek yanlış sıra) 500 bayttan fazla fark üretmeli, yoksa "sıralama önemli" iddiası boş
+  olurdu. Ayrıca **güvenlik denemesi:** panel metnin üstüne konunca yükseltme **engellenir** (taşınan 0,
+  engellenen 1 — sessizce değil, sayılarak) ve piksel farkı 0 kalır.
+- `renderer_ui_batches_group_by_atlas` — tek atlastan N dörtgen **tek** batch (1 atlas grubu); iki atlas
+  **ayrık** bölgelerdeyse atlasa göre kararlı sıralanır → atlas başına 1, toplam 2 batch; iki atlas
+  **üst üsteyse** sıralama yapılmaz ve batch sayısı N'e çıkar — **doğruluk batch'ten önce gelir**.
+- `renderer_ui_overdraw_is_measured` — üst üste binen dörtgenlerin ölçülen `shaded/covered` oranı;
+  **kontrol:** aynı sayıda **ayrık** dörtgen.
+- `renderer_ui_frame_budget_under_1_5_ms` — 1280×720, 2000 opak HUD kutusu + 5000 glif ölçüsünde harmanlı
+  dörtgen = **7000 dörtgen**, **2 batch** (opak koşu + harmanlı koşu), **0 düşen**; GPU + CPU toplamı
+  **< 1,5 ms** (PLAN §4 kare bütçesindeki UI kalemi). **Kontroller:** 1/10 yük belirgin daha kısa sürmeli,
+  ve zaman damgası gerçekten okunmuş olmalı (`timed`) — damgasız "süre" iddiası boştur.
+- `renderer_ui_retained_block_skips_layout` — 2. karede blok önbellekten gelir, yerleşim hesabı **koşmaz**;
+  önbellekten çizilen kare ile hesaplanan kare arasında **0 bayt** fark; **kontrol:** içerik değişince blok
+  yeniden üretilir.
+- `renderer_ui_warns_on_fullscreen_blended_layer` — tam ekran harmanlı katman uyarı verir; **kontroller:**
+  yarım ekran harmanlı ve tam ekran **opak** uyarı vermez.
+- `renderer_ui_sdf_sampling_keeps_edge_sharp` — SDF boru hattının örnekleme yolu (atlas üretimi ayrı kapı).
+- `content_sdf_atlas_is_sharper_when_magnified` — DejaVuSans `'B'`, 32 px atlas, **8× büyütme**: SDF kenar
+  bandı bitmap'in **dörtte birinden dar** olmalı. Siluet sadakati ayrıca sınanır: ölçülen (2026-09-15)
+  yanlış piksel oranı **SDF 0.157 / bitmap 0.147** — yani SDF hafifçe **daha yüksek**, ve bu beklenen:
+  bulanık kenarda yanlış sınıflandırma yumuşak geçişe yayılır, keskin kenarda her konum hatası tam bir
+  yanlış piksele döner. Kapı bu yüzden eşitlik değil **yakınlık** arar (`sdf_error < bitmap_error · 1.25`);
+  SDF çözme bozulursa (yanlış `on_edge`, yanlış ölçek) bu oran patlar. **Kontroller:** 1× büyütmede
+  keskinlik kazancı 8×'tekinden küçük olmalı; olmayan dosya sessizce başarılı dönmemeli.
+
+**PLAN Faz 4 kapısı** ("UI overdraw ölçülmüş; UI kalemi kare bütçesinde < 1,5 ms") bu dilimle **kapandı**.
+Açık kalan Faz 4 maddesi: çok dilli metin **shaping** (bugün UTF-8 çözme + glif başına ilerleme var,
+Harfbuzz sınıfı shaping yok).
+
+## Faz 6 GI — sonda bake'i (ambient cube) + sahne blob sürüm 4 — 2026-09-15
+
+PLAN Faz 6 "scene compiler: resident set, peak memory, PSO üretimi, **GI probe / navmesh bake**" diyor;
+navmesh bake'i blob v2'de gelmişti, GI sondası bu dilimde geldi. Oyun tanımı (CIHAZ-MATRISI §1) "PBR yok,
+basit BRDF + **bake GI**" dediği için statik ışık **derleme anında** CPU'da ışın izlemeyle çözülüyor;
+runtime hesaplamıyor, yalnız dünya konumundan **okuyor** (`content::SceneGi`).
+
+**Gösterim kararı — SH-L1 değil, 6 yönlü ambient cube** (sonda başına 6 × RGB = 72 bayt; SH-L1 48 bayt
+olurdu). Gerekçe kodda yazılı: (1) **halka (ringing) yok** — güçlü tek yönlü bir güneş SH-L1'e sığmaz, lob
+ters tarafta negatife düşer, kırpınca enerji kaybolur ve "güneşe dönük yüz vs ters yüz" ölçümü göstergenin
+**kendi hatasını** ölçmeye başlar; ambient cube'da her yüz bağımsız, negatif olamayan bir integraldir.
+(2) Çözüm 3 çarpma-topla (n² ağırlıklı), Mali/Adreno'da SH-L1'in 4 nokta çarpımından ucuz, kırpma/koruma
+kodu gerekmez. (3) İnterpolasyon yüz yüz doğrusal kalır. Bedeli: sonda başına 24 bayt ve yumuşak alanlarda
+hafif kare etkisi — mobil oyun sahnesi hedeflendiği için kabul edildi.
+
+**Birim sözleşmesi:** yüz değeri `E(n)/π`, yani "albedo 1 olan Lambert yüzeyin o yönde vereceği renk" —
+`mesh.frag`'in ışık terimiyle **aynı** sözleşme. Bake, hangi terimlerin sonda alanına dahil edildiğini
+`gi_flags` ile söylüyor (`kGiDirectSun`, `kGiPointLights`, `kGiModelTris`, `kGiBounce`); runtime çift sayım
+yapmamak için bayraklara bakmak zorunda. Uygulama `content/gi.hpp` + `content/scene_blob.cpp` (scene_compile
+ile aynı TU: motorun CMake kaynak listesi elle tutuluyor).
+
+**Blob sürüm 4:** GI sonda bölümü eklendi (tablo üst sınırı 32 768 sonda, en çok 64 ışık). Sürüm 1/2/3
+anlamlı hatayla reddediliyor — "yeniden derleyin: engine_sahnec" diyerek.
+`engine_sahnec --gi` (`--gi-isin N` ışın sayısı, `--gi-adim S` sonda aralığı, `--gi-sicrama N` sıçrama,
+`--gi-modelsiz` model üçgenlerini tıkayıcı saymaz) bake'i açıyor.
+
+**Kapılar (`engine/tests/test_scene_blob.cpp`, 7 kapı; hepsi kolu kapatıp aynı ölçümü tekrarlayan
+kontrollerle):**
+- `gi_open_sky_probe_is_brighter_than_covered_and_sun_is_the_cause` — açık gökyüzü altındaki sonda çatı
+  altındakinden belirgin parlak; **kontrol:** güneş şiddeti 0'a çekilince aynı oran çöker (kalan fark
+  yalnız gökyüzü tıkanması).
+- `gi_sun_facing_face_is_brighter_and_symmetric_without_sun` — güneşe dönük yüz parlak; **kontrol:** güneş
+  yokken yüzler simetrik.
+- `gi_wall_blocks_direct_sun_and_removing_it_restores` — duvar doğrudan güneşi keser, duvar kalkınca geri gelir.
+- `gi_bake_is_deterministic_and_geometry_changes_it` — iki bake bit eşit; **kontrol:** geometri değişince özet değişir.
+- `gi_blob_roundtrip_is_bit_exact_and_rejects_corruption` — blob gidiş-dönüşü bit tam, bozulma reddediliyor.
+- `gi_runtime_query_matches_baked_values` — runtime sorgusu bake edilen değerleri veriyor.
+- `scene_compile_bakes_gi_probes_with_model_triangles` — model üçgenleri tıkayıcı olarak devrede
+  (`kGiModelTris`).
+
+## Web ve Android hedefleri onarıldı + paket/tazelik denetimleri — 2026-09-15
+
+Motor köprüsü masaüstünde ve Android'de çalışırken **web hedefi tamamen kırıktı ve bunu hiçbir kapı
+söylemiyordu**. Üç ayrı sessiz hata üst üste binmişti (Tuzaklar 8aj, 8ak, 8ao):
+
+1. **Denetimin kör noktası (8aj):** `tests/dist_archive_audit.py` yalnız `aot_tm_*` (tame) tablosuna
+   bakıyordu. Ölçüldü: denetim **"dist arsiv denetimi temiz"** derken `tulpar build --target=web`
+   **her** oyunda `undefined symbol: aot_intern_string` ile düşüyordu — çekirdek runtime sembolü tablonun
+   dışındaydı. Aynı kör nokta Android'de `aot_http_request`'te vardı (skor tablosu kullanan her Android
+   derlemesi link'te ölecekti).
+2. **wasm32'de işaretçi 4 bayt (8ak):** codegen dizi erişiminin hızlı yolunu satır içi GEP ile yapıyor ve
+   `ObjArray` düzenini kendi kuruyordu — başlık dolgusu **sabit 28 bayt**, yani 64-bit varsayımı. wasm32'de
+   `Obj` 20 bayt. Üstelik `backend->target_web` **`llvm_init_types`'tan SONRA** atanıyordu: tip gövdesi
+   kurulurken bayrak hep 0 görünüyordu.
+3. **`runtime_net.cpp` web runtime'ında yoktu** — `aot_http_request` (arcade skor tablosu) tanımsızdı.
+
+**Düzeltilenler**
+- `src/aot/llvm_types.cpp`: `ObjArray` başlık dolgusu hedefe göre (`target_web ? 16 : 28`); düzen kilidi
+  artık iki işaretçi boyutunu ayrı ayrı sabitliyor.
+- `src/aot/llvm_backend.cpp`: `backend->target_web` **`llvm_init_types`'tan önce** kuruluyor (yorumu da
+  kodda: "MUTLAKA llvm_init_types'tan ÖNCE").
+- `wasm/build_tame_web.sh`: `src/vm/runtime_net.cpp` runtime kaynak listesine eklendi.
+- `tests/dist_archive_audit.py` genişletildi: artık **codegen'in adıyla bildirdiği** sembol kümesini
+  (`LLVMAddFunction` literalleri + tame/motor tabloları + `engine_builtins_table.inc`) hedefin arşivine
+  karşı denetliyor. `nm` çıktısında **tür harfi `U` olan satır TANIMSIZ demektir**; onu "var" saymak
+  denetimi sahte yeşile çevirirdi — sembol taraması artık yalnız tanımlı sembolleri alıyor. Hedefte
+  bilerek olmayan aileler (async → ucontext yok; TLS → OpenSSL yok) **sebebiyle** listeleniyor, sessizce
+  yok sayılmıyor. `aot_tm_*` / `aot_eng_*` aileleri kendi arşivlerinde arandığı için çekirdek denetiminin
+  dışında tutuluyor.
+
+**Yeni: `tests/paket_boyut_audit.py`** — üçü de "sessizce bozulan" sınıfından olduğu için tek denetimde:
+
+| kalem | eşik | gerekçe (ölçülen) |
+|---|---|---|
+| `libtulpar_runtime.a` | 8 MB | ölçülen 3.28 MB |
+| `wasm/dist/libtulpar_runtime_web.a` | 5 MB | ölçülen 2.06 MB |
+| `wasm/dist/libtulpar_tame_web.a` | 5 MB | ölçülen 1.84 MB |
+| `android/dist/arm64-v8a/libtulpar_runtime_android.a` | 7 MB | ölçülen 2.72 MB |
+| `android/dist/arm64-v8a/libtulpar_engine_android.a` | 5 MB | ölçülen 1.76 MB |
+| motor arşivleri toplamı (arm64 / x86_64) | 160 MB | ölçülen ~73 MB / ~66 MB |
+| üretilmiş `.wasm` | 8 MB | arcade oyunu ~1.7 MB |
+| üretilmiş `.apk` | 96 MB | arena APK ~62 MB (iki ABI, striplenmemiş) |
+| açılış (pencersiz, tam tur) | 6.0 s | AOT derleme + motor kurulumu + 1 kare |
+
+Eşikler ölçülen değerin **yaklaşık iki katı**: amaç "bir gün büyüdü" değil, "bir anda **zıpladı**" demek.
+Boyut kalemi PLAN EK G.3'ün bütçesi (temel modül < 200 MB); açılış kalemi PLAN Faz 7'nin eşikli perf
+listesinden. **SPIR-V tazelik:** her GLSL kaynağı yeniden derlenip depoya giren `*_spv.h` ile karşılaştırılır
+(21 shader kaynağı) — kaynak değişip başlık üretilmezse derleme yeşil kalır ve **GPU eski shader'ı koşturur**;
+bu aynı zamanda PLAN Faz 6 kapısının ("runtime'da shader derlemesi yok") kanıtıdır. `glslc` yoksa en azından
+karşılığın **varlığı** denetlenir.
+
+**Denetimin kendi tuzağı (8ao):** SPIR-V tazelik denetiminin ilk sürümü üretilmiş başlıkları **bayt** dizisi
+sanıp taradı; başlıklar 32-bit **kelime** tutuyor (`0x%08x`). Regex hiç eşleşme bulmadı ve denetim 21
+shader'ın 21'ini birden "BAYAT" ilan etti — çıktı tamamen ikna ediciydi. Kural: yeni bir kapının **ilk
+sonucu** makullük sınavından geçmeli; "hepsi bozuk" ile "hiçbiri bozuk değil" aynı şüpheyi hak eder.
+
+**Otomasyona bağlandı (2026-09-15).** Yeni bir denetimin otomasyona bağlanmaması tam olarak bu projenin
+`assert`-hiç-düşmez sınıfı olurdu (CLAUDE.md, Testing.md), o yüzden ikisi de `build.sh suites` içinde
+koşuyor ve **kırmızı denetim suite'i düşürüyor**: `build.sh:276` (`dist_archive_audit.py`) ve
+`build.sh:292` (`paket_boyut_audit.py`), her ikisi de `if ! python3 ...; then ... exit 1; fi` biçiminde.
+Kontrol edildi: bir `*_spv.h` bozulduğunda bölüm çıkış kodu 1 veriyor ve sonraki adıma geçmiyor.
+Elle koşum hâlâ mümkün: `python3 tests/paket_boyut_audit.py [paket_dizini...]`.
+
+## Oyun emülatörde doğrulandı — ve yolda bir derleyici hatası çıktı — 2026-09-15
+
+"Gölge Salonları" (`examples/engine_aksiyon.tpr`) ilk kez bir Android yüzeyinde koştu: Android 16 x86_64
+emülatörü, Goldfish GFXStream. Ekranda ana menü (Başla / Ayarlar / Çıkış), arkasında `salon1.sahneb`'den
+yüklenen sahne — 13 varlık, 11 çizim, 2 ışık, 10 gövde, 28 poligonluk navmesh — kademeli gölgeler ve
+bloom. Ses AAudio ile açıldı (48 kHz, 2 kanal). APK 71 MB (iki ABI, striplenmemiş), varlıklar
+`TULPAR_ANDROID_ASSETS=examples/assets` ile paketlendi.
+
+### Yolda çıkan iki hata
+
+**1. Depo kökündeki `./tulpar` bayattı.** `lib/engine.tpr` yeni sarmalayıcılar (`ui_basla`, `ui_bitir`,
+`rekor_guncelle`) kazandı, `src/embedded_libs.h` yeniden gömüldü, ama kökteki ikili kopya eski kaldı.
+Stdlib ikilinin *içine* gömülü olduğu için derleme "`rekor_guncelle` adında bir fonksiyon bulunamadı"
+diyordu — örnek doğruydu, ikili bayattı. Belirti insanı örneğe baktırır; bakılacak yer ikilinin tarihidir.
+
+**2. Aynı `LLVMModule`'den iki ABI üretmek ikincisini bozuyordu** (asıl bulgu; tuzak kaydı
+[Tuzaklar](../mindmap/Tuzaklar.md) 8ap). Uygulama ilk karede SIGSEGV veriyordu. Motorun kendi çökme
+raporu faili tam yerinden söyledi — `t_menu_ciz.f+576` — ve disassembly geri kalanı verdi: 16 bayt hizalı
+`movapd`, 8 mod 16 olan `0x48(%rsp)` yuvasına yazıyor. Masaüstü ikilisinde aynı fonksiyon `0x40(%rsp)`
+kullanıyor. Kanıt tek komutla kapandı: aynı optimize IR `llc -mtriple=x86_64-linux-android34
+-relocation-model=pic` ile **tek başına** derlendiğinde doğru yuvayı üretti. Fark yalnızca şuydu: sürücü
+o modülü daha önce **arm64 için bir kez emit etmişti**. `LLVMTargetMachineEmitToFile` saf bir okuma
+değildir — CodeGen boru hattı modülü yerinde değiştiren IR geçişleri içerir — yani ikinci emit,
+birincinin alçaltılmış IR'i üzerine biniyordu.
+
+Düzeltme: `emit_object_with_triple` artık her hedef için `LLVMCloneModule` üstünde çalışıyor
+(`src/aot/llvm_backend.cpp`). Doğrulama: yeniden üretilen x86_64 nesnesi `0x40(%rsp)` kullanıyor —
+tek başına `llc` referansıyla **birebir aynı** — ve uygulama emülatörde açılıyor.
+
+**Kapı:** `src/aot/aot_pipeline.cpp` Android kolunda, ABI döngüsünün öncesinde ve sonrasında modülün
+IR'inin FNV-1a özeti alınıp karşılaştırılıyor; değişmişse sürücü `AOT_ERROR_EMIT` ile duruyor. Kontroller:
+temiz ağaçta çıkış 0; klonlama kaldırılıp yeniden derlendiğinde çıkış **1** ve mesaj basılıyor.
+
+**Kapsam uyarısı:** bu yalnızca motor örneğini değil, **Android x86_64 için üretilen her şeyi**
+ilgilendirir — tame/arcade oyunları dahil. İlk ABI (arm64, gerçek telefon) her zaman doğru üretiliyordu,
+o yüzden telefonda yapılan doğrulamalar geçerliliğini koruyor; şüpheli olan emülatör (x86_64) tarafıdır
+ve o taraf bu düzeltmeden sonra yeniden üretilmelidir.
+
+## Faz 6 kalanı + Faz 8 fizibilitesi — 2026-09-16
+
+Dört paralel iş: PBR, stokastik tile ışıklandırma, PSO ön-üretimi, Tulpar shader aşaması.
+
+### PBR (metallic-roughness) — Faz 6'nın açık kalemi
+`mesh.frag`'a Cook-Torrance: GGX (Filament'in yarım-duyarlılık yeniden düzenlemesi), Smith yükseklik-ilişkili
+görünürlük, Schlick Fresnel. Malzeme parametreleri set 1 binding 1'de **tek** 32 baytlık UBO'da, cihazın
+`minUniformBufferOffsetAlignment`'ına yuvarlanmış ofsetle — malzeme başına ayrı ayırma yok, bindless yok.
+
+**Enerji birimi kararı:** motorun mevcut sözleşmesi `çıktı = albedo·NoL·S`, yani 1/π ışık ölçeğinin içinde;
+spekülerin π'si D'nin 1/π'siyle sadeleşiyor, bu yüzden `d_ggx_pi()` doğrudan π·D döndürüyor ve **fazladan
+π çarpanı yok** (olsaydı enerji π² kayardı). Ortam terimi **GI sözleşmesine bağlı**: dağılımlı kısım
+doğrudan `u.ambient`, speküler aynı ışımayı analitik split-sum DFG ile ağırlıklandırıyor (6 ALU). DFG **LUT
+dokusu** reddedildi (TBDR'da fazladan sampler + tile dışı okuma); tek terimli "F0·ortam" da reddedildi,
+çünkü pürüzlülüğü hiç kullanmaz — mat metal ile ayna aynı parlardı.
+
+**Geriye uyumluluk ölçüldü:** gölgeleme modeli malzeme başına. `create_material(doku, renk)` Lambert kalıyor
+ve demo PPM'in md5'i **değişmedi**. PBR varsayılanına (m=0, r=1) geçildiğinde fark 18 616 piksel, **en büyük
+kanal farkı 9/255** — yani %4 dielektrik Fresnel + ortam DFG terimi kadar.
+
+Kapılar: enerji korunumu pürüzlülük taramasında **1.32x** (kontrol: normalize edilmemiş GGX **24.58x**);
+metal/dielektrik Fresnel ayrımı krom farkı **0.589** (kontrol: **0.185**'e çöküyor); PBR varsayılanı
+Lambert'e yakın, en büyük kanal **9** (kontrol: parlak PBR **63**). PBR yolu doğrulama katmanı altında
+**0 Arm uyarısı** veriyor.
+
+**İçerik bağlandı (2026-09-16):** PBR uzun süre renderer'da vardı ama `content/gltf.cpp` yalnız `base_color`
+okuyordu — yani yüklenen **her** model metallic=0/roughness=1 ile çiziliyordu ve PBR pratikte ölüydü.
+Artık `metallicFactor`/`roughnessFactor`/`emissiveFactor` okunuyor; dosyada `pbrMetallicRoughness` bloğu
+yoksa eski Lambert yolu korunuyor. Kapı `content_gltf_metallic_roughness_reaches_material` (GPU istemez)
+kontrolüyle birlikte geldi ve **hemen bir hata yakaladı**: `alloc_array_zeroed` yapıcı çalıştırmadığı için
+(Tuzaklar 8u) `roughness = 1.0f` varsayılanı uygulanmıyordu, alan 0 kalıyordu — yani PBR bloğu olmayan her
+malzeme sessizce **aynaya** dönerdi. Sıfırdan farklı her varsayılan elle atanıyor.
+`metallicRoughness` **dokusu** hâlâ okunmuyor (ikinci sampler bağlaması gerekir, TBDR bütçesinde ertelendi).
+
+### Stokastik tile ışıklandırma (PLAN EK A.1) — düşük segment
+Seçim CPU'da ve **tile başına** (piksel başına reservoir değil: compute §8/10 ile yasak, per-pixel gürültü
+denoiser'a bağımlı olurdu). Küme başına ışıklar öneme göre sıralanır, en önemli `keep` tanesi **kapa** olarak
+her kare tutulur, kalan kuyruktan öneme orantılı katmanlı örnekleme yapılır ve **oran tahmin edicisiyle**
+telafi edilir. Varsayılan **kapalı**; kapalıyken shader dalı specialization constant ile tamamen eleniyor ve
+Lambert döngüsü kelimesi kelimesine eski kod.
+
+Kapılar: parlaklık sapması **%1.95** ve değerlendirme yükü **%68 daha az** (kontrol: telafi kapatılınca
+**%64 karartma**); zamansal kararlılık kare-arası **2.34 bayt/kanal** (kontrol: 2 faz + kapasız **35.74**,
+15x); kapalıyken **0 fark** (kontrol: bütçe 3 → 84 271 bayt fark).
+
+**Tasarımı ölçüm belirledi:** önem metriği `intensity/(d²+1)` seçildi çünkü shader'ın gerçek sönümünü
+(`pencere²/(d²+1)`) kullanmak **%19.3 karartma** veriyordu — küme düzeyindeki mesafe kaba, pencere terimi
+onun ~8. kuvveti. Rank üzerinde düzgün örnekleme + ağırlık üst sınırı da reddedildi (**%30 sistematik
+karartma**: kırpma yalnız büyük ağırlıkları keser, küçükleri yükseltmez).
+
+### PSO ön-üretimi — Faz 6'nın diğer açık kalemi
+Faz 6 kapısı "runtime'da shader **derlemesi** yok" diyordu ve SPIR-V zaten derleme zamanında üretiliyordu;
+eksik olan **pipeline nesnesinin** kendisiydi. Ölçüldü: renderer kurulumunda **15 grafik boru hattı**
+kuruluyor ve hepsi `VK_NULL_HANDLE` önbellekle kuruluyordu — yani hiç önbellek yoktu.
+
+`engine/rhi/pipeline_cache.hpp`: `VkPipelineCache` + diske kalıcılık, üç katmanlı doğrulama (sarmalayıcı
+özeti; `vendorID`/`deviceID`/`driverVersion`/`pipelineCacheUUID`; Vulkan'ın kendi başlığı). `VkApi` üstüne
+takılan bir ara yordamla **tek çağrı yeri değişmeden** bütün pipeline'lar önbelleğe giriyor.
+
+Kapı, süreye güvenmiyor: süreç içinde dosyanın katkısı sürücünün kendi ısınmasından ayırt edilemiyor ve kapı
+bunu **kendi çıktısında söylüyor**. Geçerli kanıt **önbellek büyümesi**: soğuk koşumda 0 → 203 253 B, sıcak
+koşumda **+0 B** (15 varyantın hepsi isabet). Reddetme kontrolü 7 vaka + "bozulmamış dosya kabul edilir"
+pozitif kontrolü. İlk-kare sayacı: ön ısınma açıkken **0**, kontrol kolunda (`ui_prewarm_sdf=false`) **1**
+ve kare içinde **0.29 ms** takılma.
+
+**Android'de iki ayrı boşluk çıktı ve kapatıldı.** (1) `XDG_CACHE_HOME`/`HOME`/`TMPDIR` üçü de tanımsız
+olduğu için önbellek en çok işe yaradığı platformda sessizce kapanıyordu — son çare olarak çalışma dizini
+(barındırıcının chdir ettiği, uygulamaya özel yazılabilir dizin) eklendi. (2) Yazma yalnız `shutdown`'daydı
+ve Android'de uygulamalar temiz kapanmaz, yani dosya **hiç oluşmuyordu** (Tuzaklar 8au); artık kurulum biter
+bitmez yazılıyor. **Emülatörde uçtan uca ölçüldü** — temiz kurulum → öldür → yeniden aç: soğuk **6.5 ms**
+(168 495 B yazıldı), sıcak **1.1 ms**. Bu, masaüstünde ölçülemeyen süreçler-arası kazancın ta kendisi.
+
+Sahne bazlı varyant listesi **yapılmadı**: bu renderer'da varyantlar yapılandırmadan türüyor (skinned /
+gpu_cull / post / motion / ui-sdf), içerikten değil; içerikten türetilebilecek tek eksen "sahnede iskeletli
+mesh var mı" (1 bit) ve renderer düz + iskeletli kümeyi zaten koşulsuz kuruyor — kazanç en fazla 3 pipeline.
+
+### Faz 8 — fizibilite kapandı, backend kararı değişti
+Ayrıntı: [FAZ8.md](FAZ8.md), plan notu PLAN.md ⚠️ REV-4. Özet: **Slang değil, GLSL + `glslc`**.
+`engine/tools/tpr_shader.py` Tulpar sözdiziminin GPU alt kümesini GLSL'e çeviriyor; 21 shader'ın **19'u
+taşındı** ve çevrilenlerin SPIR-V'si depodaki `*_spv.h` ile **bayt bayt aynı** — o günün en ağır shader'ı
+olan `mesh.frag` dahil (7972 bayt: CSM atlası, kümelenmiş ışıklar, `findLSB` döngüsü, `sampler2DShadow`).
+Aynı gün `mesh.frag`'a PBR girince kapı onu **görünür şekilde atlamaya** başladı: her `.tprs` çevrildiği
+GLSL'in özetini taşıyor, özet tutmazsa "referans değişmiş" der. Yani bugün **18 bayt-aynı + 1 görünür
+atlama**. Bu doğru davranış — ne yanlış suçlama ne ölçmeden geçme; yeni PBR sürümünü taşımak 8.1'in `const`
+ve `out` parametre maddelerini gerektiriyor.
+Kapı `tests/faz8_shader_audit.py`, `build.sh suites` içinde; en kritik kontrolü aynı boyutta ama farklı
+içerikli bir SPIR-V üretip farkı görmesi — o olmadan "bayt aynı" doğrulanmamış bir iddia olurdu.
+
+**Gramer boşluğu küçük** (4 madde), **tip sistemi boşluğu büyük** ve §11'in sistem alt kümesiyle aynı iş.
+Yani Faz 8'i kritik yoldan çıkaran karar hâlâ doğru.
+
+### Tam koşu (2026-09-16)
+`engine_tests` **149/149, 0 atlandı**; `./build.sh suites` **82/82**; `./build.sh test` yeşil.
+Emülatörde "Gölge Salonları" PBR ve kalıcı PSO önbelleğiyle çalışıyor.
+
+## Çarpışma olayları — köprünün oyun tarafındaki son büyük boşluğu — 2026-09-16
+
+Köprü bugüne kadar "neye çarptım" sorusunu yalnızca **sorguyla** (ışın/örtüşme) cevaplayabiliyordu; bir
+oyun motoru için bu eksik. Engel şuydu: bugünkü FFI **geri çağrım taşımıyor** (düz skaler ABI).
+
+Çözüm callback değil **kuyruk**. `sim::Physics` artık Jolt'un `ContactListener`'ını taşıyor ve fizik
+adımında oluşan temasları sabit boy bir halkaya yazıyor; oyun kareyi çizerken okuyor. Halka arenada,
+kapasite init'te sabit, **ayırma yok**. Jolt geri çağrımları iş parçacıklarından ve eş zamanlı geldiği için
+yazma atomik (her yazar kendi yuvasını rezerve eder) — kilit yok, çünkü fizik adımında kilit beklemek adımı
+serileştirirdi.
+
+**Kalıcı temaslar kaydedilmiyor**, yalnız yeni temaslar: bir kutunun zeminde durması her adımda olay
+üretirdi ve halka tek karede dolardı. Oyunun sorduğu soru "ne zaman çarptım"; "hâlâ değiyor muyum" için
+örtüşme sorgusu zaten var.
+
+**Sessiz kırpılma yok.** Halka dolarsa olaylar düşer ve `contact_overflow()` sayar; köprü bunu her karede
+bir kez hata olarak logluyor. Sessiz kırpılma, oyunun "çarpma gelmedi" sanıp yanlış mantık kurması demekti
+ve hiçbir şey kızarmazdı.
+
+Köprü tarafı 13 builtin (`eng_collision_count/dropped/a/b/scene_a/scene_b/x/y/z/nx/ny/nz/speed`), toplam
+**169**. Şiddet ölçüsü olarak temas noktasındaki **normal boyu göreli hız** veriliyor: Jolt manifoldu itki
+taşımıyor, göreli hız çözümden önce doğru büyüklüğü veriyor ve belirlenimli.
+
+**Sıra bir kez yanlış kuruldu ve uçtan uca test yakaladı.** Halka önce `teng_frame_begin`'de
+temizleniyordu; oysa fizik `teng_frame_end` içinde adımlanıyor, yani olaylar önceki karenin sonunda
+oluşuyor ve kare başındaki temizlik onları oyun okumadan siliyordu. Belirti öğreticiydi: **C++ kapısı
+olayları görüyordu, Tulpar tarafı "0 çarpışma" diyordu** — aynı kodun iki ucu farklı cevap veriyordu.
+Temizlik adımlardan hemen öncesine alındı.
+
+**Kapılar (ikisi de kontrollü):**
+- C++ `physics_contact_events_fire_with_speed`: 4 m'den bırakılan küre 52. karede zemine çarpıyor,
+  şiddet 8.32 m/s, temas noktası y≈0, normal y=1. **Kontrol 1**: zeminsiz serbest düşüş **0 olay**
+  (bu olmadan kapı "adım koştu" ile "çarpma oldu"yu ayırt edemezdi). **Kontrol 2**: halka 1 yuvaya
+  düşürülünce görülen 1, **düşen 11** — taşma görünür. Ayrıca belirlenimlilik: aynı kurulum aynı kare,
+  aynı hız bitleri.
+- Tulpar `tests/engine_bridge.test.tpr`: 6 m'den bırakılan küre, ölçülen şiddet **10.34 m/s**, analitik
+  `sqrt(2·9.81·5.5) ≈ 10.39`. Kontrol olarak zemin silinip küre ışınlanınca 60 karede **0 olay**.
+
+## Faz 3 kapanış durumu — ne kapandı, ne açık (2026-09-15)
+
+**Kapı sayımı (kaynaktan):** `engine/tests/*.cpp` içinde **141 `ENGINE_TEST` bloğu** tanımlı (masaüstü);
+Android'de editör (5) ve köprü (1) kapıları derlenmediği için **135**. Tulpar tarafında
+`tests/engine_bridge.test.tpr` **17** test. Katman denetimi (`engine/tools/layer_check.py`): **159 dosya,
+0 ihlal**. Köprü `SPEC`'i **156 builtin** (= `engine/bridge/engine_api.h`'deki `teng_*` sayısı; ikisi
+birbirine karşı denetlenebilir).
+
+**Tam koşu (2026-09-15 akşamı, bu belgedeki bütün dilimler dahil):** masaüstü `engine_tests`
+**141/141, 0 atlandı**; Tulpar suite'leri **81/81** (1295 iddia, `Tests:` satırı eksik suite yok),
+`tests/engine_bridge.test.tpr` **17/17**; örnekler **102/102**. Pencersiz motor koşumlarının çıktıları
+tek renk değil — `engine_ilk_oyun` 1178, `engine_arena` 3883, `engine_aksiyon` 4823 ayrı renk
+(1280x720; en sık renk payı sırasıyla %31, %41, %18).
+
+**Faz 3'te kapananlar (cihaz gerektirmeyen yol):** kademeli gölge (CSM, tek atlas), paketlenmiş vertex
+formatı (32 → 20 bayt), derlenmiş render graph + bloom/post, kümelenmiş nokta ışıklar, doku/malzeme/glTF,
+sRGB doğrusal aydınlatma, GPU skinning, Mali linteri + tile bütçesi.
+
+**Faz 3'te AÇIK kalanlar:**
+- **Faz 3 kapısı: "bandwidth < 8 GB/s ölçülmüş (3 cihaz)"** — elde **bir** cihaz var (Huawei P20 Pro,
+  Mali-G72). Üç fiziksel cihaz (Mali + Adreno + düşük segment) gerekiyor; **kullanıcı kararı: şimdilik pas**.
+  Aynı kapıya bağlı: visibility buffer A/B ölçümü, VRS/FDM baseline, stochastic tile ışıklandırma
+  (düşük segment), Adreno tile memory heap yolu.
+- **PBR** — oyun tanımı "PBR yok, basit BRDF + bake GI" dediği için bilinçli ertelendi; GI sondası geldi.
+- **PSO üretimi** (Faz 6 scene compiler maddesi).
+- **Faz 5 cihaz kapısı** ("10 dk sustained, 99p < 18 ms, 3 cihaz") — yazılım tarafı bitti, kapı cihaz bekliyor.
+- **Faz 8 (Tulpar shader stage)** — önkoşul PLAN §11'in dil alt kümesi (kutusuz struct, işaretçi, atomik);
+  o gelene kadar shader'lar GLSL'de yazılıyor. Başlanmadı.
+- **Faz 10 (Metal / iOS)** — Mac ve geliştirici hesabı gerekiyor. Başlanmadı.
+- **Mağaza ve servis kalemleri** (Play Asset Delivery, Firebase crash/analytics, uygulama içi güncelleme,
+  bulut kayıt, UMP/rıza, IAP) — hepsi **hesap** gerektiriyor.
+- **macOS CI'da `engine_tests` çökmesi** — yerelden ulaşılamıyor; teşhis altyapısı hazır, yanıt bir
+  sonraki macOS koşusunda gelecek (bu belgede kendi bölümü var).

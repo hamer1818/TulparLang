@@ -955,12 +955,25 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
 // alternatifi, uretilen kodun sessizce yanlis adrese yazmasiydi.
 static_assert(sizeof(VMValue) == 16, "VMValue 16 bayt olmali (codegen varsayimi)");
 static_assert(offsetof(VMValue, as) == 8, "VMValue::as @8 olmali");
-static_assert(sizeof(ObjArray) == 64, "ObjArray 64 bayt olmali (codegen varsayimi)");
+// Ofsetler ISARETCI BOYUTUNA bagli: 64-bit'te Obj basligi 32 bayt, wasm32'de
+// 20. Codegen (llvm_types.cpp) dolguyu hedefe gore seciyor; buradaki kilit de
+// iki duzeni de ayri ayri sabitler. Tek bir 64-bit iddiasi yazmak web runtime
+// derlemesini KIRIYORDU (ve wasm/dist tazelenemiyordu).
+#if UINTPTR_MAX > 0xFFFFFFFFu
+static_assert(sizeof(ObjArray) == 64, "ObjArray 64 bayt olmali (codegen varsayimi, 64-bit)");
 static_assert(offsetof(ObjArray, count) == 32, "ObjArray::count @32 olmali");
 static_assert(offsetof(ObjArray, capacity) == 36, "ObjArray::capacity @36 olmali");
 static_assert(offsetof(ObjArray, items_) == 40, "ObjArray::items_ @40 olmali");
 static_assert(offsetof(ObjArray, idata) == 48, "ObjArray::idata @48 olmali");
 static_assert(offsetof(ObjArray, elem_bits) == 56, "ObjArray::elem_bits @56 olmali");
+#else
+static_assert(sizeof(ObjArray) == 40, "ObjArray 40 bayt olmali (codegen varsayimi, 32-bit)");
+static_assert(offsetof(ObjArray, count) == 20, "ObjArray::count @20 olmali (32-bit)");
+static_assert(offsetof(ObjArray, capacity) == 24, "ObjArray::capacity @24 olmali (32-bit)");
+static_assert(offsetof(ObjArray, items_) == 28, "ObjArray::items_ @28 olmali (32-bit)");
+static_assert(offsetof(ObjArray, idata) == 32, "ObjArray::idata @32 olmali (32-bit)");
+static_assert(offsetof(ObjArray, elem_bits) == 36, "ObjArray::elem_bits @36 olmali (32-bit)");
+#endif
 static_assert(offsetof(Obj, type) == 0, "Obj::type @0 olmali");
 static_assert((int)VM_VAL_INT == 0 && (int)VM_VAL_OBJ == 4,
               "VMValueType sirasi codegen ile uyusmali");
@@ -3617,8 +3630,25 @@ VMValue aot_env(VMValue nameVal) {
   return VM_OBJ((Obj *)aot_allocate_string(val, (int)strlen(val)));
 }
 
-// AOT Input: Reads a line from stdin
-VMValue aot_input() {
+// AOT Input: istemi (varsa) basar, sonra stdin'den bir satir okur.
+//
+// ISTEM PARAMETRESI (2026-09-16): once `aot_input` SIFIR argumanliydi ve
+// codegen cagridaki argumani hic okumadan atiyordu, yani `input("You: ")`
+// yazan program istemi EKRANA HIC BASMIYOR, kullanici bos ekrana yaziyordu.
+// Aile de tutarsizdi: aot_input_int / aot_input_float istemi ZATEN VMValue
+// olarak alip basiyor. Buraya onlarin BIREBIR ayni kalibi uygulandi.
+//
+// GERIYE UYUM: argumansiz `input()` cagrisinda codegen VM_VAL_VOID gecirir;
+// IS_STRING false olur ve fonksiyon sessizce okumaya gecer.
+//
+// fflush(stdout) SART: istem satir sonu tasimaz, satir tamponlu stdout onu
+// tutar ve istem ancak ilk `print`ten sonra gorunurdu.
+VMValue aot_input(VMValue promptVal) {
+  if (IS_STRING(promptVal)) {
+    printf("%s", AS_STRING(promptVal)->chars);
+    fflush(stdout);
+  }
+
   char buffer[1024];
   if (fgets(buffer, sizeof(buffer), stdin)) {
     size_t len = strlen(buffer);

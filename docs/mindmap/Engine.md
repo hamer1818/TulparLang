@@ -58,3 +58,50 @@ Kümelenmiş nokta ışıklar: 16×9×24 grid, küme başına 32-bit maske, atam
 ## 2B arayüz + font (2026-09-14) → [FAZ3.md](../engine/FAZ3.md)
 Immediate-mode dörtgen kuyruğu (`Renderer::ui_*`, aynı subpass, alfa), **mantıksal** uzayda ve ön-döndürmeyle döndürülmüş; stb_truetype atlas (Türkçe dahil), DejaVuSans bundle; HUD ve joystick göstergesi. Kullanıcı yönü: işler **editörden** yapılacak → sıra UI çekirdeği ✅ → sahne veri modeli → editör. Tuzaklar 8r.
 
+## Editör + sahne veri modeli (2026-09-14/15) → [FAZ3.md](../engine/FAZ3.md), [[Editor]] (raylib hattı ayrı)
+`engine_editor` = motor düzenleme kipinde (Dear ImGui + ImGuizmo, yalnız masaüstü). Tek gerçek: `content::SceneDesc` (`.sahne` deterministik metin — bit-tam en kısa ondalık; `editor.sahne` kanonik, test diff'ler); sim ve GPU kaynakları ondan türetilir. `SceneHistory` (her sürükleme tek işlem), ekle/sil, ışın–AABB tıkla-seç (headless uçtan uca kapı), `T·Rz·Ry·Rx·S` ImGuizmo'yla ölçülerek sabitlendi. Tuzaklar 8x.
+
+## Sahne → runtime blob (2026-09-15) → [FAZ3.md](../engine/FAZ3.md), PLAN §6
+`.sahne` runtime'a gitmez: `engine_sahnec` / editörde **Derle** → `.sahneb` (magic, sürüm, endian, FNV-1a özeti, 16 hizalı 4-baytlık tablolar; aynı desc → aynı bayt; matris/kuaterniyon/ölçekli gövde/ışık konumu derlemede). `SceneRuntime` blob'u işaretçiyle okur (ayrıştırma/ayırma yok), `engine_demo --scene` yazar içeriğini oradan çizer ("sahne = blob + kod"; kare içi 0 `new`). Dünya paneli (`SceneWorld`, `SceneOp::World`). Kapılar 5 (bozulma reddi 10 durum + pozitif kontrol, piksel + fizik). Tuzaklar 8aa.
+
+## Tulpar köprüsü (2026-09-15) → [KOPRU.md](../engine/KOPRU.md), [FAZ3.md](../engine/FAZ3.md)
+**Karar (kullanıcı):** motor C++, oyun betikleri Tulpar — aynı ikilide, script sınırı yok (PLAN §11'in L5'i).
+`engine/bridge/` düz skaler C ABI (`teng_*`, **156 fonksiyon**: struct/callback yok, bugünkü FFI'nin taşıdığı kadar);
+`runtime/engine_bindings.cpp` + backend tablosu + typeinfer imzaları + LSP girdileri **tek `SPEC`'ten üretilir**
+(`engine/tools/gen_engine_bindings.py`) — "5 noktada bağlama" artık mekanik. `lib/engine.tpr` TR/EN sarmalayıcı,
+`examples/engine_ilk_oyun.tpr` ilk oyun. Emülatörde 60 fps, dokunmatik + skor döngüsü Tulpar'da. Her çağrı
+loglanır (`TULPAR_ENGINE_LOG=0..3`), kapanışta hata varsa 64 satırlık halka dökülür. Tuzaklar 8ab–8ae.
+Aileler: yaşam döngüsü, dünya/kamera, derlenmiş sahne + **sıcak yükleme**, varlık/fizik, girdi, HUD,
+**anlık-kip arayüz**, **kalıcı kayıt**, ses, animasyon, bloom, **ışın/örtüşme/navmesh sorguları**, ölçüm.
+
+## Faz 4 UI dilimi (2026-09-15) → [FAZ3.md](../engine/FAZ3.md)
+PLAN Faz 4'ün UI maddesi kapandı: **SDF font atlası** (`content/font.*`, GPU'suz kalite ölçümüyle),
+**tek batch** çizim (atlasa göre kararlı gruplama), **güvenli opak-önce** sıralama (yalnız örtüşmeyen opak
+dörtgen öne alınır → piksel aynı; yanlış sıra kontrol kipi), **retained blok** (değişmeyen blok yeniden
+hesaplanmaz), **gerçekten ölçülen overdraw** (fragment sayan boru hattı, tahmin değil) ve tam ekran harmanlı
+katman uyarısı. Kapı: 7000 dörtgen / 2 batch / **< 1,5 ms** (PLAN §4 bütçesi), zaman damgası şart.
+
+## Faz 5 Temporal + Faz 9 GPU cull (2026-09-15) → [FAZ3.md](../engine/FAZ3.md)
+Jitter (Halton, projeksiyonun solundan), hareket vektörü geçişi, dinamik çözünürlük ve yükseltici arayüzü;
+ayrıca **küme DAG builder** (kenar kilitli sadeleştirme) + **GPU görünürlük elemesi + dolaylı çizim**
+(tek dispatch dört frustum: kamera + 3 gölge kademesi). Hepsi **varsayılan kapalı**, açık/kapalı piksel farkı
+0 bayt — yani bugünkü yol bit bit aynı.
+
+## GI sondaları + blob sürüm 4 (2026-09-15) → [FAZ3.md](../engine/FAZ3.md), PLAN Faz 6
+Statik ışık **derleme anında** CPU ışın izlemesiyle çözülüp `.sahneb`'e giriyor; runtime yalnız okuyor.
+Gösterim **6 yönlü ambient cube** — SH-L1 değil, çünkü güçlü tek yönlü güneşte SH lobu negatife düşer ve
+ölçüm göstergenin kendi hatasını ölçmeye başlar. `gi_flags` hangi terimlerin içeride olduğunu söyler
+(çift sayım yasağı). 7 kapı, hepsi kolu kapatıp aynı ölçümü tekrarlayan kontrollerle.
+
+## Web/Android hedefi onarıldı + paket denetimleri (2026-09-15) → [[Tuzaklar]] 8aj–8ao
+Köprü masaüstünde koşarken **web hedefi tamamen kırıktı ve hiçbir kapı söylemiyordu**: denetim yalnız
+`aot_tm_*` ailesine bakıyor, wasm32'de `ObjArray` başlığı 20 bayt olduğu hâlde codegen 28 yazıyor ve
+`target_web` bayrağı tip kurulumundan **sonra** atanıyordu; ayrıca web runtime'ında `runtime_net.cpp` yoktu.
+Üçü de onarıldı; `tests/dist_archive_audit.py` artık codegen'in adıyla bildirdiği **çekirdek** sembolleri de
+denetliyor ve yeni `tests/paket_boyut_audit.py` boyut + açılış + **SPIR-V tazelik** eşikleri koyuyor
+(⚠️ bu yeni denetim henüz hiçbir otomasyonda koşmuyor).
+
+## Faz 7 — ilk oyunun dikey dilimi (2026-09-15) → [FAZ3.md](../engine/FAZ3.md)
+"Gölge Salonları" (`examples/engine_aksiyon.tpr`, saf Tulpar): iki bölüm, fizik tabanlı vuruş, iki davranışlı
+düşman durum makinesi (devriye ↔ kovalama; ışınla görüş hattı), navmesh varsa Detour yolu yoksa düz yol +
+ışınla kaçınma, ana menü / duraklat / ayarlar, kalıcı rekor. Otopilot kapısı pencersiz koşuyor.

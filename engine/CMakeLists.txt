@@ -180,13 +180,26 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/vendored_impl.c)
+add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/scene_blob.cpp content/scene_runtime.cpp content/vendored_impl.c)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
-target_link_libraries(engine_content PUBLIC engine_renderer engine_meshopt engine_astcenc)
+target_link_libraries(engine_content PUBLIC engine_renderer engine_sim engine_meshopt engine_astcenc)
 target_compile_options(engine_content PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
 add_dependencies(engine_content engine_layer_check)
+
+# --- L6 BRIDGE: Tulpar betikleri icin C ABI (teng_*), bkz. bridge/engine_api.h --------
+# Masaustu: engine_bridge (+ desktop_host, GLFW dlopen). Android: tulpar_engine_android
+# (asagida) ayni cekirdegi NativeActivity host + native_app_glue + Tulpar bindingleriyle
+# tek arsivde toplar; `tulpar build --target=android` android/dist/<abi>/ altinda arar.
+if(NOT ANDROID)
+add_library(engine_bridge STATIC bridge/engine_api.cpp bridge/desktop_host.cpp app/virtual_stick.cpp)
+target_link_libraries(engine_bridge PUBLIC engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core ${CMAKE_DL_LIBS})
+target_include_directories(engine_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
+target_compile_options(engine_bridge PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
+target_compile_definitions(engine_bridge PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_dependencies(engine_bridge engine_layer_check)
+endif()
 
 # --- Demo uygulamasi (L5): pencere (GLFW dlopen) ya da --headless -------------
 if(NOT ANDROID)
@@ -225,7 +238,13 @@ set(ENGINE_TEST_SOURCES
     tests/test_scene_faz2.cpp
     tests/test_renderer.cpp
     tests/test_content.cpp
+    tests/test_scene.cpp
+    tests/test_scene_blob.cpp
+    tests/test_render_graph.cpp
+    tests/test_temporal.cpp
+    tests/test_pack.cpp
     tests/test_input.cpp
+    tests/test_layout.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
@@ -240,18 +259,23 @@ if(NOT ANDROID)
     # Prototip yok: Vulkan fonksiyonlari bizim dlopen'li yukleyiciden (ImGui_ImplVulkan_LoadFunctions).
     target_compile_definitions(engine_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
     target_compile_options(engine_imgui PRIVATE -fno-exceptions -fno-rtti -w)
-    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp app/editor_ui.cpp)
+    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp app/editor_ui.cpp tests/test_bridge.cpp)
 endif()
 
 add_executable(engine_tests ${ENGINE_TEST_SOURCES} app/virtual_stick.cpp core/memory/alloc_gate_override.cpp)
 target_link_libraries(engine_tests PRIVATE engine_content engine_renderer engine_rhi engine_sim engine_audio engine_core ${CMAKE_DL_LIBS})
 if(NOT ANDROID)
-    target_link_libraries(engine_tests PRIVATE engine_imgui)
+    # engine_bridge: Tulpar betiklerinin gordugu C ABI (tests/test_bridge.cpp onu kosturur).
+    target_link_libraries(engine_tests PRIVATE engine_imgui engine_bridge)
     target_include_directories(engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
     # --- engine_texpack: PNG -> ASTC mip zinciri -> .ktx2 (sahne derleyicisi doku dilimi)
     add_executable(engine_texpack tools/texpack.cpp)
     target_link_libraries(engine_texpack PRIVATE engine_content engine_core ${CMAKE_DL_LIBS})
     target_compile_options(engine_texpack PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
+    # --- engine_sahnec: sahne derleyicisi (.sahne -> .sahneb, PLAN §6); --dump blob'u basar
+    add_executable(engine_sahnec tools/sahnec.cpp)
+    target_link_libraries(engine_sahnec PRIVATE engine_content engine_core ${CMAKE_DL_LIBS})
+    target_compile_options(engine_sahnec PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
     # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
     add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/demo_scene.cpp)
     target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})
@@ -297,4 +321,20 @@ if(ANDROID)
   # --no-undefined: eksik sembol LINK'te dussun (cihazda UnsatisfiedLinkError degil);
   # 16 KB sayfa; glue'nun ANativeActivity_onCreate'i disari ver.
   target_link_options(tulparengine PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384 -u ANativeActivity_onCreate)
+
+  # --- tulpar_engine_android: Tulpar oyununun (libtulpargame.so) motor tarafi ---
+  # Kopru cekirdegi + NativeActivity host (android_main -> oyunun main'i) + glue +
+  # VMValue bindingleri (runtime/engine_bindings.cpp; Tulpar runtime basliklari ../src).
+  # engine/tools/build_bridge_android.sh bunu ve libengine_*.a'lari android/dist/<abi>/'ye kopyalar.
+  add_library(tulpar_engine_android STATIC
+      bridge/engine_api.cpp
+      bridge/android_host.cpp
+      app/virtual_stick.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/engine_bindings.cpp
+      ${ENGINE_GLUE_DIR}/android_native_app_glue.c
+  )
+  target_include_directories(tulpar_engine_android PRIVATE ${ENGINE_GLUE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../src ${CMAKE_CURRENT_SOURCE_DIR}/../runtime)
+  target_compile_definitions(tulpar_engine_android PRIVATE TULPAR_RUNTIME_ONLY PLATFORM_LINUX ENGINE_SOURCE_DIR="/data/local/tmp/tulpar_engine")
+  target_compile_options(tulpar_engine_android PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off -Wno-deprecated-declarations)
+  target_link_libraries(tulpar_engine_android PUBLIC engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core android log ${CMAKE_DL_LIBS})
 endif()

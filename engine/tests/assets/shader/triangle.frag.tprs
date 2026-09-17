@@ -1,0 +1,6 @@
+// kaynak-ozet: 62744165ca92  (engine/rhi/shaders/triangle.frag)
+// Faz 1 ilk piksel — en kucuk tam ornek.
+str asama = "frag";
+vec3 v_color = girdi(0);
+vec4 o_color = cikti(0);
+func main() { o_color = vec4(v_color, 1.0); }

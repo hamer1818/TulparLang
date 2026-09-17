@@ -1,0 +1,151 @@
+// Bit islemleri ve tabanli sayi sabitleri
+// =======================================
+//
+// Calistir:  ./tulpar examples/42_bit_islemleri.tpr
+//
+// Bu dosya dile 2026-09-16'da eklenen alti isleci (`& | ^ ~ << >>`),
+// atamali bicimlerini (`&= |= ^= <<= >>=`) ve uc yeni sayi yazimini
+// (`0xFF`, `0b1010`, `1_000_000`) gosteriyor.
+//
+// Neden bir ornek hak ediyor: bunlar yoktu. Tek basina `&` yazmak
+// "Unknown character" hatasi veriyordu ve `0xFF` ayrismiyordu. Bu yuzden
+// motorun renk paketlemesi hala CARPMAYLA yazili:
+//
+//     r * 16777216 + g * 65536 + b * 256 + a
+//
+// Asagidaki "renk" bolumu iki yazimin AYNI sayiyi urettigini calistirarak
+// gosteriyor — yani kaydirmali yazima gecmek davranis degistirmiyor.
+
+print("=== Bit Islemleri ===");
+print("");
+
+// ---------------------------------------------------------------------------
+// 1. Temel islecler
+// ---------------------------------------------------------------------------
+int a = 12;                  // 1100
+int b = 10;                  // 1010
+
+print("a = 12 (1100), b = 10 (1010)");
+print("a & b  = " + toString(a & b));     // 8   (1000)
+print("a | b  = " + toString(a | b));     // 14  (1110)
+print("a ^ b  = " + toString(a ^ b));     // 6   (0110)
+print("a << 1 = " + toString(a << 1));    // 24
+print("a >> 2 = " + toString(a >> 2));    // 3
+print("~a     = " + toString(~a));        // -13
+print("");
+
+// ---------------------------------------------------------------------------
+// 2. Sayi yazimlari
+// ---------------------------------------------------------------------------
+print("0xFF        = " + toString(0xFF));           // 255
+print("0b1010      = " + toString(0b1010));         // 10
+print("1_000_000   = " + toString(1_000_000));      // 1000000
+print("0xFF_FF     = " + toString(0xFF_FF));        // 65535
+// `int` ISARETLI 64 bit ve isaretsiz tip yok; 64 bitin tamami yazilinca
+// sonuc -1 olur. Maske yazarken istenen bit deseni tam olarak budur.
+print("0xFFFFFFFFFFFFFFFF = " + toString(0xFFFFFFFFFFFFFFFF));  // -1
+print("");
+
+// ---------------------------------------------------------------------------
+// 3. Oncelik — C ve GLSL ile AYNI sira
+//
+// `&` `|`den siki baglar; `<<` toplamadan gevsek baglar. Sira C'den
+// aliniyor cunku shader alt kumesi GLSL'e cevriliyor ve ayni metin iki
+// tarafta ayni sonucu vermek zorunda.
+// ---------------------------------------------------------------------------
+print("1 | 2 & 3   = " + toString(1 | 2 & 3));      // 1 | (2&3) = 3
+print("1 << 2 + 3  = " + toString(1 << 2 + 3));     // 1 << 5    = 32
+print("(1 << 2) + 3 = " + toString((1 << 2) + 3));  // 7
+print("");
+
+// ---------------------------------------------------------------------------
+// 4. `>>` ARITMETIKTIR — isaret korunur
+//
+// Mantiksal kaydirma secilseydi -8 >> 1 devasa bir pozitif sayi olurdu.
+// Tek tamsayi tipi isaretli oldugu icin "ikiye bol" beklentisi korunuyor.
+// ---------------------------------------------------------------------------
+int neg = 0 - 8;
+print("-8 >> 1     = " + toString(neg >> 1));       // -4
+print("-1 & 0xFF   = " + toString((0 - 1) & 0xFF)); // 255
+// Kaydirma miktari 64 ve uzeri TANIMSIZ degil: butun bitler disari cikar.
+print("1 << 64     = " + toString(1 << 64));        // 0
+print("-8 >> 100   = " + toString(neg >> 100));     // -1 (isaret doldurur)
+print("");
+
+// ---------------------------------------------------------------------------
+// 5. Atamali bicimler — bayrak kumesi
+// ---------------------------------------------------------------------------
+const int OKUMA  = 0b001;
+const int YAZMA  = 0b010;
+const int CALIST = 0b100;
+
+int izin = 0;
+izin |= OKUMA;
+izin |= YAZMA;
+print("izin (oku+yaz) = " + toString(izin));              // 3
+print("yazma var mi?  = " + toString((izin & YAZMA) != 0));
+izin &= ~YAZMA;                                            // bayragi kaldir
+print("yazma kalkti   = " + toString((izin & YAZMA) != 0));
+izin ^= CALIST;                                            // cevir
+print("calistir acik  = " + toString((izin & CALIST) != 0));
+print("");
+
+// ---------------------------------------------------------------------------
+// 6. RENK PAKETLEME — carpma yazimi ile kaydirma yazimi AYNI sayiyi verir
+//
+// Solda motorun bugunku yazimi (lib/engine.tpr `renk`, lib/tame.tpr `rgb`),
+// sagda bit yazimi. Dongu 256 rengi tek tek karsilastiriyor: "ayni" iddiasi
+// iki ornekle degil sayimla kanitlaniyor.
+// ---------------------------------------------------------------------------
+func renk_carpma(int r, int g, int b, int al): int {
+    return r * 16777216 + g * 65536 + b * 256 + al;
+}
+
+func renk_bit(int r, int g, int b, int al): int {
+    return (r << 24) | (g << 16) | (b << 8) | al;
+}
+
+print("=== Renk paketleme: carpma == kaydirma ===");
+print("beyaz  carpma = " + toString(renk_carpma(255, 255, 255, 255)));
+print("beyaz  kaydir = " + toString(renk_bit(255, 255, 255, 255)));
+print("gunes  carpma = " + toString(renk_carpma(255, 246, 224, 255)));
+print("gunes  kaydir = " + toString(renk_bit(255, 246, 224, 255)));
+
+int fark = 0;
+for (int i = 0; i < 256; i = i + 1) {
+    int r = i;
+    int g = (i * 7) & 0xFF;
+    int bb = (i * 13) & 0xFF;
+    int al = (i * 29) & 0xFF;
+    if (renk_bit(r, g, bb, al) != renk_carpma(r, g, bb, al)) {
+        fark = fark + 1;
+    }
+}
+print("256 renkte fark sayisi = " + toString(fark));   // 0
+
+// Ayristirma da kisaliyor: bugun `mod(toInt(c / 16777216), 256)` yazilan
+// sey `(c >> 24) & 0xFF`.
+int c = renk_bit(200, 150, 100, 50);
+print("R = " + toString((c >> 24) & 0xFF));
+print("G = " + toString((c >> 16) & 0xFF));
+print("B = " + toString((c >> 8) & 0xFF));
+print("A = " + toString(c & 0xFF));
+print("eski yazimla R = " + toString(mod(toInt(c / 16777216), 256)));
+print("");
+
+// ---------------------------------------------------------------------------
+// 7. `const` — yeniden atanamaz yerel
+//
+// Yukaridaki OKUMA/YAZMA/CALIST birer `const`. Asagidaki satirin yorumu
+// KALDIRILIRSA program DERLENMEZ; hata calisma zamaninda degil ayristirmada
+// cikar:
+//     hata: 'OKUMA' bir 'const' ve yeniden atanamaz
+//
+//   OKUMA = 8;
+//
+// `const` BAGLAMAYI kilitler, icerigi degil: bir dizinin elemanlari yine
+// degistirilebilir.
+// ---------------------------------------------------------------------------
+print("OKUMA sabiti = " + toString(OKUMA));
+print("");
+print("=== Bitti ===");

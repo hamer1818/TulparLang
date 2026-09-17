@@ -334,6 +334,44 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     case TOKEN_AND:
     case TOKEN_OR:
       return TYPE_BOOL;
+
+    // BIT ISLEMLERI — yalniz TAMSAYI.
+    //
+    // `float` operand HATA. Gerekce olcum: codegen bu operatorler icin her
+    // operandi `toInt` ile AYNI kurala gore (sifira dogru kirparak) tam
+    // sayiya ceviriyor, yani `1.5 & 1` sessizce `1 & 1` oluyordu. Sessiz
+    // bir kirpma degil, gorunur bir tani olmali.
+    //
+    // KASITLI DAR: yalniz FLOAT ve STRING reddediliyor. TYPE_UNKNOWN /
+    // TYPE_CUSTOM serbest — degilse tipi bilinmeyen her ifade (shader alt
+    // kumesindeki `gl_VertexIndex`, kutulu `var`) yanlis pozitif verirdi.
+    // BOOL da serbest: depoda bool->int etiket cevrimi zaten var.
+    case TOKEN_BIT_AND:
+    case TOKEN_PIPE:
+    case TOKEN_BIT_XOR:
+    case TOKEN_SHIFT_LEFT:
+    case TOKEN_SHIFT_RIGHT: {
+      const char *spelling = bin->op == TOKEN_BIT_AND     ? "&"
+                             : bin->op == TOKEN_PIPE      ? "|"
+                             : bin->op == TOKEN_BIT_XOR   ? "^"
+                             : bin->op == TOKEN_SHIFT_LEFT ? "<<"
+                                                           : ">>";
+      auto bad = [](DataType t) {
+        return t == TYPE_FLOAT || t == TYPE_STRING;
+      };
+      if (bad(left_type) || bad(right_type)) {
+        report_error(
+            ctx,
+            tulpar::i18n::tr_en(
+                "'%s' bit islemi yalnizca tamsayi ile calisir ('%s' ve '%s' "
+                "verildi) - satir %d",
+                "bitwise '%s' works on integers only (got '%s' and '%s') "
+                "at line %d"),
+            spelling, datatype_to_string(left_type),
+            datatype_to_string(right_type), bin->loc.line);
+      }
+      return TYPE_INT;
+    }
     default:
       break;
     }
@@ -363,6 +401,20 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     DataType operand_type = infer_expr(ctx, un->operand.get());
     if (un->op == TOKEN_BANG) {
       return TYPE_BOOL;
+    }
+    // `~x` — bit DEGIL. Ikili bit islemleriyle ayni kural: float/str hata,
+    // sonuc her zaman int.
+    if (un->op == TOKEN_BIT_NOT) {
+      if (operand_type == TYPE_FLOAT || operand_type == TYPE_STRING) {
+        report_error(ctx,
+                     tulpar::i18n::tr_en(
+                         "'~' bit islemi yalnizca tamsayi ile calisir ('%s' "
+                         "verildi) - satir %d",
+                         "bitwise '~' works on integers only (got '%s') "
+                         "at line %d"),
+                     datatype_to_string(operand_type), un->loc.line);
+      }
+      return TYPE_INT;
     }
     return operand_type;
   }
@@ -628,6 +680,56 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       }
     }
     typeinfer_add_symbol(ctx, decl->name.c_str(), declared_type);
+    return;
+  }
+
+  // BILESIK ATAMA. Degisken hedefli bicim (`x &= y`) ayristiricida
+  // `x = x & y` olarak seker aciliyor ve BinaryOp yolundan zaten deneteniyor;
+  // buraya YALNIZ eleman hedefli bicim (`a[i] &= y`) dusuyor. Denetim
+  // olmadan iki yol AYRISIYORDU: `x &= 2.5` uyari veriyor, `a[0] &= 2.5`
+  // sessizce geciyordu (olculdu 2026-09-16). Ayni dilde ayni islemin iki
+  // yazimi ayni seyi soylemeli.
+  if (const auto *ca = as_node<CompoundAssign>(stmt)) {
+    const bool bitwise =
+        ca->op == TOKEN_BIT_AND_EQUAL || ca->op == TOKEN_BIT_OR_EQUAL ||
+        ca->op == TOKEN_BIT_XOR_EQUAL || ca->op == TOKEN_SHIFT_LEFT_EQUAL ||
+        ca->op == TOKEN_SHIFT_RIGHT_EQUAL;
+    DataType lt = TYPE_UNKNOWN;
+    if (ca->target) {
+      if (const auto *acc = as_node<ArrayAccess>(ca->target.get())) {
+        // Eleman tipi kabin tipinden gelir; `int[]` -> int.
+        switch (infer_expr(ctx, acc->object.get())) {
+        case TYPE_ARRAY_INT:   lt = TYPE_INT;    break;
+        case TYPE_ARRAY_FLOAT: lt = TYPE_FLOAT;  break;
+        case TYPE_ARRAY_STR:   lt = TYPE_STRING; break;
+        case TYPE_ARRAY_BOOL:  lt = TYPE_BOOL;   break;
+        default: break;
+        }
+      }
+    } else if (!ca->name.empty()) {
+      lt = lookup_symbol_type(ctx, ca->name);
+    }
+    const DataType rt = infer_expr(ctx, ca->value.get());
+    if (bitwise) {
+      const char *spelling = ca->op == TOKEN_BIT_AND_EQUAL      ? "&="
+                             : ca->op == TOKEN_BIT_OR_EQUAL     ? "|="
+                             : ca->op == TOKEN_BIT_XOR_EQUAL    ? "^="
+                             : ca->op == TOKEN_SHIFT_LEFT_EQUAL ? "<<="
+                                                                : ">>=";
+      // BinaryOp yolundaki ile AYNI darlik: yalniz float/string reddediliyor.
+      auto bad = [](DataType t) { return t == TYPE_FLOAT || t == TYPE_STRING; };
+      if (bad(lt) || bad(rt)) {
+        report_error(
+            ctx,
+            tulpar::i18n::tr_en(
+                "'%s' bit islemi yalnizca tamsayi ile calisir ('%s' ve '%s' "
+                "verildi) - satir %d",
+                "bitwise '%s' works on integers only (got '%s' and '%s') "
+                "at line %d"),
+            spelling, datatype_to_string(lt), datatype_to_string(rt),
+            ca->loc.line);
+      }
+    }
     return;
   }
 
@@ -1230,7 +1332,12 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"toFloat", TYPE_FLOAT, {TYPE_UNKNOWN}},
       {"toBool", TYPE_BOOL, {TYPE_UNKNOWN}},
       // I/O
-      {"input", TYPE_STRING, {}},
+      // input(prompt?) — istem ISTEGE BAGLI. "Cok argumani hata, az argumani
+      // serbest" kurali geregi tek parametreyle kayit hem `input()` hem
+      // `input("You: ")` cagrisini gecirir; ONCEDEN {} kayitliydi ve istem
+      // veren her cagri "expects 0 argument(s), got 1" diye isaretleniyordu
+      // (dogru uyariydi: runtime da o argumani okumuyordu).
+      {"input", TYPE_STRING, {TYPE_STRING}},
       {"read_key", TYPE_STRING, {}},
       {"sys_lang", TYPE_STRING, {}},
       {"read_key_timeout", TYPE_STRING, {TYPE_INT}},
@@ -1255,6 +1362,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"substring", TYPE_STRING, {TYPE_STRING, TYPE_INT, TYPE_INT}},
       {"ord", TYPE_INT, {TYPE_STRING, TYPE_INT}},
       {"chr", TYPE_STRING, {TYPE_INT}},
+#include "engine_builtins_sigs.inc"
       // tame (2D oyun) builtin ailesi — import "tame" sarmalayıcılarının
       // altındaki tm_* native katmanı. Koordinat pozisyonları int VEYA float
       // kabul eder (oyunlar `x + dx` float'larıyla literal int'leri serbestçe

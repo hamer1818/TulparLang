@@ -1044,6 +1044,22 @@ static const TameBuiltin *tame_builtin_lookup(const char *name) {
   return nullptr;
 }
 
+// Tulpar Engine (engine/) köprüsü — eng_* builtin ailesi. Tablo ÜRETİLİR:
+// engine/tools/gen_engine_bindings.py (tek kaynak SPEC) aynı anda binding'i,
+// typeinfer imzalarını ve LSP girdilerini de yazar; elle düzenlenmez. ABI ve
+// dispatch tame ile birebir aynı (N-ptr VMValue). Link: engine_link_flags().
+static const TameBuiltin k_engine_builtins[] = {
+#include "engine_builtins_table.inc"
+};
+#define ENGINE_BUILTIN_COUNT \
+  ((int)(sizeof(k_engine_builtins) / sizeof(k_engine_builtins[0])))
+static const TameBuiltin *engine_builtin_lookup(const char *name) {
+  for (int i = 0; i < ENGINE_BUILTIN_COUNT; i++) {
+    if (strcmp(k_engine_builtins[i].name, name) == 0) return &k_engine_builtins[i];
+  }
+  return nullptr;
+}
+
 // Declare external runtime functions
 void declare_runtime_functions(LLVMBackend *backend) {
   // printf: i32 printf(i8*, ...)
@@ -1345,12 +1361,22 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_array_set_raw_fast = LLVMAddFunction(
       backend->module, "aot_array_set_raw_fast", set_raw_fast_type);
 
-  // aot_input() -> VMValue
-  LLVMTypeRef input_type = llvm_make_vmvalue_func_type(backend, nullptr, 0, 0);
+  // aot_input(prompt) -> VMValue
+  // Istem parametresi (2026-09-16): `input("You: ")` istemi basmaliydi ama
+  // aot_input SIFIR argumanliydi ve buradaki gonderim argumani atiyordu.
+  // Artik aot_input_int / aot_input_float ile AYNI 1-VMValue imzasi var;
+  // argumansiz `input()` cagrisinda VM_VAL_VOID gecilir (asagidaki gonderim).
+  // DIKKAT: bu tip ASAGIDAKI 0-argumanli `input_type` ile PAYLASILAMAZ —
+  // read_key / sys_lang / term_width / term_height / screen_open /
+  // screen_close hepsi o tipi kullaniyor ve gercekten argumansizlar.
+  LLVMTypeRef input_prompt_only_params[] = {backend->vm_value_type};
+  LLVMTypeRef input_with_prompt_type =
+      llvm_make_vmvalue_func_type(backend, input_prompt_only_params, 1, 0);
   backend->func_aot_input =
-      LLVMAddFunction(backend->module, "aot_input", input_type);
+      LLVMAddFunction(backend->module, "aot_input", input_with_prompt_type);
 
-  // aot_read_key() -> VMValue (single keypress, no echo) — same 0-arg ABI.
+  // aot_read_key() -> VMValue (single keypress, no echo) — 0-arg ABI.
+  LLVMTypeRef input_type = llvm_make_vmvalue_func_type(backend, nullptr, 0, 0);
   backend->func_aot_read_key =
       LLVMAddFunction(backend->module, "aot_read_key", input_type);
 
@@ -1605,6 +1631,12 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMTypeRef tm_ft = llvm_make_vmvalue_func_type(
           backend, tm_params, k_tame_builtins[i].argc, 0);
       LLVMAddFunction(backend->module, k_tame_builtins[i].sym, tm_ft);
+    }
+    // Tulpar Engine köprüsü (eng_*): aynı ABI, aynı döngü.
+    for (int i = 0; i < ENGINE_BUILTIN_COUNT; i++) {
+      LLVMTypeRef en_ft = llvm_make_vmvalue_func_type(
+          backend, tm_params, k_engine_builtins[i].argc, 0);
+      LLVMAddFunction(backend->module, k_engine_builtins[i].sym, en_ft);
     }
   }
 
@@ -2392,6 +2424,13 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
       LLVMPointerType(LLVMInt8TypeInContext(backend->context), 0);
   backend->string_type = backend->ptr_type;
 
+  // Web hedefi — MUTLAKA llvm_init_types'tan ÖNCE. ObjArray'in C tarafındaki
+  // düzeni işaretçi boyutuna bağlı (wasm32'de Obj başlığı 32 değil 20 bayt);
+  // tip gövdesi yanlış kurulursa satır içi GEP web'de YANLIŞ ofsete yazar.
+  // Eskiden bu atama llvm_init_types'tan SONRAYDI: web derlemesi runtime'ın
+  // static_assert'lerinde patlıyordu ve wasm/dist arşivleri tazelenemiyordu.
+  backend->target_web = g_backend_target_web;
+
   // Initialize VM Types
   llvm_init_types(backend);
 
@@ -2423,9 +2462,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->di_int_type = nullptr;
   backend->di_vmvalue_type = nullptr;
 
-  // Web hedefi — MUTLAKA declare_runtime_functions'tan önce (VMValue
-  // fonksiyon tiplerinin şekli buna bağlı; bkz. g_backend_target_web notu).
-  backend->target_web = g_backend_target_web;
+  // (target_web yukarıda, llvm_init_types'tan önce kuruldu.)
 
   // Declare Runtime
   declare_runtime_functions(backend);
@@ -3193,6 +3230,80 @@ static LLVMValueRef typed_to_int_payload(LLVMBackend *backend, TypedValue tv) {
   return LLVMConstInt(backend->int_type, 0, 0);
 }
 
+// ---------------------------------------------------------------------------
+// BIT ISLEMLERI (G4) — `& | ^ << >>` ve tekli `~`
+//
+// Hepsi SATIR ICI uretiliyor; hicbiri `vm_binary_op`'a gitmiyor. Bu bir
+// baglanti kurali: `vm_binary_op` onceden derlenmis `wasm/dist/` ve
+// `android/dist/` arsivlerinde de duruyor ve bu tokenlari TANIMIYOR. Oraya
+// dusselerdi masaustu yesil kalirken web/android SESSIZCE `default` dalina
+// dusup yanlis deger uretirdi (bkz. lexer.hpp'deki renumaralama notu).
+//
+// Operandlar `int`e ceviriliyor (kutulu float gelirse `toInt` ile AYNI
+// kural: sifira dogru kirpma). typeinfer float operandi zaten HATA olarak
+// bildiriyor; buradaki cevrim yalniz tipi calisma zamaninda belli olan
+// degerler icin son caredir, tanimsiz bir bit deseni degil.
+//
+// ISARET SECIMI — `>>` ARITMETIK (`ashr`), mantiksal degil.
+//   Tulpar'da tek bir tamsayi tipi var ve o ISARETLI 64 bit (`int` = i64,
+//   isaretsiz tip YOK). Mantiksal kaydirma secilseydi `-8 >> 1` 2^63-4
+//   gibi devasa bir pozitif sayi verirdi; aritmetik kaydirmayla -4 veriyor,
+//   yani "ikiye bol" beklentisi isaretli tipte KORUNUYOR. Isaretsiz
+//   kaydirma isteyen `(x >> n) & mask` yazabilir. Test: negatif sayilarla
+//   olculuyor (tests/bit_islemleri.test.tpr).
+//
+// KAYDIRMA MIKTARI — 64 ve uzeri TANIMSIZ DEGIL, SECILDI.
+//   LLVM'de `shl`/`ashr` bit genisliginden buyuk bir miktarla POISON verir
+//   (yani "ne cikarsa" degil, optimizasyonun her seyi yapmasina izin veren
+//   bir durum). Ikisi de kapatildi ve secilen davranis MATEMATIKSEL SINIR:
+//     `x << n`, n >= 64  -> 0            (butun bitler disari cikti)
+//     `x >> n`, n >= 64  -> 0 ya da -1   (isaret doldurur; n=63 ile ayni)
+//   Miktar ISARETSIZ okunuyor, yani negatif bir miktar (`x << -1`) da
+//   "cok buyuk" sayilip ayni sinira dusuyor — sessizce `x` DONMEZ.
+//   Uretilen IR'de poison hic olusmuyor: kaydirma once maskeleniyor,
+//   `select` ancak ondan sonra geliyor (secilmeyen kolun poison'ina
+//   guvenmek bu dosyanin zaten kacindigi bir sey — bkz. llvm_values.cpp).
+static LLVMValueRef emit_bitwise_i64(LLVMBackend *backend, int op,
+                                     LLVMValueRef li, LLVMValueRef ri) {
+  if (!li || !ri) return nullptr;
+  LLVMBuilderRef b = backend->builder;
+  switch (op) {
+  case TOKEN_BIT_AND:
+    return LLVMBuildAnd(b, li, ri, "bit.and");
+  case TOKEN_PIPE:  // `|` — match kolu ayraciyla AYNI token, bkz. lexer.hpp
+    return LLVMBuildOr(b, li, ri, "bit.or");
+  case TOKEN_BIT_XOR:
+    return LLVMBuildXor(b, li, ri, "bit.xor");
+  case TOKEN_SHIFT_LEFT: {
+    LLVMValueRef masked =
+        LLVMBuildAnd(b, ri, LLVMConstInt(backend->int_type, 63, 0), "shl.cnt");
+    LLVMValueRef sh = LLVMBuildShl(b, li, masked, "shl");
+    LLVMValueRef too_big =
+        LLVMBuildICmp(b, LLVMIntUGE, ri,
+                      LLVMConstInt(backend->int_type, 64, 0), "shl.big");
+    return LLVMBuildSelect(b, too_big,
+                           LLVMConstInt(backend->int_type, 0, 0), sh,
+                           "shl.res");
+  }
+  case TOKEN_SHIFT_RIGHT: {
+    LLVMValueRef too_big =
+        LLVMBuildICmp(b, LLVMIntUGT, ri,
+                      LLVMConstInt(backend->int_type, 63, 0), "shr.big");
+    LLVMValueRef cnt =
+        LLVMBuildSelect(b, too_big,
+                        LLVMConstInt(backend->int_type, 63, 0), ri, "shr.cnt");
+    return LLVMBuildAShr(b, li, cnt, "shr");
+  }
+  default:
+    return nullptr;
+  }
+}
+
+static bool is_bitwise_binary_op(int op) {
+  return op == TOKEN_BIT_AND || op == TOKEN_PIPE || op == TOKEN_BIT_XOR ||
+         op == TOKEN_SHIFT_LEFT || op == TOKEN_SHIFT_RIGHT;
+}
+
 // Box a typed value to VMValue when needed
 LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv) {
   if (tv.boxed)
@@ -3875,6 +3986,21 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     TypedValue L = codegen_typed_expr(backend, node->left);
     TypedValue R = codegen_typed_expr(backend, node->right);
 
+    // BIT ISLEMLERI: operandlarin statik tipi ne olursa olsun BURADA biter.
+    // `typed_to_int_payload` int/bool'u oldugu gibi, float'i `toInt` kuraliyla,
+    // kutulu degeri de calisma zamaninda etiketine bakarak int'e ceviriyor.
+    if (is_bitwise_binary_op(node->op)) {
+      LLVMValueRef bits = emit_bitwise_i64(backend,
+                                           node->op,
+                                           typed_to_int_payload(backend, L),
+                                           typed_to_int_payload(backend, R));
+      if (bits) {
+        result.value = bits;
+        result.type = INFERRED_INT;
+        return result;
+      }
+    }
+
     // Fast path: both are known integers
     if (L.type == INFERRED_INT && R.type == INFERRED_INT) {
       switch (node->op) {
@@ -4527,6 +4653,14 @@ static int compound_op_to_binary(int op) {
   case TOKEN_MULTIPLY_EQUAL: return TOKEN_MULTIPLY;
   case TOKEN_DIVIDE_EQUAL:   return TOKEN_DIVIDE;
   case TOKEN_MODULO_EQUAL:   return TOKEN_MODULO;
+  // Bit bicimleri: eleman yolunda (codegen_elem_compound) bunlar vm_binary_op'a
+  // HIC gitmiyor — yerinde emit ediliyor. Esleme yine de burada duruyor ki
+  // baska bir cagri yeri eklendiginde sessizce `&=` token'ini islem sanmasin.
+  case TOKEN_BIT_AND_EQUAL:     return TOKEN_BIT_AND;
+  case TOKEN_BIT_OR_EQUAL:      return TOKEN_PIPE;
+  case TOKEN_BIT_XOR_EQUAL:     return TOKEN_BIT_XOR;
+  case TOKEN_SHIFT_LEFT_EQUAL:  return TOKEN_SHIFT_LEFT;
+  case TOKEN_SHIFT_RIGHT_EQUAL: return TOKEN_SHIFT_RIGHT;
   default:                   return op;
   }
 }
@@ -4652,6 +4786,33 @@ static LLVMValueRef codegen_elem_compound(LLVMBackend *backend,
   LLVMValueRef L_ptr =
       llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.L");
   LLVMBuildStore(backend->builder, old, L_ptr);
+  // BIT BICIMLERI (`a[i] &= y`, `<<=`, ...) vm_binary_op'a GITMIYOR.
+  // Iki sebep: (1) o fonksiyon bit tokenlarini tanimiyor ve onceden derlenmis
+  // web/android arsivlerinde ESKI kopyasi duruyor — oraya yeni bir islem
+  // eklemek arsivleri tazelemeden sessizce yanlis cevap verirdi; (2) bit
+  // islemleri zaten tamsayi islemi, kutulu cagriya gerek yok. Kap ve indis bu
+  // noktada ZATEN bir kez degerlendirilip alloca'ya yazilmis durumda (ca.cont /
+  // ca.idx), yani `a[f()] &= 1` icinde `f()` bir kez calisiyor.
+  if (is_bitwise_binary_op(compound_op_to_binary(node->op))) {
+    LLVMValueRef old_i = llvm_vm_val_to_int_payload(backend, old);
+    LLVMValueRef rhs_i = llvm_vm_val_to_int_payload(backend, rhs);
+    LLVMValueRef bit_i =
+        emit_bitwise_i64(backend, compound_op_to_binary(node->op), old_i, rhs_i);
+    if (bit_i) {
+      LLVMValueRef bit_val = llvm_vm_val_int_val(backend, bit_i);
+      LLVMValueRef bit_p = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "ca.bitv");
+      LLVMBuildStore(backend->builder, bit_val, bit_p);
+      LLVMValueRef bargs[] = {LLVMConstNull(backend->ptr_type), cont_p, idx_p,
+                              bit_p};
+      LLVMBuildCall2(backend->builder,
+                     LLVMGlobalGetValueType(backend->func_vm_set_element),
+                     backend->func_vm_set_element, bargs, 4, "");
+      if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+      return bit_val;
+    }
+  }
+
   LLVMValueRef R_ptr =
       llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.R");
   LLVMBuildStore(backend->builder, rhs, R_ptr);
@@ -5487,6 +5648,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_vm_val_bool_val(backend, inverted);
     }
 
+    // `~x` — bit DEGIL. Operand once int'e ceviriliyor (bkz.
+    // emit_bitwise_i64 basligi), sonuc her zaman int.
+    if (node->op == TOKEN_BIT_NOT) {
+      LLVMValueRef iv = llvm_vm_val_to_int_payload(backend, operand);
+      LLVMValueRef inv = LLVMBuildNot(backend->builder, iv, "bit.not");
+      return llvm_vm_val_int_val(backend, inv);
+    }
+
     // Unary minus for int/float
     if (node->op == TOKEN_MINUS) {
       LLVMValueRef type_val =
@@ -6195,7 +6364,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (node->name && strcmp(bi_name, "input") == 0) {
       if (!backend->func_aot_input)
         fprintf(stderr, "Fatal: func_aot_input is nullptr\n");
-      return llvm_call_vmvalue_func(backend, backend->func_aot_input, nullptr, 0, "input_res");
+      // Istem argumani VARSA runtime'a gecilir (orada basilir + fflush).
+      // YOKSA VM_VAL_VOID: IS_STRING false oldugundan runtime sessizce
+      // okumaya gecer, yani eski `input()` cagrilari aynen calisir.
+      // (input_int / input_float bu noktada VM_VAL_INT 0 geciyor; void daha
+      // dogru sentinel — "istem yok" bir sayi degil.)
+      LLVMValueRef prompt = node->argument_count >= 1
+                                ? codegen_expression(backend, node->arguments[0])
+                                : llvm_vm_val_void(backend);
+      LLVMValueRef args[] = {prompt};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_input, args, 1, "input_res");
     }
     if (node->name && strcmp(bi_name, "read_key") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_key, nullptr, 0, "readkey_res");
@@ -6307,6 +6485,31 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         }
         return llvm_call_vmvalue_func(backend, tm_fn, tm_args,
                                       (unsigned)tb->argc, "tm_res");
+      }
+    }
+    // Tulpar Engine köprüsü (eng_*): tame ile aynı tablo-güdümlü dispatch;
+    // görülmesi link satırına libtulpar_engine.a + engine/ arşivlerinin
+    // eklenmesi için yeterli sinyaldir (uses_engine).
+    if (node->name && strncmp(node->name, "eng_", 4) == 0) {
+      const TameBuiltin *eb = engine_builtin_lookup(node->name);
+      if (eb) {
+        backend->uses_engine = 1;
+        LLVMValueRef en_fn =
+            LLVMGetNamedFunction(backend->module, eb->sym);
+        LLVMValueRef en_args[TAME_MAX_ARGS];
+        for (int i = 0; i < eb->argc; i++) {
+          LLVMValueRef v = (i < node->argument_count)
+                               ? codegen_expression(backend,
+                                                    node->arguments[i])
+                               : llvm_vm_val_int(backend, 0);
+          LLVMValueRef slot = llvm_build_alloca_at_entry(
+              backend, backend->vm_value_type, "eng_arg");
+          LLVMBuildStore(backend->builder, v, slot);
+          en_args[i] = LLVMBuildBitCast(backend->builder, slot,
+                                        backend->ptr_type, "eng_arg_void");
+        }
+        return llvm_call_vmvalue_func(backend, en_fn, en_args,
+                                      (unsigned)eb->argc, "eng_res");
       }
     }
     if (node->name && strcmp(bi_name, "screen_open") == 0) {
@@ -10035,6 +10238,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // "tame" (2D oyun kütüphanesi) importu — link satırına libtulpar_tame.a
     // eklenmesi gerektiğini işaretle (dup-import erken dönse de idempotent).
     if (rel_path && strcmp(rel_path, "tame") == 0) backend->uses_tame = 1;
+    // "engine" (Tulpar Engine köprüsü) importu — libtulpar_engine.a + engine/ arşivleri.
+    if (rel_path && strcmp(rel_path, "engine") == 0) backend->uses_engine = 1;
     // Check duplication
     for (int i = 0; i < backend->imported_count; i++) {
       if (strcmp(backend->imported_files[i], rel_path) == 0)
@@ -12045,8 +12250,30 @@ int llvm_backend_emit_ir_file(LLVMBackend *backend, const char *filename) {
 // LLVMRelocDefault for executables and LLVMRelocPIC for the Android
 // shared-library objects (a non-PIC x86_64 object aborts the .so link with
 // "relocation R_X86_64_32 cannot be used against local symbol").
+// clone_module: modulu EMIT ETMEDEN ONCE kopyala ve kopyadan uret.
+//
+// NEDEN: `LLVMTargetMachineEmitToFile` saf bir okuma DEGILDIR. CodeGen boru
+// hatti modulu YERINDE degistiren IR gecisleri icerir (PreISelIntrinsicLowering,
+// AtomicExpand, ExpandLargeFpConvert, SelectOptimize, ...) ve ustelik
+// `LLVMSetModuleDataLayout` ile veri yerlesimi de hedefe gore damgalanir. Yani
+// bir emit'ten sonra elimizdeki artik "on uc IR'i" degil, O HEDEFE gore
+// alcaltilmis IR'dir.
+//
+// Android hedefi ayni modulden IKI ABI uretir (once arm64-v8a, sonra x86_64).
+// Kopyalamadan yapilinca ikinci emit, birincinin (AArch64) alcaltmasi uzerine
+// biniyordu. Olculen sonuc (2026-09-15, emulator): `t_menu_ciz` icinde 16 bayt
+// hizali `movapd` 8 mod 16 bir yuva olan `0x48(%rsp)`e dusuyor ve uygulama ilk
+// karede SIGSEGV veriyordu (fault_addr 0x0 = hizalama hatasi, null DEGIL).
+// Ayni IR `llc -mtriple=x86_64-linux-android34 -relocation-model=pic` ile TEK
+// BASINA derlendiginde dogru yuvayi (`0x40(%rsp)`) uretiyor — fark tam olarak
+// "modul daha once baska bir hedef icin emit edildi mi" farkiydi.
+//
+// Belirtinin sinsiligi: ILK ABI (arm64, gercek telefon) DOGRU uretiliyor, yalniz
+// IKINCISI (x86_64, emulator) bozuluyor. Yani gercek cihazda her sey calisirken
+// emulator cokuyor ve insan once emulatorden suphelenip hatayi ariyor.
 static int emit_object_with_triple(LLVMBackend *backend, const char *filename,
-                                   char *triple, LLVMRelocMode reloc) {
+                                   char *triple, LLVMRelocMode reloc,
+                                   bool clone_module) {
   LLVMTargetRef target;
   char *error = nullptr;
   if (LLVMGetTargetFromTriple(triple, &target, &error) != 0)
@@ -12054,24 +12281,27 @@ static int emit_object_with_triple(LLVMBackend *backend, const char *filename,
   LLVMTargetMachineRef machine = LLVMCreateTargetMachine(
       target, triple, "generic", "", LLVMCodeGenLevelDefault, reloc,
       LLVMCodeModelDefault);
-  LLVMSetModuleDataLayout(backend->module, LLVMCreateTargetDataLayout(machine));
-  LLVMSetTarget(backend->module, triple);
+  LLVMModuleRef module =
+      clone_module ? LLVMCloneModule(backend->module) : backend->module;
+  LLVMSetModuleDataLayout(module, LLVMCreateTargetDataLayout(machine));
+  LLVMSetTarget(module, triple);
 
   // Verify module
   char *verify_error = nullptr;
-  if (LLVMVerifyModule(backend->module, LLVMPrintMessageAction,
-                       &verify_error) != 0) {
+  if (LLVMVerifyModule(module, LLVMPrintMessageAction, &verify_error) != 0) {
     fprintf(stderr, "Global module verification failed: %s\n", verify_error);
     LLVMDisposeMessage(verify_error);
     // Continue anyway to see if it links? No, it usually crashes.
     // return 1;
   }
 
-  if (LLVMTargetMachineEmitToFile(machine, backend->module, filename,
-                                  LLVMObjectFile, &error) != 0) {
+  if (LLVMTargetMachineEmitToFile(machine, module, filename, LLVMObjectFile,
+                                  &error) != 0) {
     fprintf(stderr, "Error emitting object file: %s\n", error);
+    if (clone_module) LLVMDisposeModule(module);
     return 1;
   }
+  if (clone_module) LLVMDisposeModule(module);
   LLVMDisposeTargetMachine(machine);
   LLVMDisposeMessage(triple);
   return 0;
@@ -12096,7 +12326,25 @@ int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
     LLVMInitializeNativeAsmPrinter();
     triple = LLVMGetDefaultTargetTriple();
   }
-  return emit_object_with_triple(backend, filename, triple, LLVMRelocDefault);
+  // Tek emit: modul bundan sonra kullanilmiyor, kopyaya gerek yok.
+  return emit_object_with_triple(backend, filename, triple, LLVMRelocDefault,
+                                 /*clone_module=*/false);
+}
+
+// Modulun IR'inin FNV-1a ozeti. Tek amaci: "emit modulu degistirmez"
+// varsayimini MEKANIK olarak dogrulamak (bkz. Tuzaklar 8ap). Android yolu ayni
+// modulden iki ABI uretiyor; klonlama kaldirilir ya da baska bir yerde modulu
+// degistiren bir emit yolu eklenirse, bu ozet ABI dongusu boyunca DEGISIR ve
+// surucu sessiz bozuk kod uretmek yerine yuksek sesle durur.
+uint64_t llvm_backend_module_fingerprint(LLVMBackend *backend) {
+  char *ir = LLVMPrintModuleToString(backend->module);
+  uint64_t h = 1469598103934665603ULL;
+  for (const char *p = ir; *p; p++) {
+    h ^= (unsigned char)*p;
+    h *= 1099511628211ULL;
+  }
+  LLVMDisposeMessage(ir);
+  return h;
 }
 
 int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
@@ -12115,8 +12363,11 @@ int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
   LLVMInitializeX86TargetMC();
   LLVMInitializeX86AsmPrinter();
   LLVMInitializeX86AsmParser();
+  // Her ABI KENDI KOPYASINDAN uretilir: bir onceki hedefin alcaltmasi
+  // sonrakine sizmasin (yukaridaki gerekce).
   return emit_object_with_triple(backend, filename,
-                                 LLVMCreateMessage(triple_str), LLVMRelocPIC);
+                                 LLVMCreateMessage(triple_str), LLVMRelocPIC,
+                                 /*clone_module=*/true);
 }
 
 // Optimization Pass enabling using new LLVM Pass Manager

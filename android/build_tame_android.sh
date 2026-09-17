@@ -69,7 +69,15 @@ build_abi() {
     local AR="$TC/llvm-ar"
     local OUT="dist/$abi"
     local OBJ="$OUT/obj"
-    rm -rf "$OUT"
+    # YALNIZ KENDI CIKTILARINI SIL. Eskiden `rm -rf "$OUT"` vardi ve bu, ayni
+    # dizinde yasayan MOTOR arsivlerini (libengine_*.a, libtulpar_engine_android.a —
+    # engine/tools/build_bridge_android.sh uretir) her kosumda yok ediyordu.
+    # Olculdu 2026-09-16: bu betik kosturuldu, motorun 11 arsivi silindi ve
+    # `import "engine"` eden her android derlemesi link'te olur hale geldi;
+    # masaustunde hicbir sey kizarmaz. (tests/dist_archive_audit.py bunu
+    # "arsiv YOK" diye yakalar, ama ancak kosturulursa.)
+    rm -rf "$OBJ"
+    rm -f "$OUT/libtulpar_runtime_android.a" "$OUT/libtulpar_tame_android.a"
     mkdir -p "$OBJ/tame"
 
     local CXXFLAGS="-O2 -std=c++17 -fPIC -I$ROOT/src -I$ROOT/runtime -DTULPAR_RUNTIME_ONLY -DPLATFORM_LINUX -Wno-deprecated-declarations"
@@ -83,6 +91,7 @@ build_abi() {
         "$ROOT/src/common/diagnostics.cpp"
         "$ROOT/src/common/http_fetch.cpp"
         "$ROOT/src/vm/runtime_bindings.cpp"
+        "$ROOT/src/vm/runtime_net.cpp"
         "$ROOT/src/vm/vm.cpp"
         "$ROOT/src/vm/bytecode.cpp"
         "$ROOT/runtime/tulpar_arc.cpp"

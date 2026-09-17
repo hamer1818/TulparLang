@@ -89,10 +89,51 @@ enum TulparTokenType {
     TOKEN_QUESTION,      // ? (ternary conditional: cond ? a : b)
     TOKEN_DOT,           // . (member access)
     TOKEN_DOTDOT,        // .. (inclusive range in match patterns)
-    TOKEN_PIPE,          // | (pattern alternative in match arms)
+    TOKEN_PIPE,          // | (match kolu ayraci VE bit VEYA — bkz. asagi)
 
     TOKEN_EOF,           // End of file
-    TOKEN_ERROR          // Error
+    TOKEN_ERROR,         // Error
+
+    // ------------------------------------------------------------------
+    // BIT ISLEMLERI — YENI GIRDILER BU ENUM'UN SONUNA EKLENIR. RENUMARA ETME.
+    //
+    // Bu enum'un sayisal degerleri DERLEYICININ DISINA sizmiyor sanilabilir
+    // ama siziyor: `vm_binary_op` (src/vm/runtime_bindings.cpp) op'u `int`
+    // olarak aliyor ve codegen ona ham enum degerini geciriyor. O fonksiyon
+    // `libtulpar_runtime.a` ile birlikte `wasm/dist/` ve `android/dist/`
+    // ONCEDEN DERLENMIS arsivlerinde de duruyor. Ortadan bir girdi eklemek
+    // butun degerleri kaydirir; masaustu yeniden derlendigi icin YESIL
+    // kalir, web/android ise ESKI numaralamayla baglanip SESSIZCE yanlis
+    // islemi yapar (Tuzaklar 8aq ailesi). Sona eklemek bu sinifi olanaksiz
+    // kilar.
+    //
+    // Ayrica: bit islemleri codegen'de TAMAMEN satir ici uretiliyor, hicbiri
+    // `vm_binary_op`'a gitmiyor — yani onceden derlenmis arsivlerin bu
+    // tokenlari TANIMASI da gerekmiyor.
+    //
+    // `|` icin ayri bir token YOK: TOKEN_PIPE ikisini birden tasiyor
+    // (match kolu ayraci + bit VEYA). Ayrimi baglam yapiyor — match desen
+    // atomlari `parse_expression(PREC_BIT_OR)` ile ayrisiyor, yani `|`
+    // oradan once durduruluyor. Iki ayri token uretmek lexer'da olanaksiz
+    // olurdu (ayni karakter).
+    TOKEN_BIT_AND,       // &  — bit VE
+    TOKEN_BIT_XOR,       // ^  — bit XOR
+    TOKEN_BIT_NOT,       // ~  — bit DEGIL (tekli)
+    TOKEN_SHIFT_LEFT,    // << — sola kaydirma
+    TOKEN_SHIFT_RIGHT,   // >> — saga kaydirma (ARITMETIK, bkz. codegen)
+
+    // `const` / `sabit` — yeniden atanamaz yerel. Yine SONA eklendi
+    // (yukaridaki renumaralama notu bunun icin de gecerli).
+    TOKEN_CONST,         // "const"
+
+    // Atamali bit bicimleri. AYRISTIRICIDA SEKER ACILIYOR (`x &= y` ->
+    // `x = x & y`), yani codegen'e ayri bir dugum olarak HIC gitmiyorlar;
+    // `vm_binary_op`'a bit tokeni tasima riski de boylece yok.
+    TOKEN_BIT_AND_EQUAL,     // &=
+    TOKEN_BIT_OR_EQUAL,      // |=
+    TOKEN_BIT_XOR_EQUAL,     // ^=
+    TOKEN_SHIFT_LEFT_EQUAL,  // <<=
+    TOKEN_SHIFT_RIGHT_EQUAL  // >>=
 };
 
 // Modern C++ Token class

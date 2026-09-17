@@ -1,0 +1,209 @@
+// Tulpar Engine — "editörde sahne, Tulpar'da oyun" döngüsü.
+//
+// Sahne (duvarlar, kasalar, ışıklar, hedef şeridi) EDITÖRDE hazırlanır ve
+// derlenir; bu dosya yalnız OYUN MANTIĞInı içerir. Motor C++, oyun Tulpar.
+//
+//   engine_editor --scene examples/assets/arena.sahne     # düzenle (kullanıcı açar)
+//   engine_sahnec examples/assets/arena.sahne             # -> arena.sahneb (runtime blob)
+//   ./tulpar examples/engine_arena.tpr                    # oyna
+//
+// Pencersiz doğrulama:
+//   TULPAR_ENGINE_HEADLESS=180 TULPAR_ENGINE_OUT=/tmp/arena.ppm ./tulpar examples/engine_arena.tpr
+// Ayrıntılı log: TULPAR_ENGINE_LOG=2 (her varlık/çağrı), 3 = her API çağrısı.
+// Android:  ./tulpar build --target=android examples/engine_arena.tpr out/arena --apk
+//
+// Oyun: kırmızı topla turuncu kasaları kuzeydeki YEŞİL ŞERİDİN ötesine it.
+// WASD / ok tuşları / sol yarım ekran sürükleme yürütür; boşluk / sağ yarım
+// ekrana dokunuş zıplatır. 45 saniye.
+//
+// Ses: cihaz yoksa oyun SESSİZ devam eder (çökme değil, uyarı). Puan sesi varsa
+// WAV dosyasından, yoksa sentetik tondan gelir — iki yol da köprüde.
+//
+// `.sahneb` TÜRETİLMİŞ dosyadır (gitignore'lu): yoksa oyun aynı areni KODDA
+// kurar ve komutu loglar — böylece örnek her koşulda çalışır.
+//
+// Not: test koşucusunda COMPILE_ONLY (pencere/GPU ister).
+
+import "engine";
+
+int SURE_S = 45;
+float HIZ = 5.0;
+float ZIPLAMA = 6.5;
+float HEDEF_Z = -6.0;   // bu çizginin ötesi sayılır (yeşil şerit z=-6.5)
+
+// Kasalar: sahneden geldiyse SAHNE indeksi, koddan kurulduysa VARLIK id'si.
+array g_kasa = [];
+array g_gecti = [];
+bool g_sahneden = false;
+int g_top = 0;
+
+// ---- Ses --------------------------------------------------------------------
+// Cihaz açılamazsa g_ses false kalır ve HİÇBİR ses çağrısı yapılmaz: oyun
+// sessiz ama hatasız sürer (köprü kapalı cihazda da çökmez, çağrıyı yok sayar).
+bool g_ses = false;
+int g_ses_puan = -1;   // altin.wav varsa ondan, yoksa sentetik ton
+
+func sesi_kur() {
+    g_ses = ses_ac();
+    if (!g_ses) {
+        logla("UYARI ses cihazi acilamadi -> oyun sessiz devam ediyor (" + eng_last_error() + ")");
+        return;
+    }
+    ses_seviyesi(0.35);
+    logla("ses: " + ses_cihazi());
+    str wav = "examples/assets/sesler/altin.wav";
+    if (file_exists(wav)) {
+        g_ses_puan = ses_yukle(wav);
+        logla("puan sesi dosyadan: " + wav);
+    } else {
+        logla("puan sesi sentetik ton (wav yok: " + wav + ")");
+    }
+}
+func ses_zipla() {
+    if (g_ses) { bip(660.0, 0.07, 0.6); }
+}
+func ses_puani() {
+    if (!g_ses) { return; }
+    if (g_ses_puan >= 0) { cal(g_ses_puan, 0.9, false); }
+    else { bip(880.0, 0.16, 0.7); }
+}
+func ses_kazandin() {
+    if (g_ses) { bip(1320.0, 0.40, 0.8); }
+}
+
+// Kasanın z'si — tek okuma noktası (sahne mi kod mu, çağıran bilmesin).
+func kasa_z(i): float {
+    if (g_sahneden) { return eng_scene_z(g_kasa[i]); }
+    return konum_z(g_kasa[i]);
+}
+func kasa_y(i): float {
+    if (g_sahneden) { return eng_scene_y(g_kasa[i]); }
+    return konum_y(g_kasa[i]);
+}
+
+// Sahneyi yükle: aday yolları sırayla dener, her denemeyi loglar.
+func sahne_dene(): bool {
+    array yollar = ["examples/assets/arena.sahneb", "assets/arena.sahneb", "arena.sahneb"];
+    int i = 0;
+    while (i < len(yollar)) {
+        if (sahne_yukle(yollar[i])) {
+            logla("sahne yuklendi: " + yollar[i]);
+            return true;
+        }
+        logla("sahne adayi yok: " + yollar[i]);
+        i = i + 1;
+    }
+    return false;
+}
+
+// Sahnedeki kasaları adlarıyla bul (kasa_1 .. kasa_6).
+func kasalari_sahneden_al() {
+    int n = 1;
+    while (n <= 6) {
+        int idx = sahne_bul("kasa_" + toString(n));
+        if (idx >= 0) {
+            push(g_kasa, idx);
+            push(g_gecti, false);
+        }
+        n = n + 1;
+    }
+}
+
+// Yedek: sahne yoksa aynı areni kodda kur (duvarlar + kasalar).
+func areni_kodda_kur() {
+    int renk_duvar = renk(140, 148, 166);
+    kutu(0, 0.75, -8, 8, 0.75, 0.25, false, renk_duvar);
+    kutu(0, 0.75, 8, 8, 0.75, 0.25, false, renk_duvar);
+    kutu(-8, 0.75, 0, 0.25, 0.75, 8, false, renk_duvar);
+    kutu(8, 0.75, 0, 0.25, 0.75, 8, false, renk_duvar);
+    isik(-5, 3, -2, renk(255, 190, 100), 3.0, 10.0);
+    isik(5, 3, 2, renk(128, 178, 255), 3.0, 10.0);
+    array xs = [-4.0, -2.0, 0.0, 2.0, 4.0, 0.0];
+    array zs = [3.0, 1.5, 3.0, 1.5, 3.0, 3.0];
+    array ys = [0.5, 0.5, 0.5, 0.5, 0.5, 1.5];
+    int i = 0;
+    while (i < len(xs)) {
+        push(g_kasa, kutu(xs[i], ys[i], zs[i], 0.5, 0.5, 0.5, true, renk(242, 140, 51)));
+        push(g_gecti, false);
+        i = i + 1;
+    }
+}
+
+func main() {
+    log_seviyesi(2);
+    if (!motor_ac("Tulpar Engine — Arena", 1280, 720)) {
+        print("motor acilamadi: " + eng_last_error());
+        return;
+    }
+    logla("GPU: " + eng_gpu_name() + "  " + toString(genislik()) + "x" + toString(yukseklik()));
+    sesi_kur();
+
+    g_sahneden = sahne_dene();
+    if (g_sahneden) {
+        kasalari_sahneden_al();
+        logla("sahneden " + toString(len(g_kasa)) + " kasa, toplam " + toString(eng_scene_count()) + " sahne varligi");
+    } else {
+        logla("UYARI arena.sahneb yok -> arena KODDA kuruldu. Derlemek icin:");
+        logla("  build-linux/engine/engine_sahnec examples/assets/arena.sahne");
+        areni_kodda_kur();
+    }
+    // Zemin ve oyuncu her zaman betikten (sahnede yok).
+    zemin_kur(8.5, ACIK_GRI);
+    g_top = kure(0, 1.0, 5.5, 0.5, true, KIRMIZI);
+
+    int puan = 0;
+    bool bitti = false;
+    while (calisiyor()) {
+        kare_basla();
+        // --- girdi -> top ---
+        float vx = yon_x() * HIZ;
+        float vz = -yon_y() * HIZ;
+        if (vx != 0.0 || vz != 0.0) { yuru(g_top, vx, vz); }
+        if (eylem_basildi() && yerde(g_top)) { itme(g_top, 0, ZIPLAMA, 0); ses_zipla(); }
+        if (tus_basildi("R")) { isinla(g_top, 0, 1.0, 5.5); logla("top sifirlandi"); }
+        if (tus("ESC")) { cikis_iste(); }
+        // Top arenadan düşerse geri getir.
+        if (konum_y(g_top) < -3.0) { isinla(g_top, 0, 1.0, 5.5); logla("top dustu, sifirlandi"); }
+
+        // --- puan: hedef şeridin ötesine geçen kasa ---
+        int i = 0;
+        while (i < len(g_kasa)) {
+            if (!g_gecti[i] && kasa_z(i) < HEDEF_Z && kasa_y(i) > -1.0) {
+                g_gecti[i] = true;
+                puan = puan + 1;
+                ses_puani();
+                logla("kasa " + toString(i + 1) + " hedefte, puan " + toString(puan));
+            }
+            i = i + 1;
+        }
+
+        // --- kamera topu izler ---
+        // Yükseklik/uzaklık bilerek böyle: daha alçak bir kamerada GÜNEY DUVARI
+        // (z=8, 1.5 m) topu kapatıyor — arena kenarındayken oyuncu kayboluyordu.
+        float tx = konum_x(g_top);
+        float tz = konum_z(g_top);
+        kamera(tx, 9.5, tz + 9.0, tx, 0.6, tz - 2.5);
+
+        // --- HUD ---
+        durum_seridi();
+        int kalan = SURE_S - toInt(zaman());
+        yazi("kasa " + toString(puan) + " / " + toString(len(g_kasa)) + "   sure " + toString(kalan), 22, 56, 1.2, SARI);
+        yazi("kasalari YESIL seridin otesine it   WASD/dokun: yuru   bosluk: zipla   R: sifirla", 22, 92, 0.85, ACIK_GRI);
+        if (puan >= len(g_kasa) && !bitti) {
+            bitti = true;
+            ses_kazandin();
+            logla("TUM KASALAR HEDEFTE — sure " + toString(zaman()));
+        }
+        if (bitti) { yazi("KAZANDIN", 22, 130, 1.8, YESIL); }
+        if (kalan <= 0) {
+            yazi("SURE BITTI — kasa " + toString(puan), 22, 130, 1.6, BEYAZ);
+            if (zaman() > SURE_S + 3) { cikis_iste(); }
+        }
+        kare_bitir();
+    }
+    logla("bitis: puan " + toString(puan) + ", kare " + toString(kare_no()) + ", hata " + toString(hata_sayisi()));
+    ses_kapat();
+    motor_kapat();
+}
+
+main();

@@ -10,8 +10,13 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -136,9 +141,57 @@ public:
     return h;
   }
 
+  // NOBETCI: bu nesne yok edilirken kuyrukta ya da calismakta olan Jolt isi
+  // KALMAMALI. `jobs_` havuzu bizimle birlikte gider ve kuyrukta duran her
+  // girdi CIPLAK bir `Job*`; sahibi olmeden calisirsa cop isaretci cagirilir.
+  //
+  // Bu tam olarak CI macOS/arm64'te olculen cokmenin sinifi (2026-09-16):
+  // `thread: tulpar-job`, SIGSEGV, fault_addr 0x8bc94512aa864210 — null degil,
+  // COP. Yigin izi iki cerceveydi (fiber yigini cozucuyu kesiyor), yani
+  // sessiz ve teshisi zor. Asil duzeltme sirada: `jobs.shutdown()` artik
+  // fizikten ONCE cagriliyor, yani bu sayac sifir olmak ZORUNDA. Nobetci o
+  // sozlesmeyi ayakta tutuyor: biri sirayi bozarsa sessiz UAF yerine tam
+  // burada, adiyla patlar.
+  ~FiberJoltJobs() override {
+    // Bizim kuyrugumuzda, bu nesnenin `jobs_` havuzunu gosteren girdiler
+    // KALMIS olabilir ve bu NORMALDIR: Jolt'un bariyeri beklerken isleri
+    // kendi thread'inde de kosturuyor, bizim girdiler bayat ama refli kaliyor.
+    // Tehlike o girdilerin varligi degil, HAVUZ OLDUKTEN SONRA bir worker'in
+    // onlari cekmesi — o zaman `job->Execute()` serbest bellege gider.
+    //
+    // Olculdu (CI macOS/arm64): `thread: tulpar-job`, SIGSEGV, fault_addr
+    // 0x8bc94512aa864210 (null DEGIL, COP). Iki worker'li kosucuda kuyrukta
+    // 276 girdi birikmisti; 15 worker'li yerel makinede birikmedigi icin
+    // hic uretilemedi.
+    //
+    // Iki durumdan biri saglanmali, ikisini de BURADA garantiliyoruz:
+    //   * is sistemi KOSUYOR   -> birikinti tukenene kadar bekle (worker'lar
+    //                             bosaltir; kuyruk spin-poll'lu, ilerler),
+    //   * is sistemi DURMUS    -> thread'ler join edilmis, girdiler ATIL,
+    //                             beklemek KILITLENME olurdu.
+    // Boylece dogruluk cagiranin kapanis SIRASINA bagli kalmiyor. Sira yine
+    // de duzeltildi (jobs.shutdown() alt sistemlerden once) — bu ikinci hat.
+    //
+    // Bekleme SINIRLI: `shutdown` ana thread'den cagriliyor (worker degil), yani
+    // bosaltacak thread'ler serbest ve kuyruk spin-poll'lu — ilerlemeli. Yine de
+    // sonsuz sessiz bekleme CI'da en kotu sonuctur; sinira dayanirsak ADIYLA
+    // patliyoruz, cunku o noktada havuzu yikmak zaten UAF olurdu.
+    if (js_ && js_->running()) {
+      uint32_t spins = 0;
+      while (outstanding_.load(std::memory_order_acquire) != 0) {
+        platform::thread_yield();
+        if (++spins > 20u * 1000u * 1000u)
+          ENGINE_ASSERT_MSG(false,
+                            "Jolt is uyarlayicisi: %u is kuyrukta takildi (is sistemi kosuyor ama bosalmiyor)",
+                            outstanding_.load(std::memory_order_acquire));
+      }
+    }
+  }
+
 protected:
   void QueueJob(Job *job) override {
     job->AddRef(); // kuyrukta yasadigi surece
+    outstanding_.fetch_add(1, std::memory_order_acq_rel);
     js_->run(::tulpar::engine::JobDecl{run_one, job, "jolt"}, nullptr);
   }
   void QueueJobs(Job **jobs, JPH::uint n) override {
@@ -149,10 +202,15 @@ protected:
 private:
   static void run_one(void *p) {
     Job *job = static_cast<Job *>(p);
+    // Sahibi Release'DEN ONCE okunur: Release son referansi dusurunce Job
+    // yok ediliyor ve `GetJobSystem()` serbest bellege bakardi.
+    auto *self = static_cast<FiberJoltJobs *>(job->GetJobSystem());
     job->Execute();
     job->Release();
+    self->outstanding_.fetch_sub(1, std::memory_order_acq_rel);
   }
   FiberJobSystem *js_;
+  std::atomic<uint32_t> outstanding_{0};
   JPH::FixedSizeFreeList<Job> jobs_;
 };
 
@@ -160,6 +218,61 @@ inline JPH::Vec3 to_jph(Vec3 v) { return JPH::Vec3(v.x, v.y, v.z); }
 inline JPH::Quat to_jph(Quat q) { return JPH::Quat(q.x, q.y, q.z, q.w); }
 inline Vec3 from_jph(JPH::Vec3 v) { return Vec3{v.GetX(), v.GetY(), v.GetZ()}; }
 inline Quat from_jph(JPH::Quat q) { return Quat{q.GetX(), q.GetY(), q.GetZ(), q.GetW()}; }
+
+// TEMAS DINLEYICISI. Jolt bu geri cagrimlari IS PARCACIKLARINDAN ve es zamanli
+// cagirir, yani halka yazimi atomik olmak zorunda: her yazar `next_` uzerinden
+// kendi yuvasini rezerve eder. Kilit YOK (fizik adiminda kilit beklemek adimi
+// serilestirirdi) ve AYIRMA yok (halka arena'da, kapasite init'te sabit).
+//
+// Halka dolunca olay DUSER ve `dropped_` artar. Bu sayac disari veriliyor:
+// sessiz kirpilma, oyunun "carpma gelmedi" sanip yanlis mantik kurmasi demek
+// olurdu ve hicbir sey kizarmazdi.
+class ContactRing final : public JPH::ContactListener {
+public:
+  void setup(ContactEvent *buf, uint32_t cap) { buf_ = buf; cap_ = cap; }
+  void clear() { next_.store(0, std::memory_order_relaxed); dropped_.store(0, std::memory_order_relaxed); }
+  uint32_t count() const {
+    const uint32_t n = next_.load(std::memory_order_acquire);
+    return n < cap_ ? n : cap_;
+  }
+  uint32_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
+  const ContactEvent &at(uint32_t i) const { return buf_[i]; }
+
+  void OnContactAdded(const JPH::Body &b1, const JPH::Body &b2, const JPH::ContactManifold &m,
+                      JPH::ContactSettings &) override {
+    record(b1, b2, m);
+  }
+  // Kalici temaslar KAYDEDILMIYOR: bir kutunun zeminde durmasi her adimda olay
+  // uretirdi ve halka tek karede dolardi. Oyunun sordugu soru "ne zaman
+  // carptim", "hala degiyor muyum" degil (onun icin ortusme sorgusu var).
+
+private:
+  void record(const JPH::Body &b1, const JPH::Body &b2, const JPH::ContactManifold &m) {
+    if (!buf_ || !cap_) return;
+    const uint32_t slot = next_.fetch_add(1, std::memory_order_acq_rel);
+    if (slot >= cap_) {
+      dropped_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    ContactEvent &e = buf_[slot];
+    e.a.v = b1.GetID().GetIndexAndSequenceNumber();
+    e.b.v = b2.GetID().GetIndexAndSequenceNumber();
+    e.point = from_jph(JPH::Vec3(m.GetWorldSpaceContactPointOn1(0)));
+    e.normal = from_jph(m.mWorldSpaceNormal);
+    // Carpma SIDDETI: temas noktasindaki goreli hizin normal boyu. Jolt
+    // manifoldu itki tasimiyor; goreli hiz cozumden ONCE dogru buyuklugu
+    // veriyor ve belirlenimli (ayni girdi ayni sayi).
+    const JPH::Vec3 p = JPH::Vec3(m.GetWorldSpaceContactPointOn1(0));
+    const JPH::Vec3 v1 = b1.GetPointVelocity(p);
+    const JPH::Vec3 v2 = b2.GetPointVelocity(p);
+    const float rel = (v2 - v1).Dot(m.mWorldSpaceNormal);
+    e.speed = rel < 0 ? -rel : rel;
+  }
+  ContactEvent *buf_ = nullptr;
+  uint32_t cap_ = 0;
+  std::atomic<uint32_t> next_{0};
+  std::atomic<uint32_t> dropped_{0};
+};
 
 uint64_t fnv1a(const void *p, size_t n, uint64_t h) {
   const uint8_t *b = static_cast<const uint8_t *>(p);
@@ -178,6 +291,7 @@ struct Physics::Impl {
   JPH::PhysicsSystem system;
   uint64_t allocs_before_step = 0;
   uint64_t allocs_last_step = 0;
+  ContactRing contacts;
 };
 
 bool Physics::init(Arena &arena, const PhysicsConfig &cfg) {
@@ -196,6 +310,12 @@ bool Physics::init(Arena &arena, const PhysicsConfig &cfg) {
   impl_->system.Init(cfg.max_bodies, 0, cfg.max_body_pairs, cfg.max_contacts, impl_->bp_iface,
                      impl_->obj_bp_filter, impl_->pair_filter);
   impl_->system.SetGravity(to_jph(cfg.gravity));
+  if (cfg.max_contact_events) {
+    void *cbuf = arena.alloc(sizeof(ContactEvent) * cfg.max_contact_events, alignof(ContactEvent));
+    if (!cbuf) return false;
+    impl_->contacts.setup(static_cast<ContactEvent *>(cbuf), cfg.max_contact_events);
+    impl_->system.SetContactListener(&impl_->contacts);
+  }
   return true;
 }
 
@@ -242,6 +362,37 @@ void Physics::step(float dt, int collision_steps) {
   impl_->system.Update(dt, collision_steps, impl_->temp, impl_->jobs);
   g_trace = false;
   impl_->allocs_last_step = g_allocs.load(std::memory_order_relaxed) - impl_->allocs_before_step;
+}
+
+uint32_t Physics::contact_count() const { return impl_ ? impl_->contacts.count() : 0; }
+uint32_t Physics::contact_overflow() const { return impl_ ? impl_->contacts.dropped() : 0; }
+ContactEvent Physics::contact(uint32_t i) const {
+  if (!impl_ || i >= impl_->contacts.count()) return ContactEvent{};
+  return impl_->contacts.at(i);
+}
+void Physics::clear_contacts() {
+  if (impl_) impl_->contacts.clear();
+}
+
+bool Physics::raycast(Vec3 origin, Vec3 dir, float max_distance, RayHit *hit) const {
+  if (hit) *hit = RayHit{};
+  if (!impl_ || max_distance <= 0.0f) return false;
+  const float len = length(dir);
+  if (len <= 1e-8f) return false;
+  const JPH::Vec3 d = to_jph(dir * (1.0f / len)) * max_distance;
+  const JPH::RRayCast ray{to_jph(origin), d};
+  JPH::RayCastResult res;
+  if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, res)) return false;
+  if (hit) {
+    hit->body = BodyId{res.mBodyID.GetIndexAndSequenceNumber()};
+    hit->distance = res.mFraction * max_distance;
+    const JPH::RVec3 p = ray.GetPointOnRay(res.mFraction);
+    hit->point = Vec3{(float)p.GetX(), (float)p.GetY(), (float)p.GetZ()};
+    // Yuzey normali govde kilidi ister (sorgu baska thread'den de gelebilir).
+    JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), res.mBodyID);
+    if (lock.Succeeded()) hit->normal = from_jph(lock.GetBody().GetWorldSpaceSurfaceNormal(res.mSubShapeID2, p));
+  }
+  return true;
 }
 
 Vec3 Physics::position(BodyId id) const { return from_jph(impl_->system.GetBodyInterface().GetPosition(JPH::BodyID(id.v))); }

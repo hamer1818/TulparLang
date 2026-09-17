@@ -19,6 +19,47 @@ Parser::Parser(std::vector<Token> tokens)
     if (tokens_.empty()) {
         throw std::runtime_error("Parser: Empty token list");
     }
+    decl_scopes_.emplace_back();  // kuresel kapsam
+}
+
+// ---------------------------------------------------------------------------
+// `const` kapsam yigini (bkz. parser.hpp'deki gerekce)
+// ---------------------------------------------------------------------------
+
+void Parser::scope_push() { decl_scopes_.emplace_back(); }
+
+void Parser::scope_pop() {
+    // Kuresel kapsam ASLA atilmaz: error() firlatiyor ve ust duzey
+    // kurtarma dongusu ayni Parser ile devam ediyor; yigin bosalsaydi
+    // sonraki her arama tanimsiz olurdu.
+    if (decl_scopes_.size() > 1) decl_scopes_.pop_back();
+}
+
+void Parser::scope_declare(const std::string& name, bool is_const) {
+    if (decl_scopes_.empty()) decl_scopes_.emplace_back();
+    decl_scopes_.back().emplace_back(name, is_const);
+}
+
+bool Parser::name_is_const(const std::string& name) const {
+    for (size_t i = decl_scopes_.size(); i-- > 0;) {
+        const auto& scope = decl_scopes_[i];
+        for (size_t j = scope.size(); j-- > 0;) {
+            if (scope[j].first == name) return scope[j].second;  // EN ICTEKI kazanir
+        }
+    }
+    return false;
+}
+
+void Parser::reject_const_write(const Token& name_tok) {
+    if (!name_is_const(name_tok.value())) return;
+    std::string m = std::string(tulpar::i18n::tr_en(
+        "'", "'")) + name_tok.value() +
+        tulpar::i18n::tr_en(
+            "' bir 'const' ve yeniden atanamaz (satir ",
+            "' is a 'const' and cannot be reassigned (line ");
+    m += std::to_string(name_tok.line());
+    m += ")";
+    error(m);
 }
 
 const Token& Parser::current() const {
@@ -269,21 +310,81 @@ void Parser::error(const std::string& message) {
     throw std::runtime_error(message);
 }
 
+// Oncelik merdiveni — BUYUK olan SIKI baglar.
+//
+// Bit islemleri eklenince butun basamaklar kaydi (eskiden `||`=1 … `*`=6).
+// Sira C ailesinin sirasi ve bu bir TERCIH DEGIL, ZORUNLULUK: bu dilin
+// shader alt kumesi GLSL'e ceviriliyor (docs/engine/FAZ8.md, Secenek C) ve
+// GLSL de C onceligini kullaniyor. Baska bir sira secseydik ayni metin iki
+// tarafta iki farkli sey hesaplardi — ve fark ancak calisma zamaninda
+// gorulurdu.
+//
+// C'nin bilinen carpikligi da aynen geliyor: `&`/`^`/`|` KARSILASTIRMADAN
+// GEVSEK baglar, yani `a & b == c` -> `a & (b == c)`. Bunu "duzeltmek"
+// GLSL ile ayrisma demek olurdu. Test: tests/bit_islemleri.test.tpr
+// "oncelik" bolumu bu satirlari sayiyla kanitliyor.
+namespace {
+// `|`in onceligi — match kolu ayraci ile ayni karakter oldugu icin desen
+// ayristirmasinda TABAN olarak kullaniliyor (bkz. parse_primary/match).
+constexpr int kPrecBitOr = 3;
+
+// `&=` ailesi ve karsilik gelen ikili islec.
+// Dizi tipi mi (baslaticisiz bildirimde varsayilan deger uretmek icin).
+static bool is_array_type(DataType t) {
+    return t == TYPE_ARRAY || t == TYPE_ARRAY_INT || t == TYPE_ARRAY_FLOAT ||
+           t == TYPE_ARRAY_STR || t == TYPE_ARRAY_BOOL || t == TYPE_ARRAY_JSON;
+}
+
+// `T[N]` bildiriminin eleman varsayilani. Tip bilinmiyorsa null: uzunluk yine
+// dogru olur, eleman sonradan atanir.
+static std::unique_ptr<ASTNode> zero_literal_for(DataType arr, SourceLocation loc) {
+    switch (arr) {
+    case TYPE_ARRAY_INT: return std::make_unique<ASTNode>(IntLiteral(0, loc));
+    case TYPE_ARRAY_FLOAT: return std::make_unique<ASTNode>(FloatLiteral(0.0, loc));
+    case TYPE_ARRAY_STR: return std::make_unique<ASTNode>(StringLiteral("", loc));
+    case TYPE_ARRAY_BOOL: return std::make_unique<ASTNode>(BoolLiteral(false, loc));
+    default: return std::make_unique<ASTNode>(NullLiteral(loc));
+    }
+}
+
+
+bool is_bitwise_compound(TulparTokenType t) {
+    return t == TOKEN_BIT_AND_EQUAL || t == TOKEN_BIT_OR_EQUAL ||
+           t == TOKEN_BIT_XOR_EQUAL || t == TOKEN_SHIFT_LEFT_EQUAL ||
+           t == TOKEN_SHIFT_RIGHT_EQUAL;
+}
+
+TulparTokenType bitwise_compound_base(TulparTokenType t) {
+    switch (t) {
+    case TOKEN_BIT_AND_EQUAL:    return TOKEN_BIT_AND;
+    case TOKEN_BIT_OR_EQUAL:     return TOKEN_PIPE;
+    case TOKEN_BIT_XOR_EQUAL:    return TOKEN_BIT_XOR;
+    case TOKEN_SHIFT_LEFT_EQUAL: return TOKEN_SHIFT_LEFT;
+    default:                     return TOKEN_SHIFT_RIGHT;
+    }
+}
+}  // namespace
+
 int Parser::get_precedence(TulparTokenType op) const {
     switch (op) {
-        case TOKEN_OR: return 1;
-        case TOKEN_AND: return 2;
+        case TOKEN_OR: return 1;            // ||
+        case TOKEN_AND: return 2;           // &&
+        case TOKEN_PIPE: return kPrecBitOr; // |   (bit VEYA)
+        case TOKEN_BIT_XOR: return 4;       // ^
+        case TOKEN_BIT_AND: return 5;       // &
         case TOKEN_EQUAL:
-        case TOKEN_NOT_EQUAL: return 3;
+        case TOKEN_NOT_EQUAL: return 6;
         case TOKEN_LESS:
         case TOKEN_GREATER:
         case TOKEN_LESS_EQUAL:
-        case TOKEN_GREATER_EQUAL: return 4;
+        case TOKEN_GREATER_EQUAL: return 7;
+        case TOKEN_SHIFT_LEFT:
+        case TOKEN_SHIFT_RIGHT: return 8;   // << >>  (toplamadan GEVSEK)
         case TOKEN_PLUS:
-        case TOKEN_MINUS: return 5;
+        case TOKEN_MINUS: return 9;
         case TOKEN_MULTIPLY:
         case TOKEN_DIVIDE:
-        case TOKEN_MODULO: return 6;
+        case TOKEN_MODULO: return 10;
         default: return 0;
     }
 }
@@ -374,13 +475,40 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
         check(TOKEN_ARRAY_TYPE) || check(TOKEN_ARRAY_INT) ||
         check(TOKEN_ARRAY_FLOAT) || check(TOKEN_ARRAY_STR) ||
         check(TOKEN_ARRAY_BOOL) || check(TOKEN_ARRAY_JSON) ||
-        check(TOKEN_JSON_TYPE) || check(TOKEN_VAR)) {
-        return parse_variable_decl();
+        check(TOKEN_JSON_TYPE) || check(TOKEN_VAR) || check(TOKEN_CONST)) {
+        // G1 istisnasi: `int(x)` bir DONUSUM CAGRISIDIR, bildirim degil.
+        // Bu satir olmadan `int(deger);` deyimi parse_variable_decl'e
+        // gider ve "degisken adi bekleniyordu" hatasi verirdi.
+        if (!(peek().type() == TOKEN_LPAREN &&
+              (check(TOKEN_INT_TYPE) || check(TOKEN_FLOAT_TYPE) ||
+               check(TOKEN_STR_TYPE) || check(TOKEN_BOOL_TYPE)))) {
+            return parse_variable_decl();
+        }
     }
 
     // Custom type variable declaration: <TypeName> <varName> ...
+    // `[]` / `[N]` sonekli bicim de burada: `Point[] ps;`, `mat4[3] m;`.
+    // Once yalniz "IDENT IDENT" sinaniyordu, yani `Point[] ps;` ifade
+    // deyimi sanilip ayristirma hatasi veriyordu.
     if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_IDENTIFIER) {
         return parse_variable_decl();
+    }
+    if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_LBRACKET) {
+        // Ileri bakis: IDENT ( '[' ']' | '[' SAYI ']' )+ IDENT
+        // KASITLI DAR: koseli parantez icinde yalniz BOSLUK ya da TAMSAYI
+        // SABITI kabul ediliyor. `arr[i] = 5;` ve `ents[i].area();` boylece
+        // bildirim sanilmiyor.
+        int k = 1;
+        bool saw_group = false;
+        while (peek(k).type() == TOKEN_LBRACKET) {
+            if (peek(k + 1).type() == TOKEN_RBRACKET) { k += 2; saw_group = true; continue; }
+            if (peek(k + 1).type() == TOKEN_INT_LITERAL &&
+                peek(k + 2).type() == TOKEN_RBRACKET) { k += 3; saw_group = true; continue; }
+            break;
+        }
+        if (saw_group && peek(k).type() == TOKEN_IDENTIFIER) {
+            return parse_variable_decl();
+        }
     }
     
     // Function declaration (optionally prefixed with `async`)
@@ -455,6 +583,31 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
 std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     SourceLocation loc(current().line(), current().column());
 
+    // `const` oneki (G5). `const var x = ...` ve `const int x = ...` ikisi de
+    // gecerli; tip zorunlu DEGIL.
+    const bool is_const = match(TOKEN_CONST);
+
+    // TIPSIZ BICIM: `const x = 3;` — `var` gibi cikarimli.
+    //
+    // Bu dal SART: `const` sonrasi dogrudan parse_type cagrilsaydi tanimsiz
+    // bir tanimlayici TYPE_CUSTOM olarak YUTULUR ve degisken adi `=`
+    // uzerinde aranirdi ("Expected variable name"). Olculdu — ilk yazimda
+    // tam olarak bu oldu. Ayirt etme tek token ileri bakisla kesin:
+    // tipli bicimde adi bir TANIMLAYICI izler (`const Point p = ...`),
+    // tipsiz bicimde ise dogrudan `=` gelir.
+    if (is_const && check(TOKEN_IDENTIFIER) &&
+        peek().type() == TOKEN_ASSIGN) {
+        Token cname = current();
+        advance();                      // ad
+        advance();                      // '='
+        auto cinit = parse_expression();
+        expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
+        scope_declare(cname.value(), true);
+        VariableDecl cvd(cname.value(), TYPE_UNKNOWN, std::move(cinit), loc);
+        cvd.is_const = true;
+        return std::make_unique<ASTNode>(std::move(cvd));
+    }
+
     // Capture custom-type identifier (`Point p;`) before parse_type
     // consumes it. Builtin types like `int`/`str` come in as their own
     // tokens, so this snapshot only matters for the TOKEN_IDENTIFIER
@@ -466,6 +619,7 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
 
     // Parse type
     DataType type = parse_type();
+    const int fixed_n = last_fixed_array_n_;  // `T[N]` ise N, degilse 0
 
     // Only keep the captured name when the parser actually resolved
     // to a custom type — otherwise `int x;` would store the spurious
@@ -491,10 +645,44 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
         }
     }
 
+    // BASLATICI ZORUNLU. `const int x;` sonradan atanamayacagi icin
+    // kalici olarak 0'da kalirdi — sessiz ve anlamsiz. Acik hata veriyoruz.
+    if (is_const && !initializer) {
+        error(std::string(tulpar::i18n::tr_en(
+                  "'const' bildirimi baslangic degeri ister: 'const int ",
+                  "'const' declaration requires an initialiser: 'const int ")) +
+              name +
+              tulpar::i18n::tr_en(" = ...;'", " = ...;'"));
+    }
+
     expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
+
+    // Kayit ADIN ALINMASINDAN SONRA: `const int x = x;` icindeki sagdaki
+    // `x` hala disaridaki x'tir; bu sira onu bozmuyor cunku baslatici
+    // yukarida ayristi.
+    scope_declare(name, is_const);
+
+    // BASLATICISIZ DIZI BILDIRIMI ARTIK KULLANILABILIR BIR DIZI URETIYOR.
+    // Once: `int[] a;` ve `int[4] a;` dizi DEGIL bir deger uretiyordu —
+    // `len(a)` 0 donuyor ama `a[0] = 1` ve `push(a, 1)` CALISMA ZAMANINDA
+    // "gecersiz hedef" ile dusuyordu. Derleyici kabul edip calisma zamani
+    // reddediyordu: hata en gec noktada ve en anlamsiz mesajla cikiyordu.
+    // Simdi baslatici SENTEZLENIYOR:
+    //   `int[] a;`   -> `int[] a = [];`          (push ile buyur)
+    //   `int[4] a;`  -> `int[4] a = [0,0,0,0];`  (N artik bir sey ifade ediyor)
+    // Eleman varsayilani tipe gore: sayi 0, metin "", bool false, digeri null.
+    // Ozel deger uretemedigimiz eleman tiplerinde bile UZUNLUK dogru olur,
+    // yani `p[i] = ...` gecerli hale gelir — asil kazanc bu.
+    if (!initializer && is_array_type(type)) {
+        std::vector<std::unique_ptr<ASTNode>> elems;
+        elems.reserve(fixed_n > 0 ? (size_t)fixed_n : 0u);
+        for (int i = 0; i < fixed_n; i++) elems.push_back(zero_literal_for(type, loc));
+        initializer = std::make_unique<ASTNode>(ArrayLiteral(std::move(elems), loc));
+    }
 
     VariableDecl vd(name, type, std::move(initializer), loc);
     vd.custom_type = std::move(custom_type_name);
+    vd.is_const = is_const;
     return std::make_unique<ASTNode>(std::move(vd));
 }
 
@@ -597,6 +785,17 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
         if (return_type != TYPE_CUSTOM) return_custom_type_name.reset();
     }
 
+    // Fonksiyon govdesi KENDI kapsaminda; parametreler oraya CONST OLMAYAN
+    // olarak yaziliyor. Yazilmasaydi, ayni adli bir kuresel `const`
+    // parametreyi de kilitlerdi — yani YANLIS POZITIF verirdi
+    // (`const int n = 5; func f(int n) { n = 1; }` gecerli olmali).
+    struct ScopeGuard {
+        Parser* p;
+        explicit ScopeGuard(Parser* pp) : p(pp) { p->scope_push(); }
+        ~ScopeGuard() { p->scope_pop(); }
+    } fn_guard(this);
+    for (const auto& prm : parameters) scope_declare(prm.name, false);
+
     // Function body
     auto body = parse_block();
 
@@ -687,6 +886,13 @@ std::unique_ptr<ASTNode> Parser::parse_for_loop() {
             advance();
             auto iterable = parse_expression();
             expect(TOKEN_RPAREN, "Expected ')' after for-in");
+            // Dongu degiskeni kendi kapsaminda, const DEGIL.
+            struct ScopeGuard {
+                Parser* p;
+                explicit ScopeGuard(Parser* pp) : p(pp) { p->scope_push(); }
+                ~ScopeGuard() { p->scope_pop(); }
+            } in_guard(this);
+            scope_declare(id.value(), false);
             auto body = parse_statement();
             
             return std::make_unique<ASTNode>(
@@ -709,6 +915,7 @@ std::unique_ptr<ASTNode> Parser::parse_for_loop() {
     if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_ASSIGN) {
         SourceLocation iloc(current().line(), current().column());
         Token name_tok = current();
+        reject_const_write(name_tok);
         advance(); // identifier
         advance(); // '='
         auto value = parse_expression();
@@ -804,8 +1011,18 @@ std::unique_ptr<ASTNode> Parser::parse_try_catch() {
     expect(TOKEN_LPAREN, "Expected '(' after 'catch'");
     Token catch_var = expect(TOKEN_IDENTIFIER, "Expected exception variable name");
     expect(TOKEN_RPAREN, "Expected ')' after exception variable");
-    
-    auto catch_block = parse_block();
+
+    // Yakalama degiskeni catch blogunun kapsaminda, const DEGIL.
+    std::unique_ptr<ASTNode> catch_block;
+    {
+        struct ScopeGuard {
+            Parser* p;
+            explicit ScopeGuard(Parser* pp) : p(pp) { p->scope_push(); }
+            ~ScopeGuard() { p->scope_pop(); }
+        } c_guard(this);
+        scope_declare(catch_var.value(), false);
+        catch_block = parse_block();
+    }
     
     std::unique_ptr<ASTNode> finally_block = nullptr;
     if (match(TOKEN_FINALLY)) {
@@ -857,7 +1074,16 @@ std::unique_ptr<ASTNode> Parser::parse_import_statement() {
 std::unique_ptr<ASTNode> Parser::parse_block() {
     SourceLocation loc(current().line(), current().column());
     expect(TOKEN_LBRACE, "Expected '{'");
-    
+
+    // RAII sart: error() FIRLATIYOR. Duz push/pop yazilsaydi ilk ayristirma
+    // hatasindan sonra yigin bir seviye sisman kalirdi ve ayni dosyadaki
+    // sonraki const aramalari yanlis kapsaga bakardi.
+    struct ScopeGuard {
+        Parser* p;
+        explicit ScopeGuard(Parser* pp) : p(pp) { p->scope_push(); }
+        ~ScopeGuard() { p->scope_pop(); }
+    } guard(this);
+
     std::vector<std::unique_ptr<ASTNode>> statements;
     
     while (!check(TOKEN_RBRACE) && !is_at_end()) {
@@ -879,7 +1105,11 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
             next_type == TOKEN_MINUS_EQUAL ||
             next_type == TOKEN_MULTIPLY_EQUAL ||
             next_type == TOKEN_DIVIDE_EQUAL ||
-            next_type == TOKEN_MODULO_EQUAL) {
+            next_type == TOKEN_MODULO_EQUAL ||
+            is_bitwise_compound(next_type)) {
+            // G5: `const` yeniden atanamaz. Bu SERT bir ayristirma hatasi —
+            // `--strict` bayragina bagli degil.
+            reject_const_write(name_tok);
             SourceLocation loc(name_tok.line(), name_tok.column());
             advance(); // identifier
             advance(); // assignment operator
@@ -889,6 +1119,34 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
             if (next_type == TOKEN_ASSIGN) {
                 return std::make_unique<ASTNode>(
                     Assignment(name_tok.value(), std::move(value), loc)
+                );
+            }
+            // ATAMALI BIT BICIMLERI BURADA SEKER ACILIYOR:
+            //   `x &= y;`  ->  `x = x & y;`
+            //
+            // Neden CompoundAssign dugumu uretilmiyor: o dugumun KUTULU
+            // yolu (llvm_backend.cpp AST_COMPOUND_ASSIGN) islemi
+            // `vm_binary_op`'a yaptiriyor — bit tokenlarini TANIMAYAN ve
+            // onceden derlenmis web/android arsivlerinde de duran bir
+            // fonksiyona. Seker acmak islemi normal BinaryOp yoluna
+            // sokuyor, yani tek bir uretim yolu kaliyor.
+            //
+            // Hedef bir DEGISKEN ADI oldugu icin iki kez degerlendirme
+            // sorunu yok.
+            //
+            // `a[i] &= y` BASKA bir yoldan geliyor (asagidaki karmasik-lvalue
+            // dali): orada seker acilmiyor, CompoundAssign dugumu uretiliyor
+            // ve codegen kabi/indisi BIR KEZ degerlendirip bit islemini
+            // yerinde emit ediyor (codegen_elem_compound). Yani `a[f()] &= 1`
+            // icinde `f()` bir kez calisir ve vm_binary_op'a hic ugranmaz.
+            if (is_bitwise_compound(next_type)) {
+                auto lhs = std::make_unique<ASTNode>(
+                    Identifier(name_tok.value(), loc));
+                auto combined = std::make_unique<ASTNode>(
+                    BinaryOp(std::move(lhs), std::move(value),
+                             bitwise_compound_base(next_type), loc));
+                return std::make_unique<ASTNode>(
+                    Assignment(name_tok.value(), std::move(combined), loc)
                 );
             }
             return std::make_unique<ASTNode>(
@@ -909,7 +1167,7 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
         const bool is_compound =
             (t == TOKEN_PLUS_EQUAL || t == TOKEN_MINUS_EQUAL ||
              t == TOKEN_MULTIPLY_EQUAL || t == TOKEN_DIVIDE_EQUAL ||
-             t == TOKEN_MODULO_EQUAL);
+             t == TOKEN_MODULO_EQUAL || is_bitwise_compound(t));
         if ((is_plain || is_compound) &&
             std::holds_alternative<ArrayAccess>(expr->value)) {
             SourceLocation loc(current().line(), current().column());
@@ -979,7 +1237,8 @@ std::unique_ptr<ASTNode> Parser::parse_expression(int precedence) {
 }
 
 std::unique_ptr<ASTNode> Parser::parse_unary() {
-    if (match(TOKEN_MINUS) || match(TOKEN_BANG)) {
+    // `~x` — bit DEGIL. `!x` (mantiksal degil) ile ayni baglama gucunde.
+    if (match(TOKEN_MINUS) || match(TOKEN_BANG) || match(TOKEN_BIT_NOT)) {
         SourceLocation loc(current().line(), current().column());
         TulparTokenType op = peek(-1).type();
         auto operand = parse_unary();
@@ -1091,6 +1350,42 @@ std::unique_ptr<ASTNode> Parser::build_tstring(const std::string& tmpl,
 std::unique_ptr<ASTNode> Parser::parse_primary() {
     SourceLocation loc(current().line(), current().column());
 
+    // ------------------------------------------------------------------
+    // G1 — TIP ADI CAGRI KONUMUNDA DONUSTURUCUDUR: `int(x)`, `float(x)`,
+    // `str(x)`, `bool(x)` (ve Turkce yazimlari: `tamsayi(x)`, `ondalik(x)`,
+    // `metin(x)`, `mantiksal(x)` — ayni tokenlar).
+    //
+    // Neden gerekiyordu: `int`/`float` ANAHTAR KELIME oldugu icin `float(x)`
+    // ayrisamiyordu (docs/engine/FAZ8.md T19). Her dilde bulunan bu yazim
+    // olmadan shader alt kumesi `f32(x)` gibi takma adlarla dolanmak
+    // zorundaydi.
+    //
+    // Yeni bir builtin EKLENMIYOR: mevcut `toInt`/`toFloat`/`toString`/
+    // `toBool` ailesine YONLENDIRILIYOR. Bu bilerek: iki ayri donusum yolu
+    // olsaydi biri otekinden farkli davranmaya baslar ve fark ancak kenar
+    // durumda (bos metin, tasma) gorulurdu. `toInt(x)` yazimi aynen
+    // calismaya devam ediyor ve ikisi AYNI dugumu uretiyor.
+    //
+    // Yalniz hemen ardindan '(' geliyorsa tetikleniyor; `int x = 5;` gibi
+    // bildirimler etkilenmiyor (orada sonraki token bir tanimlayici).
+    if (peek().type() == TOKEN_LPAREN) {
+        const char *conv = nullptr;
+        switch (current().type()) {
+        case TOKEN_INT_TYPE:   conv = "toInt";    break;
+        case TOKEN_FLOAT_TYPE: conv = "toFloat";  break;
+        case TOKEN_STR_TYPE:   conv = "toString"; break;
+        case TOKEN_BOOL_TYPE:  conv = "toBool";   break;
+        default: break;
+        }
+        if (conv) {
+            advance();  // tip adini tuket; '(' parse_postfix'e kaliyor
+            // Cagriyi BURADA kurmuyoruz: Identifier dondurup normal cagri
+            // yolunu (parse_postfix) kullaniyoruz, boylece adlandirilmis
+            // arguman / zincirleme gibi her sey bedava geliyor.
+            return std::make_unique<ASTNode>(Identifier(conv, loc));
+        }
+    }
+
     // Rust-style match expression: `match subject { pat => body, _ => body }`.
     // Parsed in primary position so it works both as a statement and as an
     // expression (e.g. `str g = match score { 90 => "A", _ => "F" };`).
@@ -1180,10 +1475,18 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
                 std::vector<std::unique_ptr<ASTNode>> atoms;
                 do {
                     SourceLocation aloc(current().line(), current().column());
-                    auto atom = parse_expression();
+                    // TABAN kPrecBitOr: `|` artik AYNI ZAMANDA bit VEYA
+                    // isleci (tek token, TOKEN_PIPE). Tabani vermeseydik
+                    // `1 | 2 => ...` deseni tek bir `1|2` ifadesine (=3)
+                    // cokerdi ve match kolu SESSIZCE anlam degistirirdi —
+                    // kaynak hala derlenirdi, yalniz yanlis esleserdi.
+                    // Oncelik dongusu `op_prec <= precedence` ile kirildigi
+                    // icin `|`(=kPrecBitOr) burada durur, daha SIKI baglayan
+                    // her sey (`^`, `&`, `+`, ...) desende calismaya devam eder.
+                    auto atom = parse_expression(kPrecBitOr);
                     if (check(TOKEN_DOTDOT)) {
                         advance();
-                        auto hi = parse_expression();
+                        auto hi = parse_expression(kPrecBitOr);
                         atom = std::make_unique<ASTNode>(
                             BinaryOp(std::move(atom), std::move(hi), TOKEN_DOTDOT, aloc));
                     }
@@ -1444,6 +1747,11 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
             // x++ becomes increment
             SourceLocation loc(current().line(), current().column());
             if (auto* id = std::get_if<Identifier>(&expr->value)) {
+                // G5: `x++` de bir YAZMA. Yalniz `x = ...` denetlenseydi
+                // const bir degisken `++` ile sessizce degistirilebilirdi.
+                if (name_is_const(id->name))
+                    reject_const_write(Token(TOKEN_IDENTIFIER, id->name,
+                                             loc.line, loc.column));
                 return std::make_unique<ASTNode>(IncrementOp(id->name, loc));
             }
             // `a[0]++` / `j["n"]++`: hedefi TASI. Eskiden buraya dusuldugunde
@@ -1454,6 +1762,9 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
             // x-- becomes decrement
             SourceLocation loc(current().line(), current().column());
             if (auto* id = std::get_if<Identifier>(&expr->value)) {
+                if (name_is_const(id->name))
+                    reject_const_write(Token(TOKEN_IDENTIFIER, id->name,
+                                             loc.line, loc.column));
                 return std::make_unique<ASTNode>(DecrementOp(id->name, loc));
             }
             return std::make_unique<ASTNode>(DecrementOp(std::move(expr), loc));
@@ -1629,12 +1940,47 @@ DataType Parser::parse_type() {
         return TYPE_UNKNOWN;
     }
 
-    // `[]` sonekleri. Birden fazlası (`int[][]`) düz `array`'e düşüyor —
-    // motorun iç içe dizi için ayrı bir eleman tipi yok.
-    while (check(TOKEN_LBRACKET) && peek(1).type() == TOKEN_RBRACKET) {
-        advance();
-        advance();
-        base = array_of(base);
+    // `[]` ve `[N]` sonekleri. Birden fazlası (`int[][]`) düz `array`'e
+    // düşüyor — motorun iç içe dizi için ayrı bir eleman tipi yok.
+    //
+    // SABIT BOY (`float[4]`, `mat4[3]`) — G3. BUGUN YAPTIGI: ayrismak ve
+    // eleman tipini `[]` ile AYNI sekilde belirlemek. YAPMADIGI: boyutu
+    // saklamak, yigina yerlestirmek, sinir denetimi yapmak, ilk deger
+    // uretmek. Yani `float[4] v;` calisma zamaninda `float[] v;` ile ayni
+    // seydir. Bu BILEREK boyle: amac shader alt kumesinin (docs/engine/FAZ8.md
+    // T8) ayrisabilmesi; gercek sabit-boy semantigi kutusuz struct/yerlesim
+    // isiyle (PLAN §11) birlikte gelir. Boyut SESSIZCE degil, bu yorumla
+    // ve raporla dusuruluyor.
+    last_fixed_array_n_ = 0;
+    while (check(TOKEN_LBRACKET)) {
+        const TulparTokenType nxt = peek(1).type();
+        if (nxt == TOKEN_RBRACKET) {
+            advance();  // '['
+            advance();  // ']'
+            base = array_of(base);
+            continue;
+        }
+        if (nxt == TOKEN_INT_LITERAL && peek(2).type() == TOKEN_RBRACKET) {
+            advance();  // '['
+            const std::string n = current().value();
+            advance();  // sayi
+            advance();  // ']'
+            // 0 ve negatif boyut ayristirma hatasi: `float[0]` bir yazim
+            // hatasidir ve sessizce dinamik diziye donusmemeli.
+            if (n.empty() || n[0] == '-' || n == "0") {
+                error(tulpar::i18n::tr_en(
+                    "sabit boy dizi uzunlugu pozitif bir tamsayi olmali",
+                    "fixed-size array length must be a positive integer"));
+            }
+            // N artik DUSMUYOR: bildirimde baslatici yoksa varsayilan degeri
+            // bu sayi uretiyor (`int[4] a;` -> dort sifir). Ic ice dizide
+            // (`int[2][3]`) sonuncu kazanir; o bicim zaten duz `array`'e
+            // dusuyor ve bir soz vermiyor.
+            last_fixed_array_n_ = std::atoi(n.c_str());
+            base = array_of(base);
+            continue;
+        }
+        break;  // `arr[i]` gibi bir ifade — tip sonekini burada bitir.
     }
     return base;
 }

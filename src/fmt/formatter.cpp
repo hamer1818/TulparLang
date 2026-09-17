@@ -1,5 +1,6 @@
 #include "formatter.hpp"
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -130,7 +131,8 @@ bool char_implies_unary(char c) {
     return c == '\0' || c == '(' || c == '[' || c == '{' || c == ',' ||
            c == ';' || c == ':' || c == '=' || c == '<' || c == '>' ||
            c == '!' || c == '+' || c == '-' || c == '*' || c == '/' ||
-           c == '%' || c == '&' || c == '|' || c == '?' || c == '~';
+           c == '%' || c == '&' || c == '|' || c == '?' || c == '~' ||
+           c == '^';   // `a ^ -1` — bit XOR'dan sonraki `-` de tekli
 }
 
 // Apply the token spacing rules to one already-stripped & pre-indented
@@ -333,19 +335,63 @@ std::string normalise_line_spacing(const std::string &content) {
             continue;
         }
 
+        // US ISARETI SAYININ PARCASIDIR: `1.5e-8`, `2E+3`.
+        //
+        // ONCEDEN VAR OLAN HATA (2026-09-16'da olculdu, bit islecleri
+        // eklenirken cikti): `-`/`+` ikili islec sanilip dolguleniyordu ve
+        // `1.5e-8` -> `1.5e - 8` oluyordu. O metin ARTIK BIR SAYI DEGIL —
+        // yani `tulpar fmt --write` kullanicinin kaynagini DERLENMEYEN hale
+        // getiriyordu. `tests/scientific_notation.test.tpr` (20 hata) ve
+        // her bilimsel gosterim kullanan dosya etkileniyordu; kimse fark
+        // etmemisti cunku hicbir sey "bicimlendirilmis cikti hala ayrisiyor
+        // mu" diye sormuyordu.
+        //
+        // Kosul DAR: `e`/`E`den ONCE basamak (ya da `.`) ve isaretten SONRA
+        // basamak olmali. Boylece `ae - 3` (degisken adi `ae`) etkilenmiyor.
+        if ((c == '-' || c == '+') && !out.empty()) {
+            char pe = out.back();
+            char pd = out.size() >= 2 ? out[out.size() - 2] : '\0';
+            bool exponent_sign =
+                (pe == 'e' || pe == 'E') &&
+                (std::isdigit(static_cast<unsigned char>(pd)) || pd == '.') &&
+                i + 1 < content.size() &&
+                std::isdigit(static_cast<unsigned char>(content[i + 1]));
+            if (exponent_sign) { out.push_back(c); continue; }
+        }
+
+        // Uc karakterli islecler — `two(...)`DAN ONCE sinanmali.
+        // `<<=` iki karakterlik `<=`/`<<` dallarina once girerse
+        // `a < <= 1` cikiyor ve BICIMLENDIRICI DERLENMEYEN KOD URETIYOR
+        // (olculdu). Ayni sinif, `=>`nin listeye sonradan eklenmesiyle bir
+        // kez yasandi; bu yuzden yeni bir islec eklerken uzunluk sirasi
+        // asagidan yukari degil YUKARIDAN ASAGI kurulur.
+        auto three = [&](char a, char b2, char c3) {
+            return c == a && i + 2 < content.size() &&
+                   content[i + 1] == b2 && content[i + 2] == c3;
+        };
+
         // Detect operators that take padding.
         bool is_op = false;
         size_t op_len = 1;
-        if (two('=', '=') || two('!', '=') || two('<', '=') ||
+        if (three('<', '<', '=') || three('>', '>', '=')) {
+            is_op = true; op_len = 3;
+        } else if (two('=', '=') || two('!', '=') || two('<', '=') ||
             two('>', '=') || two('&', '&') || two('|', '|') ||
             two('+', '=') || two('-', '=') || two('*', '=') ||
-            two('/', '=') || two('%', '=') || two('=', '>')) {
+            two('/', '=') || two('%', '=') || two('=', '>') ||
+            // Bit islecleri (2026-09-16). `<<` / `>>` LISTEDE OLMAK ZORUNDA:
+            // tek karakterlik `<` / `>` dali onlari `a < < 2` yapiyordu.
+            two('<', '<') || two('>', '>') || two('&', '=') ||
+            two('|', '=') || two('^', '=')) {
             // `=>` (match kolu) LİSTEDE OLMALIYDI: yoksa `=` ve `>` ayrı ayrı
             // dolgulanıp `= >` çıkıyordu ve match ifadesi AYRIŞMIYORDU —
             // biçimlendirici derlenmeyen kod üretiyordu (üç örnek dosya).
             is_op = true; op_len = 2;
         } else if (c == '+' || c == '*' || c == '/' || c == '%' ||
-                   c == '<' || c == '>' || c == '=') {
+                   c == '<' || c == '>' || c == '=' ||
+                   // Tekli bit islecleri: `&` `|` `^` dolgu alir, `~` ALMAZ
+                   // (tekli, `!` gibi — bkz. asagidaki `!` dali).
+                   c == '&' || c == '|' || c == '^') {
             is_op = true;
         } else if (c == '-') {
             // Unary vs binary — peek at last emitted non-space char.

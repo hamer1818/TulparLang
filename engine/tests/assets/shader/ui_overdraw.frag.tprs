@@ -1,0 +1,6 @@
+// kaynak-ozet: 16cc79c33d7e  (engine/rhi/shaders/ui_overdraw.frag)
+// UI OVERDRAW SAYIMI (olcum boru hatti). Her fragment hedefe +1/255 ekler.
+// Vertex shader'in cikislarini TUKETMEZ.
+str asama = "frag";
+vec4 o_color = cikti(0);
+func main() { o_color = vec4(1.0 / 255.0, 0.0, 0.0, 0.0); }

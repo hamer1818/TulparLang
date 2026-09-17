@@ -251,6 +251,9 @@ typedef struct {
   // satırına libtulpar_tame.a + platform pencere/GL bayrakları eklenmeli
   // (bkz. tame_link_flags() / aot_pipeline.cpp). calloc ile 0 başlar.
   int uses_tame;
+  // `import "engine"` veya bir eng_* builtin çağrısı görüldü — link satırına
+  // libtulpar_engine.a + engine/ arşivleri eklenir (engine_link_flags()).
+  int uses_engine;
 
   // Hedef web (wasm32-unknown-emscripten). declare_runtime_functions
   // llvm_backend_create İÇİNDE koştuğu için bu alan doğrudan set edilemez:
@@ -290,6 +293,9 @@ typedef struct {
   LLVMValueRef func_aot_to_json;
   LLVMValueRef func_aot_runtime_init;
   LLVMValueRef func_aot_register_func; // (name, ptr) -> void; seeds call() cache
+  // input(prompt?)->str : 1 VMValue argumanli (aot_input_int ile ayni imza).
+  // Istem argumansiz cagrida VM_VAL_VOID gecer; read_key/sys_lang'in 0-arg
+  // tipiyle KARISTIRMA (bkz. llvm_backend.cpp declare_runtime_functions).
   LLVMValueRef func_aot_input;
   LLVMValueRef func_aot_read_key; // read_key()->str : single keypress, no echo
   LLVMValueRef func_aot_sys_lang; // sys_lang()->str : OS UI language (iso-639)
@@ -682,6 +688,9 @@ void llvm_backend_set_target_web(int enable);
 // AArch64 and X86 LLVM backends — CMake links both on every host. The
 // module's triple/datalayout are (re)set per call, so the same compiled
 // module can be emitted for several ABIs in sequence.
+// IR'in FNV-1a ozeti — "emit modulu degistirmez" kapisi (Tuzaklar 8ap).
+uint64_t llvm_backend_module_fingerprint(LLVMBackend *backend);
+
 int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
                                         const char *filename,
                                         const char *triple_str);

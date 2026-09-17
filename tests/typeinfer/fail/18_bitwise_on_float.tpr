@@ -1,0 +1,20 @@
+// Beklenen: bit islemleri YALNIZ tamsayi; float operand reddedilmeli.
+//
+// Neden bu bir kapi: codegen bit islemlerinde her operandi `toInt` ile AYNI
+// kurala gore (sifira dogru kirparak) tam sayiya ceviriyor. Denetim
+// olmasaydi `f & 1` SESSIZCE `1 & 1` olurdu — deger dogru gorunur, ama
+// kullanicinin yazdigi sey yapilmamis olurdu. Kirpma gorunur bir tani
+// olmali, gizli bir davranis degil.
+//
+// Kaydirma MIKTARI da denetleniyor: `1 << f` ayni sinifa giriyor.
+
+// EXPECT: [typecheck]
+// EXPECT: bitwise '&' works on integers only
+// EXPECT: bitwise '<<' works on integers only
+// EXPECT: bitwise '~' works on integers only
+
+float f = 1.5;
+
+print(f & 1);
+print(1 << f);
+print(~f);

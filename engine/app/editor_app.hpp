@@ -1,7 +1,12 @@
 // L6 APP — Editor: motorun kendisi masaustunde duzenleme kipinde (PLAN L7:
 // "editor motoru kutuphane olarak kullanir"). Dear ImGui panelleri + ImGuizmo
-// gizmo, sahne = Faz 2 demo sahnesi + duzenlenebilir varliklar (LOD kureleri,
-// iskeletli borular). Headless kip: betikli durumla N kare ciz, PPM yaz.
+// gizmo. Veri modeli content::SceneDesc (.sahne dosyasi): yukle / kaydet /
+// geri al / yinele (SceneHistory), ekle / sil, oynat = govdeler fizige girer,
+// durdur = yazar donusumune doner (veri modeli gercek, sim turetilmis).
+// Dunya paneli (gunes/ortam/golge/kamera), Derle (Ctrl+B) = runtime blob .sahneb.
+// Coklu secim (Ctrl+tik; grup tasima/silme gunluge TEK eylem), Kaynaklar paneli
+// (sahne dizinindeki glTF'ler), isik yaricapi / golge hacmi / gunes yonu gizmolari.
+// Arka plan: Faz 2 demo sahnesi. Headless kip: betikli durumla N kare, PPM.
 #pragma once
 #include <cstdint>
 
@@ -15,6 +20,7 @@ struct EditorOptions {
   const char *out_path = nullptr;
   uint32_t width = 1280, height = 720;
   bool validation = false;
+  const char *scene_path = nullptr; // null: tests/assets/editor.sahne
 };
 
 struct EditorHost {
@@ -24,14 +30,6 @@ struct EditorHost {
   // Olaylari isler; false = kapat. *w/*h framebuffer.
   bool (*poll)(void *user, uint32_t *w, uint32_t *h) = nullptr;
   const platform::InputState *(*input)(void *user) = nullptr;
-};
-
-// Duzenlenebilir varlik (editor veri modelinin ilk dilimi; kaydet/yukle sonraki is).
-struct EditorEntity {
-  char name[32];
-  float pos[3], rot_deg[3], scale[3];
-  int kind;      // 0 = LOD kuresi, 1 = iskeletli boru
-  float phase;   // boru: klip fazi (s)
 };
 
 int editor_run(const EditorOptions &opts, const EditorHost *host);

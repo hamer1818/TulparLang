@@ -1,6 +1,7 @@
 #include "rhi/device.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace tulpar::engine::rhi {
@@ -47,6 +48,48 @@ uint32_t Device::best_practice_count(const char *id_substring) const {
     if (std::strstr(bp_ids_[i].name, id_substring)) n += bp_ids_[i].count;
   return n;
 }
+
+namespace {
+// Kalici PSO onbellek dosyasinin yolu. Sira: DeviceConfig -> TULPAR_ENGINE_PSO_CACHE
+// -> $XDG_CACHE_HOME -> $HOME/.cache -> $TMPDIR (Android host bunu verir) -> KAPALI.
+// "" ya da "0" acikca KAPATIR (yalniz bellek ici onbellek; disk yok).
+// Dosya adi YALNIZ GPU'ya baglanir (satici + cihaz), surucu surumune DEGIL:
+// surucu guncellenince ayni dosya acilir, basligi (driverVersion /
+// pipelineCacheUUID) tutmaz, REDDEDILIR ve uzerine yenisi yazilir. Ada surum
+// koymak her surucu guncellemesinde yetim bir dosya birakirdi.
+void resolve_pso_path(char *out, size_t n, const DeviceConfig &cfg, const DeviceCaps &caps) {
+  out[0] = 0;
+  const char *want = cfg.pso_cache_path;
+  if (!want) want = std::getenv("TULPAR_ENGINE_PSO_CACHE");
+  if (want) {
+    if (!*want || (want[0] == '0' && !want[1])) return; // kapali
+    std::snprintf(out, n, "%s", want);
+    return;
+  }
+  char home[400];
+  const char *base = std::getenv("XDG_CACHE_HOME");
+  if (!base || !*base) {
+    const char *h = std::getenv("HOME");
+    if (h && *h) {
+      std::snprintf(home, sizeof home, "%s/.cache", h);
+      base = home;
+    }
+  }
+  if (!base || !*base) base = std::getenv("TMPDIR");
+#if defined(__ANDROID__)
+  // ANDROID: NativeActivity surecinde XDG_CACHE_HOME/HOME/TMPDIR'in ucu de
+  // genelde TANIMSIZDIR. Yukaridaki zincir orada bosa cikiyor ve onbellek tam
+  // olarak EN COK ISE YARADIGI platformda kapaniyordu — masaustunde her sey
+  // yolunda gorundugu icin de fark edilmezdi. Motorun Android barindiricisi
+  // acilirken APK varliklarini uygulamanin kendi dizinine cikarip oraya chdir
+  // ediyor (yazilabilir, uygulamaya ozel, kaldirinca temizlenir), o yuzden
+  // son care olarak calisma dizini dogru yer.
+  if (!base || !*base) base = ".";
+#endif
+  if (!base || !*base) return; // yer yok -> kapali (sessiz degil: pso().path() bos)
+  std::snprintf(out, n, "%s/tulpar_engine/pso_%04x_%04x.bin", base, caps.vendor_id, caps.device_id);
+}
+} // namespace
 
 void Device::fail(const char *msg, VkResult r) {
   std::snprintf(err_, sizeof err_, "%s (%s)", msg, vk_result_str(r));
@@ -232,8 +275,10 @@ bool Device::init_device(VkSurfaceKHR surface) {
   caps_.timestamps = qp[queue_family_].timestampValidBits > 0 && caps_.timestamp_period_ns > 0;
 
   // Uzantilar (varsa ac).
-  const char *dev_exts[12];
+  const char *dev_exts[12 + DeviceCaps::kMaxOptionalExtensions];
   uint32_t dev_ext_n = 0;
+  for (uint32_t i = 0; i < cfg_.optional_device_extension_count && i < DeviceCaps::kMaxOptionalExtensions; i++)
+    if (caps_.optional_extension_enabled[i]) dev_exts[dev_ext_n++] = cfg_.optional_device_extensions[i];
   if (surface) {
     if (!has_swapchain_ext_) { fail("VK_KHR_swapchain yok", VK_ERROR_EXTENSION_NOT_PRESENT); return false; }
     dev_exts[dev_ext_n++] = "VK_KHR_swapchain";
@@ -346,6 +391,21 @@ bool Device::init_device(VkSurfaceKHR surface) {
   VkFenceCreateInfo fci{};
   fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
   api.vkCreateFence(device_, &fci, nullptr, &one_shot_fence_);
+
+  // Kalici PSO onbellegi + VkApi kancasi. Kanca vk_api_load_device'tan SONRA
+  // takilir: o cagri tabloyu bastan doldurur ve kancayi silerdi (Tuzaklar 8an).
+  {
+    char pso_path[512];
+    resolve_pso_path(pso_path, sizeof pso_path, cfg_, caps_);
+    PsoDeviceId id;
+    id.vendor_id = caps_.vendor_id;
+    id.device_id = caps_.device_id;
+    id.driver_version = caps_.driver_version;
+    id.api_version = caps_.api_version;
+    std::memcpy(id.cache_uuid, caps_.pipeline_cache_uuid, VK_UUID_SIZE);
+    pso_.init(api, device_, id, pso_path);
+    pso_install_hook(api, device_, &pso_);
+  }
   return true;
 }
 
@@ -397,6 +457,7 @@ bool Device::pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface) {
   caps_.device_id = p2.properties.deviceID;
   caps_.device_type = p2.properties.deviceType;
   caps_.timestamp_period_ns = p2.properties.limits.timestampPeriod;
+  std::memcpy(caps_.pipeline_cache_uuid, p2.properties.pipelineCacheUUID, VK_UUID_SIZE);
 
   bool has_pipeline_library = false;
   ext_descriptor_indexing_ = ext_timeline_semaphore_ = ext_buffer_device_address_ = false;
@@ -417,6 +478,8 @@ bool Device::pick_physical(const DeviceConfig &cfg, VkSurfaceKHR surface) {
     else if (!std::strcmp(e, "VK_KHR_fragment_shading_rate")) caps_.khr_fragment_shading_rate = true;
     else if (!std::strcmp(e, "VK_KHR_portability_subset")) caps_.khr_portability_subset = true;
     else if (!std::strcmp(e, "VK_KHR_swapchain")) has_swapchain_ext_ = true;
+    for (uint32_t k = 0; k < cfg_.optional_device_extension_count && k < DeviceCaps::kMaxOptionalExtensions; k++)
+      if (!std::strcmp(e, cfg_.optional_device_extensions[k])) caps_.optional_extension_enabled[k] = true;
   }
   if (!has_pipeline_library) caps_.ext_graphics_pipeline_library = false; // ikisi birlikte gerekir
 
@@ -605,6 +668,9 @@ void Device::shutdown() {
   VkApi &api = *api_;
   if (device_) {
     api.vkDeviceWaitIdle(device_);
+    // Onbellek cihazdan ONCE: vkGetPipelineCacheData canli cihaz ister.
+    pso_.shutdown(true);
+    pso_remove_hook(api, device_);
     if (one_shot_fence_) api.vkDestroyFence(device_, one_shot_fence_, nullptr);
     if (cmd_pool_) api.vkDestroyCommandPool(device_, cmd_pool_, nullptr);
     for (uint32_t i = 0; i < block_count_; i++) {
