@@ -283,3 +283,61 @@ ENGINE_TEST(physics_contact_events_fire_with_speed) {
   dar.shutdown();
   tekrar.shutdown();
 }
+
+// --- PR #322: kinematik karakter denetleyicisi (Jolt CharacterVirtual) ----
+ENGINE_TEST(physics_character_controller) {
+  static SystemArena sys;
+  sys.reserve(4u << 20, "phys-char");
+  PhysicsConfig cfg;
+  cfg.threads = 1;
+  cfg.max_characters = 1;
+  Physics ph;
+  CHECK(ph.init(sys, cfg));
+
+  // Zemin: 50x1x50 box at y=-1 (top surface is at y=0)
+  ph.add_box({50, 1, 50}, {0, -1, 0}, Quat::identity(), false);
+
+  // Karakter havada (y = 5) dogar
+  CharacterConfig ccfg;
+  ccfg.position = {0, 5, 0};
+  CharacterId cid = ph.add_character(ccfg);
+  CHECK(cid.valid());
+  CHECK(!ph.character_grounded(cid));
+
+  // Yere inene kadar adimla (tavanli). ONCEDEN tam 60 adim (1,00 s) bekleniyordu
+  // ve kapi KIL PAYI dusuyordu: y=5'ten serbest dusus analitik olarak
+  // sqrt(2*5/9,81) = 1,0096 s surer, yani 1,00 s'de karakter hala ~9,5 cm
+  // yukarida. Sabit sayi yerine OLCUM: kacinci karede indigi basiliyor.
+  int inis_kare = 0;
+  for (int i = 0; i < 180 && inis_kare == 0; i++) {
+    ph.step(1.0f / 60.0f, 1);
+    if (ph.character_grounded(cid)) inis_kare = i + 1;
+  }
+  std::printf("    [bilgi] karakter %d. karede zemine indi (analitik serbest dusus ~%.1f kare)\n",
+              inis_kare, 60.0f * 1.0096f);
+  CHECK(inis_kare > 0);
+  CHECK(ph.character_grounded(cid));
+  Vec3 pos = ph.character_position(cid);
+  CHECK(pos.y > -0.1f && pos.y < 0.1f); // zeminin ustu 0
+
+  // saga yuru
+  ph.set_character_input(cid, {2, 0, 0}, false);
+  for (int i = 0; i < 30; i++) {
+    ph.step(1.0f / 60.0f, 1);
+  }
+
+  pos = ph.character_position(cid);
+  CHECK(pos.x > 0.5f); // saga hareket etmis olmali
+  CHECK(pos.y > -0.1f && pos.y < 0.1f);
+
+  // Ziplama tetikleyelim
+  ph.set_character_input(cid, {0, 0, 0}, true);
+  ph.step(1.0f / 60.0f, 1);
+  
+  // Havada olmali
+  CHECK(!ph.character_grounded(cid));
+  pos = ph.character_position(cid);
+  CHECK(pos.y > 0.05f);
+
+  ph.shutdown();
+}

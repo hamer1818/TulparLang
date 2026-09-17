@@ -17,10 +17,18 @@
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Geometry/Plane.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <dlfcn.h>
@@ -281,6 +289,17 @@ uint64_t fnv1a(const void *p, size_t n, uint64_t h) {
 }
 } // namespace
 
+// Karakter slotu. `Ref<>` kullaniliyor: CharacterVirtual bir RefTarget'tir,
+// slot temizlenince (nullptr atanarak) sayac duser ve nesne yok edilir.
+struct CharacterSlot {
+  JPH::Ref<JPH::CharacterVirtual> ch;
+  Vec3 desired{0, 0, 0};
+  float jump_speed = 4.0f;
+  float step_up = 0.4f;
+  bool jump = false;
+  bool alive = false;
+};
+
 struct Physics::Impl {
   PhysicsConfig cfg;
   BPLayerInterface bp_iface;
@@ -292,7 +311,55 @@ struct Physics::Impl {
   uint64_t allocs_before_step = 0;
   uint64_t allocs_last_step = 0;
   ContactRing contacts;
+  CharacterSlot *chars = nullptr;
+  uint32_t char_cap = 0;
 };
+
+namespace {
+// Karakterleri ilerlet. Fizik adiminin ARDINDAN, SLOT SIRASINDA cagrilir --
+// sira sabit oldugu icin sonuc belirlenimli. `Physics::step()` bunu kendisi
+// yapar; cagiranin sirayi yanlis kurma sansi YOKTUR.
+void update_characters(Physics::Impl *im, float dt) {
+  if (!im->chars || dt <= 0.0f) return;
+  const JPH::Vec3 gravity = im->system.GetGravity();
+
+  for (uint32_t i = 0; i < im->char_cap; i++) {
+    CharacterSlot &s = im->chars[i];
+    if (!s.alive || s.ch == nullptr) continue;
+    JPH::CharacterVirtual *c = s.ch;
+
+    const JPH::Vec3 up = c->GetUp();
+    const bool grounded = c->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+
+    // Dikey hiz MOTORUN, yatay hiz OYUNCUNUN. Ikisi ayri tutulmazsa ya
+    // yercekimi girdi tarafindan silinir ya da oyuncu havada yukari yurur.
+    JPH::Vec3 v = c->GetLinearVelocity();
+    float vy = v.Dot(up);
+    if (grounded) {
+      // Yamacta yavasca kaymayi onlemek icin asagi yonlu birikimi sifirla.
+      if (vy < 0.0f) vy = 0.0f;
+      if (s.jump) vy = s.jump_speed;
+    } else {
+      vy += gravity.Dot(up) * dt;
+    }
+    s.jump = false; // KENAR-TETIKLI: basili tutmak zincirleme ziplatmaz
+
+    JPH::Vec3 horiz = to_jph(s.desired);
+    horiz -= up * horiz.Dot(up); // istegin dikey bileseni YOK SAYILIR
+    c->SetLinearVelocity(horiz + up * vy);
+
+    // ExtendedUpdate (duz Update degil): merdiven cikma + zemine yapisma
+    // burada. Bunlar olmadan karakter kucuk basamaklara takilir ve rampadan
+    // inerken havada sekerek iner -- "oyun karakteri" hissini veren fark budur.
+    JPH::CharacterVirtual::ExtendedUpdateSettings us;
+    us.mWalkStairsStepUp = up * s.step_up;
+    c->ExtendedUpdate(dt, gravity, us,
+                      im->system.GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+                      im->system.GetDefaultLayerFilter(Layers::MOVING),
+                      {}, {}, *im->temp);
+  }
+}
+} // namespace
 
 bool Physics::init(Arena &arena, const PhysicsConfig &cfg) {
   jolt_global_init();
@@ -316,11 +383,23 @@ bool Physics::init(Arena &arena, const PhysicsConfig &cfg) {
     impl_->contacts.setup(static_cast<ContactEvent *>(cbuf), cfg.max_contact_events);
     impl_->system.SetContactListener(&impl_->contacts);
   }
+
+  // Karakter slotlari: TUM bellek burada, adim icinde tahsis YOK (A2).
+  if (cfg.max_characters > 0) {
+    impl_->chars = arena.alloc_array<CharacterSlot>(cfg.max_characters);
+    if (!impl_->chars) return false;
+    for (uint32_t i = 0; i < cfg.max_characters; i++) new (&impl_->chars[i]) CharacterSlot();
+    impl_->char_cap = cfg.max_characters;
+  }
   return true;
 }
 
 void Physics::shutdown() {
   if (!impl_) return;
+  // Karakterler Jolt nesneleridir: jobs/temp YOK EDILMEDEN once birakilmali.
+  for (uint32_t i = 0; i < impl_->char_cap; i++) impl_->chars[i].~CharacterSlot();
+  impl_->char_cap = 0;
+  impl_->chars = nullptr;
   delete impl_->jobs;
   delete impl_->temp;
   impl_->~Impl(); // bellek arenada kalir
@@ -361,6 +440,7 @@ void Physics::step(float dt, int collision_steps) {
   g_trace = trace_env;
   impl_->system.Update(dt, collision_steps, impl_->temp, impl_->jobs);
   g_trace = false;
+  update_characters(impl_, dt);
   impl_->allocs_last_step = g_allocs.load(std::memory_order_relaxed) - impl_->allocs_before_step;
 }
 
@@ -401,6 +481,104 @@ Vec3 Physics::linear_velocity(BodyId id) const { return from_jph(impl_->system.G
 void Physics::set_linear_velocity(BodyId id, Vec3 v) { impl_->system.GetBodyInterface().SetLinearVelocity(JPH::BodyID(id.v), to_jph(v)); }
 bool Physics::is_active(BodyId id) const { return impl_->system.GetBodyInterface().IsActive(JPH::BodyID(id.v)); }
 
+
+// --- Karakter -----------------------------------------------------------
+
+namespace {
+CharacterSlot *char_slot(Physics::Impl *im, CharacterId id) {
+  if (!im || !im->chars || !id.valid() || id.v >= im->char_cap) return nullptr;
+  CharacterSlot *s = &im->chars[id.v];
+  return (s->alive && s->ch != nullptr) ? s : nullptr;
+}
+} // namespace
+
+CharacterId Physics::add_character(const CharacterConfig &cfg) {
+  if (!impl_ || !impl_->chars) return CharacterId{};
+  // Jolt'un CapsuleShape'i yarim-silindir > 0 ve yaricap > 0 diye ASSERT eder.
+  // Gecersiz yapilandirmayi ASSERT'e dusurmek yerine burada REDDEDIYORUZ.
+  const float half_cyl = cfg.height * 0.5f - cfg.radius;
+  if (cfg.radius <= 0.0f || half_cyl <= 0.0f) return CharacterId{};
+
+  uint32_t idx = 0xFFFFFFFFu;
+  for (uint32_t i = 0; i < impl_->char_cap; i++)
+    if (!impl_->chars[i].alive) { idx = i; break; }
+  if (idx == 0xFFFFFFFFu) return CharacterId{}; // havuz dolu
+
+  // Jolt'un sozlesmesi: sekil oyle kurulmali ki TABANI (0,0,0)'da olsun.
+  // CapsuleShape merkezlidir; bu yuzden yarim-silindir + yaricap kadar
+  // YUKARI otelenir. Bu yapilmazsa karakter zemine YARI YARIYA gomulu
+  // dogar ve konumu ayagini degil govde merkezini gosterir.
+  JPH::RefConst<JPH::Shape> capsule = new JPH::CapsuleShape(half_cyl, cfg.radius);
+  JPH::RefConst<JPH::Shape> shape = new JPH::RotatedTranslatedShape(
+      JPH::Vec3(0.0f, half_cyl + cfg.radius, 0.0f), JPH::Quat::sIdentity(), capsule);
+
+  JPH::CharacterVirtualSettings cs;
+  cs.mShape = shape;
+  cs.mMass = cfg.mass;
+  cs.mMaxSlopeAngle = JPH::DegreesToRadians(cfg.max_slope_deg);
+  // Taban duzlemi: kapsulun yaricapi kadar asagisi hala "destek" sayilir.
+  // Varsayilan (-1e10) HER temasi destek sayardi -- duvara surtunen
+  // karakter havada ziplayabilirdi.
+  cs.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -cfg.radius);
+
+  CharacterSlot &slot = impl_->chars[idx];
+  slot.ch = new JPH::CharacterVirtual(&cs, to_jph(cfg.position), JPH::Quat::sIdentity(), &impl_->system);
+  slot.desired = Vec3{0, 0, 0};
+  slot.jump = false;
+  slot.jump_speed = cfg.jump_speed;
+  slot.step_up = cfg.step_up;
+  slot.alive = true;
+  return CharacterId{idx};
+}
+
+void Physics::remove_character(CharacterId id) {
+  CharacterSlot *s = char_slot(impl_, id);
+  if (!s) return;
+  s->ch = nullptr; // Ref sayaci duser -> nesne yok edilir
+  s->alive = false;
+}
+
+void Physics::set_character_input(CharacterId id, Vec3 desired_horizontal_velocity, bool jump) {
+  CharacterSlot *s = char_slot(impl_, id);
+  if (!s) return;
+  s->desired = desired_horizontal_velocity;
+  // `jump` BIRIKIR: girdi step()ten once birden fazla kez yazilsa bile
+  // istek kaybolmaz; step() onu tuketip sifirlar.
+  if (jump) s->jump = true;
+}
+
+Vec3 Physics::character_position(CharacterId id) const {
+  const CharacterSlot *s = char_slot(impl_, id);
+  if (!s) return Vec3{0, 0, 0};
+  const JPH::RVec3 p = s->ch->GetPosition();
+  return Vec3{(float)p.GetX(), (float)p.GetY(), (float)p.GetZ()};
+}
+
+Vec3 Physics::character_velocity(CharacterId id) const {
+  const CharacterSlot *s = char_slot(impl_, id);
+  return s ? from_jph(s->ch->GetLinearVelocity()) : Vec3{0, 0, 0};
+}
+
+GroundState Physics::character_ground_state(CharacterId id) const {
+  const CharacterSlot *s = char_slot(impl_, id);
+  if (!s) return GroundState::InAir;
+  switch (s->ch->GetGroundState()) {
+    case JPH::CharacterBase::EGroundState::OnGround: return GroundState::OnGround;
+    case JPH::CharacterBase::EGroundState::OnSteepGround: return GroundState::OnSteepGround;
+    case JPH::CharacterBase::EGroundState::NotSupported: return GroundState::NotSupported;
+    default: return GroundState::InAir;
+  }
+}
+
+bool Physics::character_grounded(CharacterId id) const {
+  return character_ground_state(id) == GroundState::OnGround;
+}
+
+Vec3 Physics::character_ground_normal(CharacterId id) const {
+  const CharacterSlot *s = char_slot(impl_, id);
+  return s ? from_jph(s->ch->GetGroundNormal()) : Vec3{0, 1, 0};
+}
+
 uint64_t Physics::state_hash() const {
   uint64_t h = 0xcbf29ce484222325ull;
   JPH::BodyIDVector ids;
@@ -409,6 +587,18 @@ uint64_t Physics::state_hash() const {
     JPH::RVec3 p = impl_->system.GetBodyInterface().GetPosition(id);
     JPH::Quat q = impl_->system.GetBodyInterface().GetRotation(id);
     float v[7] = {p.GetX(), p.GetY(), p.GetZ(), q.GetX(), q.GetY(), q.GetZ(), q.GetW()};
+    h = fnv1a(v, sizeof v, h);
+  }
+  // Karakterler rijit govde DEGIL, bu yuzden GetBodies() onlari DONDURMEZ.
+  // Ozeti burada kapatmazsak desync kapisi (sim/desync.cpp) oyuncunun
+  // kendisindeki sapmayi KACIRIRDI. Sira slot sirasidir: belirlenimli.
+  for (uint32_t i = 0; i < impl_->char_cap; i++) {
+    const CharacterSlot &cs = impl_->chars[i];
+    if (!cs.alive || cs.ch == nullptr) continue;
+    const JPH::RVec3 p = cs.ch->GetPosition();
+    const JPH::Vec3 lv = cs.ch->GetLinearVelocity();
+    float v[6] = {(float)p.GetX(), (float)p.GetY(), (float)p.GetZ(),
+                  lv.GetX(), lv.GetY(), lv.GetZ()};
     h = fnv1a(v, sizeof v, h);
   }
   return h;

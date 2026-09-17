@@ -34,6 +34,9 @@ add_library(engine_platform STATIC
     platform/thread.cpp
     platform/crash.cpp
     platform/window.cpp
+    platform/gesture.cpp
+    platform/thermal.cpp
+    platform/perf_hint.cpp
 )
 target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
 target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -53,6 +56,12 @@ add_library(engine_core STATIC
     core/memory/alloc_gate.cpp
     core/jobs/fiber.cpp
     core/jobs/job_system.cpp
+    core/jobs/job_graph.cpp
+    core/memory/ebr.cpp
+    core/event.cpp
+    core/math/bvh.cpp
+    core/math/spatial_hash.cpp
+    core/math/nn.cpp
     core/profiler/profiler.cpp
     core/jobs/fiber_switch_x86_64.S
     core/jobs/fiber_switch_aarch64.S
@@ -88,6 +97,7 @@ add_library(engine_rhi STATIC
     rhi/offscreen.cpp
     rhi/swapchain.cpp
     rhi/tile_budget.cpp
+    rhi/frame_graph.cpp
 )
 target_include_directories(engine_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)
 target_link_libraries(engine_rhi PUBLIC engine_core ${CMAKE_DL_LIBS})
@@ -141,7 +151,7 @@ else()
 endif()
 
 # --- audio (L3): miniaudio (vendored, engine/third_party/miniaudio, MIT-0) ---
-add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/miniaudio_impl.c)
+add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/miniaudio_impl.c) # PR #322 spatial.cpp/dsp.cpp ALINMADI: main basliklari zaten saglıyor
 target_include_directories(engine_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio)
 target_link_libraries(engine_audio PUBLIC engine_core ${CMAKE_DL_LIBS})
 if(APPLE) # CoreAudio arka ucu: cerceveler (CI macOS; yerelde denenmedi)
@@ -165,22 +175,53 @@ target_compile_options(engine_recast PRIVATE -fno-exceptions -fno-rtti -w -ffp-c
 add_library(engine_sim STATIC
     sim/ecs.cpp
     sim/schedule.cpp
+    sim/timers.cpp
     sim/physics.cpp
     sim/navmesh.cpp
     sim/animation.cpp
+    sim/ik.cpp
+    sim/lag_compensation.cpp
+    sim/camera_rig.cpp
+    sim/behavior_tree.cpp
+    sim/state_machine.cpp
+    sim/boids.cpp
+    sim/npc_motivation.cpp
+    sim/neo_riemannian.cpp
+    sim/chaos_physics.cpp
+    sim/fluid_system.cpp
+    sim/quantum_gen.cpp
+    sim/ml_system.cpp
+    sim/anticheat.cpp
+    sim/desync.cpp
+    sim/interp.cpp
 )
 target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
 target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
+# ratas (jsnell/ratas, MIT) yalniz sim/timers.cpp'nin ICINDE kullanilir --
+# kendi ad alani olmadigi ve global alana `Tick`/`TimerWheel` koydugu icin
+# sim/timers.hpp onu GORMEZ. Bu yuzden PUBLIC degil PRIVATE: kutuphane
+# motorun geri kalanina SIZMAZ.
+target_include_directories(engine_sim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 add_dependencies(engine_sim engine_layer_check)
 
 # --- L3 RENDERER -----------------------------------------------------------------
-add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp)
-target_link_libraries(engine_renderer PUBLIC engine_rhi)
+# NOT: renderer/nextgen_render.cpp BILEREK bu listede YOK -- Intel
+# MaskedOcclusionCulling'e ihtiyac duyuyor, o kutuphane bu agacin
+# third_party/'sinde yok. Dosya kaynak olarak duruyor (sim/rollback.hpp ile
+# ayni durum: "kod hazir, bagimlilik/kablolama bekliyor").
+add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp renderer/indirect_cull.cpp
+    renderer/meshlet_pipeline.cpp renderer/lighting_pipeline.cpp renderer/debug_draw.cpp
+    renderer/cluster_lod.cpp renderer/cluster_cull.cpp)
+target_include_directories(engine_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/debug_draw)
+target_link_libraries(engine_renderer PUBLIC engine_rhi engine_meshopt)
 target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/scene_blob.cpp content/scene_runtime.cpp content/vendored_impl.c)
+add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/scene_blob.cpp content/scene_runtime.cpp content/vendored_impl.c
+    # --- PR #322: yeni icerik modulleri (content/pack.cpp ALINMADI: main'in
+    # .tpak'i mmap'li, belirlenimli ve kapili — PR'inki daha basit bir format)
+    content/voxel.cpp content/morph.cpp content/terrain.cpp content/lod_select.cpp content/water_wave.cpp content/wind.cpp content/occlusion.cpp content/clod_format.cpp content/device_tier.cpp content/dynamic_quality.cpp)
 target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
@@ -245,6 +286,57 @@ set(ENGINE_TEST_SOURCES
     tests/test_pack.cpp
     tests/test_input.cpp
     tests/test_layout.cpp
+    # --- PR #322 testleri (test_dsp/test_spatial/test_scene_format ALINMADI:
+    # olctukleri surumler main'dekilerle degistirildi)
+    tests/test_ik.cpp
+    tests/test_lag_compensation.cpp
+    tests/test_camera_rig.cpp
+    tests/test_gesture.cpp
+    tests/test_voxel.cpp
+    tests/test_morph.cpp
+    tests/test_terrain.cpp
+    tests/test_lod_select.cpp
+    tests/test_wind.cpp
+    tests/test_occlusion.cpp
+    tests/test_frame_pacer.cpp
+    tests/test_job_graph.cpp
+    tests/test_bvh.cpp
+    tests/test_nn.cpp
+    tests/test_replay.cpp
+    tests/test_water_wave.cpp
+    tests/test_random.cpp
+    tests/test_noise.cpp
+    tests/test_behavior_tree.cpp
+    tests/test_particles.cpp
+    tests/test_frame_graph.cpp
+    tests/test_indirect_cull.cpp
+    tests/test_chaos_physics.cpp
+    tests/test_fluid_system.cpp
+    tests/test_quantum_gen.cpp
+    tests/test_lighting_pipeline.cpp
+    tests/test_fixed.cpp
+    tests/test_spatial_hash.cpp
+    tests/test_debug_draw.cpp
+    tests/test_timers.cpp
+    tests/test_state_machine.cpp
+    tests/test_event_bus.cpp
+    tests/test_boids.cpp
+    tests/test_npc_motivation.cpp
+    tests/test_neo_riemannian.cpp
+    tests/test_ebr.cpp
+    tests/test_cluster_lod.cpp
+    tests/test_meshlet_pipeline.cpp
+    tests/test_clod_format.cpp
+    tests/test_cluster_cull.cpp
+    tests/test_anticheat.cpp
+    tests/test_desync.cpp
+    tests/test_device_tier.cpp
+    tests/test_dynamic_quality.cpp
+    tests/test_ecs_snapshot.cpp
+    tests/test_interp.cpp
+    tests/test_perf_hint.cpp
+    tests/test_thermal.cpp
+    tests/test_rollback.cpp
 )
 # Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
 # 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
@@ -276,6 +368,15 @@ if(NOT ANDROID)
     add_executable(engine_sahnec tools/sahnec.cpp)
     target_link_libraries(engine_sahnec PRIVATE engine_content engine_core ${CMAKE_DL_LIBS})
     target_compile_options(engine_sahnec PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
+    # --- engine_clodbake: glTF -> cluster LOD DAG -> .clod (sahne derleyicisinin
+    # GEOMETRI dilimi). MeshDecimationTools (MIT) burada derlenir; sadelestirme
+    # varlik basina BIR KEZ, cevrimdisi yapilir -- cihazda maliyeti sifirdir.
+    add_executable(engine_clodbake tools/clodbake.cpp third_party/mdt/MeshDecimationTools.cpp)
+    target_link_libraries(engine_clodbake PRIVATE engine_content engine_renderer engine_core ${CMAKE_DL_LIBS})
+    target_include_directories(engine_clodbake PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+    # MeshDecimationTools STL/exception KULLANMIYOR, bu yuzden motorun kendi
+    # derleme bayraklari burada da uygulanabilir.
+    target_compile_options(engine_clodbake PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
     # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
     add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/demo_scene.cpp)
     target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})

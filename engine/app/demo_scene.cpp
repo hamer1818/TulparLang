@@ -7,7 +7,10 @@ namespace tulpar::engine::app {
 using namespace tulpar::engine::sim;
 
 namespace {
-struct Agent { Vec3 pos; Vec3 target; Vec3 path[16]; int path_n; int path_i; uint32_t seed; float speed; float hue; };
+struct Agent {
+  Vec3 pos; Vec3 target; Vec3 path[16]; int path_n; int path_i; uint32_t seed; float speed; float hue;
+  uint32_t bt_state[BehaviorTree::kMaxNodes]; // sim/behavior_tree.hpp: agent BASINA calisma-zamani durumu
+};
 struct AnimState { float time; Vec3 t[DemoScene::kJoints]; Quat r[DemoScene::kJoints]; Vec3 s[DemoScene::kJoints]; };
 struct PhysMirror { BodyId body; Vec3 pos; Quat rot; float hue; };
 ComponentId cid_agent() { return component_id<Agent>("DemoAgent"); }
@@ -25,6 +28,64 @@ Vec3 hue_color(float h) { // 0..1 -> canli renk
   float r = std::fabs(h * 6 - 3) - 1, g = 2 - std::fabs(h * 6 - 2), b = 2 - std::fabs(h * 6 - 4);
   auto c = [](float v) { return v < 0 ? 0.f : v > 1 ? 1.f : v; };
   return Vec3{c(r), c(g), c(b)};
+}
+
+constexpr float kChaseRadius = 4.0f; // bu mesafenin altinda ajan oyuncuyu kovalar, ustunde devriye gezer
+
+// sim/behavior_tree.hpp yaprak-aksiyonlarina paket gecirilen ajan-basina
+// baglam -- BtTickFn'nin tek void* parametresine UYAN, cagiranin (burada
+// demo_sys_nav) her ajan icin TAZE olusturdugu kucuk bir yigin nesnesi.
+struct BtCtx { Agent *agent; DemoScene *scene; float dt; };
+
+// Oyuncu kChaseRadius icindeyse basarili -- kovalama Sequence'inin kosulu.
+BtStatus bt_is_player_near(void *ctx_) {
+  BtCtx *ctx = (BtCtx *)ctx_;
+  const Vec3 to_player = ctx->scene->player_position() - ctx->agent->pos;
+  return dot(to_player, to_player) < (kChaseRadius * kChaseRadius) ? BtStatus::kSuccess : BtStatus::kFailure;
+}
+
+// Oyuncuya DOGRUDAN (yol bulma OLMADAN -- basit demo sadelestirmesi,
+// duvara TAKILABILIR ama gorsel amac icin yeterli) bir adim yaklasir.
+// HER ZAMAN Success doner, Running DEGIL: boylece SARMALAYAN Sequence HER
+// karede state[0]'dan (is_player_near) YENIDEN baslar -- oyuncu uzaklasinca
+// AYNI karede fark edilir. (Running donseydi Sequence bir SONRAKI tick'te
+// KALDIGI cocuktan -- yani DOGRUDAN chase_player'dan -- devam ederdi,
+// is_player_near BIR DAHA HIC kontrol edilmezdi -- bkz. tick_node()'un
+// "Running'de index SABIT kalir" kurali.)
+BtStatus bt_chase_player(void *ctx_) {
+  BtCtx *ctx = (BtCtx *)ctx_;
+  Agent *a = ctx->agent;
+  const Vec3 to = ctx->scene->player_position() - a->pos;
+  const float d = length(to);
+  if (d > 0.01f) {
+    const float step = (a->speed * 1.3f) * ctx->dt; // kovalarken devriyeden biraz hizli
+    a->pos += to * (step < d ? step / d : 1.0f);
+  }
+  a->path_n = 0; a->path_i = 0; // kovalama bitince ESKI yol GECERSIZ -- devriyeye donunce YENI hedef alinsin
+  return BtStatus::kSuccess;
+}
+
+// ONCEKI demo_sys_nav govdesiyle AYNI navmesh devriye mantigi -- artik BT
+// yaprak-aksiyonu olarak (HER ZAMAN Success/Failure doner, yukaridaki NOT
+// ile ayni sebeple).
+BtStatus bt_wander(void *ctx_) {
+  BtCtx *ctx = (BtCtx *)ctx_;
+  Agent &a = *ctx->agent;
+  DemoScene *sc = ctx->scene;
+  if (a.path_i >= a.path_n) {
+    Vec3 tgt;
+    if (!sc->nav().nearest_point(random_target(a.seed), &tgt)) return BtStatus::kFailure;
+    a.target = tgt;
+    a.path_n = sc->nav().find_path(a.pos, a.target, a.path, 16);
+    a.path_i = 1;
+    if (a.path_n < 2) { a.path_n = 0; return BtStatus::kFailure; }
+  }
+  Vec3 to = a.path[a.path_i] - a.pos;
+  float d = length(to);
+  float step = a.speed * ctx->dt;
+  if (d <= step) { a.pos = a.path[a.path_i]; a.path_i++; }
+  else a.pos += to * (step / d);
+  return BtStatus::kSuccess;
 }
 
 bool build_nav(NavMesh &nm) {
@@ -47,20 +108,11 @@ void demo_sys_nav(SystemCtx &c) {
   c.world->each(mask_of(cid_agent()), [&](const ChunkView &v) {
     Agent *ag = v.col<Agent>();
     for (uint32_t i = 0; i < v.count; i++) {
-      Agent &a = ag[i];
-      if (a.path_i >= a.path_n) {
-        Vec3 tgt;
-        if (!sc->nav_.nearest_point(random_target(a.seed), &tgt)) continue;
-        a.target = tgt;
-        a.path_n = sc->nav_.find_path(a.pos, a.target, a.path, 16);
-        a.path_i = 1;
-        if (a.path_n < 2) { a.path_n = 0; continue; }
-      }
-      Vec3 to = a.path[a.path_i] - a.pos;
-      float d = length(to);
-      float step = a.speed * c.dt;
-      if (d <= step) { a.pos = a.path[a.path_i]; a.path_i++; }
-      else a.pos += to * (step / d);
+      // Selector(Sequence(oyuncu yakin mi?, kovala), devriye gez) -- karar
+      // sim/behavior_tree.hpp'ye devredildi, bu dongu artik SADECE her
+      // ajan icin baglam kurup TEK bir tick() cagirir.
+      BtCtx ctx{&ag[i], sc, c.dt};
+      sc->agent_bt_.tick(ag[i].bt_state, &ctx);
     }
   });
 }
@@ -82,7 +134,22 @@ void demo_sys_phys(SystemCtx &c) {
     Vec3 v = sc->phys_.linear_velocity(sc->player_);
     v.x = sc->player_cmd_.x * sc->player_speed_;
     v.z = sc->player_cmd_.y * sc->player_speed_;
-    if (sc->player_jump_ && std::fabs(v.y) < 0.05f) v.y = 5.5f;
+    if (sc->player_jump_ && std::fabs(v.y) < 0.05f) {
+      v.y = 5.5f;
+      // Ziplama tozu: content/particles.hpp -- deterministik Rng (sc->particle_rng_,
+      // SABIT tohumlu) kullanir, bu yuzden ayni komut dizisiyle HER platformda
+      // AYNI toz dizisi cikar (kozmetik ama content_hash()'e KATILMAZ --
+      // oynanis durumu degil, bkz. demo_scene.hpp).
+      content::ParticleEmitterConfig dust;
+      dust.spawn_pos = sc->phys_.position(sc->player_) - Vec3{0, 0.5f, 0}; // oyuncu yari-yuksekligi
+      dust.base_velocity = Vec3{0, 1.5f, 0};
+      dust.velocity_jitter = Vec3{1.2f, 0.6f, 1.2f};
+      dust.lifetime_min = 0.25f;
+      dust.lifetime_max = 0.5f;
+      dust.size_start = 0.12f;
+      dust.size_end = 0.02f;
+      sc->particles_.emit(dust, 10, sc->particle_rng_);
+    }
     sc->player_jump_ = false;
     sc->phys_.set_linear_velocity(sc->player_, v);
   }
@@ -126,6 +193,18 @@ bool DemoScene::init(Arena &arena, JobSystem *jobs) {
   RawClip raw{tracks, kJoints, 30, 30.0f};
   clip_ = ClipBuilder::build(arena, raw, 1e-5f, nullptr);
   if (!clip_) return false;
+  if (!particles_.init(arena, 256, Vec3{0, -3.0f, 0})) return false; // hafif toz-esintisi (gercekci yercekiminden daha yavas duser)
+  {
+    // Selector( Sequence(is_near, chase), wander ) -- TEK agac tanimi,
+    // TUM ajanlar paylasir (asagida her Agent kendi bt_state[]'ini tasir).
+    const uint32_t is_near = agent_bt_.add_action(bt_is_player_near);
+    const uint32_t chase = agent_bt_.add_action(bt_chase_player);
+    const uint32_t seq_children[2] = {is_near, chase};
+    const uint32_t chase_seq = agent_bt_.add_sequence(seq_children, 2);
+    const uint32_t wander = agent_bt_.add_action(bt_wander);
+    const uint32_t sel_children[2] = {chase_seq, wander};
+    agent_bt_.set_root(agent_bt_.add_selector(sel_children, 2));
+  }
   WorldConfig wc; wc.max_entities = 512; wc.max_chunks = 64;
   if (!world_.init(arena, wc)) return false;
   for (uint32_t i = 0; i < kAgents; i++) {
@@ -137,6 +216,7 @@ bool DemoScene::init(Arena &arena, JobSystem *jobs) {
     Vec3 start{-8.0f + (float)(i % 6) * 0.8f, 0, -8.0f + (float)(i / 6) * 0.8f};
     nav_.nearest_point(start, &a->pos);
     a->path_n = 0; a->path_i = 0;
+    for (uint32_t k = 0; k < BehaviorTree::kMaxNodes; k++) a->bt_state[k] = 0; // tick() SIFIRLANMIS baslamali (bkz. behavior_tree.hpp)
     world_.get<AnimState>(e)->time = i * 0.1f;
   }
   for (uint32_t i = 0; i < kBoxes; i++) {
@@ -159,7 +239,10 @@ void DemoScene::shutdown() {
   nav_.shutdown();
 }
 
-void DemoScene::tick(float dt, uint32_t tick_index) { sched_.run(world_, dt, nullptr, tick_index); }
+void DemoScene::tick(float dt, uint32_t tick_index) {
+  sched_.run(world_, dt, nullptr, tick_index);
+  particles_.update(dt); // ECS disinda, duz havuz -- ayri bir sistem olmaya GEREK yok
+}
 
 void DemoScene::set_player_command(Vec2 move, bool jump) {
   player_cmd_ = move;
@@ -199,6 +282,10 @@ void DemoScene::draw(renderer::Renderer &r, const DrawSet &d) {
         r.draw(cube, base * m[j] * Mat4::scale({0.18f, 0.18f, 0.18f}), col * 0.8f + Vec3{0.2f, 0.2f, 0.2f});
     }
   });
+  for (uint32_t i = 0; i < particles_.alive_count(); i++) {
+    const content::Particle &p = particles_.particle(i);
+    r.draw(cube, Mat4::translate(p.pos) * Mat4::scale({p.size, p.size, p.size}), {0.55f, 0.45f, 0.35f});
+  }
 }
 
 } // namespace tulpar::engine::app

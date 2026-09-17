@@ -15,7 +15,10 @@ layout(set = 0, binding = 0) uniform Frame {
   vec4 cascade_params; // x: kademe sayisi, y: 1/kademe, z: atlas texel x, w: atlas texel y
 } u;
 layout(std430, set = 0, binding = 4) readonly buffer Skin { mat4 m[]; } u_skin;
-layout(push_constant) uniform Push { mat4 model; vec4 color; uvec4 skin; } pc;
+// pbr KULLANILMAZ, yalniz Push bayt duzenini (renderer.hpp) mesh_skin.vert ile
+// eslemek icin burada — yoksa pc.skin YANLIS ofsetten (roughness/metallic'in
+// ustunden) okunur.
+layout(push_constant) uniform Push { mat4 model; vec4 color; vec4 pbr; uvec4 skin; } pc;
 void main() {
   mat4 skin = in_weights.x * u_skin.m[pc.skin.x + in_joints.x] + in_weights.y * u_skin.m[pc.skin.x + in_joints.y] +
               in_weights.z * u_skin.m[pc.skin.x + in_joints.z] + in_weights.w * u_skin.m[pc.skin.x + in_joints.w];
