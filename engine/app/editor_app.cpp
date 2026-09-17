@@ -906,9 +906,16 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     } else {
       rhi::FrameContext fc;
       if (swap.acquire(&fc)) {
+        // IKI YOL DA AYNI IKI FONKSIYONU CAGIRIR — ayrisamasinlar diye.
+        // Burada bir kez `ui.record()` DOGRUDAN cagrildi ve pencereli editor
+        // SIMSIYAH acildi: ana gecis (swapchain de offscreen de) IKI subpass
+        // tanimliyor, ImGui'nin boru hatti subpass 1 icin kurulu ve ilerletmeyi
+        // `record_cb` yapiyor. Headless yol record_cb'den gectigi icin calisti,
+        // pencereli yol gecmedigi icin hicbir sey cizmedi. Ayni hata, tek yolda
+        // duzeltilmis hali. Artik tek kaynak var.
         before_cb(fc.cmd, &rctx);   // golge + viewport (ikisi de KENDI gecisi)
         swap.begin_render_pass(fc);
-        ui.record(fc.cmd);          // ana gecis: YALNIZ ImGui
+        record_cb(fc.cmd, &rctx);   // subpass ilerlet + ImGui
         swap.end_frame(fc);
       }
       // Swapchain yeniden yaratimi artik renderer'in cizim olcusunu DEGISTIRMEZ:

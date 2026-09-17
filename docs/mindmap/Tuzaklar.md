@@ -2583,3 +2583,22 @@ sonsuz sessiz bekleme CI'da en kötü sonuç, sınıra dayanırsak adıyla patl�
 Bir de ölçü notu: birikinti **yerelde hiç üremedi** — 15 worker'da 0, zorla 2 worker'da bile 0. macOS/arm64
 koşucusunda 276. "Yerelde üretemedim" bir düzeltmeyi geçersiz kılmaz ama sözleşmeyi ölçüyle değil
 **muhakemeyle** yazdığını bilerek yazmayı gerektirir.
+
+### 8bp. Pencereli ve headless yol AYRI kod ise, düzeltme yalnız birine uygulanır
+Editörde 3B'yi kendi viewport geçişine taşıdıktan sonra ana geçişte ImGui tek başına kaldı. Ana geçiş —
+swapchain ve offscreen, **ikisi de** — iki subpass tanımlıyor ve ImGui'nin boru hattı subpass 1 için kurulu;
+ilerletmeyi eskiden `Renderer::record` yapıyordu. Renderer çıkınca `vkCmdNextSubpass`'i elle eklemek gerekti.
+
+Headless yol `record_cb` üzerinden gidiyordu ve düzeltme oraya girdi: doğrulama katmanı 0 VUID, kapılar
+yeşil, çıktı PPM'inde 6800 renk. **Pencereli yol ise `ui.record()`'u DOĞRUDAN çağırıyordu** ve düzeltmeyi
+hiç görmedi: kullanıcı editörü açtığında ekran **simsiyah** geldi.
+
+Hata tekti, ama iki kopyası vardı; ben yalnız koşturabildiğim kopyayı düzeltip yeşil gördüm ve "tamam"
+dedim. Headless doğrulama, pencereli yol ayrı kod olduğu sürece o yolu **temsil etmiyor** — 8bo'nun aynısı
+(yerel clang'ın macOS'u temsil etmemesi), bu sefer platform yerine kod yolu.
+
+Düzeltme yalnız çağrıyı eklemek değil, **iki yolu tek kaynağa bağlamak**: her ikisi de artık aynı
+`before_cb` + `record_cb` çiftini çağırıyor, yani bir daha ayrışamazlar.
+
+Genel kural: aynı işi yapan iki kod yolundan yalnız birini koşturabiliyorsan, onları **tek fonksiyona
+indirge**; yoksa koşturamadığın yol sessizce geride kalır ve farkı kullanıcı bulur.
