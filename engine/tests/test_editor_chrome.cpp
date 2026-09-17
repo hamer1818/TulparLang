@@ -486,14 +486,18 @@ ENGINE_TEST(editor_chrome_transport_and_gizmo_segments_reflect_state) {
   if (fx.st == ProbeStatus::NoVulkan) { skip("Vulkan yok"); return; }
   CHECK(fx.st == ProbeStatus::Ok);
   if (fx.st != ProbeStatus::Ok) return;
+  // Etkin kip artik doygun Accent DEGIL, sakin Select zemini (bkz.
+  // docs/engine/EDITOR-TASARIM.md §6 ve editor_chrome.cpp Look::Fill).
+  // Testin ANLAMI degismedi: etkin dugme, kendisine ayrilmis tonda olmali
+  // ve pasif dugmelerden AYIRT EDILEBILIR kalmali.
   uint8_t acc[3], bg3[3];
-  tone_srgb8(app::Tone::Accent, acc);
+  tone_srgb8(app::Tone::Select, acc);
   tone_srgb8(app::Tone::Bg3, bg3);
   const int d_stop = max_ch_diff(fill_px(g_pix_a, fx.W, fx.transport), bg3);
   const int d_play = max_ch_diff(fill_px(g_pix_b, fx.W, fx.transport), acc);
   const uint32_t diff_tr = rect_diff(g_pix_a, g_pix_b, fx.W, fx.H, fx.transport);
   const uint32_t diff_snap = rect_diff(g_pix_a, g_pix_b, fx.W, fx.H, fx.snap);
-  std::printf("    [bilgi] oynat: dugme %.0fx%.0f, dururken piksel-Bg3 farki %d, oynarken piksel-Accent farki %d; dugmede %u piksel degisti, Yakala'da %u\n",
+  std::printf("    [bilgi] oynat: dugme %.0fx%.0f, dururken piksel-Bg3 farki %d, oynarken piksel-Select farki %d; dugmede %u piksel degisti, Yakala'da %u\n",
               (double)(fx.transport[2] - fx.transport[0]), (double)(fx.transport[3] - fx.transport[1]), d_stop, d_play, diff_tr, diff_snap);
   CHECK(d_stop <= 8);
   CHECK(d_play <= 8);
@@ -506,7 +510,7 @@ ENGINE_TEST(editor_chrome_transport_and_gizmo_segments_reflect_state) {
     db[i] = max_ch_diff(fill_px(g_pix_b, fx.W, fx.seg[i]), i == 1 ? acc : bg3);
   }
   const float w0 = fx.seg[0][2] - fx.seg[0][0], w1 = fx.seg[1][2] - fx.seg[1][0], w2 = fx.seg[2][2] - fx.seg[2][0];
-  std::printf("    [bilgi] gizmo kipi: A(Tasi) fark %d/%d/%d, B(Dondur) fark %d/%d/%d (etkin~Accent, digerleri~Bg3); bolum genislikleri %.0f/%.0f/%.0f, "
+  std::printf("    [bilgi] gizmo kipi: A(Tasi) fark %d/%d/%d, B(Dondur) fark %d/%d/%d (etkin~Select, digerleri~Bg3); bolum genislikleri %.0f/%.0f/%.0f, "
               "bitisik\n",
               da[0], da[1], da[2], db[0], db[1], db[2], (double)w0, (double)w1, (double)w2);
   for (int i = 0; i < 3; i++) { CHECK(da[i] <= 8); CHECK(db[i] <= 8); }

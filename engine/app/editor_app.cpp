@@ -82,6 +82,29 @@ void entity_from_matrix(SceneEntity &e, const Mat4 &mat) {
 }
 
 // Editor durumu: veri modeli (gercek) + turetilmis sim/gpu kaynaklari.
+// Renderer'in CALISMA ZAMANINDA degistirilebilen ayarlari. Sahne dosyasina
+// YAZILMAZ: SceneWorld'e eklemek surum artirimi + scene_blob degisikligi
+// ister; bu tur oturum ayari olarak duruyor ve her karede uygulaniyor.
+//
+// Varsayilanlar RendererConfig'ten TUREIR -- ayni sayi iki yerde tutulmaz,
+// motorun varsayilani degisirse editor kendiliginden uyar.
+const renderer::RendererConfig kRenderDefaults{};
+
+struct RenderSettings {
+  bool shadows = true;
+  float shadow_bias = kRenderDefaults.shadow_bias;
+  float shadow_normal_offset = kRenderDefaults.shadow_normal_offset;
+  float exposure = kRenderDefaults.exposure;
+  float bloom_threshold = kRenderDefaults.bloom_threshold;
+  float bloom_intensity = kRenderDefaults.bloom_intensity;
+  float bloom_knee = kRenderDefaults.bloom_soft_knee;
+  float bloom_radius = kRenderDefaults.bloom_radius;
+  float render_scale = kRenderDefaults.temporal.render_scale;
+  int upscaler = (int)kRenderDefaults.temporal.upscaler;
+  float sharpness = kRenderDefaults.temporal.sharpness;
+  bool jitter = kRenderDefaults.temporal.jitter;
+};
+
 struct EditorState {
   SceneDesc scene;
   content::SceneHistory hist;
@@ -108,6 +131,7 @@ struct EditorState {
   content::SceneWorld world_before; // Dunya paneli surukleme/metin: tek islem
   bool world_edit_active = false;
   bool prev_lmb = false;
+  RenderSettings render;    // golge/pozlama/bloom/olceklendirme (oturum ayari)
   GizmoOptions gizmos;      // isik yaricapi / golge hacmi / gunes yonu
   uint32_t gizmo_draws = 0; // son karede gizmolarin yaptigi cizim sayisi
   AssetFile browse[64];     // kaynak tarayici (sahne dosyasinin dizini)
@@ -1041,7 +1065,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         if (row.has_children && !row.expanded) hide_depth = depth + 1;
       }
       if (shown == 0)
-        hierarchy_empty(st.scene.entity_count ? "S\xC3\xBCzge\xC3\xA7le e\xC5\x9Fle\xC5\x9Fen varl\xC4\xB1k yok"
+        hierarchy_empty(st.scene.entity_count ? "S\xC3\xBCzge\xC3\xA7le e\xC5\x9Fle\xC5\x9F" "en varl\xC4\xB1k yok"
                                               : "Sahne bo\xC5\x9F \xE2\x80\x94 \xE2\x80\x9C+\xE2\x80\x9D ile varl\xC4\xB1k ekle");
       // Listenin altindaki bosluk: buraya birakmak KOKE tasir.
       const HierarchyResult zone = hierarchy_root_drop_zone(&st.tree);
@@ -1166,6 +1190,65 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         track_world_edit(st, prop_float("Derinlik", &st.scene.shadow_depth, 0.5f, 1.0f, 2000.0f, "%.1f m"));
         prop_end();
       }
+      // --- Gorunum: motorun ayarlanabilir render ozellikleri ------------
+      // Bunlarin hepsi ZATEN kodlanmis ama editorde hic yuzu yoktu. Sektor
+      // editorlerinde tam olarak burada dururlar (UE5: Post Process Volume +
+      // Scalability; Unity: Quality/Volume).
+      section_label("G\xC3\x96R\xC3\x9CN\xC3\x9CM");
+      if (prop_begin("golge_kalite")) {
+        prop_help("G\xC3\xB6lge haritasi kapatilinca sahne duz aydinlanir; egilim degerleri golge akne/ayrilma dengesidir.");
+        prop_check("G\xC3\xB6lgeler", &st.render.shadows);
+        prop_float("Derinlik e\xC4\x9Filimi", &st.render.shadow_bias, 0.0001f, 0.0f, 0.02f, "%.4f");
+        prop_float("Normal kayd\xC4\xB1rma", &st.render.shadow_normal_offset, 0.005f, 0.0f, 1.0f, "%.3f m");
+        prop_end();
+      }
+      {
+        // Durum: SESSIZ kapanma yok -- ozellik kapaliysa SEBEBI yazilir.
+        const renderer::ShadowInfo si = ren.shadow();
+        if (!si.enabled)
+          ImGui::TextDisabled("G\xC3\xB6lge kapal\xC4\xB1: %s",
+                              si.disabled_reason[0] ? si.disabled_reason : "panelden kapat\xC4\xB1ld\xC4\xB1");
+        else
+          ImGui::TextDisabled("%u px \xC3\x97 %u kademe \xC2\xB7 %s", si.size, si.cascades,
+                              si.linear_filter ? "donan\xC4\xB1m PCF" : "NEAREST");
+      }
+
+      if (prop_begin("post")) {
+        prop_help("Pozlama ve bloom, sahnenin ic HDR hedefi uzerinde calisir.");
+        prop_float("Pozlama", &st.render.exposure, 0.01f, 0.01f, 8.0f, "%.2f");
+        prop_float("Bloom e\xC5\x9Fi\xC4\x9Fi", &st.render.bloom_threshold, 0.01f, 0.0f, 8.0f, "%.2f");
+        prop_float("Bloom \xC5\x9Fiddeti", &st.render.bloom_intensity, 0.01f, 0.0f, 2.0f, "%.2f");
+        prop_float("Yumu\xC5\x9F" "ak diz", &st.render.bloom_knee, 0.01f, 0.0f, 1.0f, "%.2f");
+        prop_float("Bloom yar\xC4\xB1\xC3\xA7" "ap\xC4\xB1", &st.render.bloom_radius, 0.01f, 0.5f, 3.0f, "%.2f");
+        prop_end();
+      }
+      {
+        const renderer::PostInfo pi = ren.post();
+        if (!pi.enabled)
+          ImGui::TextDisabled("Sonradan i\xC5\x9Fleme kapal\xC4\xB1: %s",
+                              pi.disabled_reason[0] ? pi.disabled_reason : "ac\xC4\xB1lmad\xC4\xB1");
+        else
+          ImGui::TextDisabled("%ux%u \xC2\xB7 %u bloom mip \xC2\xB7 %u ge\xC3\xA7i\xC5\x9F \xC2\xB7 %.1f MB", pi.width, pi.height,
+                              pi.bloom_mips, pi.pass_count, (double)pi.target_bytes / (1024.0 * 1024.0));
+      }
+
+      if (prop_begin("olceklendirme")) {
+        prop_help("Sahne ic hedefin bir ALT dikdortgenine cizilir ve birlestirme gecisinde buyutulur; kare icinde ayirma olmaz.");
+        prop_float("Render \xC3\xB6l\xC3\xA7" "e\xC4\x9Fi", &st.render.render_scale, 0.01f, 0.5f, 1.0f, "%.2f");
+        prop_combo("Y\xC3\xBCkseltici", &st.render.upscaler, "Yok\0" "Do\xC4\x9Frusal\0" "Keskinle\xC5\x9Ftir\0");
+        prop_float("Keskinlik", &st.render.sharpness, 0.01f, 0.0f, 1.0f, "%.2f");
+        prop_check("Titretme (TAA)", &st.render.jitter);
+        prop_end();
+      }
+      {
+        const renderer::TemporalInfo ti = ren.temporal();
+        if (ti.scale_disabled_reason[0])
+          ImGui::TextDisabled("\xC3\x96l\xC3\xA7" "ekleme yok: %s", ti.scale_disabled_reason);
+        else
+          ImGui::TextDisabled("sahne %ux%u (\xC3\xB6l\xC3\xA7" "ek %.2f)", ti.scaled_width, ti.scaled_height,
+                              (double)ti.render_scale);
+      }
+
       section_label("G\xC4\xB0ZMOLAR");
       if (prop_begin("gizmo")) {
         prop_check("I\xC5\x9F\xC4\xB1k yar\xC4\xB1\xC3\xA7""ap\xC4\xB1", &st.gizmos.light_radius);
@@ -1617,6 +1700,17 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // --- 3B cizim: veri modelinden (dunya isigi/golgesi de her kare modelden: panel canli) ---
     ren.set_light(normalize(st.scene.sun_dir), st.scene.ambient, st.scene.sun_diffuse);
     ren.set_shadow_volume(st.scene.shadow_center, st.scene.shadow_radius, st.scene.shadow_depth);
+    // Gorüntü ayarlari: hepsi ucuz set_* cagrisi, kare icinde ayirma YOK.
+    // Her karede kosulsuz uygulanir -- "degisti mi" takibi, panelin disindan
+    // (geri al/yinele, betik) gelen degisiklikleri kacirirdi.
+    ren.set_shadows_enabled(st.render.shadows);
+    ren.set_shadow_bias(st.render.shadow_bias, st.render.shadow_normal_offset);
+    ren.set_exposure(st.render.exposure);
+    ren.set_bloom(st.render.bloom_threshold, st.render.bloom_intensity);
+    ren.set_bloom_shape(st.render.bloom_knee, st.render.bloom_radius);
+    ren.set_render_scale(st.render.render_scale);
+    ren.set_upscaler((renderer::UpscalerKind)st.render.upscaler, st.render.sharpness);
+    ren.set_jitter(st.render.jitter);
     ren.set_shadow_focus(cam.target); // yakin kademeler kameranin baktigi yerde
     ren.begin_frame(headless ? 0 : frame_i);
     scene.draw(ren, ds);

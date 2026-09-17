@@ -164,8 +164,13 @@ bool tool_button(const ToolBtn &b, float height) {
   Tone bg = held ? Tone::AccentLo : hovered ? Tone::Bg4 : Tone::Bg3;
   Tone line = Tone::Line, text = Tone::Text;
   if (b.look == Look::Fill) {
-    bg = held ? Tone::AccentLo : hovered ? Tone::AccentHi : Tone::Accent;
-    text = Tone::Bg0;
+    // ETKIN kip: DOYGUN DOLGU DEGIL. Onceki hali (tam Accent zemin + koyu
+    // metin) arac cubugunda iki buyuk turkuaz slab birakiyordu; etkin dugme
+    // "secili" degil "baska bir widget" gibi okunuyor ve vurgunun seyrek
+    // kullanim kuralini tek basina ciyordu (EDITOR-TASARIM.md §3).
+    // Sektor editorlerinde etkin gecis sakin bir zemin + PARLAK metindir.
+    bg = held ? Tone::AccentLo : hovered ? Tone::Bg3 : Tone::Select;
+    text = Tone::AccentHi;
   } else if (b.look == Look::Outline) {
     line = Tone::Accent;
     text = Tone::AccentHi;

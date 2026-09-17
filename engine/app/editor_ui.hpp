@@ -38,10 +38,28 @@ enum class Tone : uint8_t {
   Bg0, Bg1, Bg2, Bg3, Bg4, Line, Text, TextDim, Accent, AccentHi, AccentLo, Warn, White,
   AxisX, AxisY, AxisZ, // vec3 rozetleri + eksen gostergesi: kirmizi/yesil/mavi (Unity/Blender gelenegi)
   Ok, Err,             // durum noktalari: yuklendi / yuklenemedi
+  Input,               // COKUK yuzey: girdi kutusu zemini (panelden KOYU)
+  TextMute,            // pasif metin, yer tutucu (TextDim'den de soluk)
+  Select,              // liste/agac secim seridi (doygun DEGIL)
   Count
 };
 // out[4] = r,g,b,a (0..1). Gecersiz t: Text.
 void editor_tone(Tone t, float out[4]);
+
+// --- Tipografi olcegi --------------------------------------------------------
+// Tek font yuzu, UC boyut kademesi. Vendored ImGui 1.92 dinamik boyut
+// destekledigi icin (PushFont(NULL, px)) ikinci bir TTF gerekmiyor.
+// AGIRLIK yok; hiyerarsi boyut + renk kademesi + BUYUK HARF ile kurulur
+// (bkz. docs/engine/EDITOR-TASARIM.md §4).
+enum class TextSize : uint8_t {
+  Sm, // 11/13 — durum cubugu, sutun basligi, ust veri, rozet
+  Md, // taban — etiket, deger, menu, dugme
+  Lg, // 15/13 — panel basligi, secili nesne adi
+};
+// Push/pop CIFTLER halinde cagrilir. Baglam yoksa ikisi de sessizce doner.
+void push_text_size(TextSize s);
+void pop_text_size();
+
 // Metni max_w piksele sigacak sekilde "…" ile kirpar (UTF-8 sinirinda keser).
 // ImGui baglami gerekir (CalcTextSize). Sigiyorsa oldugu gibi kopyalar. out her
 // zaman NUL ile biter. Donus: yazilan uzunluk (bayt).

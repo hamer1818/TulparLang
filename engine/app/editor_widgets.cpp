@@ -165,7 +165,7 @@ void draw_magnifier(ImDrawList *dl, ImVec2 c, float size, ImU32 col) {
 // =============================================================================
 
 bool prop_begin(const char *id, float label_fraction) {
-  if (!(label_fraction > 0.1f)) label_fraction = 0.38f; // NaN de buraya duser
+  if (!(label_fraction > 0.1f)) label_fraction = 0.30f; // NaN de buraya duser
   if (label_fraction > 0.8f) label_fraction = 0.8f;
   const ImGuiStyle &s = ImGui::GetStyle();
   const float avail = ImGui::GetContentRegionAvail().x;
@@ -177,7 +177,21 @@ bool prop_begin(const char *id, float label_fraction) {
     ImGui::PopStyleVar();
     return false;
   }
-  ImGui::TableSetupColumn("etiket", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, std::floor(avail * label_fraction));
+  // Etiket sutunu UYARLANABILIR. Sabit oran (eski: 0.38) dar panelde deger
+  // sutununu ACLIKTAN OLDURUYORDU: 250 px'lik bir panelde etiket 95 px
+  // aliyor, kalan 155 px uc alana bolununce metne 26 px kaliyor ve "6.00"
+  // KIRPILIYORDU (ekran goruntusunde "6.0(" olarak gorunen hata).
+  // Alt sinir: en kisa etiket okunur kalsin. Ust sinir: genis panelde
+  // etiket sutunu gereksiz yere buyuyup degerleri sага itmesin.
+  // Etiket zaten sigmazsa "..." ile kirpiliyor ve ustune gelince tam adi
+  // ipucunda gosteriliyor (bkz. prop_label), yani daraltmak bilgi kaybetmez.
+  const float lo = std::floor(56.0f * (s.FramePadding.x / 6.0f)); // olcekle buyur
+  const float hi = std::floor(140.0f * (s.FramePadding.x / 6.0f));
+  float label_w = std::floor(avail * label_fraction);
+  if (label_w < lo) label_w = lo;
+  if (label_w > hi) label_w = hi;
+  if (label_w > avail * 0.6f) label_w = std::floor(avail * 0.6f); // cok dar panel
+  ImGui::TableSetupColumn("etiket", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, label_w);
   ImGui::TableSetupColumn("deger", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoResize);
   return true;
 }
@@ -200,10 +214,32 @@ PropItem prop_vec3(const char *label, float v[3], float speed, float min, float 
   static const Tone kTone[3] = {Tone::AxisX, Tone::AxisY, Tone::AxisZ};
   // Rozet: harf + iki yanda yarim FramePadding. Alanin sol kenarina BINER
   // (yuvarlak koseyi orter) — tek parca [X|0.000] kapsulu, arada bosluk yok.
-  const float badge_w = std::floor(ImGui::CalcTextSize("X").x + s.FramePadding.x);
+  //
+  // Rozet zemini eksenin renginde DEGIL, alanin kendi (cokuk) zemininde;
+  // eksen rengi yalniz SOL KENARDAKI ince cubukta ve harfte gorunur. Dolu
+  // renkli blok, satirda uc koyu doygun dikdortgen olusturup ozellik
+  // panelini "oyuncak" gosteriyordu; sektor editorlerinde (UE5) eksen rengi
+  // ince bir kenar isaretidir, yuzey degil.
+  float badge_w = std::floor(ImGui::CalcTextSize("X").x + s.FramePadding.x);
   const float overlap = s.FrameRounding;
   const float gap = s.ItemInnerSpacing.x;
   float field_w = std::floor((w - 3.0f * (badge_w - overlap) - 2.0f * gap) / 3.0f);
+  // Alan, iki yandaki dolgudan SONRA en az "-000.00" kadar metin tasimali.
+  // Tasiyamiyorsa rozetten HARFI dusurup yalniz eksen cubugunu birakiyoruz:
+  // renk zaten hangi eksen oldugunu soyluyor, sayinin kirpilmasi ise bilgi
+  // KAYBIDIR. Once metne yer acilir, en son caresi kirpmadir.
+  const float need = ImGui::CalcTextSize("-000.00").x + s.FramePadding.x * 2.0f;
+  bool letter = true;
+  if (field_w < need) {
+    const float bar_only = std::floor(s.FramePadding.x * 0.5f) + 2.0f;
+    const float regained = (badge_w - bar_only) * 3.0f;
+    if (std::floor((w - 3.0f * (bar_only - overlap) - 2.0f * gap) / 3.0f) >= need) {
+      letter = false;
+      badge_w = bar_only;
+      field_w = std::floor((w - 3.0f * (badge_w - overlap) - 2.0f * gap) / 3.0f);
+    }
+    (void)regained;
+  }
   if (field_w < badge_w) field_w = badge_w;
   ImDrawList *dl = ImGui::GetWindowDrawList();
   ImVec2 p = ImGui::GetCursorScreenPos();
@@ -219,9 +255,21 @@ PropItem prop_vec3(const char *label, float v[3], float speed, float min, float 
     g_vec3_layout.field[a] = item_rect();
     // Rozet alandan SONRA cizilir ki alanin sol kosesini ortsun.
     const ImVec2 b0(p.x, p.y), b1(p.x + badge_w, p.y + h);
-    dl->AddRectFilled(b0, b1, tone_u32(kTone[a]), s.FrameRounding, ImDrawFlags_RoundCornersLeft);
-    const ImVec2 ts = ImGui::CalcTextSize(kAxis[a]);
-    dl->AddText(ImVec2(std::floor(b0.x + (badge_w - ts.x) * 0.5f), std::floor(b0.y + (h - ts.y) * 0.5f)), tone_u32(Tone::Bg0), kAxis[a]);
+    dl->AddRectFilled(b0, b1, tone_u32(Tone::Input), s.FrameRounding, ImDrawFlags_RoundCornersLeft);
+    // Eksen cubugu: sol kenarda, cerceve yuksekliginin tamami boyunca.
+    // Genislik FramePadding'e oranli (olcekle buyur), en az 3 piksel:
+    // tests/test_editor_widgets.cpp rozeti `x0 + 2` pikselinden ornekliyor,
+    // daha ince bir cubuk o ornegi kenar yumusatmasinin icine dusururdu.
+    float bar_w = std::floor(s.FramePadding.x * 0.5f);
+    if (bar_w < 3.0f) bar_w = 3.0f;
+    dl->AddRectFilled(b0, ImVec2(b0.x + bar_w, b1.y), tone_u32(kTone[a]), s.FrameRounding,
+                      ImDrawFlags_RoundCornersLeft);
+    if (letter) {
+      const ImVec2 ts = ImGui::CalcTextSize(kAxis[a]);
+      dl->AddText(ImVec2(std::floor(b0.x + bar_w + (badge_w - bar_w - ts.x) * 0.5f),
+                         std::floor(b0.y + (h - ts.y) * 0.5f)),
+                  tone_u32(kTone[a]), kAxis[a]);
+    }
     g_vec3_layout.badge[a] = WidgetRect{b0.x, b0.y, b1.x, b1.y};
     p.x = fx + field_w + gap;
   }
@@ -378,11 +426,12 @@ PropItem prop_asset(const char *label, int *index, const char (*names)[128], uin
 void section_label(const char *text) {
   const ImGuiStyle &s = ImGui::GetStyle();
   ImGui::Dummy(ImVec2(0, s.ItemSpacing.y * 0.4f));
-  ImGui::PushFont(nullptr, s.FontSizeBase * 0.80f);
+  // Boyut TEK KAYNAKTAN: docs/engine/EDITOR-TASARIM.md §4 tipografi olcegi.
+  push_text_size(TextSize::Sm);
   ImGui::PushStyleColor(ImGuiCol_Text, tone(Tone::TextDim));
   ImGui::TextUnformatted(text);
   ImGui::PopStyleColor();
-  ImGui::PopFont();
+  pop_text_size();
   const ImVec2 t0 = ImGui::GetItemRectMin(), t1 = ImGui::GetItemRectMax();
   const float x_end = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
   const float y = std::floor((t0.y + t1.y) * 0.5f) + 0.5f;
@@ -502,7 +551,7 @@ PropItem inspector_title(const char *icon, char *name, uint32_t cap, const char 
   PropItem it;
   const ImGuiStyle &s = ImGui::GetStyle();
   ImGui::PushID("baslik");
-  ImGui::PushFont(nullptr, s.FontSizeBase * 1.18f);
+  push_text_size(TextSize::Lg); // olcek jetonu (docs/engine/EDITOR-TASARIM.md §4)
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(s.FramePadding.x, std::floor(s.FramePadding.y * 1.5f)));
   const float h = ImGui::GetFrameHeight();
   const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -515,17 +564,23 @@ PropItem inspector_title(const char *icon, char *name, uint32_t cap, const char 
   }
   ImGui::SetCursorScreenPos(ImVec2(x, p.y));
   ImGui::SetNextItemWidth(-FLT_MIN);
-  // Ad kutusu baslik gibi dursun: zemin neredeyse saydam, kenarlik yok;
-  // ustune gelince/odaklaninca tema cercevesi geri gelir.
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, tone(Tone::Bg3, 0.35f));
+  // Ad kutusu BASLIK gibi okunmali. Onceki hali (Bg3 %35) panelden ACIK bir
+  // dikdortgen biraktigi icin "bos bir duzenleme alani" gibi duruyordu.
+  // Modern desen: sakin haldeyken zemin YOK (duz baslik); girdi yuzu yalniz
+  // ETKILESIMDE ortaya cikar -- uzerine gelince cokuk yuzey, yazarken daha
+  // koyu. Hem baslik gibi okunur hem yeniden adlandirilabilir oldugu
+  // kesfedilebilir kalir.
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, tone(Tone::Bg1, 0.0f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, tone(Tone::Input));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, tone(Tone::Bg0));
   ImGui::PushStyleColor(ImGuiCol_Border, tone(Tone::Line, 0.0f));
   accumulate(it, ImGui::InputText("##ad", name, cap));
-  ImGui::PopStyleColor(2);
+  ImGui::PopStyleColor(4);
   ImGui::PopStyleVar();
-  ImGui::PopFont();
+  pop_text_size();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive()) ImGui::SetTooltip("Varlık adı (yeniden adlandırmak için tıkla)");
   if (subtitle && *subtitle) {
-    ImGui::PushFont(nullptr, s.FontSizeBase * 0.88f);
+    push_text_size(TextSize::Sm);
     ImGui::PushStyleColor(ImGuiCol_Text, tone(Tone::TextDim));
     ImGui::SetCursorScreenPos(ImVec2(x + s.FramePadding.x, ImGui::GetCursorScreenPos().y - std::floor(s.ItemSpacing.y * 0.4f)));
     char sb[128];
@@ -533,7 +588,7 @@ PropItem inspector_title(const char *icon, char *name, uint32_t cap, const char 
     ImGui::TextUnformatted(sb);
     if (std::strcmp(sb, subtitle) != 0 && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", subtitle);
     ImGui::PopStyleColor();
-    ImGui::PopFont();
+    pop_text_size();
   }
   ImGui::Dummy(ImVec2(0, s.ItemSpacing.y * 0.2f));
   ImGui::Separator();
