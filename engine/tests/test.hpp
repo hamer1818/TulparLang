@@ -12,12 +12,18 @@ struct Case {
   TestFn fn;
 };
 struct Registry {
-  static constexpr int kMax = 256;
+  // 512: bugun 397 test var. TAVAN SESSIZ DEGIL — asilirsa `overflow` sayar ve
+  // kosum KIRMIZI doner (bkz. Registrar). 2026-09-17'de tam bu tavan sessizce
+  // asildi: PR #322 test sayisini 165'ten 397'ye cikardi, tavan 256'ydi ve 141
+  // test HIC KAYDOLMADI. Ozet satiri "256 passed, 0 failed" diyordu; o sayi bir
+  // OLCUM DEGIL, tavanin kendisiydi ve kimse sormadi.
+  static constexpr int kMax = 512;
   static Case cases[kMax];
   static int count;
   static int failures;      // mevcut testteki CHECK basarisizliklari
   static int failures_total;
   static int skipped;       // GORUNUR atlanan testler (ozet satirinda)
+  static int overflow;      // kapasiteye SIGMAYAN test sayisi (sessiz olamaz)
 };
 // Test kosamadi (donanim/arac yok): sebep basilir ve ozet satirina girer.
 // Sessiz `return` YASAK — atlanan test yesil sayilmasin (Tuzaklar 1m).
@@ -37,7 +43,16 @@ inline void tmp_template(char *buf, size_t n, const char *stem) {
 }
 struct Registrar {
   Registrar(const char *name, TestFn fn) {
-    if (Registry::count < Registry::kMax) Registry::cases[Registry::count++] = Case{name, fn};
+    if (Registry::count < Registry::kMax) {
+      Registry::cases[Registry::count++] = Case{name, fn};
+      return;
+    }
+    // SESSIZCE DUSURME YOK. Eskiden burada `else` yoktu: kapasiteyi asan test
+    // hic kaydolmuyordu ve ozet "256 passed" diyordu — tavan sayisi, olcum
+    // gibi gorunuyordu. Artik hem basiliyor hem sayiliyor; test_main bu sayac
+    // sifir degilse kosumu KIRMIZI bitiriyor.
+    Registry::overflow++;
+    std::printf("[engine_tests] KAYIT TASMASI: '%s' kaydedilemedi (kapasite %d)\n", name, Registry::kMax);
   }
 };
 
