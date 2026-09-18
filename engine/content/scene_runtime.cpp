@@ -10,16 +10,135 @@
 
 #include "content/gltf.hpp"
 #include "content/hash.hpp"
+#include "content/primitives.hpp"
 
 namespace tulpar::engine::content {
 
 namespace {
 Vec3 v3(const float *f) { return {f[0], f[1], f[2]}; }
 Quat q4(const float *f) { return {f[0], f[1], f[2], f[3]}; }
+
+static renderer::MeshHandle build_terrain_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::HeightmapConfig &cfg) {
+  float *heights = temp_arena.alloc_array<float>(cfg.width * cfg.height);
+  content::generate_heightmap(cfg, heights);
+  
+  uint32_t nverts = cfg.width * cfg.height;
+  renderer::Vertex *verts = temp_arena.alloc_array<renderer::Vertex>(nverts);
+  for (uint32_t z = 0; z < cfg.height; z++) {
+    for (uint32_t x = 0; x < cfg.width; x++) {
+      uint32_t i = z * cfg.width + x;
+      verts[i].pos = { (float)x * cfg.cell_size, heights[i], (float)z * cfg.cell_size };
+      verts[i].uv = { (float)x / (cfg.width > 1 ? cfg.width - 1 : 1), (float)z / (cfg.height > 1 ? cfg.height - 1 : 1) };
+      verts[i].nrm = { 0, 1, 0 };
+    }
+  }
+  for (uint32_t z = 1; z < cfg.height - 1; z++) {
+    for (uint32_t x = 1; x < cfg.width - 1; x++) {
+       float hl = heights[z * cfg.width + x - 1];
+       float hr = heights[z * cfg.width + x + 1];
+       float hd = heights[(z - 1) * cfg.width + x];
+       float hu = heights[(z + 1) * cfg.width + x];
+       Vec3 n = normalize(Vec3{hl - hr, 2.0f * cfg.cell_size, hd - hu});
+       verts[z * cfg.width + x].nrm = n;
+    }
+  }
+  uint32_t nindices = (cfg.width - 1) * (cfg.height - 1) * 6;
+  uint32_t *indices = temp_arena.alloc_array<uint32_t>(nindices);
+  uint32_t idx = 0;
+  for (uint32_t z = 0; z < cfg.height - 1; z++) {
+    for (uint32_t x = 0; x < cfg.width - 1; x++) {
+      uint32_t i0 = z * cfg.width + x;
+      uint32_t i1 = i0 + 1;
+      uint32_t i2 = (z + 1) * cfg.width + x;
+      uint32_t i3 = i2 + 1;
+      indices[idx++] = i0; indices[idx++] = i2; indices[idx++] = i1;
+      indices[idx++] = i1; indices[idx++] = i2; indices[idx++] = i3;
+    }
+  }
+  return ren.create_mesh(verts, nverts, indices, nindices);
+}
+
+static renderer::MeshHandle build_voxel_mesh(core::Arena &temp_arena, renderer::Renderer &ren, uint32_t nx, uint32_t ny, uint32_t nz, float cell) {
+  content::VoxelGrid grid;
+  grid.nx = nx; grid.ny = ny; grid.nz = nz; grid.voxel_size = cell;
+  uint8_t *cells = temp_arena.alloc_array<uint8_t>(nx * ny * nz);
+  for (uint32_t z=0; z<nz; z++) {
+    for (uint32_t y=0; y<ny; y++) {
+      for (uint32_t x=0; x<nx; x++) {
+         float dist = length(Vec3{(float)x - nx/2.0f, (float)y - ny/2.0f, (float)z - nz/2.0f});
+         cells[(z * ny + y) * nx + x] = (dist < nx/2.0f) ? 1 : 0;
+      }
+    }
+  }
+  grid.cells = cells;
+  int16_t *mask = temp_arena.alloc_array<int16_t>(content::voxel_mesh_mask_capacity(grid));
+  content::VoxelMeshCounts counts = content::count_voxel_mesh(grid, mask);
+  
+  if (counts.vertices == 0) return 0;
+  content::VoxelVertex *verts = temp_arena.alloc_array<content::VoxelVertex>(counts.vertices);
+  uint32_t *indices = temp_arena.alloc_array<uint32_t>(counts.indices);
+  content::build_voxel_mesh(grid, mask, verts, indices);
+  
+  renderer::Vertex *r_verts = temp_arena.alloc_array<renderer::Vertex>(counts.vertices);
+  for (uint32_t i=0; i<counts.vertices; i++) {
+     r_verts[i].pos = verts[i].pos;
+     r_verts[i].nrm = verts[i].nrm;
+     r_verts[i].uv = verts[i].uv;
+  }
+  return ren.create_mesh(r_verts, counts.vertices, indices, counts.indices);
+}
+
+static renderer::MeshHandle build_water_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::GerstnerWave &wave) {
+  uint32_t w = 64, h = 64;
+  float cell = 2.0f;
+  uint32_t nverts = w * h;
+  renderer::Vertex *verts = temp_arena.alloc_array<renderer::Vertex>(nverts);
+  for (uint32_t z = 0; z < h; z++) {
+    for (uint32_t x = 0; x < w; x++) {
+      uint32_t i = z * w + x;
+      float wx = (x - w/2.0f) * cell;
+      float wz = (z - h/2.0f) * cell;
+      
+      float theta = wave.direction.x * wx + wave.direction.y * wz;
+      float k = 6.28318f / wave.wavelength;
+      float q = wave.steepness / (wave.amplitude * k * 1.01f);
+      
+      float dx = q * wave.amplitude * wave.direction.x * std::cos(k * theta);
+      float dz = q * wave.amplitude * wave.direction.y * std::cos(k * theta);
+      float dy = wave.amplitude * std::sin(k * theta);
+      
+      verts[i].pos = { wx + dx, dy, wz + dz };
+      verts[i].uv = { (float)x / (w - 1), (float)z / (h - 1) };
+      
+      float wa = k * wave.amplitude;
+      float nx = wave.direction.x * wa * std::cos(k * theta);
+      float nz = wave.direction.y * wa * std::cos(k * theta);
+      float ny = 1.0f - q * wa * std::sin(k * theta);
+      verts[i].nrm = normalize(Vec3{-nx, ny, -nz});
+    }
+  }
+  uint32_t nindices = (w - 1) * (h - 1) * 6;
+  uint32_t *indices = temp_arena.alloc_array<uint32_t>(nindices);
+  uint32_t idx = 0;
+  for (uint32_t z = 0; z < h - 1; z++) {
+    for (uint32_t x = 0; x < w - 1; x++) {
+      uint32_t i0 = z * w + x;
+      uint32_t i1 = i0 + 1;
+      uint32_t i2 = (z + 1) * w + x;
+      uint32_t i3 = i2 + 1;
+      indices[idx++] = i0; indices[idx++] = i2; indices[idx++] = i1;
+      indices[idx++] = i1; indices[idx++] = i2; indices[idx++] = i3;
+    }
+  }
+  return ren.create_mesh(verts, nverts, indices, nindices);
+}
+
 } // namespace
 
 bool SceneRuntime::init(Arena &arena, renderer::Renderer &r, const SceneBlobView &view, const char *dir) {
   view_ = view;
+  particles_.init(arena, 4096, Vec3{0, -9.8f, 0});
+  gi_.init(view); // probe yoksa ok()==false doner, apply_world duz ambient'a duser
   stats_ = SceneRuntimeStats{};
   bodies_live_ = false;
   body_ids_ = view.h->body_count ? arena.alloc_array<sim::BodyId>(view.h->body_count) : nullptr;
@@ -36,12 +155,60 @@ bool SceneRuntime::init(Arena &arena, renderer::Renderer &r, const SceneBlobView
     if (have_[i]) stats_.assets_loaded++;
     else { stats_.assets_failed++; std::printf("[scene_runtime] kaynak yuklenemedi: %s (%s)\n", path, models_[i].error); }
   }
+  
+    // Ilkel (prosedurel) mesh tablosu
+  build_primitive_meshes(r, prims_);
+
+  // Faz 3: Gecici arena ile prosedurel sistemleri uret
+  Arena temp;
+  if (temp.init(std::malloc(32 << 20), 32 << 20)) {
+    if (view.terrains) {
+      for (uint32_t i = 0; i < view.h->terrain_count; i++) {
+        const SceneBlobTerrain &t = view.terrains[i];
+        content::HeightmapConfig cfg;
+        cfg.width = (uint32_t)t.width; cfg.height = (uint32_t)t.height;
+        cfg.cell_size = t.cell; cfg.amplitude = t.amp;
+        cfg.frequency = t.freq; cfg.octaves = t.octaves; cfg.seed = t.seed;
+        terrain_meshes_[t.entity] = build_terrain_mesh(temp, r, cfg);
+        temp.reset();
+      }
+    }
+    if (view.voxels) {
+      for (uint32_t i = 0; i < view.h->voxel_count; i++) {
+        const SceneBlobVoxel &v = view.voxels[i];
+        voxel_meshes_[v.entity] = build_voxel_mesh(temp, r, v.size_x, v.size_y, v.size_z, v.cell);
+        temp.reset();
+      }
+    }
+    if (view.waters) {
+      for (uint32_t i = 0; i < view.h->water_count; i++) {
+        const SceneBlobWater &w = view.waters[i];
+        content::GerstnerWave wave;
+        wave.steepness = w.steepness; wave.amplitude = w.amplitude; wave.wavelength = w.wavelength;
+        wave.direction = {w.direction[0], w.direction[1]};
+        wave.speed = 1.0f; // Hiz runtime'da animasyon icin
+        water_meshes_[w.entity] = build_water_mesh(temp, r, wave);
+        temp.reset();
+      }
+    }
+    std::free(temp.base);
+  }
+
   return true;
 }
 
 void SceneRuntime::apply_world(renderer::Renderer &r) const {
   const SceneWorld w = view_.world();
-  r.set_light(normalize(w.sun_dir), w.ambient, w.sun_diffuse);
+  Vec3 ambient = w.ambient;
+  if (gi_.ok()) {
+    // Kaba ornek: sahne AABB'sinin ortasi, yukari bakan normal. Per-pixel
+    // DEGIL (Tier 2 takip planinda) -- yine de duz sabitten daha dogru, ve
+    // bake yoksa (ok()==false) bu dal hic girilmez, eski deger korunur.
+    const Vec3 lo{view_.h->bounds_lo[0], view_.h->bounds_lo[1], view_.h->bounds_lo[2]};
+    const Vec3 hi{view_.h->bounds_hi[0], view_.h->bounds_hi[1], view_.h->bounds_hi[2]};
+    ambient = gi_.sample((lo + hi) * 0.5f, {0, 1, 0});
+  }
+  r.set_light(normalize(w.sun_dir), ambient, w.sun_diffuse);
   r.set_shadow_volume(w.shadow_center, w.shadow_radius, w.shadow_depth);
 }
 
@@ -91,6 +258,32 @@ bool SceneRuntime::entity_dynamic(uint32_t i) const {
   return b >= 0 && (uint32_t)b < view_.h->body_count && view_.bodies[b].dynamic != 0;
 }
 
+void SceneRuntime::update(float dt, const sim::Physics *ph) {
+  // Parcaciklari guncelle (ECS disinda basittir)
+  if (particles_.alive_count() > 0 || view_.particles) {
+    if (view_.particles) {
+      // Oylesine basit bir emitter mantigi: sabit hizda uretim (basitlik icin rng sabit seed veya zamanla degisen seed alinabilir)
+      Rng rng; rng.seed((uint32_t)(dt * 1000000.0f));
+      for (uint32_t i = 0; i < view_.h->particle_count; i++) {
+        const SceneBlobParticle &ep = view_.particles[i];
+        if (ep.spawn_rate > 0.0f && rng.next_float() < (ep.spawn_rate * dt)) {
+           Mat4 m = entity_matrix(ep.entity, ph);
+           ParticleEmitterConfig cfg;
+           cfg.spawn_pos = Vec3{m.m[3][0], m.m[3][1], m.m[3][2]};
+           cfg.base_velocity = Vec3{ep.velocity[0], ep.velocity[1], ep.velocity[2]};
+           cfg.velocity_jitter = Vec3{ep.jitter[0], ep.jitter[1], ep.jitter[2]};
+           cfg.lifetime_min = ep.lifetime_min;
+           cfg.lifetime_max = ep.lifetime_max;
+           cfg.size_start = ep.size_start;
+           cfg.size_end = ep.size_end;
+           particles_.emit(cfg, 1, rng);
+        }
+      }
+    }
+    particles_.update(dt);
+  }
+}
+
 void SceneRuntime::draw(renderer::Renderer &r, Vec3 cam_pos, float time_s, const sim::Physics *ph) {
   stats_.draws = 0;
   stats_.lights = 0;
@@ -101,11 +294,32 @@ void SceneRuntime::draw(renderer::Renderer &r, Vec3 cam_pos, float time_s, const
   lod.distance2 = 34.0f;
   for (uint32_t i = 0; i < view_.h->draw_count; i++) {
     const SceneBlobDraw &d = view_.draws[i];
-    if (d.asset >= kSceneMaxAssets || !have_[d.asset]) continue;
-    const Model &mdl = models_[d.asset];
-    const UploadedModel &up = ups_[d.asset];
     const SceneBlobEntity &e = view_.entities[d.entity];
     const Mat4 m = entity_matrix(d.entity, ph);
+    
+    if (d.primitive >= 0 && d.primitive < (int32_t)kPrimitiveSlotCount && prims_[d.primitive].valid()) {
+      renderer::PbrParams pbr;
+      pbr.metallic = d.metallic;
+      pbr.roughness = d.roughness;
+      pbr.reflectance = d.reflectance;
+      pbr.emissive = Vec3{d.emissive[0], d.emissive[1], d.emissive[2]};
+      pbr.emissive_strength = d.emissive_strength;
+      if (!entity_mats_[d.entity].valid()) {
+        entity_mats_[d.entity] = r.create_material(r.default_texture(), Vec3{1,1,1}, pbr);
+      } else {
+        r.set_material_pbr(entity_mats_[d.entity], pbr);
+      }
+      r.draw(prims_[d.primitive], entity_mats_[d.entity], m, v3(d.tint));
+      stats_.draws++;
+      continue;
+    }
+    
+    if (d.asset < 0 || (uint32_t)d.asset >= kSceneMaxAssets || !have_[d.asset]) continue;
+    const Model &mdl = models_[d.asset];
+    const UploadedModel &up = ups_[d.asset];
+    // e / m dongunun BASINDA kuruldu; burada ikinci kez tanimlamak ayni
+    // kapsamda yeniden bildirimdir ve derlemeyi kirar (ilkel dali eklenirken
+    // eski satirlar yukari tasinmis ama asagidakiler silinmemis).
     bool drew = false;
     if (e.anim >= 0 && pose_scratch_) {
       const SceneBlobAnim &a = view_.anims[e.anim];
@@ -123,6 +337,51 @@ void SceneRuntime::draw(renderer::Renderer &r, Vec3 cam_pos, float time_s, const
     if (!drew) draw_model(r, mdl, up, m, v3(d.tint), &lod, stats_.lod);
     stats_.draws++;
   }
+  
+  if (view_.terrains) {
+    for (uint32_t i = 0; i < view_.h->terrain_count; i++) {
+      const SceneBlobTerrain &t = view_.terrains[i];
+      if (terrain_meshes_[t.entity].valid()) {
+        const Mat4 m = entity_matrix(t.entity, ph);
+        r.draw_mesh(terrain_meshes_[t.entity], m, Vec4{0.7f, 0.7f, 0.7f, 1.0f}, 0, 0.1f, 0.9f, Vec3{0}, 0.0f);
+        stats_.draws++;
+      }
+    }
+  }
+  if (view_.voxels) {
+    for (uint32_t i = 0; i < view_.h->voxel_count; i++) {
+      const SceneBlobVoxel &v = view_.voxels[i];
+      if (voxel_meshes_[v.entity].valid()) {
+        const Mat4 m = entity_matrix(v.entity, ph);
+        r.draw_mesh(voxel_meshes_[v.entity], m, Vec4{0.8f, 0.8f, 0.8f, 1.0f}, 0, 0.0f, 0.5f, Vec3{0}, 0.0f);
+        stats_.draws++;
+      }
+    }
+  }
+  if (view_.waters) {
+    for (uint32_t i = 0; i < view_.h->water_count; i++) {
+      const SceneBlobWater &w = view_.waters[i];
+      if (water_meshes_[w.entity].valid()) {
+        const Mat4 m = entity_matrix(w.entity, ph);
+        r.draw_mesh(water_meshes_[w.entity], m, Vec4{0.1f, 0.4f, 0.8f, 0.8f}, 0, 0.1f, 0.1f, Vec3{0}, 0.0f);
+        stats_.draws++;
+      }
+    }
+  }
+
+  // Parcaciklarin cizimi (ilkel KUP ile). ONCE prims_[0] soruluyordu ama
+  // slot 0 HICBIR ZAMAN doldurulmuyor (build_primitive_meshes 8/10/11/20..24
+  // kurar; kup 10). Yani kosul hic saglanmiyor, parcaciklar yayilip simule
+  // ediliyor ama tek piksel cizilmiyordu -- sessizce, cunku 0 da gecerli bir
+  // indeks. Slot artik isimli sabitten geliyor.
+  if (particles_.alive_count() > 0 && prims_[kPrimitiveCube].valid()) {
+    for (uint32_t i = 0; i < particles_.alive_count(); i++) {
+      const Particle &p = particles_.particle(i);
+      r.draw(prims_[kPrimitiveCube], Mat4::translate(p.pos) * Mat4::scale({p.size, p.size, p.size}), {0.9f, 0.9f, 0.9f});
+      stats_.draws++;
+    }
+  }
+
   for (uint32_t i = 0; i < view_.h->light_count; i++) {
     const SceneBlobLight &l = view_.lights[i];
     renderer::PointLight pl;

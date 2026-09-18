@@ -36,6 +36,16 @@ public:
   bool should_close() const;
   void request_close();
   void framebuffer_size(uint32_t *w, uint32_t *h) const;
+  // TAM EKRAN: pencere -> monitorun video kipi; geri donuste KAYDEDILEN pencere
+  // dikdortgeni. Donus: istek uygulandi mi (GLFW sembolu yoksa false — cagiran
+  // menu ogesini soluk gosterir). Olcu degisimini uygulama ayrica islemek
+  // ZORUNDA: Wayland'de yuzey olcusunu uygulama surer (rhi/swapchain.hpp
+  // ResizeAction), yani swapchain'i yeniden kuran kod bu cagriya bagli degil.
+  bool set_fullscreen(bool on);
+  bool is_fullscreen() const;
+  // Pencere olcusu MANTIKSAL pikselde (imlec konumu bu uzayda gelir); HiDPI'da
+  // framebuffer'dan kucuktur. Orani arayuz isaretci olcegidir.
+  void window_size(uint32_t *w, uint32_t *h) const;
   const InputState &input() const { return input_; }
   const char *last_error() const { return err_; }
 
@@ -48,6 +58,9 @@ private:
   void *win_ = nullptr;
   InputState input_{};
   char err_[256] = {0};
+  // Tam ekrandan cikista geri donulecek pencere dikdortgeni (Wayland'de konum
+  // okunamaz, o zaman 0,0 ile gecilir ve kompozitor yerlestirir).
+  int saved_x_ = 0, saved_y_ = 0, saved_w_ = 0, saved_h_ = 0;
 };
 
 } // namespace tulpar::engine::platform

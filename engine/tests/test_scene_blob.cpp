@@ -184,6 +184,31 @@ ENGINE_TEST(scene_blob_compile_is_deterministic_and_matches_desc) {
   std::printf("    [bilgi] blob %zu bayt, ozet %016llx; bos sahne %zu bayt\n", n1, (unsigned long long)v.hash(), ne);
 }
 
+ENGINE_TEST(scene_roundtrip_equality) {
+  static SceneDesc d;
+  fill(d);
+  
+  // 1. Yaz (d -> buf1)
+  uint8_t buf1[32768];
+  const size_t n1 = scene_write(d, buf1, sizeof buf1);
+  CHECK(n1 > 0);
+  
+  // 2. Oku (buf1 -> d2)
+  static SceneDesc d2;
+  SceneError err{};
+  const bool ok = scene_read(buf1, n1, d2, &err);
+  CHECK(ok);
+  
+  // 3. Yaz (d2 -> buf2)
+  uint8_t buf2[32768];
+  const size_t n2 = scene_write(d2, buf2, sizeof buf2);
+  CHECK(n2 == n1);
+  
+  // 4. Eşitlik (buf1 == buf2)
+  CHECK(std::memcmp(buf1, buf2, n1) == 0);
+  std::printf("    [bilgi] roundtrip test: yaz-oku-yaz esitligi OK (%zu bayt, sifir veri kaybi)\n", n1);
+}
+
 ENGINE_TEST(scene_blob_open_rejects_corruption) {
   static SceneDesc d;
   fill(d);
@@ -746,9 +771,12 @@ ENGINE_TEST(scene_blob_rejects_older_version) {
   if (!bad) return;
   std::memcpy(bad, good, n);
   auto *h = reinterpret_cast<SceneBlobHeader *>(bad);
-  CHECK(h->version == kSceneBlobVersion && kSceneBlobVersion == 4);
+  CHECK(h->version == kSceneBlobVersion && kSceneBlobVersion == 5);
   // Her ESKI surum ayni anlamli hatayla reddedilmeli: 1 (Faz 6 oncesi),
-  // 2 (yerlesik kume + navmesh, kume DAG YOK) ve 3 (GI sonda bolumu YOK).
+  // 2 (yerlesik kume + navmesh, kume DAG YOK), 3 (GI sonda bolumu YOK) ve
+  // 4 (SceneBlobDraw 24 bayt: ilkel geometri ve malzeme alanlari YOK).
+  // Dongu kSceneBlobVersion'a kadar gittigi icin yeni surumler kendiliginden
+  // kapsanir; yalniz yukaridaki sabit guncellenir.
   SceneBlobView v;
   SceneError err{};
   for (uint32_t old = 1; old < kSceneBlobVersion; old++) {
@@ -1267,6 +1295,68 @@ ENGINE_TEST(gi_runtime_query_matches_baked_values) {
   arena().reset_to(mark);
 }
 
+// Bake edilmis GI probe'lari SceneRuntime::apply_world'e GERCEKTEN ulasiyor mu
+// (content/gi.hpp'nin bake+sorgu motoru kendi icinde dogruydu ama hicbir
+// caginin cagirmiyordu -- bu kapi tam da o bagi olcer). KONTROL: AYNI sahne
+// GI'siz derlenince ambient eski duz sabitte BIT-TAM kalir (Vulkan gerekmez:
+// set_light/set_shadow_volume salt alan atamasi, Renderer init'siz kullanilir).
+ENGINE_TEST(scene_runtime_applies_baked_gi_ambient) {
+  const size_t mark = arena().mark();
+  static SceneDesc d;
+  gi_ground_scene(d, Vec3{0.3f, 1.0f, 0.0f}, 1.0f);
+  gi_add_box(d, "cati", {6, 3.0f, 0}, {4, 0.25f, 4});
+  renderer::Renderer ren;
+
+  // 1) GI'SIZ derleme (POZITIF KONTROL): apply_world eski davranista kalmali.
+  {
+    SceneBlobExtras x{}; // gi_probe_count 0
+    const size_t need = scene_blob_compile_ex(d, &x, nullptr, 0);
+    void *buf = arena().alloc(need, kSceneBlobAlign);
+    CHECK(buf != nullptr);
+    scene_blob_compile_ex(d, &x, buf, need);
+    SceneBlobView v;
+    SceneError err{};
+    CHECK(scene_blob_open(buf, need, &v, &err));
+    CHECK(v.h->gi_probe_count == 0);
+    static SceneRuntime rt;
+    CHECK(rt.init(arena(), ren, v, "."));
+    rt.apply_world(ren);
+    const Vec3 a = ren.ambient();
+    CHECK(feq(a.x, d.ambient.x) && feq(a.y, d.ambient.y) && feq(a.z, d.ambient.z)); // BIT-TAM
+  }
+  arena().reset_to(mark);
+
+  // 2) GI'LI derleme: ambient artik duz sabit DEGIL, probe orneginden gelir
+  // (bkz. scene_runtime.cpp apply_world: sahne AABB ortasi, yukari normal).
+  {
+    SceneBlobExtras x;
+    SceneGiReport rep;
+    CHECK(gi_bake_bodies(d, gi_fast_opts(), &x, &rep));
+    const size_t need = scene_blob_compile_ex(d, &x, nullptr, 0);
+    void *buf = arena().alloc(need, kSceneBlobAlign);
+    CHECK(buf != nullptr);
+    scene_blob_compile_ex(d, &x, buf, need);
+    SceneBlobView v;
+    SceneError err{};
+    CHECK(scene_blob_open(buf, need, &v, &err));
+    CHECK(v.h->gi_probe_count > 0);
+    static SceneRuntime rt2;
+    CHECK(rt2.init(arena(), ren, v, "."));
+    rt2.apply_world(ren);
+    const Vec3 gi_amb = ren.ambient();
+    SceneGi gi;
+    CHECK(gi.init(v));
+    const Vec3 lo{v.h->bounds_lo[0], v.h->bounds_lo[1], v.h->bounds_lo[2]};
+    const Vec3 hi{v.h->bounds_hi[0], v.h->bounds_hi[1], v.h->bounds_hi[2]};
+    const Vec3 expect = gi.sample((lo + hi) * 0.5f, {0, 1, 0});
+    std::printf("    [bilgi] GI ambient (%.4f %.4f %.4f) vs duz sabit (%.4f %.4f %.4f)\n", gi_amb.x, gi_amb.y, gi_amb.z, d.ambient.x,
+                d.ambient.y, d.ambient.z);
+    CHECK(feq(gi_amb.x, expect.x) && feq(gi_amb.y, expect.y) && feq(gi_amb.z, expect.z));
+    CHECK(!(feq(gi_amb.x, d.ambient.x) && feq(gi_amb.y, d.ambient.y) && feq(gi_amb.z, d.ambient.z))); // gercekten degisti
+  }
+  arena().reset_to(mark);
+}
+
 // Derleyici yolu: scene_compile GI'yi bake ediyor mu (model ucgenleri dahil).
 // Bu, BVH'li yolun tek kapisi — editor.sahne'nin modelleri binlerce ucgen.
 ENGINE_TEST(scene_compile_bakes_gi_probes_with_model_triangles) {
@@ -1309,4 +1399,118 @@ ENGINE_TEST(scene_compile_bakes_gi_probes_with_model_triangles) {
   CHECK(gi_open(d, x, &v, &gi));
   CHECK(gi.ok() && (gi.flags() & kGiModelTris));
   arena().reset_to(mark);
+}
+
+// =============================================================================
+// Faz E2 KAPISI — sahne agaci blob'da duzlesir
+// =============================================================================
+// Hiyerarsik sahne ile ELLE duzlestirilmis ikizi AYNI dunya donusumlerini
+// tasir; blob'da ebeveyn alani olmadigi icin ikisinin BAYTLARI da ozeti de ayni
+// olmali. Ebeveynler bilerek yalniz OTELEME tasiyor: duzlestirme o zaman
+// toplamdir ve karsilastirma TOLERANSSIZ yapilabilir (donuslu ebeveynde elle
+// duzlestirme ayristirma sapmasi getirir, kapi da tolerans olcerdi = zayif).
+// Kontrol: ebeveyn oynatilinca hiyerarsik blob DEGISIR, duz ikiz AYNI kalir.
+namespace {
+void fill_hier(SceneDesc &d) {
+  d = SceneDesc{};
+  d.add_asset("lod_sphere.gltf");
+  SceneEntity e{};
+  std::snprintf(e.name, sizeof e.name, "kok"); // yalniz oteleme
+  e.pos = {3, 1, -2};
+  d.insert_entity(d.entity_count, e);
+  e = SceneEntity{};
+  std::snprintf(e.name, sizeof e.name, "orta"); // yalniz oteleme
+  e.pos = {0, 2, 0}; e.parent = 0;
+  d.insert_entity(d.entity_count, e);
+  e = SceneEntity{};
+  std::snprintf(e.name, sizeof e.name, "govde");
+  e.pos = {1, 0, 0.5f}; e.rot_deg = {0, 30, 0}; e.scale = {2, 1, 1}; e.parent = 1;
+  e.components = kSceneModel | kSceneBody; e.asset = 0; e.tint = {0.85f, 0.9f, 1.0f};
+  e.shape = SceneShape::Box; e.half = {0.5f, 0.25f, 0.5f}; e.dynamic = true;
+  d.insert_entity(d.entity_count, e);
+  e = SceneEntity{};
+  std::snprintf(e.name, sizeof e.name, "lamba");
+  e.pos = {-1, 0, 0}; e.parent = 1;
+  e.components = kSceneLight; e.light_color = {1, 0.2f, 0.1f}; e.light_intensity = 3; e.light_radius = 8;
+  d.insert_entity(d.entity_count, e);
+  e = SceneEntity{};
+  std::snprintf(e.name, sizeof e.name, "bagimsiz");
+  e.pos = {-6, 0, 4};
+  e.components = kSceneModel; e.asset = 0; e.tint = {1, 1, 1};
+  d.insert_entity(d.entity_count, e);
+}
+// Ayni sahnenin duz ikizi: her varlik kok, konumlar zincirin CARPMA sirasiyla
+// toplanmis (kok*orta)*cocuk -> cocuk + (orta + kok).
+void flatten(const SceneDesc &h, SceneDesc &f) {
+  f = h;
+  for (uint32_t i = 0; i < f.entity_count; i++) f.entities[i].parent = -1;
+  const Vec3 mid = h.entities[1].pos + h.entities[0].pos;
+  f.entities[1].pos = mid;
+  f.entities[2].pos = h.entities[2].pos + mid;
+  f.entities[3].pos = h.entities[3].pos + mid;
+}
+} // namespace
+
+ENGINE_TEST(scene_blob_hierarchy_matches_flattened_scene) {
+  static SceneDesc h, f;
+  fill_hier(h);
+  flatten(h, f);
+  uint32_t bad = 0;
+  CHECK(scene_tree_validate(h, &bad));
+  // 1. Veri modeli: dunya matrisleri bit-tam ayni.
+  bool mats = true;
+  for (uint32_t i = 0; i < h.entity_count; i++) {
+    const Mat4 a = scene_entity_world_matrix(h, i), b = scene_entity_world_matrix(f, i);
+    if (std::memcmp(&a.m[0][0], &b.m[0][0], sizeof a.m) != 0) mats = false;
+  }
+  CHECK(mats);
+  // 2. Blob: ebeveyn alani YOK, turetilmis her sey dunya uzayinda -> AYNI BAYT.
+  size_t nh = 0, nf = 0;
+  void *bh = compile_to(h, &nh);
+  void *bf = compile_to(f, &nf);
+  CHECK(bh && bf && nh == nf);
+  CHECK(nh == nf && std::memcmp(bh, bf, nh) == 0);
+  SceneBlobView vh, vf;
+  SceneError err{};
+  CHECK(scene_blob_open(bh, nh, &vh, &err) && scene_blob_open(bf, nf, &vf, &err));
+  CHECK(vh.hash() == vf.hash());
+  // 3. Blob matrisi = scene_entity_world_matrix (yerel DEGIL).
+  bool blob_world = true, blob_local_differs = false;
+  for (uint32_t i = 0; i < h.entity_count; i++) {
+    const Mat4 w = scene_entity_world_matrix(h, i), bm = vh.entity_matrix(i);
+    if (std::memcmp(&w.m[0][0], &bm.m[0][0], sizeof w.m) != 0) blob_world = false;
+    const Mat4 l = scene_entity_matrix(h.entities[i]);
+    if (h.entities[i].parent >= 0 && std::memcmp(&l.m[0][0], &bm.m[0][0], sizeof l.m) != 0) blob_local_differs = true;
+  }
+  CHECK(blob_world);
+  CHECK(blob_local_differs); // kontrol: kapi gercekten YEREL olmayani olcuyor
+  // Govde ve isik de dunyada: govde (1,0,0.5) + (0,2,0) + (3,1,-2) = (4,3,-1.5)
+  CHECK(vh.h->body_count == 1 && vh.h->light_count == 1);
+  CHECK(v3eq(vh.bodies[0].pos, Vec3{4.0f, 3.0f, -1.5f}));
+  CHECK(v3eq(vh.lights[0].pos, Vec3{2.0f, 3.0f, -2.0f})); // (-1,0,0) + (0,2,0) + (3,1,-2)
+  CHECK(v3eq(vh.bodies[0].half, h.entities[2].half * h.entities[2].scale));
+  // 4. KONTROL: ebeveyni oynat -> hiyerarsik blob DEGISIR, duz ikiz AYNI kalir.
+  static SceneDesc h2, f2;
+  h2 = h;
+  h2.entities[0].pos = h2.entities[0].pos + Vec3{0, 5, 0};
+  f2 = f; // duz ikize dokunulmadi
+  size_t n2 = 0, n3 = 0;
+  void *b2 = compile_to(h2, &n2);
+  void *b3 = compile_to(f2, &n3);
+  SceneBlobView v2, v3;
+  CHECK(b2 && b3 && scene_blob_open(b2, n2, &v2, &err) && scene_blob_open(b3, n3, &v3, &err));
+  CHECK(v2.hash() != vh.hash()); // ebeveyn oynadi: cocuklar da oynadi
+  CHECK(v3.hash() == vf.hash()); // duz ikiz degismedi
+  CHECK(v3eq(v2.bodies[0].pos, Vec3{4.0f, 8.0f, -1.5f}));
+  // 5. KONTROL: duzlestirme YANLIS yapilirsa (cocuk konumu guncellenmezse)
+  //    baytlar ayrilir — yani 2. adimdaki esitlik bos bir dogru degil.
+  static SceneDesc naive;
+  naive = h;
+  for (uint32_t i = 0; i < naive.entity_count; i++) naive.entities[i].parent = -1;
+  size_t nn = 0;
+  void *bn = compile_to(naive, &nn);
+  SceneBlobView vn;
+  CHECK(bn && scene_blob_open(bn, nn, &vn, &err) && vn.hash() != vh.hash());
+  std::printf("    [bilgi] hiyerarsik blob %zu bayt ozet %016llx == duz ikiz; ebeveyn oynayinca %016llx, naif duzlestirme %016llx\n", nh,
+              (unsigned long long)vh.hash(), (unsigned long long)v2.hash(), (unsigned long long)vn.hash());
 }

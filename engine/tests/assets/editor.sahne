@@ -56,5 +56,5 @@ nesne "lamba_kirmizi"
   konum 0 2 -3
   donus 0 0 0
   olcek 1 1 1
-  isik 1 0.2 0.1 3 8
+  isik 1 0.2 0.1 3 8 nokta
 son

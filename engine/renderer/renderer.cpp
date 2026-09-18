@@ -1154,7 +1154,7 @@ void Renderer::write_material_ubo(uint32_t id) {
   u.pbr[2] = m.pbr.reflectance;
   u.pbr[3] = m.is_pbr ? 1.0f : 0.0f;
   const Vec3 e = srgb_to_linear(m.pbr.emissive); // yazar sRGB verir
-  u.emissive[0] = e.x; u.emissive[1] = e.y; u.emissive[2] = e.z; u.emissive[3] = 0.0f;
+  u.emissive[0] = e.x; u.emissive[1] = e.y; u.emissive[2] = e.z; u.emissive[3] = m.pbr.emissive_strength;
   // Doku maskeleri: shader bunlara gore MALZEME BASINA TEKDUZE dallanir.
   // Maske 0 iken o sampler'a HIC dokunulmaz — dokusuz malzemenin goruntusu de
   // maliyeti de degismez (A/B md5 kapisi bunu olcuyor).
@@ -3506,6 +3506,191 @@ uint32_t Renderer::plane(Vertex *v, uint32_t *idx, float uv_repeat) {
   uint32_t i[6] = {0, 1, 2, 0, 2, 3};
   std::memcpy(idx, i, sizeof i);
   return 6;
+}
+
+uint32_t Renderer::sphere(Vertex *v, uint32_t *idx, uint32_t seg_h, uint32_t seg_v) {
+  uint32_t vi = 0, ii = 0;
+  for (uint32_t y = 0; y <= seg_v; ++y) {
+    float v_val = (float)y / seg_v;
+    float phi = v_val * 3.14159265359f;
+    float sin_phi = std::sin(phi);
+    float cos_phi = std::cos(phi);
+    for (uint32_t x = 0; x <= seg_h; ++x) {
+      float u_val = (float)x / seg_h;
+      float theta = u_val * 2.0f * 3.14159265359f;
+      float x_pos = std::cos(theta) * sin_phi;
+      float z_pos = std::sin(theta) * sin_phi;
+      Vec3 N{x_pos, cos_phi, z_pos};
+      v[vi++] = {N * 0.5f, N, {u_val, v_val}};
+    }
+  }
+  for (uint32_t y = 0; y < seg_v; ++y) {
+    for (uint32_t x = 0; x < seg_h; ++x) {
+      uint32_t first = (y * (seg_h + 1)) + x;
+      uint32_t second = first + seg_h + 1;
+      idx[ii++] = first; idx[ii++] = second; idx[ii++] = first + 1;
+      idx[ii++] = second; idx[ii++] = second + 1; idx[ii++] = first + 1;
+    }
+  }
+  return ii;
+}
+
+uint32_t Renderer::capsule(Vertex *v, uint32_t *idx, float radius, float half_height, uint32_t seg_h, uint32_t seg_v) {
+  uint32_t vi = 0, ii = 0;
+  uint32_t half_v = seg_v / 2;
+  // Ust yari kure
+  for (uint32_t y = 0; y <= half_v; ++y) {
+    float v_val = (float)y / seg_v;
+    float phi = v_val * 3.14159265359f;
+    float sin_phi = std::sin(phi);
+    float cos_phi = std::cos(phi);
+    for (uint32_t x = 0; x <= seg_h; ++x) {
+      float u_val = (float)x / seg_h;
+      float theta = u_val * 2.0f * 3.14159265359f;
+      Vec3 N{std::cos(theta) * sin_phi, cos_phi, std::sin(theta) * sin_phi};
+      v[vi++] = {{N.x * radius, N.y * radius + half_height, N.z * radius}, N, {u_val, v_val}};
+    }
+  }
+  // Alt yari kure
+  for (uint32_t y = half_v; y <= seg_v; ++y) {
+    float v_val = (float)y / seg_v;
+    float phi = v_val * 3.14159265359f;
+    float sin_phi = std::sin(phi);
+    float cos_phi = std::cos(phi);
+    for (uint32_t x = 0; x <= seg_h; ++x) {
+      float u_val = (float)x / seg_h;
+      float theta = u_val * 2.0f * 3.14159265359f;
+      Vec3 N{std::cos(theta) * sin_phi, cos_phi, std::sin(theta) * sin_phi};
+      v[vi++] = {{N.x * radius, N.y * radius - half_height, N.z * radius}, N, {u_val, v_val}};
+    }
+  }
+  for (uint32_t y = 0; y < seg_v + 1; ++y) { // +1 for the extra cylinder loop
+    for (uint32_t x = 0; x < seg_h; ++x) {
+      uint32_t first = (y * (seg_h + 1)) + x;
+      uint32_t second = first + seg_h + 1;
+      idx[ii++] = first; idx[ii++] = second; idx[ii++] = first + 1;
+      idx[ii++] = second; idx[ii++] = second + 1; idx[ii++] = first + 1;
+    }
+  }
+  return ii;
+}
+
+uint32_t Renderer::cylinder(Vertex *v, uint32_t *idx, float radius, float half_height, uint32_t seg_h) {
+  uint32_t vi = 0, ii = 0;
+  // Yan yuzey
+  for (uint32_t y = 0; y <= 1; ++y) {
+    float y_pos = y == 0 ? half_height : -half_height;
+    for (uint32_t x = 0; x <= seg_h; ++x) {
+      float u_val = (float)x / seg_h;
+      float theta = u_val * 2.0f * 3.14159265359f;
+      Vec3 N{std::cos(theta), 0, std::sin(theta)};
+      v[vi++] = {{N.x * radius, y_pos, N.z * radius}, N, {u_val, (float)y}};
+    }
+  }
+  for (uint32_t x = 0; x < seg_h; ++x) {
+    uint32_t first = x;
+    uint32_t second = first + seg_h + 1;
+    idx[ii++] = first; idx[ii++] = second; idx[ii++] = first + 1;
+    idx[ii++] = second; idx[ii++] = second + 1; idx[ii++] = first + 1;
+  }
+  // Ust kapak
+  uint32_t top_center = vi;
+  v[vi++] = {{0, half_height, 0}, {0, 1, 0}, {0.5f, 0.5f}};
+  uint32_t top_start = vi;
+  for (uint32_t x = 0; x <= seg_h; ++x) {
+    float theta = ((float)x / seg_h) * 2.0f * 3.14159265359f;
+    v[vi++] = {{std::cos(theta) * radius, half_height, std::sin(theta) * radius}, {0, 1, 0}, {std::cos(theta)*0.5f+0.5f, std::sin(theta)*0.5f+0.5f}};
+  }
+  for (uint32_t x = 0; x < seg_h; ++x) {
+    idx[ii++] = top_center; idx[ii++] = top_start + x; idx[ii++] = top_start + x + 1;
+  }
+  // Alt kapak
+  uint32_t bot_center = vi;
+  v[vi++] = {{0, -half_height, 0}, {0, -1, 0}, {0.5f, 0.5f}};
+  uint32_t bot_start = vi;
+  for (uint32_t x = 0; x <= seg_h; ++x) {
+    float theta = ((float)x / seg_h) * 2.0f * 3.14159265359f;
+    v[vi++] = {{std::cos(theta) * radius, -half_height, std::sin(theta) * radius}, {0, -1, 0}, {std::cos(theta)*0.5f+0.5f, std::sin(theta)*0.5f+0.5f}};
+  }
+  for (uint32_t x = 0; x < seg_h; ++x) {
+    idx[ii++] = bot_center; idx[ii++] = bot_start + x + 1; idx[ii++] = bot_start + x;
+  }
+  return ii;
+}
+
+uint32_t Renderer::cone(Vertex *v, uint32_t *idx, float radius, float height, uint32_t seg_h) {
+  uint32_t vi = 0, ii = 0;
+  float half_height = height * 0.5f;
+  // Yan yuzey
+  float slant = std::atan2(radius, height);
+  float cos_slant = std::cos(slant);
+  float sin_slant = std::sin(slant);
+  uint32_t top = vi;
+  for (uint32_t x = 0; x <= seg_h; ++x) { // ust noktalar kopyalanir (normalleri farkli)
+    float u_val = (float)x / seg_h;
+    float theta = u_val * 2.0f * 3.14159265359f;
+    Vec3 N{std::cos(theta)*cos_slant, sin_slant, std::sin(theta)*cos_slant};
+    v[vi++] = {{0, half_height, 0}, N, {u_val, 0}};
+  }
+  uint32_t bot = vi;
+  for (uint32_t x = 0; x <= seg_h; ++x) {
+    float u_val = (float)x / seg_h;
+    float theta = u_val * 2.0f * 3.14159265359f;
+    Vec3 N{std::cos(theta)*cos_slant, sin_slant, std::sin(theta)*cos_slant};
+    v[vi++] = {{std::cos(theta) * radius, -half_height, std::sin(theta) * radius}, N, {u_val, 1}};
+  }
+  for (uint32_t x = 0; x < seg_h; ++x) {
+    idx[ii++] = top + x; idx[ii++] = bot + x; idx[ii++] = bot + x + 1;
+    idx[ii++] = top + x; idx[ii++] = bot + x + 1; idx[ii++] = top + x + 1;
+  }
+  // Alt kapak
+  uint32_t bot_center = vi;
+  v[vi++] = {{0, -half_height, 0}, {0, -1, 0}, {0.5f, 0.5f}};
+  uint32_t bot_start = vi;
+  for (uint32_t x = 0; x <= seg_h; ++x) {
+    float theta = ((float)x / seg_h) * 2.0f * 3.14159265359f;
+    v[vi++] = {{std::cos(theta) * radius, -half_height, std::sin(theta) * radius}, {0, -1, 0}, {std::cos(theta)*0.5f+0.5f, std::sin(theta)*0.5f+0.5f}};
+  }
+  for (uint32_t x = 0; x < seg_h; ++x) {
+    idx[ii++] = bot_center; idx[ii++] = bot_start + x + 1; idx[ii++] = bot_start + x;
+  }
+  return ii;
+}
+
+uint32_t Renderer::quad(Vertex *v, uint32_t *idx) {
+  Vec3 N{0, 0, 1};
+  v[0] = {{-0.5f, -0.5f, 0}, N, {0, 0}}; v[1] = {{0.5f, -0.5f, 0}, N, {1, 0}};
+  v[2] = {{0.5f, 0.5f, 0}, N, {1, 1}};   v[3] = {{-0.5f, 0.5f, 0}, N, {0, 1}};
+  uint32_t i[6] = {0, 1, 2, 0, 2, 3};
+  std::memcpy(idx, i, sizeof i);
+  return 6;
+}
+
+uint32_t Renderer::torus(Vertex *v, uint32_t *idx, float r_main, float r_tube, uint32_t seg_main, uint32_t seg_tube) {
+  uint32_t vi = 0, ii = 0;
+  for (uint32_t y = 0; y <= seg_tube; ++y) {
+    float v_val = (float)y / seg_tube;
+    float phi = v_val * 2.0f * 3.14159265359f;
+    float cos_phi = std::cos(phi);
+    float sin_phi = std::sin(phi);
+    for (uint32_t x = 0; x <= seg_main; ++x) {
+      float u_val = (float)x / seg_main;
+      float theta = u_val * 2.0f * 3.14159265359f;
+      float cos_th = std::cos(theta);
+      float sin_th = std::sin(theta);
+      Vec3 N{cos_th * cos_phi, sin_phi, sin_th * cos_phi};
+      v[vi++] = {{cos_th * (r_main + r_tube * cos_phi), r_tube * sin_phi, sin_th * (r_main + r_tube * cos_phi)}, N, {u_val, v_val}};
+    }
+  }
+  for (uint32_t y = 0; y < seg_tube; ++y) {
+    for (uint32_t x = 0; x < seg_main; ++x) {
+      uint32_t first = (y * (seg_main + 1)) + x;
+      uint32_t second = first + seg_main + 1;
+      idx[ii++] = first; idx[ii++] = second; idx[ii++] = first + 1;
+      idx[ii++] = second; idx[ii++] = second + 1; idx[ii++] = first + 1;
+    }
+  }
+  return ii;
 }
 
 } // namespace tulpar::engine::renderer

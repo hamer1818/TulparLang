@@ -50,6 +50,27 @@ add_custom_target(engine_layer_check
     VERBATIM
 )
 
+# --- Ikon denetimi ----------------------------------------------------------
+# Editorun kullandigi her ikon kod noktasi YUKLENEN fontlarda var mi.
+# Yoksa ImGui sessizce bos kutu cizer ve arayuz hata vermeden bozulur
+# (olculdu: 16 kod noktasi / 34 cagri, panel baslikleri dahil).
+add_custom_target(engine_icon_check
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/icon_check.py ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "engine: editor ikon glif denetimi (eksik glif = build hatasi)"
+    VERBATIM
+)
+
+# --- Sahne bicim denetimi ---------------------------------------------------
+# .sahne yazicisi ile ayristiricisi elle tutulan IKI ayri tablodur. Biri
+# degisip oteki degismediginde derleyici susar: sahne yazilir, geri okunamaz
+# ya da ALANLAR KAYAR (olculdu: arazi/su/ruzgar/voksel dortu de birer fazla
+# jeton bekliyordu, pbr dali kMaxTok yuzunden hic ulasilamiyordu).
+add_custom_target(engine_scene_check
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/scene_check.py ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "engine: .sahne yazici/ayristirici uyum denetimi"
+    VERBATIM
+)
+
 # --- L1 ---------------------------------------------------------------------
 add_library(engine_core STATIC
     core/memory/arena.cpp
@@ -218,7 +239,7 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/scene_blob.cpp content/scene_runtime.cpp content/vendored_impl.c
+add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/scene_blob.cpp content/scene_runtime.cpp content/primitives.cpp content/vendored_impl.c
     # --- PR #322: yeni icerik modulleri (content/pack.cpp ALINMADI: main'in
     # .tpak'i mmap'li, belirlenimli ve kapili — PR'inki daha basit bir format)
     content/voxel.cpp content/morph.cpp content/terrain.cpp content/lod_select.cpp content/water_wave.cpp content/wind.cpp content/occlusion.cpp content/clod_format.cpp content/device_tier.cpp content/dynamic_quality.cpp)
@@ -227,7 +248,7 @@ target_include_directories(engine_content PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
 target_link_libraries(engine_content PUBLIC engine_renderer engine_sim engine_meshopt engine_astcenc)
 target_compile_options(engine_content PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
-add_dependencies(engine_content engine_layer_check)
+add_dependencies(engine_content engine_layer_check engine_scene_check)
 
 # --- L6 BRIDGE: Tulpar betikleri icin C ABI (teng_*), bkz. bridge/engine_api.h --------
 # Masaustu: engine_bridge (+ desktop_host, GLFW dlopen). Android: tulpar_engine_android
@@ -346,12 +367,16 @@ if(NOT ANDROID)
     add_library(engine_imgui STATIC
         third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp
         third_party/imgui/imgui_widgets.cpp third_party/imgui/imgui_demo.cpp
-        third_party/imgui/imgui_impl_vulkan.cpp third_party/imgui/ImGuizmo.cpp)
-    target_include_directories(engine_imgui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)
+        third_party/imgui/imgui_impl_vulkan.cpp third_party/imgui/ImGuizmo.cpp
+        third_party/imgui/imnodes.cpp third_party/imgui/ImSequencer.cpp third_party/imgui/ImCurveEdit.cpp)
+    # iconfont: yalniz #define'lerden olusan tek baslik (IconFontCppHeaders,
+    # Zlib). Kod uretmez, bu yuzden ayri hedef degil -- imgui ile ayni
+    # gorunurlukte olmasi yeterli (ikonlari ImGui cagrilari tuketiyor).
+    target_include_directories(engine_imgui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan ${CMAKE_CURRENT_SOURCE_DIR}/third_party/iconfont)
     # Prototip yok: Vulkan fonksiyonlari bizim dlopen'li yukleyiciden (ImGui_ImplVulkan_LoadFunctions).
     target_compile_definitions(engine_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
     target_compile_options(engine_imgui PRIVATE -fno-exceptions -fno-rtti -w)
-    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp app/editor_ui.cpp tests/test_bridge.cpp)
+    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp tests/editor_probe.cpp tests/test_editor_chrome.cpp tests/test_editor_widgets.cpp tests/test_editor_overlay.cpp tests/test_editor_camera.cpp tests/test_editor_console.cpp tests/test_editor_files.cpp app/editor_ui.cpp app/editor_viewport.cpp app/editor_commands.cpp app/editor_layout.cpp app/editor_chrome.cpp app/editor_widgets.cpp app/editor_overlay.cpp app/editor_camera.cpp app/editor_console.cpp app/editor_files.cpp tests/test_bridge.cpp)
 endif()
 
 add_executable(engine_tests ${ENGINE_TEST_SOURCES} app/virtual_stick.cpp core/memory/alloc_gate_override.cpp)
@@ -378,11 +403,12 @@ if(NOT ANDROID)
     # derleme bayraklari burada da uygulanabilir.
     target_compile_options(engine_clodbake PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
     # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
-    add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/demo_scene.cpp)
+    add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/editor_viewport.cpp app/editor_commands.cpp app/editor_layout.cpp app/editor_chrome.cpp app/editor_widgets.cpp app/editor_overlay.cpp app/editor_camera.cpp app/editor_console.cpp app/editor_files.cpp app/demo_scene.cpp)
     target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})
     target_include_directories(engine_editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
     target_compile_options(engine_editor PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
     target_compile_definitions(engine_editor PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_dependencies(engine_editor engine_icon_check)
 endif()
 target_compile_options(engine_tests PRIVATE -ffp-contract=off) # sim belirlenimliligi (strict FP, plan C.1.5)
 target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)

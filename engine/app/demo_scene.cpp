@@ -163,11 +163,14 @@ void demo_sys_phys(SystemCtx &c) {
   });
 }
 
-bool DemoScene::init(Arena &arena, JobSystem *jobs) {
+bool DemoScene::init(Arena &arena, JobSystem *jobs, bool with_content) {
   g_scene = this;
   if (!build_nav(nav_)) return false;
   PhysicsConfig pc; pc.jobs = jobs;
   if (!phys_.init(arena, pc)) return false;
+  // Buradan sonrasi demo ICERIGIDIR. with_content=false (editor) verildiginde
+  // hicbiri kurulmaz: cagirana BOS bir fizik dunyasi ve navmesh kalir.
+  if (!with_content) return true;
   // Zemin gorsel arena kadar (20x20) + gorunmez kenar duvarlari: oyuncu ve
   // kutular arenayi terk edemez (telefonda olculdu: oyuncu -25 m'ye yurudu).
   phys_.add_box({10, 1, 10}, {0, -1, 0}, Quat::identity(), false);

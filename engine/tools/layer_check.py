@@ -38,7 +38,52 @@ VENDORED = {
     "ratas": {"sim"},                  # jsnell/ratas zamanlayici carki (MIT)
 }
 
+BS = chr(92)  # ters bolu
+
 INC_RE = re.compile(r'^\s*#\s*include\s+([<"])([^>"]+)[>"]')
+
+
+# --- 3. C++ hex kacisi TASMASI ------------------------------------------------
+# C++'ta \xHH kacisi GREEDY'dir: rakam bittigi yere kadar okur. UTF-8 metni
+# kacisla yazarken (Turkce glifler) bir sonraki harf DE hex rakamiysa
+# (0-9 a-f A-F) kacis onu da yutar ve deger char araligini asar:
+#     "...le\xC5\x9Fen..."   ->   \x9Fe okunur (0x9FE)   ->   DERLEME HATASI
+#     "hex escape sequence out of range"
+# Cozum, bu kod tabaninda zaten kullanilan desen: dizgiyi BOL ->
+#     "...le\xC5\x9F" "en..."
+# Bu kapi olmadan hata yalniz derleyicide gorunur ve Turkce metin ekleyen her
+# yamada yeniden uretilebilir -- motorda bir kez gercekten olustu
+# (app/editor_app.cpp, "eslesen varlik yok").
+_HEXDIG = set("0123456789abcdefABCDEF")
+
+
+def hex_escape_overflow(line):
+    # Satirdaki DIZGILER icinde, iki haneden uzun hex kacislarini dondurur.
+    # Yalniz dizgi icine bakar: yorumdaki ornek metinler kapiyi tetiklemesin.
+    out = []
+    i, in_str = 0, False
+    while i < len(line):
+        ch = line[i]
+        if in_str:
+            if ch == BS and i + 1 < len(line):
+                if line[i + 1] == "x":
+                    j = i + 2
+                    while j < len(line) and line[j] in _HEXDIG:
+                        j += 1
+                    if j - (i + 2) > 2:
+                        out.append(line[i:j])
+                    i = j
+                    continue
+                i += 2  # kacirilmis karakter (tirnak dahil) atlanir
+                continue
+            if ch == chr(34):
+                in_str = False
+        elif ch == chr(34):
+            in_str = True
+        elif ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            break  # satir yorumu: gerisi kod degil
+        i += 1
+    return out
 
 
 def main():
@@ -59,6 +104,10 @@ def main():
             files += 1
             with open(path, encoding="utf-8", errors="replace") as f:
                 for ln, line in enumerate(f, 1):
+                    # HER satirda: include olsun olmasin, dizgi kacisi tasmasi.
+                    for esc in hex_escape_overflow(line):
+                        violations.append(
+                            f"{rel}:{ln}: '{esc}' hex kacisi TASIYOR (C++ greedy okur, char araligini asar) -- dizgiyi bol")
                     m = INC_RE.match(line)
                     if not m:
                         continue
