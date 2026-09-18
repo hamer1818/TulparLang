@@ -25,12 +25,18 @@ export WINEDEBUG=-all
 unset WINEPATH TULPAR_CC TULPAR_ENGINE_ASSETS TULPAR_AOT_LINK_FLAGS
 
 FAIL=0
+# IKI KOSUL: cikis kodu 0 VE beklenen metin. Yalniz metne bakmak yetmiyordu —
+# olculdu (2026-09-18): editor kapisinin olcutu "varlik" idi ve BASARISIZLIK
+# mesaji yolu icerdigi icin ("...\motor\varliklar/editor.sahne") ayni kelime
+# orada da geciyordu; kapi, sahne SILINMISKEN bile yesil veriyordu. Pozitif
+# kontrol (varliklari kasten kaldir) bunu yakaladi. Ders: olcut, hedeflenen
+# hatanin ciktisinda BULUNMAMALI — ve cikis kodu bedava bir ikinci taniktir.
 kontrol() { # ad, beklenen-metin, komut...
     local ad="$1" bekle="$2"; shift 2
     local out rc
-    out=$(DISPLAY= timeout 600 "$@" 2>&1 | grep -vE "MESA|pci id|^wine:")
-    rc=$?
-    if grep -q "$bekle" <<< "$out"; then
+    out=$(DISPLAY= timeout 600 "$@" 2>&1); rc=$?
+    out=$(grep -vE "MESA|pci id|^wine:" <<< "$out")
+    if [ "$rc" = "0" ] && grep -q "$bekle" <<< "$out"; then
         printf "  ${GREEN}TAMAM${NC}  %s\n" "$ad"
     else
         printf "  ${RED}DUSTU${NC}  %s (beklenen: '%s', cikis %d)\n" "$ad" "$bekle" "$rc"
@@ -52,10 +58,21 @@ else
     printf "  ${RED}DUSTU${NC}  uretilen ikili (cikti.exe olusmadi)\n"; FAIL=1
 fi
 kontrol "bicimlendirici"   "print"             wine cmd /c tulpar.cmd fmt "ornekler\\01_hello_world.tpr"
-kontrol "tip denetimi"     "ok"                wine cmd /c tulpar.cmd typecheck "ornekler\\02_basics.tpr"
+kontrol "tip denetimi"     "typecheck: ok"     wine cmd /c tulpar.cmd typecheck "ornekler\\02_basics.tpr"
 
+# MOTOR: "kare uretti" YETMEZ. Model/yazi tipi bulunamazsa motor sessizce duz
+# kutulara ve yazi tipsiz HUD'a duser, yine de goruntu yazar — ilk paket surumu
+# tam bu yuzden YANLIS YESIL verdi (varliklar ic ice dizinlerdeydi, hicbiri
+# bulunmuyordu; hatayi kullanici gordu). O yuzden burada YUKLENDI kaniti
+# araniyor: glTF satiri ve sahnenin varlik sayisi.
 if [ -f motor/engine_demo.exe ]; then
-    kontrol "motor headless" "goruntu"         wine cmd /c "motor\\demo.cmd" --headless 3 --out kare.ppm
+    kontrol "motor: kare uretti"   "goruntu"   wine cmd /c "motor\\demo.cmd" --headless 3 --out kare.ppm
+    kontrol "motor: glTF yuklendi" "glTF: "    wine cmd /c "motor\\demo.cmd" --headless 3 --out kare2.ppm
+    kontrol "motor: yazi tipi"     "font: "    wine cmd /c "motor\\demo.cmd" --headless 3 --out kare3.ppm
+fi
+if [ -f motor/engine_editor.exe ]; then
+    # Editor sahneyi BULAMAZSA cikis kodu 1 ve "sahne ...: acilamadi" der.
+    kontrol "editor: sahne acildi" "kaynak"    wine cmd /c "motor\\editor.cmd" --headless 3 --out ed.ppm
 fi
 
 echo

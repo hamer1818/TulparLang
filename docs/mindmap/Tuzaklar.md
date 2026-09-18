@@ -2816,3 +2816,23 @@ Doğrusu `platform/fs.hpp::fs_replace_file`: Windows'ta
 `MoveFileExA(..., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`, POSIX'te `rename`.
 Ders iki katmanlı: (1) `rename` taşınabilir değildir; (2) **durum bırakan bir testi iki kez
 koş** — ilk koşu temiz dizinde yeşil olabilir.
+
+### 9l. Ölçüt, hedeflediği hatanın çıktısında BULUNMAMALI — "varliklar" tuzağı
+
+Windows dağıtım paketinde varlıklar (glTF, yazı tipi, `editor.sahne`) yanlış yerleşmişti: kaynak
+ağacındaki `tests/assets/` + `assets/fonts/` yapısı kopyalanmıştı, oysa `TULPAR_ENGINE_ASSETS`
+verildiğinde motor her şeyi o dizinin **kökünde** arıyor (`%s/editor.sahne`, `%s/checker_cube.gltf`,
+`%s/DejaVuSans.ttf`). Sonuç: editör açılmıyor, demo ise **sessizce** düz kutulara ve yazı tipsiz
+HUD'a düşüyor — yine de kare üretiyor.
+
+İki ders var ve ikincisi daha pahalı:
+
+1. **"Kare üretti" bir varlık kapısı değildir.** Paket doğrulayıcısı `goruntu` satırını arıyordu ve
+   varlıkların hiçbiri bulunmazken YEŞİL veriyordu. Hatayı kullanıcı gördü. Kapı artık yüklenme
+   kanıtı arıyor: `glTF: `, `font: `, editörde sahne özeti.
+2. **Ölçüt seçimi.** Editör kapısının ölçütü `varlik` idi; başarısızlık mesajı yolu içerdiği için
+   (`...\motor\varliklar/editor.sahne`) o kelime **başarısızlıkta da** geçiyordu — kapı, sahne
+   silinmişken bile yeşil verdi. Pozitif kontrol (varlıkları kasten sil) bunu yakaladı.
+   Kural: ölçüt, hedeflenen hatanın çıktısında bulunmamalı; **çıkış kodu bedava bir ikinci
+   tanıktır** ve her kontrolde birlikte istenmeli. (8bd'nin kardeşi: orada pozitif kontrolün
+   kendisi boştu, burada ölçüt çift anlamlıydı.)
