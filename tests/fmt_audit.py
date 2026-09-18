@@ -22,6 +22,8 @@ Bu denetim iki seyi birden sorar:
 Cikis: 0 temiz, 1 sorun.
 """
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,25 +46,36 @@ def sources():
                     yield os.path.join(root, f)
 
 
-def fmt_capture(binpath, path, env):
+def fmt_capture(binargv, path, env):
     """`tulpar fmt` ciktisini dondurur (dosyayi degistirmez); reddederse None."""
-    r = subprocess.run([binpath, "fmt", path], capture_output=True, env=env, timeout=120)
+    r = subprocess.run(binargv + ["fmt", path], capture_output=True, env=env, timeout=120)
     if r.returncode != 0:
         return None
     return r.stdout.decode(errors="replace")
 
 
-def hata_sayisi(binpath, path, env):
-    r = subprocess.run([binpath, "typecheck", path], capture_output=True, env=env, timeout=120)
+def hata_sayisi(binargv, path, env):
+    r = subprocess.run(binargv + ["typecheck", path], capture_output=True, env=env, timeout=120)
     t = (r.stdout + r.stderr).decode(errors="replace")
     return t.count("parse error") + t.count("Lexer Error") + t.count("Parser Error")
 
 
 def main():
-    binpath = os.path.join(ROOT, "tulpar")
-    if not os.path.exists(binpath):
-        print("ATLANDI: ./tulpar yok (once ./build.sh) — bu denetim TAM kosmadi")
-        return 0
+    # TULPAR_AUDIT_CMD: denetimi BASKA bir ikiliyle kosturmak icin (ornegin
+    # capraz derlenmis Windows yapisi: `TULPAR_AUDIT_CMD="wine
+    # build-windows/tulpar.exe"`). Verilmezse eski davranis: ./tulpar.
+    cmd_override = os.environ.get("TULPAR_AUDIT_CMD", "").strip()
+    if cmd_override:
+        binargv = shlex.split(cmd_override)
+        if not os.path.exists(binargv[-1]) and not shutil.which(binargv[0]):
+            print(f"ATLANDI: TULPAR_AUDIT_CMD calistirilamiyor ({cmd_override})")
+            return 0
+    else:
+        binpath = os.path.join(ROOT, "tulpar")
+        if not os.path.exists(binpath):
+            print("ATLANDI: ./tulpar yok (once ./build.sh) — bu denetim TAM kosmadi")
+            return 0
+        binargv = [binpath]
     env = dict(os.environ, LC_ALL="C")
     tmp = tempfile.mkdtemp(prefix="fmtaudit")
     bozuk, degisken, n = [], [], 0
@@ -72,7 +85,7 @@ def main():
         a = os.path.join(tmp, "a.tpr")
         with open(a, "w", encoding="utf-8") as fh:
             fh.write(raw)
-        once = hata_sayisi(binpath, a, env)
+        once = hata_sayisi(binargv, a, env)
         # DIKKAT: `tulpar fmt <dosya>` dosyayi YERINDE DEGISTIRMEZ —
         # bicimlenmis metni STDOUT'a basar. Bu denetimin ilk surumu bunu
         # bilmeden `fmt` cagirip AYNI dosyayi yeniden okuyordu: dosya hic
@@ -80,16 +93,16 @@ def main():
         # IKISI DE kendiliginden dogruydu ve denetim HICBIR SEY OLCMUYORDU.
         # (Pozitif kontrol yakaladi: bicimlendirici bilerek bozuldugunda
         # denetim yine yesil veriyordu.) Cikti boruyla alinip yaziliyor.
-        r1 = fmt_capture(binpath, a, env)
+        r1 = fmt_capture(binargv, a, env)
         if r1 is None:
             continue  # fmt kendisi reddetti: bu denetimin konusu degil
         bir = r1
         with open(a, "w", encoding="utf-8") as fh:
             fh.write(bir)
-        sonra = hata_sayisi(binpath, a, env)
+        sonra = hata_sayisi(binargv, a, env)
         if sonra > once:
             bozuk.append((os.path.relpath(src, ROOT), once, sonra))
-        r2 = fmt_capture(binpath, a, env)
+        r2 = fmt_capture(binargv, a, env)
         if r2 is not None and r2 != bir:
             degisken.append(os.path.relpath(src, ROOT))
     if bozuk:

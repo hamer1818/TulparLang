@@ -186,14 +186,36 @@ func _derleyici(): str {
     return _bin;
 }
 
+// Windows mu? `OS` degiskeni Windows'ta "Windows_NT", POSIX'te bos. Dilde
+// platform sorgusu YOK; kabuk komutu calistiran her testin bu ayrimi kendi
+// yapmasi gerekiyor (bkz. asagidaki uc fark).
+func _windows_mu(): bool {
+    return env("OS") == "Windows_NT";
+}
+
 // Kaynagi gecici bir dosyaya yazip `tulpar typecheck` cikis kodunu dondurur.
 // 0 = kabul edildi, 0 disi = reddedildi.
+//
+// UC SEY PLATFORMA GORE DEGISIR ve ucu de Windows'ta SESSIZ yanlis sonuc
+// veriyordu (olculdu 2026-09-18: dort KONTROL durumu "reddedilmeliydi" diye
+// dusuyordu, cunku alt surec hic kosmuyordu):
+//   * `/tmp` Windows'ta yok      -> gecici dosya CALISMA DIZININE yazilir
+//   * `/dev/null` yok            -> `NUL`
+//   * `rm -f` yok                -> `del /q`
+// Derleyicinin kendisi TULPAR_BIN'den gelir; Windows kipinde build.sh onu
+// `build-windows\tulpar.exe` olarak ihrac eder (`./tulpar` cmd.exe'de calismaz).
 func derleme_kodu(str kaynak): int {
-    str yol = "/tmp/tulpar_gramer_" + toString(timestamp()) + "_" +
+    str yol = ".tulpar_gramer_" + toString(timestamp()) + "_" +
               toString(randint(1, 999999)) + ".tpr";
     write_file(yol, kaynak);
-    int rc = sys_run(_derleyici() + " typecheck " + yol + " > /dev/null 2>&1");
-    sys_run("rm -f " + yol);
+    str sessiz = " > /dev/null 2>&1";
+    str sil = "rm -f ";
+    if (_windows_mu()) {
+        sessiz = " > NUL 2>&1";
+        sil = "del /q ";
+    }
+    int rc = sys_run(_derleyici() + " typecheck " + yol + sessiz);
+    sys_run(sil + yol);
     return rc;
 }
 

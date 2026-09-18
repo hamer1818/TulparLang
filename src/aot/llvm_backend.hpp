@@ -360,8 +360,11 @@ typedef struct {
   LLVMValueRef func_aot_throw;
   LLVMValueRef func_aot_get_exception;
   LLVMValueRef func_setjmp;
-  // llvm.frameaddress.p0 — Windows only, feeds _setjmpex's 2nd arg.
-  LLVMValueRef func_frameaddress;
+  // Windows x64'te setjmp'in IKI argumani var (`_setjmp(jmp_buf, void*)`);
+  // ikincisi NULL gecilir = "longjmp unwind yapmasin". Bkz.
+  // declare_runtime_functions'daki uzun not (SEH cozumu LLVM cerceveleri icin
+  // guvenilir degil). Linux/macOS'ta tek argumanli `setjmp`.
+  bool win_setjmp_two_args;
 
   // Time functions
   LLVMValueRef func_aot_clock_ms;

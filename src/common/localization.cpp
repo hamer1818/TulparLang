@@ -92,8 +92,10 @@ const char *tr_for_en(const char *en_text) {
     return "[AOT] Hata: LLVM backend olusturulamadi\n";
   if (strcmp(en_text, "[AOT] Error: Failed to emit object file\n") == 0)
     return "[AOT] Hata: Object dosyasi uretilemedi\n";
-  if (strcmp(en_text, "[AOT] Error: Linking failed (code %d). Check clang installation and libraries.\n") == 0)
-    return "[AOT] Hata: Baglama basarisiz (kod %d). clang kurulumu ve kutuphaneleri kontrol edin.\n";
+  if (strcmp(en_text, "[AOT] Error: Linking failed (code %d) using '%s'. Check the toolchain installation and libraries "
+                      "(set TULPAR_CC to pick a different linker driver).\n") == 0)
+    return "[AOT] Hata: Baglama basarisiz (kod %d, surucu '%s'). Toolchain kurulumunu ve kutuphaneleri kontrol edin "
+           "(baska bir linkleyici surucusu icin TULPAR_CC).\n";
   if (strcmp(en_text, "Undefined var in array access: %s\n") == 0)
     return "Dizi erisiminde tanimsiz degisken: %s\n";
   if (strcmp(en_text, "Undefined var in increment: %s\n") == 0)
