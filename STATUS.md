@@ -186,14 +186,23 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > bölüm sistemi + codegen düzeltmeleri. GitHub Release'te 3-OS ikilileri +
 > Windows installer + GPG-imzalı SHA256SUMS.
 >
-> **Geliştirme (yayınlanmadı) — platform politikası:** 3.13.0'dan itibaren
-> **natif Windows desteklenmiyor**; Windows kullanıcıları **WSL** içinde Linux
-> sürümünü kullanıyor. CI'daki `build-windows` işi, Windows release varlıkları,
-> `build.bat`/`build.ps1`/`run_tests.*` ve Inno Setup installer kaldırıldı.
-> Kaynaktaki `PLATFORM_WINDOWS` dalları bilerek bırakıldı ama artık **bakımsız
-> ve test edilmemiş**. ⚠️ `main`'in branch protection ayarından `build-windows`
-> zorunlu check'i **elle kaldırılmalı**. Detay: CHANGELOG "natif Windows
-> desteği bırakıldı".
+> **Geliştirme (yayınlanmadı) — platform politikası:** 3.13.0'da natif Windows
+> bırakılmıştı (CI işi, release varlıkları, `build.bat`/`build.ps1`/`run_tests.*`
+> ve Inno Setup installer kaldırıldı; kaynaktaki `PLATFORM_WINDOWS` dalları
+> bilerek bırakılmıştı). **2026-09-18'de natif Windows YERELDE geri geldi:**
+> Linux'tan MinGW-w64 çapraz derlemesi + Wine ile doğrulama
+> (`windows/setup_sysroot.py`, `windows/build.sh`, `./build.sh windows
+> test|suites`, `cmake/toolchain-mingw64.cmake`). Bırakılan dallar **tekrar
+> derleniyor ve koşuluyor**; 3.13.0'daki "bakımsız ve test edilmemiş" notu
+> geçersiz. Kapsam: dil + stdlib (Wings/socket/SQLite/async=Win32 fiber/gzip/
+> thread), tame/raylib, TLS (Windows sistem sertifika deposu) **ve `engine/`
+> (Vulkan motoru)** — motor da aynı gün portlandı: `engine_tests.exe` Wine'da
+> 469/469, `engine_demo --headless` çıktısı Linux'unkiyle bayt bayt aynı,
+> `import "engine"` eden Tulpar programı çalışıyor. Kapsam dışı: Windows
+> hosttan web/Android hedefleri. CI'ya **henüz dönülmedi** (kullanıcı kuralı: önce yerel
+> yeşil); `main`'in branch protection'ındaki eski `build-windows` zorunlu check'i
+> hâlâ elle temizlenmeli. Ayrıntı: [windows/README.md](windows/README.md),
+> tuzaklar: docs/mindmap/Tuzaklar.md §9.
 >
 > **Geliştirme (yayınlanmadı) — 3D oyun katmanı:** TulparLang artık 3D oyun
 > yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **35 `tm3_*` builtin**

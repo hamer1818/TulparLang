@@ -19,11 +19,23 @@ TulparLang supports the following platforms:
 - **Build System**: CMake + Make
 
 ### Windows
-- **Status**: Native support (NEW!) ✅
-- **Tested on**: Windows 10/11
-- **Compilers**: MSVC (Visual Studio 2019/2022)
-- **Build System**: CMake + MSBuild
-- **Alternative**: WSL2 with Linux build
+- **Status**: Native (MinGW-w64) — restored 2026-09-18, **not yet in CI** ⚠️
+- **How it is built**: cross-compiled from Linux with the MinGW-w64 toolchain
+  (`windows/build.sh`, `cmake/toolchain-mingw64.cmake`); the target tree
+  (LLVM 22.1.8 + CRT + OpenSSL) comes from pinned MSYS2 packages
+  (`windows/setup_sysroot.py`, `windows/packages.lock`)
+- **How it is verified locally**: under **Wine** —
+  `./build.sh windows test` and `./build.sh windows suites` run the same
+  runners as Linux. Wine is a fast loop, **not** proof: acceptance still needs
+  a real Windows machine
+- **Toolchain rule**: GCC (not clang) and a **single** mingw tree — mixing
+  clang objects with GCC's libstdc++ silently breaks exception unwinding
+- **In scope**: language + stdlib (Wings/sockets/SQLite/async via Win32 fibers/
+  gzip/threads), `tame`/raylib games, TLS via the Windows certificate store
+- **Out of scope for now**: `engine/` (the Vulkan engine), and building the
+  web/Android targets *from* a Windows host
+- **Alternative**: WSL2 with the Linux build (still fully supported)
+- **Details**: [../windows/README.md](../windows/README.md)
 
 ## Prerequisites
 
