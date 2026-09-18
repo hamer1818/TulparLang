@@ -158,13 +158,27 @@ bool SceneRuntime::init(Arena &arena, renderer::Renderer &r, const SceneBlobView
     else { stats_.assets_failed++; std::printf("[scene_runtime] kaynak yuklenemedi: %s (%s)\n", path, models_[i].error); }
   }
   
-    // Ilkel (prosedurel) mesh tablosu
-  build_primitive_meshes(r, prims_);
+  // Ilkel (prosedurel) mesh tablosu; editor de AYNI fonksiyonu cagirir
+  // (bkz. content/primitives.hpp) -- iki tablo tutulursa biri geride kalir.
+  //
+  // YALNIZ GEREKIYORSA kurulur. Kosulsuz cagirmak, ilkel kullanmayan bir
+  // sahnede bile GPU tamponu ayirmak demekti; dahasi bazi cagiranlar
+  // KURULMAMIS bir Renderer veriyor (kapilar: renderer::Renderer ren;)
+  // ve create_mesh orada COKUYOR -- olculdu:
+  // scene_runtime_applies_baked_gi_ambient, SIGSEGV.
+  bool wants_prims = false;
+  for (uint32_t i = 0; i < view.h->draw_count && !wants_prims; i++)
+    wants_prims = view.draws[i].primitive >= 0;
+  if (wants_prims) build_primitive_meshes(r, prims_);
 
   // Faz 3: Gecici arena ile prosedurel sistemleri uret  // Arena::init VOID doner ve bir AD ister; eski kod bool
   // bekliyordu. Tamponu biz ayirdigimiz icin isaretciyi de biz
   // tutariz -- Arena::base_ private, disaridan free edilemez.
-  void *temp_buf = std::malloc(32 << 20);
+  // 32 MB yalniz prosedurel icerik VARSA ayrilir. Kosulsuz ayirmak, arazi/
+  // voksel/su icermeyen her sahne yuklemesinde 32 MB alip hemen birakmak
+  // demekti.
+  const bool wants_proc = view.h->terrain_count || view.h->voxel_count || view.h->water_count;
+  void *temp_buf = wants_proc ? std::malloc(32 << 20) : nullptr;
   if (temp_buf) {
     Arena temp;
     temp.init(temp_buf, 32 << 20, "gecici-prosedurel");
