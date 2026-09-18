@@ -56,6 +56,48 @@ hw_end() {
 }
 TARGET="$2"
 
+# --- WINDOWS KIPI -----------------------------------------------------------
+# `./build.sh windows test` / `./build.sh windows suites`: aynı test
+# koşucuları, Linux'tan çapraz derlenmiş `tulpar.exe` ile ve üretilen ikililer
+# Wine altında koşarak. Liste TEK KAYNAKTA kalsın diye ayrı bir koşucu YOK —
+# 3.13.0 öncesinde COMPILE_ONLY_TESTS hem burada hem run_tests.ps1'de duruyordu
+# ve elle senkron tutulması gerekiyordu (CHANGELOG bunu açıkça yan fayda diye
+# yazıyor). Aynı hatayı tekrarlamıyoruz: yalnız ÜÇ değişken değişiyor.
+#   TULPAR_RUN  — derleyiciyi çağırma biçimi (host tarafı)
+#   RUN_PREFIX  — üretilen ikiliyi çalıştırma biçimi
+#   EXE_SUFFIX  — üretilen ikilinin uzantısı
+# Ayrıca `TULPAR_BIN` MİSAFİR tarafa (Wine içindeki süreçlere) ihraç edilir:
+# derleyiciyi alt süreç olarak çağıran testler (gramer_bosluklari) onu okur ve
+# Windows'ta `./tulpar` çalışmaz — `build-windows\tulpar.exe` gerekir.
+# Windows derlemesi: windows/build.sh (bkz. windows/README ve cmake/toolchain-mingw64.cmake).
+TULPAR_RUN="./tulpar"
+RUN_PREFIX=""
+EXE_SUFFIX=""
+WINDOWS_MODE=0
+if [ "$ACTION" = "windows" ]; then
+    WINDOWS_MODE=1
+    ACTION="$2"
+    TARGET="$3"
+    WIN_EXE="build-windows/tulpar.exe"
+    if [ ! -f "$WIN_EXE" ]; then
+        echo -e "${RED}HATA: $WIN_EXE yok — önce windows/build.sh çalıştırın.${NC}"
+        exit 1
+    fi
+    if ! command -v wine &> /dev/null; then
+        echo -e "${RED}HATA: wine yok (Windows ikilisi çalıştırılamaz).${NC}"
+        exit 1
+    fi
+    # Wine ortamı: ayrı prefix, sysroot'un bin'i Windows PATH'inde (AOT link
+    # adımı orada g++ arıyor), TULPAR_CC=g++.
+    # shellcheck disable=SC1091
+    . "$(dirname "$0")/windows/wine_env.sh" > /dev/null
+    TULPAR_RUN="wine $WIN_EXE"
+    RUN_PREFIX="wine"
+    export TULPAR_BIN='build-windows\tulpar.exe'
+    EXE_SUFFIX=".exe"
+    echo -e "${YELLOW}Windows kipi: $TULPAR_RUN (üretilen ikililer Wine altında)${NC}"
+fi
+
 # Single platform-suffixed build directory (mirrors build.bat behaviour:
 # contents are wiped on every build so a stale runtime archive never lingers).
 case "${OS}" in
@@ -63,6 +105,7 @@ case "${OS}" in
     Darwin*)    BUILD_DIR="build-macos";;
     *)          BUILD_DIR="build";;
 esac
+[ "$WINDOWS_MODE" = "1" ] && BUILD_DIR="build-windows"
 
 if [ "$ACTION" = "clean" ]; then
     echo "Cleaning build artifacts..."
@@ -142,7 +185,7 @@ echo ""
 # çağırmayan bir paket ASLA kırmızı olamaz, o yüzden aşağıda `Tests:` satırı
 # olmayan paket de hata sayılıyor — sessizce yutulmasın.
 if [ "$ACTION" = "suites" ]; then
-    if [ ! -x "./tulpar" ]; then
+    if [ "$WINDOWS_MODE" != "1" ] && [ ! -x "./tulpar" ]; then
         echo -e "${RED}ERROR: ./tulpar yok — önce ./build.sh çalıştırın.${NC}"
         exit 1
     fi
@@ -161,11 +204,23 @@ if [ "$ACTION" = "suites" ]; then
     hw_begin
     SUITE_FAILED=0
     SUITE_N=0
+    # WINDOWS KIPI — motor (engine/) Windows'a taşınmadı: `import "engine"` eden
+    # paket link edilemez. FAIL değil ATLANMIŞ sayılır ama SESSİZCE değil.
+    SUITE_SKIP=""
+    if [ "$WINDOWS_MODE" = "1" ] && [ ! -f "build-windows/engine/libengine_core.a" ]; then
+        SUITE_SKIP="engine_bridge.test.tpr"
+    fi
     for suite in tests/*.test.tpr; do
         [ -f "$suite" ] || continue
         SUITE_N=$((SUITE_N + 1))
         name=$(basename "$suite")
-        out=$(DISPLAY= $SUITE_TIMEOUT_CMD ./tulpar "$suite" 2>&1)
+        case " $SUITE_SKIP " in
+            *" $name "*)
+                printf "%-42s ${YELLOW}ATLANDI${NC} (motor bu yapıda derlenmedi)\n" "$name"
+                continue
+                ;;
+        esac
+        out=$(DISPLAY= $SUITE_TIMEOUT_CMD $TULPAR_RUN "$suite" 2>&1)
         code=$?
         summary=$(echo "$out" | grep -E '^Tests:' | tail -1)
         if [ $code -ne 0 ]; then
@@ -231,17 +286,34 @@ if [ "$ACTION" = "suites" ]; then
     # olarak basilir, karar vermez (Tuzaklar 1l/1p).
     # CI `build/` icinde derliyor (workflow: mkdir build; cmake ..), yerel
     # build.sh ise build-<platform>/; ikisine de bak. Bulunamazsa KIRMIZI.
+    #
+    # WINDOWS KIPINDE KOSULMAZ: motor Windows hedefinin parçası değil (CMake'te
+    # `if(NOT WIN32)`), yani burada koşulacak olan HOST'un Linux ikilisidir —
+    # Windows hakkında hiçbir şey ölçmez ama çıkış kodunu boyar. Görünür atlama.
     ENGINE_TESTS=""
     for d in "$BUILD_DIR" build build-linux build-macos; do
         if [ -x "$d/engine/engine_tests" ]; then ENGINE_TESTS="$d/engine/engine_tests"; break; fi
     done
     SUITE_N=$((SUITE_N + 1))
-    if [ -z "$ENGINE_TESTS" ]; then
+    # Windows kipinde MOTORUN KENDI WINDOWS IKILISI koşulur (varsa): host'un
+    # Linux ikilisini koşmak Windows hakkında hiçbir şey ölçmezdi.
+    if [ "$WINDOWS_MODE" = "1" ]; then
+        if [ -x "build-windows/engine/engine_tests.exe" ]; then
+            ENGINE_TESTS="build-windows/engine/engine_tests.exe"
+        elif [ -x "build-win-engine/engine/engine_tests.exe" ]; then
+            ENGINE_TESTS="build-win-engine/engine/engine_tests.exe"
+        else
+            ENGINE_TESTS=""
+        fi
+    fi
+    if [ "$WINDOWS_MODE" = "1" ] && [ -z "$ENGINE_TESTS" ]; then
+        printf "%-42s ${YELLOW}ATLANDI${NC} (motor bu yapıda derlenmedi: -DTULPAR_WIN_ENGINE=ON)\n" "engine_tests"
+    elif [ -z "$ENGINE_TESTS" ]; then
         ENGINE_TESTS="$BUILD_DIR/engine/engine_tests"
         printf "%-42s ${RED}FAIL${NC} (ikili yok: %s — engine hedefi derlenmedi mi?)\n" "engine_tests" "$ENGINE_TESTS"
         SUITE_FAILED=1
     else
-        out=$(DISPLAY= $SUITE_TIMEOUT_CMD "$ENGINE_TESTS" 2>&1); code=$?
+        out=$(DISPLAY= $SUITE_TIMEOUT_CMD $RUN_PREFIX "$ENGINE_TESTS" 2>&1); code=$?
         summary=$(echo "$out" | grep -E '^engine tests:' | tail -1)
         if [ $code -ne 0 ] || [ -z "$summary" ]; then
             printf "%-42s ${RED}FAIL${NC} %s\n" "engine_tests" "$summary"
@@ -1180,6 +1252,17 @@ if [ "$ACTION" = "test" ]; then
     # per failing example); the driver dumps them, sorted, after the run.
     FAIL_DIR=$(mktemp -d)
     SKIP_TESTS=()
+    SKIP_REASON=""
+    # WINDOWS KIPI — motor (engine/) henüz Windows'a taşınmadı: `import "engine"`
+    # eden örnekler link edilemez (libengine_*.a yok, CMake'te WIN32'de kapalı).
+    # Bunlar FAIL değil ATLANMIŞ sayılır, ama SESSİZCE değil: kapı neyi
+    # ölçmediğini söylemeli. Motorun Windows portu bitince bu blok kalkacak.
+    # Motor arşivleri YOKSA atla (TULPAR_WIN_ENGINE=OFF ile derlenmiş yapı);
+    # varsa örnekler normal koşar — Windows motor portu tamamlandı.
+    if [ "$WINDOWS_MODE" = "1" ] && [ ! -f "build-windows/engine/libengine_core.a" ]; then
+        SKIP_TESTS+=("engine_ilk_oyun.tpr" "engine_arena.tpr" "engine_aksiyon.tpr")
+        SKIP_REASON=" (motor bu yapıda derlenmedi: -DTULPAR_WIN_ENGINE=ON ile derleyin)"
+    fi
     # Compile-only smoke tests: server/listener examples that block on
     # listen()/api_run(), plus utils.tpr (module-only — has no top-level
     # program, but we still verify it parses/lowers). We verify the build
@@ -1266,7 +1349,10 @@ if [ "$ACTION" = "test" ]; then
         # only kicks in when the basename strips down to empty (which never
         # happens for our examples). Earlier versions of this runner checked
         # `[ -f a.out ]` and silently failed every example on Linux CI.
-        local out_path="$name"
+        # Windows kipinde üretilen ikili <name>.exe; nesne/IR dosyaları yine
+        # <name>.o / <name>.ll (uzantı yalnız çalıştırılabilirde).
+        local out_base="$name"
+        local out_path="$name$EXE_SUFFIX"
         local compile_log
         compile_log=$(mktemp)
         # Failure detail sink. FAIL_DIR is exported by the driver; when
@@ -1305,7 +1391,7 @@ if [ "$ACTION" = "test" ]; then
         # Keep the exit code: `timeout` reports a kill as 124, and a timeout
         # otherwise looks identical to a compile error with an empty log
         # (which is exactly how the first parallel CI run presented itself).
-        $COMPILE_TIMEOUT_CMD ./tulpar --aot "$example" > "$compile_log" 2>&1
+        $COMPILE_TIMEOUT_CMD $TULPAR_RUN --aot "$example" > "$compile_log" 2>&1
         local compile_rc=$?
         if [ $compile_rc -eq 0 ] && [ -f "$out_path" ]; then
             if [ "$compile_only" = "1" ]; then
@@ -1327,7 +1413,7 @@ if [ "$ACTION" = "test" ]; then
                 # whatever the user is doing on every test run. Headless,
                 # tame fails gracefully with exit 0 (the InitWindow patch),
                 # and the wings/router examples never used a display.
-                DISPLAY= WAYLAND_DISPLAY= "./$out_path" > "$smoke_log" 2>&1 &
+                DISPLAY= WAYLAND_DISPLAY= $RUN_PREFIX "./$out_path" > "$smoke_log" 2>&1 &
                 local smoke_pid=$!
                 sleep 2
                 if kill -0 "$smoke_pid" 2>/dev/null; then
@@ -1368,7 +1454,7 @@ if [ "$ACTION" = "test" ]; then
                             sed 's/^/    /' "$smoke_log" | head -n 40
                             echo "----- end log -----"
                         } > "$fail_dir/$name.log" 2>&1
-                        rm -f "$smoke_log" "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                        rm -f "$smoke_log" "$out_path" "$out_base.ll" "$out_base.o" "$compile_log"
                         return 1
                     fi
                 else
@@ -1388,12 +1474,12 @@ if [ "$ACTION" = "test" ]; then
                             sed 's/^/    /' "$smoke_log" | head -n 40
                             echo "----- end log -----"
                         } > "$fail_dir/$name.log" 2>&1
-                        rm -f "$smoke_log" "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                        rm -f "$smoke_log" "$out_path" "$out_base.ll" "$out_base.o" "$compile_log"
                         return 1
                     fi
                 fi
                 rm -f "$smoke_log"
-                rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                rm -f "$out_path" "$out_base.ll" "$out_base.o" "$compile_log"
                 return 0
             fi
             if [ -f "$input_file" ]; then
@@ -1404,9 +1490,9 @@ if [ "$ACTION" = "test" ]; then
                 # ile dil varsayilanindan siki kostu; FLIP'ten sonra (2026-09-10)
                 # strict zaten varsayilan, o yuzden bayrak kaldirildi — iki
                 # hakikat tablosu birakmamak icin.
-                $TIMEOUT_CMD "./$out_path" < "$input_file" > /dev/null 2>&1
+                $TIMEOUT_CMD $RUN_PREFIX "./$out_path" < "$input_file" > /dev/null 2>&1
             else
-                $TIMEOUT_CMD "./$out_path" > /dev/null 2>&1
+                $TIMEOUT_CMD $RUN_PREFIX "./$out_path" > /dev/null 2>&1
             fi
 
             if [ $? -eq 0 ]; then
@@ -1415,7 +1501,7 @@ if [ "$ACTION" = "test" ]; then
                 printf "Testing %s... ${RED}FAIL (execution)${NC}\n" "$example"
                 echo "----- execution failed (non-zero exit): $example -----" \
                     > "$fail_dir/$name.log" 2>&1
-                rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                rm -f "$out_path" "$out_base.ll" "$out_base.o" "$compile_log"
                 return 1
             fi
         elif [ $compile_rc -eq 124 ]; then
@@ -1428,7 +1514,7 @@ if [ "$ACTION" = "test" ]; then
                 sed 's/^/    /' "$compile_log" | head -n 40
                 echo "----- end log -----"
             } > "$fail_dir/$name.log" 2>&1
-            rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+            rm -f "$out_path" "$out_base.ll" "$out_base.o" "$compile_log"
             return 1
         else
             printf "Testing %s... ${RED}FAIL (compilation)${NC}\n" "$example"
@@ -1437,11 +1523,11 @@ if [ "$ACTION" = "test" ]; then
                 sed 's/^/    /' "$compile_log" | head -n 40
                 echo "----- end log -----"
             } > "$fail_dir/$name.log" 2>&1
-            rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+            rm -f "$out_path" "$out_base.ll" "$out_base.o" "$compile_log"
             return 1
         fi
 
-        rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+        rm -f "$out_path" "$out_base.ll" "$out_base.o" "$compile_log"
         return 0
     }
 
@@ -1492,7 +1578,7 @@ if [ "$ACTION" = "test" ]; then
             done
 
             if [ $skip -eq 1 ]; then
-                printf "SKIP: %s\n" "$example"
+                printf "SKIP: %s%s\n" "$example" "$SKIP_REASON"
                 continue
             fi
 
@@ -1537,7 +1623,14 @@ if [ "$ACTION" = "test" ]; then
         # Workers are separate bash processes, so run_test + everything it
         # reads must be exported. FAIL_DIR is where they drop multi-line
         # failure detail (see run_test's header comment).
+        # TULPAR_BIN/RUN_PREFIX/EXE_SUFFIX de ihracat listesinde: Windows
+        # kipinde worker'lar ayri bash surecleridir ve bunlar dis kabukta
+        # ayarlaniyor. Unutulursa worker'lar sessizce LINUX ikilisine doner
+        # (ve "her sey yesil" gorunur — olculen sey Windows olmaz).
+        # Wine degiskenleri de ayni sebeple: AOT link adimi worker icinde kosuyor.
         export INPUT_DIR FAIL_DIR GREEN RED NC
+        export TULPAR_RUN RUN_PREFIX EXE_SUFFIX
+        export WINEPREFIX WINEDEBUG WINEPATH TULPAR_CC
         export -f run_test smoke_probe_for
 
         # xargs exits 123 if ANY worker exited non-zero — that is the

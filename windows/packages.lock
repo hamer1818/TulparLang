@@ -1,0 +1,27 @@
+# MSYS2 mingw64 paketleri — SURUM SABITLENMISTIR.
+# Uretim: python3 windows/setup_sysroot.py --refresh
+# Bicim: <dosya adi> <surum> <sha256>
+mingw-w64-x86_64-binutils-2.47-3-any.pkg.tar.zst 2.47-3 827363748ce3320683319d860ee4fcfcdbb36baf66aac6dab0ec3822be2d4ff7
+mingw-w64-x86_64-crt-14.0.0.r375.g9c1abbbf5-1-any.pkg.tar.zst 14.0.0.r375.g9c1abbbf5-1 d24b4e7614756414ae3ef58793265448a3ca7d5fd447a991e9b2facde7b59d75
+mingw-w64-x86_64-gcc-16.2.0-3-any.pkg.tar.zst 16.2.0-3 8b37c953ae12f3d8fa05c854236463231ea0a294dff423007cbd93d4d8089f9f
+mingw-w64-x86_64-gcc-libs-16.2.0-3-any.pkg.tar.zst 16.2.0-3 f8e25ea67bb796e7f65550f0dca9fce4cdde8aaa3dadafe4d13c6a8233c8de26
+mingw-w64-x86_64-gettext-runtime-1.0-1-any.pkg.tar.zst 1.0-1 be68d7f260633284b910c588c6d82ee304a81c8817a686d2cd9df83f872c27af
+mingw-w64-x86_64-gmp-6.3.0-2-any.pkg.tar.zst 6.3.0-2 8924433974c4add46cb46ea4f6ef283b5c5139d3f552375115b5580f855015cc
+mingw-w64-x86_64-headers-14.0.0.r375.g9c1abbbf5-1-any.pkg.tar.zst 14.0.0.r375.g9c1abbbf5-1 acad5748942953f91a0f2bba03e20437b909366e55949f478f1b2f2d30c726a7
+mingw-w64-x86_64-isl-0.28-1-any.pkg.tar.zst 0.28-1 03ed191718a89edc46e783deed46b8fd20ec47a09fcdefb37c6c4169b6188b08
+mingw-w64-x86_64-libffi-3.8.0-1-any.pkg.tar.zst 3.8.0-1 6dad7f3c6c900d3c64a4fe0c2764b405e678b22df3521d2284ffaeff0198b84b
+mingw-w64-x86_64-libiconv-1.19-1-any.pkg.tar.zst 1.19-1 21e334d0911f25de75d3e18e0697648bcecfa9658256d600cad0827d719c2f35
+mingw-w64-x86_64-libwinpthread-14.0.0.r375.g9c1abbbf5-1-any.pkg.tar.zst 14.0.0.r375.g9c1abbbf5-1 1d0ed7fda332a5c879de210f3d72c75fa1f3df7cc63dd951e763dec8eb02c1ee
+mingw-w64-x86_64-libxml2-2.15.4-1-any.pkg.tar.zst 2.15.4-1 b79dcaea6713e8d09af334de946db364eb501b5be2ec2f75dc7608e61b5d0316
+mingw-w64-x86_64-lld-22.1.8-3-any.pkg.tar.zst 22.1.8-3 a6cddccf332266a8ef30ef079dbd3ef52ac122b55de4079c2851f79389b882b6
+mingw-w64-x86_64-llvm-22.1.8-3-any.pkg.tar.zst 22.1.8-3 551273499170d15a532e5fb98299b67ac2846a6788e6a352ce77889fb746d40b
+mingw-w64-x86_64-llvm-libs-22.1.8-3-any.pkg.tar.zst 22.1.8-3 ab50a733cbafd24e5180c00dede15014ecb7c133b836ce59262c22c27d46d659
+mingw-w64-x86_64-llvm-tools-22.1.8-3-any.pkg.tar.zst 22.1.8-3 6a0df0eca402e184aeeb02db9672fe8dcd50a17b2d95ab70253b4cf6446bbe10
+mingw-w64-x86_64-mpc-1.4.1-1-any.pkg.tar.zst 1.4.1-1 ce024a90d59c8a591d2c88ef94a386c6367750bf9edc6a944e80815ec5d93344
+mingw-w64-x86_64-mpfr-4.2.2-3-any.pkg.tar.zst 4.2.2-3 9ecbc05f1f855bc656a8f111d367f61fbd90dbbfcf469ba74d6d5dd1ec07a542
+mingw-w64-x86_64-openssl-3.6.4-1-any.pkg.tar.zst 3.6.4-1 d613ab4e1b5af9e95cde16895765e1be53ab05657d8d51ff2707d4e99c29c55b
+mingw-w64-x86_64-tzdata-2026d-1-any.pkg.tar.zst 2026d-1 aa05089a14869bc05f841ce1caa61bb4ebbc392780f9daec4f3eaf01937e5091
+mingw-w64-x86_64-windows-default-manifest-20260815-1-any.pkg.tar.zst 20260815-1 d2dd9a4f3a3362bc85ca273dff2b0f9868cfba7ba60151499b5935a049f00d74
+mingw-w64-x86_64-winpthreads-14.0.0.r375.g9c1abbbf5-1-any.pkg.tar.zst 14.0.0.r375.g9c1abbbf5-1 7d86a267b6069198d28f3e77314282ff7b4e3c7bb8fe482299ca58f7a5b439db
+mingw-w64-x86_64-zlib-1.3.2-2-any.pkg.tar.zst 1.3.2-2 9e75842a070ba648e986e12424e1c92c9d7d77200e85f6a34eeb600819f2e694
+mingw-w64-x86_64-zstd-1.5.7-2-any.pkg.tar.zst 1.5.7-2 1add6705b344664f6aca108c85f79ab5bdd9e1162662bb06a4cf40a34f6e0907

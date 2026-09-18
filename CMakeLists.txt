@@ -40,6 +40,31 @@ if(NOT LLVM_FOUND)
     find_package(LLVM REQUIRED)
 endif()
 
+# CAPRAZ DERLEME (Windows): MSYS2'nin include/ dizini LLVM basliklarini mingw
+# CRT basliklariyla ayni yerde tutuyor; oldugu gibi -I'ya konunca capraz
+# derleyicinin kendi CRT basliklariyla cakisiyor (redefinition of 'wcstod').
+# cmake/toolchain-mingw64.cmake yalniz llvm/ + llvm-c/ iceren ince bir dizin
+# hazirlar ve burada devreye girer. Yerel (capraz olmayan) derlemede bu
+# degisken bos, davranis ayni.
+if(TULPAR_WIN_LLVM_INCLUDE AND EXISTS "${TULPAR_WIN_LLVM_INCLUDE}")
+    set(LLVM_INCLUDE_DIRS "${TULPAR_WIN_LLVM_INCLUDE}")
+    message(STATUS "LLVM basliklari ince dizinden: ${LLVM_INCLUDE_DIRS}")
+    # Ithal hedefler (ZLIB::ZLIB, LibXml2::LibXml2, OpenSSL::*, zstd) kendi
+    # INTERFACE include'lariyla ayni TAM dizini geri getiriyor — ustelik
+    # `-isystem` olarak, yani CRT basliklarini ikinci kez. Hepsini ince dizine
+    # cevir. Fonksiyon, OpenSSL find'indan SONRA da cagrilir (asagida).
+    function(tulpar_win_slim_includes)
+        foreach(_t ZLIB::ZLIB LibXml2::LibXml2 OpenSSL::SSL OpenSSL::Crypto
+                   zstd::libzstd_shared zstd::libzstd_static)
+            if(TARGET ${_t})
+                set_target_properties(${_t} PROPERTIES
+                    INTERFACE_INCLUDE_DIRECTORIES "${TULPAR_WIN_LLVM_INCLUDE}")
+            endif()
+        endforeach()
+    endfunction()
+    tulpar_win_slim_includes()
+endif()
+
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "LLVM_DIR: ${LLVM_DIR}")
 message(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
@@ -66,6 +91,9 @@ add_compile_definitions(TULPAR_LLVM_MAJOR=${LLVM_VERSION_MAJOR})
 #             so the auto-detect Just Works on the standard MSYS2 path.
 #             Override with -DOPENSSL_ROOT_DIR=... for non-default installs.
 find_package(OpenSSL QUIET)
+if(COMMAND tulpar_win_slim_includes)
+    tulpar_win_slim_includes()   # OpenSSL::* hedefleri simdi olustu
+endif()
 if(OpenSSL_FOUND)
     message(STATUS "OpenSSL: ${OPENSSL_VERSION} (TLS enabled)")
     add_compile_definitions(TULPAR_HAS_TLS=1)
@@ -540,12 +568,23 @@ elseif(WIN32)
     # touches them directly. -Wl,-Bstatic ... -Wl,-Bdynamic is scoped
     # so ws2_32 / kernel32 / advapi32 / etc. (Windows system libs that
     # only have import-lib form) keep being resolved dynamically.
+    #
+    # SIRA ONEMLI (olculdu 2026-09-18, capraz derlemede): bu kutuphaneler
+    # `target_link_options` ile verilince link satirinin BASINA giriyorlar,
+    # libstdc++'tan ONCE. GNU ld/lld bir arsivden yalnizca O ANA KADAR istenen
+    # sembolleri alir; libstdc++ winpthread'i SONRA istedigi icin sonuc
+    # "undefined reference to pthread_create / pthread_cond_wait /
+    # clock_gettime64" duvariydi. `target_link_libraries` ile verilince
+    # nesnelerden SONRA gelirler ve cozulurler.
     if(NOT MSVC)
-        target_link_options(tulpar PRIVATE
-            -static-libgcc
-            -static-libstdc++
-            -Wl,-Bstatic -lwinpthread -lz -lzstd -Wl,-Bdynamic
-        )
+        # -Wl,--stack: PE varsayilani 1 MB, Linux 8 MB. Derleyicinin kendisi de
+        # ozyinelemeli (ayristirici + codegen); ayrica uretilen kullanici
+        # ikilileri de ayni sayiyi aliyor (AOT_LINK_LIB_FLAGS,
+        # src/aot/aot_pipeline.cpp) ki dilin davranisi platforma gore
+        # degismesin.
+        target_link_options(tulpar PRIVATE -static-libgcc -static-libstdc++ -Wl,--stack,8388608)
+        target_link_libraries(tulpar
+            -Wl,-Bstatic winpthread z zstd -Wl,-Bdynamic)
     endif()
 
     # UTF-8 console support
@@ -580,7 +619,15 @@ install(TARGETS tulpar_tame ARCHIVE DESTINATION lib)
 # (runtime/engine_bindings.cpp, uretilmis: engine/tools/gen_engine_bindings.py).
 # `import "engine"` eden program bununla + engine/ arsivleriyle linklenir
 # (engine_link_flags(), src/aot/aot_pipeline.cpp); sirdan binary'ler dokunmaz.
-if(NOT MSVC)
+#
+# KOSUL `NOT MSVC` DEGIL `NOT WIN32`: MinGW de NOT MSVC'dir, yani eski kosul
+# Windows'un YALNIZ yarisini kapatiyordu ve capraz derleme motordan patliyordu.
+# Motor bugun POSIX'e bagli (dlfcn/unistd/pthread/mmap + SysV ABI fiber asm);
+# Windows portu ayri bir faz (docs: Windows plani Faz 4). O faz bitince bu
+# kosul geri alinacak.
+# Windows'ta motor ancak TULPAR_WIN_ENGINE ile geliyor; koprunun bagimliliklari
+# da ayni kosula bagli (yoksa `import "engine"` eden program link edilemez).
+if(NOT WIN32 OR TULPAR_WIN_ENGINE)
     add_library(tulpar_engine STATIC runtime/engine_bindings.cpp)
     target_include_directories(tulpar_engine PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/engine)
     target_compile_definitions(tulpar_engine PRIVATE TULPAR_RUNTIME_ONLY)
@@ -609,9 +656,26 @@ message(STATUS "=== TulparLang Build Configuration ===")
 message(STATUS "Version: ${PROJECT_VERSION}")
 # ---------------------------------------------------------------------------
 # Tulpar Engine (Faz 0) — ayri agac, derleyiciye linklenmez. Bkz. engine/ ve
-# docs/engine/MIMARI.md. Native Windows desteklenmedigi icin MSVC'de atlanir.
+# docs/engine/MIMARI.md.
+#
+# WINDOWS'TA VARSAYILAN OLARAK ATLANIR (MSVC de MinGW de). Eski kosul
+# `NOT MSVC` idi ve MinGW'yi kapsamiyordu: capraz derlemede motor derlenmeye
+# calisip patliyordu. Motor POSIX'e bagli dogdu (dlfcn/unistd/pthread/mmap +
+# SysV ABI fiber asm) ve Windows portu surmekte.
+#
+# `-DTULPAR_WIN_ENGINE=OFF` motoru Windows derlemesinin DISINDA birakir
+# (yalniz dil + stdlib istendiginde; derleme suresini kisaltir).
 # ---------------------------------------------------------------------------
-if(NOT MSVC)
+# MinGW'de VARSAYILAN ACIK: port tamamlandi ve engine_tests Windows'ta
+# 469/469 geciyor (79 gorunur atlama: Vulkan/ses cihazi). MSVC'de KAPALI —
+# motorun Windows yolu GCC'ye ozgudur (fiber gecisi GNU asm sozdiziminde).
+if(MINGW)
+    set(TULPAR_WIN_ENGINE_DEFAULT ON)
+else()
+    set(TULPAR_WIN_ENGINE_DEFAULT OFF)
+endif()
+option(TULPAR_WIN_ENGINE "Windows'ta engine/ agacini da derle" ${TULPAR_WIN_ENGINE_DEFAULT})
+if(NOT WIN32 OR TULPAR_WIN_ENGINE)
     add_subdirectory(engine)
 endif()
 
