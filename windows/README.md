@@ -57,6 +57,28 @@ listesi hem `build.sh`'de hem `run_tests.ps1`'de duruyordu ve elle senkron tutul
 (`tulpar_temp.o/.exe`) çalışma dizinine yazar; test paketi koşarken elle sonda çalıştırmak ikisini
 de bozar ve hata tamamen alakasız görünür ([[Tuzaklar]] 9e).
 
+## Dağıtım paketi (başka bir makineye göndermek için)
+
+`build-windows/` klasörünü olduğu gibi zip'lemek **yetmez**: DLL'ler sysroot'ta kalır, AOT'un
+ikinci adımı için hedefte MinGW bulunmaz ve motor ikilileri `TULPAR_ENGINE_ASSETS` yoksa derleme
+zamanında gömülü Linux yoluna düşer. Paketleyici bu üçünü de çözer:
+
+```bash
+windows/package.sh --zip        # dist-windows/ + dist-windows.zip (~64 MB sıkıştırılmış)
+windows/verify_package.sh       # paketi YALITILMIŞ kopyada Wine ile sınar
+```
+
+Paket içeriği: `tulpar.exe` + AOT'un linklediği arşivler + geçişli DLL kapanışı,
+`linkleyici/` (g++ + collect2 + ld + CRT + gerçekten kullanılan arşivler; `cc1plus` ve `lto1`
+**yok** — C++ derlemiyoruz, yalnız LLVM'in ürettiği `.o`'yu bağlıyoruz), `motor/` (demo, editör,
+sahnec + varlıklar), `ornekler/`, `tulpar.cmd` sarmalayıcısı ve `BENIOKU.txt`.
+
+Doğrulayıcı paketi **ayrı bir dizine kopyalayıp** sysroot'u ve `TULPAR_CC`'yi ortamdan çıkararak
+koşar — geliştirme makinesinde sysroot zaten PATH'te olduğu için yalıtım şart. İlk sürüm tam bu
+sayede iki kez düştü: `liblto_plugin.dll` eksikti (GCC link ederken istiyor) ve `ld.exe`
+`libintl-8.dll` bulamadığı için **hiç başlamıyordu** (`collect2: ld returned 53`, sebebini
+söylemeden). DLL listesi artık elle tutulmuyor: import tablosundan özyinelemeli çıkarılıyor.
+
 ## Mimari: hangi toolchain nerede
 
 | # | Ne | Nerede koşar | Ne için |
