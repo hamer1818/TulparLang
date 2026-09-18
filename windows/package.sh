@@ -89,9 +89,17 @@ if [ -d "$BUILD/engine" ]; then
         [ -f "$BUILD/engine/$e.exe" ] && cp "$BUILD/engine/$e.exe" "$OUT/motor/"
     done
     dll_kapanisi "$OUT/motor" "$OUT"/motor/*.exe
-    mkdir -p "$OUT/motor/varliklar/assets/fonts" "$OUT/motor/varliklar/tests/assets"
-    cp -r "$ROOT/engine/assets/fonts/." "$OUT/motor/varliklar/assets/fonts/" 2>/dev/null || true
-    cp -r "$ROOT/engine/tests/assets/." "$OUT/motor/varliklar/tests/assets/" 2>/dev/null || true
+    # VARLIKLAR DUZ DURUR. TULPAR_ENGINE_ASSETS verildiginde motor her seyi o
+    # dizinin KOKUNDE arar — `%s/editor.sahne`, `%s/checker_cube.gltf`,
+    # `%s/DejaVuSans.ttf` (engine/app/editor_app.cpp, demo_app.cpp). Kaynak
+    # agacindaki `tests/assets/` + `assets/fonts/` yapisini KOPYALAMAK hatali:
+    # ilk surumde tam bunu yaptim, editor "editor.sahne bulunamadi" ile durdu,
+    # demo ise SESSIZCE duz kutulara ve yazi tipsiz HUD'a dustu (kullanici
+    # bildirdi 2026-09-18). Sahnenin referans verdigi glTF'ler de ayni
+    # dizinde olmali (editor.sahne "kaynak \"lod_sphere.gltf\"" diyor).
+    mkdir -p "$OUT/motor/varliklar"
+    for f in "$ROOT/engine/tests/assets"/*; do [ -f "$f" ] && cp "$f" "$OUT/motor/varliklar/"; done
+    cp "$ROOT/engine/assets/fonts/DejaVuSans.ttf" "$OUT/motor/varliklar/" 2>/dev/null || true
 fi
 
 # --- 4) Linkleyici (curated) ------------------------------------------------
