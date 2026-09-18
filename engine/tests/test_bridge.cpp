@@ -30,6 +30,14 @@
 #include "core/memory/arena.hpp"
 #include "platform/thread.hpp"
 #include "rhi/vk_api.hpp"
+#if defined(_WIN32)
+#include <cstdlib>
+// Windows CRT'sinde setenv/unsetenv yok; _putenv_s ayni isi gorur
+// ("DEGISKEN=" bos deger = silme).
+static inline int setenv(const char *k, const char *v, int) { return _putenv_s(k, v ? v : ""); }
+static inline int unsetenv(const char *k) { return _putenv_s(k, ""); }
+#endif
+
 #include "tests/test.hpp"
 
 using namespace tulpar::engine;

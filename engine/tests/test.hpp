@@ -1,6 +1,12 @@
 // Minimal test cercevesi: STL yok, ayirma yok (kayit sabit diziye).
 #pragma once
 #include <cstdio>
+#if defined(_WIN32)
+#include <direct.h>   // _mkdir
+#include <process.h>  // _getpid
+#else
+#include <unistd.h>   // mkdtemp icin <stdlib.h> yeter ama pid/erisim de burada
+#endif
 #include <cstring>
 #include <cstdlib>
 
@@ -33,13 +39,39 @@ inline void skip(const char *reason) {
 }
 // Gecici dizin: $TMPDIR, yoksa /tmp. Android'de /tmp YOK; adb shell'de
 // TMPDIR=/data/local/tmp, APK icinde host internalDataPath verir.
+// Windows'ta /tmp yok: TMP/TEMP bakilir, ikisi de yoksa CALISMA DIZINI (".").
 inline const char *tmp_dir() {
   const char *t = std::getenv("TMPDIR");
-  return (t && *t) ? t : "/tmp";
+  if (t && *t) return t;
+#if defined(_WIN32)
+  t = std::getenv("TMP");
+  if (t && *t) return t;
+  t = std::getenv("TEMP");
+  if (t && *t) return t;
+  return ".";
+#else
+  return "/tmp";
+#endif
 }
 // mkstemp/mkdtemp sablonu: "<tmp>/<stem>_XXXXXX".
 inline void tmp_template(char *buf, size_t n, const char *stem) {
   std::snprintf(buf, n, "%s/%s_XXXXXX", tmp_dir(), stem);
+}
+// Benzersiz gecici DIZIN yaratir; yolu buf'a yazar. Windows'ta `mkdtemp` yok,
+// onun yerine surec kimligi + sayacla ad uretilip `_mkdir` cagriliyor (ayni
+// kosumda iki test ayni adi istemez). Donus: yaratildi mi.
+inline bool tmp_mkdir(char *buf, size_t n, const char *stem) {
+#if defined(_WIN32)
+  static unsigned counter = 0;
+  for (int deneme = 0; deneme < 64; deneme++) {
+    std::snprintf(buf, n, "%s/%s_%u_%u", tmp_dir(), stem, (unsigned)_getpid(), counter++);
+    if (::_mkdir(buf) == 0) return true;
+  }
+  return false;
+#else
+  tmp_template(buf, n, stem);
+  return ::mkdtemp(buf) != nullptr;
+#endif
 }
 struct Registrar {
   Registrar(const char *name, TestFn fn) {

@@ -5,6 +5,8 @@
 // halkanin son satiri + son API cagrisidir.
 #include "bridge/engine_api.h"
 
+#include "platform/fs.hpp"
+
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -13,6 +15,15 @@
 #include <new>
 
 #include <sys/stat.h> // sahne sicak yeniden yukleme: dosya degisim zamani
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>  // GetFileAttributesExA: 100 ns cozunurluklu mtime
+#endif
 
 #include "app/virtual_stick.hpp"
 #include "audio/clip.hpp"
@@ -1739,7 +1750,8 @@ int teng_save_write(void) {
   std::fprintf(f, "# tulpar engine kayit v1\n");
   for (uint32_t i = 0; i < g_save.n; i++) std::fprintf(f, "%s=%s\n", g_save.keys[i], g_save.vals[i]);
   if (std::fclose(f) != 0) { BERR("kayit yazilamadi (kapanis): %s", tmp); return 0; }
-  if (std::rename(tmp, g_save.path) != 0) { BERR("kayit yerine konamadi: %s -> %s", tmp, g_save.path); return 0; }
+  // Tasinabilir "yerine koy": Windows rename hedef varsa duser (platform/fs.hpp).
+  if (platform::fs_replace_file(tmp, g_save.path) != 0) { BERR("kayit yerine konamadi: %s -> %s", tmp, g_save.path); return 0; }
   g_save.dirty = false;
   g_save.writes++;
   BINFO("kayit yazildi: %s (%u anahtar, %u. yazma)", g_save.path, g_save.n, g_save.writes);
@@ -1755,6 +1767,18 @@ static bool file_stamp_pub(const char *path, int64_t *mtime, int64_t *size) {
   if (!path || !*path || stat(path, &st) != 0) return false;
 #if defined(__APPLE__)
   *mtime = (int64_t)st.st_mtimespec.tv_sec * 1000000000ll + st.st_mtimespec.tv_nsec;
+#elif defined(_WIN32)
+  // Windows CRT'sinin `struct stat`i yalniz SANIYE cozunurluklu st_mtime verir
+  // ve bu sicak yeniden yukleme icin YETMEZ: ayni saniye icinde ayni boyutta
+  // yazilan yeni icerik "degismemis" gorunur (olculdu 2026-09-18,
+  // tests/engine_bridge.test.tpr "kopya dosya damgasini ilerletmeli" dustu).
+  // Win32'nin kendi API'si 100 ns cozunurluklu FILETIME veriyor; onu
+  // kullaniyoruz. stat yalniz "dosya var mi" denetimi icin kaldi.
+  WIN32_FILE_ATTRIBUTE_DATA fad;
+  if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return false;
+  const uint64_t ft = ((uint64_t)fad.ftLastWriteTime.dwHighDateTime << 32) |
+                      fad.ftLastWriteTime.dwLowDateTime;
+  *mtime = (int64_t)(ft * 100ull);   // 100 ns birimi -> ns
 #else
   *mtime = (int64_t)st.st_mtim.tv_sec * 1000000000ll + st.st_mtim.tv_nsec;
 #endif

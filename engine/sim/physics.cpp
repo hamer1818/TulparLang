@@ -31,7 +31,11 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/RegisterTypes.h>
 
+#if defined(_WIN32)
+#include <malloc.h>   // _aligned_malloc / _aligned_free
+#else
 #include <dlfcn.h>
+#endif
 
 #include <atomic>
 #include <cstdio>
@@ -58,9 +62,15 @@ void *jph_alloc(size_t n) {
     int k = platform::crash_capture_frames(pcs, 12);
     std::fprintf(stderr, "[jolt-alloc] %zu B", n);
     for (int i = 1; i < k && i < 8; i++) {
+#if defined(_WIN32)
+      // Windows'ta dladdr yok; ham adres yaziliyor. Modul+ofsete cevirmek icin
+      // crash raporundaki modul tabanlari kullanilabilir (platform/crash.cpp).
+      std::fprintf(stderr, " 0x%llx", (unsigned long long)(uintptr_t)pcs[i]);
+#else
       Dl_info info;
       if (dladdr(pcs[i], &info) && info.dli_fbase)
         std::fprintf(stderr, " +0x%llx", (unsigned long long)((uintptr_t)pcs[i] - (uintptr_t)info.dli_fbase));
+#endif
     }
     std::fprintf(stderr, "\n");
   }
@@ -70,11 +80,27 @@ void *jph_realloc(void *p, size_t, size_t n) { g_allocs.fetch_add(1, std::memory
 void jph_free(void *p) { if (p) g_frees.fetch_add(1, std::memory_order_relaxed); std::free(p); }
 void *jph_aligned_alloc(size_t n, size_t a) {
   g_allocs.fetch_add(1, std::memory_order_relaxed);
+  const size_t align = a < sizeof(void *) ? sizeof(void *) : a;
+#if defined(_WIN32)
+  // Windows'ta hizali bellek AYRI bir cifttir: _aligned_malloc ile alinan
+  // blok free() ile birakilamaz (heap bozulur) — jph_aligned_free de
+  // _aligned_free cagiriyor. Jolt zaten hizali ayirma/birakma icin ayri
+  // kancalar tuttugu icin bu eslesme dogru kurulabiliyor.
+  return _aligned_malloc(n, align);
+#else
   void *p = nullptr;
-  if (posix_memalign(&p, a < sizeof(void *) ? sizeof(void *) : a, n) != 0) return nullptr;
+  if (posix_memalign(&p, align, n) != 0) return nullptr;
   return p;
+#endif
 }
-void jph_aligned_free(void *p) { if (p) g_frees.fetch_add(1, std::memory_order_relaxed); std::free(p); }
+void jph_aligned_free(void *p) {
+  if (p) g_frees.fetch_add(1, std::memory_order_relaxed);
+#if defined(_WIN32)
+  _aligned_free(p);   // _aligned_malloc'un ESI; free() ile birakmak bozar
+#else
+  std::free(p);
+#endif
+}
 
 bool g_jolt_registered = false;
 void jolt_global_init() {

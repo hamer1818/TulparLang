@@ -26,7 +26,7 @@
 #include <cstring>
 
 #include <fcntl.h>
-#include <sys/mman.h>
+#include "platform/fs.hpp"
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -282,22 +282,12 @@ inline bool pack_open_memory(const void *data, size_t size, PackFile *out, PackE
 // Dosyayi mmap'ler ve dogrular. Okuma yolunda ayirma yok.
 inline bool pack_open(const char *path, PackFile *out, PackError *err) {
   *out = PackFile{};
-  const int fd = ::open(path, O_RDONLY);
-  if (fd < 0) {
-    if (err) std::snprintf(err->msg, sizeof err->msg, "pack acilamadi: %.100s", path);
-    return false;
-  }
-  struct stat st;
-  if (::fstat(fd, &st) != 0 || st.st_size <= 0) {
-    ::close(fd);
-    return detail::pack_fail(err, "dosya boyutu gecersiz");
-  }
-  const size_t n = (size_t)st.st_size;
-  void *m = ::mmap(nullptr, n, PROT_READ, MAP_PRIVATE, fd, 0);
-  ::close(fd); // esleme fd'den bagimsiz yasar
-  if (m == MAP_FAILED) return detail::pack_fail(err, "mmap basarisiz");
+  // Esleme L0'da (platform/fs.hpp): POSIX mmap / Windows MapViewOfFile.
+  size_t n = 0;
+  void *m = platform::fs_map_readonly(path, &n);
+  if (!m) return detail::pack_fail(err, "dosya eslenemedi (yok, bos ya da okunamiyor)");
   if (!pack_open_memory(m, n, out, err)) {
-    ::munmap(m, n);
+    platform::fs_unmap(m, n);
     return false;
   }
   out->map = m;
@@ -306,7 +296,7 @@ inline bool pack_open(const char *path, PackFile *out, PackError *err) {
 }
 
 inline void pack_close(PackFile *p) {
-  if (p->map) ::munmap(p->map, p->map_size);
+  if (p->map) platform::fs_unmap(p->map, p->map_size);
   *p = PackFile{};
 }
 

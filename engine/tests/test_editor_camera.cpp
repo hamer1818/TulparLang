@@ -131,10 +131,13 @@ ENGINE_TEST(editor_camera_pan_moves_target_perpendicular_to_view) {
 
   // Olcek radius ile: iki kat uzaktan ayni surukleme iki kat yol alir (her
   // yakinlikta "ayni his").
-  app::EditorCamera far;
-  far.yaw = 0.9f; far.pitch = 0.35f; far.radius = 40.0f;
-  app::camera_update(far, mouse_drag(30.0f, -18.0f, false, true));
-  const float len_far = length(far.target - t0);
+  // DEGISKEN ADI `far` DEGIL: Windows basliklarinda `far` (ve `near`) eski
+  // 16-bit isaretci nitelikleri icin BOS MAKRO olarak tanimli — MinGW'de
+  // `EditorCamera far;` satiri "bildirim hicbir sey bildirmiyor" hatasi verir.
+  app::EditorCamera uzak;
+  uzak.yaw = 0.9f; uzak.pitch = 0.35f; uzak.radius = 40.0f;
+  app::camera_update(uzak, mouse_drag(30.0f, -18.0f, false, true));
+  const float len_far = length(uzak.target - t0);
   std::printf("    [bilgi] radius olcegi: r=20 -> %.4f, r=40 -> %.4f, oran %.4f (2 olmali)\n", (double)len, (double)len_far, (double)(len_far / len));
   CHECK(nearly_equal(len_far / len, 2.0f, 1e-3f));
 

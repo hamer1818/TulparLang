@@ -37,6 +37,8 @@
 
 #include <sys/stat.h>
 
+#include "platform/fs.hpp"
+
 #include "platform/time.hpp"
 #include "rhi/vk_api.hpp"
 
@@ -214,7 +216,7 @@ inline void pso_make_parent_dirs(const char *path) {
   for (char *p = buf + 1; *p; p++) {
     if (*p != '/') continue;
     *p = 0;
-    ::mkdir(buf, 0755);
+    platform::fs_mkdir_one(buf);
     *p = '/';
   }
 }
@@ -255,7 +257,9 @@ inline bool pso_cache_write_file(VkApi &api, VkDevice dev, VkPipelineCache cache
   bool ok = std::fwrite(&h, 1, sizeof h, f) == sizeof h && std::fwrite(buf, 1, n, f) == n;
   std::fclose(f);
   std::free(buf);
-  if (!ok || std::rename(tmp, path) != 0) {
+  // Windows rename hedef varsa duser: PSO onbellegi ikinci kayitta
+  // guncellenmezdi (platform/fs.hpp::fs_replace_file).
+  if (!ok || platform::fs_replace_file(tmp, path) != 0) {
     std::remove(tmp);
     return false;
   }

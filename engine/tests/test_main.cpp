@@ -37,8 +37,12 @@ void sig_write(const char *s) {
 extern "C" void on_fatal_signal(int sig) {
   sig_write("\n  COKME testi: ");
   sig_write(const_cast<const char *>(g_running_test));
+  // SIGBUS Windows'ta YOK (C standardinin zorunlu kildigi alti sinyalde degil);
+  // orada hizasiz/gecersiz erisim de SIGSEGV'e dusuyor.
   sig_write(sig == SIGSEGV   ? " (SIGSEGV)\n"
+#if defined(SIGBUS)
             : sig == SIGBUS  ? " (SIGBUS)\n"
+#endif
             : sig == SIGILL  ? " (SIGILL)\n"
             : sig == SIGFPE  ? " (SIGFPE)\n"
             : sig == SIGABRT ? " (SIGABRT)\n"
@@ -85,7 +89,11 @@ int engine_tests_main(int argc, char **argv) {
     crash_child_fn();
     return 4;
   }
+#if defined(SIGBUS)
   for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT}) std::signal(sig, on_fatal_signal);
+#else
+  for (int sig : {SIGSEGV, SIGILL, SIGFPE, SIGABRT}) std::signal(sig, on_fatal_signal);
+#endif
   // Pozitif kontrol: isleyici gercekten test adini basiyor mu (Tuzaklar 1m —
   // gormedigin teshise guvenme). `engine_tests --cokme-kontrol` cokmeli.
   if (argc > 1 && argv[1] && std::strcmp(argv[1], "--cokme-kontrol") == 0) {

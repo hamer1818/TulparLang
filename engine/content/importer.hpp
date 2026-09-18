@@ -22,6 +22,8 @@
 
 #include <sys/stat.h>
 
+#include "platform/fs.hpp"
+
 #include "content/hash.hpp"
 
 namespace tulpar::engine::content {
@@ -70,7 +72,7 @@ inline bool import_mkdir_p(const char *dir) {
     const char c = tmp[i];
     tmp[i] = 0;
     struct stat st;
-    if (::stat(tmp, &st) != 0 && ::mkdir(tmp, 0777) != 0) return false;
+    if (::stat(tmp, &st) != 0 && platform::fs_mkdir_one(tmp) != 0) return false;
     tmp[i] = c;
   }
   struct stat st;

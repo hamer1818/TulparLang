@@ -1,5 +1,33 @@
 #include "app/editor_console.hpp"
 
+#if defined(_WIN32)
+// Windows'ta yakalama yolu: `_pipe`/`_dup`/`_dup2` var ama `fcntl(O_NONBLOCK)`
+// YOK — anonim borularda bloklamayan okuma `PeekNamedPipe` ile yapilir
+// (asagida stream_drain). Sozlesme ayni kaliyor: kare icinde ASLA bloklama.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <io.h>
+#include <fcntl.h>
+#include <windows.h>
+#define TULPAR_PIPE(p)      ::_pipe((p), 1 << 16, _O_BINARY)
+#define TULPAR_DUP(fd)      ::_dup(fd)
+#define TULPAR_DUP2(a, b)   ::_dup2((a), (b))
+#define TULPAR_CLOSE(fd)    ::_close(fd)
+#define TULPAR_READ(fd, b, n)  ::_read((fd), (b), (unsigned)(n))
+#define TULPAR_WRITE(fd, b, n) ::_write((fd), (b), (unsigned)(n))
+#else
+#define TULPAR_PIPE(p)      ::pipe(p)
+#define TULPAR_DUP(fd)      ::dup(fd)
+#define TULPAR_DUP2(a, b)   ::dup2((a), (b))
+#define TULPAR_CLOSE(fd)    ::close(fd)
+#define TULPAR_READ(fd, b, n)  ::read((fd), (b), (n))
+#define TULPAR_WRITE(fd, b, n) ::write((fd), (b), (n))
+#endif
+
 #include <cstdio>
 #include <cstring>
 
@@ -125,7 +153,7 @@ void stream_emit(ConsoleCaptureStream &s, ConsoleCapture &c) {
 
 bool stream_begin(ConsoleCaptureStream &s, int fd, bool is_err, char *err, uint32_t err_cap) {
   int p[2] = {-1, -1};
-  if (::pipe(p) != 0) {
+  if (TULPAR_PIPE(p) != 0) {
     std::snprintf(err, err_cap, "boru acilamadi (fd %d)", fd);
     return false;
   }
@@ -134,24 +162,26 @@ bool stream_begin(ConsoleCaptureStream &s, int fd, bool is_err, char *err, uint3
   // EAGAIN alirsa FILE akisinin hata bayragini kaldirir ve sonraki printf'ler
   // SESSIZCE duser. Sozlesme bunun yerine "her kare drain" olsun: iki drain
   // arasinda boru tamponundan (64 KB) fazla yazan bir program beklerdi.
+#if !defined(_WIN32)
   const int fl = ::fcntl(p[0], F_GETFL, 0);
   ::fcntl(p[0], F_SETFL, (fl < 0 ? 0 : fl) | O_NONBLOCK);
-  s.saved_fd = ::dup(fd);
+#endif
+  s.saved_fd = TULPAR_DUP(fd);
   if (s.saved_fd < 0) {
     std::snprintf(err, err_cap, "fd %d kopyalanamadi", fd);
-    ::close(p[0]);
-    ::close(p[1]);
+    TULPAR_CLOSE(p[0]);
+    TULPAR_CLOSE(p[1]);
     return false;
   }
-  if (::dup2(p[1], fd) < 0) {
+  if (TULPAR_DUP2(p[1], fd) < 0) {
     std::snprintf(err, err_cap, "fd %d yonlendirilemedi", fd);
-    ::close(s.saved_fd);
+    TULPAR_CLOSE(s.saved_fd);
     s.saved_fd = -1;
-    ::close(p[0]);
-    ::close(p[1]);
+    TULPAR_CLOSE(p[0]);
+    TULPAR_CLOSE(p[1]);
     return false;
   }
-  ::close(p[1]);
+  TULPAR_CLOSE(p[1]);
   s.read_fd = p[0];
   s.target_fd = fd;
   s.is_err = is_err;
@@ -164,13 +194,23 @@ void stream_drain(ConsoleCaptureStream &s, ConsoleCapture &c) {
   if (s.read_fd < 0) return;
   char buf[4096];
   for (;;) {
-    const ssize_t n = ::read(s.read_fd, buf, sizeof buf);
+#if defined(_WIN32)
+    // Bloklamayan okumanin Windows karsiligi: once PeekNamedPipe ile HAZIR
+    // bayt sayisina bak, yoksa cik. `_read` hazir veri yokken BLOKLARDI.
+    DWORD avail = 0;
+    HANDLE h = (HANDLE)_get_osfhandle(s.read_fd);
+    if (h == INVALID_HANDLE_VALUE) break;
+    if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr) || avail == 0) break;
+    const long n = TULPAR_READ(s.read_fd, buf, avail < sizeof buf ? avail : sizeof buf);
+#else
+    const ssize_t n = TULPAR_READ(s.read_fd, buf, sizeof buf);
+#endif
     if (n <= 0) break; // 0 = yazan yok, <0 = EAGAIN (bloklamayan bos boru)
     c.bytes += (uint32_t)n;
     // Terminal SUSMASIN: yakalanan baytlar ozgun fd'ye de gider. Yoksa
     // editoru terminalden calistiran gelistirici ciktinin tamamini kaybederdi.
     if (c.echo && s.saved_fd >= 0) {
-      const ssize_t w = ::write(s.saved_fd, buf, (size_t)n);
+      const long w = (long)TULPAR_WRITE(s.saved_fd, buf, (size_t)n);
       (void)w;
     }
     for (ssize_t i = 0; i < n; i++) {

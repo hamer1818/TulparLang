@@ -578,6 +578,19 @@ ENGINE_TEST(editor_overlay_box_select_draws_and_reports_only_on_real_drag) {
     if (k == 1) { out_path(path, sizeof path, "overlay_box_select.ppm"); p.out_ppm = path; }
     else p.out_ppm = nullptr;
     st = editor_probe_render(p);
+    // Sonda DUSERSE SEBEBINI SOYLE: ciplak "st == Ok degil" satiri neyin
+    // olmadigini (Vulkan? bellek? katman?) soylemiyordu.
+    if (st != ProbeStatus::Ok)
+      std::printf("    [bilgi] sonda (k=%d) dustu: durum %d, sebep: %s\n", k, (int)st, p.err[0] ? p.err : "(bos)");
+    // Vulkan ORTADAN KALKTIYSA bu bir HATA degil, OLCUMSUZLUKTUR ve gorunur
+    // atlanir (testin basindaki NoVulkan kapisiyla ayni kural). Wine altinda
+    // olculdu (2026-09-18): ayni surecte cok sayida sonda ornegi acilinca
+    // sonrakiler NoVulkan doner — Tuzaklar 8al'in Wine'daki dusuk tavanli
+    // hali. Gercek Windows'ta bu tavan yeniden olculmeli.
+    if (st == ProbeStatus::NoVulkan) {
+      skip("Vulkan tukendi (ayni surecte cok sonda; Wine tavani) — kutu secim piksel kapisi olculmedi");
+      return;
+    }
     CHECK(st == ProbeStatus::Ok);
     if (st != ProbeStatus::Ok) return;
     std::memcpy(px[k], p.pixels, sizeof px[k]);
