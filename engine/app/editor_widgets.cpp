@@ -459,7 +459,7 @@ bool component_header(const char *icon, const char *name, bool *enabled, bool *r
                           ImGuiTreeNodeFlags_NoTreePushOnOpen; // TreePush'i biz yapariz (ID sirasi: bkz. asagisi)
   if (default_open) fl |= ImGuiTreeNodeFlags_DefaultOpen;
   // Metin bos: ok disinda her seyi biz cizeriz (renkli simge, kirpilmis ad).
-  const bool open = ImGui::TreeNodeEx(name, fl, "%s", );
+  const bool open = ImGui::TreeNodeEx(name, fl, "%s", "");
   ImGui::PopStyleVar();
   ImGui::PopStyleColor(3);
   const WidgetRect hr = item_rect();
