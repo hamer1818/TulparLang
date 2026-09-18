@@ -74,7 +74,9 @@ static renderer::MeshHandle make_voxel_mesh(Arena &temp_arena, renderer::Rendere
   int16_t *mask = temp_arena.alloc_array<int16_t>(content::voxel_mesh_mask_capacity(grid));
   content::VoxelMeshCounts counts = content::count_voxel_mesh(grid, mask);
   
-  if (counts.vertices == 0) return 0;
+  // MeshHandle{} = 0xFFFFFFFF (GECERSIZ). "return 0" hem derlenmiyor
+  // hem de derlenseydi 0 numarali GECERLI mesh'i isaret ederdi.
+  if (counts.vertices == 0) return renderer::MeshHandle{};
   content::VoxelVertex *verts = temp_arena.alloc_array<content::VoxelVertex>(counts.vertices);
   uint32_t *indices = temp_arena.alloc_array<uint32_t>(counts.indices);
   content::build_voxel_mesh(grid, mask, verts, indices);
