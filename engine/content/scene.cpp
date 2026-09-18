@@ -13,6 +13,10 @@ constexpr float kDeg2Rad = 3.14159265358979f / 180.0f;
 uint32_t bits_of(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
 bool feq(float a, float b) { return bits_of(a) == bits_of(b); }
 bool veq(Vec3 a, Vec3 b) { return feq(a.x, b.x) && feq(a.y, b.y) && feq(a.z, b.z); }
+// Vec2 icin ayri: su/ruzgar yonu Vec2. Yazicida vec2() eklenmisti ama
+// ESITLIK yolu hala veq(Vec3) cagiriyordu -- ayni derleme hatasinin
+// ikinci yuzu (CI: scene.cpp:278,281 could not convert Vec2 to Vec3).
+bool veq2(Vec2 a, Vec2 b) { return feq(a.x, b.x) && feq(a.y, b.y); }
 
 // --- yazici: bayt sayar, kapasite asilsa da uzunlugu dogru dondurur ---
 struct Out {
@@ -275,10 +279,10 @@ bool scene_entity_equal(const SceneEntity &a, const SceneEntity &b) {
   if (c & kSceneWater) {
     if (!feq(a.wave_length, b.wave_length) || !feq(a.wave_amplitude, b.wave_amplitude) ||
         !feq(a.wave_steepness, b.wave_steepness) || !feq(a.wave_speed, b.wave_speed) ||
-        !veq(a.wave_direction, b.wave_direction)) return false;
+        !veq2(a.wave_direction, b.wave_direction)) return false;
   }
   if (c & kSceneWind) {
-    if (!veq(a.wind_direction, b.wind_direction) || !feq(a.wind_strength, b.wind_strength) ||
+    if (!veq2(a.wind_direction, b.wind_direction) || !feq(a.wind_strength, b.wind_strength) ||
         !feq(a.wind_gustiness, b.wind_gustiness) || !feq(a.wind_gust_freq, b.wind_gust_freq) ||
         a.wind_seed != b.wind_seed) return false;
   }

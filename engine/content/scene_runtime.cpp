@@ -18,7 +18,7 @@ namespace {
 Vec3 v3(const float *f) { return {f[0], f[1], f[2]}; }
 Quat q4(const float *f) { return {f[0], f[1], f[2], f[3]}; }
 
-static renderer::MeshHandle build_terrain_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::HeightmapConfig &cfg) {
+static renderer::MeshHandle make_terrain_mesh(Arena &temp_arena, renderer::Renderer &ren, const content::HeightmapConfig &cfg) {
   float *heights = temp_arena.alloc_array<float>(cfg.width * cfg.height);
   content::generate_heightmap(cfg, heights);
   
@@ -58,7 +58,7 @@ static renderer::MeshHandle build_terrain_mesh(core::Arena &temp_arena, renderer
   return ren.create_mesh(verts, nverts, indices, nindices);
 }
 
-static renderer::MeshHandle build_voxel_mesh(core::Arena &temp_arena, renderer::Renderer &ren, uint32_t nx, uint32_t ny, uint32_t nz, float cell) {
+static renderer::MeshHandle make_voxel_mesh(Arena &temp_arena, renderer::Renderer &ren, uint32_t nx, uint32_t ny, uint32_t nz, float cell) {
   content::VoxelGrid grid;
   grid.nx = nx; grid.ny = ny; grid.nz = nz; grid.voxel_size = cell;
   uint8_t *cells = temp_arena.alloc_array<uint8_t>(nx * ny * nz);
@@ -88,7 +88,7 @@ static renderer::MeshHandle build_voxel_mesh(core::Arena &temp_arena, renderer::
   return ren.create_mesh(r_verts, counts.vertices, indices, counts.indices);
 }
 
-static renderer::MeshHandle build_water_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::GerstnerWave &wave) {
+static renderer::MeshHandle make_water_mesh(Arena &temp_arena, renderer::Renderer &ren, const content::GerstnerWave &wave) {
   uint32_t w = 64, h = 64;
   float cell = 2.0f;
   uint32_t nverts = w * h;
@@ -159,9 +159,13 @@ bool SceneRuntime::init(Arena &arena, renderer::Renderer &r, const SceneBlobView
     // Ilkel (prosedurel) mesh tablosu
   build_primitive_meshes(r, prims_);
 
-  // Faz 3: Gecici arena ile prosedurel sistemleri uret
-  Arena temp;
-  if (temp.init(std::malloc(32 << 20), 32 << 20)) {
+  // Faz 3: Gecici arena ile prosedurel sistemleri uret  // Arena::init VOID doner ve bir AD ister; eski kod bool
+  // bekliyordu. Tamponu biz ayirdigimiz icin isaretciyi de biz
+  // tutariz -- Arena::base_ private, disaridan free edilemez.
+  void *temp_buf = std::malloc(32 << 20);
+  if (temp_buf) {
+    Arena temp;
+    temp.init(temp_buf, 32 << 20, "gecici-prosedurel");
     if (view.terrains) {
       for (uint32_t i = 0; i < view.h->terrain_count; i++) {
         const SceneBlobTerrain &t = view.terrains[i];
@@ -169,14 +173,14 @@ bool SceneRuntime::init(Arena &arena, renderer::Renderer &r, const SceneBlobView
         cfg.width = (uint32_t)t.width; cfg.height = (uint32_t)t.height;
         cfg.cell_size = t.cell; cfg.amplitude = t.amp;
         cfg.frequency = t.freq; cfg.octaves = t.octaves; cfg.seed = t.seed;
-        terrain_meshes_[t.entity] = build_terrain_mesh(temp, r, cfg);
+        terrain_meshes_[t.entity] = make_terrain_mesh(temp, r, cfg);
         temp.reset();
       }
     }
     if (view.voxels) {
       for (uint32_t i = 0; i < view.h->voxel_count; i++) {
         const SceneBlobVoxel &v = view.voxels[i];
-        voxel_meshes_[v.entity] = build_voxel_mesh(temp, r, v.size_x, v.size_y, v.size_z, v.cell);
+        voxel_meshes_[v.entity] = make_voxel_mesh(temp, r, v.size_x, v.size_y, v.size_z, v.cell);
         temp.reset();
       }
     }
@@ -187,11 +191,11 @@ bool SceneRuntime::init(Arena &arena, renderer::Renderer &r, const SceneBlobView
         wave.steepness = w.steepness; wave.amplitude = w.amplitude; wave.wavelength = w.wavelength;
         wave.direction = {w.direction[0], w.direction[1]};
         wave.speed = 1.0f; // Hiz runtime'da animasyon icin
-        water_meshes_[w.entity] = build_water_mesh(temp, r, wave);
+        water_meshes_[w.entity] = make_water_mesh(temp, r, wave);
         temp.reset();
       }
     }
-    std::free(temp.base);
+    std::free(temp_buf);
   }
 
   return true;
@@ -263,7 +267,8 @@ void SceneRuntime::update(float dt, const sim::Physics *ph) {
   if (particles_.alive_count() > 0 || view_.particles) {
     if (view_.particles) {
       // Oylesine basit bir emitter mantigi: sabit hizda uretim (basitlik icin rng sabit seed veya zamanla degisen seed alinabilir)
-      Rng rng; rng.seed((uint32_t)(dt * 1000000.0f));
+      // Rng'nin varsayilan kurucusu ve seed() uyesi yok: Rng(uint32_t).
+      Rng rng((uint32_t)(dt * 1000000.0f));
       for (uint32_t i = 0; i < view_.h->particle_count; i++) {
         const SceneBlobParticle &ep = view_.particles[i];
         if (ep.spawn_rate > 0.0f && rng.next_float() < (ep.spawn_rate * dt)) {
@@ -343,7 +348,8 @@ void SceneRuntime::draw(renderer::Renderer &r, Vec3 cam_pos, float time_s, const
       const SceneBlobTerrain &t = view_.terrains[i];
       if (terrain_meshes_[t.entity].valid()) {
         const Mat4 m = entity_matrix(t.entity, ph);
-        r.draw_mesh(terrain_meshes_[t.entity], m, Vec4{0.7f, 0.7f, 0.7f, 1.0f}, 0, 0.1f, 0.9f, Vec3{0}, 0.0f);
+        r.draw(terrain_meshes_[t.entity], m, Vec3{0.7f, 0.7f, 0.7f}); // draw_mesh diye bir uye yok; PBR
+        // argumanlari da hicbir yere gitmiyordu
         stats_.draws++;
       }
     }
@@ -353,7 +359,8 @@ void SceneRuntime::draw(renderer::Renderer &r, Vec3 cam_pos, float time_s, const
       const SceneBlobVoxel &v = view_.voxels[i];
       if (voxel_meshes_[v.entity].valid()) {
         const Mat4 m = entity_matrix(v.entity, ph);
-        r.draw_mesh(voxel_meshes_[v.entity], m, Vec4{0.8f, 0.8f, 0.8f, 1.0f}, 0, 0.0f, 0.5f, Vec3{0}, 0.0f);
+        r.draw(voxel_meshes_[v.entity], m, Vec3{0.8f, 0.8f, 0.8f}); // draw_mesh diye bir uye yok; PBR
+        // argumanlari da hicbir yere gitmiyordu
         stats_.draws++;
       }
     }
@@ -363,7 +370,8 @@ void SceneRuntime::draw(renderer::Renderer &r, Vec3 cam_pos, float time_s, const
       const SceneBlobWater &w = view_.waters[i];
       if (water_meshes_[w.entity].valid()) {
         const Mat4 m = entity_matrix(w.entity, ph);
-        r.draw_mesh(water_meshes_[w.entity], m, Vec4{0.1f, 0.4f, 0.8f, 0.8f}, 0, 0.1f, 0.1f, Vec3{0}, 0.0f);
+        r.draw(water_meshes_[w.entity], m, Vec3{0.1f, 0.4f, 0.8f}); // draw_mesh diye bir uye yok; PBR
+        // argumanlari da hicbir yere gitmiyordu
         stats_.draws++;
       }
     }

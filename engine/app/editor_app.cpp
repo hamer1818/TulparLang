@@ -479,7 +479,7 @@ void track_world_edit(EditorState &st, const PropItem &it) {
 }
 // --- Gizli Özellikler İçin Dinamik Mesh Üreticileri ---
 
-static renderer::MeshHandle build_terrain_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::HeightmapConfig &cfg) {
+static renderer::MeshHandle make_terrain_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::HeightmapConfig &cfg) {
   float *heights = temp_arena.alloc_array<float>(cfg.width * cfg.height);
   content::generate_heightmap(cfg, heights);
   
@@ -519,7 +519,7 @@ static renderer::MeshHandle build_terrain_mesh(core::Arena &temp_arena, renderer
   return ren.create_mesh(verts, nverts, indices, nindices);
 }
 
-static renderer::MeshHandle build_voxel_mesh(core::Arena &temp_arena, renderer::Renderer &ren, uint32_t nx, uint32_t ny, uint32_t nz, float cell) {
+static renderer::MeshHandle make_voxel_mesh(core::Arena &temp_arena, renderer::Renderer &ren, uint32_t nx, uint32_t ny, uint32_t nz, float cell) {
   content::VoxelGrid grid;
   grid.nx = nx; grid.ny = ny; grid.nz = nz; grid.voxel_size = cell;
   uint8_t *cells = temp_arena.alloc_array<uint8_t>(nx * ny * nz);
@@ -549,7 +549,7 @@ static renderer::MeshHandle build_voxel_mesh(core::Arena &temp_arena, renderer::
   return ren.create_mesh(r_verts, counts.vertices, indices, counts.indices);
 }
 
-static renderer::MeshHandle build_water_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::GerstnerWave &wave) {
+static renderer::MeshHandle make_water_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::GerstnerWave &wave) {
   uint32_t w = 64, h = 64;
   float cell = 2.0f;
   uint32_t nverts = w * h;
@@ -3141,22 +3141,30 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           cfg.width = (uint32_t)e.terrain_width; cfg.height = (uint32_t)e.terrain_height;
           cfg.cell_size = e.terrain_cell; cfg.amplitude = e.terrain_amp;
           cfg.frequency = e.terrain_freq; cfg.octaves = e.terrain_octaves;
-          cfg.seed = e.terrain_seed;
-          core::Arena temp;
-          if (temp.init(std::malloc(32 << 20), 32 << 20)) {
-            st.terrain_meshes[i] = build_terrain_mesh(temp, ren, cfg);
-            std::free(temp.base);
+          cfg.seed = e.terrain_seed;          // Arena::init VOID doner ve bir AD ister; eski kod bool
+          // bekliyordu. Tamponu biz ayirdigimiz icin isaretciyi de biz
+          // tutariz -- Arena::base_ private, disaridan free edilemez.
+          void *temp_buf = std::malloc(32 << 20);
+          if (temp_buf) {
+            Arena temp;
+            temp.init(temp_buf, 32 << 20, "gecici-prosedurel");
+            st.terrain_meshes[i] = make_terrain_mesh(temp, ren, cfg);
+            std::free(temp_buf);
             st.terrain_hashes[i] = h;
           }
         }
       }
       if (e.components & content::kSceneVoxel) {
         uint32_t h = (uint32_t)(e.voxel_size_x + e.voxel_size_y + e.voxel_size_z + e.voxel_cell*10);
-        if (h != st.voxel_hashes[i]) {
-          core::Arena temp;
-          if (temp.init(std::malloc(32 << 20), 32 << 20)) {
-            st.voxel_meshes[i] = build_voxel_mesh(temp, ren, e.voxel_size_x, e.voxel_size_y, e.voxel_size_z, e.voxel_cell);
-            std::free(temp.base);
+        if (h != st.voxel_hashes[i]) {          // Arena::init VOID doner ve bir AD ister; eski kod bool
+          // bekliyordu. Tamponu biz ayirdigimiz icin isaretciyi de biz
+          // tutariz -- Arena::base_ private, disaridan free edilemez.
+          void *temp_buf = std::malloc(32 << 20);
+          if (temp_buf) {
+            Arena temp;
+            temp.init(temp_buf, 32 << 20, "gecici-prosedurel");
+            st.voxel_meshes[i] = make_voxel_mesh(temp, ren, e.voxel_size_x, e.voxel_size_y, e.voxel_size_z, e.voxel_cell);
+            std::free(temp_buf);
             st.voxel_hashes[i] = h;
           }
         }
@@ -3167,11 +3175,15 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           content::GerstnerWave wave;
           wave.wavelength = e.wave_length; wave.amplitude = e.wave_amplitude;
           wave.steepness = e.wave_steepness; wave.speed = e.wave_speed;
-          wave.direction = e.wave_direction;
-          core::Arena temp;
-          if (temp.init(std::malloc(4 << 20), 4 << 20)) {
-            st.water_meshes[i] = build_water_mesh(temp, ren, wave);
-            std::free(temp.base);
+          wave.direction = e.wave_direction;          // Arena::init VOID doner ve bir AD ister; eski kod bool
+          // bekliyordu. Tamponu biz ayirdigimiz icin isaretciyi de biz
+          // tutariz -- Arena::base_ private, disaridan free edilemez.
+          void *temp_buf = std::malloc(4 << 20);
+          if (temp_buf) {
+            Arena temp;
+            temp.init(temp_buf, 4 << 20, "gecici-prosedurel");
+            st.water_meshes[i] = make_water_mesh(temp, ren, wave);
+            std::free(temp_buf);
             st.water_hashes[i] = h;
           }
         }
@@ -3217,15 +3229,18 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       
       // Gizli ozellikler icin Editor viewport cizimi (Procedural Meshes)
       if (e.components & content::kSceneTerrain && st.terrain_meshes[i]) {
-        ren.draw_mesh(st.terrain_meshes[i], m, Vec4{0.7f, 0.7f, 0.7f, 1.0f}, 0, 0.1f, 0.9f, Vec3{0}, 0.0f);
+        ren.draw(st.terrain_meshes[i], m, Vec3{0.7f, 0.7f, 0.7f}); // draw_mesh diye bir uye yok; PBR
+        // argumanlari da hicbir yere gitmiyordu
         drew = true;
       }
       if (e.components & content::kSceneVoxel && st.voxel_meshes[i]) {
-        ren.draw_mesh(st.voxel_meshes[i], m, Vec4{0.8f, 0.8f, 0.8f, 1.0f}, 0, 0.0f, 0.5f, Vec3{0}, 0.0f);
+        ren.draw(st.voxel_meshes[i], m, Vec3{0.8f, 0.8f, 0.8f}); // draw_mesh diye bir uye yok; PBR
+        // argumanlari da hicbir yere gitmiyordu
         drew = true;
       }
       if (e.components & content::kSceneWater && st.water_meshes[i]) {
-        ren.draw_mesh(st.water_meshes[i], m, Vec4{0.2f, 0.6f, 1.0f, 0.8f}, 0, 0.0f, 0.1f, Vec3{0}, 0.0f);
+        ren.draw(st.water_meshes[i], m, Vec3{0.2f, 0.6f, 1.0f}); // draw_mesh diye bir uye yok; PBR
+        // argumanlari da hicbir yere gitmiyordu
         drew = true;
       }
       
