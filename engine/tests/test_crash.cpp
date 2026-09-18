@@ -5,10 +5,16 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <direct.h>   // _mkdir
+#include <process.h>  // _spawnl, _P_WAIT
+#else
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstring>
 
 #include "platform/crash.hpp"
 #include "tests/test.hpp"
@@ -52,6 +58,27 @@ void run_case(bool fiber) {
   }
   char dir[512];
   ::tulpar::engine::test::tmp_template(dir, sizeof dir, "engine_crash");
+#if defined(_WIN32)
+  // Windows'ta mkdtemp/fork/exec YOK. Dizin adi surec kimligiyle benzersiz
+  // kilinir; cocuk `_spawnl(_P_WAIT, ...)` ile beklenerek baslatilir.
+  {
+    char *x = std::strstr(dir, "XXXXXX");
+    if (x) std::snprintf(x, 7, "%06u", (unsigned)(_getpid() % 1000000u));
+  }
+  CHECK(_mkdir(dir) == 0);
+  // Cocuk bir erisim ihlaliyle olurse Windows'ta CIKIS KODU exception kodudur
+  // (0xC0000005 = EXCEPTION_ACCESS_VIOLATION). POSIX'teki "sinyalle oldu"
+  // bilgisinin karsiligi budur; normal cikis (0 / 4 / 127) BASARISIZLIKTIR
+  // cunku cocuk cokmemis demektir.
+  intptr_t st = fiber
+      ? _spawnl(_P_WAIT, g_engine_tests_exe, g_engine_tests_exe, "--crash-child", dir, "fiber", (const char *)nullptr)
+      : _spawnl(_P_WAIT, g_engine_tests_exe, g_engine_tests_exe, "--crash-child", dir, (const char *)nullptr);
+  const unsigned long code = (unsigned long)st;
+  bool crashed = (code == 0xC0000005ul || code == 0xC0000006ul || code == 0xC000001Dul ||
+                  code == 0xC0000094ul || code == 0xC0000374ul);
+  CHECK(crashed);
+  if (!crashed) std::printf("    [bilgi] cocuk cikis kodu 0x%lx (cokme bekleniyordu)\n", code);
+#else
   CHECK(mkdtemp(dir) != nullptr);
   pid_t pid = fork();
   CHECK(pid >= 0);
@@ -64,6 +91,7 @@ void run_case(bool fiber) {
   waitpid(pid, &status, 0);
   CHECK(WIFSIGNALED(status));
   CHECK(WIFSIGNALED(status) && (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS));
+#endif
   static char buf[16384];
   char path[512];
   bool ok = read_report(dir, path, sizeof path, buf, sizeof buf);
@@ -80,12 +108,25 @@ void run_case(bool fiber) {
     char cmd[1024];
     snprintf(cmd, sizeof cmd, "python3 " ENGINE_SOURCE_DIR "/tools/symbolize.py '%s' --binary '%s' 2>/dev/null",
              path, g_engine_tests_exe);
+#if defined(_WIN32)
+    // MSVCRT'de popen/pclose `_popen`/`_pclose` adiyla ve pclose dogrudan
+    // cocugun CIKIS KODUNU dondurur (POSIX'teki wait durumu DEGIL), yani
+    // WEXITSTATUS kabugu yok.
+    FILE *pp = _popen(cmd, "r");
+    static char out[32768];
+    size_t n = pp ? fread(out, 1, sizeof out - 1, pp) : 0;
+    out[n] = 0;
+    int rc = pp ? _pclose(pp) : -1;
+    const int sym_rc = rc;
+#else
     FILE *pp = popen(cmd, "r");
     static char out[32768];
     size_t n = pp ? fread(out, 1, sizeof out - 1, pp) : 0;
     out[n] = 0;
     int rc = pp ? pclose(pp) : -1;
-    if (rc != 0 && WEXITSTATUS(rc) == 2) {
+    const int sym_rc = rc == -1 ? -1 : WEXITSTATUS(rc);
+#endif
+    if (rc != 0 && sym_rc == 2) {
       std::printf("    ATLANDI: sembol cozucu (llvm-symbolizer/addr2line) yok, rapor ham kaldi\n");
     } else {
 #if defined(__linux__)

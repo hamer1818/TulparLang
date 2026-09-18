@@ -359,10 +359,29 @@ namespace {
 // tavanimiz 1024 — tasma riski; ustelik null tamponlu bicimi malloc eder).
 // ".." coz(un)mez: diyalog yukari cikarken file_path_parent kullanir, yani
 // yola hicbir zaman ".." eklenmez.
+// MUTLAK MI? Platforma gore degisir ve yanlis cevap SESSIZ bir hata uretir:
+// mutlak bir yol goreli sanilirsa calisma dizinine EKLENIR ve ortaya
+// "Z:\proje/C:\Users\...\Temp" gibi var olmayan bir yol cikar (olculdu
+// 2026-09-18: Windows'ta dosya diyalogu hicbir sey listelemiyordu).
+//   POSIX  : "/..."
+//   Windows: "C:\..." / "C:/..." (surucu harfi) ya da "\\sunucu\pay" (UNC)
+//            ayrica "\..." ve "/..." gecerli surucuye gore koktur.
+static bool path_is_absolute(const char *p) {
+  if (!p || !*p) return false;
+  if (p[0] == '/') return true;
+#if defined(_WIN32)
+  if (p[0] == '\\') return true;                       // kok ya da UNC
+  if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':' &&
+      (p[2] == '\\' || p[2] == '/'))
+    return true;                                        // "C:\" / "C:/"
+#endif
+  return false;
+}
+
 bool absolutize(const char *in, char *out, uint32_t cap) {
   if (!out || cap == 0) return false;
   out[0] = 0;
-  if (in && in[0] == '/') {
+  if (path_is_absolute(in)) {
     if (std::strlen(in) + 1 > cap) return false;
     std::snprintf(out, cap, "%s", in);
     return true;

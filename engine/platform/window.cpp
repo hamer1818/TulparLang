@@ -1,10 +1,10 @@
 #include "platform/window.hpp"
 
 #if !defined(__ANDROID__)
-#include <dlfcn.h>
-
 #include <cstdio>
 #include <cstring>
+
+#include "platform/dl.hpp"   // dlopen/LoadLibrary ortak shim'i
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -54,21 +54,30 @@ void on_char(GLFWwindow *, unsigned int cp) { if (g_char_count < InputState::kMa
 bool load_glfw(char *err, size_t n) {
   if (g.lib) return true;
   const char *names[] = {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+      // MSYS2/vcpkg "glfw3.dll" adiyla kurar; bazi dagitimlarda surumlu ad.
+      "glfw3.dll", "libglfw3.dll", "glfw.dll",
+#elif defined(__APPLE__)
       "libglfw.3.dylib", "/opt/homebrew/lib/libglfw.3.dylib", "/usr/local/lib/libglfw.3.dylib",
 #else
       "libglfw.so.3", "libglfw.so",
 #endif
   };
   for (const char *nm : names) {
-    g.lib = dlopen(nm, RTLD_NOW | RTLD_LOCAL);
+    g.lib = dl_open(nm);
     if (g.lib) break;
   }
   if (!g.lib) {
-    std::snprintf(err, n, "GLFW yok (libglfw.so.3 / libglfw.3.dylib): masaustu pencere acilamaz");
+    std::snprintf(err, n,
+#if defined(_WIN32)
+                  "GLFW yok (glfw3.dll): masaustu pencere acilamaz"
+#else
+                  "GLFW yok (libglfw.so.3 / libglfw.3.dylib): masaustu pencere acilamaz"
+#endif
+    );
     return false;
   }
-#define L(field, sym) g.field = (decltype(g.field))dlsym(g.lib, sym); if (!g.field) { std::snprintf(err, n, "GLFW sembolu yok: %s", sym); return false; }
+#define L(field, sym) g.field = (decltype(g.field))dl_sym(g.lib, sym); if (!g.field) { std::snprintf(err, n, "GLFW sembolu yok: %s", sym); return false; }
   L(init, "glfwInit"); L(terminate, "glfwTerminate"); L(window_hint, "glfwWindowHint");
   L(create_window, "glfwCreateWindow"); L(destroy_window, "glfwDestroyWindow");
   L(poll_events, "glfwPollEvents"); L(window_should_close, "glfwWindowShouldClose");
@@ -81,7 +90,7 @@ bool load_glfw(char *err, size_t n) {
   L(set_char_callback, "glfwSetCharCallback");
 #undef L
   // Secmeli (yoklugu hata DEGIL): tam ekran yetenegi.
-#define O(field, sym) g.field = (decltype(g.field))dlsym(g.lib, sym);
+#define O(field, sym) g.field = (decltype(g.field))dl_sym(g.lib, sym);
   O(get_primary_monitor, "glfwGetPrimaryMonitor"); O(get_window_monitor, "glfwGetWindowMonitor");
   O(set_window_monitor, "glfwSetWindowMonitor"); O(get_video_mode, "glfwGetVideoMode");
   O(get_window_pos, "glfwGetWindowPos");

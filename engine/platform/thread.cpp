@@ -1,10 +1,24 @@
 #include "platform/thread.hpp"
 
+// MinGW-w64 winpthreads'i tasidigi icin thread/mutex/sched yolu Windows'ta da
+// AYNI pthread kodudur (ayri bir Win32 uyarlamasi yazmiyoruz: ikinci bir kod
+// yolu = ikinci bir hata yuzeyi). Platforma ozgu kalan tek sey cekirdek
+// sayisi — sysconf POSIX'e ozgu.
 #include <atomic>
 #include <pthread.h>
 #include <sched.h>
 #include <time.h>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 namespace tulpar::engine::platform {
 
@@ -60,8 +74,14 @@ void thread_sleep_us(uint32_t us) {
 }
 
 uint32_t cpu_count() {
+#if defined(_WIN32)
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  return si.dwNumberOfProcessors ? (uint32_t)si.dwNumberOfProcessors : 1u;
+#else
   long n = sysconf(_SC_NPROCESSORS_ONLN);
   return n > 0 ? (uint32_t)n : 1u;
+#endif
 }
 
 } // namespace tulpar::engine::platform

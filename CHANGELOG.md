@@ -35,6 +35,53 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Yeni — natif Windows geri geldi (yerel; CI'a henüz dönülmedi)
+
+3.13.0'da bırakılan natif Windows hedefi **çalışır durumda geri geldi**. O
+zamanki kaldırma yalnız betikleri, installer'ı ve CI işini silmişti;
+**hiçbir C++ satırına dokunulmamıştı** — bu karar kendini ödedi: shim'ler
+(`async` = Win32 fiber, thread = `_beginthreadex`, socket = winsock,
+dl = `LoadLibrary`) **hiç değiştirilmeden** doğru çalıştı.
+
+- **Nasıl derleniyor:** Linux'tan MinGW-w64 çapraz derlemesi.
+  `windows/setup_sysroot.py` hedef ağacı (LLVM 22.1.8 + CRT + OpenSSL) sürümü
+  `windows/packages.lock` ile sabitlenmiş MSYS2 paketlerinden kurar;
+  `--host-gcc` çapraz GCC 16.2.0'ı **sudo olmadan** getirir;
+  `windows/build.sh` → `build-windows/tulpar.exe` + `libtulpar_runtime.a` +
+  `libtulpar_tame.a`.
+- **Nasıl doğrulanıyor:** Wine altında, **aynı** test koşucularıyla:
+  `./build.sh windows test` ve `./build.sh windows suites`. Windows kipi yalnız
+  `TULPAR_BIN` / `RUN_PREFIX` / `EXE_SUFFIX` değişkenlerini değiştirir; ayrı bir
+  koşucu ve ikinci bir `COMPILE_ONLY_TESTS` listesi **yok** (3.13.0'ın
+  `run_tests.ps1` ile elle senkron tutma sorunu tekrarlanmıyor).
+- **TLS düzeltmesi (gerçek hata):** Windows'ta OpenSSL'in varsayılan güven
+  deposu yok; `https` istekleri hata metni **olmadan** `status 0` dönüyordu.
+  `http_fetch.cpp` artık OpenSSL 3.2+ `org.openssl.winstore://` sağlayıcısıyla
+  **Windows sistem sertifika deposunu** yüklüyor (ölçüldü: 0 → 307).
+- **`TULPAR_CC`:** AOT link adımının sürücüsü artık seçilebilir (varsayılan
+  `clang++`, davranış aynı). Windows'ta MinGW `g++` gerekiyor; çapraz
+  geliştirmede üretilen `.exe` ile `libtulpar_runtime.a`'nın aynı ABI'de
+  buluşmasını sağlıyor.
+- **Platform kapısı düzeltmesi:** `engine/` ve `tulpar_engine` hedefleri
+  `if(NOT MSVC)` ile korunuyordu — MinGW `WIN32`'dir ama `MSVC` değildir, yani
+  kapı Windows'un yarısını kaçırıyordu. Artık `if(NOT WIN32)`.
+- **Motor da portlandı (`engine/`).** MinGW'de varsayılan açık
+  (`TULPAR_WIN_ENGINE`; MSVC'de kapalı — Windows yolu GCC'ye özgü). Yeni L0
+  shim'leri (`platform/dl.hpp`, `platform/fs.hpp`), VirtualAlloc arena, **Win64
+  fiber geçişi** (rcx/rdx, XMM6-15, TEB yığın alanları), vectored-SEH çökme
+  raporcusu, `vulkan-1.dll` yükleyici, `PeekNamedPipe` ile bloklamayan konsol
+  yakalama. Ölçüm: `engine_tests.exe` **469/469** (79 görünür atlama),
+  `engine_demo --headless` çıktısı Linux'unkiyle **bayt bayt aynı**,
+  `tests/engine_bridge.test.tpr` **19/19**.
+- **Bulunan iki taşınabilirlik hatası (her iki platformu da etkiliyordu):**
+  yolda boşluk varsa AOT link komutu bölünüyordu (`tulpar --aot "bos luk.tpr"`
+  Linux'ta da düşüyordu — artık tırnaklanıyor) ve editörün dosya diyaloğu
+  `C:\...` gibi mutlak yolları göreli sanıp çalışma dizinine ekliyordu.
+- **Kapsam dışı:** Windows hosttan web/Android hedefleri.
+  Wine ≠ Windows: kabul testi gerçek Windows'ta yapılmalı.
+- Ayrıntı ve tuzaklar: [windows/README.md](windows/README.md),
+  `docs/mindmap/Tuzaklar.md` §9.
+
 ### Doğruluk — üç sessiz hata sınıfı kapandı
 
 - **Yığın sızıntısı (R11).** `AST_ARRAY_LITERAL` ve dört kutulu-ABI builtin

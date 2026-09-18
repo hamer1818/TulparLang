@@ -1703,19 +1703,29 @@ void declare_runtime_functions(LLVMBackend *backend) {
 
   // setjmp signature is platform-dependent.
   //   Linux/macOS: int setjmp(jmp_buf)               -- 1 ptr arg
-  //   Windows x64: int _setjmpex(jmp_buf, void*)     -- 2 ptr args; the second
-  //                arg is the SEH frame address. Calling the 1-arg form leaves
-  //                the SEH frame unset and the matching longjmp later corrupts
-  //                stack unwind => process aborts at first throw.
-  // The C-side macro setjmp(buf) expands to either form; we explicitly target
-  // the right ABI here.
+  //   Windows x64: int _setjmp(jmp_buf, void *frame) -- 2 ptr args.
+  //
+  // WINDOWS'TA IKINCI ARGUMAN **NULL** GECILIR ve bu bilincli bir karardir.
+  // Windows x64'te longjmp iki kipte calisir:
+  //   * frame != NULL (`_setjmpex` / `setjmp` makrosunun varsayilani):
+  //     longjmp RtlUnwindEx ile SEH COZUMU yapar — hedef cerceveye kadar
+  //     butun cerceveleri gecerli unwind verisiyle yurumesi gerekir.
+  //   * frame == NULL: unwind YOK, yalniz kayit geri yuklemesi — Linux'taki
+  //     setjmp/longjmp semantiginin aynisi.
+  // Tulpar'in istisna modeli ikincisini varsayar (aot_throw duz longjmp'tir,
+  // hicbir yikici calistirmaz) ve birincisi LLVM'in urettigi cerceveler icin
+  // GUVENILIR DEGIL: olculdu (2026-09-18, Wine/mingw, LLVM 22) — `catch`
+  // icinden atilan bir hata IKI dagitici cercevesini asarken RtlUnwindEx
+  // tekrar eden EXCEPTION_ACCESS_VIOLATION uretip sureci yigin tasmasiyla
+  // oldurdu. Ayni desen C++ ile yazilinca (her iki kipte de) calisiyor, yani
+  // sorun CRT'de degil uretilen cercevenin unwind verisinde.
 #ifdef _WIN32
   {
     LLVMTypeRef setjmp_params[] = {backend->ptr_type, backend->ptr_type};
     LLVMTypeRef setjmp_type =
         LLVMFunctionType(backend->int32_type, setjmp_params, 2, 0);
     backend->func_setjmp =
-        LLVMAddFunction(backend->module, "_setjmpex", setjmp_type);
+        LLVMAddFunction(backend->module, "_setjmp", setjmp_type);
   }
 #else
   {
@@ -1732,18 +1742,11 @@ void declare_runtime_functions(LLVMBackend *backend) {
           backend->context,
           LLVMGetEnumAttributeKindForName("returns_twice", 13), 0));
 
-  // llvm.frameaddress.p0(i32) -> ptr  -- needed to pass the current frame
-  // address as setjmp's second arg on Windows x64.
+  // Windows'ta setjmp iki argumanlidir; codegen ikinciyi NULL gecer.
 #ifdef _WIN32
-  {
-    LLVMTypeRef fa_params[] = {backend->int32_type};
-    LLVMTypeRef fa_type =
-        LLVMFunctionType(backend->ptr_type, fa_params, 1, 0);
-    backend->func_frameaddress = LLVMAddFunction(
-        backend->module, "llvm.frameaddress.p0", fa_type);
-  }
+  backend->win_setjmp_two_args = true;
 #else
-  backend->func_frameaddress = nullptr;
+  backend->win_setjmp_two_args = false;
 #endif
 
   // aot_clock_ms() -> VMValue (float ms)
@@ -10120,17 +10123,16 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         backend->builder, LLVMGlobalGetValueType(backend->func_aot_try_push),
         backend->func_aot_try_push, nullptr, 0, "eh_buf");
 
-    // int result = setjmp(buf)  -- on Windows x64 we actually call
-    // _setjmpex(buf, frame_addr) so the SEH frame is recorded; longjmp
-    // later needs that to walk the stack without crashing.
+    // int result = setjmp(buf)
+    // Windows x64: `_setjmp(buf, NULL)`. NULL ikinci arguman "longjmp UNWIND
+    // YAPMASIN" demektir (bkz. declare_runtime_functions'daki uzun not):
+    // Tulpar'in istisna modeli Linux'taki duz setjmp/longjmp semantigi
+    // uzerine kurulu ve SEH cozumu LLVM'in urettigi cerceveler icin
+    // guvenilir degil — cerceve adresi verildiginde `catch` icinden atilan
+    // hata iki dagitici cercevesini asarken sureci olduruyordu.
     LLVMValueRef result;
-    if (backend->func_frameaddress) {
-      LLVMValueRef fa_args[] = {LLVMConstInt(backend->int32_type, 0, 0)};
-      LLVMValueRef frame_addr = LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_frameaddress),
-          backend->func_frameaddress, fa_args, 1, "eh_frame");
-      LLVMValueRef setjmp_args[] = {buf, frame_addr};
+    if (backend->win_setjmp_two_args) {
+      LLVMValueRef setjmp_args[] = {buf, LLVMConstNull(backend->ptr_type)};
       result = LLVMBuildCall2(
           backend->builder, LLVMGlobalGetValueType(backend->func_setjmp),
           backend->func_setjmp, setjmp_args, 2, "setjmp_res");

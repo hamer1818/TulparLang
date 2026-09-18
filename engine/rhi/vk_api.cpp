@@ -1,6 +1,6 @@
 #include "rhi/vk_api.hpp"
 
-#include <dlfcn.h>
+#include "platform/dl.hpp"   // dlopen/LoadLibrary ortak shim'i
 #include <stdlib.h>
 
 namespace tulpar::engine::rhi {
@@ -9,13 +9,13 @@ namespace {
 bool g_direct_moltenvk = false;
 bool load_from(VkApi &api, const char *const *names, int n) {
   for (int i = 0; i < n; i++) {
-    api.lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
+    api.lib = platform::dl_open(names[i]);
     if (api.lib) break;
   }
   if (!api.lib) return false;
-  api.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(api.lib, "vkGetInstanceProcAddr");
+  api.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)platform::dl_sym(api.lib, "vkGetInstanceProcAddr");
   if (!api.vkGetInstanceProcAddr) {
-    dlclose(api.lib);
+    platform::dl_close(api.lib);
     api.lib = nullptr;
     return false;
   }
@@ -50,7 +50,11 @@ bool vk_api_load(VkApi &api) {
   // (atlanan test sessizce yesil sayilmasin; ozet satiri "atlandi" gostermeli).
   if (const char *e = getenv("TULPAR_ENGINE_NO_VULKAN"); e && *e && *e != '0') return false;
   const char *names[] = {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+      // Windows'ta loader'in adi SABIT: vulkan-1.dll (Khronos ICD sozlesmesi).
+      // Surucu kurulu degilse bulunamaz ve cagiran gorunur sekilde ATLANIR.
+      "vulkan-1.dll",
+#elif defined(__APPLE__)
       // Once loader (brew vulkan-loader), sonra MoltenVK'nin kendisi (ICD
       // olarak degil dogrudan: vkGetInstanceProcAddr disari verir). dlopen
       // bare adi DYLD yolunda aramaz; brew dizinleri TAM yol.
@@ -118,7 +122,7 @@ void vk_api_load_device(VkApi &api, VkDevice dev) {
 }
 
 void vk_api_unload(VkApi &api) {
-  if (api.lib) dlclose(api.lib);
+  if (api.lib) platform::dl_close(api.lib);
   api = VkApi{};
   g_direct_moltenvk = false;
 }

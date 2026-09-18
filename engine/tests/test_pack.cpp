@@ -564,6 +564,13 @@ ENGINE_TEST(pack_delta_patch_rebuilds_new_pack) {
   CHECK(identical);
   // KONTROL 1: yanlis tabana uygulama reddedilir.
   CHECK(!pack_patch_apply(a, new_pack, patch, p_out, &err) && std::strstr(err.msg, "taban"));
+  // p_patch AYNI YOLA yeniden yazilacak; once ESLEMEYI KAPAT.
+  // Windows'ta bellege eslenmis bir dosya KILITLIDIR: uzerine yazmak
+  // ERROR_USER_MAPPED_FILE ile duser (POSIX'te serbesttir ve eski esleme
+  // eski icerigi gostermeye devam eder). Test bunu yapmadigi icin Windows'ta
+  // iki kontrol dusuyordu — urun tarafinda da ayni kural gecerli: bir pack'i
+  // yerinde guncellemek istiyorsan once pack_close.
+  pack_close(&patch);
   // KONTROL 2: degisiklik yoksa 0 blok tasinir; her sey degistiyse hepsi tasinir.
   uint32_t same_changed = 99, all_changed = 0;
   uint64_t same_bytes = 1, all_bytes = 0;

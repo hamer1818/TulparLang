@@ -24,6 +24,7 @@
 #include "app/editor_files.hpp"
 #include "app/editor_ui.hpp"
 #include "tests/editor_probe.hpp"
+#include "platform/fs.hpp"
 #include "tests/test.hpp"
 
 #include <imgui.h>
@@ -50,11 +51,10 @@ bool touch(const char *dir, const char *name) {
   return true;
 }
 bool make_tree(TempTree &t) {
-  tmp_template(t.root, sizeof t.root, "tul_dosya");
-  if (!::mkdtemp(t.root)) return false;
+  if (!tmp_mkdir(t.root, sizeof t.root, "tul_dosya")) return false;
   char sub[1024];
   std::snprintf(sub, sizeof sub, "%s/alt_sahneler", t.root);
-  if (::mkdir(sub, 0755) != 0) return false;
+  if (tulpar::engine::platform::fs_mkdir_one(sub) != 0) return false;
   // Kasten TERS sirada yaratilir: sonuc sirali cikiyorsa siralama GERCEKTEN
   // yapiliyor demektir (readdir sirasi dosya sistemine baglidir).
   t.ok = touch(t.root, "zemin.sahne") && touch(t.root, "arena.sahne") && touch(t.root, "bolum1.sahne") && touch(t.root, "kapak.png") &&

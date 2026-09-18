@@ -2678,3 +2678,141 @@ sürücünün dayattığı `currentExtent` ile değil — yoksa X11'de her kare 
 ImGui `DisplaySize`'ı yeni ölçüye, hedef eskisine göre çizilmiş bir kare hep kalır.
 Kapı: `rhi_resize_follows_window_size_not_only_out_of_date` (senaryo tablosu + pozitif kontrol
 olarak ESKİ kural, tam ekran senaryosunu kaçırdığı ölçülür).
+
+## 9. Windows (çapraz derleme + Wine) — 3.13.0'da bırakılan hedefin geri getirilmesi
+
+### 9a. `if(NOT MSVC)` Windows'un yalnız YARISINI kapatır
+
+CMake'te bir hedefi "Windows'ta atla" diye kapatmak için yazılan `if(NOT MSVC)` **MinGW'yi
+kapsamaz**: MinGW `WIN32`'dir ama `MSVC` değildir. Depoda `engine/` ve `tulpar_engine` tam bu
+koşulla korunuyordu; natif Windows MSVC ile derlendiği sürece doğru göründü, çapraz derleme
+(MinGW) denenince ilk hata motordan geldi. Doğrusu `if(NOT WIN32)`. Aynı şüpheyle bakılacak
+ikizler: `if(MSVC)` ile yazılan *derleyici bayrağı* blokları doğrudur (gerçekten MSVC'ye özgü),
+ama *platform* kapıları WIN32 ile yazılmalıdır.
+
+### 9b. `target_link_options` kütüphaneyi link satırının BAŞINA koyar — GNU ld sırayı umursar
+
+`-lwinpthread` `target_link_options` ile verilince nesnelerden ve libstdc++'tan **önce** geliyor.
+GNU ld/lld bir arşivden yalnız **o ana kadar istenmiş** sembolleri alır; libstdc++ winpthread'i
+daha sonra istediği için sonuç `undefined reference to pthread_create / pthread_cond_wait /
+clock_gettime64` duvarıydı — kütüphane link satırında **vardı** ve yine de çözülmedi. Kütüphaneler
+`target_link_libraries` ile verilir (nesnelerden sonra gelirler); `target_link_options` yalnız
+gerçek *bayraklar* içindir (`-static-libgcc`, `-Wl,-Bstatic`). Bu, MSYS2'de g++ ile fark edilmiyordu
+çünkü sürücü winpthread'i kendi spec'inden en sona ekliyor.
+
+### 9c. AOT'lanan programın davranışı `tulpar.exe`'de değil, RUNTIME ARŞİVİNDE yaşar
+
+TLS düzeltmesi (`http_fetch.cpp`) yapıldı, `cmake --build --target tulpar` koşuldu, davranış
+değişmedi. Sebep: `http_get` çağrısını yapan kod kullanıcının derlenmiş programına
+`libtulpar_runtime.a`'dan giriyor; derleyici ikilisini tazelemek hiçbir şeyi değiştirmez. Kural:
+runtime'da görünen bir dosyaya dokundunsa (`src/vm/`, `runtime/`, `src/common/http_fetch.cpp`, ...)
+**iki hedefi de** derle — bu, 8am/8aq'nın (bayat arşiv) doğrudan akrabası.
+
+### 9d. Windows'ta OpenSSL'in varsayılan güven deposu YOKTUR — https sessizce `status 0` döner
+
+`SSL_CTX_set_default_verify_paths()` Linux'ta dağıtımın CA paketini bulur, Windows'ta **boş bir
+depo** bulur: zincir doğrulaması düşer ve `http_get("https://…")` hata metni olmadan `status 0`
+döner (düz http aynı anda 200 döndüğü için "ağ çalışıyor" sanılır). Ölçüm üçlüsü teşhisi tek başına
+veriyor: Linux+https 307, Windows+http 200, Windows+https 0; `TULPAR_CA_BUNDLE=<pem>` verilince
+Windows+https 307. Kalıcı çözüm bir PEM paketlemek DEĞİL, **Windows sistem sertifika deposunu**
+kullanmak: OpenSSL 3.2+ `SSL_CTX_load_verify_store(ctx, "org.openssl.winstore://")`. Doğrulaması da
+tuzaklı: `X509_STORE` nesne sayısı bu sağlayıcıda **0 kalır** (tembel yükleme), yani "0 sertifika"
+başarısızlık kanıtı değildir — kanıt gerçek bir https isteğidir.
+
+### 9e. Aynı dizinde iki `tulpar <dosya>.tpr` aynı geçici dosyaya yazar
+
+Doğrudan çalıştırma yolu (`aot_compile_and_run_silent`) çıktı adını SABİT tutuyor:
+`tulpar_temp.o` / `tulpar_temp.exe`, üstelik **çalışma dizininde**. Aynı dizinde paralel iki koşum
+birbirinin nesnesini/ikilisini eziyor ve hata "AOT derleme/bağlama başarısız: clang ve
+libtulpar_runtime.a mevcut mu?" gibi **tamamen alakasız** görünüyor. Test paketi arka planda
+koşarken elle sonda çalıştırmak tam olarak bunu üretti (2026-09-18). Sonda çalıştıracaksan ayrı bir
+dizinde çalıştır; uzun vadeli çözüm geçici ada süreç kimliği eklemek.
+
+### 9f. Aynı hedefte İKİ mingw dağıtımı karıştırmak — üç ayrı kılıkta aynı hata
+
+Çapraz derlemede elde iki tam mingw-w64 takımı vardı: Arch'ın çapraz GCC'si (sürücü, Linux'ta koşar)
+ve MSYS2 sysroot'u (LLVM/OpenSSL + CRT + libstdc++, Windows). Üretilen `.exe`'nin **AOT link adımı
+Wine altında MSYS2'nin `g++`'ı** ile yapıldığı için çalışma zamanı ağacı MSYS2'nindir; derlemenin de
+o ağaca göre yapılması gerekir. Karıştıran her kombinasyon ayrı bir kılıkta patladı:
+
+| Karışım | Hata |
+|---|---|
+| MSYS2 `include/` + Arch CRT başlıkları | `stdlib.h: redefinition of 'wcstod'`, `'at_quick_exit' has not been declared` |
+| MSYS2 `lib/` önce + Arch `crt2.o` | `undefined reference to '_gnu_exception_handler'` |
+| Arch libstdc++ ile derlenmiş arşiv + MSYS2 g++ linki | `undefined reference to std::__codecvt_utf8_utf16_base<wchar_t>::do_in` |
+
+En sinsisi bu üçü değil, **dördüncüsüydü**: host **clang** ile derlenen sürüm sorunsuz derlendi,
+linklendi ve çalıştı — ama `catch` içinden atılan bir hata `call()` sınırını geçerken süreç
+**çıkış kodu 0 ile sessizce** öldü (`errors.test.tpr` üçüncü testte duruyordu). Wine `+seh` izi
+gerçeği söyledi: tekrar eden `EXCEPTION_ACCESS_VIOLATION` → yığın taşması. Link sırasındaki tek
+ipucu `libstdc++.a(...): duplicate section ... has different size` uyarılarıydı — clang'ın typeinfo
+bölümleri GCC'ninkilerle aynı boyda değil. Aynı program GCC ile derlenmiş ikilide (hem Haziran'daki
+MSYS2 yapısı hem yeni çapraz GCC yapısı) **doğru** çalışıyor.
+
+Kural: bir hedef için **tek ağaç**. Sürücü başka bir paketten gelebilir (Arch GCC 16.2.0 = MSYS2 GCC
+16.2.0), ama başlıklar, CRT, libstdc++ ve startfile'lar **aynı ağaçtan** gelmeli:
+`-nostdinc -nostdinc++` + MSYS2 başlıkları, `-B<sysroot>/lib/` (startfile için; `-L` yetmez) ve
+`-L<sysroot>/lib`. Ders daha genel: "derleniyor + linkleniyor + basit test geçiyor" ABI uyumunun
+kanıtı değildir; ABI uyumsuzluğu en önce **istisna/unwind** yollarında görünür ve orada da sessizdir.
+
+### 9g. Win64 fiber geçişi SysV'nin kopyası değildir — üç ayrı fark, üçü de sessiz
+
+Motorun iş sistemi kendi fiber geçişini asm'de yazıyor. Aynı dosya Windows'ta **derlenir** (mingw
+`__x86_64__` tanımlar) ama SysV sürümü Win64'te YANLIŞ ÇALIŞIR ve hata "bazen bozuk veri" olarak
+çıkar — derleyici hiçbir şey söylemez:
+
+1. **Argümanlar:** SysV rdi/rsi, Win64 **rcx/rdx**.
+2. **Callee-saved kümesi daha geniş:** rbx rbp r12-r15'e ek olarak **rdi, rsi ve XMM6–XMM15**.
+   XMM'leri saklamayan bir geçiş, float ağırlıklı bir işi (fizik, renderer) sessizce bozar.
+3. **TEB:** Windows yığının sınırlarını thread ortamı bloğunda tutar —
+   `gs:0x08` StackBase, `gs:0x10` StackLimit, `gs:0x1478` DeallocationStack. Fiber'a geçerken
+   bunlar güncellenmezse yığın taşma denetimi ve SEH çözümü **başka bir yığını** doğru sanar.
+
+Ayrıca hizalama: 8 push'tan sonra `sub rsp,160` yapmak `movaps`'ı **hizasız** adrese düşürür
+(giriş rsp%16==8). 168 çıkarmak gerekir. `fiber_prepare` de aynı düzeni birebir kurmalı —
+264 baytlık çerçeve: 24 (TEB) + 168 (XMM+dolgu) + 64 (8 GPR) + 8 (dönüş).
+Doğrulama: `engine_tests` fiber/iş testleri ve `physics_runs_on_fiber_job_system_same_hash`.
+
+### 9h. Windows'ta eşlenmiş dosya KİLİTLİDİR; POSIX'te değildir
+
+`mmap`/`MapViewOfFile` ile açık bir pack dosyasının üzerine yazmak Windows'ta
+`ERROR_USER_MAPPED_FILE` ile düşer; POSIX'te serbesttir (eski eşleme eski içeriği görmeye devam
+eder). `test_pack.cpp` tam bu yüzden Windows'ta düşüyordu: yamayı üretip aynı yola yeniden
+yazıyordu. Kural: bir pack'i **yerinde güncellemeden önce `pack_close`**. Aynı sınıf hot-reload
+için de geçerli — dosyayı yazan taraf ile eşleyen taraf aynı süreçteyse Windows'ta çakışır.
+
+### 9i. `far`/`near` hâlâ Windows makrosu; `/tmp` yok; `st_mtim` yok
+
+Üç küçük ama tekrar eden fark, üçü de derleme ya da davranış hatası olarak çıktı:
+* `windows.h` **`far` ve `near`'ı boş makro** olarak tanımlar (16-bit mirası). `EditorCamera far;`
+  satırı MinGW'de "bildirim hiçbir şey bildirmiyor" hatası verir. Değişkene başka ad ver.
+* `/tmp` YOKTUR: `TMPDIR` → `TMP` → `TEMP` sırası izlenmeli (hem C++ tarafında `tmp_dir()` hem
+  Tulpar testlerinde `gecici_yol()`).
+* `struct stat` **nanosaniye alanı taşımaz** (`st_mtim`/`st_mtimespec` yok). Saniye çözünürlüğü
+  sıcak yeniden yükleme için yetmez (aynı saniyede aynı boyutta yazılan içerik "değişmemiş"
+  görünür); `GetFileAttributesExA` + `ftLastWriteTime` 100 ns verir.
+
+### 9j. Windows'ta çöken süreç, rapor yazıldıktan sonra KENDİSİ ölmeli
+
+POSIX tarafında çökme raporcusu sinyali varsayılana bırakıp yeniden yükseltir (core dump + kesin
+ölüm). Windows'ta aynı yerde `EXCEPTION_CONTINUE_SEARCH` demek, işletim sisteminin hata kutusuna /
+WER'e / `winedbg`'ye düşmek demektir: ölçüldü (Wine, 2026-09-18) — çökme testinin çocuk süreci
+**asılı kaldı**, paket 10 dakikada zaman aşımına uğradı. Doğrusu: `SetErrorMode(SEM_NOGPFAULTERRORBOX)`
++ rapor yazıldıktan sonra `TerminateProcess(..., exception_code)`; hata ayıklayıcı varsa
+(`IsDebuggerPresent`) dokunma. Bir başka incelik: MinGW CRT'si SEH'i **C sinyallerine çevirir**, bu
+yüzden yakalama noktası `SetUnhandledExceptionFilter` değil **`AddVectoredExceptionHandler(1, ...)`**
+olmalı — yoksa testin kendi SIGSEGV işleyicisi önce koşar ve rapor hiç yazılmaz.
+
+### 9k. Windows'ta `rename` hedefin ÜZERİNE YAZMAZ — "atomik kaydet" ikinci çağrıda bozulur
+
+"Geçici dosyaya yaz, sonra `rename` ile yerine koy" deseni POSIX'te atomiktir ve hedefi sessizce
+ezer. Windows'ta `rename`/`MoveFile` **hedef varsa başarısız olur**. Sonuç sinsi: ilk kayıt
+çalışır (dosya yoktur), **ikincisi düşer**. Motorun kalıcı kaydı ve PSO önbelleği tam bu yüzden
+Windows'ta tek kullanımlıktı (ölçüldü 2026-09-18: `engine_bridge.test.tpr` ilk koşuda 19/19,
+ikinci koşuda 18/19 — "kayit yerine konamadi"). Testin iki kez koşulması hatayı ortaya çıkardı;
+tek koşu yeşil görünüyordu.
+
+Doğrusu `platform/fs.hpp::fs_replace_file`: Windows'ta
+`MoveFileExA(..., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`, POSIX'te `rename`.
+Ders iki katmanlı: (1) `rename` taşınabilir değildir; (2) **durum bırakan bir testi iki kez
+koş** — ilk koşu temiz dizinde yeşil olabilir.

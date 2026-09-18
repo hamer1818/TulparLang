@@ -167,6 +167,12 @@ tags
 docs/mindmap/.obsidian/workspace.json
 _fio_t*.txt
 
+# Windows capraz derleme sysroot'u (windows/setup_sysroot.py). Turetilmis ve
+# BUYUK (~1.4 GB): MSYS2 mingw64 paketlerinden acilan hedef agac + indirme
+# onbellegi. Depoda duran tek sey SURUM KILIDI: windows/packages.lock.
+windows/dist/
+windows/cache/
+
 # Android build outputs (android/build_tame_android.sh)
 android/dist/
 *_apk/

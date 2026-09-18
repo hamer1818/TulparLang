@@ -139,8 +139,14 @@ struct AOTPhaseTimer {
   // order had ws2_32 before libssl and produced a wall of
   // `undefined reference to __imp_WSAGetLastError` once OpenSSL was
   // available at build time on Windows.
+  // YIGIN BOYU 8 MB (-Wl,--stack): Windows PE varsayilani 1 MB, Linux'un
+  // varsayilani 8 MB. Fark kullanicinin programinda GORUNUR: Linux'ta gecen
+  // derin ozyineleme Windows'ta yigini tasirip sureci OLDURUYOR — olculdu
+  // (2026-09-18, tests/self_recursion.test.tpr "derin ozyineleme cokmuyor",
+  // 100 000 seviye: Linux OK, Windows olum). Ayni sayiyi vererek dilin
+  // davranisini platformdan bagimsiz tutuyoruz.
   #define AOT_LINK_LIB_FLAGS \
-      "-Wl,--export-all-symbols " \
+      "-Wl,--export-all-symbols -Wl,--stack,8388608 " \
       "-static -static-libgcc -static-libstdc++ " \
       "-ltulpar_runtime" AOT_TLS_LINK_FLAGS \
       " -lws2_32 -lwsock32"
@@ -383,6 +389,43 @@ static std::string aot_extra_link_flags() {
   return std::string(" ") + e;
 }
 
+// Kabuk icin guvenli tirnaklama. Link ve calistirma komutlari `system()` ile
+// kosuyor; yolda BOSLUK varsa komut iki argumana bolunuyordu. Olculdu
+// 2026-09-18 (`tulpar --aot "bos luk.tpr"`): Linux'ta
+// "input file 'bos' is the same as output file", Windows'ta
+// "cannot find luk.exe" — yani hata IKI PLATFORMDA da vardi, ama Windows'ta
+// cok daha sik karsilasilir ("Program Files", "Masaustu", OneDrive yollari).
+static std::string aot_shell_quote(const std::string &s) {
+#if PLATFORM_WINDOWS
+  // cmd.exe: cift tirnak yeter ve ters bolu KACIS DEGILDIR (yol ayiricisidir),
+  // yani kacislamak yolu bozardi. Yol icinde " karakteri Windows'ta zaten yasak.
+  return "\"" + s + "\"";
+#else
+  std::string out = "\"";
+  for (char c : s) {
+    if (c == '"' || c == '\\' || c == '$' || c == '`') out += '\\';
+    out += c;
+  }
+  out += '"';
+  return out;
+#endif
+}
+
+// Link adiminda kullanilan SURUCU. Nesne dosyasini LLVM kendi uretiyor; bu
+// program yalnizca "linkleyici surucusu" olarak cagriliyor (C++ calisma zamani
+// + sistem kutuphanelerini dogru sirayla baglasin diye).
+//
+// Varsayilan clang++ — ama sabit olmasi Windows'ta yolu tikiyordu: orada
+// PATH'teki clang++ cogunlukla MSVC hedefli olur ve bayraklarimiz
+// (-static-libgcc, -Wl,--export-all-symbols, -lws2_32) MinGW'nindir. Ayrica
+// capraz gelistirmede uretilen .exe ile libtulpar_runtime.a'nin AYNI ABI'de
+// (GCC/MSVCRT) bulusmasi gerekiyor. TULPAR_CC bunu cagirana birakiyor;
+// verilmezse davranis oncekiyle bit bit ayni.
+static const char *aot_link_driver() {
+  const char *e = getenv("TULPAR_CC");
+  return (e && *e) ? e : "clang++";
+}
+
 // --- Web hedefi (wasm32-unknown-emscripten) ---------------------------------
 // `tulpar build --target=web` main.cpp'den bu bayrağı kurar. Codegen'e
 // backend->target_web olarak taşınır (VMValue ABI'sini sret+byval'a çevirir
@@ -457,6 +500,12 @@ static std::string find_android_script(const char *name) {
 // Sonuç ölçüldü: makinede çalışır bir NDK dururken hem betik hem sürücü
 // "NDK bulunamadı" diyordu. Bir kural iki yerde yazılınca ikisi de aynı
 // eksikle yaşıyor — burada tam olarak bu oldu.
+// WINDOWS'TA YOK: Android capraz derlemesi Windows HOST'tan desteklenmiyor —
+// find_android_ndk() orada zaten "" donuyor, yani bu iki yardimci tamamen olu
+// kod. dirent.h de Windows'ta yok (include'lari zaten `#if !PLATFORM_WINDOWS`
+// ile korunuyordu; korumasiz kalan bu iki govdeydi ve capraz derleme tam
+// burada patliyordu).
+#if !PLATFORM_WINDOWS
 static bool ndk_usable(const std::string &dir) {
   if (dir.empty()) return false;
   // Araç zinciri klasörü ana bilgisayara göre adlanıyor.
@@ -496,6 +545,7 @@ static std::string newest_subdir(const std::string &base, const char *prefix) {
   closedir(d);
   return best;
 }
+#endif // !PLATFORM_WINDOWS
 
 static std::string find_android_ndk() {
 #if PLATFORM_WINDOWS
@@ -898,6 +948,14 @@ static std::string build_web_link_search_dirs() {
 // durdurmak gereksiz olurdu.
 static void warn_if_prebuilt_archive_stale(const char *dist_dir,
                                            const char *rebuild_cmd) {
+#if PLATFORM_WINDOWS
+  // Windows HOST'ta web/Android hedefleri zaten desteklenmiyor (em++ ve NDK
+  // yollari Linux/macOS icin kurulu; find_android_ndk() de "" donuyor), yani
+  // denetlenecek onceden derlenmis arsiv yok. dirent.h de burada yok.
+  (void)dist_dir;
+  (void)rebuild_cmd;
+  return;
+#else
   static const char *srcs[] = {
       "runtime/tame_impl.c", "runtime/tame_bindings.cpp",
       "src/vm/runtime_bindings.cpp", "src/vm/vm.cpp",
@@ -936,6 +994,7 @@ static void warn_if_prebuilt_archive_stale(const char *dist_dir,
       return;   // tek uyarı yeter
     }
   }
+#endif // PLATFORM_WINDOWS
 }
 
 // Web hedefinin HTML kabuğu. em++'a .html ürettirmiyoruz: emcc'nin HTML
@@ -1072,7 +1131,18 @@ static const char *tame_link_flags(int uses_tame) {
 // için grup içinde verilir. Vulkan ve GLFW dlopen'lanır: link zamanı bağımlılık yok.
 static const char *engine_link_flags(int uses_engine) {
   if (!uses_engine) return "";
-#if PLATFORM_MACOS
+#if PLATFORM_WINDOWS
+  // Windows: arsivler ayni (cok yonlu bagimli olduklari icin --start-group),
+  // ek olarak MOTORUN KULLANDIGI SISTEM DLL'LERI. Vulkan ve GLFW LINKLENMEZ —
+  // ikisi de calisma zamaninda LoadLibrary ile yukleniyor (platform/dl.hpp),
+  // yani surucu/pencere kutuphanesi olmayan bir makinede program yine acilir.
+  //   winmm/ole32/user32 : miniaudio (WASAPI) ve pencere/COM baslangici
+  //   dbghelp            : cokme raporunun modul cozumu
+  return " -Wl,--start-group -ltulpar_engine -lengine_bridge -lengine_content -lengine_renderer"
+         " -lengine_sim -lengine_rhi -lengine_audio -lengine_core -lengine_platform -lengine_jolt"
+         " -lengine_recast -lengine_meshopt -lengine_astcenc -Wl,--end-group"
+         " -lwinmm -lole32 -luser32 -ldbghelp -lpthread";
+#elif PLATFORM_MACOS
   return " -ltulpar_engine -lengine_bridge -lengine_content -lengine_renderer -lengine_sim"
          " -lengine_rhi -lengine_audio -lengine_core -lengine_platform -lengine_jolt -lengine_recast"
          " -lengine_meshopt -lengine_astcenc -lpthread";
@@ -1577,7 +1647,8 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     }
   }
 
-  // Link using clang++ (need C++ runtime for tulpar_runtime).
+  // Link using the driver from aot_link_driver() — clang++ by default,
+  // TULPAR_CC overrides it (need a C++ driver: tulpar_runtime is C++).
   // `-g` is forwarded to clang when --debug was requested so debug
   // sections emitted in the object file survive linking into the
   // final binary. Today the object has no `!dbg` metadata yet
@@ -1629,10 +1700,13 @@ AOTResult aot_compile_with_filename_debug(const char *source,
         obj_filename, exe_filename, web_dirs.c_str(), preload.c_str(),
         extra_flags.c_str());
   } else {
+  // Yollar TIRNAKLI: bosluklu dosya/dizin adlari komutu bolmesin (aot_shell_quote).
+  const std::string q_obj = aot_shell_quote(obj_filename);
+  const std::string q_exe = aot_shell_quote(std::string(exe_filename) + AOT_EXE_SUFFIX);
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s%s -o %s%s %s %s%s%s%s%s 2>&1",
-      debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      "%s %s%s -o %s %s %s%s%s%s%s 2>&1",
+      aot_link_driver(), debug_flag, q_obj.c_str(), q_exe.c_str(),
       AOT_LINK_PIE_FLAG, search_dirs.c_str(),
       tame_link_flags(backend->uses_tame), engine_link_flags(backend->uses_engine), " " AOT_LINK_LIB_FLAGS,
       extra_flags.c_str());
@@ -1645,8 +1719,9 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   }
   if (link_result != 0) {
     fprintf(stderr, tulpar::i18n::tr_for_en(
-            "[AOT] Error: Linking failed (code %d). Check clang installation and libraries.\n"),
-            link_result);
+            "[AOT] Error: Linking failed (code %d) using '%s'. Check the toolchain installation and libraries "
+            "(set TULPAR_CC to pick a different linker driver).\n"),
+            link_result, aot_link_driver());
     if (g_target_web) {
       fprintf(stderr, "%s\n",
               tulpar::i18n::tr_en(
@@ -1738,20 +1813,23 @@ static AOTResult aot_compile_silent(const char *source,
   // Link silently (suppress output)
   std::string silent_search_dirs = build_link_search_dirs();
   std::string silent_extra_flags = aot_extra_link_flags();
+  // Yollar TIRNAKLI (bkz. aot_shell_quote): bosluklu ad komutu bolmesin.
+  const std::string q_obj = aot_shell_quote(obj_filename);
+  const std::string q_exe = aot_shell_quote(std::string(exe_filename) + AOT_EXE_SUFFIX);
   char link_cmd[2048];
 #if PLATFORM_WINDOWS
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s%s%s%s 2>NUL",
-      obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      "%s %s -o %s %s %s%s%s%s%s 2>NUL",
+      aot_link_driver(), q_obj.c_str(), q_exe.c_str(),
       AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
       tame_link_flags(backend->uses_tame), engine_link_flags(backend->uses_engine), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str());
 #else
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s%s%s%s 2>/dev/null",
-      obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      "%s %s -o %s %s %s%s%s%s%s 2>/dev/null",
+      aot_link_driver(), q_obj.c_str(), q_exe.c_str(),
       AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
       tame_link_flags(backend->uses_tame), engine_link_flags(backend->uses_engine), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str());
@@ -1791,19 +1869,25 @@ AOTResult aot_compile_and_run_silent(const char *source) {
 AOTResult aot_compile_and_run_silent_with_filename(const char *source,
                                                    const char *source_filename) {
 #if PLATFORM_WINDOWS
-  const char *base = "tulpar_run_tmp";
+  // SÜRECE ÖZGÜ ad — POSIX dalındaki (aşağıda) gerekçenin aynısı, ama burada
+  // uzun süre EKSİKTİ: sabit `tulpar_run_tmp` yüzünden aynı dizinde koşan iki
+  // `tulpar x.tpr` birbirinin nesnesini/ikilisini eziyordu ve hata
+  // "AOT derleme/bağlama başarısız: clang ve libtulpar_runtime.a mevcut mu?"
+  // gibi tamamen alakasız görünüyordu (ölçüldü 2026-09-18, Tuzaklar 9e).
+  std::string run_base = ".tulpar_run" + std::to_string((long)GetCurrentProcessId());
+  const char *base = run_base.c_str();
   AOTResult result = aot_compile_silent(source, base, source_filename);
   if (result != AOT_OK) {
     return result;
   }
   // cmd.exe does not auto-search the current directory unless an explicit
   // path is given, so prefix with .\ to ensure the binary is found.
-  std::string run_cmd = ".\\tulpar_run_tmp.exe";
+  std::string run_cmd = aot_shell_quote(".\\" + run_base + ".exe");
   if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
   int run_result = system(run_cmd.c_str());
-  remove("tulpar_run_tmp.exe");
-  remove("tulpar_run_tmp.ll");
-  remove("tulpar_run_tmp.o");
+  remove((run_base + ".exe").c_str());
+  remove((run_base + ".ll").c_str());
+  remove((run_base + ".o").c_str());
 #else
   // SÜRECE ÖZGÜ yol. Sabit `/tmp/.tulpar_run` iki `tulpar` aynı anda koşunca
   // yarışıyordu: biri ötekinin ikilisini derlemesiyle EZİYOR, sonra `remove`

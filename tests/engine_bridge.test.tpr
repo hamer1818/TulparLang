@@ -566,7 +566,11 @@ func run_ui() {
 
 // Geçici dosya yolu (TMPDIR, yoksa /tmp).
 func gecici_yol(ad): str {
+    // TMPDIR (POSIX) -> TMP/TEMP (Windows) -> "/tmp". Windows'ta "/tmp" YOK:
+    // sabit yol kullanan testler orada "dosya yazilamadi" ile duserdi.
     str d = env("TMPDIR");
+    if (len(d) == 0) { d = env("TMP"); }
+    if (len(d) == 0) { d = env("TEMP"); }
     if (len(d) == 0) { d = "/tmp"; }
     return d + "/" + ad;
 }

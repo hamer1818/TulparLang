@@ -28,7 +28,17 @@ Requires **CMake 3.14+** and **LLVM 18+** (hard requirement — `find_package(LL
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j   # Direct CMake
 ```
 
-**Native Windows is not supported** (dropped in 3.13.0). On Windows, develop and run inside **WSL** and use the Linux path above — everything works there, including the web and Android build targets. There is no MSVC/MinGW build, no `build.bat`/`build.ps1`, no Inno Setup installer, and no `build-windows` CI job.
+**Native Windows is being restored** (dropped in 3.13.0, brought back locally 2026-09-18 — not yet in CI). The 3.13.0 removal deleted only the build scripts, the Inno Setup installer and the `build-windows` CI job; **no C++ source was touched**, so the `PLATFORM_WINDOWS` / `_WIN32` branches in `src/common/platform*.h` and elsewhere are live again and **must be kept working** (the "unmaintained and untested" note that used to be here is obsolete). The supported path is a **MinGW-w64 cross build from Linux, verified under Wine** — see [windows/README.md](windows/README.md):
+
+```bash
+python3 windows/setup_sysroot.py             # MSYS2 mingw64 tree: LLVM 22.1.8 + CRT + OpenSSL (pinned in windows/packages.lock)
+python3 windows/setup_sysroot.py --host-gcc  # cross GCC 16.2.0 into windows/dist/host (no sudo)
+windows/build.sh                             # -> build-windows/tulpar.exe + libtulpar_runtime.a + libtulpar_tame.a
+windows/check_imports.sh                     # DLL gate: imports ⊆ stock Windows + the 5 bundled DLLs
+./build.sh windows test | suites             # same runners, TULPAR_BIN/RUN_PREFIX/EXE_SUFFIX swapped to wine
+```
+
+Three rules this target lives by: (1) **one tree** — the compiler driver may come from Arch, but headers/CRT/libstdc++/startfiles all come from the MSYS2 sysroot (`-nostdinc -nostdinc++`, `-B<sysroot>/lib/`), because the AOT link step runs *inside Wine* with MSYS2's `g++`; mixing them breaks exception unwinding **silently** (Tuzaklar 9f). (2) **GCC, not clang** — a clang-built runtime compiles, links and runs, then dies with exit code 0 the first time a `catch` rethrows across `call()`. (3) **`if(NOT WIN32)`, never `if(NOT MSVC)`** for platform gates — MinGW is `WIN32` but not `MSVC` (Tuzaklar 9a). `engine/` (the Vulkan engine) **is ported too** (2026-09-18): `TULPAR_WIN_ENGINE` defaults ON for MinGW (OFF for MSVC — the Windows path is GCC-specific: GNU-syntax fiber asm), `engine_tests.exe` passes **469/469** under Wine with 79 visible skips, `engine_demo.exe --headless` produces a **byte-identical** PPM and sim hash to the Linux build, and an `import "engine"` Tulpar game compiles/links/runs (`tests/engine_bridge.test.tpr` 19/19). The port added `platform/dl.hpp` (LoadLibrary) and `platform/fs.hpp` (mkdir + MapViewOfFile) as L0 shims, a VirtualAlloc arena, a **Win64 fiber switch** (rcx/rdx args, XMM6-15 + TEB StackBase/StackLimit/DeallocationStack — Tuzaklar 9g), a vectored-SEH crash reporter that terminates deterministically (9j), the `vulkan-1.dll` loader, and `PeekNamedPipe`-based non-blocking console capture. Everything else — language, stdlib, Wings/sockets/SQLite/async(Win32 fibers)/gzip/threads, tame/raylib and TLS via the Windows system certificate store — was already in scope. WSL remains a perfectly good option for users; it is no longer the only one.
 
 `build.sh` wipes `$BUILD_DIR` on every invocation (no incremental builds). Use direct CMake if you want incremental rebuilds during development.
 
@@ -152,7 +162,7 @@ Then rebuild **both** `tulpar` and `tulpar_runtime`, and refresh the repo-root `
 
 Platform detection goes through `src/common/platform.h`, `platform_sockets.h`, `platform_threads.h`, `platform_dl.h`. Always add new syscalls through these headers rather than `#ifdef _WIN32` directly.
 
-The `PLATFORM_WINDOWS` / `_WIN32` branches inside those shims were **deliberately left in place** when native Windows support was dropped in 3.13.0: ripping them out is a large, risky refactor across sockets/threads/dl/paths for no user-visible gain, and keeping them costs nothing on the supported platforms. Treat them as **unmaintained and untested** — nothing builds or exercises them, so don't rely on them being correct, and don't spend effort keeping them current. New code still goes through the shim headers (for `PLATFORM_LINUX` / `PLATFORM_MACOS` hygiene), but a Windows branch is optional.
+The `PLATFORM_WINDOWS` / `_WIN32` branches inside those shims were **deliberately left in place** when native Windows support was dropped in 3.13.0 — and that decision paid off: restoring Windows in 2026-09-18 needed **zero** changes to them (async = Win32 fibers, threads = `_beginthreadex`, sockets = winsock, dl = `LoadLibrary`, all still correct). They are **tested again** now: `windows/build.sh` compiles them and `./build.sh windows test|suites` exercises them under Wine. A new syscall therefore needs its Windows branch **written and compiled**, not skipped — if you can't test it, say so in the commit rather than leaving a silent hole. Two live gaps worth knowing: `tulpar update` shells out to `curl.exe`/PowerShell (absent under Wine, present on real Windows 10+), and OpenSSL has no default trust store on Windows, so `http_fetch.cpp` loads the system store via the OpenSSL 3.2+ `org.openssl.winstore://` provider (Tuzaklar 9d).
 
 ### WASM target
 

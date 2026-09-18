@@ -47,6 +47,17 @@ namespace {
 //   1. Default: SSL_VERIFY_PEER + hostname check. Calls
 //      SSL_CTX_set_default_verify_paths() first so distro-installed
 //      CA bundles work out of the box on Linux/macOS.
+//   1b. WINDOWS: there is no distro CA bundle — set_default_verify_paths()
+//      finds an empty store and EVERY https request fails the chain check.
+//      Measured 2026-09-18 on the MinGW build: `http_get("https://…")`
+//      returned status 0 while plain http returned 200, and the same call
+//      with TULPAR_CA_BUNDLE pointing at a PEM returned 307. So on Windows
+//      we additionally load OpenSSL 3's *winstore* provider URI, which reads
+//      the live Windows certificate store (CertOpenSystemStoreW) — the same
+//      trust root every other Windows program uses, nothing to ship and
+//      nothing to keep fresh. Failure is NOT fatal: TULPAR_CA_BUNDLE (rule 2)
+//      is still a valid way to run, so a missing/locked store just leaves the
+//      context as-is instead of killing the request path.
 //   2. If $TULPAR_CA_BUNDLE points at a readable PEM file, load it on
 //      top of the defaults. This is how MSYS2 builds (and CI) point
 //      at the system trust store explicitly.
@@ -69,6 +80,12 @@ SSL_CTX *make_client_tls_ctx(std::string &out_err) {
         return nullptr;
     }
     SSL_CTX_set_default_verify_paths(ctx);
+#if defined(_WIN32) && defined(OPENSSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30200000L
+    // Windows sistem sertifika deposu (OpenSSL 3.2+ winstore saglayicisi).
+    // Donus degeri bilerek yok sayilmiyor ama HATA da sayilmiyor: depo yoksa
+    // TULPAR_CA_BUNDLE hala gecerli bir yol.
+    (void)SSL_CTX_load_verify_store(ctx, "org.openssl.winstore://");
+#endif
     const char *ca_bundle = std::getenv("TULPAR_CA_BUNDLE");
     if (ca_bundle && ca_bundle[0]) {
         if (SSL_CTX_load_verify_locations(ctx, ca_bundle, nullptr) != 1) {
