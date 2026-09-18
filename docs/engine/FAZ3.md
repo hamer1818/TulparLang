@@ -54,7 +54,15 @@ Headless kare görüntüsü: zemin, duvar, yerleşmiş kutu yığınları, dağ�
   (acquire/present/yeniden yaratma) kullanıcı çalıştırınca görülecek.
 
 ## Açık iş
-1. ~~Pencereli demo~~ çalıştı (Wayland, GLFW 3.5). Yeniden boyutlandırma/küçültme yolu (`needs_recreate`) henüz denenmedi.
+1. ~~Pencereli demo~~ çalıştı (Wayland, GLFW 3.5). ~~Yeniden boyutlandırma/küçültme yolu
+   (`needs_recreate`) henüz denenmedi.~~ **Denendi ve KIRIK çıktı (2026-09-18):** `needs_recreate`
+   tek sinyal olarak Wayland'de hiç ateşlemiyor (yüzey `currentExtent` = `0xFFFFFFFF`, ölçüldü),
+   yani tam ekran/yeniden boyutlandırmada swapchain eski ölçüde kalıyor ve kompozitör görüntüyü
+   **geriyor**. Karar artık pencere ölçüsünden veriliyor ve **karenin başında** (kayıttan önce)
+   uygulanıyor: `Swapchain::sync_size` + saf `swapchain_resize_action` (editör, demo ve köprü
+   döngülerinin üçü de oradan geçiyor). Kapı: `rhi_resize_follows_window_size_not_only_out_of_date`.
+   Ayrıntı: [[Tuzaklar]] 8bw. Editöre ayrıca **F11 tam ekran** komutu eklendi
+   (`platform::Window::set_fullscreen`, host yeteneği yoksa menü ögesi soluk).
 2. ~~Depth görüntüsü blok ayırıcıdan geliyor ve serbest bırakılmıyor~~ **kapandı**:
    `Device::allocate_dedicated` / `free_dedicated` eklendi, swapchain derinliği onu kullanıyor.
    Test `rhi_dedicated_allocation_is_released` 8 "yeniden boyutlandırma" döngüsünde blok sayısının

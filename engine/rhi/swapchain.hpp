@@ -1,8 +1,9 @@
 // L2 RHI — Swapchain + kare senkronu (masaustu pencere; Android yuzeyi de
 // ayni sinif, yuzey Kotlin host'tan). Render pass: depth prepass -> renk
 // (subpass zinciri, transient depth), renk PRESENT'e cikar. Ucuslu kare 2.
-// Yeniden boyutlanma: OUT_OF_DATE/SUBOPTIMAL -> recreate(). Present FIFO
-// (vsync; A7: kilitli kare > oynak).
+// Yeniden boyutlanma: PENCERE OLCUSU (sync_size) — OUT_OF_DATE yalniz ek
+// sinyaldir, bkz. asagidaki ResizeAction. Present FIFO (vsync; A7: kilitli
+// kare > oynak).
 #pragma once
 #include <cstdint>
 
@@ -10,6 +11,27 @@
 #include "rhi/device.hpp"
 
 namespace tulpar::engine::rhi {
+
+// --- YENIDEN KURMA KARARI (saf; Vulkan gerektirmez, kapi bunu olcer) --------
+//
+// TUZAK: "OUT_OF_DATE gelince yeniden kur" TASINABILIR DEGIL. Wayland'de yuzey
+// olcusunu SUREN taraf UYGULAMADIR: `caps.currentExtent` 0xFFFFFFFF doner ve
+// pencere buyudugunde (tam ekran!) acquire/present OUT_OF_DATE HIC DEMEZ.
+// Eski goruntu olcusu korunur, kompozitor onu pencereye GERER — kullanicinin
+// gordugu "tam ekran olmuyor, icerik ayni oranda buyuyup bozuluyor" tam olarak
+// bu. X11'de OUT_OF_DATE gelir, yani hata yalniz Wayland'de gorunur.
+// Dogru sinyal: pencerenin bildirdigi framebuffer olcusu ISTENEN olcuden
+// farkliysa yeniden kur. OUT_OF_DATE ek sebeptir (yuzey gercekten gecersiz).
+enum class ResizeAction {
+  None = 0,    // dokunma
+  OutOfDate,   // acquire/present OUT_OF_DATE dedi: yuzey gecersiz
+  SizeChanged, // pencere olcusu istenenden farkli (Wayland'de TEK sinyal)
+};
+// requested: son create_swapchain'e verilen olcu. win_w/win_h: pencerenin SU AN
+// bildirdigi framebuffer olcusu (0 = kucultulmus -> None; 0 olculu swapchain
+// yaratilamaz).
+ResizeAction swapchain_resize_action(VkExtent2D requested, uint32_t win_w, uint32_t win_h, bool out_of_date);
+const char *resize_action_str(ResizeAction a);
 
 struct FrameContext {
   VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -52,6 +74,11 @@ public:
   void shutdown();
   // Pencere boyutu degisince (ya da acquire OUT_OF_DATE deyince).
   bool recreate(uint32_t width, uint32_t height);
+  // KARE BASINDA cagrilir (kayittan ONCE: arayuzun DisplaySize'i ile hedefin
+  // olcusu ayni karede ayrismasin). Karari swapchain_resize_action verir;
+  // gerekiyorsa recreate eder. Donus: yeniden kuruldu mu. Ne oldugu
+  // last_resize_action()/last_resize_reason() ile okunur (sessiz gecis yok).
+  bool sync_size(uint32_t width, uint32_t height);
 
   // Kare: acquire + komut tamponu baslat + render pass baslat (subpass 0).
   // false = yeniden kurulmali (recreate cagir) ya da hata.
@@ -76,6 +103,12 @@ public:
   VkPresentModeKHR present_mode() const { return present_mode_; }
   uint32_t image_count() const { return image_count_; }
   bool needs_recreate() const { return needs_recreate_; }
+  // En son create_swapchain'e ISTENEN olcu (Wayland'de goruntu olcusu budur;
+  // X11'de surucu currentExtent'i dayatabilir, o zaman extent() ondan gelir).
+  VkExtent2D requested_extent() const { return requested_; }
+  uint64_t recreate_count() const { return recreates_; }
+  ResizeAction last_resize_action() const { return last_action_; }
+  const char *last_resize_reason() const { return resize_action_str(last_action_); }
   // Sunumun "calisir ama optimum degil" dedigi kare sayisi (Android: preTransform
   // uyusmazligi). Yeniden yaratmayi TETIKLEMEZ; raporlanir.
   uint64_t suboptimal_frames() const { return suboptimal_; }
@@ -112,6 +145,9 @@ private:
   uint64_t suboptimal_ = 0;
   SwapchainConfig cfg_;
   VkExtent2D logical_extent_{};
+  VkExtent2D requested_{};
+  uint64_t recreates_ = 0;
+  ResizeAction last_action_ = ResizeAction::None;
   VkPresentModeKHR present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
   VkSurfaceTransformFlagBitsKHR pretransform_ = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 };

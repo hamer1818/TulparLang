@@ -74,6 +74,7 @@ enum class CommandId : uint16_t {
   SelectClear,    // Esc
   ViewGizmos,     // G
   ViewConsole,    // (kisayolsuz) Konsol panelini ac/kapa
+  ViewFullscreen, // F11 (host desteklemiyorsa soluk)
   GizmoTranslate, // T
   GizmoRotate,    // R
   GizmoScale,     // S

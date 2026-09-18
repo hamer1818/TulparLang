@@ -716,8 +716,9 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     decltype(&do_open_guarded) open;
     decltype(&do_save_as) saveas;
     bool *show_console;
+    const EditorHost *host; // tam ekran: yetenek host'ta (headless'ta nullptr)
   } cc{&st,      &gizmo_op, &do_save, &do_compile,      &do_undo,         &do_redo,     &do_add,     &do_remove,
-       &set_playing, &do_cut,   &do_copy, &do_paste,    &do_new_guarded,  &do_open_guarded, &do_save_as, &show_console};
+       &set_playing, &do_cut,   &do_copy, &do_paste,    &do_new_guarded,  &do_open_guarded, &do_save_as, &show_console, host};
   CommandTable cmds;
   cmds.bind(CommandId::FileNew, [](void *c) { (*static_cast<CmdCtx *>(c)->newscene)(); }, &cc);
   cmds.bind(CommandId::FileOpen, [](void *c) { (*static_cast<CmdCtx *>(c)->open)(); }, &cc);
@@ -758,6 +759,26 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
             });
   cmds.bind(CommandId::ViewConsole, [](void *c) { bool *b = static_cast<CmdCtx *>(c)->show_console; *b = !*b; }, &cc, nullptr,
             [](const void *c) { return *static_cast<const CmdCtx *>(c)->show_console; });
+  // Tam ekran: yetenek HOST'un (GLFW). Yoksa menu ogesi soluk — sessizce
+  // hicbir sey yapan bir dugme kalmaz. Swapchain'i bu komut DEGIL, kare
+  // basindaki sync_size yeniden kurar (tek karar noktasi).
+  cmds.bind(CommandId::ViewFullscreen,
+            [](void *c) {
+              const EditorHost *h = static_cast<CmdCtx *>(c)->host;
+              if (!h || !h->set_fullscreen) return;
+              const bool now = h->is_fullscreen ? h->is_fullscreen(h->user) : false;
+              if (!h->set_fullscreen(h->user, !now))
+                console_log(ConsoleLevel::Uyari, kConsoleTagEditor, "tam ekran: pencere yoneticisi/GLFW istegi uygulamadi");
+            },
+            &cc,
+            [](const void *c) {
+              const EditorHost *h = static_cast<const CmdCtx *>(c)->host;
+              return h && h->set_fullscreen != nullptr;
+            },
+            [](const void *c) {
+              const EditorHost *h = static_cast<const CmdCtx *>(c)->host;
+              return h && h->is_fullscreen && h->is_fullscreen(h->user);
+            });
   cmds.bind(CommandId::GizmoTranslate, [](void *c) { *static_cast<CmdCtx *>(c)->gizmo_op = 0; }, &cc, nullptr,
             [](const void *c) { return *static_cast<const CmdCtx *>(c)->gizmo_op == 0; });
   cmds.bind(CommandId::GizmoRotate, [](void *c) { *static_cast<CmdCtx *>(c)->gizmo_op = 1; }, &cc, nullptr,
@@ -837,8 +858,23 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       if (!host->poll(host->user, &fw, &fh)) running = false;
       in = host->input ? host->input(host->user) : nullptr;
       if (fw == 0 || fh == 0) continue; // kucultulmus
-      // HiDPI: imlec mantiksal pikselde, arayuz framebuffer pikselinde. Oran
-      // her karede okunur (pencere baska ekrana tasininca degisir).
+      // --- PENCERE OLCUSU -> SWAPCHAIN, KAYITTAN ONCE ------------------------
+      // Tam ekrana gecis (ve her yeniden boyutlandirma) BURADA yakalanir.
+      // Eskiden yalniz `needs_recreate()` (OUT_OF_DATE) bakiliyordu ve o da
+      // kare SONUNDA: Wayland'de OUT_OF_DATE HIC gelmedigi icin swapchain
+      // 1280x720'de kaliyor, kompozitor o goruntuyu tam ekrana GERIYORDU —
+      // "tam ekran olmuyor, icerik ayni oranda buyuyup bozuluyor" bu.
+      // Kararin gerekcesi ve X11/Wayland ayrimi: rhi/swapchain.hpp ResizeAction.
+      if (swap.sync_size(fw, fh))
+        console_log(ConsoleLevel::Bilgi, kConsoleTagEditor, "swapchain %ux%u (%s)", swap.extent().width, swap.extent().height,
+                    swap.last_resize_reason());
+      // Arayuz ile hedef AYNI olcuyu gorur: ImGui'nin DisplaySize'i cizilen
+      // hedefin olcusudur, pencerenin degil. Ayrisirlarsa (yeniden kurma
+      // basarisiz ya da surucu currentExtent'i dayatti) kare gerilir.
+      fw = swap.extent().width;
+      fh = swap.extent().height;
+      // HiDPI: imlec mantiksal pikselde, arayuz hedef pikselinde. Oran her
+      // karede okunur (pencere baska ekrana tasininca degisir).
       if (host->window_size) {
         uint32_t ww = 0, wh = 0;
         host->window_size(host->user, &ww, &wh);
@@ -1775,9 +1811,12 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         record_cb(fc.cmd, &rctx);   // subpass ilerlet + ImGui
         swap.end_frame(fc);
       }
-      // Swapchain yeniden yaratimi artik renderer'in cizim olcusunu DEGISTIRMEZ:
+      // Yeniden kurma TEK YERDEN yapilir: kare BASINDAKI sync_size. Burada
+      // (kare sonunda) yapmak bir kareyi hep yanlis olcude birakiyordu —
+      // arayuz yeni olcuye, hedef eskisine gore cizilmis oluyordu. acquire /
+      // present OUT_OF_DATE derse bayrak kalir ve sonraki karenin basinda
+      // ayni yerden islenir. Renderer'in cizim olcusu buradan etkilenmez:
       // renderer viewport'a ciziyor, onun olcusu panelden geliyor.
-      if (swap.needs_recreate() && fw && fh) swap.recreate(fw, fh);
     }
     prof.end_frame();
     frame_i++;

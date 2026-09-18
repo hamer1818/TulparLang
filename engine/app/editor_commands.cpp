@@ -45,6 +45,7 @@ constexpr Chord kKeyV = (Chord)ImGuiKey_V;
 constexpr Chord kKeyF5 = (Chord)ImGuiKey_F5;
 constexpr Chord kKeyF6 = (Chord)ImGuiKey_F6;
 constexpr Chord kKeyF10 = (Chord)ImGuiKey_F10;
+constexpr Chord kKeyF11 = (Chord)ImGuiKey_F11;
 constexpr Chord kKeyN = (Chord)ImGuiKey_N;
 constexpr Chord kKeyO = (Chord)ImGuiKey_O;
 
@@ -97,6 +98,11 @@ constexpr CommandDesc k_defaults[] = {
      "Isik yaricapi, golge hacmi ve gunes oku tel cizimleri"},
     {CommandId::ViewConsole, CommandCategory::View, kCmdCheckable, kChordNone, kChordNone, "gorunum.konsol", "Konsol",
      "Motor, Vulkan ve sahne iletilerini gosteren paneli ac/kapa"},
+    // kCmdWhileTyping KONMADI: bu tablodaki kural degistiricisiz her bilesimi
+    // HAM sayar (islev tuslari dahil), yani F5/F6/F10 ile ayni davranis —
+    // metin yazarken tetiklenmez.
+    {CommandId::ViewFullscreen, CommandCategory::View, kCmdCheckable, kKeyF11, kChordNone, "gorunum.tam_ekran",
+     "Tam ekran", "Pencereyi monitorun video kipine gecirir (F11 ile geri doner)"},
     {CommandId::GizmoTranslate, CommandCategory::Gizmo, kCmdCheckable, kKeyT, kChordNone, "gizmo.tasi", "Ta\xC5\x9F\xC4\xB1",
      "ImGuizmo kipi: tasima"},
     {CommandId::GizmoRotate, CommandCategory::Gizmo, kCmdCheckable, kKeyR, kChordNone, "gizmo.dondur", "D\xC3\xB6nd\xC3\xBCr", "ImGuizmo kipi: dondurme"},

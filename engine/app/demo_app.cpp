@@ -348,6 +348,17 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
       }
       case HostPoll::Run: have_window = true; break;
       }
+      // --- PENCERE OLCUSU -> SWAPCHAIN, KAYITTAN ONCE ------------------------
+      // Tam ekran / yeniden boyutlandirma BURADA yakalanir. Yalniz
+      // `needs_recreate()` (OUT_OF_DATE) beklemek tasinabilir degil: Wayland'de
+      // yuzey olcusunu uygulama surer ve OUT_OF_DATE HIC gelmez — swapchain eski
+      // olcude kalir, kompozitor gerer (rhi/swapchain.hpp ResizeAction).
+      if (running && have_window && swap.sync_size(fw, fh)) {
+        render_w = swap.extent().width;
+        render_h = swap.extent().height;
+        ren.set_render_size(render_w, render_h);
+        std::printf("[engine_demo] swapchain %ux%u (%s)\n", render_w, render_h, swap.last_resize_reason());
+      }
     }
     uint64_t t0 = platform::now_ns();
     // Girdi -> oyuncu komutu (kameraya gore) + kamera yorungesi
@@ -445,7 +456,9 @@ int demo_run(const DemoOptions &opts, const DemoHost *host) {
           uint64_t tf = platform::now_ns();
           ubo_ns += tc - tb; draw_ns += td - tc; record_ns += te - td; submit_ns += tf - te;
         }
-        if (swap.needs_recreate() && fw && fh) { swap.recreate(fw, fh); ren.set_render_size(swap.extent().width, swap.extent().height); }
+        // Yeniden kurma TEK YERDEN: kare BASINDAKI sync_size (yukari bak).
+        // OUT_OF_DATE bayragi kalir, sonraki karenin basinda oradan islenir —
+        // boylece cizim ile hedef olcusu ayni karede ayrismaz.
       }
       render_ns += platform::now_ns() - t1;
       report_frames++;

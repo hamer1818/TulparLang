@@ -5,6 +5,23 @@
 
 namespace tulpar::engine::rhi {
 
+ResizeAction swapchain_resize_action(VkExtent2D requested, uint32_t win_w, uint32_t win_h, bool out_of_date) {
+  // Kucultulmus pencere: 0 olculu swapchain yaratilamaz, karar YOK (cagiran
+  // zaten cizmiyor). OUT_OF_DATE bayragi da burada tutulur, kaybolmaz.
+  if (win_w == 0 || win_h == 0) return ResizeAction::None;
+  if (out_of_date) return ResizeAction::OutOfDate;
+  if (requested.width != win_w || requested.height != win_h) return ResizeAction::SizeChanged;
+  return ResizeAction::None;
+}
+
+const char *resize_action_str(ResizeAction a) {
+  switch (a) {
+  case ResizeAction::OutOfDate: return "OUT_OF_DATE";
+  case ResizeAction::SizeChanged: return "pencere olcusu degisti";
+  default: return "-";
+  }
+}
+
 bool Swapchain::init(Device &dev, Arena &, VkSurfaceKHR surface, uint32_t w, uint32_t h, const SwapchainConfig &cfg) {
   dev_ = &dev;
   surface_ = surface;
@@ -105,6 +122,10 @@ bool Swapchain::create_swapchain(uint32_t w, uint32_t h) {
   VkApi &a = dev_->api();
   VkSurfaceCapabilitiesKHR caps;
   a.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev_->physical(), surface_, &caps);
+  // ISTENEN olcu: sync_size karsilastirmasi BUNU kullanir, surucunun dayattigi
+  // currentExtent'i DEGIL. X11'de currentExtent bir kare ileride olabilir;
+  // istenen olcuyu saklamak "her karede yeniden kur" dongusunu onler.
+  requested_ = VkExtent2D{w, h};
   logical_extent_ = caps.currentExtent;
   if (logical_extent_.width == 0xFFFFFFFFu) logical_extent_ = VkExtent2D{w, h};
   if (logical_extent_.width == 0 || logical_extent_.height == 0) return false; // kucultulmus pencere
@@ -235,7 +256,15 @@ float Swapchain::rotation_radians() const {
 
 bool Swapchain::recreate(uint32_t w, uint32_t h) {
   dev_->api().vkDeviceWaitIdle(dev_->handle());
+  recreates_++;
   return create_swapchain(w, h);
+}
+
+bool Swapchain::sync_size(uint32_t w, uint32_t h) {
+  if (!dev_) return false;
+  last_action_ = swapchain_resize_action(requested_, w, h, needs_recreate_);
+  if (last_action_ == ResizeAction::None) return false;
+  return recreate(w, h);
 }
 
 void Swapchain::shutdown() {

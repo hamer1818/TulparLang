@@ -166,6 +166,21 @@ kalıyor (sapma 0.0000), ebeveyn +5 → çocuk +5.00, **kontrol** bağsız varl�
 * Ana oturum: **pano** (Ctrl+X/C/V, tek geri-al grubu), **duraklat/kare ilerlet** (F6/F10, F5 oynat),
   `Konsol` düzen tablosunda (6 panel, düzen kalıcılığı bit-tam).
 
+**E1.6 — Yeniden boyutlandırma / tam ekran (2026-09-18, kullanıcı bildirimi):** editör tam ekran
+yapılınca içerik "aynı oranda büyüyüp bozuluyordu". Sebep swapchain'in pencereyi hiç takip
+etmemesiydi: yeniden kurma tek sinyale bağlıydı (`needs_recreate`, yani `VK_ERROR_OUT_OF_DATE_KHR`)
+ve **Wayland'de o sinyal hiç gelmez** — yüzey `currentExtent`i `0xFFFFFFFF` döner, ölçüsü süren
+taraf uygulamadır (görünmez pencere sondasıyla ölçüldü: 640x360 → 1600x900, `currentExtent`
+iki ölçümde de tanımsız). Swapchain 1280x720'de kalıyor, kompozitör görüntüyü pencereye geriyordu.
+Çözüm `rhi/swapchain.hpp`'de: saf `swapchain_resize_action` (istenen ölçü ≠ pencere ölçüsü →
+yeniden kur; OUT_OF_DATE *ek* sebep; 0 ölçü hiçbir şey) + `Swapchain::sync_size`, **karenin
+başında** (kayıttan önce) çağrılır — böylece ImGui `DisplaySize`'ı ile hedefin ölçüsü aynı karede
+ayrışmaz; editör, demo ve köprü döngüleri artık tek karar noktasından geçiyor. Editöre
+**Görünüm > Tam ekran (F11)** komutu eklendi (`platform::Window::set_fullscreen`; host yeteneği
+yoksa menü ögesi soluk). Kapı: `rhi_resize_follows_window_size_not_only_out_of_date` (senaryo
+tablosu; pozitif kontrol olarak ESKİ kural, tam ekran senaryosunu kaçırdığı **ölçülür**).
+Görsel doğrulama kullanıcıda (pencere açma kuralı). Ayrıntı: [[Tuzaklar]] 8bw.
+
 ### Faz E3 — Inspector + içerik
 Bileşen ekle/çıkar, alan tablosu güdümlü özellik editörü, her özellikte "geri döndür",
 kaynak içe aktarma (glTF/PNG → `engine_texpack`/`sahnec`), malzeme düzenleme.

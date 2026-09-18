@@ -515,13 +515,11 @@ void render_frame() {
   // Kare yuvasi swapchain'den (fence beklenmis yuva) — Tuzaklar 8l: once acquire, sonra begin_frame.
   rhi::FrameContext fc;
   if (!b.headless && !b.swap.acquire(&fc)) {
-    BDBG("swapchain acquire basarisiz (kare %u), kare atlandi; yeniden kurulacak", b.frame);
+    // Yeniden kurma TEK YERDEN: teng_frame_begin'deki sync_size. OUT_OF_DATE
+    // bayragi kalir ve sonraki karenin basinda oradan islenir — cizim ile
+    // hedef olcusu ayni karede ayrismasin.
+    BDBG("swapchain acquire basarisiz (kare %u), kare atlandi; sonraki kare basinda yeniden kurulacak", b.frame);
     b.hud_n = 0; b.hud_text_n = 0;
-    if (b.swap.needs_recreate() && b.fb_w && b.fb_h) {
-      b.swap.recreate(b.fb_w, b.fb_h);
-      b.ren.set_render_size(b.swap.extent().width, b.swap.extent().height);
-      BDBG("swapchain yeniden: %ux%u", b.swap.extent().width, b.swap.extent().height);
-    }
     return;
   }
   b.ren.begin_frame(b.headless ? 0 : fc.frame_index);
@@ -588,11 +586,8 @@ void render_frame() {
     b.ren.record(fc.cmd);
     b.ren.ui_record(fc.cmd);
     b.swap.end_frame(fc);
-    if (b.swap.needs_recreate() && b.fb_w && b.fb_h) {
-      b.swap.recreate(b.fb_w, b.fb_h);
-      b.ren.set_render_size(b.swap.extent().width, b.swap.extent().height);
-      BDBG("swapchain yeniden: %ux%u", b.swap.extent().width, b.swap.extent().height);
-    }
+    // needs_recreate bayragi burada TUKETILMEZ: sonraki karenin basindaki
+    // sync_size tek karar noktasidir (yukariya bak).
   }
 }
 } // namespace
@@ -865,6 +860,22 @@ int teng_frame_begin(void) {
       break;
     }
     case bridge::HostPoll::Run: b.have_window = fw && fh; if (fw && fh) { b.fb_w = fw; b.fb_h = fh; } break;
+    }
+    // --- PENCERE OLCUSU -> SWAPCHAIN, KAYITTAN ONCE --------------------------
+    // Tam ekran / yeniden boyutlandirma BURADA yakalanir. Yalniz OUT_OF_DATE
+    // beklemek tasinabilir degil: Wayland'de yuzey olcusunu uygulama surer ve
+    // OUT_OF_DATE HIC gelmez — swapchain eski olcude kalir, kompozitor gerer
+    // ("tam ekran olmuyor, icerik ayni oranda buyuyor"). Karar ve X11/Wayland
+    // ayrimi: rhi/swapchain.hpp ResizeAction.
+    if (b.running && b.have_window && b.swap.sync_size(b.fb_w, b.fb_h)) {
+      b.ren.set_render_size(b.swap.extent().width, b.swap.extent().height);
+      BINFO("swapchain %ux%u (%s)", b.swap.extent().width, b.swap.extent().height, b.swap.last_resize_reason());
+      // Parlama (post) ic HDR hedefi KURULUMDA olculendi ve kare icinde
+      // degismez (renderer.hpp post_width/post_height). Pencere buyurse sahne
+      // o cozunurlukten olceklenir — sessiz kalmasin diye bir kez yazilir.
+      const renderer::PostInfo pi = b.ren.post();
+      if (pi.enabled && (pi.width != b.swap.extent().width || pi.height != b.swap.extent().height))
+        BINFO("parlama ic hedefi %ux%u sabit: sahne bu cozunurlukten olceklenir (kurulumda belirlenir)", pi.width, pi.height);
     }
     b.in = b.host.input ? b.host.input(b.host.user) : nullptr;
     b.touch = b.host.touch ? b.host.touch(b.host.user) : nullptr;

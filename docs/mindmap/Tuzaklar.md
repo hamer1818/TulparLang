@@ -2655,3 +2655,26 @@ ipucu ekrandan kayboldu (ölçüldü 937 px panelde, 2026-09-17). Ders: bir kapl
 zeminini değiştirmek onun **yerleşim bütçesini** de değiştirir; değişiklikten sonra kareyi
 yeniden çıkarıp BAK (düşen öge sessizdir, hata vermez).
 
+
+### 8bw. "OUT_OF_DATE gelince yeniden kur" Wayland'de HİÇ ateşlemez — tam ekran gerilmiş görünür
+
+Swapchain yeniden kurma tek bir sinyale bağlıydı: `acquire`/`present` `VK_ERROR_OUT_OF_DATE_KHR`
+dediğinde. X11'de bu gelir, yani masaüstünde yıllarca doğru göründü. **Wayland'de gelmez**:
+yüzey ölçüsünü süren taraf uygulamadır ve sürücü `currentExtent`i `0xFFFFFFFF` (tanımsız) döner.
+Ölçüldü (2026-09-18, KDE Wayland, GLFW 3.5.1 Wayland arka ucu, görünmez pencere sondası):
+pencere 640x360 → 1600x900 yapıldı, `glfwGetFramebufferSize` yeni ölçüyü verdi, `currentExtent`
+**iki ölçümde de** `0xFFFFFFFF` kaldı. Yani hiçbir Vulkan dönüş kodu "boyut değişti" demiyor.
+
+Sonuç kullanıcıya şöyle görünür: editörü/oyunu **tam ekran yapınca tam ekran olmuyor** — swapchain
+1280x720'de kalır, kompozitör o küçük görüntüyü pencereye **gerer**, bütün arayüz aynı oranda
+büyür ve bulanıklaşır. Hiçbir hata, hiçbir doğrulama uyarısı yok; headless kapıların tamamı yeşil
+(hiçbiri pencere açmıyor).
+
+Doğrusu: **karar pencere ölçüsünden verilir**, `rhi/swapchain.hpp::swapchain_resize_action` —
+istenen ölçü ≠ pencerenin bildirdiği framebuffer ölçüsü ise yeniden kur; OUT_OF_DATE *ek* sebep;
+0 ölçü (küçültülmüş) hiçbir şey. İki incelik: (1) karşılaştırma **istenen** ölçüyle yapılır,
+sürücünün dayattığı `currentExtent` ile değil — yoksa X11'de her kare yeniden kurulur (Tuzaklar
+8m: 45 ms/kare); (2) yeniden kurma **kayıttan ÖNCE**, karenin başında olmalı — sonda yapılınca
+ImGui `DisplaySize`'ı yeni ölçüye, hedef eskisine göre çizilmiş bir kare hep kalır.
+Kapı: `rhi_resize_follows_window_size_not_only_out_of_date` (senaryo tablosu + pozitif kontrol
+olarak ESKİ kural, tam ekran senaryosunu kaçırdığı ölçülür).

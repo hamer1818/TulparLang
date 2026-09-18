@@ -35,6 +35,14 @@ struct Glfw {
   const char *(*get_error)(const char **) = nullptr;
   GLFWscrollfun (*set_scroll_callback)(GLFWwindow *, GLFWscrollfun) = nullptr;
   GLFWcharfun (*set_char_callback)(GLFWwindow *, GLFWcharfun) = nullptr;
+  // Tam ekran: SECMELI semboller (yoksa yetenek kapali, pencere acilmaya
+  // devam eder — zorunlu sembol listesine konursa eski bir GLFW butun
+  // pencereyi dusururdu).
+  GLFWmonitor *(*get_primary_monitor)() = nullptr;
+  GLFWmonitor *(*get_window_monitor)(GLFWwindow *) = nullptr;
+  void (*set_window_monitor)(GLFWwindow *, GLFWmonitor *, int, int, int, int, int) = nullptr;
+  const GLFWvidmode *(*get_video_mode)(GLFWmonitor *) = nullptr;
+  void (*get_window_pos)(GLFWwindow *, int *, int *) = nullptr;
 };
 Glfw g;
 double g_scroll_accum = 0;
@@ -72,6 +80,12 @@ bool load_glfw(char *err, size_t n) {
   L(get_error, "glfwGetError"); L(set_scroll_callback, "glfwSetScrollCallback");
   L(set_char_callback, "glfwSetCharCallback");
 #undef L
+  // Secmeli (yoklugu hata DEGIL): tam ekran yetenegi.
+#define O(field, sym) g.field = (decltype(g.field))dlsym(g.lib, sym);
+  O(get_primary_monitor, "glfwGetPrimaryMonitor"); O(get_window_monitor, "glfwGetWindowMonitor");
+  O(set_window_monitor, "glfwSetWindowMonitor"); O(get_video_mode, "glfwGetVideoMode");
+  O(get_window_pos, "glfwGetWindowPos");
+#undef O
   return true;
 }
 } // namespace
@@ -129,6 +143,37 @@ void Window::framebuffer_size(uint32_t *w, uint32_t *h) const {
   if (win_) g.get_framebuffer_size(static_cast<GLFWwindow *>(win_), &iw, &ih);
   *w = (uint32_t)(iw < 0 ? 0 : iw);
   *h = (uint32_t)(ih < 0 ? 0 : ih);
+}
+
+bool Window::is_fullscreen() const {
+  return win_ && g.get_window_monitor && g.get_window_monitor(static_cast<GLFWwindow *>(win_)) != nullptr;
+}
+
+bool Window::set_fullscreen(bool on) {
+  if (!win_ || !g.set_window_monitor || !g.get_primary_monitor || !g.get_video_mode || !g.get_window_monitor) return false;
+  GLFWwindow *w = static_cast<GLFWwindow *>(win_);
+  if (on == is_fullscreen()) return true;
+  if (on) {
+    // Pencere dikdortgenini SAKLA (cikista geri donulecek). Wayland'de konum
+    // okunamaz: GLFW hata isaretler ve 0,0 kalir — kompozitor yerlestirir.
+    if (g.get_window_pos) g.get_window_pos(w, &saved_x_, &saved_y_);
+    int ww = 0, wh = 0;
+    g.get_window_size(w, &ww, &wh);
+    if (ww > 0 && wh > 0) { saved_w_ = ww; saved_h_ = wh; }
+    GLFWmonitor *m = g.get_window_monitor(w);
+    if (!m) m = g.get_primary_monitor();
+    if (!m) return false;
+    const GLFWvidmode *vm = g.get_video_mode(m);
+    if (!vm || vm->width <= 0 || vm->height <= 0) return false;
+    g.set_window_monitor(w, m, 0, 0, vm->width, vm->height, vm->refreshRate);
+  } else {
+    if (saved_w_ < 1 || saved_h_ < 1) { saved_w_ = 1280; saved_h_ = 720; }
+    g.set_window_monitor(w, nullptr, saved_x_, saved_y_, saved_w_, saved_h_, 0);
+  }
+  // DIKKAT: burada swapchain'e dokunulmaz. Yeni olcu bir sonraki poll'da
+  // framebuffer_size'dan gelir ve cagiran onu Swapchain::sync_size'a verir —
+  // tek karar noktasi orasi (rhi/swapchain.hpp ResizeAction).
+  return true;
 }
 
 void Window::window_size(uint32_t *w, uint32_t *h) const {
