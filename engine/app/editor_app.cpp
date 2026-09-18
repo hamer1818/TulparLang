@@ -478,7 +478,7 @@ void track_world_edit(EditorState &st, const PropItem &it) {
 }
 // --- Gizli Özellikler İçin Dinamik Mesh Üreticileri ---
 
-static renderer::MeshHandle make_terrain_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::HeightmapConfig &cfg) {
+static renderer::MeshHandle make_terrain_mesh(Arena &temp_arena, renderer::Renderer &ren, const content::HeightmapConfig &cfg) {
   float *heights = temp_arena.alloc_array<float>(cfg.width * cfg.height);
   content::generate_heightmap(cfg, heights);
   
@@ -518,7 +518,7 @@ static renderer::MeshHandle make_terrain_mesh(core::Arena &temp_arena, renderer:
   return ren.create_mesh(verts, nverts, indices, nindices);
 }
 
-static renderer::MeshHandle make_voxel_mesh(core::Arena &temp_arena, renderer::Renderer &ren, uint32_t nx, uint32_t ny, uint32_t nz, float cell) {
+static renderer::MeshHandle make_voxel_mesh(Arena &temp_arena, renderer::Renderer &ren, uint32_t nx, uint32_t ny, uint32_t nz, float cell) {
   content::VoxelGrid grid;
   grid.nx = nx; grid.ny = ny; grid.nz = nz; grid.voxel_size = cell;
   uint8_t *cells = temp_arena.alloc_array<uint8_t>(nx * ny * nz);
@@ -550,7 +550,7 @@ static renderer::MeshHandle make_voxel_mesh(core::Arena &temp_arena, renderer::R
   return ren.create_mesh(r_verts, counts.vertices, indices, counts.indices);
 }
 
-static renderer::MeshHandle make_water_mesh(core::Arena &temp_arena, renderer::Renderer &ren, const content::GerstnerWave &wave) {
+static renderer::MeshHandle make_water_mesh(Arena &temp_arena, renderer::Renderer &ren, const content::GerstnerWave &wave) {
   uint32_t w = 64, h = 64;
   float cell = 2.0f;
   uint32_t nverts = w * h;
@@ -2871,7 +2871,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
                        bv.h->entity_count == st.scene.entity_count && bv.h->asset_count == st.scene.asset_count;
       std::printf("[engine_editor] derleme kapisi: %zu bayt, %u varlik, %u cizim, %u isik, %u govde, ozet %016llx %s%s\n", need,
                   bok ? bv.h->entity_count : 0u, bok ? bv.h->draw_count : 0u, bok ? bv.h->light_count : 0u, bok ? bv.h->body_count : 0u,
-                  bok ? (unsigned long long)bv.hash() : 0ull, bok ? "OK" : "HATA ", bok ?  : berr.msg);
+                  bok ? (unsigned long long)bv.hash() : 0ull, bok ? "OK" : "HATA ", bok ? "" : berr.msg);
       if (!bok) return 1;
       // Coklu secim kapisi: iki varlik secili, grup tasima gunluge TEK eylem
       // (2 islem); metin degismeli, grup geri al ikisini BIRDEN geri almali.
@@ -3251,17 +3251,17 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       }
       
       // Gizli ozellikler icin Editor viewport cizimi (Procedural Meshes)
-      if (e.components & content::kSceneTerrain && st.terrain_meshes[i]) {
+      if (e.components & content::kSceneTerrain && st.terrain_meshes[i].valid()) {
         ren.draw(st.terrain_meshes[i], m, Vec3{0.7f, 0.7f, 0.7f}); // draw_mesh diye bir uye yok; PBR
         // argumanlari da hicbir yere gitmiyordu
         drew = true;
       }
-      if (e.components & content::kSceneVoxel && st.voxel_meshes[i]) {
+      if (e.components & content::kSceneVoxel && st.voxel_meshes[i].valid()) {
         ren.draw(st.voxel_meshes[i], m, Vec3{0.8f, 0.8f, 0.8f}); // draw_mesh diye bir uye yok; PBR
         // argumanlari da hicbir yere gitmiyordu
         drew = true;
       }
-      if (e.components & content::kSceneWater && st.water_meshes[i]) {
+      if (e.components & content::kSceneWater && st.water_meshes[i].valid()) {
         ren.draw(st.water_meshes[i], m, Vec3{0.2f, 0.6f, 1.0f}); // draw_mesh diye bir uye yok; PBR
         // argumanlari da hicbir yere gitmiyordu
         drew = true;
