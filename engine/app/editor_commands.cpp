@@ -48,6 +48,10 @@ constexpr Chord kKeyF10 = (Chord)ImGuiKey_F10;
 constexpr Chord kKeyF11 = (Chord)ImGuiKey_F11;
 constexpr Chord kKeyN = (Chord)ImGuiKey_N;
 constexpr Chord kKeyO = (Chord)ImGuiKey_O;
+// F (odaklan) ve D (cogalt): tablo satirlari eklenmis ama SABITLERI
+// yazilmamisti, yani editor_commands.cpp hic derlenmemis.
+constexpr Chord kKeyF = (Chord)ImGuiKey_F;
+constexpr Chord kKeyD = (Chord)ImGuiKey_D;
 
 // --- VARSAYILAN TABLO -------------------------------------------------------
 // Buradaki her satir editor_app.cpp'de BUGUN VAR OLAN bir davranistir; hicbiri

@@ -188,19 +188,20 @@ ENGINE_TEST(scene_roundtrip_equality) {
   static SceneDesc d;
   fill(d);
   
-  // 1. Yaz (d -> buf1)
-  uint8_t buf1[32768];
+  // 1. Yaz (d -> buf1). scene_write METIN yazar: char*, uint8_t* degil.
+  static char buf1[32768];
   const size_t n1 = scene_write(d, buf1, sizeof buf1);
-  CHECK(n1 > 0);
+  CHECK(n1 > 0 && n1 < sizeof buf1);
   
-  // 2. Oku (buf1 -> d2)
+  // 2. Oku (buf1 -> d2). scene_read diye bir sey yok; metin ayristirici
+  // scene_parse(text, len, out, err).
   static SceneDesc d2;
   SceneError err{};
-  const bool ok = scene_read(buf1, n1, d2, &err);
+  const bool ok = scene_parse(buf1, n1, &d2, &err);
   CHECK(ok);
   
   // 3. Yaz (d2 -> buf2)
-  uint8_t buf2[32768];
+  static char buf2[32768];
   const size_t n2 = scene_write(d2, buf2, sizeof buf2);
   CHECK(n2 == n1);
   
