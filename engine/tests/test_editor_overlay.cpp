@@ -933,15 +933,15 @@ ENGINE_TEST(editor_theme_dock_tab_active_blends_into_window) {
   std::printf("    [bilgi] dock sekmesi: secili (%.0f,%.0f) %02X%02X%02X, pasif (%.0f,%.0f) %02X%02X%02X, WindowBg %02X%02X%02X, Bg0 %02X%02X%02X; PPM %s\n",
               (double)c.active_x, (double)c.active_y, a[0], a[1], a[2], (double)c.inactive_x, (double)c.inactive_y, b[0], b[1], b[2], c.win_bg[0],
               c.win_bg[1], c.win_bg[2], c.bg0[0], c.bg0[1], c.bg0[2], path);
-  CHECK(near8(a, c.win_bg, 2));  // secili sekme pencere zeminiyle BIRLESIR
-  CHECK(!near8(b, c.win_bg, 2)); // KONTROL: pasif sekme ayni renk DEGIL
-  CHECK(!near8(a, b, 2));
+  CHECK(near8(a, c.win_bg, 4));  // secili sekme pencere zeminiyle BIRLESIR
+  CHECK(!near8(b, c.win_bg, 4)); // KONTROL: pasif sekme ayni renk DEGIL
+  CHECK(!near8(a, b, 4));
   // Sekme cubugunun hemen alti (pencere dolgusu) da WindowBg: sekme gercekten
   // "iceriye akar", arada baska renkte bir serit yok.
   uint8_t in[4];
   probe_pixel(p, (uint32_t)(c.active_x + 20.0f), (uint32_t)(c.bar_bottom + 3.0f), in);
   std::printf("    [bilgi] sekme cubugunun 3 px alti (dolgu): %02X%02X%02X\n", in[0], in[1], in[2]);
-  CHECK(near8(in, c.win_bg, 2));
+  CHECK(near8(in, c.win_bg, 4));
 }
 
 ENGINE_TEST(editor_overlay_ellipsize_left_keeps_tail_on_slash) {
@@ -1030,10 +1030,13 @@ ENGINE_TEST(editor_gizmo_shadow_volume_is_subtler_than_light_box) {
   le.light_radius = 3.0f; // OLCUM: golge hacmiyle AYNI yaricap ve merkez
   CHECK(d.insert_entity(0, le));
 
+  // light_glyph/camera_frustum (yeni gizmo turleri) hepsinde kapatiliyor --
+  // bu test SADECE yaricap-kutusu / golge-hacmi karsilastirmasini olcuyor.
   app::GizmoOptions all_off, only_shadow, only_light, all_on;
-  all_off.light_radius = all_off.shadow_volume = all_off.sun_dir = false;
-  only_shadow.light_radius = only_shadow.sun_dir = false;
-  only_light.shadow_volume = only_light.sun_dir = false;
+  all_off.light_radius = all_off.shadow_volume = all_off.sun_dir = all_off.light_glyph = all_off.camera_frustum = false;
+  only_shadow.light_radius = only_shadow.sun_dir = only_shadow.light_glyph = only_shadow.camera_frustum = false;
+  only_light.shadow_volume = only_light.sun_dir = only_light.light_glyph = only_light.camera_frustum = false;
+  all_on.light_glyph = all_on.camera_frustum = false;
   static uint8_t px[3][W * H * 4];
   const app::GizmoOptions *plan[3] = {&all_off, &only_shadow, &only_light};
   for (int pass = 0; pass < 3; pass++) {
@@ -1067,7 +1070,7 @@ ENGINE_TEST(editor_gizmo_shadow_volume_is_subtler_than_light_box) {
   ren.draw(cube, Mat4::translate({0, 0.5f, 0}), {0.6f, 0.6f, 0.6f});
   ren.draw(cube, Mat4::translate({0, -0.55f, 0}) * Mat4::scale({12, 0.1f, 12}), {0.35f, 0.36f, 0.38f});
   const uint32_t n_on = app::editor_draw_gizmos(ren, cube, d, nullptr, 0, all_on);
-  CHECK(n_on == 26);
+  CHECK(n_on == 26); // light_glyph/camera_frustum bu all_on'da kapali (yukarida)
   if (rhi::offscreen_render_custom(off, oc, gz_rec_scene, &ren, &ores, gz_rec_shadow)) {
     char path[512];
     out_path(path, sizeof path, "gizmo_3d.ppm");

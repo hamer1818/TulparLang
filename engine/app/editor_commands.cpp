@@ -68,13 +68,13 @@ constexpr CommandDesc k_defaults[] = {
      "Farkl\xC4\xB1 kaydet\xE2\x80\xA6", "Sahneyi baska bir dosyaya yazar ve o dosyayi acik tutar"},
     {CommandId::FileCompile, CommandCategory::File, kCmdNone, chord_of(kModCtrl, kKeyB), kChordNone, "dosya.derle", "Derle",
      "Bellekteki sahneyi .sahneb calisma blobuna derler"},
-    {CommandId::EditUndo, CommandCategory::Edit, kCmdNone, chord_of(kModCtrl, kKeyZ), kChordNone, "duzen.geri_al", "Geri al",
+    {CommandId::EditUndo, CommandCategory::Edit, kCmdWhileTyping, chord_of(kModCtrl, kKeyZ), kChordNone, "duzen.geri_al", "Geri al",
      "Son kullanici eylemini geri alir (grup = tek eylem)"},
     // Yinele'nin IKI kisayolu var: Ctrl+Y (Windows gelenegi) ve Ctrl+Shift+Z
     // (Blender/Krita). Bugun editor_app.cpp'de tek satirda `||` ile duruyor;
     // tabloda ayri alan oldugu icin menu her ikisini de gosterebilir ve cakisma
     // taramasi ikisini de gorur.
-    {CommandId::EditRedo, CommandCategory::Edit, kCmdNone, chord_of(kModCtrl, kKeyY), chord_of(kModCtrl | kModShift, kKeyZ), "duzen.yinele",
+    {CommandId::EditRedo, CommandCategory::Edit, kCmdWhileTyping, chord_of(kModCtrl, kKeyY), chord_of(kModCtrl | kModShift, kKeyZ), "duzen.yinele",
      "Yinele", "Geri alinan eylemi yeniden uygular"},
     {CommandId::EditDuplicate, CommandCategory::Edit, kCmdUndoable, kChordNone, kChordNone, "duzen.ekle", "Ekle / \xC3\xA7o\xC4\x9F""alt",
      "Secili varlik varsa kopyasini, yoksa yeni bir varlik ekler"},

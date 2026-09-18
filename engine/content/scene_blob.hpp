@@ -155,6 +155,8 @@ struct SceneBlobAnim {
 struct SceneBlobLight {
   uint32_t entity; float pos[3]; // dunya konumu (matris cevirisi)
   float color[3], intensity;
+  // reserved[0]: SceneLightType (0 Nokta, 1 Yonlu), float olarak (blob boyutunu
+  // BUYUTMEMEK icin -- yeni alan degil, var olan bosluk yeniden kullanildi).
   float radius, reserved[3];
 };
 struct SceneBlobBody {

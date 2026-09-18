@@ -148,6 +148,9 @@ enum class HierarchyAction : uint32_t {
   Reparent,   // index varligi target'in cocugu olsun (satir UZERINE birakildi)
   Visibility, // gorunurluk simgesi tiklandi (kSceneHidden tersine cevrilsin)
   Lock,       // kilit simgesi tiklandi (kSceneLocked tersine cevrilsin)
+  Cut,        // baglam menusu: Kes
+  Copy,       // baglam menusu: Kopyala
+  Paste,      // baglam menusu: Yapistir
 };
 struct HierarchyResult {
   HierarchyAction action = HierarchyAction::None;

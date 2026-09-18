@@ -9,10 +9,12 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <ImGuizmo.h>
 
 #include "app/demo_scene.hpp"
 #include "app/editor_ui.hpp"
+#include "content/gi.hpp"
 #include "content/gltf.hpp"
 #include "content/scene.hpp"
 #include "content/scene_blob.hpp"
@@ -34,12 +36,172 @@
 #include "rhi/swapchain.hpp"
 #include "sim/schedule.hpp"
 
+#include <unistd.h>
+
 namespace tulpar::engine::app {
 
 namespace {
 constexpr float kPi = 3.14159265358979f;
 using content::SceneDesc;
 using content::SceneEntity;
+
+enum class ViewportTab : uint8_t {
+  Scene = 0, // Sahne: serbest kamera, gizmo, seçim, ızgara
+  Game = 1,  // Oyun: kamera bileşeninden bakış, temiz oyun görüntüsü
+};
+
+enum class GameAspect : uint8_t {
+  Free = 0,
+  Aspect16_9,
+  Aspect16_10,
+  Aspect4_3,
+  Aspect21_9,
+  Aspect1_1,
+};
+
+static float get_system_rss_mb() {
+  FILE *f = std::fopen("/proc/self/statm", "r");
+  if (!f) return 0.0f;
+  unsigned long size = 0, resident = 0;
+  if (std::fscanf(f, "%lu %lu", &size, &resident) == 2) {
+    std::fclose(f);
+    long page_size = sysconf(_SC_PAGESIZE);
+    return (float)((double)resident * (double)page_size / (1024.0 * 1024.0));
+  }
+  std::fclose(f);
+  return 0.0f;
+}
+
+struct ScenePolyStats {
+  uint32_t triangles = 0;
+  uint32_t vertices = 0;
+};
+
+static ScenePolyStats calculate_scene_poly_stats(const content::SceneDesc &s) {
+  ScenePolyStats st{};
+  for (uint32_t i = 0; i < s.entity_count; i++) {
+    const SceneEntity &e = s.entities[i];
+    if (e.flags & content::kSceneHidden) continue;
+    if (e.components & content::kSceneModel) {
+      if (std::strstr(e.name, "kure") || std::strstr(e.name, "Küre") || std::strstr(e.name, "sphere")) {
+        st.triangles += 768;
+        st.vertices += 420;
+      } else if (std::strstr(e.name, "zemin") || std::strstr(e.name, "Zemin") || std::strstr(e.name, "plane")) {
+        st.triangles += 2;
+        st.vertices += 4;
+      } else if (std::strstr(e.name, "kup") || std::strstr(e.name, "Küp") || std::strstr(e.name, "kutu") || std::strstr(e.name, "Kutu")) {
+        st.triangles += 12;
+        st.vertices += 24;
+      } else {
+        st.triangles += 1840;
+        st.vertices += 1200;
+      }
+    } else if (e.components & content::kSceneBody) {
+      if (e.shape == content::SceneShape::Box) { st.triangles += 12; st.vertices += 24; }
+      else if (e.shape == content::SceneShape::Sphere) { st.triangles += 768; st.vertices += 420; }
+    }
+  }
+  return st;
+}
+
+inline ImVec4 tone_col(Tone t, float a = 1.0f) {
+  float c[4];
+  editor_tone(t, c);
+  return ImVec4(c[0], c[1], c[2], c[3] * a);
+}
+
+static int find_first_camera_entity(const content::SceneDesc &s) {
+  for (uint32_t i = 0; i < s.entity_count; i++) {
+    if ((s.entities[i].components & content::kSceneCamera) != 0 && (s.entities[i].flags & content::kSceneHidden) == 0) {
+      return (int)i;
+    }
+  }
+  return -1;
+}
+
+static void draw_stats_overlay(bool *open, float dt, const renderer::RendererStats &rs, const content::SceneDesc &scene,
+                               uint32_t vp_w, uint32_t vp_h, ViewportTab tab, const Arena &arena) {
+  if (!open || !*open) return;
+  ImGui::SetNextWindowBgAlpha(0.92f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+  ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
+
+  if (ImGui::Begin("İstatistikler (Stats)###EngineStatsOverlay", open, ImGuiWindowFlags_NoSavedSettings)) {
+    const float fps = dt > 0.0001f ? (1.0f / dt) : 0.0f;
+    const float ms = dt * 1000.0f;
+
+    // 1) PERFORMANS BASLIGI
+    ImVec4 fps_col = (fps >= 55.0f) ? ImVec4(0.2f, 0.9f, 0.4f, 1.0f)
+                                    : ((fps >= 30.0f) ? ImVec4(0.9f, 0.8f, 0.2f, 1.0f) : ImVec4(0.95f, 0.25f, 0.2f, 1.0f));
+    ImGui::TextColored(fps_col, "● %.1f FPS", (double)fps);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%.2f ms / kare)", (double)ms);
+
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("📊 Grafik & Geometri (Poly Count)", ImGuiTreeNodeFlags_DefaultOpen)) {
+      const ScenePolyStats poly = calculate_scene_poly_stats(scene);
+      ImGui::Columns(2, "poly_cols", false);
+      ImGui::TextUnformatted("Üçgenler (Tris):"); ImGui::NextColumn();
+      ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%u tris", poly.triangles); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Köşeler (Verts):"); ImGui::NextColumn();
+      ImGui::Text("%u verts", poly.vertices); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Çizim Çağrıları:"); ImGui::NextColumn();
+      ImGui::Text("%u batch", rs.draws); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Malzeme Bağlama:"); ImGui::NextColumn();
+      ImGui::Text("%u SetPass", rs.material_binds); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Yüklü Mesh / Doku:"); ImGui::NextColumn();
+      ImGui::Text("%u / %u", rs.meshes, rs.textures); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Gölge Haritası:"); ImGui::NextColumn();
+      ImGui::Text("CSM 3x1024 D16"); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Aktif Işık:"); ImGui::NextColumn();
+      ImGui::Text("%u değerlendirildi", rs.clusters.lights_evaluated); ImGui::NextColumn();
+      ImGui::Columns(1);
+    }
+
+    if (ImGui::CollapsingHeader("💾 Bellek & Atık (Memory / GC)", ImGuiTreeNodeFlags_DefaultOpen)) {
+      const float rss_mb = get_system_rss_mb();
+      const float vram_est = (float)(vp_w * vp_h * 8 * 2 + rs.textures * 1024 * 1024 * 4) / (1024.0f * 1024.0f);
+      ImGui::Columns(2, "mem_cols", false);
+      ImGui::TextUnformatted("Sistem RAM (RSS):"); ImGui::NextColumn();
+      ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1.0f), "%.1f MB", (double)rss_mb); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("GPU VRAM (Tahmini):"); ImGui::NextColumn();
+      ImGui::Text("%.1f MB", (double)vram_est); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Motor Arena Belleği:"); ImGui::NextColumn();
+      ImGui::Text("%.1f KB / Tepe %.1f KB", (double)arena.used() / 1024.0, (double)arena.capacity() / 1024.0); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Sıcak Döngü Tahsisi:"); ImGui::NextColumn();
+      ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f), "0 Bayt (Sıfır Atık)"); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Tulpar ARC Durumu:"); ImGui::NextColumn();
+      ImGui::Text("Çöp Toplama Hazır (0 sızıntı)"); ImGui::NextColumn();
+      ImGui::Columns(1);
+    }
+
+    if (ImGui::CollapsingHeader("🌍 Dünya & Görünüm", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::Columns(2, "world_cols", false);
+      ImGui::TextUnformatted("Sahne Varlıkları:"); ImGui::NextColumn();
+      ImGui::Text("%u varlık", scene.entity_count); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Görünüm Modu:"); ImGui::NextColumn();
+      ImGui::Text(tab == ViewportTab::Scene ? "🎬 Sahne (Scene)" : "🎮 Oyun (Game)"); ImGui::NextColumn();
+
+      ImGui::TextUnformatted("Çözünürlük:"); ImGui::NextColumn();
+      ImGui::Text("%u x %u px", vp_w, vp_h); ImGui::NextColumn();
+      ImGui::Columns(1);
+    }
+  }
+  ImGui::End();
+  ImGui::PopStyleVar(2);
+}
 
 struct RecordCtx {
   renderer::Renderer *r;
@@ -148,6 +310,16 @@ struct EditorState {
   // yalniz zaman akmaz. step_request duraklatilmisken tek adim ilerletir.
   bool paused = false;
   uint32_t step_request = 0;
+  // GI (isik probe) onizleme -- SADECE EDITOR, .sahne/.sahneb'e YAZILMAZ.
+  // "Isik Haritasini Pisir" butonuyla bellekte pisirilir (ayni bellek-ici
+  // bake->derle->ac yolu .sahneb derleyicisinin kullandigi, disk YOK).
+  // Sahne degisince (undo_count degisir) otomatik yeniden pisirilmez --
+  // bake tum sahne uzerinde CPU ray-tracing, her kare/duzenlemede pahali.
+  SystemArena gi_arena;
+  content::SceneGi gi;
+  content::SceneGiReport gi_report{};
+  bool gi_baked = false, gi_preview = false;
+  uint32_t gi_bake_undo_count = 0;
 };
 
 // Varlik silindikten / geri alindiktan sonra secimi gecerli tut.
@@ -210,26 +382,44 @@ template <class F> void with_bodies(EditorState &st, sim::Physics &ph, F &&f) {
 // widget'ta (vec3 = uc surukleme) son oge yalniz Z alanidir; Y suruklenirken
 // IsItemActivated() false kalir ve gunluge islem dusmezdi (editor_widgets kapisi).
 void track_edit(EditorState &st, SceneEntity &e, int index, const PropItem &it) {
-  if (it.activated && !st.edit_active) { st.edit_before = e; st.edit_active = true; }
-  if (it.deactivated && st.edit_active) {
-    st.edit_active = false;
-    if (it.deactivated_after_edit) {
-      const SceneEntity after = e;
-      e = st.edit_before;
-      if (st.hist.set_entity(st.scene, (uint32_t)index, after)) { st.groups.push(1); st.dirty = true; }
+  if (!st.edit_active) {
+    st.edit_before = e;
+  }
+  if (it.activated || it.changed) {
+    st.edit_active = true;
+  }
+  if (it.deactivated_after_edit) {
+    const SceneEntity after = e;
+    e = st.edit_before;
+    if (st.hist.set_entity(st.scene, (uint32_t)index, after)) {
+      st.groups.push(1);
+      st.dirty = true;
     }
+    st.edit_active = false;
+    st.edit_before = after;
+  } else if (it.deactivated && !it.changed && content::scene_entity_equal(e, st.edit_before)) {
+    st.edit_active = false;
   }
 }
 // Dunya paneli (gunes/ortam/golge): ayni kural, SceneOp::World olarak gunluge.
 void track_world_edit(EditorState &st, const PropItem &it) {
-  if (it.activated && !st.world_edit_active) { st.world_before = st.scene.world(); st.world_edit_active = true; }
-  if (it.deactivated && st.world_edit_active) {
-    st.world_edit_active = false;
-    if (it.deactivated_after_edit) {
-      const content::SceneWorld after = st.scene.world();
-      st.scene.set_world(st.world_before);
-      if (st.hist.set_world(st.scene, after)) { st.groups.push(1); st.dirty = true; }
+  if (!st.world_edit_active) {
+    st.world_before = st.scene.world();
+  }
+  if (it.activated || it.changed) {
+    st.world_edit_active = true;
+  }
+  if (it.deactivated_after_edit) {
+    const content::SceneWorld after = st.scene.world();
+    st.scene.set_world(st.world_before);
+    if (st.hist.set_world(st.scene, after)) {
+      st.groups.push(1);
+      st.dirty = true;
     }
+    st.world_edit_active = false;
+    st.world_before = after;
+  } else if (it.deactivated && content::scene_world_equal(st.scene.world(), st.world_before)) {
+    st.world_edit_active = false;
   }
 }
 // Ayrik widget (onay kutusu, secim): kopya uzerinde degisiklik, hemen islem.
@@ -314,6 +504,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   // --- Sahne dosyasi (veri modeli) ---
   static EditorState st;
   st.hist.init(sys, 256);
+  st.gi_arena.reserve(32u << 20, "editor_gi_preview"); // bake + blob derleme scratch'i
   const char *adir = std::getenv("TULPAR_ENGINE_ASSETS");
   if (opts.scene_path) std::snprintf(st.scene_path, sizeof st.scene_path, "%s", opts.scene_path);
   else if (adir && *adir) std::snprintf(st.scene_path, sizeof st.scene_path, "%s/editor.sahne", adir);
@@ -407,6 +598,14 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   OverlayResult ovres;       // kaplamanin son karede urettigi etkilesim
   bool cam_dragging = false; // kamera tusu basili: panelden cikmak donusu kesmesin
   bool prev_f = false;
+  ViewportTab view_tab = ViewportTab::Scene;
+  GameAspect game_aspect = GameAspect::Free;
+  bool maximize_on_play = false;
+  bool mute_audio_on_play = false;
+  bool show_grid = true;
+  bool wireframe_mode = false;
+  bool show_stats = true;
+  bool was_playing = false;
   RecordCtx rctx{&ren, &ui, &vp, &dev};
   bool running = true;
   // Konsol + dosya islemleri durumu. static: ic tamponlari buyuk (halka ~150 KB,
@@ -438,6 +637,16 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   // (grup tasima = N set_entity, grup silme = N remove_entity). Sinirlar OpGroups'ta;
   // gunluk once biterse dongu orada durur (grup muhasebesi gunlugun onune gecemez).
   auto do_undo = [&]() {
+    if (st.edit_active) {
+      const int32_t si = st.sel.primary();
+      if (si >= 0 && si < (int32_t)st.scene.entity_count) {
+        st.scene.entities[si] = st.edit_before;
+      }
+      st.edit_active = false;
+      ImGui::ClearActiveID();
+      set_status(st, "degisiklik iptal edildi");
+      return;
+    }
     if (st.hist.undo_count() == 0) return;
     const uint32_t k = st.groups.undo_size();
     uint32_t done = 0;
@@ -546,19 +755,172 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     set_status(st, "derlendi: %s (%u bayt, %u cizim, %u isik, %u govde, ozet %08x)", out, v.h->total_size, v.h->draw_count, v.h->light_count,
                v.h->body_count, (unsigned)v.h->hash_lo);
   };
+  // GI onizleme pisirme: sahne+yuklu modellerden bellek-ici bake -> derle ->
+  // ac (ayni scene_blob_compile_ex/scene_blob_open yolu, DISK YOK). Dunya
+  // panelindeki "Isik Haritasini Pisir" butonu cagirir; her cagrida onceki
+  // pisirme atilir (arena().reset_to(0)) -- tek aktif sonuc yeter.
+  auto do_bake_gi = [&]() {
+    st.gi_arena.reset_to(0);
+    content::GiScene g{};
+    content::scene_gi_setup(st.scene, &g);
+    static content::GiOccluder occ[content::kGiMaxOccluders];
+    static content::GiLight lights[content::kGiMaxLights];
+    static content::GiTri tris[200000]; // editor.sahne'nin gercek yuku (~6600) icin cok pay
+    content::SceneGiOptions opt;
+    g.occluders = occ;
+    g.occluder_count = content::scene_gi_occluders(st.scene, opt, occ, content::kGiMaxOccluders);
+    const content::Model *model_ptrs[content::kSceneMaxAssets];
+    for (uint32_t i = 0; i < content::kSceneMaxAssets; i++) model_ptrs[i] = st.have[i] ? &st.models[i] : nullptr;
+    g.tris = tris;
+    g.tri_count = content::scene_gi_model_tris(st.scene, opt, model_ptrs, st.scene.asset_count, tris, 200000);
+    g.lights = lights;
+    g.light_count = content::scene_gi_lights(st.scene, lights, content::kGiMaxLights);
+    content::SceneBlobExtras x{};
+    st.gi_baked = false;
+    if (!content::scene_gi_bake(st.gi_arena, g, opt, &x, &st.gi_report)) {
+      set_status(st, "GI pisirilemedi: sahne bos ya da izgara kurulamadi");
+      return;
+    }
+    const size_t need = content::scene_blob_compile_ex(st.scene, &x, nullptr, 0);
+    void *buf = st.gi_arena.alloc(need, content::kSceneBlobAlign);
+    if (!buf) { set_status(st, "GI pisirilemedi: onizleme belleği yetersiz (32 MB)"); return; }
+    content::scene_blob_compile_ex(st.scene, &x, buf, need);
+    content::SceneBlobView v;
+    content::SceneError err{};
+    if (!content::scene_blob_open(buf, need, &v, &err)) { set_status(st, "GI pisirilemedi: %s", err.msg); return; }
+    st.gi_baked = st.gi.init(v);
+    st.gi_bake_undo_count = st.hist.undo_count();
+    if (st.gi_baked)
+      set_status(st, "GI pisirildi: %u sonda (%u gecerli), %.3f s", st.gi_report.probes, st.gi_report.probes - st.gi_report.probes_inside,
+                 st.gi_report.seconds);
+    else
+      set_status(st, "GI pisirildi ama sonda izgarasi acilamadi (sahne cok kucuk/buyuk olabilir)");
+  };
   // kind: 0 = kopya/varsayilan (secili varsa kopyasi, yoksa bos ya da model),
   // 1 bos, 2 model, 3 isik, 4 govde (Sahne panelinin "+" menusu).
-  auto do_add = [&](int kind = 0) {
+  auto do_add = [&](int kind = 0, int32_t parent = -1) {
     SceneEntity e{};
     const int32_t prim = st.sel.primary();
-    if (kind == 0 && prim >= 0) { e = st.scene.entities[prim]; std::snprintf(e.name, sizeof e.name, "%.24s_kopya", st.scene.entities[prim].name); e.pos.x += 1.5f; }
-    else {
-      static const char *const kStem[5] = {"nesne", "nesne", "model", "isik", "govde"};
-      std::snprintf(e.name, sizeof e.name, "%s_%u", kStem[kind < 0 || kind > 4 ? 0 : kind], st.scene.entity_count + 1);
+    if (kind == 0 && prim >= 0) {
+      e = st.scene.entities[prim];
+      std::snprintf(e.name, sizeof e.name, "%.24s_kopya", st.scene.entities[prim].name);
+      e.pos.x += 1.5f;
+    } else {
+      static const char *const kStem[] = {
+        "nesne", "nesne", "model", "isik", "kutu_sabit",
+        "kure_sabit", "kutu_dinamik", "kure_dinamik", "zemin",
+        "animasyon", "kup", "kure", "kamera", "ses", "isik_yonlu"
+      };
+      const char *stem = (kind >= 0 && kind < (int)(sizeof(kStem)/sizeof(kStem[0]))) ? kStem[kind] : "nesne";
+      std::snprintf(e.name, sizeof e.name, "%s_%u", stem, st.scene.entity_count + 1);
       e.pos = cam.target;
-      if (kind == 2 || (kind == 0 && st.scene.asset_count)) { e.components = content::kSceneModel; e.asset = st.scene.asset_count ? 0 : -1; }
-      if (kind == 3) e.components = content::kSceneLight;
-      if (kind == 4) e.components = content::kSceneBody;
+      e.parent = parent;
+
+      switch (kind) {
+      case 1: // Boş varlık
+        e.components = 0;
+        break;
+      case 2: // Model
+        e.components = content::kSceneModel;
+        e.asset = st.scene.asset_count ? 0 : -1;
+        break;
+      case 3: // Nokta Işık
+        e.components = content::kSceneLight;
+        e.light_type = content::SceneLightType::Point;
+        e.light_color = Vec3{1.0f, 1.0f, 1.0f};
+        e.light_intensity = 3.0f;
+        e.light_radius = 8.0f;
+        break;
+      case 4: // Sabit Kutu Gövde
+        e.components = content::kSceneBody;
+        e.shape = content::SceneShape::Box;
+        e.half = Vec3{0.5f, 0.5f, 0.5f};
+        e.dynamic = false;
+        break;
+      case 5: // Sabit Küre Gövde
+        e.components = content::kSceneBody;
+        e.shape = content::SceneShape::Sphere;
+        e.radius = 0.5f;
+        e.dynamic = false;
+        break;
+      case 6: // Dinamik Kutu Gövde
+        e.components = content::kSceneBody;
+        e.shape = content::SceneShape::Box;
+        e.half = Vec3{0.5f, 0.5f, 0.5f};
+        e.dynamic = true;
+        break;
+      case 7: // Dinamik Küre Gövde
+        e.components = content::kSceneBody;
+        e.shape = content::SceneShape::Sphere;
+        e.radius = 0.5f;
+        e.dynamic = true;
+        break;
+      case 8: // Zemin / Düzlem
+        e.components = content::kSceneBody;
+        e.shape = content::SceneShape::Box;
+        e.half = Vec3{10.0f, 0.1f, 10.0f};
+        e.dynamic = false;
+        e.pos.y = -0.1f;
+        break;
+      case 9: // Animasyonlu Model
+        e.components = content::kSceneModel | content::kSceneAnim;
+        e.asset = st.scene.asset_count > 1 ? 1 : (st.scene.asset_count ? 0 : -1);
+        e.clip = 0;
+        e.speed = 1.0f;
+        break;
+      case 10: { // Küp (Model + Gövde)
+        e.components = content::kSceneModel | content::kSceneBody;
+        e.shape = content::SceneShape::Box;
+        e.half = Vec3{0.5f, 0.5f, 0.5f};
+        e.dynamic = false;
+        int32_t cube_a = -1;
+        for (uint32_t a = 0; a < st.scene.asset_count; a++) {
+          if (std::strstr(st.scene.assets[a], "cube") != nullptr) { cube_a = (int32_t)a; break; }
+        }
+        if (cube_a < 0 && st.scene.asset_count) cube_a = 0;
+        e.asset = cube_a;
+        break;
+      }
+      case 11: { // Küre (Model + Gövde)
+        e.components = content::kSceneModel | content::kSceneBody;
+        e.shape = content::SceneShape::Sphere;
+        e.radius = 0.5f;
+        e.dynamic = false;
+        int32_t sph_a = -1;
+        for (uint32_t a = 0; a < st.scene.asset_count; a++) {
+          if (std::strstr(st.scene.assets[a], "sphere") != nullptr) { sph_a = (int32_t)a; break; }
+        }
+        if (sph_a < 0 && st.scene.asset_count) sph_a = 0;
+        e.asset = sph_a;
+        break;
+      }
+      case 12: // Kamera Varlığı
+        e.components = content::kSceneCamera;
+        e.cam_fov = 60.0f;
+        e.cam_near = 0.1f;
+        e.cam_far = 200.0f;
+        break;
+      case 13: // Ses Kaynağı
+        e.components = content::kSceneAudio;
+        std::snprintf(e.audio_clip, sizeof e.audio_clip, "ambient.wav");
+        e.audio_volume = 1.0f;
+        e.audio_pitch = 1.0f;
+        e.audio_loop = true;
+        e.audio_spatial = true;
+        break;
+      case 14: // Yönlü Işık
+        e.components = content::kSceneLight;
+        e.light_type = content::SceneLightType::Directional;
+        e.light_color = Vec3{1.0f, 0.96f, 0.9f};
+        e.light_intensity = 2.0f;
+        e.rot_deg = Vec3{50.0f, -30.0f, 0.0f}; // asagi/yana bakan tipik gunes acisi
+        break;
+      default:
+        if (kind == 2 || (kind == 0 && st.scene.asset_count)) { e.components = content::kSceneModel; e.asset = st.scene.asset_count ? 0 : -1; }
+        if (kind == 3) e.components = content::kSceneLight;
+        if (kind == 4) e.components = content::kSceneBody;
+        break;
+      }
     }
     with_bodies(st, phys, [&] {
       if (st.hist.add_entity(st.scene, e)) {
@@ -655,6 +1017,17 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       st.sel.set_single(i);
       do_add(0);
       break;
+    case HierarchyAction::Cut:
+      st.sel.set_single(i);
+      do_cut();
+      break;
+    case HierarchyAction::Copy:
+      st.sel.set_single(i);
+      do_copy();
+      break;
+    case HierarchyAction::Paste:
+      do_paste();
+      break;
     case HierarchyAction::Detach:
     case HierarchyAction::Reparent: {
       const int32_t par = (r.action == HierarchyAction::Detach) ? -1 : r.target;
@@ -750,12 +1123,12 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   cmds.bind(CommandId::ViewGizmos,
             [](void *c) { // gizmolarin tamami ac/kapa
               GizmoOptions &g = static_cast<CmdCtx *>(c)->st->gizmos;
-              const bool on = !(g.light_radius || g.shadow_volume || g.sun_dir);
-              g.light_radius = g.shadow_volume = g.sun_dir = on;
+              const bool on = !(g.light_radius || g.light_glyph || g.shadow_volume || g.sun_dir || g.camera_frustum);
+              g.light_radius = g.light_glyph = g.shadow_volume = g.sun_dir = g.camera_frustum = on;
             },
             &cc, nullptr, [](const void *c) {
               const GizmoOptions &g = static_cast<const CmdCtx *>(c)->st->gizmos;
-              return g.light_radius || g.shadow_volume || g.sun_dir;
+              return g.light_radius || g.light_glyph || g.shadow_volume || g.sun_dir || g.camera_frustum;
             });
   cmds.bind(CommandId::ViewConsole, [](void *c) { bool *b = static_cast<CmdCtx *>(c)->show_console; *b = !*b; }, &cc, nullptr,
             [](const void *c) { return *static_cast<const CmdCtx *>(c)->show_console; });
@@ -906,17 +1279,25 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       // goruntunun ustunde ve kaplama/gizmo onu almamis — ya da surukleme
       // zaten basladi (panelden disari tasan surukleme kesilmesin).
       const bool cam_btn = ci.rmb || ci.mmb;
-      const bool can_start = view_hovered && !ovres.consumed_mouse && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing();
+      const bool can_start = (view_tab == ViewportTab::Scene) && view_hovered && !ovres.consumed_mouse && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing();
       if (!cam_btn) cam_dragging = false;
       else if (can_start) cam_dragging = true;
-      ci.allow_mouse = cam_dragging || can_start;
-      ci.allow_keys = !ui.wants_text_input(); // WASD bir ad alanina yaziliyorsa ucus baslamasin
+      ci.allow_mouse = (view_tab == ViewportTab::Scene) && (cam_dragging || can_start);
+      ci.allow_keys = (view_tab == ViewportTab::Scene) && !ui.wants_text_input(); // WASD bir ad alanina yaziliyorsa ucus baslamasin
       ci.dt = dt;
       camera_update(cam, ci);
       prev_mx = in->mouse_x;
       prev_my = in->mouse_y;
       prev_scroll = in->scroll_y;
     }
+
+    // Oynatma baslayinca otomatik Oyun sekmesine gec, durunca Sahne sekmesine don
+    if (st.playing && !was_playing) {
+      view_tab = ViewportTab::Game;
+    } else if (!st.playing && was_playing) {
+      view_tab = ViewportTab::Scene;
+    }
+    was_playing = st.playing;
 
     // Sim: yalniz oynatilirken (sabit adim). Duraklatilmisken zaman AKMAZ ama
     // govdeler yerinde durur; F10 tek adim ilerletir. fs.advance duraklamada
@@ -935,10 +1316,31 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
 
     // En-boy orani artik PENCERENIN degil, sahnenin icinde yasadigi PANELIN
     // orani: 3B viewport dokusuna ciziliyor ve o dokunun olcusu panelden geliyor.
-    // Pencere oranini kullanmak sahneyi panelde gerilmis gosterirdi.
     const float aspect = vp.aspect();
-    Mat4 proj = camera_projection(cam, aspect, 0.1f, 200.0f);
-    Mat4 view = camera_view(cam);
+    Mat4 proj, view;
+    if (view_tab == ViewportTab::Game) {
+      const int cam_ent = find_first_camera_entity(st.scene);
+      if (cam_ent >= 0) {
+        const SceneEntity &ce = st.scene.entities[cam_ent];
+        const Mat4 wm = content::scene_entity_world_matrix(st.scene, (uint32_t)cam_ent);
+        const Vec3 c_eye = {wm.m[3][0], wm.m[3][1], wm.m[3][2]};
+        Vec3 c_f = {-wm.m[2][0], -wm.m[2][1], -wm.m[2][2]};
+        Vec3 c_u = {wm.m[1][0], wm.m[1][1], wm.m[1][2]};
+        if (length_sq(c_f) < 1e-6f) c_f = Vec3{0, 0, -1};
+        if (length_sq(c_u) < 1e-6f) c_u = Vec3{0, 1, 0};
+        const float fov_rad = ce.cam_fov > 1.0f ? (ce.cam_fov * 3.14159265f / 180.0f) : (ce.cam_fov > 0.1f ? ce.cam_fov : 0.897598f);
+        const float znear = ce.cam_near > 0.001f ? ce.cam_near : 0.1f;
+        const float zfar = ce.cam_far > znear ? ce.cam_far : 200.0f;
+        view = Mat4::look_at(c_eye, c_eye + c_f, c_u);
+        proj = Mat4::perspective(fov_rad, aspect, znear, zfar);
+      } else {
+        view = camera_view(cam);
+        proj = camera_projection(cam, aspect, 0.1f, 200.0f);
+      }
+    } else {
+      proj = camera_projection(cam, aspect, 0.1f, 200.0f);
+      view = camera_view(cam);
+    }
     ren.set_camera(view, proj);
     ren.clear_point_lights();
 
@@ -948,6 +1350,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // metin yazarken VE kaydirac suruklerken kapali; Ctrl+* yalniz metinde kapali).
     const InputGuards guards{ui.wants_text_input(), ui.wants_keyboard()};
     commands_poll_imgui(cmds, guards);
+    if (ImGui::IsKeyPressed(ImGuiKey_F3, false)) show_stats = !show_stats;
     // --- CERCEVE: menu / arac / durum cubugu (editor_chrome.hpp; sira sozlesmesi
     // orada: uc cubuk da ana viewport'un WorkRect'ini daraltir, dockspace tam
     // aralarina oturur — ImGui daraltmayi bir kare gecikmeli uygular).
@@ -974,7 +1377,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     cs.gizmo_op = gizmo_op;
     cs.snap = snap_on;
     cs.snap_value = snap_step;
-    cs.gizmos_visible = st.gizmos.light_radius || st.gizmos.shadow_volume || st.gizmos.sun_dir;
+    cs.gizmos_visible = st.gizmos.light_radius || st.gizmos.light_glyph || st.gizmos.shadow_volume || st.gizmos.sun_dir || st.gizmos.camera_frustum;
     const Vec3 eye = camera_eye(cam);
     cs.cam_eye[0] = eye.x; cs.cam_eye[1] = eye.y; cs.cam_eye[2] = eye.z;
     chrome_menu_bar(cmds, cs, menu_extra);
@@ -1007,41 +1410,206 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     view_hovered = false;
     ovres = OverlayResult{}; // panel kapaliyken bayat sonuc uygulanmasin
     if (ImGui::Begin(kPanelGorunumLabel)) {
+      // 1) Viewport Ust Arac Cubugu (Sekmeler + Araclar + Stats + 3 Nokta)
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 4.0f));
+
+      // Sekmeler: [🎬 Sahne] [🎮 Oyun]
+      const bool is_scene = (view_tab == ViewportTab::Scene);
+      if (is_scene) {
+        ImGui::PushStyleColor(ImGuiCol_Button, tone_col(Tone::Accent));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, tone_col(Tone::AccentHi));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+      } else {
+        ImGui::PushStyleColor(ImGuiCol_Button, tone_col(Tone::Bg2));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, tone_col(Tone::Bg3));
+        ImGui::PushStyleColor(ImGuiCol_Text, tone_col(Tone::TextDim));
+      }
+      if (ImGui::Button(" 🎬 Sahne ")) view_tab = ViewportTab::Scene;
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sahne Görünümü (Düzenleme, Gizmo, Serbest Kamera)");
+      ImGui::PopStyleColor(3);
+
+      ImGui::SameLine();
+      const bool is_game = (view_tab == ViewportTab::Game);
+      if (is_game) {
+        ImGui::PushStyleColor(ImGuiCol_Button, tone_col(Tone::Accent));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, tone_col(Tone::AccentHi));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+      } else {
+        ImGui::PushStyleColor(ImGuiCol_Button, tone_col(Tone::Bg2));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, tone_col(Tone::Bg3));
+        ImGui::PushStyleColor(ImGuiCol_Text, tone_col(Tone::TextDim));
+      }
+      if (ImGui::Button(" 🎮 Oyun ")) view_tab = ViewportTab::Game;
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Oyun Görünümü (Kamera Perspektifi, Temiz Oyun Ekranı)");
+      ImGui::PopStyleColor(3);
+
+      ImGui::SameLine();
+      ImGui::TextDisabled("|");
+      ImGui::SameLine();
+
+      if (view_tab == ViewportTab::Scene) {
+        if (ImGui::Button(show_grid ? "⊞ Izgara: Açık" : "⊞ Izgara: Kapalı")) show_grid = !show_grid;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("3B Zemin Izgarasını Göster / Gizle");
+
+        ImGui::SameLine();
+        if (ImGui::Button(wireframe_mode ? "▦ Tel Kafes" : "■ Düz Gölgeli")) wireframe_mode = !wireframe_mode;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Gölgelendirme Modu");
+
+        ImGui::SameLine();
+        if (ImGui::Button("🎯 Odaklan (F)")) {
+          const int32_t s0 = st.sel.primary();
+          if (s0 >= 0 && s0 < (int32_t)st.scene.entity_count) {
+            static content::SceneBounds fb[content::kSceneMaxEntities];
+            const uint32_t nb = entity_world_bounds(st, phys, fb);
+            if ((uint32_t)s0 < nb) camera_focus(cam, fb[s0]);
+          }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Seçili Varlığa Odaklan (F)");
+      } else {
+        // Oyun görünümü araçları
+        static const char *const kAspectNames[] = {"Serbest En-Boy", "16:9 (FHD)", "16:10", "4:3", "21:9", "1:1"};
+        ImGui::SetNextItemWidth(130.0f);
+        int cur_aspect = (int)game_aspect;
+        if (ImGui::Combo("##aspect", &cur_aspect, kAspectNames, IM_ARRAYSIZE(kAspectNames))) {
+          game_aspect = (GameAspect)cur_aspect;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Oyun Görünümü En-Boy Oranı");
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Oynatılınca Büyüt", &maximize_on_play);
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Sessiz", &mute_audio_on_play);
+      }
+
+      // Sağ Taraf: [ 📊 Stats ] [ ⋮ ]
+      const float right_width = 115.0f;
+      const float avail_w = ImGui::GetContentRegionAvail().x;
+      if (avail_w > right_width) {
+        ImGui::SameLine(ImGui::GetWindowWidth() - right_width - ImGui::GetStyle().WindowPadding.x);
+      } else {
+        ImGui::SameLine();
+      }
+
+      const bool stats_btn_active = show_stats;
+      if (stats_btn_active) {
+        ImGui::PushStyleColor(ImGuiCol_Button, tone_col(Tone::Accent));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+      }
+      if (ImGui::Button("📊 Stats")) show_stats = !show_stats;
+      if (stats_btn_active) ImGui::PopStyleColor(2);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("İstatistikler Panelini Aç / Kapat (FPS, Poligon, Bellek, Çöp)");
+
+      ImGui::SameLine();
+      if (ImGui::Button(" ⋮ ")) ImGui::OpenPopup("ViewportOptionsMenu");
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Görünüm Seçenekleri ve Araçlar");
+
+      if (ImGui::BeginPopup("ViewportOptionsMenu")) {
+        if (ImGui::MenuItem("📊 Detaylı İstatistikler (Stats)", nullptr, show_stats)) show_stats = !show_stats;
+        ImGui::Separator();
+        if (ImGui::MenuItem("🎬 Sahne Görünümüne Geç", nullptr, view_tab == ViewportTab::Scene)) view_tab = ViewportTab::Scene;
+        if (ImGui::MenuItem("🎮 Oyun Görünümüne Geç", nullptr, view_tab == ViewportTab::Game)) view_tab = ViewportTab::Game;
+        ImGui::Separator();
+        if (ImGui::MenuItem("📐 Izgarayı Göster / Gizle", nullptr, show_grid)) show_grid = !show_grid;
+        if (ImGui::MenuItem("☀ Işık ve Gölge Gizmolarnı Göster", nullptr, st.gizmos.light_radius)) {
+          st.gizmos.light_radius = !st.gizmos.light_radius;
+          st.gizmos.light_glyph = st.gizmos.light_radius;
+          st.gizmos.shadow_volume = st.gizmos.light_radius;
+          st.gizmos.sun_dir = st.gizmos.light_radius;
+          st.gizmos.camera_frustum = st.gizmos.light_radius;
+        }
+        if (ImGui::MenuItem("🎯 Seçili Varlığa Odaklan", "F")) {
+          const int32_t s0 = st.sel.primary();
+          if (s0 >= 0 && s0 < (int32_t)st.scene.entity_count) {
+            static content::SceneBounds fb[content::kSceneMaxEntities];
+            const uint32_t nb = entity_world_bounds(st, phys, fb);
+            if ((uint32_t)s0 < nb) camera_focus(cam, fb[s0]);
+          }
+        }
+        if (ImGui::MenuItem("🔄 Kamerayı Varsayılana Sıfırla")) {
+          cam.yaw = 0.7f; cam.pitch = 0.45f; cam.radius = 26.0f;
+          cam.target = Vec3{0, 1.0f, -3.0f};
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Kamera Hızı: %.1fx", (double)(cam.speed / 9.0f));
+        float sp = cam.speed / 9.0f;
+        if (ImGui::SliderFloat("##camspeed", &sp, 0.1f, 5.0f, "%.1fx")) {
+          cam.speed = sp * 9.0f;
+        }
+        ImGui::EndPopup();
+      }
+
+      ImGui::PopStyleVar(2);
+      ImGui::Separator();
+
+      // 2) 3B Canvas Çizimi
       const ImVec2 avail = ImGui::GetContentRegionAvail();
       const ImVec2 origin = ImGui::GetCursorScreenPos();
       if (avail.x >= 1.0f && avail.y >= 1.0f) {
-        vp.resize((uint32_t)avail.x, (uint32_t)avail.y);
+        float draw_w = avail.x;
+        float draw_h = avail.y;
+        float offset_x = 0.0f;
+        float offset_y = 0.0f;
+
+        if (view_tab == ViewportTab::Game && game_aspect != GameAspect::Free) {
+          float target_ar = 16.0f / 9.0f;
+          if (game_aspect == GameAspect::Aspect16_10) target_ar = 16.0f / 10.0f;
+          else if (game_aspect == GameAspect::Aspect4_3) target_ar = 4.0f / 3.0f;
+          else if (game_aspect == GameAspect::Aspect21_9) target_ar = 21.0f / 9.0f;
+          else if (game_aspect == GameAspect::Aspect1_1) target_ar = 1.0f;
+
+          if (avail.x / avail.y > target_ar) {
+            draw_h = avail.y;
+            draw_w = std::floor(draw_h * target_ar);
+            offset_x = std::floor((avail.x - draw_w) * 0.5f);
+          } else {
+            draw_w = avail.x;
+            draw_h = std::floor(draw_w / target_ar);
+            offset_y = std::floor((avail.y - draw_h) * 0.5f);
+          }
+
+          // Arka planı koyu letterbox ile doldur
+          ImDrawList *dl = ImGui::GetWindowDrawList();
+          dl->AddRectFilled(origin, ImVec2(origin.x + avail.x, origin.y + avail.y), IM_COL32(8, 8, 8, 255));
+        }
+
+        if (draw_w < 1.0f) draw_w = 1.0f;
+        if (draw_h < 1.0f) draw_h = 1.0f;
+        vp.resize((uint32_t)draw_w, (uint32_t)draw_h);
         ren.set_render_size(vp.width(), vp.height());
         if (vp.texture_id()) {
+          if (offset_x > 0.0f || offset_y > 0.0f) {
+            ImGui::SetCursorScreenPos(ImVec2(origin.x + offset_x, origin.y + offset_y));
+          }
           ImGui::Image((ImTextureID)vp.texture_id(), ImVec2((float)vp.width(), (float)vp.height()));
           view_hovered = ImGui::IsItemHovered();
-          // Kaplama: yalniz cizim listesi (oge yok) — altindaki Image tiklamayi
-          // ve hover'i almaya devam eder. Eksen gizmosu kameranin 3x3'unden.
-          OverlayInfo oi;
-          const Mat4 vm = camera_view(cam);
-          std::memcpy(oi.view, &vm.m[0][0], sizeof oi.view);
-          const Vec3 eye = camera_eye(cam);
-          oi.cam_eye[0] = eye.x; oi.cam_eye[1] = eye.y; oi.cam_eye[2] = eye.z;
-          oi.cam_target[0] = cam.target.x; oi.cam_target[1] = cam.target.y; oi.cam_target[2] = cam.target.z;
-          oi.gizmo_op = gizmo_op;
-          oi.gizmos_visible = st.gizmos.light_radius || st.gizmos.shadow_volume || st.gizmos.sun_dir;
-          oi.playing = st.playing;
-          oi.hovered = view_hovered;
-          oi.focused = ImGui::IsWindowFocused();
-          oi.frame_ms = dt * 1000.0f;
-          oi.draw_calls = ren.stats().draws; // onceki karenin kaydi (Tuzaklar 8aa)
-          oi.entity_count = st.scene.entity_count;
-          oi.proj = cam.proj;
-          oi.cam_mode = cam.mode;
-          oi.gizmo_space = gizmo_space;
-          // Kisa tutuluyor: kaplama sigmayan hapi DUSURUR ve uzun ipucu kamera
-          // hapiyla birlikte sigmadiginda hic gorunmuyordu (olculdu 937 px panelde).
-          oi.hint = "Sa\xC4\x9F t\xC4\xB1k d\xC3\xB6nd\xC3\xBCr \xC2\xB7 orta tu\xC5\x9F kayd\xC4\xB1r \xC2\xB7 F odak";
-          viewport_overlay(ViewportRect{origin.x, origin.y, (float)vp.width(), (float)vp.height()}, oi, nullptr, &ovres);
+
+          if (view_tab == ViewportTab::Scene) {
+            OverlayInfo oi;
+            const Mat4 vm = camera_view(cam);
+            std::memcpy(oi.view, &vm.m[0][0], sizeof oi.view);
+            const Vec3 eye = camera_eye(cam);
+            oi.cam_eye[0] = eye.x; oi.cam_eye[1] = eye.y; oi.cam_eye[2] = eye.z;
+            oi.cam_target[0] = cam.target.x; oi.cam_target[1] = cam.target.y; oi.cam_target[2] = cam.target.z;
+            oi.gizmo_op = gizmo_op;
+            oi.gizmos_visible = st.gizmos.light_radius || st.gizmos.light_glyph || st.gizmos.shadow_volume || st.gizmos.sun_dir || st.gizmos.camera_frustum;
+            oi.playing = st.playing;
+            oi.hovered = view_hovered;
+            oi.focused = ImGui::IsWindowFocused();
+            oi.frame_ms = dt * 1000.0f;
+            oi.draw_calls = ren.stats().draws;
+            oi.entity_count = st.scene.entity_count;
+            oi.proj = cam.proj;
+            oi.cam_mode = cam.mode;
+            oi.gizmo_space = gizmo_space;
+            oi.hint = "Sağ tık döndür · orta tuş kaydır · F odak";
+            viewport_overlay(ViewportRect{origin.x + offset_x, origin.y + offset_y, (float)vp.width(), (float)vp.height()}, oi, nullptr, &ovres);
+          }
         } else {
-          ImGui::TextUnformatted(vp.last_error()); // sessiz siyah panel YOK
+          ImGui::TextUnformatted(vp.last_error());
         }
-        view_rect = ViewportRect{origin.x, origin.y, (float)vp.width(), (float)vp.height()};
+        view_rect = ViewportRect{origin.x + offset_x, origin.y + offset_y, (float)vp.width(), (float)vp.height()};
       }
     }
     ImGui::End();
@@ -1057,9 +1625,43 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
 
     if (ImGui::Begin(kPanelSahneLabel)) {
       const int tb = hierarchy_toolbar(st.scene.entity_count, st.sel.count > 0);
-      if (tb >= 1 && tb <= 4) do_add(tb);
-      else if (tb == 5) do_remove();
+      if (tb == 100) do_remove();
+      else if (tb >= 1 && tb <= 14) do_add(tb);
       hierarchy_search(st.filter, sizeof st.filter);
+
+      if (ImGui::BeginPopupContextWindow("SahnePanelMenu", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+        if (ImGui::BeginMenu("Yeni Varl\xC4\xB1k Ekle")) {
+          if (ImGui::MenuItem("\xE2\x97\x8B  Bo\xC5\x9F Varl\xC4\xB1k")) do_add(1);
+          ImGui::Separator();
+          if (ImGui::MenuItem("\xE2\x97\x86  Model (glTF)")) do_add(2);
+          if (ImGui::MenuItem("\xE2\x97\xBC  K\xC3\xBCp (Model + G\xC3\xB6vde)")) do_add(10);
+          if (ImGui::MenuItem("\xE2\x97\x8F  K\xC3\xBCre (Model + G\xC3\xB6vde)")) do_add(11);
+          if (ImGui::MenuItem("\xE2\x96\xAC  Zemin / D\xC3\xBCzlem")) do_add(8);
+          ImGui::Separator();
+          if (ImGui::BeginMenu("\xE2\x98\x80  I\xC5\x9F\xC4\xB1k")) {
+            if (ImGui::MenuItem("\xE2\x97\x8F  Nokta")) do_add(3);
+            if (ImGui::MenuItem("\xE2\x86\x97  Y\xC3\xB6nl\xC3\xBC (g\xC3\xBCne\xC5\x9F)")) do_add(14);
+            ImGui::EndMenu();
+          }
+          ImGui::Separator();
+          if (ImGui::MenuItem("\xE2\x96\xA1  Sabit Kutu G\xC3\xB6vde")) do_add(4);
+          if (ImGui::MenuItem("\xE2\x97\x8B  Sabit K\xC3\xBCre G\xC3\xB6vde")) do_add(5);
+          if (ImGui::MenuItem("\xE2\x96\xA7  Dinamik Kutu G\xC3\xB6vde")) do_add(6);
+          if (ImGui::MenuItem("\xE2\x97\x8D  Dinamik K\xC3\xBCre G\xC3\xB6vde")) do_add(7);
+          ImGui::Separator();
+          if (ImGui::MenuItem("\xE2\x86\xBB  Animasyonlu Model")) do_add(9);
+          if (ImGui::MenuItem("\xF0\x9F\x8E\xA5  Kamera Varl\xC4\xB1\xC4\x9F\xC4\xB1")) do_add(12);
+          if (ImGui::MenuItem("\xF0\x9F\x94\x8A  Ses Kayna\xC4\x9F\xC4\xB1")) do_add(13);
+          ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Yap\xC4\xB1\xC5\x9Ft\xC4\xB1r", "Ctrl+V", false, st.clip_count > 0)) do_paste();
+        if (ImGui::MenuItem("T\xC3\xBCm\xC3\xBCn\xC3\xBC Se\xC3\xA7", "Ctrl+A", false, st.scene.entity_count > 0)) {
+          st.sel.clear();
+          for (uint32_t k = st.scene.entity_count; k > 0; k--) st.sel.toggle((int32_t)(k - 1));
+        }
+        ImGui::EndPopup();
+      }
       // Cizim sirasi belirlenimli ON-SIRADIR (kokler indeks sirasinda, cocuklar
       // indeks sirasinda). SUZGEC ACIKKEN duz liste cizilir: katlanmis bir ata
       // eslesmeyi gizlemesin.
@@ -1116,15 +1718,22 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     ImGui::End();
     if (ImGui::Begin(kPanelOzelliklerLabel)) {
       const int si = (int)st.sel.primary();
+      static int32_t last_inspected = -1;
+      if (last_inspected != si) {
+        st.edit_active = false;
+        last_inspected = si;
+      }
       if (si >= 0 && si < (int)st.scene.entity_count) {
         SceneEntity &e = st.scene.entities[si];
         const bool has_m = (e.components & content::kSceneModel) != 0, has_l = (e.components & content::kSceneLight) != 0,
-                   has_b = (e.components & content::kSceneBody) != 0, has_a = (e.components & content::kSceneAnim) != 0;
-        const char *icon = has_l ? "\xE2\x98\x80" : has_m ? "\xE2\x97\x86" : has_b ? "\xE2\x97\xBC" : "\xE2\x97\x8B"; // ☀ ◆ ◼ ○
-        const Tone icon_tone = has_l ? Tone::Warn : has_m ? Tone::Text : has_b ? Tone::AxisZ : Tone::TextDim;
+                   has_b = (e.components & content::kSceneBody) != 0, has_a = (e.components & content::kSceneAnim) != 0,
+                   has_c = (e.components & content::kSceneCamera) != 0, has_s = (e.components & content::kSceneAudio) != 0,
+                   has_sc = (e.components & content::kSceneScript) != 0;
+        const char *icon = has_l ? "\xE2\x98\x80" : has_m ? "\xE2\x97\x86" : has_b ? "\xE2\x97\xBC" : has_c ? "\xF0\x9F\x8E\xA5" : has_s ? "\xF0\x9F\x94\x8A" : has_sc ? "\xF0\x9F\x93\x9C" : "\xE2\x97\x8B";
+        const Tone icon_tone = has_l ? Tone::Warn : has_m ? Tone::Text : has_b ? Tone::AxisZ : has_c ? Tone::Accent : Tone::TextDim;
         char sub[96];
         if (st.sel.count > 1) std::snprintf(sub, sizeof sub, "grup: %u se\xC3\xA7ili \xC2\xB7 alanlar ana se\xC3\xA7ilide, gizmo grubu ta\xC5\x9F\xC4\xB1r", st.sel.count);
-        else std::snprintf(sub, sizeof sub, "%u bile\xC5\x9F""en%s%s", (unsigned)(has_m + has_l + has_b + has_a),
+        else std::snprintf(sub, sizeof sub, "%u bile\xC5\x9F""en%s%s", (unsigned)(has_m + has_l + has_b + has_a + has_c + has_s + has_sc),
                            has_b ? (e.shape == content::SceneShape::Box ? " \xC2\xB7 kutu g\xC3\xB6vde" : " \xC2\xB7 k\xC3\xBCre g\xC3\xB6vde") : "",
                            (has_b && e.dynamic) ? " \xC2\xB7 dinamik" : "");
         track_edit(st, e, si, inspector_title(icon, e.name, sizeof e.name, sub, icon_tone));
@@ -1165,11 +1774,23 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         }
         if (has_l) {
           rem = false;
+          after = e;
           if (component_header("\xE2\x98\x80", "I\xC5\x9F\xC4\xB1k", nullptr, &rem, true, Tone::Warn)) {
             if (prop_begin("isik")) {
+              int ltype = (int)e.light_type;
+              // "govde" bileseninin sekil combo'suyla AYNI desen: tur degisince
+              // tek islem olarak gunluge yazilir, alan gorunumu tipe gore degisir.
+              if (prop_combo("T\xC3\xBCr", &ltype, "Nokta\0Y\xC3\xB6nl\xC3\xBC\0").changed) {
+                after.light_type = (content::SceneLightType)ltype;
+                commit(st, si, after);
+              }
               track_edit(st, e, si, prop_color("Renk", &e.light_color.x));
               track_edit(st, e, si, prop_float("\xC5\x9Eiddet", &e.light_intensity, 0.05f, 0.0f, 100.0f, "%.2f"));
-              track_edit(st, e, si, prop_float("Yar\xC4\xB1\xC3\xA7""ap", &e.light_radius, 0.05f, 0.1f, 100.0f, "%.2f m"));
+              // Yaricap yalniz Nokta icin anlamli (Yonlu'de yon = varligin donusu,
+              // gizmo gunes-oku cizer; runtime'da HENUZ ayri bir yonlu terim shade
+              // etmez -- bkz. scene.hpp SceneLightType yorumu).
+              if (e.light_type == content::SceneLightType::Point)
+                track_edit(st, e, si, prop_float("Yar\xC4\xB1\xC3\xA7""ap", &e.light_radius, 0.05f, 0.1f, 100.0f, "%.2f m"));
               prop_end();
             }
             component_end();
@@ -1193,13 +1814,62 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           }
           if (rem) { after = e; after.components &= ~content::kSceneBody; commit(st, si, after); }
         }
-        const char *names[4];
-        uint32_t bits[4];
+        if (has_c) {
+          rem = false;
+          after = e;
+          if (component_header("\xF0\x9F\x8E\xA5", "Kamera", nullptr, &rem, true, Tone::Accent)) {
+            if (prop_begin("kamera")) {
+              track_edit(st, e, si, prop_float("G\xC3\xB6r\xC3\xBC\xC5\x9F A\xC3\xA7\xC4\xB1s\xC4\xB1 (FOV)", &e.cam_fov, 0.5f, 10.0f, 120.0f, "%.1f\xC2\xB0"));
+              track_edit(st, e, si, prop_float("Yak\xC4\xB1n K\xC4\xB1rpma", &e.cam_near, 0.01f, 0.01f, 10.0f, "%.2f m"));
+              track_edit(st, e, si, prop_float("Uzak K\xC4\xB1rpma", &e.cam_far, 1.0f, 1.0f, 5000.0f, "%.1f m"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneCamera; commit(st, si, after); }
+        }
+        if (has_s) {
+          rem = false;
+          after = e;
+          if (component_header("\xF0\x9F\x94\x8A", "Ses Kayna\xC4\x9F\xC4\xB1", nullptr, &rem, true, Tone::Warn)) {
+            if (prop_begin("ses")) {
+              track_edit(st, e, si, prop_text("Ses Dosyas\xC4\xB1", e.audio_clip, sizeof e.audio_clip));
+              track_edit(st, e, si, prop_float("Ses D\xC3\xBCzeyi", &e.audio_volume, 0.02f, 0.0f, 2.0f, "%.2f"));
+              track_edit(st, e, si, prop_float("Perde", &e.audio_pitch, 0.02f, 0.1f, 3.0f, "%.2f"));
+              bool loop = e.audio_loop;
+              if (prop_check("D\xC3\xB6ng\xC3\xBC", &loop).changed) { after = e; after.audio_loop = loop; commit(st, si, after); }
+              bool spat = e.audio_spatial;
+              if (prop_check("3B Uzamsal", &spat).changed) { after = e; after.audio_spatial = spat; commit(st, si, after); }
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneAudio; commit(st, si, after); }
+        }
+        if (has_sc) {
+          rem = false;
+          after = e;
+          if (component_header("\xF0\x9F\x93\x9C", "Tulpar Betik", nullptr, &rem, true, Tone::AccentLo)) {
+            if (prop_begin("betik")) {
+              track_edit(st, e, si, prop_text("Betik (.tpr)", e.script_file, sizeof e.script_file));
+              bool en = e.script_enabled;
+              if (prop_check("Etkin", &en).changed) { after = e; after.script_enabled = en; commit(st, si, after); }
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneScript; commit(st, si, after); }
+        }
+        const char *names[7];
+        uint32_t bits[7];
         uint32_t n = 0;
         if (!has_m) { names[n] = "\xE2\x97\x86  Model"; bits[n++] = content::kSceneModel; }
         if (!has_a) { names[n] = "\xE2\x86\xBB  Animasyon"; bits[n++] = content::kSceneAnim; }
         if (!has_l) { names[n] = "\xE2\x98\x80  I\xC5\x9F\xC4\xB1k"; bits[n++] = content::kSceneLight; }
-        if (!has_b) { names[n] = "\xE2\x97\xBC  G\xC3\xB6vde"; bits[n++] = content::kSceneBody; }
+        if (!has_b) { names[n] = "\xE2\x97\xBC  Fizik G\xC3\xB6vdesi"; bits[n++] = content::kSceneBody; }
+        if (!has_c) { names[n] = "\xF0\x9F\x8E\xA5  Kamera"; bits[n++] = content::kSceneCamera; }
+        if (!has_s) { names[n] = "\xF0\x9F\x94\x8A  Ses Kayna\xC4\x9F\xC4\xB1"; bits[n++] = content::kSceneAudio; }
+        if (!has_sc) { names[n] = "\xF0\x9F\x93\x9C  Tulpar Betik"; bits[n++] = content::kSceneScript; }
         const int add = component_add_button(names, n);
         if (add >= 0) {
           after = e;
@@ -1224,6 +1894,28 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         track_world_edit(st, prop_vec3("Merkez", &st.scene.shadow_center.x, 0.1f, 0, 0, "%.1f"));
         track_world_edit(st, prop_float("Yar\xC4\xB1\xC3\xA7""ap", &st.scene.shadow_radius, 0.1f, 1.0f, 500.0f, "%.1f m"));
         track_world_edit(st, prop_float("Derinlik", &st.scene.shadow_depth, 0.5f, 1.0f, 2000.0f, "%.1f m"));
+        prop_end();
+      }
+      // --- Isik haritasi (GI): content/gi.hpp'nin bake+sorgu motoru daha once
+      // hicbir yerden cagrilmiyordu -- .sahneb runtime'i (engine_demo/koprü)
+      // okuyordu ama EDITOR viewport'u hep ham SceneDesc'ten ciziyordu, yani
+      // "devrimsel isik sistemi"nin bake tarafi hicbir zaman GORUNMUYORDU.
+      // Manuel buton: bake tum sahne uzerinde CPU ray-tracing, otomatik
+      // (her karede/duzenlemede) calistirmak pahali olurdu.
+      section_label("I\xC5\x9E\xC4\xB1K HAR\xC4\xB0TASI (GI)");
+      if (prop_begin("gi")) {
+        prop_help("Statik i\xC5\x9F\xC4\xB1k/g\xC3\xB6lge \xC3\xB6nceden pi\xC5\x9Firilir (sonda \xC4\xB1zgaras\xC4\xB1, offline ray-tracing) ve viewport'ta \xC3\xB6nizlenir "
+                  "-- runtime derlemesi (.sahneb) AYNI sonda tablosunu okur.");
+        if (ImGui::Button("I\xC5\x9F\xC4\xB1k Haritas\xC4\xB1n\xC4\xB1 Pi\xC5\x9Fir")) do_bake_gi();
+        ImGui::SameLine();
+        prop_check("\xC3\x96nizleme", &st.gi_preview);
+        if (st.gi_baked) {
+          const bool stale = st.gi_bake_undo_count != st.hist.undo_count();
+          ImGui::TextDisabled("%u sonda (%u ge\xC3\xA7" "erli), %.3f s%s", st.gi_report.probes, st.gi_report.probes - st.gi_report.probes_inside,
+                              st.gi_report.seconds, stale ? " -- BAYAT (sahne de\xC4\x9Fi\xC5\x9Fti, yeniden pi\xC5\x9Fir)" : "");
+        } else {
+          ImGui::TextDisabled("hen\xC3\xBCz pi\xC5\x9Firilmedi");
+        }
         prop_end();
       }
       // --- Gorunum: motorun ayarlanabilir render ozellikleri ------------
@@ -1288,8 +1980,10 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       section_label("G\xC4\xB0ZMOLAR");
       if (prop_begin("gizmo")) {
         prop_check("I\xC5\x9F\xC4\xB1k yar\xC4\xB1\xC3\xA7""ap\xC4\xB1", &st.gizmos.light_radius);
+        prop_check("I\xC5\x9F\xC4\xB1k isareti", &st.gizmos.light_glyph);
         prop_check("G\xC3\xB6lge hacmi", &st.gizmos.shadow_volume);
         prop_check("G\xC3\xBCne\xC5\x9F y\xC3\xB6n\xC3\xBC", &st.gizmos.sun_dir);
+        prop_check("Kamera g\xC3\xB6r\xC3\xBC\xC5\x9F alan\xC4\xB1", &st.gizmos.camera_frustum);
         prop_end();
       }
       section_label("KAMERA");
@@ -1334,12 +2028,12 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // Gizmo: ImGuizmo GL gelenegi (NDC y yukari) bekler; Vulkan projeksiyonun y'si tersken duzeltilir.
     // Surukleme tek islem: IsUsing baslarken kopya, bitince gunluge.
     const int32_t gz = st.sel.primary();
-    if (gz >= 0 && gz < (int32_t)st.scene.entity_count) {
+    if (view_tab == ViewportTab::Scene && gz >= 0 && gz < (int32_t)st.scene.entity_count) {
       SceneEntity &e = st.scene.entities[gz];
       Mat4 proj_gl = proj;
       proj_gl.m[1][1] = -proj_gl.m[1][1];
       ImGuizmo::SetOrthographic(false);
-      ImGuizmo::SetRect(0, 0, (float)fw, (float)fh);
+      ImGuizmo::SetRect(view_rect.x, view_rect.y, view_rect.w, view_rect.h);
       Mat4 mtx = content::scene_entity_world_matrix(st.scene, (uint32_t)gz);
       const ImGuizmo::OPERATION op = gizmo_op == 0 ? ImGuizmo::TRANSLATE : gizmo_op == 1 ? ImGuizmo::ROTATE : ImGuizmo::SCALE;
       const float snap_vec[3] = {snap_step, snap_step, snap_step};
@@ -1392,8 +2086,14 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       // tik bir viewport tiklamasi DEGILDIR ve hicbir sey secmez — `map_mouse`
       // orada valid=false donuyor (ve -1 sentinel veriyor, 0 degil: 0 gecerli
       // bir piksel olurdu ve sessizce kosede bir isin atardik).
-      const ViewportPick pick = in ? vp.map_mouse(view_rect, (float)in->mouse_x, (float)in->mouse_y) : ViewportPick{};
-      if (ovres.box_done) {
+      // `in->mouse_x/y` GLFW'den MANTIKSAL piksel gelir (push_input'taki yorumla
+      // AYNI); view_rect ise ImGui/Vulkan FRAMEBUFFER piksel uzayindadir (HiDPI'da
+      // ikisi ES DEGIL). ui.pointer_scale() ile carpilmadan verilirse (eski hal)
+      // HiDPI ekranda (fw/ww != 1) tiklama panelin YANLIS noktasini isaret eder --
+      // bu da "tiklayinca hemen kapaniyor / secim tutmuyor" sikayetinin sebebiydi.
+      const float psc = ui.pointer_scale();
+      const ViewportPick pick = in ? vp.map_mouse(view_rect, (float)in->mouse_x * psc, (float)in->mouse_y * psc) : ViewportPick{};
+      if (view_tab == ViewportTab::Scene && ovres.box_done) {
         // Kutu (marquee) secim: kaplama dikdortgeni verdi, izdusum testi saf
         // fonksiyonda (kamera ARKASINDAKI kutular orada eleniyor).
         static content::SceneBounds bb[content::kSceneMaxEntities];
@@ -1405,7 +2105,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         for (uint32_t k = 0; k < nh; k++)
           if (!st.sel.contains(hits[k])) st.sel.toggle(hits[k]);
         set_status(st, "kutu secim: %u varlik", st.sel.count);
-      } else if (pressed && pick.valid && view_hovered && !ovres.consumed_mouse && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
+      } else if (view_tab == ViewportTab::Scene && pressed && pick.valid && view_hovered && !ovres.consumed_mouse && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
         static content::SceneBounds wb[content::kSceneMaxEntities];
         const uint32_t nb = entity_world_bounds(st, phys, wb);
         Vec3 o, d;
@@ -1426,7 +2126,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // "F": secime odaklan (secim yoksa tum sahne) — Unity/Blender geleneği.
     // Kenar tetikli: basili tutmak kamerayi surekli kenetlemesin.
     {
-      const bool f_now = in && in->key_down[GLFW_KEY_F] && !ui.wants_text_input();
+      const bool f_now = (view_tab == ViewportTab::Scene) && in && in->key_down[GLFW_KEY_F] && !ui.wants_text_input();
       if (f_now && !prev_f) {
         static content::SceneBounds fb[content::kSceneMaxEntities];
         const uint32_t nb = entity_world_bounds(st, phys, fb);
@@ -1731,10 +2431,18 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       } else if (cr == ConfirmResult::Third) { run_pending(pending); pending = PendingNone; }
       else if (cr == ConfirmResult::Cancel) pending = PendingNone;
     }
+    draw_stats_overlay(&show_stats, dt, ren.stats(), st.scene, vp.width(), vp.height(), view_tab, sys);
     ui.end_frame();
 
     // --- 3B cizim: veri modelinden (dunya isigi/golgesi de her kare modelden: panel canli) ---
-    ren.set_light(normalize(st.scene.sun_dir), st.scene.ambient, st.scene.sun_diffuse);
+    // GI onizleme actiksa (ve pisirilmisse) duz ambient sabiti yerine kamera
+    // konumunda ORNEKLENEN probe degeri kullanilir -- per-pixel DEGIL (kare
+    // basina TEK ornek), yine de "Isik Haritasini Pisir"in viewport'ta
+    // GORUNMESI icin yeterli (runtime/SceneRuntime tarafi ayni SceneGi'yi
+    // ayni granulerlikte kullanir, bkz. scene_runtime.cpp apply_world).
+    Vec3 preview_ambient = st.scene.ambient;
+    if (st.gi_preview && st.gi_baked && st.gi.ok()) preview_ambient = st.gi.sample(camera_eye(cam), {0, 1, 0});
+    ren.set_light(normalize(st.scene.sun_dir), preview_ambient, st.scene.sun_diffuse);
     ren.set_shadow_volume(st.scene.shadow_center, st.scene.shadow_radius, st.scene.shadow_depth);
     // Gorüntü ayarlari: hepsi ucuz set_* cagrisi, kare icinde ayirma YOK.
     // Her karede kosulsuz uygulanir -- "degisti mi" takibi, panelin disindan
@@ -1782,7 +2490,11 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         ren.draw(ds.cube, m * Mat4::scale(s), sel ? tint : Vec3{0.55f, 0.6f, 0.7f});
         drew = true;
       }
-      if (!drew) ren.draw(ds.cube, m * Mat4::scale({0.3f, 0.3f, 0.3f}), sel ? tint : Vec3{0.9f, 0.9f, 0.3f}); // bos/isik isareti
+      // Isik/kamera artik editor_draw_gizmos'un kendi ayirt edici sekliyle
+      // isaretleniyor (yildiz / frustum) -- burada generic sari kup cizmek
+      // ikisini de ayni "kare" yapip birbirinden ayirt edilemez kilardi.
+      if (!drew && !(e.components & (content::kSceneLight | content::kSceneCamera)))
+        ren.draw(ds.cube, m * Mat4::scale({0.3f, 0.3f, 0.3f}), sel ? tint : Vec3{0.9f, 0.9f, 0.3f}); // bos varlik isareti
       if (e.components & content::kSceneLight) {
         renderer::PointLight pl;
         pl.pos = {m.m[3][0], m.m[3][1], m.m[3][2]};

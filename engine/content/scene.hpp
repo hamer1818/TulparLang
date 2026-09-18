@@ -27,12 +27,20 @@ constexpr uint32_t kScenePathLen = 128;  // NUL dahil
 constexpr uint32_t kSceneMaxDepth = 16;
 
 enum SceneComponentBits : uint32_t {
-  kSceneModel = 1u << 0, // glTF model (kaynak indeksi + renk)
-  kSceneAnim = 1u << 1,  // model klibi (iskeletli)
-  kSceneLight = 1u << 2, // nokta isik
-  kSceneBody = 1u << 3,  // fizik govdesi (kutu / kure)
+  kSceneModel  = 1u << 0, // glTF model (kaynak indeksi + renk)
+  kSceneAnim   = 1u << 1, // model klibi (iskeletli)
+  kSceneLight  = 1u << 2, // nokta isik
+  kSceneBody   = 1u << 3, // fizik govdesi (kutu / kure)
+  kSceneCamera = 1u << 4, // kamera (fov, yakin, uzak)
+  kSceneAudio  = 1u << 5, // ses kaynagi (klip, ses, perde, dongu, uzamsal)
+  kSceneScript = 1u << 6, // tulpar betik bileseni (.tpr)
 };
 enum class SceneShape : uint32_t { Box = 0, Sphere = 1 };
+// Nokta: kSceneLight'in eskiden BILDIGI tek tur (yaricapli, konum onemli).
+// Yonlu: entity-bazli yon gostergesi (gizmo gunes-oku cizer) -- Dunya panelindeki
+// TEK global gunes'ten AYRI, henuz runtime'da gercek ikinci bir yonlu terim
+// SHADE ETMEZ (bkz. PLAN takip notu); bugun editoryel/gorsel bir ayrimdir.
+enum class SceneLightType : uint32_t { Point = 0, Directional = 1 };
 // Varlik bayraklari — EDITOR gorunumu, oyun icerigi DEGIL: `.sahneb` derleyicisi
 // bunlara bakmaz (gizli bir varlik yine de blob'a girer), yalniz editor panelleri
 // okur. Sifir varsayilan ve dosyaya YAZILMAZ; boylece bayraksiz sahnelerin metni
@@ -61,11 +69,22 @@ struct SceneEntity {
   // isik
   Vec3 light_color{1, 1, 1};
   float light_intensity = 1, light_radius = 5;
+  SceneLightType light_type = SceneLightType::Point;
   // govde
   SceneShape shape = SceneShape::Box;
   Vec3 half{0.5f, 0.5f, 0.5f};
   float radius = 0.5f;
   bool dynamic = false;
+  // kamera
+  float cam_fov = 60.0f;
+  float cam_near = 0.1f, cam_far = 200.0f;
+  // ses
+  char audio_clip[kSceneNameLen] = {0};
+  float audio_volume = 1.0f, audio_pitch = 1.0f;
+  bool audio_loop = false, audio_spatial = true;
+  // betik
+  char script_file[kSceneNameLen] = {0};
+  bool script_enabled = true;
 };
 // Veri modeli esitligi: yalniz mevcut bilesenlerin alanlari (dosyaya yazilanlar).
 bool scene_entity_equal(const SceneEntity &a, const SceneEntity &b);
