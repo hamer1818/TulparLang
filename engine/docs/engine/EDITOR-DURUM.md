@@ -2,6 +2,11 @@
 
 **Ölçüm tarihi:** 2026-09-18 · **Ölçülen ağaç:** yerel `master` + Faz 0 dalı (`editor/faz0-olu-arayuz`)
 
+> **Durum (2026-09-19):** Faz 0, A, B ve C uygulandı. PR
+> [#332](https://github.com/hamer1818/TulparLang/pull/332) CI'da **yeşil** —
+> `build-linux` ve `build-macos` ikisi de geçti. Bu, motorun uzun süredir
+> **ilk kez derlendiği** koşu: §8'e bakın.
+
 Bu belge editörün *iddia ettiği* ile *yaptığı* arasındaki farkı ölçer ve kapatma sırasını verir.
 Hiçbir madde tahmin değil; her birinin altında onu üreten ölçüm var. Bir madde "ölçülmedi"
 diyorsa, kodlamaya başlamadan önce ölçülmesi gerekir — varsayımla kod yazmak bu belgenin
@@ -347,6 +352,61 @@ Gözle sınanacaklar:
 - Parçacık bileşeni ekle → **ekranda parçacık görünmeli**
 - NavAgent/Joint/RefProbe/Reverb değerleri gir → kaydet → aç → **durmalı**
 - Editörü kapat/aç → **panel düzeni korunmalı**
+
+---
+
+## 8. Uygulama kaydı (2026-09-19) — CI ilk kez yeşil
+
+Faz 0/A/B/C uygulandı ve PR #332'de CI **ilk kez tüm motoru derledi**. O ana
+kadar `build.yml` yalnız `main`/`master`'a açılan PR'larda koştuğu için
+#327–#331 arası **hiç derlenmeden** birleşmişti. Derleyici devreye girince
+**~40 derleme hatası** çıktı — hiçbiri bu turda yazılan kod değildi.
+
+### Derleyicinin bulduğu, daha önce hiç görülmemiş hatalar
+
+| Sınıf | Nerede | Ne |
+|---|---|---|
+| Bildirim/tanım ayrışması | `editor_widgets.hpp` | `component_add_button`'ın 2 argümanlı sürümü bildirilmiş, tanımı yok → `engine_editor` **ve** `engine_tests` bağlanmıyor |
+| Tip uyuşmazlığı | `scene.cpp` | `o.vec(Vec3)`'e `Vec2` veriliyor (su/rüzgâr yönü); aynı hata eşitlik yolunda da var |
+| Aşırı yükleme yok | `scene.cpp` | `p.vec(t[1],t[2],t[3],&…)` — 4 argümanlı böyle bir şey yok |
+| Çift bildirim | `scene_runtime.cpp` | `e` ve `m` aynı kapsamda iki kez |
+| Ad alanı | `scene_runtime.cpp`, `editor_app.cpp` | `core::Arena` yok; `Arena` `tulpar::engine` içinde (6 yer) |
+| API uydurma | her ikisi | `Renderer::draw_mesh` diye bir üye yok (6 çağrı); `Arena::init` void döner ve ad ister; `Arena::base_` private; `Rng`'nin varsayılan kurucusu ve `seed()`'i yok |
+| Tip dönüşümü | her ikisi | `MeshHandle` bool bağlamında (3 yer); `return 0` ile `MeshHandle` döndürme (2 yer) |
+| Eksik sabit | `editor_commands.cpp` | `kKeyF`/`kKeyD` hiç tanımlanmamış → dört `static_assert` birden patlıyor |
+| Başlık ezilmesi | `editor_console.hpp` | Eski API (`ConsoleLevel`, `console_log`…) üzerine yazılmış ama `.cpp` hâlâ onu tanımlıyor ve 14 çağrı yeri kullanıyor |
+| Eksik include | `editor_app.cpp` | `imnodes.h` hiç include edilmemiş, `ImNodes::CreateContext()` hiç çağrılmamış (bağlamsız `BeginNodeEditor` çöker) |
+| Test API'si | `test_scene_blob.cpp` | `scene_write` `uint8_t*` ile çağrılıyor (metin yazar), olmayan `scene_read` kullanılıyor |
+| Açgözlü kaçış | `editor_app.cpp`, `editor_commands.cpp` | `"\xC4\x9F"` + `a/c/e` → `\x9Fa` = `0x9FA`, `char` aralığı dışı (12 yer) |
+
+### Testlerin bulduğu
+
+- **SIGSEGV** — `scene_runtime_applies_baked_gi_ambient`. Sebep bu turda
+  yazılan kod: `build_primitive_meshes` koşulsuz çağrılıyordu ama kapılar
+  **kurulmamış** bir `Renderer` veriyor (`renderer::Renderer ren;`, `init` yok)
+  ve `create_mesh` orada çöküyor. Artık tablo yalnız blob'da `primitive >= 0`
+  olan bir çizim varsa kuruluyor. Aynı sınıf: 32 MB'lık prosedürel arena da
+  koşulsuz ayrılıyordu, artık arazi/voksel/su varsa ayrılıyor.
+- **Kanonik sahne** — `tests/assets/editor.sahne` eski `model N r g b`
+  biçimindeydi, yazıcı artık `model kaynak N r g b` üretiyor. Dosya yeni
+  biçime alındı.
+- **Blob sürümü** — sabit 6'ya çıkmış, test hâlâ 5 bekliyordu.
+- **Bağlanmamış 6 shader** — `rhi/shaders/wip/` altına alındı (§2.E).
+
+### Süreç dersi: `tools/syntax_check.py`
+
+Yukarıdaki hataların ~39'u `g++ -fsyntax-only` ile **saniyeler içinde**
+bulunabilirdi; bunun yerine yedi CI turuna (her biri ~5–15 dk) mal oldu.
+Sebep: bu makinede derleyici yoktu ve CI derleyici olarak kullanıldı.
+
+`tools/syntax_check.py` bu boşluğu kapatır: her çeviri birimini tek tek
+denetler, Windows/POSIX farklarını eler. **Şu an 99 çeviri birimi, 0 hata.**
+Sınırı dosyanın başında yazılı: **bağlayıcı hatalarını görmez** — yukarıdaki
+ilk satır (`component_add_button`) tam olarak o sınıftandır.
+
+Kalıcı çözüm yine de **Faz F.3**: `build.yml`'nin `pull_request.branches`
+listesine çalışma dalları eklenmeli. Yoksa bir sonraki büyük birleşme de
+derlenmeden girer.
 
 ---
 
