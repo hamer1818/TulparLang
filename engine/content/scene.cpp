@@ -138,7 +138,8 @@ void write_entity(Out &o, const SceneEntity &e) {
     o.puts("  animasyon "); o.num((float)e.clip); o.ch(' '); o.num(e.phase); o.ch(' '); o.num(e.speed); o.ch('\n');
   }
   if (e.components & kSceneLight) {
-    o.puts("  isik "); o.vec(e.light_color); o.ch(' '); o.num(e.light_intensity); o.ch(' '); o.num(e.light_radius); o.ch('\n');
+    o.puts("  isik "); o.vec(e.light_color); o.ch(' '); o.num(e.light_intensity); o.ch(' '); o.num(e.light_radius);
+    o.puts(e.light_type == SceneLightType::Directional ? " yonlu\n" : " nokta\n");
   }
   if (e.components & kSceneBody) {
     o.puts("  govde ");
@@ -146,6 +147,18 @@ void write_entity(Out &o, const SceneEntity &e) {
     else { o.puts("kure "); o.num(e.radius); }
     o.puts(e.dynamic ? " dinamik" : " sabit");
     o.ch('\n');
+  }
+  if (e.components & kSceneCamera) {
+    o.puts("  kamera "); o.num(e.cam_fov); o.ch(' '); o.num(e.cam_near); o.ch(' '); o.num(e.cam_far); o.ch('\n');
+  }
+  if (e.components & kSceneAudio) {
+    o.puts("  ses \""); o.puts(e.audio_clip); o.puts("\" "); o.num(e.audio_volume); o.ch(' '); o.num(e.audio_pitch);
+    o.puts(e.audio_loop ? " dongu" : " tek");
+    o.puts(e.audio_spatial ? " uzamsal" : " 2b");
+    o.ch('\n');
+  }
+  if (e.components & kSceneScript) {
+    o.puts("  betik \""); o.puts(e.script_file); o.puts(e.script_enabled ? "\" etkin\n" : "\" kapali\n");
   }
   o.puts("son\n");
 }
@@ -160,11 +173,22 @@ bool scene_entity_equal(const SceneEntity &a, const SceneEntity &b) {
   const uint32_t c = a.components;
   if ((c & kSceneModel) && (a.asset != b.asset || !veq(a.tint, b.tint))) return false;
   if ((c & kSceneAnim) && (a.clip != b.clip || !feq(a.phase, b.phase) || !feq(a.speed, b.speed))) return false;
-  if ((c & kSceneLight) && (!veq(a.light_color, b.light_color) || !feq(a.light_intensity, b.light_intensity) || !feq(a.light_radius, b.light_radius)))
+  if ((c & kSceneLight) && (!veq(a.light_color, b.light_color) || !feq(a.light_intensity, b.light_intensity) || !feq(a.light_radius, b.light_radius) ||
+                            a.light_type != b.light_type))
     return false;
   if (c & kSceneBody) {
     if (a.shape != b.shape || a.dynamic != b.dynamic) return false;
     if (a.shape == SceneShape::Box ? !veq(a.half, b.half) : !feq(a.radius, b.radius)) return false;
+  }
+  if (c & kSceneCamera) {
+    if (!feq(a.cam_fov, b.cam_fov) || !feq(a.cam_near, b.cam_near) || !feq(a.cam_far, b.cam_far)) return false;
+  }
+  if (c & kSceneAudio) {
+    if (std::strcmp(a.audio_clip, b.audio_clip) != 0 || !feq(a.audio_volume, b.audio_volume) ||
+        !feq(a.audio_pitch, b.audio_pitch) || a.audio_loop != b.audio_loop || a.audio_spatial != b.audio_spatial) return false;
+  }
+  if (c & kSceneScript) {
+    if (std::strcmp(a.script_file, b.script_file) != 0 || a.script_enabled != b.script_enabled) return false;
   }
   return true;
 }
@@ -310,8 +334,16 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
         if (!p.uint(t[1], &cur.clip) || !p.num(t[2], &cur.phase) || !p.num(t[3], &cur.speed)) return false;
         seen |= kSceneAnim;
       } else if (tok_is(t[0], "isik")) {
-        if (n != 6 || (seen & kSceneLight)) return p.fail("isik r g b siddet yaricap (bir kez)");
+        // n==6: eski dosya (turu yok, varsayilan Nokta -- geriye donuk okunur).
+        // n>=7: 7. token tur anahtar sozcugu ("nokta"/"yonlu").
+        if (n < 6 || (seen & kSceneLight)) return p.fail("isik r g b siddet yaricap [nokta|yonlu] (bir kez)");
         if (!p.vec(t + 1, &cur.light_color) || !p.num(t[4], &cur.light_intensity) || !p.num(t[5], &cur.light_radius)) return false;
+        cur.light_type = SceneLightType::Point;
+        if (n >= 7) {
+          if (tok_is(t[6], "yonlu")) cur.light_type = SceneLightType::Directional;
+          else if (tok_is(t[6], "nokta")) cur.light_type = SceneLightType::Point;
+          else return p.fail("isik turu nokta|yonlu olmali");
+        }
         seen |= kSceneLight;
       } else if (tok_is(t[0], "govde")) {
         if (seen & kSceneBody) return p.fail("govde bir kez");
@@ -331,6 +363,21 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
         else if (tok_is(*last, "sabit")) cur.dynamic = false;
         else return p.fail("govde sonu dinamik|sabit");
         seen |= kSceneBody;
+      } else if (tok_is(t[0], "kamera")) {
+        if (n != 4 || (seen & kSceneCamera)) return p.fail("kamera fov yakin uzak (bir kez)");
+        if (!p.num(t[1], &cur.cam_fov) || !p.num(t[2], &cur.cam_near) || !p.num(t[3], &cur.cam_far)) return false;
+        seen |= kSceneCamera;
+      } else if (tok_is(t[0], "ses")) {
+        if (n < 4 || (seen & kSceneAudio)) return p.fail("ses \"klip\" ses_duzeyi perde [dongu|tek] [uzamsal|2b] (bir kez)");
+        if (!p.str(t[1], cur.audio_clip, sizeof cur.audio_clip) || !p.num(t[2], &cur.audio_volume) || !p.num(t[3], &cur.audio_pitch)) return false;
+        if (n >= 5) cur.audio_loop = tok_is(t[4], "dongu");
+        if (n >= 6) cur.audio_spatial = tok_is(t[5], "uzamsal");
+        seen |= kSceneAudio;
+      } else if (tok_is(t[0], "betik")) {
+        if (n < 2 || (seen & kSceneScript)) return p.fail("betik \"dosya\" [etkin|kapali] (bir kez)");
+        if (!p.str(t[1], cur.script_file, sizeof cur.script_file)) return false;
+        if (n >= 3) cur.script_enabled = tok_is(t[2], "etkin");
+        seen |= kSceneScript;
       } else return p.fail("varlik icinde bilinmeyen anahtar");
       cur.components = seen & 0xFFu;
       continue;

@@ -20,6 +20,7 @@ Quat q4(const float *f) { return {f[0], f[1], f[2], f[3]}; }
 
 bool SceneRuntime::init(Arena &arena, renderer::Renderer &r, const SceneBlobView &view, const char *dir) {
   view_ = view;
+  gi_.init(view); // probe yoksa ok()==false doner, apply_world duz ambient'a duser
   stats_ = SceneRuntimeStats{};
   bodies_live_ = false;
   body_ids_ = view.h->body_count ? arena.alloc_array<sim::BodyId>(view.h->body_count) : nullptr;
@@ -41,7 +42,16 @@ bool SceneRuntime::init(Arena &arena, renderer::Renderer &r, const SceneBlobView
 
 void SceneRuntime::apply_world(renderer::Renderer &r) const {
   const SceneWorld w = view_.world();
-  r.set_light(normalize(w.sun_dir), w.ambient, w.sun_diffuse);
+  Vec3 ambient = w.ambient;
+  if (gi_.ok()) {
+    // Kaba ornek: sahne AABB'sinin ortasi, yukari bakan normal. Per-pixel
+    // DEGIL (Tier 2 takip planinda) -- yine de duz sabitten daha dogru, ve
+    // bake yoksa (ok()==false) bu dal hic girilmez, eski deger korunur.
+    const Vec3 lo{view_.h->bounds_lo[0], view_.h->bounds_lo[1], view_.h->bounds_lo[2]};
+    const Vec3 hi{view_.h->bounds_hi[0], view_.h->bounds_hi[1], view_.h->bounds_hi[2]};
+    ambient = gi_.sample((lo + hi) * 0.5f, {0, 1, 0});
+  }
+  r.set_light(normalize(w.sun_dir), ambient, w.sun_diffuse);
   r.set_shadow_volume(w.shadow_center, w.shadow_radius, w.shadow_depth);
 }
 

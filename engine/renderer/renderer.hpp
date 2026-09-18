@@ -383,6 +383,7 @@ public:
 
   void set_camera(const Mat4 &view, const Mat4 &proj);
   void set_light(Vec3 dir, Vec3 ambient, float diffuse_scale);
+  Vec3 ambient() const { return ambient_; } // son set_light degeri (GI kapisi okur)
   // Kume gridi framebuffer uzayinda: hedefin olcusu (swapchain goruntusu / offscreen).
   void set_render_size(uint32_t width, uint32_t height);
   // Nokta isiklar (kare basina en cok 32; kumelenmis, CPU atamali). begin_frame'de atanir.

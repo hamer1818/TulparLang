@@ -94,6 +94,44 @@ ENGINE_TEST(scene_text_roundtrip_is_deterministic) {
   std::printf("    [bilgi] sahne metni %zu bayt, %u varlik, %u kaynak; gidis-donus ayni\n", n1, a.entity_count, a.asset_count);
 }
 
+// Eski 6-tokenli "isik" satiri (tur yok) -> varsayilan Nokta; yeni 7-tokenli
+// satir ("nokta"/"yonlu") tur alanini ayarlar; bilinmeyen anahtar sozcuk
+// reddedilir. Gecmis dosyalarin sessizce Nokta okunmasi (C1'in geriye donuklugu).
+ENGINE_TEST(scene_light_type_roundtrips_and_defaults_to_point) {
+  static SceneDesc d;
+  SceneError err{};
+  const char *old6 = "tulpar-sahne 1\nnesne \"lamba\"\n  isik 1 1 1 2 5\nson\n";
+  CHECK(scene_parse(old6, std::strlen(old6), &d, &err));
+  CHECK(d.entity_count == 1 && (d.entities[0].components & kSceneLight));
+  CHECK(d.entities[0].light_type == SceneLightType::Point);
+
+  const char *new_dir = "tulpar-sahne 1\nnesne \"gunes\"\n  isik 1 1 1 2 5 yonlu\nson\n";
+  CHECK(scene_parse(new_dir, std::strlen(new_dir), &d, &err));
+  CHECK(d.entities[0].light_type == SceneLightType::Directional);
+
+  const char *new_point = "tulpar-sahne 1\nnesne \"lamba2\"\n  isik 1 1 1 2 5 nokta\nson\n";
+  CHECK(scene_parse(new_point, std::strlen(new_point), &d, &err));
+  CHECK(d.entities[0].light_type == SceneLightType::Point);
+
+  const char *bad_kw = "tulpar-sahne 1\nnesne \"x\"\n  isik 1 1 1 2 5 gokkusagi\nson\n";
+  CHECK(!scene_parse(bad_kw, std::strlen(bad_kw), &d, &err));
+
+  // Yaz-oku: tur her zaman aciktan yazilir (govde'nin dinamik|sabit'i gibi).
+  static char t[256];
+  d = SceneDesc{};
+  SceneEntity e{};
+  std::snprintf(e.name, sizeof e.name, "gunes");
+  e.components = kSceneLight;
+  e.light_type = SceneLightType::Directional;
+  e.light_color = {1, 1, 1}; e.light_intensity = 2; e.light_radius = 5;
+  CHECK(d.insert_entity(0, e));
+  const size_t n = scene_write(d, t, sizeof t);
+  CHECK(std::strstr(t, "yonlu") != nullptr);
+  static SceneDesc d2;
+  CHECK(scene_parse(t, n, &d2, &err));
+  CHECK(scene_entity_equal(d.entities[0], d2.entities[0]));
+}
+
 ENGINE_TEST(scene_parse_reports_bad_line_and_rejects_overflow) {
   static SceneDesc d;
   SceneError err{};

@@ -721,6 +721,57 @@ uint32_t arrow(renderer::Renderer &ren, renderer::MeshHandle cube, Vec3 a, Vec3 
   ren.draw(cube, segment_matrix(neck, b, th * 3.0f), color);
   return 2;
 }
+// Isik varligini isaretleyen isaret: merkezden gecen 3 eksenli cubuk (yildiz,
+// 3 cizim -- her eksen TEK kutu, -len..+len).
+// Yaricap tel-kutusundan (wire_box) AYRI amac: o hacmi gosterir, bu "burada bir
+// isik var" der -- ikisi ayni sekilde cizilince kullanicinin gordugu "duz kup"
+// sorunuydu. Kup mesh KULLANMAZ demiyoruz (motor cizgiyi de kup'tan orer,
+// editor_ui.hpp'nin "ayri boru hatti yok" kurali), yalniz kup TEK BASINA
+// (dolgun, buyuk) yerine ince cubuklardan yildiz cizilir.
+uint32_t light_glyph(renderer::Renderer &ren, renderer::MeshHandle cube, Vec3 c, Vec3 color, float th) {
+  static const Vec3 kAxes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  const float len = 0.35f;
+  uint32_t n = 0;
+  for (int a = 0; a < 3; a++) {
+    ren.draw(cube, segment_matrix(c - kAxes[a] * len, c + kAxes[a] * len, th), color);
+    n++;
+  }
+  return n;
+}
+// Kamera gizmosu: govde (kucuk tel kutu, "bu bos kutu degil kamera" isareti)
+// + FOV/near/far'dan hesaplanan tel kafes gorus alani (yakin+uzak dortgen ve
+// baglayan 4 kenar). Uzak duzlem GORSEL olarak kirpilir (golge hacmindeki
+// "kilavuz, alarm degil" ilkesiyle ayni: cam_far varsayilani 200 birim,
+// kirpilmezse frustum sahneye hakim olur ve hata gibi okunur).
+uint32_t camera_frustum(renderer::Renderer &ren, renderer::MeshHandle cube, Vec3 eye, Vec3 fwd, Vec3 up, float fov_deg, float znear,
+                         float zfar, Vec3 color, float th) {
+  const float aspect = 16.0f / 9.0f;
+  const float fov = (fov_deg > 1.0f ? fov_deg : 60.0f) * 3.14159265f / 180.0f;
+  const float near_d = znear > 0.01f ? znear : 0.1f;
+  float far_d = zfar > near_d ? zfar : 8.0f;
+  if (far_d > 6.0f) far_d = 6.0f;
+  const Vec3 f = length_sq(fwd) > 1e-8f ? normalize(fwd) : Vec3{0, 0, -1};
+  const Vec3 u0 = length_sq(up) > 1e-8f ? normalize(up) : Vec3{0, 1, 0};
+  const Vec3 r = normalize(cross(f, u0));
+  const Vec3 u = cross(r, f);
+  const float dists[2] = {near_d, far_d};
+  Vec3 corners[2][4];
+  for (int p = 0; p < 2; p++) {
+    const float hh = std::tan(fov * 0.5f) * dists[p];
+    const float hw = hh * aspect;
+    const Vec3 center = eye + f * dists[p];
+    corners[p][0] = center + r * hw + u * hh;
+    corners[p][1] = center - r * hw + u * hh;
+    corners[p][2] = center - r * hw - u * hh;
+    corners[p][3] = center + r * hw - u * hh;
+  }
+  uint32_t n = 0;
+  for (int p = 0; p < 2; p++)
+    for (int k = 0; k < 4; k++) { ren.draw(cube, segment_matrix(corners[p][k], corners[p][(k + 1) & 3], th), color); n++; }
+  for (int k = 0; k < 4; k++) { ren.draw(cube, segment_matrix(corners[0][k], corners[1][k], th), color); n++; }
+  wire_box(ren, cube, eye, {0.12f, 0.12f, 0.12f}, color, th, &n);
+  return n;
+}
 } // namespace
 
 uint32_t editor_draw_gizmos(renderer::Renderer &ren, renderer::MeshHandle cube, const content::SceneDesc &d, const int32_t *sel,
@@ -728,20 +779,55 @@ uint32_t editor_draw_gizmos(renderer::Renderer &ren, renderer::MeshHandle cube, 
   if (!cube.valid()) return 0;
   const float th = o.thickness > 0.005f ? o.thickness : 0.005f;
   uint32_t draws = 0;
-  if (o.light_radius) {
+  if (o.light_radius || o.light_glyph) {
     for (uint32_t i = 0; i < d.entity_count; i++) {
       const content::SceneEntity &e = d.entities[i];
       if (!(e.components & content::kSceneLight)) continue;
-      const Mat4 m = content::scene_entity_matrix(e);
+      // DUNYA matrisi: ebeveyni olan bir isik yerelde konumlanirsa yanlis
+      // yerde cizilirdi (bu, kullanicinin gordugu yer degistirmeli "kare"
+      // sorununun bir parcasiydi). scene_entity_matrix SADECE kok icin dogru.
+      const Mat4 m = content::scene_entity_world_matrix(d, i);
       const Vec3 p{m.m[3][0], m.m[3][1], m.m[3][2]};
       bool is_sel = false;
       for (uint32_t k = 0; k < n && !is_sel; k++) is_sel = sel && sel[k] == (int32_t)i;
-      // Secili isik: tam kalinlik, tam renk (duzenlenen sey). Digerleri: yarim
-      // kalinlik, 0.35x renk. editor.sahne'deki kirmizi isik 8 birim yaricapli;
-      // tam kalinlikta 16 birimlik kirmizi kutu sahneye hakim oluyor ve hata
-      // gibi okunuyordu (kullanicinin gordugu "buyuk kalin kirmizi kutu" bu).
-      const float r = e.light_radius;
-      wire_box(ren, cube, p, {r, r, r}, e.light_color * (is_sel ? 1.0f : 0.35f), is_sel ? th : th * 0.5f, &draws);
+      const Vec3 tint = e.light_color * (is_sel ? 1.0f : 0.35f);
+      const bool directional = e.light_type == content::SceneLightType::Directional;
+      // Yaricap tel-kutusu yalniz Nokta icin anlamli (Yonlu'de "yaricap" alani
+      // panelde de gizli -- ikisi tutarli olmali).
+      if (o.light_radius && !directional) {
+        // editor.sahne'deki kirmizi isik 8 birim yaricapli; tam kalinlikta 16
+        // birimlik kirmizi kutu sahneye hakim oluyor ve hata gibi okunuyordu
+        // (kullanicinin gordugu "buyuk kalin kirmizi kutu" bu) -- secili
+        // degilse yarim kalinlik.
+        const float r = e.light_radius;
+        wire_box(ren, cube, p, {r, r, r}, tint, is_sel ? th : th * 0.5f, &draws);
+      }
+      if (o.light_glyph) {
+        if (directional) {
+          // Nokta'nin yildizindan AYRI, taniniir bir "gunes oku": varligin
+          // DONUSUNDEN (-Z sutunu, kamera gizmosuyla ayni sozlesme) hesaplanan
+          // yon boyunca isaga dogru bir ok.
+          const Vec3 fwd{-m.m[2][0], -m.m[2][1], -m.m[2][2]};
+          const Vec3 dir = length_sq(fwd) > 1e-8f ? normalize(fwd) : Vec3{0, -1, 0};
+          draws += arrow(ren, cube, p, p + dir * 1.2f, tint, is_sel ? th * 1.5f : th);
+        } else {
+          draws += light_glyph(ren, cube, p, tint, is_sel ? th * 1.5f : th);
+        }
+      }
+    }
+  }
+  if (o.camera_frustum) {
+    for (uint32_t i = 0; i < d.entity_count; i++) {
+      const content::SceneEntity &e = d.entities[i];
+      if (!(e.components & content::kSceneCamera)) continue;
+      const Mat4 m = content::scene_entity_world_matrix(d, i);
+      const Vec3 eye{m.m[3][0], m.m[3][1], m.m[3][2]};
+      const Vec3 fwd{-m.m[2][0], -m.m[2][1], -m.m[2][2]};
+      const Vec3 up{m.m[1][0], m.m[1][1], m.m[1][2]};
+      bool is_sel = false;
+      for (uint32_t k = 0; k < n && !is_sel; k++) is_sel = sel && sel[k] == (int32_t)i;
+      const Vec3 color = is_sel ? Vec3{1.0f, 0.9f, 0.4f} : Vec3{0.55f, 0.75f, 0.95f};
+      draws += camera_frustum(ren, cube, eye, fwd, up, e.cam_fov, e.cam_near, e.cam_far, color, is_sel ? th : th * 0.6f);
     }
   }
   if (o.shadow_volume) {

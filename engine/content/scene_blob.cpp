@@ -213,6 +213,7 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
       SceneBlobLight li{};
       li.entity = i; put3(li.pos, {m.m[3][0], m.m[3][1], m.m[3][2]});
       put3(li.color, e.light_color); li.intensity = e.light_intensity; li.radius = e.light_radius;
+      li.reserved[0] = (float)(uint32_t)e.light_type; // SceneLightType (blob versiyonunu buyutmemek icin reserved'da)
       lights[nl] = li; be.light = (int32_t)nl++;
     }
     if (e.components & kSceneBody) {

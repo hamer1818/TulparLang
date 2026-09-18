@@ -1267,6 +1267,68 @@ ENGINE_TEST(gi_runtime_query_matches_baked_values) {
   arena().reset_to(mark);
 }
 
+// Bake edilmis GI probe'lari SceneRuntime::apply_world'e GERCEKTEN ulasiyor mu
+// (content/gi.hpp'nin bake+sorgu motoru kendi icinde dogruydu ama hicbir
+// caginin cagirmiyordu -- bu kapi tam da o bagi olcer). KONTROL: AYNI sahne
+// GI'siz derlenince ambient eski duz sabitte BIT-TAM kalir (Vulkan gerekmez:
+// set_light/set_shadow_volume salt alan atamasi, Renderer init'siz kullanilir).
+ENGINE_TEST(scene_runtime_applies_baked_gi_ambient) {
+  const size_t mark = arena().mark();
+  static SceneDesc d;
+  gi_ground_scene(d, Vec3{0.3f, 1.0f, 0.0f}, 1.0f);
+  gi_add_box(d, "cati", {6, 3.0f, 0}, {4, 0.25f, 4});
+  renderer::Renderer ren;
+
+  // 1) GI'SIZ derleme (POZITIF KONTROL): apply_world eski davranista kalmali.
+  {
+    SceneBlobExtras x{}; // gi_probe_count 0
+    const size_t need = scene_blob_compile_ex(d, &x, nullptr, 0);
+    void *buf = arena().alloc(need, kSceneBlobAlign);
+    CHECK(buf != nullptr);
+    scene_blob_compile_ex(d, &x, buf, need);
+    SceneBlobView v;
+    SceneError err{};
+    CHECK(scene_blob_open(buf, need, &v, &err));
+    CHECK(v.h->gi_probe_count == 0);
+    static SceneRuntime rt;
+    CHECK(rt.init(arena(), ren, v, "."));
+    rt.apply_world(ren);
+    const Vec3 a = ren.ambient();
+    CHECK(feq(a.x, d.ambient.x) && feq(a.y, d.ambient.y) && feq(a.z, d.ambient.z)); // BIT-TAM
+  }
+  arena().reset_to(mark);
+
+  // 2) GI'LI derleme: ambient artik duz sabit DEGIL, probe orneginden gelir
+  // (bkz. scene_runtime.cpp apply_world: sahne AABB ortasi, yukari normal).
+  {
+    SceneBlobExtras x;
+    SceneGiReport rep;
+    CHECK(gi_bake_bodies(d, gi_fast_opts(), &x, &rep));
+    const size_t need = scene_blob_compile_ex(d, &x, nullptr, 0);
+    void *buf = arena().alloc(need, kSceneBlobAlign);
+    CHECK(buf != nullptr);
+    scene_blob_compile_ex(d, &x, buf, need);
+    SceneBlobView v;
+    SceneError err{};
+    CHECK(scene_blob_open(buf, need, &v, &err));
+    CHECK(v.h->gi_probe_count > 0);
+    static SceneRuntime rt2;
+    CHECK(rt2.init(arena(), ren, v, "."));
+    rt2.apply_world(ren);
+    const Vec3 gi_amb = ren.ambient();
+    SceneGi gi;
+    CHECK(gi.init(v));
+    const Vec3 lo{v.h->bounds_lo[0], v.h->bounds_lo[1], v.h->bounds_lo[2]};
+    const Vec3 hi{v.h->bounds_hi[0], v.h->bounds_hi[1], v.h->bounds_hi[2]};
+    const Vec3 expect = gi.sample((lo + hi) * 0.5f, {0, 1, 0});
+    std::printf("    [bilgi] GI ambient (%.4f %.4f %.4f) vs duz sabit (%.4f %.4f %.4f)\n", gi_amb.x, gi_amb.y, gi_amb.z, d.ambient.x,
+                d.ambient.y, d.ambient.z);
+    CHECK(feq(gi_amb.x, expect.x) && feq(gi_amb.y, expect.y) && feq(gi_amb.z, expect.z));
+    CHECK(!(feq(gi_amb.x, d.ambient.x) && feq(gi_amb.y, d.ambient.y) && feq(gi_amb.z, d.ambient.z))); // gercekten degisti
+  }
+  arena().reset_to(mark);
+}
+
 // Derleyici yolu: scene_compile GI'yi bake ediyor mu (model ucgenleri dahil).
 // Bu, BVH'li yolun tek kapisi — editor.sahne'nin modelleri binlerce ucgen.
 ENGINE_TEST(scene_compile_bakes_gi_probes_with_model_triangles) {

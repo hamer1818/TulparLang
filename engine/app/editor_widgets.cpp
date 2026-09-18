@@ -765,6 +765,10 @@ HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState
       if (ImGui::MenuItem("Ebeveynden ay\xC4\xB1r")) res.action = HierarchyAction::Detach;
       ImGui::Separator();
       if (ImGui::MenuItem("Sil", "Del")) res.action = HierarchyAction::Delete;
+      ImGui::Separator();
+      if (ImGui::MenuItem("Kes", "Ctrl+X")) res.action = HierarchyAction::Cut;
+      if (ImGui::MenuItem("Kopyala", "Ctrl+C")) res.action = HierarchyAction::Copy;
+      if (ImGui::MenuItem("Yap\xC4\xB1\xC5\x9Ft\xC4\xB1r", "Ctrl+V")) res.action = HierarchyAction::Paste;
       ImGui::EndPopup();
     }
     if (dbl) st->rename.begin(id, r.name); // cift tik: yerinde ad
@@ -899,17 +903,34 @@ int hierarchy_toolbar(uint32_t entity_count, bool has_selection) {
   const WidgetRect b = item_rect();
   ImGui::SetNextWindowPos(ImVec2(b.x0, b.y1 + s.ItemInnerSpacing.y * 0.5f));
   if (ImGui::BeginPopup("ekle")) {
-    static const char *const kItems[4] = {"\xE2\x97\x8B  Boş varlık", "\xE2\x97\x86  Model", "\xE2\x98\x80  Işık", "\xE2\x97\xBC  Gövde"};
-    for (int i = 0; i < 4; i++) {
-      ImGui::PushID(i);
-      if (ImGui::Selectable(kItems[i])) result = i + 1;
-      ImGui::PopID();
+    if (ImGui::Selectable("\xE2\x97\x8B  Bo\xC5\x9F varl\xC4\xB1k")) result = 1;
+    ImGui::Separator();
+    if (ImGui::Selectable("\xE2\x97\x86  Model (glTF)")) result = 2;
+    if (ImGui::Selectable("\xE2\x97\xBC  K\xC3\xBCp (Model + G\xC3\xB6vde)")) result = 10;
+    if (ImGui::Selectable("\xE2\x97\x8F  K\xC3\xBCre (Model + G\xC3\xB6vde)")) result = 11;
+    if (ImGui::Selectable("\xE2\x96\xAC  Zemin / D\xC3\xBCzlem")) result = 8;
+    ImGui::Separator();
+    // Isik TEK secenek DEGIL, alt menu: tur burada ayrilir (Unity'nin
+    // Light > Directional/Point ile ayni fikir) -- "isiklari da bol" istegi.
+    if (ImGui::BeginMenu("\xE2\x98\x80  I\xC5\x9F\xC4\xB1k")) {
+      if (ImGui::Selectable("\xE2\x97\x8F  Nokta")) result = 3;
+      if (ImGui::Selectable("\xE2\x86\x97  Y\xC3\xB6nl\xC3\xBC (g\xC3\xBCne\xC5\x9F)")) result = 14;
+      ImGui::EndMenu();
     }
+    ImGui::Separator();
+    if (ImGui::Selectable("\xE2\x96\xA1  Sabit Kutu G\xC3\xB6vde")) result = 4;
+    if (ImGui::Selectable("\xE2\x97\x8B  Sabit K\xC3\xBCre G\xC3\xB6vde")) result = 5;
+    if (ImGui::Selectable("\xE2\x96\xA7  Dinamik Kutu G\xC3\xB6vde")) result = 6;
+    if (ImGui::Selectable("\xE2\x97\x8D  Dinamik K\xC3\xBCre G\xC3\xB6vde")) result = 7;
+    ImGui::Separator();
+    if (ImGui::Selectable("\xE2\x86\xBB  Animasyonlu Model")) result = 9;
+    if (ImGui::Selectable("\xF0\x9F\x8E\xA5  Kamera Varl\xC4\xB1\xC4\x9F\xC4\xB1")) result = 12;
+    if (ImGui::Selectable("\xF0\x9F\x94\x8A  Ses Kayna\xC4\x9F\xC4\xB1")) result = 13;
     ImGui::EndPopup();
   }
   ImGui::SameLine(0, std::floor(s.ItemInnerSpacing.x * 0.5f));
   ImGui::BeginDisabled(!has_selection);
-  if (ImGui::Button("\xE2\x88\x92", ImVec2(h, h))) result = 5; // −
+  if (ImGui::Button("\xE2\x88\x92", ImVec2(h, h))) result = 100; // − sil
   ImGui::EndDisabled();
   if (has_selection && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Seçili varlığı sil (Del)");
   // Sag: sayi, soluk.

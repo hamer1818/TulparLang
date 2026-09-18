@@ -640,7 +640,7 @@ void draw_tree(void *ctx, uint32_t frame) {
     if (m->menu_item >= 0) {
       const float ih = ImGui::GetFrameHeight();
       const float mx = w.x0 + (w.x1 - w.x0) * 0.4f + 12.0f;
-      const float my = w.cy() + ih * (0.6f + (float)m->menu_item) + (m->menu_item == 3 ? 6.0f : 0.0f);
+      const float my = w.cy() + ih * (0.5f + (float)m->menu_item) + (m->menu_item == 3 ? 4.0f : 0.0f);
       if (frame == 6) io.AddMousePosEvent(mx, my);
       if (frame == 7) io.AddMouseButtonEvent(0, true);
       if (frame == 8) io.AddMouseButtonEvent(0, false);

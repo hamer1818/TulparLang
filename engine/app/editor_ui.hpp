@@ -193,10 +193,12 @@ uint32_t selection_remove(content::SceneDesc &d, content::SceneHistory &h, const
 // Isik/golge gizmolari: AYRI BIR CIZGI BORU HATTI YOK — motorun kendi draw'u
 // ile ince kutulardan tel cerceve (birim kup mesh'i, +-0.5).
 struct GizmoOptions {
-  bool light_radius = true;  // isik varliklarinin yaricapi (tel kutu)
-  bool shadow_volume = true; // Dunya panelindeki golge hacmi (tel kutu)
-  bool sun_dir = true;       // gunes yonu (ok; isiga dogru)
-  float thickness = 0.06f;   // tel kalinligi (dunya birimi)
+  bool light_radius = true;    // isik varliklarinin yaricapi (tel kutu)
+  bool light_glyph = true;     // isik varligini isaretleyen yildiz/isin sekli (kup DEGIL)
+  bool shadow_volume = true;   // Dunya panelindeki golge hacmi (tel kutu)
+  bool sun_dir = true;         // gunes yonu (ok; isiga dogru)
+  bool camera_frustum = true;  // kamera varliklarinin govdesi + gorus alani (tel kafes)
+  float thickness = 0.06f;     // tel kalinligi (dunya birimi)
 };
 // Donus: yapilan ren.draw cagrisi sayisi (secili isik daha parlak cizilir).
 uint32_t editor_draw_gizmos(renderer::Renderer &ren, renderer::MeshHandle cube, const content::SceneDesc &d, const int32_t *sel,

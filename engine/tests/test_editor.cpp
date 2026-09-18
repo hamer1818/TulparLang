@@ -336,12 +336,14 @@ ENGINE_TEST(editor_light_and_shadow_gizmos_draw_with_control) {
   le.light_radius = 2.0f;
   CHECK(d.insert_entity(0, le));
 
-  // Bilesenlerin payi: 12 + 12 kenar + 2 parcali ok.
+  // Bilesenlerin payi: 12 + 12 kenar + 2 parcali ok. light_glyph/camera_frustum
+  // (yeni gizmo turleri) burada izole edilmek icin HEPSINDE kapatiliyor --
+  // onlarin kendi sayimi ayri testte (editor_camera_and_light_glyph_gizmos...).
   app::GizmoOptions only_light, only_shadow, only_sun, all_off;
-  only_light.shadow_volume = only_light.sun_dir = false;
-  only_shadow.light_radius = only_shadow.sun_dir = false;
-  only_sun.light_radius = only_sun.shadow_volume = false;
-  all_off.light_radius = all_off.shadow_volume = all_off.sun_dir = false;
+  only_light.shadow_volume = only_light.sun_dir = only_light.light_glyph = only_light.camera_frustum = false;
+  only_shadow.light_radius = only_shadow.sun_dir = only_shadow.light_glyph = only_shadow.camera_frustum = false;
+  only_sun.light_radius = only_sun.shadow_volume = only_sun.light_glyph = only_sun.camera_frustum = false;
+  all_off.light_radius = all_off.shadow_volume = all_off.sun_dir = all_off.light_glyph = all_off.camera_frustum = false;
   ren.begin_frame(0);
   CHECK(app::editor_draw_gizmos(ren, cube, d, nullptr, 0, only_light) == 12);
   CHECK(app::editor_draw_gizmos(ren, cube, d, nullptr, 0, only_shadow) == 12);
@@ -367,7 +369,7 @@ ENGINE_TEST(editor_light_and_shadow_gizmos_draw_with_control) {
   CHECK(ret[0] == 0 && ret[1] == 0);
   CHECK(drew[1] == drew[0]);              // KONTROL: kapaliyken cizim farki 0
   CHECK(diff_ctrl == 0);                  // KONTROL: kapaliyken piksel farki 0
-  CHECK(ret[2] == 26);                    // 12 isik + 12 golge + 2 ok
+  CHECK(ret[2] == 29);                    // 12 isik-yaricap + 3 isik-isaret + 12 golge + 2 ok (kamera yok)
   CHECK(drew[2] - drew[1] == ret[2]);     // artan cizimler gizmolarinki
   // Cizim SAYILARI (ret[2] == 26, drew farki) her yerde olculuyor; yalniz
   // "ekranda gercekten gorundu" iddiasi sanal GPU'da (CI macOS) sonuc vermiyor.
@@ -375,6 +377,84 @@ ENGINE_TEST(editor_light_and_shadow_gizmos_draw_with_control) {
     skip("sanal GPU (Apple Paravirtual, CI macOS): gizmo PIKSEL farki gercek cihazda olculur");
   else
     CHECK(diff_on > 300);               // ekranda gercekten gorunuyor
+  ren.shutdown();
+  rhi::offscreen_destroy(off);
+  dev.shutdown();
+}
+
+// Kamera/Yonlu-isik gizmolari: eskiden HER ikisi de ayirt edilemeyen tek bir
+// sari kup cizerdi (editor_app.cpp:2340 fallback) -- bu kapi sekillerin
+// GERCEKTEN farkli olduğunu (cizim sayisi + piksel) pozitif kontrolle olcer.
+ENGINE_TEST(editor_camera_and_directional_light_gizmos_draw_with_control) {
+  if (!rhi::vk_api_load(g_api)) { skip("Vulkan loader yok"); return; }
+  static SystemArena sys;
+  if (sys.capacity() == 0 && !sys.reserve(64u << 20, "editor_gizmo_cam_test")) { CHECK(false); return; }
+  rhi::Device dev;
+  rhi::DeviceConfig dc;
+  if (!dev.init(sys, g_api, dc)) { skip("Vulkan cihazi yok"); return; }
+  const uint32_t W = 256, H = 256;
+  rhi::OffscreenConfig oc;
+  oc.srgb = true;
+  oc.width = W; oc.height = H;
+  rhi::OffscreenResult ores;
+  rhi::OffscreenTarget *off = rhi::offscreen_create(dev, sys, oc, &ores);
+  if (!off) { CHECK(false); dev.shutdown(); return; }
+  renderer::Renderer ren;
+  renderer::RendererConfig rc;
+  rc.frames_in_flight = 1;
+  rc.shadow_size = 0;
+  if (!ren.init(dev, sys, rhi::offscreen_render_pass(off), rc)) { CHECK(false); rhi::offscreen_destroy(off); dev.shutdown(); return; }
+  renderer::Vertex cv[24];
+  uint32_t ci[36];
+  const uint32_t cn = renderer::Renderer::cube(cv, ci);
+  const renderer::MeshHandle cube = ren.create_mesh(cv, 24, ci, cn);
+  ren.set_camera(Mat4::look_at({0, 3, 12}, {0, 0, 0}, {0, 1, 0}), Mat4::perspective(1.0f, 1.0f, 0.1f, 60.0f));
+  ren.set_render_size(W, H);
+  ren.set_light(normalize(Vec3{0.4f, 1.0f, 0.2f}), {0.2f, 0.2f, 0.25f}, 0.9f);
+
+  content::SceneDesc d{};
+  content::SceneEntity ce{};
+  std::snprintf(ce.name, sizeof ce.name, "kam");
+  ce.components = content::kSceneCamera;
+  ce.pos = {-2.0f, 1.0f, 0.0f};
+  ce.cam_fov = 60.0f; ce.cam_near = 0.1f; ce.cam_far = 200.0f;
+  CHECK(d.insert_entity(0, ce));
+  content::SceneEntity de{};
+  std::snprintf(de.name, sizeof de.name, "gunes");
+  de.components = content::kSceneLight;
+  de.light_type = content::SceneLightType::Directional;
+  de.light_color = {1.0f, 0.9f, 0.7f};
+  de.pos = {2.0f, 1.0f, 0.0f};
+  CHECK(d.insert_entity(1, de));
+
+  app::GizmoOptions off_opt, cam_only, light_only;
+  off_opt.light_radius = off_opt.light_glyph = off_opt.shadow_volume = off_opt.sun_dir = off_opt.camera_frustum = false;
+  cam_only = off_opt; cam_only.camera_frustum = true;
+  light_only = off_opt; light_only.light_glyph = true;
+
+  ren.begin_frame(0);
+  const uint32_t n_off = app::editor_draw_gizmos(ren, cube, d, nullptr, 0, off_opt);
+  const uint32_t n_cam = app::editor_draw_gizmos(ren, cube, d, nullptr, 0, cam_only);
+  // Yonlu isik yildiz DEGIL, gunes-oku cizer (arrow() = 2 cizim; nokta olsaydi
+  // light_glyph() = 3 olurdu) -- tur dallanmasinin fiilen calistigini olcer.
+  const uint32_t n_dir_light = app::editor_draw_gizmos(ren, cube, d, nullptr, 0, light_only);
+  CHECK(n_off == 0);
+  CHECK(n_cam == 24);       // camera_frustum: 4+4+4 kenar + wire_box govdesi (12)
+  CHECK(n_dir_light == 2);  // arrow: govde + uc
+
+  const app::GizmoOptions *plan[2] = {&off_opt, &cam_only};
+  static uint8_t px[2][W * H * 4];
+  for (int pass = 0; pass < 2; pass++) {
+    ren.begin_frame(0);
+    ren.draw(cube, Mat4::scale({0.4f, 0.4f, 0.4f}), {0.5f, 0.5f, 0.5f}); // sabit gonderme
+    app::editor_draw_gizmos(ren, cube, d, nullptr, 0, *plan[pass]);
+    if (!rhi::offscreen_render_custom(off, oc, rec_only_scene, &ren, &ores, rec_only_shadow)) { CHECK(false); break; }
+    std::memcpy(px[pass], ores.pixels, sizeof px[pass]);
+  }
+  const uint32_t diff = pixel_diff(px[0], px[1], W * H);
+  std::printf("    [bilgi] kamera gizmosu: cizim %u, piksel farki %u\n", n_cam, diff);
+  if (test::gpu_is_virtual(dev.caps().device_name)) skip("sanal GPU: piksel olcumu gercek cihazda");
+  else CHECK(diff > 100); // frustum ekranda gercekten gorunuyor
   ren.shutdown();
   rhi::offscreen_destroy(off);
   dev.shutdown();
