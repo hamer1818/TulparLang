@@ -248,3 +248,7 @@ crash_*.txt
 # Motor köprüsünün kalıcı kaydı (eng_save_*): yol verilmezse çalışma dizinine
 # yazılır, yani örnek koşturan her komut depo kökünde bir tane bırakır.
 tulpar_kayit.txt
+
+# Windows dagitim paketi (windows/package.sh) — turetilmis
+dist-windows/
+dist-windows.zip
