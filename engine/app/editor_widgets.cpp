@@ -824,7 +824,7 @@ void HierarchyCollapse::after_insert(uint32_t at) {
 }
 void HierarchyRename::begin(int32_t i, const char *name) {
   index = i;
-  std::snprintf(buf, sizeof buf, "%s", name ? name : );
+  std::snprintf(buf, sizeof buf, "%s", name ? name : "");
   focus = true;
 }
 void hierarchy_begin_rename(HierarchyState *st, int32_t index, const char *name) {
@@ -882,7 +882,7 @@ HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState
     // kullaniciya var olmayan bir yetenek soyler. Prefab'in arkasi (alt agaci
     // dosyaya yazma + tarayicida listeleme + ornekleme) yazildiginda geri gelir.
     if (ImGui::MenuItem("Yeniden Adlandır")) {
-      if (st) { st->rename.index = id; st->rename.focus = true; std::snprintf(st->rename.buf, sizeof st->rename.buf, "%s", r.name ? r.name : ); }
+      if (st) { st->rename.index = id; st->rename.focus = true; std::snprintf(st->rename.buf, sizeof st->rename.buf, "%s", r.name ? r.name : ""); }
     }
     ImGui::EndPopup();
   }
@@ -913,7 +913,7 @@ HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoHoldToOpenOthers)) {
       st->drag_source = id;
       ImGui::SetDragDropPayload("TULPAR_VARLIK", &id, sizeof id);
-      ImGui::TextUnformatted(r.name ? r.name : );
+      ImGui::TextUnformatted(r.name ? r.name : "");
       ImGui::EndDragDropSource();
     }
     if (ImGui::BeginDragDropTarget()) {
@@ -1031,7 +1031,7 @@ HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState
   // Ad: kalan genislige kirp; kirpildiysa tam ad ipucunda. Gizli varlik soluk.
   g_row_layout.text_max_w = right - x;
   g_row_layout.text_x = x;
-  editor_ellipsize(r.name ? r.name : , g_row_layout.text_max_w, g_row_layout.text, sizeof g_row_layout.text);
+  editor_ellipsize(r.name ? r.name : "", g_row_layout.text_max_w, g_row_layout.text, sizeof g_row_layout.text);
   g_row_layout.ellipsized = r.name && std::strcmp(g_row_layout.text, r.name) != 0;
   dl->AddText(ImVec2(x, ty), tone_u32(r.hidden ? Tone::TextDim : Tone::Text), g_row_layout.text);
   if (g_row_layout.ellipsized && hovered && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", r.name);

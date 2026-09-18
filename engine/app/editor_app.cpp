@@ -42,8 +42,6 @@
 #include "rhi/swapchain.hpp"
 #include "sim/schedule.hpp"
 
-#include "app/editor_console.hpp"
-#include "app/editor_browser.hpp"
 
 #include <unistd.h>
 
@@ -940,7 +938,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   // KIRLI SAHNE KORUMASI: kaydedilmemis is varken Yeni/Ac ONCE sorar. Onay kipli
   // oldugu icin eylem ERTELENIR (pending) ve cevap gelince calisir.
   auto guard_then = [&](int action, const char *path = nullptr) {
-    std::snprintf(pending_path, sizeof pending_path, "%s", path ? path : );
+    std::snprintf(pending_path, sizeof pending_path, "%s", path ? path : "");
     if (!st.dirty) { run_pending(action); return; }
     pending = action;
     confirm.open = true;
@@ -1317,9 +1315,11 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     decltype(&do_open_guarded) open;
     decltype(&do_save_as) saveas;
     bool *show_console;
+    sim::Physics *phys;      // ViewFocus: sinirlar govde konumlarini da sorar
+    EditorCamera *cam;       // ViewFocus kamerayi kenetler
     const EditorHost *host; // tam ekran: yetenek host'ta (headless'ta nullptr)
   } cc{&st,      &gizmo_op, &do_save, &do_compile,      &do_undo,         &do_redo,     &do_add,     &do_remove,
-       &set_playing, &do_cut,   &do_copy, &do_paste,    &do_new_guarded,  &do_open_guarded, &do_save_as, &show_console, host};
+       &set_playing, &do_cut,   &do_copy, &do_paste,    &do_new_guarded,  &do_open_guarded, &do_save_as, &show_console, host, &phys, &cam};
   CommandTable cmds;
   cmds.bind(CommandId::FileNew, [](void *c) { (*static_cast<CmdCtx *>(c)->newscene)(); }, &cc);
   cmds.bind(CommandId::FileOpen, [](void *c) { (*static_cast<CmdCtx *>(c)->open)(); }, &cc);
@@ -1328,29 +1328,29 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   cmds.bind(CommandId::FileCompile, [](void *c) { (*static_cast<CmdCtx *>(c)->compile)(); }, &cc);
   cmds.bind(CommandId::EditUndo, [](void *c) { (*static_cast<CmdCtx *>(c)->undo)(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->hist.undo_count() > 0; });
-  cmds.bind(CommandId::EditRedo, [](void *c) { (*static_cast<CmdCtx *>(c)->redo)(); }, &cc,
+  cmds.bind(CommandId::EditRedo, [](void *c) { (*static_cast<const CmdCtx *>(c)->redo)(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->hist.redo_count() > 0; });
-  cmds.bind(CommandId::EditDuplicate, [](void *c) { (*static_cast<CmdCtx *>(c)->add)(); }, &cc);
-  cmds.bind(CommandId::EditDelete, [](void *c) { (*static_cast<CmdCtx *>(c)->remove)(); }, &cc,
+  cmds.bind(CommandId::EditDuplicate, [](void *c) { (*static_cast<const CmdCtx *>(c)->add)(); }, &cc);
+  cmds.bind(CommandId::EditDelete, [](void *c) { (*static_cast<const CmdCtx *>(c)->remove)(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
-  cmds.bind(CommandId::EditCut, [](void *c) { (*static_cast<CmdCtx *>(c)->cut)(); }, &cc,
+  cmds.bind(CommandId::EditCut, [](void *c) { (*static_cast<const CmdCtx *>(c)->cut)(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
-  cmds.bind(CommandId::EditCopy, [](void *c) { (*static_cast<CmdCtx *>(c)->copy)(); }, &cc,
+  cmds.bind(CommandId::EditCopy, [](void *c) { (*static_cast<const CmdCtx *>(c)->copy)(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
-  cmds.bind(CommandId::EditPaste, [](void *c) { (*static_cast<CmdCtx *>(c)->paste)(); }, &cc,
+  cmds.bind(CommandId::EditPaste, [](void *c) { (*static_cast<const CmdCtx *>(c)->paste)(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->clip_count > 0; });
   cmds.bind(CommandId::SelectAll,
             [](void *c) {
-              EditorState *s = static_cast<CmdCtx *>(c)->st;
+              EditorState *s = static_cast<const CmdCtx *>(c)->st;
               s->sel.clear();
               for (uint32_t i = s->scene.entity_count; i > 0; i--) s->sel.toggle((int32_t)(i - 1));
             },
             &cc, [](const void *c) { return static_cast<const CmdCtx *>(c)->st->scene.entity_count > 0; });
-  cmds.bind(CommandId::SelectClear, [](void *c) { static_cast<CmdCtx *>(c)->st->sel.clear(); }, &cc,
+  cmds.bind(CommandId::SelectClear, [](void *c) { static_cast<const CmdCtx *>(c)->st->sel.clear(); }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
   cmds.bind(CommandId::ViewGizmos,
             [](void *c) { // gizmolarin tamami ac/kapa
-              GizmoOptions &g = static_cast<CmdCtx *>(c)->st->gizmos;
+              GizmoOptions &g = static_cast<const CmdCtx *>(c)->st->gizmos;
               const bool on = !(g.light_radius || g.light_glyph || g.shadow_volume || g.sun_dir || g.camera_frustum);
               g.light_radius = g.light_glyph = g.shadow_volume = g.sun_dir = g.camera_frustum = on;
             },
@@ -1358,14 +1358,14 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
               const GizmoOptions &g = static_cast<const CmdCtx *>(c)->st->gizmos;
               return g.light_radius || g.light_glyph || g.shadow_volume || g.sun_dir || g.camera_frustum;
             });
-  cmds.bind(CommandId::ViewConsole, [](void *c) { bool *b = static_cast<CmdCtx *>(c)->show_console; *b = !*b; }, &cc, nullptr,
+  cmds.bind(CommandId::ViewConsole, [](void *c) { bool *b = static_cast<const CmdCtx *>(c)->show_console; *b = !*b; }, &cc, nullptr,
             [](const void *c) { return *static_cast<const CmdCtx *>(c)->show_console; });
   cmds.bind(CommandId::ViewFocus, [](void *c) {
     const CmdCtx *x = static_cast<const CmdCtx *>(c);
     const int32_t s0 = x->st->sel.primary();
     if (s0 >= 0 && s0 < (int32_t)x->st->scene.entity_count) {
       static content::SceneBounds fb[content::kSceneMaxEntities];
-      const uint32_t nb = entity_world_bounds(*x->st, x->st->scene.physics(), fb);
+      const uint32_t nb = entity_world_bounds(*x->st, *x->phys, fb);
       if ((uint32_t)s0 < nb) camera_focus(*x->cam, fb[s0]);
     }
   }, &cc, [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
@@ -1382,29 +1382,29 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
             },
             &cc,
             [](const void *c) {
-              const EditorHost *h = static_cast<CmdCtx *>(c)->host;
+              const EditorHost *h = static_cast<const CmdCtx *>(c)->host;
               return h && h->set_fullscreen != nullptr;
             },
             [](const void *c) {
-              const EditorHost *h = static_cast<CmdCtx *>(c)->host;
+              const EditorHost *h = static_cast<const CmdCtx *>(c)->host;
               return h && h->is_fullscreen && h->is_fullscreen(h->user);
             });
-  cmds.bind(CommandId::GizmoTranslate, [](void *c) { *static_cast<CmdCtx *>(c)->gizmo_op = 0; }, &cc, nullptr,
-            [](const void *c) { return *static_cast<CmdCtx *>(c)->gizmo_op == 0; });
-  cmds.bind(CommandId::GizmoRotate, [](void *c) { *static_cast<CmdCtx *>(c)->gizmo_op = 1; }, &cc, nullptr,
-            [](const void *c) { return *static_cast<CmdCtx *>(c)->gizmo_op == 1; });
-  cmds.bind(CommandId::GizmoScale, [](void *c) { *static_cast<CmdCtx *>(c)->gizmo_op = 2; }, &cc, nullptr,
-            [](const void *c) { return *static_cast<CmdCtx *>(c)->gizmo_op == 2; });
+  cmds.bind(CommandId::GizmoTranslate, [](void *c) { *static_cast<const CmdCtx *>(c)->gizmo_op = 0; }, &cc, nullptr,
+            [](const void *c) { return *static_cast<const CmdCtx *>(c)->gizmo_op == 0; });
+  cmds.bind(CommandId::GizmoRotate, [](void *c) { *static_cast<const CmdCtx *>(c)->gizmo_op = 1; }, &cc, nullptr,
+            [](const void *c) { return *static_cast<const CmdCtx *>(c)->gizmo_op == 1; });
+  cmds.bind(CommandId::GizmoScale, [](void *c) { *static_cast<const CmdCtx *>(c)->gizmo_op = 2; }, &cc, nullptr,
+            [](const void *c) { return *static_cast<const CmdCtx *>(c)->gizmo_op == 2; });
   cmds.bind(CommandId::PlayToggle,
             [](void *c) {
-              CmdCtx *x = static_cast<CmdCtx *>(c);
+              CmdCtx *x = static_cast<const CmdCtx *>(c);
               (*x->play)(!x->st->playing);
             },
             &cc, nullptr, [](const void *c) { return static_cast<const CmdCtx *>(c)->st->playing; });
-  cmds.bind(CommandId::PlayPause, [](void *c) { EditorState *s = static_cast<CmdCtx *>(c)->st; s->paused = !s->paused; }, &cc,
+  cmds.bind(CommandId::PlayPause, [](void *c) { EditorState *s = static_cast<const CmdCtx *>(c)->st; s->paused = !s->paused; }, &cc,
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->playing; },
             [](const void *c) { return static_cast<const CmdCtx *>(c)->st->paused; });
-  cmds.bind(CommandId::PlayStep, [](void *c) { static_cast<CmdCtx *>(c)->st->step_request++; }, &cc,
+  cmds.bind(CommandId::PlayStep, [](void *c) { static_cast<const CmdCtx *>(c)->st->step_request++; }, &cc,
             [](const void *c) {
               const EditorState *s = static_cast<const CmdCtx *>(c)->st;
               return s->playing && s->paused;
@@ -2023,8 +2023,8 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         char sub[96];
         if (st.sel.count > 1) std::snprintf(sub, sizeof sub, "grup: %u se\xC3\xA7ili \xC2\xB7 alanlar ana se\xC3\xA7ilide, gizmo grubu ta\xC5\x9F\xC4\xB1r", st.sel.count);
         else std::snprintf(sub, sizeof sub, "%u bile\xC5\x9F""en%s%s", (unsigned)(has_m + has_l + has_b + has_a + has_c + has_s + has_sc),
-                           has_b ? (e.shape == content::SceneShape::Box ? " \xC2\xB7 kutu g\xC3\xB6vde" : " \xC2\xB7 k\xC3\xBCre g\xC3\xB6vde") : ,
-                           (has_b && e.dynamic) ? " \xC2\xB7 dinamik" : );
+                           has_b ? (e.shape == content::SceneShape::Box ? " \xC2\xB7 kutu g\xC3\xB6vde" : " \xC2\xB7 k\xC3\xBCre g\xC3\xB6vde") : "",
+                           (has_b && e.dynamic) ? " \xC2\xB7 dinamik" : "");
         track_edit(st, e, si, inspector_title(icon, e.name, sizeof e.name, sub, icon_tone));
 
         section_label("D\xC3\x96N\xC3\x9C\xC5\x9E\xC3\x9CM");
@@ -2158,8 +2158,10 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         if (has_terrain) {
           rem = false;
           after = e;
+          // Oktav/tohum tamsayi: prop_int yerel bir int ister. Kapsam panelin
+          // DISINDA olmali cunku degisimi component_end()ten sonra yaziyoruz.
+          int oct_i = e.terrain_octaves, seed_i = (int)e.terrain_seed;
           if (component_header(ICON_MD_LANDSCAPE, "Arazi (Terrain)", nullptr, &rem, true, Tone::AxisY)) {
-            int oct_i = e.terrain_octaves, seed_i = (int)e.terrain_seed;
             if (prop_begin("terrain")) {
               track_edit(st, e, si, prop_float("Genislik", &e.terrain_width, 1.0f, 1.0f, 1024.0f, "%.1f m"));
               track_edit(st, e, si, prop_float("Uzunluk", &e.terrain_height, 1.0f, 1.0f, 1024.0f, "%.1f m"));
@@ -2601,8 +2603,18 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       }
     }
     ImGui::End();
-    if (show_console) ShowConsolePanel(&show_console);
-    if (st.show_asset_browser) AssetBrowserPanel(&st.show_asset_browser);
+    // NOT: burada ikinci bir konsol paneli (ShowConsolePanel) daha
+    // ciziliyordu; AYNI show_console bayragina bagliydi, yani konsolu
+    // acinca IKI konsol geliyordu. Calisan olan asagidaki console_panel:
+    // halka tamponu, suzgec ve stdout yakalama onda. Otekinin basligi
+    // (editor_console.hpp) eski API'nin bildirimlerini de EZMISTI --
+    // console_log/ConsoleLevel 14 cagri yerinde kullanildigi halde artik
+    // bildirilmiyordu, yani editor derlenmiyordu.
+    // NOT: burada IKINCI bir varlik tarayici (AssetBrowserPanel,
+    // editor_browser.hpp) daha vardi. Calisan assets_panel zaten her
+    // karede ciziliyor; ikisi ayri durum tutup ayri tarama yapiyordu.
+    // Kucuk resim/klasor agaci gibi eksikler calisan panele eklenecek
+    // (docs/engine/EDITOR-DURUM.md Faz E.2), ikinci kopya degil.
     
     // --- Node Editor Paneli ---
     if (st.show_node_editor) {
@@ -3303,7 +3315,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   std::printf("[engine_editor] %u kare | p50 %.2f ms p99 %.2f ms | ui %u vertex %u indeks %u liste | cizim %u (gizmo %u) | nesne %u | kaynak %u/%u dosya | gunluk %u/%u%s | secili %u (%s) | tick %u\n",
               frame_i, stt.p50_ns / 1e6, stt.p99_ns / 1e6, us.vertices, us.indices, us.draw_lists, ren.stats().draws, st.gizmo_draws,
               st.scene.entity_count, st.scene.asset_count, st.browse_count, st.hist.undo_count(), st.hist.redo_count(),
-              st.dirty ? " (kaydedilmedi)" : , st.sel.count, prim_end >= 0 ? st.scene.entities[prim_end].name : "-", tick_i);
+              st.dirty ? " (kaydedilmedi)" : "", st.sel.count, prim_end >= 0 ? st.scene.entities[prim_end].name : "-", tick_i);
   if (headless && opts.out_path) {
     if (rhi::write_ppm(opts.out_path, ores.pixels, oc.width, oc.height)) std::printf("[engine_editor] goruntu: %s\n", opts.out_path);
   }
