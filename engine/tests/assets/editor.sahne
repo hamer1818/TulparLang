@@ -11,39 +11,39 @@ nesne "kure_1"
   konum -8 1.2 -8.5
   donus 0 0 0
   olcek 1 1 1
-  model 0 0.85 0.9 1
+  model kaynak 0 0.85 0.9 1
 son
 nesne "kure_2"
   konum 0 1.2 -8.5
   donus 0 0 0
   olcek 1 1 1
-  model 0 0.85 0.9 1
+  model kaynak 0 0.85 0.9 1
 son
 nesne "kure_3"
   konum 8 1.2 -8.5
   donus 0 0 0
   olcek 1 1 1
-  model 0 0.85 0.9 1
+  model kaynak 0 0.85 0.9 1
 son
 nesne "boru_1"
   konum -4 0 -3.5
   donus 0 0 0
   olcek 1.2 1.2 1.2
-  model 1 1 0.75 0.35
+  model kaynak 1 1 0.75 0.35
   animasyon 0 0 1
 son
 nesne "boru_2"
   konum 4 0 -3.5
   donus 0 0 0
   olcek 1.2 1.2 1.2
-  model 1 1 0.75 0.35
+  model kaynak 1 1 0.75 0.35
   animasyon 0 0.35 1
 son
 nesne "kup_dusen"
   konum 6 6 3
   donus 0 30 0
   olcek 1 1 1
-  model 2 1 1 1
+  model kaynak 2 1 1 1
   govde kutu 0.5 0.5 0.5 dinamik
 son
 nesne "duvar_sabit"

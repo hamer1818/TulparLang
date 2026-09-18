@@ -772,10 +772,11 @@ ENGINE_TEST(scene_blob_rejects_older_version) {
   if (!bad) return;
   std::memcpy(bad, good, n);
   auto *h = reinterpret_cast<SceneBlobHeader *>(bad);
-  CHECK(h->version == kSceneBlobVersion && kSceneBlobVersion == 5);
+  CHECK(h->version == kSceneBlobVersion && kSceneBlobVersion == 6);
   // Her ESKI surum ayni anlamli hatayla reddedilmeli: 1 (Faz 6 oncesi),
   // 2 (yerlesik kume + navmesh, kume DAG YOK), 3 (GI sonda bolumu YOK) ve
-  // 4 (SceneBlobDraw 24 bayt: ilkel geometri ve malzeme alanlari YOK).
+  // 4 (SceneBlobDraw 24 bayt: ilkel geometri ve malzeme alanlari YOK) ve
+  // 5 (partikul/arazi/voksel/su/ruzgar/karakter tablolari YOK).
   // Dongu kSceneBlobVersion'a kadar gittigi icin yeni surumler kendiliginden
   // kapsanir; yalniz yukaridaki sabit guncellenir.
   SceneBlobView v;
