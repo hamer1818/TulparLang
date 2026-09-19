@@ -223,3 +223,15 @@ scene3d_vol_*.txt
 # .tulpar_onbellek/, tulpar_kayit.txt, android/host Gradle çıktıları) oraya gitti.
 # Burada yalnız, motor ağacı yanlışlıkla geri çekilirse görünür olmasın diye:
 engine/
+
+# ---------------------------------------------------------------------------
+# Windows capraz derleme is alani (Linux'tan MinGW + Wine). Hepsi INDIRILMIS
+# ya da URETILMIS: windows/cache MinGW .pkg.tar.zst paketleri, windows/dist
+# acilmis arac zinciri + LLVM basliklari, dist-windows/ ve *.zip ise paketlenmis
+# ciktilar. Toplam ~3,8 GB ve 14.600 dosya — yoksayilmadiklari icin her IDE
+# bunlari "degisiklik" diye gosteriyordu (olculdu 2026-09-20).
+# ---------------------------------------------------------------------------
+/windows/
+/dist-windows/
+/build-windows.zip
+/dist-windows.zip
