@@ -2836,3 +2836,40 @@ HUD'a düşüyor — yine de kare üretiyor.
    Kural: ölçüt, hedeflenen hatanın çıktısında bulunmamalı; **çıkış kodu bedava bir ikinci
    tanıktır** ve her kontrolde birlikte istenmeli. (8bd'nin kardeşi: orada pozitif kontrolün
    kendisi boştu, burada ölçüt çift anlamlıydı.)
+
+### 9m. `imgui_demo.cpp`'den kesilmiş örnek kod "yeni özellik" kılığında gelir
+
+PR #331 depo köküne 28 dosya bıraktı ve bunların önemli bir bölümü Dear ImGui'nin
+**`imgui_demo.cpp` örneklerinin birebir kopyasıydı**. Beş ajanlı bir birleştirme
+turunda ölçüldü (2026-09-19):
+
+* `app/editor_browser.hpp` — ilk satırı `// [SECTION] Example App: Assets Browser /
+  AssetBrowserPanel()`. İçinde `ExampleAsset`, kurucuda `AddItems(10000)` ile **10000
+  sentetik sahte öğe**, pencere başlığı `"Example: Assets Browser"`. Dosya sistemine
+  erişimi **sıfır** (`grep -c 'dirent|opendir|fopen|\.gltf'` → 0), yani hiçbir varlık
+  göstermiyor. Üstelik `imgui_demo.cpp`'nin kuyruğuyla birlikte kesildiği için
+  `#else/#endif` dengesiz ve **tek başına derlenmiyor**.
+* `app/editor_console.hpp` — `ShowExampleAppConsole` kopyası: `"Welcome to Dear ImGui!"`,
+  `"CLASSIFY"` test komutu, `console.Draw("Example: Console", p_open)`. Motorun günlüğüne
+  hiç bağlı değil; satır başına heap ayırıyor (motor sözleşmesi: statik halka tamponu,
+  ayırma yok); kırpma/clipper yok; `#pragma once` bile yok.
+
+Her ikisinin de motorda **zaten daha iyisi vardı**: `assets_panel()` gerçek `*.gltf/*.glb`
+taramasından (dirent, ada göre sıralı = belirlenimli) besleniyor ve sahneye geri
+alınabilir biçimde varlık ekliyor; `editor_console` POSIX `pipe`+`dup2` ile fd 1/2
+yakalıyor, VUID sınıflandırıyor, ardışık satırları topluyor ve taşmayı `console_dropped()`
+ile **sesli** bildiriyor.
+
+**İmza — bunlardan biri varsa dosya örnek koddur, özellik değildir:**
+İngilizce demo metni, `Example:` ile başlayan pencere başlığı, `Example*` önekli tipler,
+sentetik/sayılı sahte veri, `imgui_demo.cpp`'nin `// [SECTION]` banner'ı.
+
+**Kural:** bir PR mevcut bir panelin "yenisini" getiriyorsa, önce motordaki sürümle
+karşılaştır. Satır sayısı büyüklük değil; demo kodu uzundur çünkü her şeyi gösterir.
+Aynı turda kökün `io.IniFilename = nullptr` → `"tulpar_layout.ini"` değişikliği de aynı
+sınıftaydı: motorun belirlenimli düzen kalıcılığını ImGui'nin sırasız ini dosyasıyla
+değiştiriyordu — `editor_layout.hpp` o satırı yorumunda **isim vererek** sözleşmeye
+bağlamış olmasaydı gerileme fark edilmeden geçerdi.
+
+İlgili: 8bd ve 9l (kapı ölçmediği halde yeşil verir); buradaki fark, **kodun kendisinin**
+ölçülmemiş olması — hiç derlenmemişti.

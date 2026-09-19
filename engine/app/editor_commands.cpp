@@ -48,6 +48,11 @@ constexpr Chord kKeyF10 = (Chord)ImGuiKey_F10;
 constexpr Chord kKeyF11 = (Chord)ImGuiKey_F11;
 constexpr Chord kKeyN = (Chord)ImGuiKey_N;
 constexpr Chord kKeyO = (Chord)ImGuiKey_O;
+// #331 Ctrl+D (cogalt) ve ham F (odakla) kisayollarini tabloya koydu ama bu
+// iki sabiti tanimlamayi unuttu; birakildigi kopya tek basina 7 hatayla
+// derlenmiyordu. Tablo satiri ile sabiti AYNI yamada tutmak sarttir.
+constexpr Chord kKeyD = (Chord)ImGuiKey_D;
+constexpr Chord kKeyF = (Chord)ImGuiKey_F;
 
 // --- VARSAYILAN TABLO -------------------------------------------------------
 // Buradaki her satir editor_app.cpp'de BUGUN VAR OLAN bir davranistir; hicbiri
@@ -76,7 +81,7 @@ constexpr CommandDesc k_defaults[] = {
     // taramasi ikisini de gorur.
     {CommandId::EditRedo, CommandCategory::Edit, kCmdWhileTyping, chord_of(kModCtrl, kKeyY), chord_of(kModCtrl | kModShift, kKeyZ), "duzen.yinele",
      "Yinele", "Geri alinan eylemi yeniden uygular"},
-    {CommandId::EditDuplicate, CommandCategory::Edit, kCmdUndoable, kChordNone, kChordNone, "duzen.ekle", "Ekle / \xC3\xA7o\xC4\x9F""alt",
+    {CommandId::EditDuplicate, CommandCategory::Edit, kCmdUndoable, chord_of(kModCtrl, kKeyD), kChordNone, "duzen.ekle", "Ekle / \xC3\xA7o\xC4\x9F""alt",
      "Secili varlik varsa kopyasini, yoksa yeni bir varlik ekler"},
     {CommandId::EditDelete, CommandCategory::Edit, kCmdUndoable | kCmdNeedsSelection, kKeyDelete, kChordNone, "duzen.sil", "Sil",
      "Secili varliklarin tamamini siler (tek geri al getirir)"},
@@ -98,6 +103,8 @@ constexpr CommandDesc k_defaults[] = {
      "Isik yaricapi, golge hacmi ve gunes oku tel cizimleri"},
     {CommandId::ViewConsole, CommandCategory::View, kCmdCheckable, kChordNone, kChordNone, "gorunum.konsol", "Konsol",
      "Motor, Vulkan ve sahne iletilerini gosteren paneli ac/kapa"},
+    {CommandId::ViewFocus, CommandCategory::View, kCmdNeedsSelection, kKeyF, kChordNone, "gorunum.odak", "Se\xC3\xA7ili Varl\xC4\xB1\xC4\x9F""a Odaklan",
+     "Kamerayi secili varligin merkezine odaklar"},
     // kCmdWhileTyping KONMADI: bu tablodaki kural degistiricisiz her bilesimi
     // HAM sayar (islev tuslari dahil), yani F5/F6/F10 ile ayni davranis —
     // metin yazarken tetiklenmez.

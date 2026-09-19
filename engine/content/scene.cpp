@@ -38,6 +38,15 @@ struct Out {
     puts(tmp);
   }
   void vec(Vec3 v) { num(v.x); ch(' '); num(v.y); ch(' '); num(v.z); }
+  void vec2(Vec2 v) { num(v.x); ch(' '); num(v.y); }
+  // Tamsayi alanlari (tohum, izgara boyu, yuva indeksi) float'a CEVRILMEDEN
+  // yazilir: float mantissasi 24 bit, yani 2^24'un ustundeki bir uint32 tohum
+  // (`terrain_seed`, `wind_seed`) num() yolundan gecerse SESSIZCE yuvarlanirdi.
+  void inum(long long v) {
+    char tmp[24];
+    std::snprintf(tmp, sizeof tmp, "%lld", v);
+    puts(tmp);
+  }
   void str(const char *s) { ch('"'); puts(s); ch('"'); }
   void finish() {
     if (buf && cap) buf[len < cap ? len : cap - 1] = 0;
@@ -50,7 +59,11 @@ struct Tok {
   size_t n;
   bool quoted;
 };
-constexpr size_t kMaxTok = 8;
+// 8 idi; `partikul` satiri anahtar + 11 sayi = 12 jeton istiyor (en uzun
+// satir). Tavan bir GUVENLIK siniri, bicim kurali degil: her satirin kendi
+// jeton sayisi zaten ayri ayri denetleniyor, o yuzden buyutmek bir satiri
+// sessizce kabul ettirmez — yalniz "fazla jeton" hatasinin esigini kaldirir.
+constexpr size_t kMaxTok = 16;
 
 // Satiri bosluklardan boler; "..." tek jeton (kacis yok, cift tirnak ad icinde olamaz).
 // Donus: jeton sayisi; *bad = kapanmamis tirnak / fazla jeton.
@@ -111,7 +124,21 @@ struct Parser {
     *out = (uint32_t)v;
     return true;
   }
+  // Isaretli tamsayi: `model` kaynak indeksi ve `ilkel` / `eklem` hedefi -1
+  // olabiliyor (yok anlaminda), uint() ise '-' goren her jetonu reddediyor.
+  bool sint(const Tok &t, int32_t *out) {
+    char tmp[32];
+    if (t.quoted || t.n == 0 || t.n >= sizeof tmp) return fail("tamsayi bekleniyor");
+    std::memcpy(tmp, t.s, t.n);
+    tmp[t.n] = 0;
+    char *end = nullptr;
+    long v = std::strtol(tmp, &end, 10);
+    if (end != tmp + t.n || v < -2147483647l - 1 || v > 2147483647l) return fail("gecersiz tamsayi");
+    *out = (int32_t)v;
+    return true;
+  }
   bool vec(const Tok *t, Vec3 *out) { return num(t[0], &out->x) && num(t[1], &out->y) && num(t[2], &out->z); }
+  bool vec2(const Tok *t, Vec2 *out) { return num(t[0], &out->x) && num(t[1], &out->y); }
   bool str(const Tok &t, char *out, size_t cap) {
     if (!t.quoted) return fail("tirnakli metin bekleniyor");
     if (t.n >= cap) return fail("metin cok uzun");
@@ -120,6 +147,15 @@ struct Parser {
     return true;
   }
 };
+
+// Malzeme alanlari SceneEntity'nin varsayilanlarinda mi (bit-tam). Yazici
+// bunu "satiri hic yazma" karari icin kullaniyor; degerler PbrParams'in
+// varsayilanlariyla ayni olmak zorunda (bkz. scene.hpp yorumu).
+bool material_is_default(const SceneEntity &e) {
+  const SceneEntity d{};
+  return feq(e.metallic, d.metallic) && feq(e.roughness, d.roughness) && feq(e.reflectance, d.reflectance) &&
+         veq(e.emissive, d.emissive) && feq(e.emissive_strength, d.emissive_strength);
+}
 
 void write_entity(Out &o, const SceneEntity &e) {
   o.puts("nesne "); o.str(e.name); o.ch('\n');
@@ -133,6 +169,17 @@ void write_entity(Out &o, const SceneEntity &e) {
   if (e.flags) { o.puts("  bayrak "); o.num((float)e.flags); o.ch('\n'); }
   if (e.components & kSceneModel) {
     o.puts("  model "); o.num((float)e.asset); o.ch(' '); o.vec(e.tint); o.ch('\n');
+  }
+  // `ilkel` ve `malzeme` bir bilesen DEGIL, model alanlarinin uzantisi — ve
+  // ikisi de yalniz VARSAYILANDAN FARKLIYSA yazilir. Sebep kanonik bicim
+  // kapisi (scene_file_editor_sahne_is_canonical): mevcut editor.sahne'de her
+  // ikisi de varsayilanda, yani bu iki satir hic cikmiyor ve dosya bayt bayt
+  // ayni kaliyor. Bilesen bitine BAGLANMADILAR cunku `primitive >= 0` olan bir
+  // varlikta kSceneModel olmayabilir; kosul degere bakar, bite degil.
+  if (e.primitive >= 0) { o.puts("  ilkel "); o.inum(e.primitive); o.ch('\n'); }
+  if (!material_is_default(e)) {
+    o.puts("  malzeme "); o.num(e.metallic); o.ch(' '); o.num(e.roughness); o.ch(' '); o.num(e.reflectance);
+    o.ch(' '); o.vec(e.emissive); o.ch(' '); o.num(e.emissive_strength); o.ch('\n');
   }
   if (e.components & kSceneAnim) {
     o.puts("  animasyon "); o.num((float)e.clip); o.ch(' '); o.num(e.phase); o.ch(' '); o.num(e.speed); o.ch('\n');
@@ -159,6 +206,49 @@ void write_entity(Out &o, const SceneEntity &e) {
   }
   if (e.components & kSceneScript) {
     o.puts("  betik \""); o.puts(e.script_file); o.puts(e.script_enabled ? "\" etkin\n" : "\" kapali\n");
+  }
+  // --- PR #331 bilesenleri. Sira SABIT (yazici = kanonik bicim); bit sirasiyla
+  // ayni gitmesi bilincli, yeni bir bilesen eklenince sona eklenir.
+  if (e.components & kSceneCharacter) {
+    o.puts("  karakter "); o.num(e.char_radius); o.ch(' '); o.num(e.char_height); o.ch(' ');
+    o.num(e.char_mass); o.ch(' '); o.num(e.char_max_slope); o.ch('\n');
+  }
+  if (e.components & kSceneParticle) {
+    o.puts("  partikul "); o.num(e.particle_spawn_rate); o.ch(' ');
+    o.num(e.particle_lifetime_min); o.ch(' '); o.num(e.particle_lifetime_max); o.ch(' ');
+    o.num(e.particle_size_start); o.ch(' '); o.num(e.particle_size_end); o.ch(' ');
+    o.vec(e.particle_velocity); o.ch(' '); o.vec(e.particle_jitter); o.ch('\n');
+  }
+  if (e.components & kSceneTerrain) {
+    o.puts("  arazi "); o.num(e.terrain_width); o.ch(' '); o.num(e.terrain_height); o.ch(' ');
+    o.num(e.terrain_cell); o.ch(' '); o.num(e.terrain_amp); o.ch(' '); o.num(e.terrain_freq); o.ch(' ');
+    o.inum(e.terrain_octaves); o.ch(' '); o.inum(e.terrain_seed); o.ch('\n');
+  }
+  if (e.components & kSceneVoxel) {
+    o.puts("  voksel "); o.inum(e.voxel_size_x); o.ch(' '); o.inum(e.voxel_size_y); o.ch(' ');
+    o.inum(e.voxel_size_z); o.ch(' '); o.num(e.voxel_cell); o.ch('\n');
+  }
+  if (e.components & kSceneWater) {
+    o.puts("  su "); o.num(e.wave_length); o.ch(' '); o.num(e.wave_amplitude); o.ch(' ');
+    o.num(e.wave_steepness); o.ch(' '); o.num(e.wave_speed); o.ch(' '); o.vec2(e.wave_direction); o.ch('\n');
+  }
+  if (e.components & kSceneWind) {
+    o.puts("  ruzgar "); o.vec2(e.wind_direction); o.ch(' '); o.num(e.wind_strength); o.ch(' ');
+    o.num(e.wind_gustiness); o.ch(' '); o.num(e.wind_gust_freq); o.ch(' '); o.inum(e.wind_seed); o.ch('\n');
+  }
+  if (e.components & kSceneNavAgent) {
+    o.puts("  ajan "); o.vec(e.ai_target); o.ch(' '); o.num(e.ai_speed); o.ch(' '); o.num(e.ai_turn_speed); o.ch('\n');
+  }
+  if (e.components & kSceneJoint) {
+    o.puts("  eklem "); o.inum(e.joint_target); o.ch(' '); o.vec(e.joint_axis); o.ch(' ');
+    o.num(e.joint_limit_min); o.ch(' '); o.num(e.joint_limit_max); o.ch(' '); o.num(e.joint_motor_speed); o.ch('\n');
+  }
+  if (e.components & kSceneSkybox) o.puts("  gokyuzu\n"); // alani yok: bilesenin VARLIGI tek veri
+  if (e.components & kSceneRefProbe) {
+    o.puts("  yansima "); o.num(e.ref_probe_radius); o.ch(' '); o.num(e.ref_probe_intensity); o.ch('\n');
+  }
+  if (e.components & kSceneReverb) {
+    o.puts("  yanki "); o.num(e.reverb_decay); o.ch(' '); o.num(e.reverb_room_size); o.ch('\n');
   }
   o.puts("son\n");
 }
@@ -190,6 +280,63 @@ bool scene_entity_equal(const SceneEntity &a, const SceneEntity &b) {
   if (c & kSceneScript) {
     if (std::strcmp(a.script_file, b.script_file) != 0 || a.script_enabled != b.script_enabled) return false;
   }
+  // `ilkel` / `malzeme` bilesene bagli DEGIL (yazici da degere bakip yaziyor),
+  // o yuzden kosulsuz karsilastirilir — yoksa bir malzeme degisikligi "no-op"
+  // sayilir ve gunluge (geri al) hic girmezdi.
+  if (a.primitive != b.primitive) return false;
+  if (!feq(a.metallic, b.metallic) || !feq(a.roughness, b.roughness) || !feq(a.reflectance, b.reflectance) ||
+      !veq(a.emissive, b.emissive) || !feq(a.emissive_strength, b.emissive_strength))
+    return false;
+  if (c & kSceneCharacter) {
+    if (!feq(a.char_radius, b.char_radius) || !feq(a.char_height, b.char_height) || !feq(a.char_mass, b.char_mass) ||
+        !feq(a.char_max_slope, b.char_max_slope))
+      return false;
+  }
+  if (c & kSceneParticle) {
+    if (!feq(a.particle_spawn_rate, b.particle_spawn_rate) || !feq(a.particle_lifetime_min, b.particle_lifetime_min) ||
+        !feq(a.particle_lifetime_max, b.particle_lifetime_max) || !feq(a.particle_size_start, b.particle_size_start) ||
+        !feq(a.particle_size_end, b.particle_size_end) || !veq(a.particle_velocity, b.particle_velocity) ||
+        !veq(a.particle_jitter, b.particle_jitter))
+      return false;
+  }
+  if (c & kSceneTerrain) {
+    if (!feq(a.terrain_width, b.terrain_width) || !feq(a.terrain_height, b.terrain_height) ||
+        !feq(a.terrain_cell, b.terrain_cell) || !feq(a.terrain_amp, b.terrain_amp) || !feq(a.terrain_freq, b.terrain_freq) ||
+        a.terrain_octaves != b.terrain_octaves || a.terrain_seed != b.terrain_seed)
+      return false;
+  }
+  if (c & kSceneVoxel) {
+    if (a.voxel_size_x != b.voxel_size_x || a.voxel_size_y != b.voxel_size_y || a.voxel_size_z != b.voxel_size_z ||
+        !feq(a.voxel_cell, b.voxel_cell))
+      return false;
+  }
+  if (c & kSceneWater) {
+    if (!feq(a.wave_length, b.wave_length) || !feq(a.wave_amplitude, b.wave_amplitude) ||
+        !feq(a.wave_steepness, b.wave_steepness) || !feq(a.wave_speed, b.wave_speed) ||
+        !feq(a.wave_direction.x, b.wave_direction.x) || !feq(a.wave_direction.y, b.wave_direction.y))
+      return false;
+  }
+  if (c & kSceneWind) {
+    if (!feq(a.wind_direction.x, b.wind_direction.x) || !feq(a.wind_direction.y, b.wind_direction.y) ||
+        !feq(a.wind_strength, b.wind_strength) || !feq(a.wind_gustiness, b.wind_gustiness) ||
+        !feq(a.wind_gust_freq, b.wind_gust_freq) || a.wind_seed != b.wind_seed)
+      return false;
+  }
+  if (c & kSceneNavAgent) {
+    if (!veq(a.ai_target, b.ai_target) || !feq(a.ai_speed, b.ai_speed) || !feq(a.ai_turn_speed, b.ai_turn_speed)) return false;
+  }
+  if (c & kSceneJoint) {
+    if (a.joint_target != b.joint_target || !veq(a.joint_axis, b.joint_axis) || !feq(a.joint_limit_min, b.joint_limit_min) ||
+        !feq(a.joint_limit_max, b.joint_limit_max) || !feq(a.joint_motor_speed, b.joint_motor_speed))
+      return false;
+  }
+  if (c & kSceneRefProbe) {
+    if (!feq(a.ref_probe_radius, b.ref_probe_radius) || !feq(a.ref_probe_intensity, b.ref_probe_intensity)) return false;
+  }
+  if (c & kSceneReverb) {
+    if (!feq(a.reverb_decay, b.reverb_decay) || !feq(a.reverb_room_size, b.reverb_room_size)) return false;
+  }
+  // kSceneSkybox: alani yok, `components` esitligi yukarida zaten olculdu.
   return true;
 }
 
@@ -259,7 +406,14 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
   bool in_entity = false, header = false;
   SceneEntity cur{};
   uint32_t seen = 0; // varlik icinde gorulen anahtarlar (yineleme yasak)
-  enum { kKonum = 1u << 8, kDonus = 1u << 9, kOlcek = 1u << 10, kEbeveyn = 1u << 11, kBayrak = 1u << 12 };
+  // Bilesen OLMAYAN satirlarin "gordum" bitleri. 1u<<8..1u<<12'deydiler;
+  // PR #331 bilesen bitlerini 1<<7..1<<17'ye tasiyinca kKonum ile kSceneParticle
+  // AYNI bit oldu — yani bir `konum` satiri varliga partikul bileseni takardi.
+  // Bit-24 ve ustu bilesen maskesinin (kSceneComponentMask) DISINDA duruyor.
+  enum : uint32_t {
+    kKonum = 1u << 24, kDonus = 1u << 25, kOlcek = 1u << 26, kEbeveyn = 1u << 27,
+    kBayrak = 1u << 28, kIlkel = 1u << 29, kMalzeme = 1u << 30
+  };
   // Ebeveyn satirlari: ILERI referans serbest oldugu icin gecerlilik ancak
   // dosya bitince olculebilir; hata yine de DOGRU satiri gostersin diye her
   // varligin "ebeveyn" satiri saklanir (0 = satir yok).
@@ -323,12 +477,91 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
         cur.flags = fl;
       } else if (tok_is(t[0], "model")) {
         if (n != 5 || (seen & kSceneModel)) return p.fail("model kaynak r g b (bir kez)");
-        uint32_t a = 0;
-        if (!p.uint(t[1], &a)) return false;
-        if (a >= out->asset_count) return p.fail("model kaynak indeksi tanimsiz (kaynak satiri once gelmeli)");
-        cur.asset = (int32_t)a;
+        int32_t a = 0;
+        // -1 serbest: varlik bir glTF kaynagina DEGIL, `ilkel` satirindaki
+        // prosedurel mesh'e baglidir (SceneRuntime ilkeli kaynaga tercih eder).
+        if (!p.sint(t[1], &a)) return false;
+        if (a < -1 || (a >= 0 && (uint32_t)a >= out->asset_count))
+          return p.fail("model kaynak indeksi tanimsiz (kaynak satiri once gelmeli)");
+        cur.asset = a;
         if (!p.vec(t + 2, &cur.tint)) return false;
         seen |= kSceneModel;
+      } else if (tok_is(t[0], "ilkel")) {
+        if (n != 2 || (seen & kIlkel)) return p.fail("ilkel <yuva> (bir kez)");
+        seen |= kIlkel;
+        if (!p.sint(t[1], &cur.primitive)) return false;
+        if (cur.primitive < -1) return p.fail("ilkel yuvasi negatif olamaz (-1 = yok)");
+      } else if (tok_is(t[0], "malzeme")) {
+        if (n != 8 || (seen & kMalzeme)) return p.fail("malzeme metalik puruz yansitma er eg eb siddet (bir kez)");
+        seen |= kMalzeme;
+        if (!p.num(t[1], &cur.metallic) || !p.num(t[2], &cur.roughness) || !p.num(t[3], &cur.reflectance) ||
+            !p.vec(t + 4, &cur.emissive) || !p.num(t[7], &cur.emissive_strength))
+          return false;
+      } else if (tok_is(t[0], "karakter")) {
+        if (n != 5 || (seen & kSceneCharacter)) return p.fail("karakter yaricap yukseklik kutle egim (bir kez)");
+        if (!p.num(t[1], &cur.char_radius) || !p.num(t[2], &cur.char_height) || !p.num(t[3], &cur.char_mass) ||
+            !p.num(t[4], &cur.char_max_slope))
+          return false;
+        seen |= kSceneCharacter;
+      } else if (tok_is(t[0], "partikul")) {
+        if (n != 12 || (seen & kSceneParticle))
+          return p.fail("partikul hiz omur_min omur_max boy_bas boy_son vx vy vz jx jy jz (bir kez)");
+        if (!p.num(t[1], &cur.particle_spawn_rate) || !p.num(t[2], &cur.particle_lifetime_min) ||
+            !p.num(t[3], &cur.particle_lifetime_max) || !p.num(t[4], &cur.particle_size_start) ||
+            !p.num(t[5], &cur.particle_size_end) || !p.vec(t + 6, &cur.particle_velocity) ||
+            !p.vec(t + 9, &cur.particle_jitter))
+          return false;
+        seen |= kSceneParticle;
+      } else if (tok_is(t[0], "arazi")) {
+        if (n != 8 || (seen & kSceneTerrain)) return p.fail("arazi en boy hucre genlik frekans oktav tohum (bir kez)");
+        if (!p.num(t[1], &cur.terrain_width) || !p.num(t[2], &cur.terrain_height) || !p.num(t[3], &cur.terrain_cell) ||
+            !p.num(t[4], &cur.terrain_amp) || !p.num(t[5], &cur.terrain_freq) || !p.sint(t[6], &cur.terrain_octaves) ||
+            !p.uint(t[7], &cur.terrain_seed))
+          return false;
+        seen |= kSceneTerrain;
+      } else if (tok_is(t[0], "voksel")) {
+        if (n != 5 || (seen & kSceneVoxel)) return p.fail("voksel nx ny nz hucre (bir kez)");
+        if (!p.uint(t[1], &cur.voxel_size_x) || !p.uint(t[2], &cur.voxel_size_y) || !p.uint(t[3], &cur.voxel_size_z) ||
+            !p.num(t[4], &cur.voxel_cell))
+          return false;
+        seen |= kSceneVoxel;
+      } else if (tok_is(t[0], "su")) {
+        if (n != 7 || (seen & kSceneWater)) return p.fail("su dalga_boyu genlik sivrilik hiz dx dy (bir kez)");
+        if (!p.num(t[1], &cur.wave_length) || !p.num(t[2], &cur.wave_amplitude) || !p.num(t[3], &cur.wave_steepness) ||
+            !p.num(t[4], &cur.wave_speed) || !p.vec2(t + 5, &cur.wave_direction))
+          return false;
+        seen |= kSceneWater;
+      } else if (tok_is(t[0], "ruzgar")) {
+        if (n != 7 || (seen & kSceneWind)) return p.fail("ruzgar dx dy siddet dalgalanma frekans tohum (bir kez)");
+        if (!p.vec2(t + 1, &cur.wind_direction) || !p.num(t[3], &cur.wind_strength) || !p.num(t[4], &cur.wind_gustiness) ||
+            !p.num(t[5], &cur.wind_gust_freq) || !p.uint(t[6], &cur.wind_seed))
+          return false;
+        seen |= kSceneWind;
+      } else if (tok_is(t[0], "ajan")) {
+        if (n != 6 || (seen & kSceneNavAgent)) return p.fail("ajan hx hy hz hiz donus_hizi (bir kez)");
+        if (!p.vec(t + 1, &cur.ai_target) || !p.num(t[4], &cur.ai_speed) || !p.num(t[5], &cur.ai_turn_speed)) return false;
+        seen |= kSceneNavAgent;
+      } else if (tok_is(t[0], "eklem")) {
+        if (n != 8 || (seen & kSceneJoint)) return p.fail("eklem hedef ax ay az alt ust motor (bir kez)");
+        if (!p.sint(t[1], &cur.joint_target) || !p.vec(t + 2, &cur.joint_axis) || !p.num(t[5], &cur.joint_limit_min) ||
+            !p.num(t[6], &cur.joint_limit_max) || !p.num(t[7], &cur.joint_motor_speed))
+          return false;
+        // Hedef indeksi ILERI referans olabilir (varlik henuz olusmadi), o
+        // yuzden burada yalniz kaba sinir denetlenir; -1 = eklem serbest ucu.
+        if (cur.joint_target < -1 || cur.joint_target >= (int32_t)kSceneMaxEntities)
+          return p.fail("eklem hedef indeksi sinir disi");
+        seen |= kSceneJoint;
+      } else if (tok_is(t[0], "gokyuzu")) {
+        if (n != 1 || (seen & kSceneSkybox)) return p.fail("gokyuzu tek basina olmali (bir kez)");
+        seen |= kSceneSkybox;
+      } else if (tok_is(t[0], "yansima")) {
+        if (n != 3 || (seen & kSceneRefProbe)) return p.fail("yansima yaricap siddet (bir kez)");
+        if (!p.num(t[1], &cur.ref_probe_radius) || !p.num(t[2], &cur.ref_probe_intensity)) return false;
+        seen |= kSceneRefProbe;
+      } else if (tok_is(t[0], "yanki")) {
+        if (n != 3 || (seen & kSceneReverb)) return p.fail("yanki sonumlenme oda_boyu (bir kez)");
+        if (!p.num(t[1], &cur.reverb_decay) || !p.num(t[2], &cur.reverb_room_size)) return false;
+        seen |= kSceneReverb;
       } else if (tok_is(t[0], "animasyon")) {
         if (n != 4 || (seen & kSceneAnim)) return p.fail("animasyon klip faz hiz (bir kez)");
         if (!p.uint(t[1], &cur.clip) || !p.num(t[2], &cur.phase) || !p.num(t[3], &cur.speed)) return false;
@@ -379,7 +612,7 @@ bool scene_parse(const char *text, size_t len, SceneDesc *out, SceneError *err) 
         if (n >= 3) cur.script_enabled = tok_is(t[2], "etkin");
         seen |= kSceneScript;
       } else return p.fail("varlik icinde bilinmeyen anahtar");
-      cur.components = seen & 0xFFu;
+      cur.components = seen & kSceneComponentMask;
       continue;
     }
     // ust duzey

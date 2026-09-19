@@ -34,7 +34,13 @@
 namespace tulpar::engine::content {
 
 constexpr uint32_t kSceneBlobMagic = 0x4E485354u;   // "TSHN" (LE)
-constexpr uint32_t kSceneBlobVersion = 4; // v4: GI sonda izgarasi; v3: kume DAG; v2: yerlesik kume / navmesh
+// v6: prosedurel/arkaplan bilesen tablolari (partikul, arazi, voksel, su,
+// ruzgar, karakter); v5: SceneBlobDraw'a ilkel geometri + PBR malzemesi;
+// v4: GI sonda izgarasi; v3: kume DAG; v2: yerlesik kume / navmesh.
+// v5 ARA SURUM olarak atlanmadi — v5'i yazan bir .sahneb hic uretilmedi
+// (bicim bu agacta v4'ten dogrudan v6'ya gecti), numara yalniz #331'in
+// tarihcesiyle hizali kalsin diye tutuluyor.
+constexpr uint32_t kSceneBlobVersion = 6;
 constexpr uint32_t kSceneBlobEndian = 0x01020304u;
 constexpr uint32_t kSceneBlobAlign = 16;
 constexpr uint32_t kGiBlobMaxProbes = 32768; // GI sonda tablosu ust siniri (dosya formati)
@@ -85,6 +91,15 @@ struct SceneBlobHeader {
   uint32_t gi_rays, gi_bounces;             // bake ayarlari (sonda basina isin, sicrama)
   uint32_t gi_valid, gi_reserved0;          // kati disinda kalan (gecerli) sonda sayisi
   uint32_t gi_reserved1, gi_reserved2;
+  // --- v6: prosedurel / arkaplan bilesen tablolari -------------------------
+  // Basligin SONUNA eklendi, ortasina degil: boylece v4 ve v6 blob'larinin ilk
+  // N bayti ayni yerlesimde kalir ve bir hex dokumu karsilastirilabilir olur.
+  uint32_t particle_count, particle_offset;   // SceneBlobParticle[]
+  uint32_t terrain_count, terrain_offset;     // SceneBlobTerrain[]
+  uint32_t voxel_count, voxel_offset;         // SceneBlobVoxel[]
+  uint32_t water_count, water_offset;         // SceneBlobWater[]
+  uint32_t wind_count, wind_offset;           // SceneBlobWind[]
+  uint32_t character_count, character_offset; // SceneBlobCharacter[]
 };
 // GI sondasi: 6 yonlu ambient cube + dogrudan gunes gorunurlugu.
 // Yuz sirasi +X,-X,+Y,-Y,+Z,-Z; deger E(n)/pi, DOGRUSAL RGB (gi.hpp sozlesmesi).
@@ -143,10 +158,17 @@ struct SceneBlobEntity {
   float scale[3];    uint32_t name; // dunya olcegi / string ofseti
   int32_t draw, anim, light, body;  // tablo dizinleri, -1 = bilesen yok
 };
+// v5'te 24 -> 52 bayt. `asset` ISARETLI oldu: prosedurel ilkelden cizilen bir
+// varlikta glTF kaynagi YOKTUR (asset = -1, primitive >= 0), ve runtime ilkeli
+// kaynaga TERCIH eder (bkz. SceneRuntime::draw).
 struct SceneBlobDraw {
-  uint32_t entity, asset;
+  uint32_t entity;
+  int32_t asset;     // -1 = kaynak yok (ilkelden cizilir)
+  int32_t primitive; // content/primitives.hpp yuvasi, -1 = yok
   float tint[3];
-  uint32_t reserved;
+  float metallic, roughness, reflectance; // renderer::PbrParams ile birebir
+  float emissive[3];
+  float emissive_strength;
 };
 struct SceneBlobAnim {
   uint32_t entity, clip;
@@ -166,13 +188,69 @@ struct SceneBlobBody {
   float quat[4];
   float scale[3], reserved2;    // yazar olcegi (cizim matrisi icin)
 };
+// --- v6: prosedurel / arkaplan bilesen kayitlari ----------------------------
+// Hepsi 16'nin kati (dosya formati kurali: her tablo 16 hizali baslar ve kayit
+// boyu hizayi bozmamali). Bos `reserved` alanlari bilincli: sonraki alanlar
+// surum yukseltmeden buraya oturur.
+struct SceneBlobParticle {
+  uint32_t entity;
+  float spawn_rate, lifetime_min, lifetime_max;
+  float size_start, size_end;
+  float velocity[3], jitter[3];
+}; // 48 bayt
+
+struct SceneBlobTerrain {
+  uint32_t entity;
+  // width/height IZGARA hucre sayisidir (float olarak tasinir, SceneEntity ile
+  // ayni sozlesme); dunya boyu = (N-1) * cell.
+  float width, height, cell, amp, freq;
+  int32_t octaves;
+  uint32_t seed, reserved0, reserved1, reserved2, reserved3;
+}; // 48 bayt
+
+struct SceneBlobWater {
+  uint32_t entity;
+  float steepness, amplitude, wavelength;
+  float direction[2];
+  float speed; // Gerstner faz hizi (#331'in kaydinda YOKTU: sessiz kayipti)
+  float reserved;
+}; // 32 bayt
+
+struct SceneBlobWind {
+  uint32_t entity;
+  float direction[2];
+  float strength, gustiness, gust_freq;
+  uint32_t seed;
+  float reserved;
+}; // 32 bayt
+
+struct SceneBlobVoxel {
+  uint32_t entity;
+  uint32_t size_x, size_y, size_z;
+  float cell;
+  uint32_t reserved[3];
+}; // 32 bayt
+
+// 16 bayt degil 32: #331'in kaydi yalniz (radius, height, step_height) tasiyor
+// ve `step_height` alanina SceneEntity::char_max_slope yaziyordu — hem yanlis
+// isimli hem de char_mass'i dusuruyordu. Dort alan da kayitta.
+struct SceneBlobCharacter {
+  uint32_t entity;
+  float radius, height, mass;
+  float max_slope;
+  uint32_t reserved[3];
+}; // 32 bayt
+
 static_assert(sizeof(SceneBlobHeader) % kSceneBlobAlign == 0, "baslik 16 hizali");
 static_assert(sizeof(SceneBlobResident) == 32, "yerlesik kaydi 32 bayt (dosya formati)");
 static_assert(sizeof(SceneBlobDagNode) == 80 && sizeof(SceneBlobDagMesh) == 48, "DAG kayit boyutlari sabit (dosya formati)");
 static_assert(sizeof(SceneBlobGiProbe) == 80, "GI sonda kaydi 80 bayt (dosya formati)");
 static_assert(sizeof(SceneBlobEntity) == 128 && sizeof(SceneBlobLight) == 48 && sizeof(SceneBlobBody) == 80 &&
-                  sizeof(SceneBlobAsset) == 16 && sizeof(SceneBlobDraw) == 24 && sizeof(SceneBlobAnim) == 16,
+                  sizeof(SceneBlobAsset) == 16 && sizeof(SceneBlobDraw) == 52 && sizeof(SceneBlobAnim) == 16,
               "blob kayit boyutlari sabit (dosya formati)");
+static_assert(sizeof(SceneBlobParticle) == 48 && sizeof(SceneBlobTerrain) == 48 && sizeof(SceneBlobWater) == 32 &&
+                  sizeof(SceneBlobWind) == 32 && sizeof(SceneBlobVoxel) == 32 && sizeof(SceneBlobCharacter) == 32,
+              "v6 kayit boyutlari sabit (dosya formati)");
 
 // Acilmis blob: isaretciler blob'un icine bakar (kopya yok). Blob bellegi
 // gorunumden uzun yasamali ve 16 hizali olmali.
@@ -184,6 +262,14 @@ struct SceneBlobView {
   const SceneBlobAnim *anims = nullptr;
   const SceneBlobLight *lights = nullptr;
   const SceneBlobBody *bodies = nullptr;
+  // v6 tablolari. Sayilari h->*_count'ta; tablo bossa isaretci yine blob'un
+  // icini gosterir (ofset gecerli, sayi 0) — cagiran sayiya bakmali.
+  const SceneBlobParticle *particles = nullptr;
+  const SceneBlobTerrain *terrains = nullptr;
+  const SceneBlobVoxel *voxels = nullptr;
+  const SceneBlobWater *waters = nullptr;
+  const SceneBlobWind *winds = nullptr;
+  const SceneBlobCharacter *characters = nullptr;
   const SceneBlobResident *residents = nullptr;
   const uint8_t *nav = nullptr; // bake edilmis Detour verisi (SALT OKUNUR; nav_size bayt)
   const SceneBlobDagMesh *dag_meshes = nullptr;

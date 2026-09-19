@@ -597,6 +597,19 @@ public:
   static constexpr uint32_t kPrimitiveMaxVerts = 640;
   static constexpr uint32_t kPrimitiveMaxIndices = 3328;
 
+  // Cihaza BAGLI mi? `init()` cagrilmamis bir Renderer gecerli bir nesnedir
+  // ama GPU kaynagi yaratamaz: create_mesh/create_material `dev_`i
+  // dereference eder ve SIGSEGV verir.
+  //
+  // Bunu sormak zorundayiz cunku motorun CPU tarafini olcen kapilar cihazsiz
+  // bir Renderer ile kosuyor (ornegin test_scene_blob.cpp
+  // `scene_runtime_applies_baked_gi_ambient`: `renderer::Renderer ren;` yazip
+  // yalnizca `ambient()` degerini sinar). Olculdu 2026-09-19: SceneRuntime::init
+  // ilkel mesh tablosunu KOSULSUZ kurmaya baslayinca o kapi
+  // `fault_addr: 0x48` ile cokuyordu — hata mesaji GI'yi isaret ediyordu,
+  // sebep ise cihazsiz create_mesh'ti.
+  bool ready() const { return dev_ != nullptr; }
+
 private:
   struct Mesh {
     VkBuffer vbuf = VK_NULL_HANDLE, ibuf = VK_NULL_HANDLE;

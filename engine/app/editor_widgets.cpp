@@ -544,6 +544,243 @@ int component_add_button(const char *const *names, uint32_t count) {
 }
 
 // =============================================================================
+// Olustur / bilesen ekle agaci (veri tablolari + cizim)
+// =============================================================================
+// Bilesen satirlarindaki `code` alani content::kSceneXxx BITIDIR ve bilerek
+// isimli sabitten yaziliyor: ham "1u << 5" yazilsaydi scene.hpp'de bir bit
+// numarasi kaydiginda menu SESSIZCE yanlis bileseni eklerdi.
+//
+// Simgeler METIN fontundan gelir -- depoda ikon TTF'i yok ve gelmeyecek, o
+// yuzden ICON_MD_* makrolari kullanilmaz. Yalniz DejaVuSans'ta gercekten
+// bulunan kod noktalari secildi; emoji (U+1F3A5, U+1F50A) fontta YOK ve
+// menude tofu kutusu olarak ciziliyordu.
+const CreateMenuItem kCompModel[] = {
+    {"Model (glTF)", "\xE2\x97\x86", content::kSceneModel, nullptr, 0}, // ◆
+    {"Animasyon", "\xE2\x86\xBB", content::kSceneAnim, nullptr, 0},     // ↻
+};
+const CreateMenuItem kCompLight[] = {
+    {"I\xC5\x9F\xC4\xB1k", "\xE2\x98\x80", content::kSceneLight, nullptr, 0}, // ☀
+};
+const CreateMenuItem kCompPhysics[] = {
+    {"Fizik G\xC3\xB6vdesi", "\xE2\x97\xBC", content::kSceneBody, nullptr, 0},         // ◼
+    {"Karakter Kontrolc\xC3\xBC", "\xE2\x8A\x99", content::kSceneCharacter, nullptr, 0}, // ⊙
+    // ∞ (U+221E): ic ice iki halka = iki govdeyi birlestiren baglanti.
+    // ICON_MD_LINK yerine; zincir glifi DejaVuSans'ta yok.
+    {"Fizik Eklemi (Joint)", "\xE2\x88\x9E", content::kSceneJoint, nullptr, 0},
+};
+const CreateMenuItem kCompCamera[] = {
+    // ▣ (U+25A3): objektif/diyafram cagrisimi. ICON_MD_VIDEOCAM yerine --
+    // eski U+1F3A5 emojisi DejaVuSans'ta yok, menude tofu ciziliyordu.
+    {"Kamera", "\xE2\x96\xA3", content::kSceneCamera, nullptr, 0},
+};
+const CreateMenuItem kCompAudio[] = {
+    // ♪ (U+266A): ICON_MD_VOLUME_UP yerine; hoparlor glifi ve U+1F50A
+    // emojisi fontta yok, nota var.
+    {"Ses Kayna\xC4\x9F\xC4\xB1", "\xE2\x99\xAA", content::kSceneAudio, nullptr, 0},
+    // ◎ (U+25CE): ic ice cemberler = yayilan yanki. ICON_MD_WAVES yerine.
+    {"Yank\xC4\xB1 Alan\xC4\xB1 (Reverb)", "\xE2\x97\x8E", content::kSceneReverb, nullptr, 0},
+};
+const CreateMenuItem kCompScript[] = {
+    // ▤ (U+25A4): satirli sayfa = belge. ICON_MD_DESCRIPTION yerine.
+    {"Tulpar Betik", "\xE2\x96\xA4", content::kSceneScript, nullptr, 0},
+};
+const CreateMenuItem kCompVFX[] = {
+    // ∴ (U+2234): uc nokta = parcacik bulutu. ICON_MD_AUTO_AWESOME yerine.
+    {"Partik\xC3\xBCl Emitter", "\xE2\x88\xB4", content::kSceneParticle, nullptr, 0},
+    {"R\xC3\xBCzgar Alan\xC4\xB1", "\xE2\x86\xAF", content::kSceneWind, nullptr, 0}, // ↯
+};
+const CreateMenuItem kCompEnvironment[] = {
+    // ▲ (U+25B2): dag silueti. ICON_MD_TERRAIN yerine.
+    {"Arazi (Terrain)", "\xE2\x96\xB2", content::kSceneTerrain, nullptr, 0},
+    // ≈ (U+2248): iki dalga cizgisi = su yuzeyi. ICON_MD_WATER yerine.
+    {"Su (Gerstner)", "\xE2\x89\x88", content::kSceneWater, nullptr, 0},
+    // ▦ (U+25A6): izgarali kare = voksel kafesi.
+    {"Voksel D\xC3\xBCnyas\xC4\xB1", "\xE2\x96\xA6", content::kSceneVoxel, nullptr, 0},
+    // ☁ (U+2601): ICON_MD_CLOUD yerine; ayni fontta ☀ (U+2600) zaten
+    // kullaniliyor, komsu kod noktasi da var (olculdu).
+    {"G\xC3\xB6ky\xC3\xBCz\xC3\xBC (Skybox)", "\xE2\x98\x81", content::kSceneSkybox, nullptr, 0},
+    // ◉ (U+25C9): parlayan kure = yansima sondasi. ICON_MD_LENS yerine.
+    {"Yans\xC4\xB1ma Sondas\xC4\xB1 (Probe)", "\xE2\x97\x89", content::kSceneRefProbe, nullptr, 0},
+};
+const CreateMenuItem kCompAI[] = {
+    // → (U+2192): yol izleyen ajan. ICON_MD_DIRECTIONS_RUN yerine; kosan
+    // insan glifi (emoji) fontta yok.
+    {"Yapay Zeka Ajan\xC4\xB1 (NavAgent)", "\xE2\x86\x92", content::kSceneNavAgent, nullptr, 0},
+};
+const CreateMenuItem kComponentMenu[] = {
+    {"Render", nullptr, 0, kCompModel, 2},
+    {"VFX", nullptr, 0, kCompVFX, 2},
+    {"\xC3\x87" "evre (Environment)", nullptr, 0, kCompEnvironment, 5},
+    {"I\xC5\x9F\xC4\xB1k", nullptr, 0, kCompLight, 1},
+    {"Fizik", nullptr, 0, kCompPhysics, 3},
+    {"Kamera", nullptr, 0, kCompCamera, 1},
+    {"Ses", nullptr, 0, kCompAudio, 2},
+    {"Betik", nullptr, 0, kCompScript, 1},
+    {"Yapay Zeka (AI)", nullptr, 0, kCompAI, 1},
+};
+const uint32_t kComponentMenuCount = 9;
+
+namespace {
+
+// Etiketi "<glif>  <ad>" olarak tek tampona yazar (glif yoksa yalniz ad).
+void menu_label(const CreateMenuItem &it, char *out, uint32_t cap) {
+  if (it.icon) std::snprintf(out, cap, "%s  %s", it.icon, it.label);
+  else std::snprintf(out, cap, "%s", it.label);
+}
+
+// Kategoride GOSTERILECEK bir yaprak kaldi mi? Baslik cizilmeden once
+// sorulur. Zaten eklenmis bilesenler gizlendigi icin bu, suzgec KAPALIYKEN de
+// olabilir: sorulmazsa acildiginda bombos cikan bir "Ses" basligi kalir.
+bool category_has_visible_leaf(const CreateMenuItem *items, uint32_t count, uint32_t existing, const char *filter) {
+  for (uint32_t i = 0; i < count; i++) {
+    const CreateMenuItem &it = items[i];
+    if (it.children) {
+      if (category_has_visible_leaf(it.children, it.child_count, existing, filter)) return true;
+      continue;
+    }
+    if (existing & (uint32_t)it.code) continue;
+    if (filter && filter[0] && !hierarchy_filter_match(it.label, filter)) continue;
+    return true;
+  }
+  return false;
+}
+
+// Bilesen agaci. Suzgec ACIKKEN kategori acilir dugum DEGIL duz basliktir:
+// aranan sey katlanmis bir dalda saklanmasin. Donus: bu kare bir yaprak
+// secildi (*chosen = bilesen biti).
+bool draw_component_tree(const CreateMenuItem *items, uint32_t count, uint32_t existing, const char *filter,
+                         uint32_t *chosen) {
+  bool ret = false;
+  char buf[128];
+  const bool filtering = filter && filter[0];
+  for (uint32_t i = 0; i < count; i++) {
+    const CreateMenuItem &it = items[i];
+    if (it.children) {
+      if (!category_has_visible_leaf(it.children, it.child_count, existing, filter)) continue;
+      menu_label(it, buf, (uint32_t)sizeof buf);
+      bool open = true;
+      if (!filtering) open = ImGui::TreeNodeEx(buf, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanFullWidth);
+      else ImGui::TextUnformatted(buf);
+      if (open) {
+        if (draw_component_tree(it.children, it.child_count, existing, filter, chosen)) ret = true;
+        if (!filtering) ImGui::TreePop();
+      }
+      continue;
+    }
+    if (existing & (uint32_t)it.code) continue;
+    if (filtering && !hierarchy_filter_match(it.label, filter)) continue;
+    menu_label(it, buf, (uint32_t)sizeof buf);
+    if (ImGui::Selectable(buf)) {
+      *chosen = (uint32_t)it.code;
+      ret = true;
+    }
+  }
+  return ret;
+}
+
+} // namespace
+
+uint32_t component_add_button(const CreateMenuItem *items, uint32_t count, uint32_t existing_components) {
+  uint32_t chosen = 0;
+  const ImGuiStyle &s = ImGui::GetStyle();
+  ImGui::PushID("bilesen_ekle_agac");
+  ImGui::Dummy(ImVec2(0, s.ItemSpacing.y * 0.6f));
+  if (ImGui::Button("+  Bileşen ekle", ImVec2(-FLT_MIN, 0))) ImGui::OpenPopup("liste");
+  const WidgetRect b = item_rect();
+  ImGui::SetNextWindowPos(ImVec2(b.x0, b.y1 + s.ItemInnerSpacing.y * 0.5f));
+  ImGui::SetNextWindowSize(ImVec2(b.x1 - b.x0, 0));
+  if (ImGui::BeginPopup("liste")) {
+    // Suzgec POPUP'A aittir (acilista sifirlanip odaklanir, secimde temizlenir):
+    // sahnenin durumu degil, acilir pencerenin gecici hali. Sabit tampon --
+    // ayirma yok, "STL yok / new yok" kurali korunur.
+    static char filter[64] = {0};
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::IsWindowAppearing()) {
+      filter[0] = 0;
+      ImGui::SetKeyboardFocusHere();
+    }
+    // Ipucunda buyutec GLIFI yok: U+2315 DejaVuSans'ta bulunmuyor (bkz.
+    // hierarchy_search -- orada simge glif yerine cizgiyle ciziliyor).
+    ImGui::InputTextWithHint("##arama", "Ara...", filter, sizeof filter);
+    ImGui::Separator();
+    if (count == 0 || !category_has_visible_leaf(items, count, existing_components, nullptr)) {
+      ImGui::TextDisabled("Eklenecek bileşen kalmadı");
+    } else if (draw_component_tree(items, count, existing_components, filter, &chosen)) {
+      filter[0] = 0;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  ImGui::PopID();
+  return chosen;
+}
+
+// --- Varlik olustur agaci -----------------------------------------------------
+// Yaprak kodlari editor_app'in do_add() dalidir. 8/10/11 ve 20..24 AYNI ZAMANDA
+// content/primitives.hpp yuva numaralaridir (kPrimPlane/kPrimCube/kPrimCapsule
+// ...); bu esitlik bilerek kuruldu, menu koduyla ilkel yuvasi arasinda esleme
+// tablosu tutulmuyor.
+const CreateMenuItem kCreate3D[] = {
+    {"K\xC3\xBCp", "\xE2\x97\xBC", 10, nullptr, 0},     // ◼
+    {"K\xC3\xBCre", "\xE2\x97\x8F", 11, nullptr, 0},    // ●
+    {"Kaps\xC3\xBCl", "\xE2\x97\xBC", 20, nullptr, 0},  // ◼
+    {"Silindir", "\xE2\x97\xBC", 21, nullptr, 0},   // ◼
+    {"Koni", "\xE2\x97\xBC", 22, nullptr, 0},       // ◼
+    {"D\xC3\xBCzlem", "\xE2\x96\xAC", 8, nullptr, 0},   // ▬
+    {"D\xC3\xB6rtgen", "\xE2\x96\xAC", 23, nullptr, 0}, // ▬
+    {"Simit", "\xE2\x97\xBC", 24, nullptr, 0},      // ◼
+};
+const CreateMenuItem kCreateLight[] = {
+    {"Y\xC3\xB6nl\xC3\xBC (G\xC3\xBCne\xC5\x9F)", "\xE2\x86\x97", 14, nullptr, 0}, // ↗
+    {"Nokta", "\xE2\x97\x8F", 3, nullptr, 0},                           // ●
+};
+const CreateMenuItem kCreatePhysics[] = {
+    {"Sabit Kutu G\xC3\xB6vde", "\xE2\x96\xA1", 4, nullptr, 0},    // □
+    {"Sabit K\xC3\xBCre G\xC3\xB6vde", "\xE2\x97\x8B", 5, nullptr, 0},  // ○
+    {"Dinamik Kutu G\xC3\xB6vde", "\xE2\x96\xA7", 6, nullptr, 0},  // ▧
+    {"Dinamik K\xC3\xBCre G\xC3\xB6vde", "\xE2\x97\x8D", 7, nullptr, 0}, // ◍
+};
+const CreateMenuItem kCreateAudio[] = {
+    // ♪: ICON_MD_VOLUME_UP yerine (bkz. kCompAudio).
+    {"Ses Kayna\xC4\x9F\xC4\xB1", "\xE2\x99\xAA", 13, nullptr, 0},
+};
+const CreateMenuItem kCreateMenu[] = {
+    {"Bo\xC5\x9F Varl\xC4\xB1k", "\xE2\x97\x8B", 1, nullptr, 0}, // ○
+    {"Model (glTF)", "\xE2\x97\x86", 2, nullptr, 0},     // ◆
+    {"Animasyonlu Model", "\xE2\x86\xBB", 9, nullptr, 0},   // ↻
+    {"3B Nesne", nullptr, 0, kCreate3D, 8},
+    // Isik TEK secenek DEGIL, alt menu: tur burada ayrilir (Unity'nin
+    // Light > Directional/Point ile ayni fikir).
+    {"I\xC5\x9F\xC4\xB1k", "\xE2\x98\x80", 0, kCreateLight, 2}, // ☀
+    {"Fizik", nullptr, 0, kCreatePhysics, 4},
+    {"Ses", nullptr, 0, kCreateAudio, 1},
+    // ▣: ICON_MD_VIDEOCAM yerine (bkz. kCompCamera).
+    {"Kamera Varl\xC4\xB1\xC4\x9F\xC4\xB1", "\xE2\x96\xA3", 12, nullptr, 0},
+};
+const uint32_t kCreateMenuCount = 8;
+
+int create_menu_draw(const CreateMenuItem *items, uint32_t count) {
+  int result = 0;
+  char buf[128];
+  for (uint32_t i = 0; i < count; i++) {
+    const CreateMenuItem &it = items[i];
+    menu_label(it, buf, (uint32_t)sizeof buf);
+    if (it.children) {
+      // Kategori = alt menu. BeginMenu tiklanabilir bir SONUC uretmez, o
+      // yuzden kategorinin kendi `code`u burada kullanilmaz (0 kalir).
+      if (ImGui::BeginMenu(buf)) {
+        const int r = create_menu_draw(it.children, it.child_count);
+        if (r) result = r;
+        ImGui::EndMenu();
+      }
+      continue;
+    }
+    if (ImGui::MenuItem(buf)) result = it.code;
+  }
+  return result;
+}
+
+// =============================================================================
 // Inspector baslik satiri
 // =============================================================================
 
@@ -711,6 +948,11 @@ HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState
   // Satirlar sik: dikey bosluk 2px; Selectable zemini boslugun yarisini kaplar.
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(s.ItemSpacing.x, 2.0f));
   ImGui::SetNextItemAllowOverlap(); // ok / gorunurluk / kilit satirin UZERINDE
+  // Satir KIMLIGINI ImGui'ye bildirir: cagiran BeginMultiSelect/EndMultiSelect
+  // arasinda ciziyorsa Shift+tik araligi ve kutu secimi bunun uzerinden yurur.
+  // Coklu secim baglami YOKKEN islevsizdir (yalniz NextItemData'ya yazar), bu
+  // yuzden kosulsuz cagrilabilir.
+  ImGui::SetNextItemSelectionUserData(id);
   const bool clicked = ImGui::Selectable("##satir", r.selected, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, h));
   ImGui::PopStyleVar();
   const WidgetRect rr = item_rect();
@@ -903,29 +1145,10 @@ int hierarchy_toolbar(uint32_t entity_count, bool has_selection) {
   const WidgetRect b = item_rect();
   ImGui::SetNextWindowPos(ImVec2(b.x0, b.y1 + s.ItemInnerSpacing.y * 0.5f));
   if (ImGui::BeginPopup("ekle")) {
-    if (ImGui::Selectable("\xE2\x97\x8B  Bo\xC5\x9F varl\xC4\xB1k")) result = 1;
-    ImGui::Separator();
-    if (ImGui::Selectable("\xE2\x97\x86  Model (glTF)")) result = 2;
-    if (ImGui::Selectable("\xE2\x97\xBC  K\xC3\xBCp (Model + G\xC3\xB6vde)")) result = 10;
-    if (ImGui::Selectable("\xE2\x97\x8F  K\xC3\xBCre (Model + G\xC3\xB6vde)")) result = 11;
-    if (ImGui::Selectable("\xE2\x96\xAC  Zemin / D\xC3\xBCzlem")) result = 8;
-    ImGui::Separator();
-    // Isik TEK secenek DEGIL, alt menu: tur burada ayrilir (Unity'nin
-    // Light > Directional/Point ile ayni fikir) -- "isiklari da bol" istegi.
-    if (ImGui::BeginMenu("\xE2\x98\x80  I\xC5\x9F\xC4\xB1k")) {
-      if (ImGui::Selectable("\xE2\x97\x8F  Nokta")) result = 3;
-      if (ImGui::Selectable("\xE2\x86\x97  Y\xC3\xB6nl\xC3\xBC (g\xC3\xBCne\xC5\x9F)")) result = 14;
-      ImGui::EndMenu();
-    }
-    ImGui::Separator();
-    if (ImGui::Selectable("\xE2\x96\xA1  Sabit Kutu G\xC3\xB6vde")) result = 4;
-    if (ImGui::Selectable("\xE2\x97\x8B  Sabit K\xC3\xBCre G\xC3\xB6vde")) result = 5;
-    if (ImGui::Selectable("\xE2\x96\xA7  Dinamik Kutu G\xC3\xB6vde")) result = 6;
-    if (ImGui::Selectable("\xE2\x97\x8D  Dinamik K\xC3\xBCre G\xC3\xB6vde")) result = 7;
-    ImGui::Separator();
-    if (ImGui::Selectable("\xE2\x86\xBB  Animasyonlu Model")) result = 9;
-    if (ImGui::Selectable("\xF0\x9F\x8E\xA5  Kamera Varl\xC4\xB1\xC4\x9F\xC4\xB1")) result = 12;
-    if (ImGui::Selectable("\xF0\x9F\x94\x8A  Ses Kayna\xC4\x9F\xC4\xB1")) result = 13;
+    // Liste artik BURADA yazmiyor: tek dogruluk kaynagi kCreateMenu. Ayni
+    // tablo sahne panelinin sag tik menusunu de beslediginde ikisi bir daha
+    // birbirinden kayamaz (eskiden ayni liste elle iki kez yazilmisti).
+    result = create_menu_draw(kCreateMenu, kCreateMenuCount);
     ImGui::EndPopup();
   }
   ImGui::SameLine(0, std::floor(s.ItemInnerSpacing.x * 0.5f));

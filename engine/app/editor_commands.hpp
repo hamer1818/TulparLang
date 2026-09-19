@@ -65,7 +65,7 @@ enum class CommandId : uint16_t {
   FileCompile,    // Ctrl+B
   EditUndo,       // Ctrl+Z
   EditRedo,       // Ctrl+Y / Ctrl+Shift+Z
-  EditDuplicate,  // (kisayolsuz; "Ekle" dugmesi)
+  EditDuplicate,  // Ctrl+D ("Ekle" dugmesi ayni komutu cagirir)
   EditDelete,     // Delete
   EditCut,        // Ctrl+X
   EditCopy,       // Ctrl+C
@@ -74,6 +74,7 @@ enum class CommandId : uint16_t {
   SelectClear,    // Esc
   ViewGizmos,     // G
   ViewConsole,    // (kisayolsuz) Konsol panelini ac/kapa
+  ViewFocus,      // F
   ViewFullscreen, // F11 (host desteklemiyorsa soluk)
   GizmoTranslate, // T
   GizmoRotate,    // R

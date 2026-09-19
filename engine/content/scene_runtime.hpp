@@ -9,12 +9,31 @@
 
 #include "content/gi.hpp"
 #include "content/model.hpp"
+#include "content/particles.hpp"
+#include "content/primitives.hpp"
 #include "content/scene_blob.hpp"
+#include "content/terrain.hpp"
+#include "content/voxel.hpp"
+#include "content/water_wave.hpp"
 #include "core/memory/arena.hpp"
 #include "renderer/renderer.hpp"
 #include "sim/physics.hpp"
 
 namespace tulpar::engine::content {
+
+// --- Prosedurel mesh ureticileri (v6) ---------------------------------------
+// SceneRuntime yukleme aninda, EDITOR ise varlik duzenlenince cagirir. ORTAK
+// olmalari sart: editor canli SceneDesc'ten, runtime derlenmis blobtan cizer;
+// geometri iki yerde ayri yazilirsa editorde gorulen sey oyunda cikan sey
+// olmaz (PR #331'in editor kopyasindaki gerstner formulu yanlisti: k * theta
+// iki kez uygulaniyordu).
+//
+// `tmp` GECICI alandir: cagiran mark() alir, cagriyi yapar, reset_to() ile
+// geri sarar; kalici olan yalniz GPU tarafi. Yer yetmezse ya da olcu gecersizse
+// GECERSIZ MeshHandle doner (cagiran valid() ile bakar) -- sessiz bos mesh yok.
+renderer::MeshHandle make_terrain_mesh(Arena &tmp, renderer::Renderer &r, const HeightmapConfig &cfg);
+renderer::MeshHandle make_voxel_mesh(Arena &tmp, renderer::Renderer &r, uint32_t nx, uint32_t ny, uint32_t nz, float cell);
+renderer::MeshHandle make_water_mesh(Arena &tmp, renderer::Renderer &r, const GerstnerWave &wave);
 
 // Blob'daki BAKE EDILMIS navmesh'in runtime yuzu: bake YOK, yalniz sorgu.
 // Detour tile verisine baglanti kurarken YAZAR, bu yuzden blob (ya da mmap'li
@@ -69,6 +88,11 @@ public:
   // Kare: modeller (LOD / animasyon), isiklar. ph null = yazar donusumu;
   // degilse dinamik govdeli varliklar sim'den.
   void draw(renderer::Renderer &r, Vec3 cam_pos, float time_s, const sim::Physics *ph);
+  // Zaman bagimli sistemler (bugun yalniz parcacik yayicilari). draw()'dan AYRI
+  // cagrilir: cizim saf olsun, simulasyon adimi cagirana ait olsun — headless
+  // bir kapi update()'i N kez cagirip hic cizmeden sonucu olcebilsin diye.
+  // Cagrilmazsa davranis eskisiyle BIT-TAM ayni (hic parcacik dogmaz).
+  void update(float dt, const sim::Physics *ph = nullptr);
   const SceneBlobView &view() const { return view_; }
   SceneRuntimeStats stats() const { return stats_; }
   const Model *model(uint32_t asset) const { return asset < view_.h->asset_count && have_[asset] ? &models_[asset] : nullptr; }
@@ -94,6 +118,24 @@ private:
   PoseScratch *pose_scratch_ = nullptr;
   SceneRuntimeStats stats_;
   SceneGi gi_; // ok()==false (bake yok) ise apply_world eski davranista kalir
+  // --- v6 bilesenleri -------------------------------------------------------
+  // Diziler varlik indeksiyle adreslenir (blob kaydindaki `entity`), tablo
+  // indeksiyle DEGIL: cizim dongusu varliktan mesh'e tek adimda gitsin diye.
+  // Gecersiz MeshHandle (id 0xFFFFFFFF) "yok" demek — bu yuzden bu sinifin
+  // KURUCUSU calismak zorunda; alloc_array_zeroed ile ayrilirsa id 0 olur ve
+  // valid() yanlislikla true doner (Tuzaklar 8u).
+  ParticleSystem particles_;
+  uint32_t particle_seed_ = 0; // deterministik yayma: kare sayaci, saat degil
+  renderer::MeshHandle prims_[kPrimitiveSlotCount] = {};
+  renderer::MeshHandle terrain_meshes_[kSceneMaxEntities] = {};
+  renderer::MeshHandle voxel_meshes_[kSceneMaxEntities] = {};
+  renderer::MeshHandle water_meshes_[kSceneMaxEntities] = {};
+  // Cizim kaydi basina PBR malzemesi (ilkel yolunda). YUKLEME aninda kurulur:
+  // kare icinde create_material cagirmak ayirma demek olurdu.
+  renderer::MaterialHandle entity_mats_[kSceneMaxEntities] = {};
+  // Arazi / voksel / su tek renk kullaniyor, o yuzden varlik basina degil
+  // TURU basina tek malzeme yetiyor.
+  renderer::MaterialHandle terrain_mat_{}, voxel_mat_{}, water_mat_{};
 };
 
 } // namespace tulpar::engine::content

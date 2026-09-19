@@ -34,7 +34,28 @@ enum SceneComponentBits : uint32_t {
   kSceneCamera = 1u << 4, // kamera (fov, yakin, uzak)
   kSceneAudio  = 1u << 5, // ses kaynagi (klip, ses, perde, dongu, uzamsal)
   kSceneScript = 1u << 6, // tulpar betik bileseni (.tpr)
+  // --- PR #331: prosedurel / arkaplan bilesenleri -------------------------
+  // Hepsi kSceneScript'in (1<<6) USTUNDE duruyor; ayristiricinin "bu satiri
+  // gordum mu" sentinel bitleri bu yuzden 1<<24'e tasindi (scene.cpp) —
+  // eskiden 1<<8..1<<12'deydiler ve buradaki yeni bitlerle CAKISIYOR olurdu.
+  kSceneCharacter = 1u << 7,  // karakter kontrolcusu (kapsul)
+  kSceneParticle  = 1u << 8,  // partikul yayici (VFX)
+  kSceneTerrain   = 1u << 9,  // yukseklik haritasi (arazi)
+  kSceneVoxel     = 1u << 10, // voxel grid (greedy mesh)
+  kSceneWater     = 1u << 11, // okyanus/su (gerstner)
+  kSceneWind      = 1u << 12, // ruzgar alani
+  kSceneNavAgent  = 1u << 13, // yapay zeka ajani (navmesh)
+  kSceneJoint     = 1u << 14, // fizik eklemi (hinge, vb.)
+  kSceneSkybox    = 1u << 15, // PBR gokyuzu kutusu
+  kSceneRefProbe  = 1u << 16, // Yansima sondasi (IBL)
+  kSceneReverb    = 1u << 17, // Ses yanki alani
 };
+// Bilesen bitlerinin TAMAMINI kapsayan maske (bit 0..17). Ayristirici, satir
+// anahtarlarini tek bir `seen` maskesinde biriktirip sonunda BUNUNLA maskeler;
+// eskiden yerinde duran `0xFFu` sabiti yeni bitleri SESSIZCE kirpardi (varlik
+// diske yazilir, geri okunurken bileseni kaybolurdu). Yeni bir bit eklenince
+// burasi da buyumeli.
+constexpr uint32_t kSceneComponentMask = 0x0003FFFFu;
 enum class SceneShape : uint32_t { Box = 0, Sphere = 1 };
 // Nokta: kSceneLight'in eskiden BILDIGI tek tur (yaricapli, konum onemli).
 // Yonlu: entity-bazli yon gostergesi (gizmo gunes-oku cizer) -- Dunya panelindeki
@@ -63,6 +84,17 @@ struct SceneEntity {
   // model
   int32_t asset = -1;
   Vec3 tint{1, 1, 1}; // yazar rengi (sRGB)
+  // Prosedurel ilkel yuvasi (content/primitives.hpp): -1 = yok, varlik glTF
+  // kaynagindan cizilir. >= 0 ise SceneRuntime kaynak yerine bu mesh'i cizer,
+  // yani `asset` -1 olabilir. `.sahne` dosyasina YALNIZ >= 0 iken yazilir —
+  // boylece ilkelsiz sahnelerin metni bayt bayt eskisiyle ayni kalir.
+  int32_t primitive = -1;
+  // Varsayilanlar renderer::PbrParams ile AYNI olmali: glTF'te varsayilan
+  // puruzluluk 1.0'dir ve motor da oyle kabul eder. Sahne 0.5 verirse ayni
+  // nesne kaynagina gore (glTF mi ilkel mi) FARKLI parlaklikta gorunur.
+  float metallic = 0.0f, roughness = 1.0f, reflectance = 0.5f;
+  Vec3 emissive{0, 0, 0};
+  float emissive_strength = 1.0f;
   // animasyon
   uint32_t clip = 0;
   float phase = 0, speed = 1;
@@ -85,6 +117,54 @@ struct SceneEntity {
   // betik
   char script_file[kSceneNameLen] = {0};
   bool script_enabled = true;
+  // --- PR #331 bilesenleri ------------------------------------------------
+  // Hepsi kendi bilesen bitine baglidir: bit yoksa alanlar VERI DEGILDIR
+  // (dosyaya yazilmaz, scene_entity_equal karsilastirmaz) — kSceneModel/
+  // kSceneBody ile ayni sozlesme.
+  // karakter (kSceneCharacter)
+  float char_radius = 0.5f, char_height = 1.0f;
+  float char_mass = 70.0f, char_max_slope = 45.0f;
+  // partikul (kSceneParticle)
+  float particle_spawn_rate = 10.0f; // saniyede partikul
+  float particle_lifetime_min = 1.0f, particle_lifetime_max = 2.0f;
+  float particle_size_start = 0.2f, particle_size_end = 0.0f;
+  Vec3 particle_velocity{0, 2.0f, 0};
+  Vec3 particle_jitter{1.0f, 0.5f, 1.0f};
+  // yapay zeka (kSceneNavAgent)
+  Vec3 ai_target{0, 0, 0};
+  float ai_speed = 3.0f;
+  float ai_turn_speed = 120.0f;
+  // fizik eklemi (kSceneJoint)
+  int32_t joint_target = -1; // baglanilan diger varligin indeksi
+  Vec3 joint_axis{0, 1, 0};  // donus veya hareket ekseni (yerel)
+  float joint_limit_min = -45.0f, joint_limit_max = 45.0f;
+  float joint_motor_speed = 0.0f; // >0 ise motor aktif
+  // arazi (kSceneTerrain). DIKKAT: width/height DUNYA olcusu degil, izgara
+  // HUCRE SAYISIDIR (content::HeightmapConfig::width/height'a dogrudan
+  // tamsayiya cevrilerek gider); dunya boyu = (N-1) * terrain_cell.
+  float terrain_width = 64.0f, terrain_height = 64.0f;
+  float terrain_cell = 1.0f, terrain_amp = 20.0f, terrain_freq = 0.02f;
+  int32_t terrain_octaves = 5;
+  uint32_t terrain_seed = 0;
+  // IBL & yansima sondasi (kSceneRefProbe)
+  float ref_probe_radius = 10.0f;
+  float ref_probe_intensity = 1.0f;
+  // yanki alani (kSceneReverb)
+  float reverb_decay = 1.5f; // saniye cinsinden yanki sonumlenme suresi
+  float reverb_room_size = 0.8f;
+  // su / gerstner dalgasi (kSceneWater)
+  float wave_length = 10.0f, wave_amplitude = 0.5f;
+  float wave_steepness = 0.3f, wave_speed = 1.0f;
+  Vec2 wave_direction{1.0f, 0.0f};
+  // ruzgar (kSceneWind)
+  Vec2 wind_direction{1.0f, 0.0f};
+  float wind_strength = 1.0f, wind_gustiness = 0.5f;
+  float wind_gust_freq = 0.3f;
+  uint32_t wind_seed = 0;
+  // voksel (kSceneVoxel)
+  uint32_t voxel_size_x = 16, voxel_size_y = 16, voxel_size_z = 16;
+  float voxel_cell = 1.0f;
+  // kSceneSkybox'in alani YOK: bileseni tasimak (gokyuzu var mi) tek veridir.
 };
 // Veri modeli esitligi: yalniz mevcut bilesenlerin alanlari (dosyaya yazilanlar).
 bool scene_entity_equal(const SceneEntity &a, const SceneEntity &b);

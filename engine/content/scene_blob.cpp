@@ -28,8 +28,10 @@ Vec3 get3(const float *src) { return {src[0], src[1], src[2]}; }
 struct Plan {
   uint32_t draws = 0, anims = 0, lights = 0, bodies = 0, strings = 0, residents = 0, nav = 0;
   uint32_t dag_meshes = 0, dag_nodes = 0, dag_indices = 0, dag_children = 0, gi_probes = 0;
+  uint32_t particles = 0, terrains = 0, voxels = 0, waters = 0, winds = 0, characters = 0; // v6
   size_t off_asset = 0, off_entity = 0, off_draw = 0, off_anim = 0, off_light = 0, off_body = 0, off_string = 0, off_resident = 0,
-         off_nav = 0, off_dag_mesh = 0, off_dag_node = 0, off_dag_index = 0, off_dag_child = 0, off_gi = 0, total = 0;
+         off_nav = 0, off_dag_mesh = 0, off_dag_node = 0, off_dag_index = 0, off_dag_child = 0, off_gi = 0,
+         off_particle = 0, off_terrain = 0, off_voxel = 0, off_water = 0, off_wind = 0, off_character = 0, total = 0;
 };
 Plan plan_of(const SceneDesc &d, const SceneBlobExtras *x) {
   Plan p;
@@ -55,6 +57,12 @@ Plan plan_of(const SceneDesc &d, const SceneBlobExtras *x) {
     if (e.components & kSceneAnim) p.anims++;
     if (e.components & kSceneLight) p.lights++;
     if (e.components & kSceneBody) p.bodies++;
+    if (e.components & kSceneParticle) p.particles++;
+    if (e.components & kSceneTerrain) p.terrains++;
+    if (e.components & kSceneVoxel) p.voxels++;
+    if (e.components & kSceneWater) p.waters++;
+    if (e.components & kSceneWind) p.winds++;
+    if (e.components & kSceneCharacter) p.characters++;
     p.strings += (uint32_t)std::strlen(e.name) + 1;
   }
   if (p.strings == 0) p.strings = 1; // en az bir NUL: ofset 0 her zaman gecerli
@@ -73,6 +81,14 @@ Plan plan_of(const SceneDesc &d, const SceneBlobExtras *x) {
   p.off_dag_index = o; o = align_up(o + sizeof(uint32_t) * p.dag_indices);
   p.off_dag_child = o; o = align_up(o + sizeof(uint32_t) * p.dag_children);
   p.off_gi = o; o = align_up(o + sizeof(SceneBlobGiProbe) * p.gi_probes);
+  // v6 tablolari EN SONA: mevcut bolumlerin ofsetleri degismesin (bilesensiz
+  // bir sahnenin blob'u v4'tekiyle ayni yerlesimde kalir, yalniz baslik buyur).
+  p.off_particle = o; o = align_up(o + sizeof(SceneBlobParticle) * p.particles);
+  p.off_terrain = o; o = align_up(o + sizeof(SceneBlobTerrain) * p.terrains);
+  p.off_voxel = o; o = align_up(o + sizeof(SceneBlobVoxel) * p.voxels);
+  p.off_water = o; o = align_up(o + sizeof(SceneBlobWater) * p.waters);
+  p.off_wind = o; o = align_up(o + sizeof(SceneBlobWind) * p.winds);
+  p.off_character = o; o = align_up(o + sizeof(SceneBlobCharacter) * p.characters);
   p.total = o;
   return p;
 }
@@ -133,6 +149,12 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
   h.dag_index_count = p.dag_indices; h.dag_index_offset = (uint32_t)p.off_dag_index;
   h.dag_child_count = p.dag_children; h.dag_child_offset = (uint32_t)p.off_dag_child;
   h.gi_probe_count = p.gi_probes; h.gi_probe_offset = (uint32_t)p.off_gi;
+  h.particle_count = p.particles; h.particle_offset = (uint32_t)p.off_particle;
+  h.terrain_count = p.terrains; h.terrain_offset = (uint32_t)p.off_terrain;
+  h.voxel_count = p.voxels; h.voxel_offset = (uint32_t)p.off_voxel;
+  h.water_count = p.waters; h.water_offset = (uint32_t)p.off_water;
+  h.wind_count = p.winds; h.wind_offset = (uint32_t)p.off_wind;
+  h.character_count = p.characters; h.character_offset = (uint32_t)p.off_character;
   if (x) {
     h.resident_cpu = x->resident_cpu; h.resident_gpu = x->resident_gpu;
     h.peak_transient = x->peak_transient; h.peak_bytes = x->peak_bytes;
@@ -166,6 +188,12 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
   auto *anims = reinterpret_cast<SceneBlobAnim *>(b + p.off_anim);
   auto *lights = reinterpret_cast<SceneBlobLight *>(b + p.off_light);
   auto *bodies = reinterpret_cast<SceneBlobBody *>(b + p.off_body);
+  auto *particles = reinterpret_cast<SceneBlobParticle *>(b + p.off_particle);
+  auto *terrains = reinterpret_cast<SceneBlobTerrain *>(b + p.off_terrain);
+  auto *voxels = reinterpret_cast<SceneBlobVoxel *>(b + p.off_voxel);
+  auto *waters = reinterpret_cast<SceneBlobWater *>(b + p.off_water);
+  auto *winds = reinterpret_cast<SceneBlobWind *>(b + p.off_wind);
+  auto *characters = reinterpret_cast<SceneBlobCharacter *>(b + p.off_character);
   char *strings = reinterpret_cast<char *>(b + p.off_string);
   uint32_t soff = 0;
   auto intern = [&](const char *s) {
@@ -182,6 +210,7 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
     assets[i] = a;
   }
   uint32_t nd = 0, na = 0, nl = 0, nb = 0;
+  uint32_t npart = 0, nterr = 0, nvox = 0, nwat = 0, nwind = 0, nchar = 0; // v6
   Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
   for (uint32_t i = 0; i < d.entity_count; i++) {
     const SceneEntity &e = d.entities[i];
@@ -201,7 +230,9 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
     be.draw = be.anim = be.light = be.body = -1;
     if (e.components & kSceneModel) {
       SceneBlobDraw dr{};
-      dr.entity = i; dr.asset = (uint32_t)e.asset; put3(dr.tint, e.tint);
+      dr.entity = i; dr.asset = e.asset; dr.primitive = e.primitive; put3(dr.tint, e.tint);
+      dr.metallic = e.metallic; dr.roughness = e.roughness; dr.reflectance = e.reflectance;
+      put3(dr.emissive, e.emissive); dr.emissive_strength = e.emissive_strength;
       draws[nd] = dr; be.draw = (int32_t)nd++;
     }
     if (e.components & kSceneAnim) {
@@ -224,6 +255,54 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
       bo.quat[0] = q.x; bo.quat[1] = q.y; bo.quat[2] = q.z; bo.quat[3] = q.w;
       put3(bo.scale, wscale);
       bodies[nb] = bo; be.body = (int32_t)nb++;
+    }
+    // v6 tablolari: SceneBlobEntity'de indeks alanlari YOK (baslik boyunu
+    // buyutmemek icin) — tuketici tabloyu tarar ve `entity` alanindan eslesir.
+    // Tablolar kucuk (varlik basina en fazla bir kayit) ve tarama YUKLEME
+    // aninda; kare icinde kimse bu tablolara bakmiyor.
+    if (e.components & kSceneParticle) {
+      SceneBlobParticle pa{};
+      pa.entity = i;
+      pa.spawn_rate = e.particle_spawn_rate;
+      pa.lifetime_min = e.particle_lifetime_min; pa.lifetime_max = e.particle_lifetime_max;
+      pa.size_start = e.particle_size_start; pa.size_end = e.particle_size_end;
+      put3(pa.velocity, e.particle_velocity); put3(pa.jitter, e.particle_jitter);
+      particles[npart++] = pa;
+    }
+    if (e.components & kSceneTerrain) {
+      SceneBlobTerrain te{};
+      te.entity = i;
+      te.width = e.terrain_width; te.height = e.terrain_height; te.cell = e.terrain_cell;
+      te.amp = e.terrain_amp; te.freq = e.terrain_freq; te.octaves = e.terrain_octaves; te.seed = e.terrain_seed;
+      terrains[nterr++] = te;
+    }
+    if (e.components & kSceneVoxel) {
+      SceneBlobVoxel vo{};
+      vo.entity = i;
+      vo.size_x = e.voxel_size_x; vo.size_y = e.voxel_size_y; vo.size_z = e.voxel_size_z; vo.cell = e.voxel_cell;
+      voxels[nvox++] = vo;
+    }
+    if (e.components & kSceneWater) {
+      SceneBlobWater wa{};
+      wa.entity = i;
+      wa.steepness = e.wave_steepness; wa.amplitude = e.wave_amplitude; wa.wavelength = e.wave_length;
+      wa.direction[0] = e.wave_direction.x; wa.direction[1] = e.wave_direction.y;
+      wa.speed = e.wave_speed;
+      waters[nwat++] = wa;
+    }
+    if (e.components & kSceneWind) {
+      SceneBlobWind wi{};
+      wi.entity = i;
+      wi.direction[0] = e.wind_direction.x; wi.direction[1] = e.wind_direction.y;
+      wi.strength = e.wind_strength; wi.gustiness = e.wind_gustiness; wi.gust_freq = e.wind_gust_freq;
+      wi.seed = e.wind_seed;
+      winds[nwind++] = wi;
+    }
+    if (e.components & kSceneCharacter) {
+      SceneBlobCharacter ch{};
+      ch.entity = i;
+      ch.radius = e.char_radius; ch.height = e.char_height; ch.mass = e.char_mass; ch.max_slope = e.char_max_slope;
+      characters[nchar++] = ch;
     }
     ents[i] = be;
     const SceneBounds wb = scene_world_bounds(scene_entity_local_bounds(e, nullptr), m);
@@ -289,6 +368,18 @@ bool scene_blob_open(const void *data, size_t size, SceneBlobView *out, SceneErr
   } else if (h->gi_dim[0] || h->gi_dim[1] || h->gi_dim[2] || h->gi_flags || h->gi_valid) {
     return E.fail("GI bolumu yok ama izgara alanlari dolu");
   }
+  // v6 tablolari. Hepsi varlik BASINA en fazla bir kayit: sayi entity_count'u
+  // asiyorsa dosya bozuk (ya da baska bir bicimden geliyor) — tabloyu tarayan
+  // tuketici `entity` alanina GUVENIYOR, o yuzden sinir burada olculur.
+  if (!table_ok(h->particle_offset, h->particle_count, sizeof(SceneBlobParticle), size)) return E.fail("partikul tablosu sinir disi");
+  if (!table_ok(h->terrain_offset, h->terrain_count, sizeof(SceneBlobTerrain), size)) return E.fail("arazi tablosu sinir disi");
+  if (!table_ok(h->voxel_offset, h->voxel_count, sizeof(SceneBlobVoxel), size)) return E.fail("voksel tablosu sinir disi");
+  if (!table_ok(h->water_offset, h->water_count, sizeof(SceneBlobWater), size)) return E.fail("su tablosu sinir disi");
+  if (!table_ok(h->wind_offset, h->wind_count, sizeof(SceneBlobWind), size)) return E.fail("ruzgar tablosu sinir disi");
+  if (!table_ok(h->character_offset, h->character_count, sizeof(SceneBlobCharacter), size)) return E.fail("karakter tablosu sinir disi");
+  if (h->particle_count > h->entity_count || h->terrain_count > h->entity_count || h->voxel_count > h->entity_count ||
+      h->water_count > h->entity_count || h->wind_count > h->entity_count || h->character_count > h->entity_count)
+    return E.fail("v6 tablo sayisi varlik sayisindan buyuk");
   const uint8_t *b = static_cast<const uint8_t *>(data);
   const char *strings = reinterpret_cast<const char *>(b + h->string_offset);
   if (strings[h->string_size - 1] != 0) return E.fail("metin tablosu NUL ile bitmiyor");
@@ -307,9 +398,30 @@ bool scene_blob_open(const void *data, size_t size, SceneBlobView *out, SceneErr
   v.dag_indices = h->dag_index_count ? reinterpret_cast<const uint32_t *>(b + h->dag_index_offset) : nullptr;
   v.dag_children = h->dag_child_count ? reinterpret_cast<const uint32_t *>(b + h->dag_child_offset) : nullptr;
   v.gi_probes = h->gi_probe_count ? reinterpret_cast<const SceneBlobGiProbe *>(b + h->gi_probe_offset) : nullptr;
+  v.particles = h->particle_count ? reinterpret_cast<const SceneBlobParticle *>(b + h->particle_offset) : nullptr;
+  v.terrains = h->terrain_count ? reinterpret_cast<const SceneBlobTerrain *>(b + h->terrain_offset) : nullptr;
+  v.voxels = h->voxel_count ? reinterpret_cast<const SceneBlobVoxel *>(b + h->voxel_offset) : nullptr;
+  v.waters = h->water_count ? reinterpret_cast<const SceneBlobWater *>(b + h->water_offset) : nullptr;
+  v.winds = h->wind_count ? reinterpret_cast<const SceneBlobWind *>(b + h->wind_offset) : nullptr;
+  v.characters = h->character_count ? reinterpret_cast<const SceneBlobCharacter *>(b + h->character_offset) : nullptr;
   v.strings = strings;
   for (uint32_t i = 0; i < h->resident_count; i++)
     if (v.residents[i].asset >= h->asset_count) return E.fail("yerlesik kaydi tanimsiz kaynaga bakiyor");
+  // v6 kayitlarinin `entity` alani DIZI INDEKSI olarak kullaniliyor
+  // (SceneRuntime::terrain_meshes_[t.entity] gibi) — bozuk bir blob'un sinir
+  // disi yazmasini burada durdur, cizim yolunda degil.
+  for (uint32_t i = 0; i < h->particle_count; i++)
+    if (v.particles[i].entity >= h->entity_count) return E.fail("partikul kaydi tanimsiz varliga bakiyor");
+  for (uint32_t i = 0; i < h->terrain_count; i++)
+    if (v.terrains[i].entity >= h->entity_count) return E.fail("arazi kaydi tanimsiz varliga bakiyor");
+  for (uint32_t i = 0; i < h->voxel_count; i++)
+    if (v.voxels[i].entity >= h->entity_count) return E.fail("voksel kaydi tanimsiz varliga bakiyor");
+  for (uint32_t i = 0; i < h->water_count; i++)
+    if (v.waters[i].entity >= h->entity_count) return E.fail("su kaydi tanimsiz varliga bakiyor");
+  for (uint32_t i = 0; i < h->wind_count; i++)
+    if (v.winds[i].entity >= h->entity_count) return E.fail("ruzgar kaydi tanimsiz varliga bakiyor");
+  for (uint32_t i = 0; i < h->character_count; i++)
+    if (v.characters[i].entity >= h->entity_count) return E.fail("karakter kaydi tanimsiz varliga bakiyor");
   // Kume DAG: her dilim tablolarin icinde mi, dugum araliklari dilimin icinde mi,
   // cocuk baglantilari gecerli dugumu mu gosteriyor, indeksler mesh vertex'i mi.
   for (uint32_t i = 0; i < h->dag_mesh_count; i++) {
@@ -355,7 +467,14 @@ bool scene_blob_open(const void *data, size_t size, SceneBlobView *out, SceneErr
     if (e.draw >= (int32_t)h->draw_count || e.anim >= (int32_t)h->anim_count || e.light >= (int32_t)h->light_count || e.body >= (int32_t)h->body_count)
       return E.fail("varlik bilesen dizini tablo disi");
     if (e.draw >= 0 && v.draws[e.draw].entity != i) return E.fail("cizim tablosu varlikla tutarsiz");
-    if (e.draw >= 0 && v.draws[e.draw].asset >= h->asset_count) return E.fail("cizim kaynak dizini tanimsiz");
+    // asset artik ISARETLI: -1 = kaynak yok (prosedurel ilkelden cizilir).
+    if (e.draw >= 0 && (v.draws[e.draw].asset < -1 || v.draws[e.draw].asset >= (int32_t)h->asset_count))
+      return E.fail("cizim kaynak dizini tanimsiz");
+    if (e.draw >= 0 && v.draws[e.draw].primitive < -1) return E.fail("cizim ilkel yuvasi gecersiz");
+    // Ne kaynak ne ilkel: cizilecek bir sey yok, yani derleyici bozuk bir kayit
+    // yazmis. Sessizce gorunmez bir varlik birakmak yerine BURADA dur.
+    if (e.draw >= 0 && v.draws[e.draw].asset < 0 && v.draws[e.draw].primitive < 0)
+      return E.fail("cizim kaydinda ne kaynak ne ilkel var");
     if (e.anim >= 0 && v.anims[e.anim].entity != i) return E.fail("animasyon tablosu varlikla tutarsiz");
     if (e.light >= 0 && v.lights[e.light].entity != i) return E.fail("isik tablosu varlikla tutarsiz");
     if (e.body >= 0 && v.bodies[e.body].entity != i) return E.fail("govde tablosu varlikla tutarsiz");

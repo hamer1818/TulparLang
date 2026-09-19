@@ -72,8 +72,46 @@ void section_label(const char *text);
 bool component_header(const char *icon, const char *name, bool *enabled, bool *remove_clicked, bool default_open = true,
                       Tone icon_tone = Tone::Accent);
 void component_end();
+// --- Olustur / bilesen ekle agaci ------------------------------------------
+// Menu KOD DEGIL VERI: tek bir tablo hem "varlik olustur" acilirini
+// (kCreateMenu) hem de "+ Bilesen ekle" listesini (kComponentMenu) besler.
+// Boylece arac cubugu, sahne panelinin sag tik menusu ve ileride menu cubugu
+// AYNI satirlari gosterir; biri digerinden sessizce kayamaz (eskiden ayni
+// liste iki yerde elle yazilmisti ve zaten kaymisti).
+//
+// children != nullptr olan satir bir KATEGORIDIR: kendi turunden bir diziye
+// bakar, yani struct kendine OZYINELEMELI basvurur. Govdesi icinde sinif adi
+// zaten gorunur oldugu icin ayrica ileri bildirim gerekmez.
+// Yaprakta `code` cagiranin anladigi koddur: kCreateMenu'de varlik turu
+// (8/10/11/20..24 ayni zamanda content/primitives.hpp yuva numaralaridir --
+// bu esitlik BILEREK kuruldu, arada esleme tablosu yok), kComponentMenu'de
+// content::kSceneXxx BITI.
+// icon UTF-8 bir gliftir ya da nullptr. IKON FONTU YOK (depoda ikon TTF'i
+// bulunmuyor), o yuzden yalniz metin fontunda gercekten olan kod noktalari.
+struct CreateMenuItem {
+  const char *label;
+  const char *icon;              // UTF-8 glif ya da nullptr
+  int code;                      // yaprak: cagiranin kodu; kategori: 0
+  const CreateMenuItem *children; // nullptr: yaprak
+  uint32_t child_count;
+};
+extern const CreateMenuItem kCreateMenu[];    // varlik olustur agaci
+extern const uint32_t kCreateMenuCount;
+extern const CreateMenuItem kComponentMenu[]; // bilesen ekle agaci
+extern const uint32_t kComponentMenuCount;
+// Agaci ImGui menu ogeleri olarak cizer (kategori = BeginMenu alt menusu).
+// Donus: tiklanan yapragin `code`u, tiklanmadiysa 0. Acik bir popup/menu
+// baglami GEREKTIRIR.
+int create_menu_draw(const CreateMenuItem *items, uint32_t count);
+
 // Tam genislik "+ Bilesen ekle" dugmesi; acilan listeden secilen indeks, yoksa -1.
 int component_add_button(const char *const *names, uint32_t count);
+// Ayni dugmenin kategorili + aranabilir cesidi: satirlar `items` agacindan
+// gelir ve `existing_components` (content::kSceneXxx bit maskesi) icinde ZATEN
+// bulunan bilesenler gizlenir -- iki kez eklenemeyen bir sey listede durmaz.
+// Donus: secilen bilesen BITI, secim yoksa 0. Duz liste cesidi eski cagiranlar
+// (ve widget kapilari) icin duruyor; ikisi ayni dugmedir, listeyi farkli besler.
+uint32_t component_add_button(const CreateMenuItem *items, uint32_t count, uint32_t existing_components);
 
 // --- Inspector baslik satiri ------------------------------------------------------
 // Buyuk simge + daha buyuk yazili ad kutusu + altinda soluk alt baslik

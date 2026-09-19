@@ -184,6 +184,151 @@ ENGINE_TEST(scene_blob_compile_is_deterministic_and_matches_desc) {
   std::printf("    [bilgi] blob %zu bayt, ozet %016llx; bos sahne %zu bayt\n", n1, (unsigned long long)v.hash(), ne);
 }
 
+namespace {
+// PR #331 alanlarinin HEPSI dolu bir varlik. Ayri bir kurucu (fill() DEGIL):
+// mevcut testler fill()'in varlik/tablo sayilarina birebir bakiyor, onu
+// buyutmek onlari kirardi.
+void fill_v6(SceneDesc &d) {
+  d = SceneDesc{};
+  d.add_asset("lod_sphere.gltf");
+  SceneEntity e{};
+  std::snprintf(e.name, sizeof e.name, "hepsi");
+  e.pos = {1.5f, -2.25f, 3.125f}; e.rot_deg = {15, 30, 45}; e.scale = {2, 0.5f, 1};
+  e.components = kSceneModel | kSceneCharacter | kSceneParticle | kSceneTerrain | kSceneVoxel | kSceneWater |
+                 kSceneWind | kSceneNavAgent | kSceneJoint | kSceneSkybox | kSceneRefProbe | kSceneReverb;
+  e.asset = 0; e.tint = {0.85f, 0.9f, 1.0f};
+  e.primitive = 24; e.metallic = 0.75f; e.roughness = 0.125f; e.reflectance = 0.9f;
+  e.emissive = {1.0f / 3.0f, 0.5f, 7.0f}; e.emissive_strength = 2.5f;
+  e.char_radius = 0.42f; e.char_height = 1.83f; e.char_mass = 81.5f; e.char_max_slope = 37.25f;
+  e.particle_spawn_rate = 123.5f; e.particle_lifetime_min = 0.25f; e.particle_lifetime_max = 4.5f;
+  e.particle_size_start = 0.75f; e.particle_size_end = 0.125f;
+  e.particle_velocity = {-1, 2.5f, 3}; e.particle_jitter = {0.5f, 0.25f, 0.75f};
+  e.terrain_width = 32; e.terrain_height = 24; e.terrain_cell = 0.5f; e.terrain_amp = 33.25f;
+  e.terrain_freq = 0.0125f; e.terrain_octaves = 7;
+  e.terrain_seed = 4294967295u; // 2^24 USTU: float uzerinden yazan bir yazici bunu kirpar
+  e.voxel_size_x = 9; e.voxel_size_y = 5; e.voxel_size_z = 7; e.voxel_cell = 0.25f;
+  e.wave_length = 12.5f; e.wave_amplitude = 0.75f; e.wave_steepness = 0.4f; e.wave_speed = 2.25f;
+  e.wave_direction = {0.6f, -0.8f};
+  e.wind_direction = {-0.5f, 0.5f}; e.wind_strength = 3.5f; e.wind_gustiness = 0.75f;
+  e.wind_gust_freq = 0.9f; e.wind_seed = 123456789u;
+  e.ai_target = {5, -2, 11}; e.ai_speed = 4.25f; e.ai_turn_speed = 200.5f;
+  e.joint_target = 1; e.joint_axis = {0, 0, 1}; e.joint_limit_min = -90.5f; e.joint_limit_max = 33.25f;
+  e.joint_motor_speed = 12.75f;
+  e.ref_probe_radius = 7.5f; e.ref_probe_intensity = 0.25f;
+  e.reverb_decay = 2.75f; e.reverb_room_size = 0.35f;
+  d.insert_entity(d.entity_count, e);
+  // Bilesensiz ama ilkel + malzemesi olan varlik: bu iki alan bilesen bitine
+  // BAGLI DEGIL, yine de diske gitmeli.
+  SceneEntity f{};
+  std::snprintf(f.name, sizeof f.name, "sade_ilkel");
+  f.primitive = 11; f.roughness = 0.2f;
+  d.insert_entity(d.entity_count, f);
+  // Editorun "Kapsul/Silindir/..." menusunun URETTIGI sekil: kSceneModel VAR
+  // ama glTF kaynagi YOK (asset = -1). Yazicinin `model -1 ...` uretip geri
+  // okuyabilmesi ve blob'un bunu reddetmemesi bu varlikla olculuyor.
+  SceneEntity g{};
+  std::snprintf(g.name, sizeof g.name, "kapsul");
+  g.components = kSceneModel; g.asset = -1; g.primitive = 20; g.tint = {0.2f, 0.7f, 0.4f};
+  d.insert_entity(d.entity_count, g);
+}
+} // namespace
+
+// PR #331 SceneEntity'ye 11 bilesen + ~45 alan ekledi ama `.sahne` yazicisina/
+// okuyucusuna/esitligine DOKUNMADI: alanlar diske hic yazilmiyordu, yani
+// editorde kurulan bir arazi/su/partikul kaydedilip acildiginda SESSIZCE
+// kayboluyordu. Kapi bunu olcer: yaz -> oku -> yaz baytlari ayni, ve her varlik
+// scene_entity_equal'a gore esit. `feq`/`v3eq` bit-tam karsilastirir, yani
+// "yuvarlandi ama yakin" gecmez.
+ENGINE_TEST(scene_file_carries_every_new_component_field) {
+  static SceneDesc a, b;
+  fill_v6(a);
+  static char buf1[1 << 16], buf2[1 << 16];
+  const size_t n1 = scene_write(a, buf1, sizeof buf1);
+  CHECK(n1 > 0 && n1 < sizeof buf1);
+  SceneError err{};
+  const bool ok = scene_parse(buf1, n1, &b, &err);
+  if (!ok) std::printf("    [bilgi] ayristirma: %s\n", err.msg);
+  CHECK(ok);
+  if (!ok) return;
+  const size_t n2 = scene_write(b, buf2, sizeof buf2);
+  CHECK(n1 == n2 && std::memcmp(buf1, buf2, n1) == 0);
+  CHECK(b.entity_count == a.entity_count);
+  bool same = true;
+  for (uint32_t i = 0; i < a.entity_count && i < b.entity_count; i++)
+    if (!scene_entity_equal(a.entities[i], b.entities[i])) same = false;
+  CHECK(same);
+  // Alan alan birkac nokta: bileseni tasimak yetmez, DEGER de dogru donmeli.
+  const SceneEntity &g = b.entities[0];
+  CHECK(g.components == a.entities[0].components);
+  CHECK(g.terrain_seed == 4294967295u); // tohum kirpilmadi (float yolu 4294967296 yapardi)
+  CHECK(feq(g.char_mass, 81.5f) && feq(g.wave_speed, 2.25f) && feq(g.reverb_room_size, 0.35f));
+  CHECK(g.primitive == 24 && feq(g.emissive_strength, 2.5f) && g.joint_target == 1);
+  CHECK(b.entities[1].primitive == 11 && feq(b.entities[1].roughness, 0.2f) && b.entities[1].components == 0);
+  CHECK(b.entities[2].components == kSceneModel && b.entities[2].asset == -1 && b.entities[2].primitive == 20);
+  // POZITIF KONTROL: tek bir alan degisince baytlar da esitlik de degismeli.
+  // (Bu olmadan, yazici hicbir yeni alani yazmasa bile test yesil kalirdi.)
+  static SceneDesc c;
+  c = a;
+  c.entities[0].wind_gustiness = std::nextafterf(c.entities[0].wind_gustiness, 1000.0f);
+  static char buf3[1 << 16];
+  const size_t n3 = scene_write(c, buf3, sizeof buf3);
+  CHECK(n3 != n1 || std::memcmp(buf1, buf3, n1) != 0);
+  CHECK(!scene_entity_equal(a.entities[0], c.entities[0]));
+  std::printf("    [bilgi] .sahne v6 gidis-donus: %zu bayt, %u varlik, alanlar bit-tam\n", n1, a.entity_count);
+}
+
+// Ayni veri BLOB tarafinda da tasiniyor mu: v6 tablolari doluyor, degerler
+// bit-tam geri geliyor, `entity` alanlari varliga isaret ediyor. Kontrol:
+// bilesensiz sahnede tablolarin hepsi BOS (yani sayac gercekten bileseni
+// olcuyor, sabit bir sayi dondurmuyor).
+ENGINE_TEST(scene_blob_carries_new_component_tables) {
+  static SceneDesc d;
+  fill_v6(d);
+  size_t n = 0;
+  void *blob = compile_to(d, &n);
+  SceneBlobView v;
+  SceneError err{};
+  const bool ok = blob && scene_blob_open(blob, n, &v, &err);
+  if (!ok && blob) std::printf("    [bilgi] acma: %s\n", err.msg);
+  CHECK(ok);
+  if (!ok) return;
+  CHECK(v.h->version == kSceneBlobVersion);
+  CHECK(v.h->particle_count == 1 && v.h->terrain_count == 1 && v.h->voxel_count == 1 && v.h->water_count == 1 &&
+        v.h->wind_count == 1 && v.h->character_count == 1);
+  CHECK(v.particles && v.terrains && v.voxels && v.waters && v.winds && v.characters);
+  if (!v.particles) return;
+  const SceneEntity &e = d.entities[0];
+  CHECK(v.particles[0].entity == 0 && feq(v.particles[0].spawn_rate, e.particle_spawn_rate) &&
+        v3eq(v.particles[0].velocity, e.particle_velocity) && v3eq(v.particles[0].jitter, e.particle_jitter));
+  CHECK(v.terrains[0].seed == e.terrain_seed && v.terrains[0].octaves == e.terrain_octaves &&
+        feq(v.terrains[0].amp, e.terrain_amp));
+  CHECK(v.voxels[0].size_x == e.voxel_size_x && v.voxels[0].size_z == e.voxel_size_z && feq(v.voxels[0].cell, e.voxel_cell));
+  // wave_speed #331'in kaydinda YOKTU (reserved'da duruyordu) — burada tasiniyor.
+  CHECK(feq(v.waters[0].wavelength, e.wave_length) && feq(v.waters[0].speed, e.wave_speed));
+  CHECK(v.winds[0].seed == e.wind_seed && feq(v.winds[0].gust_freq, e.wind_gust_freq));
+  // char_mass da #331'in 16 baytlik kaydina sigmiyordu; dordu de kayitta.
+  CHECK(feq(v.characters[0].mass, e.char_mass) && feq(v.characters[0].max_slope, e.char_max_slope) &&
+        feq(v.characters[0].radius, e.char_radius) && feq(v.characters[0].height, e.char_height));
+  // Cizim kaydi: ilkel yuvasi + PBR malzemesi.
+  CHECK(v.h->draw_count == 2 && v.draws[0].primitive == 24 && v.draws[0].asset == 0);
+  CHECK(feq(v.draws[0].metallic, e.metallic) && feq(v.draws[0].roughness, e.roughness) &&
+        feq(v.draws[0].reflectance, e.reflectance) && feq(v.draws[0].emissive_strength, e.emissive_strength) &&
+        v3eq(v.draws[0].emissive, e.emissive));
+  // Kaynaksiz ilkel (editorun "Kapsul" menusu): asset -1 blob'da REDDEDILMEZ.
+  CHECK(v.draws[1].entity == 2 && v.draws[1].asset == -1 && v.draws[1].primitive == 20);
+  // KONTROL: bilesensiz sahnede tablolar bos.
+  static SceneDesc plain;
+  fill(plain);
+  size_t pn = 0;
+  void *pb = compile_to(plain, &pn);
+  SceneBlobView pv;
+  CHECK(pb && scene_blob_open(pb, pn, &pv, &err));
+  CHECK(pv.h->particle_count == 0 && pv.h->terrain_count == 0 && pv.h->voxel_count == 0 && pv.h->water_count == 0 &&
+        pv.h->wind_count == 0 && pv.h->character_count == 0);
+  CHECK(pv.draws[0].primitive == -1 && feq(pv.draws[0].roughness, 1.0f)); // varsayilan malzeme
+  std::printf("    [bilgi] v6 blob %zu bayt (bilesensiz kontrol %zu bayt)\n", n, pn);
+}
+
 ENGINE_TEST(scene_blob_open_rejects_corruption) {
   static SceneDesc d;
   fill(d);
@@ -746,9 +891,13 @@ ENGINE_TEST(scene_blob_rejects_older_version) {
   if (!bad) return;
   std::memcpy(bad, good, n);
   auto *h = reinterpret_cast<SceneBlobHeader *>(bad);
-  CHECK(h->version == kSceneBlobVersion && kSceneBlobVersion == 4);
+  CHECK(h->version == kSceneBlobVersion && kSceneBlobVersion == 6);
   // Her ESKI surum ayni anlamli hatayla reddedilmeli: 1 (Faz 6 oncesi),
-  // 2 (yerlesik kume + navmesh, kume DAG YOK) ve 3 (GI sonda bolumu YOK).
+  // 2 (yerlesik kume + navmesh, kume DAG YOK), 3 (GI sonda bolumu YOK),
+  // 4 (SceneBlobDraw 24 bayt: ilkel + malzeme alanlari YOK) ve 5 (v6 bilesen
+  // tablolari YOK; bu numarayla bir dosya hic uretilmedi ama reddi yine de
+  // olculuyor). Dongu kSceneBlobVersion'a kadar gittigi icin yeni surumler
+  // kendiliginden kapsanir; yalniz yukaridaki sabit guncellenir.
   SceneBlobView v;
   SceneError err{};
   for (uint32_t old = 1; old < kSceneBlobVersion; old++) {

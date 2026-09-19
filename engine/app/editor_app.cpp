@@ -27,8 +27,18 @@
 #include "app/editor_ui.hpp"
 #include "content/gi.hpp"
 #include "content/gltf.hpp"
+#include "content/hash.hpp"
+#include "content/primitives.hpp"
 #include "content/scene.hpp"
 #include "content/scene_blob.hpp"
+// Prosedurel arazi/su/voksel onizlemesi derlenmis sahneninkiyle AYNI
+// ureticileri kullanir (make_terrain_mesh / make_voxel_mesh / make_water_mesh
+// scene_runtime.hpp'de bildirildi) -- editorde gorulen sey oyunda cikan sey
+// olsun diye; ikinci bir geometri kopyasi YOK.
+#include "content/scene_runtime.hpp"
+#include "content/terrain.hpp"
+#include "content/voxel.hpp"
+#include "content/water_wave.hpp"
 #include "core/jobs/job_system.hpp"
 #include "core/memory/arena.hpp"
 #include "core/profiler/profiler.hpp"
@@ -301,6 +311,33 @@ struct EditorState {
   content::PoseScratch pose_scratch;
   sim::BodyId bodies[content::kSceneMaxEntities];
   bool bodies_live = false;
+  // --- Prosedurel geometri (PR #331 bilesenleri) ----------------------------
+  // Ilkeller YUVA basina tutulur, varlik basina DEGIL: ayni kup yuz varlikta
+  // kullanilsa da tek mesh. Tabloyu content::build_primitive_meshes kurar --
+  // SceneRuntime de AYNI fonksiyonu cagirir, yani editor ve oyun ayni
+  // geometriyi cizer.
+  renderer::MeshHandle prims[content::kPrimitiveSlotCount] = {};
+  // Arazi / voksel / su varlik basinadir (her birinin kendi olculeri var) ve
+  // alanlari degisince YENIDEN uretilir. Ozet (hash) degismedikce tek bir
+  // create_mesh bile calismaz: alan kaydirmadan duran bir sahnede kare icinde
+  // GPU ayirmasi olmaz.
+  renderer::MeshHandle terrain_meshes[content::kSceneMaxEntities] = {};
+  renderer::MeshHandle voxel_meshes[content::kSceneMaxEntities] = {};
+  renderer::MeshHandle water_meshes[content::kSceneMaxEntities] = {};
+  uint32_t terrain_hash[content::kSceneMaxEntities] = {};
+  uint32_t voxel_hash[content::kSceneMaxEntities] = {};
+  uint32_t water_hash[content::kSceneMaxEntities] = {};
+  // Malzemeler ACILISTA kurulur. create_material kare icinde cagrilirsa
+  // "kare basina 0 ayirma" kapisi duser (scene_runtime.cpp ayni notu tasiyor).
+  renderer::MaterialHandle terrain_mat{}, voxel_mat{}, water_mat{};
+  // Prosedurel uretimin GECICI alani: her uretimde mark/reset_to ile geri
+  // sarilir. Motorun tek bellek kaynagi arena -- std::malloc DEGIL (AllocGate
+  // global ayirmalari sayiyor). Ana `sys` arenasi DOGRUDAN kullanilamaz:
+  // oradan kalici seyler de ayriliyor, reset_to onlari da sifirlardi. Bu
+  // yuzden `sys`ten CARVE edilmis bir cocuk arena -- ve tasma politikasi
+  // ReturnNull: kullanici arazi olcusunu buyuturken tasan bir arena editoru
+  // OLDURMEMELI, o varligin mesh'i cizilmez ve konsola yazilir.
+  Arena proc_arena;
   Selection sel;   // coklu secim: items[0] = ana secili (gizmo ona bagli)
   OpGroups groups; // bir kullanici eylemi = gunlukte N islem (grup tasima/silme)
   bool playing = false, dirty = false;
@@ -353,20 +390,43 @@ void clamp_selection(EditorState &st) {
 
 // Fare pikselinden dunya isini (kamera tabanindan; matris tersi gerekmez).
 // Tum varliklarin dunya AABB'si (secim icin) — model sinirlari yuklu modelden.
-uint32_t entity_world_bounds(const EditorState &st, const sim::Physics &phys, content::SceneBounds *out) {
-  for (uint32_t i = 0; i < st.scene.entity_count; i++) {
-    const SceneEntity &e = st.scene.entities[i];
-    const content::SceneBounds *mb = nullptr;
-    content::SceneBounds mbs;
-    if ((e.components & content::kSceneModel) && e.asset >= 0 && e.asset < (int32_t)st.scene.asset_count && st.have[e.asset]) {
-      mbs = {st.models[e.asset].bounds_min, st.models[e.asset].bounds_max};
-      mb = &mbs;
-    }
-    const bool simulated = st.playing && st.bodies_live && st.bodies[i].valid() && e.dynamic;
-    const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_world_matrix(st.scene, i);
-    out[i] = content::scene_world_bounds(content::scene_entity_local_bounds(e, mb), m);
+content::SceneBounds entity_world_bounds_one(const EditorState &st, const sim::Physics &phys, uint32_t i) {
+  const SceneEntity &e = st.scene.entities[i];
+  const content::SceneBounds *mb = nullptr;
+  content::SceneBounds mbs;
+  if ((e.components & content::kSceneModel) && e.asset >= 0 && e.asset < (int32_t)st.scene.asset_count && st.have[e.asset]) {
+    mbs = {st.models[e.asset].bounds_min, st.models[e.asset].bounds_max};
+    mb = &mbs;
   }
+  const bool simulated = st.playing && st.bodies_live && st.bodies[i].valid() && e.dynamic;
+  const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_world_matrix(st.scene, i);
+  return content::scene_world_bounds(content::scene_entity_local_bounds(e, mb), m);
+}
+
+uint32_t entity_world_bounds(const EditorState &st, const sim::Physics &phys, content::SceneBounds *out) {
+  for (uint32_t i = 0; i < st.scene.entity_count; i++) out[i] = entity_world_bounds_one(st, phys, i);
   return st.scene.entity_count;
+}
+
+// SECILEBILIR varliklarin dunya AABB'leri, SIKISTIRILMIS. scene.hpp kSceneHidden
+// icin "cizilmez, SECILEMEZ" diyor ama secim yollari bayragi hic sormuyordu:
+// gozu kapatilmis bir nesne hem isinla hem kutu secimle yakalanabiliyordu (ve
+// secilince gizmo ile tasinabiliyordu -- gorunmeyen bir seyi kazara tasimak,
+// gizleme ozelliginin tam tersi).
+//
+// Sikistirmak SART: content::scene_pick bitisik bir dizi bekler ve INDEKS
+// dondurur; gizli varliklari yerinde birakip sonra elemek, arkalarindaki
+// nesnenin secilmesini engellerdi. map[k] = k'inci sinirin GERCEK varlik
+// indeksi. Donus: yazilan eleman sayisi.
+uint32_t entity_pick_bounds(const EditorState &st, const sim::Physics &phys, content::SceneBounds *out, int32_t *map) {
+  uint32_t m = 0;
+  for (uint32_t i = 0; i < st.scene.entity_count; i++) {
+    if (st.scene.entities[i].flags & content::kSceneHidden) continue;
+    out[m] = entity_world_bounds_one(st, phys, i);
+    map[m] = (int32_t)i;
+    m++;
+  }
+  return m;
 }
 
 void set_status(EditorState &st, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -445,6 +505,80 @@ void track_world_edit(EditorState &st, const PropItem &it) {
     st.world_edit_active = false;
   }
 }
+// --- Prosedurel onizleme (arazi / voksel / su) --------------------------------
+// Editor canli SceneDesc uzerinde calisir; derlenmis sahnedeki gibi yukleme
+// aninda bir kez uretme sansi YOK: kullanici alani suruklerken geometri
+// degisir. Cozum, alanlarin OZETI: ozet degismedikce tek bir create_mesh bile
+// calismaz, yani duran bir sahnede kare icinde GPU ayirmasi olmaz.
+//
+// Ozet FNV-1a; PR #331'in yaptigi gibi alanlari TOPLAMAK degil (genislik+1 /
+// uzunluk-1 ayni sayiyi verir ve mesh sessizce eski kalirdi).
+uint32_t proc_hash(const void *p, size_t n) {
+  const uint64_t h = content::content_fnv1a(p, n);
+  // 0 "hic uretilmedi" anlamina geliyor (diziler sifir baslar); 0'a dusen
+  // gercek bir ozet ilk uretimi sonsuza dek tekrarlatirdi.
+  const uint32_t v = (uint32_t)(h ^ (h >> 32));
+  return v ? v : 1u;
+}
+
+// Bir varligin prosedurel mesh'lerini gerekiyorsa yeniden uretir.
+// begin_frame'den ONCE cagrilir (create_mesh kayit sirasinda degil).
+void proc_refresh(EditorState &st, renderer::Renderer &ren, uint32_t i) {
+  // Arena kurulamadiysa hicbir sey uretilmez: Arena::alloc init EDILMEMIS bir
+  // arenada assert eder, yani "sessizce bos mesh" degil dogrudan cokme olurdu.
+  if (st.proc_arena.capacity() == 0) return;
+  const SceneEntity &e = st.scene.entities[i];
+  const size_t mark = st.proc_arena.mark();
+  if (e.components & content::kSceneTerrain) {
+    content::HeightmapConfig cfg;
+    cfg.width = (uint32_t)e.terrain_width; // DIKKAT: hucre SAYISI (bkz. scene.hpp)
+    cfg.height = (uint32_t)e.terrain_height;
+    cfg.cell_size = e.terrain_cell;
+    cfg.amplitude = e.terrain_amp;
+    cfg.frequency = e.terrain_freq;
+    cfg.octaves = e.terrain_octaves;
+    cfg.seed = e.terrain_seed;
+    const uint32_t h = proc_hash(&cfg, sizeof cfg);
+    if (h != st.terrain_hash[i]) {
+      st.terrain_meshes[i] = content::make_terrain_mesh(st.proc_arena, ren, cfg);
+      st.proc_arena.reset_to(mark);
+      st.terrain_hash[i] = h;
+    }
+  } else if (st.terrain_hash[i]) {
+    st.terrain_meshes[i] = renderer::MeshHandle{}; // bilesen kaldirildi: cizme
+    st.terrain_hash[i] = 0;
+  }
+  if (e.components & content::kSceneVoxel) {
+    const struct { uint32_t x, y, z; float cell; } key{e.voxel_size_x, e.voxel_size_y, e.voxel_size_z, e.voxel_cell};
+    const uint32_t h = proc_hash(&key, sizeof key);
+    if (h != st.voxel_hash[i]) {
+      st.voxel_meshes[i] = content::make_voxel_mesh(st.proc_arena, ren, key.x, key.y, key.z, key.cell);
+      st.proc_arena.reset_to(mark);
+      st.voxel_hash[i] = h;
+    }
+  } else if (st.voxel_hash[i]) {
+    st.voxel_meshes[i] = renderer::MeshHandle{};
+    st.voxel_hash[i] = 0;
+  }
+  if (e.components & content::kSceneWater) {
+    content::GerstnerWave w;
+    w.direction = e.wave_direction;
+    w.wavelength = e.wave_length;
+    w.amplitude = e.wave_amplitude;
+    w.steepness = e.wave_steepness;
+    w.speed = e.wave_speed;
+    const uint32_t h = proc_hash(&w, sizeof w);
+    if (h != st.water_hash[i]) {
+      st.water_meshes[i] = content::make_water_mesh(st.proc_arena, ren, w);
+      st.proc_arena.reset_to(mark);
+      st.water_hash[i] = h;
+    }
+  } else if (st.water_hash[i]) {
+    st.water_meshes[i] = renderer::MeshHandle{};
+    st.water_hash[i] = 0;
+  }
+}
+
 // Ayrik widget (onay kutusu, secim): kopya uzerinde degisiklik, hemen islem.
 bool commit(EditorState &st, int index, const SceneEntity &after) {
   if (!st.hist.set_entity(st.scene, (uint32_t)index, after)) return false;
@@ -528,6 +662,27 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   static EditorState st;
   st.hist.init(sys, 256);
   st.gi_arena.reserve(32u << 20, "editor_gi_preview"); // bake + blob derleme scratch'i
+  // Prosedurel geometri GECICI alani (yukselti/voksel/dalga tamponlari). AYRI
+  // arena: her uretimden sonra reset_to ile geri sarilir; `sys` uzerinde
+  // yapilsaydi ayni geri sarma KALICI tahsisleri de silerdi. Yer ayrilamazsa
+  // onizleme sessizce degil, KONSOLA yazarak kapanir.
+  if (!sys.carve(st.proc_arena, 64u << 20, "editor_proc_mesh", OverflowPolicy::ReturnNull))
+    console_log(ConsoleLevel::Uyari, kConsoleTagEditor, "prosedurel onizleme arenasi ayrilamadi: arazi/su/voksel cizilmeyecek");
+  // Ilkel mesh tablosu: SAHNEDEN BAGIMSIZ, salt geometri, bir kez kurulur.
+  // SceneRuntime de AYNI fonksiyonu cagirir -- kapsul/silindir/koni/dortgen/
+  // simit editorde ve derlenmis oyunda ayni geometriyi gosterir.
+  content::build_primitive_meshes(ren, st.prims);
+  {
+    // Arazi/voksel/su TURU basina tek malzeme (hepsi duz renk). ACILISTA:
+    // create_material kare icinde ayirma demektir (bkz. scene_runtime.cpp).
+    renderer::PbrParams p;
+    p.metallic = 0.1f; p.roughness = 0.9f;
+    st.terrain_mat = ren.create_material(ren.default_texture(), Vec3{1, 1, 1}, p);
+    p.metallic = 0.0f; p.roughness = 0.5f;
+    st.voxel_mat = ren.create_material(ren.default_texture(), Vec3{1, 1, 1}, p);
+    p.metallic = 0.0f; p.roughness = 0.1f;
+    st.water_mat = ren.create_material(ren.default_texture(), Vec3{1, 1, 1}, p);
+  }
   const char *adir = std::getenv("TULPAR_ENGINE_ASSETS");
   if (opts.scene_path) std::snprintf(st.scene_path, sizeof st.scene_path, "%s", opts.scene_path);
   else if (adir && *adir) std::snprintf(st.scene_path, sizeof st.scene_path, "%s/editor.sahne", adir);
@@ -834,7 +989,13 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         "kure_sabit", "kutu_dinamik", "kure_dinamik", "zemin",
         "animasyon", "kup", "kure", "kamera", "ses", "isik_yonlu"
       };
-      const char *stem = (kind >= 0 && kind < (int)(sizeof(kStem)/sizeof(kStem[0]))) ? kStem[kind] : "nesne";
+      // Ilkel geometriler 20..24 araliginda. kStem'i 25 uzunluga cikarip
+      // ortasini bos birakmak yerine AYRI tablo: bosluklar sessizce "nesne"
+      // olur ve iki kapsul "nesne_3" adini alirdi.
+      static const char *const kPrimStem[] = {"kapsul", "silindir", "koni", "dortgen", "simit"};
+      const char *stem = "nesne";
+      if (kind >= content::kPrimCapsule && kind <= content::kPrimTorus) stem = kPrimStem[kind - content::kPrimCapsule];
+      else if (kind >= 0 && kind < (int)(sizeof(kStem)/sizeof(kStem[0]))) stem = kStem[kind];
       std::snprintf(e.name, sizeof e.name, "%s_%u", stem, st.scene.entity_count + 1);
       e.pos = cam.target;
       e.parent = parent;
@@ -937,6 +1098,24 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         e.light_color = Vec3{1.0f, 0.96f, 0.9f};
         e.light_intensity = 2.0f;
         e.rot_deg = Vec3{50.0f, -30.0f, 0.0f}; // asagi/yana bakan tipik gunes acisi
+        break;
+      // --- Ilkel (prosedurel) geometriler ---------------------------------
+      // Bu kodlar kCreate3D menusunde ZATEN vardi ama buraya hic ulasmiyordu:
+      // cagiran `tb <= 14` ile kesiyordu ve switch de 14'te bitiyordu. Yani
+      // Kapsul/Silindir/Koni/Dortgen/Simit tiklandiginda HICBIR SEY olmuyordu
+      // (menude gorunur, tiklanir, sonuc yok).
+      //
+      // glTF kaynagi ARANMAZ: geometri motorun kendi ureteclerinden gelir
+      // (content/primitives.hpp), bu yuzden asset = -1 ve primitive = kind.
+      // Yuva numaralari menu kodlariyla AYNI secildi, arada esleme tablosu yok.
+      case content::kPrimCapsule:  // Kapsül
+      case content::kPrimCylinder: // Silindir
+      case content::kPrimCone:     // Koni
+      case content::kPrimQuad:     // Dörtgen
+      case content::kPrimTorus:    // Simit
+        e.components = content::kSceneModel;
+        e.primitive = kind;
+        e.asset = -1;
         break;
       default:
         if (kind == 2 || (kind == 0 && st.scene.asset_count)) { e.components = content::kSceneModel; e.asset = st.scene.asset_count ? 0 : -1; }
@@ -1098,6 +1277,8 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   struct CmdCtx {
     EditorState *st;
     int *gizmo_op;
+    EditorCamera *cam;  // ViewFocus (F): secili varligi cerceveler
+    sim::Physics *phys; // ... sinirlar oynatma sirasinda GOVDEDEN gelir
     decltype(&do_save) save;
     decltype(&do_compile) compile;
     decltype(&do_undo) undo;
@@ -1113,7 +1294,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     decltype(&do_save_as) saveas;
     bool *show_console;
     const EditorHost *host; // tam ekran: yetenek host'ta (headless'ta nullptr)
-  } cc{&st,      &gizmo_op, &do_save, &do_compile,      &do_undo,         &do_redo,     &do_add,     &do_remove,
+  } cc{&st,      &gizmo_op, &cam,     &phys,     &do_save, &do_compile,      &do_undo,         &do_redo,     &do_add,     &do_remove,
        &set_playing, &do_cut,   &do_copy, &do_paste,    &do_new_guarded,  &do_open_guarded, &do_save_as, &show_console, host};
   CommandTable cmds;
   cmds.bind(CommandId::FileNew, [](void *c) { (*static_cast<CmdCtx *>(c)->newscene)(); }, &cc);
@@ -1155,6 +1336,23 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
             });
   cmds.bind(CommandId::ViewConsole, [](void *c) { bool *b = static_cast<CmdCtx *>(c)->show_console; *b = !*b; }, &cc, nullptr,
             [](const void *c) { return *static_cast<const CmdCtx *>(c)->show_console; });
+  // Odaklan (F). Komut tablosunda TANIMLIYDI (kisayol, menu satiri, "secim
+  // gerektirir" kurali) ama BAGLI DEGILDI: menude gorunen, tiklanan ve hicbir
+  // sey yapmayan bir satirdi; F tusu de olu bir kisayoldu. Govde, arac
+  // cubugundaki "Odaklan" dugmesinin ta kendisi -- tek fark, kisayolun ve menu
+  // satirinin artik ayni yere varmasi.
+  cmds.bind(CommandId::ViewFocus,
+            [](void *c) {
+              CmdCtx *x = static_cast<CmdCtx *>(c);
+              const int32_t s0 = x->st->sel.primary();
+              if (s0 < 0 || s0 >= (int32_t)x->st->scene.entity_count) return;
+              // static: 256 elemanlik sinir dizisi yigina konmaz (kapasite
+              // sabit, yeniden giris yok -- arayuz tek is parcaciginda).
+              static content::SceneBounds fb[content::kSceneMaxEntities];
+              const uint32_t nb = entity_world_bounds(*x->st, *x->phys, fb);
+              if ((uint32_t)s0 < nb) camera_focus(*x->cam, fb[s0]);
+            },
+            &cc, [](const void *c) { return static_cast<const CmdCtx *>(c)->st->sel.count > 0; });
   // Tam ekran: yetenek HOST'un (GLFW). Yoksa menu ogesi soluk — sessizce
   // hicbir sey yapan bir dugme kalmaz. Swapchain'i bu komut DEGIL, kare
   // basindaki sync_size yeniden kurar (tek karar noktasi).
@@ -1649,32 +1847,23 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     if (ImGui::Begin(kPanelSahneLabel)) {
       const int tb = hierarchy_toolbar(st.scene.entity_count, st.sel.count > 0);
       if (tb == 100) do_remove();
-      else if (tb >= 1 && tb <= 14) do_add(tb);
+      // UST SINIR YOK. Burada `tb <= 14` yaziyordu ve kCreate3D menusunun
+      // urettigi 20..24 (Kapsul/Silindir/Koni/Dortgen/Simit) bu dala takilip
+      // SESSIZCE YUTULUYORDU: menude gorunuyor, tiklaniyor, hicbir sey olmuyor.
+      // Tanimsiz bir kodu do_add zaten `default` dalinda karsiliyor.
+      else if (tb > 0) do_add(tb);
       hierarchy_search(st.filter, sizeof st.filter);
 
       if (ImGui::BeginPopupContextWindow("SahnePanelMenu", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+        // Olustur agacinin TEK dogruluk kaynagi kCreateMenu (editor_widgets).
+        // Burada elle yazilmis IKINCI bir kopya vardi ve ayrismisti: kCreate3D
+        // uzun zamandir Kapsul/Silindir/Koni/Dortgen/Simit tasiyor, bu kopyada
+        // hicbiri yoktu. Ayrica iki emoji (U+1F3A5 kamera, U+1F50A hoparlor)
+        // DejaVuSans'ta YOK -- menude tofu kutusu ciziliyordu; tablo yalniz
+        // fontta gercekten bulunan glifleri kullaniyor.
         if (ImGui::BeginMenu("Yeni Varl\xC4\xB1k Ekle")) {
-          if (ImGui::MenuItem("\xE2\x97\x8B  Bo\xC5\x9F Varl\xC4\xB1k")) do_add(1);
-          ImGui::Separator();
-          if (ImGui::MenuItem("\xE2\x97\x86  Model (glTF)")) do_add(2);
-          if (ImGui::MenuItem("\xE2\x97\xBC  K\xC3\xBCp (Model + G\xC3\xB6vde)")) do_add(10);
-          if (ImGui::MenuItem("\xE2\x97\x8F  K\xC3\xBCre (Model + G\xC3\xB6vde)")) do_add(11);
-          if (ImGui::MenuItem("\xE2\x96\xAC  Zemin / D\xC3\xBCzlem")) do_add(8);
-          ImGui::Separator();
-          if (ImGui::BeginMenu("\xE2\x98\x80  I\xC5\x9F\xC4\xB1k")) {
-            if (ImGui::MenuItem("\xE2\x97\x8F  Nokta")) do_add(3);
-            if (ImGui::MenuItem("\xE2\x86\x97  Y\xC3\xB6nl\xC3\xBC (g\xC3\xBCne\xC5\x9F)")) do_add(14);
-            ImGui::EndMenu();
-          }
-          ImGui::Separator();
-          if (ImGui::MenuItem("\xE2\x96\xA1  Sabit Kutu G\xC3\xB6vde")) do_add(4);
-          if (ImGui::MenuItem("\xE2\x97\x8B  Sabit K\xC3\xBCre G\xC3\xB6vde")) do_add(5);
-          if (ImGui::MenuItem("\xE2\x96\xA7  Dinamik Kutu G\xC3\xB6vde")) do_add(6);
-          if (ImGui::MenuItem("\xE2\x97\x8D  Dinamik K\xC3\xBCre G\xC3\xB6vde")) do_add(7);
-          ImGui::Separator();
-          if (ImGui::MenuItem("\xE2\x86\xBB  Animasyonlu Model")) do_add(9);
-          if (ImGui::MenuItem("\xF0\x9F\x8E\xA5  Kamera Varl\xC4\xB1\xC4\x9F\xC4\xB1")) do_add(12);
-          if (ImGui::MenuItem("\xF0\x9F\x94\x8A  Ses Kayna\xC4\x9F\xC4\xB1")) do_add(13);
+          const int r = create_menu_draw(kCreateMenu, kCreateMenuCount);
+          if (r) do_add(r);
           ImGui::EndMenu();
         }
         ImGui::Separator();
@@ -1696,6 +1885,34 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       } else n = content::scene_tree_order(st.scene, order, content::kSceneMaxEntities);
       HierarchyResult act;
       uint32_t shown = 0, hide_depth = 0; // hide_depth > 0: katlanmis alt agactayiz
+      // --- ImGui'nin YERLESIK coklu secimi ------------------------------------
+      // Shift+tik ARALIGI, Ctrl+tik, Ctrl+A, ok tuslariyla gezinme ve listede
+      // kutu (marquee) secim bunun uzerinden gelir; hepsi elle yazilsaydi
+      // klavye gezintisi ve aralik secimi yine olmazdi. Satirlar kendi
+      // kimliklerini zaten bildiriyor (editor_widgets: SetNextItemSelectionUserData).
+      //
+      // Depolama DISARIDA: tek dogruluk kaynagi st.sel olarak kaliyor
+      // (gizmo, silme, kopyalama, gruplar hep onu okur). ImGui yalniz
+      // "sunu sec / sundan cikar" istekleri gonderir, kumeyi kendisi tutmaz.
+      ImGuiSelectionExternalStorage ms_ext;
+      ms_ext.UserData = (void *)&st.sel;
+      ms_ext.AdapterSetItemSelected = [](ImGuiSelectionExternalStorage *self, int idx, bool selected) {
+        Selection *sel = (Selection *)self->UserData;
+        if (!selected) { sel->erase(idx); return; }
+        // toggle() "yoksa ekler, varsa cikarir": burada VARSA dokunulmamali,
+        // yoksa ImGui'nin "secili kalsin" istegi secimi kapatirdi.
+        if (!sel->contains(idx)) sel->toggle(idx);
+      };
+      // items_count = VARLIK SAYISI, ekrandaki satir sayisi degil: satirin
+      // ImGui'ye bildirdigi kimlik varlik indeksidir (editor_widgets), ve
+      // ApplyRequests "hepsini sec" istegini 0..items_count-1 kimlikleri
+      // uzerinde dolasarak uygular. n verilseydi suzgec aciksa ya da agac
+      // sirasi indeks sirasindan farkliysa yanlis varliklar secilirdi.
+      // Ctrl+A ImGui'de KAPALI: o kisayolun sahibi komut tablosu (SelectAll),
+      // iki sahip olsa ayni karede iki kez secim yazilirdi.
+      ImGuiMultiSelectIO *ms_io = ImGui::BeginMultiSelect(
+          ImGuiMultiSelectFlags_ClearOnEscape | ImGuiMultiSelectFlags_NoSelectAll, (int)st.sel.count, (int)st.scene.entity_count);
+      ms_ext.ApplyRequests(ms_io); // satirlar CIZILMEDEN once: "hepsini temizle/sec"
       for (uint32_t k = 0; k < n; k++) {
         const uint32_t i = (uint32_t)order[k];
         if (i >= st.scene.entity_count) continue;
@@ -1722,9 +1939,15 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         row.locked = (e.flags & content::kSceneLocked) != 0;
         shown++;
         const HierarchyResult r = hierarchy_tree_row((int)i, row, &st.tree);
-        if (r.action != HierarchyAction::None) act = r;
+        // Select ELENIR: secimi artik BeginMultiSelect/EndMultiSelect yonetiyor
+        // (apply_hierarchy'nin kendi tek-secim dali ayni karede ikinci kez
+        // yazsaydi Shift+tik araligi hemen tek satira duserdi). Diger eylemler
+        // (yeniden adlandir, sil, ebeveyn degistir...) oldugu gibi gecer.
+        if (r.action != HierarchyAction::None && r.action != HierarchyAction::Select) act = r;
         if (row.has_children && !row.expanded) hide_depth = depth + 1;
       }
+      ms_io = ImGui::EndMultiSelect();
+      ms_ext.ApplyRequests(ms_io);
       if (shown == 0)
         hierarchy_empty(st.scene.entity_count ? "S\xC3\xBCzge\xC3\xA7le e\xC5\x9Fle\xC5\x9F" "en varl\xC4\xB1k yok"
                                               : "Sahne bo\xC5\x9F \xE2\x80\x94 \xE2\x80\x9C+\xE2\x80\x9D ile varl\xC4\xB1k ekle");
@@ -1752,11 +1975,20 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
                    has_b = (e.components & content::kSceneBody) != 0, has_a = (e.components & content::kSceneAnim) != 0,
                    has_c = (e.components & content::kSceneCamera) != 0, has_s = (e.components & content::kSceneAudio) != 0,
                    has_sc = (e.components & content::kSceneScript) != 0;
-        const char *icon = has_l ? "\xE2\x98\x80" : has_m ? "\xE2\x97\x86" : has_b ? "\xE2\x97\xBC" : has_c ? "\xF0\x9F\x8E\xA5" : has_s ? "\xF0\x9F\x94\x8A" : has_sc ? "\xF0\x9F\x93\x9C" : "\xE2\x97\x8B";
+        // ▣ / ♪ / ▤ : kamera / ses / betik. Eskiden burada U+1F3A5, U+1F50A ve
+        // U+1F4DC emojileri vardi ve DejaVuSans'ta HICBIRI yok -- mufettis
+        // basliginda tofu kutusu ciziliyordu. Glifler editor_widgets.cpp'nin
+        // menu tablolariyla ayni (orada fontun cmap'i taranarak secildiler).
+        const char *icon = has_l ? "\xE2\x98\x80" : has_m ? "\xE2\x97\x86" : has_b ? "\xE2\x97\xBC" : has_c ? "\xE2\x96\xA3" : has_s ? "\xE2\x99\xAA" : has_sc ? "\xE2\x96\xA4" : "\xE2\x97\x8B";
         const Tone icon_tone = has_l ? Tone::Warn : has_m ? Tone::Text : has_b ? Tone::AxisZ : has_c ? Tone::Accent : Tone::TextDim;
+        // Bilesen SAYISI MASKEDEN sayilir, yedi bayrak toplanarak degil: elle
+        // toplanan liste yeni bir bilesen eklendiginde sessizce eskiyordu
+        // (varliga arazi + su takiliyken baslik yine "0 bilesen" diyordu).
+        unsigned comp_n = 0;
+        for (uint32_t bits = e.components & content::kSceneComponentMask; bits; bits &= bits - 1) comp_n++;
         char sub[96];
         if (st.sel.count > 1) std::snprintf(sub, sizeof sub, "grup: %u se\xC3\xA7ili \xC2\xB7 alanlar ana se\xC3\xA7ilide, gizmo grubu ta\xC5\x9F\xC4\xB1r", st.sel.count);
-        else std::snprintf(sub, sizeof sub, "%u bile\xC5\x9F""en%s%s", (unsigned)(has_m + has_l + has_b + has_a + has_c + has_s + has_sc),
+        else std::snprintf(sub, sizeof sub, "%u bile\xC5\x9F""en%s%s", comp_n,
                            has_b ? (e.shape == content::SceneShape::Box ? " \xC2\xB7 kutu g\xC3\xB6vde" : " \xC2\xB7 k\xC3\xBCre g\xC3\xB6vde") : "",
                            (has_b && e.dynamic) ? " \xC2\xB7 dinamik" : "");
         track_edit(st, e, si, inspector_title(icon, e.name, sizeof e.name, sub, icon_tone));
@@ -1837,10 +2069,191 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           }
           if (rem) { after = e; after.components &= ~content::kSceneBody; commit(st, si, after); }
         }
+        // --- PR #331 bilesenleri ------------------------------------------
+        // scene.hpp bunlarin alanlarini, scene_blob v6 dosya bicimini ve
+        // kComponentMenu'nun ekleme satirlarini uzun zamandir tasiyordu;
+        // MUFETTIS yoktu, yani bir varliga eklenebiliyor ama HICBIR ALANI
+        // duzenlenemiyordu. Hepsi ayni sozlesmeyi izler: baslik + prop_begin /
+        // prop_end + "kaldir" (rem) dali.
+        //
+        // Simgeler METIN fontundan (DejaVuSans) gelir: depoda ikon TTF'i YOK,
+        // o yuzden ICON_MD_* makrolari kullanilmaz. Glifler editor_widgets.cpp
+        // menu satirlariyla BIREBIR ayni -- menude ▲ gorup mufettiste baska bir
+        // sey gormek olmasin diye.
+        if (e.components & content::kSceneCharacter) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x8A\x99", "Karakter Kontrolc\xC3\xBC", nullptr, &rem, true, Tone::AxisY)) { // ⊙
+            if (prop_begin("karakter")) {
+              prop_help("Kapsul carpisan: yaricap + govde yuksekligi. Egim siniri, uzerinde YURUNEBILEN en dik yuzeyin acisidir.");
+              track_edit(st, e, si, prop_float("Yar\xC4\xB1\xC3\xA7""ap", &e.char_radius, 0.01f, 0.05f, 5.0f, "%.2f m"));
+              track_edit(st, e, si, prop_float("Y\xC3\xBCkseklik", &e.char_height, 0.02f, 0.1f, 10.0f, "%.2f m"));
+              track_edit(st, e, si, prop_float("K\xC3\xBCtle", &e.char_mass, 0.5f, 1.0f, 500.0f, "%.1f kg"));
+              track_edit(st, e, si, prop_float("En Dik E\xC4\x9Fim", &e.char_max_slope, 0.5f, 0.0f, 89.0f, "%.1f\xC2\xB0"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneCharacter; commit(st, si, after); }
+        }
+        if (e.components & content::kSceneJoint) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x88\x9E", "Fizik Eklemi (Joint)", nullptr, &rem, true, Tone::AxisZ)) { // ∞
+            if (prop_begin("eklem")) {
+              prop_help("Baglanan varlik INDEKSTIR (-1 = dunyaya bagli). Sinirlar eksen etrafindaki aci araligidir.");
+              track_edit(st, e, si, prop_int("Ba\xC4\x9Flanan Varl\xC4\xB1k", &e.joint_target, -1, (int)st.scene.entity_count - 1));
+              track_edit(st, e, si, prop_vec3("Eksen", &e.joint_axis.x, 0.01f, -1.0f, 1.0f, "%.2f"));
+              track_edit(st, e, si, prop_float("Alt S\xC4\xB1n\xC4\xB1r", &e.joint_limit_min, 1.0f, -180.0f, 180.0f, "%.1f\xC2\xB0"));
+              track_edit(st, e, si, prop_float("\xC3\x9Cst S\xC4\xB1n\xC4\xB1r", &e.joint_limit_max, 1.0f, -180.0f, 180.0f, "%.1f\xC2\xB0"));
+              track_edit(st, e, si, prop_float("Motor H\xC4\xB1z\xC4\xB1", &e.joint_motor_speed, 0.1f, 0.0f, 100.0f, "%.1f"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneJoint; commit(st, si, after); }
+        }
+        if (e.components & content::kSceneTerrain) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x96\xB2", "Arazi (Terrain)", nullptr, &rem, true, Tone::AxisY)) { // ▲
+            if (prop_begin("arazi")) {
+              // DIKKAT (scene.hpp): genislik/uzunluk DUNYA olcusu DEGIL, izgara
+              // HUCRE SAYISIDIR. Etikete "m" yazmak 64 hucrelik bir araziyi 64
+              // metre sanmaya yol acardi.
+              prop_help("Genislik/uzunluk HUCRE SAYISIDIR; dunya boyu = (N-1) x hucre boyu. Alan degisince mesh yeniden uretilir.");
+              track_edit(st, e, si, prop_float("Geni\xC5\x9Flik (h\xC3\xBC" "cre)", &e.terrain_width, 1.0f, 2.0f, 512.0f, "%.0f"));
+              track_edit(st, e, si, prop_float("Uzunluk (h\xC3\xBC" "cre)", &e.terrain_height, 1.0f, 2.0f, 512.0f, "%.0f"));
+              track_edit(st, e, si, prop_float("H\xC3\xBC" "cre Boyu", &e.terrain_cell, 0.01f, 0.05f, 10.0f, "%.2f m"));
+              track_edit(st, e, si, prop_float("Y\xC3\xBCkseklik", &e.terrain_amp, 0.2f, 0.0f, 500.0f, "%.1f m"));
+              track_edit(st, e, si, prop_float("Frekans", &e.terrain_freq, 0.0005f, 0.0005f, 0.5f, "%.4f"));
+              track_edit(st, e, si, prop_int("Oktav", &e.terrain_octaves, 1, 8));
+              int seed = (int)e.terrain_seed;
+              const PropItem sit = prop_int("Tohum", &seed, 0, 65535);
+              if (sit.changed) e.terrain_seed = (uint32_t)(seed < 0 ? 0 : seed);
+              track_edit(st, e, si, sit);
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneTerrain; commit(st, si, after); }
+        }
+        if (e.components & content::kSceneWater) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x89\x88", "Su (Gerstner)", nullptr, &rem, true, Tone::Accent)) { // ≈
+            if (prop_begin("su")) {
+              // Vec2 icin ayri bir prop yok; iki prop_float ayni iki sayiyi
+              // gosterir ve her biri kendi undo islemini uretir.
+              prop_help("Sivrilik 1'e yaklastikca tepeler sivrilir; cok yuksekte yorungeler kesisir (dalga kivrilir).");
+              track_edit(st, e, si, prop_float("Dalga Boyu", &e.wave_length, 0.05f, 0.5f, 200.0f, "%.2f m"));
+              track_edit(st, e, si, prop_float("Genlik", &e.wave_amplitude, 0.01f, 0.0f, 20.0f, "%.2f m"));
+              track_edit(st, e, si, prop_float("Sivrilik", &e.wave_steepness, 0.005f, 0.0f, 1.0f, "%.3f"));
+              track_edit(st, e, si, prop_float("H\xC4\xB1z", &e.wave_speed, 0.01f, 0.0f, 20.0f, "%.2f"));
+              track_edit(st, e, si, prop_float("Y\xC3\xB6n X", &e.wave_direction.x, 0.01f, -1.0f, 1.0f, "%.2f"));
+              track_edit(st, e, si, prop_float("Y\xC3\xB6n Y", &e.wave_direction.y, 0.01f, -1.0f, 1.0f, "%.2f"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneWater; commit(st, si, after); }
+        }
+        if (e.components & content::kSceneVoxel) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x96\xA6", "Voksel D\xC3\xBCnyas\xC4\xB1", nullptr, &rem, true, Tone::Text)) { // ▦
+            if (prop_begin("voksel")) {
+              prop_help("Izgara olcusu HUCRE cinsinden. Hucre verisi henuz sahne bicimine girmedi: izgaraya sigan bir kure dolduruluyor.");
+              int sx = (int)e.voxel_size_x, sy = (int)e.voxel_size_y, sz = (int)e.voxel_size_z;
+              const PropItem ix = prop_int("Izgara X", &sx, 1, 128);
+              if (ix.changed) e.voxel_size_x = (uint32_t)sx;
+              track_edit(st, e, si, ix);
+              const PropItem iy = prop_int("Izgara Y", &sy, 1, 128);
+              if (iy.changed) e.voxel_size_y = (uint32_t)sy;
+              track_edit(st, e, si, iy);
+              const PropItem iz = prop_int("Izgara Z", &sz, 1, 128);
+              if (iz.changed) e.voxel_size_z = (uint32_t)sz;
+              track_edit(st, e, si, iz);
+              track_edit(st, e, si, prop_float("H\xC3\xBC" "cre Boyu", &e.voxel_cell, 0.01f, 0.05f, 10.0f, "%.2f m"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneVoxel; commit(st, si, after); }
+        }
+        if (e.components & content::kSceneWind) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x86\xAF", "R\xC3\xBCzgar Alan\xC4\xB1", nullptr, &rem, true, Tone::AccentLo)) { // ↯
+            if (prop_begin("ruzgar")) {
+              prop_help("Esinti (gust) siddetin uzerine binen dalgalanmanin genligi, siklik ise frekansidir.");
+              track_edit(st, e, si, prop_float("Y\xC3\xB6n X", &e.wind_direction.x, 0.01f, -1.0f, 1.0f, "%.2f"));
+              track_edit(st, e, si, prop_float("Y\xC3\xB6n Y", &e.wind_direction.y, 0.01f, -1.0f, 1.0f, "%.2f"));
+              track_edit(st, e, si, prop_float("\xC5\x9Eiddet", &e.wind_strength, 0.02f, 0.0f, 50.0f, "%.2f"));
+              track_edit(st, e, si, prop_float("Esinti", &e.wind_gustiness, 0.01f, 0.0f, 1.0f, "%.2f"));
+              track_edit(st, e, si, prop_float("Esinti S\xC4\xB1kl\xC4\xB1\xC4\x9F\xC4\xB1", &e.wind_gust_freq, 0.01f, 0.0f, 10.0f, "%.2f Hz"));
+              int wseed = (int)e.wind_seed;
+              const PropItem wit = prop_int("Tohum", &wseed, 0, 65535);
+              if (wit.changed) e.wind_seed = (uint32_t)(wseed < 0 ? 0 : wseed);
+              track_edit(st, e, si, wit);
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneWind; commit(st, si, after); }
+        }
+        if (e.components & content::kSceneParticle) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x88\xB4", "Partik\xC3\xBCl Emitter", nullptr, &rem, true, Tone::Warn)) { // ∴
+            if (prop_begin("partikul")) {
+              prop_help("Sacilma, baslangic hizina eklenen RASTGELE bilesenin yariciplidir; 0 = hepsi ayni yone gider.");
+              track_edit(st, e, si, prop_float("Yayma H\xC4\xB1z\xC4\xB1", &e.particle_spawn_rate, 0.5f, 0.0f, 1000.0f, "%.1f /s"));
+              track_edit(st, e, si, prop_float("\xC3\x96m\xC3\xBCr (en az)", &e.particle_lifetime_min, 0.01f, 0.01f, 60.0f, "%.2f s"));
+              track_edit(st, e, si, prop_float("\xC3\x96m\xC3\xBCr (en \xC3\xA7ok)", &e.particle_lifetime_max, 0.01f, 0.01f, 60.0f, "%.2f s"));
+              track_edit(st, e, si, prop_float("Boy (ba\xC5\x9Flang\xC4\xB1\xC3\xA7)", &e.particle_size_start, 0.005f, 0.0f, 10.0f, "%.3f m"));
+              track_edit(st, e, si, prop_float("Boy (biti\xC5\x9F)", &e.particle_size_end, 0.005f, 0.0f, 10.0f, "%.3f m"));
+              track_edit(st, e, si, prop_vec3("Ba\xC5\x9Flang\xC4\xB1\xC3\xA7 H\xC4\xB1z\xC4\xB1", &e.particle_velocity.x, 0.02f));
+              track_edit(st, e, si, prop_vec3("Sa\xC3\xA7\xC4\xB1lma", &e.particle_jitter.x, 0.02f, 0.0f, 20.0f, "%.2f"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneParticle; commit(st, si, after); }
+        }
+        if (e.components & content::kSceneSkybox) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x98\x81", "G\xC3\xB6ky\xC3\xBCz\xC3\xBC (Skybox)", nullptr, &rem, true, Tone::Accent)) { // ☁
+            if (prop_begin("gokyuzu")) {
+              // AYARI YOK ve bu bir eksiklik degil, sozlesme: scene.hpp
+              // "kSceneSkybox'in alani YOK: bileseni tasimak tek veridir".
+              // Bos bir "HDRI dosyasi" kutusu koymak, kaydedilmeyen ve hicbir
+              // seyi degistirmeyen bir alan gostermek olurdu.
+              prop_help("Bu bilesenin ayari yoktur: varlikta BULUNMASI gokyuzunu acar (dosyaya yazilan tek veri budur).");
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneSkybox; commit(st, si, after); }
+        }
+        if (e.components & content::kSceneRefProbe) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x97\x89", "Yans\xC4\xB1ma Sondas\xC4\xB1 (IBL)", nullptr, &rem, true, Tone::AxisX)) { // ◉
+            if (prop_begin("sonda")) {
+              track_edit(st, e, si, prop_float("Etki Yar\xC4\xB1\xC3\xA7""ap\xC4\xB1", &e.ref_probe_radius, 0.1f, 0.5f, 200.0f, "%.1f m"));
+              track_edit(st, e, si, prop_float("\xC5\x9Eiddet", &e.ref_probe_intensity, 0.01f, 0.0f, 5.0f, "%.2f"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneRefProbe; commit(st, si, after); }
+        }
         if (has_c) {
           rem = false;
           after = e;
-          if (component_header("\xF0\x9F\x8E\xA5", "Kamera", nullptr, &rem, true, Tone::Accent)) {
+          if (component_header("\xE2\x96\xA3", "Kamera", nullptr, &rem, true, Tone::Accent)) { // ▣
             if (prop_begin("kamera")) {
               track_edit(st, e, si, prop_float("G\xC3\xB6r\xC3\xBC\xC5\x9F A\xC3\xA7\xC4\xB1s\xC4\xB1 (FOV)", &e.cam_fov, 0.5f, 10.0f, 120.0f, "%.1f\xC2\xB0"));
               track_edit(st, e, si, prop_float("Yak\xC4\xB1n K\xC4\xB1rpma", &e.cam_near, 0.01f, 0.01f, 10.0f, "%.2f m"));
@@ -1854,7 +2267,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         if (has_s) {
           rem = false;
           after = e;
-          if (component_header("\xF0\x9F\x94\x8A", "Ses Kayna\xC4\x9F\xC4\xB1", nullptr, &rem, true, Tone::Warn)) {
+          if (component_header("\xE2\x99\xAA", "Ses Kayna\xC4\x9F\xC4\xB1", nullptr, &rem, true, Tone::Warn)) { // ♪
             if (prop_begin("ses")) {
               track_edit(st, e, si, prop_text("Ses Dosyas\xC4\xB1", e.audio_clip, sizeof e.audio_clip));
               track_edit(st, e, si, prop_float("Ses D\xC3\xBCzeyi", &e.audio_volume, 0.02f, 0.0f, 2.0f, "%.2f"));
@@ -1869,10 +2282,24 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           }
           if (rem) { after = e; after.components &= ~content::kSceneAudio; commit(st, si, after); }
         }
+        if (e.components & content::kSceneReverb) {
+          rem = false;
+          after = e;
+          if (component_header("\xE2\x97\x8E", "Yank\xC4\xB1 Alan\xC4\xB1 (Reverb)", nullptr, &rem, true, Tone::Warn)) { // ◎
+            if (prop_begin("yanki")) {
+              prop_help("Sonumlenme, yankinin duyulmaz olana kadar gecen suresi; oda buyuklugu ilk yansimalarin gecikmesidir.");
+              track_edit(st, e, si, prop_float("S\xC3\xB6n\xC3\xBCmlenme", &e.reverb_decay, 0.02f, 0.05f, 20.0f, "%.2f s"));
+              track_edit(st, e, si, prop_float("Oda B\xC3\xBCy\xC3\xBCkl\xC3\xBC\xC4\x9F\xC3\xBC", &e.reverb_room_size, 0.01f, 0.0f, 1.0f, "%.2f"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneReverb; commit(st, si, after); }
+        }
         if (has_sc) {
           rem = false;
           after = e;
-          if (component_header("\xF0\x9F\x93\x9C", "Tulpar Betik", nullptr, &rem, true, Tone::AccentLo)) {
+          if (component_header("\xE2\x96\xA4", "Tulpar Betik", nullptr, &rem, true, Tone::AccentLo)) { // ▤
             if (prop_begin("betik")) {
               track_edit(st, e, si, prop_text("Betik (.tpr)", e.script_file, sizeof e.script_file));
               bool en = e.script_enabled;
@@ -1883,21 +2310,34 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           }
           if (rem) { after = e; after.components &= ~content::kSceneScript; commit(st, si, after); }
         }
-        const char *names[7];
-        uint32_t bits[7];
-        uint32_t n = 0;
-        if (!has_m) { names[n] = "\xE2\x97\x86  Model"; bits[n++] = content::kSceneModel; }
-        if (!has_a) { names[n] = "\xE2\x86\xBB  Animasyon"; bits[n++] = content::kSceneAnim; }
-        if (!has_l) { names[n] = "\xE2\x98\x80  I\xC5\x9F\xC4\xB1k"; bits[n++] = content::kSceneLight; }
-        if (!has_b) { names[n] = "\xE2\x97\xBC  Fizik G\xC3\xB6vdesi"; bits[n++] = content::kSceneBody; }
-        if (!has_c) { names[n] = "\xF0\x9F\x8E\xA5  Kamera"; bits[n++] = content::kSceneCamera; }
-        if (!has_s) { names[n] = "\xF0\x9F\x94\x8A  Ses Kayna\xC4\x9F\xC4\xB1"; bits[n++] = content::kSceneAudio; }
-        if (!has_sc) { names[n] = "\xF0\x9F\x93\x9C  Tulpar Betik"; bits[n++] = content::kSceneScript; }
-        const int add = component_add_button(names, n);
-        if (add >= 0) {
+        if (e.components & content::kSceneNavAgent) {
+          rem = false;
           after = e;
-          after.components |= bits[add];
-          if (bits[add] == content::kSceneModel && after.asset < 0) after.asset = 0;
+          if (component_header("\xE2\x86\x92", "Yapay Zeka Ajan\xC4\xB1", nullptr, &rem, true, Tone::AccentLo)) { // →
+            if (prop_begin("ajan")) {
+              prop_help("Yol ARAMASI motorun (Detour); yolu YURUME isi oyun kodunda (lib/engine.tpr ajan_ilerlet). Bunlar o kodun okudugu ayarlar.");
+              track_edit(st, e, si, prop_vec3("Hedef Nokta", &e.ai_target.x, 0.05f));
+              track_edit(st, e, si, prop_float("Hareket H\xC4\xB1z\xC4\xB1", &e.ai_speed, 0.05f, 0.0f, 100.0f, "%.2f m/s"));
+              track_edit(st, e, si, prop_float("D\xC3\xB6n\xC3\xBC\xC5\x9F H\xC4\xB1z\xC4\xB1", &e.ai_turn_speed, 1.0f, 0.0f, 720.0f, "%.0f\xC2\xB0/s"));
+              prop_end();
+            }
+            component_end();
+          }
+          if (rem) { after = e; after.components &= ~content::kSceneNavAgent; commit(st, si, after); }
+        }
+        // Ekleme listesi kComponentMenu'den gelir: KATEGORILI, aranabilir ve ON
+        // SEKIZ bilesenin tamamini kapsar. Burada elle kurulan duz bir dizi
+        // vardi ve yalniz YEDI bileseni taniyordu -- Karakter / Partikul /
+        // Arazi / Voksel / Su / Ruzgar / Eklem / Gokyuzu / Sonda / Yanki /
+        // Ajan HICBIR YERDEN eklenemiyordu (bilesen bitleri, dosya bicimi ve
+        // menu tablosu hazirdi, eksik olan tek sey bu cagriydi).
+        // Takili olanlari eleme isini de widget yapar (existing_components),
+        // burada tek tek sormaya gerek yok.
+        const uint32_t add = component_add_button(kComponentMenu, kComponentMenuCount, e.components);
+        if (add) { // 0 = secim yok; donus INDEKS degil BIT
+          after = e;
+          after.components |= add;
+          if (add == content::kSceneModel && after.asset < 0) after.asset = 0;
           commit(st, si, after);
         }
       } else inspector_empty("Sahne listesinden bir varl\xC4\xB1k se\xC3\xA7");
@@ -2051,7 +2491,15 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // Gizmo: ImGuizmo GL gelenegi (NDC y yukari) bekler; Vulkan projeksiyonun y'si tersken duzeltilir.
     // Surukleme tek islem: IsUsing baslarken kopya, bitince gunluge.
     const int32_t gz = st.sel.primary();
-    if (view_tab == ViewportTab::Scene && gz >= 0 && gz < (int32_t)st.scene.entity_count) {
+    // KILITLI varlikta gizmo HIC cizilmez. scene.hpp kSceneLocked icin
+    // "gizmo/surukleme degistiremez" diyor ama bu bayrak tum depoda hicbir
+    // yerde OKUNMUYORDU: kilit simgesi yalniz kendi gorunumunu degistiriyor,
+    // nesne eskisi gibi suruklenebiliyordu. Gizmoyu cizmemek hem kilidi
+    // uygular hem de kilitli nesnenin ustundeki baska bir nesneyi secmeyi
+    // kolaylastirir (ImGuizmo::IsOver artik isin yolunu kapatmaz).
+    const bool gz_locked = gz >= 0 && gz < (int32_t)st.scene.entity_count &&
+                           (st.scene.entities[gz].flags & content::kSceneLocked) != 0;
+    if (view_tab == ViewportTab::Scene && gz >= 0 && gz < (int32_t)st.scene.entity_count && !gz_locked) {
       SceneEntity &e = st.scene.entities[gz];
       Mat4 proj_gl = proj;
       proj_gl.m[1][1] = -proj_gl.m[1][1];
@@ -2120,21 +2568,26 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         // Kutu (marquee) secim: kaplama dikdortgeni verdi, izdusum testi saf
         // fonksiyonda (kamera ARKASINDAKI kutular orada eleniyor).
         static content::SceneBounds bb[content::kSceneMaxEntities];
-        const uint32_t nb = entity_world_bounds(st, phys, bb);
+        static int32_t bmap[content::kSceneMaxEntities];
+        const uint32_t nb = entity_pick_bounds(st, phys, bb, bmap); // gizliler DISARIDA
         static int32_t hits[Selection::kMax];
         const uint32_t nh = viewport_box_select(proj * view, bb, nb, view_rect, ovres.box[0], ovres.box[1], ovres.box[2], ovres.box[3],
                                                 /*tam icerme*/ false, hits, Selection::kMax);
         if (!ImGui::GetIO().KeyCtrl) st.sel.clear();
-        for (uint32_t k = 0; k < nh; k++)
-          if (!st.sel.contains(hits[k])) st.sel.toggle(hits[k]);
+        for (uint32_t k = 0; k < nh; k++) {
+          const int32_t ent = bmap[hits[k]]; // sikistirilmis indeks -> varlik indeksi
+          if (!st.sel.contains(ent)) st.sel.toggle(ent);
+        }
         set_status(st, "kutu secim: %u varlik", st.sel.count);
       } else if (view_tab == ViewportTab::Scene && pressed && pick.valid && view_hovered && !ovres.consumed_mouse && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
         static content::SceneBounds wb[content::kSceneMaxEntities];
-        const uint32_t nb = entity_world_bounds(st, phys, wb);
+        static int32_t wmap[content::kSceneMaxEntities];
+        const uint32_t nb = entity_pick_bounds(st, phys, wb, wmap); // gizliler DISARIDA
         Vec3 o, d;
         camera_ray(cam, aspect, pick.x, pick.y, (float)vp.width(), (float)vp.height(), &o, &d);
         float t = 0;
-        const int32_t hit = content::scene_pick(wb, nb, o, d, &t);
+        const int32_t raw = content::scene_pick(wb, nb, o, d, &t);
+        const int32_t hit = raw >= 0 ? wmap[raw] : -1; // sikistirilmis -> gercek indeks
         const bool ctrl = ImGui::GetIO().KeyCtrl;
         if (hit >= 0) {
           if (ctrl) st.sel.toggle(hit);
@@ -2479,6 +2932,11 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     ren.set_upscaler((renderer::UpscalerKind)st.render.upscaler, st.render.sharpness);
     ren.set_jitter(st.render.jitter);
     ren.set_shadow_focus(cam.target); // yakin kademeler kameranin baktigi yerde
+    // Arazi / voksel / su onizlemesi: alanlarin OZETI degistiyse mesh yeniden
+    // uretilir. begin_frame'den ONCE, cunku create_mesh kayit sirasinda degil
+    // hazirlikta yapilir. Ozet ayni kaldikca hicbir sey calismaz -- duran bir
+    // sahnede kare basina 0 GPU ayirmasi.
+    for (uint32_t i = 0; i < st.scene.entity_count; i++) proc_refresh(st, ren, i);
     ren.begin_frame(headless ? 0 : frame_i);
     scene.draw(ren, ds);
     for (uint32_t i = 0; i < st.scene.entity_count; i++) {
@@ -2489,7 +2947,17 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       const bool sel = st.sel.contains((int32_t)i);
       const Vec3 tint = sel ? Vec3{1.0f, 0.9f, 0.4f} : e.tint;
       bool drew = false;
-      if ((e.components & content::kSceneModel) && e.asset >= 0 && e.asset < (int32_t)st.scene.asset_count && st.have[e.asset]) {
+      // Ilkel geometri glTF kaynagindan ONCE denenir: primitive >= 0 ise varlik
+      // PROSEDURELDIR ve `asset` alani anlamsizdir (-1). Bu dal olmadan
+      // menuden eklenen Kapsul/Silindir/Koni/Dortgen/Simit editorde GORUNMEZ
+      // kalirdi -- derlenmis sahnede cizilir (scene_runtime ayni tabloyu
+      // kullaniyor) ama editorde cizilmezdi.
+      if ((e.components & content::kSceneModel) && e.primitive >= 0 &&
+          e.primitive < (int32_t)content::kPrimitiveSlotCount && st.prims[e.primitive].valid()) {
+        ren.draw(st.prims[e.primitive], m, tint);
+        drew = true;
+      }
+      if (!drew && (e.components & content::kSceneModel) && e.asset >= 0 && e.asset < (int32_t)st.scene.asset_count && st.have[e.asset]) {
         const content::Model &mdl = st.models[e.asset];
         const content::UploadedModel &up = st.ups[e.asset];
         content::ModelLod lod;
@@ -2506,6 +2974,21 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           }
         }
         if (!drew) { content::draw_model(ren, mdl, up, m, tint, &lod); drew = true; }
+      }
+      // Prosedurel bilesenler: mesh'i proc_refresh uretti (bu kare ya da
+      // daha once). Renkler scene_runtime.cpp'nin cizim yoluyla AYNI -- editor
+      // ile derlenmis sahne ayni araziyi ayni tonda gostersin.
+      if ((e.components & content::kSceneTerrain) && st.terrain_meshes[i].valid()) {
+        ren.draw(st.terrain_meshes[i], st.terrain_mat, m, sel ? tint : Vec3{0.7f, 0.7f, 0.7f});
+        drew = true;
+      }
+      if ((e.components & content::kSceneVoxel) && st.voxel_meshes[i].valid()) {
+        ren.draw(st.voxel_meshes[i], st.voxel_mat, m, sel ? tint : Vec3{0.8f, 0.8f, 0.8f});
+        drew = true;
+      }
+      if ((e.components & content::kSceneWater) && st.water_meshes[i].valid()) {
+        ren.draw(st.water_meshes[i], st.water_mat, m, sel ? tint : Vec3{0.1f, 0.4f, 0.8f});
+        drew = true;
       }
       if (!drew && (e.components & content::kSceneBody)) {
         // Modelsiz govde: carpisan hacmi kutu olarak goster (kure de kutu, yaricap kadar).
