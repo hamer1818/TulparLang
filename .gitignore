@@ -228,11 +228,9 @@ android/host/build/
 android/host/app/build/
 android/host/local.properties
 
-# Khronos Vulkan dogrulama katmani Android ikilileri (engine/tools/fetch_vvl_android.sh)
-engine/third_party/vvl-android/
-
-# AGDK Swappy statik kutuphaneleri (engine/tools/fetch_swappy.sh)
-engine/third_party/swappy/libs/
+# NOT: engine/ artik bir submodule (github.com/hamer1818/tulpar-engine) — motorun
+# yoksayma kurallari kendi .gitignore'unda. Buradan yazilan `engine/...` desenleri
+# submodule sinirini GECMEZ, o yuzden vvl-android/ ve swappy/libs/ satirlari kalkti.
 
 # Derlenmis sahne blob'lari (engine_sahnec / editor Derle; deterministik, kaynagi .sahne)
 *.sahneb

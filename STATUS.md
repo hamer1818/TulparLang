@@ -61,8 +61,10 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > **Faz 8** (Tulpar shader stage — PLAN §11 dil alt kümesi gerekiyor, başlanmadı);
 > **Faz 10** (Metal/iOS — Mac + geliştirici hesabı gerekiyor, başlanmadı); mağaza/servis
 > kalemleri (Play Asset Delivery, Firebase, IAP — hesap gerekiyor).
-> Durum: [docs/engine/DURUM.md](docs/engine/DURUM.md) · Faz 3:
-> [docs/engine/FAZ3.md](docs/engine/FAZ3.md) · Köprü: [docs/engine/KOPRU.md](docs/engine/KOPRU.md).
+> Durum: [engine/docs/DURUM.md](engine/docs/DURUM.md) · Faz 3:
+> [engine/docs/FAZ3.md](engine/docs/FAZ3.md) · Köprü: [engine/docs/KOPRU.md](engine/docs/KOPRU.md).
+> (Motor belgeleri artık **motor deposunda** — bu yollar submodule klonluyken açılır:
+> `git submodule update --init --recursive`.)
 >
 > **Yan etki — web hedefi onarıldı.** Köprü çalışırken `tulpar build --target=web` **her** oyunda
 > `undefined symbol: aot_intern_string` ile düşüyordu ve `tests/dist_archive_audit.py` buna

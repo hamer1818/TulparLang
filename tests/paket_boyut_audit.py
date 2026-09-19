@@ -23,7 +23,15 @@ sebebi bilinmelidir (yanlislikla eklenen bir varlik, silinmeyen hata ayiklama
 bilgisi, statik baglanan yeni bir kutuphane).
 
 Cikis: 0 temiz / atlandi, 1 esik asildi ya da SPIR-V bayat.
+
+ATLAMALAR SAYILIR
+-----------------
+"Kosmayan kapi YESIL DEGILDIR." Olculemeyen her alt denetim `atla()` ile
+kaydedilir, ekrana yazilir ve SON SATIRDA sayilir — yoksa bu betik hicbir sey
+olcmeden "paket denetimi temiz" diyebilir (ve `engine/` submodule'u
+klonlanmamisken tam olarak bunu yapiyordu).
 """
+import glob
 import os
 import re
 import shutil
@@ -31,8 +39,26 @@ import subprocess
 import sys
 import time
 
+# WINDOWS KODLAMA SOZLESMESI (bkz. tests/silent_failure_probe.py): konsol
+# cp1254, hem bu dosyanin ciktisi hem de olculen alt surecin ciktisi UTF-8.
+# Kodlama soylenmezse denetim gercek bir bulguyu BASARKEN UnicodeEncodeError
+# ile cokuyor — bu depoda bugun iki kez yasandi.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MB = 1024 * 1024
+
+# GORUNUR + SAYILAN atlamalar (ozette tekrar yazilir).
+ATLANAN = []
+
+
+def atla(msg):
+    ATLANAN.append(msg)
+    print("  ATLANDI: %s" % msg)
 
 # (yol, insan adi, esik bayt, gerekce)
 # (yol, insan adi, esik bayt, gerekce) — esikler OLCULEN degerin ~2 kati.
@@ -67,7 +93,7 @@ def check_sizes():
     for rel, label, limit, why in SIZE_LIMITS:
         path = os.path.join(ROOT, rel)
         if not os.path.exists(path):
-            print("  atlandi: %s yok (%s)" % (label, rel))
+            atla("%s olculmedi: %s yok" % (label, rel))
             continue
         n = os.path.getsize(path)
         mark = "TAMAM" if n <= limit else "ESIK ASILDI"
@@ -77,11 +103,11 @@ def check_sizes():
     for d, prefix, label, limit, why in ARCHIVE_GROUPS:
         dpath = os.path.join(ROOT, d)
         if not os.path.isdir(dpath):
-            print("  atlandi: %s yok (%s)" % (label, d))
+            atla("%s olculmedi: %s yok" % (label, d))
             continue
         names = [n for n in os.listdir(dpath) if n.startswith("lib" + prefix) and n.endswith(".a")]
         if not names:
-            print("  atlandi: %s bos" % label)
+            atla("%s olculmedi: dizin bos" % label)
             continue
         total = sum(os.path.getsize(os.path.join(dpath, n)) for n in names)
         mark = "TAMAM" if total <= limit else "ESIK ASILDI"
@@ -97,7 +123,7 @@ def check_artifacts(extra_dirs):
     seen = 0
     for d in extra_dirs:
         if not os.path.isdir(d):
-            print("  atlandi: '%s' dizini yok (cagiran yanlis yol mu verdi?)" % d)
+            atla("'%s' dizini yok (cagiran yanlis yol mu verdi?)" % d)
             continue
         for name in sorted(os.listdir(d)):
             for ext, label, limit, why in ARTIFACT_LIMITS:
@@ -110,9 +136,9 @@ def check_artifacts(extra_dirs):
                 if n > limit:
                     bad += 1
     if seen == 0:
-        print("  atlandi: olculecek uretilmis paket yok (bakilan dizin: %s; "
-              "once tulpar build --target=web/android)"
-              % (", ".join(extra_dirs) if extra_dirs else "yok — dizin verilmedi"))
+        atla("olculecek uretilmis paket yok (bakilan dizin: %s; "
+             "once tulpar build --target=web/android)"
+             % (", ".join(extra_dirs) if extra_dirs else "yok — dizin verilmedi"))
     return bad
 
 
@@ -158,7 +184,7 @@ def check_android_strip(dirs):
                 print("  %-12s .so %9s (striplenmis), semboller %9s saklandi" %
                       (abi, human(n), human(os.path.getsize(sym))))
     if seen == 0:
-        print("  atlandi: APK staging dizini verilmedi (once tulpar build --target=android)")
+        atla("APK staging dizini verilmedi (once tulpar build --target=android)")
     return bad
 
 
@@ -167,7 +193,14 @@ def check_spirv():
     glslc = shutil.which("glslc")
     sh_dir = os.path.join(ROOT, "engine/rhi/shaders")
     if not os.path.isdir(sh_dir):
-        print("  atlandi: shader dizini yok")
+        # SUBMODULE SINIRINI GECMEYEN SEY: shader kaynaklari da uretilmis
+        # *_spv.h basliklari da `engine/` submodule'unun icinde. Baslatilmamis
+        # bir agacta bu dizin YOKTUR — ve eski hal tek satir basip `return 0`
+        # diyordu, yani SPIR-V tazeligi hakkinda HICBIR sey olcmeden kapi
+        # yesile yaziliyordu. Atlama artik sayiliyor.
+        atla("SPIR-V tazeligi olculmedi: engine/rhi/shaders yok "
+             "(engine/ bir git submodule; baslatilmamis olabilir: "
+             "git submodule update --init --recursive)")
         return 0
     srcs = sorted(n for n in os.listdir(sh_dir) if n.endswith((".vert", ".frag", ".comp")))
     if not glslc:
@@ -177,7 +210,8 @@ def check_spirv():
         if missing:
             print("  HATA: %d shader kaynaginin uretilmis basligi YOK: %s" % (len(missing), ", ".join(missing[:5])))
             return 1
-        print("  atlandi: glslc yok (yalniz varlik denetlendi, %d shader)" % len(srcs))
+        atla("SPIR-V/GLSL bayt karsilastirmasi yapilmadi: glslc yok "
+             "(yalniz *_spv.h VARLIGI denetlendi, %d shader)" % len(srcs))
         return 0
     stale = []
     for name in srcs:
@@ -221,40 +255,100 @@ def check_spirv():
     return 0
 
 
+# DERLEME/BAGLAMA HATASI IMZALARI. Bunlarin hicbiri "ortam eksikligi" degil:
+# hepsi "bu agacta motor ornegi DERLENMIYOR" demek. Ayirt edilmezlerse
+# asagidaki "motor hazir yok -> atla" dali onlari da yutar (ve `engine/`
+# submodule'u klonlanmamisken tam olarak bunu yapiyordu: motor arsivleri yok ->
+# AOT LINK'te patlar -> "motor hazir" basilmaz -> "GPU yok?" deyip YESIL).
+LINK_HATA_IMZALARI = (
+    "cannot find -lengine_",          # motor arsivleri yok (submodule / derlenmemis)
+    "cannot find -ltulpar_engine",
+    "undefined reference",            # arsiv var ama sembol yok / bayat
+    "ld returned",
+    "ld.lld:",
+    "AOT derleme/baglama basarisiz",  # src/main.cpp
+    "Baglama basarisiz",              # localization.cpp, TR
+    "Linking failed",                 # aot_pipeline.cpp, EN
+    "[AOT] Hata",
+    "[AOT] Error",
+)
+
+
+def engine_archive_present():
+    """Motor arsivi bu agacta URETILMIS mi (link edilebilir mi).
+
+    ON KOSUL ILE KUSUR AYRIMI: motor arsivi yoksa `import "engine"` eden ornek
+    zaten LINK EDILEMEZ; bunu olcmeye kalkip cikan hatayi "GPU yok" sanmak
+    denetimi yalanci yapar. Arsiv yoksa GORUNUR + SAYILAN atliyoruz; arsiv
+    VARKEN link patliyorsa bu gercek bir kusurdur ve KIRMIZI olur.
+    """
+    for pat in ("libtulpar_engine.a", "build-*/libtulpar_engine.a",
+                "build-*/engine/libengine_core.a", "engine/build*/libengine_core.a"):
+        if glob.glob(os.path.join(ROOT, pat)):
+            return True
+    return False
+
+
 def check_startup():
     """Pencersiz motor kurulumu: eng_init -> ilk kare. Olcum: tek karelik kosum."""
     tulpar = None
     # `build/` de aday: CI workflow'u orada derliyor (build.sh'in kendi
     # yorumu: "CI `build/` icinde derliyor"). Listede yoksa CI'da ikili
     # bulunamaz ve acilis olcumu sessizce atlanir.
-    for cand in ("tulpar", "build-linux/tulpar", "build-macos/tulpar", "build/tulpar"):
+    # `.exe` adaylari SART: Windows'ta kok kopyasinin adi `tulpar.exe` ve
+    # uzantisiz ad DISKTE YOK (MSYS2 `ls` onu uzantisiz gosterdigi icin bu
+    # uzun sure fark edilmedi) — yani bu olcum Windows'ta HIC kosmuyordu.
+    for cand in ("tulpar", "tulpar.exe",
+                 "build-linux/tulpar", "build-macos/tulpar", "build/tulpar",
+                 "build-windows/tulpar.exe", "build/tulpar.exe"):
         p = os.path.join(ROOT, cand)
         if os.path.exists(p):
             tulpar = p
             break
     game = os.path.join(ROOT, "examples/engine_ilk_oyun.tpr")
     if not tulpar or not os.path.exists(game):
-        print("  atlandi: tulpar ikilisi ya da ornek yok")
+        atla("acilis olculmedi: tulpar ikilisi ya da examples/engine_ilk_oyun.tpr yok")
+        return 0
+    if not engine_archive_present():
+        atla("acilis olculmedi: motor arsivi yok (build-*/engine/libengine_core.a "
+             "ya da libtulpar_engine.a) — motoru olan bir yapi olmadan bu olcum "
+             "ORTAMI degil YOKLUGU olcer. engine/ bir git submodule; "
+             "baslatilmamis olabilir: git submodule update --init --recursive")
         return 0
     env = dict(os.environ)
     env.update({"TULPAR_ENGINE_HEADLESS": "1", "TULPAR_ENGINE_LOG": "1", "DISPLAY": ""})
     t0 = time.time()
     try:
-        r = subprocess.run([tulpar, game], capture_output=True, text=True, env=env, timeout=180)
+        # encoding SART: alt surec UTF-8 basiyor, Windows konsolu cp1254.
+        # `text=True` tek basina yerel kod sayfasiyla cozer ve ciktiyi bozar.
+        r = subprocess.run([tulpar, game], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env, timeout=180)
     except subprocess.TimeoutExpired:
         print("  HATA: acilis 180 s icinde bitmedi")
         return 1
     dt = time.time() - t0
+    cikti = (r.stdout or "") + (r.stderr or "")
     if r.returncode < 0:
         # Sinyalle olmek ORTAM EKSIKLIGI DEGIL: bu bir cokme. Ayirt edilmezse
         # cokme "GPU yok" gibi atlanir ve kapi hic kizarmaz (bu deponun en
         # pahali hata sinifi: sessiz yesil).
         print("  HATA: motor sinyal %d ile COKTU — cikti: %s"
-              % (-r.returncode, (r.stdout.strip().splitlines()[-3:] or ["yok"])))
+              % (-r.returncode, (cikti.strip().splitlines()[-3:] or ["yok"])))
+        return 1
+    # DERLENMEDI/BAGLANMADI ile KURULAMADI AYRI SINIFLAR. Ikisi de "motor
+    # hazir" satirini basmaz, ama yalniz ikincisi bir ortam eksikligidir.
+    # stderr'e de bakiliyor: link hatasi oraya yaziliyor, stdout'a degil.
+    vurus = [s for s in LINK_HATA_IMZALARI if s in cikti]
+    if vurus:
+        print("  HATA: motor ornegi DERLENMEDI/BAGLANMADI (cikis %d) — bu bir "
+              "ortam eksikligi DEGIL, kirik bir yapi. Imza: %s"
+              % (r.returncode, ", ".join(repr(v) for v in vurus[:3])))
+        for satir in cikti.strip().splitlines()[-6:]:
+            print("      %s" % satir)
         return 1
     if "motor hazir" not in r.stdout:
-        print("  atlandi: motor kurulamadi (GPU yok?) — cikis %d, cikti: %s"
-              % (r.returncode, (r.stdout.strip().splitlines()[-1:] or ["yok"])))
+        atla("acilis olculmedi: motor kurulamadi (GPU/sürücü yok?) — cikis %d, "
+             "cikti: %s" % (r.returncode, (cikti.strip().splitlines()[-1:] or ["yok"])))
         return 0
     # Not: sure AOT DERLEMESINI de icerir (tulpar kaynagi derleyip kosturur),
     # yani bu "oyuncunun gordugu acilis" degil, gelistiricinin gordugu tam tur.
@@ -276,8 +370,18 @@ def main():
     print("acilis suresi:")
     bad += check_startup()
     if bad:
-        print("paket denetimi: %d SORUN" % bad)
+        print("paket denetimi: %d SORUN%s"
+              % (bad, " (+%d atlama)" % len(ATLANAN) if ATLANAN else ""))
         return 1
+    if ATLANAN:
+        # "temiz" kelimesi TEK BASINA yaziliyorsa okuyan kisi her seyin
+        # olculdugunu sanir. Atlamalar burada TEKRAR sayilir: yukarida tek tek
+        # akip giden satirlar son satira ulasmaz.
+        print("paket denetimi: esik asan yok — ama %d alt denetim ATLANDI "
+              "(olculmedi, bu 'temiz' degil):" % len(ATLANAN))
+        for m in ATLANAN:
+            print("    - %s" % m)
+        return 0
     print("paket denetimi temiz")
     return 0
 

@@ -44,7 +44,45 @@ import re
 import subprocess
 import sys
 
+# WINDOWS KODLAMA SOZLESMESI (ayrintisi tests/silent_failure_probe.py basinda).
+# Konsol kod sayfasi cp1254, bu dosyanin ciktisi UTF-8 ("—", "≠"). Kodlama
+# soylenmezse denetim GERCEK bir bulguyu BASARKEN UnicodeEncodeError ile
+# cokuyor: bulgu kayboluyor, geriye anlamsiz bir traceback kaliyor. Bu depoda
+# bugun iki kez yasandi.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# GORUNUR + SAYILAN ATLAMALAR. "Kosmayan kapi YESIL DEGILDIR": olculemeyen bir
+# sey sessizce gecilemez, ama her yoklugu da kirmizi yapamayiz. Ortasi budur:
+# atlama ekrana yazilir, SAYILIR ve ozette "temiz" kelimesinin yanina konur.
+ATLANAN = []
+
+
+def atla(msg):
+    ATLANAN.append(msg)
+    print("dist denetimi ATLANDI: %s" % msg)
+
+
+def engine_tree_present():
+    """`engine/` submodule'u klonlanmis mi (dizin var VE bos degil).
+
+    SUBMODULE SINIRINI GECMEYEN SEY: `engine/` artik ayri bir git submodule.
+    `git clone` (--recursive olmadan) bu dizini BOS birakir; dosya yoktur ama
+    dizin vardir. Bu ayrimi yapmayan kod iki hatadan birine duser: ya yoklugu
+    "bozuk" sayip herkesi SAHTE KIRMIZI ile bogar (derleyici motor olmadan da
+    derlenip test edilebilmeli), ya da her eksikligi atlayip kapsam kaybini
+    gizler. Motor agaci YOKSA -> atlama; VARSA ama parcasi eksikse -> kirmizi.
+    """
+    d = os.path.join(ROOT, "engine")
+    try:
+        return os.path.isdir(d) and any(os.scandir(d))
+    except OSError:
+        return False
 
 # Arşiv yolu, insan adı, eksik sembol HATA mı (True) yoksa UYARI mı (False).
 # Tame arsivleri (aot_tm_* ailesi) — tablo tabanli denetim.
@@ -388,6 +426,10 @@ def check_archive_freshness(driver_srcs):
     Doner: (hata_var_mi, bayat_sayisi). Arsiv yoksa atlanir (o hedef
     kullanilmiyor). Zaman damgasi kaba ama EYLEME GECIRILEBILIR bir olcut:
     "tazele" komutu ekranda yaziyor.
+
+    Arsiv VAR ama KAYNAGI yoksa (ornegin `engine/` submodule'u baslatilmamis)
+    bu KIRMIZI: karsilastiracak sey olmadan "taze" demek, denetimi hukumsuz
+    kilar.
     """
     bad = 0
     stale = 0
@@ -396,12 +438,37 @@ def check_archive_freshness(driver_srcs):
         if not os.path.exists(full):
             continue
         srcs = FRESHNESS_ENGINE_SOURCES if which == "engine" else driver_srcs
+        # KAYNAKSIZ TAZELIK DENETIMI = HUKUMSUZ TAZELIK DENETIMI.
+        #
+        # SUBMODULE SINIRINI GECMEYEN SEY: bu listenin uc kaynagindan ikisi
+        # (`engine/bridge/engine_api.{h,cpp}`) artik `engine/` submodule'unun
+        # icinde. Submodule baslatilmamissa o iki dosya YOKTUR. Eski hal her
+        # eksik kaynagi `continue` ile SESSIZCE atliyordu: geriye yalniz
+        # `runtime/engine_bindings.cpp` kaliyor, yani ABI yuzeyinin 2/3'u hic
+        # olculmeden arsive "taze" deniyordu — `engine_api.h`'daki bir imza
+        # degisikligi (tam da bu denetimin var olma sebebi) gorunmez oluyordu.
+        #
+        # Kural `driver_staleness_sources() is None` dalindakiyle ayni:
+        # kaynagini bulamayan bir denetim "temiz" diyemez, KIRMIZI der.
+        # Bu dal yalnizca ARSIV VARKEN kosar (yukaridaki `exists` suzgeci),
+        # yani motoru hic derlememis bir gelistiriciyi kirmiziya bogmaz.
+        eksik = [s for s in srcs if not os.path.exists(os.path.join(ROOT, s))]
+        if eksik:
+            print("HATA: %s arsivinin TAZELIK denetimi KAYNAKSIZ — %d kaynak "
+                  "dosyasi yok, yani 'taze' hukmu olculmeden verilecekti:"
+                  % (label, len(eksik)))
+            for s in eksik:
+                print("    %s" % s)
+            if any(s.startswith("engine/") for s in eksik):
+                print("    engine/ bir git submodule ve baslatilmamis gorunuyor; "
+                      "arsiv VAR ama kaynagi YOK. Cozum:")
+                print("    git submodule update --init --recursive")
+            bad += 1
+            continue
         amtime = os.path.getmtime(full)
         newer = []
         for s in srcs:
             sp = os.path.join(ROOT, s)
-            if not os.path.exists(sp):
-                continue
             if os.path.getmtime(sp) > amtime:
                 newer.append(s)
         if not newer:
@@ -509,9 +576,26 @@ def main():
     # --- Motor koprusu arsivleri (aot_eng_* + teng_*) -----------------------
     eng_wanted = []
     espec = engine_spec()
-    if espec is None:
+    if espec is None and not engine_tree_present():
+        # MOTORUN YOKLUGU BIR HATA DEGIL, BIR YOKLUKTUR.
+        #
+        # SUBMODULE SINIRINI GECMEYEN SEY: SPEC tablosu
+        # `engine/tools/gen_engine_bindings.py` icinde, yani submodule'un
+        # icinde. Recursive klonlanmamis her calisma agacinda okunamaz.
+        # Bunu "kapsam kaybi" sayip kirmizi vermek, motoru hic kullanmayan
+        # gelistiricinin ve `engine/` cekmeyen her CI isinin `./build.sh
+        # suites` kosumunu SAHTE KIRMIZI yapar. Sahte kirmizi, sessiz yesil
+        # kadar zararlidir: kirmiziyi gormezden gelmeyi ogretir.
+        #
+        # Ayrim ARACIN KENDISINDE degil, AGACIN VARLIGINDA: agac varken
+        # ureteç yoksa asagidaki dal kirmizi verir (gercek kapsam kaybi).
+        atla("motor koprusu (aot_eng_*/teng_*) HIC denetlenmedi: engine/ "
+             "submodule'u klonlanmamis (bos ya da yok). "
+             "Cozum: git submodule update --init --recursive")
+    elif espec is None:
         print("HATA: motor koprusu SPEC tablosu okunamadi — bu denetim "
-              "KAPSAMINI kaybetti (engine/tools/gen_engine_bindings.py)")
+              "KAPSAMINI kaybetti (engine/tools/gen_engine_bindings.py). "
+              "engine/ agaci YERINDE, yani bu bir yokluk degil bir kirik.")
         fail = True
     else:
         if check_engine_generated_fresh(espec):
@@ -572,6 +656,13 @@ def main():
         fail = True
     if fail:
         return 1
+    # Atlamalar ozette TEKRAR sayilir: yukarida tek satir olarak akip gitmis
+    # bir "ATLANDI", son satirda "temiz" okuyan kisiye ulasmaz.
+    if ATLANAN:
+        print("dist arsiv denetimi: %d DENETIM ATLANDI — kapsam eksik, "
+              "bu 'temiz' degil:" % len(ATLANAN))
+        for m in ATLANAN:
+            print("    - %s" % m)
     if dirty:
         # "Temiz" YAZMA: uyarı basıp temiz demek, uyarıyı gürültüye çevirir —
         # bu denetimin kapatmaya çalıştığı hatanın ta kendisi.
@@ -580,9 +671,10 @@ def main():
               % (checked, dirty, len(eng_wanted)))
         return 0
     print("dist arsiv denetimi temiz (%d arsiv, %d tame builtin, %d cekirdek "
-          "sembol, %d motor koprusu builtin x2 aile, %d arsivde tazelik)"
+          "sembol, %d motor koprusu builtin x2 aile, %d arsivde tazelik)%s"
           % (checked, len(wanted), len(core), len(eng_wanted),
-             sum(1 for r in FRESHNESS_ARCHIVES if os.path.exists(os.path.join(ROOT, r[0])))))
+             sum(1 for r in FRESHNESS_ARCHIVES if os.path.exists(os.path.join(ROOT, r[0]))),
+             " — %d ATLAMA ile" % len(ATLANAN) if ATLANAN else ""))
     return 0
 
 

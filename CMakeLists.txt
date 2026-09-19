@@ -625,9 +625,36 @@ install(TARGETS tulpar_tame ARCHIVE DESTINATION lib)
 # Motor bugun POSIX'e bagli (dlfcn/unistd/pthread/mmap + SysV ABI fiber asm);
 # Windows portu ayri bir faz (docs: Windows plani Faz 4). O faz bitince bu
 # kosul geri alinacak.
-# Windows'ta motor ancak TULPAR_WIN_ENGINE ile geliyor; koprunun bagimliliklari
-# da ayni kosula bagli (yoksa `import "engine"` eden program link edilemez).
-if(NOT WIN32 OR TULPAR_WIN_ENGINE)
+if(MINGW)
+    set(TULPAR_WIN_ENGINE_DEFAULT ON)
+else()
+    set(TULPAR_WIN_ENGINE_DEFAULT OFF)
+endif()
+option(TULPAR_WIN_ENGINE "Windows'ta engine/ agacini da derle" ${TULPAR_WIN_ENGINE_DEFAULT})
+
+# --- MOTOR ARTIK BIR SUBMODULE -------------------------------------------
+# engine/ ayri bir depo (github.com/hamer1818/tulpar-engine) ve buraya AYNI
+# yoldan baglaniyor. Yol degismedigi icin asagidaki her sey eskisi gibi
+# calisir — TEK bir kosulla: submodule baslatilmis olmali.
+#
+# Baslatilmamissa engine/ BOS BIR DIZIN olur ve `add_subdirectory` su hatayi
+# verir: "The source directory .../engine does not contain a CMakeLists.txt
+# file." Teknik olarak dogru ama "submodule" kelimesini hic gecmiyor — yani
+# insani yanlis yere baktiriyor. Asagidaki kontrol sebebi ADIYLA soyluyor.
+#
+# TULPAR_ENGINE: platformdan BAGIMSIZ kapatma anahtari. Eskiden yalniz
+# TULPAR_WIN_ENGINE vardi ve o da yalniz Windows'u etkiliyordu; Linux/macOS'ta
+# motoru derlemenin disinda birakmanin yolu YOKTU. Dil/stdlib uzerinde calisan
+# birinin 1090 dosyalik motoru klonlamasi gerekmesin diye ayrildi.
+set(TULPAR_ENGINE_DEFAULT ON)
+if(WIN32 AND NOT TULPAR_WIN_ENGINE)
+    set(TULPAR_ENGINE_DEFAULT OFF)
+endif()
+option(TULPAR_ENGINE "engine/ agacini derle (submodule gerekir)" ${TULPAR_ENGINE_DEFAULT})
+
+# Koprunun bagimliliklari motorla AYNI kosula bagli: ikisi ayrisirsa
+# `import "engine"` eden program derlenir ama LINK'te oluur ve sebep gorunmez.
+if(TULPAR_ENGINE)
     add_library(tulpar_engine STATIC runtime/engine_bindings.cpp)
     target_include_directories(tulpar_engine PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/engine)
     target_compile_definitions(tulpar_engine PRIVATE TULPAR_RUNTIME_ONLY)
@@ -655,8 +682,10 @@ message(STATUS "")
 message(STATUS "=== TulparLang Build Configuration ===")
 message(STATUS "Version: ${PROJECT_VERSION}")
 # ---------------------------------------------------------------------------
-# Tulpar Engine (Faz 0) — ayri agac, derleyiciye linklenmez. Bkz. engine/ ve
-# docs/engine/MIMARI.md.
+# Tulpar Engine (Faz 0) — ayri agac, derleyiciye linklenmez. Artik AYRI BIR
+# DEPO: github.com/hamer1818/tulpar-engine, `engine/` yoluna submodule olarak
+# bagli (`git submodule update --init --recursive`). Katman mimarisi ve faz
+# planlari motor deposunun kendi belgelerinde: `engine/docs/PLAN.md`.
 #
 # WINDOWS'TA VARSAYILAN OLARAK ATLANIR (MSVC de MinGW de). Eski kosul
 # `NOT MSVC` idi ve MinGW'yi kapsamiyordu: capraz derlemede motor derlenmeye
@@ -669,14 +698,21 @@ message(STATUS "Version: ${PROJECT_VERSION}")
 # MinGW'de VARSAYILAN ACIK: port tamamlandi ve engine_tests Windows'ta
 # 469/469 geciyor (79 gorunur atlama: Vulkan/ses cihazi). MSVC'de KAPALI —
 # motorun Windows yolu GCC'ye ozgudur (fiber gecisi GNU asm sozdiziminde).
-if(MINGW)
-    set(TULPAR_WIN_ENGINE_DEFAULT ON)
-else()
-    set(TULPAR_WIN_ENGINE_DEFAULT OFF)
+
+if(TULPAR_ENGINE AND NOT EXISTS "${PROJECT_SOURCE_DIR}/engine/CMakeLists.txt")
+    message(FATAL_ERROR
+        "engine/ submodule'u baslatilmamis (engine/CMakeLists.txt yok).\n"
+        "  Cozum:  git submodule update --init --recursive\n"
+        "  Ya da motorsuz derlemek icin:  -DTULPAR_ENGINE=OFF\n"
+        "  (motorsuz derlemede `import \"engine\"` eden programlar linklenemez)")
 endif()
-option(TULPAR_WIN_ENGINE "Windows'ta engine/ agacini da derle" ${TULPAR_WIN_ENGINE_DEFAULT})
-if(NOT WIN32 OR TULPAR_WIN_ENGINE)
+
+if(TULPAR_ENGINE)
     add_subdirectory(engine)
+else()
+    # SESSIZ KALMIYOR: motorsuz bir tulpar.exe disaridan ayirt edilemez;
+    # `import "engine"` eden program link zamaninda oluyor ve sebep gorunmez.
+    message(STATUS "Tulpar Engine: KAPALI (-DTULPAR_ENGINE=OFF) — `import \"engine\"` calismayacak")
 endif()
 
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")

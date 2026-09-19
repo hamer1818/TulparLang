@@ -117,6 +117,13 @@ jobs:
       - uses: actions/checkout@v6
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
+          # engine/ AYRI BIR DEPO (submodule). actions/checkout VARSAYILAN
+          # OLARAK submodule KLONLAMAZ; bu satir olmadan engine/ bos gelir ve
+          # CMake "engine/ submodule'u baslatilmamis" diyerek yapilandirmayi
+          # dusurur — yani CI gocun ertesi gunu tamamen kirmiziya doner.
+          # detect-docs-only isinde BILEREK yok: orasi yalniz `git diff`
+          # yapiyor, motoru klonlamak bos yere dakika harciyor.
+          submodules: recursive
           sparse-checkout: |
             /*
             !wasm/emsdk
@@ -462,6 +469,13 @@ jobs:
       - uses: actions/checkout@v6
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
+          # engine/ AYRI BIR DEPO (submodule). actions/checkout VARSAYILAN
+          # OLARAK submodule KLONLAMAZ; bu satir olmadan engine/ bos gelir ve
+          # CMake "engine/ submodule'u baslatilmamis" diyerek yapilandirmayi
+          # dusurur — yani CI gocun ertesi gunu tamamen kirmiziya doner.
+          # detect-docs-only isinde BILEREK yok: orasi yalniz `git diff`
+          # yapiyor, motoru klonlamak bos yere dakika harciyor.
+          submodules: recursive
           sparse-checkout: |
             /*
             !wasm/emsdk

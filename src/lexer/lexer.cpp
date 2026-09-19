@@ -308,7 +308,7 @@ static int digit_value_in_base(char c, int base) {
 // sayiyi bitirip ardindan bir TANIMLAYICI okuyordu ve kullanici
 // "Expected ')' after condition" gibi ilgisiz bir mesaj goruyordu.
 // Ozellikle `1u` onemli: GLSL/C'deki isaretsiz sonek ve Tulpar'da isaretsiz
-// tip YOK (docs/engine/FAZ8.md T3) — sessizce `1` saymak yanlis bir zihin
+// tip YOK (motor deposu: docs/FAZ8.md T3) — sessizce `1` saymak yanlis bir zihin
 // modeli kurardi, bu yuzden ACIK hata.
 //
 // Yanlis pozitif riski yok: Tulpar'da "sayi hemen ardindan tanimlayici"

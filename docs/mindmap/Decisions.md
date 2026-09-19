@@ -143,7 +143,7 @@ bir çözünürlük varsayıyor). scene3d açıyor. → [[Tame]] · [[Editor]]
 Hedef "gelişmiş mekanikli, Godot kadar hızlı, Unity kadar çok cihaza ulaşan mobil oyun".
 raylib/GLES2 hattı bu hedefe **eklenerek** varmaz (fizik, animasyon, UI, platform servisi
 yok; anlık-kip API); ayrı bir çekirdek `engine/` başladı, arcade/TameEngine dondurulup
-gönderilmeye devam eder. Dışarıdan gelen plan ([PLAN.md](../engine/PLAN.md)) yargılandı:
+gönderilmeye devam eder. Dışarıdan gelen plan ([PLAN.md](../../engine/docs/PLAN.md)) yargılandı:
 aksiyomlar ve katman modeli doğru; **yanlışlar düzeltildi** (vis buffer önceliği, hacim
 başına LOD bake, streaming↔VT çelişkisi, Nanite yoğunluk hedefi, faz sırası, Tulpar'ı hazır
 sayma). **Dil:** L0/L1 C++17, çünkü Tulpar bugün kutusuz struct/işaretçi/atomik vermiyor;

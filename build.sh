@@ -408,6 +408,14 @@ if [ "$ACTION" = "suites" ]; then
     # Builtin tablosu ↔ codegen ↔ LSP tutarlılık denetimi (derleme gerektirmez).
     if command -v python3 >/dev/null 2>&1; then
         echo ""
+        # GÖRÜNÜR + SAYILAN KAPI ATLAMALARI. `engine/` artık ayrı bir git
+        # submodule; recursive klonlanmamış bir ağaçta motora bakan kapıların
+        # ölçecek şeyi YOKTUR. İki yanlış yanıt var: yokluğu kusur sayıp
+        # herkesi sahte kırmızıya boğmak, ya da sessizce `return 0` deyip
+        # yeşile yazmak. Doğrusu ortası: atlama ekrana yazılır, SAYILIR ve
+        # süitin sonunda tekrar söylenir — "koşmayan kapı YEŞİL DEĞİLDİR".
+        GATE_SKIPS=0
+        GATE_SKIP_NAMES=""
         if ! python3 tests/builtin_audit.py; then
             echo -e "${RED}Builtin denetimi basarisiz!${NC}"
             exit 1
@@ -431,6 +439,25 @@ if [ "$ACTION" = "suites" ]; then
         # kapalılığı ve eğimin fizikle aynı tanımda olduğunu ölçüyor.
         if ! python3 tests/wedge_mesh_check.py; then
             echo -e "${RED}Kama mesh denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # Motor KÖPRÜSÜ bindingleri. Motor artık AYRI bir depo (submodule), yani
+        # üreteç (engine/tools/gen_engine_bindings.py içindeki SPEC tablosu) ile
+        # bu depodaki DÖRT üretilmiş dosya bağımsız hareket edebiliyor. Tek
+        # ağaçken üreteci koşmamak zaten derlemeyi kırıyordu; artık motor
+        # tarafında imza değişip dosyalar tazelenmediğinde HER ŞEY YEŞİL kalıyor
+        # ve derleyici eski ABI ile derliyor — Tuzaklar 8aq'nın kardeşi, tek
+        # farkı sınırın arşiv değil DEPO olması.
+        #
+        # Aşağıdaki dist_archive_audit yalnız ad + arite bakıyor: parametre TİPİ
+        # ya da dönüş tipi değişince o YEŞİL kalır. Bu kapı üretileni depodakiyle
+        # BAYT BAYT karşılaştırdığı için o sınıfı da görüyor. Motor klonlu
+        # değilse GÖRÜNÜR biçimde atlıyor (derleyici tek başına derlenebilmeli).
+        # ÖNCE koşuyor: dist_archive_audit beklentisini aynı SPEC'ten türetiyor,
+        # dosyalar bayatsa sebebi önce adıyla söylensin.
+        if ! python3 tests/engine_bindings_freshness.py; then
+            echo -e "${RED}Motor binding tazelik denetimi basarisiz!${NC}"
+            echo -e "${YELLOW}   tazele: bash tools/engine_bindings_sync.sh${NC}"
             exit 1
         fi
         # Önceden derlenmiş web/Android arşivleri ↔ builtin tablosu.
@@ -479,7 +506,20 @@ if [ "$ACTION" = "suites" ]; then
         # sorduruluyor; iki taraf da elle hesaplanmiyor. `static_assert(sizeof)`
         # bu sinifin yalniz YARISINI gorur: ayni boyutta alan sirasi degisimi
         # ondan gecer (olculdu), bu denetimden gecmez.
-        if ! python3 tests/layout_audit.py; then
+        # ÇIKIŞ 3 = "ölçecek şey yok" (betiğin kendi sözleşmesi: 0 temiz /
+        # 1 uyuşmazlık / 2 kapı bozuk / 3 araç yok). `engine/` submodule'u
+        # klonlanmamışsa hem ölçülen shader tarafı hem ölçen araç yoktur;
+        # eskiden bu dal sessizce 0 dönüyordu, yani kapı hiçbir şey ölçmeden
+        # yeşile yazılıyordu. Artık ATLAMA olarak sayılıyor: yeşil değil, ama
+        # kırmızı da değil — çünkü derleyici motor olmadan da derlenip test
+        # edilebilmeli.
+        python3 tests/layout_audit.py
+        LAYOUT_RC=$?
+        if [ $LAYOUT_RC -eq 3 ]; then
+            GATE_SKIPS=$((GATE_SKIPS + 1))
+            GATE_SKIP_NAMES="$GATE_SKIP_NAMES layout_audit"
+            echo -e "${YELLOW}CPU-GPU yerlesim denetimi ATLANDI${NC} — olculecek/olcen taraf yok (engine/ submodule'u baslatilmamis olabilir: git submodule update --init --recursive)"
+        elif [ $LAYOUT_RC -ne 0 ]; then
             echo -e "${RED}CPU-GPU yerlesim denetimi basarisiz!${NC}"
             exit 1
         fi
@@ -598,6 +638,12 @@ if [ "$ACTION" = "suites" ]; then
                 *)     echo -e "${GREEN}$SMOKE_LAST${NC}" ;;
             esac
         done
+        # Atlamalar TEKRAR sayılıyor: yukarıda tek satır olarak akıp giden bir
+        # ATLANDI, yüzlerce satırın ardından "hepsi geçti" okuyan kişiye
+        # ulaşmaz. Sayı sıfırdan büyükse kapsamın eksik olduğu burada yazılı.
+        if [ "${GATE_SKIPS:-0}" -gt 0 ]; then
+            echo -e "${YELLOW}kapi atlamalari: $GATE_SKIPS${NC} —$GATE_SKIP_NAMES (olculmedi; bu kapilar YESIL SAYILMAZ)"
+        fi
     fi
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:

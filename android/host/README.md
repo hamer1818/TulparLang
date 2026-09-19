@@ -1,6 +1,6 @@
 # Tulpar Engine — Kotlin host (Faz 1 iskeleti)
 
-Plan `docs/engine/PLAN.md` Faz 1: saf NativeActivity + aapt2 zinciri yerine Kotlin Activity +
+Plan `docs/PLAN.md` (motor deposu) Faz 1: saf NativeActivity + aapt2 zinciri yerine Kotlin Activity +
 SurfaceView + JNI köprüsü (`engine/platform/android/jni_bridge.cpp`). Sebep: Play Asset Delivery,
 Firebase, ADPF Performance Hint, uygulama içi güncelleme Java/Kotlin tarafından geçer.
 

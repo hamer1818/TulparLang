@@ -2873,3 +2873,60 @@ bağlamış olmasaydı gerileme fark edilmeden geçerdi.
 
 İlgili: 8bd ve 9l (kapı ölçmediği halde yeşil verir); buradaki fark, **kodun kendisinin**
 ölçülmemiş olması — hiç derlenmemişti.
+
+### 9n. Üreteç depo sınırını geçince "tek kaynak" garantisi ADRESLE birlikte kaybolur
+
+`engine/` ayrı bir depoya taşındı (2026-09-19, submodule). `eng_*` ailesinin
+SPEC tablosu artık **motor deposunda** (`engine/tools/gen_engine_bindings.py`),
+onun ürettiği **dört dosya** ise derleyici deposunda:
+
+```
+runtime/engine_bindings.cpp
+src/aot/engine_builtins_table.inc
+src/typeinfer/engine_builtins_sigs.inc
+src/lsp/engine_builtins.inc
+```
+
+Tek ağaçken üreteci çalıştırmamak zaten derlemeyi kırıyordu — imza ile kullanım
+aynı commit'te yaşıyordu. Submodule olunca ikisi **bağımsız hareket ediyor**:
+motor tarafında imza değişir, üretilmiş dosyalar tazelenmez, ve **her şey yeşil
+kalır** — derleyici eski ABI ile derler. Bu 8aq'nın kardeşi; tek farkı sınırın
+prebuilt arşiv değil **depo** olması.
+
+**Kural:** bir üreteç depo sınırını geçiyorsa, ürettiği dosyalar için
+"üretilenle depodaki AYNI mı" kapısı **zorunludur**.
+
+**Ad + arite denetimi YETMEZ.** `tests/dist_archive_audit.py`'nin
+`check_engine_generated_fresh()`'i tabloda ad+arite, diğer üç dosyada yalnız
+"ad metinde geçiyor mu" bakıyor. Bugün sessizce geçen sınıflar:
+
+* **ariteyi değiştirmeyen parametre tipi değişimi** — `num`→`int`: typeinfer
+  `TYPE_UNKNOWN`→`TYPE_INT`, C++ tarafı `tm_num`→`tm_int`. Yanlış unpack,
+  sessiz yanlış sonuç.
+* **dönüş tipi değişimi**
+* **üretecin emisyon mantığının değişmesi** — SPEC'e hiç dokunulmadan çıktı
+  biçimi değişirse ad/arite denetimleri yeşil kalır.
+
+`tests/engine_bindings_freshness.py` bunları görüyor çünkü **bayt eşitliği**
+ölçüyor. Pozitif kontrolü gerçek hata sınıfını taklit ediyor: sahte bir motor
+ağacında `eng_screenshot(path)` → `eng_screenshot(path, kalite)` yapılınca kapı
+dört dosyada birden kırmızı veriyor.
+
+**İki alt not, ikisi de ölçüldü:**
+
+1. Kapı üreteci **geçici bir köke** koşturmalı ve kökü **açıkça** vermeli.
+   `gen_engine_bindings.py` çıktı kökünü `argv[1]`'den alır; verilmezse
+   `__file__`'dan **üç** dizin yukarısını kök sayar. O varsayılan yalnız motor
+   `<depo>/engine` altındayken doğru — motor tek başına klonlanırsa script
+   `~/runtime/`, `~/src/aot/` dizinlerini **sessizce yaratıp** oraya yazar.
+2. Karşılaştırma **satır sonu duyarsız** olmalı. Üretecin `write()`'ı metin
+   kipinde yazdığı için Windows'ta CRLF üretiyor; `core.autocrlf` farkı aksi
+   halde %100 sahte kırmızı verir.
+
+**Aynı sınırın diğer yüzü:** üst deponun `.gitattributes` ve `.gitignore`
+kuralları submodule'ün çalışma ağacına **uygulanmaz**. Ölçüldü: ana depodaki
+`*.sahne text eol=lf` kuralı geçerliliğini yitirdi, `tests/assets/editor.sahne`
+CRLF olarak çıkarıldı (1054 vs 994 bayt) ve `scene_file_editor_sahne_is_canonical`
+düştü — yani 9m'de açtığımız yara aynı gün submodule sınırından geri girdi.
+Motor deposuna kendi `.gitattributes`'ı yazılarak kapatıldı. Kural ekleyince de
+**çalışma kopyası kendiliğinden düzelmez**: dosyayı silip yeniden çıkarmak gerekir.

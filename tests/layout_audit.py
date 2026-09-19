@@ -34,15 +34,55 @@ import os
 import shutil
 import sys
 
+# WINDOWS KODLAMA SOZLESMESI (bkz. tests/silent_failure_probe.py): konsol
+# cp1254, bu denetimin ciktisi UTF-8 ("—", "≠", "→"). Kodlama soylenmezse
+# gercek bir UYUSMAZLIK satirini BASARKEN UnicodeEncodeError ile cokulur ve
+# bulgu kaybolur.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS = os.path.join(ROOT, "engine", "tools")
 sys.path.insert(0, TOOLS)
 
 
+def engine_tree_present():
+    """`engine/` submodule'u klonlanmis mi (dizin var VE bos degil)."""
+    d = os.path.join(ROOT, "engine")
+    try:
+        return os.path.isdir(d) and any(os.scandir(d))
+    except OSError:
+        return False
+
+
 def main():
-    if not os.path.isdir(os.path.join(ROOT, "engine", "rhi", "shaders")):
-        print("yerlesim denetimi ATLANDI: engine/rhi/shaders yok")
-        return 0
+    # SUBMODULE SINIRINI GECMEYEN SEY: olculen iki taraftan biri
+    # (`engine/rhi/shaders/*.{vert,frag}`) ve olcen arac
+    # (`engine/tools/layout_check.py`) artik `engine/` submodule'unun icinde.
+    # Baslatilmamis bir agacta ikisi de yoktur. Eski hal bu durumda tek satir
+    # basip `return 0` diyordu: kapinin KENDI pozitif kontrolleri (rc1/rc2
+    # KIRMIZI olmali) dahil hicbir sey kosmuyor, ama cikis kodu YESIL.
+    # Betigin docstring'i zaten "3 = arac yok" diyor; bu dal onu kullanmiyordu.
+    # Artik 3 donuyor ve cagiran (build.sh) bunu GORUNUR + SAYILAN atlama
+    # olarak isliyor — yesile de kirmiziya da yazmadan.
+    eksik = [p for p in ("engine/rhi/shaders", "engine/tools/layout_check.py")
+             if not os.path.exists(os.path.join(ROOT, p))]
+    if eksik and not engine_tree_present():
+        print("yerlesim denetimi ATLANDI: %s yok — olculecek iki taraftan biri "
+              "burada degil, demek ki HICBIR SEY olculmedi (pozitif kontroller "
+              "dahil)" % ", ".join(eksik))
+        print("  engine/ bir git submodule ve klonlanmamis gorunuyor. Cozum:")
+        print("  git submodule update --init --recursive")
+        return 3
+    if eksik:
+        # Agac YERINDE ama parcasi yok: bu bir yokluk degil, bir kirik.
+        # (dist_archive_audit.py'deki motor SPEC dali ile ayni ayrim.)
+        print("yerlesim denetimi KOSULAMADI: engine/ agaci YERINDE ama %s YOK "
+              "— kapi kapsamini kaybetmis" % ", ".join(eksik))
+        return 2
     if not (os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")):
         print("yerlesim denetimi ATLANDI: C++ derleyici (g++/clang++) yok")
         print("  UYARI: C++ struct yerlesimi DERLEYICIYE olcturuluyor; derleyici "
