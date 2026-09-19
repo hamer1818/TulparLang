@@ -187,7 +187,7 @@ if [ "$ACTION" = "suites" ]; then
                 # PAKET COKTU (FAIL satiri YOK). Burada en cok ihtiyac duyulan
                 # iki sey CIKIS KODU ve ciktinin SONU — ikisi de eskiden
                 # basilmiyordu ve 2026-09-16'da bir CI turu tam olarak bunun
-                # yuzunden bosa gitti: macOS'ta engine_bridge ozetsiz dustu,
+                # yuzunden bosa gitti: macOS'ta bir paket ozetsiz dustu,
                 # elimizde yalnizca "hata" gecen 8 satir vardi ve onlar da
                 # kapanis raporunun ortasindan gelmisti, yani teshis icin
                 # HICBIR SEY soylemiyordu.
@@ -205,9 +205,9 @@ if [ "$ACTION" = "suites" ]; then
                 echo "    cikis kodu $code$sig; FAIL satiri YOK -> paket ozetine varmadan oldu."
                 echo "    --- ciktinin son 12 satiri ---"
                 echo "$out" | tail -12 | sed 's/^/    /'
-                # Motor koprusu (teng_init) cokme raporcusunu KURUYOR ve
-                # rapor dosyasini CWD'ye yaziyor — ama onu kimse basmiyordu,
-                # yani saha kosumunda yigin izi uretilip cope gidiyordu.
+                # Cokme raporu dosyasi CWD'ye dusebiliyor — onu kimse
+                # basmiyordu, yani saha kosumunda yigin izi uretilip cope
+                # gidiyordu.
                 for cr in crash_*.txt; do
                     [ -f "$cr" ] || continue
                     echo "    --- cokme raporu $cr ---"
@@ -223,43 +223,6 @@ if [ "$ACTION" = "suites" ]; then
             printf "%-42s ${GREEN}PASS${NC} %s\n" "$name" "$summary"
         fi
     done
-    # ENGINE (Faz 0) birim testleri — C++ L0/L1 (engine/). macOS arm64 kosumu
-    # AArch64 fiber gecisini, Linux x86_64 kosumu SysV gecisini sinar; A2
-    # kapisi (karede 0 ayirma, pozitif kontrollu) ve crash reporter her
-    # build'de burada kosar. Ikili yoksa bu bir build sapmasidir, atlama
-    # degil: kirmizi. Zaman olcumleri [profiler]/[bilgi] satirlariyla BILGI
-    # olarak basilir, karar vermez (Tuzaklar 1l/1p).
-    # CI `build/` icinde derliyor (workflow: mkdir build; cmake ..), yerel
-    # build.sh ise build-<platform>/; ikisine de bak. Bulunamazsa KIRMIZI.
-    ENGINE_TESTS=""
-    for d in "$BUILD_DIR" build build-linux build-macos; do
-        if [ -x "$d/engine/engine_tests" ]; then ENGINE_TESTS="$d/engine/engine_tests"; break; fi
-    done
-    SUITE_N=$((SUITE_N + 1))
-    if [ -z "$ENGINE_TESTS" ]; then
-        ENGINE_TESTS="$BUILD_DIR/engine/engine_tests"
-        printf "%-42s ${RED}FAIL${NC} (ikili yok: %s — engine hedefi derlenmedi mi?)\n" "engine_tests" "$ENGINE_TESTS"
-        SUITE_FAILED=1
-    else
-        out=$(DISPLAY= $SUITE_TIMEOUT_CMD "$ENGINE_TESTS" 2>&1); code=$?
-        summary=$(echo "$out" | grep -E '^engine tests:' | tail -1)
-        if [ $code -ne 0 ] || [ -z "$summary" ]; then
-            printf "%-42s ${RED}FAIL${NC} %s\n" "engine_tests" "$summary"
-            # Teshis icin GPU/yetenek satirlari da basilir (ilk lavapipe
-            # kosumunda hangi cihazin bulundugu gorunmedi).
-            # Dusen kosumda TUM [bilgi] satirlari: teshis icin gereken sayilar
-            # (cihaz acilamadi sebebi, altin ozet farki) burada.
-            # Once DUSEN kontroller (hepsi; 28 satir siniri bunlari kesiyordu, CI'da
-            # hangi testin dustugu gorunmuyordu 2026-09-14), sonra bilgi satirlari.
-            echo "$out" | grep -E 'FAIL|FATAL|COKME' | sed 's/^/    /'
-            echo "$out" | grep -E 'ATLANDI|\[bilgi\]' | awk 'NR<=80' | sed 's/^/    /'
-            SUITE_FAILED=1
-        else
-            printf "%-42s ${GREEN}PASS${NC} %s\n" "engine_tests" "$summary"
-            echo "$out" | grep -E '^\[profiler\]|\[bilgi\]|ATLANDI' | sed 's/^/    /'
-        fi
-    fi
-    echo ""
     if [ $SUITE_FAILED -ne 0 ]; then
         hw_end "suites"
         echo -e "${RED}Some suites failed!${NC} ($SUITE_N paket)"
@@ -298,10 +261,8 @@ if [ "$ACTION" = "suites" ]; then
         # "kaynak daha yeni" diyebiliyordu); bu, EKSİK SEMBOLLERİ adıyla
         # sayıyor. Ayrım işe yaradı: wasm/dist beş gün bayat kaldı, scene3d'nin
         # her web derlemesi link'te patlıyordu ve sarı satırı kimse okumadı.
-        # Uc aileyi de sayiyor: tame (aot_tm_*), cekirdek runtime ve motor
-        # koprusu (aot_eng_* + teng_*, 156 builtin). Ucuncusu 2026-09-15'e
-        # kadar ELENIYORDU: denetim "temiz" derken `import "engine"` eden her
-        # android derlemesi bayat arsivde link'te patlayabilirdi.
+        # Iki aileyi de sayiyor: tame (aot_tm_*) ve cekirdek runtime.
+        # (Motor koprusu ailesi 2026-09-20'de ayri depoya tasindi.)
         if ! python3 tests/dist_archive_audit.py; then
             echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
             exit 1
@@ -314,7 +275,6 @@ if [ "$ACTION" = "suites" ]; then
         #             YESIL kalir ve GPU ESKI shader'i kosturur (sessiz yanlis
         #             sonuc; ayrica "runtime'da shader derlemesi yok" kapisinin
         #             kaniti uretilmis basligin depoda TAZE durmasidir).
-        #  • acilis — motor kurulumu uzarsa kimse fark etmez, oyun yine calisir.
         #
         # Cikis kodu KAPI: 0 disi ise suite duser. Atlamalar (emsdk/NDK/GPU yok)
         # sebebiyle birlikte basiliyor, gorunmez `return` ile degil.
@@ -332,29 +292,9 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Bicimlendirici denetimi basarisiz!${NC}"
             exit 1
         fi
-        # CPU-GPU YERLESIM denetimi: shader'in std140/std430 yerlesimi ile C++
-        # struct'inin bayt yerlesimi ayrisirsa hicbir sey kizarmaz — GPU baska
-        # bir ofsetten okur, goruntu "biraz yanlis" olur. Yerlesim SPIR-V'den
-        # (glslc'nin gercekte urettigi ofsetler) okunuyor, C++ tarafi da derleyiciye
-        # sorduruluyor; iki taraf da elle hesaplanmiyor. `static_assert(sizeof)`
-        # bu sinifin yalniz YARISINI gorur: ayni boyutta alan sirasi degisimi
-        # ondan gecer (olculdu), bu denetimden gecmez.
-        if ! python3 tests/layout_audit.py; then
-            echo -e "${RED}CPU-GPU yerlesim denetimi basarisiz!${NC}"
-            exit 1
-        fi
-        # Faz 8 fizibilite kapisi: Tulpar sozdiziminin GPU alt kumesi (.tprs)
-        # -> GLSL -> SPIR-V cevirisi hala depodaki *_spv.h ile BAYT AYNI mi.
-        # Bayt esitligi secildi cunku `glslc -O` ciktisi isim bagimsiz ve
-        # yeniden uretilebilir (olculdu) — yani "benzer" degil "ayni" diyebiliyoruz.
-        # glslc yoksa GORUNUR atlar (CI'da glslc yok, bu bilinen ve yazili).
-        # Referans GLSL degismisse o dosya gorunur atlanir: ne yanlis suclama,
-        # ne olcmeden gecme. Prototip oldugu icin atlama suite'i DUSURMEZ,
-        # ama gercek bir ayrisma (cikis 1) duSurur.
-        if ! python3 tests/faz8_shader_audit.py; then
-            echo -e "${RED}Faz 8 shader cevirici denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        # NOT: CPU-GPU yerlesim denetimi (layout_audit.py) ve Faz 8 shader
+        # cevirici denetimi (faz8_shader_audit.py) motorun shader agacini
+        # okuyordu; motorla birlikte tulpar-engine deposuna (tools/) tasindilar.
         # Dongu-sekli gezicisi ASTNode_C'nin TUM cocuk alanlarini geziyor mu?
         # Bir dal atlanirsa "govdede cagri yok" kaniti delinir ve atlanan
         # dalda duran bir push bellek bozar — suitler yesil kalarak.
@@ -1185,7 +1125,7 @@ if [ "$ACTION" = "test" ]; then
     # program, but we still verify it parses/lowers). We verify the build
     # succeeds (catches regressions in the embedded server/router/api
     # stdlib path) but do not run the binary.
-    COMPILE_ONLY_TESTS=("engine_ilk_oyun.tpr" "engine_arena.tpr" "engine_aksiyon.tpr" "09_socket_simple.tpr" "09_socket_server.tpr" \
+    COMPILE_ONLY_TESTS=("09_socket_simple.tpr" "09_socket_server.tpr" \
                         "09_socket_client.tpr" "11_router_app.tpr" \
                         "12_threaded_server.tpr" "14_api_server.tpr" \
                         "api_wings.tpr" "api_wings_crud.tpr" \

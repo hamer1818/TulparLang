@@ -1,7 +1,7 @@
 import "test";
 
 // GRAMER BOSLUKLARI: G1 (tip adiyla donusum), G3 (sabit boy dizi tipi),
-// G5 (`const` yerel).  Bkz. docs/engine/FAZ8.md §2 T19 / T8 / T16.
+// G5 (`const` yerel).  Bkz. tulpar-engine: docs/FAZ8.md §2 T19 / T8 / T16.
 //
 // Bu paketin IKI yarisi var ve ikincisi olmadan birincisi eksik olurdu:
 //
@@ -231,7 +231,7 @@ func run_b_sayi_reddi() {
     assert_eq_int(derleme_kodu("print(0xFF);\nprint(0b1010);\nprint(1_000);\n"), 0);
 
     // REDDEDILMELI: isaretsiz sonek — Tulpar'da isaretsiz tip YOK
-    // (docs/engine/FAZ8.md T3). Sessizce `1` saymiyoruz.
+    // (tulpar-engine: docs/FAZ8.md T3). Sessizce `1` saymiyoruz.
     assert(derleme_kodu("print(1u);\n") != 0, "`1u` REDDEDILMELIYDI");
     // REDDEDILMELI: eksik us / asili ayirici / bos taban
     assert(derleme_kodu("int x = 1e;\nprint(x);\n") != 0, "`1e` REDDEDILMELIYDI");

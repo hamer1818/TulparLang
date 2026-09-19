@@ -314,7 +314,7 @@ void Parser::error(const std::string& message) {
 //
 // Bit islemleri eklenince butun basamaklar kaydi (eskiden `||`=1 … `*`=6).
 // Sira C ailesinin sirasi ve bu bir TERCIH DEGIL, ZORUNLULUK: bu dilin
-// shader alt kumesi GLSL'e ceviriliyor (docs/engine/FAZ8.md, Secenek C) ve
+// shader alt kumesi GLSL'e ceviriliyor (tulpar-engine: docs/FAZ8.md, Secenek C) ve
 // GLSL de C onceligini kullaniyor. Baska bir sira secseydik ayni metin iki
 // tarafta iki farkli sey hesaplardi — ve fark ancak calisma zamaninda
 // gorulurdu.
@@ -1356,7 +1356,7 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
     // `metin(x)`, `mantiksal(x)` — ayni tokenlar).
     //
     // Neden gerekiyordu: `int`/`float` ANAHTAR KELIME oldugu icin `float(x)`
-    // ayrisamiyordu (docs/engine/FAZ8.md T19). Her dilde bulunan bu yazim
+    // ayrisamiyordu (tulpar-engine: docs/FAZ8.md T19). Her dilde bulunan bu yazim
     // olmadan shader alt kumesi `f32(x)` gibi takma adlarla dolanmak
     // zorundaydi.
     //
@@ -1947,7 +1947,7 @@ DataType Parser::parse_type() {
     // eleman tipini `[]` ile AYNI sekilde belirlemek. YAPMADIGI: boyutu
     // saklamak, yigina yerlestirmek, sinir denetimi yapmak, ilk deger
     // uretmek. Yani `float[4] v;` calisma zamaninda `float[] v;` ile ayni
-    // seydir. Bu BILEREK boyle: amac shader alt kumesinin (docs/engine/FAZ8.md
+    // seydir. Bu BILEREK boyle: amac shader alt kumesinin (tulpar-engine: docs/FAZ8.md
     // T8) ayrisabilmesi; gercek sabit-boy semantigi kutusuz struct/yerlesim
     // isiyle (PLAN §11) birlikte gelir. Boyut SESSIZCE degil, bu yorumla
     // ve raporla dusuruluyor.

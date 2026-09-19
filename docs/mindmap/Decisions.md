@@ -143,12 +143,12 @@ bir çözünürlük varsayıyor). scene3d açıyor. → [[Tame]] · [[Editor]]
 Hedef "gelişmiş mekanikli, Godot kadar hızlı, Unity kadar çok cihaza ulaşan mobil oyun".
 raylib/GLES2 hattı bu hedefe **eklenerek** varmaz (fizik, animasyon, UI, platform servisi
 yok; anlık-kip API); ayrı bir çekirdek `engine/` başladı, arcade/TameEngine dondurulup
-gönderilmeye devam eder. Dışarıdan gelen plan ([PLAN.md](../engine/PLAN.md)) yargılandı:
+gönderilmeye devam eder. Dışarıdan gelen plan ([PLAN.md](https://github.com/hamer1818/tulpar-engine/blob/main/docs/PLAN.md)) yargılandı:
 aksiyomlar ve katman modeli doğru; **yanlışlar düzeltildi** (vis buffer önceliği, hacim
 başına LOD bake, streaming↔VT çelişkisi, Nanite yoğunluk hedefi, faz sırası, Tulpar'ı hazır
 sayma). **Dil:** L0/L1 C++17, çünkü Tulpar bugün kutusuz struct/işaretçi/atomik vermiyor;
 alt küme gelince L1 taşınır, L2+ dili o zaman kararlaştırılır — "üstü C++ kalır" varsayılan
-değil. Web hedef değil; masaüstü ürün değil, geliştirme platformu. Ayrıntı: [[Engine]].
+değil. Web hedef değil; masaüstü ürün değil, geliştirme platformu. Motor 2026-09-20'de ayrı depoya taşındı: [tulpar-engine](https://github.com/hamer1818/tulpar-engine).
 
 ## Sunset (geri getirme)
 Tree-walk interpreter (`src/interpreter/`) + x64 JIT (`src/jit/`) — 2026-05-05 kaldırıldı.

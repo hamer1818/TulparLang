@@ -116,7 +116,7 @@ base, stage = sys.argv[1], sys.argv[2]
 libroot = os.path.join(stage, "lib")
 with zipfile.ZipFile(base, "a", zipfile.ZIP_STORED) as z:
     for abi in sorted(os.listdir(libroot)):
-        # Tame: libtulpargame.so; motor host: libtulparengine.so — dizindeki her .so
+        # Tame: libtulpargame.so — dizindeki her .so (dongu genel)
         for name in sorted(os.listdir(os.path.join(libroot, abi))):
             if not name.endswith(".so"):
                 continue
