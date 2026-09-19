@@ -1926,6 +1926,16 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   // path is given, so prefix with .\ to ensure the binary is found.
   std::string run_cmd = aot_shell_quote(".\\" + run_base + ".exe");
   if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
+  // DIS TIRNAK CIFTI — cmd.exe'nin en bilinen kurali. `system()` Windows'ta
+  // `cmd.exe /c <satir>` calistiriyor ve cmd, satir bir tirnakla BASLIYORSA
+  // satirin ILK ve SON tirnagini atiyor. Tek tirnakli belirtec varken bu
+  // kazara dogru sonuc veriyordu (atilanlar exe'nin kendi tirnaklariydi);
+  // argumanlar da tirnaklanir tirnaklanmaz satir bozuluyor ve cmd program
+  // adini `.\prog.exe" "ilk_arg` diye okuyor. Olculdu 2026-09-19:
+  //   '.\.tulpar_run23260.exe" "examples' is not recognized as an internal...
+  // Tamami bir tirnak cifti daha icine alininca cmd'nin attigi tirnaklar O
+  // CIFT oluyor ve geriye dogru satir kaliyor. Argumansiz durumda da zararsiz.
+  run_cmd = "\"" + run_cmd + "\"";
   int run_result = system(run_cmd.c_str());
   remove((run_base + ".exe").c_str());
   remove((run_base + ".ll").c_str());

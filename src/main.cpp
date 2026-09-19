@@ -637,20 +637,52 @@ int main(int argc, char **argv) {
     // Tulpar is AOT-only (see CLAUDE.md "AOT-ONLY"): this is the single
     // execution path. Any AOT failure is a hard error — there is NO VM
     // fallback. "It ran" therefore always means the AOT path ran.
-    // Betikten SONRAKİ argümanları programa ilet. Kabuk alıntılaması tek
-    // tırnakla: boşluk, joker ve `$` içeren yollar bozulmasın. İçindeki tek
-    // tırnak '\'' dizisiyle kaçırılıyor (POSIX sh'de tek tırnağı tek tırnak
-    // içinde kaçırmanın tek yolu).
+    // Betikten SONRAKİ argümanları programa ilet. Alıntılama KABUĞA GÖRE
+    // DEĞİŞİR, çünkü üretilen ikili `system()` ile çalıştırılıyor:
+    //
+    //   POSIX  -> /bin/sh : tek tırnak. Boşluk, joker ve `$` bozulmasın;
+    //             içindeki tek tırnak '\'' dizisiyle kaçırılır (sh'de tek
+    //             tırnağı tek tırnak içinde kaçırmanın tek yolu).
+    //   Windows -> cmd.exe: TEK TIRNAK DİYE BİR ŞEY YOK. cmd onu sıradan bir
+    //             karakter sayar ve argümanın İÇİNE koyar. Ölçüldü
+    //             (2026-09-19, yerel Windows derlemesi):
+    //             `tulpar betik.tpr sahne.json` çağrısında program
+    //             `args()[1]` olarak `'sahne.json'` alıyordu — tırnaklar
+    //             dahil. Yani komut satırı argümanı alan HER Tulpar programı
+    //             Windows'ta bozuktu; `build.sh suites` içindeki kod üretimi
+    //             denetimi "sahne bulunamadi" diyerek buna takıldı ve hatayı
+    //             sahne dosyasında aratıyordu.
+    //
+    // Windows tarafı çift tırnak kullanıyor (aot_pipeline.cpp'deki
+    // aot_shell_quote ile aynı gelenek). Ters bölü YOL AYIRICISIDIR, kaçış
+    // değildir; ama kapanış tırnağından hemen önce gelen ters bölü dizisi
+    // CRT'nin argüman ayrıştırıcısı tarafından kaçış sayılır, o yüzden orada
+    // ikileniyor. İçerideki `"` de `\"` olarak kaçırılıyor.
     {
       std::string q;
       for (int ai = arg_offset + 1; ai < argc; ai++) {
         if (!q.empty()) q += " ";
+#if defined(_WIN32)
+        q += '"';
+        {
+          size_t backslashes = 0;
+          for (const char *c = argv[ai]; *c; c++) {
+            if (*c == '\\') { backslashes++; q += *c; continue; }
+            if (*c == '"') { q.append(backslashes + 1, '\\'); q += '"'; }
+            else q += *c;
+            backslashes = 0;
+          }
+          q.append(backslashes, '\\');  // kapanış tırnağına kaçmasınlar
+        }
+        q += '"';
+#else
         q += "'";
         for (const char *c = argv[ai]; *c; c++) {
           if (*c == '\'') q += "'\\''";
           else q += *c;
         }
         q += "'";
+#endif
       }
       aot_set_run_args(q.c_str());
     }
