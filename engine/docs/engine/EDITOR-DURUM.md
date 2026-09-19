@@ -410,6 +410,38 @@ derlenmeden girer.
 
 ---
 
+## 9. Sektör karşılaştırması: UE5 / Unity / Roblox Studio / CryEngine / Source 2
+
+Beş editörün **ortak** tabanı, bizim durumumuzla. "Açık kaynak" sütunu,
+kodu vendor'lanabilecek bir kaynak olup olmadığını söyler — bu satırların
+çoğu motorun kendi veri modeline bağlı olduğu için kütüphaneyle çözülmez.
+
+| Özellik | UE5 | Unity | Bizde | Kaynak |
+|---|---|---|---|---|
+| Çoklu nesne düzenleme | Details | Inspector | ✅ **yapıldı** — 101 alan-yaprağı, bit alanları ayrı | kendi (veri modeli) |
+| Özellik araması | Details arama | — | ✅ **yapıldı** | hiyerarşi aramasının yeniden kullanımı |
+| Görünüm kipleri | View Mode | Draw Mode | ✅ Aydınlatmalı / Işıksız / Çarpışma / Sınırlar — ❌ tel kafes | tel kafes: barycentric (shader işi) |
+| Prefab / Blueprint | Blueprint | Prefab | ✅ **yapıldı** — kaydet + örnekle, geri alınabilir | `.sahne` biçimi yeniden kullanıldı |
+| Panel düzeni kalıcılığı | var | var | ✅ **yapıldı** — aç/kapa otomatik + menü | mevcut `editor_layout` |
+| Varlık tarayıcı (klasör, küçük resim) | Content Browser | Project | ⚠️ düz liste, 64 tavan | `imgui_demo.cpp` `ExampleAssetsBrowser` (MIT, depoda) |
+| Çoklu viewport | 4 pencere | Scene + Game | ❌ tek, sekmeli | — |
+| Malzeme grafiği | Material Editor | Shader Graph | ❌ kabuk (rozetli) | `imnodes` (depoda) + shader üretimi |
+| VFX grafiği | Niagara | VFX Graph | ❌ yalnız sayı alanları | — |
+| Zaman çizelgesi | Sequencer | Timeline | ❌ kabuk | `ImSequencer` (depoda) |
+| Arazi araçları | Landscape | Terrain | ❌ kabuk fırça | — |
+| Proje ayarları | Project Settings | Project Settings | ❌ render ayarları sahneye yazılmıyor | mevcut `editor_layout` yazıcısı |
+| Kaynak kontrol | var | var | ❌ | önceliksiz |
+
+### Bu turda bulunan kendi regresyonum
+
+Faz 0'da `rc.tonemap = true` açmıştım. `compose.frag` düz Reinhard
+(`c / (1 + c)`) kullanıyor: tam aydınlık beyaz bir yüzey **0.5'e** iniyordu,
+yani editörün tüm sahnesi yaklaşık yarı parlaklığa düşmüştü — "ışıklar
+görünmüyor" hissini büyüten bir şey. Kapatıldı. Doğru çözüm pozlama
+kompanzasyonlu filmik eğri (ACES / AgX); shader yeniden derlenmesi ister.
+
+---
+
 ## 7. Kayıt: bu belgede düzeltilen kendi hatalarım
 
 - "Rüzgâr için `rhi/shaders/foliage.vert` zaten bekliyor" — **öyle bir shader yok** (§3).
