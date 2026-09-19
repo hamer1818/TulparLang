@@ -70,12 +70,12 @@ build_abi() {
     local OUT="dist/$abi"
     local OBJ="$OUT/obj"
     # YALNIZ KENDI CIKTILARINI SIL. Eskiden `rm -rf "$OUT"` vardi ve bu, ayni
-    # dizinde yasayan MOTOR arsivlerini (libengine_*.a, libtulpar_engine_android.a —
-    # engine/tools/build_bridge_android.sh uretir) her kosumda yok ediyordu.
-    # Olculdu 2026-09-16: bu betik kosturuldu, motorun 11 arsivi silindi ve
-    # `import "engine"` eden her android derlemesi link'te olur hale geldi;
-    # masaustunde hicbir sey kizarmaz. (tests/dist_archive_audit.py bunu
-    # "arsiv YOK" diye yakalar, ama ancak kosturulursa.)
+    # dizinde yasayan BASKA uretilerin arsivlerini de her kosumda yok ediyordu.
+    # Olculdu 2026-09-16: bu betik kosturuldu, o gun dizini paylasan motorun 11
+    # arsivi silindi ve motoru kullanan her android derlemesi link'te olur hale
+    # geldi; masaustunde hicbir sey kizarmazdi. Motor 2026-09-20'de ayri depoya
+    # tasindi, yani dizin su an paylasimli degil — ama hedefli silme yine de
+    # dogru olan: bir sonraki paylasimda ayni tuzaga dusmeyelim.
     rm -rf "$OBJ"
     rm -f "$OUT/libtulpar_runtime_android.a" "$OUT/libtulpar_tame_android.a"
     mkdir -p "$OBJ/tame"

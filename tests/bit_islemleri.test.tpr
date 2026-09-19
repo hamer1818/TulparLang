@@ -233,7 +233,7 @@ func run_kutulu() {
 // ---------------------------------------------------------------------------
 // 8. SOMUT FAYDA — RENK PAKETLEME
 //
-// Motorun bugunku yazimi (lib/engine.tpr `renk`) carpmayla:
+// Motor koprusunun yazimi (`renk`, artik tulpar-engine deposunda) carpmayla:
 //     r * 16777216 + g * 65536 + b * 256 + a
 // Bit yazimi ayni sayiyi vermeli. Ayristirma da (bugun `/` ve `mod()` ile
 // yapiliyor) `>>` + `&` ile ayni sonucu vermeli.

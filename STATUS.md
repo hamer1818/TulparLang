@@ -11,58 +11,18 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ## 📊 Mevcut durum (özet)
 
-> **Yeni (2026-09-15, `engine/faz3-sahne` dalı, yayınlanmadı): `import "engine"` — Tulpar
-> Engine köprüsü.** Ayrı C++ motor çekirdeği (`engine/`, Vulkan + Jolt) artık Tulpar
-> betiklerinden sürülüyor: **motor C++, oyun mantığı Tulpar**, aynı ikilide, script sınırı
-> yok. Düz skaler C ABI (`engine/bridge/engine_api.h`, **156 fonksiyon**), üretilmiş bağlama
-> katmanı (`engine/tools/gen_engine_bindings.py` tek `SPEC`'ten binding + backend tablosu +
-> typeinfer + LSP yazar — "5 noktada bağlama" bu ailede **mekanik**), gömülü `lib/engine.tpr`
-> sarmalayıcı (TR + EN adlar). Köprü aileleri: yaşam döngüsü, dünya/kamera, derlenmiş sahne +
-> **sıcak yükleme**, varlık/fizik, girdi, HUD, **anlık-kip arayüz** (düğme/onay/kaydırıcı),
-> **kalıcı kayıt**, ses, model animasyonu, bloom, **ışın/örtüşme/navmesh sorguları**, ölçüm.
-> Üç örnek oyun, hepsi **saf Tulpar**: `examples/engine_ilk_oyun.tpr` (94 satır),
-> `engine_arena.tpr` (editörde hazırlanan sahne → `engine_sahnec` → blob → oyun),
-> `engine_aksiyon.tpr` — **"Gölge Salonları"**, iki bölümlü aksiyon dikey dilimi (fizik tabanlı
-> vuruş, iki davranışlı düşman durum makinesi, navmesh yol bulma, ana menü/duraklat/ayarlar,
-> kalıcı rekor; 1070 satır). Android emülatöründe **60 fps**, dokunmatik ve skor döngüsü Tulpar
-> tarafında. Bu, raylib tabanlı `tame`/`arcade` hattının **yerini almaz** (o hat donduruldu ama
-> gönderilmeye devam ediyor); iki oyun hattı yan yana duruyor.
+> **Motor ayrı depoya taşındı (2026-09-20).** `import "engine"` köprüsü ve arkasındaki
+> C++ oyun motoru (Vulkan + Jolt, eski `engine/` ağacı) artık bu depoda **değil**:
+> <https://github.com/hamer1818/tulpar-engine> (geçmiş `git subtree split` ile korundu).
+> Bu ağaçtan birlikte çıkanlar: `engine/`, `runtime/engine_bindings.cpp`, üretilmiş üç
+> `engine_builtins*.inc`, `lib/engine.tpr`, **175 `eng_*` builtin** + `uses_engine` /
+> `engine_link_flags()`, `examples/engine_*.tpr`, `tests/engine_bridge.test.tpr`,
+> `engine_tests` paket koşucusu, `docs/engine/`, CI'daki Vulkan/MoltenVK bağımlılıkları.
+> **`tulpar` artık yalnız dili derliyor.** Motorun durumu, faz raporları ve köprü
+> sözleşmesi o deponun `docs/` dizininde (`DURUM.md`, `FAZ3.md`, `KOPRU.md`, `MIMARI.md`,
+> `TUZAKLAR.md`); köprünün Tulpar tarafı orada `tulpar/` altında.
 >
-> Aynı dalda motor tarafında kapanan Faz kalemleri (hepsi cihaz gerektirmeyen yol, yenileri
-> **varsayılan kapalı** — açık/kapalı piksel farkı ölçülerek 0 doğrulandı): **kademeli gölge**
-> (CSM, 3 kademe tek atlas, 6 MB), **paketlenmiş vertex** (32 → 20 bayt), **derlenmiş render
-> graph + bloom**, **Faz 4 UI** (SDF atlas, tek batch, opak-önce, retained blok, ölçülmüş
-> overdraw — kapı: 7000 dörtgen / 2 batch / < 1,5 ms), **Faz 4 ses** (uzamsal + DSP + oklüzyon),
-> **Faz 5 temporal** (jitter, hareket vektörü, dinamik çözünürlük), **Faz 6 içerik** (`.tpak`
-> pack + delta yama + önbellek, sahne blob **sürüm 4**: yerleşik küme + navmesh + küme DAG +
-> **GI sondaları**), **Faz 9** (küme DAG builder, GPU cull + dolaylı çizim).
-> Kapılar (kaynaktan): `engine/tests/*.cpp` **141 `ENGINE_TEST`**, Tulpar tarafında
-> `tests/engine_bridge.test.tpr` **17** test, katman denetimi **159 dosya / 0 ihlal**.
-> **Çarpışma olayları geldi (2026-09-16).** Köprü "neye çarptım"ı yalnız sorguyla verebiliyordu;
-> FFI geri çağrım taşımadığı için çözüm **kuyruk** oldu: fizik adımındaki temaslar sabit boy halkaya
-> yazılıyor, oyun karede okuyor. Ayırma yok, kilit yok (atomik yuva rezervasyonu), taşma **görünür**
-> (`carpisma_dusen()` sayar, motor karede bir kez loglar). Köprü **169 builtin**.
->
-> Tam koşu (2026-09-16): `engine_tests` **164/164, 0 atlandı**, `./build.sh suites` **84/84**,
-> `./build.sh test` yeşil.
->
-> **Faz 6 kalanı kapandı:** PBR (Cook-Torrance/GGX; glTF metallic/roughness artık malzemeye akıyor —
-> daha önce PBR renderer'da vardı ama içerik yolu okumadığı için **ölüydü**), düşük segment için
-> stokastik tile ışıklandırma (varsayılan kapalı, kapalıyken bit-aynı), ve **PSO ön-üretimi**
-> (`VkPipelineCache` + diske kalıcılık). Android'de önbellek iki ayrı yoldan sessizce kapanıyordu;
-> düzeltildikten sonra emülatörde süreçler-arası kazanç ölçüldü: **6.5 ms → 1.1 ms**.
->
-> **Faz 8 fizibilitesi bitti:** Tulpar sözdiziminin GPU alt kümesi → GLSL → SPIR-V; 21 shader'ın 19'u
-> taşındı ve çevrilenler depodaki başlıklarla **bayt bayt aynı**. Backend kararı Slang'den
-> **GLSL + glslc**'ye döndü (gerekçe: `slangc` yok, ve MSL/WGSL çıkışının bugün alıcısı yok).
->
-> **Açık kalanlar:** Faz 3 kapısı (üç cihazda bant genişliği), Faz 5 cihaz kapısı, PBR, PSO
-> üretimi — hepsi **üç fiziksel cihaz** bekliyor (kullanıcı kararı: şimdilik pas);
-> **Faz 8** (Tulpar shader stage — PLAN §11 dil alt kümesi gerekiyor, başlanmadı);
-> **Faz 10** (Metal/iOS — Mac + geliştirici hesabı gerekiyor, başlanmadı); mağaza/servis
-> kalemleri (Play Asset Delivery, Firebase, IAP — hesap gerekiyor).
-> Durum: [docs/engine/DURUM.md](docs/engine/DURUM.md) · Faz 3:
-> [docs/engine/FAZ3.md](docs/engine/FAZ3.md) · Köprü: [docs/engine/KOPRU.md](docs/engine/KOPRU.md).
+> Tame / arcade / scene3d (`tm_*`, raylib, TameEngine) **ayrı bir hat** ve bu depoda kalıyor.
 >
 > **Yan etki — web hedefi onarıldı.** Köprü çalışırken `tulpar build --target=web` **her** oyunda
 > `undefined symbol: aot_intern_string` ile düşüyordu ve `tests/dist_archive_audit.py` buna
@@ -83,8 +43,9 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > döngüsünün iki ucunda IR özetini karşılaştıran bir kapı klonlamanın kaldırılmasını
 > derleme anında yakalıyor. **İlk ABI (arm64) her zaman doğruydu**, yani telefon
 > doğrulamaları geçerli; emülatör için daha önce üretilmiş çıktılar yenilenmeli.
-> Düzeltmeden sonra hem `examples/engine_aksiyon.tpr` hem `examples/arcade_zipla.tpr`
-> emülatörde koşuyor (Tuzaklar 8ap).
+> Düzeltmeden sonra hem o günün motor örneği (`engine_aksiyon.tpr`, artık
+> tulpar-engine deposunda) hem `examples/arcade_zipla.tpr` emülatörde koşuyor
+> (Tuzaklar 8ap — o da motor deposunun `docs/TUZAKLAR.md`'inde).
 
 > **Geliştirme dalı (yayınlanmadı): ÜÇÜNCÜ mobil dalga** — app kabuğu + juice +
 > 3 yeni oyun + full-stack global skor tablosu; hepsi Android emülatöründe

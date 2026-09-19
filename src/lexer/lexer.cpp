@@ -105,8 +105,9 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         // YOK: `const` bir dizinin icerigini dondurmaz.
         //
         // TURKCE TAKMA AD YOK ve bu bir ihmal DEGIL, olcum: `sabit`
-        // denendi ve `tests/engine_bridge.test.tpr` ANINDA dustu — orada
-        // `int sabit = -1;` diye bir DEGISKEN var. Yani `sabit`i anahtar
+        // denendi ve o gunun bir paketi (motor koprusu testi, simdi
+        // tulpar-engine deposunda) ANINDA dustu — orada
+        // `int sabit = -1;` diye bir DEGISKEN vardi. Yani `sabit`i anahtar
         // kelime yapmak calisan bir testi kiriyor. Bu, deponun bilinen
         // tuzagi (`move`/`don` ayni sekilde adlari calmisti); yeni bir
         // anahtar kelime eklerken once `grep -rn --include='*.tpr'`
@@ -308,7 +309,7 @@ static int digit_value_in_base(char c, int base) {
 // sayiyi bitirip ardindan bir TANIMLAYICI okuyordu ve kullanici
 // "Expected ')' after condition" gibi ilgisiz bir mesaj goruyordu.
 // Ozellikle `1u` onemli: GLSL/C'deki isaretsiz sonek ve Tulpar'da isaretsiz
-// tip YOK (docs/engine/FAZ8.md T3) — sessizce `1` saymak yanlis bir zihin
+// tip YOK (tulpar-engine: docs/FAZ8.md T3) — sessizce `1` saymak yanlis bir zihin
 // modeli kurardi, bu yuzden ACIK hata.
 //
 // Yanlis pozitif riski yok: Tulpar'da "sayi hemen ardindan tanimlayici"

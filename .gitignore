@@ -217,28 +217,9 @@ scene3d_vol_*.txt
 /scene3d_karakter
 /karakter_desktop
 /labirent_desktop
-android/host/.gradle/
-android/host/build/
-android/host/app/build/
-android/host/local.properties
-
-# Khronos Vulkan dogrulama katmani Android ikilileri (engine/tools/fetch_vvl_android.sh)
-engine/third_party/vvl-android/
-
-# AGDK Swappy statik kutuphaneleri (engine/tools/fetch_swappy.sh)
-engine/third_party/swappy/libs/
-
-# Derlenmis sahne blob'lari (engine_sahnec / editor Derle; deterministik, kaynagi .sahne)
-*.sahneb
-
-# Cokme raporlari (platform/crash.cpp; calisma dizinine yazilir)
-crash_*.txt
-
-# İçerik içe aktarıcısının derleme önbelleği (engine/content/importer.hpp).
-# Türetilmiş ve deterministik: girdinin özeti + damga dosyaları. Depoya girerse
-# bayatladığında kapıları sessizce "atlandı"ya düşürür (Tuzaklar 8am).
-.tulpar_onbellek/
-
-# Motor köprüsünün kalıcı kaydı (eng_save_*): yol verilmezse çalışma dizinine
-# yazılır, yani örnek koşturan her komut depo kökünde bir tane bırakır.
-tulpar_kayit.txt
+# Tulpar Engine (oyun motoru) 2026-09-20'de ayrı depoya taşındı:
+# https://github.com/hamer1818/tulpar-engine
+# Motorun kendi yoksayma kuralları (vvl-android, swappy, .sahneb, crash_*.txt,
+# .tulpar_onbellek/, tulpar_kayit.txt, android/host Gradle çıktıları) oraya gitti.
+# Burada yalnız, motor ağacı yanlışlıkla geri çekilirse görünür olmasın diye:
+engine/

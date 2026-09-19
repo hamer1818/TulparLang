@@ -26,17 +26,15 @@ Arşiv VAR ama eksikse:
               gelmeyi öğretir — bu denetimin kapatmaya çalıştığı hatanın ta
               kendisi.
 
-UC AILE DENETLENIYOR
+IKI AILE DENETLENIYOR
 --------------------
   1. aot_tm_* / aot_tm3_*  (tame)   -> libtulpar_tame_{web,android}.a
   2. codegen'in adiyla bildirdigi cekirdek aot_* -> libtulpar_runtime_*.a
-  3. aot_eng_* / teng_*    (motor koprusu) -> libtulpar_engine_android.a
 
-Ucuncusu 2026-09-15'e kadar `OTHER_ARCHIVE_PREFIXES` ile ELENIYORDU: 156
-builtin'lik aile hic denetlenmiyordu. Motor koprusu arsivi icin AYRI bir
-kural var (asagida ENGINE_ARCHIVES): arsiv VARSA eksik sembol HATA. Gerekce
-tame android satirlarindakinin tersi degil, devami — arsiv orada duruyorsa
-gelistiricinin NDK'si VAR (o arsivi uretmis), yani kirmizi duzeltilebilir.
+Ucuncu bir aile daha vardi — motor koprusu (aot_eng_* / teng_*). Motor
+2026-09-20'de ayri depoya (tulpar-engine) tasindi; o ailenin denetimi de
+oraya gitti. Bu depoda artik eng_* builtin'i YOK, yani burada aranmasi
+"kapsam kaybi" degil, konu disi.
 """
 import importlib.util
 import os
@@ -107,11 +105,10 @@ EXPECTED_MISSING = {
 # Cekirdek runtime arsivinde ARANMAYACAK aileler: bunlar BASKA arsivlerde
 # yasiyor ve yalnizca ilgili program onlari kullanirsa linke girer.
 #   aot_tm_* / aot_tm3_*  -> libtulpar_tame_*   (tablo denetimi zaten bakiyor)
-#   aot_eng_*             -> libtulpar_engine_* (ENGINE_ARCHIVES bolumu bakiyor)
 # DIKKAT: burasi bir ELEME listesi, "denetlenmiyor" listesi DEGIL. Bir aileyi
 # buraya ekleyip ona bakan bir bolum yazmamak = sessiz kapsam kaybi; aot_eng_*
-# 2026-09-15'e kadar tam olarak bu durumdaydi.
-OTHER_ARCHIVE_PREFIXES = ("aot_tm_", "aot_tm3_", "aot_eng_")
+# 2026-09-15'e kadar tam olarak bu durumdaydi (o aile artik ayri depoda).
+OTHER_ARCHIVE_PREFIXES = ("aot_tm_", "aot_tm3_")
 
 
 def codegen_runtime_symbols():
@@ -124,22 +121,15 @@ def codegen_runtime_symbols():
         with open(path, encoding="utf-8", errors="replace") as fh:
             src = fh.read()
         syms.update(re.findall(r'LLVMAddFunction\s*\([^,]+,\s*"(aot_[A-Za-z0-9_]+)"', src))
-        # Tablolardan gelen semboller (tame + engine kopru) ayri satirlarda duruyor.
+        # Tablodan gelen semboller (tame) ayri satirlarda duruyor.
         syms.update(re.findall(r'\{\s*"[a-z0-9_]+"\s*,\s*"(aot_[A-Za-z0-9_]+)"\s*,\s*\d+\s*\}', src))
-    for rel in ("src/aot/engine_builtins_table.inc",):
-        path = os.path.join(ROOT, rel)
-        if os.path.exists(path):
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                syms.update(re.findall(r'"(aot_[A-Za-z0-9_]+)"', fh.read()))
     return sorted(x for x in syms if not x.startswith(OTHER_ARCHIVE_PREFIXES))
 
 
 def archive_symbols(path, prefixes=("aot_",)):
     """Arşivdeki semboller; okuyacak araç yoksa None (denetim atlanır).
 
-    `prefixes`: hangi aileler okunacak. Motor koprusu iki aile birden
-    kullaniyor (`aot_eng_*_ptr` codegen'in bildirdigi ad, `teng_*` onun
-    cagirdigi C ABI); ikisi de TANIMLI olmali, yoksa link'te patlar.
+    `prefixes`: hangi aileler okunacak.
     """
     pat = (r"^[0-9a-fA-F]* *[A-TV-Za-tv-z] +((?:%s)[A-Za-z0-9_]+)$"
            % "|".join(re.escape(x) for x in prefixes))
@@ -156,189 +146,6 @@ def archive_symbols(path, prefixes=("aot_",)):
     return None
 
 
-# --- Motor koprusu ailesi (aot_eng_* / teng_*) -------------------------------
-# Arsiv yolu, insan adi, tazeleme betigi. Bu satirlarda UYARI yok, HATA var:
-# dosya orada duruyorsa gelistirici NDK'ya sahip (o arsivi kendisi uretmis),
-# yani eksik sembol DUZELTILEBILIR bir kirmizidir. Tame android satirlarindaki
-# "duzeltilemez kirmizi ogretmez" gerekcesi burada gecerli degil.
-ENGINE_ARCHIVES = [
-    ("android/dist/arm64-v8a/libtulpar_engine_android.a", "android/arm64-v8a-engine",
-     "engine/tools/build_bridge_android.sh"),
-    ("android/dist/x86_64/libtulpar_engine_android.a", "android/x86_64-engine",
-     "engine/tools/build_bridge_android.sh"),
-]
-
-# Motoru BILEREK tasimayan hedefler. Gorunmez `return` ile atlanmiyor: main()
-# her kosumda bu satirlari GEREKCESIYLE ekrana yaziyor. "Neden bu hedef
-# denetlenmedi" sorusunun cevabi ekranda yoksa kapsam kaybi gorunmez olur.
-ENGINE_ABSENT_TARGETS = [
-    ("web", "Emscripten'de Vulkan/WSI yok — motor web'e hic derlenmiyor; "
-            "aot_pipeline.cpp web link kolunda motor arsivi gecmez, "
-            "wasm/build_tame_web.sh motor arsivi uretmez"),
-]
-
-# Uretilen dosyalar (gen_engine_bindings.py SPEC -> bunlar). Her biri baska bir
-# noktayi besliyor; biri bayat kalirsa o nokta sessizce kor olur.
-ENGINE_GENERATED = [
-    ("src/aot/engine_builtins_table.inc", "codegen tablosu"),
-    ("runtime/engine_bindings.cpp", "VMValue ABI govdesi"),
-    ("src/typeinfer/engine_builtins_sigs.inc", "tip cikarimi imzalari"),
-    ("src/lsp/engine_builtins.inc", "LSP tamamlama"),
-]
-
-
-def engine_spec():
-    """gen_engine_bindings.py'deki SPEC: [(ad, arite), ...] — TEK dogruluk kaynagi.
-
-    Uretici dosya `__main__` korumali, yani ice aktarmanin yan etkisi yok.
-    Okunamazsa None: cagiran bunu KIRMIZI sayar (sessizce atlanan bir kaynak,
-    denetimin kapsamini yok eder).
-    """
-    path = os.path.join(ROOT, "engine/tools/gen_engine_bindings.py")
-    if not os.path.exists(path):
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("gen_engine_bindings", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        rows = [(row[0], len(row[2])) for row in mod.SPEC]
-    except Exception as exc:                      # noqa: BLE001 — sebebi yaz, yut ma
-        print("HATA: gen_engine_bindings.py okunamadi (%s)" % exc)
-        return None
-    return rows or None
-
-
-def check_engine_generated_fresh(spec):
-    """SPEC <-> uretilmis 4 dosya ayrisik mi (uretici kosulmus mu).
-
-    Arsiv GEREKTIRMEZ, her makinede kosar — kapinin negatif kontrolu de bu:
-    temiz agacta 156/156 esit. Yakaladigi kusur: SPEC'e satir eklenip
-    `python3 engine/tools/gen_engine_bindings.py` unutulunca codegen builtin'i
-    tanimaz, typeinfer imzasiz cagri gorur, LSP tamamlamaz — ve derleme YESIL
-    kalir, cunku eksik olan sey uretilmis bir dosyadir, yazilan bir dosya degil.
-    """
-    bad = 0
-    names = [n for n, _a in spec]
-    tbl_path = os.path.join(ROOT, "src/aot/engine_builtins_table.inc")
-    if os.path.exists(tbl_path):
-        with open(tbl_path, encoding="utf-8", errors="replace") as fh:
-            rows = re.findall(r'\{\s*"([a-z0-9_]+)"\s*,\s*"(aot_[A-Za-z0-9_]+)"\s*,\s*(\d+)\s*\}',
-                              fh.read())
-        arity = dict((n, a) for n, a in spec)
-        drift = [n for n, _sym, _ar in rows if n not in arity]
-        drift += [n for n in names if n not in [r[0] for r in rows]]
-        wrong = ["%s (%s != %d)" % (n, ar, arity[n])
-                 for n, _sym, ar in rows if n in arity and int(ar) != arity[n]]
-        if drift or wrong:
-            print("HATA: motor codegen tablosu SPEC ile AYRISIK — "
-                  "%d ad, %d arite farki" % (len(drift), len(wrong)))
-            for x in (drift + wrong)[:8]:
-                print("    %s" % x)
-            bad += 1
-    for rel, label in ENGINE_GENERATED:
-        path = os.path.join(ROOT, rel)
-        if not os.path.exists(path):
-            print("HATA: uretilmis motor dosyasi YOK: %s (%s)" % (rel, label))
-            bad += 1
-            continue
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            body = fh.read()
-        missing = [n for n in names if n not in body]
-        if missing:
-            print("HATA: %s (%s) BAYAT — SPEC'teki %d builtin yok: %s"
-                  % (rel, label, len(missing), ", ".join(missing[:5])))
-            bad += 1
-    if bad:
-        print("    tazele: python3 engine/tools/gen_engine_bindings.py")
-    return bad
-
-
-def android_engine_link_libs():
-    """aot_pipeline.cpp'nin ANDROID motor link kolundaki -l<arsiv> listesi.
-
-    Elle yazilmis bir liste DEGIL, cunku elle yazilan liste link satiriyla
-    ayrisir ve ayrisma sessizdir. Desen tutmazsa None doner ve cagiran bunu
-    KIRMIZI sayar: "desen bulamadim, o yuzden temiz" bu deponun en pahali
-    hata sinifi (Tuzaklar 8aj).
-    """
-    path = os.path.join(ROOT, "src/aot/aot_pipeline.cpp")
-    if not os.path.exists(path):
-        return None
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        src = fh.read()
-    m = re.search(r"backend->uses_engine(.*?)\n\s*:\s*\"-ltulpar_tame_android",
-                  src, re.S)
-    if not m:
-        return None
-    libs = re.findall(r"-l(engine_[a-z0-9_]+|tulpar_engine_android)", m.group(1))
-    return libs or None
-
-
-def check_engine_companion_archives(libs):
-    """Link'in istedigi her motor arsivi (a) uretici betikte, (b) var olan her
-    ABI dizininde duruyor mu.
-
-    Sembol denetimi yetmiyor: libtulpar_engine_android.a tastamam olsa bile
-    libengine_jolt.a kopyalanmadiysa her `import "engine"` android derlemesi
-    link'te oluyor ve masaustunde hicbir sey kizarmiyor.
-    """
-    bad = 0
-    sh_rel = "engine/tools/build_bridge_android.sh"
-    sh_path = os.path.join(ROOT, sh_rel)
-    if os.path.exists(sh_path):
-        with open(sh_path, encoding="utf-8", errors="replace") as fh:
-            sh = fh.read()
-        gone = [x for x in libs if x not in sh]
-        if gone:
-            print("HATA: link satirindaki %d motor arsivi uretici betikte (%s) "
-                  "gecmiyor — hic kopyalanmaz: %s" % (len(gone), sh_rel, ", ".join(gone)))
-            bad += 1
-    for rel, label, refresh in ENGINE_ARCHIVES:
-        full = os.path.join(ROOT, rel)
-        if not os.path.exists(full):
-            continue                  # atlandigi zaten yazildi
-        d = os.path.dirname(full)
-        gone = [x for x in libs if not os.path.exists(os.path.join(d, "lib%s.a" % x))]
-        if gone:
-            print("HATA: %s dizininde link'in istedigi %d arsiv YOK: %s"
-                  % (label, len(gone), ", ".join(gone)))
-            print("    tazele: %s" % refresh)
-            bad += 1
-    return bad
-
-
-# --- ARSIV TAZELIGI (sembol denetiminin KOR NOKTASI) -------------------------
-# Sembol denetimi "su sembol arsivde YOK" der. Ama bir builtin EKLENMEDEN,
-# var olan bir sembolun IMZASI degistiginde sembol hala ORADADIR ve denetim
-# YESIL verir — arsivdeki govde ise eski imzayla derlenmis eski kodtur.
-#
-# Olculdu 2026-09-16 (aot_input'a istem parametresi eklenirken):
-#   wasm-ld: warning: function signature mismatch: aot_input
-#   >>> defined as (i32, i32) -> void in oyun.o          (yeni codegen)
-#   >>> defined as (i32) -> void in libtulpar_runtime_web.a  (bayat arsiv)
-# Link YINE DE tuttu (uyari, hata degil) ve `.html` uretildi; cagri tarayicida
-# imza tuzagina dusup patlayacakti. Android'de ise ELF imza denetlemez: link
-# sessizce tutar ve fonksiyon argumani okumayan koda gider. Ikisi de bu deponun
-# "sessiz yanlis" sinifi (Tuzaklar 8aj) — ve o gun bu denetim "TEMIZ" diyordu.
-#
-# Cozum imza cozumleme degil (asiri muhendislik): arsiv, kaynagindan ESKI mi?
-# Sembol denetimi "ne eksik" der, bu "ne bayat" der; ikisi farkli sinif yakalar.
-#
-# KAYNAK LISTESI SURUCUDEN OKUNUYOR: aot_pipeline.cpp'deki
-# warn_if_prebuilt_archive_stale zaten ayni karsilastirmayi derleme aninda
-# yapiyor. Listeyi buraya ELLE kopyalamak, iki listenin ayrismasi demekti;
-# desen tutmazsa (asagida) KIRMIZI veriyoruz — "desen bulamadim, o yuzden
-# temiz" bu deponun en pahali hata sinifi.
-FRESHNESS_ENGINE_SOURCES = [
-    # Motor arsivinin ABI YUZEYI. Butun `engine/**` agacina bakmiyoruz
-    # BILEREK: o agac aktif gelistirmede her gun degisiyor ve her degisiklik
-    # ABI'yi bozmuyor; surekli kirmizi, kirmiziyi gurultuye cevirir. Burada
-    # yalnizca kopru sembollerinin IMZASINI belirleyen dosyalar var.
-    "runtime/engine_bindings.cpp",
-    "engine/bridge/engine_api.h",
-    "engine/bridge/engine_api.cpp",
-]
-
 # (arsiv yolu, insan adi, eksiklik HATA mi, tazeleme betigi, kaynak listesi
 #  "driver" ise surucuden okunan liste kullanilir)
 FRESHNESS_ARCHIVES = [
@@ -354,12 +161,6 @@ FRESHNESS_ARCHIVES = [
      "android/x86_64-runtime", False, "android/build_tame_android.sh", "driver"),
     ("android/dist/x86_64/libtulpar_tame_android.a",
      "android/x86_64-tame", False, "android/build_tame_android.sh", "driver"),
-    ("android/dist/arm64-v8a/libtulpar_engine_android.a",
-     "android/arm64-v8a-engine", False, "engine/tools/build_bridge_android.sh",
-     "engine"),
-    ("android/dist/x86_64/libtulpar_engine_android.a",
-     "android/x86_64-engine", False, "engine/tools/build_bridge_android.sh",
-     "engine"),
 ]
 
 
@@ -395,7 +196,7 @@ def check_archive_freshness(driver_srcs):
         full = os.path.join(ROOT, rel)
         if not os.path.exists(full):
             continue
-        srcs = FRESHNESS_ENGINE_SOURCES if which == "engine" else driver_srcs
+        srcs = driver_srcs
         amtime = os.path.getmtime(full)
         newer = []
         for s in srcs:
@@ -506,54 +307,6 @@ def main():
         if hard:
             fail = True
 
-    # --- Motor koprusu arsivleri (aot_eng_* + teng_*) -----------------------
-    eng_wanted = []
-    espec = engine_spec()
-    if espec is None:
-        print("HATA: motor koprusu SPEC tablosu okunamadi — bu denetim "
-              "KAPSAMINI kaybetti (engine/tools/gen_engine_bindings.py)")
-        fail = True
-    else:
-        if check_engine_generated_fresh(espec):
-            fail = True
-        # Iki aile birden: codegen'in bildirdigi ad ve onun cagirdigi C ABI.
-        eng_wanted = ["aot_%s_ptr" % n for n, _a in espec]
-        eng_c_wanted = ["t%s" % n for n, _a in espec]
-        for rel, label, refresh in ENGINE_ARCHIVES:
-            path = os.path.join(ROOT, rel)
-            if not os.path.exists(path):
-                print("dist denetimi: %s atlandi: %s yok — once %s"
-                      % (label, rel, refresh))
-                continue
-            have = archive_symbols(path, ("aot_eng_", "teng_"))
-            if have is None:
-                print("dist denetimi: %s okunamadi (llvm-nm/nm yok) — atlandi" % label)
-                continue
-            checked += 1
-            for wanted_set, aile in ((eng_wanted, "kopru builtin'i (aot_eng_*_ptr)"),
-                                     (eng_c_wanted, "motor C ABI'si (teng_*)")):
-                missing = [x for x in wanted_set if x not in have]
-                if not missing:
-                    continue
-                print("HATA: %s arsivinde %d %s YOK — `import \"engine\"` eden "
-                      "her android derlemesi link'te patlar" % (label, len(missing), aile))
-                for sym in missing[:10]:
-                    print("    %s" % sym)
-                if len(missing) > 10:
-                    print("    ... (+%d)" % (len(missing) - 10))
-                print("    tazele: %s" % refresh)
-                fail = True
-        libs = android_engine_link_libs()
-        if libs is None:
-            print("HATA: aot_pipeline.cpp'de android motor link kolu bulunamadi — "
-                  "desen bayat, arsiv listesi denetimi KAPSAMSIZ")
-            fail = True
-        elif check_engine_companion_archives(libs):
-            fail = True
-    # Motorun BILEREK olmadigi hedefler: gerekcesiyle yaz, sessizce atlama.
-    for label, why in ENGINE_ABSENT_TARGETS:
-        print("dist denetimi: %s hedefinde motor koprusu ARANMADI — %s" % (label, why))
-
     # --- Arsiv tazeligi (imza degisikligi sinifi) ---------------------------
     driver_srcs = driver_staleness_sources()
     if driver_srcs is None:
@@ -576,12 +329,11 @@ def main():
         # "Temiz" YAZMA: uyarı basıp temiz demek, uyarıyı gürültüye çevirir —
         # bu denetimin kapatmaya çalıştığı hatanın ta kendisi.
         print("dist arsiv denetimi: %d arsiv denetlendi, %d sorun BAYAT/EKSIK "
-              "(yukariya bak) — motor koprusu: %d builtin denetlendi"
-              % (checked, dirty, len(eng_wanted)))
+              "(yukariya bak)" % (checked, dirty))
         return 0
     print("dist arsiv denetimi temiz (%d arsiv, %d tame builtin, %d cekirdek "
-          "sembol, %d motor koprusu builtin x2 aile, %d arsivde tazelik)"
-          % (checked, len(wanted), len(core), len(eng_wanted),
+          "sembol, %d arsivde tazelik)"
+          % (checked, len(wanted), len(core),
              sum(1 for r in FRESHNESS_ARCHIVES if os.path.exists(os.path.join(ROOT, r[0])))))
     return 0
 

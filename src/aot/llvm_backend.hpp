@@ -251,9 +251,6 @@ typedef struct {
   // satırına libtulpar_tame.a + platform pencere/GL bayrakları eklenmeli
   // (bkz. tame_link_flags() / aot_pipeline.cpp). calloc ile 0 başlar.
   int uses_tame;
-  // `import "engine"` veya bir eng_* builtin çağrısı görüldü — link satırına
-  // libtulpar_engine.a + engine/ arşivleri eklenir (engine_link_flags()).
-  int uses_engine;
 
   // Hedef web (wasm32-unknown-emscripten). declare_runtime_functions
   // llvm_backend_create İÇİNDE koştuğu için bu alan doğrudan set edilemez:

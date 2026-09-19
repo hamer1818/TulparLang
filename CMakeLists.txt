@@ -576,16 +576,6 @@ install(TARGETS tulpar RUNTIME DESTINATION bin)
 install(TARGETS tulpar_runtime ARCHIVE DESTINATION lib)
 install(TARGETS tulpar_tame ARCHIVE DESTINATION lib)
 
-# libtulpar_engine.a = Tulpar Engine (engine/) koprusunun VMValue bindingleri
-# (runtime/engine_bindings.cpp, uretilmis: engine/tools/gen_engine_bindings.py).
-# `import "engine"` eden program bununla + engine/ arsivleriyle linklenir
-# (engine_link_flags(), src/aot/aot_pipeline.cpp); sirdan binary'ler dokunmaz.
-if(NOT MSVC)
-    add_library(tulpar_engine STATIC runtime/engine_bindings.cpp)
-    target_include_directories(tulpar_engine PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/engine)
-    target_compile_definitions(tulpar_engine PRIVATE TULPAR_RUNTIME_ONLY)
-    install(TARGETS tulpar_engine ARCHIVE DESTINATION lib)
-endif()
 
 install(DIRECTORY examples/
     DESTINATION share/tulpar/examples
@@ -607,13 +597,9 @@ install(FILES
 message(STATUS "")
 message(STATUS "=== TulparLang Build Configuration ===")
 message(STATUS "Version: ${PROJECT_VERSION}")
-# ---------------------------------------------------------------------------
-# Tulpar Engine (Faz 0) — ayri agac, derleyiciye linklenmez. Bkz. engine/ ve
-# docs/engine/MIMARI.md. Native Windows desteklenmedigi icin MSVC'de atlanir.
-# ---------------------------------------------------------------------------
-if(NOT MSVC)
-    add_subdirectory(engine)
-endif()
+# Tulpar Engine (oyun motoru) 2026-09-20'de AYRI DEPOYA tasindi:
+# https://github.com/hamer1818/tulpar-engine
+# Bu depo yalniz dili derler; motor ne alt dizin ne hedef olarak burada degil.
 
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "LLVM Version: ${LLVM_PACKAGE_VERSION}")

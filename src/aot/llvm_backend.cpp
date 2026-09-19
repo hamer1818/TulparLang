@@ -1044,22 +1044,6 @@ static const TameBuiltin *tame_builtin_lookup(const char *name) {
   return nullptr;
 }
 
-// Tulpar Engine (engine/) köprüsü — eng_* builtin ailesi. Tablo ÜRETİLİR:
-// engine/tools/gen_engine_bindings.py (tek kaynak SPEC) aynı anda binding'i,
-// typeinfer imzalarını ve LSP girdilerini de yazar; elle düzenlenmez. ABI ve
-// dispatch tame ile birebir aynı (N-ptr VMValue). Link: engine_link_flags().
-static const TameBuiltin k_engine_builtins[] = {
-#include "engine_builtins_table.inc"
-};
-#define ENGINE_BUILTIN_COUNT \
-  ((int)(sizeof(k_engine_builtins) / sizeof(k_engine_builtins[0])))
-static const TameBuiltin *engine_builtin_lookup(const char *name) {
-  for (int i = 0; i < ENGINE_BUILTIN_COUNT; i++) {
-    if (strcmp(k_engine_builtins[i].name, name) == 0) return &k_engine_builtins[i];
-  }
-  return nullptr;
-}
-
 // Declare external runtime functions
 void declare_runtime_functions(LLVMBackend *backend) {
   // printf: i32 printf(i8*, ...)
@@ -1631,12 +1615,6 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMTypeRef tm_ft = llvm_make_vmvalue_func_type(
           backend, tm_params, k_tame_builtins[i].argc, 0);
       LLVMAddFunction(backend->module, k_tame_builtins[i].sym, tm_ft);
-    }
-    // Tulpar Engine köprüsü (eng_*): aynı ABI, aynı döngü.
-    for (int i = 0; i < ENGINE_BUILTIN_COUNT; i++) {
-      LLVMTypeRef en_ft = llvm_make_vmvalue_func_type(
-          backend, tm_params, k_engine_builtins[i].argc, 0);
-      LLVMAddFunction(backend->module, k_engine_builtins[i].sym, en_ft);
     }
   }
 
@@ -6487,31 +6465,6 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                       (unsigned)tb->argc, "tm_res");
       }
     }
-    // Tulpar Engine köprüsü (eng_*): tame ile aynı tablo-güdümlü dispatch;
-    // görülmesi link satırına libtulpar_engine.a + engine/ arşivlerinin
-    // eklenmesi için yeterli sinyaldir (uses_engine).
-    if (node->name && strncmp(node->name, "eng_", 4) == 0) {
-      const TameBuiltin *eb = engine_builtin_lookup(node->name);
-      if (eb) {
-        backend->uses_engine = 1;
-        LLVMValueRef en_fn =
-            LLVMGetNamedFunction(backend->module, eb->sym);
-        LLVMValueRef en_args[TAME_MAX_ARGS];
-        for (int i = 0; i < eb->argc; i++) {
-          LLVMValueRef v = (i < node->argument_count)
-                               ? codegen_expression(backend,
-                                                    node->arguments[i])
-                               : llvm_vm_val_int(backend, 0);
-          LLVMValueRef slot = llvm_build_alloca_at_entry(
-              backend, backend->vm_value_type, "eng_arg");
-          LLVMBuildStore(backend->builder, v, slot);
-          en_args[i] = LLVMBuildBitCast(backend->builder, slot,
-                                        backend->ptr_type, "eng_arg_void");
-        }
-        return llvm_call_vmvalue_func(backend, en_fn, en_args,
-                                      (unsigned)eb->argc, "eng_res");
-      }
-    }
     if (node->name && strcmp(bi_name, "screen_open") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_open,
                                     nullptr, 0, "scropen_res");
@@ -10238,8 +10191,6 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // "tame" (2D oyun kütüphanesi) importu — link satırına libtulpar_tame.a
     // eklenmesi gerektiğini işaretle (dup-import erken dönse de idempotent).
     if (rel_path && strcmp(rel_path, "tame") == 0) backend->uses_tame = 1;
-    // "engine" (Tulpar Engine köprüsü) importu — libtulpar_engine.a + engine/ arşivleri.
-    if (rel_path && strcmp(rel_path, "engine") == 0) backend->uses_engine = 1;
     // Check duplication
     for (int i = 0; i < backend->imported_count; i++) {
       if (strcmp(backend->imported_files[i], rel_path) == 0)

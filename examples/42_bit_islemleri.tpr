@@ -93,8 +93,9 @@ print("");
 // ---------------------------------------------------------------------------
 // 6. RENK PAKETLEME — carpma yazimi ile kaydirma yazimi AYNI sayiyi verir
 //
-// Solda motorun bugunku yazimi (lib/engine.tpr `renk`, lib/tame.tpr `rgb`),
-// sagda bit yazimi. Dongu 256 rengi tek tek karsilastiriyor: "ayni" iddiasi
+// Solda kutuphanelerin bugunku yazimi (lib/tame.tpr `rgb`; motor koprusunun
+// `renk`i artik tulpar-engine deposunda), sagda bit yazimi. Dongu 256 rengi
+// tek tek karsilastiriyor: "ayni" iddiasi
 // iki ornekle degil sayimla kanitlaniyor.
 // ---------------------------------------------------------------------------
 func renk_carpma(int r, int g, int b, int al): int {

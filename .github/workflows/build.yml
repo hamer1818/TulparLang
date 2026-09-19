@@ -237,12 +237,11 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: awalsh128/cache-apt-pkgs-action@v1.4.3
         with:
-          # libvulkan1 + mesa-vulkan-drivers: Vulkan loader + lavapipe (CPU ICD)
-          # — engine RHI testleri GPU'suz koşucuda offscreen üçgen çizip
-          # piksel okur (engine/rhi). Başlıklar vendored (engine/third_party).
-          # vulkan-validationlayers: engine RHI testleri katman etkinken 0 hata ister
-          # (API kullanimi lavapipe uzerinde dogrulanir; katman yoksa GORUNUR atlanir).
-          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libvulkan1 mesa-vulkan-drivers vulkan-validationlayers
+          # Vulkan paketleri (libvulkan1 + mesa-vulkan-drivers +
+          # vulkan-validationlayers) yalnız motor RHI testleri içindi; motor
+          # 2026-09-20'de ayrı depoya (tulpar-engine) taşındı ve onlarla
+          # birlikte kaldırıldı. Kalanlar derleyici ve tame/raylib (X11) için.
+          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev
           version: 1.3
 
       - name: Verify apt packages installed
@@ -258,12 +257,6 @@ jobs:
           # raylib/tame X11 build dep — fail loudly here, not 100 lines deep
           # in a raylib compile, if libx11-dev didn't land.
           test -f /usr/include/X11/Xlib.h || { echo "::error::libx11-dev missing (X11/Xlib.h) — tame build will fail"; exit 1; }
-          # engine RHI testleri lavapipe ICD'sini dlopen ile bulur; yoksa
-          # test GORUNUR atlanir ama burada da erken uyaralim.
-          # ICD nerede? (ilk kosumda /usr/share/vulkan/icd.d/'de gorunmedi ama cihaz bulundu)
-          ls -la /usr/share/vulkan/icd.d/ /etc/vulkan/icd.d/ 2>/dev/null || true
-          # Ubuntu'da dosya adi lvp_icd.json (mimari eki yok) — ilk glob onu kaciriyordu.
-          ls /usr/share/vulkan/icd.d/lvp_icd*.json /etc/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1 || echo "::notice::lavapipe ICD json standart dizinlerde yok — engine_tests [bilgi] GPU satirina bak"
 
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
@@ -559,24 +552,9 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           brew list --versions cmake >/dev/null 2>&1 || brew install cmake
-          # MoltenVK: Vulkan loader + Metal ICD; engine RHI testleri offscreen
-          # üçgeni burada da çizer (sanal GPU). Yoksa test GORUNUR atlanir.
-          # vulkan-loader: libvulkan.1.dylib (ICD mekanizmasi); molten-vk: Metal ICD.
-          # Ilk denemede yalniz molten-vk kuruldu ve loader bulunamadi (3 ATLANDI, gorunur).
-          brew list --versions vulkan-loader >/dev/null 2>&1 || brew install vulkan-loader || echo "::warning::vulkan-loader kurulamadı"
-          brew list --versions molten-vk >/dev/null 2>&1 || brew install molten-vk || echo "::warning::molten-vk kurulamadı — engine RHI testleri ATLANDI olacak"
-          # Dogrulama katmani: MoltenVK uzerinde de API kullanimi 0 hata istenir.
-          brew list --versions vulkan-validationlayers >/dev/null 2>&1 || brew install vulkan-validationlayers || echo "::warning::vulkan-validationlayers kurulamadı — dogrulama testi ATLANDI olacak"
-          # Loader brew dizinini (/opt/homebrew/share/vulkan) ARAMAZ: ICD ve katman
-          # yollarini acikca ver — yoksa "Vulkan cihazi yok" (olculdu 2026-09-14).
-          echo "VK_ICD_FILENAMES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
-          echo "VK_DRIVER_FILES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
-          echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
-          echo "VK_ADD_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
-          # Teshis: loader + MoltenVK + ICD json gercekten nerede? (ilk denemede
-          # loader cihaz gormedi — sebep bu listede gorunmeli)
-          ls -la "$(brew --prefix)/lib/libvulkan"* "$(brew --prefix)/lib/libMoltenVK"* "$(brew --prefix)/share/vulkan/icd.d/" 2>&1 | head -12 || true
-          cat "$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" 2>/dev/null || echo "MoltenVK_icd.json YOK"
+          # MoltenVK + Vulkan loader + dogrulama katmani yalniz motor RHI
+          # testleri icindi; motor 2026-09-20'de ayri depoya tasindi ve bu
+          # kurulum onlarla birlikte kaldirildi.
           if [ "${{ steps.brew-llvm-cache.outputs.cache-hit }}" = "true" ]; then
             # Cellar restored from cache; just rewire the symlinks into
             # $(brew --prefix)/opt/llvm@18 that find_package(LLVM) looks at.
