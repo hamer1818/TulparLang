@@ -20,6 +20,25 @@ Aranan uc bozulma bicimi:
 Sonda eklemek serbest ve tesvik edilir: (ad, kaynak, beklenen cikti).
 """
 import os, subprocess, sys, tempfile, pathlib
+
+# WINDOWS KODLAMA SOZLESMESI. Iki ayri yerde patliyordu, ikisi de olculdu
+# (2026-09-19, yerel Windows derlemesi, konsol kod sayfasi cp1254):
+#
+#   1) `text=True` verilip `encoding=` VERILMEZSE Python alt surecin
+#      ciktisini YEREL kod sayfasiyla cozer. `tulpar fmt` UTF-8 basiyor;
+#      cp1254 ile cozulup tekrar UTF-8 yazilinca her bayt iki bayta cikiyor.
+#      Belirti: "fmt gidis-donus: utf8 dizgi, beklenen='12' alinan='24'" —
+#      yani DILDE bir hata varmis gibi gorunuyor. Yok: `len("cgusoi")`
+#      dogrudan olculdugunde 12 donuyor; bozan yalniz bu sondanin cozumu.
+#   2) Bulgu satirlarindaki `✗` (CARPI) cp1254'te YOK. Sonda gercek bir
+#      sorun bulup onu BASARKEN UnicodeEncodeError ile cokuyordu: bulgu
+#      kayboluyor, geriye anlamsiz bir traceback kaliyor.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TULPAR = str(ROOT / "tulpar")
 D = pathlib.Path(tempfile.mkdtemp(prefix="probe"))
@@ -227,7 +246,7 @@ for name, src, expect, mode in CASES:
     # LC_ALL=C: tani metinleri yerele gore degisiyor, beklenen ciktiyi
     # sabitlemek icin ingilizceye pinliyoruz (bkz. tests/typeinfer/run.sh).
     env = dict(os.environ, LC_ALL="C")
-    p = subprocess.run([TULPAR, str(f)], capture_output=True, text=True,
+    p = subprocess.run([TULPAR, str(f)], capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=90, env=env)
     # CALISMA ZAMANI TANILARI ARTIK STDERR'E GIDIYOR (R1, 2026-09-10): once
     # `printf` ile stdout'a yaziliyorlardi ve programin kendi ciktisina
@@ -275,13 +294,13 @@ for name, src, expect, mode in CASES:
     f = D / ("fmt_" + safe + ".tpr")
     f.write_text(src, encoding="utf-8")
     env = dict(os.environ, LC_ALL="C")
-    r = subprocess.run([TULPAR, "fmt", str(f)], capture_output=True, text=True,
+    r = subprocess.run([TULPAR, "fmt", str(f)], capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=90, env=env)
     if r.returncode != 0 or not r.stdout.strip():
         continue          # fmt bu girdiyi islemiyorsa sondanin konusu degil
     g = D / ("fmtout_" + safe + ".tpr")
     g.write_text(r.stdout, encoding="utf-8")
-    q = subprocess.run([TULPAR, str(g)], capture_output=True, text=True,
+    q = subprocess.run([TULPAR, str(g)], capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=90, env=env)
     if mode == "runtime_error":
         # fmt gidis-donusu de yeni sozlesmeye tabi: bicimlendirilmis kod da

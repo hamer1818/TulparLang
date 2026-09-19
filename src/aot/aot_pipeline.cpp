@@ -423,7 +423,49 @@ static std::string aot_shell_quote(const std::string &s) {
 // verilmezse davranis oncekiyle bit bit ayni.
 static const char *aot_link_driver() {
   const char *e = getenv("TULPAR_CC");
-  return (e && *e) ? e : "clang++";
+  if (e && *e) return e;
+#if PLATFORM_WINDOWS && (defined(__MINGW32__) || defined(__MINGW64__))
+  // MinGW ile derlenmis bir tulpar.exe icin varsayilan clang++ YANLIS ve
+  // ustelik SESSIZ yanlis. Iki ayri sebep:
+  //   1. Cogu Windows kurulumunda PATH'te hic clang++ yoktur; o zaman her
+  //      `tulpar x.tpr` "AOT derleme/baglama basarisiz: clang ve
+  //      libtulpar_runtime.a mevcut mu?" diyor — yani KULLANICIYI eksik bir
+  //      runtime arsivi aramaya yolluyor, oysa eksik olan LINKLEYICI.
+  //      (Olculdu 2026-09-19, MSYS2 MINGW64 uzerinde yerel derlemede.)
+  //   2. clang++ VARSA daha kotusu oluyor: bayraklarimiz (-static-libgcc,
+  //      -Wl,--export-all-symbols) MinGW'nin; clang nesneleri GCC'nin
+  //      libstdc++'iyla karisinca istisna yolu bozuluyor ve `catch` icinden
+  //      atilan hata `call()` sinirini gecerken surec SESSIZCE (cikis kodu 0)
+  //      oluyor — Tuzaklar 9f, windows/README "GCC zorunlu, clang degil".
+  // Bu yuzden MinGW yapisinda varsayilan g++. TULPAR_CC hala her seyi ezer.
+  return "g++";
+#else
+  return "clang++";
+#endif
+}
+
+// Cikti adina platform uzantisini ekler — AMA ZATEN VARSA EKLEMEZ.
+// `tulpar build oyun.tpr oyun.exe` Windows'ta `oyun.exe.exe` uretiyordu:
+// kullanicinin yazdigi uzantiya bir daha eklendigi icin. Web hedefinde ayni
+// sorun cozulmus (yazilan `.html` kirpiliyor), native Windows'ta kirpma
+// YOKTU. Karsilastirma buyuk/kucuk harf duyarsiz: Windows dosya sistemi oyle
+// ve kullanici `OYUN.EXE` de yazabilir.
+static std::string aot_exe_output_name(const char *exe_filename) {
+  std::string out(exe_filename ? exe_filename : "");
+  const std::string suffix = AOT_EXE_SUFFIX;
+  if (suffix.empty()) return out;
+  if (out.size() >= suffix.size()) {
+    bool same = true;
+    size_t off = out.size() - suffix.size();
+    for (size_t i = 0; i < suffix.size(); i++) {
+      char a = out[off + i], b = suffix[i];
+      if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+      if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+      if (a != b) { same = false; break; }
+    }
+    if (same) return out;
+  }
+  return out + suffix;
 }
 
 // --- Web hedefi (wasm32-unknown-emscripten) ---------------------------------
@@ -1702,7 +1744,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   } else {
   // Yollar TIRNAKLI: bosluklu dosya/dizin adlari komutu bolmesin (aot_shell_quote).
   const std::string q_obj = aot_shell_quote(obj_filename);
-  const std::string q_exe = aot_shell_quote(std::string(exe_filename) + AOT_EXE_SUFFIX);
+  const std::string q_exe = aot_shell_quote(aot_exe_output_name(exe_filename));
   snprintf(
       link_cmd, sizeof(link_cmd),
       "%s %s%s -o %s %s %s%s%s%s%s 2>&1",
@@ -1815,7 +1857,7 @@ static AOTResult aot_compile_silent(const char *source,
   std::string silent_extra_flags = aot_extra_link_flags();
   // Yollar TIRNAKLI (bkz. aot_shell_quote): bosluklu ad komutu bolmesin.
   const std::string q_obj = aot_shell_quote(obj_filename);
-  const std::string q_exe = aot_shell_quote(std::string(exe_filename) + AOT_EXE_SUFFIX);
+  const std::string q_exe = aot_shell_quote(aot_exe_output_name(exe_filename));
   char link_cmd[2048];
 #if PLATFORM_WINDOWS
   snprintf(

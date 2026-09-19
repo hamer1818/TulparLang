@@ -5,3 +5,11 @@
 *.sh         text eol=lf
 build.sh     text eol=lf
 run_tests.sh text eol=lf
+# `.sahne` = sahne editorunun BELIRLENIMLI metin bicimi. Motor onu her zaman
+# LF ile yazar ve `scene_file_editor_sahne_is_canonical` kapisi dosyayi
+# yazicinin ciktisiyla BAYT BAYT karsilastirir. core.autocrlf=true olan bir
+# Windows checkout'unda LF->CRLF cevriliyor ve kapi dusuyor: olculdu
+# 2026-09-19, engine/tests/assets/editor.sahne 1054 bayt (CRLF, 60 satir)
+# ama yazici 994 bayt (LF) uretiyor — tam 60 bayt fark, satir basina bir CR.
+# Belirti "kanonik bicim bozulmus" diyor, oysa bozulan yalniz checkout.
+*.sahne      text eol=lf

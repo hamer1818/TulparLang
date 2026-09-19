@@ -56,6 +56,37 @@ hw_end() {
 }
 TARGET="$2"
 
+# Bir "smoke" alt surecini GUVENILIR sekilde oldurur.
+#
+# NEDEN AYRI BIR FONKSIYON: duz `kill -TERM $pid; wait $pid` Windows'ta
+# ASILIYOR. MSYS2 sinyalleri yalniz MSYS'e baglI surecler icin taklit eder;
+# `tulpar`in urettigi ikili NATIF bir Windows surecidir ve SIGTERM'i hic
+# gormez. Sonuc olculdu (2026-09-19): `wait` donmedi, kosucu 50 dakika
+# ilerlemedi ve o sirada baslatilmis 13 raylib penceresi ekranda ACIK kaldi
+# (tam da DISPLAY temizliginin Linux'ta onledigi sey). Cozum: once POSIX
+# sinyali (Linux/macOS yolu aynen korunur), sonra MSYS2'nin /proc/<pid>/winpid
+# eslemesiyle taskkill — agac dahil (/T), cunku ikili alt surec baslatabilir.
+_smoke_kill() {
+    local pid="$1"
+    kill -TERM "$pid" 2>/dev/null
+    if [ -r "/proc/$pid/winpid" ]; then
+        local wpid
+        wpid=$(cat "/proc/$pid/winpid" 2>/dev/null)
+        if [ -n "$wpid" ]; then
+            MSYS2_ARG_CONV_EXCL='*' taskkill /F /T /PID "$wpid" >/dev/null 2>&1
+        fi
+    fi
+    wait "$pid" 2>/dev/null
+}
+
+# Ornek bir PENCERE aciyor mu? raylib tabanli her sey (tame/arcade/scene3d) ve
+# motor koprusu. Windows'ta bunlarin "2 saniyelik smoke"u GERCEK bir pencere
+# acar: raylib'in Win32 yolunda headless kip YOK ve `DISPLAY=`/`WAYLAND_DISPLAY=`
+# temizligi orada hicbir sey ifade etmez (o sadece X11/Wayland icindir).
+_opens_window() {
+    grep -qE '^[[:space:]]*import[[:space:]]+"(tame|arcade|scene3d|engine)"' "$1" 2>/dev/null
+}
+
 # --- WINDOWS KIPI -----------------------------------------------------------
 # `./build.sh windows test` / `./build.sh windows suites`: aynı test
 # koşucuları, Linux'tan çapraz derlenmiş `tulpar.exe` ile ve üretilen ikililer
@@ -74,6 +105,35 @@ TULPAR_RUN="./tulpar"
 RUN_PREFIX=""
 EXE_SUFFIX=""
 WINDOWS_MODE=0
+
+# --- YEREL WINDOWS (MSYS2 MINGW64 kabugu) -----------------------------------
+# `./build.sh test|suites` GERCEK Windows'ta, Wine olmadan kosar. Yukaridaki
+# `windows` kipinden tek farki RUN_PREFIX'in BOS kalmasi: ikili natif calisir.
+#
+# EXE_SUFFIX sart: AOT uretilen ikiliyi `<ad>.exe` diye yaziyor, kosucu ise
+# uzantisiz ariyordu ve "ikili uretilmedi" diye DUSUYORDU — yani her ornek
+# Windows'ta yanlis sebeple kirmizi veriyordu.
+#
+# NATIVE_EXE ayri tutuluyor cunku EXE_SUFFIX'i Wine kipi de set ediyor; bu
+# degisken yalniz HOST ikilisinin (tulpar.exe) uzantisini anlatiyor ve
+# derleme sonundaki kopyalama adiminda kullaniliyor.
+NATIVE_EXE=""
+NATIVE_WINDOWS=0
+case "${OS}" in
+    MINGW*|MSYS*|CYGWIN*)
+        NATIVE_WINDOWS=1
+        NATIVE_EXE=".exe"
+        TULPAR_RUN="./tulpar.exe"
+        EXE_SUFFIX=".exe"
+        # gramer_bosluklari.test.tpr derleyiciyi ALT SUREC olarak cagiriyor
+        # (`sys_run`), ve `sys_run` Windows'ta cmd.exe'ye gidiyor. cmd.exe `/`
+        # ile baslayan bir sozcugu ANAHTAR sanir: `./tulpar.exe` orada
+        # CALISMAZ (olculdu: cikis 1, `.\tulpar.exe` ve `tulpar.exe` cikis 0).
+        # Wine kipi de bu yuzden ters bolu kullaniyor. TULPAR_BIN yoksa test
+        # `./tulpar`a dusuyor — Windows'ta o dosya zaten YOK.
+        export TULPAR_BIN='.\tulpar.exe'
+        ;;
+esac
 if [ "$ACTION" = "windows" ]; then
     WINDOWS_MODE=1
     ACTION="$2"
@@ -103,6 +163,14 @@ fi
 case "${OS}" in
     Linux*)     BUILD_DIR="build-linux";;
     Darwin*)    BUILD_DIR="build-macos";;
+    # YEREL WINDOWS (MSYS2 MINGW64): capraz derlemeyle AYNI dizin adi. Ad
+    # yuk tasiyor — src/aot/aot_pipeline.cpp build_link_search_dirs()
+    # Windows'ta once `build-windows` (ve `build-windows/Release`) deniyor.
+    # Onceden burasi `*)` dalina dusup `build` seciyordu; arsiv yine de
+    # bulunuyordu (add_dev("build") yedegi var) ama motor arsivleri
+    # `build-windows/engine` yolundan aranidigi icin `import "engine"`
+    # eden program linklenemiyordu.
+    MINGW*|MSYS*|CYGWIN*) BUILD_DIR="build-windows";;
     *)          BUILD_DIR="build";;
 esac
 [ "$WINDOWS_MODE" = "1" ] && BUILD_DIR="build-windows"
@@ -1405,6 +1473,19 @@ if [ "$ACTION" = "test" ]; then
                 # silently shipping in a release. SIGTERM the survivors;
                 # any non-zero exit before the SIGTERM means a real
                 # runtime failure.
+                # WINDOWS: pencere acan ornegin smoke'u KOSULMAZ. Linux'ta
+                # DISPLAY temizligi raylib'i baslatmiyor ve InitWindow yamasi
+                # zarifce exit 0 veriyor; Windows'ta oyle bir kapi YOK, ikili
+                # gercekten aciliyor. Sessizce PASS demiyoruz — atlama GORUNUR,
+                # cunku kosmayan bir sonda kosuldugunu soylememeli.
+                if [ "$NATIVE_WINDOWS" = "1" ] || [ "$WINDOWS_MODE" = "1" ]; then
+                    if _opens_window "$example"; then
+                        printf "Testing %s... ${GREEN}PASS (compile-only)${NC} ${YELLOW}[smoke ATLANDI: Windows'ta pencere acar]${NC}
+" "$example"
+                        rm -f "$out_path" "$out_base.ll" "$out_base.o" "$compile_log"
+                        return 0
+                    fi
+                fi
                 local smoke_log
                 smoke_log=$(mktemp)
                 # DISPLAY/WAYLAND_DISPLAY scrubbed: on WSLg/desktop the
@@ -1431,16 +1512,33 @@ if [ "$ACTION" = "test" ]; then
                         # api_wings_tls.tpr smoke (the fixture cert in
                         # tests/fixtures/ has no CA chain), no-op for
                         # plain HTTP probes.
-                        local code
-                        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -k "$probe_url" 2>/dev/null)
+                        # SORGU YENIDEN DENENIR (en cok ~10 s). Tek atis
+                        # yarisliydi: `sleep 2` sunucunun HAZIR oldugunu degil,
+                        # yalnizca 2 saniye gectigini olcuyor. 16 paralel is
+                        # altinda o pencere yetmiyor ve saglam bir ornek
+                        # "probe_failed_no_response" ile KIRMIZI veriyor.
+                        # Olculdu 2026-09-19 (Windows, 38 ornek paralel):
+                        # api_wings_tls.tpr paket icinde dustu, tek basina
+                        # ayni kosucuyla 3/3 gecti ve elle olcumde 1.5 s'de
+                        # HTTP 200 donuyordu. Yani hata TLS'te degil, sondada.
+                        # Dongu sunucu OLURSE hemen cikar, yani gercek bir
+                        # cokme hala aninda yakalanir ve yesile donmez.
+                        local code=""
+                        local _try=0
+                        while [ $_try -lt 20 ]; do
+                            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -k "$probe_url" 2>/dev/null)
+                            [ -n "$code" ] && [ "$code" != "000" ] && break
+                            kill -0 "$smoke_pid" 2>/dev/null || break
+                            _try=$((_try + 1))
+                            sleep 0.5
+                        done
                         if [ -z "$code" ] || [ "$code" = "000" ]; then
                             probe_status="probe_failed_no_response"
                         elif ! kill -0 "$smoke_pid" 2>/dev/null; then
                             probe_status="server_died_after_probe"
                         fi
                     fi
-                    kill -TERM "$smoke_pid" 2>/dev/null
-                    wait "$smoke_pid" 2>/dev/null
+                    _smoke_kill "$smoke_pid"
                     if [ "$probe_status" = "ok" ]; then
                         if [ -n "$probe_url" ]; then
                             printf "Testing %s... ${GREEN}PASS (compile-only +smoke +probe)${NC}\n" "$example"
@@ -1631,7 +1729,14 @@ if [ "$ACTION" = "test" ]; then
         export INPUT_DIR FAIL_DIR GREEN RED NC
         export TULPAR_RUN RUN_PREFIX EXE_SUFFIX
         export WINEPREFIX WINEDEBUG WINEPATH TULPAR_CC
-        export -f run_test smoke_probe_for
+        # NATIVE_WINDOWS/WINDOWS_MODE + iki yardimci de ihracat listesinde.
+        # Unutulursa worker'da `_smoke_kill: command not found` cikiyor ve
+        # pencere acan ornegin smoke'u ATLANMIYOR — olculdu 2026-09-19:
+        # kosum sirasinda 5 oyun penceresi acildi ve surecler asili kaldi.
+        # Bu dosyanin kendi kurali: worker ayri bir bash surecidir, run_test'in
+        # OKUDUGU her sey ihrac edilmeli.
+        export NATIVE_WINDOWS WINDOWS_MODE
+        export -f run_test smoke_probe_for _smoke_kill _opens_window
 
         # xargs exits 123 if ANY worker exited non-zero — that is the
         # failure channel (a worker subshell cannot set TEST_FAILED).
@@ -1692,7 +1797,7 @@ fi
 
 # Copy executable
 hw_end "derleme"
-cp tulpar ../tulpar
+cp "tulpar$NATIVE_EXE" "../tulpar$NATIVE_EXE"
 # Copy the runtime archive next to the executable too. The AOT linker
 # probes the directory of the running `tulpar` first, so leaving a stale
 # (e.g. Windows/MinGW `.obj`) libtulpar_runtime.a in the repo root makes
@@ -1705,7 +1810,7 @@ cp libtulpar_tame.a ../libtulpar_tame.a
 cd ..
 
 # Make executable
-chmod +x tulpar
+chmod +x "tulpar$NATIVE_EXE"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"

@@ -18,6 +18,18 @@ set -u
 cd "$(dirname "$0")/.."
 TULPAR=./tulpar
 [ -x "$TULPAR" ] || { echo "fmt denetimi: ./tulpar yok — atlandi"; exit 0; }
+# ARACIN VARLIGI ONCE DENETLENIR. `diff` yoksa asagidaki `diff -q` her dosyada
+# basarisiz oluyor ve denetim "IDEMPOTENT DEGIL" diye DOSYALARI sucluyordu —
+# olculdu 2026-09-19 (yerel Windows/MSYS2, diffutils kurulu degildi): cikti
+# "fmt denetimi BASARISIZ: 148 dosyanin 148 tanesi" idi. %100 oran zaten
+# tek basina delil: gercek bir bicimlendirici hatasi her dosyayi birden
+# dusurmez. Sessizce atlamak da dogru degil (kapi kosmadan yesil vermemeli),
+# o yuzden SEBEBI soyleyip kirmizi veriyoruz.
+command -v diff > /dev/null 2>&1 || {
+    echo "fmt denetimi KOSULAMADI: 'diff' bulunamadi."
+    echo "  Kur:  MSYS2 -> pacman -S diffutils | Debian/Ubuntu -> apt install diffutils"
+    exit 1
+}
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 fail=0

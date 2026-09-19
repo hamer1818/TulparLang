@@ -38,13 +38,47 @@ socket_close(server_fd);
 def main() -> int:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.chdir(root)
-    with tempfile.TemporaryDirectory() as tmp:
+    # WINDOWS TEMIZLIK YARISI: Windows, daha yeni sonlanmis bir .exe'nin
+    # goruntu tanitici serbest birakilana kadar silinmesine izin vermez, ve
+    # bu birakma ASENKRON. Olculdu 2026-09-19: ayni sonda arka arkaya iki kez
+    # kosturuldugunda biri `PermissionError: [WinError 5] ...wsecho_bin.exe`
+    # ile DUSTU, otekisi gecti — testin OLCTUGU sey (maskeli cerceve eko'su)
+    # ikisinde de dogruydu. Temizligin basarisizligi bir test sonucu degildir,
+    # o yuzden hukum verdirmiyor. (Python 3.10 oncesinde parametre yok.)
+    tmp_kwargs = {}
+    if sys.version_info >= (3, 10):
+        tmp_kwargs["ignore_cleanup_errors"] = True
+    with tempfile.TemporaryDirectory(**tmp_kwargs) as tmp:
+        # WINDOWS. Uc ayri nokta; ucu de kardes sonda wings_tls_smoke.py'de
+        # zaten dogru yapiliyor, bu dosya geride kalmisti (olculdu 2026-09-19,
+        # yerel Windows derlemesi):
+        #   1. Derleyicinin adi `tulpar.exe`; `./tulpar` diye aranirsa yok.
+        #   2. `tulpar build <kaynak> <ad>` ciktiyi `<ad>.exe` yazar, yani
+        #      `os.path.exists("<ad>")` False donuyordu ve sonda
+        #      "FAIL: server did not compile" diyordu — oysa bir ustteki satir
+        #      "[AOT] Successfully created". Mesaj YANLIS sucluyordu: derleme
+        #      degil, ARAMA basarisizdi. Bu, paketlerdeki TEK kirmiziydi.
+        #   3. Alt surec ciktisi yerel kod sayfasiyla (cp1254) cozulurse
+        #      Turkce tanilar bozulur ya da UnicodeDecodeError atar.
+        exe_suffix = ".exe" if sys.platform.startswith("win") else ""
+        tulpar = None
+        for cand in ("./tulpar" + exe_suffix, "tulpar" + exe_suffix):
+            if os.path.exists(cand):
+                tulpar = cand
+                break
+        if tulpar is None:
+            print("FAIL: tulpar%s bulunamadi (depo kokunden calistirin)"
+                  % exe_suffix)
+            return 1
+
         src = os.path.join(tmp, "wsecho.tpr")
-        binary = os.path.join(tmp, "wsecho_bin")
-        with open(src, "w") as f:
+        bin_base = os.path.join(tmp, "wsecho_bin")
+        binary = bin_base + exe_suffix
+        with open(src, "w", encoding="utf-8") as f:
             f.write(SERVER_SRC)
-        build = subprocess.run(["./tulpar", "build", src, binary],
-                               capture_output=True, text=True)
+        build = subprocess.run([tulpar, "build", src, bin_base],
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
         if build.returncode != 0 or not os.path.exists(binary):
             print("FAIL: server did not compile\n" + build.stdout + build.stderr)
             return 1
@@ -76,6 +110,10 @@ def main() -> int:
         finally:
             server.kill()
             server.wait()
+            # Boru taniticisini ACIKCA birak; yoksa .exe'yi tutan ikinci bir
+            # tanitici kaliyor ve yukaridaki temizlik yarisi buyuyor.
+            if server.stdout is not None:
+                server.stdout.close()
 
 
 if __name__ == "__main__":

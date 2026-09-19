@@ -1,456 +1,688 @@
-# ===========================================================================
-# Tulpar Engine — Faz 0 (L0 platform + L1 core). AYRI agac: `tulpar`
-# derleyicisine ve `tulpar_runtime`a LINKLENMEZ; ileride oyun ikilisine
-# linklenir. Plan: docs/engine/MIMARI.md. Katman kurali (tools/layer_check.py)
-# engine_core'un on kosulu — ihlal = build hatasi.
-# ===========================================================================
-# Tek basina yapilandirma (Android capraz derleme: cmake -S engine -B build-android
-# -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a
-# -DANDROID_PLATFORM=android-26). Ust agactan add_subdirectory ile de gelir.
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  cmake_minimum_required(VERSION 3.14)
-  project(tulpar_engine CXX C ASM)
-  set(CMAKE_CXX_STANDARD 17)
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-  if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-  endif()
+# TulparLang - Programming Language (Modern C++17 + LLVM Backend)
+# Supported platforms: Linux, macOS, Windows (native MSVC support)
+# Minimum CMake version
+cmake_minimum_required(VERSION 3.14)
+
+# Project name and version - Now using modern C++17
+# This is the NEXT (unreleased) version; dev builds report "<version>-dev".
+# Keep it >= the latest git tag (currently v3.10.0) so `tulpar --version` and
+# `tulpar update --check` never report a dev build as older than the last
+# release. Bump here when cutting a release; CI overrides via -DTULPAR_VERSION.
+project(TulparLang VERSION 3.13.1 LANGUAGES C CXX)
+
+# C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ============================================
+# Embed Standard Libraries (lib/*.tpr)
+# ============================================
+include(${CMAKE_SOURCE_DIR}/cmake/EmbedLibraries.cmake)
+
+# ============================================
+# LLVM is REQUIRED for TulparLang 2.x
+# ============================================
+# Add cmake directory to module path for FindLLVM.cmake
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+# LLVM (especially MSYS2/mingw builds) imports targets like ZLIB::ZLIB and
+# LibXml2::LibXml2. Find them up-front so the imported targets exist before
+# LLVMConfig.cmake references them. Quiet/optional so MSVC builds still work.
+find_package(ZLIB QUIET)
+find_package(LibXml2 QUIET)
+find_package(zstd QUIET)
+
+# Try CONFIG mode first (preferred), fallback to MODULE mode
+find_package(LLVM CONFIG QUIET)
+if(NOT LLVM_FOUND)
+    message(STATUS "LLVM CONFIG mode failed, trying MODULE mode with FindLLVM.cmake...")
+    find_package(LLVM REQUIRED)
 endif()
-enable_language(ASM)
-find_package(Threads REQUIRED)
 
-option(ENGINE_MEM_CANARY "Arena blok kanaryalari (tasma tespiti; ship'te kapat)" ON)
-option(ENGINE_TRACY "Tracy profiler istemcisi (third_party/tracy, BSD-3): profiler bolgeleri + kare isaretleri Tracy'ye de basilir" OFF)
-
-# Motorda exception ve RTTI YOK (plan L1). -Werror yok: derleyici surumune
-# bagli uyari CI'i kirmasin; kod uyarisiz tutulur.
-set(ENGINE_CXX_OPTS -fno-exceptions -fno-rtti -funwind-tables -Wall -Wextra)
-
-# --- L0 ---------------------------------------------------------------------
-add_library(engine_platform STATIC
-    platform/fatal.cpp
-    platform/time.cpp
-    platform/memory.cpp
-    platform/thread.cpp
-    platform/crash.cpp
-    platform/window.cpp
-    platform/gesture.cpp
-    platform/thermal.cpp
-    platform/perf_hint.cpp
-)
-target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
-target_include_directories(engine_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_options(engine_platform PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
-target_link_libraries(engine_platform PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
-
-# --- Katman denetimi --------------------------------------------------------
-add_custom_target(engine_layer_check
-    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/layer_check.py ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMENT "engine: katman bagimlilik denetimi (ihlal = build hatasi)"
-    VERBATIM
-)
-
-# --- Ikon denetimi ----------------------------------------------------------
-# Editorun kullandigi her ikon kod noktasi YUKLENEN fontlarda var mi.
-# Yoksa ImGui sessizce bos kutu cizer ve arayuz hata vermeden bozulur
-# (olculdu: 16 kod noktasi / 34 cagri, panel baslikleri dahil).
-add_custom_target(engine_icon_check
-    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/icon_check.py ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMENT "engine: editor ikon glif denetimi (eksik glif = build hatasi)"
-    VERBATIM
-)
-
-# --- L1 ---------------------------------------------------------------------
-add_library(engine_core STATIC
-    core/memory/arena.cpp
-    core/memory/alloc_gate.cpp
-    core/jobs/fiber.cpp
-    core/jobs/job_system.cpp
-    core/jobs/job_graph.cpp
-    core/memory/ebr.cpp
-    core/event.cpp
-    core/math/bvh.cpp
-    core/math/spatial_hash.cpp
-    core/math/nn.cpp
-    core/profiler/profiler.cpp
-    core/jobs/fiber_switch_x86_64.S
-    core/jobs/fiber_switch_aarch64.S
-)
-target_link_libraries(engine_core PUBLIC engine_platform)
-if(ENGINE_TRACY)
-    # Kapaliyken sifir maliyet (makrolar bos). Acikken: talep uzerine (sunucu
-    # baglaninca kayit), ornekleme/sistem izleme/callstack kapali (mobilde izin yok),
-    # yayin yok (adb forward ile 8086). Fiber destegi acik: bolgeler fiber'a baglanir.
-    add_library(engine_tracy STATIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy/TracyClient.cpp)
-    target_include_directories(engine_tracy PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy)
-    target_compile_definitions(engine_tracy PUBLIC TRACY_ENABLE TRACY_ON_DEMAND TRACY_FIBERS TRACY_NO_SAMPLING
-        TRACY_NO_SYSTEM_TRACING TRACY_NO_CALLSTACK TRACY_NO_BROADCAST TRACY_NO_FRAME_IMAGE TRACY_NO_CODE_TRANSFER
-        TRACY_NO_CONTEXT_SWITCH TRACY_NO_VSYNC_CAPTURE TRACY_NO_VERIFY) # NO_EXIT YOK: sunucu yoksa surec cikista sonsuza dek beklerdi (engine_tests asili kaldi, 2026-09-14)
-    target_compile_options(engine_tracy PRIVATE -w)
-    target_link_libraries(engine_tracy PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
-    target_link_libraries(engine_core PUBLIC engine_tracy)
-    target_compile_definitions(engine_core PUBLIC ENGINE_TRACY=1)
+# CAPRAZ DERLEME (Windows): MSYS2'nin include/ dizini LLVM basliklarini mingw
+# CRT basliklariyla ayni yerde tutuyor; oldugu gibi -I'ya konunca capraz
+# derleyicinin kendi CRT basliklariyla cakisiyor (redefinition of 'wcstod').
+# cmake/toolchain-mingw64.cmake yalniz llvm/ + llvm-c/ iceren ince bir dizin
+# hazirlar ve burada devreye girer. Yerel (capraz olmayan) derlemede bu
+# degisken bos, davranis ayni.
+if(TULPAR_WIN_LLVM_INCLUDE AND EXISTS "${TULPAR_WIN_LLVM_INCLUDE}")
+    set(LLVM_INCLUDE_DIRS "${TULPAR_WIN_LLVM_INCLUDE}")
+    message(STATUS "LLVM basliklari ince dizinden: ${LLVM_INCLUDE_DIRS}")
+    # Ithal hedefler (ZLIB::ZLIB, LibXml2::LibXml2, OpenSSL::*, zstd) kendi
+    # INTERFACE include'lariyla ayni TAM dizini geri getiriyor — ustelik
+    # `-isystem` olarak, yani CRT basliklarini ikinci kez. Hepsini ince dizine
+    # cevir. Fonksiyon, OpenSSL find'indan SONRA da cagrilir (asagida).
+    function(tulpar_win_slim_includes)
+        foreach(_t ZLIB::ZLIB LibXml2::LibXml2 OpenSSL::SSL OpenSSL::Crypto
+                   zstd::libzstd_shared zstd::libzstd_static)
+            if(TARGET ${_t})
+                set_target_properties(${_t} PROPERTIES
+                    INTERFACE_INCLUDE_DIRECTORIES "${TULPAR_WIN_LLVM_INCLUDE}")
+            endif()
+        endforeach()
+    endfunction()
+    tulpar_win_slim_includes()
 endif()
-target_compile_options(engine_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
-if(ENGINE_MEM_CANARY)
-    # PUBLIC: baslik (Arena yerlesimi) ve kutuphane ayni tanimi gormeli.
-    target_compile_definitions(engine_core PUBLIC ENGINE_MEM_CANARY=1)
+
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "LLVM_DIR: ${LLVM_DIR}")
+message(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
+message(STATUS "LLVM_LIBRARY_DIRS: ${LLVM_LIBRARY_DIRS}")
+
+# Expose LLVM major version to C++ so codegen can pick between API
+# spellings that LLVM has renamed across versions. Concretely:
+# `LLVMDIBuilderInsertDeclareAtEnd` (≤ 18) vs
+# `LLVMDIBuilderInsertDeclareRecordAtEnd` (≥ 19, record-based debug
+# info migration). Plan 07 PR 3e tripped on this — MSYS2 ships
+# LLVM 19, CI's apt installs LLVM 18.
+add_compile_definitions(TULPAR_LLVM_MAJOR=${LLVM_VERSION_MAJOR})
+
+# OpenSSL is OPTIONAL — when present, `https://` URLs become available
+# in `aot_http_request` and `tulpar pkg install` registry/url specs.
+# When absent, `http://` keeps working as before and `https://` URLs
+# return a clear "TLS not compiled in" error at runtime.
+#
+# Install:
+#   Linux:  apt install libssl-dev          (auto-detected)
+#   macOS:  brew install openssl            (auto-detected via brew prefix)
+#   MSYS2:  pacman -S mingw-w64-x86_64-openssl
+#           — build.bat passes -DOPENSSL_ROOT_DIR=C:/msys64/mingw64
+#             so the auto-detect Just Works on the standard MSYS2 path.
+#             Override with -DOPENSSL_ROOT_DIR=... for non-default installs.
+find_package(OpenSSL QUIET)
+if(COMMAND tulpar_win_slim_includes)
+    tulpar_win_slim_includes()   # OpenSSL::* hedefleri simdi olustu
 endif()
-add_dependencies(engine_core engine_layer_check)
-
-# --- L2 RHI (Vulkan) ---------------------------------------------------------
-# Basliklar vendored, loader dlopen: link zamani Vulkan bagimliligi YOK.
-add_library(engine_rhi STATIC
-    rhi/vk_api.cpp
-    rhi/device.cpp
-    rhi/command_pools.cpp
-    rhi/offscreen.cpp
-    rhi/swapchain.cpp
-    rhi/tile_budget.cpp
-    rhi/frame_graph.cpp
-)
-target_include_directories(engine_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan)
-target_link_libraries(engine_rhi PUBLIC engine_core ${CMAKE_DL_LIBS})
-target_compile_options(engine_rhi PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
-add_dependencies(engine_rhi engine_layer_check)
-
-# --- Jolt Physics (vendored, engine/third_party/jolt) ------------------------
-# Plan Faz 2: "yazma, bagla". Bayraklar: platformlar arasi belirlenimlilik
-# (FMA kapali), x86_64 SSE4.2 (AVX yok), ObjectStream/DebugRenderer/Profile
-# kapali. Uyarilar Jolt'un kendi isi (-w).
-file(GLOB_RECURSE ENGINE_JOLT_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/jolt/Jolt/*.cpp)
-# ObjectStream/*.cpp de derlenir: SerializableObject.cpp'deki GetRTTIOfType her
-# yerden cagriliyor; serializer'in kendisi JPH_OBJECT_STREAM tanimsiz oldugu
-# icin derlenmiyor (dosya ici #ifdef).
-add_library(engine_jolt STATIC ${ENGINE_JOLT_SOURCES})
-target_include_directories(engine_jolt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/jolt)
-target_compile_definitions(engine_jolt PUBLIC JPH_CROSS_PLATFORM_DETERMINISTIC)
-# -ffp-contract=off PUBLIC: AArch64'te GCC/Clang a*b+c'yi varsayilan olarak FMA'ya
-# birlestirir, x86_64'te (-mfma yok) birlestirmez -> ayni kaynak, farkli yuvarlama.
-# Olculdu (CI 2026-09-14): sabit girdiyle x86_64 5dc41c2b... vs arm64 4087b9af...
-# Jolt'un kendi derlemesi de bunu kapatir; define tek basina yetmiyor.
-target_compile_options(engine_jolt PUBLIC -ffp-contract=off)
-target_compile_options(engine_jolt PRIVATE -fno-exceptions -fno-rtti -w)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    target_compile_definitions(engine_jolt PUBLIC JPH_USE_SSE4_1 JPH_USE_SSE4_2)
-    target_compile_options(engine_jolt PUBLIC -msse4.2 -mpopcnt)
-endif()
-target_link_libraries(engine_jolt PUBLIC Threads::Threads)
-
-# --- meshoptimizer (vendored, engine/third_party/meshoptimizer, MIT) ---------
-# Yukleme aninda mesh optimizasyonu + LOD (Faz 6); cluster DAG'in temeli (Faz 9).
-file(GLOB ENGINE_MESHOPT_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/meshoptimizer/*.cpp)
-add_library(engine_meshopt STATIC ${ENGINE_MESHOPT_SOURCES})
-target_include_directories(engine_meshopt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/meshoptimizer)
-target_compile_options(engine_meshopt PRIVATE -fno-exceptions -fno-rtti -w)
-
-# --- astc-encoder (vendored, engine/third_party/astcenc, Apache-2.0) ---------
-# Arac (engine_texpack) sikistirir; runtime yalniz ASTC LDR olmayan GPU'da (masaustu
-# NVIDIA) cozer. ISA: x86_64 SSE4.1+POPCNT, AArch64 NEON, digerleri skaler.
-file(GLOB ENGINE_ASTCENC_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astcenc/astcenc_*.cpp)
-add_library(engine_astcenc STATIC ${ENGINE_ASTCENC_SOURCES})
-target_include_directories(engine_astcenc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astcenc)
-target_compile_options(engine_astcenc PRIVATE -fno-exceptions -fno-rtti -w)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    target_compile_definitions(engine_astcenc PRIVATE ASTCENC_SSE=41 ASTCENC_AVX=0 ASTCENC_POPCNT=1 ASTCENC_F16C=0 ASTCENC_NEON=0 ASTCENC_SVE=0)
-    target_compile_options(engine_astcenc PRIVATE -msse4.1 -mpopcnt)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-    target_compile_definitions(engine_astcenc PRIVATE ASTCENC_SSE=0 ASTCENC_AVX=0 ASTCENC_POPCNT=0 ASTCENC_F16C=0 ASTCENC_NEON=1 ASTCENC_SVE=0)
+if(OpenSSL_FOUND)
+    message(STATUS "OpenSSL: ${OPENSSL_VERSION} (TLS enabled)")
+    add_compile_definitions(TULPAR_HAS_TLS=1)
+    # AOT link satirina `-lssl -lcrypto` giriyor ama `-L` GIRMIYORDU: OpenSSL
+    # sistemin varsayilan arama yolunda degilse (macOS'ta Homebrew keg-only bir
+    # dizine koyuyor) her `tulpar build` `ld: library 'ssl' not found` ile
+    # dusuyordu. CMake'in bulduğu dizin ikiliye gomuluyor; surucu onu ve birkac
+    # standart konumu VAR OLDUKLARI SURECE `-L` olarak ekliyor.
+    get_filename_component(TULPAR_OPENSSL_LIBDIR "${OPENSSL_SSL_LIBRARY}" DIRECTORY)
+    if(TULPAR_OPENSSL_LIBDIR)
+        message(STATUS "OpenSSL lib dir: ${TULPAR_OPENSSL_LIBDIR}")
+        add_compile_definitions(TULPAR_OPENSSL_LIBDIR="${TULPAR_OPENSSL_LIBDIR}")
+    endif()
 else()
-    target_compile_definitions(engine_astcenc PRIVATE ASTCENC_SSE=0 ASTCENC_AVX=0 ASTCENC_POPCNT=0 ASTCENC_F16C=0 ASTCENC_NEON=0 ASTCENC_SVE=0)
+    message(STATUS "OpenSSL: not found (TLS disabled — `https://` URLs will fail at runtime)")
 endif()
 
-# --- audio (L3): miniaudio (vendored, engine/third_party/miniaudio, MIT-0) ---
-add_library(engine_audio STATIC audio/mixer.cpp audio/device.cpp audio/clip.cpp audio/miniaudio_impl.c) # PR #322 spatial.cpp/dsp.cpp ALINMADI: main basliklari zaten saglıyor
-target_include_directories(engine_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio)
-target_link_libraries(engine_audio PUBLIC engine_core ${CMAKE_DL_LIBS})
-if(APPLE) # CoreAudio arka ucu: cerceveler (CI macOS; yerelde denenmedi)
-    target_link_libraries(engine_audio PUBLIC "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox" "-framework AudioUnit")
+include_directories(${LLVM_INCLUDE_DIRS})
+link_directories(${LLVM_LIBRARY_DIRS})
+if(LLVM_DEFINITIONS)
+    # LLVM_DEFINITIONS is a single SPACE-SEPARATED STRING, not a CMake list.
+    # Passing it straight to add_definitions() collapses every flag after the
+    # first into the value of the first -D (e.g. LLVM 22's MinGW config yields
+    #   -D_GLIBCXX_USE_CXX11_ABI="1 -D_FILE_OFFSET_BITS=64 ...")
+    # which makes libstdc++'s `#if _GLIBCXX_USE_CXX11_ABI` see '=' tokens:
+    #   <command-line>: error: token '=' is not valid in preprocessor expressions
+    # Split into proper arguments first (LLVM's own docs recommend this).
+    separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND "${LLVM_DEFINITIONS}")
+    add_definitions(${LLVM_DEFINITIONS_LIST})
 endif()
-target_compile_options(engine_audio PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
-add_dependencies(engine_audio engine_layer_check)
 
-# --- recastnavigation (vendored, engine/third_party/recast) ------------------
-# Recast = bake (sahne derleyicisi/test), Detour = runtime sorgu.
-file(GLOB ENGINE_RECAST_SOURCES CONFIGURE_DEPENDS
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/recast/Recast/Source/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/recast/Detour/Source/*.cpp)
-add_library(engine_recast STATIC ${ENGINE_RECAST_SOURCES})
-target_include_directories(engine_recast PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/recast/Recast/Include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/recast/Detour/Include)
-target_compile_options(engine_recast PRIVATE -fno-exceptions -fno-rtti -w -ffp-contract=off)
+# C++ Compiler flags (modern, strict)
+if(MSVC)
+    # MSVC specific flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc /permissive-")
+    # Disable specific MSVC warnings
+    add_compile_options(
+        /wd4244  # conversion from 'type1' to 'type2', possible loss of data
+        /wd4267  # conversion from 'size_t' to 'type', possible loss of data
+        /wd4996  # function was declared deprecated
+        /wd4005  # macro redefinition
+        /wd4146  # unary minus operator applied to unsigned type
+        /wd4624  # destructor was implicitly defined as deleted
+    )
+    # Enable big object files for LLVM
+    add_compile_options(/bigobj)
+else()
+    # GCC/Clang flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
+endif()
 
-# --- L4 SIM (ECS, zamanlayici, sabit adim, replay, fizik, navmesh) -----------
-add_library(engine_sim STATIC
-    sim/ecs.cpp
-    sim/schedule.cpp
-    sim/timers.cpp
-    sim/physics.cpp
-    sim/navmesh.cpp
-    sim/animation.cpp
-    sim/ik.cpp
-    sim/lag_compensation.cpp
-    sim/camera_rig.cpp
-    sim/behavior_tree.cpp
-    sim/state_machine.cpp
-    sim/boids.cpp
-    sim/npc_motivation.cpp
-    sim/neo_riemannian.cpp
-    sim/chaos_physics.cpp
-    sim/fluid_system.cpp
-    sim/quantum_gen.cpp
-    sim/ml_system.cpp
-    sim/anticheat.cpp
-    sim/desync.cpp
-    sim/interp.cpp
+# Known non-critical noise for current architecture strategy:
+# - computed goto dispatch in VM (GNU extension)
+# - compatibility conversions inherited from legacy code paths
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-write-strings>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-function>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-variable>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-but-set-variable>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-maybe-uninitialized>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
+    )
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-gnu-label-as-value>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c++20-extensions>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c99-extensions>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-writable-strings>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-defaulted-function-deleted>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-function>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-variable>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-but-set-variable>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
+    )
+endif()
+
+# Debug/Release configurations
+if(MSVC)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Zi /DTULPAR_DEBUG")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /DNDEBUG")
+else()
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+endif()
+
+# Include directories
+include_directories(${PROJECT_SOURCE_DIR}/src)
+
+# ============================================
+# Source files
+# ============================================
+
+# Common
+set(COMMON_SOURCES
+    src/common/localization.cpp
+    src/common/localization.hpp
+    src/common/diagnostics.cpp
+    src/common/diagnostics.hpp
+    src/common/http_fetch.cpp
+    src/common/http_fetch.hpp
 )
-target_link_libraries(engine_sim PUBLIC engine_core engine_jolt engine_recast)
-target_compile_options(engine_sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
-# ratas (jsnell/ratas, MIT) yalniz sim/timers.cpp'nin ICINDE kullanilir --
-# kendi ad alani olmadigi ve global alana `Tick`/`TimerWheel` koydugu icin
-# sim/timers.hpp onu GORMEZ. Bu yuzden PUBLIC degil PRIVATE: kutuphane
-# motorun geri kalanina SIZMAZ.
-target_include_directories(engine_sim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
-add_dependencies(engine_sim engine_layer_check)
 
-# --- L3 RENDERER -----------------------------------------------------------------
-# NOT: renderer/nextgen_render.cpp BILEREK bu listede YOK -- Intel
-# MaskedOcclusionCulling'e ihtiyac duyuyor, o kutuphane bu agacin
-# third_party/'sinde yok. Dosya kaynak olarak duruyor (sim/rollback.hpp ile
-# ayni durum: "kod hazir, bagimlilik/kablolama bekliyor").
-add_library(engine_renderer STATIC renderer/renderer.cpp renderer/cluster.cpp renderer/indirect_cull.cpp
-    renderer/meshlet_pipeline.cpp renderer/lighting_pipeline.cpp renderer/debug_draw.cpp
-    renderer/cluster_lod.cpp renderer/cluster_cull.cpp)
-target_include_directories(engine_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/debug_draw)
-target_link_libraries(engine_renderer PUBLIC engine_rhi engine_meshopt)
-target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
-add_dependencies(engine_renderer engine_layer_check)
-
-# --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/scene_blob.cpp content/scene_runtime.cpp content/primitives.cpp content/vendored_impl.c
-    # --- PR #322: yeni icerik modulleri (content/pack.cpp ALINMADI: main'in
-    # .tpak'i mmap'li, belirlenimli ve kapili — PR'inki daha basit bir format)
-    content/voxel.cpp content/morph.cpp content/terrain.cpp content/lod_select.cpp content/water_wave.cpp content/wind.cpp content/occlusion.cpp content/clod_format.cpp content/device_tier.cpp content/dynamic_quality.cpp)
-target_include_directories(engine_content PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cgltf
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
-target_link_libraries(engine_content PUBLIC engine_renderer engine_sim engine_meshopt engine_astcenc)
-target_compile_options(engine_content PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> $<$<COMPILE_LANGUAGE:C>:-w>)
-add_dependencies(engine_content engine_layer_check)
-
-# --- L6 BRIDGE: Tulpar betikleri icin C ABI (teng_*), bkz. bridge/engine_api.h --------
-# Masaustu: engine_bridge (+ desktop_host, GLFW dlopen). Android: tulpar_engine_android
-# (asagida) ayni cekirdegi NativeActivity host + native_app_glue + Tulpar bindingleriyle
-# tek arsivde toplar; `tulpar build --target=android` android/dist/<abi>/ altinda arar.
-if(NOT ANDROID)
-add_library(engine_bridge STATIC bridge/engine_api.cpp bridge/desktop_host.cpp app/virtual_stick.cpp)
-target_link_libraries(engine_bridge PUBLIC engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core ${CMAKE_DL_LIBS})
-target_include_directories(engine_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
-target_compile_options(engine_bridge PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
-target_compile_definitions(engine_bridge PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-add_dependencies(engine_bridge engine_layer_check)
-endif()
-
-# --- Demo uygulamasi (L5): pencere (GLFW dlopen) ya da --headless -------------
-if(NOT ANDROID)
-add_executable(engine_demo
-    app/demo.cpp
-    app/demo_app.cpp
-    app/demo_scene.cpp
-    app/virtual_stick.cpp
-    core/memory/alloc_gate_override.cpp
+# Core Language
+set(LEXER_SOURCES
+    src/lexer/lexer.cpp
+    src/lexer/lexer.hpp
 )
-target_link_libraries(engine_demo PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core ${CMAKE_DL_LIBS})
-target_compile_options(engine_demo PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
-target_compile_definitions(engine_demo PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-endif()
 
-# --- Testler ------------------------------------------------------------------
-# alloc_gate_override.cpp YURUTULEBILIRE eklenir: hangi ikilinin sayildigi
-# burada gorunur (A2 kapisi).
-set(ENGINE_TEST_SOURCES
-    tests/test_main.cpp
-    tests/test_memory.cpp
-    tests/test_alloc_gate.cpp
-    tests/test_fiber.cpp
-    tests/test_jobs.cpp
-    tests/test_profiler.cpp
-    tests/test_frame_gate.cpp
-    tests/test_crash.cpp
-    tests/test_math.cpp
-    tests/test_containers.cpp
-    tests/test_rhi.cpp
-    tests/test_audio.cpp
-    tests/test_sim.cpp
-    tests/test_physics.cpp
-    tests/test_navmesh.cpp
-    tests/test_animation.cpp
-    tests/test_scene_faz2.cpp
-    tests/test_renderer.cpp
-    tests/test_content.cpp
-    tests/test_scene.cpp
-    tests/test_scene_blob.cpp
-    tests/test_render_graph.cpp
-    tests/test_temporal.cpp
-    tests/test_pack.cpp
-    tests/test_input.cpp
-    tests/test_layout.cpp
-    # --- PR #322 testleri (test_dsp/test_spatial/test_scene_format ALINMADI:
-    # olctukleri surumler main'dekilerle degistirildi)
-    tests/test_ik.cpp
-    tests/test_lag_compensation.cpp
-    tests/test_camera_rig.cpp
-    tests/test_gesture.cpp
-    tests/test_voxel.cpp
-    tests/test_morph.cpp
-    tests/test_terrain.cpp
-    tests/test_lod_select.cpp
-    tests/test_wind.cpp
-    tests/test_occlusion.cpp
-    tests/test_frame_pacer.cpp
-    tests/test_job_graph.cpp
-    tests/test_bvh.cpp
-    tests/test_nn.cpp
-    tests/test_replay.cpp
-    tests/test_water_wave.cpp
-    tests/test_random.cpp
-    tests/test_noise.cpp
-    tests/test_behavior_tree.cpp
-    tests/test_particles.cpp
-    tests/test_frame_graph.cpp
-    tests/test_indirect_cull.cpp
-    tests/test_chaos_physics.cpp
-    tests/test_fluid_system.cpp
-    tests/test_quantum_gen.cpp
-    tests/test_lighting_pipeline.cpp
-    tests/test_fixed.cpp
-    tests/test_spatial_hash.cpp
-    tests/test_debug_draw.cpp
-    tests/test_timers.cpp
-    tests/test_state_machine.cpp
-    tests/test_event_bus.cpp
-    tests/test_boids.cpp
-    tests/test_npc_motivation.cpp
-    tests/test_neo_riemannian.cpp
-    tests/test_ebr.cpp
-    tests/test_cluster_lod.cpp
-    tests/test_meshlet_pipeline.cpp
-    tests/test_clod_format.cpp
-    tests/test_cluster_cull.cpp
-    tests/test_anticheat.cpp
-    tests/test_desync.cpp
-    tests/test_device_tier.cpp
-    tests/test_dynamic_quality.cpp
-    tests/test_ecs_snapshot.cpp
-    tests/test_interp.cpp
-    tests/test_perf_hint.cpp
-    tests/test_thermal.cpp
-    tests/test_rollback.cpp
+set(PARSER_SOURCES
+    src/parser/parser.cpp
+    src/parser/parser.hpp
+    src/parser/import_alias.cpp
+    src/parser/import_alias.hpp
 )
-# Fizik altin ozeti: x86_64'te hesaplanir, CI arm64 ve telefon (Kirin 970) karsilastirir.
-# 0x5dc41c2bddc345cb: x86_64 (SSE4.2, FMA yok), 65 govde x 300 adim, baslangic donusleri SABIT bit (libm yok), 2026-09-14.
-set(ENGINE_PHYSICS_GOLDEN_HASH "0x5dc41c2bddc345cb" CACHE STRING "Jolt sahnesinin platformlar arasi altin ozeti (x86_64'te hesaplandi)")
-# --- Dear ImGui + ImGuizmo (vendored, engine/third_party/imgui, MIT) — yalniz masaustu editor
-if(NOT ANDROID)
-    add_library(engine_imgui STATIC
-        third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp
-        third_party/imgui/imgui_widgets.cpp third_party/imgui/imgui_demo.cpp
-        third_party/imgui/imgui_impl_vulkan.cpp third_party/imgui/ImGuizmo.cpp
-        third_party/imgui/imnodes.cpp third_party/imgui/ImSequencer.cpp third_party/imgui/ImCurveEdit.cpp)
-    # iconfont: yalniz #define'lerden olusan tek baslik (IconFontCppHeaders,
-    # Zlib). Kod uretmez, bu yuzden ayri hedef degil -- imgui ile ayni
-    # gorunurlukte olmasi yeterli (ikonlari ImGui cagrilari tuketiyor).
-    target_include_directories(engine_imgui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan ${CMAKE_CURRENT_SOURCE_DIR}/third_party/iconfont)
-    # Prototip yok: Vulkan fonksiyonlari bizim dlopen'li yukleyiciden (ImGui_ImplVulkan_LoadFunctions).
-    target_compile_definitions(engine_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
-    target_compile_options(engine_imgui PRIVATE -fno-exceptions -fno-rtti -w)
-    list(APPEND ENGINE_TEST_SOURCES tests/test_editor.cpp tests/editor_probe.cpp tests/test_editor_chrome.cpp tests/test_editor_widgets.cpp tests/test_editor_overlay.cpp tests/test_editor_camera.cpp tests/test_editor_console.cpp tests/test_editor_files.cpp app/editor_ui.cpp app/editor_viewport.cpp app/editor_commands.cpp app/editor_layout.cpp app/editor_chrome.cpp app/editor_widgets.cpp app/editor_overlay.cpp app/editor_camera.cpp app/editor_console.cpp app/editor_files.cpp tests/test_bridge.cpp)
+
+# LLVM Backend (Primary) - Now using C++ API
+set(AOT_SOURCES
+    src/aot/llvm_backend.cpp
+    src/aot/llvm_array_shape.cpp
+    src/aot/llvm_backend.hpp
+    src/aot/llvm_types.cpp
+    src/aot/llvm_types.hpp
+    src/aot/llvm_values.cpp
+    src/aot/llvm_values.hpp
+    src/aot/aot_pipeline.cpp
+    src/aot/aot_pipeline.hpp
+)
+
+# Type Inference
+set(TYPEINFER_SOURCES
+    src/typeinfer/typeinfer.cpp
+    src/typeinfer/typeinfer.hpp
+    src/typeinfer/typeinfer_warn.cpp
+    src/typeinfer/typeinfer_warn.hpp
+    src/typeinfer/thread_lint.cpp
+    src/typeinfer/thread_lint.hpp
+)
+
+# Runtime Support (needed for AOT binaries)
+set(RUNTIME_SOURCES
+    src/vm/runtime_bindings.cpp
+    src/vm/runtime_net.cpp
+    src/vm/vm.cpp
+    src/vm/vm.hpp
+    src/vm/bytecode.cpp
+    src/vm/bytecode.hpp
+    runtime/cJSON.c
+    runtime/tulpar_arc.cpp
+    runtime/tulpar_arc.h
+    runtime/tulpar_native.cpp
+    runtime/tulpar_native.h
+    runtime/tulpar_async.cpp
+    runtime/tulpar_async.h
+    runtime/tulpar_gzip.cpp
+    runtime/tulpar_gzip.h
+)
+
+set(MAIN_SOURCES
+    src/main.cpp
+)
+
+# Language Server (LSP)
+set(LSP_SOURCES
+    src/lsp/lsp_server.cpp
+    src/lsp/lsp_server.hpp
+    src/lsp/builtins.cpp
+    src/lsp/builtins.hpp
+    src/lsp/document_index.cpp
+    src/lsp/document_index.hpp
+)
+
+# Source formatter (`tulpar fmt`)
+set(FMT_SOURCES
+    src/fmt/formatter.cpp
+    src/fmt/formatter.hpp
+)
+
+# Package manager (`tulpar pkg ...`)
+set(PKG_SOURCES
+    src/pkg/manifest.cpp
+    src/pkg/manifest.hpp
+    src/pkg/pkg_cli.cpp
+    src/pkg/pkg_cli.hpp
+    src/pkg/sha256.cpp
+    src/pkg/sha256.hpp
+    src/pkg/tpkg.cpp
+    src/pkg/tpkg.hpp
+)
+
+# CLI subcommands (`tulpar update`, `tulpar typecheck`, version, ...) and
+# REPL line editor.
+set(CLI_SOURCES
+    src/cli/update_cmd.cpp
+    src/cli/update_cmd.hpp
+    src/cli/line_edit.cpp
+    src/cli/line_edit.hpp
+    src/cli/typecheck_cmd.cpp
+    src/cli/typecheck_cmd.hpp
+    src/cli/doc_cmd.cpp
+    src/cli/doc_cmd.hpp
+    src/cli/debug_cmd.cpp
+    src/cli/debug_cmd.hpp
+)
+
+set(SQLITE_SOURCES
+    lib/sqlite3/sqlite3.c
+)
+
+# SQLite is vendored 3rd-party. Its amalgamation triggers spurious
+# diagnostics on modern toolchains (gcc/MinGW raises -Wstringop-overread on
+# sqlite3ColumnSetColl, cc1 emits "source object likely at address zero"
+# even though the access is guarded). Silence them on the SQLite TU only
+# so they don't drown real warnings in our own code.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(lib/sqlite3/sqlite3.c PROPERTIES
+        COMPILE_OPTIONS "-Wno-stringop-overread;-Wno-stringop-overflow")
 endif()
 
-add_executable(engine_tests ${ENGINE_TEST_SOURCES} app/virtual_stick.cpp core/memory/alloc_gate_override.cpp)
-target_link_libraries(engine_tests PRIVATE engine_content engine_renderer engine_rhi engine_sim engine_audio engine_core ${CMAKE_DL_LIBS})
-if(NOT ANDROID)
-    # engine_bridge: Tulpar betiklerinin gordugu C ABI (tests/test_bridge.cpp onu kosturur).
-    target_link_libraries(engine_tests PRIVATE engine_imgui engine_bridge)
-    target_include_directories(engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
-    # --- engine_texpack: PNG -> ASTC mip zinciri -> .ktx2 (sahne derleyicisi doku dilimi)
-    add_executable(engine_texpack tools/texpack.cpp)
-    target_link_libraries(engine_texpack PRIVATE engine_content engine_core ${CMAKE_DL_LIBS})
-    target_compile_options(engine_texpack PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
-    # --- engine_sahnec: sahne derleyicisi (.sahne -> .sahneb, PLAN §6); --dump blob'u basar
-    add_executable(engine_sahnec tools/sahnec.cpp)
-    target_link_libraries(engine_sahnec PRIVATE engine_content engine_core ${CMAKE_DL_LIBS})
-    target_compile_options(engine_sahnec PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
-    # --- engine_clodbake: glTF -> cluster LOD DAG -> .clod (sahne derleyicisinin
-    # GEOMETRI dilimi). MeshDecimationTools (MIT) burada derlenir; sadelestirme
-    # varlik basina BIR KEZ, cevrimdisi yapilir -- cihazda maliyeti sifirdir.
-    add_executable(engine_clodbake tools/clodbake.cpp third_party/mdt/MeshDecimationTools.cpp)
-    target_link_libraries(engine_clodbake PRIVATE engine_content engine_renderer engine_core ${CMAKE_DL_LIBS})
-    target_include_directories(engine_clodbake PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
-    # MeshDecimationTools STL/exception KULLANMIYOR, bu yuzden motorun kendi
-    # derleme bayraklari burada da uygulanabilir.
-    target_compile_options(engine_clodbake PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
-    # --- engine_editor: motor duzenleme kipinde (ImGui paneller + ImGuizmo), masaustu / headless
-    add_executable(engine_editor app/editor.cpp app/editor_app.cpp app/editor_ui.cpp app/editor_viewport.cpp app/editor_commands.cpp app/editor_layout.cpp app/editor_chrome.cpp app/editor_widgets.cpp app/editor_overlay.cpp app/editor_camera.cpp app/editor_console.cpp app/editor_files.cpp app/demo_scene.cpp)
-    target_link_libraries(engine_editor PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_core engine_imgui ${CMAKE_DL_LIBS})
-    target_include_directories(engine_editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
-    target_compile_options(engine_editor PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
-    target_compile_definitions(engine_editor PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-    add_dependencies(engine_editor engine_icon_check)
-endif()
-target_compile_options(engine_tests PRIVATE -ffp-contract=off) # sim belirlenimliligi (strict FP, plan C.1.5)
-target_compile_definitions(engine_tests PRIVATE ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
-target_compile_options(engine_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}>)
+# ============================================
+# Main Executable
+# ============================================
+set(ALL_SOURCES
+    ${COMMON_SOURCES}
+    ${LEXER_SOURCES}
+    ${PARSER_SOURCES}
+    ${AOT_SOURCES}
+    ${TYPEINFER_SOURCES}
+    ${RUNTIME_SOURCES}
+    ${LSP_SOURCES}
+    ${FMT_SOURCES}
+    ${PKG_SOURCES}
+    ${CLI_SOURCES}
+    ${MAIN_SOURCES}
+    ${SQLITE_SOURCES}
+)
 
-# --- Android NativeActivity host: libtulparengine.so (testler + demo ayni surecte) ---
-# adb shell'den GPU yok (vkEnumeratePhysicalDevices = 0, SELinux/HAL); APK sureci gerekir.
-# Paketleme/kosum: engine/tools/android_run.sh
-if(ANDROID)
-  set(ENGINE_GLUE_DIR ${ANDROID_NDK}/sources/android/native_app_glue)
-  add_library(tulparengine SHARED
-      app/android_main.cpp
-      app/demo_app.cpp
-      app/demo_scene.cpp
-      app/virtual_stick.cpp
-      core/memory/alloc_gate_override.cpp
-      ${ENGINE_GLUE_DIR}/android_native_app_glue.c
-      ${ENGINE_TEST_SOURCES}
-  )
-  target_include_directories(tulparengine PRIVATE ${ENGINE_GLUE_DIR})
-  target_compile_definitions(tulparengine PRIVATE ENGINE_TESTS_NO_MAIN=1
-      ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" PHYSICS_GOLDEN_HASH=${ENGINE_PHYSICS_GOLDEN_HASH}ull)
-  target_compile_options(tulparengine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off)
-  target_link_libraries(tulparengine PRIVATE engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core android log ${CMAKE_DL_LIBS})
-  # AGDK Swappy (kare temposu, Apache-2.0): third_party/swappy/libs/<abi>/libswappy_static.a
-  # (tools/fetch_swappy.sh, gitignore'lu). ENGINE_SWAPPY=ON ve lib varsa baglanir.
-  option(ENGINE_SWAPPY "AGDK Swappy kare temposu (SwappyVk_queuePresent)" OFF)
-  set(ENGINE_SWAPPY_LIB ${CMAKE_CURRENT_SOURCE_DIR}/third_party/swappy/libs/${ANDROID_ABI}/libswappy_static.a)
-  if(ENGINE_SWAPPY AND EXISTS ${ENGINE_SWAPPY_LIB})
-      target_include_directories(tulparengine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/swappy/include)
-      target_compile_definitions(tulparengine PRIVATE ENGINE_SWAPPY=1)
-      target_link_libraries(tulparengine PRIVATE ${ENGINE_SWAPPY_LIB})
-      message(STATUS "engine: Swappy bagli (${ANDROID_ABI})")
-  elseif(ENGINE_SWAPPY)
-      message(WARNING "engine: ENGINE_SWAPPY=ON ama ${ENGINE_SWAPPY_LIB} yok (tools/fetch_swappy.sh)")
-  endif()
-  # --no-undefined: eksik sembol LINK'te dussun (cihazda UnsatisfiedLinkError degil);
-  # 16 KB sayfa; glue'nun ANativeActivity_onCreate'i disari ver.
-  target_link_options(tulparengine PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384 -u ANativeActivity_onCreate)
+add_executable(tulpar ${ALL_SOURCES})
 
-  # --- tulpar_engine_android: Tulpar oyununun (libtulpargame.so) motor tarafi ---
-  # Kopru cekirdegi + NativeActivity host (android_main -> oyunun main'i) + glue +
-  # VMValue bindingleri (runtime/engine_bindings.cpp; Tulpar runtime basliklari ../src).
-  # engine/tools/build_bridge_android.sh bunu ve libengine_*.a'lari android/dist/<abi>/'ye kopyalar.
-  add_library(tulpar_engine_android STATIC
-      bridge/engine_api.cpp
-      bridge/android_host.cpp
-      app/virtual_stick.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/engine_bindings.cpp
-      ${ENGINE_GLUE_DIR}/android_native_app_glue.c
-  )
-  target_include_directories(tulpar_engine_android PRIVATE ${ENGINE_GLUE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../src ${CMAKE_CURRENT_SOURCE_DIR}/../runtime)
-  target_compile_definitions(tulpar_engine_android PRIVATE TULPAR_RUNTIME_ONLY PLATFORM_LINUX ENGINE_SOURCE_DIR="/data/local/tmp/tulpar_engine")
-  target_compile_options(tulpar_engine_android PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGINE_CXX_OPTS}> -ffp-contract=off -Wno-deprecated-declarations)
-  target_link_libraries(tulpar_engine_android PUBLIC engine_content engine_renderer engine_sim engine_rhi engine_audio engine_core android log ${CMAKE_DL_LIBS})
+# Always enable AOT
+target_compile_definitions(tulpar PRIVATE TULPAR_AOT_ENABLED)
+
+# Embedded version string. Defaults to "<project_version>-dev" for local
+# builds; release CI overrides with `-DTULPAR_VERSION=v3.1.0` (the tag
+# name) so `tulpar --version` matches the GitHub release tag. Only tag
+# pushes create releases; main/PR builds use this default.
+#
+# ⚠️ ÖNBELLEKLİ. `project(VERSION ...)` yükseltilip AYNI build dizininde
+# yeniden derlenirse bu değer ESKİ kalır ve `tulpar version` yanlış sürüm
+# söyler — sessizce. Ölçüldü (2026-09-02, v3.13.1 keserken): 3.13.1'e
+# yükseltildikten sonra ikili hâlâ "3.13.0-dev" diyordu. CI'da görünmüyor
+# (her koşum temiz dizin, üstelik etiket -DTULPAR_VERSION ile eziyor).
+# Sürüm yükselttikten sonra YA build dizinini sil YA da
+# `cmake -S . -B <dir> -DTULPAR_VERSION=<yeni>-dev` ile ez.
+set(TULPAR_VERSION "${PROJECT_VERSION}-dev"
+    CACHE STRING "Embedded version string surfaced via tulpar --version")
+target_compile_definitions(tulpar
+    PRIVATE TULPAR_VERSION_STRING="${TULPAR_VERSION}")
+
+# LLVM Linking - Cross-platform support (x86_64 + AArch64)
+# WebAssembly components ride along on every arch: `tulpar build
+# --target=web` emits wasm32-unknown-emscripten objects from the same
+# driver (linked by em++ against the wasm/dist archives — see
+# wasm/build_tame_web.sh and the web path in aot_pipeline.cpp).
+# BOTH x86 and AArch64 backends are linked on every host since the
+# Android target (`tulpar build --target=android`): one driver emits
+# arm64-v8a (real devices) AND x86_64 (Android Studio emulator) objects
+# regardless of what CPU it runs on.
+#
+# Dağıtımlar LLVM'i iki farklı şekilde paketliyor ve ikisini de desteklemek
+# gerekiyor:
+#   - Bileşen bileşen STATİK arşivler (libLLVMCore.a, libLLVMX86CodeGen.a, ...)
+#     — Ubuntu/macOS apt+brew paketleri, CI'ın kullandığı yol.
+#   - Tek PAYLAŞIMLI kitaplık (libLLVM.so) — Arch/CachyOS gibi dağıtımlar
+#     statik bileşenleri hiç göndermiyor; LLVM 22 paketinde yalnız birkaç
+#     artık .a kalmış ve onlar da LTO bitcode olduğu için GNU ld okuyamıyor.
+#     Böyle bir ağaçta bileşen adlarıyla linklemek "unable to find library
+#     -lLLVMCore" ya da "file format not recognized" ile patlar.
+# LLVMConfig.cmake bunu LLVM_LINK_LLVM_DYLIB ile kendisi bildiriyor; bayrağa
+# uymak LLVM'in önerdiği yol, sürüm/dağıtım tahmini yapmaktan güvenli.
+#
+# Karar ölçütü, LLVM_LINK_LLVM_DYLIB bayrağı DEĞİL, statik bileşenlerin diskte
+# gerçekten bulunup bulunmadığıdır. Bayrağa bakmak yetmiyor: MSYS2/MinGW LLVM 22
+# paketinde bayrak AÇIK ama statik bileşenler de var; oraya dylib yolunu
+# uygulayınca tulpar.exe libllvm-22.dll'e bağlanıyor ve CI'ın DLL paketleme
+# koruması (haklı olarak) düşüyor — Windows dağıtımı kendi kendine yeten tek
+# dosya olmalı. Statik bileşen varsa onu kullan; yoksa (Arch/CachyOS) dylib'e
+# düş. LLVMCore temsilci: Arch'ta gönderilmeyenler arasında.
+find_library(TULPAR_LLVM_STATIC_PROBE
+    NAMES LLVMCore
+    PATHS ${LLVM_LIBRARY_DIRS}
+    NO_DEFAULT_PATH)
+
+if(NOT TULPAR_LLVM_STATIC_PROBE)
+    set(llvm_libs LLVM)
+    message(STATUS "LLVM: statik bilesenler yok — paylasimli dylib ile linkleniyor")
+else()
+    llvm_map_components_to_libnames(llvm_libs
+        support core irreader
+        aarch64asmparser aarch64codegen aarch64desc aarch64info
+        x86asmparser x86codegen x86desc x86info
+        webassemblyasmparser webassemblycodegen webassemblydesc webassemblyinfo
+        passes asmparser asmprinter
+        target mc
+    )
+    message(STATUS "LLVM: statik bilesenlerle linkleniyor")
 endif()
+
+# Windows-specific linking requirements (applies to MSVC and MinGW)
+if(WIN32)
+    # version.lib is required by LLVM (VerQueryValue) on Windows;
+    # ws2_32 is needed for socket support.
+    target_link_libraries(tulpar ${llvm_libs} version ws2_32)
+else()
+    target_link_libraries(tulpar ${llvm_libs})
+endif()
+
+if(OpenSSL_FOUND)
+    target_link_libraries(tulpar OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
+# ============================================
+# Runtime Library (for AOT-compiled binaries)
+# ============================================
+add_library(tulpar_runtime STATIC
+    src/common/localization.cpp
+    src/common/diagnostics.cpp
+    src/common/http_fetch.cpp
+    src/vm/runtime_bindings.cpp
+    src/vm/runtime_net.cpp
+    src/vm/vm.cpp
+    src/vm/bytecode.cpp
+    runtime/cJSON.c
+    runtime/tulpar_arc.cpp
+    runtime/tulpar_native.cpp
+    runtime/tulpar_async.cpp
+    runtime/tulpar_gzip.cpp
+    src/lexer/lexer.cpp
+    src/parser/parser.cpp
+    src/parser/import_alias.cpp
+    src/pkg/sha256.cpp
+    lib/sqlite3/sqlite3.c
+)
+target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(tulpar_runtime PRIVATE TULPAR_RUNTIME_ONLY)
+if(OpenSSL_FOUND)
+    target_link_libraries(tulpar_runtime PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
+# Windows-specific settings for runtime (apply to both MSVC and MinGW)
+if(WIN32)
+    target_compile_definitions(tulpar_runtime PRIVATE PLATFORM_WINDOWS)
+    # Link Winsock for socket support
+    target_link_libraries(tulpar_runtime PUBLIC ws2_32)
+    if(MSVC)
+        target_compile_options(tulpar_runtime PRIVATE
+            /utf-8
+            /W3
+            /wd4996
+            /wd4244
+            /wd4267
+        )
+        target_compile_definitions(tulpar_runtime PRIVATE
+            _CRT_SECURE_NO_WARNINGS
+            _WINSOCK_DEPRECATED_NO_WARNINGS
+        )
+    endif()
+endif()
+
+# ============================================
+# Tame — 2D game runtime (vendored raylib)
+# ============================================
+# libtulpar_tame.a = vendored raylib (lib/raylib/, zlib license) + the
+# aot_tm_* VMValue bindings (runtime/tame_bindings.cpp + tame_impl.c,
+# two-TU split so raylib.h never meets the runtime/windows headers).
+# It is a SEPARATE archive from libtulpar_runtime.a on purpose: the AOT
+# pipeline links it only when the program imports "tame" (see
+# tame_link_flags() in src/aot/aot_pipeline.cpp), so ordinary binaries
+# never gain a GL/window dependency.
+set(RAYLIB_DIR ${PROJECT_SOURCE_DIR}/lib/raylib)
+add_library(raylib_objs OBJECT
+    ${RAYLIB_DIR}/rcore.c
+    ${RAYLIB_DIR}/rshapes.c
+    ${RAYLIB_DIR}/rtextures.c
+    ${RAYLIB_DIR}/rtext.c
+    ${RAYLIB_DIR}/rmodels.c
+    ${RAYLIB_DIR}/raudio.c
+    ${RAYLIB_DIR}/utils.c
+    ${RAYLIB_DIR}/rglfw.c
+)
+target_include_directories(raylib_objs PRIVATE
+    ${RAYLIB_DIR}
+    ${RAYLIB_DIR}/external/glfw/include
+)
+target_compile_definitions(raylib_objs PRIVATE
+    PLATFORM_DESKTOP
+    GRAPHICS_API_OPENGL_33
+)
+if(WIN32)
+    target_compile_definitions(raylib_objs PRIVATE _GLFW_WIN32)
+elseif(APPLE)
+    target_compile_definitions(raylib_objs PRIVATE _GLFW_COCOA)
+    # rglfw.c pulls the Cocoa platform files in as Objective-C on macOS.
+    set_source_files_properties(${RAYLIB_DIR}/rglfw.c PROPERTIES
+        COMPILE_FLAGS "-x objective-c")
+else()
+    target_compile_definitions(raylib_objs PRIVATE _GLFW_X11)
+    # x11_compat vendors the X11 extension headers GLFW needs at compile
+    # time (Xrandr/Xinerama/Xcursor/XInput2 — MIT-licensed, ABI-stable) so
+    # the build works on hosts without the lib*-dev packages. It is listed
+    # after the raylib dirs, and system dirs still come last, so these
+    # shadow /usr/include copies — harmless, the headers are identical.
+    target_include_directories(raylib_objs PRIVATE ${RAYLIB_DIR}/x11_compat)
+endif()
+# Vendored 3rd-party — silence its warnings so they don't drown ours
+# (same treatment as the SQLite amalgamation above).
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(raylib_objs PRIVATE -w)
+elseif(MSVC)
+    target_compile_options(raylib_objs PRIVATE /w)
+endif()
+
+add_library(tulpar_tame STATIC
+    runtime/tame_impl.c
+    runtime/tame_bindings.cpp
+    $<TARGET_OBJECTS:raylib_objs>
+)
+target_include_directories(tulpar_tame PRIVATE
+    ${RAYLIB_DIR}
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_compile_definitions(tulpar_tame PRIVATE TULPAR_RUNTIME_ONLY)
+if(WIN32)
+    target_compile_definitions(tulpar_tame PRIVATE PLATFORM_WINDOWS)
+    if(MSVC)
+        target_compile_options(tulpar_tame PRIVATE /utf-8 /wd4996 /wd4244 /wd4267)
+        target_compile_definitions(tulpar_tame PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+endif()
+
+# ============================================
+# Platform-specific settings
+# ============================================
+if(APPLE)
+    message(STATUS "Configuring for macOS")
+    target_compile_definitions(tulpar PRIVATE PLATFORM_MACOS)
+    target_link_options(tulpar PRIVATE "-Wl,-no_warn_duplicate_libraries")
+    target_link_libraries(tulpar pthread dl)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+        message(STATUS "Building for Apple Silicon (ARM64)")
+    endif()
+elseif(UNIX)
+    message(STATUS "Configuring for Linux")
+    target_compile_definitions(tulpar PRIVATE PLATFORM_LINUX)
+    target_link_libraries(tulpar m pthread dl)
+elseif(WIN32)
+    message(STATUS "Configuring for Windows (MSVC)")
+    target_compile_definitions(tulpar PRIVATE PLATFORM_WINDOWS)
+
+    # Winsock2 for networking
+    target_link_libraries(tulpar ws2_32 wsock32)
+
+    # MinGW: fold the GCC C++ runtime + winpthread + the LLVM-pulled
+    # zlib/zstd shared libs into tulpar.exe so a fresh Windows install
+    # (no MSYS2 / Git PATH on PATH) can launch it without bumping into
+    # STATUS_DLL_NOT_FOUND on libgcc_s_seh-1.dll, libstdc++-6.dll,
+    # libwinpthread-1.dll, zlib1.dll, or libzstd.dll. zlib/zstd are
+    # transitive deps of the static LLVM components linked above, so
+    # they show up in the import table even though tulpar source never
+    # touches them directly. -Wl,-Bstatic ... -Wl,-Bdynamic is scoped
+    # so ws2_32 / kernel32 / advapi32 / etc. (Windows system libs that
+    # only have import-lib form) keep being resolved dynamically.
+    #
+    # SIRA ONEMLI (olculdu 2026-09-18, capraz derlemede): bu kutuphaneler
+    # `target_link_options` ile verilince link satirinin BASINA giriyorlar,
+    # libstdc++'tan ONCE. GNU ld/lld bir arsivden yalnizca O ANA KADAR istenen
+    # sembolleri alir; libstdc++ winpthread'i SONRA istedigi icin sonuc
+    # "undefined reference to pthread_create / pthread_cond_wait /
+    # clock_gettime64" duvariydi. `target_link_libraries` ile verilince
+    # nesnelerden SONRA gelirler ve cozulurler.
+    if(NOT MSVC)
+        # -Wl,--stack: PE varsayilani 1 MB, Linux 8 MB. Derleyicinin kendisi de
+        # ozyinelemeli (ayristirici + codegen); ayrica uretilen kullanici
+        # ikilileri de ayni sayiyi aliyor (AOT_LINK_LIB_FLAGS,
+        # src/aot/aot_pipeline.cpp) ki dilin davranisi platforma gore
+        # degismesin.
+        target_link_options(tulpar PRIVATE -static-libgcc -static-libstdc++ -Wl,--stack,8388608)
+        target_link_libraries(tulpar
+            -Wl,-Bstatic winpthread z zstd -Wl,-Bdynamic)
+    endif()
+
+    # UTF-8 console support
+    if(MSVC)
+        target_compile_options(tulpar PRIVATE
+            /utf-8           # UTF-8 source files
+            /W3              # Warning level 3
+            /wd4996          # Disable deprecated function warnings
+            /wd4244          # Disable conversion warnings
+            /wd4267          # Disable size_t conversion warnings
+            /EHsc            # Exception handling model
+        )
+
+        # Disable "unsafe" CRT warnings for standard C functions
+        target_compile_definitions(tulpar PRIVATE
+            _CRT_SECURE_NO_WARNINGS
+            _WINSOCK_DEPRECATED_NO_WARNINGS
+        )
+    endif()
+else()
+    message(FATAL_ERROR "Unsupported platform. TulparLang supports Linux, macOS, and Windows.")
+endif()
+
+# ============================================
+# Installation
+# ============================================
+install(TARGETS tulpar RUNTIME DESTINATION bin)
+install(TARGETS tulpar_runtime ARCHIVE DESTINATION lib)
+install(TARGETS tulpar_tame ARCHIVE DESTINATION lib)
+
+# libtulpar_engine.a = Tulpar Engine (engine/) koprusunun VMValue bindingleri
+# (runtime/engine_bindings.cpp, uretilmis: engine/tools/gen_engine_bindings.py).
+# `import "engine"` eden program bununla + engine/ arsivleriyle linklenir
+# (engine_link_flags(), src/aot/aot_pipeline.cpp); sirdan binary'ler dokunmaz.
+#
+# KOSUL `NOT MSVC` DEGIL `NOT WIN32`: MinGW de NOT MSVC'dir, yani eski kosul
+# Windows'un YALNIZ yarisini kapatiyordu ve capraz derleme motordan patliyordu.
+# Motor bugun POSIX'e bagli (dlfcn/unistd/pthread/mmap + SysV ABI fiber asm);
+# Windows portu ayri bir faz (docs: Windows plani Faz 4). O faz bitince bu
+# kosul geri alinacak.
+# Windows'ta motor ancak TULPAR_WIN_ENGINE ile geliyor; koprunun bagimliliklari
+# da ayni kosula bagli (yoksa `import "engine"` eden program link edilemez).
+if(NOT WIN32 OR TULPAR_WIN_ENGINE)
+    add_library(tulpar_engine STATIC runtime/engine_bindings.cpp)
+    target_include_directories(tulpar_engine PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/engine)
+    target_compile_definitions(tulpar_engine PRIVATE TULPAR_RUNTIME_ONLY)
+    install(TARGETS tulpar_engine ARCHIVE DESTINATION lib)
+endif()
+
+install(DIRECTORY examples/
+    DESTINATION share/tulpar/examples
+    FILES_MATCHING PATTERN "*.tpr"
+)
+
+install(FILES
+    README.md
+    RELEASING.md
+    STATUS.md
+    LICENSE
+    docs/PLATFORM_SUPPORT.md
+    DESTINATION share/doc/tulpar
+)
+
+# ============================================
+# Build Info
+# ============================================
+message(STATUS "")
+message(STATUS "=== TulparLang Build Configuration ===")
+message(STATUS "Version: ${PROJECT_VERSION}")
+# ---------------------------------------------------------------------------
+# Tulpar Engine (Faz 0) — ayri agac, derleyiciye linklenmez. Bkz. engine/ ve
+# docs/engine/MIMARI.md.
+#
+# WINDOWS'TA VARSAYILAN OLARAK ATLANIR (MSVC de MinGW de). Eski kosul
+# `NOT MSVC` idi ve MinGW'yi kapsamiyordu: capraz derlemede motor derlenmeye
+# calisip patliyordu. Motor POSIX'e bagli dogdu (dlfcn/unistd/pthread/mmap +
+# SysV ABI fiber asm) ve Windows portu surmekte.
+#
+# `-DTULPAR_WIN_ENGINE=OFF` motoru Windows derlemesinin DISINDA birakir
+# (yalniz dil + stdlib istendiginde; derleme suresini kisaltir).
+# ---------------------------------------------------------------------------
+# MinGW'de VARSAYILAN ACIK: port tamamlandi ve engine_tests Windows'ta
+# 469/469 geciyor (79 gorunur atlama: Vulkan/ses cihazi). MSVC'de KAPALI —
+# motorun Windows yolu GCC'ye ozgudur (fiber gecisi GNU asm sozdiziminde).
+if(MINGW)
+    set(TULPAR_WIN_ENGINE_DEFAULT ON)
+else()
+    set(TULPAR_WIN_ENGINE_DEFAULT OFF)
+endif()
+option(TULPAR_WIN_ENGINE "Windows'ta engine/ agacini da derle" ${TULPAR_WIN_ENGINE_DEFAULT})
+if(NOT WIN32 OR TULPAR_WIN_ENGINE)
+    add_subdirectory(engine)
+endif()
+
+message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "LLVM Version: ${LLVM_PACKAGE_VERSION}")
+message(STATUS "C++ Compiler: ${CMAKE_CXX_COMPILER}")
+message(STATUS "C++ Standard: C++${CMAKE_CXX_STANDARD}")
+message(STATUS "System: ${CMAKE_SYSTEM_NAME}")
+message(STATUS "======================================")
+# Touch for rebuild

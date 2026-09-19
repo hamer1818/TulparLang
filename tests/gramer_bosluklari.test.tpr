@@ -186,11 +186,25 @@ func _derleyici(): str {
     return _bin;
 }
 
-// Windows mu? `OS` degiskeni Windows'ta "Windows_NT", POSIX'te bos. Dilde
-// platform sorgusu YOK; kabuk komutu calistiran her testin bu ayrimi kendi
-// yapmasi gerekiyor (bkz. asagidaki uc fark).
+// Windows mu? Dilde platform sorgusu YOK; kabuk komutu calistiran her testin
+// bu ayrimi kendi yapmasi gerekiyor (bkz. asagidaki uc fark).
+//
+// TEK BASINA `OS` YETMEZ. `OS=Windows_NT`yi cmd.exe/PowerShell ve Git Bash
+// verir, ama YEREL derlemenin kostugu MSYS2 MINGW64 kabugu onu ortamdan
+// ELIYOR (olculdu 2026-09-19: login de login-olmayan da bos). O zaman bu
+// fonksiyon gercek Windows'ta `false` donuyor, test POSIX dalini seciyor ve
+// `> /dev/null` cmd.exe'ye gidince yonlendirme dusuyor — dort KONTROL durumu
+// "reddedilmeliydi" diye degil, ALT SUREC HIC KOSMADIGI icin kirmiziya
+// donuyor. Belirti tamamen yanlis yere baktiriyor.
+//
+// `SYSTEMROOT` (ve yedegi `WINDIR`) uc kabukta da hayatta: Windows bunlari
+// her surece verir, MSYS2 de aktariyor. POSIX'te ikisi de bos.
 func _windows_mu(): bool {
-    return env("OS") == "Windows_NT";
+    if (env("OS") == "Windows_NT") { return true; }
+    if (env("SYSTEMROOT") != "") { return true; }
+    if (env("SystemRoot") != "") { return true; }
+    if (env("WINDIR") != "") { return true; }
+    return false;
 }
 
 // Kaynagi gecici bir dosyaya yazip `tulpar typecheck` cikis kodunu dondurur.

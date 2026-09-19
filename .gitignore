@@ -252,3 +252,8 @@ tulpar_kayit.txt
 # Windows dagitim paketi (windows/package.sh) — turetilmis
 dist-windows/
 dist-windows.zip
+# scene3d_engine.test.tpr gecici cikti dosyalari (calisma dizinine yaziliyor;
+# `/tmp` native Windows'ta yok — bkz. testteki gerekce).
+tulpar_scene_edit_test.json
+tulpar_authored_test.json
+tulpar_dirty_test.json
