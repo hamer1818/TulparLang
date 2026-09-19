@@ -210,6 +210,11 @@ struct GizmoOptions {
   float thickness = 0.06f;     // tel kalinligi (dunya birimi)
 };
 // Donus: yapilan ren.draw cagrisi sayisi (secili isik daha parlak cizilir).
+// Gorunum kipleri (Carpisma / Sinirlar) icin tel kutular. _m: yerel yarim
+// olcu + dunya matrisi (govdeyle doner); _aabb: eksen hizali dunya kutusu.
+uint32_t editor_wire_box_m(renderer::Renderer &ren, renderer::MeshHandle cube, const Mat4 &m, Vec3 half, Vec3 color,
+                           float th);
+uint32_t editor_wire_aabb(renderer::Renderer &ren, renderer::MeshHandle cube, Vec3 lo, Vec3 hi, Vec3 color, float th);
 uint32_t editor_draw_gizmos(renderer::Renderer &ren, renderer::MeshHandle cube, const content::SceneDesc &d, const int32_t *sel,
                             uint32_t n, const GizmoOptions &o);
 

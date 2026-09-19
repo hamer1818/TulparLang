@@ -39,6 +39,8 @@
 #include "app/editor_overlay.hpp"
 #include "app/editor_viewport.hpp"
 #include "app/editor_widgets.hpp"
+#include "app/editor_multiedit.hpp"
+#include "content/prefab.hpp"
 #include "rhi/offscreen.hpp"
 #include "rhi/swapchain.hpp"
 #include "sim/schedule.hpp"
@@ -331,6 +333,7 @@ struct EditorState {
   uint32_t browse_count = 0;
   char status[160];
   char filter[64] = {0}; // Sahne paneli suzgeci
+  char prop_filter[64] = {0}; // Ozellikler paneli aramasi (UE5 Details aramasi)
   HierarchyState tree;   // Sahne agaci: katlama bitleri + yerinde ad + surukleme
   AssetsView assets_view; // Kaynaklar paneli gorunumu (izgara/liste, karo, suzgec)
   // Pano: editorun KENDI tamponu (isletim sistemi panosu degil — metin degil
@@ -435,6 +438,24 @@ template <class F> void with_bodies(EditorState &st, sim::Physics &ph, F &&f) {
 // Ozellik paneli: PropItem uzerinden — ImGui "son oge"sine BAKMAZ. Bilesik bir
 // widget'ta (vec3 = uc surukleme) son oge yalniz Z alanidir; Y suruklenirken
 // IsItemActivated() false kalir ve gunluge islem dusmezdi (editor_widgets kapisi).
+// Coklu secim: ana secilide yapilan alan duzenlemesini secimdeki DIGER
+// varliklara yayar (bkz. editor_multiedit.hpp). Yalniz `index` secimin
+// icindeyse calisir: secili olmayan bir satirin goz/kilit simgesine tiklamak
+// butun secimi etkilememeli. Donus: gunluge eklenen EK islem sayisi -- cagiran
+// bunu kendi islemiyle TEK grup yapar, yani tek Ctrl+Z hepsini geri alir.
+uint32_t propagate_selection_edit(EditorState &st, int index, const SceneEntity &before, const SceneEntity &after) {
+  if (st.sel.count < 2 || !st.sel.contains(index)) return 0;
+  uint32_t n = 0;
+  for (uint32_t k = 0; k < st.sel.count; k++) {
+    const int32_t j = st.sel.items[k];
+    if (j == index || j < 0 || j >= (int32_t)st.scene.entity_count) continue;
+    SceneEntity x = st.scene.entities[j];
+    if (!multiedit_apply(before, after, &x)) continue;
+    if (st.hist.set_entity(st.scene, (uint32_t)j, x)) n++;
+  }
+  return n;
+}
+
 void track_edit(EditorState &st, SceneEntity &e, int index, const PropItem &it) {
   if (!st.edit_active) {
     st.edit_before = e;
@@ -446,7 +467,8 @@ void track_edit(EditorState &st, SceneEntity &e, int index, const PropItem &it) 
     const SceneEntity after = e;
     e = st.edit_before;
     if (st.hist.set_entity(st.scene, (uint32_t)index, after)) {
-      st.groups.push(1);
+      const uint32_t extra = propagate_selection_edit(st, index, st.edit_before, after);
+      st.groups.push(1 + extra); // tek kullanici eylemi = tek geri al
       st.dirty = true;
     }
     st.edit_active = false;
@@ -597,8 +619,9 @@ static renderer::MeshHandle make_water_mesh(Arena &temp_arena, renderer::Rendere
 
 // Ayrik widget (onay kutusu, secim): kopya uzerinde degisiklik, hemen islem.
 bool commit(EditorState &st, int index, const SceneEntity &after) {
+  const SceneEntity before = st.scene.entities[index]; // yayma icin fark tabani
   if (!st.hist.set_entity(st.scene, (uint32_t)index, after)) return false;
-  st.groups.push(1);
+  st.groups.push(1 + propagate_selection_edit(st, index, before, after));
   st.dirty = true;
   return true;
 }
@@ -688,7 +711,13 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   // Ic hedefin temizleme rengi viewport gecisininkiyle AYNI olmali;
   // yoksa post acilinca arka plan aniden kararir (bridge bunu olcmustu).
   rc.post_clear = Vec3{vc.clear[0], vc.clear[1], vc.clear[2]};
-  rc.tonemap = true; // HDR -> LDR: kirpma yerine Reinhard
+  // TONEMAP KAPALI. Faz 0'da acmistim ve bu bir REGRESYONDU: compose.frag
+  // duz Reinhard kullaniyor (c / (1 + c)), yani tam aydinlik beyaz bir yuzey
+  // 0.5'e iniyor -- editorun TUM sahnesi yaklasik yari parlakliga dusuyordu.
+  // Kapaliyken HDR hedef yine var: 1'in ustundeki isima bloom'a gider,
+  // siradan yuzeyler eskisi gibi gorunur. Dogru cozum pozlama kompanzasyonlu
+  // bir filmik egri (ACES / AgX); shader yeniden derlenmesi gerektirir.
+  rc.tonemap = false;
   if (!ren.init(dev, sys, vp.render_pass(), rc)) { std::fprintf(stderr, "renderer\n"); return 1; }
   ren.set_render_size(vp.width(), vp.height());
 
@@ -772,6 +801,15 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   // ImNodes kendi baglamini ister; kurulmadan BeginNodeEditor cagirmak
   // coker. Panel su an yalniz onizleme (bkz. asagidaki rozet).
   ImNodes::CreateContext();
+  // --- Panel duzeni: acilista yukle -----------------------------------------
+  // layout_save/layout_load deterministik ve surumlu; ama bugune kadar YALNIZ
+  // headless kapidan cagriliyordu, yani editor her acilista duzeni unutuyordu.
+  // Dosya yoksa ya da bozuksa sessizce varsayilan duzene dusulur -- bozuk bir
+  // duzen dosyasi yuzunden editorun acilmamasi kabul edilemez.
+  char layout_path[1024];
+  std::snprintf(layout_path, sizeof layout_path, "%s/editor_layout.txt", st.scene_dir);
+  bool layout_restored = false;
+
   EditorCamera cam;
   cam.target = st.scene.cam_target; cam.yaw = st.scene.cam_yaw; cam.pitch = st.scene.cam_pitch; cam.radius = st.scene.cam_radius;
   if (headless) st.sel.set_single(0);
@@ -806,6 +844,8 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   bool maximize_on_play = false;
   bool mute_audio_on_play = false;
   bool show_grid = true;
+  // Gorunum kipi: 0 Aydinlatmali, 1 Isiksiz (albedo), 2 Carpisma, 3 Sinirlar.
+  int view_mode = 0;
   // Demo sahnesi (ajanlar, Jolt kutulari, dama zemin, duvar, parcaciklar)
   // EDITORUN ARKA PLANIYDI: ekranda 100+ nesne, sahne agacinda 8 satir.
   // Hicbiri secilemez, tasinamaz, kaydedilemez -- yani kullaniciya
@@ -820,6 +860,12 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   static ConsoleView console_view;
   static ConsoleCapture console_cap;
   static FileDialog dlg;
+  // Ayni dosya diyalogu uc is icin acilir; kabul edildiginde NE yapilacagini
+  // bu belirler. Eskiden yalniz dlg.mode (Ac/Kaydet) soruluyordu -- prefab
+  // kaydetmek sahneyi kaydetmekle karisirdi.
+  enum DialogIntent { IntentScene = 0, IntentPrefabSave = 1, IntentPrefabLoad = 2 };
+  DialogIntent dlg_intent = IntentScene;
+  int32_t prefab_root = -1;
   static ConfirmState confirm;
   bool show_console = true;
   enum PendingAction { PendingNone = 0, PendingNew = 1, PendingOpen = 2, PendingOpenPath = 3 };
@@ -872,6 +918,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     if (done) { st.dirty = true; clamp_selection(st); set_status(st, "yinelendi (%u islem, %u kaldi)", done, st.hist.redo_count()); }
   };
   auto do_save_as = [&]() {
+    dlg_intent = IntentScene;
     file_dialog_open(dlg, FileDialogMode::Kaydet, st.scene_path[0] ? st.scene_path : st.scene_dir, ".sahne", "Farkl\xC4\xB1 kaydet");
   };
   // Sahneyi verilen yola yazar ve editorun ACIK DOSYASINI oraya tasir (kaynak
@@ -936,7 +983,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   };
   auto run_pending = [&](int a) {
     if (a == PendingNew) do_new();
-    else if (a == PendingOpen) file_dialog_open(dlg, FileDialogMode::Ac, st.scene_dir, ".sahne", "Sahne a\xC3\xA7");
+    else if (a == PendingOpen) { dlg_intent = IntentScene; file_dialog_open(dlg, FileDialogMode::Ac, st.scene_dir, ".sahne", "Sahne a\xC3\xA7"); }
     else if (a == PendingOpenPath && pending_path[0]) load_scene_from(pending_path);
   };
   // KIRLI SAHNE KORUMASI: kaydedilmemis is varken Yeni/Ac ONCE sorar. Onay kipli
@@ -1257,6 +1304,11 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       break;
     case HierarchyAction::Paste:
       do_paste();
+      break;
+    case HierarchyAction::SavePrefab:
+      prefab_root = i;
+      dlg_intent = IntentPrefabSave;
+      file_dialog_open(dlg, FileDialogMode::Kaydet, st.scene_dir, ".prefab", "Prefab kaydet");
       break;
     case HierarchyAction::Detach:
     case HierarchyAction::Reparent: {
@@ -1636,10 +1688,21 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     const ImGuiID dock_id = ImGui::DockSpaceOverViewport(ImGui::GetID("TulparDock"), ImGui::GetMainViewport(), 0);
     if (frame_i == 0) {
       layout_set_dockspace_id(dock_id);
+      // ONCE varsayilan kurulur: kaydedilmis duzen yoksa ya da bozuksa geri
+      // duseceğimiz saglam bir taban olsun. Bir duzen dosyasi yuzunden
+      // editorun panelsiz acilmasi kabul edilemez.
       if (!layout_apply_default(dock_id, (float)fw, (float)fh)) {
         console_log(ConsoleLevel::Uyari, kConsoleTagEditor, "varsayilan duzen: %s", layout_last_error());
         std::fprintf(stderr, "[editor] varsayilan duzen: %s\n", layout_last_error());
       }
+      // SONRA kullanicinin kaydettigi duzen (varsa) uygulanir. Basarisizlik
+      // SESSIZ degil ama olumcul de degil: taban zaten kuruldu.
+      LayoutError le{};
+      // Headless kapi kosularinda KULLANICININ duzeni yuklenmez: kapilar
+      // varsayilan duzeni olcer, diskte kalmis bir dosya onlari bozmamali.
+      layout_restored = !headless && layout_load(layout_path, &le);
+      if (layout_restored)
+        console_log(ConsoleLevel::Bilgi, kConsoleTagEditor, "panel d\xC3\xBCzeni geri y\xC3\xBCklendi: %s", layout_path);
     }
 
     // --- GORUNUM: 3B sahnenin YASADIGI panel --------------------------------
@@ -1693,6 +1756,15 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         if (ImGui::Button(show_grid ? "⊞ Izgara: Açık" : "⊞ Izgara: Kapalı")) show_grid = !show_grid;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("3B Zemin Izgarasını Göster / Gizle");
 
+        // Gorunum kipi (UE5 "View Mode"). Dordu de CPU tarafinda DOGRU:
+        //  Isiksiz  : ortam 1, gunes 0, nokta isik yok -> saf albedo/doku.
+        //  Carpisma : her govdenin carpisma hacmi, govdeyle birlikte DONEN tel kutu.
+        //  Sinirlar : her varligin dunya AABB'si (secim/odak bunu kullanir).
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9.0f);
+        ImGui::Combo("##gorunum_kipi", &view_mode,
+                     "Ayd\xC4\xB1nlatmal\xC4\xB1\0I\xC5\x9F\xC4\xB1ks\xC4\xB1z\0\xC3\x87" "arp\xC4\xB1\xC5\x9Fma\0S\xC4\xB1n\xC4\xB1rlar\0");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("G\xC3\xB6r\xC3\xBCn\xC3\xBCm kipi");
+        ImGui::SameLine();
         // NOT: burada bir "Tel Kafes / Duz Golgeli" dugmesi vardi ve HICBIR
         // SEY yapmiyordu: wireframe_mode degiskeni depoda baska hicbir yerde
         // okunmuyor, dugme yalniz kendi etiketini degistiriyordu.
@@ -1761,6 +1833,26 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         if (ImGui::MenuItem( ICON_MD_SPORTS_ESPORTS " Oyun Görünümüne Geç", nullptr, view_tab == ViewportTab::Game)) view_tab = ViewportTab::Game;
         ImGui::Separator();
         if (ImGui::MenuItem( ICON_MD_STRAIGHTEN " Izgarayı Göster / Gizle", nullptr, show_grid)) show_grid = !show_grid;
+        ImGui::Separator();
+        if (ImGui::MenuItem(ICON_MD_SAVE " D\xC3\xBCzeni Kaydet")) {
+          LayoutError le{};
+          if (layout_save(layout_path, &le))
+            console_log(ConsoleLevel::Bilgi, kConsoleTagEditor, "panel d\xC3\xBCzeni kaydedildi: %s", layout_path);
+          else
+            console_log(ConsoleLevel::Uyari, kConsoleTagEditor, "panel d\xC3\xBCzeni kaydedilemedi: %s", le.msg);
+        }
+        if (ImGui::MenuItem(ICON_MD_REFRESH " D\xC3\xBCzeni Y\xC3\xBCkle")) {
+          LayoutError le{};
+          if (layout_load(layout_path, &le))
+            console_log(ConsoleLevel::Bilgi, kConsoleTagEditor, "panel d\xC3\xBCzeni y\xC3\xBCklendi");
+          else
+            console_log(ConsoleLevel::Uyari, kConsoleTagEditor, "panel d\xC3\xBCzeni y\xC3\xBCklenemedi: %s", le.msg);
+        }
+        if (ImGui::MenuItem(ICON_MD_WIDGETS " Varsay\xC4\xB1lan D\xC3\xBCzene D\xC3\xB6n")) {
+          const ImGuiViewport *vp_main = ImGui::GetMainViewport();
+          layout_apply_default(layout_dockspace_id(), vp_main->WorkSize.x, vp_main->WorkSize.y);
+          console_log(ConsoleLevel::Bilgi, kConsoleTagEditor, "varsay\xC4\xB1lan panel d\xC3\xBCzeni uyguland\xC4\xB1");
+        }
         if (ImGui::MenuItem("☀ Işık ve Gölge Gizmolarnı Göster", nullptr, st.gizmos.light_radius)) {
           st.gizmos.light_radius = !st.gizmos.light_radius;
           st.gizmos.light_glyph = st.gizmos.light_radius;
@@ -1922,6 +2014,10 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
           if (r) do_add(r);
           ImGui::EndMenu();
         }
+        if (ImGui::MenuItem(ICON_MD_WIDGETS " Prefab ekle...")) {
+          dlg_intent = IntentPrefabLoad;
+          file_dialog_open(dlg, FileDialogMode::Ac, st.scene_dir, ".prefab", "Prefab ekle");
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Yeni Edit\xC3\xB6r Konsolu", nullptr, &show_console)) {}
         if (ImGui::MenuItem("Yeni Geli\xC5\x9Fmi\xC5\x9F Varl\xC4\xB1k Taray\xC4\xB1" "c\xC4\xB1", nullptr, &st.show_asset_browser)) {}
@@ -2025,11 +2121,16 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         const char *icon = has_l ? "\xE2\x98\x80" : has_m ? "\xE2\x97\x86" : has_b ? "\xE2\x97\xBC" : has_c ?  ICON_MD_VIDEOCAM  : has_s ?  ICON_MD_VOLUME_UP  : has_sc ?  ICON_MD_DESCRIPTION  : "\xE2\x97\x8B";
         const Tone icon_tone = has_l ? Tone::Warn : has_m ? Tone::Text : has_b ? Tone::AxisZ : has_c ? Tone::Accent : Tone::TextDim;
         char sub[96];
-        if (st.sel.count > 1) std::snprintf(sub, sizeof sub, "grup: %u se\xC3\xA7ili \xC2\xB7 alanlar ana se\xC3\xA7ilide, gizmo grubu ta\xC5\x9F\xC4\xB1r", st.sel.count);
+        if (st.sel.count > 1) std::snprintf(sub, sizeof sub, "%u nesne birlikte d\xC3\xBCzenleniyor \xC2\xB7 alanlar ana se\xC3\xA7iliden", st.sel.count);
         else std::snprintf(sub, sizeof sub, "%u bile\xC5\x9F""en%s%s", (unsigned)(has_m + has_l + has_b + has_a + has_c + has_s + has_sc),
                            has_b ? (e.shape == content::SceneShape::Box ? " \xC2\xB7 kutu g\xC3\xB6vde" : " \xC2\xB7 k\xC3\xBCre g\xC3\xB6vde") : "",
                            (has_b && e.dynamic) ? " \xC2\xB7 dinamik" : "");
         track_edit(st, e, si, inspector_title(icon, e.name, sizeof e.name, sub, icon_tone));
+        // Ozellik aramasi: 18 bilesen x onlarca alan -- aradigini bulmanin tek
+        // yolu. Hiyerarsinin arama kutusu yeniden kullanilir (ayni gorunum,
+        // ayni Turkce katlamali esleme). Filtre panelin SONUNDA temizlenir.
+        hierarchy_search(st.prop_filter, sizeof st.prop_filter);
+        prop_set_filter(st.prop_filter);
 
         section_label("D\xC3\x96N\xC3\x9C\xC5\x9E\xC3\x9CM");
         if (prop_begin("donusum")) {
@@ -2433,6 +2534,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
         // yalniz yedi bileseni taniyordu, yani Karakter/Partikul/Arazi/Voksel/
         // Su/Ruzgar HICBIR YERDEN eklenemiyordu. Takili olanlari eleme isini de
         // widget yapar (existing_components), burada tek tek sormaya gerek yok.
+        prop_set_filter(nullptr); // ekleme listesi ve diger paneller etkilenmesin
         const uint32_t add = component_add_button(kComponentMenu, kComponentMenuCount, e.components);
         if (add) { // 0 = secim yok; donus indeks degil BIT
           after = e;
@@ -3112,10 +3214,44 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // kimligi kaydirirdi — ikisi de OpenPopup'i kendi icinde yapiyor).
     if (dlg.open) {
       const FileDialogAction fa = file_dialog_draw(dlg);
-      if (fa == FileDialogAction::Accepted) {
+      if (fa == FileDialogAction::Accepted && dlg_intent == IntentPrefabSave) {
+        // Alt agaci ayri bir .sahne metnine cikar (bkz. content/prefab.hpp).
+        static content::SceneDesc pf; // buyuk: yigina konmaz
+        content::SceneError err{};
+        const uint32_t n = prefab_extract(st.scene, prefab_root, &pf);
+        if (n && content::scene_save(frame, pf, dlg.path, &err)) {
+          set_status(st, "prefab kaydedildi: %s (%u varlik)", dlg.path, n);
+          console_log(ConsoleLevel::Bilgi, kConsoleTagEditor, "prefab kaydedildi: %s (%u varlik)", dlg.path, n);
+        } else {
+          set_status(st, "prefab KAYDEDILEMEDI: %s", n ? err.msg : "gecersiz kok");
+        }
+        dlg_intent = IntentScene;
+      } else if (fa == FileDialogAction::Accepted && dlg_intent == IntentPrefabLoad) {
+        static content::SceneDesc pf;
+        content::SceneError err{};
+        if (!content::scene_load(frame, dlg.path, &pf, &err)) {
+          set_status(st, "prefab okunamadi: %s", err.msg);
+        } else {
+          // Hepsi ya da hicbiri (bkz. prefab_instantiate): yer yoksa 0 doner
+          // ve sahneye tek varlik bile eklenmez.
+          uint32_t first = 0, n = 0;
+          with_bodies(st, phys, [&] { n = prefab_instantiate(st.scene, st.hist, pf, cam.target, &first); });
+          if (!n) {
+            set_status(st, "prefab eklenemedi: sahnede ya da kaynak tablosunda yer yok");
+          } else {
+            st.groups.push(n); // tek Ctrl+Z butun prefab'i geri alir
+            st.dirty = true;
+            for (uint32_t a = 0; a < st.scene.asset_count; a++)
+              if (!st.have[a]) load_asset((int32_t)a); // prefab'in getirdigi yeni kaynaklar
+            st.sel.set_single((int32_t)first);
+            set_status(st, "prefab eklendi: %s (%u varlik)", dlg.path, n);
+          }
+        }
+        dlg_intent = IntentScene;
+      } else if (fa == FileDialogAction::Accepted) {
         if (dlg.mode == FileDialogMode::Ac) load_scene_from(dlg.path);
         else if (save_scene_to(dlg.path) && pending != PendingNone) { run_pending(pending); pending = PendingNone; }
-      } else if (fa == FileDialogAction::Cancelled) pending = PendingNone;
+      } else if (fa == FileDialogAction::Cancelled) { pending = PendingNone; dlg_intent = IntentScene; }
     }
     if (confirm.open) {
       char msg[320];
@@ -3145,6 +3281,10 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
     // Her karede kosulsuz uygulanir -- "degisti mi" takibi, panelin disindan
     // (geri al/yinele, betik) gelen degisiklikleri kacirirdi.
     ren.set_shadows_enabled(st.render.shadows);
+    if (view_mode == 1) { // Isiksiz: saf albedo. Tonemap kapali oldugu icin c = albedo birebir.
+      ren.set_light(normalize(st.scene.sun_dir), Vec3{1.0f, 1.0f, 1.0f}, 0.0f);
+      ren.set_shadows_enabled(false);
+    }
     ren.set_shadow_bias(st.render.shadow_bias, st.render.shadow_normal_offset);
     ren.set_exposure(st.render.exposure);
     ren.set_bloom(st.render.bloom_threshold, st.render.bloom_intensity);
@@ -3278,7 +3418,7 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       // ikisini de ayni "kare" yapip birbirinden ayirt edilemez kilardi.
       if (!drew && !(e.components & (content::kSceneLight | content::kSceneCamera)))
         ren.draw(ds.cube, m * Mat4::scale({0.3f, 0.3f, 0.3f}), sel ? tint : Vec3{0.9f, 0.9f, 0.3f}); // bos varlik isareti
-      if (e.components & content::kSceneLight) {
+      if ((e.components & content::kSceneLight) && view_mode != 1) {
         renderer::PointLight pl;
         pl.pos = {m.m[3][0], m.m[3][1], m.m[3][2]};
         pl.radius = e.light_radius;
@@ -3288,6 +3428,27 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
       }
     }
     // Isik yaricapi / golge hacmi / gunes yonu: motorun kendi draw'u ile ince kutular.
+    // --- Gorunum kipi kaplamalari -------------------------------------------
+    if (view_mode == 2) { // Carpisma: govdeyle DONEN tel kutu; dinamik turuncu, sabit yesil.
+      for (uint32_t i = 0; i < st.scene.entity_count; i++) {
+        const SceneEntity &e = st.scene.entities[i];
+        if (!(e.components & content::kSceneBody) || (e.flags & content::kSceneHidden)) continue;
+        const bool simulated = st.playing && st.bodies_live && st.bodies[i].valid() && e.dynamic;
+        const Mat4 m = simulated ? content::scene_body_matrix(e, phys, st.bodies[i]) : content::scene_entity_world_matrix(st.scene, i);
+        const Vec3 half = e.shape == content::SceneShape::Box ? e.half : Vec3{e.radius, e.radius, e.radius};
+        const Vec3 col = st.sel.contains((int32_t)i) ? Vec3{1.0f, 0.95f, 0.4f}
+                         : e.dynamic ? Vec3{1.0f, 0.55f, 0.15f} : Vec3{0.25f, 0.9f, 0.35f};
+        editor_wire_box_m(ren, ds.cube, m, half, col, 0.03f);
+      }
+    } else if (view_mode == 3) { // Sinirlar: secim ve odak bu kutulari kullanir.
+      static content::SceneBounds vb[content::kSceneMaxEntities];
+      const uint32_t nb = entity_world_bounds(st, phys, vb);
+      for (uint32_t i = 0; i < nb; i++) {
+        if (st.scene.entities[i].flags & content::kSceneHidden) continue;
+        const Vec3 col = st.sel.contains((int32_t)i) ? Vec3{1.0f, 0.95f, 0.4f} : Vec3{0.45f, 0.75f, 1.0f};
+        editor_wire_aabb(ren, ds.cube, vb[i].lo, vb[i].hi, col, 0.025f);
+      }
+    }
     st.gizmo_draws = editor_draw_gizmos(ren, ds.cube, st.scene, st.sel.items, st.sel.count, st.gizmos);
     if (headless) {
       if (!rhi::offscreen_render_custom(off, oc, record_cb, &rctx, &ores, before_cb)) { std::fprintf(stderr, "kare: %s\n", ores.error); return 1; }
@@ -3345,6 +3506,16 @@ int editor_run(const EditorOptions &opts, const EditorHost *host) {
   // kalmadigini ENGINE_ASSERT ile dogrular. Ondan sonrasi tek thread'lidir,
   // yani bu sinif tamamen kapanir. Kapanis yolunda is URETEN kimse yok
   // (yikim yalniz Vulkan/arena nesnesi serbest birakiyor).
+  // Panel duzenini KAPANISTA kaydet: ImGui hala ayakta (asagida kapaniyor),
+  // yani docking agaci okunabilir. Basarisizlik olumcul degil -- editorun
+  // kapanmasini bir duzen dosyasi engellememeli, ama sessiz de kalmamali.
+  if (!headless) {
+    LayoutError le{};
+    if (layout_save(layout_path, &le))
+      std::printf("[engine_editor] panel duzeni kaydedildi: %s\n", layout_path);
+    else
+      std::printf("[engine_editor] panel duzeni kaydedilemedi: %s\n", le.msg);
+  }
   jobs.shutdown();
   bodies_remove(st, phys);
   // VIEWPORT ImGui'DEN ONCE KAPANIR: doku descriptor'i ImGui'nin havuzundan

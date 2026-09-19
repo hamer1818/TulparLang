@@ -44,6 +44,10 @@ bool prop_begin(const char *id, float label_fraction = 0.38f);
 void prop_end();
 // Bir SONRAKI satirin etiket ipucuna eklenecek aciklama (tek kare gecerli).
 void prop_help(const char *text);
+// Ozellik aramasi: bos degilse etiketi eslesmeyen prop_* satirlari cizilmez.
+// Cagiran panel basinda ayarlar, panel sonunda nullptr ile temizler.
+void prop_set_filter(const char *filter);
+bool prop_filter_active();
 
 // Uc DragFloat, her birinin solunda AxisX/AxisY/AxisZ dolgulu X/Y/Z rozeti
 // (Unity/Godot). min == max: sinirsiz. Rozet alanin sol kenarina yapisiktir.
@@ -179,6 +183,7 @@ enum class HierarchyAction : uint32_t {
   Cut,        // baglam menusu: Kes
   Copy,       // baglam menusu: Kopyala
   Paste,      // baglam menusu: Yapistir
+  SavePrefab, // baglam menusu: alt agaci prefab dosyasina kaydet
 };
 struct HierarchyResult {
   HierarchyAction action = HierarchyAction::None;

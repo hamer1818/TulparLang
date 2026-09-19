@@ -206,7 +206,20 @@ void prop_end() {
 
 void prop_help(const char *text) { g_help = text; }
 
+// --- Ozellik aramasi ------------------------------------------------------
+// UE5 Details panelinin arama kutusu: 40 alanli bir bilesende aradigini
+// bulmanin tek yolu. Filtre bos degilse, etiketi eslesmeyen prop_* satiri
+// HIC cizilmez ve bos PropItem doner (degisiklik yok = gunluge islem yok).
+// Esleme hiyerarsi aramasiyla AYNI kuraldir (Turkce harf katlamali).
+namespace {
+const char *g_prop_filter = nullptr;
+bool prop_visible(const char *label) { return !g_prop_filter || hierarchy_filter_match(label, g_prop_filter); }
+} // namespace
+void prop_set_filter(const char *filter) { g_prop_filter = (filter && *filter) ? filter : nullptr; }
+bool prop_filter_active() { return g_prop_filter != nullptr; }
+
 PropItem prop_vec3(const char *label, float v[3], float speed, float min, float max, const char *fmt) {
+  if (!prop_visible(label)) return PropItem{};
   PropItem it;
   ImGui::PushID(label);
   prop_label(label);
@@ -282,6 +295,7 @@ PropItem prop_vec3(const char *label, float v[3], float speed, float min, float 
 }
 
 PropItem prop_float(const char *label, float *v, float speed, float min, float max, const char *fmt) {
+  if (!prop_visible(label)) return PropItem{};
   PropItem it;
   ImGui::PushID(label);
   prop_label(label);
@@ -292,6 +306,7 @@ PropItem prop_float(const char *label, float *v, float speed, float min, float m
 }
 
 PropItem prop_int(const char *label, int *v, int min, int max) {
+  if (!prop_visible(label)) return PropItem{};
   PropItem it;
   ImGui::PushID(label);
   prop_label(label);
@@ -304,6 +319,7 @@ PropItem prop_int(const char *label, int *v, int min, int max) {
 }
 
 PropItem prop_text(const char *label, char *buf, uint32_t cap) {
+  if (!prop_visible(label)) return PropItem{};
   PropItem it;
   ImGui::PushID(label);
   prop_label(label);
@@ -313,6 +329,7 @@ PropItem prop_text(const char *label, char *buf, uint32_t cap) {
 }
 
 PropItem prop_color(const char *label, float rgb[3]) {
+  if (!prop_visible(label)) return PropItem{};
   PropItem it;
   ImGui::PushID(label);
   prop_label(label);
@@ -372,6 +389,7 @@ PropItem prop_color(const char *label, float rgb[3]) {
 }
 
 PropItem prop_check(const char *label, bool *v) {
+  if (!prop_visible(label)) return PropItem{};
   PropItem it;
   ImGui::PushID(label);
   prop_label(label);
@@ -381,6 +399,7 @@ PropItem prop_check(const char *label, bool *v) {
 }
 
 PropItem prop_combo(const char *label, int *v, const char *items_zero_separated) {
+  if (!prop_visible(label)) return PropItem{};
   PropItem it;
   ImGui::PushID(label);
   prop_label(label);
@@ -390,6 +409,7 @@ PropItem prop_combo(const char *label, int *v, const char *items_zero_separated)
 }
 
 PropItem prop_asset(const char *label, int *index, const char (*names)[128], uint32_t count) {
+  if (!prop_visible(label)) return PropItem{};
   PropItem it;
   ImGui::PushID(label);
   prop_label(label);
@@ -936,6 +956,7 @@ HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState
         ImGui::CloseCurrentPopup();
       }
       if (ImGui::MenuItem("\xC3\x87o\xC4\x9F" "alt")) res.action = HierarchyAction::Duplicate;
+      if (ImGui::MenuItem(ICON_MD_SAVE " Prefab olarak kaydet...")) res.action = HierarchyAction::SavePrefab;
       if (ImGui::MenuItem("Ebeveynden ay\xC4\xB1r")) res.action = HierarchyAction::Detach;
       ImGui::Separator();
       if (ImGui::MenuItem("Sil", "Del")) res.action = HierarchyAction::Delete;

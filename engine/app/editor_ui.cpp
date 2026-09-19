@@ -874,4 +874,27 @@ uint32_t editor_draw_gizmos(renderer::Renderer &ren, renderer::MeshHandle cube, 
   return draws;
 }
 
+// Donusumlu tel kutu: 12 kenar YEREL uzayda kurulur, sonra m ile dunyaya
+// tasinir. wire_box eksen hizali (AABB) cizer; carpisma hacmi ise govdeyle
+// birlikte DONER -- dondurulmus bir kutu govdesini AABB ile gostermek
+// carpismanin gercekte nerede oldugu hakkinda yalan soylerdi.
+uint32_t editor_wire_box_m(renderer::Renderer &ren, renderer::MeshHandle cube, const Mat4 &m, Vec3 half, Vec3 color,
+                           float th) {
+  uint32_t n = 0;
+  const Vec3 h = half;
+  for (int a = 0; a < 4; a++) {
+    const float s0 = (a & 1) ? 1.0f : -1.0f, s1 = (a & 2) ? 1.0f : -1.0f;
+    ren.draw(cube, m * Mat4::translate({0, s0 * h.y, s1 * h.z}) * Mat4::scale({h.x * 2 + th, th, th}), color); n++;
+    ren.draw(cube, m * Mat4::translate({s0 * h.x, 0, s1 * h.z}) * Mat4::scale({th, h.y * 2 + th, th}), color); n++;
+    ren.draw(cube, m * Mat4::translate({s0 * h.x, s1 * h.y, 0}) * Mat4::scale({th, th, h.z * 2 + th}), color); n++;
+  }
+  return n;
+}
+
+uint32_t editor_wire_aabb(renderer::Renderer &ren, renderer::MeshHandle cube, Vec3 lo, Vec3 hi, Vec3 color, float th) {
+  uint32_t n = 0;
+  wire_box(ren, cube, (lo + hi) * 0.5f, (hi - lo) * 0.5f, color, th, &n);
+  return n;
+}
+
 } // namespace tulpar::engine::app

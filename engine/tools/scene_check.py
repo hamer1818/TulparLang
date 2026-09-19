@@ -181,6 +181,40 @@ BIT_RE = re.compile(r"(kScene[A-Za-z]+)\s*=\s*1u\s*<<\s*\d+")
 NOT_COMPONENT = {"kSceneHidden", "kSceneLocked"}
 
 
+def multiedit_coverage(root):
+    """app/editor_multiedit.cpp yaprak tablosu SceneEntity'nin TUM alanlarini
+    kapsiyor mu. Kapsamazsa yeni bir alan coklu secimde SESSIZCE yayilmaz --
+    kullanici 5 nesne secip degeri degistirir, yalniz biri degisir."""
+    with open(os.path.join(root, "content/scene.hpp"), encoding="utf-8") as f:
+        hdr = f.read()
+    body = re.search(r"struct SceneEntity\s*\{(.*?)\n\};", hdr, re.S).group(1)
+    fields = []
+    for line in body.split("\n"):
+        l = line.split("//")[0].strip()
+        m = re.match(r"^([A-Za-z_][\w:<>]*)\s+(.+);$", l)
+        if not m:
+            continue
+        for part in m.group(2).split(","):
+            n = re.match(r"\s*([A-Za-z_]\w*)", part)
+            if n:
+                fields.append(n.group(1))
+    path = os.path.join(root, "app/editor_multiedit.cpp")
+    if not os.path.exists(path):
+        return ["app/editor_multiedit.cpp yok"]
+    with open(path, encoding="utf-8") as f:
+        table = f.read()
+    # Bilerek disarida: ad/ebeveyn hic yayilmaz, bit alanlari ayri islenir.
+    exempt = {"name", "parent", "components", "flags"}
+    out = []
+    for fld in fields:
+        if fld in exempt:
+            continue
+        if not re.search(r"offsetof\(SceneEntity, " + re.escape(fld) + r"[.)]", table):
+            out.append("SceneEntity::%s coklu duzenleme tablosunda YOK -> coklu secimde "
+                       "yayilmaz (app/editor_multiedit.cpp)" % fld)
+    return out
+
+
 def component_liveness(root, src):
     with open(os.path.join(root, "content/scene.hpp"), encoding="utf-8") as f:
         hdr = f.read()
@@ -249,6 +283,9 @@ def main():
     # 4) Bilesen canliligi
     bits, dead = component_liveness(root, src)
     problems.extend(dead)
+
+    # 5) Coklu duzenleme tablosu kapsami
+    problems.extend(multiedit_coverage(root))
 
     print("sahne bicim kapisi: %d yazici satiri, %d ayristirici dali, %d bilesen biti, kMaxTok=%s"
           % (len(w), len(p), len(bits), cap))
