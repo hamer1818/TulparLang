@@ -568,6 +568,35 @@ public:
   static uint32_t cube(Vertex *v, uint32_t *idx);                         // 24 v, 36 idx (uv yuz basina 0..1)
   static uint32_t plane(Vertex *v, uint32_t *idx, float uv_repeat = 1.0f); // 4 v, 6 idx
 
+  // --- Prosedurel ilkeller (PR #331) --------------------------------------
+  // cube/plane ile AYNI sozlesme: cagiranin dizilerine yazar, INDEKS SAYISI
+  // doner. Hepsi merkezde, CCW sarim, disa bakan normaller.
+  //
+  // Dizi boyutlari cagiranin sorumlulugu; varsayilan parametrelerdeki
+  // TEPE/INDEKS sayilari asagida yaziyor ve `kPrimitiveMaxVerts` /
+  // `kPrimitiveMaxIndices` bu degerlerin ustunu tutuyor (content/primitives.cpp
+  // tek bir gecici tampon ayirmak icin onlari kullaniyor). Parametre
+  // buyuturursen tamponu da buyut.
+  static uint32_t sphere(Vertex *v, uint32_t *idx, uint32_t seg_h = 32, uint32_t seg_v = 16);
+  //   (seg_v+1)*(seg_h+1) tepe, seg_v*seg_h*6 indeks -> 561 / 3072
+  static uint32_t capsule(Vertex *v, uint32_t *idx, float radius = 0.5f, float half_height = 0.5f,
+                          uint32_t seg_h = 32, uint32_t seg_v = 16);
+  //   (seg_v+2)*(seg_h+1) tepe, (seg_v+1)*seg_h*6 indeks -> 594 / 3264
+  static uint32_t cylinder(Vertex *v, uint32_t *idx, float radius = 0.5f, float half_height = 1.0f,
+                           uint32_t seg_h = 32);
+  //   2*(seg_h+1) + 2*(seg_h+2) tepe, seg_h*12 indeks -> 134 / 384
+  static uint32_t cone(Vertex *v, uint32_t *idx, float radius = 0.5f, float height = 2.0f,
+                       uint32_t seg_h = 32);
+  //   2*(seg_h+1) + (seg_h+2) tepe, seg_h*6 indeks -> 100 / 192
+  static uint32_t quad(Vertex *v, uint32_t *idx); // 4 v, 6 idx (XY duzlemi, +Z'ye bakar)
+  static uint32_t torus(Vertex *v, uint32_t *idx, float r_main = 0.5f, float r_tube = 0.2f,
+                        uint32_t seg_main = 32, uint32_t seg_tube = 16);
+  //   (seg_main+1)*(seg_tube+1) tepe, seg_main*seg_tube*6 indeks -> 561 / 3072
+
+  // Varsayilan parametrelerle en buyuk ilkelin (kapsul) ustu.
+  static constexpr uint32_t kPrimitiveMaxVerts = 640;
+  static constexpr uint32_t kPrimitiveMaxIndices = 3328;
+
 private:
   struct Mesh {
     VkBuffer vbuf = VK_NULL_HANDLE, ibuf = VK_NULL_HANDLE;

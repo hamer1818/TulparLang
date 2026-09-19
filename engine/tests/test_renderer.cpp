@@ -1979,3 +1979,164 @@ ENGINE_TEST(renderer_gltf_pbr_textures_upload_to_material) {
   bool textures_actually_change_the_frame = mx > 24 && mean > 2.0;
   CHECK(textures_actually_change_the_frame);
 }
+
+// --- KAPI: prosedurel ilkeller disa mi bakiyor? (PR #331) -------------------
+// #331 renderer.hpp'ye sphere/capsule/cylinder/cone/quad/torus BILDIRIMLERINI
+// ekledi ama TANIM yazmadi; tanimlar bu depoda yazildi. Tanim yazmanin en
+// sinsi hatasi TERS SARIM: derleme gecer, test gecer, ikili calisir — yalniz
+// yuzeyler ice bakar ve isik yanlis olur. Ekran goruntusune bakmadan bunu
+// yakalamanin yolu her ucgenin GEOMETRIK normalini (kenarlarin capraz carpimi)
+// tepe normalleriyle karsilastirmak.
+//
+// Olculenler: (1) hicbir ucgen ters degil, (2) tepe normalleri birim,
+// (3) tepe/indeks sayilari basliktaki formullerle ve tampon ustleriyle
+// tutarli, (4) noktalar beklenen yuzeyde. Sonda POZITIF KONTROL: tek bir
+// ucgen bilerek ters cevrilince kapi onu GORMELI — gormezse kapi hicbir sey
+// olcmuyordur.
+namespace {
+
+struct PrimCheck {
+  uint32_t idx_count = 0;
+  uint32_t vert_count = 0;
+  uint32_t tris = 0;
+  uint32_t flipped = 0;
+  uint32_t degenerate = 0;
+  float worst_unit_err = 0.0f;
+};
+
+PrimCheck prim_check(const renderer::Vertex *v, const uint32_t *idx, uint32_t n_idx) {
+  PrimCheck s;
+  s.idx_count = n_idx;
+  for (uint32_t i = 0; i < n_idx; i++)
+    if (idx[i] + 1u > s.vert_count) s.vert_count = idx[i] + 1u;
+  for (uint32_t i = 0; i + 2 < n_idx; i += 3) {
+    const Vec3 p0 = v[idx[i]].pos, p1 = v[idx[i + 1]].pos, p2 = v[idx[i + 2]].pos;
+    const Vec3 g = cross(p1 - p0, p2 - p0);
+    // ESIK 1e-7: birim olcekli bir mesh'te float capraz carpimi kutup
+    // civarinda 1e-9'a kadar gurultu uretebiliyor (olculdu). 1e-9 esigi o
+    // sivri ucgenleri GERCEK sayiyor ve gurultulu normallerini "ters" diye
+    // raporluyordu. Uretici artik kutbu tam sifirliyor; esik yine de paye
+    // birakiyor ki parametre degisince kapi yanlis alarm vermesin.
+    if (length(g) < 1e-7f) { s.degenerate++; continue; }
+    s.tris++;
+    const Vec3 avg = v[idx[i]].nrm + v[idx[i + 1]].nrm + v[idx[i + 2]].nrm;
+    if (length(avg) < 1e-9f) continue;
+    if (dot(normalize(g), normalize(avg)) < 0.0f) s.flipped++;
+  }
+  for (uint32_t k = 0; k < s.vert_count; k++) {
+    const float e = std::fabs(length(v[k].nrm) - 1.0f);
+    if (e > s.worst_unit_err) s.worst_unit_err = e;
+  }
+  return s;
+}
+
+} // namespace
+
+ENGINE_TEST(renderer_procedural_primitives_face_outward) {
+  using namespace renderer;
+  static Vertex v[Renderer::kPrimitiveMaxVerts];
+  static uint32_t idx[Renderer::kPrimitiveMaxIndices];
+
+  struct Row { const char *ad; uint32_t idx_bekle; uint32_t vert_bekle; };
+  uint32_t n = 0;
+  PrimCheck s;
+  uint32_t toplam_ucgen = 0, toplam_ters = 0;
+  float en_kotu_birim = 0.0f;
+
+  // --- kure: her nokta yaricap 0.5 uzerinde -------------------------------
+  n = Renderer::sphere(v, idx);
+  s = prim_check(v, idx, n);
+  CHECK(n == 3072 && s.vert_count == 561);
+  CHECK(s.flipped == 0);
+  {
+    float en_kotu_r = 0.0f;
+    for (uint32_t k = 0; k < s.vert_count; k++) {
+      const float e = std::fabs(length(v[k].pos) - 0.5f);
+      if (e > en_kotu_r) en_kotu_r = e;
+    }
+    CHECK(en_kotu_r < 1e-5f);
+    std::printf("    [bilgi] kure: %u ucgen, ters %u, yaricap sapmasi %.2e\n",
+                s.tris, s.flipped, (double)en_kotu_r);
+  }
+  toplam_ucgen += s.tris; toplam_ters += s.flipped;
+  if (s.worst_unit_err > en_kotu_birim) en_kotu_birim = s.worst_unit_err;
+
+  // --- kapsul: Y uzanimi 2*(half_height+radius) ---------------------------
+  n = Renderer::capsule(v, idx);
+  s = prim_check(v, idx, n);
+  CHECK(n == 3264 && s.vert_count == 594);
+  CHECK(s.flipped == 0);
+  {
+    float ymin = 1e9f, ymax = -1e9f;
+    for (uint32_t k = 0; k < s.vert_count; k++) {
+      if (v[k].pos.y < ymin) ymin = v[k].pos.y;
+      if (v[k].pos.y > ymax) ymax = v[k].pos.y;
+    }
+    CHECK(std::fabs((ymax - ymin) - 2.0f) < 1e-4f);
+    std::printf("    [bilgi] kapsul: %u ucgen, ters %u, Y uzanimi %.4f (2.0 bekleniyor)\n",
+                s.tris, s.flipped, (double)(ymax - ymin));
+  }
+  toplam_ucgen += s.tris; toplam_ters += s.flipped;
+  if (s.worst_unit_err > en_kotu_birim) en_kotu_birim = s.worst_unit_err;
+
+  // --- silindir -----------------------------------------------------------
+  n = Renderer::cylinder(v, idx);
+  s = prim_check(v, idx, n);
+  CHECK(n == 384 && s.vert_count == 134);
+  CHECK(s.flipped == 0);
+  toplam_ucgen += s.tris; toplam_ters += s.flipped;
+  if (s.worst_unit_err > en_kotu_birim) en_kotu_birim = s.worst_unit_err;
+
+  // --- koni ---------------------------------------------------------------
+  n = Renderer::cone(v, idx);
+  s = prim_check(v, idx, n);
+  CHECK(n == 192 && s.vert_count == 100);
+  CHECK(s.flipped == 0);
+  toplam_ucgen += s.tris; toplam_ters += s.flipped;
+  if (s.worst_unit_err > en_kotu_birim) en_kotu_birim = s.worst_unit_err;
+
+  // --- dortgen: +Z'ye bakar, plane()'den (XZ, +Y) AYRI bir ilkel ----------
+  n = Renderer::quad(v, idx);
+  s = prim_check(v, idx, n);
+  CHECK(n == 6 && s.vert_count == 4);
+  CHECK(s.flipped == 0);
+  CHECK(v[0].nrm.z > 0.99f && std::fabs(v[0].nrm.y) < 1e-6f);
+  toplam_ucgen += s.tris; toplam_ters += s.flipped;
+  if (s.worst_unit_err > en_kotu_birim) en_kotu_birim = s.worst_unit_err;
+
+  // --- simit: her nokta ana cemberden r_tube kadar uzakta -----------------
+  n = Renderer::torus(v, idx);
+  s = prim_check(v, idx, n);
+  CHECK(n == 3072 && s.vert_count == 561);
+  CHECK(s.flipped == 0);
+  {
+    float en_kotu_t = 0.0f;
+    for (uint32_t k = 0; k < s.vert_count; k++) {
+      const Vec3 p = v[k].pos;
+      const Vec3 duz{p.x, 0.0f, p.z};
+      const Vec3 merkez = (length(duz) > 1e-6f) ? normalize(duz) * 0.5f : Vec3{0.5f, 0, 0};
+      const float e = std::fabs(length(p - merkez) - 0.2f);
+      if (e > en_kotu_t) en_kotu_t = e;
+    }
+    CHECK(en_kotu_t < 1e-5f);
+    std::printf("    [bilgi] simit: %u ucgen, ters %u, tup yaricap sapmasi %.2e\n",
+                s.tris, s.flipped, (double)en_kotu_t);
+  }
+  toplam_ucgen += s.tris; toplam_ters += s.flipped;
+  if (s.worst_unit_err > en_kotu_birim) en_kotu_birim = s.worst_unit_err;
+
+  CHECK(toplam_ters == 0);
+  CHECK(en_kotu_birim < 1e-5f);
+  std::printf("    [bilgi] 6 ilkel: %u ucgen, ters %u, normal birimlik sapmasi %.2e\n",
+              toplam_ucgen, toplam_ters, (double)en_kotu_birim);
+
+  // --- POZITIF KONTROL ----------------------------------------------------
+  // Tek bir ucgeni bilerek ters cevir: kapi tam 1 ters saymali. Saymazsa
+  // yukaridaki butun "ters 0" sonuclari hicbir sey olcmuyor demektir.
+  n = Renderer::sphere(v, idx);
+  const uint32_t t = idx[3]; idx[3] = idx[4]; idx[4] = t;
+  const PrimCheck kontrol = prim_check(v, idx, n);
+  CHECK(kontrol.flipped == 1);
+  std::printf("    [bilgi] POZITIF KONTROL (bir ucgen ters cevrildi): kapi %u ters gordu (1 bekleniyor)\n",
+              kontrol.flipped);
+}

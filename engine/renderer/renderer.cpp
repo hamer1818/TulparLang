@@ -3508,4 +3508,197 @@ uint32_t Renderer::plane(Vertex *v, uint32_t *idx, float uv_repeat) {
   return 6;
 }
 
+// --- Prosedurel ilkeller (PR #331) ------------------------------------------
+// #331 bunlari renderer.hpp'de BILDIRMIS ama hicbir yerde TANIMLAMAMISTI:
+// basligi oldugu gibi tasimak derlemeyi gecirir, cagiran ilk ceviri birimi
+// ise link'te "undefined reference" alirdi. Tanimlar burada.
+//
+// Sozlesme cube/plane ile ayni: cagiranin dizilerine yazar, INDEKS SAYISI
+// doner. Hepsi merkezde ve disa bakan normallerle CCW sarimli.
+
+namespace {
+
+constexpr float kPi = 3.14159265358979323846f;
+
+// Enlem/boylam izgarasi icin indeks uretici. rows = QUAD satiri sayisi,
+// cols = sutun (segment) sayisi; tepe dizisi (rows+1)*(cols+1) elemanli ve
+// satir-oncelikli olmali.
+//
+// SARIM (a, a+1, b) / (a+1, b+1, b): elle turetildi ve sonra olculdu
+// (tests/test_renderer.cpp icindeki ilkel kapisi her ucgenin geometrik
+// normalini tepe normaliyle karsilastiriyor). Ters sarim sessizce ice bakan
+// yuzeyler uretir: derleme de, test de gecer, yalniz isik yanlis olur.
+void grid_indices(uint32_t *idx, uint32_t &ii, uint32_t rows, uint32_t cols) {
+  for (uint32_t r = 0; r < rows; r++) {
+    for (uint32_t c = 0; c < cols; c++) {
+      const uint32_t a = r * (cols + 1) + c;
+      const uint32_t b = a + cols + 1;
+      idx[ii++] = a;     idx[ii++] = a + 1; idx[ii++] = b;
+      idx[ii++] = a + 1; idx[ii++] = b + 1; idx[ii++] = b;
+    }
+  }
+}
+
+// Yatay disk (kapak). up=true ise +Y'ye bakar (ust kapak), degilse -Y.
+// center_first: merkez tepe once yazilir, ardindan cember.
+uint32_t disk(Vertex *v, uint32_t *idx, uint32_t &vi, uint32_t &ii,
+              float y, float radius, uint32_t seg_h, bool up) {
+  const Vec3 n{0.0f, up ? 1.0f : -1.0f, 0.0f};
+  const uint32_t center = vi;
+  v[vi++] = {{0.0f, y, 0.0f}, n, {0.5f, 0.5f}};
+  for (uint32_t c = 0; c <= seg_h; c++) {
+    const float th = 2.0f * kPi * (float)c / (float)seg_h;
+    const float cx = std::cos(th), sz = std::sin(th);
+    v[vi++] = {{cx * radius, y, sz * radius}, n, {0.5f + 0.5f * cx, 0.5f + 0.5f * sz}};
+  }
+  for (uint32_t c = 0; c < seg_h; c++) {
+    const uint32_t p0 = center + 1 + c, p1 = center + 2 + c;
+    // Ust kapakta ters sira: (merkez, p1, p0) +Y verir; alt kapakta duz sira
+    // -Y verir (ikisi de cross carpimla dogrulandi).
+    if (up) { idx[ii++] = center; idx[ii++] = p1; idx[ii++] = p0; }
+    else    { idx[ii++] = center; idx[ii++] = p0; idx[ii++] = p1; }
+  }
+  return ii;
+}
+
+} // namespace
+
+uint32_t Renderer::sphere(Vertex *v, uint32_t *idx, uint32_t seg_h, uint32_t seg_v) {
+  if (seg_h < 3) seg_h = 3;
+  if (seg_v < 2) seg_v = 2;
+  const float R = 0.5f;
+  uint32_t vi = 0, ii = 0;
+  for (uint32_t r = 0; r <= seg_v; r++) {
+    const float phi = kPi * (float)r / (float)seg_v; // 0 = tepe (+Y)
+    float cy = std::cos(phi), sy = std::sin(phi);
+    // KUTUPTA TAM SIFIR. float'ta sin(pi) = -8.74e-8, sifir DEGIL; bu yuzden
+    // kutup halkasinin tepeleri birbirinden ~1e-8 ayriliyor ve aralarindaki
+    // "sifir alanli" ucgenler |capraz carpim| ~1.2e-9 uretiyor. Alan sifir
+    // sayilmadigi icin normalleri tamamen GURULTU oluyor. Olculdu 2026-09-19:
+    // ilkel kapisi kurede ve kapsulde ikiser "ters ucgen" raporladi, oysa
+    // geometri dogruydu. Kutbu elle sifirlamak ucgenleri TAM dejenere yapar.
+    if (r == 0) { cy = 1.0f; sy = 0.0f; }
+    if (r == seg_v) { cy = -1.0f; sy = 0.0f; }
+    for (uint32_t c = 0; c <= seg_h; c++) {
+      const float th = 2.0f * kPi * (float)c / (float)seg_h;
+      const Vec3 n{sy * std::cos(th), cy, sy * std::sin(th)};
+      v[vi++] = {n * R, n, {(float)c / (float)seg_h, (float)r / (float)seg_v}};
+    }
+  }
+  grid_indices(idx, ii, seg_v, seg_h);
+  return ii;
+}
+
+uint32_t Renderer::capsule(Vertex *v, uint32_t *idx, float radius, float half_height,
+                           uint32_t seg_h, uint32_t seg_v) {
+  if (seg_h < 3) seg_h = 3;
+  if (seg_v < 2) seg_v = 2;
+  seg_v &= ~1u; // cift olmali: iki yarim kureye esit bolunuyor
+  const uint32_t half = seg_v / 2;
+  uint32_t vi = 0, ii = 0;
+  // seg_v+2 satir: ust yarim kure, EKVATOR IKI KEZ (silindirik bant), alt
+  // yarim kure. Ekvatorun tekrari sayesinde bant ayri bir gecis istemiyor ve
+  // normal formulu (phi = pi/2 -> (cos t, 0, sin t)) kendiliginden dogru cikiyor.
+  for (uint32_t r = 0; r <= seg_v + 1; r++) {
+    float phi, yc;
+    if (r <= half) {
+      phi = 0.5f * kPi * (float)r / (float)half;
+      yc = half_height;
+    } else {
+      phi = 0.5f * kPi * (1.0f + (float)(r - half - 1) / (float)half);
+      yc = -half_height;
+    }
+    float cy = std::cos(phi), sy = std::sin(phi);
+    if (r == 0) { cy = 1.0f; sy = 0.0f; }             // kutup: bkz. sphere()
+    if (r == seg_v + 1) { cy = -1.0f; sy = 0.0f; }
+    for (uint32_t c = 0; c <= seg_h; c++) {
+      const float th = 2.0f * kPi * (float)c / (float)seg_h;
+      const Vec3 n{sy * std::cos(th), cy, sy * std::sin(th)};
+      const Vec3 p{n.x * radius, yc + n.y * radius, n.z * radius};
+      v[vi++] = {p, n, {(float)c / (float)seg_h, (float)r / (float)(seg_v + 1)}};
+    }
+  }
+  grid_indices(idx, ii, seg_v + 1, seg_h);
+  return ii;
+}
+
+uint32_t Renderer::cylinder(Vertex *v, uint32_t *idx, float radius, float half_height,
+                            uint32_t seg_h) {
+  if (seg_h < 3) seg_h = 3;
+  uint32_t vi = 0, ii = 0;
+  // Yan yuzey: iki satir (ust/alt), yanal normal. Kapaklar AYRI tepelerle
+  // yaziliyor cunku normalleri farkli (+Y/-Y); paylasilsalar kenar yuvarlanirdi.
+  for (uint32_t r = 0; r < 2; r++) {
+    const float y = (r == 0) ? half_height : -half_height;
+    for (uint32_t c = 0; c <= seg_h; c++) {
+      const float th = 2.0f * kPi * (float)c / (float)seg_h;
+      const Vec3 n{std::cos(th), 0.0f, std::sin(th)};
+      v[vi++] = {{n.x * radius, y, n.z * radius}, n, {(float)c / (float)seg_h, (float)r}};
+    }
+  }
+  grid_indices(idx, ii, 1, seg_h);
+  disk(v, idx, vi, ii, half_height, radius, seg_h, true);
+  disk(v, idx, vi, ii, -half_height, radius, seg_h, false);
+  return ii;
+}
+
+uint32_t Renderer::cone(Vertex *v, uint32_t *idx, float radius, float height, uint32_t seg_h) {
+  if (seg_h < 3) seg_h = 3;
+  const float hy = height * 0.5f;
+  uint32_t vi = 0, ii = 0;
+  // Tepe noktasi SUTUN BASINA kopyalaniyor: tek bir tepe tepesi olsaydi normali
+  // tek bir yone donerdi ve yan yuzey duz gorunurdu.
+  const uint32_t apex0 = vi;
+  for (uint32_t c = 0; c <= seg_h; c++) {
+    const float th = 2.0f * kPi * (float)c / (float)seg_h;
+    const Vec3 n = normalize(Vec3{height * std::cos(th), radius, height * std::sin(th)});
+    v[vi++] = {{0.0f, hy, 0.0f}, n, {(float)c / (float)seg_h, 0.0f}};
+  }
+  const uint32_t rim0 = vi;
+  for (uint32_t c = 0; c <= seg_h; c++) {
+    const float th = 2.0f * kPi * (float)c / (float)seg_h;
+    const Vec3 n = normalize(Vec3{height * std::cos(th), radius, height * std::sin(th)});
+    v[vi++] = {{std::cos(th) * radius, -hy, std::sin(th) * radius}, n,
+               {(float)c / (float)seg_h, 1.0f}};
+  }
+  for (uint32_t c = 0; c < seg_h; c++) {
+    idx[ii++] = apex0 + c; idx[ii++] = rim0 + c + 1; idx[ii++] = rim0 + c;
+  }
+  disk(v, idx, vi, ii, -hy, radius, seg_h, false);
+  return ii;
+}
+
+uint32_t Renderer::quad(Vertex *v, uint32_t *idx) {
+  // plane() XZ duzleminde ve +Y'ye bakar; quad XY duzleminde ve +Z'ye bakar.
+  // Ikisi ayri ilkel: biri zemin, oteki pano/afis.
+  const Vec3 N{0.0f, 0.0f, 1.0f};
+  v[0] = {{-0.5f, -0.5f, 0.0f}, N, {0.0f, 1.0f}};
+  v[1] = {{0.5f, -0.5f, 0.0f}, N, {1.0f, 1.0f}};
+  v[2] = {{0.5f, 0.5f, 0.0f}, N, {1.0f, 0.0f}};
+  v[3] = {{-0.5f, 0.5f, 0.0f}, N, {0.0f, 0.0f}};
+  const uint32_t i[6] = {0, 1, 2, 0, 2, 3};
+  std::memcpy(idx, i, sizeof i);
+  return 6;
+}
+
+uint32_t Renderer::torus(Vertex *v, uint32_t *idx, float r_main, float r_tube,
+                         uint32_t seg_main, uint32_t seg_tube) {
+  if (seg_main < 3) seg_main = 3;
+  if (seg_tube < 3) seg_tube = 3;
+  uint32_t vi = 0, ii = 0;
+  for (uint32_t a = 0; a <= seg_main; a++) {
+    const float u = 2.0f * kPi * (float)a / (float)seg_main;
+    const Vec3 dir{std::cos(u), 0.0f, std::sin(u)};
+    const Vec3 c = dir * r_main;
+    for (uint32_t b = 0; b <= seg_tube; b++) {
+      const float t = 2.0f * kPi * (float)b / (float)seg_tube;
+      const Vec3 n = dir * std::cos(t) + Vec3{0.0f, std::sin(t), 0.0f};
+      v[vi++] = {c + n * r_tube, n,
+                 {(float)a / (float)seg_main, (float)b / (float)seg_tube}};
+    }
+  }
+  grid_indices(idx, ii, seg_main, seg_tube);
+  return ii;
+}
+
 } // namespace tulpar::engine::renderer

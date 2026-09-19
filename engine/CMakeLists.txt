@@ -218,7 +218,7 @@ target_compile_options(engine_renderer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${ENGIN
 add_dependencies(engine_renderer engine_layer_check)
 
 # --- L6 CONTENT: glTF (cgltf) + goruntu (stb_image), yalniz yukleme aninda malloc ---
-add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/scene_blob.cpp content/scene_runtime.cpp content/vendored_impl.c
+add_library(engine_content STATIC content/gltf.cpp content/meshopt.cpp content/ktx2.cpp content/font.cpp content/scene.cpp content/scene_blob.cpp content/scene_runtime.cpp content/primitives.cpp content/vendored_impl.c
     # --- PR #322: yeni icerik modulleri (content/pack.cpp ALINMADI: main'in
     # .tpak'i mmap'li, belirlenimli ve kapili — PR'inki daha basit bir format)
     content/voxel.cpp content/morph.cpp content/terrain.cpp content/lod_select.cpp content/water_wave.cpp content/wind.cpp content/occlusion.cpp content/clod_format.cpp content/device_tier.cpp content/dynamic_quality.cpp)
