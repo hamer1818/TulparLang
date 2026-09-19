@@ -956,7 +956,6 @@ HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState
         ImGui::CloseCurrentPopup();
       }
       if (ImGui::MenuItem("\xC3\x87o\xC4\x9F" "alt")) res.action = HierarchyAction::Duplicate;
-      if (ImGui::MenuItem(ICON_MD_SAVE " Prefab olarak kaydet...")) res.action = HierarchyAction::SavePrefab;
       if (ImGui::MenuItem("Ebeveynden ay\xC4\xB1r")) res.action = HierarchyAction::Detach;
       ImGui::Separator();
       if (ImGui::MenuItem("Sil", "Del")) res.action = HierarchyAction::Delete;
@@ -964,6 +963,10 @@ HierarchyResult hierarchy_row_impl(int id, const HierarchyRow &r, HierarchyState
       if (ImGui::MenuItem("Kes", "Ctrl+X")) res.action = HierarchyAction::Cut;
       if (ImGui::MenuItem("Kopyala", "Ctrl+C")) res.action = HierarchyAction::Copy;
       if (ImGui::MenuItem("Yap\xC4\xB1\xC5\x9Ft\xC4\xB1r", "Ctrl+V")) res.action = HierarchyAction::Paste;
+      // Menunun SONUNDA: araya eklemek mevcut ogelerin konumunu kaydirir;
+      // test_editor_widgets sentetik tiki konumla yapiyor (Sil = 3. oge).
+      ImGui::Separator();
+      if (ImGui::MenuItem(ICON_MD_SAVE " Prefab olarak kaydet...")) res.action = HierarchyAction::SavePrefab;
       ImGui::EndPopup();
     }
     if (dbl) st->rename.begin(id, r.name); // cift tik: yerinde ad
