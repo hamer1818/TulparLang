@@ -23,7 +23,7 @@ layout(set = 1, binding = 0) uniform sampler2D u_albedo; // malzeme (klasik set,
 // olculen deger Renderer::material_ubo_stride()).
 layout(set = 1, binding = 1) uniform MatBlock {
   vec4 pbr;      // x metallic, y ALGISAL puruzluluk, z dielektrik yansitirlik, w model (0 Lambert, 1 PBR)
-  vec4 emissive; // rgb DOGRUSAL isima, w kullanilmiyor
+  vec4 emissive; // rgb DOGRUSAL isima, w isima gucu carpani (strength)
   vec4 tex;      // x ORM var, y normal var, z isima dokusu var, w normal olcegi
   vec4 tex2;     // x occlusion gucu (ORM.R), y/z/w bos
 } u_mat;
@@ -287,9 +287,18 @@ vec3 shade_pbr(vec3 n_geo, vec3 albedo, float nl_geo, float vis) {
   vec3 c = diffuse_color * (amb + sun + pl_d);
   c += amb * (f0 * dfg.x + vec3(dfg.y));
   c += spec_sun + pl_s;
-  vec3 emis = u_mat.emissive.rgb;
+  return c; // isima main()'de eklenir (her iki golgeleme dali icin ORTAK)
+}
+
+// Isima (emissive) terimi. ONCEDEN yalniz shade_pbr icindeydi; Lambert
+// malzemelerde isima SESSIZCE yok sayiliyordu -- glTF'ten gelen Lambert bir
+// malzemeye isima rengi verilse bile ekranda hicbir sey degismiyordu.
+// Artik iki dal da bunu kullanir. Isimasiz malzemede deger tam 0'dir ve
+// `c + 0.0` bit-tam `c`'dir, yani eski goruntu korunur.
+vec3 emissive_term() {
+  vec3 emis = u_mat.emissive.rgb * u_mat.emissive.a;
   if (u_mat.tex.z > 0.5) emis *= texture(u_emissive, v_uv).rgb; // sRGB doku, ornekleme dogrusal dondurur
-  return c + emis;
+  return emis;
 }
 
 layout(location = 0) out vec4 o_color;
@@ -347,12 +356,14 @@ void main() {
   float nl = max(dot(n, normalize(u.light_dir.xyz)), 0.0);
   float vis = shadow_visibility(nl, n);
   vec3 albedo = texture(u_albedo, v_uv).rgb * v_color;
-  // Golgeleme modeli MALZEME basina. Lambert dali asagidaki ifadeyle BIREBIR
-  // ayni (kelimesi kelimesine): eski malzemeler bit bit eski goruntuyu verir.
+  // Golgeleme modeli MALZEME basina. Lambert dali eski ifadeyle ayni; ustune
+  // ISIMA terimi eklenir. Isimasiz malzemede terim tam 0 oldugu ve `c + 0.0`
+  // bit-tam `c` verdigi icin eski malzemeler yine bit bit eski goruntudedir.
   // Dal malzeme basina tekduze, yani dalga icinde ayrisma yok.
   vec3 c;
   if (u_mat.pbr.w < 0.5) c = albedo * (u.ambient.rgb + nl * vis * u.ambient.a + point_lights(n));
   else c = shade_pbr(n, albedo, nl, vis);
+  c += emissive_term(); // ISIMA: iki dal icin de, tonemap/sRGB'den ONCE
   if (u.light_dir.w > 0.5) c = linear_to_srgb(c);
   o_color = vec4(c, 1.0);
 }

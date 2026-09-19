@@ -11,6 +11,7 @@
 #include "renderer/renderer.hpp"
 #include "rhi/device.hpp"
 #include "rhi/offscreen.hpp"
+#include "rhi/swapchain.hpp"
 #include "rhi/tile_budget.hpp"
 #include "rhi/vk_api.hpp"
 #include "tests/test.hpp"
@@ -778,4 +779,58 @@ ENGINE_TEST(rhi_pso_cache_warms_pipeline_creation) {
   dev.shutdown();
   // temizlik: gecici dizin icerigi
   std::remove(cache_path);
+}
+
+// Tam ekran / yeniden boyutlandirma KARARI (rhi/swapchain.hpp ResizeAction).
+//
+// TASINABILIRLIK KURALI: "acquire/present OUT_OF_DATE dediginde yeniden kur"
+// Wayland'de YETMEZ — yuzey olcusunu suren taraf uygulamadir (`currentExtent`
+// 0xFFFFFFFF) ve pencere tam ekrana geciste OUT_OF_DATE HIC uretmez. Swapchain
+// eski olcude kalir, kompozitor goruntuyu pencereye GERER: kullanicinin
+// gordugu "tam ekran olmuyor, icerik ayni oranda buyuyup bozuluyor" tam budur
+// (olculdu 2026-09-18, KDE Wayland). X11'de OUT_OF_DATE gelir, yani hata
+// platforma gore GORUNUR/GORUNMEZ.
+//
+// Kapi kararin KENDISINI olcer ve yaninda POZITIF KONTROL olarak ESKI kurali
+// (yalniz OUT_OF_DATE) ayni senaryolara uygular: eski kural senaryolardan
+// en az birini KACIRMALI, yoksa bu test hicbir sey olcmuyor demektir.
+ENGINE_TEST(rhi_resize_follows_window_size_not_only_out_of_date) {
+  struct Case {
+    const char *name;
+    VkExtent2D requested;
+    uint32_t win_w, win_h;
+    bool out_of_date;
+    ResizeAction want;
+  };
+  const Case cases[] = {
+      {"tam ekran (Wayland: OUT_OF_DATE yok)", {1280, 720}, 2560, 1440, false, ResizeAction::SizeChanged},
+      {"suruklenerek kuculme", {2560, 1440}, 1000, 900, false, ResizeAction::SizeChanged},
+      {"olcu ayni: DOKUNMA", {1280, 720}, 1280, 720, false, ResizeAction::None},
+      {"yuzey gecersiz (X11 yolu)", {1280, 720}, 1280, 720, true, ResizeAction::OutOfDate},
+      {"kucultulmus pencere (0 olcu)", {1280, 720}, 0, 0, true, ResizeAction::None},
+  };
+  uint32_t ok_new = 0, ok_old = 0;
+  for (const Case &c : cases) {
+    const ResizeAction got = swapchain_resize_action(c.requested, c.win_w, c.win_h, c.out_of_date);
+    const bool good = got == c.want;
+    CHECK(good);
+    if (good) ok_new++;
+    // ESKI kural: yalniz bayraga bakar, olcuyu HIC gormez.
+    const ResizeAction old_rule = (c.out_of_date && c.win_w && c.win_h) ? ResizeAction::OutOfDate : ResizeAction::None;
+    if (old_rule == c.want) ok_old++;
+    std::printf("    [bilgi] %-38s -> %s (eski kural: %s)\n", c.name, resize_action_str(got), resize_action_str(old_rule));
+  }
+  const uint32_t n = (uint32_t)(sizeof cases / sizeof cases[0]);
+  CHECK(ok_new == n);
+  // Pozitif kontrol: eski kural en az bir senaryoyu kacirdi (tam ekran).
+  bool old_rule_misses = ok_old < n;
+  CHECK(old_rule_misses);
+  std::printf("    [bilgi] %u senaryo: yeni kural %u dogru, eski kural (yalniz OUT_OF_DATE) %u dogru\n", n, ok_new, ok_old);
+  // Olcu degisimi her karede yeniden kurmayi TETIKLEMEZ: yeniden kurma
+  // istenen olcuyu gunceller, ikinci cagri None der (Tuzaklar 8m'nin ikizi:
+  // her karede swapchain yeniden kurmak 45 ms/kare demekti).
+  VkExtent2D req{1280, 720};
+  CHECK(swapchain_resize_action(req, 1920, 1080, false) == ResizeAction::SizeChanged);
+  req = VkExtent2D{1920, 1080}; // create_swapchain'in yaptigi
+  CHECK(swapchain_resize_action(req, 1920, 1080, false) == ResizeAction::None);
 }

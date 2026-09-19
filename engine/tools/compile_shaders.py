@@ -7,6 +7,7 @@ Slang degil). Uretilen .h dosyalari DEPOYA GIRER: CI'da glslc gerekmez ve
 byte'lar deterministiktir. Yeniden uretmek: python3 engine/tools/compile_shaders.py
 """
 import os
+import struct
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,36 @@ SHADERS = os.path.join(os.path.dirname(HERE), "rhi", "shaders")
 # ama BAYT OLARAK FARKLI SPIR-V'ye cevirir (farkli optimizasyon gecisleri).
 # Ikisi de yoksa betik, once oldugu gibi, calismaz -- ama artik SEBEBI
 # soyluyor ve glslang'in da aranmis oldugunu belirtiyor.
+
+# --- glslang: hata ayiklama ISIMLERINI siyir --------------------------------
+# Depodaki *_spv.h dosyalari glslc -O ile uretildi ve glslc OpName/OpMemberName
+# komutlarini ATAR. tools/layout_check.py bu varsayim uzerine kurulu: isimler
+# DURUYORSA blok yollarini GLSL kaynagiyla eslestiremiyor, "yolu
+# adlandirilamadi" deyip shader'i denetim DISINDA birakiyor -- yani yerlesim
+# kapisi sessizce kapsam kaybediyor (olculdu: 39 blok/16 shader -> 34/15).
+# glslang isimleri KORUDUGU icin burada elle siyriliyor.
+#
+# OpName(5) ve OpMemberName(6) yalnizca hata ayiklama bilgisidir; kaldirmak
+# modulun ANLAMINI degistirmez (SPIR-V spec, Debug Instructions).
+_OP_NAME, _OP_MEMBER_NAME = 5, 6
+
+
+def strip_debug_names(data):
+    if len(data) % 4 or data[:4] != b"\x03\x02\x23\x07":
+        return data  # SPIR-V degil: dokunma
+    w = list(struct.unpack("<%dI" % (len(data) // 4), data))
+    out = w[:5]  # baslik: magic, surum, uretec, id siniri, sema
+    i = 5
+    while i < len(w):
+        count = w[i] >> 16
+        if count == 0:
+            return data  # bozuk akis: dokunma
+        if (w[i] & 0xFFFF) not in (_OP_NAME, _OP_MEMBER_NAME):
+            out.extend(w[i:i + count])
+        i += count
+    return struct.pack("<%dI" % len(out), *out)
+
+
 def find_compiler():
     glslc = shutil.which("glslc")
     if glslc:
@@ -43,7 +74,7 @@ def compile_one(kind, exe, src, ext):
                         "-S", STAGE[ext], "-o", tmp, src], capture_output=True)
     if r.returncode == 0:
         with open(tmp, "rb") as f:
-            r.stdout = f.read()
+            r.stdout = strip_debug_names(f.read())
         os.remove(tmp)
     return r
 

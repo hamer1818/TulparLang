@@ -30,6 +30,13 @@ struct EditorHost {
   // Olaylari isler; false = kapat. *w/*h framebuffer.
   bool (*poll)(void *user, uint32_t *w, uint32_t *h) = nullptr;
   const platform::InputState *(*input)(void *user) = nullptr;
+  // Pencere olcusu mantiksal pikselde (imlec uzayi). nullptr = framebuffer ile
+  // ayni (isaretci olcegi 1). HiDPI'da yoksa tiklamalar arayuzu ISKALAR.
+  void (*window_size)(void *user, uint32_t *w, uint32_t *h) = nullptr;
+  // Tam ekran (F11). nullptr = host desteklemiyor: menu ogesi SOLUK gorunur
+  // (sessizce hicbir sey yapan bir dugme yok).
+  bool (*set_fullscreen)(void *user, bool on) = nullptr;
+  bool (*is_fullscreen)(void *user) = nullptr;
 };
 
 int editor_run(const EditorOptions &opts, const EditorHost *host);

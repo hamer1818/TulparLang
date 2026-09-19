@@ -27,8 +27,10 @@ Vec3 get3(const float *src) { return {src[0], src[1], src[2]}; }
 // tablosu: kaynak yollari, sonra varlik adlari, hepsi NUL sonlu, sirali.
 struct Plan {
   uint32_t draws = 0, anims = 0, lights = 0, bodies = 0, strings = 0, residents = 0, nav = 0;
+  uint32_t particles = 0, terrains = 0, waters = 0, winds = 0, voxels = 0, characters = 0;
   uint32_t dag_meshes = 0, dag_nodes = 0, dag_indices = 0, dag_children = 0, gi_probes = 0;
   size_t off_asset = 0, off_entity = 0, off_draw = 0, off_anim = 0, off_light = 0, off_body = 0, off_string = 0, off_resident = 0,
+         off_particle = 0, off_terrain = 0, off_water = 0, off_wind = 0, off_voxel = 0, off_character = 0,
          off_nav = 0, off_dag_mesh = 0, off_dag_node = 0, off_dag_index = 0, off_dag_child = 0, off_gi = 0, total = 0;
 };
 Plan plan_of(const SceneDesc &d, const SceneBlobExtras *x) {
@@ -55,6 +57,12 @@ Plan plan_of(const SceneDesc &d, const SceneBlobExtras *x) {
     if (e.components & kSceneAnim) p.anims++;
     if (e.components & kSceneLight) p.lights++;
     if (e.components & kSceneBody) p.bodies++;
+    if (e.components & kSceneParticle) p.particles++;
+    if (e.components & kSceneTerrain) p.terrains++;
+    if (e.components & kSceneWater) p.waters++;
+    if (e.components & kSceneWind) p.winds++;
+    if (e.components & kSceneVoxel) p.voxels++;
+    if (e.components & kSceneCharacter) p.characters++;
     p.strings += (uint32_t)std::strlen(e.name) + 1;
   }
   if (p.strings == 0) p.strings = 1; // en az bir NUL: ofset 0 her zaman gecerli
@@ -65,6 +73,14 @@ Plan plan_of(const SceneDesc &d, const SceneBlobExtras *x) {
   p.off_anim = o; o = align_up(o + sizeof(SceneBlobAnim) * p.anims);
   p.off_light = o; o = align_up(o + sizeof(SceneBlobLight) * p.lights);
   p.off_body = o; o = align_up(o + sizeof(SceneBlobBody) * p.bodies);
+  
+  p.off_particle = o; o = align_up(o + sizeof(SceneBlobParticle) * p.particles);
+  p.off_terrain = o; o = align_up(o + sizeof(SceneBlobTerrain) * p.terrains);
+  p.off_water = o; o = align_up(o + sizeof(SceneBlobWater) * p.waters);
+  p.off_wind = o; o = align_up(o + sizeof(SceneBlobWind) * p.winds);
+  p.off_voxel = o; o = align_up(o + sizeof(SceneBlobVoxel) * p.voxels);
+  p.off_character = o; o = align_up(o + sizeof(SceneBlobCharacter) * p.characters);
+
   p.off_string = o; o = align_up(o + p.strings);
   p.off_resident = o; o = align_up(o + sizeof(SceneBlobResident) * p.residents);
   p.off_nav = o; o = align_up(o + p.nav);
@@ -125,6 +141,14 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
   h.anim_count = p.anims; h.anim_offset = (uint32_t)p.off_anim;
   h.light_count = p.lights; h.light_offset = (uint32_t)p.off_light;
   h.body_count = p.bodies; h.body_offset = (uint32_t)p.off_body;
+  
+  h.particle_count = p.particles; h.particle_offset = (uint32_t)p.off_particle;
+  h.terrain_count = p.terrains; h.terrain_offset = (uint32_t)p.off_terrain;
+  h.water_count = p.waters; h.water_offset = (uint32_t)p.off_water;
+  h.wind_count = p.winds; h.wind_offset = (uint32_t)p.off_wind;
+  h.voxel_count = p.voxels; h.voxel_offset = (uint32_t)p.off_voxel;
+  h.character_count = p.characters; h.character_offset = (uint32_t)p.off_character;
+
   h.string_offset = (uint32_t)p.off_string; h.string_size = p.strings;
   h.resident_count = p.residents; h.resident_offset = (uint32_t)p.off_resident;
   h.nav_offset = (uint32_t)p.off_nav; h.nav_size = p.nav;
@@ -166,6 +190,14 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
   auto *anims = reinterpret_cast<SceneBlobAnim *>(b + p.off_anim);
   auto *lights = reinterpret_cast<SceneBlobLight *>(b + p.off_light);
   auto *bodies = reinterpret_cast<SceneBlobBody *>(b + p.off_body);
+  
+  auto *particles = reinterpret_cast<SceneBlobParticle *>(b + p.off_particle);
+  auto *terrains = reinterpret_cast<SceneBlobTerrain *>(b + p.off_terrain);
+  auto *waters = reinterpret_cast<SceneBlobWater *>(b + p.off_water);
+  auto *winds = reinterpret_cast<SceneBlobWind *>(b + p.off_wind);
+  auto *voxels = reinterpret_cast<SceneBlobVoxel *>(b + p.off_voxel);
+  auto *characters = reinterpret_cast<SceneBlobCharacter *>(b + p.off_character);
+
   char *strings = reinterpret_cast<char *>(b + p.off_string);
   uint32_t soff = 0;
   auto intern = [&](const char *s) {
@@ -182,20 +214,29 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
     assets[i] = a;
   }
   uint32_t nd = 0, na = 0, nl = 0, nb = 0;
+  uint32_t npart = 0, nterr = 0, nwat = 0, nwin = 0, nvox = 0, nchar = 0;
   Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
   for (uint32_t i = 0; i < d.entity_count; i++) {
     const SceneEntity &e = d.entities[i];
-    const Mat4 m = scene_entity_matrix(e);
-    const Quat q = scene_entity_rotation(e);
+    // Sahne agaci burada DUZLESIR (PLAN §6 "sahne bir blob + kod"): blob'da
+    // ebeveyn alani YOK, cunku turetilmis her sey derleme aninda hesaplanmistir.
+    // Bu yuzden matris/kuaterniyon/olcek/konum DUNYA uzayindadir; kok varlikta
+    // bunlar yerel degerlerle BIT-TAM aynidir (scene_entity_world_* erken donus),
+    // yani hiyerarsisiz sahnelerin blob'u Faz E2 oncesiyle bayt bayt ayni kalir.
+    const Mat4 m = scene_entity_world_matrix(d, i);
+    const Quat q = scene_entity_world_rotation(d, i);
+    const Vec3 wscale = scene_entity_world_scale(d, i);
     SceneBlobEntity be{};
     std::memcpy(be.world, &m.m[0][0], sizeof be.world);
-    put3(be.pos, e.pos); be.components = e.components;
+    put3(be.pos, {m.m[3][0], m.m[3][1], m.m[3][2]}); be.components = e.components;
     be.quat[0] = q.x; be.quat[1] = q.y; be.quat[2] = q.z; be.quat[3] = q.w;
-    put3(be.scale, e.scale); be.name = intern(e.name);
+    put3(be.scale, wscale); be.name = intern(e.name);
     be.draw = be.anim = be.light = be.body = -1;
     if (e.components & kSceneModel) {
       SceneBlobDraw dr{};
-      dr.entity = i; dr.asset = (uint32_t)e.asset; put3(dr.tint, e.tint);
+      dr.entity = i; dr.asset = e.asset; dr.primitive = e.primitive; put3(dr.tint, e.tint);
+      dr.metallic = e.metallic; dr.roughness = e.roughness; dr.reflectance = e.reflectance;
+      put3(dr.emissive, e.emissive); dr.emissive_strength = e.emissive_strength;
       draws[nd] = dr; be.draw = (int32_t)nd++;
     }
     if (e.components & kSceneAnim) {
@@ -207,17 +248,63 @@ size_t scene_blob_compile_ex(const SceneDesc &d, const SceneBlobExtras *x, void 
       SceneBlobLight li{};
       li.entity = i; put3(li.pos, {m.m[3][0], m.m[3][1], m.m[3][2]});
       put3(li.color, e.light_color); li.intensity = e.light_intensity; li.radius = e.light_radius;
+      li.reserved[0] = (float)(uint32_t)e.light_type; // SceneLightType (blob versiyonunu buyutmemek icin reserved'da)
       lights[nl] = li; be.light = (int32_t)nl++;
     }
     if (e.components & kSceneBody) {
       SceneBlobBody bo{};
       bo.entity = i; bo.shape = (uint32_t)e.shape; bo.dynamic = e.dynamic ? 1u : 0u;
-      put3(bo.half, e.half * e.scale); bo.radius = e.radius * e.scale.x; // scene_spawn_bodies ile ayni
-      put3(bo.pos, e.pos);
+      put3(bo.half, e.half * wscale); bo.radius = e.radius * wscale.x; // scene_spawn_bodies ile ayni (DUNYA olcegi)
+      put3(bo.pos, {m.m[3][0], m.m[3][1], m.m[3][2]});
       bo.quat[0] = q.x; bo.quat[1] = q.y; bo.quat[2] = q.z; bo.quat[3] = q.w;
-      put3(bo.scale, e.scale);
+      put3(bo.scale, wscale);
       bodies[nb] = bo; be.body = (int32_t)nb++;
     }
+    if (e.components & kSceneParticle) {
+      SceneBlobParticle p{};
+      p.entity = i;
+      p.spawn_rate = e.particle_spawn_rate; p.lifetime_min = e.particle_lifetime_min; p.lifetime_max = e.particle_lifetime_max;
+      p.size_start = e.particle_size_start; p.size_end = e.particle_size_end;
+      put3(p.velocity, e.particle_velocity); put3(p.jitter, e.particle_jitter);
+      particles[npart++] = p;
+    }
+    if (e.components & kSceneTerrain) {
+      SceneBlobTerrain t{};
+      t.entity = i;
+      t.width = e.terrain_width; t.height = e.terrain_height; t.cell = e.terrain_cell;
+      t.amp = e.terrain_amp; t.freq = e.terrain_freq; t.octaves = e.terrain_octaves;
+      t.seed = e.terrain_seed;
+      terrains[nterr++] = t;
+    }
+    if (e.components & kSceneWater) {
+      SceneBlobWater w{};
+      w.entity = i;
+      w.steepness = e.wave_steepness; w.amplitude = e.wave_amplitude; w.wavelength = e.wave_length;
+      w.direction[0] = e.wave_direction.x; w.direction[1] = e.wave_direction.y;
+      waters[nwat++] = w;
+    }
+    if (e.components & kSceneWind) {
+      SceneBlobWind w{};
+      w.entity = i;
+      w.direction[0] = e.wind_direction.x; w.direction[1] = e.wind_direction.y;
+      w.strength = e.wind_strength; w.gustiness = e.wind_gustiness; w.gust_freq = e.wind_gust_freq;
+      w.seed = e.wind_seed;
+      winds[nwin++] = w;
+    }
+    if (e.components & kSceneVoxel) {
+      SceneBlobVoxel v{};
+      v.entity = i;
+      v.size_x = e.voxel_size_x; v.size_y = e.voxel_size_y; v.size_z = e.voxel_size_z;
+      v.cell = e.voxel_cell;
+      voxels[nvox++] = v;
+    }
+    if (e.components & kSceneCharacter) {
+      SceneBlobCharacter c{};
+      c.entity = i;
+      c.radius = e.char_radius; c.height = e.char_height; c.step_height = e.char_max_slope;
+      characters[nchar++] = c;
+    }
+
     ents[i] = be;
     const SceneBounds wb = scene_world_bounds(scene_entity_local_bounds(e, nullptr), m);
     lo = vmin(lo, wb.lo); hi = vmax(hi, wb.hi);
@@ -263,6 +350,12 @@ bool scene_blob_open(const void *data, size_t size, SceneBlobView *out, SceneErr
   if (!table_ok(h->anim_offset, h->anim_count, sizeof(SceneBlobAnim), size)) return E.fail("animasyon tablosu sinir disi");
   if (!table_ok(h->light_offset, h->light_count, sizeof(SceneBlobLight), size)) return E.fail("isik tablosu sinir disi");
   if (!table_ok(h->body_offset, h->body_count, sizeof(SceneBlobBody), size)) return E.fail("govde tablosu sinir disi");
+  if (!table_ok(h->particle_offset, h->particle_count, sizeof(SceneBlobParticle), size)) return E.fail("partikul tablosu sinir disi");
+  if (!table_ok(h->terrain_offset, h->terrain_count, sizeof(SceneBlobTerrain), size)) return E.fail("arazi tablosu sinir disi");
+  if (!table_ok(h->water_offset, h->water_count, sizeof(SceneBlobWater), size)) return E.fail("su tablosu sinir disi");
+  if (!table_ok(h->wind_offset, h->wind_count, sizeof(SceneBlobWind), size)) return E.fail("ruzgar tablosu sinir disi");
+  if (!table_ok(h->voxel_offset, h->voxel_count, sizeof(SceneBlobVoxel), size)) return E.fail("voksel tablosu sinir disi");
+  if (!table_ok(h->character_offset, h->character_count, sizeof(SceneBlobCharacter), size)) return E.fail("karakter tablosu sinir disi");
   if (h->string_size == 0 || !table_ok(h->string_offset, h->string_size, 1, size)) return E.fail("metin tablosu sinir disi");
   if (!table_ok(h->resident_offset, h->resident_count, sizeof(SceneBlobResident), size)) return E.fail("yerlesik tablosu sinir disi");
   if (h->resident_count > kSceneMaxAssets) return E.fail("yerlesik tablosu kapasite asimi");
@@ -293,6 +386,12 @@ bool scene_blob_open(const void *data, size_t size, SceneBlobView *out, SceneErr
   v.anims = reinterpret_cast<const SceneBlobAnim *>(b + h->anim_offset);
   v.lights = reinterpret_cast<const SceneBlobLight *>(b + h->light_offset);
   v.bodies = reinterpret_cast<const SceneBlobBody *>(b + h->body_offset);
+  v.particles = reinterpret_cast<const SceneBlobParticle *>(b + h->particle_offset);
+  v.terrains = reinterpret_cast<const SceneBlobTerrain *>(b + h->terrain_offset);
+  v.waters = reinterpret_cast<const SceneBlobWater *>(b + h->water_offset);
+  v.winds = reinterpret_cast<const SceneBlobWind *>(b + h->wind_offset);
+  v.voxels = reinterpret_cast<const SceneBlobVoxel *>(b + h->voxel_offset);
+  v.characters = reinterpret_cast<const SceneBlobCharacter *>(b + h->character_offset);
   v.residents = h->resident_count ? reinterpret_cast<const SceneBlobResident *>(b + h->resident_offset) : nullptr;
   v.nav = h->nav_size ? b + h->nav_offset : nullptr;
   v.dag_meshes = h->dag_mesh_count ? reinterpret_cast<const SceneBlobDagMesh *>(b + h->dag_mesh_offset) : nullptr;
@@ -505,7 +604,7 @@ uint32_t scene_nav_soup(const SceneDesc &d, float *verts, uint32_t max_verts, in
     const SceneEntity &e = d.entities[i];
     if (!(e.components & kSceneBody) || e.dynamic || e.shape != SceneShape::Box) continue;
     if (nv + 8 > max_verts || nt + 12 > max_tris) break;
-    const Mat4 m = scene_entity_matrix(e);
+    const Mat4 m = scene_entity_world_matrix(d, i); // navmesh DUNYA uzayinda: cocuk zemin de sayilir
     auto corner = [&](float sx, float sy, float sz) {
       const Vec3 l{sx * e.half.x, sy * e.half.y, sz * e.half.z};
       return transform_point(m, l);
@@ -983,11 +1082,13 @@ uint32_t scene_gi_occluders(const SceneDesc &d, const SceneGiOptions &opt, GiOcc
     const SceneEntity &e = d.entities[i];
     if (!(e.components & kSceneBody) || e.dynamic) continue; // dinamik govde bake'e girmez
     GiOccluder o;
-    o.center = e.pos; // scene_spawn_bodies ile ayni: govde konumu = varlik konumu
-    o.rot = scene_entity_rotation(e);
+    const Mat4 wm = scene_entity_world_matrix(d, i);
+    const Vec3 ws = scene_entity_world_scale(d, i);
+    o.center = {wm.m[3][0], wm.m[3][1], wm.m[3][2]}; // scene_spawn_bodies ile ayni: govde DUNYA konumu
+    o.rot = scene_entity_world_rotation(d, i);
     o.kind = e.shape == SceneShape::Sphere ? 1u : 0u;
-    o.half = e.half * e.scale;
-    o.radius = e.radius * e.scale.x;
+    o.half = e.half * ws;
+    o.radius = e.radius * ws.x;
     o.albedo = (e.components & kSceneModel) ? gi_srgb_to_linear(e.tint) : Vec3{opt.surface_albedo, opt.surface_albedo, opt.surface_albedo};
     out[n++] = o;
   }
@@ -1004,7 +1105,7 @@ uint32_t scene_gi_model_tris(const SceneDesc &d, const SceneGiOptions &opt, cons
     if (!(e.components & kSceneModel) || e.asset < 0 || (uint32_t)e.asset >= asset_count) continue;
     const Model *m = models[e.asset];
     if (!m) continue;
-    const Mat4 em = scene_entity_matrix(e);
+    const Mat4 em = scene_entity_world_matrix(d, i);
     const Vec3 tint = gi_srgb_to_linear(e.tint);
     for (uint32_t k = 0; k < m->instance_count && n < max; k++) {
       const ModelInstance &in = m->instances[k];
@@ -1035,7 +1136,7 @@ uint32_t scene_gi_lights(const SceneDesc &d, GiLight *out, uint32_t max) {
   for (uint32_t i = 0; i < d.entity_count && n < max; i++) {
     const SceneEntity &e = d.entities[i];
     if (!(e.components & kSceneLight)) continue;
-    const Mat4 m = scene_entity_matrix(e);
+    const Mat4 m = scene_entity_world_matrix(d, i);
     GiLight l;
     l.pos = {m.m[3][0], m.m[3][1], m.m[3][2]};
     l.color = e.light_color;
@@ -1054,7 +1155,7 @@ void scene_gi_setup(const SceneDesc &d, GiScene *g) {
   g->ambient = d.ambient; // set_light ambient'i donusturmez: zaten dogrusal
   Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
   for (uint32_t i = 0; i < d.entity_count; i++) {
-    const SceneBounds wb = scene_world_bounds(scene_entity_local_bounds(d.entities[i], nullptr), scene_entity_matrix(d.entities[i]));
+    const SceneBounds wb = scene_world_bounds(scene_entity_local_bounds(d.entities[i], nullptr), scene_entity_world_matrix(d, i));
     lo = vmin(lo, wb.lo);
     hi = vmax(hi, wb.hi);
   }

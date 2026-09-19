@@ -27,7 +27,17 @@ namespace tulpar::engine::app {
 class DemoScene {
 public:
   static constexpr uint32_t kAgents = 24, kBoxes = 40, kJoints = 4;
-  bool init(Arena &arena, JobSystem *jobs);
+  // with_content: demo ICERIGINI (arena zemini + duvarlari, oyuncu kutusu,
+  // ajanlar, dusen kutular, parcaciklar, davranis agaci, zamanlayici)
+  // kurar mi. false verilirse YALNIZ fizik dunyasi ve navmesh kurulur.
+  //
+  // Neden gerekli: editor bu siniftan SADECE bir sim::Physics dunyasi
+  // aliyordu ama demo icerigi de o dunyaya 6 sabit kutu + 1 dinamik
+  // govde ekliyordu. Bunlar sahne dosyasina ait DEGIL, seciliemez,
+  // kaydedilemez -- ama kullanicinin dinamik govdelerini gorunmez bir
+  // zeminde tutuyordu. Ayni sahne derlenip oynatildiginda (scene_runtime)
+  // o zemin YOK, yani editor ile oyun FARKLI davraniyordu.
+  bool init(Arena &arena, JobSystem *jobs, bool with_content = true);
   void shutdown();
   void tick(float dt, uint32_t tick_index);
   struct DrawSet {
