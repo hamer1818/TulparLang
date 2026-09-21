@@ -1,11 +1,17 @@
 // Regression: returning a non-trivially-unboxable struct from a function.
 //
-// A struct with float / string / nested-struct fields is a boxed VM_OBJECT,
-// not a native aggregate. Before 2026-07-20 such structs returned a zero
+// A struct with string / nested-struct fields is a boxed VM_OBJECT, not a
+// native aggregate. Before 2026-07-20 such structs returned a zero
 // placeholder from a call, so `P e = mk(1.5,2.5)`, `push(a, mk())`, and
 // `arr[i] = mk()` all yielded zeros — and nested structs didn't work at all.
 // The native res-ptr ABI is now gated on trivially-unboxable structs; the rest
-// flow as normal boxed VMValue returns. Run: ./tulpar tests/struct_nontrivial.test.tpr
+// flow as normal boxed VMValue returns.
+//
+// 2026-09-21 (P0.3): a FLOAT field no longer makes a struct boxed — `P` and
+// `Mix` below now take the native `{double,...}` path. The assertions are
+// unchanged on purpose: same contract, different lowering. The str/nested
+// cases (`Player`, `Body`) still exercise the boxed path.
+// Run: ./tulpar tests/struct_nontrivial.test.tpr
 import "test";
 
 struct P { float x; float y; }

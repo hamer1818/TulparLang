@@ -1,6 +1,7 @@
 # Plan 08 — Oyun dili P0: `enum`, kutusuz float struct, çoklu dönüş
 
-**Durum:** IN PROGRESS — P0.2 `enum` ✅ (2026-09-21, dal `dil/enum`); P0.3 ve P0.1 sırada.
+**Durum:** IN PROGRESS — P0.2 `enum` ✅ (2026-09-21, dal `dil/enum`); P0.3 float struct ✅
+(2026-09-21, dal `dil/struct-float-kutusuz`); P0.1 sırada.
 **Tahmin:** 3 PR (enum → float struct → tuple), sonra motor deposunda 1 PR (oyun yeniden yazımı).
 **Risk:** Orta — P0.2/P0.1 ayrıştırıcı şekeri (codegen'e dokunmaz); P0.3 codegen'in 20+ struct
 yerleşim noktasına dokunur.
@@ -46,7 +47,20 @@ enum tipi + tamlık uyarısı; modül çözümlemesinin ayrıştırıcıya girme
 Doğrulama: `tests/enum.test.tpr` (7), `tests/enum_hatalari.sh` (6 hata yolu, `build.sh suites`
 içinde), `examples/43_enum.tpr`, `tulpar fmt` idempotent.
 
-## P0.3 — float alanlı struct kutusuz (sırada)
+## P0.3 — float alanlı struct kutusuz ✅
+
+Yapıldı (2026-09-21): yardımcılar `struct_field_llvm_type` / `struct_field_load_boxed` /
+`struct_field_payload_from_boxed` / `struct_field_store_from_boxed` (`llvm_backend.cpp`,
+`struct_is_trivially_unboxable` yanında); 10 codegen noktası bunlara geçti; runtime
+`aot_struct_unpack_typed` (alan tipli geri açma; eski `aot_struct_unpack_named` imzasıyla duruyor).
+Ölçüm: `benchmarks/vec3_sum` **1671,8 → 49,5 ms** (C 6,5), int `struct_sum` 8,1 → 0,6 ms; IR:
+`%tulpar_struct.Vec3 = type { double, double, double }`, sıcak fonksiyonda 0 tahsis çağrısı.
+Yolda bulunan ve kapatılan üç eski hata (int struct'ta da vardı): bütün-struct yeniden atama
+(`acc = f(acc, d)` → 0), bildirimde kopya (`Vec3 b = a;` → SIGSEGV), fonksiyondan struct global
+erişimi (çalışma zamanı hatası). Bunlar P0.4'ün (oyun döngüsü) ve P0.1'in (tuple = sentezlenmiş
+struct) ön koşuluydu.
+
+Planlanan tasarım (uygulanan hâliyle):
 
 Alan başına statik tipli 8 baytlık yuva: `int/bool → i64`, `float → double`. Yerleşim 8
 bayt/alan kaldığı için `ObjStruct::fields[int64_t]` ile bit-kopya (`aot_struct_alloc_from_fields`,

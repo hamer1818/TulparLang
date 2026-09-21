@@ -84,7 +84,7 @@ typedef struct {
 // VAR_DECL TYPE_CUSTOM branch produces a typed-struct local.
 typedef struct {
   char *name;            // e.g. "Point"
-  LLVMTypeRef llvm_type; // %struct.Point = type { i64, i64 }
+  LLVMTypeRef llvm_type; // %struct.Point = type { i64, i64 } / { double, ... } (float alan, P0.3)
   char **field_names;    // declaration-ordered (matches LLVM struct order)
   DataType *field_types;
   int field_count;
@@ -385,7 +385,8 @@ typedef struct {
   LLVMValueRef func_aot_call_dynamic;
   LLVMValueRef func_aot_call_dynamic_1; // call(name, arg) — 1-arg dynamic dispatch
   LLVMValueRef func_aot_call_dynamic_n; // call(name, a, b, ...) — N-arg dynamic dispatch
-  LLVMValueRef func_aot_struct_unpack_named; // Ent e = arr[i] — name-keyed unpack
+  LLVMValueRef func_aot_struct_unpack_named; // Ent e = arr[i] — name-keyed unpack (eski imza)
+  LLVMValueRef func_aot_struct_unpack_typed; // P0.3: ayni is, alan tipli (float alan)
   LLVMValueRef func_aot_create_closure;
   LLVMValueRef func_aot_call_closure;
 

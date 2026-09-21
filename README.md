@@ -571,12 +571,14 @@ json user = {
 };
 print(user.address.city);  // dot access works
 
-// Custom types
+// Custom types — int/bool/float fields are unboxed (native LLVM structs)
 type Person {
     str name;
     int age;
 }
 Person p = { name: "Ali", age: 25 };
+struct Vec3 { float x; float y; float z; }
+Vec3 v = { x: 1.5, y: 0, z: -2 };   // {double, double, double}, zero heap
 
 // Enums — named integer constants, folded at parse time (zero runtime cost)
 enum Screen { MENU, GAME, PAUSED = 5, SETTINGS }   // 0, 1, 5, 6
