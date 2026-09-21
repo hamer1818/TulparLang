@@ -312,6 +312,18 @@ func run_b_bit_tipi_reddi() {
            "eleman hedefinde float kaydirma miktari REDDEDILMELIYDI");
 }
 
+// TANI SATIRI — kapinin NEYI olctugunu gorunur kiliyor.
+//
+// Bu kapi bir kez "reddi olcuyorum" sanirken aslinda CALISMAYAN BIR KOMUTUN
+// cikis kodunu olcmustu (Windows, 2026-09-21): ikili adi yanlis oldugunda
+// sys_run her seferinde sifirdan farkli doner, yani "REDDEDILMELIYDI"
+// iddialari sahte sekilde GECER ve yalniz KONTROL'ler duser. O yuzden hangi
+// ikiliyi, hangi platformda kosturdugumuz ve bilinen-gecerli bir kaynagin
+// cikis kodu HER KOSUMDA basiliyor: probe_rc 0 degilse asagidaki her sonuc
+// suphelidir.
+print("[tani] OS=" + env("OS") + " ikili=" + _derleyici()
+      + " probe_rc=" + toString(derleme_kodu("print(1);\n")));
+
 test("G1: tip adiyla donusum", "run_g1_donusum");
 test("G3: sabit boy dizi tipi", "run_g3_sabit_boy");
 test("G5: const okuma ve golgeleme", "run_g5_const");
