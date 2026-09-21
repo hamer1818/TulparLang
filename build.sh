@@ -1134,25 +1134,37 @@ TPREOF
         for CODEGEN_SCENE in $CODEGEN_SCENES; do
             [ -f "$CODEGEN_SCENE" ] || continue
             CG_TMP=$(mktemp -d)
-            if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>/dev/null > "$CG_TMP/kur.tpr" \
-               && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>/dev/null > "$CG_TMP/src.json"; then
+            # STDERR'I YUTMA. Bu kapi uc cagrinin da stderr'ini /dev/null'a
+            # atiyordu ve Windows'ta yalnizca "calistirilamadi" deyip NEDENINI
+            # hic soylemedi (olculdu 2026-09-21) — bir CI turu tam olarak o tek
+            # cumleyi ogrenmek icin harcandi. Artik her kol kendi stderr'ini
+            # dosyaya aliyor ve dusunce ilk satirlari basiliyor. Ayni ders
+            # tests/gramer_bosluklari.test.tpr'de de ogrenildi: bir kapi ya
+            # olctugunu SOYLER ya da bir sonraki turu yakar.
+            if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>"$CG_TMP/kod.err" > "$CG_TMP/kur.tpr" \
+               && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>"$CG_TMP/json.err" > "$CG_TMP/src.json"; then
                 {
                     echo 'import "scene3d";'
                     cat "$CG_TMP/kur.tpr"
                     echo 'kur();'
                     echo 'print(sahne_json3d());'
                 } > "$CG_TMP/verify.tpr"
-                if ./tulpar "$CG_TMP/verify.tpr" 2>/dev/null > "$CG_TMP/gen.json" \
+                if ./tulpar "$CG_TMP/verify.tpr" 2>"$CG_TMP/verify.err" > "$CG_TMP/gen.json" \
                    && diff -q "$CG_TMP/src.json" "$CG_TMP/gen.json" >/dev/null; then
                     echo -e "${GREEN}kod uretimi denk${NC} ($CODEGEN_SCENE)"
                 else
                     echo -e "${RED}Kod uretimi DENK DEGIL!${NC} ($CODEGEN_SCENE)"
+                    [ -s "$CG_TMP/verify.err" ] && { echo "  dogrulama stderr:"; sed -n '1,5p' "$CG_TMP/verify.err" | sed 's/^/      /'; }
                     diff "$CG_TMP/src.json" "$CG_TMP/gen.json" | head -20
                     rm -rf "$CG_TMP"
                     exit 1
                 fi
             else
                 echo -e "${RED}Kod uretimi denetimi calistirilamadi!${NC} ($CODEGEN_SCENE)"
+                echo "  kod uretimi stdout (ilk 5):"; sed -n '1,5p' "$CG_TMP/kur.tpr" | sed 's/^/      /'
+                echo "  kod uretimi stderr (ilk 5):"; sed -n '1,5p' "$CG_TMP/kod.err" | sed 's/^/      /'
+                echo "  --dogrula stdout (ilk 5):";  sed -n '1,5p' "$CG_TMP/src.json" | sed 's/^/      /'
+                echo "  --dogrula stderr (ilk 5):";  sed -n '1,5p' "$CG_TMP/json.err" | sed 's/^/      /'
                 rm -rf "$CG_TMP"
                 exit 1
             fi
