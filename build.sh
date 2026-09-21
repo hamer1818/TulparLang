@@ -812,16 +812,34 @@ TPREOF
     #       `time_ms()` ile olcup bassin. O zaman cikarilacak acilis KALMAZ,
     #       dejenerasyon da imkansiz olur. perf_pair.py duvar saati olctugu
     #       icin bu ayri bir yardimci ister; yapilana kadar sari dal durur.
-    SR_RES=$(python3 tests/perf_pair.py "$SR_TMP/fib_on" "$SR_TMP/fib_off" 32 1 5)
+    # python3 HER YERDE YOK. MSYS2 (Windows CI) kurulumunda gelmiyor ve bu
+    # satir orada `python3: command not found` deyip kapiyi "OLCUM
+    # URETEMEDI" ile KIRMIZI dusuruyordu (olculdu 2026-09-21): 86 paketin
+    # hepsi ve butun denetimler gectikten SONRA, eksik bir arac yuzunden.
+    # Eksik ARAC ile gercek bir GERILEME ayni renge boyanmamali — build.sh
+    # bu kalibi zaten kullaniyor (builtin_audit / lsp_audit bloklarindaki
+    # `command -v python3` kapilari). Kaybedilen sey yalnizca KAZANC olcusu;
+    # zincirin VARLIGINI ayni kapinin IR ayagi olcuyor ve o python3
+    # istemiyor. Olcum platformdan bagimsiz oldugu icin Linux isindeki
+    # zorunlu kosum zaten kapsiyor.
+    if command -v python3 >/dev/null 2>&1; then
+        SR_RES=$(python3 tests/perf_pair.py "$SR_TMP/fib_on" "$SR_TMP/fib_off" 32 1 5)
+    else
+        SR_RES=""
+    fi
     SR_RATIO=$(echo "$SR_RES" | cut -d' ' -f1)
     SR_ON_W=$(echo "$SR_RES" | cut -d' ' -f2)
     SR_OFF_W=$(echo "$SR_RES" | cut -d' ' -f3)
     SR_DEG=$(echo "$SR_RES" | cut -d' ' -f4)
-    if [ -z "$SR_RATIO" ]; then
+    if [ -z "$SR_RATIO" ] && command -v python3 >/dev/null 2>&1; then
         echo -e "${RED}Ozyineleme zinciri kapisi OLCUM URETEMEDI${NC}"
         rm -rf "$SR_TMP"; exit 1
     fi
-    if [ "$SR_DEG" -gt 0 ]; then
+    if [ -z "$SR_RATIO" ]; then
+        echo -e "${YELLOW}ozyineleme ZAMAN kapisi KOSMADI${NC} — python3 yok (tests/perf_pair.py onu gerektiriyor)."
+        echo "  Bu bir gerileme DEGIL, eksik arac. Zincirin VARLIGINI yukaridaki IR"
+        echo "  kapisi (@fib icindeki oz-cagri sayisi) dogruladi; olculmeyen tek sey KAZANC."
+    elif [ "$SR_DEG" -gt 0 ]; then
         echo -e "${YELLOW}ozyineleme ZAMAN kapisi olcemedi${NC} — 5 turun ${SR_DEG} tanesinde is payi surec acilisinin altinda kaldi (bu platformda fib(32) cok hizli)."
         echo "  Bu bir gerileme DEGIL, olcum siniri. Zincirin VARLIGINI yukaridaki IR"
         echo "  kapisi (@fib icindeki oz-cagri sayisi) zaten dogruladi; kazanc olcusu burada yok."
@@ -941,11 +959,14 @@ TPREOF
     fi
     echo -e "${GREEN}ic ice oz-cagri sekli zincirlenmiyor${NC} (@ack oz-cagri: varsayilan=$AR_C_ON zincirsiz=$AR_C_OFF zorla-K=1=$AR_C_FORCE; cikti 16381)"
     # [bilgi] — KARAR YOK. Zorla-K=1 / zincirsiz orani, makine adiyla (bkz. yukari).
-    AR_RES=$(python3 tests/perf_pair.py "$AR_TMP/ack_force" "$AR_TMP/ack_off" 11 1 5)
-    AR_CPU=$(awk -F': ' '/^model name/{print $2; exit}' /proc/cpuinfo 2>/dev/null)
-    [ -z "$AR_CPU" ] && AR_CPU=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
-    [ -z "$AR_CPU" ] && AR_CPU=$(uname -m)
-    echo "  [bilgi] zorla zincirli ackermann bu makinede: oran %$(echo "$AR_RES" | cut -d' ' -f1) (zorla=$(echo "$AR_RES" | cut -d' ' -f2)us zincirsiz=$(echo "$AR_RES" | cut -d' ' -f3)us) — $AR_CPU"
+    # Bu satir KARAR VERMIYOR, yalnizca bilgi — python3 yoksa sessizce dusuyor.
+    if command -v python3 >/dev/null 2>&1; then
+        AR_RES=$(python3 tests/perf_pair.py "$AR_TMP/ack_force" "$AR_TMP/ack_off" 11 1 5)
+        AR_CPU=$(awk -F': ' '/^model name/{print $2; exit}' /proc/cpuinfo 2>/dev/null)
+        [ -z "$AR_CPU" ] && AR_CPU=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
+        [ -z "$AR_CPU" ] && AR_CPU=$(uname -m)
+        echo "  [bilgi] zorla zincirli ackermann bu makinede: oran %$(echo "$AR_RES" | cut -d' ' -f1) (zorla=$(echo "$AR_RES" | cut -d' ' -f2)us zincirsiz=$(echo "$AR_RES" | cut -d' ' -f3)us) — $AR_CPU"
+    fi
     rm -rf "$AR_TMP"
 
     # TANI TEK KAPIDAN CIKAR — mekanik garanti (#19).
@@ -974,8 +995,14 @@ TPREOF
     # `puts("... Hatasi ...")` kapidan geciyordu (2026-09-11 denetimi). Ikisi
     # de tam olarak bu kapinin yasakladigi seyi yapar. Artik her kosumda
     # kacis bicimleri tablosuna karsi sinaniyor.
-    if ! python3 tests/source_gates.py --gate="tani tek kapi"; then
-        exit 1
+    # Kaynak METNI denetimi: platformdan tamamen bagimsiz, Linux isinde
+    # zorunlu kosuyor. python3 yoksa atlanir ve bunu SOYLER.
+    if command -v python3 >/dev/null 2>&1; then
+        if ! python3 tests/source_gates.py --gate="tani tek kapi"; then
+            exit 1
+        fi
+    else
+        echo -e "${YELLOW}\`tani tek kapi\` denetimi atlandi${NC} — python3 yok (tests/source_gates.py)."
     fi
     rm -rf "$SR_TMP"
 
