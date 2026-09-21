@@ -78,6 +78,10 @@ private:
     // tipini degistirmemek icin uye: cagri yerlerinin cogu N'i umursamiyor.
     // Yalniz bildirim yolu okuyor ve HEMEN tuketiyor.
     int last_fixed_array_n_ = 0;
+    // parse_type bir TANIMLAYICI tabani tuketince adi burada birakir
+    // (`Dusman[]` -> "Dusman"); dizi bildirimleri eleman struct adini
+    // buradan alir (P1.1). Her parse_type girisinde sifirlanir.
+    std::optional<std::string> last_type_custom_name_;
     std::string parse_custom_type_name();
     
     // Error handling
@@ -262,6 +266,7 @@ typedef struct ASTNode_C {
   struct ASTNode_C *body;
   DataType return_type;
   char *return_custom_type;
+  char *elem_custom_type;   // AST_VARIABLE_DECL / parametre: `T[]`nin T'si (P1.1)
   char *receiver_type_name;
   struct ASTNode_C *receiver;
   struct ASTNode_C *callee;

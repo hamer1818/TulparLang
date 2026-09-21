@@ -30,6 +30,10 @@ typedef struct {
   // name so field access can resolve fields against the layout. NULL for
   // regular VMValue locals (the historical default path).
   char *struct_type_name;
+  // Tipli STRUCT DIZISI yereli (`Dusman[] d`, P1.1): eleman struct'inin adi.
+  // Degerin kendisi siradan bir VMValue yuvasi (OBJ_STRUCT_ARRAY tutamaci);
+  // yalniz tip bilgisi burada. struct_type_name ile ayni anda dolu OLMAZ.
+  char *struct_array_elem;
   int is_captured;
   int slot_index;
   LLVMValueRef env_ptr;
@@ -112,6 +116,7 @@ typedef struct {
   // struct ObjArray — dizi erisiminin satir ici hizli yolu icin. Alan
   // ofsetleri runtime_bindings.cpp'deki static_assert'lerle kilitli.
   LLVMTypeRef obj_array_type;
+  LLVMTypeRef obj_sarr_type;  // struct ObjStructArray (P1.1)
 
   // TBAA: dizi ELEMAN deposu ile ObjArray BASLIGI/VMValue yuvalari ayri
   // takma-ad sinifi. Bu bilgi olmadan LLVM, `a[k] = 1` yazmasinin basligi
@@ -387,6 +392,9 @@ typedef struct {
   LLVMValueRef func_aot_call_dynamic_n; // call(name, a, b, ...) — N-arg dynamic dispatch
   LLVMValueRef func_aot_struct_unpack_named; // Ent e = arr[i] — name-keyed unpack (eski imza)
   LLVMValueRef func_aot_struct_unpack_typed; // P0.3: ayni is, alan tipli (float alan)
+  LLVMValueRef func_aot_sarr_new;   // P1.1: tipli struct dizisi kur
+  LLVMValueRef func_aot_sarr_push;  // P1.1: eleman ekle (yerlesim isaretcisinden kopya)
+  LLVMValueRef func_aot_sarr_elem;  // P1.1: eleman isaretcisi (sinir denetimli)
   LLVMValueRef func_aot_create_closure;
   LLVMValueRef func_aot_call_closure;
 
@@ -792,6 +800,10 @@ StructTypeEntry *find_struct_type(LLVMBackend *backend, const char *name);
 int struct_type_field_index(StructTypeEntry *st, const char *field_name);
 // `add_local_struct` adds a typed-struct local: `value` is an alloca to the
 // LLVM struct type, `struct_name` is the registered StructTypeEntry name.
+// P1.1: `Dusman[] d` — VMValue yuvasi + eleman struct adi.
+void add_local_struct_array(LLVMBackend *backend, const char *name,
+                            LLVMValueRef slot, const char *elem_struct);
+const char *get_local_struct_array_elem(LLVMBackend *backend, const char *name);
 void add_local_struct(LLVMBackend *backend, const char *name, LLVMValueRef alloca_ptr,
                       const char *struct_name);
 // Returns the struct_type_name of the local (or NULL if it's a regular

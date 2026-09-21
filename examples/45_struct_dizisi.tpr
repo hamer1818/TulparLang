@@ -1,0 +1,87 @@
+// Tipli struct dizisi — Dusman[]
+// ==============================
+//
+// Calistir:  ./tulpar examples/45_struct_dizisi.tpr
+//
+// Dile 2026-09-21'de eklendi (P1.1). Neden: oyun betikleri N varligi
+// tutmak icin PARALEL DIZILER yazmak zorundaydi —
+//
+//     array d_id = []; array d_can = []; array d_x = []; ...   // 11 dizi
+//
+// cunku kutulu bir `array` icindeki struct string anahtarli nesneye
+// donusuyor ve her `d[i].x` bir arama oluyordu. Simdi:
+//
+//     Dusman[] d = [];        // elemanlar ARDISIK ve KUTUSUZ
+//     push(d, e);  d[i].x = 1.5;  Dusman k = d[i];
+//
+// Eleman struct'inin butun alanlari int/bool/float olmali (str ya da ic ice
+// struct icin `array` kullanin). Dizi tutamaci referanstir: parametreye
+// verince ayni diziyi yazarsiniz. `d[i]` bir KOPYA doner.
+
+struct Dusman { int id; int can; float x; float z; bool kovala; }
+
+func dusman_yap(int id, float x, float z): Dusman {
+    Dusman d;
+    d.id = id;
+    d.can = 100;
+    d.x = x;
+    d.z = z;
+    d.kovala = false;
+    return d;
+}
+
+// Tutamac referans: bu fonksiyon cagiranin dizisini degistirir.
+func hasar_ver(Dusman[] ds, int i, int hasar) {
+    ds[i].can = ds[i].can - hasar;
+    if (ds[i].can <= 0) { ds[i].can = 0; }
+}
+
+func canli_sayisi(Dusman[] ds): int {
+    int n = 0;
+    int i = 0;
+    while (i < len(ds)) {
+        if (ds[i].can > 0) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+print("=== tipli struct dizisi ===");
+
+Dusman[] dusmanlar = [];
+push(dusmanlar, dusman_yap(1, -3.0, 0.0));
+push(dusmanlar, dusman_yap(2, 0.0, 4.0));
+push(dusmanlar, { id: 3, can: 40, x: 5.5, z: -1.0, kovala: true });
+print("dusman sayisi: " + toString(len(dusmanlar)));
+print("canli: " + toString(canli_sayisi(dusmanlar)));
+
+// Bir kare: oyuncuya dogru yaklas, menzildekine vur.
+float px = 0.0;
+float pz = 0.0;
+int i = 0;
+while (i < len(dusmanlar)) {
+    float dx = px - dusmanlar[i].x;
+    float dz = pz - dusmanlar[i].z;
+    float uz = sqrt(dx * dx + dz * dz);
+    if (uz > 0.001) {
+        dusmanlar[i].x = dusmanlar[i].x + dx / uz * 0.5;
+        dusmanlar[i].z = dusmanlar[i].z + dz / uz * 0.5;
+        dusmanlar[i].kovala = true;
+    }
+    if (uz < 4.5) { hasar_ver(dusmanlar, i, 60); }
+    i = i + 1;
+}
+
+i = 0;
+while (i < len(dusmanlar)) {
+    Dusman d = dusmanlar[i];        // kopya
+    print("dusman " + toString(d.id) + ": can " + toString(d.can)
+          + ", konum (" + toString(d.x) + ", " + toString(d.z) + ")"
+          + ", kovaliyor " + toString(d.kovala));
+    i = i + 1;
+}
+print("canli: " + toString(canli_sayisi(dusmanlar)));
+
+// Diziyi bastan kurmak: `= []`
+dusmanlar = [];
+print("bolum bitti, dusman sayisi: " + toString(len(dusmanlar)));

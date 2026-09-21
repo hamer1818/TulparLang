@@ -2001,6 +2001,13 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 ### Dil seviyesi
 
+- ✅ **Tipli struct dizisi `Dusman[]` (2026-09-21, P1.1 — `plans/08_oyun_dili_p0.md`).**
+  Elemanlar ardışık + kutusuz (`ObjStructArray`); `d[i].x` satır içi eleman
+  işaretçisi + GEP. Paralel dizi zorunluluğunu bitirir: `benchmarks/dusman_dizisi`
+  2000×500 karede **7,2 ms**, aynı işi yapan 11 paralel dizi 10,8 ms (ilk,
+  çağrılı yazım 13,7 — yerinden ettiği yazımdan yavaştı, satır içine alındı).
+  Eleman struct'ı yalnız int/bool/float alanlı olabilir. `tests/struct_dizisi.test.tpr`
+  10/10, `tests/struct_dizisi_hatalari.sh` 5/5, `examples/45_struct_dizisi.tpr`.
 - ✅ **Çoklu dönüş / tuple (2026-09-21, P0.1 — `plans/08_oyun_dili_p0.md`).**
   `func f(): (float, float) { return a, b; }`, `float x, y = f();`,
   `x, y = f();`, `var q, r = bol(17, 5);`. Ayrıştırıcı şekeri: tip listesi

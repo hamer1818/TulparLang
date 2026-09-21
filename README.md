@@ -580,6 +580,12 @@ Person p = { name: "Ali", age: 25 };
 struct Vec3 { float x; float y; float z; }
 Vec3 v = { x: 1.5, y: 0, z: -2 };   // {double, double, double}, zero heap
 
+// Typed struct arrays — elements stored contiguously, unboxed
+struct Enemy { int id; int hp; float x; float z; }
+Enemy[] enemies = [];
+push(enemies, Enemy_new(1, 0.0, 0.0));
+enemies[0].hp = enemies[0].hp - 34;   // pointer + GEP, no key lookup
+
 // Multiple return values — a synthesized unboxed struct under the hood
 func polar(float x, float y): (float, float) { return sqrt(x*x + y*y), atan2(y, x); }
 float r, theta = polar(3.0, 4.0);

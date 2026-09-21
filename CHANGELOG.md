@@ -35,6 +35,44 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Added — tipli struct dizisi `Dusman[]` (P1.1)
+
+```tpr
+struct Dusman { int id; int can; float x; float z; bool kovala; }
+Dusman[] d = [];
+push(d, dusman_yap(1, 0.0, 0.0));
+d[0].can = d[0].can - 34;      // eleman işaretçisi + GEP + tipli yük
+Dusman k = d[0];               // kopya
+```
+
+Oyun betikleri N varlığı tutmak için **paralel diziler** yazmak zorundaydı
+(motorun düşman kaydı: 11 dizi), çünkü kutulu bir `array` içindeki struct
+string anahtarlı nesneye dönüşüyor ve her `d[i].x` bir arama oluyordu. Yeni
+`ObjStructArray`: elemanlar ardışık ve kutusuz, eleman = `field_count` adet
+8 baytlık yuva (kutusuz struct'ın LLVM yerleşimiyle aynı bit deseni).
+
+Ölçüm (`benchmarks/dusman_dizisi`, 2000 düşman × 500 kare, 6 erişim/tur,
+en iyi/5, hepsi aynı koşumda):
+
+| yazım | süre |
+|---|---|
+| `Dusman[]` (satır içi erişim) | **7,2 ms** |
+| 11 paralel dizi | 10,8 ms |
+| `Dusman[]` (ilk yazım, her erişimde runtime çağrısı) | 13,7 ms |
+
+Üçüncü satır neden duruyor: ilk uygulama eleman işaretçisini runtime'dan
+alıyordu ve **yerinden ettiği yazımdan yavaştı**. Erişim artık satır içi
+(etiket + nesne türü + sınır denetimi doğrudan yüklerle, sonra
+`data + i*field_count`); yavaş yol yalnız hatalı durumda runtime'a gider.
+Yerleşim `static_assert`'lerle kilitli (ObjArray ile aynı iki-düzen kalıbı).
+
+Destekleniyor: `push` / `len` / `d[i].alan` oku-yaz / `Dusman k = d[i]`
+(kopya) / `d[i] = k` / `d = []` / parametre ve global (tutamaç referans) /
+`for (e in d)` (eleman kopyası) / `print` / `toJson`. Sınır dışı indeks
+çalışma zamanı hatası. Eleman struct'ının tüm alanları int/bool/float olmalı;
+`str` veya iç içe alan derleme hatası (`tests/struct_dizisi_hatalari.sh`).
+`tests/struct_dizisi.test.tpr` 10/10, `examples/45_struct_dizisi.tpr`.
+
 ### Added — çoklu dönüş / tuple (P0.1)
 
 ```tpr

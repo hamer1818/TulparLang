@@ -1,8 +1,9 @@
 # Plan 08 — Oyun dili P0: `enum`, kutusuz float struct, çoklu dönüş
 
-**Durum:** DİL TARAFI TAMAM (2026-09-21) — P0.2 `enum` ✅ (dal `dil/enum`), P0.3 float struct ✅
-(dal `dil/struct-float-kutusuz`), P0.1 tuple ✅ (dal `dil/coklu-donus`). Kalan: motor deposunda
-P0.4 (oyun yeniden yazımı).
+**Durum:** P0 TAMAM + P1.1 ✅ (2026-09-21) — P0.2 `enum`, P0.3 float struct, P0.1 tuple `main`'de
+(#335); P0.4 oyun yeniden yazımı motor deposunda (#18). **P1.1 tipli struct dizisi** `dil/struct-dizisi`
+dalında: motorun 11 paralel dizisinin dil tarafındaki karşılığı hazır, motor tarafı (düşman kaydını
+`Dusman[]`e taşımak) sıradaki iş.
 **Tahmin:** 3 PR (enum → float struct → tuple), sonra motor deposunda 1 PR (oyun yeniden yazımı).
 **Risk:** Orta — P0.2/P0.1 ayrıştırıcı şekeri (codegen'e dokunmaz); P0.3 codegen'in 20+ struct
 yerleşim noktasına dokunur.
@@ -116,8 +117,30 @@ Doğrulama: `tests/tuple_return.test.tpr`, `tests/typeinfer/fail/2x_tuple_arity.
 string-anahtarlı unpack/box demek). Kapı: otopilot özeti önce/sonra aynı
 (`kare=3200 bolum=2 gecis=1 oldurulen=9 kalan_dusman=0 can=26 skor=900 navmesh=true hata=0`).
 
-## P1–P3 (bu planın dışında)
+## P1.1 — tipli struct dizisi ✅ (2026-09-21, dal `dil/struct-dizisi`)
 
-P1 typed struct dizileri `Dusman[]`, iç içe struct kutusuz, `f32`, köprüde `Vec3` register
-geçişi + callback. P2 frame arena (`@frame`), `unsafe { ptr<T> }`, atomikler. P3 `@no_alloc`,
-`@repr(C)`, `tulpar analyze`, Tracy/LLDB.
+`Dusman[] d` — yeni runtime nesnesi `ObjStructArray` (vm.hpp): elemanlar ardışık ve kutusuz,
+eleman = `field_count` adet 8 baytlık yuva, kutusuz struct'ın LLVM yerleşimiyle aynı bit deseni,
+yani `d[i]` ↔ tipli alloca kopyası bit kopyasıdır. Tutamaç sıradan bir VMValue
+(`OBJ_STRUCT_ARRAY`), yani yerel/global/parametre olarak kutulu dolaşır; codegen eleman tipini
+yerel kaydından (`LocalVar::struct_array_elem`) bilir.
+
+**Erişim satır içi** (`sarr_elem_ptr`): etiket + nesne türü + sınır denetimi doğrudan yüklerle,
+sonra `data + i*field_count`; yavaş yol yalnız hatalı durumda runtime'a gider ve sıfırlanmış
+karalama döndürür. Bu, ölçümün dayattığı ikinci yazım: ilk yazım her alan erişiminde runtime
+çağrısı yapıyordu ve **yerinden ettiği paralel dizi yazımından yavaştı** (13,7 vs 10,8 ms);
+satır içi yolda 7,2 ms. Yerleşim `static_assert`'lerle kilitli.
+
+Parser: `parse_type` tanımlayıcı tabanını `last_type_custom_name_`'e bırakır; `Dusman[] d`
+bildirimi/parametresi eleman adını `elem_custom_type` ile taşır (AST + C köprüsü).
+for-in indirgemesi eleman tipini yineleyiciye ve döngü değişkenine yazar (kopya semantiği).
+
+Sınırlar: eleman struct'ı yalnız int/bool/float alanlı (derleme hatası, 5 yol kilitli);
+`pop` / `remove_at` / dilim yok; `d[i]` tipsiz bağlamda (json/`var`) okunursa kutulanır
+(runtime yedeği, `vm_get_element`).
+
+## P1 kalanı ve P2–P3 (bu planın dışında)
+
+P1: iç içe struct kutusuz, `f32`, köprüde `Vec3` register geçişi + callback. P2 frame arena
+(`@frame`), `unsafe { ptr<T> }`, atomikler. P3 `@no_alloc`, `@repr(C)`, `tulpar analyze`,
+Tracy/LLDB.

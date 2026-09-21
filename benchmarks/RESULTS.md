@@ -210,6 +210,13 @@ within 3% of each other.
 - `sieve`: Sieve of Eratosthenes up to 100K — array + branch heavy.
 - `struct_sum`: accumulate typed struct fields over 10M iterations —
   tests native struct AOT codegen.
+- `dusman_dizisi`: typed struct array (`Dusman[]`, P1.1) vs the 11-parallel-array
+  shape it replaces — 2000 entities × 500 frames, 6 field accesses per entity
+  per frame. Measured by hand on 2026-09-21 (best of 5, one session):
+  struct array **7.2 ms**, parallel arrays 10.8 ms, and the first
+  implementation (a runtime call per field access) 13.7 ms — i.e. the
+  unboxed shape was *slower* than what it replaced until element access was
+  inlined. Twin source: `benchmarks/dusman_dizisi_paralel.tpr`.
 - `vec3_sum`: the float twin of `struct_sum` (three `float` fields, 10M
   iterations). Not part of the harness table; measured by hand on
   2026-09-21 (best of 5, same machine as the table below) when float

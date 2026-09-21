@@ -658,6 +658,11 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     // Parse type
     DataType type = parse_type();
     const int fixed_n = last_fixed_array_n_;  // `T[N]` ise N, degilse 0
+    // `Dusman[] d` — eleman struct adi (P1.1). parse_type `[]` sonekiyle
+    // TYPE_ARRAY'e dusuyor ve asagida custom_type_name sifirlaniyor; eleman
+    // adini ayrica tasiyoruz.
+    const std::optional<std::string> elem_custom =
+        is_array_type(type) ? last_type_custom_name_ : std::nullopt;
 
     // Only keep the captured name when the parser actually resolved
     // to a custom type — otherwise `int x;` would store the spurious
@@ -732,6 +737,7 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
 
     VariableDecl vd(name, type, std::move(initializer), loc);
     vd.custom_type = std::move(custom_type_name);
+    vd.elem_custom_type = elem_custom;
     vd.is_const = is_const;
     return std::make_unique<ASTNode>(std::move(vd));
 }
@@ -809,6 +815,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
                                           "Expected parameter name");
                 Parameter par(param_name.value(), param_type);
                 par.custom_type = std::move(param_custom_type);
+                par.elem_custom_type = is_array_type(param_type) ? last_type_custom_name_ : std::nullopt;  // `Dusman[] d` (P1.1)
                 parameters.push_back(std::move(par));
             }
         } while (match(TOKEN_COMMA));
@@ -1897,6 +1904,7 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
                         Token param_name = expect(TOKEN_IDENTIFIER, "Expected parameter name");
                         Parameter par(param_name.value(), param_type);
                         par.custom_type = std::move(param_custom_type);
+                        par.elem_custom_type = is_array_type(param_type) ? last_type_custom_name_ : std::nullopt;  // `Dusman[] d` (P1.1)
                         parameters.push_back(std::move(par));
                     }
                 } while (match(TOKEN_COMMA));
@@ -2475,6 +2483,7 @@ void Parser::reject_pending() {
 
 DataType Parser::parse_type() {
     DataType base = TYPE_UNKNOWN;
+    last_type_custom_name_.reset();
     bool matched = true;
 
     if (match(TOKEN_INT_TYPE)) base = TYPE_INT;
@@ -2493,7 +2502,7 @@ DataType Parser::parse_type() {
     // `func f(Ekran e): Ekran`. Cagiranlar TYPE_CUSTOM disinda yakaladiklari
     // tip adini zaten sifirliyor, yani "Unknown type" uyarisi dogmaz.
     else if (check(TOKEN_IDENTIFIER) && is_enum_name(current().value())) { advance(); base = TYPE_INT; }
-    else if (check(TOKEN_IDENTIFIER)) { advance(); base = TYPE_CUSTOM; }
+    else if (check(TOKEN_IDENTIFIER)) { last_type_custom_name_ = current().value(); advance(); base = TYPE_CUSTOM; }
     else matched = false;
 
     if (!matched) {
@@ -2669,6 +2678,9 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
             if (n.custom_type.has_value()) {
                 out->return_custom_type = dup_cstr(n.custom_type.value());
             }
+            if (n.elem_custom_type.has_value()) {
+                out->elem_custom_type = dup_cstr(n.elem_custom_type.value());  // P1.1
+            }
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, Assignment>) {
             out->type = AST_ASSIGNMENT;
@@ -2717,6 +2729,9 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
                     param->data_type = n.parameters[i].type;
                     if (n.parameters[i].custom_type.has_value()) {
                         param->return_custom_type = dup_cstr(n.parameters[i].custom_type.value());
+                    }
+                    if (n.parameters[i].elem_custom_type.has_value()) {
+                        param->elem_custom_type = dup_cstr(n.parameters[i].elem_custom_type.value());  // P1.1
                     }
                     out->parameters[i] = param;
                 }
@@ -2862,6 +2877,9 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
                     if (n.parameters[i].custom_type.has_value()) {
                         param->return_custom_type = dup_cstr(n.parameters[i].custom_type.value());
                     }
+                    if (n.parameters[i].elem_custom_type.has_value()) {
+                        param->elem_custom_type = dup_cstr(n.parameters[i].elem_custom_type.value());  // P1.1
+                    }
                     out->parameters[i] = param;
                 }
             }
@@ -2977,6 +2995,7 @@ static void ast_node_free_recursive(ASTNode_C* node) {
     }
 
     free(node->field_types);
+    free(node->elem_custom_type);
     free(node->field_types_nodes);
     free(node->field_defaults);
     free(node->statements);

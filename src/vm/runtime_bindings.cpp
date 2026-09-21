@@ -974,6 +974,25 @@ static_assert(offsetof(ObjArray, items_) == 28, "ObjArray::items_ @28 olmali (32
 static_assert(offsetof(ObjArray, idata) == 32, "ObjArray::idata @32 olmali (32-bit)");
 static_assert(offsetof(ObjArray, elem_bits) == 36, "ObjArray::elem_bits @36 olmali (32-bit)");
 #endif
+// P1.1 tipli struct dizisi: eleman erisimi SATIR ICI (llvm_backend.cpp
+// sarr_elem_ptr) — `count` ve `data` alanlarini GEP ile okuyor. Ayni
+// gerekce, ayni iki duzen.
+#if UINTPTR_MAX > 0xFFFFFFFFu
+static_assert(sizeof(ObjStructArray) == 80, "ObjStructArray 80 bayt olmali (codegen varsayimi, 64-bit)");
+static_assert(offsetof(ObjStructArray, type_name) == 32, "ObjStructArray::type_name @32 olmali");
+static_assert(offsetof(ObjStructArray, field_count) == 56, "ObjStructArray::field_count @56 olmali");
+static_assert(offsetof(ObjStructArray, count) == 60, "ObjStructArray::count @60 olmali");
+static_assert(offsetof(ObjStructArray, capacity) == 64, "ObjStructArray::capacity @64 olmali");
+static_assert(offsetof(ObjStructArray, data) == 72, "ObjStructArray::data @72 olmali");
+#else
+static_assert(sizeof(ObjStructArray) == 48, "ObjStructArray 48 bayt olmali (codegen varsayimi, 32-bit)");
+static_assert(offsetof(ObjStructArray, type_name) == 20, "ObjStructArray::type_name @20 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, field_count) == 32, "ObjStructArray::field_count @32 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, count) == 36, "ObjStructArray::count @36 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, capacity) == 40, "ObjStructArray::capacity @40 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, data) == 44, "ObjStructArray::data @44 olmali (32-bit)");
+#endif
+static_assert((int)OBJ_STRUCT_ARRAY == 7, "OBJ_STRUCT_ARRAY = 7 olmali (codegen varsayimi)");
 static_assert(offsetof(Obj, type) == 0, "Obj::type @0 olmali");
 static_assert((int)VM_VAL_INT == 0 && (int)VM_VAL_OBJ == 4,
               "VMValueType sirasi codegen ile uyusmali");
@@ -2005,6 +2024,10 @@ void vm_set_element_ptr(VM *vm, VMValue *target, VMValue *index,
   vm_set_element(vm, *target, *index, *value);
 }
 
+// Asagidaki struct dizisi yedegi icin (tanimlari daha asagida).
+ObjObject *vm_allocate_object_aot_wrapper(void *vm);
+void vm_object_set_aot_wrapper(void *vm, ObjObject *obj, char *key, VMValue value);
+
 VMValue vm_get_element(VMValue target, VMValue index) {
   if (IS_ARRAY(target)) {
     if (IS_INT(index)) {
@@ -2026,6 +2049,38 @@ VMValue vm_get_element(VMValue target, VMValue index) {
       if (idx < 0 || idx >= str->length)
         return VM_OBJ(aot_allocate_string("", 0));
       return VM_OBJ(aot_allocate_string(&str->chars[idx], 1));
+    }
+  } else if (IS_STRUCT_ARRAY(target)) {
+    // Tipli struct dizisi TIPSIZ baglamdan okunuyor (P1.1): `array` parametre,
+    // `var`/`json` yerel, `call()` uzerinden gelen deger. Eleman string
+    // anahtarli VM_OBJECT olarak KOPYALANIR — codegen'in tipli yolu (isaretci
+    // + GEP) bu fonksiyona hic ugramaz; burasi yalniz dogruluk yedegi.
+    // Yazma (`obj.x = v`) kopyayi degistirir, diziyi degil.
+    if (IS_INT(index)) {
+      ObjStructArray *a = AS_STRUCT_ARRAY(target);
+      long long idx = AS_INT(index);
+      if (idx < 0 || idx >= a->count) {
+        char b[192];
+        snprintf(b, sizeof b,
+                 tulpar::i18n::tr_en(
+                     "Calisma Zamani Hatasi: struct dizisi indeksi sinir disinda: %lld (uzunluk %d)",
+                     "Runtime Error: struct array index out of bounds: %lld (length %d)"),
+                 idx, a->count);
+        aot_runtime_error(b);
+        return VM_INT(0);
+      }
+      ObjObject *o = vm_allocate_object_aot_wrapper(nullptr);
+      const int64_t *e = a->data + (size_t)idx * (size_t)a->field_count;
+      for (int f = 0; f < a->field_count; f++) {
+        const char *fn = (a->field_names && a->field_names[f]) ? a->field_names[f] : "_";
+        const int ft = a->field_types ? a->field_types[f] : 0;
+        VMValue v;
+        if (ft == 1) { double d; memcpy(&d, &e[f], sizeof d); v = VM_FLOAT(d); }
+        else if (ft == 2) { v = VM_BOOL(e[f] != 0); }
+        else { v = VM_INT((long long)e[f]); }
+        vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(fn), v);
+      }
+      return VM_OBJ((Obj *)o);
     }
   }
   aot_runtime_error(tulpar::i18n::tr_en(
@@ -2081,6 +2136,29 @@ void print_vm_value(VMValue value) {
         if (i > 0)
           printf(", ");
         print_vm_value(arr_items(arr)[i]);
+      }
+      printf("]");
+    } else if (IS_STRUCT_ARRAY(value)) {
+      // P1.1: `[Ad { x: 1.5, y: 2 }, ...]` — alan adlari/tipleri codegen'in
+      // sabit tablosundan; float alan %g (print(struct) ile ayni).
+      ObjStructArray *a = AS_STRUCT_ARRAY(value);
+      printf("[");
+      for (int i = 0; i < a->count; i++) {
+        if (i > 0) printf(", ");
+        printf("%s { ", a->type_name ? a->type_name : "struct");
+        const int64_t *e = a->data + (size_t)i * (size_t)a->field_count;
+        for (int f = 0; f < a->field_count; f++) {
+          if (f > 0) printf(", ");
+          printf("%s: ", (a->field_names && a->field_names[f]) ? a->field_names[f] : "_");
+          if (a->field_types && a->field_types[f] == 1) {
+            double d;
+            memcpy(&d, &e[f], sizeof d);
+            printf("%g", d);
+          } else {
+            printf("%lld", (long long)e[f]);
+          }
+        }
+        printf(" }");
       }
       printf("]");
     } else {
@@ -2235,6 +2313,8 @@ int64_t aot_len(VMValue value) {
     return AS_ARRAY(value)->count;
   } else if (IS_OBJECT(value)) {
     return ((ObjObject *)AS_OBJECT(value))->count;
+  } else if (IS_STRUCT_ARRAY(value)) {
+    return AS_STRUCT_ARRAY(value)->count;  // P1.1
   }
   return 0;
 }
@@ -2434,6 +2514,84 @@ extern "C" void aot_struct_unpack_to(VMValue *vp, int field_count,
   } else {
     for (int i = 0; i < field_count; i++) dst[i] = 0;
   }
+}
+
+// ============================================================================
+// TIPLI STRUCT DIZISI (P1.1, 2026-09-21) — bkz. vm.hpp ObjStructArray.
+// Uc yardimci: kur / ekle / eleman isaretcisi. Alan okuma-yazma runtime'da
+// DEGIL codegen'de (isaretci + GEP + tipli yuk); runtime yalniz sinir
+// denetimi ve buyume yapar. Isaretci ABI'si: dizi tutamaci VMValue* ile
+// (aot_struct_* ailesiyle ayni, Windows x64 by-value struct tuzagi).
+// ============================================================================
+// AOT'de VM yok: basligi vm_allocate_array_aot_wrapper gibi malloc ile kur ve
+// istek-yerel bolgeye kaydet (wings'te arena_restore'da serbest kalir; oyun
+// kodunda restore olmadigi icin program boyunca yasar). allocate_object
+// vm->arena'ya dokunur — null VM ile cagrilinca SIGSEGV (olculdu 2026-09-21).
+extern "C" VMValue aot_sarr_new(const char *type_name, int field_count,
+                                const char *const *names, const int *types) {
+  ObjStructArray *a = static_cast<ObjStructArray *>(malloc(sizeof(ObjStructArray)));
+  if (!a) return VM_INT(0);
+  a->obj.type = OBJ_STRUCT_ARRAY;
+  a->obj.arena_allocated = 0;
+  a->obj.next = nullptr;
+  a->obj.ref_count = 1;
+  a->obj.is_moved = 0;
+  a->count = 0;
+  a->capacity = 0;
+  a->data = nullptr;
+  region_track((Obj *)a);
+  a->type_name = type_name;
+  a->field_names = names;
+  a->field_types = types;
+  a->field_count = field_count < 0 ? 0 : field_count;
+  return VM_OBJ(a);
+}
+
+extern "C" void aot_sarr_push_ptr(VMValue *arr, const int64_t *src) {
+  if (!arr || !IS_STRUCT_ARRAY(*arr) || !src) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: push hedefi bir struct dizisi degil",
+        "Runtime Error: push target is not a struct array"));
+    return;
+  }
+  ObjStructArray *a = AS_STRUCT_ARRAY(*arr);
+  if (a->count + 1 > a->capacity) {
+    int nc = a->capacity < 8 ? 8 : a->capacity * 2;
+    a->data = static_cast<int64_t *>(
+        realloc(a->data, (size_t)nc * (size_t)a->field_count * sizeof(int64_t)));
+    a->capacity = nc;
+  }
+  memcpy(a->data + (size_t)a->count * (size_t)a->field_count, src,
+         (size_t)a->field_count * sizeof(int64_t));
+  a->count++;
+}
+
+// Eleman isaretcisi (sinir denetimli). Hata yolunda (yumusak kip: hata
+// basildi ama surec suruyor) sifirlanmis bir karalama alani doner ki codegen'in
+// GEP'i cop okumasin/yazmasin. 256 yuva: struct alan sayisi bunu asarsa
+// karalama tasar — ayristiricida sinir yok, bu yuzden burada kirpiyoruz.
+extern "C" int64_t *aot_sarr_elem_ptr(VMValue *arr, long long idx) {
+  static thread_local int64_t scratch[256];
+  if (!arr || !IS_STRUCT_ARRAY(*arr)) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: indeksleme hedefi bir struct dizisi degil",
+        "Runtime Error: index target is not a struct array"));
+    memset(scratch, 0, sizeof scratch);
+    return scratch;
+  }
+  ObjStructArray *a = AS_STRUCT_ARRAY(*arr);
+  if (idx < 0 || idx >= a->count) {
+    char b[192];
+    snprintf(b, sizeof b,
+             tulpar::i18n::tr_en(
+                 "Calisma Zamani Hatasi: struct dizisi indeksi sinir disinda: %lld (uzunluk %d)",
+                 "Runtime Error: struct array index out of bounds: %lld (length %d)"),
+             idx, a->count);
+    aot_runtime_error(b);
+    memset(scratch, 0, sizeof scratch);
+    return scratch;
+  }
+  return a->data + (size_t)idx * (size_t)a->field_count;
 }
 
 // P0.3 (2026-09-21): aot_struct_unpack_named'in ALAN TIPLI hali. `types[i]`
@@ -2792,6 +2950,27 @@ static void js_serialize(JSBuilder *b, VMValue v, int depth) {
       js_serialize(b, obj->values[i], depth + 1);
     }
     js_append_char(b, '}');
+  } else if (IS_STRUCT_ARRAY(v)) {
+    // P1.1: nesne dizisi olarak — alan adlari codegen tablosundan.
+    ObjStructArray *a = AS_STRUCT_ARRAY(v);
+    js_append_char(b, '[');
+    for (int i = 0; i < a->count; i++) {
+      if (i > 0) js_append_char(b, ',');
+      js_append_char(b, '{');
+      const int64_t *e = a->data + (size_t)i * (size_t)a->field_count;
+      for (int f = 0; f < a->field_count; f++) {
+        if (f > 0) js_append_char(b, ',');
+        const char *fn = (a->field_names && a->field_names[f]) ? a->field_names[f] : "_";
+        js_escape_string(b, fn, strlen(fn));
+        js_append_char(b, ':');
+        const int ft = a->field_types ? a->field_types[f] : 0;
+        if (ft == 1) { double d; memcpy(&d, &e[f], sizeof d); js_serialize(b, VM_FLOAT(d), depth + 1); }
+        else if (ft == 2) { js_serialize(b, VM_BOOL(e[f] != 0), depth + 1); }
+        else { js_serialize(b, VM_INT((long long)e[f]), depth + 1); }
+      }
+      js_append_char(b, '}');
+    }
+    js_append_char(b, ']');
   } else {
     js_append_n(b, "nullptr", 4);
   }

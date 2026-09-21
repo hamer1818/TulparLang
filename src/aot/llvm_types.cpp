@@ -78,6 +78,24 @@ void llvm_init_types(LLVMBackend *backend) {
   };
   LLVMStructSetBody(backend->obj_array_type, obj_arr_elements, 7, 0);
 
+  // struct ObjStructArray (P1.1) — `d[i].x` satir ici hizli yolu bunun
+  // `count` ve `data` alanlarini GEP ile okuyor. ObjArray ile AYNI gerekce ve
+  // ayni baslik dolgusu; duzen kilidi runtime_bindings.cpp'deki
+  // static_assert'lerde.
+  backend->obj_sarr_type = LLVMStructCreateNamed(ctx, "struct.ObjStructArray");
+  LLVMTypeRef obj_sarr_elements[] = {
+      LLVMInt32TypeInContext(ctx),                               // obj.type    @0
+      LLVMArrayType(LLVMInt8TypeInContext(ctx), obj_header_pad),  // baslik kalani
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),             // type_name
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),             // field_names
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),             // field_types
+      LLVMInt32TypeInContext(ctx),                                // field_count
+      LLVMInt32TypeInContext(ctx),                                // count
+      LLVMInt32TypeInContext(ctx),                                // capacity
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0)              // data
+  };
+  LLVMStructSetBody(backend->obj_sarr_type, obj_sarr_elements, 9, 0);
+
   // --- Define VMValue Body ---
   // struct VMValue {
   //   int type;      // offset 0  (4 bytes)
