@@ -179,14 +179,18 @@ func run_g5_const() {
 str _bin = "";
 int _win = -1;            // -1 bilinmiyor, 1 Windows, 0 degil
 
-// Windows mu? Isaret olarak "C:/Windows" dizini kullaniliyor.
-// NEDEN `file_exists("./tulpar.exe")` DEGIL: bir Linux calisma kopyasinda
-// depo kokunde BAYAT bir tulpar.exe durabiliyor (bu depoda gercekten oldu,
-// bkz. build.sh'teki "3 ay bayat PE32+ artigi" notu) ve o zaman test kendini
-// Windows saniyordu.
+// Windows mu? `OS` ortam degiskeni: Windows'ta "Windows_NT", Linux/macOS'ta
+// tanimsiz. Dosya sistemine BAKMIYORUZ ve bu bilincli:
+//   * `file_exists("./tulpar.exe")` olmaz — bir Linux calisma kopyasinda depo
+//     kokunde BAYAT bir tulpar.exe durabiliyor (bkz. build.sh'teki "3 ay bayat
+//     PE32+ artigi" notu) ve test kendini Windows sanirdi;
+//   * `file_exists("C:/Windows")` de olmadi — DENENDI ve HIC tetiklenmedi,
+//     cunku o gunku `file_exists` fopen ile calisiyordu ve fopen bir dizinde
+//     Windows'ta basarisiz oluyor. (Builtin ayni turda stat'a cevrildi, ama
+//     ortam degiskeni zaten daha ucuz ve daha dogrudan bir isaret.)
 func _windows_mu(): bool {
     if (_win < 0) {
-        if (file_exists("C:/Windows")) { _win = 1; } else { _win = 0; }
+        if (env("OS") == "Windows_NT") { _win = 1; } else { _win = 0; }
     }
     return _win == 1;
 }

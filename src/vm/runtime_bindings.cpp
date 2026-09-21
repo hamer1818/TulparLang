@@ -47,6 +47,19 @@ typedef SSIZE_T ssize_t;
 #include <sys/select.h>// select() — timed key wait for read_key_timeout
 #endif
 
+// stat(): file_exists icin. Bu dosyada <sys/stat.h> YOKTU — o yuzden `stat`
+// adi yalniz TUR olarak gorunuyor ve cagri "no matching function for call to
+// 'stat::stat'" ile duşuyordu.
+#include <sys/stat.h>
+
+// Dosya YA DA dizin var mi? Cagiran `extern "C"` blogunun icinde oldugu icin
+// yardimci DISARIDA duruyor.
+static bool tulpar_path_exists(const char *path) {
+  if (!path || !*path) return false;
+  struct stat st;
+  return stat(path, &st) == 0;
+}
+
 // EXTERN "C" BLOCK - AOT Runtime Functions (called from LLVM compiled code)
 // ============================================================================
 
@@ -4870,16 +4883,21 @@ VMValue aot_append_file_ptr(VMValue *path_ptr, VMValue *content_ptr) {
   return aot_append_file(*path_ptr, *content_ptr);
 }
 
+// `file_exists(path)` — DOSYA YA DA DIZIN. Belgesi ("Dosya/dizin var mi?")
+// bunu soyluyordu ama uygulama `fopen(path, "r")` ile bakiyordu ve fopen bir
+// DIZINDE Windows'ta BASARISIZ olur (Linux/glibc'de basarili olur, okuma
+// denenmedigi surece). Yani ayni cagri Linux'ta true, Windows'ta false
+// donuyordu — sessiz bir platform ayrismasi. OLCULDU 2026-09-21: Windows CI
+// icin yazilan `file_exists("C:/Windows")` kontrolu bu yuzden HIC
+// tetiklenmedi ve onun korudugu dal sessizce atlandi.
+//
+// `stat` ikisini de dogru yanitliyor ve mevcut cagiranlari bozmuyor:
+// duzenli dosya icin davranis aynen ayni kaliyor.
 VMValue aot_file_exists(VMValue path_val) {
   if (!IS_STRING(path_val))
     return VM_BOOL(false);
   const char *path = AS_STRING(path_val)->chars;
-  FILE *f = fopen(path, "r");
-  if (f) {
-    fclose(f);
-    return VM_BOOL(true);
-  }
-  return VM_BOOL(false);
+  return VM_BOOL(tulpar_path_exists(path));
 }
 
 VMValue aot_file_exists_ptr(VMValue *path_ptr) {
