@@ -1274,6 +1274,31 @@ if [ "$ACTION" = "test" ]; then
         $COMPILE_TIMEOUT_CMD ./tulpar --aot "$example" > "$compile_log" 2>&1
         local compile_rc=$?
         if [ $compile_rc -eq 0 ] && [ -f "$out_path" ]; then
+            # PENCERE ACAN ORNEKLER WINDOWS'TA CALISTIRILMAZ, yalniz derlenir.
+            #
+            # Linux/macOS'ta bu ornekler DISPLAY/WAYLAND_DISPLAY bosaltilarak
+            # 2 saniyelik smoke aliyor ve raylib'in TULPAR PATCH'li
+            # InitWindow'u ekransiz ortamda duzgunce exit 0 donuyor. Windows'ta
+            # "DISPLAY" diye bir kavram YOK: raylib gercek bir pencere acmayi
+            # deniyor ve ekransiz CI runner'inda SIGSEGV veriyor. OLCULDU
+            # (2026-09-21, Windows isi ilk kez test kosunca): 23 ornek
+            # "smoke crashed, exit 139" ile dustu — hicbiri gercek bir
+            # gerileme degildi.
+            #
+            # Derleme + link YINE olculuyor; Windows ayaginin asil kattigi
+            # deger zaten o (uretilen tulpar.exe gercekten program
+            # derleyebiliyor mu). Atlanan tek sey CALISTIRMA ve bu GORUNUR
+            # bir etiketle bildiriliyor, sessizce degil.
+            #
+            # Liste ELLE TUTULMUYOR: ornegin kendi `import` satirlarindan
+            # turetiliyor, yani yeni bir oyun ornegi eklendiginde burayi
+            # guncellemek gerekmiyor.
+            if [ "$PLATFORM" = "Windows" ] && \
+               grep -qE '^[[:space:]]*import[[:space:]]+"(tame|arcade|scene3d)"' "$example"; then
+                printf "Testing %s... ${GREEN}PASS (derlendi; pencere acan ornek, Windows'ta calistirilmaz)${NC}\n" "$example"
+                rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                return 0
+            fi
             if [ "$compile_only" = "1" ]; then
                 # Runtime smoke test for COMPILE_ONLY examples: spawn the
                 # binary in the background, give it 2s to either start
