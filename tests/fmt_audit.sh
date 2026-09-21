@@ -18,6 +18,13 @@ set -u
 cd "$(dirname "$0")/.."
 TULPAR=./tulpar
 [ -x "$TULPAR" ] || { echo "fmt denetimi: ./tulpar yok — atlandi"; exit 0; }
+# `diff` her yerde YOK: MSYS2'nin setup-msys2 kurulumunda gelmiyor ve
+# olculdu (2026-09-21, Windows CI) — 147 dosyanin 147'si "IDEMPOTENT DEGIL"
+# dedi, tek bir bicimlendirici hatasi olmadan. Eksik ARAC ile bozuk KOD ayni
+# renge boyanmamali: arac yoksa denetim atlanir ve bunu SOYLER (pkg_audit.sh
+# `timeout` icin ayni kalibi kullaniyor).
+command -v diff >/dev/null 2>&1 || {
+    echo "fmt denetimi: diff yok — atlandi (kurun: MSYS2 'diffutils')"; exit 0; }
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 fail=0

@@ -511,6 +511,15 @@ jobs:
           msystem: MINGW64
           update: false
           cache: true
+          # `diffutils` (mingw- onekSIZ, cunku bash'in kullandigi MSYS
+          # tarafindaki arac): setup-msys2'nin kurulumunda `diff` YOK ve
+          # tests/fmt_audit.sh onunla calisiyor. Olculdu 2026-09-21: 147
+          # dosyanin 147'si "IDEMPOTENT DEGIL" dedi — tek bir bicimlendirici
+          # hatasi degil, sadece `diff: command not found`. Python denetimleri
+          # (fmt_audit.py, lsp_audit.py, builtin_audit.py, ...) bilerek
+          # EKLENMEDI: hepsi platformdan bagimsiz kaynak denetimi ve Linux
+          # isinde zaten kosuyor; buraya python getirmek dist arsiv
+          # denetimini de tetikler ve bu isin olcmesi gereken sey degil.
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-clang
@@ -522,6 +531,7 @@ jobs:
             mingw-w64-x86_64-zstd
             mingw-w64-x86_64-libxml2
             mingw-w64-x86_64-openssl
+            diffutils
 
       # ccache yolu is alanina gore: `~` msys2 ile pwsh arasinda FARKLI
       # cozuluyor ve onbellek gidis-donusu tutmuyordu.
