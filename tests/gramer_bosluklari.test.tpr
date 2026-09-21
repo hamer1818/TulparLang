@@ -202,7 +202,17 @@ func _derleyici(): str {
         if (_bin == "") {
             // Windows'ta `./tulpar` CALISMAZ: dosyanin adi tulpar.exe ve
             // komut cmd.exe'ye gidiyor.
-            if (_windows_mu()) { _bin = "tulpar.exe"; } else { _bin = "./tulpar"; }
+            //
+            // `.\\` ONEKI SART ve sebebi depoda zaten olculmus: cmd.exe bir
+            // komutu GECERLI DIZINDE aramaz, acik bir yol verilmedikce
+            // yalnizca PATH'e bakar. AOT surucusu ayni tuzaga dusmus ve ayni
+            // cozumu kullaniyor (src/aot/aot_pipeline.cpp:1683 ve :1791 —
+            // ".\\tulpar_run_tmp.exe"). Depo koku PATH'te olmadigi icin
+            // oneksiz "tulpar.exe" HIC calismiyor, sys_run sifirdan farkli
+            // doner ve kapi tersine doner: tum "REDDEDILMELIYDI" iddialari
+            // sahte sekilde GECER, yalniz KONTROL'ler duser. Windows CI'da
+            // tam bu imza goruldu (dort KONTROL, "expected 0 got 1").
+            if (_windows_mu()) { _bin = ".\\tulpar.exe"; } else { _bin = "./tulpar"; }
         }
     }
     return _bin;
