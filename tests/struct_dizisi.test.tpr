@@ -1,0 +1,183 @@
+// Tipli struct dizisi `Dusman[]` (P1.1, 2026-09-21).
+//
+// Neden var: motorun oyun betigi dusman verisini 11 PARALEL dizide tutuyordu
+// ("kutulu struct dizisi yok"): kutulu dizideki struct string anahtarli
+// VM_OBJECT'e donusuyor, her alan erisimi strcmp, gidis-donuste 11 alanlik
+// ac/paketle. Simdi:
+//   * `Dusman[] d = [];`  elemanlar ARDISIK ve KUTUSUZ (ObjStructArray).
+//   * `push(d, e)`, `len(d)`, `d[i].x` oku/yaz, `Dusman e = d[i]` (kopya),
+//     `d[i] = e`, `d = []` (sifirla), parametre/global olarak gecis, `d[i]`
+//     genel rvalue (kutulanir: print, cagri argumani).
+//   * Sinir disi indeks calisma zamani hatasi (try/catch ile yakalanir).
+//   * Eleman struct'i yalniz int/bool/float alanli olabilir (derleme hatasi;
+//     tests/struct_dizisi_hatalari.sh).
+// Calistir: ./tulpar tests/struct_dizisi.test.tpr
+import "test";
+
+struct Dusman { int id; int can; float x; float z; bool kovala; }
+
+func dusman_yap(int id, float x, float z): Dusman {
+    Dusman d;
+    d.id = id;
+    d.can = 100;
+    d.x = x;
+    d.z = z;
+    d.kovala = false;
+    return d;
+}
+
+func run_kur_ve_ekle() {
+    Dusman[] d = [];
+    assert_eq_int(len(d), 0);
+    push(d, dusman_yap(1, 1.5, -2.0));          // cagri
+    Dusman e = dusman_yap(2, 3.0, 4.0);
+    push(d, e);                                  // yerel
+    push(d, { id: 3, can: 7, x: 0.25, z: 0.5, kovala: true });   // literal
+    assert_eq_int(len(d), 3);
+    assert_eq_int(d[0].id, 1);
+    assert_close(d[0].x, 1.5, 0.000001);
+    assert_close(d[1].z, 4.0, 0.000001);
+    assert_eq_int(d[2].can, 7);
+    assert(d[2].kovala, "literal bool alani");
+    assert(!d[0].kovala, "varsayilan false");
+}
+
+func run_alan_yaz() {
+    Dusman[] d = [dusman_yap(1, 0.0, 0.0), dusman_yap(2, 0.0, 0.0)];
+    d[1].x = 9.5;
+    d[1].can = d[1].can - 34;
+    d[0].kovala = true;
+    d[0].z = 3;                                  // int -> float alan (sitofp)
+    assert_close(d[1].x, 9.5, 0.000001);
+    assert_eq_int(d[1].can, 66);
+    assert(d[0].kovala, "bool alan yazildi");
+    assert_close(d[0].z, 3.0, 0.000001);
+    assert_close(d[0].x, 0.0, 0.000001);         // komsu alan bozulmadi
+}
+
+func run_eleman_kopya_ve_yaz() {
+    Dusman[] d = [dusman_yap(1, 1.0, 1.0)];
+    Dusman e = d[0];                             // kopya
+    e.x = 42.0;
+    assert_close(d[0].x, 1.0, 0.000001);         // dizi etkilenmedi
+    d[0] = e;                                    // butun eleman yaz
+    assert_close(d[0].x, 42.0, 0.000001);
+    Dusman f = dusman_yap(5, 0.0, 0.0);
+    f = d[0];                                    // var olan yerele kopya
+    assert_eq_int(f.id, 1);
+    assert_close(f.x, 42.0, 0.000001);
+}
+
+func run_sifirla_ve_buyume() {
+    Dusman[] d = [];
+    int i = 0;
+    while (i < 1000) {                           // buyume (8 -> 16 -> ... )
+        push(d, dusman_yap(i, i * 0.5, 0.0));
+        i = i + 1;
+    }
+    assert_eq_int(len(d), 1000);
+    assert_eq_int(d[999].id, 999);
+    assert_close(d[500].x, 250.0, 0.000001);
+    d = [];
+    assert_eq_int(len(d), 0);
+    push(d, dusman_yap(7, 0.0, 0.0));
+    assert_eq_int(len(d), 1);
+    assert_eq_int(d[0].id, 7);
+}
+
+// Parametre olarak: tutamac paylasilir (array gibi), alanlar tipli yoldan.
+func toplam_can(Dusman[] ds): int {
+    int t = 0;
+    int i = 0;
+    while (i < len(ds)) { t = t + ds[i].can; i = i + 1; }
+    return t;
+}
+func hepsini_kovala(Dusman[] ds) {
+    int i = 0;
+    while (i < len(ds)) { ds[i].kovala = true; i = i + 1; }
+}
+func run_parametre() {
+    Dusman[] d = [dusman_yap(1, 0.0, 0.0), dusman_yap(2, 0.0, 0.0)];
+    d[0].can = 30;
+    assert_eq_int(toplam_can(d), 130);
+    hepsini_kovala(d);
+    assert(d[0].kovala && d[1].kovala, "parametre uzerinden yazma diziyi degistirir");
+}
+
+// Global struct dizisi, fonksiyondan oku/yaz.
+Dusman[] g_dusmanlar = [];
+func g_ekle(int id) { push(g_dusmanlar, dusman_yap(id, id * 1.0, 0.0)); }
+func g_can(int i): int { return g_dusmanlar[i].can; }
+func run_global() {
+    g_ekle(10);
+    g_ekle(11);
+    assert_eq_int(len(g_dusmanlar), 2);
+    assert_close(g_dusmanlar[1].x, 11.0, 0.000001);
+    g_dusmanlar[0].can = 5;
+    assert_eq_int(g_can(0), 5);
+    g_dusmanlar = [];
+    assert_eq_int(len(g_dusmanlar), 0);
+}
+
+// `d[i]` genel rvalue: kutulanir; cagri argumani + var + kutulu dizi.
+func id_oku(Dusman e): int { return e.id; }
+func run_genel_rvalue() {
+    Dusman[] d = [dusman_yap(3, 1.0, 2.0)];
+    assert_eq_int(id_oku(d[0]), 3);
+    var kutu = d[0];
+    assert_eq_int(kutu.id, 3);
+    var kutulu = [];
+    push(kutulu, d[0]);
+    assert_close(kutulu[0].z, 2.0, 0.000001);
+    str js = toJson(d);
+    assert_contains(js, "\"id\":3");
+    assert_contains(js, "\"x\":1");
+}
+
+// for-in: eleman kutulanarak dolasilir (yavas ama dogru).
+func run_for_in() {
+    Dusman[] d = [dusman_yap(1, 0.5, 0.0), dusman_yap(2, 0.25, 0.0)];
+    float t = 0.0;
+    for (e in d) { t = t + e.x; }
+    assert_close(t, 0.75, 0.000001);
+}
+
+func run_sinir_disi() {
+    Dusman[] d = [dusman_yap(1, 0.0, 0.0)];
+    bool yakalandi = false;
+    try {
+        int c = d[5].can;
+        c = c + 1;
+    } catch (e) {
+        yakalandi = true;
+    }
+    assert(yakalandi, "sinir disi indeks calisma zamani hatasi vermeli");
+}
+
+// Kare dongusu kalibi: 1M alan guncellemesi.
+func run_dongu() {
+    Dusman[] d = [];
+    int i = 0;
+    while (i < 100) { push(d, dusman_yap(i, 0.0, 0.0)); i = i + 1; }
+    int tur = 0;
+    while (tur < 10000) {
+        int k = 0;
+        while (k < 100) { d[k].x = d[k].x + 0.5; k = k + 1; }
+        tur = tur + 1;
+    }
+    assert_close(d[0].x, 5000.0, 0.001);
+    assert_close(d[99].x, 5000.0, 0.001);
+}
+
+print("=== tipli struct dizisi tests ===");
+test("kur + push (cagri/yerel/literal) + oku", "run_kur_ve_ekle");
+test("alan yazma", "run_alan_yaz");
+test("eleman kopya + butun eleman yazma", "run_eleman_kopya_ve_yaz");
+test("sifirla + buyume (1000)", "run_sifirla_ve_buyume");
+test("parametre", "run_parametre");
+test("global", "run_global");
+test("genel rvalue (kutulama, toJson)", "run_genel_rvalue");
+test("for-in", "run_for_in");
+test("sinir disi indeks", "run_sinir_disi");
+test("1M alan guncellemesi", "run_dongu");
+test_summary();

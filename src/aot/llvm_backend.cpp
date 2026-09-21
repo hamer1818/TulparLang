@@ -489,8 +489,17 @@ static void report_codegen_error(LLVMBackend *backend, int line,
 // exactly once on shutdown. Necessary because AST_FOR_IN had no codegen case
 // at all in this backend — `for (x in arr) { ... }` silently produced an
 // exe that did nothing.
-static void lower_for_in_in_place(ASTNode_C *node) {
+static void lower_for_in_in_place(LLVMBackend *backend, ASTNode_C *node) {
   ASTNode_C *iterable = node->iterable;
+  // Tipli struct dizisi uzerinde for-in (P1.1): yineleyici gecicisi eleman
+  // tipini tasir, dongu degiskeni de o struct'in tipli yereli olur — her tur
+  // `e = it[idx]` isaretciden BUTUN yapi kopyasidir (kutulama yok). Kopya
+  // demek: `e.x = ...` diziyi DEGISTIRMEZ (deger anlambilimi); yazmak icin
+  // indeksle (`d[i].x = ...`). Kutulu dizide ise eleman referanstir.
+  const char *sarr_elem =
+      (iterable && iterable->type == AST_IDENTIFIER && iterable->name)
+          ? get_local_struct_array_elem(backend, iterable->name)
+          : nullptr;
   ASTNode_C *body = node->body;
   char *loop_var = node->name;
   int line = node->line;
@@ -528,6 +537,14 @@ static void lower_for_in_in_place(ASTNode_C *node) {
   it_decl->data_type = TYPE_ARRAY_JSON;
   it_decl->right = iterable;
   it_decl->line = line;
+  if (sarr_elem) {
+    // Tipli struct dizisi: `Dusman e;` + `Dusman[] __forin_it = d;` — her tur
+    // `e = it[idx]` isaretciden butun yapi kopyasi, kutulama yok.
+    loop_var_decl->data_type = TYPE_CUSTOM;
+    loop_var_decl->return_custom_type = strdup(sarr_elem);  // VAR_DECL tip tasiyicisi
+    it_decl->data_type = TYPE_ARRAY;
+    it_decl->elem_custom_type = strdup(sarr_elem);
+  }
 
   // int __forin_idx_<line> = 0;
   ASTNode_C *idx_decl = ast_node_create(AST_VARIABLE_DECL);
@@ -1319,6 +1336,27 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMFunctionType(backend->void_type, struct_unpackt_params, 5, 0);
   backend->func_aot_struct_unpack_typed = LLVMAddFunction(
       backend->module, "aot_struct_unpack_typed", struct_unpackt_type);
+
+  // ---- Tipli struct dizisi (P1.1, 2026-09-21) ----
+  // aot_sarr_new(ptr type_name, i32 field_count, ptr names, ptr types) -> VMValue
+  LLVMTypeRef sarr_new_params[] = {backend->ptr_type, backend->int32_type,
+                                   backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef sarr_new_type =
+      llvm_make_vmvalue_func_type(backend, sarr_new_params, 4, 0);
+  backend->func_aot_sarr_new =
+      LLVMAddFunction(backend->module, "aot_sarr_new", sarr_new_type);
+  // aot_sarr_push_ptr(VMValue *arr, i64 *src) -> void
+  LLVMTypeRef sarr_push_params[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef sarr_push_type =
+      LLVMFunctionType(backend->void_type, sarr_push_params, 2, 0);
+  backend->func_aot_sarr_push =
+      LLVMAddFunction(backend->module, "aot_sarr_push_ptr", sarr_push_type);
+  // aot_sarr_elem_ptr(VMValue *arr, i64 idx) -> ptr
+  LLVMTypeRef sarr_elem_params[] = {backend->ptr_type, backend->int_type};
+  LLVMTypeRef sarr_elem_type =
+      LLVMFunctionType(backend->ptr_type, sarr_elem_params, 2, 0);
+  backend->func_aot_sarr_elem =
+      LLVMAddFunction(backend->module, "aot_sarr_elem_ptr", sarr_elem_type);
 
   // ====== Fast Array Access (value-based, no alloca) ======
   // aot_array_get_fast(VMValue arr, i64 index) -> VMValue
@@ -2596,6 +2634,7 @@ void exit_scope(LLVMBackend *backend) {
     for (int i = 0; i < old->count; i++) {
       free(old->vars[i].name);
       if (old->vars[i].struct_type_name) free(old->vars[i].struct_type_name);
+      if (old->vars[i].struct_array_elem) free(old->vars[i].struct_array_elem);
     }
     free(old);
   }
@@ -2619,6 +2658,8 @@ static int scope_decl_slot(Scope *s, const char *name) {
       free(s->vars[i].name);
       if (s->vars[i].struct_type_name) free(s->vars[i].struct_type_name);
       s->vars[i].struct_type_name = nullptr;
+      if (s->vars[i].struct_array_elem) free(s->vars[i].struct_array_elem);
+      s->vars[i].struct_array_elem = nullptr;
       return i;
     }
   }
@@ -2732,6 +2773,37 @@ const char *get_local_struct_type(LLVMBackend *backend, const char *name) {
       if (strcmp(s->vars[i].name, name) == 0) {
         return s->vars[i].struct_type_name;
       }
+    }
+    s = s->parent;
+  }
+  return nullptr;
+}
+
+// P1.1: tipli struct dizisi yereli. Deger siradan VMValue yuvasi; tip bilgisi
+// struct_array_elem'de. Kapsam zinciriyle bulunur (global kaydi Pass 0.1 yapar).
+void add_local_struct_array(LLVMBackend *backend, const char *name,
+                            LLVMValueRef slot, const char *elem_struct) {
+  if (!backend->current_scope) return;
+  Scope *s = backend->current_scope;
+  int si = scope_decl_slot(s, name);
+  if (si < 0) return;
+  s->vars[si].name = my_strdup(name);
+  s->vars[si].value = slot;
+  s->vars[si].known_type = INFERRED_UNKNOWN;
+  s->vars[si].native_value = nullptr;
+  s->vars[si].struct_type_name = nullptr;
+  s->vars[si].struct_array_elem = my_strdup(elem_struct);
+  s->vars[si].is_captured = 0;
+  s->vars[si].slot_index = 0;
+  s->vars[si].env_ptr = nullptr;
+  s->vars[si].declaring_function = backend->current_function_node;
+}
+
+const char *get_local_struct_array_elem(LLVMBackend *backend, const char *name) {
+  Scope *s = backend->current_scope;
+  while (s) {
+    for (int i = 0; i < s->count; i++) {
+      if (strcmp(s->vars[i].name, name) == 0) return s->vars[i].struct_array_elem;
     }
     s = s->parent;
   }
@@ -2931,6 +3003,204 @@ static void emit_unpack_boxed_struct_into(LLVMBackend *backend,
   LLVMBuildCall2(backend->builder,
                  LLVMGlobalGetValueType(backend->func_aot_struct_unpack_typed),
                  backend->func_aot_struct_unpack_typed, ua, 5, "");
+}
+
+// ---- Tipli struct dizisi (P1.1, 2026-09-21) --------------------------------
+// `Dusman[] d` — elemanlar ObjStructArray icinde ARDISIK ve KUTUSUZ (eleman =
+// field_count adet 8 baytlik yuva, StructTypeEntry::llvm_type ile ayni
+// yerlesim). Dizi tutamaci siradan bir VMValue (OBJ_STRUCT_ARRAY) — yerel /
+// global / parametre olarak kutulu dolasir; codegen ELEMAN TIPINI yerel
+// kaydindan (LocalVar::struct_array_elem) bilir ve `d[i].x`i runtime'dan
+// eleman isaretcisi alip GEP + tipli yuk/sakla ile indirir. Kutulu dizideki
+// struct (VM_OBJECT) yolu bu diziler icin hic kullanilmaz.
+static const char *sarr_elem_of_ident(LLVMBackend *backend, ASTNode_C *n) {
+  if (!n || n->type != AST_IDENTIFIER || !n->name) return nullptr;
+  return get_local_struct_array_elem(backend, n->name);
+}
+
+// `[]`den yeni dizi: ad + alan tablolari modul duzeyi sabit global'ler.
+static LLVMValueRef sarr_new_value(LLVMBackend *backend, StructTypeEntry *st) {
+  LLVMValueRef tn = LLVMBuildGlobalStringPtr(backend->builder, st->name, "sarr.tn");
+  std::vector<LLVMValueRef> names, types;
+  for (int i = 0; i < st->field_count; i++) {
+    names.push_back(LLVMBuildGlobalStringPtr(backend->builder, st->field_names[i], "sarr.fn"));
+    unsigned code = st->field_types[i] == TYPE_FLOAT ? 1u
+                    : st->field_types[i] == TYPE_BOOL ? 2u : 0u;
+    types.push_back(LLVMConstInt(backend->int32_type, code, 0));
+  }
+  LLVMTypeRef names_ty = LLVMArrayType(backend->ptr_type, (unsigned)st->field_count);
+  LLVMValueRef names_g = LLVMAddGlobal(backend->module, names_ty, "sarr.names");
+  LLVMSetInitializer(names_g, LLVMConstArray(backend->ptr_type, names.data(), (unsigned)st->field_count));
+  LLVMSetGlobalConstant(names_g, 1);
+  LLVMSetLinkage(names_g, LLVMPrivateLinkage);
+  LLVMTypeRef types_ty = LLVMArrayType(backend->int32_type, (unsigned)st->field_count);
+  LLVMValueRef types_g = LLVMAddGlobal(backend->module, types_ty, "sarr.types");
+  LLVMSetInitializer(types_g, LLVMConstArray(backend->int32_type, types.data(), (unsigned)st->field_count));
+  LLVMSetGlobalConstant(types_g, 1);
+  LLVMSetLinkage(types_g, LLVMPrivateLinkage);
+  LLVMValueRef z0 = LLVMConstInt(backend->int32_type, 0, 0);
+  LLVMValueRef zz[] = {z0, z0};
+  LLVMValueRef names_p = LLVMBuildGEP2(backend->builder, names_ty, names_g, zz, 2, "sarr.np");
+  LLVMValueRef types_p = LLVMBuildGEP2(backend->builder, types_ty, types_g, zz, 2, "sarr.tp");
+  LLVMValueRef args[] = {tn, LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0), names_p, types_p};
+  return llvm_call_vmvalue_func(backend, backend->func_aot_sarr_new, args, 4, "sarr.new");
+}
+
+// push: dizi tutamaci (VMValue) + kaynak yerlesim isaretcisi.
+static void sarr_push(LLVMBackend *backend, LLVMValueRef arr_val, LLVMValueRef src_ptr) {
+  LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "sarr.push.arr");
+  LLVMBuildStore(backend->builder, arr_val, tmp);
+  LLVMValueRef args[] = {tmp, src_ptr};
+  LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(backend->func_aot_sarr_push),
+                 backend->func_aot_sarr_push, args, 2, "");
+}
+
+// `d[idx]` icin eleman isaretcisi. SATIR ICI hizli yol: etiket + nesne turu
+// + sinir denetimi dogrudan yuklerle, sonra `data + idx*field_count`. Yavas
+// yol (yanlis tur ya da sinir disi) runtime'a gider; o da hatayi bildirir ve
+// karalama alani doner, yani GEP hicbir zaman cop adres uretmez.
+//
+// Neden satir ici: ilk yazim her alan erisiminde runtime cagrisi yapiyordu ve
+// OLCULDU (2026-09-21, benchmarks/dusman_dizisi) — 2000 dusman x 500 kare,
+// 6 erisim/tur: struct dizisi 22,7 ms, ayni isi yapan 11 paralel dizi 17,3 ms.
+// Yani "kutusuz" olan yazim, yerinden ettigi yazimdan YAVASTI; cagri, kazanci
+// yiyordu. Satir ici yolda ayni olcum asagidaki gibi (CHANGELOG'a yazildi).
+// nullptr = yerel bulunamadi (yakalanmis kapanis degiskeni vb.) — cagiran
+// genel yola dusmeli.
+static LLVMValueRef sarr_elem_ptr(LLVMBackend *backend, const char *arr_name,
+                                  ASTNode_C *idx_node, const char *tag) {
+  LLVMValueRef slot = get_local(backend, arr_name);
+  if (!slot || !idx_node) return nullptr;
+  const char *en = get_local_struct_array_elem(backend, arr_name);
+  StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
+  if (!est) return nullptr;
+
+  LLVMValueRef arr = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot, tag);
+  LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, tag);
+  LLVMBuildStore(backend->builder, arr, tmp);
+  LLVMValueRef iv = codegen_expression(backend, idx_node);
+  if (!iv) return nullptr;
+  LLVMValueRef idx = llvm_vm_val_to_int_payload(backend, iv);
+
+  LLVMTypeRef i32t = backend->int32_type;
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef bb_chk = append_bb(backend, fn, "sarr.chk");
+  LLVMBasicBlockRef bb_fast = append_bb(backend, fn, "sarr.fast");
+  LLVMBasicBlockRef bb_slow = append_bb(backend, fn, "sarr.slow");
+  LLVMBasicBlockRef bb_done = append_bb(backend, fn, "sarr.done");
+
+  // Etiket VM_VAL_OBJ mi? (degilse nesne isaretcisini hic cozme)
+  LLVMValueRef vtag = LLVMBuildExtractValue(backend->builder, arr, 0, "sarr.tag");
+  LLVMValueRef is_obj = LLVMBuildICmp(backend->builder, LLVMIntEQ, vtag,
+                                      LLVMConstInt(i32t, 4 /* VM_VAL_OBJ */, 0), "sarr.isobj");
+  LLVMBuildCondBr(backend->builder, is_obj, bb_chk, bb_slow);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_chk);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, arr);
+  LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
+                                         objp, 0, "sarr.otp");
+  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "sarr.ot");
+  llvm_tbaa_tag(backend, ot, 0);
+  LLVMValueRef is_sarr = LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                       LLVMConstInt(i32t, 7 /* OBJ_STRUCT_ARRAY */, 0),
+                                       "sarr.issarr");
+  LLVMValueRef cntp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
+                                          objp, 6, "sarr.cntp");
+  LLVMValueRef cnt = LLVMBuildLoad2(backend->builder, i32t, cntp, "sarr.cnt");
+  llvm_tbaa_tag(backend, cnt, 0);
+  LLVMValueRef cnt64 = LLVMBuildSExt(backend->builder, cnt, backend->int_type, "sarr.cnt64");
+  // Isaretsiz karsilastirma negatif indeksi de yakalar (tek dal).
+  LLVMValueRef in_rng = LLVMBuildICmp(backend->builder, LLVMIntULT, idx, cnt64, "sarr.inr");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildAnd(backend->builder, is_sarr, in_rng, "sarr.ok"),
+                  bb_fast, bb_slow);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_fast);
+  LLVMValueRef datap = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
+                                           objp, 8, "sarr.datap");
+  LLVMValueRef data = LLVMBuildLoad2(backend->builder, backend->ptr_type, datap, "sarr.data");
+  llvm_tbaa_tag(backend, data, 0);
+  LLVMValueRef off = LLVMBuildMul(backend->builder, idx,
+                                  LLVMConstInt(backend->int_type, (unsigned long long)est->field_count, 0),
+                                  "sarr.off");
+  LLVMValueRef ep_fast = LLVMBuildGEP2(backend->builder, backend->int_type, data, &off, 1, "sarr.ep");
+  LLVMBuildBr(backend->builder, bb_done);
+
+  // Yavas yol: runtime hatayi bildirir (sinir disi / yanlis tur) ve sifirlanmis
+  // karalama alani doner.
+  LLVMPositionBuilderAtEnd(backend->builder, bb_slow);
+  LLVMValueRef sargs[] = {tmp, idx};
+  LLVMValueRef ep_slow = LLVMBuildCall2(backend->builder,
+                                        LLVMGlobalGetValueType(backend->func_aot_sarr_elem),
+                                        backend->func_aot_sarr_elem, sargs, 2, "sarr.slowep");
+  LLVMBuildBr(backend->builder, bb_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_done);
+  LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->ptr_type, tag);
+  LLVMValueRef inc[] = {ep_fast, ep_slow};
+  LLVMBasicBlockRef inb[] = {bb_fast, bb_slow};
+  LLVMAddIncoming(phi, inc, inb, 2);
+  return phi;
+}
+
+// Struct DEGERI veren ifadeyi yerlesim isaretcisine indir (kopyalanacak
+// kaynak): tipli yerel -> alloca'si; struct donen cagri -> gecici + ipucu;
+// nesne literali -> gecici + alan yazimi; struct dizisi elemani -> eleman
+// isaretcisi. Baska bir sey -> nullptr (cagiran hata verir).
+static LLVMValueRef codegen_struct_expr_ptr(LLVMBackend *backend, ASTNode_C *arg,
+                                            StructTypeEntry *st) {
+  if (!arg || !st) return nullptr;
+  if (arg->type == AST_IDENTIFIER && arg->name) {
+    const char *sn = get_local_struct_type(backend, arg->name);
+    LLVMValueRef a = sn ? get_local(backend, arg->name) : nullptr;
+    if (sn && a && strcmp(sn, st->name) == 0) return a;
+    return nullptr;
+  }
+  if (arg->type == AST_FUNCTION_CALL && arg->name) {
+    const char *rn = nullptr;
+    for (int j = 0; j < backend->function_count; j++) {
+      if (backend->functions[j].name && strcmp(backend->functions[j].name, arg->name) == 0) {
+        rn = backend->functions[j].return_struct_name;
+        break;
+      }
+    }
+    if (!rn || strcmp(rn, st->name) != 0) return nullptr;
+    LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, st->llvm_type, "sarr.src.call");
+    LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type), tmp);
+    backend->pending_struct_result_ptr = tmp;
+    backend->pending_struct_result_name = st->name;
+    (void)codegen_expression(backend, arg);
+    backend->pending_struct_result_ptr = nullptr;
+    backend->pending_struct_result_name = nullptr;
+    return tmp;
+  }
+  if (arg->type == AST_OBJECT_LITERAL) {
+    for (int k = 0; k < arg->object_count; k++) {
+      if (struct_type_field_index(st, arg->object_keys[k]) < 0) return nullptr;
+    }
+    LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, st->llvm_type, "sarr.src.lit");
+    LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type), tmp);
+    for (int k = 0; k < arg->object_count; k++) {
+      int idx = struct_type_field_index(st, arg->object_keys[k]);
+      LLVMValueRef vbox = codegen_expression(backend, arg->object_values[k]);
+      struct_field_store_from_boxed(backend, st, tmp, idx, vbox, "sarr.src.lit");
+    }
+    return tmp;
+  }
+  if (arg->type == AST_ARRAY_ACCESS && arg->left && arg->left->type == AST_IDENTIFIER &&
+      arg->index && arg->index->type != AST_STRING_LITERAL) {
+    const char *en = sarr_elem_of_ident(backend, arg->left);
+    if (en && strcmp(en, st->name) == 0)
+      return sarr_elem_ptr(backend, arg->left->name, arg->index, "sarr.src.elem");
+  }
+  return nullptr;
+}
+
+// Butun yapiyi `src`den `dst`ye kopyala (ikisi de st yerlesimli isaretci).
+static void sarr_copy_struct(LLVMBackend *backend, StructTypeEntry *st,
+                             LLVMValueRef src, LLVMValueRef dst) {
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, st->llvm_type, src, "sarr.copy");
+  LLVMBuildStore(backend->builder, v, dst);
 }
 
 StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl) {
@@ -4699,6 +4969,9 @@ static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
     if (tulpar_loop_rebinds_name(cond, body, incr, names[i])) continue;
     if (shape_lookup(backend, names[i])) continue;   // dis dongu zaten aldi
     if (!get_local(backend, names[i])) continue;
+    // Tipli struct dizisi (P1.1) ObjArray degil: calisma zamani otype
+    // denetimi zaten reddeder, ama yuva bile acmayalim.
+    if (get_local_struct_array_elem(backend, names[i])) continue;
     LLVMValueRef ids = llvm_build_alloca_at_entry(backend, backend->ptr_type,
                                                   "shape.idata.slot");
     LLVMValueRef cns = llvm_build_alloca_at_entry(backend, backend->int_type,
@@ -5086,6 +5359,42 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_ARRAY_ACCESS: {
+    // TIPLI STRUCT DIZISI (P1.1): `d[i].x` -> eleman isaretcisi + alan yuku;
+    // `d[i]` (alan yok) -> elemani VM_OBJECT olarak kutula (genel rvalue:
+    // print, cagri argumani, kutulu diziye push, `var e = d[i]`).
+    if (node->index && node->index->type == AST_STRING_LITERAL &&
+        node->index->value.string_value && node->left &&
+        node->left->type == AST_ARRAY_ACCESS && node->left->left &&
+        node->left->left->type == AST_IDENTIFIER && node->left->index &&
+        node->left->index->type != AST_STRING_LITERAL) {
+      const char *en = sarr_elem_of_ident(backend, node->left->left);
+      StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
+      if (est) {
+        int fi = struct_type_field_index(est, node->index->value.string_value);
+        if (fi < 0) {
+          char msg[320];
+          snprintf(msg, sizeof(msg), "'%s' struct'inda '%s' alani yok / struct '%s' has no field '%s'",
+                   est->name, node->index->value.string_value, est->name,
+                   node->index->value.string_value);
+          report_codegen_error(backend, node->line, "hata", msg,
+                               node->index->value.string_value, nullptr);
+          return llvm_vm_val_int(backend, 0);
+        }
+        LLVMValueRef ep = sarr_elem_ptr(backend, node->left->left->name,
+                                        node->left->index, "sarr.get");
+        if (ep) return struct_field_load_boxed(backend, est, ep, fi, "sarr.field");
+      }
+    }
+    if (node->left && node->left->type == AST_IDENTIFIER && node->index &&
+        node->index->type != AST_STRING_LITERAL) {
+      const char *en = sarr_elem_of_ident(backend, node->left);
+      StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
+      if (est) {
+        LLVMValueRef ep = sarr_elem_ptr(backend, node->left->name, node->index, "sarr.elem");
+        if (ep) return box_native_struct_as_object(backend, ep, est);
+      }
+    }
+
     // Typed-struct fast path: when the receiver is a bare identifier
     // backed by a typed-struct local AND the index is a literal string
     // matching one of the struct's field names, lower this access to
@@ -6219,6 +6528,26 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       // VMValue" placeholder and the array would silently lose the data —
       // exactly what Plan 04 PR1..PR6 deferred to this PR.
       ASTNode_C *val_arg = node->arguments[1];
+      // TIPLI STRUCT DIZISI (P1.1): `push(d, e)` — kutulamadan, yerlesim
+      // isaretcisinden kopya.
+      if (node->arguments[0] && node->arguments[0]->type == AST_IDENTIFIER) {
+        const char *en = sarr_elem_of_ident(backend, node->arguments[0]);
+        StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
+        if (est) {
+          LLVMValueRef src = codegen_struct_expr_ptr(backend, val_arg, est);
+          if (!src) {
+            char msg[320];
+            snprintf(msg, sizeof(msg),
+                     "push(%s, ...) yalnizca %s degeri kabul eder / push(%s, ...) accepts only a %s value",
+                     node->arguments[0]->name, est->name, node->arguments[0]->name, est->name);
+            report_codegen_error(backend, node->line, "hata", msg, node->arguments[0]->name, nullptr);
+            return llvm_vm_val_int(backend, 0);
+          }
+          LLVMValueRef sarr = codegen_expression(backend, node->arguments[0]);
+          if (sarr) sarr_push(backend, sarr, src);
+          return llvm_vm_val_int(backend, 0);
+        }
+      }
       // A struct value pushed into an array is boxed as a string-keyed
       // VM_OBJECT (not an int-indexed ObjStruct) so `arr[i].field` — a
       // dynamic key lookup — resolves afterwards. nullptr = not a struct
@@ -8460,6 +8789,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           LLVMValueRef alloca = llvm_build_alloca_at_entry(backend, backend->vm_value_type, pname);
           LLVMBuildStore(backend->builder, val, alloca);
           add_local(backend, pname, alloca);
+        // `Dusman[] d` parametresi (P1.1): tutamac kutulu geldi, eleman
+        // tipini kaydet ki govdedeki `d[i].x` tipli yolu alsin.
+        if (node->parameters[i]->data_type == TYPE_ARRAY &&
+            node->parameters[i]->elem_custom_type) {
+          StructTypeEntry *pest =
+              find_struct_type(backend, node->parameters[i]->elem_custom_type);
+          if (pest && struct_is_trivially_unboxable(pest))
+            add_local_struct_array(backend, pname, alloca, pest->name);
+        }
         }
       }
     }
@@ -9012,6 +9350,56 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       return existing_global;
     }
 
+    // TIPLI STRUCT DIZISI bildirimi (P1.1): `Dusman[] d = [];` / `= [a, b]`
+    // (yeni dizi + ekleme) / `= f()` ya da `= baska_dizi` (tutamac; `array`
+    // gibi referans anlambilimi). Eleman tipi ayristiricidan (elem_custom_type).
+    if (node->data_type == TYPE_ARRAY && node->elem_custom_type) {
+      StructTypeEntry *est = find_struct_type(backend, node->elem_custom_type);
+      if (!est || !struct_is_trivially_unboxable(est)) {
+        char msg[320];
+        snprintf(msg, sizeof(msg),
+                 "'%s[]': struct dizisi yalnizca int/bool/float alanli bir struct icin kurulabilir / "
+                 "a struct array needs a struct whose fields are all int/bool/float",
+                 node->elem_custom_type);
+        report_codegen_error(backend, node->line, "hata", msg, node->name,
+                             "str ya da ic ice struct alanli kayitlar icin `array` kullanin");
+        return llvm_vm_val_int(backend, 0);
+      }
+      LLVMValueRef sinit = nullptr;
+      if (!node->right || node->right->type == AST_ARRAY_LITERAL) {
+        sinit = sarr_new_value(backend, est);
+        if (node->right) {
+          for (int k = 0; k < node->right->element_count; k++) {
+            LLVMValueRef src = codegen_struct_expr_ptr(backend, node->right->elements[k], est);
+            if (!src) {
+              char msg[320];
+              snprintf(msg, sizeof(msg),
+                       "'%s': struct dizisi literalinin her elemani %s degeri olmali / "
+                       "every element of a struct array literal must be a %s value",
+                       node->name, est->name, est->name);
+              report_codegen_error(backend, node->line, "hata", msg, node->name, nullptr);
+              return llvm_vm_val_int(backend, 0);
+            }
+            sarr_push(backend, sinit, src);
+          }
+        }
+      } else {
+        sinit = codegen_expression(backend, node->right);
+      }
+      if (!sinit) sinit = llvm_vm_val_int(backend, 0);
+      if (existing_global) {
+        // Pass 0.1 hem global'i acti hem kuresel kapsama kaydetti.
+        LLVMBuildStore(backend->builder, sinit, existing_global);
+        return existing_global;
+      }
+      LLVMValueRef sslot =
+          llvm_build_alloca_at_entry(backend, backend->vm_value_type, node->name);
+      LLVMBuildStore(backend->builder, sinit, sslot);
+      add_local_struct_array(backend, node->name, sslot, est->name);
+      llvm_backend_emit_local_vmvalue_declare(backend, node->name, sslot, node->line);
+      return sslot;
+    }
+
     // Native typed-struct path: when the declaration is for a registered
     // user struct AND every field is trivially unboxable (int/bool), allocate
     // the LLVM struct type directly. Field access via `p.x` then lowers to
@@ -9150,6 +9538,16 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
             LLVMValueRef loaded = LLVMBuildLoad2(
                 backend->builder, st->llvm_type, rsrc, "struct.copy");
             LLVMBuildStore(backend->builder, loaded, typed_alloca);
+            init_is_struct_copy = true;
+          }
+        }
+        // Struct dizisi elemanindan kopya (`Dusman e = d[i]`, P1.1): isaretci
+        // + butun yapi yukle/sakla; kutulu geri acma yoluna hic girmez.
+        if (!init_is_struct_copy && node->right &&
+            node->right->type == AST_ARRAY_ACCESS) {
+          LLVMValueRef src = codegen_struct_expr_ptr(backend, node->right, st);
+          if (src) {
+            sarr_copy_struct(backend, st, src, typed_alloca);
             init_is_struct_copy = true;
           }
         }
@@ -9324,6 +9722,33 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
+    // STRUCT DIZISI YENIDEN KURMA (P1.1): `d = [];` / `d = [a, b];` — yeni
+    // dizi; genel yol OBJ_ARRAY uretip tutamaci bozardi. Baska bir sag taraf
+    // (`d = e_dizi`) tutamac kopyasidir, genel yola duser.
+    if (node->name && node->right && node->right->type == AST_ARRAY_LITERAL) {
+      const char *en = get_local_struct_array_elem(backend, node->name);
+      StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
+      LLVMValueRef slot = est ? get_local(backend, node->name) : nullptr;
+      if (est && slot) {
+        LLVMValueRef nv = sarr_new_value(backend, est);
+        for (int k = 0; k < node->right->element_count; k++) {
+          LLVMValueRef src = codegen_struct_expr_ptr(backend, node->right->elements[k], est);
+          if (!src) {
+            char msg[320];
+            snprintf(msg, sizeof(msg),
+                     "'%s': struct dizisi literalinin her elemani %s degeri olmali / "
+                     "every element of a struct array literal must be a %s value",
+                     node->name, est->name, est->name);
+            report_codegen_error(backend, node->line, "hata", msg, node->name, nullptr);
+            return llvm_vm_val_int(backend, 0);
+          }
+          sarr_push(backend, nv, src);
+        }
+        LLVMBuildStore(backend->builder, nv, slot);
+        return llvm_vm_val_int(backend, 0);
+      }
+    }
+
     // BUTUN-STRUCT YENIDEN ATAMASI (P0.3, 2026-09-21): `acc = topla(acc, adim)`,
     // `acc = b`, `acc = { x: 0.0, ... }`, `acc = vs[i]`. Hedef tipli bir struct
     // yereli. Eskiden buraya OZEL bir dal yoktu: sag taraf VMValue olarak
@@ -9346,6 +9771,14 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
             LLVMValueRef loaded = LLVMBuildLoad2(
                 backend->builder, dst_st->llvm_type, src, "struct.assign.load");
             LLVMBuildStore(backend->builder, loaded, dst);
+            return llvm_vm_val_int(backend, 0);
+          }
+        }
+        // (a2) struct dizisi elemani (`acc = d[i]`, P1.1): isaretciden kopya.
+        if (rv->type == AST_ARRAY_ACCESS) {
+          LLVMValueRef src = codegen_struct_expr_ptr(backend, rv, dst_st);
+          if (src) {
+            sarr_copy_struct(backend, dst_st, src, dst);
             return llvm_vm_val_int(backend, 0);
           }
         }
@@ -9406,6 +9839,56 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
             LLVMBuildStore(backend->builder, LLVMConstNull(dst_st->llvm_type), dst);
             emit_unpack_boxed_struct_into(backend, boxed, dst_st, dst);
           }
+          return llvm_vm_val_int(backend, 0);
+        }
+      }
+    }
+
+    // TIPLI STRUCT DIZISI hedefleri (P1.1): `d[i].x = v` ve `d[i] = e`.
+    if (node->left && node->left->type == AST_ARRAY_ACCESS && node->right) {
+      ASTNode_C *t = node->left;
+      // d[i].x = v
+      if (t->index && t->index->type == AST_STRING_LITERAL && t->index->value.string_value &&
+          t->left && t->left->type == AST_ARRAY_ACCESS && t->left->left &&
+          t->left->left->type == AST_IDENTIFIER && t->left->index &&
+          t->left->index->type != AST_STRING_LITERAL) {
+        const char *en = sarr_elem_of_ident(backend, t->left->left);
+        StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
+        if (est) {
+          int fi = struct_type_field_index(est, t->index->value.string_value);
+          if (fi < 0) {
+            char msg[320];
+            snprintf(msg, sizeof(msg), "'%s' struct'inda '%s' alani yok / struct '%s' has no field '%s'",
+                     est->name, t->index->value.string_value, est->name, t->index->value.string_value);
+            report_codegen_error(backend, node->line, "hata", msg, t->index->value.string_value, nullptr);
+            return llvm_vm_val_int(backend, 0);
+          }
+          LLVMValueRef v = codegen_expression(backend, node->right);
+          LLVMValueRef ep = sarr_elem_ptr(backend, t->left->left->name, t->left->index, "sarr.set");
+          if (v && ep) {
+            struct_field_store_from_boxed(backend, est, ep, fi, v, "sarr.set.field");
+            return v;
+          }
+        }
+      }
+      // d[i] = e
+      if (t->left && t->left->type == AST_IDENTIFIER && t->index &&
+          t->index->type != AST_STRING_LITERAL) {
+        const char *en = sarr_elem_of_ident(backend, t->left);
+        StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
+        if (est) {
+          LLVMValueRef src = codegen_struct_expr_ptr(backend, node->right, est);
+          if (!src) {
+            char msg[320];
+            snprintf(msg, sizeof(msg),
+                     "'%s[..]' elemanina yalnizca %s degeri atanabilir / "
+                     "only a %s value can be assigned to an element of '%s[]'",
+                     t->left->name, est->name, est->name, est->name);
+            report_codegen_error(backend, node->line, "hata", msg, t->left->name, nullptr);
+            return llvm_vm_val_int(backend, 0);
+          }
+          LLVMValueRef ep = sarr_elem_ptr(backend, t->left->name, t->index, "sarr.set.elem");
+          if (ep) sarr_copy_struct(backend, est, src, ep);
           return llvm_vm_val_int(backend, 0);
         }
       }
@@ -10000,7 +10483,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // Lower in place to a desugared C-style for over an index, then re-
     // dispatch through the now-AST_BLOCK case. Done lazily on first visit
     // so the AST stays small until/unless this codegen pass touches it.
-    lower_for_in_in_place(node);
+    lower_for_in_in_place(backend, node);
     return codegen_statement(backend, node);
   }
   case AST_FOR: {
@@ -11982,6 +12465,15 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
             backend, backend->vm_value_type, pname);
         LLVMBuildStore(backend->builder, val, alloca);
         add_local(backend, pname, alloca);
+        // `Dusman[] d` parametresi (P1.1): tutamac kutulu geldi, eleman
+        // tipini kaydet ki govdedeki `d[i].x` tipli yolu alsin.
+        if (node->parameters[i]->data_type == TYPE_ARRAY &&
+            node->parameters[i]->elem_custom_type) {
+          StructTypeEntry *pest =
+              find_struct_type(backend, node->parameters[i]->elem_custom_type);
+          if (pest && struct_is_trivially_unboxable(pest))
+            add_local_struct_array(backend, pname, alloca, pest->name);
+        }
         // PR 3f: surface this boxed parameter to the debugger.
         llvm_backend_emit_local_vmvalue_declare(
             backend, pname, alloca, node->line);
@@ -12316,6 +12808,14 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
               // PR 3g: surface this top-level boxed global to the debugger.
               llvm_backend_emit_global_declare(backend, decl->name, global_var,
                                                decl->line, /*is_vmvalue=*/1);
+              // `Dusman[] d` global'i (P1.1): tutamac VMValue global'inde
+              // kalir; eleman tipini kuresel kapsama yaz ki fonksiyonlar
+              // `d[i].x`i tipli yoldan indirsin.
+              if (decl->data_type == TYPE_ARRAY && decl->elem_custom_type) {
+                StructTypeEntry *gest = find_struct_type(backend, decl->elem_custom_type);
+                if (gest && struct_is_trivially_unboxable(gest))
+                  add_local_struct_array(backend, decl->name, global_var, gest->name);
+              }
             }
           }
         }

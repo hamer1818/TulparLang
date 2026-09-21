@@ -1,0 +1,39 @@
+// P1.1 karsilastirma ikizi: AYNI is, 11 paralel dizi yazimiyla (motorun
+// 2026-09-21'e kadar zorunlu oldugu sekil). benchmarks/dusman_dizisi.tpr ile
+// birebir ayni hesabi yapar; tek fark veri yerlesimi.
+
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) { n = 2000; }
+
+array d_id = [];
+array d_can = [];
+array d_x = [];
+array d_z = [];
+array d_yaw = [];
+array d_kovala = [];
+int i = 0;
+while (i < n) {
+    push(d_id, i);
+    push(d_can, 100);
+    push(d_x, i * 0.5);
+    push(d_z, 0.0);
+    push(d_yaw, 0.0);
+    push(d_kovala, false);
+    i = i + 1;
+}
+
+int kare = 0;
+float toplam = 0.0;
+while (kare < 500) {
+    int k = 0;
+    while (k < n) {
+        d_x[k] = d_x[k] + 0.25;
+        d_z[k] = d_z[k] + d_x[k] * 0.001;
+        d_yaw[k] = d_x[k] - d_z[k];
+        if (d_can[k] > 0) { d_kovala[k] = true; }
+        toplam = toplam + d_yaw[k];
+        k = k + 1;
+    }
+    kare = kare + 1;
+}
+print(toInt(toplam));

@@ -475,6 +475,14 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # Tipli struct dizisi HATA YOLLARI (P1.1): codegen hatalari, `tulpar build`.
+    if [ -x tests/struct_dizisi_hatalari.sh ]; then
+        if ! bash tests/struct_dizisi_hatalari.sh ./tulpar; then
+            echo -e "${RED}struct dizisi hata yollari basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
     # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde

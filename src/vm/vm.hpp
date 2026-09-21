@@ -99,7 +99,11 @@ typedef enum {
 } VMValueType;
 
 // Object types for heap allocation
-typedef enum { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION, OBJ_STRUCT, OBJ_CLOSURE, OBJ_PROMISE } ObjType;
+// OBJ_STRUCT_ARRAY SONA eklendi (P1.1, 2026-09-21): bu sayilar codegen'in
+// urettigi IR'de sabit olarak duruyor (`1 /* OBJ_ARRAY */` karsilastirmalari)
+// ve onceden derlenmis wasm/android arsivlerine siziyor — ortadan eklemek
+// eski arsivlerle sessiz uyusmazlik demek.
+typedef enum { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION, OBJ_STRUCT, OBJ_CLOSURE, OBJ_PROMISE, OBJ_STRUCT_ARRAY } ObjType;
 
 // Base object header - ARC enabled
 typedef struct Obj {
@@ -311,6 +315,31 @@ typedef struct {
   int64_t fields[1];       // flexible array — index 0..field_count-1 valid
 } ObjStruct;
 
+// TIPLI STRUCT DIZISI (P1.1, 2026-09-21): `Dusman[] d`. Elemanlar ARDISIK ve
+// KUTUSUZ — her eleman field_count adet 8 baytlik yuva, ObjStruct/LLVM
+// yerlesimiyle ayni bit deseni (int/bool i64, float double). Kutulu dizideki
+// struct (VM_OBJECT: string anahtarli, her `d[i].x` bir strcmp aramasi +
+// gidis-donuste 11 alanlik ac/paketle) yerine `d[i].x` = isaretci aritmetigi
+// + tipli yuk. Motorun oyun betigi bu yuzden dusman verisini 11 paralel
+// dizide tutuyordu; bu nesne o zorunlulugu kaldirir.
+//
+// `field_names` / `field_types` codegen'in modul duzeyi SABIT tablolari
+// (print / toJson icin; 0 int, 1 float, 2 bool — aot_struct_unpack_typed ile
+// ayni kod). `data` ObjArray::items_ gibi malloc/realloc; nesne basligi
+// allocate_object ile (vm_allocate_struct_array).
+typedef struct {
+  Obj obj;
+  const char *type_name;
+  const char *const *field_names;
+  const int *field_types;
+  int field_count;   // eleman basina yuva
+  int count;         // eleman sayisi
+  int capacity;      // eleman cinsinden
+  int64_t *data;     // count * field_count yuva
+} ObjStructArray;
+#define IS_STRUCT_ARRAY(v) (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_STRUCT_ARRAY)
+#define AS_STRUCT_ARRAY(v) ((ObjStructArray *)AS_OBJ(v))
+
 #define IS_STRUCT(v) (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_STRUCT)
 #define AS_STRUCT(v) ((ObjStruct *)AS_OBJ(v))
 
@@ -462,6 +491,7 @@ ObjFunction *vm_new_function(VM *vm);
 
 // Array functions
 ObjArray *vm_allocate_array(VM *vm);
+ObjStructArray *vm_allocate_struct_array(VM *vm);  // P1.1
 void vm_array_push(VM *vm, ObjArray *array, VMValue value);
 
 // Object functions

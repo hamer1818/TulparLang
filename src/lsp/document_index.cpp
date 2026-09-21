@@ -197,7 +197,9 @@ void collect_var_decls(const ASTNode_C *node, const char *source,
         !(node->name[0] == '_' && node->name[1] == '_')) {
         IndexVariable v;
         v.name = node->name;
-        v.type = render_type(node->data_type, node->return_custom_type);
+        v.type = node->elem_custom_type
+                     ? std::string(node->elem_custom_type) + "[]"   // `Dusman[]` (P1.1)
+                     : render_type(node->data_type, node->return_custom_type);
         v.line = node->line;
         v.column = locate_name_column(source, node->line, node->name);
         v.scope_function = scope_function;

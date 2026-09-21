@@ -186,6 +186,9 @@ struct Parameter {
     std::string name;
     DataType type;
     std::optional<std::string> custom_type;
+    // `Dusman[] d` — dizi tipinin ELEMAN struct adi (P1.1). Yalniz dizi
+    // tipleri icin dolu; codegen tipli struct dizisi yerelini bundan tanir.
+    std::optional<std::string> elem_custom_type;
     
     Parameter(const std::string& n, DataType t)
         : name(n), type(t) {}
@@ -195,6 +198,7 @@ struct VariableDecl {
     std::string name;
     DataType data_type;
     std::optional<std::string> custom_type;
+    std::optional<std::string> elem_custom_type;  // `Dusman[] d` (P1.1)
     std::unique_ptr<ASTNode> initializer;
     bool is_moved;
     // `const int x = 5;` — yeniden atama YASAK. Denetim ayristiricida

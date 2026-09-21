@@ -596,6 +596,15 @@ static void free_object(Obj *obj) {
       free(obj);
     break;
   }
+  case OBJ_STRUCT_ARRAY: {
+    // P1.1: eleman deposu her zaman malloc'lu (ObjArray::items_ gibi).
+    ObjStructArray *a = (ObjStructArray *)obj;
+    free(a->data);
+    a->data = nullptr;
+    if (!from_arena)
+      free(a);
+    break;
+  }
   case OBJ_CLOSURE: {
     if (!from_arena)
       free(obj);
@@ -845,6 +854,20 @@ ObjArray *vm_allocate_array(VM *vm) {
   array->items_ = nullptr;
   array->idata = nullptr;
   return array;
+}
+
+// P1.1: tipli struct dizisi basligi. Alanlar aot_sarr_new doldurur.
+ObjStructArray *vm_allocate_struct_array(VM *vm) {
+  ObjStructArray *a = (ObjStructArray *)allocate_object(
+      vm, sizeof(ObjStructArray), OBJ_STRUCT_ARRAY);
+  a->type_name = nullptr;
+  a->field_names = nullptr;
+  a->field_types = nullptr;
+  a->field_count = 0;
+  a->count = 0;
+  a->capacity = 0;
+  a->data = nullptr;
+  return a;
 }
 
 void vm_array_push(VM *vm, ObjArray *array, VMValue value) {

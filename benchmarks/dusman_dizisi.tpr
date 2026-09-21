@@ -1,0 +1,48 @@
+// P1.1 (2026-09-21) — TIPLI STRUCT DIZISI vs paralel diziler.
+//
+// Motorun oyun betigindeki gercek kalip: N dusman, her kare her dusmanin
+// birkac alani okunup yaziliyor. Iki yazim ayni isi yapar:
+//   * `Dusman[] d` (bu dosya): elemanlar ardisik + kutusuz, `d[i].x` =
+//     eleman isaretcisi + GEP + tipli yuk.
+//   * 11 paralel dizi (dusman_dizisi_paralel.tpr): motorun 2026-09-21'e
+//     kadar zorunlu oldugu yazim.
+// Ucuncu bir ikiz yok: kutulu `array` icinde struct, her alan erisiminde
+// string anahtarli arama demek ve bu kiyasin konusu o degil.
+//
+// Calistir: TULPAR_BENCH_N=2000 ./tulpar benchmarks/dusman_dizisi.tpr
+
+struct Dusman { int id; int can; float x; float z; float yaw; bool kovala; }
+
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) { n = 2000; }
+
+Dusman[] d = [];
+int i = 0;
+while (i < n) {
+    Dusman e;
+    e.id = i;
+    e.can = 100;
+    e.x = i * 0.5;
+    e.z = 0.0;
+    e.yaw = 0.0;
+    e.kovala = false;
+    push(d, e);
+    i = i + 1;
+}
+
+// 500 kare x n dusman: oku + yaz.
+int kare = 0;
+float toplam = 0.0;
+while (kare < 500) {
+    int k = 0;
+    while (k < n) {
+        d[k].x = d[k].x + 0.25;
+        d[k].z = d[k].z + d[k].x * 0.001;
+        d[k].yaw = d[k].x - d[k].z;
+        if (d[k].can > 0) { d[k].kovala = true; }
+        toplam = toplam + d[k].yaw;
+        k = k + 1;
+    }
+    kare = kare + 1;
+}
+print(toInt(toplam));
