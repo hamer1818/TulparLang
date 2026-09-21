@@ -177,11 +177,30 @@ func run_g5_const() {
 // [B] REDDEDILMESI GEREKENLER — derleyici alt surec olarak cagriliyor
 // ---------------------------------------------------------------------------
 str _bin = "";
+int _win = -1;            // -1 bilinmiyor, 1 Windows, 0 degil
+
+// Windows mu? Isaret olarak "C:/Windows" dizini kullaniliyor.
+// NEDEN `file_exists("./tulpar.exe")` DEGIL: bir Linux calisma kopyasinda
+// depo kokunde BAYAT bir tulpar.exe durabiliyor (bu depoda gercekten oldu,
+// bkz. build.sh'teki "3 ay bayat PE32+ artigi" notu) ve o zaman test kendini
+// Windows saniyordu.
+func _windows_mu(): bool {
+    if (_win < 0) {
+        if (file_exists("C:/Windows")) { _win = 1; } else { _win = 0; }
+    }
+    return _win == 1;
+}
 
 func _derleyici(): str {
     if (_bin == "") {
         _bin = env("TULPAR_BIN");
-        if (_bin == "") { _bin = "./tulpar"; }
+        if (_bin == "") {
+            // Windows'ta `./tulpar` CALISMAZ: dosyanin adi tulpar.exe ve
+            // komut cmd.exe'ye gidiyor. Bu, olcumde dort KONTROL'un birden
+            // "expected 0 got 1" vermesinin sebebiydi — kapi reddi olcuyor
+            // sanilirken aslinda CALISMAYAN BIR KOMUTU olcuyordu.
+            if (_windows_mu()) { _bin = "tulpar.exe"; } else { _bin = "./tulpar"; }
+        }
     }
     return _bin;
 }
@@ -197,8 +216,16 @@ func derleme_kodu(str kaynak): int {
     str yol = "tulpar_gramer_" + toString(timestamp()) + "_" +
               toString(randint(1, 999999)) + ".tpr";
     write_file(yol, kaynak);
-    int rc = sys_run(_derleyici() + " typecheck " + yol + " > /dev/null 2>&1");
-    sys_run("rm -f " + yol);
+    // Bos aygit ve silme komutu da platforma gore: cmd.exe'de "/dev/null"
+    // ve "rm" YOKTUR.
+    str bos = "/dev/null";
+    str sil = "rm -f ";
+    if (_windows_mu()) {
+        bos = "NUL";
+        sil = "del /q ";
+    }
+    int rc = sys_run(_derleyici() + " typecheck " + yol + " > " + bos + " 2>&1");
+    sys_run(sil + yol);
     return rc;
 }
 
