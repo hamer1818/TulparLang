@@ -1,0 +1,59 @@
+// enum — adlandirilmis tamsayi sabitleri
+// ======================================
+//
+// Calistir:  ./tulpar examples/43_enum.tpr
+//
+// Dile 2026-09-21'de eklendi (P0.2). Neden: oyun betikleri durum
+// makinelerini `int EKRAN_MENU = 0; int EKRAN_OYUN = 1;` diye sihirli
+// sayilarla yaziyordu. Simdi:
+//
+//   enum Ekran { MENU, OYUN, DURAKLAT }     // 0, 1, 2
+//   Ekran e = Ekran.MENU;                   // Ekran = int
+//
+// `Ekran.MENU` ayristirmada sayiya donusur: calisma zamani bedeli SIFIR.
+// Deger vermek serbest (`= 10`), verilmeyen bir oncekinin +1'idir.
+// Turkce: `sayim Yon { KUZEY, GUNEY }`.
+
+enum Ekran { MENU, OYUN, DURAKLAT, AYAR }
+enum Hasar { YOK = 0, HAFIF = 10, AGIR = 35 }
+
+func ekran_adi(Ekran e): str {
+    return match e {
+        Ekran.MENU     => "Menu",
+        Ekran.OYUN     => "Oyun",
+        Ekran.DURAKLAT => "Duraklat",
+        _              => "Ayarlar"
+    };
+}
+
+// Basit gecis tablosu: hangi tustan hangi ekrana.
+func gecis(Ekran e, str tus): Ekran {
+    if (tus == "ESC") {
+        return match e {
+            Ekran.OYUN     => Ekran.DURAKLAT,
+            Ekran.DURAKLAT => Ekran.OYUN,
+            _              => Ekran.MENU
+        };
+    }
+    if (tus == "ENTER" && e == Ekran.MENU) { return Ekran.OYUN; }
+    if (tus == "A" && e == Ekran.MENU) { return Ekran.AYAR; }
+    return e;
+}
+
+print("=== enum ===");
+print("Ekran.MENU = " + toString(Ekran.MENU) + ", Ekran.AYAR = " + toString(Ekran.AYAR));
+print("Hasar.AGIR = " + toString(Hasar.AGIR));
+
+Ekran e = Ekran.MENU;
+array tuslar = ["ENTER", "ESC", "ESC", "ESC", "A", "ESC"];
+int i = 0;
+while (i < len(tuslar)) {
+    Ekran sonraki = gecis(e, tuslar[i]);
+    print(ekran_adi(e) + " --" + tuslar[i] + "--> " + ekran_adi(sonraki));
+    e = sonraki;
+    i = i + 1;
+}
+
+int can = 100;
+can = can - Hasar.AGIR;
+print("can: " + toString(can));

@@ -35,6 +35,84 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Added — çoklu dönüş / tuple (P0.1)
+
+```tpr
+func yon(fx, fz, tx, tz): (float, float) { ...; return hx / uz, hz / uz; }
+float dx, dz = yon(px, pz, 3.0, 4.0);   // bildirim (`float dx, int n = g();` de olur)
+dx, dz = yon(px, pz, tx, tz);           // var olan değişkenlere
+var q, r = bol(17, 5);                  // tipler fonksiyondan
+```
+
+Motorun oyun betiği iki sonucu `g_yon_x` / `g_yon_z` globallerine yazıyordu
+("Tulpar'da çoklu dönüş yok"). Tamamen **ayrıştırıcı şekeri**: `(float,
+float)` için `struct __tup_float_float { float _0; float _1; }` sentezlenir
+(ad yalnız tiplerden, programın başına bir kez), fonksiyon o struct'ı döner,
+bildirim/atama alanları açar. P0.3 sayesinde float/int tuple'ları native
+res-ptr ile döner: IR'de `__tup_float_float = type { double, double }`,
+sıcak fonksiyonda **sıfır** tahsis çağrısı. `str` içeren tuple kutulu yoldan
+yine çalışır. Bildirim sırası önemsiz (token ön taraması). Blok kapsamı
+korunur: `float a, b = f();` üç deyime açılır ama bir bloğa sarılmaz
+(`pending_after_`); süslü parantezsiz `if (x) float a, b = f();` açık hata.
+
+Sınır (v1): sağ taraf **aynı dosyada** `: (T, T)` bildiren bir fonksiyonun
+doğrudan çağrısı olmalı (closure/değişken çağrısı ve import edilen modülün
+fonksiyonu hata); tuple tek değişkene bağlanamaz (`var t = f()` hata).
+Sekiz hata yolu `tests/tuple_hatalari.sh` ile kilitli (suites içinde);
+`tests/tuple_return.test.tpr` 11/11; `examples/44_coklu_donus.tpr`. LSP
+tamamlama `__` önekli derleyici geçicilerini (`__t0`, `__r0`) göstermez.
+
+### Added — float alanlı struct artık KUTUSUZ (P0.3)
+
+`struct Vec3 { float x; float y; float z; }` LLVM'de `{ double, double,
+double }` — yerel, parametre (değer), dönüş (res-ptr), literal init ve
+`match` yapısökümü native. Eskiden tek bir `float` alan struct'ın tamamını
+string anahtarlı VM_OBJECT'e düşürüyordu (her `p.x` bir `strcmp` araması);
+motorun oyun betiği bu yüzden düşman verisini 11 paralel dizide tutuyordu.
+
+Ölçüm (`benchmarks/vec3_sum`, 10M iterasyon, en iyi/5): **1671,8 → 49,5 ms**
+(C `-O2` 6,5). Int `struct_sum` gerilemedi (8,1 → 0,6 ms). Kutulu diziye giren
+struct (push) hâlâ VM_OBJECT olur; geri açarken (`Vec3 g = vs[0]`) yeni
+`aot_struct_unpack_typed` alan tipine göre DÖNÜŞÜM yapar (int yazılmış
+float alan 9 → 9.0, bit kopyası değil). `print(struct)` float alanı `%g`
+ile basar. `str`/iç içe struct alanları hâlâ kutulu (P1).
+
+Aynı turda üç eski (int struct'ta da var olan, ölçülen) sessiz hata kapandı:
+- **Bütün-struct yeniden atama** `acc = topla(acc, adim)` / `acc = b` /
+  `acc = { … }` / `acc = vs[i]`: sağ taraf 16 baytlık VMValue olarak struct
+  alloca'sının üstüne yazılıyor, alanlar 0 okunuyordu — oyun döngüsünün
+  temel kalıbı sessizce yanlıştı.
+- **Bildirimde kopya** `Vec3 b = a;`: tipli alloca VMValue diye okunup
+  unpack'e veriliyordu → SIGSEGV.
+- **Struct global** `Vec3 g = …;` üst düzeyde, `g.x` fonksiyonda: "get
+  işlemi için geçersiz hedef" ile düşüyordu. Artık yerleşim tipinde LLVM
+  global'i + küresel kapsam kaydı; fonksiyonlar GEP ile doğrudan okur/yazar.
+
+Alan erişimi yazan her yeni codegen noktası `struct_field_load_boxed` /
+`struct_field_store_from_boxed` yardımcılarını kullanmalı (`int_type`
+varsayma). `tests/struct_float.test.tpr` 10/10; mevcut struct paketleri
+değişmeden yeşil.
+
+### Added — `enum`: adlandırılmış tamsayı sabitleri (P0.2)
+
+Durum makineleri `int EKRAN_MENU = 0; int EKRAN_OYUN = 1;` diye sihirli
+sayılarla yazılıyordu (motorun oyun betiğinde 39 karşılaştırma). Artık:
+
+```tpr
+enum Ekran { MENU, OYUN, DURAKLAT = 5, AYAR }   // 0, 1, 5, 6
+Ekran e = Ekran.MENU;                           // Ekran = int
+match e { Ekran.MENU => ..., _ => ... }
+```
+
+`Ekran.MENU` **ayrıştırmada** sayıya katlanır — çalışma zamanı bedeli sıfır,
+codegen/typeinfer anahtar kelimeyi görmez. Bildirim sırası önemsiz (token
+ön taraması), `};` ve sondaki virgül serbest, Türkçe `sayım`/`sayim`.
+Hata yolları açık: bilinmeyen üye, yeniden tanım, fonksiyon içinde bildirim,
+tamsayı olmayan değer, yinelenen üye — beşi de ayrıştırma hatası
+(`tests/enum_hatalari.sh`, `build.sh suites` içinde). LSP tamamlama `enum`
+anahtar kelimesini ve üyeleri (değerleriyle) görüyor. Sınır (v1): yalnız üst
+düzey, aynı dosya; nominal değil. Bkz. `plans/08_oyun_dili_p0.md`.
+
 ### Doğruluk — üç sessiz hata sınıfı kapandı
 
 - **Yığın sızıntısı (R11).** `AST_ARRAY_LITERAL` ve dört kutulu-ABI builtin

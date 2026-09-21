@@ -2001,6 +2001,32 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 ### Dil seviyesi
 
+- ✅ **Çoklu dönüş / tuple (2026-09-21, P0.1 — `plans/08_oyun_dili_p0.md`).**
+  `func f(): (float, float) { return a, b; }`, `float x, y = f();`,
+  `x, y = f();`, `var q, r = bol(17, 5);`. Ayrıştırıcı şekeri: tip listesi
+  için sentezlenmiş struct (`__tup_float_float`), P0.3 sayesinde native
+  res-ptr → sıfır tahsis (IR kanıtı). Bildirim sırası önemsiz (ön tarama).
+  v1 sınırı: sağ taraf aynı dosyadaki adlandırılmış fonksiyonun doğrudan
+  çağrısı; tuple tek değişkene bağlanamaz. `tests/tuple_return.test.tpr`
+  11/11, `tests/tuple_hatalari.sh` 9/9, `examples/44_coklu_donus.tpr`.
+- ✅ **Float alanlı struct kutusuz (2026-09-21, P0.3 — `plans/08_oyun_dili_p0.md`).**
+  `struct_is_trivially_unboxable` artık `float`ı da kabul ediyor: alan
+  başına 8 baytlık skaler yuva (`i64` / `double`), yerleşim değişmediği
+  için `ObjStruct` bit-kopyası aynı. `benchmarks/vec3_sum` 1671,8 → 49,5 ms
+  (C 6,5). Üç eski sessiz hata da kapandı: bütün-struct yeniden atama
+  (0 okunuyordu), bildirimde kopya (SIGSEGV), fonksiyondan struct global
+  erişimi (çalışma zamanı hatası) — üçü int struct'ta da vardı.
+  `tests/struct_float.test.tpr` 10/10. Kalan: `str`/iç içe alanlar kutulu,
+  typed struct dizisi yok (P1).
+- ✅ **`enum` eklendi (2026-09-21, P0.2 — bkz. `plans/08_oyun_dili_p0.md`).**
+  `enum Ekran { MENU, OYUN, DURAKLAT = 5, AYAR }` → 0, 1, 5, 6; `Ekran.MENU`
+  **ayrıştırmada** IntLiteral'e katlanır, `Ekran` tip adı `int` demektir
+  (değişken/parametre/dönüş/struct alanı). Bildirim sırası önemsiz (ön
+  tarama); `sayım`/`sayim` Türkçe takma ad. Neden: motorun oyun betiği durum
+  makinelerini `int EKRAN_MENU = 0;` sihirli sayılarıyla yazıyordu. v1 sınırı:
+  yalnız üst düzey ve aynı dosya; nominal değil (int ile karışır, `match`
+  tamlık uyarısı yok). `tests/enum.test.tpr` 7/7, `tests/enum_hatalari.sh` 6/6
+  (suites içinde), `examples/43_enum.tpr`.
 - ✅ **StringBuilder canlandırıldı (düzeltildi 2026-07-21).** `sb_append`
   VMValue argümanını ham {i32,i64} aggregate deklarasyonuyla değerle
   geçiriyordu — `llvm_make_vmvalue_func_type`'ta belgelenen SysV lowering

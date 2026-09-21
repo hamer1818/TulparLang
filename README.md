@@ -571,12 +571,24 @@ json user = {
 };
 print(user.address.city);  // dot access works
 
-// Custom types
+// Custom types — int/bool/float fields are unboxed (native LLVM structs)
 type Person {
     str name;
     int age;
 }
 Person p = { name: "Ali", age: 25 };
+struct Vec3 { float x; float y; float z; }
+Vec3 v = { x: 1.5, y: 0, z: -2 };   // {double, double, double}, zero heap
+
+// Multiple return values — a synthesized unboxed struct under the hood
+func polar(float x, float y): (float, float) { return sqrt(x*x + y*y), atan2(y, x); }
+float r, theta = polar(3.0, 4.0);
+r, theta = polar(1.0, 0.0);
+
+// Enums — named integer constants, folded at parse time (zero runtime cost)
+enum Screen { MENU, GAME, PAUSED = 5, SETTINGS }   // 0, 1, 5, 6
+Screen s = Screen.MENU;                             // Screen is an int
+str label = match s { Screen.MENU => "menu", _ => "other" };
 
 // Control flow
 for (int i = 0; i < 10; i++) { print(i); }

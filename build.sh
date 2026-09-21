@@ -457,6 +457,24 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # `enum` HATA YOLLARI (P0.2): ayristirma hatalari ne typeinfer fixture'ina
+    # (`[typecheck]` ister) ne .test.tpr paketine (derlenemeyen kaynak) sigar;
+    # bu harness derleyiciyi disaridan cagirip cikis kodu + mesaj olcuyor.
+    if [ -x tests/enum_hatalari.sh ]; then
+        if ! bash tests/enum_hatalari.sh ./tulpar; then
+            echo -e "${RED}enum hata yollari basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
+    # Coklu donus / tuple HATA YOLLARI (P0.1): ayni gerekce.
+    if [ -x tests/tuple_hatalari.sh ]; then
+        if ! bash tests/tuple_hatalari.sh ./tulpar; then
+            echo -e "${RED}tuple hata yollari basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
     # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde

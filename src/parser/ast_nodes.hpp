@@ -442,6 +442,22 @@ struct TypeDecl {
     TypeDecl(const std::string& n, SourceLocation l) : name(n), loc(l) {}
 };
 
+// `enum Ekran { MENU, OYUN = 5, AYAR }` — adlandirilmis tamsayi sabitleri
+// (P0.2, 2026-09-21). Uyeler bildirim sirasinda, degerleriyle. Ayristirici
+// her `Ekran.MENU` erisimini IntLiteral'e KATLAR ve `Ekran` tip adini
+// TYPE_INT'e cozer; yani bu dugum codegen/typeinfer icin bir sey ifade
+// etmez (AST_ENUM_DECL, no-op). Dugum yine de AST'de duruyor: LSP
+// (tamamlama/hover), `tulpar doc` ve bicimlendirici bilgiyi KAYBETMESIN.
+// Kapsam: yalniz ust duzey ve ayni dosya — import edilen modulun enum'u
+// ice aktaran dosyada gorunmez (v2: modul cozumlemesi ayristiriciya girer).
+struct EnumDecl {
+    std::string name;
+    std::vector<std::pair<std::string, long long>> members;
+    SourceLocation loc;
+
+    EnumDecl(const std::string& n, SourceLocation l) : name(n), loc(l) {}
+};
+
 // ============================================================================
 // Main AST Node Variant
 // ============================================================================
@@ -481,7 +497,8 @@ struct ASTNode {
         ImportStatement,
         TypeDecl,
         LambdaExpr,
-        MatchExpr>;
+        MatchExpr,
+        EnumDecl>;
 
     Variant value;
 

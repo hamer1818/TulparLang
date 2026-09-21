@@ -1,0 +1,204 @@
+// P0.3 (2026-09-21) — float alanli struct KUTUSUZ.
+//
+// Sozlesme: alanlari yalniz int/bool/float olan bir struct, tipli alloca +
+// GEP yolunu alir (LLVM `{ double, ... }`); yerel, parametre (deger), donus
+// (res-ptr) ve literal init native'dir. Kutulu diziye girince (push) VM_OBJECT
+// olur (float alan VM_FLOAT olarak kutulanir) ve `Vec3 g = vs[0]` geri
+// acarken alan tipine gore DONUSUM yapar (int yazilmis float alan 9 -> 9.0).
+// Oncesi: tek bir float alan struct'in tamamini string anahtarli nesneye
+// dusuruyordu; bu dosya o yolun artik alinmadigini davranisla sabitler
+// (IR kaniti: `--emit-llvm`de `tulpar_struct.Vec3 = type { double, double,
+// double }`; hiz kaniti: benchmarks/vec3_sum).
+// Calistir: ./tulpar tests/struct_float.test.tpr
+import "test";
+
+struct Vec3 { float x; float y; float z; }
+struct Mix { int id; float val; bool canli; }
+
+func vec3_yap(float x, float y, float z): Vec3 {
+    Vec3 v;
+    v.x = x;
+    v.y = y;
+    v.z = z;
+    return v;
+}
+
+func vec3_topla(Vec3 a, Vec3 b): Vec3 {
+    return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+func vec3_uzunluk(Vec3 v): float {
+    return sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+// Deger semantigi: parametre kopyadir, cagirani degistirmez.
+func vec3_olcek(Vec3 v, float k): Vec3 {
+    v.x = v.x * k;
+    v.y = v.y * k;
+    v.z = v.z * k;
+    return v;
+}
+
+func run_yerel_ve_literal() {
+    Vec3 v = { x: 3.0, y: 4.0, z: 0.0 };
+    assert_close(v.x, 3.0, 0.000001);
+    assert_close(v.y, 4.0, 0.000001);
+    assert_close(vec3_uzunluk(v), 5.0, 0.000001);
+    v.z = v.x * 2.5;
+    assert_close(v.z, 7.5, 0.000001);
+}
+
+// `Vec3 v = { x: 0, y: 1 }` — oyun kodu float alani int literal ile yazar;
+// sitofp ile 0.0/1.0 olmali, bit deseni degil.
+func run_int_literal_float_alana() {
+    Vec3 v = { x: 0, y: 1, z: 2 };
+    assert_close(v.x, 0.0, 0.000001);
+    assert_close(v.y, 1.0, 0.000001);
+    assert_close(v.z, 2.0, 0.000001);
+    v.z = 7;
+    assert_close(v.z, 7.0, 0.000001);
+    assert_close(v.z / 2.0, 3.5, 0.000001);
+}
+
+func run_donus_ve_parametre() {
+    Vec3 a = vec3_yap(1.5, 2.5, -1.0);
+    assert_close(a.x, 1.5, 0.000001);
+    assert_close(a.z, -1.0, 0.000001);
+    Vec3 b = vec3_topla(a, a);
+    assert_close(b.x, 3.0, 0.000001);
+    assert_close(b.y, 5.0, 0.000001);
+    assert_close(b.z, -2.0, 0.000001);
+    Vec3 c = vec3_olcek(a, 2.0);
+    assert_close(c.y, 5.0, 0.000001);
+    assert_close(a.y, 2.5, 0.000001);   // a degismedi (deger semantigi)
+    // ic ice cagri: struct donen cagri, struct bekleyen parametreye
+    assert_close(vec3_uzunluk(vec3_yap(0.0, 3.0, 4.0)), 5.0, 0.000001);
+}
+
+func run_kutulu_dizi() {
+    var vs = [];
+    push(vs, vec3_yap(1.5, 2.5, 3.5));
+    push(vs, vec3_topla(vec3_yap(1.0, 1.0, 1.0), vec3_yap(0.25, 0.25, 0.25)));
+    assert_close(vs[0].y, 2.5, 0.000001);
+    assert_close(vs[1].x, 1.25, 0.000001);
+    Vec3 g = vs[0];                       // geri ac (typed unpack)
+    assert_close(g.z, 3.5, 0.000001);
+    vs[0].x = 9;                          // kutulu nesnede alana INT yazildi
+    Vec3 h = vs[0];
+    assert_close(h.x, 9.0, 0.000001);     // float alana donusum, bit kopyasi degil
+    assert_close(h.y, 2.5, 0.000001);
+    vs[1] = vec3_yap(6.0, 7.0, 8.0);      // elemana struct ata
+    assert_close(vs[1].z, 8.0, 0.000001);
+}
+
+func run_karisik_alanlar() {
+    Mix m;
+    m.id = 7;
+    m.val = 3.5;
+    m.canli = true;
+    assert_eq_int(m.id, 7);
+    assert_close(m.val, 3.5, 0.000001);
+    assert(m.canli, "bool alan true olmali");
+    m.val = m.val * 2.0 + m.id;
+    assert_close(m.val, 14.0, 0.000001);
+    m.id = 2.9;                           // int alana float: kirpilir, bit deseni degil
+    assert_eq_int(m.id, 2);
+    Mix k = { id: 1, val: 0.25, canli: false };
+    assert_eq_int(k.id, 1);
+    assert_close(k.val, 0.25, 0.000001);
+    assert(!k.canli, "bool alan false olmali");
+    var ms = [];
+    push(ms, k);
+    assert_close(ms[0].val, 0.25, 0.000001);
+    assert_eq_int(ms[0].id, 1);
+}
+
+// Kare dongusu kalibi: 1M kere struct dondur/topla — tahsis olmadan.
+func run_dongu() {
+    Vec3 acc = { x: 0.0, y: 0.0, z: 0.0 };
+    Vec3 adim = { x: 0.5, y: 0.25, z: 1.0 };
+    int i = 0;
+    while (i < 1000000) {
+        acc = vec3_topla(acc, adim);
+        i = i + 1;
+    }
+    assert_close(acc.x, 500000.0, 0.001);
+    assert_close(acc.y, 250000.0, 0.001);
+    assert_close(acc.z, 1000000.0, 0.001);
+}
+
+// `match` yapisokumu: struct konu heap'e bit-kopyalanir, alanlar geri
+// bitcast ile double olarak okunmali (aot_struct_get_field_ptr i64 verir).
+func run_match_yapisokum() {
+    Vec3 v = { x: 1.5, y: 2.0, z: -0.5 };
+    float t = match v {
+        Vec3{x, y, z} => x + y + z,
+        _             => -100.0
+    };
+    assert_close(t, 3.0, 0.000001);
+}
+
+// Butun-struct yeniden atamasi: `acc = f(acc, adim)`, `acc = b`,
+// `acc = { ... }`, `acc = vs[i]` — oyun dongusunun temel kalibi.
+func run_yeniden_atama() {
+    Vec3 acc = { x: 0.0, y: 0.0, z: 0.0 };
+    Vec3 adim = { x: 0.5, y: 0.25, z: 1.0 };
+    acc = vec3_topla(acc, adim);          // cagri (hedef arguman da)
+    acc = vec3_topla(acc, adim);
+    assert_close(acc.x, 1.0, 0.000001);
+    assert_close(acc.z, 2.0, 0.000001);
+    Vec3 b = acc;
+    b.x = 42.0;
+    acc = b;                              // yerelden kopya
+    assert_close(acc.x, 42.0, 0.000001);
+    acc = { x: 7.0, y: 8, z: 9.5 };       // literal (int karisik)
+    assert_close(acc.y, 8.0, 0.000001);
+    var vs = [];
+    push(vs, vec3_yap(-1.0, -2.0, -3.0));
+    acc = vs[0];                          // kutulu elemandan
+    assert_close(acc.z, -3.0, 0.000001);
+    b.y = 0.0;
+    assert_close(acc.y, -2.0, 0.000001);  // acc, b'den bagimsiz
+}
+
+// Ust duzey struct GLOBAL'i fonksiyondan oku/yaz/yeniden ata. Eskiden
+// (int struct'ta da) "get islemi icin gecersiz hedef" ile dusuyordu.
+Vec3 g_konum = { x: 1.0, y: 2.0, z: 3.0 };
+func g_oku(): float { return g_konum.x + g_konum.z; }
+func g_yaz(float y) { g_konum.y = y; }
+func g_ilerle(Vec3 adim) { g_konum = vec3_topla(g_konum, adim); }
+
+func run_struct_global() {
+    assert_close(g_oku(), 4.0, 0.000001);
+    g_yaz(9.0);
+    assert_close(g_konum.y, 9.0, 0.000001);
+    g_ilerle(vec3_yap(1.0, 1.0, 1.0));
+    assert_close(g_konum.x, 2.0, 0.000001);
+    assert_close(g_konum.y, 10.0, 0.000001);
+    Vec3 kopya = g_konum;
+    kopya.z = 0.0;
+    assert_close(g_konum.z, 4.0, 0.000001);   // kopya bagimsiz
+}
+
+// Bildirimde kopya `Vec3 b = a;` — eskiden SIGSEGV (int struct'ta da).
+func run_bildirim_kopyasi() {
+    Vec3 a = { x: 1.0, y: 2.0, z: 3.0 };
+    Vec3 b = a;
+    assert_close(b.y, 2.0, 0.000001);
+    b.x = 0.0;
+    assert_close(a.x, 1.0, 0.000001);        // a etkilenmez
+    assert_close(b.x, 0.0, 0.000001);
+}
+
+print("=== float struct (kutusuz) tests ===");
+test("struct global: fonksiyondan oku/yaz/yeniden ata", "run_struct_global");
+test("bildirimde kopya", "run_bildirim_kopyasi");
+test("match yapisokumu (float alanlar)", "run_match_yapisokum");
+test("butun-struct yeniden atama", "run_yeniden_atama");
+test("yerel + literal init", "run_yerel_ve_literal");
+test("int literal -> float alan (sitofp)", "run_int_literal_float_alana");
+test("donus (res-ptr) + parametre (deger)", "run_donus_ve_parametre");
+test("kutulu dizi: push / geri ac / donusum", "run_kutulu_dizi");
+test("karisik int/float/bool alanlar", "run_karisik_alanlar");
+test("1M dongu", "run_dongu");
+test_summary();

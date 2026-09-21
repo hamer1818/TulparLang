@@ -1306,6 +1306,20 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_struct_unpack_named = LLVMAddFunction(
       backend->module, "aot_struct_unpack_named", struct_unpackn_type);
 
+  // aot_struct_unpack_typed(VMValue *v, int field_count, char **names,
+  //                         i32 *types, i64 *dst) -> void — P0.3: alan tipini
+  // de tasir (0 int, 1 float, 2 bool) ki VM_OBJECT'teki int bir deger float
+  // alana sitofp ile insin, float bir deger int alana fptosi ile — ham bit
+  // kopyasi degil. `aot_struct_unpack_named` eski imzasiyla duruyor
+  // (onceden derlenmis arsivler icin); codegen artik bunu cagiriyor.
+  LLVMTypeRef struct_unpackt_params[] = {backend->ptr_type, backend->int32_type,
+                                         backend->ptr_type, backend->ptr_type,
+                                         backend->ptr_type};
+  LLVMTypeRef struct_unpackt_type =
+      LLVMFunctionType(backend->void_type, struct_unpackt_params, 5, 0);
+  backend->func_aot_struct_unpack_typed = LLVMAddFunction(
+      backend->module, "aot_struct_unpack_typed", struct_unpackt_type);
+
   // ====== Fast Array Access (value-based, no alloca) ======
   // aot_array_get_fast(VMValue arr, i64 index) -> VMValue
   LLVMTypeRef get_fast_params[] = {backend->vm_value_type, backend->int_type};
@@ -2742,13 +2756,89 @@ int struct_type_field_index(StructTypeEntry *st, const char *field_name) {
   return -1;
 }
 
+// "Kutusuz" = her alan 8 baytlik SKALER yuva: int/bool -> i64, float -> double
+// (P0.3, 2026-09-21). Oncesinde yalniz int/bool kabul ediliyordu ve tek bir
+// float alan struct'in tamamini string anahtarli VM_OBJECT'e dusuruyordu —
+// her `p.x` bir strcmp aramasi; motorun oyun betigi bu yuzden dusman verisini
+// 11 paralel dizide tutuyordu. Ic ice struct / str / dizi alanlari hala
+// kutulu (P1). Yerlesim 8 bayt/alan kaldigi icin ObjStruct::fields[int64_t]
+// ile bit-kopya (aot_struct_alloc_from_fields, aot_struct_unpack_to)
+// degismeden calisir; alan tipine gore dallanan tek sey yukleme/saklama/
+// kutulama — asagidaki yardimcilar. YENI bir alan erisim noktasi yazarken
+// int_type varsayma, bunlari kullan.
 int struct_is_trivially_unboxable(StructTypeEntry *st) {
   if (!st) return 0;
   for (int i = 0; i < st->field_count; i++) {
     DataType ft = st->field_types[i];
-    if (ft != TYPE_INT && ft != TYPE_BOOL) return 0;
+    if (ft != TYPE_INT && ft != TYPE_BOOL && ft != TYPE_FLOAT) return 0;
   }
   return 1;
+}
+
+static LLVMTypeRef struct_field_llvm_type(LLVMBackend *backend,
+                                          StructTypeEntry *st, int idx) {
+  return st->field_types[idx] == TYPE_FLOAT ? backend->float_type
+                                            : backend->int_type;
+}
+
+// GEP + alan tipinde yuk + kutula (int -> VM_INT, bool -> VM_BOOL,
+// float -> VM_FLOAT).
+static LLVMValueRef struct_field_load_boxed(LLVMBackend *backend,
+                                            StructTypeEntry *st,
+                                            LLVMValueRef alloca, int idx,
+                                            const char *tag) {
+  LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type,
+                                        alloca, (unsigned)idx, tag);
+  LLVMValueRef fv = LLVMBuildLoad2(
+      backend->builder, struct_field_llvm_type(backend, st, idx), fp, tag);
+  switch (st->field_types[idx]) {
+  case TYPE_FLOAT:
+    return llvm_build_vm_val_float(backend, fv);
+  case TYPE_BOOL: {
+    LLVMValueRef as_bool =
+        LLVMBuildICmp(backend->builder, LLVMIntNE, fv,
+                      LLVMConstInt(backend->int_type, 0, 0), tag);
+    return llvm_vm_val_bool_val(backend, as_bool);
+  }
+  default:
+    return llvm_vm_val_int_val(backend, fv);
+  }
+}
+
+// Kutulu VMValue -> alanin ham yuku. float alan: etiket FLOAT ise bit deseni
+// zaten double, degilse (int/bool literal: `Vec3 v = { x: 0 }`) sitofp —
+// select ile, dallanmasiz (bitcast poison uretmez). int/bool alan:
+// llvm_vm_val_to_int_payload — float gelirse fptosi, yani `int` hedefe float
+// yazma duzeltmesiyle (CHANGELOG) AYNI kural. Eskiden bu noktalar ham slot
+// 2'yi kopyaliyordu: int alana float yazmak double'in bit desenini tam sayi
+// diye sakliyordu.
+static LLVMValueRef struct_field_payload_from_boxed(LLVMBackend *backend,
+                                                    StructTypeEntry *st,
+                                                    int idx, LLVMValueRef boxed,
+                                                    const char *tag) {
+  if (st->field_types[idx] == TYPE_FLOAT) {
+    LLVMValueRef vtag = LLVMBuildExtractValue(backend->builder, boxed, 0, tag);
+    LLVMValueRef pay = LLVMBuildExtractValue(backend->builder, boxed, 2, tag);
+    LLVMValueRef is_flt = LLVMBuildICmp(
+        backend->builder, LLVMIntEQ, vtag,
+        LLVMConstInt(backend->int32_type, /*VM_VAL_FLOAT=*/1, 0), tag);
+    LLVMValueRef as_dbl =
+        LLVMBuildBitCast(backend->builder, pay, backend->float_type, tag);
+    LLVMValueRef from_int =
+        LLVMBuildSIToFP(backend->builder, pay, backend->float_type, tag);
+    return LLVMBuildSelect(backend->builder, is_flt, as_dbl, from_int, tag);
+  }
+  return llvm_vm_val_to_int_payload(backend, boxed);
+}
+
+static void struct_field_store_from_boxed(LLVMBackend *backend,
+                                          StructTypeEntry *st,
+                                          LLVMValueRef alloca, int idx,
+                                          LLVMValueRef boxed, const char *tag) {
+  LLVMValueRef v = struct_field_payload_from_boxed(backend, st, idx, boxed, tag);
+  LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type,
+                                        alloca, (unsigned)idx, tag);
+  LLVMBuildStore(backend->builder, v, fp);
 }
 
 // Box a native (trivially-unboxable) struct's fields into a plain key-value
@@ -2757,9 +2847,10 @@ int struct_is_trivially_unboxable(StructTypeEntry *st) {
 // type is gone, `arr[i].field` is a runtime string-key lookup (vm_get/set_
 // element), which only works on an OBJECT — not on the compact int-indexed
 // ObjStruct that `aot_struct_alloc_from_fields` produces. Non-unboxable
-// (float-carrying) structs already live as objects, so this makes int/bool
-// structs behave identically in arrays. `alloca` points at the native
-// `{i64,...}` aggregate; `st` supplies the ordered field names/types.
+// (str/nested-carrying) structs already live as objects, so this makes
+// int/bool/float structs behave identically in arrays. `alloca` points at the
+// native `{i64|double,...}` aggregate; `st` supplies the ordered field
+// names/types (a float field boxes as VM_FLOAT — P0.3).
 static LLVMValueRef box_native_struct_as_object(LLVMBackend *backend,
                                                 LLVMValueRef alloca,
                                                 StructTypeEntry *st) {
@@ -2769,19 +2860,8 @@ static LLVMValueRef box_native_struct_as_object(LLVMBackend *backend,
       LLVMGlobalGetValueType(backend->func_vm_allocate_object),
       backend->func_vm_allocate_object, obj_args, 1, "struct.box.obj");
   for (int i = 0; i < st->field_count; i++) {
-    LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type,
-                                          alloca, (unsigned)i, "struct.box.fp");
-    LLVMValueRef fv = LLVMBuildLoad2(backend->builder, backend->int_type, fp,
-                                     "struct.box.fv");
-    LLVMValueRef boxed;
-    if (st->field_types[i] == TYPE_BOOL) {
-      LLVMValueRef as_bool = LLVMBuildICmp(
-          backend->builder, LLVMIntNE, fv,
-          LLVMConstInt(backend->int_type, 0, 0), "struct.box.tobool");
-      boxed = llvm_vm_val_bool_val(backend, as_bool);
-    } else {
-      boxed = llvm_vm_val_int_val(backend, fv);
-    }
+    LLVMValueRef boxed =
+        struct_field_load_boxed(backend, st, alloca, i, "struct.box.fv");
     LLVMValueRef key = LLVMBuildGlobalStringPtr(
         backend->builder, st->field_names[i], "struct.box.key");
     LLVMValueRef vptr = llvm_build_alloca_at_entry(
@@ -2826,12 +2906,31 @@ static void emit_unpack_boxed_struct_into(LLVMBackend *backend,
   LLVMValueRef nz[] = {z0, z0};
   LLVMValueRef names_ptr = LLVMBuildGEP2(backend->builder, names_arr_ty,
                                          names_arr, nz, 2, "struct.unpack.nptr");
+  // Alan tipi tablosu (0 int, 1 float, 2 bool) — sabit, modul duzeyi global.
+  LLVMTypeRef types_arr_ty = LLVMArrayType(backend->int32_type, st->field_count);
+  std::vector<LLVMValueRef> type_consts;
+  type_consts.reserve((size_t)st->field_count);
+  for (int fi = 0; fi < st->field_count; fi++) {
+    unsigned code = st->field_types[fi] == TYPE_FLOAT ? 1u
+                    : st->field_types[fi] == TYPE_BOOL ? 2u
+                                                       : 0u;
+    type_consts.push_back(LLVMConstInt(backend->int32_type, code, 0));
+  }
+  LLVMValueRef types_glob = LLVMAddGlobal(backend->module, types_arr_ty,
+                                          "struct.unpack.types");
+  LLVMSetInitializer(types_glob,
+                     LLVMConstArray(backend->int32_type, type_consts.data(),
+                                    (unsigned)st->field_count));
+  LLVMSetGlobalConstant(types_glob, 1);
+  LLVMSetLinkage(types_glob, LLVMPrivateLinkage);
+  LLVMValueRef types_ptr = LLVMBuildGEP2(backend->builder, types_arr_ty,
+                                         types_glob, nz, 2, "struct.unpack.tptr");
   LLVMValueRef fc =
       LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0);
-  LLVMValueRef ua[] = {rhs_tmp, fc, names_ptr, dst};
+  LLVMValueRef ua[] = {rhs_tmp, fc, names_ptr, types_ptr, dst};
   LLVMBuildCall2(backend->builder,
-                 LLVMGlobalGetValueType(backend->func_aot_struct_unpack_named),
-                 backend->func_aot_struct_unpack_named, ua, 4, "");
+                 LLVMGlobalGetValueType(backend->func_aot_struct_unpack_typed),
+                 backend->func_aot_struct_unpack_typed, ua, 5, "");
 }
 
 StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl) {
@@ -2862,19 +2961,22 @@ StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl
     st->field_types[i] = type_decl->field_types[i];
   }
 
-  // Build the LLVM struct layout. Trivially unboxable fields (int/bool) map
-  // to i64 — bool gets promoted to i64 so the struct stays naturally aligned
-  // and field load/store sites don't have to special-case smaller integers.
-  // Non-trivial fields fall back to vm_value_type so the struct still has a
-  // reserved slot, but field access against that slot will need to take the
-  // boxed path (left as a follow-up: this PR's VAR_DECL branch only takes
-  // the typed alloca for trivially-unboxable structs).
+  // Build the LLVM struct layout. Unboxable fields are 8-byte scalars:
+  // int/bool map to i64 (bool promoted so the struct stays naturally aligned
+  // and load/store sites don't special-case smaller integers), float maps to
+  // double (P0.3) — same size, so ObjStruct's int64 slots stay a bit-copy.
+  // Non-trivial fields (str / nested struct / array) fall back to
+  // vm_value_type so the struct still has a reserved slot, but such a struct
+  // never takes the typed path (struct_is_trivially_unboxable gates it) and
+  // lives as a boxed VM_OBJECT instead.
   LLVMTypeRef *field_llvm =
       static_cast<LLVMTypeRef *>(malloc(sizeof(LLVMTypeRef) * st->field_count));
   for (int i = 0; i < st->field_count; i++) {
     DataType ft = st->field_types[i];
     if (ft == TYPE_INT || ft == TYPE_BOOL) {
       field_llvm[i] = backend->int_type;
+    } else if (ft == TYPE_FLOAT) {
+      field_llvm[i] = backend->float_type;
     } else {
       field_llvm[i] = backend->vm_value_type;
     }
@@ -5013,19 +5115,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           int idx = struct_type_field_index(st, node->index->value.string_value);
           if (st && idx >= 0) {
             LLVMValueRef alloca_ptr = get_local(backend, receiver_name);
-            LLVMValueRef field_ptr = LLVMBuildStructGEP2(
-                backend->builder, st->llvm_type, alloca_ptr,
-                (unsigned)idx, "struct.field.ptr");
-            LLVMValueRef field_val = LLVMBuildLoad2(
-                backend->builder, backend->int_type, field_ptr, "struct.field");
-            DataType ft = st->field_types[idx];
-            if (ft == TYPE_BOOL) {
-              LLVMValueRef as_bool = LLVMBuildICmp(
-                  backend->builder, LLVMIntNE, field_val,
-                  LLVMConstInt(backend->int_type, 0, 0), "field.tobool");
-              return llvm_vm_val_bool_val(backend, as_bool);
-            }
-            return llvm_vm_val_int_val(backend, field_val);
+            return struct_field_load_boxed(backend, st, alloca_ptr, idx,
+                                           "struct.field");
           }
         }
       }
@@ -5900,8 +5991,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                     LLVMGlobalGetValueType(backend->func_printf),
                     backend->func_printf, sep_args, 1, "");
               }
+              // Alan tipine gore bicim: int/bool `%lld`, float `%g` (P0.3;
+              // `print(1.5)`in en-kisa gosterimiyle 6 anlamli haneye kadar
+              // ayni, otesinde `%g` yuvarlar).
+              const bool fld_is_float = st->field_types[f] == TYPE_FLOAT;
               char fname_lit[256];
-              snprintf(fname_lit, sizeof(fname_lit), "%s: %%lld",
+              snprintf(fname_lit, sizeof(fname_lit),
+                       fld_is_float ? "%s: %%g" : "%s: %%lld",
                        st->field_names[f]);
               LLVMValueRef fname_fmt = LLVMBuildGlobalStringPtr(
                   backend->builder, fname_lit, "struct.print.field");
@@ -5909,8 +6005,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                   backend->builder, st->llvm_type, alloca,
                   (unsigned)f, "struct.print.gep");
               LLVMValueRef field_val = LLVMBuildLoad2(
-                  backend->builder, backend->int_type, field_ptr,
-                  "struct.print.fld");
+                  backend->builder, struct_field_llvm_type(backend, st, f),
+                  field_ptr, "struct.print.fld");
               LLVMValueRef pf_args[] = {fname_fmt, field_val};
               LLVMBuildCall2(backend->builder,
                              LLVMGlobalGetValueType(backend->func_printf),
@@ -8006,8 +8102,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                      callee_entry->return_struct_name);
         }
         // Native res-ptr ABI (alloca of the struct layout + zero placeholder)
-        // only applies to trivially-unboxable (int/bool) struct returns. A
-        // struct with float/string/nested fields is returned as a boxed
+        // only applies to trivially-unboxable (int/bool/float) struct returns.
+        // A struct with string/nested fields is returned as a boxed
         // VM_OBJECT, so let it flow through the normal VMValue path below —
         // res_ptr is a VMValue slot and the loaded VMValue (the object) is
         // returned to the caller, which is what makes `P e = mk()`,
@@ -8106,12 +8202,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                   int idx = struct_type_field_index(st, arg->object_keys[k]);
                   LLVMValueRef vbox =
                       codegen_expression(backend, arg->object_values[k]);
-                  LLVMValueRef i64v = LLVMBuildExtractValue(
-                      backend->builder, vbox, 2, "arg.lit.i64");
-                  LLVMValueRef fp = LLVMBuildStructGEP2(
-                      backend->builder, st->llvm_type, tmp,
-                      (unsigned)idx, "arg.lit.field.ptr");
-                  LLVMBuildStore(backend->builder, i64v, fp);
+                  struct_field_store_from_boxed(backend, st, tmp, idx, vbox,
+                                                "arg.lit");
                 }
                 args[i + 1] = tmp;
                 continue;
@@ -8554,6 +8646,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder,
           LLVMGlobalGetValueType(backend->func_aot_struct_get_field),
           backend->func_aot_struct_get_field, ga, 2, "sfield");
+      if (st->field_types[idx] == TYPE_FLOAT) {
+        // Yuva 8 bayt: ObjStruct'a bit-kopyalanan double geri bitcast (P0.3).
+        LLVMValueRef d = LLVMBuildBitCast(backend->builder, raw,
+                                          backend->float_type, "sfield.d");
+        return llvm_build_vm_val_float(backend, d);
+      }
       if (st->field_types[idx] == TYPE_BOOL) {
         LLVMValueRef b = LLVMBuildICmp(backend->builder, LLVMIntNE, raw,
                                        LLVMConstInt(backend->int_type, 0, 0),
@@ -9019,32 +9117,60 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         }
       }
       if (can_take_typed_path) {
-        LLVMValueRef typed_alloca = llvm_build_alloca_at_entry(
-            backend, st->llvm_type, node->name);
+        // Ust duzeyde Pass 0.1 bu ad icin yerlesim tipinde bir global acti:
+        // alloca yerine ONU kullan ki fonksiyonlar (kuresel kapsam kaydi
+        // uzerinden) ayni depoyu gorsun (P0.3). Fonksiyon icinde ayni ad
+        // yeni bir yereldir: golgeler, global'i ezmez.
+        LLVMValueRef typed_alloca = nullptr;
+        if (at_top_level_scope(backend)) {
+          LLVMValueRef sg =
+              LLVMGetNamedGlobal(backend->module, gsym(node->name).c_str());
+          if (sg && LLVMGlobalGetValueType(sg) == st->llvm_type)
+            typed_alloca = sg;
+        }
+        if (!typed_alloca) {
+          typed_alloca = llvm_build_alloca_at_entry(
+              backend, st->llvm_type, node->name);
+        }
         // Zero-initialize: matches the legacy boxed path's "int 0" defaults
         // for all fields, and saves the user from reading uninitialised
         // memory before they assign to fields.
         LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
                        typed_alloca);
-        if (init_is_object_literal) {
-          // `Point p = { x: 3, y: 4 };` — store each provided field's i64
-          // payload via GEP. Slot 2 of the boxed VMValue holds the int/bool
-          // payload (true/false box as 1/0). Anything else (string, array)
-          // would be miscompiled here, but struct_is_trivially_unboxable()
-          // already guarantees every field is int/bool, and the typeinfer
-          // strict-mode catches obvious string/array literals against an
-          // int field at typecheck time.
+        // Ayni tipte bir yerelden kopya (`Vec3 b = a;`): butun yapiyi
+        // yukle/sakla (P0.3). Eskiden `init_is_heap_unpack` yoluna dusuyordu:
+        // tipli alloca 16 baytlik VMValue diye okunup unpack'e veriliyor,
+        // cop isaretci -> SIGSEGV (int struct'ta da, olculdu 2026-09-21).
+        bool init_is_struct_copy = false;
+        if (node->right && node->right->type == AST_IDENTIFIER &&
+            node->right->name) {
+          const char *rsn = get_local_struct_type(backend, node->right->name);
+          LLVMValueRef rsrc = rsn ? get_local(backend, node->right->name) : nullptr;
+          if (rsn && rsrc && strcmp(rsn, st->name) == 0) {
+            LLVMValueRef loaded = LLVMBuildLoad2(
+                backend->builder, st->llvm_type, rsrc, "struct.copy");
+            LLVMBuildStore(backend->builder, loaded, typed_alloca);
+            init_is_struct_copy = true;
+          }
+        }
+        if (init_is_struct_copy) {
+          // kopya yukarida yapildi
+        } else if (init_is_object_literal) {
+          // `Point p = { x: 3, y: 4 };` — store each provided field via GEP,
+          // coerced to the field's type (int/bool -> i64 payload, float ->
+          // double; `Vec3 v = { x: 0 }` int literal into a float field lands
+          // as 0.0 — P0.3). Anything else (string, array) would be
+          // miscompiled here, but struct_is_trivially_unboxable() already
+          // guarantees every field is int/bool/float, and typeinfer
+          // strict-mode catches obvious string/array literals against a
+          // scalar field at typecheck time.
           for (int k = 0; k < node->right->object_count; k++) {
             const char *fname = node->right->object_keys[k];
             int idx = struct_type_field_index(st, fname);
             LLVMValueRef val_box = codegen_expression(
                 backend, node->right->object_values[k]);
-            LLVMValueRef i64_val = LLVMBuildExtractValue(
-                backend->builder, val_box, 2, "lit.i64");
-            LLVMValueRef field_ptr = LLVMBuildStructGEP2(
-                backend->builder, st->llvm_type, typed_alloca,
-                (unsigned)idx, "struct.lit.field.ptr");
-            LLVMBuildStore(backend->builder, i64_val, field_ptr);
+            struct_field_store_from_boxed(backend, st, typed_alloca, idx,
+                                          val_box, "struct.lit");
           }
         } else if (init_is_struct_call) {
           // `Point p = make_point();` — pin the alloca on the hint slot,
@@ -9198,6 +9324,93 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
+    // BUTUN-STRUCT YENIDEN ATAMASI (P0.3, 2026-09-21): `acc = topla(acc, adim)`,
+    // `acc = b`, `acc = { x: 0.0, ... }`, `acc = vs[i]`. Hedef tipli bir struct
+    // yereli. Eskiden buraya OZEL bir dal yoktu: sag taraf VMValue olarak
+    // uretilip 16 baytlik kutu struct alloca'sinin ustune yaziliyordu — alanlar
+    // 0 (ya da etiket bitleri) okunuyordu, hata yok. Oyun dongusunun temel
+    // kalibi (`konum = ilerle(konum, hiz)`) bu yuzden sessizce yanlisti; int
+    // struct'ta da aynen boyleydi (olculdu: 10 iterasyon `acc = topla(acc,
+    // adim)` -> 0). Dort sekil de VAR_DECL'in tipli init yollarinin aynasi.
+    if (node->name && node->right) {
+      const char *dst_sn = get_local_struct_type(backend, node->name);
+      LLVMValueRef dst = dst_sn ? get_local(backend, node->name) : nullptr;
+      StructTypeEntry *dst_st = dst_sn ? find_struct_type(backend, dst_sn) : nullptr;
+      if (dst_st && dst && struct_is_trivially_unboxable(dst_st)) {
+        ASTNode_C *rv = node->right;
+        // (a) ayni tipte yerel: butun yapiyi kopyala.
+        if (rv->type == AST_IDENTIFIER && rv->name) {
+          const char *src_sn = get_local_struct_type(backend, rv->name);
+          LLVMValueRef src = src_sn ? get_local(backend, rv->name) : nullptr;
+          if (src_sn && src && strcmp(src_sn, dst_st->name) == 0) {
+            LLVMValueRef loaded = LLVMBuildLoad2(
+                backend->builder, dst_st->llvm_type, src, "struct.assign.load");
+            LLVMBuildStore(backend->builder, loaded, dst);
+            return llvm_vm_val_int(backend, 0);
+          }
+        }
+        // (b) ayni tipte struct donen cagri: gecici alloca'ya yazdir, kopyala.
+        // Dogrudan `dst`ye yazdirmak da calisir (callee argumanlari giriste
+        // kopyalar) ama `acc = topla(acc, adim)` gibi hedefin arguman da
+        // oldugu durumda takma-ad akil yurutmesi istiyor; 24 baytlik kopya
+        // o riski almaya degmez.
+        if (rv->type == AST_FUNCTION_CALL && rv->name) {
+          const char *rn = nullptr;
+          for (int j = 0; j < backend->function_count; j++) {
+            if (backend->functions[j].name &&
+                strcmp(backend->functions[j].name, rv->name) == 0) {
+              rn = backend->functions[j].return_struct_name;
+              break;
+            }
+          }
+          if (rn && strcmp(rn, dst_st->name) == 0) {
+            LLVMValueRef tmp = llvm_build_alloca_at_entry(
+                backend, dst_st->llvm_type, "struct.assign.call");
+            LLVMBuildStore(backend->builder, LLVMConstNull(dst_st->llvm_type), tmp);
+            backend->pending_struct_result_ptr = tmp;
+            backend->pending_struct_result_name = dst_st->name;
+            (void)codegen_expression(backend, rv);
+            backend->pending_struct_result_ptr = nullptr;
+            backend->pending_struct_result_name = nullptr;
+            LLVMValueRef loaded = LLVMBuildLoad2(
+                backend->builder, dst_st->llvm_type, tmp, "struct.assign.res");
+            LLVMBuildStore(backend->builder, loaded, dst);
+            return llvm_vm_val_int(backend, 0);
+          }
+        }
+        // (c) nesne literali: anahtarlar alan olmali, sonra sifirla + alan yaz.
+        if (rv->type == AST_OBJECT_LITERAL) {
+          bool keys_ok = true;
+          for (int k = 0; k < rv->object_count; k++) {
+            if (struct_type_field_index(dst_st, rv->object_keys[k]) < 0) {
+              keys_ok = false;
+              break;
+            }
+          }
+          if (keys_ok) {
+            LLVMBuildStore(backend->builder, LLVMConstNull(dst_st->llvm_type), dst);
+            for (int k = 0; k < rv->object_count; k++) {
+              int idx = struct_type_field_index(dst_st, rv->object_keys[k]);
+              LLVMValueRef vbox = codegen_expression(backend, rv->object_values[k]);
+              struct_field_store_from_boxed(backend, dst_st, dst, idx, vbox,
+                                            "struct.assign.lit");
+            }
+            return llvm_vm_val_int(backend, 0);
+          }
+        }
+        // (d) genel kutulu deger (`vs[i]`, ternary, ...): VMValue'yu uret,
+        // alan tipine gore hedefe ac.
+        {
+          LLVMValueRef boxed = codegen_expression(backend, rv);
+          if (boxed) {
+            LLVMBuildStore(backend->builder, LLVMConstNull(dst_st->llvm_type), dst);
+            emit_unpack_boxed_struct_into(backend, boxed, dst_st, dst);
+          }
+          return llvm_vm_val_int(backend, 0);
+        }
+      }
+    }
+
     // Struct value assigned into a dynamic container element
     // (`arr[i] = mk()`, `obj["k"] = ent`): box it as a string-keyed object,
     // like push()/array-literals — otherwise the element would get the struct
@@ -9241,15 +9454,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
               st, node->left->index->value.string_value);
           if (st && idx >= 0) {
             LLVMValueRef alloca_ptr = get_local(backend, recv_name);
-            LLVMValueRef field_ptr = LLVMBuildStructGEP2(
-                backend->builder, st->llvm_type, alloca_ptr,
-                (unsigned)idx, "struct.field.ptr");
-            // Extract the i64 payload from the boxed VMValue rhs (slot 2
-            // of {tag, pad, i64}). The bool case writes the same i64
-            // because true/false box with int_val=1 / int_val=0.
-            LLVMValueRef rhs_i64 = LLVMBuildExtractValue(
-                backend->builder, val, 2, "rhs.i64");
-            LLVMBuildStore(backend->builder, rhs_i64, field_ptr);
+            // Alan tipine gore cozup yaz (P0.3): float alana int gelirse
+            // sitofp, int alana float gelirse fptosi. Eskiden ham slot 2
+            // kopyalaniyordu — int alana float yazmak bit desenini
+            // sakliyordu.
+            struct_field_store_from_boxed(backend, st, alloca_ptr, idx, val,
+                                          "struct.field");
             return val;
           }
         }
@@ -9982,7 +10192,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef res_ptr = LLVMGetParam(backend->current_function, 0);
       ASTNode_C *rv = node->return_value;
       // Only trivially-unboxable (int/bool) structs use the native res-ptr
-      // write ABI. A float/string/nested-field struct local is already a
+      // write ABI. A string/nested-field struct local is already a
       // boxed VM_OBJECT, so none of these branches fire and the boxed
       // fallback below stores that object VMValue into res_ptr — matching the
       // caller, which now treats such returns as plain VMValue results.
@@ -10042,12 +10252,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
             int idx = struct_type_field_index(st, rv->object_keys[k]);
             LLVMValueRef val_box =
                 codegen_expression(backend, rv->object_values[k]);
-            LLVMValueRef i64_val = LLVMBuildExtractValue(
-                backend->builder, val_box, 2, "ret.lit.i64");
-            LLVMValueRef field_ptr = LLVMBuildStructGEP2(
-                backend->builder, st->llvm_type, res_ptr,
-                (unsigned)idx, "ret.lit.field.ptr");
-            LLVMBuildStore(backend->builder, i64_val, field_ptr);
+            struct_field_store_from_boxed(backend, st, res_ptr, idx, val_box,
+                                          "ret.lit");
           }
           emit_try_pops(backend, backend->try_depth);
           return LLVMBuildRetVoid(backend->builder);
@@ -10437,6 +10643,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     free(source);
     return nullptr;
   }
+  case AST_ENUM_DECL:
+    // `enum` ayristiricida cozuldu (uyeler literal'e katlandi); uretilecek
+    // kod yok. `default`e dusseydi codegen_expression'a giderdi.
+    return nullptr;
   default:
     return codegen_expression(backend, node);
   }
@@ -12070,17 +12280,43 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
             llvm_backend_emit_global_declare(backend, decl->name, ig,
                                              decl->line, /*is_vmvalue=*/0);
           } else {
-            LLVMValueRef global_var = LLVMAddGlobal(
-                backend->module, backend->vm_value_type, gsym(decl->name).c_str());
-            LLVMSetInitializer(global_var,
-                               LLVMConstNull(backend->vm_value_type));
-            if (global_needs_tls(decl->name)) {
-              LLVMSetThreadLocalMode(global_var,
-                                     LLVMInitialExecTLSModel);
+            // TIPLI STRUCT GLOBAL (P0.3, 2026-09-21). Eskiden `Vec3 g = ...;`
+            // ust duzeyde kutulu bir VMValue global'i aliyordu ama ust duzey
+            // VAR_DECL onu HIC doldurmuyordu (main icinde ayri bir tipli
+            // alloca kuruyordu): fonksiyondan `g.x` okumak "get islemi icin
+            // gecersiz hedef" ile dusuyordu — int struct'ta da (olculdu).
+            // Simdi yerlesim tipinde bir LLVM global'i acilir ve KURESEL
+            // kapsama struct yereli olarak kaydedilir; fonksiyon kapsamlari
+            // zincirle buraya ulasip GEP ile dogrudan alan okur/yazar. Ust
+            // duzey VAR_DECL bu global'i alloca yerine kullanir
+            // (at_top_level_scope dali). Kutulu (str/ic ice alanli) struct
+            // eskisi gibi VMValue global'inde kalir.
+            StructTypeEntry *gst = nullptr;
+            if (decl->data_type == TYPE_CUSTOM) {
+              const char *sname = decl->return_custom_type;
+              if (!sname && decl->field_custom_types && decl->field_count > 0)
+                sname = decl->field_custom_types[0];
+              gst = find_struct_type(backend, sname);
+              if (gst && !struct_is_trivially_unboxable(gst)) gst = nullptr;
             }
-            // PR 3g: surface this top-level boxed global to the debugger.
-            llvm_backend_emit_global_declare(backend, decl->name, global_var,
-                                             decl->line, /*is_vmvalue=*/1);
+            if (gst) {
+              LLVMValueRef sg = LLVMAddGlobal(backend->module, gst->llvm_type,
+                                              gsym(decl->name).c_str());
+              LLVMSetInitializer(sg, LLVMConstNull(gst->llvm_type));
+              add_local_struct(backend, decl->name, sg, gst->name);
+            } else {
+              LLVMValueRef global_var = LLVMAddGlobal(
+                  backend->module, backend->vm_value_type, gsym(decl->name).c_str());
+              LLVMSetInitializer(global_var,
+                                 LLVMConstNull(backend->vm_value_type));
+              if (global_needs_tls(decl->name)) {
+                LLVMSetThreadLocalMode(global_var,
+                                       LLVMInitialExecTLSModel);
+              }
+              // PR 3g: surface this top-level boxed global to the debugger.
+              llvm_backend_emit_global_declare(backend, decl->name, global_var,
+                                               decl->line, /*is_vmvalue=*/1);
+            }
           }
         }
       }

@@ -2436,6 +2436,61 @@ extern "C" void aot_struct_unpack_to(VMValue *vp, int field_count,
   }
 }
 
+// P0.3 (2026-09-21): aot_struct_unpack_named'in ALAN TIPLI hali. `types[i]`
+// 0 int, 1 float, 2 bool. Yuva 8 bayt: float alan icin double'in bit deseni
+// dst[i]'ye memcpy ile girer (codegen alan tipini bildigi icin geri bitcast
+// eder); VM_OBJECT'te alanin tipiyle uyusmayan bir deger duruyorsa (int
+// alana float yazilmis ya da tersi) ham bit kopyasi degil DONUSUM yapilir —
+// eski yardimci float'i hic tanimadigi icin float alan 0 okunuyordu.
+// Eski `aot_struct_unpack_named` imzasiyla duruyor; codegen artik bunu
+// cagiriyor.
+extern "C" void aot_struct_unpack_typed(VMValue *vp, int field_count,
+                                        const char *const *names,
+                                        const int *types, long long *dst) {
+  if (!dst || field_count <= 0) return;
+  if (vp && IS_STRUCT(*vp)) {
+    // Int-indeksli ObjStruct tipli bir alloca'dan bit-kopyayla dogdu:
+    // yuvalar zaten alanin kendi bit deseni, konuma gore kopyala.
+    ObjStruct *s = AS_STRUCT(*vp);
+    int n = field_count < s->field_count ? field_count : s->field_count;
+    for (int i = 0; i < n; i++) dst[i] = s->fields[i];
+    for (int i = n; i < field_count; i++) dst[i] = 0;
+    return;
+  }
+  if (vp && IS_OBJECT(*vp) && names) {
+    ObjObject *o = AS_OBJECT(*vp);
+    for (int i = 0; i < field_count; i++) {
+      long long v = 0;
+      const int t = types ? types[i] : 0;
+      if (names[i]) {
+        VMValue fv = vm_object_get(o, const_cast<char *>(names[i]));
+        if (t == 1) {
+          double d = 0.0;
+          if (IS_FLOAT(fv)) d = AS_FLOAT(fv);
+          else if (IS_INT(fv)) d = (double)AS_INT(fv);
+          else if (IS_BOOL(fv)) d = AS_BOOL(fv) ? 1.0 : 0.0;
+          memcpy(&v, &d, sizeof v);
+        } else {
+          if (IS_INT(fv)) v = AS_INT(fv);
+          else if (IS_BOOL(fv)) v = AS_BOOL(fv) ? 1 : 0;
+          else if (IS_FLOAT(fv)) {
+            // fptosi'nin C'deki karsiligi tanimsiz davranisa dusmesin:
+            // NaN -> 0, aralik disi -> uc deger (codegen'in kirpmasiyla ayni).
+            double d = AS_FLOAT(fv);
+            if (d != d) v = 0;
+            else if (d >= 9223372036854775807.0) v = 9223372036854775807LL;
+            else if (d <= -9223372036854775808.0) v = (-9223372036854775807LL - 1);
+            else v = (long long)d;
+          }
+        }
+      }
+      dst[i] = v;
+    }
+    return;
+  }
+  for (int i = 0; i < field_count; i++) dst[i] = 0;
+}
+
 // Unpack a boxed struct into a native `{i64,...}` aggregate, resolving fields
 // BY NAME when the source is a string-keyed VM_OBJECT — the representation a
 // struct now takes once it enters a dynamically-typed array (see

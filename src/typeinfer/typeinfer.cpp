@@ -605,6 +605,12 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   if (!stmt) {
     return;
   }
+  // `enum` bildirimi ayristiricida cozuluyor (uyeler literal'e katlandi,
+  // tip adi int'e cozuldu); burada denetlenecek bir sey yok. Dusseydi
+  // asagidaki ifade-deyimi yoluna giderdi.
+  if (as_node<EnumDecl>(stmt)) {
+    return;
+  }
 
   if (const auto *decl = as_node<VariableDecl>(stmt)) {
     DataType declared_type = decl->data_type;

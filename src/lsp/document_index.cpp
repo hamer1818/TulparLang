@@ -19,8 +19,28 @@ std::string render_type(int data_type, const char *custom_type) {
         case TYPE_ARRAY_BOOL: return "array<bool>";
         case TYPE_ARRAY_JSON: return "array<json>";
         case TYPE_JSON: return "json";
-        case TYPE_CUSTOM:
-            return custom_type ? std::string(custom_type) : std::string();
+        case TYPE_CUSTOM: {
+            if (!custom_type) return std::string();
+            // Sentezlenmis tuple struct'i (P0.1) kullaniciya kaynak yazimiyla
+            // gorunsun: `__tup_float_int` -> `(float, int)`. Etiketler
+            // parser'daki tuple_type_tag ile ayni (`_` ile ayrilir).
+            std::string c(custom_type);
+            const std::string pre = "__tup_";
+            if (c.compare(0, pre.size(), pre) == 0) {
+                std::string out = "(";
+                size_t start = pre.size();
+                while (start <= c.size()) {
+                    size_t sep = c.find('_', start);
+                    std::string part = c.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+                    if (out.size() > 1) out += ", ";
+                    out += part;
+                    if (sep == std::string::npos) break;
+                    start = sep + 1;
+                }
+                return out + ")";
+            }
+            return c;
+        }
         default:
             // Unknown / not yet inferred — fall back to the custom-type
             // hint if the parser captured one (covers `json` parameters,
@@ -171,7 +191,10 @@ void collect_var_decls(const ASTNode_C *node, const char *source,
                        const std::string &scope_function,
                        std::vector<IndexVariable> &out) {
     if (!node) return;
-    if (node->type == AST_VARIABLE_DECL && node->name) {
+    // `__` onekli adlar derleyici gecicileridir (tuple sekeri: __t0/__r0,
+    // P0.1); kullaniciya onerilmez.
+    if (node->type == AST_VARIABLE_DECL && node->name &&
+        !(node->name[0] == '_' && node->name[1] == '_')) {
         IndexVariable v;
         v.name = node->name;
         v.type = render_type(node->data_type, node->return_custom_type);
@@ -320,6 +343,31 @@ void document_index_build(const ASTNode_C *ast, const char *source,
     for (int i = 0; i < ast->statement_count; i++) {
         const ASTNode_C *stmt = ast->statements[i];
         if (!stmt || stmt->type == AST_FUNCTION_DECL) continue;
+        // `enum Ekran { MENU, OYUN }` (P0.2): enum adi ve her uyesi kuresel
+        // sembol olarak girer, boylece hover/tamamlama `MENU`'yu ve degerini
+        // gorur. C dugumu uye satirlarini tasimiyor; satir = bildirim satiri
+        // (en iyi caba), sutun ayni satirda bulunursa dogru.
+        if (stmt->type == AST_ENUM_DECL && stmt->name) {
+            IndexVariable ev;
+            ev.name = stmt->name;
+            ev.type = "enum";
+            ev.line = stmt->line;
+            ev.column = locate_name_column(source, stmt->line, stmt->name);
+            out.variables.push_back(std::move(ev));
+            for (int m = 0; m < stmt->field_count; m++) {
+                if (!stmt->field_names || !stmt->field_names[m]) continue;
+                IndexVariable mv;
+                mv.name = stmt->field_names[m];
+                long long v = 0;
+                if (stmt->field_defaults && stmt->field_defaults[m])
+                    v = stmt->field_defaults[m]->value.int_value;
+                mv.type = std::string(stmt->name) + " = " + std::to_string(v);
+                mv.line = stmt->line;
+                mv.column = locate_name_column(source, stmt->line, mv.name.c_str());
+                out.variables.push_back(std::move(mv));
+            }
+            continue;
+        }
         collect_call_sites(stmt, source, out.call_sites);
         collect_var_decls(stmt, source, "", out.variables);
     }

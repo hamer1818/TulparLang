@@ -52,6 +52,7 @@ public:
     virtual ReturnType visit(const TypeDecl& node) = 0;
     virtual ReturnType visit(const LambdaExpr& node) = 0;
     virtual ReturnType visit(const MatchExpr& node) = 0;
+    virtual ReturnType visit(const EnumDecl& node) = 0;
 
     // Apply visitor to any ASTNode
     ReturnType apply(const ASTNode& node) {
@@ -368,6 +369,11 @@ public:
             apply(arm.body);
         }
         indent_level_--;
+    }
+
+    void visit(const EnumDecl& node) override {
+        print_indent();
+        printf("EnumDecl: %s (%zu uye)\n", node.name.c_str(), node.members.size());
     }
 };
 
