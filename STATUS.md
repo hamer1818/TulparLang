@@ -2001,6 +2001,15 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 ### Dil seviyesi
 
+- ✅ **`enum` eklendi (2026-09-21, P0.2 — bkz. `plans/08_oyun_dili_p0.md`).**
+  `enum Ekran { MENU, OYUN, DURAKLAT = 5, AYAR }` → 0, 1, 5, 6; `Ekran.MENU`
+  **ayrıştırmada** IntLiteral'e katlanır, `Ekran` tip adı `int` demektir
+  (değişken/parametre/dönüş/struct alanı). Bildirim sırası önemsiz (ön
+  tarama); `sayım`/`sayim` Türkçe takma ad. Neden: motorun oyun betiği durum
+  makinelerini `int EKRAN_MENU = 0;` sihirli sayılarıyla yazıyordu. v1 sınırı:
+  yalnız üst düzey ve aynı dosya; nominal değil (int ile karışır, `match`
+  tamlık uyarısı yok). `tests/enum.test.tpr` 7/7, `tests/enum_hatalari.sh` 6/6
+  (suites içinde), `examples/43_enum.tpr`.
 - ✅ **StringBuilder canlandırıldı (düzeltildi 2026-07-21).** `sb_append`
   VMValue argümanını ham {i32,i64} aggregate deklarasyonuyla değerle
   geçiriyordu — `llvm_make_vmvalue_func_type`'ta belgelenen SysV lowering

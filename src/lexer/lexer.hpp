@@ -133,7 +133,13 @@ enum TulparTokenType {
     TOKEN_BIT_OR_EQUAL,      // |=
     TOKEN_BIT_XOR_EQUAL,     // ^=
     TOKEN_SHIFT_LEFT_EQUAL,  // <<=
-    TOKEN_SHIFT_RIGHT_EQUAL  // >>=
+    TOKEN_SHIFT_RIGHT_EQUAL, // >>=
+
+    // `enum` / `sayım` — adlandirilmis tamsayi sabitleri (P0.2, 2026-09-21).
+    // Yine SONA eklendi (yukaridaki renumaralama notu). Codegen bu tokeni
+    // HIC gormez: `Ekran.MENU` ayristiricida IntLiteral'e katlanir, bildirim
+    // ise AST_ENUM_DECL (codegen'de no-op, LSP icin sembol kaynagi) olur.
+    TOKEN_ENUM           // "enum"
 };
 
 // Modern C++ Token class

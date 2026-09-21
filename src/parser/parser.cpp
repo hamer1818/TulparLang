@@ -395,6 +395,9 @@ int Parser::get_precedence(TulparTokenType op) const {
 
 std::unique_ptr<ASTNode> Parser::parse() {
     std::vector<std::unique_ptr<ASTNode>> statements;
+    // `enum` tablosu bildirim sirasindan bagimsiz olsun diye ONCE token
+    // dizisi taranir (bkz. parser.hpp'deki enum notu).
+    prescan_enums();
     
     while (!is_at_end()) {
         try {
@@ -438,6 +441,7 @@ std::unique_ptr<ASTNode> Parser::parse() {
                     case TOKEN_TRY:
                     case TOKEN_THROW:
                     case TOKEN_TYPE_KW:
+                    case TOKEN_ENUM:
                         return true;
                     default:
                         return false;
@@ -531,6 +535,10 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
     // Type declaration
     if (check(TOKEN_TYPE_KW)) {
         return parse_type_decl();
+    }
+    // `enum Ad { ... }` (P0.2)
+    if (check(TOKEN_ENUM)) {
+        return parse_enum_decl();
     }
     
     // Control flow
@@ -831,6 +839,140 @@ std::unique_ptr<ASTNode> Parser::parse_type_decl() {
     expect(TOKEN_RBRACE, "Expected '}' after type body");
     
     return std::make_unique<ASTNode>(std::move(type_decl));
+}
+
+// ---- `enum` (P0.2, 2026-09-21) ---------------------------------------------
+// Bkz. parser.hpp'deki enum notu: enum bir AYRISTIRICI sekeridir.
+
+// Tamsayi sabiti tokeninin degeri — parse_primary ile AYNI kural (stoll,
+// tasmada INT64_MAX'a kirpma). Lexer `0xFF`/`0b1010`/`1_000` bicimlerini
+// zaten ondalik metne cevirdigi icin burada ayri bir taban isi yok.
+static long long enum_int_literal(const std::string& tok) {
+    try {
+        return std::stoll(tok);
+    } catch (const std::out_of_range&) {
+        return INT64_MAX;
+    } catch (const std::invalid_argument&) {
+        return 0;
+    }
+}
+
+void Parser::prescan_enums() {
+    const size_t n = tokens_.size();
+    for (size_t i = 0; i + 2 < n; i++) {
+        if (tokens_[i].type() != TOKEN_ENUM) continue;
+        if (tokens_[i + 1].type() != TOKEN_IDENTIFIER ||
+            tokens_[i + 2].type() != TOKEN_LBRACE) continue;
+        const std::string& name = tokens_[i + 1].value();
+        // Ilk bildirim kazanir; ikincisini parse_enum_decl "yeniden
+        // tanimlandi" diye reddeder (decl_token karsilastirmasi).
+        if (enums_.count(name)) continue;
+        EnumInfo info;
+        info.decl_token = i;
+        long long next = 0;
+        size_t j = i + 3;
+        while (j < n && tokens_[j].type() == TOKEN_IDENTIFIER) {
+            const std::string member = tokens_[j].value();
+            long long val = next;
+            j++;
+            if (j < n && tokens_[j].type() == TOKEN_ASSIGN) {
+                j++;
+                bool neg = false;
+                if (j < n && tokens_[j].type() == TOKEN_MINUS) { neg = true; j++; }
+                if (j < n && tokens_[j].type() == TOKEN_INT_LITERAL) {
+                    val = enum_int_literal(tokens_[j].value());
+                    if (neg) val = -val;
+                    j++;
+                } else {
+                    break;  // hatali deger; parse_enum_decl raporlar
+                }
+            }
+            info.members.emplace_back(member, val);
+            next = val + 1;
+            if (j < n && tokens_[j].type() == TOKEN_COMMA) j++;
+        }
+        enums_[name] = std::move(info);
+    }
+}
+
+bool Parser::is_enum_name(const std::string& name) const {
+    return enums_.find(name) != enums_.end();
+}
+
+const long long* Parser::enum_member_value(const std::string& enum_name,
+                                           const std::string& member) const {
+    auto it = enums_.find(enum_name);
+    if (it == enums_.end()) return nullptr;
+    for (const auto& m : it->second.members) {
+        if (m.first == member) return &m.second;
+    }
+    return nullptr;
+}
+
+// enum Ad { UYE, UYE = SAYI, ... }   (sondaki virgul ve `};` serbest)
+// Uye degeri verilmezse bir oncekinin +1'i; ilk uye 0. Yalniz tamsayi
+// sabiti (istege bagli `-`): ifade yok, cunku degerler AYRISTIRMA aninda
+// bilinmek zorunda (on tarama + katlama).
+std::unique_ptr<ASTNode> Parser::parse_enum_decl() {
+    SourceLocation loc(current().line(), current().column());
+    const size_t decl_tok = position_;
+    advance(); // 'enum'
+
+    // Yalniz ust duzey: fonksiyon icindeki bir enum on taramada da tabloya
+    // girer ve dosya geneline sizardi — kapsam yaniltici olurdu.
+    if (decl_scopes_.size() != 1) {
+        error("'enum' yalnizca ust duzeyde bildirilebilir / "
+              "'enum' may only be declared at top level");
+    }
+
+    Token name_tok = expect(TOKEN_IDENTIFIER,
+                            "'enum' sonrasi ad bekleniyordu / Expected enum name after 'enum'");
+    const std::string name = name_tok.value();
+    auto known = enums_.find(name);
+    if (known != enums_.end() && known->second.decl_token != decl_tok) {
+        error("'" + name + "' sayimi yeniden tanimlandi / enum '" + name +
+              "' redeclared");
+    }
+
+    EnumDecl decl(name, loc);
+    expect(TOKEN_LBRACE, "enum adindan sonra '{' bekleniyordu / Expected '{' after enum name");
+
+    long long next = 0;
+    while (!check(TOKEN_RBRACE) && !is_at_end()) {
+        Token member = expect(TOKEN_IDENTIFIER,
+                              "enum uyesi adi bekleniyordu / Expected enum member name");
+        long long value = next;
+        if (match(TOKEN_ASSIGN)) {
+            const bool neg = match(TOKEN_MINUS);
+            if (!check(TOKEN_INT_LITERAL)) {
+                error("enum uyesi yalnizca TAMSAYI sabiti alabilir / "
+                      "enum member value must be an integer literal");
+            }
+            value = enum_int_literal(current().value());
+            if (neg) value = -value;
+            advance();
+        }
+        for (const auto& m : decl.members) {
+            if (m.first == member.value()) {
+                error("'" + name + "' sayiminda '" + member.value() +
+                      "' uyesi yinelendi / duplicate enum member '" +
+                      member.value() + "' in '" + name + "'");
+            }
+        }
+        decl.members.emplace_back(member.value(), value);
+        next = value + 1;
+        if (!match(TOKEN_COMMA)) break;
+    }
+    expect(TOKEN_RBRACE, "enum govdesinden sonra '}' bekleniyordu / Expected '}' after enum body");
+    match(TOKEN_SEMICOLON);  // `};` de kabul
+
+    // Tabloyu KESIN sonucla guncelle: on tarama hatali bir govdede erken
+    // durmus olabilir; asil kaynak bu ayristirma.
+    EnumInfo& info = enums_[name];
+    info.members = decl.members;
+    info.decl_token = decl_tok;
+
+    return std::make_unique<ASTNode>(std::move(decl));
 }
 
 std::unique_ptr<ASTNode> Parser::parse_if_statement() {
@@ -1695,6 +1837,24 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
                 field = expect(TOKEN_IDENTIFIER, "Expected field name after '.'");
             }
 
+            // ENUM UYESI (P0.2): `Ekran.MENU` -> IntLiteral. Nitelikli
+            // cagridan ONCE bakilir; `Ekran.MENU(...)` bir literal cagrisi
+            // olarak dogal yoldan reddedilir. Bilinmeyen uye burada, ad ve
+            // satirla birlikte hata (`Ekran.MENUU` sessizce `Ekran["MENUU"]`
+            // olup calisma zamaninda 0 dondurmesin diye).
+            if (const auto* head = std::get_if<Identifier>(&expr->value)) {
+                if (is_enum_name(head->name)) {
+                    const long long* v = enum_member_value(head->name, field.value());
+                    if (!v) {
+                        error("'" + head->name + "' sayiminda '" + field.value() +
+                              "' adli uye yok / enum '" + head->name +
+                              "' has no member '" + field.value() + "'");
+                    }
+                    expr = std::make_unique<ASTNode>(IntLiteral(*v, dot_loc));
+                    continue;
+                }
+            }
+
             // Qualified call: `<head>.<name>(args)` parses as a single
             // FunctionCall whose `name` is the unmangled member identifier
             // and whose `receiver` field holds the head expression. Codegen
@@ -1932,6 +2092,10 @@ DataType Parser::parse_type() {
     else if (match(TOKEN_ARRAY_JSON)) base = TYPE_ARRAY_JSON;
     else if (match(TOKEN_JSON_TYPE)) base = TYPE_JSON;
     else if (match(TOKEN_VAR)) base = TYPE_UNKNOWN;
+    // Enum adi bir TAMSAYI tipidir (P0.2): `Ekran e = Ekran.MENU;`,
+    // `func f(Ekran e): Ekran`. Cagiranlar TYPE_CUSTOM disinda yakaladiklari
+    // tip adini zaten sifirliyor, yani "Unknown type" uyarisi dogmaz.
+    else if (check(TOKEN_IDENTIFIER) && is_enum_name(current().value())) { advance(); base = TYPE_INT; }
     else if (check(TOKEN_IDENTIFIER)) { advance(); base = TYPE_CUSTOM; }
     else matched = false;
 
@@ -2268,6 +2432,26 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
                 }
             }
             set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, EnumDecl>) {
+            // Codegen icin no-op; LSP uyeleri buradan okur. Uye degeri
+            // AST_INT_LITERAL olarak field_defaults'ta (ast_node_free
+            // field_defaults'i zaten geziyor, ek serbest birakma yok).
+            out->type = AST_ENUM_DECL;
+            out->name = dup_cstr(n.name);
+            out->field_count = static_cast<int>(n.members.size());
+            if (out->field_count > 0) {
+                out->field_names = static_cast<char**>(std::calloc(out->field_count, sizeof(char*)));
+                out->field_defaults = static_cast<ASTNode_C**>(std::calloc(out->field_count, sizeof(ASTNode_C*)));
+                for (int i = 0; i < out->field_count; ++i) {
+                    out->field_names[i] = dup_cstr(n.members[i].first);
+                    ASTNode_C* v = static_cast<ASTNode_C*>(std::calloc(1, sizeof(ASTNode_C)));
+                    v->type = AST_INT_LITERAL;
+                    v->value.int_value = n.members[i].second;
+                    set_loc(v, n.loc);
+                    out->field_defaults[i] = v;
+                }
+            }
+            set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, LambdaExpr>) {
             out->type = AST_LAMBDA;
             out->param_count = static_cast<int>(n.parameters.size());
@@ -2360,6 +2544,7 @@ static void ast_node_free_recursive(ASTNode_C* node) {
         case AST_FUNCTION_DECL:
         case AST_IMPORT:
         case AST_TYPE_DECL:
+        case AST_ENUM_DECL:
         case AST_FOR_IN:
         case AST_FUNCTION_CALL:
             free(node->name);

@@ -578,6 +578,11 @@ type Person {
 }
 Person p = { name: "Ali", age: 25 };
 
+// Enums — named integer constants, folded at parse time (zero runtime cost)
+enum Screen { MENU, GAME, PAUSED = 5, SETTINGS }   // 0, 1, 5, 6
+Screen s = Screen.MENU;                             // Screen is an int
+str label = match s { Screen.MENU => "menu", _ => "other" };
+
 // Control flow
 for (int i = 0; i < 10; i++) { print(i); }
 

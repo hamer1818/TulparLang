@@ -1,0 +1,118 @@
+// `enum` (P0.2, 2026-09-21) — adlandirilmis tamsayi sabitleri.
+//
+// Neden var: motorun oyun betigi (tulpar-engine, engine_aksiyon.tpr) durum
+// makinelerini `int EKRAN_MENU = 0;` gibi sihirli sayilarla yaziyordu; dilde
+// enum yoktu. Sozlesme:
+//   * `enum Ad { A, B = 5, C }` -> A=0, B=5, C=6; deger yalniz tamsayi sabiti.
+//   * `Ad.A` AYRISTIRICIDA IntLiteral'e katlanir (codegen/typeinfer gormez).
+//   * `Ad` bir tip adi olarak `int` demektir: degisken, parametre, donus,
+//     struct alani.
+//   * Bildirim sirasi ONEMSIZ (on tarama): kullanim bildirimden once gelebilir.
+//   * `sayım` / `sayim` Turkce takma ad.
+// Calistir: ./tulpar tests/enum.test.tpr
+import "test";
+
+// Bildirimden ONCE kullanim — on tarama olmasa `Ekran` bilinmeyen tip olurdu.
+func ekran_adi(Ekran e): str {
+    return match e {
+        Ekran.MENU     => "menu",
+        Ekran.OYUN     => "oyun",
+        Ekran.DURAKLAT => "duraklat",
+        _              => "ayar"
+    };
+}
+
+enum Ekran { MENU, OYUN, DURAKLAT, AYAR }
+enum Hata { YOK = 0, AZ = 10, COK, KRITIK = -1 };   // COK = 11, `};` serbest
+sayim Yon {
+    KUZEY,
+    GUNEY,   // sondaki virgul serbest
+}
+
+struct Oyuncu { Ekran ekran; int can; }
+
+func run_degerler() {
+    assert_eq_int(Ekran.MENU, 0);
+    assert_eq_int(Ekran.OYUN, 1);
+    assert_eq_int(Ekran.DURAKLAT, 2);
+    assert_eq_int(Ekran.AYAR, 3);
+    assert_eq_int(Hata.YOK, 0);
+    assert_eq_int(Hata.AZ, 10);
+    assert_eq_int(Hata.COK, 11);
+    assert_eq_int(Hata.KRITIK, -1);
+    assert_eq_int(Yon.KUZEY, 0);
+    assert_eq_int(Yon.GUNEY, 1);
+}
+
+func run_tip_olarak() {
+    Ekran e = Ekran.OYUN;
+    assert_eq_int(e, 1);
+    e = Ekran.AYAR;
+    assert_eq_str(ekran_adi(e), "ayar");
+    assert_eq_str(ekran_adi(Ekran.MENU), "menu");
+    assert_eq_str(ekran_adi(Ekran.DURAKLAT), "duraklat");
+}
+
+func sonraki(Ekran e): Ekran {
+    if (e == Ekran.AYAR) { return Ekran.MENU; }
+    return e + 1;
+}
+
+func run_donus_tipi() {
+    assert_eq_int(sonraki(Ekran.MENU), Ekran.OYUN);
+    assert_eq_int(sonraki(Ekran.AYAR), Ekran.MENU);
+}
+
+func run_match_deyim() {
+    int sayac = 0;
+    Ekran e = Ekran.DURAKLAT;
+    match e {
+        Ekran.MENU     => { sayac = 1; },
+        Ekran.DURAKLAT => { sayac = 2; },
+        _              => { sayac = 3; }
+    }
+    assert_eq_int(sayac, 2);
+}
+
+func run_karsilastirma_ve_dizi() {
+    assert(Ekran.OYUN < Ekran.AYAR, "uyeler bildirim sirasinda artmali");
+    assert(Hata.KRITIK < Hata.YOK, "negatif deger korunmali");
+    array durumlar = [Ekran.MENU, Ekran.OYUN, Ekran.AYAR];
+    assert_eq_int(durumlar[2], Ekran.AYAR);
+    int toplam = 0;
+    int i = 0;
+    while (i < len(durumlar)) { toplam = toplam + durumlar[i]; i = i + 1; }
+    assert_eq_int(toplam, 4);
+}
+
+func run_struct_alani() {
+    Oyuncu o;
+    o.ekran = Ekran.OYUN;
+    o.can = 100;
+    assert_eq_int(o.ekran, Ekran.OYUN);
+    o.ekran = sonraki(o.ekran);
+    assert_eq_int(o.ekran, Ekran.DURAKLAT);
+}
+
+// Durum makinesi: motor betiginin yazdigi kalip, sihirli sayisiz.
+func run_durum_makinesi() {
+    Ekran e = Ekran.MENU;
+    str iz = "";
+    int adim = 0;
+    while (adim < 5) {
+        iz = iz + ekran_adi(e) + ">";
+        e = sonraki(e);
+        adim = adim + 1;
+    }
+    assert_eq_str(iz, "menu>oyun>duraklat>ayar>menu>");
+}
+
+print("=== enum tests ===");
+test("degerler (ortuk, acik, negatif, takma ad)", "run_degerler");
+test("tip olarak: degisken + parametre", "run_tip_olarak");
+test("donus tipi", "run_donus_tipi");
+test("match deyimi", "run_match_deyim");
+test("karsilastirma + dizi", "run_karsilastirma_ve_dizi");
+test("struct alani", "run_struct_alani");
+test("durum makinesi", "run_durum_makinesi");
+test_summary();

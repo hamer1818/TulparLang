@@ -88,6 +88,7 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         // Functions - Turkish (primary)
         {"fonksiyon", TOKEN_FUNC},
         {"tip", TOKEN_TYPE_KW},
+        {"sayım", TOKEN_ENUM},
         {"değişken", TOKEN_VAR},
         {"taşı", TOKEN_MOVE},
         
@@ -99,6 +100,13 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         // codegen). This keeps the surface ergonomic without forking the
         // declaration semantics.
         {"struct", TOKEN_TYPE_KW},
+        // `enum Ekran { MENU, OYUN }` — adlandirilmis tamsayi sabitleri
+        // (P0.2, 2026-09-21). Nitelikli erisim `Ekran.MENU` AYRISTIRICIDA
+        // IntLiteral'e katlanir; codegen ve typeinfer bu anahtar kelimeyi
+        // hic gormez. Ad cakismasi taramasi (yukaridaki `sabit` dersi):
+        // `enum`, `sayim`, `sayım` hicbir .tpr'de tanimlayici degil
+        // (`grep -rnw --include='*.tpr'`, 2026-09-21, iki depo).
+        {"enum", TOKEN_ENUM},
         {"var", TOKEN_VAR},
         // `const x` — DEGERI degil BAGLAMAYI sabitler: `const int n = 5;`
         // sonrasinda `n = 6;` bir AYRISTIRMA HATASIDIR. Derin degismezlik
@@ -121,6 +129,7 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         // Functions - ASCII Turkish (aliases)
         {"degisken", TOKEN_VAR},
         {"tasi", TOKEN_MOVE},
+        {"sayim", TOKEN_ENUM},
         
         // Legacy Turkish aliases (backward compat)
         {"işlev", TOKEN_FUNC},

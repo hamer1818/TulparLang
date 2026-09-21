@@ -823,6 +823,8 @@ void handle_completion(DocumentStore &docs, cJSON *id, cJSON *params) {
         // olmasaydi tamamlama onu HIC onermezdi ve dilde var olmayan bir
         // kelime gibi gorunurdu.
         "const",
+        // `enum` (2026-09-21, P0.2): `const` ile ayni gerekce.
+        "enum",
         "int", "float", "str", "bool", "json", "void",
     };
     for (auto kw : kKeywords) {

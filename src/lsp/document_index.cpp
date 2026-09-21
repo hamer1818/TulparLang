@@ -320,6 +320,31 @@ void document_index_build(const ASTNode_C *ast, const char *source,
     for (int i = 0; i < ast->statement_count; i++) {
         const ASTNode_C *stmt = ast->statements[i];
         if (!stmt || stmt->type == AST_FUNCTION_DECL) continue;
+        // `enum Ekran { MENU, OYUN }` (P0.2): enum adi ve her uyesi kuresel
+        // sembol olarak girer, boylece hover/tamamlama `MENU`'yu ve degerini
+        // gorur. C dugumu uye satirlarini tasimiyor; satir = bildirim satiri
+        // (en iyi caba), sutun ayni satirda bulunursa dogru.
+        if (stmt->type == AST_ENUM_DECL && stmt->name) {
+            IndexVariable ev;
+            ev.name = stmt->name;
+            ev.type = "enum";
+            ev.line = stmt->line;
+            ev.column = locate_name_column(source, stmt->line, stmt->name);
+            out.variables.push_back(std::move(ev));
+            for (int m = 0; m < stmt->field_count; m++) {
+                if (!stmt->field_names || !stmt->field_names[m]) continue;
+                IndexVariable mv;
+                mv.name = stmt->field_names[m];
+                long long v = 0;
+                if (stmt->field_defaults && stmt->field_defaults[m])
+                    v = stmt->field_defaults[m]->value.int_value;
+                mv.type = std::string(stmt->name) + " = " + std::to_string(v);
+                mv.line = stmt->line;
+                mv.column = locate_name_column(source, stmt->line, mv.name.c_str());
+                out.variables.push_back(std::move(mv));
+            }
+            continue;
+        }
         collect_call_sites(stmt, source, out.call_sites);
         collect_var_decls(stmt, source, "", out.variables);
     }

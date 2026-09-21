@@ -7,6 +7,9 @@
 #include <memory>
 #include <stdexcept>
 #include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 // ============================================================================
 // Modern C++ Parser Class
@@ -54,6 +57,7 @@ private:
     std::unique_ptr<ASTNode> parse_variable_decl();
     std::unique_ptr<ASTNode> parse_function_decl();
     std::unique_ptr<ASTNode> parse_type_decl();
+    std::unique_ptr<ASTNode> parse_enum_decl();
     std::unique_ptr<ASTNode> parse_if_statement();
     std::unique_ptr<ASTNode> parse_while_loop();
     std::unique_ptr<ASTNode> parse_for_loop();
@@ -98,6 +102,28 @@ private:
     bool name_is_const(const std::string& name) const;
     // Hedef const ise ayristirma hatasi firlatir.
     void reject_const_write(const Token& name_tok);
+
+    // ---- `enum` (P0.2, 2026-09-21) --------------------------------------
+    // Enum TAMAMEN ayristirici seviyesinde bir sekerdir: `Ekran.MENU`
+    // IntLiteral'e katlanir, `Ekran` tip adi TYPE_INT'e cozulur. Bunun icin
+    // ayristirici enum tablosunu bildirim SIRASINDAN BAGIMSIZ bilmeli —
+    // `func f(): Ekran` enum bildiriminden once gelebilir. Cozum: parse()
+    // basinda token dizisi uzerinde tek gecisli ON TARAMA (prescan_enums):
+    // yalniz `enum AD { UYE [= SAYI], ... }` kalibini toplar, hata VERMEZ;
+    // sert denetim (yinelenen uye/ad, gecersiz deger, ust duzey disi)
+    // parse_enum_decl'de, kaynak sirasiyla, tr_en mesajiyla yapilir.
+    // `decl_token`, ayni adin ikinci bildirimini ("yeniden tanimlandi")
+    // on taramanin gordugu ilk bildirimden AYIRT ETMEK icin tutulur.
+    struct EnumInfo {
+        std::vector<std::pair<std::string, long long>> members;
+        size_t decl_token = 0;
+    };
+    std::unordered_map<std::string, EnumInfo> enums_;
+    void prescan_enums();
+    bool is_enum_name(const std::string& name) const;
+    // Uye yoksa nullptr.
+    const long long* enum_member_value(const std::string& enum_name,
+                                       const std::string& member) const;
 
 public:
     // Constructor
@@ -147,7 +173,11 @@ typedef enum {
   AST_LAMBDA,
   AST_MATCH,
   AST_AWAIT,
-  AST_TERNARY
+  AST_TERNARY,
+  // `enum` bildirimi (P0.2). Codegen icin no-op; `name` = enum adi,
+  // `field_names[i]` = uye adi, `field_defaults[i]` = AST_INT_LITERAL deger.
+  // Sona eklendi (numaralama kaymasin).
+  AST_ENUM_DECL
 } ASTNodeType;
 
 // Old C-style AST node structure (kept for legacy code compatibility)

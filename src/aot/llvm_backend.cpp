@@ -10437,6 +10437,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     free(source);
     return nullptr;
   }
+  case AST_ENUM_DECL:
+    // `enum` ayristiricida cozuldu (uyeler literal'e katlandi); uretilecek
+    // kod yok. `default`e dusseydi codegen_expression'a giderdi.
+    return nullptr;
   default:
     return codegen_expression(backend, node);
   }

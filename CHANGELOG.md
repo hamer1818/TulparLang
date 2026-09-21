@@ -35,6 +35,26 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Added — `enum`: adlandırılmış tamsayı sabitleri (P0.2)
+
+Durum makineleri `int EKRAN_MENU = 0; int EKRAN_OYUN = 1;` diye sihirli
+sayılarla yazılıyordu (motorun oyun betiğinde 39 karşılaştırma). Artık:
+
+```tpr
+enum Ekran { MENU, OYUN, DURAKLAT = 5, AYAR }   // 0, 1, 5, 6
+Ekran e = Ekran.MENU;                           // Ekran = int
+match e { Ekran.MENU => ..., _ => ... }
+```
+
+`Ekran.MENU` **ayrıştırmada** sayıya katlanır — çalışma zamanı bedeli sıfır,
+codegen/typeinfer anahtar kelimeyi görmez. Bildirim sırası önemsiz (token
+ön taraması), `};` ve sondaki virgül serbest, Türkçe `sayım`/`sayim`.
+Hata yolları açık: bilinmeyen üye, yeniden tanım, fonksiyon içinde bildirim,
+tamsayı olmayan değer, yinelenen üye — beşi de ayrıştırma hatası
+(`tests/enum_hatalari.sh`, `build.sh suites` içinde). LSP tamamlama `enum`
+anahtar kelimesini ve üyeleri (değerleriyle) görüyor. Sınır (v1): yalnız üst
+düzey, aynı dosya; nominal değil. Bkz. `plans/08_oyun_dili_p0.md`.
+
 ### Doğruluk — üç sessiz hata sınıfı kapandı
 
 - **Yığın sızıntısı (R11).** `AST_ARRAY_LITERAL` ve dört kutulu-ABI builtin
