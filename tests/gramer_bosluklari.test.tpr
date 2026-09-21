@@ -180,8 +180,23 @@ func run_g5_const() {
 str _bin = "";
 int _win = -1;            // -1 bilinmiyor, 1 Windows, 0 degil
 
-// Windows mu? `OS` ortam degiskeni: Windows'ta "Windows_NT", Linux/macOS'ta
-// tanimsiz. Dosya sistemine BAKMIYORUZ ve bu bilincli:
+// Windows mu?
+//
+// `OS == "Windows_NT"` TEK BASINA YETMEZ ve bu kapi tam olarak onun yuzunden
+// uc tur kirmizi dondu. MSYS2'nin bash'i `OS` degiskenini EZIYOR: CI kosumunda
+// olculen deger `MINGW64_NT-10.0-26100` (uname tarzi), `Windows_NT` DEGIL.
+// Yani tespit HIC tetiklenmedi, paket kendini Linux sandi, `./tulpar` komutunu
+// cmd.exe'ye verdi ve cmd `./tulpar`taki egik cizgiyi anahtar sanip
+// "'.' is not recognized as an internal or external command" dedi. Tani satiri
+// bunu kelimesi kelimesine yazdirdigi icin biliyoruz (2026-09-21).
+//
+// O yuzden DORT bagimsiz isaretin herhangi biri yetiyor:
+//   * OS=Windows_NT        — native Windows (cmd/PowerShell)
+//   * MSYSTEM              — MSYS2/MinGW kabugu (MINGW64, UCRT64, ...)
+//   * WINDIR / SYSTEMROOT  — her Windows'ta var, MSYS2 bunlari KORUYOR
+// Hicbiri Linux/macOS'ta tanimli degil.
+//
+// Dosya sistemine BAKMIYORUZ ve bu bilincli:
 //   * `file_exists("./tulpar.exe")` olmaz — bir Linux calisma kopyasinda depo
 //     kokunde BAYAT bir tulpar.exe durabiliyor (bkz. build.sh'teki "3 ay bayat
 //     PE32+ artigi" notu) ve test kendini Windows sanirdi;
@@ -191,7 +206,11 @@ int _win = -1;            // -1 bilinmiyor, 1 Windows, 0 degil
 //     ortam degiskeni zaten daha ucuz ve daha dogrudan bir isaret.)
 func _windows_mu(): bool {
     if (_win < 0) {
-        if (env("OS") == "Windows_NT") { _win = 1; } else { _win = 0; }
+        _win = 0;
+        if (env("OS") == "Windows_NT") { _win = 1; }
+        if (env("MSYSTEM") != "") { _win = 1; }
+        if (env("WINDIR") != "") { _win = 1; }
+        if (env("SYSTEMROOT") != "") { _win = 1; }
     }
     return _win == 1;
 }
@@ -279,6 +298,8 @@ func tani(): str {
             if (length(cikti) > 300) { cikti = substring(cikti, 0, 300); }
         }
         _tani_metin = "OS=" + env("OS")
+                      + " MSYSTEM=" + env("MSYSTEM")
+                      + " win=" + toString(_windows_mu())
                       + " ikili=" + _derleyici()
                       + " ikili_var=" + toString(file_exists(_derleyici()))
                       + " yazildi=" + toString(yazildi)
