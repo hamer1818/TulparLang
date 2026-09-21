@@ -15,12 +15,26 @@
 #ifndef S_ISDIR  // MSVC S_ISDIR makrosunu tanımlamaz
 #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
 #endif
-#if !PLATFORM_WINDOWS
-#include <csignal>   // SIGINT
+// `<vector>` STANDART C++: platform ayrimi ISTEMEZ. Windows'ta yalniz baska
+// bir basligin dolayli olarak cekmesiyle derleniyordu — kirilgan ve yanlis
+// yerdeydi.
 #include <vector>
-#include <sys/wait.h> // WIFSIGNALED / WTERMSIG on system() status
-#include <dirent.h>  // find_android_ndk: NDK klasör taraması
-#include <unistd.h>  // find_android_ndk: access() ile llvm-ar denetimi
+// dirent/unistd: newest_subdir + warn_if_prebuilt_archive_stale (dizin
+// taramasi) ve ndk_usable (access(X_OK)) bunlari KOSULSUZ kullaniyor, yani
+// Windows'ta da derlenmeleri gerekiyor. MinGW-w64 ikisini de saglar; MSVC
+// saglamaz (bu depoda MSVC derlemesi zaten yok, bkz. CLAUDE.md).
+//
+// NEDEN BOZULDU: bu iki fonksiyon, `build-windows` CI isi 3.13.0'da
+// silindikten SONRA eklendi. Derleme sistemi Windows'u desteklemeyi
+// surdurdugu halde hicbir sey Windows'ta derlemeyi DENEMEDIGI icin kirik
+// aylarca gorunmedi — is 2026-09-21'de geri gelince ilk kosumda cikti.
+#if !PLATFORM_WINDOWS || defined(__MINGW32__)
+#include <dirent.h>
+#include <unistd.h>
+#endif
+#if !PLATFORM_WINDOWS
+#include <csignal>    // SIGINT
+#include <sys/wait.h> // WIFSIGNALED / WTERMSIG — POSIX; MinGW'de YOK
 #endif
 #include <chrono>
 #include <string>
