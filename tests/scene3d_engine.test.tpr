@@ -4512,10 +4512,10 @@ func t_ed_edit_save_reload_roundtrip() {
     assert(kule >= 0, "kule bulunmali");
     ed_delete3d(kule);
 
-    editor_dosya3d("/tmp/tulpar_scene_edit_test.json");
+    editor_dosya3d("tulpar_scene_edit_test.json");
     assert(editor_kaydet3d(), "kaydedilmeli");
 
-    int n1 = scene_file3d("/tmp/tulpar_scene_edit_test.json");
+    int n1 = scene_file3d("tulpar_scene_edit_test.json");
     // Bir eklendi, bir silindi → sayı aynı.
     assert_eq_int(n1, n0);
     assert_eq_int(bul3d("kule"), 0 - 1);
@@ -4594,10 +4594,10 @@ func t_ed_save_writes_authored_not_simulated() {
     while (f < 180) { _dg_step(0.016667); f = f + 1; }
     assert(scene_json3d() != authored, "simulasyon JSON'u degistirmeli");
     editor3d(true);
-    editor_dosya3d("/tmp/tulpar_authored_test.json");
+    editor_dosya3d("tulpar_authored_test.json");
     assert(editor_kaydet3d(), "kaydedilmeli");
     editor3d(false);
-    str yazilan = read_file("/tmp/tulpar_authored_test.json");
+    str yazilan = read_file("tulpar_authored_test.json");
     assert(yazilan == authored, "diske YAZILMIS hal gitmeli, oynanmis hal degil");
 }
 
@@ -5614,12 +5614,12 @@ func t_ux_dirty_flag_lifecycle() {
     assert_eq_int(_ed_dirty3, 0);
     ed_mark3d();                          // bir düzenleme jesti
     assert_eq_int(_ed_dirty3, 1);
-    editor_dosya3d("/tmp/tulpar_dirty_test.json");
+    editor_dosya3d("tulpar_dirty_test.json");
     assert(editor_kaydet3d(), "kaydedilmeli");
     assert_eq_int(_ed_dirty3, 0);
     ed_mark3d();
     assert_eq_int(_ed_dirty3, 1);
-    scene_file3d("/tmp/tulpar_dirty_test.json");
+    scene_file3d("tulpar_dirty_test.json");
     assert_eq_int(_ed_dirty3, 0);
 }
 

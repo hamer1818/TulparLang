@@ -189,7 +189,12 @@ func _derleyici(): str {
 // Kaynagi gecici bir dosyaya yazip `tulpar typecheck` cikis kodunu dondurur.
 // 0 = kabul edildi, 0 disi = reddedildi.
 func derleme_kodu(str kaynak): int {
-    str yol = "/tmp/tulpar_gramer_" + toString(timestamp()) + "_" +
+    // Gecici dosya CALISMA DIZININDE (depo koku): Windows'ta "/tmp" diye bir
+    // yol YOK — MSYS2 kabugunun /tmp'si native tulpar.exe icin "C:\\tmp" olur
+    // ve orasi bulunmaz, yani dosya yazilamaz ve kapi sessizce "reddetmedi"
+    // der (olculdu 2026-09-21, Windows CI). Depo koku bu deponun zaten
+    // kullandigi kalip (08_file_io -> test_file.txt, 13_database -> test.db).
+    str yol = "tulpar_gramer_" + toString(timestamp()) + "_" +
               toString(randint(1, 999999)) + ".tpr";
     write_file(yol, kaynak);
     int rc = sys_run(_derleyici() + " typecheck " + yol + " > /dev/null 2>&1");
