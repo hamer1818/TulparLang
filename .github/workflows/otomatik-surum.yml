@@ -62,9 +62,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 — etiket gecmisi lazim (en son `v*` bulunacak).
+      #
+      # `token:` SART, ve bu OLCULDU (2026-09-21, motor v0.1.5): checkout
+      # kimligi git yapilandirmasina bir HTTP BASLIGI olarak yaziyor
+      # (`http.<url>.extraheader: AUTHORIZATION: basic ...`). O baslik, remote
+      # URL'sine gomulen kullanici/parolayi EZIYOR — yani asagida remote'u
+      # PAT'li bir URL'ye cevirmek HICBIR SEY degistirmiyor, push yine
+      # GITHUB_TOKEN ile gidiyor. Sonuc: etiket olusuyor, ama GitHub'in
+      # ozyineleme korumasi yuzunden release is akisi HIC tetiklenmiyor —
+      # "surum cikti sandim, cikmamis" hatasinin tam olarak bu bicimi
+      # yasandi. Kimligi BURADA PAT yapmak tek dogru yer.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ secrets.AUTOMERGE_PAT }}
 
       - name: Karar + etiket
         env:
@@ -144,7 +155,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           konu="$(git log -1 --format='%s')"
           git tag -a "$yeni" -m "$yeni — $konu"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Kimlik checkout'tan geliyor (yukaridaki `token:`); remote URL'sini
+          # elle kurcalamak ISE YARAMIYOR — bkz. oradaki not.
           git push origin "$yeni"
 
           ozet "## Surum: \`$yeni\`"
