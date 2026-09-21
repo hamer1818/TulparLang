@@ -1,6 +1,9 @@
 # Auto-merge: every non-draft PR is queued for squash-merge as soon as
 # the required status checks (build-linux, build-macos) turn green.
-# (Windows was in this list until 3.13.0; that job and platform are gone.)
+# (Windows was in this list until 3.13.0. The `build-windows` job came BACK
+# on 2026-09-21 but is deliberately NOT required yet — a job that has never
+# run green shouldn't gate every PR. Add it to the branch protection contexts
+# once it has proven itself.)
 #
 # ⚠️ BU OTOMASYONUN DOĞRULUĞU `strict` AYARINA BAĞLI. main'in dal
 # korumasındaki "require branches to be up to date before merging"
