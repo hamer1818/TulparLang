@@ -35,6 +35,37 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Added — float alanlı struct artık KUTUSUZ (P0.3)
+
+`struct Vec3 { float x; float y; float z; }` LLVM'de `{ double, double,
+double }` — yerel, parametre (değer), dönüş (res-ptr), literal init ve
+`match` yapısökümü native. Eskiden tek bir `float` alan struct'ın tamamını
+string anahtarlı VM_OBJECT'e düşürüyordu (her `p.x` bir `strcmp` araması);
+motorun oyun betiği bu yüzden düşman verisini 11 paralel dizide tutuyordu.
+
+Ölçüm (`benchmarks/vec3_sum`, 10M iterasyon, en iyi/5): **1671,8 → 49,5 ms**
+(C `-O2` 6,5). Int `struct_sum` gerilemedi (8,1 → 0,6 ms). Kutulu diziye giren
+struct (push) hâlâ VM_OBJECT olur; geri açarken (`Vec3 g = vs[0]`) yeni
+`aot_struct_unpack_typed` alan tipine göre DÖNÜŞÜM yapar (int yazılmış
+float alan 9 → 9.0, bit kopyası değil). `print(struct)` float alanı `%g`
+ile basar. `str`/iç içe struct alanları hâlâ kutulu (P1).
+
+Aynı turda üç eski (int struct'ta da var olan, ölçülen) sessiz hata kapandı:
+- **Bütün-struct yeniden atama** `acc = topla(acc, adim)` / `acc = b` /
+  `acc = { … }` / `acc = vs[i]`: sağ taraf 16 baytlık VMValue olarak struct
+  alloca'sının üstüne yazılıyor, alanlar 0 okunuyordu — oyun döngüsünün
+  temel kalıbı sessizce yanlıştı.
+- **Bildirimde kopya** `Vec3 b = a;`: tipli alloca VMValue diye okunup
+  unpack'e veriliyordu → SIGSEGV.
+- **Struct global** `Vec3 g = …;` üst düzeyde, `g.x` fonksiyonda: "get
+  işlemi için geçersiz hedef" ile düşüyordu. Artık yerleşim tipinde LLVM
+  global'i + küresel kapsam kaydı; fonksiyonlar GEP ile doğrudan okur/yazar.
+
+Alan erişimi yazan her yeni codegen noktası `struct_field_load_boxed` /
+`struct_field_store_from_boxed` yardımcılarını kullanmalı (`int_type`
+varsayma). `tests/struct_float.test.tpr` 10/10; mevcut struct paketleri
+değişmeden yeşil.
+
 ### Added — `enum`: adlandırılmış tamsayı sabitleri (P0.2)
 
 Durum makineleri `int EKRAN_MENU = 0; int EKRAN_OYUN = 1;` diye sihirli

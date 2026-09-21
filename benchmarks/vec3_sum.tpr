@@ -1,0 +1,30 @@
+// P0.3 (2026-09-21) — FLOAT alanli struct toplami (Tulpar AOT struct yolu).
+// struct_sum.tpr'nin float ikizi. Bu dosyanin varlik sebebi olcum: float
+// alan tasiyan bir struct 2026-09-21'e kadar string anahtarli VM_OBJECT'e
+// dusuyordu (her `acc.x` bir strcmp aramasi); artik `{double,double,double}`
+// yerlesimli tipli alloca + GEP. Ayni dosya iki derleyiciyle kosturulunca
+// fark dogrudan gorunur.
+//
+// Calistir: TULPAR_BENCH_N=10000000 ./tulpar benchmarks/vec3_sum.tpr
+
+struct Vec3 {
+    float x;
+    float y;
+    float z;
+}
+
+Vec3 acc = { x: 0.0, y: 0.0, z: 0.0 };
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) {
+    n = 10000000;
+}
+int i = 0;
+while (i < n) {
+    float f = i * 0.5;
+    acc.x = acc.x + f;
+    acc.y = acc.y + f * 2.0;
+    acc.z = acc.z + f * 3.0;
+    i = i + 1;
+}
+
+print(acc.x + acc.y + acc.z);

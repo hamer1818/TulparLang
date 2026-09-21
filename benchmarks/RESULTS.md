@@ -210,6 +210,13 @@ within 3% of each other.
 - `sieve`: Sieve of Eratosthenes up to 100K — array + branch heavy.
 - `struct_sum`: accumulate typed struct fields over 10M iterations —
   tests native struct AOT codegen.
+- `vec3_sum`: the float twin of `struct_sum` (three `float` fields, 10M
+  iterations). Not part of the harness table; measured by hand on
+  2026-09-21 (best of 5, same machine as the table below) when float
+  fields became unboxed (P0.3): C `-O2` 6.5 ms, Tulpar AOT **49.5 ms**,
+  Tulpar AOT before P0.3 (float struct boxed as a string-keyed object)
+  1671.8 ms. Int `struct_sum` on the same day: 8.1 → 0.6 ms (LLVM now
+  folds the induction sums).
 - `struct_array_push`: push 1M typed structs to array, read back and
   sum — tests heap allocation and struct packing.
 - Tulpar AOT for `fib` uses the typed AOT path (explicit `: int`

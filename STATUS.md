@@ -2001,6 +2001,15 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 ### Dil seviyesi
 
+- ✅ **Float alanlı struct kutusuz (2026-09-21, P0.3 — `plans/08_oyun_dili_p0.md`).**
+  `struct_is_trivially_unboxable` artık `float`ı da kabul ediyor: alan
+  başına 8 baytlık skaler yuva (`i64` / `double`), yerleşim değişmediği
+  için `ObjStruct` bit-kopyası aynı. `benchmarks/vec3_sum` 1671,8 → 49,5 ms
+  (C 6,5). Üç eski sessiz hata da kapandı: bütün-struct yeniden atama
+  (0 okunuyordu), bildirimde kopya (SIGSEGV), fonksiyondan struct global
+  erişimi (çalışma zamanı hatası) — üçü int struct'ta da vardı.
+  `tests/struct_float.test.tpr` 10/10. Kalan: `str`/iç içe alanlar kutulu,
+  typed struct dizisi yok (P1).
 - ✅ **`enum` eklendi (2026-09-21, P0.2 — bkz. `plans/08_oyun_dili_p0.md`).**
   `enum Ekran { MENU, OYUN, DURAKLAT = 5, AYAR }` → 0, 1, 5, 6; `Ekran.MENU`
   **ayrıştırmada** IntLiteral'e katlanır, `Ekran` tip adı `int` demektir
