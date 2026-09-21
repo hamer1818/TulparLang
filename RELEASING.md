@@ -1,11 +1,37 @@
 # Releasing TulparLang
 
-TulparLang uses **stable-only versioning** — releases are created
-exclusively when a `v*` tag is pushed. Every push to `main` (and
-every PR) builds and tests the code, but **no GitHub Release or tag
-is minted automatically**. This keeps version numbers meaningful and
-avoids the version-number inflation that comes with per-commit
-releases.
+**Since 2026-09-21 releases are automatic.** Every merge to `main`
+mints a tag and publishes a GitHub Release —
+`.github/workflows/otomatik-surum.yml` computes the next version and
+pushes the tag; `build.yml` then builds, runs the tests and creates
+the Release exactly as it always did for a hand-pushed tag. Nothing
+is published without a green build: the tag run is a full build from
+source (tag pushes never reuse PR artifacts).
+
+The numbers stay meaningful — this is **not** the rolling
+`v2.1.0.<run>` scheme the project removed in 3.13.0. Each merge takes
+one SemVer step, PATCH by default:
+
+- **PATCH** (default) — anything that isn't marked otherwise.
+- **MINOR** / **MAJOR** — put a line `Surum: minor` or `Surum: major`
+  (`Release: ...` also works) in the PR description / commit body.
+  Squash-merge carries it into the commit message, which is what the
+  workflow reads.
+
+Skipped automatically (both noted in the job summary, never silent):
+a docs-only merge (`README.md`, `benchmarks/RESULTS.{md,json}` —
+the binary is unchanged) and a commit that already carries a `v*` tag
+(so re-running the job cannot double-release).
+
+You can still cut a release by hand — push a `v*` tag as below — and
+the auto-release job will simply see the tag and stand down.
+
+⚠️ `project(TulparLang VERSION ...)` in `CMakeLists.txt` is **not**
+bumped by the automation (a commit from CI back into `main` would
+trigger another full build on every release). It only feeds the
+`<version>-dev` label of local builds; the published binary always
+carries the tag (`-DTULPAR_VERSION`). Bump it by hand when you cut a
+MINOR/MAJOR so local builds don't report a stale base.
 
 ## Versioning scheme
 
