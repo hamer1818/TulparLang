@@ -1,0 +1,171 @@
+# ===========================================================================
+# OTOMATIK SURUM — main'e giren her degisiklik bir surum uretir (2026-09-21).
+#
+# NEDEN: onceden surum YALNIZ elle `v*` etiketi itilince cikiyordu. Bir PR
+# main'e girdikten sonra "yayinlanmis" bir ikili YOKTU; kullanici derleyiciyi
+# kaynaktan derlemek ya da eski surumu kullanmak zorundaydi.
+#
+# BU YUVARLANAN ETIKET DEGIL. Depo 3.13.0'dan once `v2.1.0.<kosum>` bicimli
+# yuzlerce etiket biriktirdi ve bu BILEREK kaldirildi ("stable-only
+# versioning", build.yml create-release). Buradaki model farkli: her merge
+# ANLAMLI bir SemVer artisi alir (varsayilan YAMA), yani v3.13.1 -> v3.13.2 ->
+# v3.13.3. Kosum numarasi surum adina GIRMEZ.
+#
+# ARTIS SEVIYESI: varsayilan `patch`. Commit mesajinda (squash govdesi) bir
+# satir olarak `Surum: minor` ya da `Surum: major` (veya `Release: ...`)
+# gecerse o seviye kullanilir. CHANGELOG'daki SemVer politikasi boyle
+# uygulanir: ozellik -> minor, kirici degisiklik -> major.
+#
+# SURUMU BU IS YAYINLAMAZ, yalnizca ETIKETI iter. Etiketi build.yml gorur
+# (`tags: ['v*']`) ve DERLEYIP TESTLERI KOSTUKTAN sonra Release'i olusturur.
+# Yani "yesil olmayan bir ikili yayinlanmaz" kurali degismedi; burasi yalnizca
+# "etiketi elle atmayi" ortadan kaldirir.
+#
+# NEDEN AUTOMERGE_PAT: GITHUB_TOKEN ile itilen bir etiket asagi akis
+# is akislarini TETIKLEMEZ (GitHub'in ozyineleme korumasi; ayni tuzak
+# auto-merge.yml'de belgeli). O durumda etiket olusur ama Release HIC
+# cikmazdi. Depoya sinirli, Contents yazma yetkili ince taneli PAT bu
+# korumaya takilmaz.
+#
+# ATLANAN DURUMLAR (hepsi is ozetine yazilir, sessiz degil):
+#   * yalniz belge degismis (README / benchmarks ciktilari) -> ikili ayni,
+#     yeni surum anlamsiz;
+#   * HEAD'de zaten bir `v*` etiketi var -> is yeniden kosturulmus, ikinci
+#     kez etiketleme;
+#   * hesaplanan etiket zaten var -> KIRMIZI (sessizce uzerine yazmak yerine).
+#
+# BILINEN SINIR: `CMakeLists.txt`'teki `project(... VERSION x.y.z)` bu is
+# tarafindan YUKSELTILMEZ (CI'dan main'e commit itmek, her surumde bir tam
+# derleme daha tetikler). O deger yalnizca YEREL gelistirme derlemelerinin
+# `<surum>-dev` etiketini besler; yayinlanan ikili her zaman etiketi tasir
+# (build.yml `-DTULPAR_VERSION`). Bir MINOR/MAJOR kesildiginde CMakeLists'i
+# elle yukseltmek hala dogru is (bkz. RELEASING.md).
+# ===========================================================================
+name: Otomatik surum
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Art arda iki merge: etiketler SIRAYLA hesaplanmali. Iptal etmiyoruz —
+# iptal edilen bir kosum, surumu hic cikmamis bir merge birakir.
+concurrency:
+  group: otomatik-surum-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  etiket:
+    name: Sonraki surumu hesapla ve etiketle
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 — etiket gecmisi lazim (en son `v*` bulunacak).
+      #
+      # `token:` SART, ve bu OLCULDU (2026-09-21, motor v0.1.5): checkout
+      # kimligi git yapilandirmasina bir HTTP BASLIGI olarak yaziyor
+      # (`http.<url>.extraheader: AUTHORIZATION: basic ...`). O baslik, remote
+      # URL'sine gomulen kullanici/parolayi EZIYOR — yani asagida remote'u
+      # PAT'li bir URL'ye cevirmek HICBIR SEY degistirmiyor, push yine
+      # GITHUB_TOKEN ile gidiyor. Sonuc: etiket olusuyor, ama GitHub'in
+      # ozyineleme korumasi yuzunden release is akisi HIC tetiklenmiyor —
+      # "surum cikti sandim, cikmamis" hatasinin tam olarak bu bicimi
+      # yasandi. Kimligi BURADA PAT yapmak tek dogru yer.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AUTOMERGE_PAT }}
+
+      - name: Karar + etiket
+        env:
+          # PAT yoksa is ACIKCA kirmizi olur: "surum cikmadi" sessiz kalmasin.
+          GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
+        run: |
+          set -euo pipefail
+
+          ozet() { echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::AUTOMERGE_PAT gizli anahtari yok — etiket itilemez (GITHUB_TOKEN ile itilen etiket release is akisini tetiklemez). Depo Settings > Secrets > Actions altina ekleyin."
+            exit 1
+          fi
+
+          # --- 1) Zaten etiketli mi (is yeniden kosturuldu)? ----------------
+          var="$(git tag --points-at HEAD | grep -E '^v[0-9]' || true)"
+          if [ -n "$var" ]; then
+            ozet "## Surum atlandi"
+            ozet ""
+            ozet "HEAD zaten etiketli: \`$(echo "$var" | tr '\n' ' ')\`"
+            echo "HEAD zaten etiketli — ikinci kez etiketlenmiyor."
+            exit 0
+          fi
+
+          # --- 2) Yalniz belge mi degisti? ---------------------------------
+          # build.yml'deki detect-docs-only ile AYNI izin listesi: bu yollar
+          # ikiliyi degistiremez, yani yeni bir surum anlamsiz olur.
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            degisen="$(git diff --name-only HEAD^..HEAD)"
+            kod="$(echo "$degisen" | grep -vE '^(README\.md|benchmarks/RESULTS\.(md|json))$' || true)"
+            if [ -n "$degisen" ] && [ -z "$kod" ]; then
+              ozet "## Surum atlandi"
+              ozet ""
+              ozet "Yalniz belge/olcum ciktisi degismis — ikili ayni, yeni surum anlamsiz."
+              echo "Yalniz belge degismis — surum cikarilmiyor."
+              exit 0
+            fi
+          fi
+
+          # --- 3) Artis seviyesi -------------------------------------------
+          # Commit govdesinde `Surum: minor` / `Release: major` gibi bir satir
+          # varsa o; yoksa YAMA. Squash merge PR govdesini commit govdesine
+          # koydugu icin PR'da yazmak yeterli.
+          mesaj="$(git log -1 --format='%B')"
+          seviye="patch"
+          if echo "$mesaj" | grep -Eqi '^[[:space:]]*(surum|sürüm|release)[[:space:]]*:[[:space:]]*major[[:space:]]*$'; then
+            seviye="major"
+          elif echo "$mesaj" | grep -Eqi '^[[:space:]]*(surum|sürüm|release)[[:space:]]*:[[:space:]]*minor[[:space:]]*$'; then
+            seviye="minor"
+          fi
+
+          # --- 4) Son surumden sonrakini hesapla ---------------------------
+          son="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1)"
+          if [ -z "$son" ]; then
+            son="v0.0.0"
+            echo "Hic `v*` etiketi yok — v0.0.0'dan basliyoruz."
+          fi
+          cekirdek="${son#v}"
+          cekirdek="${cekirdek%%-*}"          # v1.2.3-rc1 -> 1.2.3
+          IFS=. read -r X Y Z <<< "$cekirdek"
+          X="${X:-0}"; Y="${Y:-0}"; Z="${Z:-0}"
+          case "$seviye" in
+            major) X=$((X+1)); Y=0; Z=0 ;;
+            minor) Y=$((Y+1)); Z=0 ;;
+            *)     Z=$((Z+1)) ;;
+          esac
+          yeni="v${X}.${Y}.${Z}"
+
+          if git rev-parse -q --verify "refs/tags/$yeni" >/dev/null; then
+            echo "::error::Hesaplanan etiket '$yeni' ZATEN VAR (son bulunan: $son). Etiket gecmisi beklenenden farkli — elle bakin; sessizce uzerine yazmiyoruz."
+            exit 1
+          fi
+
+          # --- 5) Etiketle ve it -------------------------------------------
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          konu="$(git log -1 --format='%s')"
+          git tag -a "$yeni" -m "$yeni — $konu"
+          # Kimlik checkout'tan geliyor (yukaridaki `token:`); remote URL'sini
+          # elle kurcalamak ISE YARAMIYOR — bkz. oradaki not.
+          git push origin "$yeni"
+
+          ozet "## Surum: \`$yeni\`"
+          ozet ""
+          ozet "| | |"
+          ozet "|---|---|"
+          ozet "| onceki | \`$son\` |"
+          ozet "| artis | \`$seviye\` |"
+          ozet "| commit | \`$konu\` |"
+          ozet ""
+          ozet "Etiket itildi; **Release'i build.yml olusturacak** (derleme + testler gectikten sonra)."
+          echo "Etiket itildi: $yeni ($son -> $yeni, $seviye)"

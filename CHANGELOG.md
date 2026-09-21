@@ -4,7 +4,10 @@ All notable changes to TulparLang are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/): MAJOR for breaking
 language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
-fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
+fixes. Since 2026-09-21 a release is minted **automatically on every merge to
+`main`** (PATCH by default; write `Surum: minor` / `Surum: major` in the PR to
+ask for a bigger step) — see [RELEASING.md](RELEASING.md); a hand-pushed `v*`
+tag still works;
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
 ## [Unreleased]
