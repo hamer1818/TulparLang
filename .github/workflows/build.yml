@@ -495,6 +495,14 @@ jobs:
       # Paket listesi dar tutuldu (3.13.0 oncesi isten devralindi): `toolchain`
       # meta-paketi butun GCC ailesini cekiyor, bize yalniz gcc (g++ ile
       # birlikte) lazim. `git` de yok — CMakeLists git'e bakmiyor.
+      #
+      # `clang` LISTEDE OLMAK ZORUNDA ve bu OLCULDU (2026-09-21): derleyiciyi
+      # gcc ile derliyoruz, ama URETILEN tulpar.exe AOT link adiminda
+      # `clang++` CAGIRIYOR (aot_pipeline.cpp, PLATFORM_WINDOWS kolu). Eski
+      # is akisi clang'i "yalniz bir surum satiri icin duruyor" diye
+      # cikarmisti — dogruydu, CUNKU O IS TEST KOSMUYORDU. Testler eklenince
+      # butun ornekler `[AOT] Error: Linking failed (code 1)` ile dustu:
+      # derleyici uretiliyor ama HICBIR PROGRAM derleyemiyordu.
       - name: MSYS2 (MINGW64)
         id: msys2
         if: needs.detect-docs-only.outputs.docs_only != 'true'
@@ -505,6 +513,7 @@ jobs:
           cache: true
           install: >-
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-clang
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-llvm
@@ -559,6 +568,18 @@ jobs:
       - name: Duman (tulpar.exe --version)
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: ./build-windows/tulpar.exe version
+
+      # AOT linkleyicisi `clang++` cagiriyor. Yoksa her ornek ayni anlamsiz
+      # satirla duser ("Linking failed (code 1)") ve 23 kirmizi satirin
+      # ardindaki tek sebep gorunmez olur. Burada TEK satirda soyluyoruz.
+      - name: AOT linkleyicisi yerinde mi (clang++)
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        run: |
+          if ! command -v clang++ >/dev/null 2>&1; then
+            echo "::error::clang++ PATH'te yok — uretilen tulpar.exe AOT link adiminda onu cagiriyor, yani hicbir program derlenemez. MSYS2 paket listesine mingw-w64-x86_64-clang ekleyin."
+            exit 1
+          fi
+          clang++ --version | head -1
 
       # Paketleme + DLL KAPISI: Windows dagitimi kendi kendine yeten bir
       # klasor olmali. Ikilinin ITHALAT TABLOSU okunuyor; sistem DLL'i ya da
