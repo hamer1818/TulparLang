@@ -453,15 +453,17 @@ jobs:
   # ---------------------------------------------------------------------
   # WINDOWS (MSYS2 MINGW64) — 2026-09-21'de geri geldi.
   #
-  # Testleri KOSMUYOR, bilerek: test kosucusu (`build.sh test`) her ornegi
-  # AOT derleyip linkliyor ve bu Windows runner'inda en pahali is; Linux ayagi
-  # zaten butun ornekleri + suitleri kosuyor. Buradaki soru daha dar ve
-  # cevaplanmamis olani: "derleyici Windows'ta DERLENIYOR ve kendi kendine
-  # yeten bir .exe uretiyor mu?" DLL kapisi tam olarak bunu olcuyor.
+  # TESTLERI DE KOSUYOR (2026-09-21, ikinci tur). Ilk yazimda "pahali" diye
+  # atlanmisti; OLCULDU ve gerekce tutmadi: derleme-yalniz Windows isi
+  # 3 dk 35 sn surdu, ayni kosumda Linux 13 dk 46 sn, macOS 7 dk 17 sn. Yani
+  # Windows en hizli ayakti ve is akisinin toplam suresini BELIRLEMIYORDU;
+  # ornekleri + suitleri eklemek onu yine en uzun isin altinda birakiyor.
+  # "Derleniyor" ile "dogru calisiyor" ayri iddialar, ikincisi de artik
+  # Windows'ta olculuyor.
   #
-  # Zorunlu check YAPILMADI (ilk yesil kosumdan sonra main'in dal korumasina
-  # eklenmeli). Gerekce: hic kosmamis bir isi zorunlu ilan etmek, butun
-  # PR'lari kirmizi bir bilinmeyene baglamak olurdu.
+  # Python denetimleri (fmt_audit, lsp_audit, builtin_audit ...) burada
+  # KOSMUYOR: platformdan bagimsizlar ve Linux ayagi hepsini kosuyor; MSYS2'ye
+  # python cekmek paket listesini ve sureyi bosuna buyuturdu.
   # ---------------------------------------------------------------------
   build-windows:
     # `build-linux`'taki ayni gerekce: is KOSAR, adimlar bayraga gore atlanir.
@@ -563,6 +565,37 @@ jobs:
       # pakete konan DLL olmayan tek bir bagimlilik bile isi KIRMIZI yapar.
       # (CMakeLists'teki LLVM statik/dylib secimi tam olarak bu kapiya
       # dayaniyor: dylib'e dusen bir derleme burada yakalanir.)
+      # Test kosucusu ikiliyi depo kokunde ariyor. MSYS2'de `./tulpar`
+      # cagrisi `tulpar.exe`e cozuluyor; harness'lar da zaten `.exe` yedegi
+      # tutuyor (tests/typeinfer/run.sh).
+      - name: Ikiliyi koke koy
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        run: |
+          cp build-windows/tulpar.exe tulpar.exe
+          cp build-windows/libtulpar_runtime.a libtulpar_runtime.a
+          chmod +x tulpar.exe build.sh
+
+      # Ornekler: her biri tam bir AOT derleme + link. Windows'ta AOT
+      # linkleyicisi MSYS2'nin clang++/gcc'sini kullaniyor, yani bu adim
+      # ayni zamanda "uretilen ikili KENDI BASINA program derleyebiliyor mu"
+      # sorusunu da yanitliyor — DLL kapisinin olcemedigi tek sey buydu.
+      - name: Ornekler (build.sh test)
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        run: ./build.sh test
+        timeout-minutes: 30
+
+      - name: Suitler (build.sh suites)
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        run: ./build.sh suites
+        timeout-minutes: 25
+
+      - name: Typeinfer kapisi
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        run: |
+          chmod +x tests/typeinfer/run.sh
+          ./tests/typeinfer/run.sh
+        timeout-minutes: 5
+
       - name: Paketle + DLL kapisi
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         shell: pwsh
@@ -607,12 +640,58 @@ jobs:
           Write-Host "DLL kapisi: TAMAM ($($imports.Count) ithalat, hepsi kapsanmis)"
           Compress-Archive -Path dist\tulpar-windows-x64.exe, dist\*.dll -DestinationPath dist\tulpar-windows-x64.zip
 
+      # GUI KURULUMCU (Inno Setup 6) — 3.13.0'da natif Windows'la birlikte
+      # silinmisti, 2026-09-21'de geri geldi. `installer/tulpar.iss` ve marka
+      # varliklari (.ico + iki .bmp) tarihten AYNEN geri alindi; betik yalnizca
+      # ikiliye, runtime kutuphanesine, ikona ve bes MinGW DLL'ine dokunuyor,
+      # yani bu isin zaten urettigi seylere.
+      #
+      # Kurulum KULLANICI BAZINDA (yonetici hakki istemez, %LOCALAPPDATA%
+      # altina kurar) — install.ps1 ile ayni davranis; Baslat menusu ve
+      # Program Ekle/Kaldir girdisi birakir.
+      #
+      # ISCC runner imajinda hazir gelir; gelmezse adim ACIKCA duser (sessizce
+      # kurulumcusuz surum yayinlamak yerine).
+      - name: GUI kurulumcu (Inno Setup)
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        shell: pwsh
+        env:
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Inno Setup AppVersion saf x.y.z bekler, basindaki 'v' olmadan.
+          $ver = $env:TULPAR_VERSION
+          if (-not $ver) { $ver = "0.0.0-dev" }
+          $appVersion = $ver -replace '^v',''
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            throw "ISCC.exe bulunamadi: $iscc — runner imaji mi degisti?"
+          }
+          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
+          & $iscc `
+            "/DAppVersion=$appVersion" `
+            "/DSourceBinary=$pwd\build-windows\tulpar.exe" `
+            "/DSourceRuntimeLib=$pwd\build-windows\libtulpar_runtime.a" `
+            "/DSourceMingwBin=$mingwBin" `
+            "installer\tulpar.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC $LASTEXITCODE ile dustu" }
+          Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
+          $sz = [math]::Round((Get-Item dist\tulpar-setup-windows-x64.exe).Length / 1MB, 1)
+          Write-Host "Kurulumcu uretildi: tulpar-setup-windows-x64.exe ($sz MB)"
+
       - name: Upload artifact
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-x64
           path: dist/tulpar-windows-x64.zip
+
+      - name: Upload installer
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tulpar-windows-installer
+          path: dist/tulpar-setup-windows-x64.exe
 
       - name: Upload runtime library
         if: needs.detect-docs-only.outputs.docs_only != 'true'
@@ -925,6 +1004,7 @@ jobs:
               TameEngine-linux-x64.tar.gz \
               TameEngine-macos-universal.tar.gz \
               tulpar-windows-x64.zip \
+              tulpar-setup-windows-x64.exe \
               libtulpar_runtime-windows-x64.a; do
             if [ ! -f "$f" ]; then
               echo "ERROR: expected release artifact missing: $f" >&2
@@ -986,9 +1066,12 @@ jobs:
             ### Downloads
             - `tulpar-linux-x64` - Linux executable
             - `tulpar-macos-universal` - macOS executable
-            - `tulpar-windows-x64.zip` - Windows (x64) — `tulpar.exe` plus the
-              MinGW runtime DLLs it needs. Unzip anywhere and run from inside
-              the folder; there is no installer.
+            - `tulpar-setup-windows-x64.exe` - Windows (x64) **installer** —
+              per-user install (no admin prompt), Start Menu entry, `PATH`
+              wired up, Add/Remove Programs entry. The usual way in.
+            - `tulpar-windows-x64.zip` - Windows (x64) portable — `tulpar.exe`
+              plus the MinGW runtime DLLs it needs. Unzip anywhere and run
+              from inside the folder; nothing is written outside it.
 
             **TameEngine — 3D scene editor** (standalone, no install; the compiler is *not* required to run it):
             - `TameEngine-linux-x64.tar.gz`
@@ -1019,22 +1102,25 @@ jobs:
 
             ### Windows
 
-            Native Windows builds are back (2026-09-21) — download
-            `tulpar-windows-x64.zip`, unzip it and run `tulpar.exe` from inside
-            the folder. The zip is self-contained: CI verifies that the binary
+            Native Windows builds are back (2026-09-21). Run
+            `tulpar-setup-windows-x64.exe` for a per-user install with `PATH`
+            set up, or grab `tulpar-windows-x64.zip` if you prefer a portable
+            folder. The zip is self-contained: CI verifies that the binary
             imports nothing beyond Windows system DLLs and the bundled MinGW
-            ones. Build it yourself with MSYS2 MINGW64 (see README).
+            ones.
 
-            What CI measures on Windows is the **build** plus that
-            self-containment check — the example and suite runs happen on the
-            Linux job. If you want the fully exercised path, WSL still works:
-            `wsl --install`, then the Linux one-liner above.
+            Windows CI compiles the toolchain, runs the example programs, the
+            `tests/*.test.tpr` suites and the typeinfer gate, then builds the
+            installer — the same evidence the Linux job produces, minus the
+            Python audits (platform-independent, covered on Linux). Build it
+            yourself with MSYS2 MINGW64; see README.
           draft: false
           prerelease: false
           files: |
             tulpar-linux-x64
             tulpar-macos-universal
             tulpar-windows-x64.zip
+            tulpar-setup-windows-x64.exe
             libtulpar_runtime-windows-x64.a
             libtulpar_runtime-linux-x64.a
             libtulpar_runtime-macos-universal.a
