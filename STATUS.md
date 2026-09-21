@@ -2001,6 +2001,14 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 ### Dil seviyesi
 
+- ✅ **Çoklu dönüş / tuple (2026-09-21, P0.1 — `plans/08_oyun_dili_p0.md`).**
+  `func f(): (float, float) { return a, b; }`, `float x, y = f();`,
+  `x, y = f();`, `var q, r = bol(17, 5);`. Ayrıştırıcı şekeri: tip listesi
+  için sentezlenmiş struct (`__tup_float_float`), P0.3 sayesinde native
+  res-ptr → sıfır tahsis (IR kanıtı). Bildirim sırası önemsiz (ön tarama).
+  v1 sınırı: sağ taraf aynı dosyadaki adlandırılmış fonksiyonun doğrudan
+  çağrısı; tuple tek değişkene bağlanamaz. `tests/tuple_return.test.tpr`
+  11/11, `tests/tuple_hatalari.sh` 9/9, `examples/44_coklu_donus.tpr`.
 - ✅ **Float alanlı struct kutusuz (2026-09-21, P0.3 — `plans/08_oyun_dili_p0.md`).**
   `struct_is_trivially_unboxable` artık `float`ı da kabul ediyor: alan
   başına 8 baytlık skaler yuva (`i64` / `double`), yerleşim değişmediği
