@@ -35,6 +35,33 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Added — çoklu dönüş / tuple (P0.1)
+
+```tpr
+func yon(fx, fz, tx, tz): (float, float) { ...; return hx / uz, hz / uz; }
+float dx, dz = yon(px, pz, 3.0, 4.0);   // bildirim (`float dx, int n = g();` de olur)
+dx, dz = yon(px, pz, tx, tz);           // var olan değişkenlere
+var q, r = bol(17, 5);                  // tipler fonksiyondan
+```
+
+Motorun oyun betiği iki sonucu `g_yon_x` / `g_yon_z` globallerine yazıyordu
+("Tulpar'da çoklu dönüş yok"). Tamamen **ayrıştırıcı şekeri**: `(float,
+float)` için `struct __tup_float_float { float _0; float _1; }` sentezlenir
+(ad yalnız tiplerden, programın başına bir kez), fonksiyon o struct'ı döner,
+bildirim/atama alanları açar. P0.3 sayesinde float/int tuple'ları native
+res-ptr ile döner: IR'de `__tup_float_float = type { double, double }`,
+sıcak fonksiyonda **sıfır** tahsis çağrısı. `str` içeren tuple kutulu yoldan
+yine çalışır. Bildirim sırası önemsiz (token ön taraması). Blok kapsamı
+korunur: `float a, b = f();` üç deyime açılır ama bir bloğa sarılmaz
+(`pending_after_`); süslü parantezsiz `if (x) float a, b = f();` açık hata.
+
+Sınır (v1): sağ taraf **aynı dosyada** `: (T, T)` bildiren bir fonksiyonun
+doğrudan çağrısı olmalı (closure/değişken çağrısı ve import edilen modülün
+fonksiyonu hata); tuple tek değişkene bağlanamaz (`var t = f()` hata).
+Sekiz hata yolu `tests/tuple_hatalari.sh` ile kilitli (suites içinde);
+`tests/tuple_return.test.tpr` 11/11; `examples/44_coklu_donus.tpr`. LSP
+tamamlama `__` önekli derleyici geçicilerini (`__t0`, `__r0`) göstermez.
+
 ### Added — float alanlı struct artık KUTUSUZ (P0.3)
 
 `struct Vec3 { float x; float y; float z; }` LLVM'de `{ double, double,

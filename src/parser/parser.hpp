@@ -7,6 +7,7 @@
 #include <memory>
 #include <stdexcept>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -124,6 +125,50 @@ private:
     // Uye yoksa nullptr.
     const long long* enum_member_value(const std::string& enum_name,
                                        const std::string& member) const;
+
+    // ---- coklu donus / tuple (P0.1, 2026-09-21) --------------------------
+    // `func f(): (float, float) { return a, b; }`, `float x, y = f();`,
+    // `x, y = f();` — TAMAMEN ayristirici sekeri. Tip listesi icin
+    // `struct __tup_float_float { float _0; float _1; }` sentezlenir (ad
+    // yalniz tiplerden; programin basina BIR KEZ eklenir), fonksiyon o
+    // struct'i doner (P0.3 sayesinde native res-ptr: sifir tahsis),
+    // bildirim/atama alanlari acar. `return a, b;` bir Block'a acilir
+    // (`{ __T __r; __r._0 = a; __r._1 = b; return __r; }`); bildirim ise
+    // acilamaz — Block kapsam acar, dx/dz disarida gorunmez olurdu — bu
+    // yuzden `pending_after_`: parse_statement'in ARDINA, AYNI seviyeye
+    // eklenecek deyimler; parse_block / parse() her deyimden sonra bosaltir,
+    // suslu parantezsiz govdeler (if/while/for) reddeder.
+    // Callee'nin tuple tipi `x, y = f()` ve `var a, b = f()` icin gerekli:
+    // prescan_tuple_sigs `func AD ( ... ) : ( T, T )` kalibini token
+    // dizisinden toplar — v1'de callee AYNI DOSYADA adlandirilmis bir
+    // fonksiyon olmali (closure/degisken cagrisi, import edilen modul: hata).
+    struct TupleElem {
+        DataType type = TYPE_UNKNOWN;
+        std::optional<std::string> custom;
+    };
+    std::unordered_map<std::string, std::vector<TupleElem>> tuple_sigs_;
+    std::unordered_map<std::string, std::vector<TupleElem>> synth_tuple_structs_;
+    std::vector<TupleElem> current_tuple_types_;   // bos = tuple donmuyor
+    std::vector<std::unique_ptr<ASTNode>> pending_after_;
+    int tuple_tmp_counter_ = 0;
+    void prescan_tuple_sigs();
+    std::vector<TupleElem> parse_tuple_type_list();
+    std::string tuple_struct_name(const std::vector<TupleElem>& elems);
+    const std::vector<TupleElem>* tuple_sig_of_call(const ASTNode* call) const;
+    std::unique_ptr<ASTNode> parse_tuple_var_decl(SourceLocation loc,
+                                                  DataType first_type,
+                                                  std::optional<std::string> first_custom,
+                                                  const std::string& first_name,
+                                                  bool is_const);
+    std::unique_ptr<ASTNode> parse_tuple_assignment();
+    std::unique_ptr<ASTNode> make_tuple_temp_decl(const std::string& tmp,
+                                                  const std::string& struct_name,
+                                                  std::unique_ptr<ASTNode> init,
+                                                  SourceLocation loc);
+    std::unique_ptr<ASTNode> make_tuple_field(const std::string& var, size_t idx,
+                                              SourceLocation loc);
+    void drain_pending(std::vector<std::unique_ptr<ASTNode>>& out);
+    void reject_pending();
 
 public:
     // Constructor

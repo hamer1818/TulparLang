@@ -3,6 +3,7 @@
 #include "ast_visitor.hpp"
 #include "../common/localization.hpp"
 #include "../common/diagnostics.hpp"
+#include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <cstdio>
@@ -396,13 +397,19 @@ int Parser::get_precedence(TulparTokenType op) const {
 std::unique_ptr<ASTNode> Parser::parse() {
     std::vector<std::unique_ptr<ASTNode>> statements;
     // `enum` tablosu bildirim sirasindan bagimsiz olsun diye ONCE token
-    // dizisi taranir (bkz. parser.hpp'deki enum notu).
+    // dizisi taranir (bkz. parser.hpp'deki enum notu). Tuple imzalari da
+    // ayni sebeple (bkz. tuple notu).
     prescan_enums();
+    prescan_tuple_sigs();
     
     while (!is_at_end()) {
         try {
             statements.push_back(parse_statement());
+            drain_pending(statements);
         } catch (const std::exception& e) {
+            // Yarim kalmis bir coklu bildirimin ekleri sonraki deyime
+            // yapismasin.
+            pending_after_.clear();
             // Pretty diagnostic was already emitted by Parser::error(); we
             // just need to recover and keep parsing the rest of the file
             // so the user sees every parse error in a single run.
@@ -464,6 +471,29 @@ std::unique_ptr<ASTNode> Parser::parse() {
         }
     }
     
+    // Sentezlenmis tuple struct'lari programin BASINA (P0.1): codegen Pass
+    // 0.0 ust duzey TypeDecl'leri sirasindan bagimsiz kaydediyor ama typeinfer
+    // ve LSP'nin de bildirimden once gormesi icin en basta durmalari en
+    // guvenlisi. Ada gore sirali: cikti belirlenimli.
+    if (!synth_tuple_structs_.empty()) {
+        std::vector<std::string> names;
+        for (const auto& kv : synth_tuple_structs_) names.push_back(kv.first);
+        std::sort(names.begin(), names.end());
+        std::vector<std::unique_ptr<ASTNode>> with_tuples;
+        for (const auto& nm : names) {
+            TypeDecl td(nm, SourceLocation(1, 1));
+            const auto& elems = synth_tuple_structs_[nm];
+            for (size_t i = 0; i < elems.size(); i++) {
+                td.field_names.push_back("_" + std::to_string(i));
+                td.field_types.push_back(elems[i].type);
+                td.field_custom_types.push_back(elems[i].custom);
+                td.field_defaults.push_back(nullptr);
+            }
+            with_tuples.push_back(std::make_unique<ASTNode>(std::move(td)));
+        }
+        for (auto& s : statements) with_tuples.push_back(std::move(s));
+        statements = std::move(with_tuples);
+    }
     auto program = std::make_unique<ASTNode>(Program(std::move(statements)));
     return program;
 }
@@ -638,6 +668,11 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     Token name_tok = expect(TOKEN_IDENTIFIER, "Expected variable name");
     std::string name = name_tok.value();
 
+    // COKLU DONUS BILDIRIMI (P0.1): `float dx, dz = f(...);`
+    if (check(TOKEN_COMMA)) {
+        return parse_tuple_var_decl(loc, type, custom_type_name, name, is_const);
+    }
+
     // Optional initializer
     std::unique_ptr<ASTNode> initializer = nullptr;
     if (match(TOKEN_ASSIGN)) {
@@ -664,6 +699,13 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     }
 
     expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
+
+    // Tuple bir degiskene BUTUN olarak baglanamaz (v1): `var t = f();` yerine
+    // `float a, b = f();`. Sentezlenmis struct'in `_0/_1` adlari dile sizmasin.
+    if (initializer && tuple_sig_of_call(initializer.get())) {
+        error("'" + name + "': coklu donus tek degiskene baglanamaz; `a, b = f();` yaz / "
+              "a tuple result cannot bind to one variable; write `a, b = f();`");
+    }
 
     // Kayit ADIN ALINMASINDAN SONRA: `const int x = x;` icindeki sagdaki
     // `x` hala disaridaki x'tir; bu sira onu bozmuyor cunku baslatici
@@ -782,7 +824,14 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     DataType return_type = TYPE_UNSPECIFIED;  // yazilmadi != void
     std::optional<std::string> return_custom_type_name;
     match(TOKEN_COLON); // consume ':' if present, harmless otherwise
-    if (!check(TOKEN_LBRACE)) {
+    std::vector<TupleElem> tuple_types;  // bos = coklu donus degil
+    if (check(TOKEN_LPAREN)) {
+        // COKLU DONUS (P0.1): `func f(): (float, float)` sentezlenmis
+        // struct'i doner; govdedeki `return a, b;` ona acilir.
+        tuple_types = parse_tuple_type_list();
+        return_type = TYPE_CUSTOM;
+        return_custom_type_name = tuple_struct_name(tuple_types);
+    } else if (!check(TOKEN_LBRACE)) {
         // Same identifier-name snapshot pattern as parameters above —
         // `func make(): Point { ... }` keeps "Point" alive on the AST
         // so the AOT can emit a struct-returning ABI for it.
@@ -804,7 +853,17 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     } fn_guard(this);
     for (const auto& prm : parameters) scope_declare(prm.name, false);
 
-    // Function body
+    // Function body. Tuple baglami RAII ile: error() firlatiyor ve kurtarma
+    // ayni Parser ile suruyor — bayat baglam sonraki fonksiyona sizmasin.
+    struct TupleCtxGuard {
+        Parser* p;
+        std::vector<TupleElem> saved;
+        TupleCtxGuard(Parser* pp, std::vector<TupleElem> now)
+            : p(pp), saved(std::move(pp->current_tuple_types_)) {
+            p->current_tuple_types_ = std::move(now);
+        }
+        ~TupleCtxGuard() { p->current_tuple_types_ = std::move(saved); }
+    } tuple_guard(this, tuple_types);
     auto body = parse_block();
 
     FunctionDecl decl(name, std::move(parameters), return_type,
@@ -984,10 +1043,12 @@ std::unique_ptr<ASTNode> Parser::parse_if_statement() {
     expect(TOKEN_RPAREN, "Expected ')' after condition");
     
     auto then_branch = parse_statement();
+    reject_pending();
     
     std::unique_ptr<ASTNode> else_branch = nullptr;
     if (match(TOKEN_ELSE)) {
         else_branch = parse_statement();
+        reject_pending();
     }
     
     return std::make_unique<ASTNode>(
@@ -1005,6 +1066,7 @@ std::unique_ptr<ASTNode> Parser::parse_while_loop() {
     expect(TOKEN_RPAREN, "Expected ')' after condition");
     
     auto body = parse_statement();
+    reject_pending();
     
     return std::make_unique<ASTNode>(
         WhileLoop(std::move(condition), std::move(body), loc)
@@ -1036,6 +1098,7 @@ std::unique_ptr<ASTNode> Parser::parse_for_loop() {
             } in_guard(this);
             scope_declare(id.value(), false);
             auto body = parse_statement();
+            reject_pending();
             
             return std::make_unique<ASTNode>(
                 ForInLoop(id.value(), std::move(iterable), std::move(body), loc)
@@ -1048,6 +1111,7 @@ std::unique_ptr<ASTNode> Parser::parse_for_loop() {
     
     // Regular for loop
     auto init = parse_statement();
+    reject_pending();
     auto condition = parse_expression();
     expect(TOKEN_SEMICOLON, "Expected ';' after condition");
 
@@ -1106,6 +1170,7 @@ std::unique_ptr<ASTNode> Parser::parse_for_loop() {
     }
 
     auto body = parse_statement();
+    reject_pending();
 
     return std::make_unique<ASTNode>(
         ForLoop(std::move(init), std::move(condition),
@@ -1118,11 +1183,46 @@ std::unique_ptr<ASTNode> Parser::parse_return_statement() {
     advance(); // consume 'return'
     
     std::unique_ptr<ASTNode> value = nullptr;
+    std::vector<std::unique_ptr<ASTNode>> values;  // `return a, b;`
     if (!check(TOKEN_SEMICOLON)) {
         value = parse_expression();
+        while (match(TOKEN_COMMA)) {
+            if (values.empty()) values.push_back(std::move(value));
+            values.push_back(parse_expression());
+        }
     }
     
     expect(TOKEN_SEMICOLON, "Expected ';' after return");
+
+    if (!values.empty()) {
+        // COKLU DONUS (P0.1): `return a, b;`
+        //   -> { __T __rN; __rN._0 = a; __rN._1 = b; return __rN; }
+        // Blok kapsami sorun degil: kapsam donuste zaten bitiyor.
+        if (current_tuple_types_.empty()) {
+            error("coklu 'return' yalnizca coklu donus bildiren fonksiyonda "
+                  "(`func f(): (T, T)`) yazilabilir / multiple return values "
+                  "require a tuple return type `: (T, T)`");
+        }
+        if (values.size() != current_tuple_types_.size()) {
+            error("'return' " + std::to_string(values.size()) +
+                  " deger veriyor, fonksiyon " +
+                  std::to_string(current_tuple_types_.size()) +
+                  " tip bildirdi / return gives " + std::to_string(values.size()) +
+                  " values, function declares " +
+                  std::to_string(current_tuple_types_.size()));
+        }
+        const std::string sname = tuple_struct_name(current_tuple_types_);
+        const std::string tmp = "__r" + std::to_string(tuple_tmp_counter_++);
+        std::vector<std::unique_ptr<ASTNode>> stmts;
+        stmts.push_back(make_tuple_temp_decl(tmp, sname, nullptr, loc));
+        for (size_t i = 0; i < values.size(); i++) {
+            stmts.push_back(std::make_unique<ASTNode>(
+                Assignment(make_tuple_field(tmp, i, loc), std::move(values[i]), loc)));
+        }
+        stmts.push_back(std::make_unique<ASTNode>(
+            ReturnStatement(std::make_unique<ASTNode>(Identifier(tmp, loc)), loc)));
+        return std::make_unique<ASTNode>(Block(std::move(stmts), loc));
+    }
     
     return std::make_unique<ASTNode>(
         ReturnStatement(std::move(value), loc)
@@ -1230,6 +1330,7 @@ std::unique_ptr<ASTNode> Parser::parse_block() {
     
     while (!check(TOKEN_RBRACE) && !is_at_end()) {
         statements.push_back(parse_statement());
+        drain_pending(statements);
     }
     
     expect(TOKEN_RBRACE, "Expected '}'");
@@ -1238,6 +1339,19 @@ std::unique_ptr<ASTNode> Parser::parse_block() {
 }
 
 std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
+    // COKLU ATAMA (P0.1): `dx, dz = f(...);` — ileri bakis IDENT (, IDENT)+ =
+    if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_COMMA) {
+        int k = 1;
+        bool shape = true;
+        while (peek(k).type() == TOKEN_COMMA) {
+            if (peek(k + 1).type() != TOKEN_IDENTIFIER) { shape = false; break; }
+            k += 2;
+        }
+        if (shape && peek(k).type() == TOKEN_ASSIGN) {
+            return parse_tuple_assignment();
+        }
+    }
+
     // Assignment / compound assignment statement fast path
     if (check(TOKEN_IDENTIFIER)) {
         const Token name_tok = current();
@@ -1790,10 +1904,23 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
             expect(TOKEN_RPAREN, "Expected ')' after lambda parameters");
             expect(TOKEN_FAT_ARROW, "Expected '=>' after lambda parameters");
             std::unique_ptr<ASTNode> body;
-            if (check(TOKEN_LBRACE)) {
-                body = parse_block();
-            } else {
-                body = parse_expression();
+            {
+                // Lambda govdesi cevreleyen fonksiyonun tuple donusunu
+                // GORMEZ: icindeki `return a, b;` hata olmali.
+                struct NoTupleGuard {
+                    Parser* p;
+                    std::vector<TupleElem> saved;
+                    explicit NoTupleGuard(Parser* pp)
+                        : p(pp), saved(std::move(pp->current_tuple_types_)) {
+                        p->current_tuple_types_.clear();
+                    }
+                    ~NoTupleGuard() { p->current_tuple_types_ = std::move(saved); }
+                } no_tuple(this);
+                if (check(TOKEN_LBRACE)) {
+                    body = parse_block();
+                } else {
+                    body = parse_expression();
+                }
             }
             return std::make_unique<ASTNode>(LambdaExpr(std::move(parameters), std::move(body), lam_loc));
         }
@@ -2074,6 +2201,276 @@ static DataType array_of(DataType base) {
     // eleman tipi uydurmaktansa tipsiz kalmak doğru.
     default: return TYPE_ARRAY;
     }
+}
+
+// ---- coklu donus / tuple (P0.1, 2026-09-21) --------------------------------
+// Bkz. parser.hpp'deki tuple notu.
+
+static bool is_type_keyword_token(TulparTokenType t) {
+    switch (t) {
+        case TOKEN_INT_TYPE: case TOKEN_FLOAT_TYPE: case TOKEN_STR_TYPE:
+        case TOKEN_BOOL_TYPE: case TOKEN_ARRAY_TYPE: case TOKEN_ARRAY_INT:
+        case TOKEN_ARRAY_FLOAT: case TOKEN_ARRAY_STR: case TOKEN_ARRAY_BOOL:
+        case TOKEN_ARRAY_JSON: case TOKEN_JSON_TYPE: case TOKEN_VAR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Tuple eleman tipinin ad etiketi — sentezlenen struct adi bundan uretilir
+// (`__tup_float_float`). Ayni tip listesi her yerde ayni ada cozulur; bu,
+// modul sinirinda da tutar (register_struct_type ayni adi bir kez kaydeder).
+static std::string tuple_type_tag(DataType t, const std::optional<std::string>& custom) {
+    switch (t) {
+        case TYPE_INT: return "int";
+        case TYPE_FLOAT: return "float";
+        case TYPE_STRING: return "str";
+        case TYPE_BOOL: return "bool";
+        case TYPE_JSON: return "json";
+        case TYPE_ARRAY: return "array";
+        case TYPE_ARRAY_INT: return "arrayInt";
+        case TYPE_ARRAY_FLOAT: return "arrayFloat";
+        case TYPE_ARRAY_STR: return "arrayStr";
+        case TYPE_ARRAY_BOOL: return "arrayBool";
+        case TYPE_ARRAY_JSON: return "arrayJson";
+        case TYPE_CUSTOM: return custom.value_or("custom");
+        default: return "var";
+    }
+}
+
+static DataType tuple_array_of(DataType t) {
+    switch (t) {
+        case TYPE_INT: return TYPE_ARRAY_INT;
+        case TYPE_FLOAT: return TYPE_ARRAY_FLOAT;
+        case TYPE_STRING: return TYPE_ARRAY_STR;
+        case TYPE_BOOL: return TYPE_ARRAY_BOOL;
+        case TYPE_JSON: return TYPE_ARRAY_JSON;
+        default: return TYPE_ARRAY;
+    }
+}
+
+void Parser::prescan_tuple_sigs() {
+    const size_t n = tokens_.size();
+    for (size_t i = 0; i + 3 < n; i++) {
+        if (tokens_[i].type() != TOKEN_FUNC ||
+            tokens_[i + 1].type() != TOKEN_IDENTIFIER ||
+            tokens_[i + 2].type() != TOKEN_LPAREN) continue;
+        const std::string& fname = tokens_[i + 1].value();
+        // parametre listesini atla (eslesen parantez)
+        size_t j = i + 3;
+        int depth = 1;
+        while (j < n && depth > 0) {
+            if (tokens_[j].type() == TOKEN_LPAREN) depth++;
+            else if (tokens_[j].type() == TOKEN_RPAREN) depth--;
+            j++;
+        }
+        if (depth != 0) continue;
+        if (j < n && tokens_[j].type() == TOKEN_COLON) j++;
+        if (j >= n || tokens_[j].type() != TOKEN_LPAREN) continue;
+        j++;
+        std::vector<TupleElem> elems;
+        bool ok = true;
+        while (j < n && tokens_[j].type() != TOKEN_RPAREN) {
+            TupleElem e;
+            const Token& t = tokens_[j];
+            switch (t.type()) {
+                case TOKEN_INT_TYPE: e.type = TYPE_INT; break;
+                case TOKEN_FLOAT_TYPE: e.type = TYPE_FLOAT; break;
+                case TOKEN_STR_TYPE: e.type = TYPE_STRING; break;
+                case TOKEN_BOOL_TYPE: e.type = TYPE_BOOL; break;
+                case TOKEN_JSON_TYPE: e.type = TYPE_JSON; break;
+                case TOKEN_ARRAY_TYPE: e.type = TYPE_ARRAY; break;
+                case TOKEN_ARRAY_INT: e.type = TYPE_ARRAY_INT; break;
+                case TOKEN_ARRAY_FLOAT: e.type = TYPE_ARRAY_FLOAT; break;
+                case TOKEN_ARRAY_STR: e.type = TYPE_ARRAY_STR; break;
+                case TOKEN_ARRAY_BOOL: e.type = TYPE_ARRAY_BOOL; break;
+                case TOKEN_ARRAY_JSON: e.type = TYPE_ARRAY_JSON; break;
+                case TOKEN_IDENTIFIER:
+                    if (is_enum_name(t.value())) { e.type = TYPE_INT; }
+                    else { e.type = TYPE_CUSTOM; e.custom = t.value(); }
+                    break;
+                default: ok = false; break;
+            }
+            if (!ok) break;
+            j++;
+            while (j + 1 < n && tokens_[j].type() == TOKEN_LBRACKET &&
+                   tokens_[j + 1].type() == TOKEN_RBRACKET) {
+                e.type = tuple_array_of(e.type);
+                e.custom.reset();
+                j += 2;
+            }
+            elems.push_back(std::move(e));
+            if (j < n && tokens_[j].type() == TOKEN_COMMA) j++;
+        }
+        if (!ok || elems.size() < 2) continue;
+        tuple_sigs_[fname] = std::move(elems);
+    }
+}
+
+// '(' T, T, ... ')' — en az iki tip. `(` tuketilmemis gelir.
+std::vector<Parser::TupleElem> Parser::parse_tuple_type_list() {
+    expect(TOKEN_LPAREN, "Expected '('");
+    std::vector<TupleElem> elems;
+    do {
+        TupleElem e;
+        std::optional<std::string> cn;
+        if (check(TOKEN_IDENTIFIER)) cn = current().value();
+        e.type = parse_type();
+        if (e.type == TYPE_CUSTOM) e.custom = cn;
+        elems.push_back(std::move(e));
+    } while (match(TOKEN_COMMA));
+    expect(TOKEN_RPAREN, "coklu donus tip listesinden sonra ')' bekleniyordu / "
+                         "Expected ')' after tuple return types");
+    if (elems.size() < 2) {
+        error("coklu donus en az iki tip ister: `(float, float)` / "
+              "a tuple return type needs at least two types");
+    }
+    return elems;
+}
+
+std::string Parser::tuple_struct_name(const std::vector<TupleElem>& elems) {
+    std::string name = "__tup";
+    for (const auto& e : elems) name += "_" + tuple_type_tag(e.type, e.custom);
+    if (!synth_tuple_structs_.count(name)) synth_tuple_structs_[name] = elems;
+    return name;
+}
+
+// `f(...)` dogrudan adlandirilmis cagri ve f on taramada tuple bildirdiyse
+// imzasi; yoksa nullptr.
+const std::vector<Parser::TupleElem>* Parser::tuple_sig_of_call(const ASTNode* call) const {
+    if (!call) return nullptr;
+    const auto* fc = std::get_if<FunctionCall>(&call->value);
+    if (!fc || fc->name.empty() || fc->receiver || fc->callee) return nullptr;
+    auto it = tuple_sigs_.find(fc->name);
+    return it == tuple_sigs_.end() ? nullptr : &it->second;
+}
+
+std::unique_ptr<ASTNode> Parser::make_tuple_temp_decl(const std::string& tmp,
+                                                      const std::string& struct_name,
+                                                      std::unique_ptr<ASTNode> init,
+                                                      SourceLocation loc) {
+    VariableDecl vd(tmp, TYPE_CUSTOM, std::move(init), loc);
+    vd.custom_type = struct_name;
+    scope_declare(tmp, false);
+    return std::make_unique<ASTNode>(std::move(vd));
+}
+
+// `__t._i` — ayristiricinin `.` sekeriyle AYNI dugum (ArrayAccess + str).
+std::unique_ptr<ASTNode> Parser::make_tuple_field(const std::string& var, size_t idx,
+                                                  SourceLocation loc) {
+    auto obj = std::make_unique<ASTNode>(Identifier(var, loc));
+    auto key = std::make_unique<ASTNode>(StringLiteral("_" + std::to_string(idx), loc));
+    return std::make_unique<ASTNode>(ArrayAccess(std::move(obj), std::move(key), loc));
+}
+
+// `float dx, dz = f(...);`  (ilk ad ve tipi cagiran okudu; imlec `,`de)
+//   -> __tN = f(...);  [pending] float dx = __tN._0; float dz = __tN._1;
+std::unique_ptr<ASTNode> Parser::parse_tuple_var_decl(SourceLocation loc,
+                                                      DataType first_type,
+                                                      std::optional<std::string> first_custom,
+                                                      const std::string& first_name,
+                                                      bool is_const) {
+    struct Bind {
+        std::string name;
+        DataType type;
+        std::optional<std::string> custom;
+    };
+    std::vector<Bind> binds;
+    binds.push_back({first_name, first_type, first_custom});
+    while (match(TOKEN_COMMA)) {
+        DataType t = first_type;               // tip yazilmazsa ilkininki
+        std::optional<std::string> c = first_custom;
+        const bool has_type = is_type_keyword_token(current().type()) ||
+                              (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_IDENTIFIER);
+        if (has_type) {
+            std::optional<std::string> cn;
+            if (check(TOKEN_IDENTIFIER)) cn = current().value();
+            t = parse_type();
+            c = (t == TYPE_CUSTOM) ? cn : std::nullopt;
+        }
+        Token nt = expect(TOKEN_IDENTIFIER, "Expected variable name");
+        binds.push_back({nt.value(), t, c});
+    }
+    expect(TOKEN_ASSIGN, "coklu bildirim baslatici ister: `float a, b = f();` / "
+                         "tuple declaration requires an initialiser");
+    auto init = parse_expression();
+    expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
+    const std::vector<TupleElem>* sig = tuple_sig_of_call(init.get());
+    if (!sig) {
+        error("coklu bildirimin sag tarafi bu dosyada `: (T, T)` bildiren bir "
+              "fonksiyonun dogrudan cagrisi olmali / the right-hand side of a "
+              "tuple declaration must directly call a function declared with "
+              "`: (T, T)` in this file");
+    }
+    if (sig->size() != binds.size()) {
+        error(std::to_string(binds.size()) + " ad, " + std::to_string(sig->size()) +
+              " deger: coklu bildirim fonksiyonun tip sayisiyla eslesmeli / " +
+              std::to_string(binds.size()) + " names but the function returns " +
+              std::to_string(sig->size()) + " values");
+    }
+    const std::string sname = tuple_struct_name(*sig);
+    const std::string tmp = "__t" + std::to_string(tuple_tmp_counter_++);
+    auto tmp_decl = make_tuple_temp_decl(tmp, sname, std::move(init), loc);
+    for (size_t i = 0; i < binds.size(); i++) {
+        DataType t = binds[i].type;
+        std::optional<std::string> c = binds[i].custom;
+        if (t == TYPE_UNKNOWN) { t = (*sig)[i].type; c = (*sig)[i].custom; }  // `var a, b`
+        VariableDecl vd(binds[i].name, t, make_tuple_field(tmp, i, loc), loc);
+        vd.custom_type = c;
+        vd.is_const = is_const;
+        scope_declare(binds[i].name, is_const);
+        pending_after_.push_back(std::make_unique<ASTNode>(std::move(vd)));
+    }
+    return tmp_decl;
+}
+
+// `dx, dz = f(...);`  -> __tN = f(...);  [pending] dx = __tN._0; dz = __tN._1;
+std::unique_ptr<ASTNode> Parser::parse_tuple_assignment() {
+    SourceLocation loc(current().line(), current().column());
+    std::vector<std::string> names;
+    do {
+        Token nt = expect(TOKEN_IDENTIFIER, "Expected variable name");
+        reject_const_write(nt);
+        names.push_back(nt.value());
+    } while (match(TOKEN_COMMA));
+    expect(TOKEN_ASSIGN, "Expected '='");
+    auto init = parse_expression();
+    expect(TOKEN_SEMICOLON, "Expected ';' after expression");
+    const std::vector<TupleElem>* sig = tuple_sig_of_call(init.get());
+    if (!sig) {
+        error("coklu atamanin sag tarafi bu dosyada `: (T, T)` bildiren bir "
+              "fonksiyonun dogrudan cagrisi olmali / the right-hand side of a "
+              "tuple assignment must directly call a function declared with "
+              "`: (T, T)` in this file");
+    }
+    if (sig->size() != names.size()) {
+        error(std::to_string(names.size()) + " ad, " + std::to_string(sig->size()) +
+              " deger: coklu atama fonksiyonun tip sayisiyla eslesmeli / " +
+              std::to_string(names.size()) + " names but the function returns " +
+              std::to_string(sig->size()) + " values");
+    }
+    const std::string sname = tuple_struct_name(*sig);
+    const std::string tmp = "__t" + std::to_string(tuple_tmp_counter_++);
+    auto tmp_decl = make_tuple_temp_decl(tmp, sname, std::move(init), loc);
+    for (size_t i = 0; i < names.size(); i++) {
+        pending_after_.push_back(std::make_unique<ASTNode>(
+            Assignment(names[i], make_tuple_field(tmp, i, loc), loc)));
+    }
+    return tmp_decl;
+}
+
+void Parser::drain_pending(std::vector<std::unique_ptr<ASTNode>>& out) {
+    for (auto& s : pending_after_) out.push_back(std::move(s));
+    pending_after_.clear();
+}
+
+void Parser::reject_pending() {
+    if (pending_after_.empty()) return;
+    pending_after_.clear();
+    error("coklu bildirim/atama burada suslu parantezli govde ister: "
+          "`if (x) { float a, b = f(); }` / a tuple binding needs a braced "
+          "block here");
 }
 
 DataType Parser::parse_type() {

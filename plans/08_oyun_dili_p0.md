@@ -1,7 +1,8 @@
 # Plan 08 — Oyun dili P0: `enum`, kutusuz float struct, çoklu dönüş
 
-**Durum:** IN PROGRESS — P0.2 `enum` ✅ (2026-09-21, dal `dil/enum`); P0.3 float struct ✅
-(2026-09-21, dal `dil/struct-float-kutusuz`); P0.1 sırada.
+**Durum:** DİL TARAFI TAMAM (2026-09-21) — P0.2 `enum` ✅ (dal `dil/enum`), P0.3 float struct ✅
+(dal `dil/struct-float-kutusuz`), P0.1 tuple ✅ (dal `dil/coklu-donus`). Kalan: motor deposunda
+P0.4 (oyun yeniden yazımı).
 **Tahmin:** 3 PR (enum → float struct → tuple), sonra motor deposunda 1 PR (oyun yeniden yazımı).
 **Risk:** Orta — P0.2/P0.1 ayrıştırıcı şekeri (codegen'e dokunmaz); P0.3 codegen'in 20+ struct
 yerleşim noktasına dokunur.
@@ -78,7 +79,18 @@ Doğrulama: `tests/struct_float.test.tpr`; mevcut `struct_nontrivial.test.tpr` v
 `examples/41_struct_entities.tpr` değişmeden yeşil; `benchmarks/vec3_sum` önce/sonra;
 IR kanıtı `tulpar_struct.Vec3 = type { double, double, double }`.
 
-## P0.1 — çoklu dönüş / tuple (sırada; P0.3'e dayanır)
+## P0.1 — çoklu dönüş / tuple ✅
+
+Yapıldı (2026-09-21) — aşağıdaki tasarım olduğu gibi uygulandı: `prescan_tuple_sigs` (token ön
+taraması), `parse_tuple_type_list`, `tuple_struct_name` (sentez + kayıt; `parse()` sonunda TypeDecl'ler
+programın başına), `parse_return_statement` Block açılımı, `parse_tuple_var_decl` /
+`parse_tuple_assignment` + `pending_after_` (`parse_block`/`parse()` boşaltır, süslü parantezsiz
+gövdeler `reject_pending` ile reddeder), lambda gövdesinde tuple bağlamı kapalı. Codegen/typeinfer'a
+dokunulmadı. IR: `__tup_float_float = type { double, double }`, `yon` içinde 0 tahsis çağrısı.
+`tests/tuple_return.test.tpr` 11/11, `tests/tuple_hatalari.sh` 9/9 (suites içinde),
+`examples/44_coklu_donus.tpr`, fmt idempotent. LSP `__` önekli geçicileri gizler.
+
+Planlanan tasarım (uygulanan hâliyle):
 
 ```tpr
 func yon(...): (float, float) { ... return hx, hz; }

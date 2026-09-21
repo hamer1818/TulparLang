@@ -1,0 +1,65 @@
+// Coklu donus (tuple)
+// ===================
+//
+// Calistir:  ./tulpar examples/44_coklu_donus.tpr
+//
+// Dile 2026-09-21'de eklendi (P0.1). Neden: oyun betikleri iki sonuc donen
+// hesaplari (yon vektoru, bolum + kalan) ya global degiskene yaziyor ya da
+// tek kullanimlik struct kuruyordu. Simdi:
+//
+//   func yon(...): (float, float) { return hx, hz; }
+//   float dx, dz = yon(...);          // bildirim
+//   dx, dz = yon(...);                // var olan degiskenlere
+//   var q, r = bol(17, 5);            // tipler fonksiyondan
+//
+// Altinda sentezlenmis bir struct var (`__tup_float_float`), float alanlar
+// kutusuz oldugu icin (P0.3) cagri sifir heap tahsisiyle doner.
+
+// Hedefe dogru birim yon (motorun yon_hesapla kalibi, globalsiz).
+func yon(float fx, float fz, float tx, float tz): (float, float) {
+    float hx = tx - fx;
+    float hz = tz - fz;
+    float uz = sqrt(hx * hx + hz * hz);
+    if (uz < 0.0001) { return 0.0, 0.0; }
+    return hx / uz, hz / uz;
+}
+
+func bol(int a, int b): (int, int) {
+    return a / b, a % b;
+}
+
+// Min ve max'i tek gecist bul.
+func aralik(array xs): (float, float) {
+    float en_kucuk = xs[0];
+    float en_buyuk = xs[0];
+    int i = 1;
+    while (i < len(xs)) {
+        if (xs[i] < en_kucuk) { en_kucuk = xs[i]; }
+        if (xs[i] > en_buyuk) { en_buyuk = xs[i]; }
+        i = i + 1;
+    }
+    return en_kucuk, en_buyuk;
+}
+
+print("=== coklu donus ===");
+
+float dx, dz = yon(0.0, 0.0, 3.0, 4.0);
+print("yon: (" + toString(dx) + ", " + toString(dz) + ")");
+
+// Oyuncu hedefe dogru 5 adim yurur; her adimda yon yeniden hesaplanir.
+float px = 0.0;
+float pz = 0.0;
+int adim = 0;
+while (adim < 5) {
+    dx, dz = yon(px, pz, 3.0, 4.0);
+    px = px + dx * 0.5;
+    pz = pz + dz * 0.5;
+    adim = adim + 1;
+}
+print("5 adim sonra: (" + toString(px) + ", " + toString(pz) + ")");
+
+var q, r = bol(17, 5);
+print("17 / 5 = " + toString(q) + " kalan " + toString(r));
+
+float kucuk, buyuk = aralik([3.5, -1.0, 9.25, 4.0]);
+print("aralik: " + toString(kucuk) + " .. " + toString(buyuk));

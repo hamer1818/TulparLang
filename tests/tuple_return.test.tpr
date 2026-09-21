@@ -1,0 +1,139 @@
+// Coklu donus / tuple (P0.1, 2026-09-21).
+//
+// Neden var: motorun oyun betigi yon hesabinin iki sonucunu `g_yon_x` /
+// `g_yon_z` globallerine yaziyordu — "Tulpar'da coklu donus yok". Sozlesme:
+//   * `func f(): (float, float) { return a, b; }`
+//   * `float dx, dz = f();`   `float dx, int n = g();`   `var a, b = f();`
+//   * `dx, dz = f();`  (var olan degiskenlere)
+//   * Tamamen ayristirici sekeri: `(float, float)` icin `struct
+//     __tup_float_float { float _0; float _1; }` sentezlenir; P0.3 sayesinde
+//     native `{double,double}` res-ptr ile doner — sifir heap tahsisi.
+//   * Bildirim sirasi onemsiz (on tarama). Callee ayni dosyada adlandirilmis
+//     fonksiyon olmali (v1).
+// Calistir: ./tulpar tests/tuple_return.test.tpr
+import "test";
+
+// Bildirimden ONCE kullanim — on tarama olmasa `ikili` tuple sanilmazdi.
+func run_once_kullanim() {
+    float a, b = ikili(1.0, 2.0);
+    assert_close(a, 1.0, 0.000001);
+    assert_close(b, 2.0, 0.000001);
+}
+
+func ikili(float x, float y): (float, float) { return x, y; }
+
+// Motorun yon_hesapla kalibi: birim yon, iki bilesen.
+func yon(float fx, float fz, float tx, float tz): (float, float) {
+    float hx = tx - fx;
+    float hz = tz - fz;
+    float uz = sqrt(hx * hx + hz * hz);
+    if (uz < 0.0001) { return 0.0, 0.0; }
+    return hx / uz, hz / uz;
+}
+
+func bol(int a, int b): (int, int) { return a / b, a % b; }
+func karisik(int n): (int, float, bool) { return n, n * 0.5, n > 2; }
+func adli(str ad, int yas): (str, int) { return ad + "!", yas + 1; }   // str: kutulu yol
+func ilet(float x, float y): (float, float) { return ikili(y, x); }     // tuple'i oldugu gibi ilet
+func fi(): (float, int) { return 1.5, 2; }
+
+func run_float_cifti() {
+    float dx, dz = yon(0.0, 0.0, 3.0, 4.0);
+    assert_close(dx, 0.6, 0.000001);
+    assert_close(dz, 0.8, 0.000001);
+    float sx, sz = yon(1.0, 1.0, 1.0, 1.0);   // sifir uzaklik dali
+    assert_close(sx, 0.0, 0.000001);
+    assert_close(sz, 0.0, 0.000001);
+}
+
+func run_var_olan_degiskene_atama() {
+    float a = -1.0;
+    float b = -1.0;
+    a, b = yon(0.0, 0.0, 0.0, 5.0);
+    assert_close(a, 0.0, 0.000001);
+    assert_close(b, 1.0, 0.000001);
+    a, b = ikili(7.0, 8.0);
+    assert_close(a, 7.0, 0.000001);
+    assert_close(b, 8.0, 0.000001);
+}
+
+func run_var_ile() {
+    var q, r = bol(17, 5);
+    assert_eq_int(q, 3);
+    assert_eq_int(r, 2);
+}
+
+func run_uclu_karisik_tip() {
+    int n, float h, bool b = karisik(5);
+    assert_eq_int(n, 5);
+    assert_close(h, 2.5, 0.000001);
+    assert(b, "5 > 2 olmali");
+    float p, int k = fi();
+    assert_close(p, 1.5, 0.000001);
+    assert_eq_int(k, 2);
+}
+
+func run_str_kutulu_yol() {
+    str s, int y = adli("ali", 30);
+    assert_eq_str(s, "ali!");
+    assert_eq_int(y, 31);
+}
+
+func run_iletme() {
+    float x, y = ilet(1.0, 2.0);
+    assert_close(x, 2.0, 0.000001);
+    assert_close(y, 1.0, 0.000001);
+}
+
+func run_const() {
+    const float c1, c2 = ikili(3.0, 4.0);
+    assert_close(c1 + c2, 7.0, 0.000001);
+}
+
+// Kare dongusu: 1M kere iki deger don — tahsissiz (IR kaniti ayrica).
+func run_dongu() {
+    float tx = 0.0;
+    float tz = 0.0;
+    int i = 0;
+    while (i < 1000000) {
+        float dx, dz = yon(0.0, 0.0, 3.0, 4.0);
+        tx = tx + dx;
+        tz = tz + dz;
+        i = i + 1;
+    }
+    assert_close(tx, 600000.0, 0.01);
+    assert_close(tz, 800000.0, 0.01);
+}
+
+// Ust duzeyde coklu bildirim: gecici (__t) struct global olur, fonksiyon okur.
+float g1, g2 = ikili(3.0, 4.0);
+func g_oku(): float { return g1 + g2; }
+func run_ust_duzey() {
+    assert_close(g_oku(), 7.0, 0.000001);
+    g1, g2 = ikili(10.0, 20.0);
+    assert_close(g_oku(), 30.0, 0.000001);
+}
+
+// Blok icinde bildirim: dx/dz blogun disina SIZMAZ ama blok icinde gorunur.
+func run_blok_kapsami() {
+    float toplam = 0.0;
+    if (true) {
+        float a, b = ikili(1.0, 2.0);
+        toplam = a + b;
+    }
+    assert_close(toplam, 3.0, 0.000001);
+}
+
+print("=== tuple / coklu donus tests ===");
+test("bildirimden once kullanim (on tarama)", "run_once_kullanim");
+test("float cifti (yon)", "run_float_cifti");
+test("var olan degiskene atama", "run_var_olan_degiskene_atama");
+test("var ile", "run_var_ile");
+test("uclu + karisik tip", "run_uclu_karisik_tip");
+test("str iceren tuple (kutulu yol)", "run_str_kutulu_yol");
+test("tuple iletme", "run_iletme");
+test("const", "run_const");
+test("1M dongu", "run_dongu");
+test("ust duzey bildirim + atama", "run_ust_duzey");
+test("blok kapsami", "run_blok_kapsami");
+test_summary();
