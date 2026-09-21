@@ -28,7 +28,9 @@ Requires **CMake 3.14+** and **LLVM 18+** (hard requirement — `find_package(LL
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j   # Direct CMake
 ```
 
-**Native Windows is not supported** (dropped in 3.13.0). On Windows, develop and run inside **WSL** and use the Linux path above — everything works there, including the web and Android build targets. There is no MSVC/MinGW build, no `build.bat`/`build.ps1`, no Inno Setup installer, and no `build-windows` CI job.
+**Native Windows is built again** (2026-09-21) via **MSYS2 MINGW64** — `pacman -S mingw-w64-x86_64-{gcc,cmake,ninja,llvm,ccache,zlib,zstd,libxml2,openssl}`, then the ordinary CMake path. CI's `build-windows` job compiles the same way and enforces one gate the other platforms don't need: `tulpar.exe` must import **only** Windows system DLLs plus the five MinGW DLLs shipped in `tulpar-windows-x64.zip`, so the published folder is self-contained. Releases carry that zip plus `libtulpar_runtime-windows-x64.a`.
+
+What Windows CI does **not** do is run the test suites — `build.sh test` / `suites` AOT-compile and link every example, which is the most expensive thing on a Windows runner, and the Linux job already covers them. So Windows is proven to *build and start*, not to pass the full suite; WSL remains the fully exercised path. (History: native Windows was dropped in 3.13.0 and the CI job deleted, but CMakeLists/`build.sh` kept — and later regained — their MinGW support, so the repo could build Windows while CI never measured it. That gap is what the restored job closes. There is still no `build.bat`/`build.ps1` and no Inno Setup installer.)
 
 `build.sh` wipes `$BUILD_DIR` on every invocation (no incremental builds). Use direct CMake if you want incremental rebuilds during development.
 

@@ -1,4 +1,4 @@
-name: Linux & macOS Build (LLVM)
+name: Build (LLVM)
 
 on:
   push:
@@ -81,11 +81,19 @@ jobs:
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # Windows'a NATIF destek 3.13.0'da bırakıldı — Windows kullanıcıları WSL
-  # üzerinden Linux yolunu kullanıyor (bkz. CHANGELOG "Windows desteği: WSL").
-  # Bu yüzden burada bir `build-windows` işi YOK; main'in branch protection
-  # ayarından da `build-windows` zorunlu check'i KALDIRILMALI, yoksa PR'lar
-  # hiç raporlanmayacak bir check'i bekler.
+  # NOT — "TameEngine" bu depoda kalan 3B SAHNE EDITORUDUR (Tulpar'da yazili,
+  # tame/scene3d hatti), 2026-09-20'de ayri depoya tasinan OYUN MOTORU
+  # (tulpar-engine) DEGILDIR. Asagidaki `TameEngine-*` adimlari onu paketler;
+  # bu is akisinda motora ait hicbir sey kalmadi (ne `engine/` alt agaci, ne
+  # Vulkan paketleri, ne `libengine_*`).
+  #
+  # WINDOWS (2026-09-21): natif Windows isi GERI GELDI. 3.13.0'da birakilmisti
+  # ve gerekce "WSL yeter" idi; ama derleme sistemi bu arada Windows'u yeniden
+  # destekler hale geldi (CMakeLists'teki MinGW/MSYS2 kollari, `if(WIN32)`
+  # linkleme, LLVM statik bilesen secimi — hatta oradaki yorum CI'in DLL
+  # paketleme korumasindan soz ediyor) ve `build.sh` MINGW/MSYS platformunu
+  # taniyor. Yani depo Windows'u derleyebiliyordu, YALNIZCA CI onu hic
+  # olcmuyordu; yayinlanan surumlerde de Windows ikilisi yoktu.
   build-linux:
     # Branch protection on this repo lists `build-linux` / `build-macos`
     # as *required* status checks, by name. A job-level
@@ -155,7 +163,7 @@ jobs:
           # Find a successful build on the PR's head commit. Limit 30
           # so a long-running PR with many force-pushes still finds
           # the right run. Returns the most recent if multiple.
-          run_id=$(gh run list --workflow='Linux & macOS Build (LLVM)' \
+          run_id=$(gh run list --workflow='Build (LLVM)' \
                      --status=success --limit=30 \
                      --json databaseId,headSha \
                      --jq ".[] | select(.headSha==\"$head_sha\") | .databaseId" \
@@ -442,6 +450,177 @@ jobs:
           name: libtulpar_runtime-linux-x64
           path: dist/libtulpar_runtime-linux-x64.a
 
+  # ---------------------------------------------------------------------
+  # WINDOWS (MSYS2 MINGW64) — 2026-09-21'de geri geldi.
+  #
+  # Testleri KOSMUYOR, bilerek: test kosucusu (`build.sh test`) her ornegi
+  # AOT derleyip linkliyor ve bu Windows runner'inda en pahali is; Linux ayagi
+  # zaten butun ornekleri + suitleri kosuyor. Buradaki soru daha dar ve
+  # cevaplanmamis olani: "derleyici Windows'ta DERLENIYOR ve kendi kendine
+  # yeten bir .exe uretiyor mu?" DLL kapisi tam olarak bunu olcuyor.
+  #
+  # Zorunlu check YAPILMADI (ilk yesil kosumdan sonra main'in dal korumasina
+  # eklenmeli). Gerekce: hic kosmamis bir isi zorunlu ilan etmek, butun
+  # PR'lari kirmizi bir bilinmeyene baglamak olurdu.
+  # ---------------------------------------------------------------------
+  build-windows:
+    # `build-linux`'taki ayni gerekce: is KOSAR, adimlar bayraga gore atlanir.
+    needs: detect-docs-only
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Docs-only skip notice
+        if: needs.detect-docs-only.outputs.docs_only == 'true'
+        shell: pwsh
+        run: Write-Host "Docs-only change detected; build steps will be skipped (job reports success)."
+
+      - uses: actions/checkout@v6
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        with:
+          sparse-checkout: |
+            /*
+            !wasm/emsdk
+          sparse-checkout-cone-mode: false
+
+      # MSYS2 mingw64, bir Windows runner'inda TAM bir LLVM gelistirme agacini
+      # (basliklar + LLVM*.dll.a) 30+ dakikalik bir vcpkg/kaynak derlemesi
+      # olmadan almanin tek gercekci yolu: resmi LLVM Windows kurulumu ve
+      # Chocolatey yalnizca derleyici dagitimini veriyor, linklediğimiz statik
+      # kutuphaneler (LLVMCore, LLVMSupport, ...) orada yok.
+      #
+      # Paket listesi dar tutuldu (3.13.0 oncesi isten devralindi): `toolchain`
+      # meta-paketi butun GCC ailesini cekiyor, bize yalniz gcc (g++ ile
+      # birlikte) lazim. `git` de yok — CMakeLists git'e bakmiyor.
+      - name: MSYS2 (MINGW64)
+        id: msys2
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          cache: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-llvm
+            mingw-w64-x86_64-ccache
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-libxml2
+            mingw-w64-x86_64-openssl
+
+      # ccache yolu is alanina gore: `~` msys2 ile pwsh arasinda FARKLI
+      # cozuluyor ve onbellek gidis-donusu tutmuyordu.
+      - name: Restore ccache
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ runner.os }}-msys2-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-msys2-ccache-
+
+      - name: Build with LLVM
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        env:
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+        run: |
+          llvm-config --version
+          mkdir -p build-windows
+          cd build-windows
+          cmake_args="-G Ninja
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_C_COMPILER=gcc
+            -DCMAKE_CXX_COMPILER=g++
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          if [ -n "${TULPAR_VERSION}" ]; then
+            cmake_args="${cmake_args} -DTULPAR_VERSION=${TULPAR_VERSION}"
+          fi
+          cmake .. ${cmake_args}
+          cmake --build . --config Release -j
+        timeout-minutes: 25
+
+      - name: ccache stats
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+        run: ccache -s
+
+      # DUMAN: uretilen .exe GERCEKTEN calisiyor mu? Derleme basarili olup
+      # ikilinin acilmamasi (eksik DLL, yanlis alt sistem) Windows'ta en sik
+      # ariza; `--version` bunu bir saniyede olcer.
+      - name: Duman (tulpar.exe --version)
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        run: ./build-windows/tulpar.exe version
+
+      # Paketleme + DLL KAPISI: Windows dagitimi kendi kendine yeten bir
+      # klasor olmali. Ikilinin ITHALAT TABLOSU okunuyor; sistem DLL'i ya da
+      # pakete konan DLL olmayan tek bir bagimlilik bile isi KIRMIZI yapar.
+      # (CMakeLists'teki LLVM statik/dylib secimi tam olarak bu kapiya
+      # dayaniyor: dylib'e dusen bir derleme burada yakalanir.)
+      - name: Paketle + DLL kapisi
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build-windows\tulpar.exe          dist\tulpar-windows-x64.exe
+          Copy-Item build-windows\libtulpar_runtime.a dist\libtulpar_runtime-windows-x64.a
+          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
+          $bundledDlls = @(
+            'libwinpthread-1.dll',
+            'zlib1.dll',
+            'libzstd.dll',
+            'libssl-3-x64.dll',
+            'libcrypto-3-x64.dll'
+          )
+          foreach ($dll in $bundledDlls) {
+            $src = Join-Path $mingwBin $dll
+            if (-not (Test-Path $src)) {
+              throw "Pakete konacak DLL MSYS2'de yok: $src — paket duzeni mi degisti?"
+            }
+            Copy-Item $src "dist\$dll"
+          }
+          $systemDlls = @(
+            'kernel32.dll', 'kernelbase.dll', 'ntdll.dll', 'msvcrt.dll',
+            'advapi32.dll', 'user32.dll', 'shell32.dll', 'ole32.dll',
+            'oleaut32.dll', 'ws2_32.dll', 'crypt32.dll', 'secur32.dll',
+            'gdi32.dll', 'rpcrt4.dll', 'shlwapi.dll', 'bcrypt.dll',
+            'iphlpapi.dll', 'userenv.dll', 'version.dll', 'winmm.dll',
+            'powrprof.dll', 'dbghelp.dll', 'imm32.dll'
+          )
+          $allowed = ($systemDlls + $bundledDlls) | ForEach-Object { $_.ToLower() }
+          $imports = & objdump.exe -p dist\tulpar-windows-x64.exe |
+                     Select-String '^\s*DLL Name:\s*(.+)$' |
+                     ForEach-Object { $_.Matches[0].Groups[1].Value.Trim().ToLower() }
+          $missing = $imports | Where-Object { $_ -notin $allowed }
+          if ($missing) {
+            Write-Host "tulpar.exe ne sistem ne de pakete konan DLL'lere baglaniyor:" -ForegroundColor Red
+            $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+            throw "DLL paketleme kapisi dustu."
+          }
+          Write-Host "DLL kapisi: TAMAM ($($imports.Count) ithalat, hepsi kapsanmis)"
+          Compress-Archive -Path dist\tulpar-windows-x64.exe, dist\*.dll -DestinationPath dist\tulpar-windows-x64.zip
+
+      - name: Upload artifact
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tulpar-windows-x64
+          path: dist/tulpar-windows-x64.zip
+
+      - name: Upload runtime library
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: libtulpar_runtime-windows-x64
+          path: dist/libtulpar_runtime-windows-x64.a
+
   build-macos:
     # See `build-linux` for why this is unconditional + gated per-step
     # instead of skipped at the job level.
@@ -479,7 +658,7 @@ jobs:
             echo "PR #$pr_num not accessible — building from scratch."
             echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          run_id=$(gh run list --workflow='Linux & macOS Build (LLVM)' \
+          run_id=$(gh run list --workflow='Build (LLVM)' \
                      --status=success --limit=30 \
                      --json databaseId,headSha \
                      --jq ".[] | select(.headSha==\"$head_sha\") | .databaseId" \
@@ -688,7 +867,7 @@ jobs:
 
   
   create-release:
-    needs: [detect-docs-only, build-linux, build-macos]
+    needs: [detect-docs-only, build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     # Stable-only versioning: releases are created ONLY when a `v*` tag
     # is pushed (e.g. `git tag -a v2.2.0 -m "..." && git push origin
@@ -707,7 +886,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: '{tulpar-*,libtulpar_runtime-*,TameEngine-*}'
+          pattern: '{tulpar-*,libtulpar_runtime-*,TameEngine-*}'  # Windows zip/lib de bu kalibda
           merge-multiple: true
 
       - name: Compute release tag
@@ -744,7 +923,9 @@ jobs:
               libtulpar_runtime-linux-x64.a \
               libtulpar_runtime-macos-universal.a \
               TameEngine-linux-x64.tar.gz \
-              TameEngine-macos-universal.tar.gz; do
+              TameEngine-macos-universal.tar.gz \
+              tulpar-windows-x64.zip \
+              libtulpar_runtime-windows-x64.a; do
             if [ ! -f "$f" ]; then
               echo "ERROR: expected release artifact missing: $f" >&2
               exit 1
@@ -805,6 +986,9 @@ jobs:
             ### Downloads
             - `tulpar-linux-x64` - Linux executable
             - `tulpar-macos-universal` - macOS executable
+            - `tulpar-windows-x64.zip` - Windows (x64) — `tulpar.exe` plus the
+              MinGW runtime DLLs it needs. Unzip anywhere and run from inside
+              the folder; there is no installer.
 
             **TameEngine — 3D scene editor** (standalone, no install; the compiler is *not* required to run it):
             - `TameEngine-linux-x64.tar.gz`
@@ -835,17 +1019,23 @@ jobs:
 
             ### Windows
 
-            Native Windows support was **dropped in 3.13.0**. On Windows, run
-            TulparLang inside **WSL** (Windows Subsystem for Linux) and use the
-            Linux build — install WSL with `wsl --install`, then run the Linux
-            one-liner above inside it. Everything works there: the compiler,
-            Wings, the `tame`/`arcade`/`scene3d` game layers, and the web and
-            Android build targets.
+            Native Windows builds are back (2026-09-21) — download
+            `tulpar-windows-x64.zip`, unzip it and run `tulpar.exe` from inside
+            the folder. The zip is self-contained: CI verifies that the binary
+            imports nothing beyond Windows system DLLs and the bundled MinGW
+            ones. Build it yourself with MSYS2 MINGW64 (see README).
+
+            What CI measures on Windows is the **build** plus that
+            self-containment check — the example and suite runs happen on the
+            Linux job. If you want the fully exercised path, WSL still works:
+            `wsl --install`, then the Linux one-liner above.
           draft: false
           prerelease: false
           files: |
             tulpar-linux-x64
             tulpar-macos-universal
+            tulpar-windows-x64.zip
+            libtulpar_runtime-windows-x64.a
             libtulpar_runtime-linux-x64.a
             libtulpar_runtime-macos-universal.a
             TameEngine-linux-x64.tar.gz

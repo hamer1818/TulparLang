@@ -78,9 +78,13 @@ location (`%LOCALAPPDATA%\Programs\Tulpar` on Windows, `~/.local/bin`
 on Linux/macOS), and wire up `PATH`. No admin rights needed. Run
 `tulpar update` later to upgrade in place.
 
-Prefer the GUI? Download `tulpar-setup-windows-x64.exe` from the
-[latest release](https://github.com/hamer1818/TulparLang/releases/latest)
-— per-user install, Start Menu entry, Add/Remove Programs entry.
+On Windows you can also skip the script entirely: download
+`tulpar-windows-x64.zip` from the
+[latest release](https://github.com/hamer1818/TulparLang/releases/latest),
+unzip it anywhere and run `tulpar.exe` from inside the folder. The zip is
+self-contained — CI checks on every build that the binary imports nothing
+beyond Windows system DLLs and the MinGW ones shipped alongside it. (There
+is no longer a GUI installer; the Inno Setup package was dropped in 3.13.0.)
 
 ### Verifying releases
 
