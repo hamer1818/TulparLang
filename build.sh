@@ -1528,7 +1528,15 @@ if [ "$ACTION" = "test" ]; then
         # Workers are separate bash processes, so run_test + everything it
         # reads must be exported. FAIL_DIR is where they drop multi-line
         # failure detail (see run_test's header comment).
-        export INPUT_DIR FAIL_DIR GREEN RED NC
+        #
+        # PLATFORM DA BURADA OLMAK ZORUNDA ve bu OLCULDU (2026-09-21):
+        # run_test'in "Windows'ta pencere acan ornegi calistirma" dali
+        # $PLATFORM'a bakiyor. Degisken disa aktarilmayinca isci surecte BOS
+        # kaliyor, dal HIC calismiyor ve 23 ornek yine cokuyordu — SESSIZCE,
+        # cunku bos bir degiskenle karsilastirma yalnizca "esit degil" der.
+        # Buraya yeni bir kosul eklerken sordugu her degiskenin bu satirda
+        # oldugundan emin olun.
+        export INPUT_DIR FAIL_DIR GREEN RED NC PLATFORM
         export -f run_test smoke_probe_for
 
         # xargs exits 123 if ANY worker exited non-zero — that is the
