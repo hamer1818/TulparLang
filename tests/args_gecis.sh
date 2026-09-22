@@ -46,10 +46,19 @@ BEKLENEN="[sade]
 [ters\\bolu]
 [--bayrak]"
 
-ALINAN=$("$TULPAR" "$TMP/yaz.tpr" \
+# `tr -d '\r'` SART. Windows'ta `print()` satir sonunu CRLF olarak yaziyor;
+# karsilastirdigimiz BEKLENEN ise kabuk tarafinda duz LF. Bu kapi ilk
+# kosumunda tam olarak bunun yuzunden kirmizi dondu ve cikti GORSEL OLARAK
+# birebir ayniydi (olculdu 2026-09-22, Windows CI) — yani fark gorunmuyordu
+# ve kapi neyi olctugunu yanlis soyluyordu. Burada olculen sey ARGUMANIN
+# KENDISI; satir sonu bicimi bu kapinin konusu degil.
+# Cikti DOSYAYA aliniyor, boru hattina DEGIL: bir boruda `$?` son halkanin
+# (yani `tr`'nin) kodunu verir ve programin gercek cikis kodu KAYBOLUR.
+"$TULPAR" "$TMP/yaz.tpr" \
     "sade" "bosluk var" "tek'tirnak" 'cift"tirnak' 'ters\bolu' "--bayrak" \
-    2>"$TMP/err")
+    > "$TMP/out" 2>"$TMP/err"
 RC=$?
+ALINAN=$(tr -d '\r' < "$TMP/out")
 
 if [ $RC -ne 0 ]; then
     echo "args gecis kapisi DUSTU: program cikis kodu $RC"
@@ -61,6 +70,12 @@ if [ "$ALINAN" != "$BEKLENEN" ]; then
     echo "args gecis kapisi DUSTU: argumanlar BOZULARAK ulasti"
     echo "  beklenen:"; printf '%s\n' "$BEKLENEN" | sed 's/^/      /'
     echo "  alinan:";   printf '%s\n' "$ALINAN"   | sed 's/^/      /'
+    # GORUNMEYEN FARK. Bu kapi bir kez iki liste GORSEL OLARAK birebir
+    # ayniyken dustu (CR'ler); yukaridaki iki blok bakan insana "ayni" diyor
+    # ve yanlis yere baktiriyordu. `sed -n l` kacis bicimini basiyor, yani
+    # \r / \t / UTF-8 baytlari gorunur oluyor.
+    echo "  alinan (kacis bicimi):"
+    printf '%s\n' "$ALINAN" | sed -n l | sed 's/^/      /'
     exit 1
 fi
 
