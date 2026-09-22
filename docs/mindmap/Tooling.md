@@ -48,13 +48,31 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 `src/cli/debug_cmd.cpp` — **deneysel** DAP adaptörü. Denetimi yok.
 
 ## Self-update
-`src/cli/update_cmd.cpp` — `tulpar update [--check]`, tulparlang.dev'den. Denetimi yok.
+`src/cli/update_cmd.cpp` — `tulpar update [--check] [--force]`, GitHub Releases'ten;
+SHA-256 listesi indirilip her varlık doğrulanıyor, sonra kurulum dizinine yerleştiriliyor.
+
+**En kırılgan adım indirme değil, YERLEŞTİRME.** Hazırlık dizini `$TMPDIR`
+(varsayılan `/tmp`), hedef ise kurulum dizini — ve ikisi ayrı dosya
+sistemlerinde olabiliyor. `rename(2)` o sınırı geçemez, `EXDEV` döner.
+Ölçüldü 2026-09-22: `/tmp` tmpfs olan bir makinede komut, 68 MB'lık indirmeyi
+ve doğrulamayı **başarıyla bitirdikten sonra** son adımda düşüyordu. Artık
+sınır aşılırsa hedefin yanına kopyalanıp aynı dizin içinde yeniden
+adlandırılıyor (atomik ve çalışan ikili üzerinde güvenli).
+
+Kapısı: `tests/update_yerlestirme.sh`. Gerçek bir güncelleme ağ istediği için
+yol **ağdan bağımsız** ölçülüyor — `tulpar update --test-install=<dizin>` yalnız
+yerleştirmeyi koşturuyor ve hangi aygıtlar üzerinde çalıştığını basıyor, yani
+deneme sınırı hiç geçmediyse bunu söylüyor.
 
 ## Denetim durumu
-`./build.sh suites` fmt · doc · pkg · LSP · dist arşiv · builtin · kod üretimi
-denetimlerini koşuyor. **Denetimsiz kalan:** `tulpar debug`, `tulpar update`.
+`./build.sh suites` fmt · doc · pkg · LSP · dist arşiv · builtin · argüman geçişi ·
+güncelleme yerleştirmesi denetimlerini koşuyor. **Denetimsiz kalan:** `tulpar debug`.
+
 Yayınlanan araçların sessizce çürüdüğü bir tur yaşandı — fmt derlenmeyen kod üretiyordu,
 doc üç stdlib modülünü belgeleyemiyordu, ikisi de bütün testler yeşilken.
+Aynı sınıftan ikinci vaka 2026-09-22'de çıktı: `tulpar update` bu satır
+"denetimsiz" derken Linux'ta hiç çalışmaz halde yayınlanmıştı (`EXDEV`).
+Denetimsiz bir yayınlanan araç, çalışmayan bir yayınlanan araçtır.
 → [[Tuzaklar]] §6c
 
 ## İlgili

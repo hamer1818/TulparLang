@@ -38,6 +38,29 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Düzeltildi — `tulpar update` Linux'ta hiç çalışmıyordu (`EXDEV`)
+
+Komut, indirmeyi ve SHA-256 doğrulamasını **başarıyla bitirdikten sonra** son
+adımda `Dosya yerleştirilemedi` ile düşüyordu. Sebep izin ya da disk değil,
+dosya sistemi sınırıydı: hazırlık dizini `$TMPDIR` (varsayılan `/tmp`), hedef
+ise kurulum dizini (`~/.local/bin`). systemd tabanlı dağıtımlarda `/tmp` bir
+tmpfs, yani `/home`dan ayrı bir aygıt ve `rename(2)` `EXDEV` dönüyor. Bu,
+güncellemeyi çoğu Linux kullanıcısında tamamen çalışmaz kılıyordu.
+
+- Sınır aşılırsa dosya artık hedefin **yanına** kopyalanıp aynı dizin içinde
+  yeniden adlandırılıyor: atomik ve çalışan ikili üzerinde güvenli. İçerik
+  `fsync` ile diske indiriliyor, yoksa güç kesintisi kullanıcıyı doğru adla
+  duran sıfır baytlık bir `tulpar` ile bırakabilirdi.
+- Hata mesajları artık `errno` taşıyor. Eski mesaj sebebi söylemediği için
+  izin sorunu gibi görünüyordu.
+- **Yeni kapı:** `tests/update_yerlestirme.sh`. Gerçek bir güncelleme ağ
+  istediği için bu yol hiç ölçülmüyordu — `tulpar update --test-install=<dizin>`
+  yalnız yerleştirmeyi koşturuyor. Kapının iki kolu var (aynı ve farklı dosya
+  sistemi) ve deneme sınırı geçmediyse bunu söyleyip yeşil saymıyor.
+
+Geçici çözüm (düzeltme yayınlanana kadar, eski ikiliyle): hazırlık dizinini
+hedefle aynı dosya sistemine alın — `TMPDIR=~/.cache tulpar update`.
+
 ### Kaldırıldı — sahne/arayüz hattı CI kapsamından çıktı
 
 Oyun/arayüz tarafı artık **tulpar-engine** deposunda ölçülüyor; TulparLang CI'ı

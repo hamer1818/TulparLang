@@ -4,6 +4,7 @@
 #include "../common/version.hpp"
 #include "../pkg/sha256.hpp"
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,6 +15,7 @@
 #ifdef _WIN32
 #  include <windows.h>
 #else
+#  include <fcntl.h>
 #  include <sys/stat.h>
 #  include <sys/types.h>
 #  include <unistd.h>
@@ -312,6 +314,67 @@ std::string get_install_dir() {
 #endif
 }
 
+#ifndef _WIN32
+// Icerigi kopyalar ve DISKE INDIRIR. Yalniz EXDEV yolunda kullaniliyor.
+//
+// `fsync` SART: sonraki `rename` atomik ama icerigin diske inmesini garanti
+// ETMEZ. Guc kesintisi tam arada olursa kullanicinin elinde dogru ADLA duran
+// sifir baytlik bir `tulpar` kalir — yani calisir bir derleyici kalmaz.
+// Hata durumunda yarim dosya siliniyor.
+bool copy_file_posix(const std::string &src, const std::string &dst,
+                     std::string &err) {
+    int in = ::open(src.c_str(), O_RDONLY);
+    if (in < 0) {
+        err = i18n::tr_en("Indirilen dosya okunamadi: ",
+                          "Could not read downloaded file: ") + src +
+              " (" + std::strerror(errno) + ")";
+        return false;
+    }
+    int out = ::open(dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (out < 0) {
+        err = i18n::tr_en("Hedef dizine yazilamadi: ",
+                          "Could not write into target directory: ") + dst +
+              " (" + std::strerror(errno) + ")";
+        ::close(in);
+        return false;
+    }
+
+    bool ok = true;
+    char buf[65536];
+    for (;;) {
+        ssize_t n = ::read(in, buf, sizeof(buf));
+        if (n == 0) break;
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            ok = false;
+            break;
+        }
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = ::write(out, buf + off, static_cast<size_t>(n - off));
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                ok = false;
+                break;
+            }
+            off += w;
+        }
+        if (!ok) break;
+    }
+    int saved = errno;
+    if (ok && ::fsync(out) != 0) { ok = false; saved = errno; }
+    if (::close(out) != 0) { ok = false; saved = errno; }
+    ::close(in);
+    if (!ok) {
+        err = i18n::tr_en("Dosya kopyalanamadi: ",
+                          "Could not copy file: ") + dst +
+              " (" + std::strerror(saved) + ")";
+        ::unlink(dst.c_str());
+    }
+    return ok;
+}
+#endif
+
 // Atomic-ish file replacement. On POSIX `rename(2)` is atomic on the
 // same filesystem and works while the destination is open (file is
 // referenced by inode, not name). On Windows a plain MoveFileEx call
@@ -360,15 +423,51 @@ bool atomic_replace(const std::string &src, const std::string &dst,
     }
     return true;
 #else
-    (void)load_locked;  // POSIX rename works while file is open.
-    if (std::rename(src.c_str(), dst.c_str()) != 0) {
+    (void)load_locked;  // POSIX rename works while the file is RUNNING:
+                        // the kernel tracks the inode, not the name.
+    if (std::rename(src.c_str(), dst.c_str()) == 0) {
+        // Make sure executables stay executable (rename preserves mode of
+        // src; we downloaded with curl which writes 0644 by default).
+        chmod(dst.c_str(), 0755);
+        return true;
+    }
+
+    // EXDEV — `rename(2)` DOSYA SISTEMI SINIRINI GECEMEZ.
+    //
+    // Bu, `tulpar update`i Linux kullanicilarinin cogunda tamamen calismaz
+    // hale getiriyordu ve sebebi bir izin ya da disk sorunu DEGILDI:
+    // hazirlik dizini `$TMPDIR` (varsayilan `/tmp`), kurulum dizini ise
+    // genellikle `~/.local/bin`. systemd tabanli dagitimlarda `/tmp` bir
+    // tmpfs, yani `/home`dan AYRI bir aygit ve `rename` EXDEV (18) donuyor.
+    // Olculdu 2026-09-22 (CachyOS): indirmeler ve SHA-256 dogrulamasi
+    // basariyla bittikten SONRA "Dosya yerlestirilemedi" ile dusuyordu ve
+    // mesaj sebebi SOYLEMEDIGI icin izin sorunu gibi gorunuyordu — errno
+    // artik mesaja ekleniyor.
+    //
+    // Cozum: hedefin YANINA kopyala, sonra ayni dizin icinde yeniden
+    // adlandir. Ayni dizin = ayni dosya sistemi, yani bu rename hem atomik
+    // hem de calisan ikili uzerinde guvenli. Dogrudan `dst` uzerine
+    // YAZMIYORUZ: calisan bir ikiliyi yazmaya acmak ETXTBSY verir, ustelik
+    // yarim yazilmis bir dosya kullaniciyi calisir ikilisiz birakir.
+    if (errno != EXDEV) {
         err = i18n::tr_en("Dosya yerleştirilemedi: ",
-                          "Could not place file: ") + dst;
+                          "Could not place file: ") + dst +
+              " (" + std::strerror(errno) + ")";
         return false;
     }
-    // Make sure executables stay executable (rename preserves mode of
-    // src; we downloaded with curl which writes 0644 by default).
-    chmod(dst.c_str(), 0755);
+
+    std::string staged = dst + ".new";
+    if (!copy_file_posix(src, staged, err)) return false;
+    if (std::rename(staged.c_str(), dst.c_str()) != 0) {
+        err = i18n::tr_en("Dosya yerleştirilemedi: ",
+                          "Could not place file: ") + dst +
+              " (" + std::strerror(errno) + ")";
+        ::unlink(staged.c_str());
+        return false;
+    }
+    // Bu yolda `rename` kaynagi TUKETMEDI; hazirlik dizini temizligi
+    // cagirana ait ama yine de burada birakmiyoruz.
+    ::unlink(src.c_str());
     return true;
 #endif
 }
@@ -431,13 +530,89 @@ int run_install_script_fallback() {
     return std::system(cmd);
 }
 
+// TANILAMA: yerlestirme yolunu AGDAN BAGIMSIZ kosturur.
+//
+// `tulpar update`in en kirilgan adimi indirme degil, indirileni yerine
+// koymak: hazirlik dizini `$TMPDIR`, hedef ise kurulum dizini ve ikisi
+// farkli dosya sistemlerinde olabiliyor. Bu ayrimi olcmek icin ag gerekmiyor
+// — o yuzden burada ayri, kucuk bir kapi var (tests/update_yerlestirme.sh).
+// Hangi AYGITLAR uzerinde calistigini da basiyor: sayilar esitse deneme
+// sinir gecisini HIC olcmemis demektir ve kapi bunu soylemek zorunda.
+int test_install(const std::string &dir) {
+    std::string staging = make_staging_dir("selftest");
+    if (staging.empty()) {
+        std::fprintf(stderr, "%s\n",
+                     i18n::tr_en("Hazirlik dizini olusturulamadi",
+                                 "Could not create staging directory"));
+        return 1;
+    }
+    std::string src = staging + "/tulpar_place_probe";
+    std::string dst = dir + "/tulpar_place_probe";
+    const char *icerik = "tulpar-yerlestirme-denemesi\n";
+    {
+        FILE *f = std::fopen(src.c_str(), "wb");
+        if (!f) {
+            std::fprintf(stderr, "%s: %s\n",
+                         i18n::tr_en("Deneme dosyasi yazilamadi",
+                                     "Could not write probe file"),
+                         src.c_str());
+            return 1;
+        }
+        std::fputs(icerik, f);
+        std::fclose(f);
+    }
+
+    long src_dev = -1, dst_dev = -2;
+#ifndef _WIN32
+    struct stat st{};
+    if (::stat(staging.c_str(), &st) == 0) src_dev = (long)st.st_dev;
+    if (::stat(dir.c_str(), &st) == 0) dst_dev = (long)st.st_dev;
+#endif
+
+    std::string err;
+    bool ok = atomic_replace(src, dst, /*load_locked=*/false, err);
+    if (ok) {
+        FILE *f = std::fopen(dst.c_str(), "rb");
+        char buf[64] = {0};
+        size_t n = f ? std::fread(buf, 1, sizeof(buf) - 1, f) : 0;
+        if (f) std::fclose(f);
+        if (n == 0 || std::strcmp(buf, icerik) != 0) {
+            ok = false;
+            err = i18n::tr_en("Yerlestirilen dosyanin ICERIGI farkli: ",
+                              "Placed file has DIFFERENT contents: ") + dst;
+        }
+    }
+    std::remove(dst.c_str());
+    std::remove(src.c_str());
+
+    const char *sinir = (src_dev == dst_dev)
+        ? i18n::tr_en("AYNI dosya sistemi — sinir gecisi OLCULMEDI",
+                      "SAME filesystem — boundary NOT exercised")
+        : i18n::tr_en("FARKLI dosya sistemleri — sinir gecisi olculdu",
+                      "DIFFERENT filesystems — boundary exercised");
+    if (!ok) {
+        std::fprintf(stderr, "%s: %s\n  (%s, hazirlik=%ld hedef=%ld)\n",
+                     i18n::tr_en("Yerlestirme denemesi DUSTU",
+                                 "Install probe FAILED"),
+                     err.c_str(), sinir, src_dev, dst_dev);
+        return 1;
+    }
+    std::printf("%s (%s, hazirlik=%ld hedef=%ld)\n",
+                i18n::tr_en("yerlestirme denemesi tamam",
+                            "install probe ok"),
+                sinir, src_dev, dst_dev);
+    return 0;
+}
+
 }  // namespace
 
 int update_cmd_main(int argc, char **argv) {
     bool check_only = false;
     bool force      = false;
     for (int i = 2; i < argc; i++) {
-        if (std::strcmp(argv[i], "--check") == 0) {
+        if (std::strncmp(argv[i], "--test-install=", 15) == 0) {
+            return test_install(argv[i] + 15);
+        } else if (std::strcmp(argv[i], "--check") == 0) {
             check_only = true;
         } else if (std::strcmp(argv[i], "--force") == 0) {
             // --force re-runs the full download/verify/install path even
@@ -453,8 +628,10 @@ int update_cmd_main(int argc, char **argv) {
                          argv[i]);
             std::fprintf(stderr,
                          i18n::tr_en(
-                             "Kullanım: tulpar update [--check] [--force]\n",
-                             "Usage: tulpar update [--check] [--force]\n"));
+                             "Kullanım: tulpar update [--check] [--force] "
+                             "[--test-install=<dizin>]\n",
+                             "Usage: tulpar update [--check] [--force] "
+                             "[--test-install=<dir>]\n"));
             return 2;
         }
     }

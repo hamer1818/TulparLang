@@ -518,6 +518,17 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
+    # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz
+    # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan
+    # bagimsiz — `tulpar update --test-install=<dizin>`.
+    if [ -x tests/update_yerlestirme.sh ]; then
+        if ! bash tests/update_yerlestirme.sh ./tulpar; then
+            echo -e "${RED}guncelleme yerlestirme yolu basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
     # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde
