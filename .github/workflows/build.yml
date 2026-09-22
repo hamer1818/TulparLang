@@ -694,6 +694,14 @@ jobs:
           $ver = $env:TULPAR_VERSION
           if (-not $ver) { $ver = "0.0.0-dev" }
           $appVersion = $ver -replace '^v',''
+          # Dosya ozelliklerinde gorunen surum AYRI: Inno oraya YALNIZ
+          # sayisal `x.y.z.b` kabul ediyor, `3.14.0-dev` konulamiyor. Bu
+          # alan .iss'te `2.1.0.0` diye SABIT yaziliydi — proje 3.14'teyken
+          # uretilen her kurulumcunun ozellikler penceresi 2.1.0.0 diyordu.
+          $viVersion = '0.0.0.0'
+          if ($appVersion -match '^(\d+)\.(\d+)\.(\d+)') {
+            $viVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+          }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
             throw "ISCC.exe bulunamadi: $iscc — runner imaji mi degisti?"
@@ -701,6 +709,7 @@ jobs:
           $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
           & $iscc `
             "/DAppVersion=$appVersion" `
+            "/DVersionInfo=$viVersion" `
             "/DSourceBinary=$pwd\build-windows\tulpar.exe" `
             "/DSourceRuntimeLib=$pwd\build-windows\libtulpar_runtime.a" `
             "/DSourceMingwBin=$mingwBin" `
@@ -708,7 +717,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC $LASTEXITCODE ile dustu" }
           Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
           $sz = [math]::Round((Get-Item dist\tulpar-setup-windows-x64.exe).Length / 1MB, 1)
-          Write-Host "Kurulumcu uretildi: tulpar-setup-windows-x64.exe ($sz MB)"
+          Write-Host "Kurulumcu uretildi: tulpar-setup-windows-x64.exe ($sz MB, surum $appVersion / dosya $viVersion)"
 
       - name: Upload artifact
         if: needs.detect-docs-only.outputs.docs_only != 'true'
