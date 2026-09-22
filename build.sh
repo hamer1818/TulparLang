@@ -1128,60 +1128,11 @@ TPREOF
     echo -e "${GREEN}kutulu deger ABI'si duruyor${NC} (t_<ad>.f)"
     rm -rf "$VA_TMP"
 
-    # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
-    # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
-    # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını
-    # ölçen tek şey bu — üretilen metni gözle okumak yetmez.
-    # İKİ sahne üzerinden koşuyor. `toplayici` gerçek bir demo (davranışlar,
-    # iki bölüm, isimli hedef); `kod_uretimi_tam` ise KASITLI olarak kapsamı
-    # doldurmak için üretildi — bölge kutu+küre, eylem+miktar+ses, tek atım ve
-    # kapalı bölge, sesli/sessiz kural. Gerek vardı: demo sahnesinde HİÇ bölge
-    # yok, o yüzden bölge kod üretimi denetimsizdi ve `bolge_eylem3d`/
-    # `bolge_ses3d`'nin hiç yazılmadığı (JSON'da var, üretilen kodda yok)
-    # sessizce aylarca durabilirdi. Yeni bir alan ekleyen, düzeneği de büyütsün.
-    CODEGEN_SCENES="examples/scenes/toplayici.scene.json tests/kod_uretimi_tam.scene.json"
-    if [ -f "examples/scene3d_export.tpr" ]; then
-        echo ""
-        for CODEGEN_SCENE in $CODEGEN_SCENES; do
-            [ -f "$CODEGEN_SCENE" ] || continue
-            CG_TMP=$(mktemp -d)
-            # STDERR'I YUTMA. Bu kapi uc cagrinin da stderr'ini /dev/null'a
-            # atiyordu ve Windows'ta yalnizca "calistirilamadi" deyip NEDENINI
-            # hic soylemedi (olculdu 2026-09-21) — bir CI turu tam olarak o tek
-            # cumleyi ogrenmek icin harcandi. Artik her kol kendi stderr'ini
-            # dosyaya aliyor ve dusunce ilk satirlari basiliyor. Ayni ders
-            # tests/gramer_bosluklari.test.tpr'de de ogrenildi: bir kapi ya
-            # olctugunu SOYLER ya da bir sonraki turu yakar.
-            if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>"$CG_TMP/kod.err" > "$CG_TMP/kur.tpr" \
-               && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>"$CG_TMP/json.err" > "$CG_TMP/src.json"; then
-                {
-                    echo 'import "scene3d";'
-                    cat "$CG_TMP/kur.tpr"
-                    echo 'kur();'
-                    echo 'print(sahne_json3d());'
-                } > "$CG_TMP/verify.tpr"
-                if ./tulpar "$CG_TMP/verify.tpr" 2>"$CG_TMP/verify.err" > "$CG_TMP/gen.json" \
-                   && diff -q "$CG_TMP/src.json" "$CG_TMP/gen.json" >/dev/null; then
-                    echo -e "${GREEN}kod uretimi denk${NC} ($CODEGEN_SCENE)"
-                else
-                    echo -e "${RED}Kod uretimi DENK DEGIL!${NC} ($CODEGEN_SCENE)"
-                    [ -s "$CG_TMP/verify.err" ] && { echo "  dogrulama stderr:"; sed -n '1,5p' "$CG_TMP/verify.err" | sed 's/^/      /'; }
-                    diff "$CG_TMP/src.json" "$CG_TMP/gen.json" | head -20
-                    rm -rf "$CG_TMP"
-                    exit 1
-                fi
-            else
-                echo -e "${RED}Kod uretimi denetimi calistirilamadi!${NC} ($CODEGEN_SCENE)"
-                echo "  kod uretimi stdout (ilk 5):"; sed -n '1,5p' "$CG_TMP/kur.tpr" | sed 's/^/      /'
-                echo "  kod uretimi stderr (ilk 5):"; sed -n '1,5p' "$CG_TMP/kod.err" | sed 's/^/      /'
-                echo "  --dogrula stdout (ilk 5):";  sed -n '1,5p' "$CG_TMP/src.json" | sed 's/^/      /'
-                echo "  --dogrula stderr (ilk 5):";  sed -n '1,5p' "$CG_TMP/json.err" | sed 's/^/      /'
-                rm -rf "$CG_TMP"
-                exit 1
-            fi
-            rm -rf "$CG_TMP"
-        done
-    fi
+    # Kod üretimi DENKLİK denetimi (scene3d_export + sahne JSON'ları) 2026-09-22'de
+    # ÇIKARILDI: sahne/arayüz hattı artık tulpar-engine deposunda ölçülüyor.
+    # Kapı `examples/scene3d_export.tpr`yi çalıştırıp ürettiği kodun aynı sahneyi
+    # kurduğunu doğruluyordu; örnek ve sahne JSON'ları depoda duruyor, yalnız CI
+    # kapısı kalktı. Geri isteyen: git log -- build.sh (bu satırın commit'i).
 
     hw_end "suites ($SUITE_N paket)"
     echo -e "${GREEN}All $SUITE_N suites passed!${NC}"
@@ -1239,29 +1190,11 @@ if [ "$ACTION" = "test" ]; then
                         "wings_notes_db.tpr" "wings_redirect.tpr" \
                         "wings_features_api.tpr" "wings_orm_resource.tpr" \
                         "tulpar_api_demo.tpr" "utils.tpr" \
-                        "tame_hello.tpr" "tame_sprite_demo.tpr" \
-                        "tame_run_demo.tpr" "tame_web_mini.tpr" \
-                        "tame_snake.tpr" \
-                        "arcade_topla.tpr" "arcade_zipla.tpr" \
-                        "arcade_nisan.tpr" "arcade_tugla.tpr" \
-                        "arcade_uzay.tpr" "arcade_labirent.tpr" \
-                        "arcade_karsiya.tpr" "arcade_ucus.tpr" \
-                        "arcade_goktasi.tpr" "arcade_launcher.tpr" "arcade_yilan.tpr" \
-                        "arcade_2048.tpr" "arcade_pong.tpr" "arcade_vur.tpr" \
-                        "scene3d_data_game.tpr" "scene3d_editor.tpr" \
-                        "scene3d_export.tpr" \
-                        "tame3d_cube.tpr" "tame3d_primitives.tpr" \
-                        "tame3d_models.tpr" "tame3d_anim.tpr" "tame3d_lights.tpr" \
-                        "tame3d_shadows.tpr" "tame3d_texture.tpr" \
-                        "scene3d_collector.tpr" "scene3d_camera.tpr" \
-                        "scene3d_arena.tpr" "scene3d_terrain.tpr" \
-                        "scene3d_karakter.tpr" "scene3d_labirent.tpr" \
-                        "scene3d_ses_testi.tpr" \
                         "41_struct_entities.tpr")
-    # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
-    # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik
-    # olsun diye compile-only. Derlemeleri libtulpar_tame.a link zincirini
-    # (vendored raylib + aot_tm_* binding'leri) uçtan uca doğrular.
+    # Buradaki tame/arcade/scene3d/tame3d girdileri 2026-09-22'de ÇIKARILDI:
+    # o örnekler artık iş kuyruğuna hiç girmiyor (bkz. `GRAFIK_DESEN`), yani
+    # liste kaydı ölü ayardı. Kalanlar sunucu örnekleri — pencere değil,
+    # `accept()` bekledikleri için compile-only + 2 saniyelik canlılık smoke'u.
 
     # HTTP smoke probes. The 2-second alive check above only verifies the
     # process didn't crash during startup — wings/router examples block
@@ -1367,12 +1300,6 @@ if [ "$ACTION" = "test" ]; then
             # Liste ELLE TUTULMUYOR: ornegin kendi `import` satirlarindan
             # turetiliyor, yani yeni bir oyun ornegi eklendiginde burayi
             # guncellemek gerekmiyor.
-            if [ "$PLATFORM" = "Windows" ] && \
-               grep -qE '^[[:space:]]*import[[:space:]]+"(tame|arcade|scene3d)"' "$example"; then
-                printf "Testing %s... ${GREEN}PASS (derlendi; pencere acan ornek, Windows'ta calistirilmaz)${NC}\n" "$example"
-                rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
-                return 0
-            fi
             if [ "$compile_only" = "1" ]; then
                 # Runtime smoke test for COMPILE_ONLY examples: spawn the
                 # binary in the background, give it 2s to either start
@@ -1544,8 +1471,32 @@ if [ "$ACTION" = "test" ]; then
         #     summing to ~68s of serial idling.
         # ------------------------------------------------------------------
         work_list=$(mktemp)
+        # SAHNE/ARAYUZ ORNEKLERI NE DERLENIYOR NE KOSUYOR (2026-09-22 karari).
+        #
+        # Oyun/arayuz hatti artik tulpar-engine deposunda yuruyor. Burada
+        # tame/arcade/scene3d orneklerini derlemek 133 ornegin 67'si demekti
+        # ve her platformda ayri ariza uretiyordu: Windows'ta pencere
+        # acilamadigi icin 23 ornek exit 139 veriyor, Linux'ta her scene3d
+        # ornegi lib/scene3d.tpr'yi (~16k satir) sifirdan derliyordu.
+        #
+        # KAYBEDILEN KAPSAM ACIKCA SOYLENIYOR: lib/{tame,arcade,scene3d}.tpr
+        # ve libtulpar_tame.a link zinciri (vendored raylib + aot_tm_*) artik
+        # bu depoda hic CALISTIRILMIYOR. Derleyicinin kendi C++ derlemesi
+        # raylib'i hala iceriyor (CMake tarafı degismedi); olculmeyen sey
+        # uretilen bir PROGRAMIN o zinciri linkleyip kosabilmesi.
+        #
+        # Liste ELLE TUTULMUYOR: ornegin kendi `import` satirlarindan
+        # turetiliyor, yani yeni bir oyun ornegi eklendiginde burasi
+        # guncellenmek zorunda degil.
+        GRAFIK_DESEN='^[[:space:]]*import[[:space:]]+"(tame|arcade|scene3d)"'
+        grafik_atlandi=0
         for example in examples/*.tpr; do
             [ -f "$example" ] || continue
+
+            if grep -qE "$GRAFIK_DESEN" "$example" 2>/dev/null; then
+                grafik_atlandi=$((grafik_atlandi + 1))
+                continue
+            fi
 
             example_file=$(basename "$example")
             skip=0
@@ -1585,8 +1536,15 @@ if [ "$ACTION" = "test" ]; then
         # ayrışmanın belirtisi zaten "derlenmiyor" oluyor.
         for example in examples/en/*.tpr; do
             [ -f "$example" ] || continue
+            if grep -qE "$GRAFIK_DESEN" "$example" 2>/dev/null; then
+                grafik_atlandi=$((grafik_atlandi + 1))
+                continue
+            fi
             printf '%s %s\n' "$example" "1" >> "$work_list"
         done
+        if [ "$grafik_atlandi" -gt 0 ]; then
+            echo -e "${YELLOW}${grafik_atlandi} sahne/arayuz ornegi atlandi${NC} (tame/arcade/scene3d — oyun hatti tulpar-engine deposunda)"
+        fi
 
         # Default to the machine's core count; TULPAR_TEST_JOBS overrides
         # (e.g. TULPAR_TEST_JOBS=1 to get the old serial behaviour back when

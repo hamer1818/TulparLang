@@ -250,8 +250,15 @@ izgara bayat kalir"*. Uyarı yalnız DUVAR hareketliyse çıkıyor; devriye geze
 düşman ızgarayı bozmuyor ve ona uyarmak uyarıyı gürültüye çevirirdi.
 
 ## Test edilebilirlik — motorun tasarımını belirleyen kısıt
-`tests/scene3d_engine.test.tpr` **654 test**, hepsi **pencere açmadan** koşuyor.
-Bunu mümkün kılan iki desen:
+`tests/scene3d_engine.test.tpr` **654 test** içeriyordu, hepsi **pencere
+açmadan** koşuyordu. Paket **2026-09-22'de bu depodan kaldırıldı**: sahne/arayüz
+hattı artık tulpar-engine deposunda ölçülüyor ve TulparLang CI'ı `tame`/
+`arcade`/`scene3d` içe aktaran hiçbir örneği derlemiyor. Aşağıdaki iki desen
+motorun tasarımını hâlâ anlatıyor; değişen tek şey, onları sürekli doğrulayan
+otomasyonun burada olmaması. Bu dosyadaki test sayıları o günün ölçümüdür.
+Paketi geri isteyen: `git log -- tests/scene3d_engine.test.tpr`.
+
+Ölçülebilirliği mümkün kılan iki desen:
 - **Cihaz okuması tek yere hapsedilir** (`_read_touch3`, `_read_gamepad3`) —
   motorun geri kalanı yalnız tamponu okur.
 - **Karar mantığı saf fonksiyonlara ayrılır** (`_cam_allowed3`, `_gp_curve3`,

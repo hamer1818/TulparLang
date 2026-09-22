@@ -172,7 +172,9 @@ The mobile-first C++17 game engine that used to live in `engine/` was split out 
 
 The Tulpar side of the bridge now lives in that repo under `tulpar/` (the `engine.tpr` wrapper, the generated bindings, the example games, the bridge test). Its `tools/gen_engine_bindings.py` is still the single source for the binding family and can reinstall the four generated files into a TulparLang checkout with `--tulpar <root>`. The engine's own trap index (formerly section 8 of `docs/mindmap/Tuzaklar.md`, entries 8a–8ap) moved to `docs/TUZAKLAR.md` in that repo, and the architecture plan that was `plans/TULPAR_ENGINE_MIMARI.md` is now its `docs/MIMARI.md`.
 
-**Do not re-add the engine here.** Tame/arcade/scene3d (`tm_*`/`tm3_*`, raylib, `lib/tame.tpr`, `lib/arcade.tpr`, `lib/scene3d.tpr`, `tests/scene3d_engine.test.tpr`, TameEngine packaging) are a *different, unrelated* line and stay in this repo — they only share the word "engine".
+**Do not re-add the engine here.** Tame/arcade/scene3d (`tm_*`/`tm3_*`, raylib, `lib/tame.tpr`, `lib/arcade.tpr`, `lib/scene3d.tpr`, `examples/{tame,arcade,scene3d,tame3d}_*.tpr`, TameEngine packaging) are a *different, unrelated* line and stay in this repo — they only share the word "engine".
+
+**But they are no longer covered by CI (2026-09-22).** The scene/UI line is exercised in the engine repo, so `build.sh` skips every example whose imports name `tame`/`arcade`/`scene3d` (67 of 133 — neither compiled nor run), and these suites were deleted: `tests/scene3d_engine.test.tpr` (654 headless tests), the four `tests/arcade_*.test.tpr`, and the `scene3d_export` code-generation equivalence gate with its `tests/kod_uretimi_tam.scene.json`. The libraries, the examples and the raylib build inside the `tulpar` binary all still exist and still compile — what is no longer measured is whether a *generated program* links and runs the `libtulpar_tame.a` chain. Touching `lib/tame.tpr`, `lib/arcade.tpr` or `lib/scene3d.tpr` is therefore unguarded here; verify it by hand or in the engine repo.
 
 ## Working with this codebase
 
