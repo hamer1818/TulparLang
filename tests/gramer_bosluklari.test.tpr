@@ -173,35 +173,158 @@ func run_g5_const() {
     assert_eq_int(kutu[0], 9);
 }
 
+
 // ---------------------------------------------------------------------------
 // [B] REDDEDILMESI GEREKENLER — derleyici alt surec olarak cagriliyor
 // ---------------------------------------------------------------------------
 str _bin = "";
+int _win = -1;            // -1 bilinmiyor, 1 Windows, 0 degil
+
+// Windows mu?
+//
+// `OS == "Windows_NT"` TEK BASINA YETMEZ ve bu kapi tam olarak onun yuzunden
+// uc tur kirmizi dondu. MSYS2'nin bash'i `OS` degiskenini EZIYOR: CI kosumunda
+// olculen deger `MINGW64_NT-10.0-26100` (uname tarzi), `Windows_NT` DEGIL.
+// Yani tespit HIC tetiklenmedi, paket kendini Linux sandi, `./tulpar` komutunu
+// cmd.exe'ye verdi ve cmd `./tulpar`taki egik cizgiyi anahtar sanip
+// "'.' is not recognized as an internal or external command" dedi. Tani satiri
+// bunu kelimesi kelimesine yazdirdigi icin biliyoruz (2026-09-21).
+//
+// O yuzden DORT bagimsiz isaretin herhangi biri yetiyor:
+//   * OS=Windows_NT        — native Windows (cmd/PowerShell)
+//   * MSYSTEM              — MSYS2/MinGW kabugu (MINGW64, UCRT64, ...)
+//   * WINDIR / SYSTEMROOT  — her Windows'ta var, MSYS2 bunlari KORUYOR
+// Hicbiri Linux/macOS'ta tanimli degil.
+//
+// Dosya sistemine BAKMIYORUZ ve bu bilincli:
+//   * `file_exists("./tulpar.exe")` olmaz — bir Linux calisma kopyasinda depo
+//     kokunde BAYAT bir tulpar.exe durabiliyor (bkz. build.sh'teki "3 ay bayat
+//     PE32+ artigi" notu) ve test kendini Windows sanirdi;
+//   * `file_exists("C:/Windows")` de olmadi — DENENDI ve HIC tetiklenmedi,
+//     cunku o gunku `file_exists` fopen ile calisiyordu ve fopen bir dizinde
+//     Windows'ta basarisiz oluyor. (Builtin ayni turda stat'a cevrildi, ama
+//     ortam degiskeni zaten daha ucuz ve daha dogrudan bir isaret.)
+func _windows_mu(): bool {
+    if (_win < 0) {
+        _win = 0;
+        if (env("OS") == "Windows_NT") { _win = 1; }
+        if (env("MSYSTEM") != "") { _win = 1; }
+        if (env("WINDIR") != "") { _win = 1; }
+        if (env("SYSTEMROOT") != "") { _win = 1; }
+    }
+    return _win == 1;
+}
 
 func _derleyici(): str {
     if (_bin == "") {
         _bin = env("TULPAR_BIN");
-        if (_bin == "") { _bin = "./tulpar"; }
+        if (_bin == "") {
+            // Windows'ta `./tulpar` CALISMAZ: dosyanin adi tulpar.exe ve
+            // komut cmd.exe'ye gidiyor.
+            //
+            // `.\\` ONEKI SART ve sebebi depoda zaten olculmus: cmd.exe bir
+            // komutu GECERLI DIZINDE aramaz, acik bir yol verilmedikce
+            // yalnizca PATH'e bakar. AOT surucusu ayni tuzaga dusmus ve ayni
+            // cozumu kullaniyor (src/aot/aot_pipeline.cpp:1683 ve :1791 —
+            // ".\\tulpar_run_tmp.exe"). Depo koku PATH'te olmadigi icin
+            // oneksiz "tulpar.exe" HIC calismiyor, sys_run sifirdan farkli
+            // doner ve kapi tersine doner: tum "REDDEDILMELIYDI" iddialari
+            // sahte sekilde GECER, yalniz KONTROL'ler duser. Windows CI'da
+            // tam bu imza goruldu (dort KONTROL, "expected 0 got 1").
+            if (_windows_mu()) { _bin = ".\\tulpar.exe"; } else { _bin = "./tulpar"; }
+        }
     }
     return _bin;
+}
+
+// Gecici dosyalar CALISMA DIZININDE (depo koku): Windows'ta "/tmp" diye bir
+// yol YOK — MSYS2 kabugunun /tmp'si native tulpar.exe icin "C:\\tmp" olur ve
+// orasi bulunmaz, yani dosya yazilamaz ve kapi sessizce "reddetmedi" der
+// (olculdu 2026-09-21, Windows CI). Depo koku bu deponun zaten kullandigi
+// kalip (08_file_io -> test_file.txt, 13_database -> test.db).
+func _gecici_ad(str son): str {
+    return "tulpar_gramer_" + toString(timestamp()) + "_" +
+           toString(randint(1, 999999)) + son;
+}
+
+func _sil(str yol) {
+    // cmd.exe'de `rm` YOKTUR; `del` de olmayan dosyaya soylenir, o yuzden
+    // her iki dalda da cikti bastiriliyor.
+    if (_windows_mu()) { sys_run("del /q " + yol + " > NUL 2>&1"); }
+    else { sys_run("rm -f " + yol); }
 }
 
 // Kaynagi gecici bir dosyaya yazip `tulpar typecheck` cikis kodunu dondurur.
 // 0 = kabul edildi, 0 disi = reddedildi.
 func derleme_kodu(str kaynak): int {
-    str yol = "/tmp/tulpar_gramer_" + toString(timestamp()) + "_" +
-              toString(randint(1, 999999)) + ".tpr";
+    str yol = _gecici_ad(".tpr");
     write_file(yol, kaynak);
-    int rc = sys_run(_derleyici() + " typecheck " + yol + " > /dev/null 2>&1");
-    sys_run("rm -f " + yol);
+    // Bos aygit platforma gore: cmd.exe'de "/dev/null" YOKTUR.
+    str bos = "/dev/null";
+    if (_windows_mu()) { bos = "NUL"; }
+    int rc = sys_run(_derleyici() + " typecheck " + yol + " > " + bos + " 2>&1");
+    _sil(yol);
     return rc;
 }
 
+// ---------------------------------------------------------------------------
+// TANI — kapinin NEYI olctugunu dusen iddianin ICINDE soyler.
+//
+// Iki ayri ders var ve ikisi de olculdu (2026-09-21, Windows CI):
+//
+//   1. Cikis kodu tek basina hicbir sey anlatmiyor. `tulpar typecheck` 2
+//      donunce "dosya acilamadi / ayrisamadi", 1 donunce "kostu ve tip hatasi
+//      buldu" demek (bkz. src/cli/typecheck_cmd.cpp). "expected 0 got 1"
+//      satiri bu ikisini ayirt ettirmiyordu. Tani bu yuzden AYRI bir kosumda
+//      ciktiyi bir dosyaya YAZDIRIP geri okuyor — derleyicinin kendi cumlesi.
+//   2. Tani bir `print` OLAMAZ. `build.sh suites` bir paket kirmizi dondugunde
+//      ciktidan yalniz `^FAIL` satirlarini basiyor (bkz. build.sh'teki
+//      "gurultu FAIL satirlarini disari itiyordu" notu). Bir tur tam olarak
+//      bunun yuzunden bosa gitti: tani eklendi, Windows yine dustu ve satir
+//      gunlukte HIC yoktu. O yuzden tani dusen assert'in MESAJINDA.
+// ---------------------------------------------------------------------------
+str _tani_metin = "";
+
+func tani(): str {
+    if (_tani_metin == "") {
+        str yol = _gecici_ad(".tpr");
+        str gun = yol + ".log";
+        bool yazildi = write_file(yol, "print(1);\n");
+        int rc = sys_run(_derleyici() + " typecheck " + yol + " > " + gun + " 2>&1");
+        str cikti = "<gunluk yok>";
+        if (file_exists(gun)) {
+            // Tek satira indiriyoruz: FAIL satiri tek satir olmali.
+            cikti = trim(replace(replace(read_file(gun), "\r", " "), "\n", " / "));
+            if (length(cikti) > 300) { cikti = substring(cikti, 0, 300); }
+        }
+        _tani_metin = "OS=" + env("OS")
+                      + " MSYSTEM=" + env("MSYSTEM")
+                      + " win=" + toString(_windows_mu())
+                      + " ikili=" + _derleyici()
+                      + " ikili_var=" + toString(file_exists(_derleyici()))
+                      + " yazildi=" + toString(yazildi)
+                      + " kaynak_var=" + toString(file_exists(yol))
+                      + " probe_rc=" + toString(rc)
+                      + " cikti=" + cikti;
+        _sil(yol);
+        _sil(gun);
+    }
+    return _tani_metin;
+}
+
+// KONTROL: bu kaynak KABUL EDILMELI. Her reddin yaninda gecmesi gereken bir
+// ikiz var; boylece kapi "her seyi reddediyor" diye sahte yesil veremiyor —
+// calismayan bir komut da sifirdan farkli doner ve tum "REDDEDILMELIYDI"
+// iddialarini sahte sekilde gecirir.
+func kontrol_kabul(str ad, str kaynak) {
+    int rc = derleme_kodu(kaynak);
+    assert(rc == 0, "KONTROL '" + ad + "' KABUL edilmeliydi ama rc=" +
+                    toString(rc) + "  [tani] " + tani());
+}
+
 func run_b_const_reddi() {
-    // KONTROL (gecmeli): const bildirimi + okuma
-    assert_eq_int(derleme_kodu("const int N = 5;\nprint(N);\n"), 0);
-    // KONTROL (gecmeli): const OLMAYAN degiskene atama serbest
-    assert_eq_int(derleme_kodu("int N = 5;\nN = 6;\nprint(N);\n"), 0);
+    kontrol_kabul("const bildirimi + okuma", "const int N = 5;\nprint(N);\n");
+    kontrol_kabul("const olmayana atama", "int N = 5;\nN = 6;\nprint(N);\n");
 
     // REDDEDILMELI: yeniden atama
     assert(derleme_kodu("const int N = 5;\nN = 6;\nprint(N);\n") != 0,
@@ -227,8 +350,8 @@ func run_b_const_reddi() {
 }
 
 func run_b_sayi_reddi() {
-    // KONTROL (gecmeli): tabanli sabitler
-    assert_eq_int(derleme_kodu("print(0xFF);\nprint(0b1010);\nprint(1_000);\n"), 0);
+    kontrol_kabul("tabanli sabitler",
+                  "print(0xFF);\nprint(0b1010);\nprint(1_000);\n");
 
     // REDDEDILMELI: isaretsiz sonek — Tulpar'da isaretsiz tip YOK
     // (tulpar-engine: docs/FAZ8.md T3). Sessizce `1` saymiyoruz.
@@ -244,9 +367,9 @@ func run_b_sayi_reddi() {
 }
 
 func run_b_dizi_reddi() {
-    // KONTROL (gecmeli): pozitif boy
-    assert_eq_int(derleme_kodu("int[3] a = [1,2,3];\nprint(len(a));\n"), 0);
-    assert_eq_int(derleme_kodu("type T { int[2] xs; }\nprint(1);\n"), 0);
+    kontrol_kabul("pozitif boy", "int[3] a = [1,2,3];\nprint(len(a));\n");
+    kontrol_kabul("struct alaninda pozitif boy",
+                  "type T { int[2] xs; }\nprint(1);\n");
     // REDDEDILMELI: sifir/negatif boy bir yazim hatasidir, sessizce
     // dinamik diziye donusmemeli.
     assert(derleme_kodu("int[0] a = [];\nprint(1);\n") != 0,
@@ -254,8 +377,7 @@ func run_b_dizi_reddi() {
 }
 
 func run_b_bit_tipi_reddi() {
-    // KONTROL (gecmeli): tamsayi operandlar
-    assert_eq_int(derleme_kodu("int a = 6;\nint b = 3;\nprint(a & b);\n"), 0);
+    kontrol_kabul("tamsayi operandlar", "int a = 6;\nint b = 3;\nprint(a & b);\n");
     // REDDEDILMELI: float operand — codegen onu sessizce kirpardi.
     assert(derleme_kodu("float f = 1.5;\nprint(f & 1);\n") != 0,
            "float operandli `&` REDDEDILMELIYDI");
@@ -269,12 +391,16 @@ func run_b_bit_tipi_reddi() {
     // (CompoundAssign, seker acilmiyor) ve 2026-09-16'ya kadar tip denetimine
     // HIC ugramiyordu: `x &= 2.5` uyari veriyor, `a[0] &= 2.5` sessizce
     // geciyordu. Ayni dilde ayni islemin iki yazimi ayrisamaz.
-    assert_eq_int(derleme_kodu("int[2] a = [1,2];\na[0] &= 3;\nprint(a[0]);\n"), 0);
+    kontrol_kabul("eleman hedefinde tamsayi `&=`",
+                  "int[2] a = [1,2];\na[0] &= 3;\nprint(a[0]);\n");
     assert(derleme_kodu("int[2] a = [1,2];\na[0] &= 2.5;\nprint(a[0]);\n") != 0,
            "eleman hedefinde float operandli `&=` REDDEDILMELIYDI");
     assert(derleme_kodu("int[2] a = [1,2];\na[0] <<= 1.5;\nprint(a[0]);\n") != 0,
            "eleman hedefinde float kaydirma miktari REDDEDILMELIYDI");
 }
+
+// Yerel kosumda tani tek satirda gorunsun (CI'da FAIL mesajindan okunuyor).
+print("[tani] " + tani());
 
 test("G1: tip adiyla donusum", "run_g1_donusum");
 test("G3: sabit boy dizi tipi", "run_g3_sabit_boy");

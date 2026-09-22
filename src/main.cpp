@@ -637,20 +637,50 @@ int main(int argc, char **argv) {
     // Tulpar is AOT-only (see CLAUDE.md "AOT-ONLY"): this is the single
     // execution path. Any AOT failure is a hard error — there is NO VM
     // fallback. "It ran" therefore always means the AOT path ran.
-    // Betikten SONRAKİ argümanları programa ilet. Kabuk alıntılaması tek
-    // tırnakla: boşluk, joker ve `$` içeren yollar bozulmasın. İçindeki tek
-    // tırnak '\'' dizisiyle kaçırılıyor (POSIX sh'de tek tırnağı tek tırnak
-    // içinde kaçırmanın tek yolu).
+    // Betikten SONRAKİ argümanları programa ilet. Argümanlar bir KABUK
+    // üzerinden geçiyor (aot_pipeline `system()` çağırıyor), yani alıntılama
+    // o kabuğun kurallarına göre olmak ZORUNDA — ve iki kabuğun kuralları
+    // aynı değil.
+    //
+    // WINDOWS'TA TEK TIRNAK ALINTILAMAZ. cmd.exe `'` karakterini sıradan bir
+    // harf sayar: POSIX yazımı `'yol/dosya.json'` programa TIRNAKLARIYLA
+    // BİRLİKTE ulaşır. Ölçüldü (2026-09-21, Windows CI) — `args()` ile yol
+    // okuyan bir örnek şunu bastı:
+    //
+    //     sahne bulunamadi: 'examples/scenes/toplayici.scene.json'
+    //
+    // Tırnaklar kaynakta YOK; argümanın kendisine karışmışlardı. Yani bu bir
+    // test arızası değil, Windows'ta argüman alan HER Tulpar programını
+    // etkileyen bir hata.
+    //
+    // POSIX: tek tırnak; içindeki tek tırnak '\'' dizisiyle kaçırılıyor (sh'de
+    // tek tırnağı tek tırnak içinde kaçırmanın tek yolu).
+    // Windows: çift tırnak + CRT'nin argv çözümleme kuralı — bir tırnaktan
+    // ÖNCEKİ ters bölüler ikiye katlanır, tırnağın kendisi `\\"` olur. `%`
+    // yine cmd tarafından genişletilir; ortam değişkeni adı gibi görünen bir
+    // argüman vermek Windows'ta zaten kabuk seviyesinde belirsiz.
     {
       std::string q;
       for (int ai = arg_offset + 1; ai < argc; ai++) {
         if (!q.empty()) q += " ";
+#ifdef _WIN32
+        q += '"';
+        for (const char *c = argv[ai];; c++) {
+          unsigned nbs = 0;
+          while (*c == '\\') { nbs++; c++; }
+          if (*c == '\0') { q.append(nbs * 2, '\\'); break; }
+          if (*c == '"') { q.append(nbs * 2 + 1, '\\'); q += '"'; }
+          else { q.append(nbs, '\\'); q += *c; }
+        }
+        q += '"';
+#else
         q += "'";
         for (const char *c = argv[ai]; *c; c++) {
           if (*c == '\'') q += "'\\''";
           else q += *c;
         }
         q += "'";
+#endif
       }
       aot_set_run_args(q.c_str());
     }

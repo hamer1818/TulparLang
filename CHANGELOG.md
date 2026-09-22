@@ -38,6 +38,31 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Kaldırıldı — sahne/arayüz hattı CI kapsamından çıktı
+
+Oyun/arayüz tarafı artık **tulpar-engine** deposunda ölçülüyor; TulparLang CI'ı
+onu bir daha derlemiyor ve koşturmuyor. Kaldırılanlar:
+
+- **67 örnek** (133'ün yarısı) artık ne derleniyor ne koşuyor — `tame`,
+  `arcade` veya `scene3d` içe aktaran her örnek. Liste elle tutulmuyor,
+  örneğin kendi `import` satırlarından türetiliyor.
+- **Beş regresyon paketi silindi**: `tests/scene3d_engine.test.tpr` (654
+  pencere açmayan test) ve dört `tests/arcade_*.test.tpr`.
+- **Kod üretimi denklik kapısı** (`examples/scene3d_export.tpr` ile sahne
+  JSON'unu karşılaştıran denetim) ve onun `tests/kod_uretimi_tam.scene.json`
+  düzeneği.
+
+Duran şeyler: `lib/tame.tpr`, `lib/arcade.tpr`, `lib/scene3d.tpr`, bütün
+örnek dosyaları ve `tulpar` ikilisinin içindeki raylib derlemesi. **Artık
+ölçülmeyen şey**, üretilen bir programın `libtulpar_tame.a` zincirini
+(vendored raylib + `aot_tm_*`) linkleyip koşabilmesi — bu üç kütüphaneye
+dokunan bir değişiklik burada kapısız kalıyor.
+
+Gerekçe: bu kapılar platform başına ayrı arıza üretiyordu (Windows'ta pencere
+açılamadığı için 23 örnek `exit 139`, Linux'ta her `scene3d` örneği ~16k
+satırlık `lib/scene3d.tpr`'yi sıfırdan derliyordu) ve ölçtükleri şeyin sahibi
+artık başka bir depo.
+
 ### Added — tipli struct dizisi `Dusman[]` (P1.1)
 
 ```tpr

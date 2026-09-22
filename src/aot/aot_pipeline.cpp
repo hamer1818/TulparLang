@@ -153,8 +153,18 @@ struct AOTPhaseTimer {
   // order had ws2_32 before libssl and produced a wall of
   // `undefined reference to __imp_WSAGetLastError` once OpenSSL was
   // available at build time on Windows.
+  // YIGIN BOYU ACIKCA VERILIYOR (8 MB). Windows'ta bir PE'nin varsayilan
+  // yigin AYRIMI 1 MB; Linux'ta kabuk sinirinin varsayilani 8 MB. Fark
+  // dilin kendi ozyineleme kapasitesine dogrudan yansiyor: 100 000
+  // seviyelik `derin()` ozyinelemesi (tests/self_recursion.test.tpr) Linux
+  // ve macOS'ta geciyor, Windows'ta YIGIN TASMASIYLA cokuyordu — ayni
+  // kaynak, ayni derleyici, yalniz farkli bir varsayilan. OLCULDU
+  // 2026-09-21, Windows CI ilk kez suitleri kosunca. 8 MB'a cikarmak iki
+  // platformu ayni davranisa getiriyor; bedeli yalniz ADRES ALANI ayrimi
+  // (taahhut degil), yani gercek bellek kullanimi degismiyor.
   #define AOT_LINK_LIB_FLAGS \
       "-Wl,--export-all-symbols " \
+      "-Wl,--stack,8388608 " \
       "-static -static-libgcc -static-libstdc++ " \
       "-ltulpar_runtime" AOT_TLS_LINK_FLAGS \
       " -lws2_32 -lwsock32"
