@@ -507,6 +507,17 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # ARGUMAN GECISI. tests/args.test.tpr argv'nin VAR oldugunu olcuyor ama
+    # hic arguman GECIRMIYOR; bu bosluk Windows'ta argumanlarin tek tirnakla
+    # programa yapisik ulastigi hatayi gizledi (2026-09-21). Kapi uretilen
+    # ikiliye alti zor degeri gecirip geri okuyor.
+    if [ -x tests/args_gecis.sh ]; then
+        if ! bash tests/args_gecis.sh ./tulpar; then
+            echo -e "${RED}arguman gecisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
     # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde
