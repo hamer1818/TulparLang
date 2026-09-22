@@ -41,6 +41,15 @@
   #define SourceMingwBin "C:\msys64\mingw64\bin"
 #endif
 
+; Dosya ozelliklerinde gorunen SURUM. Inno bu alanda YALNIZ sayisal
+; `x.y.z.b` kabul ediyor, yani `3.14.0-dev` gibi bir etiket buraya
+; konulamaz — `AppVersion`dan ayri tutulmasinin sebebi bu. Eskiden
+; `2.1.0.0` diye SABIT yaziliydi: proje 3.14'teyken uretilen her
+; kurulumcunun ozellikler penceresi 2.1.0.0 diyordu.
+#ifndef VersionInfo
+  #define VersionInfo "0.0.0.0"
+#endif
+
 #define AppName        "TulparLang"
 #define AppPublisher   "TulparLang Project"
 #define AppURL         "https://tulparlang.dev"
@@ -79,7 +88,9 @@ SolidCompression=yes
 ; brings the Welcome page back (modern style hides it by default), which
 ; is where the 164x314 wizard strip has the most visual impact.
 WizardStyle=modern
-WizardResizable=yes
+; WizardResizable: Inno Setup 6.7'de ARTIK YOK — derleyici "obsolete and
+; ignored" uyarisi basiyordu ve hicbir etkisi yoktu (CI gunlugundeki tek
+; uyari buydu). Sihirbaz zaten yeniden boyutlanabilir.
 DisableWelcomePage=no
 WizardImageFile=assets\wizard-image.bmp
 WizardSmallImageFile=assets\wizard-small.bmp
@@ -94,7 +105,7 @@ SetupMutex=Global\TulparLangSetup_8B4A6E2C
 ChangesEnvironment=yes
 UninstallDisplayName={#AppName} {#AppVersion}
 UninstallDisplayIcon={app}\tulpar.ico
-VersionInfoVersion=2.1.0.0
+VersionInfoVersion={#VersionInfo}
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName} compiler installer
 VersionInfoProductName={#AppName}
