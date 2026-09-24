@@ -507,6 +507,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # Import edilen struct'lar: ayni ad + farkli yerlesim derleme hatasi
+    # (ana program/modul ve modul/modul), ayni yerlesim tek tip.
+    if [ -x tests/struct_import_hatalari.sh ]; then
+        if ! bash tests/struct_import_hatalari.sh ./tulpar; then
+            echo -e "${RED}import struct hata yollari basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ARGUMAN GECISI. tests/args.test.tpr argv'nin VAR oldugunu olcuyor ama
     # hic arguman GECIRMIYOR; bu bosluk Windows'ta argumanlarin tek tirnakla
     # programa yapisik ulastigi hatayi gizledi (2026-09-21). Kapi uretilen

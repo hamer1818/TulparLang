@@ -683,6 +683,11 @@ typedef struct {
   // ("HATA (lib/router.tpr:245): ..."). May be null for stdin/embedded input.
   const char *source_filename;
   void *capture_data;
+  // Import edilen modullerin ayristirilmis AST onbellegi + modul struct
+  // tiplerinin kayit durumu (llvm_backend.cpp: ImportState). Her modul BIR
+  // KEZ ayristirilir: once struct on taramasi (prescan_import_types), sonra
+  // AST_IMPORT kodgeni ayni AST'yi kullanir.
+  void *import_state;
 } LLVMBackend;
 
 LLVMBackend *llvm_backend_create(const char *module_name);

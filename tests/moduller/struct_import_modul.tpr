@@ -1,0 +1,35 @@
+// tests/struct_import.test.tpr'nin modulu — KENDI BASINA bir paket degil.
+//
+// Motor kitapliginin (tulpar-engine/tulpar/engine.tpr) bicimi: struct +
+// struct donduren fonksiyon + struct dizisi global'i + tipli struct global'i,
+// hepsi IMPORT EDILEN modulde. Kardes dosyayi da ic ice import ediyor ki
+// on tarama (prescan_import_types) derinlige ve modul dizinine gore cozume
+// (current_import_dir) de girsin.
+import "struct_import_ic";
+
+struct Vec3 { float x; float y; float z; }
+struct D { int can; float faz; }
+
+func v3(float x, float y, float z): Vec3 { return { x: x, y: y, z: z }; }
+func v3_uzunluk2(Vec3 v): float { return v.x * v.x + v.y * v.y + v.z * v.z; }
+func v3_topla(Vec3 a, Vec3 b): Vec3 {
+    return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+// TIPSIZ parametre (lib/scene3d.tpr'deki `_bh_is_path3(b)` kalibi): tipli
+// struct buraya kutulu kopya olarak gelmeli.
+func tipsiz_x(v): float { return v.x; }
+
+// Modulun struct dizisi global'i: modulun fonksiyonlari ve ana program
+// ayni diziyi tipli yoldan okuyup yaziyor.
+D[] ds = [];
+func ekle(int c) { push(ds, { can: c, faz: 0.0 }); }
+func vur(int k) { ds[k].can -= 30; }
+func can_of(int k): int { return ds[k].can; }
+func faz_ilerlet(int k, float d) { ds[k].faz += d; }
+func faz_of(int k): float { return ds[k].faz; }
+func ds_say(): int { return len(ds); }
+
+// Modulun tipli struct global'i.
+Vec3 m_konum = { x: 1.0, y: 2.0, z: 3.0 };
+func konum_x(): float { return m_konum.x; }
+func konum_kaydir(float d) { m_konum.x += d; }

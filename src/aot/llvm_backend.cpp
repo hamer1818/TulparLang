@@ -27,6 +27,44 @@ struct CaptureData {
   std::unordered_map<ASTNode_C*, int> depths;
 };
 
+// Import edilen bir modulun cozulmus + ayristirilmis hali. `ast` hic
+// serbest birakilmaz (eskiden de birakilmiyordu: fonksiyon kayitlari ve
+// yakalama tablolari dugum isaretcilerini tutuyor).
+struct ImportedModule {
+  bool found = false;          // dosya/gomulu kitaplik bulundu mu
+  ASTNode_C *ast = nullptr;    // ayristirma hatasinda nullptr
+  std::string resolved_dir;    // ic ice importlar icin (Plan 02 PR3)
+};
+
+// Modul AST onbellegi + import edilen struct tiplerinin kaydi.
+//
+// Neden var (2026-09-25): import edilen modulun `struct`lari HIC
+// kaydedilmiyordu — yalniz ana programin Pass 0.0'i register_struct_type
+// cagiriyordu. Sonuc: kitaplik `func v3(...): Vec3` her cagrida malloc'lu,
+// hic serbest birakilmayan bir VM_OBJECT donduruyordu (olculdu 2026-09-25,
+// Ryzen 9800X3D / RTX 5080 masaustu: 10M tur ~990 ms / 4581 MiB VmHWM; ayni
+// struct ana programda 38 ms / 2,5 MiB), modulde `D[] ds` ise hic
+// derlenmiyordu. Tipler artik ana programin globallerinden ONCE
+// kaydediliyor (prescan_import_types); bunun icin modulu ondan once
+// ayristirmak gerekiyor, bu tablo da ayni modulun iki kez ayristirilmasini
+// onluyor.
+struct ImportState {
+  // anahtar: import_dir \x1f rel_path \x1f alias (bkz. import_load_module)
+  std::unordered_map<std::string, ImportedModule> modules;
+  // struct adi -> ilk bildirimi (ana program ya da ilk modul) ve kaynagi;
+  // ayni adin farkli yerlesimle ikinci kez bildirilmesini yakalamak icin.
+  std::unordered_map<std::string, ASTNode_C *> type_owner;
+  std::unordered_map<std::string, std::string> type_owner_src;
+  // Islenmis TYPE_DECL dugumleri: on tarama ve AST_IMPORT kodgeni ayni
+  // dugumu gorur; catisma bir kez raporlanir.
+  std::unordered_set<ASTNode_C *> seen_type_decls;
+};
+
+static ImportState *import_state_of(LLVMBackend *backend) {
+  if (!backend->import_state) backend->import_state = new ImportState();
+  return static_cast<ImportState *>(backend->import_state);
+}
+
 // Kullanici degiskenlerinin LLVM sembol adi.
 //
 // Ham ad kullanildiginda `free`, `malloc`, `stdout` gibi bir ust duzey
@@ -2529,6 +2567,10 @@ void llvm_backend_destroy(LLVMBackend *backend) {
     delete static_cast<CaptureData*>(backend->capture_data);
     backend->capture_data = nullptr;
   }
+  if (backend->import_state) {
+    delete static_cast<ImportState *>(backend->import_state);
+    backend->import_state = nullptr;
+  }
   free(backend);
 }
 
@@ -3270,6 +3312,404 @@ StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl
 
   backend->struct_type_count++;
   return st;
+}
+
+// ---------------------------------------------------------------------------
+// Import edilen modullerin struct tipleri (2026-09-25).
+//
+// Once yalniz ana programin `struct`lari kaydediliyordu (Pass 0.0). Modulun
+// TYPE_DECL'i hicbir gecide girmiyordu; modulun fonksiyonlari, globalleri ve
+// ana programin o tipi kullanan yerelleri find_struct_type'ta bos donup
+// kutulu yola dusuyordu. Asagidaki uc parca bunu kapatiyor:
+//   * import_load_module     — cozum + okuma + ayristirma, onbellekli.
+//   * import_register_types  — modulun struct'larini kaydet; ayni ad farkli
+//                              yerlesimle gelirse DERLEME HATASI.
+//   * prescan_import_types   — ana programin globallerinden ONCE butun import
+//                              agacini gezip tipleri kaydeder.
+// ---------------------------------------------------------------------------
+
+// `import "name"` cozum sirasi:
+//   0. <current_import_dir>/<name>.tpr     (bundle-local sibling)
+//   1. literal `name` (relative path or absolute file)
+//   2. literal + `.tpr` extension
+//   3. tulpar_modules/<name>/<name>.tpr    (vendored entry point)
+//   4. tulpar_modules/<name>.tpr           (single-file vendor)
+// Gomulu stdlib adi hepsinden once denenir.
+//
+// (3) + (4) are how `tulpar pkg install` makes a dep usable: it copies a
+// path: spec into tulpar_modules/<name>/, and the convention is that
+// `<name>.tpr` inside that dir is the entry. (0) is what makes multi-file
+// bundles work — `tulpar_modules/foo/main.tpr` doing `import "util"` finds
+// `tulpar_modules/foo/util.tpr` before falling back to the cwd-rooted
+// candidates that would either miss the file or grab the wrong unrelated
+// package.
+//
+// Sonuc `backend->current_import_dir`e baglidir (cagiran kurar), o yuzden
+// onbellek anahtarinda o da var; `as` takma adi ayristirmadan hemen sonra
+// uygulandigi icin o da. Bulunamayan modul de (found=false) onbellege girer;
+// hatayi AST_IMPORT kodgeni basar, on tarama sessiz kalir.
+static ImportedModule *import_load_module(LLVMBackend *backend,
+                                          ASTNode_C *node) {
+  const char *rel_path = node ? node->value.string_value : nullptr;
+  if (!rel_path) return nullptr;
+  const char *alias = (node->name && *node->name) ? node->name : "";
+  ImportState *ist = import_state_of(backend);
+  std::string key = std::string(backend->current_import_dir) + '\x1f' +
+                    rel_path + '\x1f' + alias;
+  auto it = ist->modules.find(key);
+  if (it != ist->modules.end()) return &it->second;
+  // unordered_map: yeniden karmada yineleyiciler gecersizlesir ama
+  // elemanlara isaretci/referans GECERLI kalir.
+  ImportedModule &mod = ist->modules[key];
+
+  char *source = nullptr;
+  char resolved_dir[256] = "";
+  const char *embedded_code = get_embedded_lib(rel_path);
+  if (embedded_code) {
+    source = strdup(embedded_code);
+  } else {
+    FILE *f = nullptr;
+    char resolved_path[512] = "";
+    if (backend->current_import_dir[0] != '\0') {
+      char path_buf[512];
+      snprintf(path_buf, sizeof(path_buf), "%s/%s.tpr",
+               backend->current_import_dir, rel_path);
+      f = fopen(path_buf, "rb");
+      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
+    }
+    if (!f) {
+      f = fopen(rel_path, "rb");
+      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", rel_path);
+    }
+    if (!f) {
+      char path_buf[512];
+      snprintf(path_buf, sizeof(path_buf), "%s.tpr", rel_path);
+      f = fopen(path_buf, "rb");
+      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
+    }
+    if (!f) {
+      char path_buf[512];
+      snprintf(path_buf, sizeof(path_buf),
+               "tulpar_modules/%s/%s.tpr", rel_path, rel_path);
+      f = fopen(path_buf, "rb");
+      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
+    }
+    if (!f) {
+      char path_buf[512];
+      snprintf(path_buf, sizeof(path_buf),
+               "tulpar_modules/%s.tpr", rel_path);
+      f = fopen(path_buf, "rb");
+      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
+    }
+    if (!f) return &mod;  // found=false
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    source = static_cast<char*>(malloc(fsize + 1));
+    size_t read_size = fread(source, 1, fsize, f);
+    (void)read_size;
+    source[fsize] = 0;
+    fclose(f);
+
+    // Compute the directory for nested imports. dirname() handling:
+    // strip the last `/` (or `\`) segment. If no separator, the file
+    // lived in cwd → leave resolved_dir empty so nested imports use
+    // the existing cwd-rooted probes only.
+    const char *last_slash = nullptr;
+    for (const char *p = resolved_path; *p; p++) {
+      if (*p == '/' || *p == '\\') last_slash = p;
+    }
+    if (last_slash && last_slash > resolved_path) {
+      size_t dir_len = (size_t)(last_slash - resolved_path);
+      if (dir_len >= sizeof(resolved_dir)) dir_len = sizeof(resolved_dir) - 1;
+      memcpy(resolved_dir, resolved_path, dir_len);
+      resolved_dir[dir_len] = '\0';
+    }
+  }
+  mod.found = true;
+  mod.resolved_dir = resolved_dir;
+
+  Lexer *lexer = lexer_create(source);
+  int token_capacity = 1024;
+  int token_count = 0;
+  Token **tokens = static_cast<Token**>(malloc(sizeof(Token *) * token_capacity));
+  Token *token;
+  while ((token = lexer_next_token(lexer))->type() != TOKEN_EOF) {
+    if (token_count >= token_capacity) {
+      token_capacity *= 2;
+      tokens = (Token **)realloc(tokens, sizeof(Token *) * token_capacity);
+    }
+    tokens[token_count++] = token;
+  }
+  if (token_count >= token_capacity) {
+    token_capacity += 1;
+    tokens = (Token **)realloc(tokens, sizeof(Token *) * token_capacity);
+  }
+  tokens[token_count++] = token; // EOF
+
+  lexer_free(lexer);
+
+  Parser_C *parser = parser_create(tokens, token_count);
+  ASTNode_C *module_ast = parser_parse(parser);
+  parser_free(parser);
+
+  // parser_parse belirtecleri KOPYALAYIP ayristiriyor ve C-kopru AST'si her
+  // dizgiyi dup_cstr ile sahipleniyor: belirtecler ve kaynak burada
+  // birakilabilir (eskiden modulun kodgeni bitene kadar tutuluyordu).
+  for (int i = 0; i < token_count; i++) {
+    token_free(tokens[i]);
+  }
+  free(tokens);
+  free(source);
+
+  // Apply `import "x" as alias;` namespacing before any codegen sees the
+  // module. The C-bridge stashes the alias in `node->name` (empty string
+  // when omitted, in which case apply_import_alias is a no-op).
+  if (module_ast && *alias) {
+    apply_import_alias(module_ast, alias);
+  }
+  mod.ast = module_ast;
+  return &mod;
+}
+
+// Iki TYPE_DECL ayni yerlesimi mi tanimliyor: alan sayisi, adlari, sirasi,
+// tipleri (ozel tipte tip adi da).
+static bool struct_decl_layout_equal(ASTNode_C *a, ASTNode_C *b) {
+  if (a->field_count != b->field_count) return false;
+  for (int i = 0; i < a->field_count; i++) {
+    const char *an = a->field_names ? a->field_names[i] : nullptr;
+    const char *bn = b->field_names ? b->field_names[i] : nullptr;
+    if (!an || !bn || strcmp(an, bn) != 0) return false;
+    if (a->field_types[i] != b->field_types[i]) return false;
+    const char *ac = a->field_custom_types ? a->field_custom_types[i] : nullptr;
+    const char *bc = b->field_custom_types ? b->field_custom_types[i] : nullptr;
+    if ((ac == nullptr) != (bc == nullptr)) return false;
+    if (ac && strcmp(ac, bc) != 0) return false;
+  }
+  return true;
+}
+
+// Hata mesaji icin `{ float x; int y; }`.
+static std::string struct_decl_layout_str(ASTNode_C *d) {
+  std::string s = "{ ";
+  for (int i = 0; i < d->field_count; i++) {
+    const char *tn;
+    switch (d->field_types[i]) {
+    case TYPE_INT: tn = "int"; break;
+    case TYPE_FLOAT: tn = "float"; break;
+    case TYPE_BOOL: tn = "bool"; break;
+    case TYPE_STRING: tn = "str"; break;
+    default:
+      tn = (d->field_custom_types && d->field_custom_types[i])
+               ? d->field_custom_types[i]
+               : "?";
+      break;
+    }
+    s += tn;
+    s += ' ';
+    s += (d->field_names && d->field_names[i]) ? d->field_names[i] : "?";
+    s += "; ";
+  }
+  s += '}';
+  return s;
+}
+
+// Ana programin kendi struct'larini "ilk bildirim" olarak isaretle
+// (Pass 0.0'dan hemen sonra). Ana programin kendi icindeki cift bildirim
+// davranisi DEGISMIYOR: ilk kazanir, register_struct_type zaten oyle.
+static void import_seed_main_types(LLVMBackend *backend, ASTNode_C *program) {
+  ImportState *ist = import_state_of(backend);
+  const char *src = (backend->source_filename && *backend->source_filename)
+                        ? backend->source_filename
+                        : "ana program";
+  for (int i = 0; i < program->statement_count; i++) {
+    ASTNode_C *d = program->statements[i];
+    if (!d || d->type != AST_TYPE_DECL || !d->name) continue;
+    ist->seen_type_decls.insert(d);
+    if (ist->type_owner.find(d->name) == ist->type_owner.end()) {
+      ist->type_owner[d->name] = d;
+      ist->type_owner_src[d->name] = src;
+    }
+  }
+}
+
+// Modulun struct'larini kaydet. Ayni ad + ayni yerlesim: ayni tip (iki modul
+// ayni `struct Vec3`u bildirebilir). Ayni ad + FARKLI yerlesim: derleme
+// hatasi — sessizce ilkini kullanmak, ikinci modulun fonksiyonlarini YANLIS
+// yerlesimle derlerdi (alan indeksi/tipi kayar, cop okunur).
+// `report_line`/`report_token`: hatanin ana programda gosterilecegi import
+// satiri (ic ice modulde en ustteki import).
+static void import_register_types(LLVMBackend *backend, ASTNode_C *module_ast,
+                                  const char *src_name, int report_line,
+                                  const char *report_token) {
+  if (!module_ast || module_ast->type != AST_PROGRAM || !module_ast->statements)
+    return;
+  ImportState *ist = import_state_of(backend);
+  for (int i = 0; i < module_ast->statement_count; i++) {
+    ASTNode_C *d = module_ast->statements[i];
+    if (!d || d->type != AST_TYPE_DECL || !d->name) continue;
+    if (!ist->seen_type_decls.insert(d).second) continue;
+    auto own = ist->type_owner.find(d->name);
+    if (own == ist->type_owner.end()) {
+      ist->type_owner[d->name] = d;
+      ist->type_owner_src[d->name] = src_name ? src_name : "?";
+      register_struct_type(backend, d);
+      continue;
+    }
+    if (struct_decl_layout_equal(own->second, d)) continue;
+    const std::string &first_src = ist->type_owner_src[d->name];
+    std::string first_lay = struct_decl_layout_str(own->second);
+    std::string this_lay = struct_decl_layout_str(d);
+    char msg[1024];
+    snprintf(msg, sizeof(msg),
+             "'%s' struct'i iki farkli yerlesimle bildirilmis: \"%s\" %s ile \"%s\" %s / "
+             "struct '%s' is declared with two different layouts: \"%s\" %s vs \"%s\" %s",
+             d->name, first_src.c_str(), first_lay.c_str(),
+             src_name ? src_name : "?", this_lay.c_str(), d->name,
+             first_src.c_str(), first_lay.c_str(), src_name ? src_name : "?",
+             this_lay.c_str());
+    // Imlec import satirindaki TIRNAKLI yolu gostersin: ciplak `m` adi
+    // `import` sozcugunun icinde de eslesirdi.
+    std::string caret =
+        report_token ? std::string("\"") + report_token + "\"" : std::string();
+    report_codegen_error(
+        backend, report_line, "hata", msg,
+        report_token ? caret.c_str() : nullptr,
+        tulpar::i18n::tr_en(
+            "ayni adli struct'lar ayni alanlari ayni sirada tasimali; "
+            "birini yeniden adlandirin",
+            "structs sharing a name must have the same fields in the same "
+            "order; rename one of them"));
+  }
+}
+
+// Import agacini (ana programin gorecegi SIRAYLA: deyim sirasi, derinlik
+// once) gezip her modulun struct'larini kaydeder. AST_IMPORT kodgeni ayni
+// sirayla ve ayni adla (rel_path) tekillestirdigi icin `visited` onu
+// yansitiyor; derinlik tavani ve ziyaret kumesi dongusel importu bitirir
+// (typeinfer'in register_module_exports'u ile ayni kural).
+static void prescan_import_types(LLVMBackend *backend, ASTNode_C *program,
+                                 int depth,
+                                 std::unordered_set<std::string> &visited,
+                                 int report_line, const char *report_token) {
+  if (!program || program->type != AST_PROGRAM || !program->statements) return;
+  if (depth > 8) return;
+  for (int i = 0; i < program->statement_count; i++) {
+    ASTNode_C *imp = program->statements[i];
+    if (!imp || imp->type != AST_IMPORT || !imp->value.string_value) continue;
+    const char *rel = imp->value.string_value;
+    if (!visited.insert(rel).second) continue;
+    ImportedModule *m = import_load_module(backend, imp);
+    if (!m || !m->ast) continue;
+    int line = depth == 0 ? imp->line : report_line;
+    const char *tok = depth == 0 ? rel : report_token;
+    import_register_types(backend, m->ast, rel, line, tok);
+    char saved_dir[256];
+    snprintf(saved_dir, sizeof(saved_dir), "%s", backend->current_import_dir);
+    snprintf(backend->current_import_dir, sizeof(backend->current_import_dir),
+             "%s", m->resolved_dir.c_str());
+    prescan_import_types(backend, m->ast, depth + 1, visited, line, tok);
+    snprintf(backend->current_import_dir, sizeof(backend->current_import_dir),
+             "%s", saved_dir);
+  }
+}
+
+// Pass 0.1: ust duzey bir global'in ileri bildirimi — ana program ve import
+// edilen modul ICIN AYNI kural. Eskiden iki ayri kopya vardi ve yalniz ana
+// programinki tipli struct global'ini (`Vec3 g`) ve struct dizisi global'ini
+// (`D[] ds`) taniyordu; modulde ikisi de kutulu VMValue'ya dusuyor, `D[]`
+// bildirimi de "struct dizisi yalnizca int/bool/float alanli..." ile
+// reddediliyordu (tip hic kayitli degildi). Tek fark bagliliktir: modulun
+// globalleri tarihsel olarak `internal` (is_import), ana programinkiler disa
+// acik — asagidaki not neden oyle kaldigini anlatiyor.
+//
+// Pure-int top-level globals (declared as `int x = ...;`) get a native i64
+// global plus a typed-local registration so codegen_typed_expr can emit
+// unboxed loads/stores (wings' int counters in an imported module included —
+// atomic RMW for race-free counter updates). Non-int globals stay boxed
+// VMValue.
+static void predeclare_top_level_global(LLVMBackend *backend, ASTNode_C *decl,
+                                        bool is_import) {
+  if (LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) return;
+  if (backend->use_static_typing && decl->data_type == TYPE_INT) {
+    LLVMValueRef ig = LLVMAddGlobal(
+        backend->module, backend->int_type, gsym(decl->name).c_str());
+    LLVMSetInitializer(ig, LLVMConstInt(backend->int_type, 0, 0));
+    // Ana programda DISA ACIK BIRAKILIYOR, bilerek. "Iceri alsak GlobalsAA
+    // kanit uretir" varsayimi 2026-09-06'da OLCULDU ve YANLIS cikti: uretilen
+    // IR BIREBIR AYNI kaliyor (globaller yine her turda okunuyor), ama makine
+    // kodu degisiyor — disa acikken LLVM adresi bir yazmaca aliyor
+    // (`mov $ADDR,%r12` + `(%r12)`), iceri alininca RIP-goreli adresleme
+    // uretiyor. Sicak dongude ikincisi daha uzun kodlaniyor: elek 9,66 ->
+    // 10,54 ms (pinlenmis, 21 tur). Iceri alinan modullerin globalleri
+    // tarihsel olarak internal; oraya dokunulmadi.
+    if (is_import) LLVMSetLinkage(ig, LLVMInternalLinkage);
+    add_local_typed(backend, decl->name, nullptr, INFERRED_INT, ig);
+    if (global_needs_tls(decl->name)) {
+      // LocalExec: Tulpar AOT always produces executables (never shared
+      // libraries), so TLS slots resolve at link time with direct
+      // segment-register offsets. Avoids `__emutls_get_address` on MinGW,
+      // which appears to interact badly with the multi-store shape AOT
+      // codegen emits for boxed VMValue writes (see PR #195:
+      // `_request[k] = func_call(...)` crashes obj_val=NULL with the
+      // general-dynamic model). LocalExec is also strictly faster — one
+      // load instead of a runtime call per access.
+      LLVMSetThreadLocalMode(ig, LLVMInitialExecTLSModel);
+    }
+    // PR 3g: surface this int global to the debugger.
+    llvm_backend_emit_global_declare(backend, decl->name, ig, decl->line,
+                                     /*is_vmvalue=*/0);
+    return;
+  }
+  // TIPLI STRUCT GLOBAL (P0.3, 2026-09-21). Eskiden `Vec3 g = ...;` ust
+  // duzeyde kutulu bir VMValue global'i aliyordu ama ust duzey VAR_DECL onu
+  // HIC doldurmuyordu (main icinde ayri bir tipli alloca kuruyordu):
+  // fonksiyondan `g.x` okumak "get islemi icin gecersiz hedef" ile
+  // dusuyordu — int struct'ta da (olculdu). Simdi yerlesim tipinde bir LLVM
+  // global'i acilir ve KURESEL kapsama struct yereli olarak kaydedilir;
+  // fonksiyon kapsamlari zincirle buraya ulasip GEP ile dogrudan alan
+  // okur/yazar. Ust duzey VAR_DECL bu global'i alloca yerine kullanir
+  // (at_top_level_scope dali). Kutulu (str/ic ice alanli) struct eskisi gibi
+  // VMValue global'inde kalir. Modul importu main'in ust duzey kapsaminda
+  // islendigi icin modulun global'i de ayni kuresel kapsama yazilir.
+  StructTypeEntry *gst = nullptr;
+  if (decl->data_type == TYPE_CUSTOM) {
+    const char *sname = decl->return_custom_type;
+    if (!sname && decl->field_custom_types && decl->field_count > 0)
+      sname = decl->field_custom_types[0];
+    gst = find_struct_type(backend, sname);
+    if (gst && !struct_is_trivially_unboxable(gst)) gst = nullptr;
+  }
+  if (gst) {
+    LLVMValueRef sg = LLVMAddGlobal(backend->module, gst->llvm_type,
+                                    gsym(decl->name).c_str());
+    LLVMSetInitializer(sg, LLVMConstNull(gst->llvm_type));
+    if (is_import) LLVMSetLinkage(sg, LLVMInternalLinkage);
+    add_local_struct(backend, decl->name, sg, gst->name);
+    return;
+  }
+  LLVMValueRef global_var = LLVMAddGlobal(
+      backend->module, backend->vm_value_type, gsym(decl->name).c_str());
+  LLVMSetInitializer(global_var, LLVMConstNull(backend->vm_value_type));
+  if (is_import) LLVMSetLinkage(global_var, LLVMInternalLinkage);
+  if (global_needs_tls(decl->name)) {
+    LLVMSetThreadLocalMode(global_var, LLVMInitialExecTLSModel);
+  }
+  // PR 3g: surface this boxed global to the debugger.
+  llvm_backend_emit_global_declare(backend, decl->name, global_var,
+                                   decl->line, /*is_vmvalue=*/1);
+  // `Dusman[] d` global'i (P1.1): tutamac VMValue global'inde kalir; eleman
+  // tipini kuresel kapsama yaz ki fonksiyonlar `d[i].x`i tipli yoldan
+  // indirsin. Ust duzey VAR_DECL'in struct dizisi dali bu kayda GUVENIYOR
+  // (`existing_global` varsa yalniz saklayip donuyor, kaydi yinelemiyor) —
+  // modulde bu kayit yokken modulun fonksiyonlari `ds[k].can`i kutulu
+  // yoldan indiriyordu.
+  if (decl->data_type == TYPE_ARRAY && decl->elem_custom_type) {
+    StructTypeEntry *gest = find_struct_type(backend, decl->elem_custom_type);
+    if (gest && struct_is_trivially_unboxable(gest))
+      add_local_struct_array(backend, decl->name, global_var, gest->name);
+  }
 }
 
 LLVMValueRef find_env_for_decl(LLVMBackend *backend, ASTNode_C *decl_node) {
@@ -4235,6 +4675,11 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
           var_type == INFERRED_FLOAT ? backend->float_type : backend->int_type,
           native, node->name);
       result.type = var_type;
+    } else if (cap_var && cap_var->struct_type_name && cap_var->value) {
+      // Tipli struct yereli: codegen_expression VM_OBJECT kopyasina kutular
+      // (oradaki nota bak); ham VMValue yuklemesi cop okurdu.
+      result.boxed = codegen_expression(backend, node);
+      result.value = result.boxed;
     } else {
       // Fall back to boxed
       LLVMValueRef val_ptr = get_local(backend, node->name);
@@ -6053,6 +6498,24 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                          native, node->name);
       llvm_tbaa_tag(backend, ival, 0);
       return llvm_vm_val_int_val(backend, ival);
+    }
+
+    // TIPLI STRUCT YERELI genel deger baglaminda (tipsiz parametre, `var`,
+    // json alani, typeof, tipsiz fonksiyondan `return`, ...). Degeri tipli
+    // bellege (st->llvm_type) bakan bir isaretci, 16 baytlik VMValue DEGIL;
+    // eskiden asagida VMValue diye yukleniyordu: ilk alan etiket, ikinci alan
+    // yuk okunuyordu. Olculdu (2026-09-25): `func f(b) { print(b); }` + `f(q)`
+    // bos satir basiyor, `func g(b) { return b.c > 0.5; }` "get islemi icin
+    // gecersiz hedef" ile dusuyordu. Bu, import edilen modulun struct'lari
+    // kutusuz olunca lib/scene3d.tpr'yi kirdi (`_bh_is_path3(b)` — Bh3 artik
+    // tipli). Deger anlambilimiyle KOPYA: push() / dizi literali /
+    // `arr[i] = s` ile ayni yardimciyla string anahtarli VM_OBJECT'e kutula.
+    // Ozel dallari olan tuketiciler (print, push, tipli parametre, struct
+    // kopyasi) buraya hic gelmiyor.
+    if (var && var->struct_type_name && var->value) {
+      StructTypeEntry *ist = find_struct_type(backend, var->struct_type_name);
+      if (ist && struct_is_trivially_unboxable(ist))
+        return box_native_struct_as_object(backend, var->value, ist);
     }
 
     LLVMValueRef val_ptr = get_local(backend, node->name);
@@ -11012,175 +11475,42 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (!backend->quiet)
       printf("[AOT] Importing: %s\n", rel_path);
 
-    char *source = nullptr;
+    // Cozum + okuma + ayristirma import_load_module'de. Onbellekli: ana
+    // programin on taramasi (prescan_import_types) bu modulu zaten
+    // ayristirdiysa AYNI AST doner — modul bir kez ayristirilir.
+    ImportedModule *imod = import_load_module(backend, node);
+    if (!imod || !imod->found) {
+      fprintf(stderr, tulpar::i18n::tr_for_en("Error: Could not import file '%s'\n"), rel_path);
+      return nullptr;
+    }
+    ASTNode_C *module_ast = imod->ast;
     // Track the resolved file's directory so nested imports inside a
     // multi-file bundle (Plan 02 PR3) can find their siblings. Empty
     // when we resolve via embedded libs / cwd-rooted candidates.
-    char resolved_dir[256] = "";
-    // Check embedded libs first
-    const char *embedded_code = get_embedded_lib(rel_path);
-    if (embedded_code) {
-      source = strdup(embedded_code);
-    } else {
-      // Resolution order for `import "name"`:
-      //   0. <current_import_dir>/<name>.tpr     (bundle-local sibling)
-      //   1. literal `name` (relative path or absolute file)
-      //   2. literal + `.tpr` extension
-      //   3. tulpar_modules/<name>/<name>.tpr    (vendored entry point)
-      //   4. tulpar_modules/<name>.tpr           (single-file vendor)
-      //
-      // (3) + (4) are how `tulpar pkg install` makes a dep usable: it
-      // copies a path: spec into tulpar_modules/<name>/, and the
-      // convention is that `<name>.tpr` inside that dir is the entry.
-      // (0) is what makes multi-file bundles work — `tulpar_modules/foo/
-      // main.tpr` doing `import "util"` finds `tulpar_modules/foo/util.tpr`
-      // before falling back to the cwd-rooted candidates that would
-      // either miss the file or grab the wrong unrelated package.
-      FILE *f = nullptr;
-      char resolved_path[512] = "";
-      if (backend->current_import_dir[0] != '\0') {
-        char path_buf[512];
-        snprintf(path_buf, sizeof(path_buf), "%s/%s.tpr",
-                 backend->current_import_dir, rel_path);
-        f = fopen(path_buf, "rb");
-        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
-      }
-      if (!f) {
-        f = fopen(rel_path, "rb");
-        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", rel_path);
-      }
-      if (!f) {
-        char path_buf[512];
-        snprintf(path_buf, sizeof(path_buf), "%s.tpr", rel_path);
-        f = fopen(path_buf, "rb");
-        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
-      }
-      if (!f) {
-        char path_buf[512];
-        snprintf(path_buf, sizeof(path_buf),
-                 "tulpar_modules/%s/%s.tpr", rel_path, rel_path);
-        f = fopen(path_buf, "rb");
-        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
-      }
-      if (!f) {
-        char path_buf[512];
-        snprintf(path_buf, sizeof(path_buf),
-                 "tulpar_modules/%s.tpr", rel_path);
-        f = fopen(path_buf, "rb");
-        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
-      }
-      if (!f) {
-        fprintf(stderr, tulpar::i18n::tr_for_en("Error: Could not import file '%s'\n"), rel_path);
-        return nullptr;
-      }
-      fseek(f, 0, SEEK_END);
-      long fsize = ftell(f);
-      fseek(f, 0, SEEK_SET);
-
-      source = static_cast<char*>(malloc(fsize + 1));
-      size_t read_size = fread(source, 1, fsize, f);
-      (void)read_size;
-      source[fsize] = 0;
-      fclose(f);
-
-      // Compute the directory for nested imports. dirname() handling:
-      // strip the last `/` (or `\`) segment. If no separator, the file
-      // lived in cwd → leave resolved_dir empty so nested imports use
-      // the existing cwd-rooted probes only.
-      const char *last_slash = nullptr;
-      for (const char *p = resolved_path; *p; p++) {
-        if (*p == '/' || *p == '\\') last_slash = p;
-      }
-      if (last_slash && last_slash > resolved_path) {
-        size_t dir_len = (size_t)(last_slash - resolved_path);
-        if (dir_len >= sizeof(resolved_dir)) dir_len = sizeof(resolved_dir) - 1;
-        memcpy(resolved_dir, resolved_path, dir_len);
-        resolved_dir[dir_len] = '\0';
-      }
-    }
-
-    Lexer *lexer = lexer_create(source);
-    int token_capacity = 1024;
-    int token_count = 0;
-    Token **tokens = static_cast<Token**>(malloc(sizeof(Token *) * token_capacity));
-    Token *token;
-    while ((token = lexer_next_token(lexer))->type() != TOKEN_EOF) {
-      if (token_count >= token_capacity) {
-        token_capacity *= 2;
-        tokens = (Token **)realloc(tokens, sizeof(Token *) * token_capacity);
-      }
-      tokens[token_count++] = token;
-    }
-    tokens[token_count++] = token; // EOF
-
-    lexer_free(lexer);
-
-    Parser_C *parser = parser_create(tokens, token_count);
-    ASTNode_C *module_ast = parser_parse(parser);
-    parser_free(parser);
-
-    // Apply `import "x" as alias;` namespacing before any codegen sees the
-    // module. The C-bridge stashes the alias in `node->name` (empty string
-    // when omitted, in which case apply_import_alias is a no-op).
-    if (module_ast && node->name && *node->name) {
-      apply_import_alias(module_ast, node->name);
-    }
+    char resolved_dir[256];
+    snprintf(resolved_dir, sizeof(resolved_dir), "%s",
+             imod->resolved_dir.c_str());
 
     if (module_ast) {
       if (module_ast->type == AST_PROGRAM && module_ast->statements) {
+        // Pass 0.0: modulun struct tipleri — globallerinden ve fonksiyon
+        // imzalarindan ONCE (imza `: Vec3` donusunu ancak tip kayitliysa
+        // kutusuz ABI ile kurar). Ana programin import agaci
+        // prescan_import_types ile zaten kaydedildi; orada gorulen dugumler
+        // icin bu cagri no-op. On taramanin ulasmadigi bir import (derinlik
+        // tavani) burada kaydolur.
+        import_register_types(backend, module_ast, rel_path, node->line,
+                              rel_path);
+
         // Pass 0.1: Pre-scan for Global Variables (Forward Declaration).
-        // Mirror the top-level rule: pure-int globals (declared as
-        // `int x = ...;`) get a native i64 global plus a typed-local
-        // registration, so codegen_typed_expr can emit unboxed
-        // load/store paths for them. Non-int globals stay boxed
-        // VMValue. Without this, wings' int counters declared inside
-        // the imported module would land on the boxed path and miss
-        // the typed-int fast paths (atomic RMW for race-free counter
-        // updates included).
+        // Ana programla AYNI kural (predeclare_top_level_global): tipli int,
+        // tipli struct (`Vec3 g`) ve struct dizisi (`D[] ds`) globalleri
+        // kuresel kapsama kaydolur ki modulun fonksiyonlari (Pass 1) onlari
+        // tipli yoldan indirsin; globaller `internal`.
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_VARIABLE_DECL) {
-            ASTNode_C *decl = module_ast->statements[i];
-            if (!LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) {
-              if (backend->use_static_typing && decl->data_type == TYPE_INT) {
-                LLVMValueRef ig = LLVMAddGlobal(
-                    backend->module, backend->int_type, gsym(decl->name).c_str());
-                LLVMSetInitializer(ig,
-                                   LLVMConstInt(backend->int_type, 0, 0));
-                LLVMSetLinkage(ig, LLVMInternalLinkage);
-                add_local_typed(backend, decl->name, nullptr,
-                                INFERRED_INT, ig);
-                if (global_needs_tls(decl->name)) {
-                  // LocalExec: Tulpar AOT always produces executables
-                  // (never shared libraries), so TLS slots resolve at
-                  // link time with direct segment-register offsets.
-                  // Avoids `__emutls_get_address` on MinGW, which
-                  // appears to interact badly with the multi-store
-                  // shape AOT codegen emits for boxed VMValue writes
-                  // (see PR #195: `_request[k] = func_call(...)`
-                  // crashes obj_val=NULL with the general-dynamic
-                  // model). LocalExec is also strictly faster — one
-                  // load instead of a runtime call per access.
-                  LLVMSetThreadLocalMode(ig, LLVMInitialExecTLSModel);
-                }
-                // PR 3g: surface imported-module int global to debugger.
-                llvm_backend_emit_global_declare(
-                    backend, decl->name, ig, decl->line, /*is_vmvalue=*/0);
-              } else {
-                LLVMValueRef global_var = LLVMAddGlobal(
-                    backend->module, backend->vm_value_type, gsym(decl->name).c_str());
-                LLVMSetInitializer(global_var,
-                                   LLVMConstNull(backend->vm_value_type));
-                LLVMSetLinkage(global_var, LLVMInternalLinkage);
-                if (global_needs_tls(decl->name)) {
-                  LLVMSetThreadLocalMode(global_var,
-                                         LLVMInitialExecTLSModel);
-                }
-                // PR 3g: surface imported-module boxed global to debugger.
-                llvm_backend_emit_global_declare(
-                    backend, decl->name, global_var, decl->line,
-                    /*is_vmvalue=*/1);
-              }
-            }
+            predeclare_top_level_global(backend, module_ast->statements[i],
+                                        /*is_import=*/true);
           }
         }
 
@@ -11241,11 +11571,6 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
-    for (int i = 0; i < token_count; i++) {
-      token_free(tokens[i]);
-    }
-    free(tokens);
-    free(source);
     return nullptr;
   }
   case AST_ENUM_DECL:
@@ -12863,84 +13188,24 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
+    // Pass 0.05: import edilen modullerin struct tipleri (2026-09-25).
+    // Ana programin globallerinden (Pass 0.1) ONCE: `Vec3 g = v3(...)` /
+    // `D[] ds` gibi bir global'in tipi bir moduldense yerlesim burada
+    // kayitli olmali. Ana programin kendi struct'lari (Pass 0.0) once
+    // kaydedildigi icin tablo sirasi ve ana programin tipleri degismiyor;
+    // ayni ad modulde farkli yerlesimle gelirse derleme hatasi.
+    import_seed_main_types(backend, node);
+    {
+      std::unordered_set<std::string> visited;
+      prescan_import_types(backend, node, 0, visited, node->line, nullptr);
+    }
+
     // Pass 0.1: Pre-scan for Global Variables (Forward Declaration)
-    // Pure-int top-level globals (declared as `int x = ...;`) get a native
-    // i64 global plus a typed-local registration so codegen_typed_expr can
-    // emit unboxed loads/stores. Non-int globals stay boxed VMValue.
+    // (predeclare_top_level_global — imported modules use the same rule).
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type == AST_VARIABLE_DECL) {
-        ASTNode_C *decl = node->statements[i];
-        if (!LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) {
-          if (backend->use_static_typing && decl->data_type == TYPE_INT) {
-            LLVMValueRef ig = LLVMAddGlobal(
-                backend->module, backend->int_type, gsym(decl->name).c_str());
-            LLVMSetInitializer(ig, LLVMConstInt(backend->int_type, 0, 0));
-            // DISA ACIK BIRAKILIYOR, bilerek. "Iceri alsak GlobalsAA
-            // kanit uretir" varsayimi 2026-09-06'da OLCULDU ve YANLIS
-            // cikti: uretilen IR BIREBIR AYNI kaliyor (globaller yine her
-            // turda okunuyor), ama makine kodu degisiyor — disa acikken
-            // LLVM adresi bir yazmaca aliyor (`mov $ADDR,%r12` + `(%r12)`),
-            // iceri alininca RIP-goreli adresleme uretiyor. Sicak
-            // dongude ikincisi daha uzun kodlaniyor: elek 9,66 -> 10,54 ms
-            // (pinlenmis, 21 tur). Iceri alinan modullerin globalleri
-            // (Pass 0.05) tarihsel olarak internal; oraya dokunulmadi.
-            add_local_typed(backend, decl->name, nullptr, INFERRED_INT, ig);
-            if (global_needs_tls(decl->name)) {
-              // LocalExec — see the matching note in the
-              // imported-module path above (Pass 0.05).
-              LLVMSetThreadLocalMode(ig, LLVMInitialExecTLSModel);
-            }
-            // PR 3g: surface this top-level int global to the debugger.
-            llvm_backend_emit_global_declare(backend, decl->name, ig,
-                                             decl->line, /*is_vmvalue=*/0);
-          } else {
-            // TIPLI STRUCT GLOBAL (P0.3, 2026-09-21). Eskiden `Vec3 g = ...;`
-            // ust duzeyde kutulu bir VMValue global'i aliyordu ama ust duzey
-            // VAR_DECL onu HIC doldurmuyordu (main icinde ayri bir tipli
-            // alloca kuruyordu): fonksiyondan `g.x` okumak "get islemi icin
-            // gecersiz hedef" ile dusuyordu — int struct'ta da (olculdu).
-            // Simdi yerlesim tipinde bir LLVM global'i acilir ve KURESEL
-            // kapsama struct yereli olarak kaydedilir; fonksiyon kapsamlari
-            // zincirle buraya ulasip GEP ile dogrudan alan okur/yazar. Ust
-            // duzey VAR_DECL bu global'i alloca yerine kullanir
-            // (at_top_level_scope dali). Kutulu (str/ic ice alanli) struct
-            // eskisi gibi VMValue global'inde kalir.
-            StructTypeEntry *gst = nullptr;
-            if (decl->data_type == TYPE_CUSTOM) {
-              const char *sname = decl->return_custom_type;
-              if (!sname && decl->field_custom_types && decl->field_count > 0)
-                sname = decl->field_custom_types[0];
-              gst = find_struct_type(backend, sname);
-              if (gst && !struct_is_trivially_unboxable(gst)) gst = nullptr;
-            }
-            if (gst) {
-              LLVMValueRef sg = LLVMAddGlobal(backend->module, gst->llvm_type,
-                                              gsym(decl->name).c_str());
-              LLVMSetInitializer(sg, LLVMConstNull(gst->llvm_type));
-              add_local_struct(backend, decl->name, sg, gst->name);
-            } else {
-              LLVMValueRef global_var = LLVMAddGlobal(
-                  backend->module, backend->vm_value_type, gsym(decl->name).c_str());
-              LLVMSetInitializer(global_var,
-                                 LLVMConstNull(backend->vm_value_type));
-              if (global_needs_tls(decl->name)) {
-                LLVMSetThreadLocalMode(global_var,
-                                       LLVMInitialExecTLSModel);
-              }
-              // PR 3g: surface this top-level boxed global to the debugger.
-              llvm_backend_emit_global_declare(backend, decl->name, global_var,
-                                               decl->line, /*is_vmvalue=*/1);
-              // `Dusman[] d` global'i (P1.1): tutamac VMValue global'inde
-              // kalir; eleman tipini kuresel kapsama yaz ki fonksiyonlar
-              // `d[i].x`i tipli yoldan indirsin.
-              if (decl->data_type == TYPE_ARRAY && decl->elem_custom_type) {
-                StructTypeEntry *gest = find_struct_type(backend, decl->elem_custom_type);
-                if (gest && struct_is_trivially_unboxable(gest))
-                  add_local_struct_array(backend, decl->name, global_var, gest->name);
-              }
-            }
-          }
-        }
+        predeclare_top_level_global(backend, node->statements[i],
+                                    /*is_import=*/false);
       }
     }
 
