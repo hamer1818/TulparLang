@@ -1770,6 +1770,37 @@ tüketMESİ gereken bir kontrol şekli.
 
 İlgili: [[Testing]] · FINDINGS R11.
 
+## 7e. Modülde bildirilen tip ana programdakiyle AYNI yoldan geçmiyordu
+
+`struct` yalnız **ana programda** kayda giriyordu (`register_struct_type`,
+Pass 0.0). `import` edilen modülün `struct`ı hiçbir geçide girmiyordu; hata
+vermedi, **sessizce kutulu yola** düştü. Ölçülen (RTX 5080 / Ryzen 9800X3D,
+2026-09-25): kitaplıktaki `func v3(...): Vec3` her çağrıda serbest
+bırakılmayan bir VM_OBJECT döndürüyordu — 10M tur **~1000 ms / 4,58 GiB
+VmHWM**, aynı struct ana programda **38 ms / 2,5 MiB**. Motor kitaplığı
+(`engine.tpr`) yorumunda "Vec3 kutusuz" diyordu; değildi. Modülde `D[] ds`
+ise hiç derlenmiyordu. Belirti "yavaş" ve "bellek büyüyor"du, hata değil.
+
+**Kural:** ana program için yazılmış her ön geçit (tip kaydı, global ileri
+bildirimi) import yolunda da var mı, sor. İki kopya vardı ve yalnız ana
+programınki güncelleniyordu (P0.3/P1.1 tipli struct global'i ve struct
+dizisi global'i ana programa eklendi, modüle hiç eklenmedi). Artık tek
+yardımcı (`predeclare_top_level_global`) ikisine de hizmet ediyor; modül
+tipleri ana programın globallerinden ÖNCE kaydediliyor
+(`prescan_import_types`), aynı ad farklı yerleşimle gelirse derleme hatası.
+
+**İkinci ders — düzeltme gizli bir hatayı açığa çıkardı:** tipli struct yerelini
+**genel değer bağlamında** kullanmak (tipsiz parametre, `var`) belleği 16
+baytlık VMValue diye okuyordu — ana programda da (ölçüldü). Kimse görmemişti
+çünkü tipli struct kullanan kod hep tipli parametre yazıyordu. Modül tipleri
+kutusuz olunca `lib/scene3d.tpr`'nin `_bh_is_path3(b)`'si bu yola girdi ve
+654 testlik (CI'dan 2026-09-22'de çıkarılmış) paket çöktü. Paket bu yüzden
+elle, eski ve yeni derleyiciyle koşturuldu; **CI'da olmayan kütüphaneyi
+değiştiren bir derleyici düzeltmesi, o kütüphanenin eski paketini elle koşmadan
+bitmiş sayılmaz.**
+
+Nöbetçi: `tests/struct_import.test.tpr` + `tests/struct_import_hatalari.sh`.
+
 ## 6ş. Döngü sınırı `n` mi `len(a)` mı — aynı iş, 3,5 kat fark
 
 40M elemanlık lineer okuma:

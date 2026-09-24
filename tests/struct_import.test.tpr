@@ -1,0 +1,140 @@
+// IMPORT EDILEN modulun struct'lari (2026-09-25).
+//
+// Neden var: modulde bildirilen `struct` hic kaydedilmiyordu — yalniz ana
+// programin struct'lari register_struct_type'tan geciyordu. Olculen iki
+// sonuc (Ryzen 9800X3D / RTX 5080 masaustu, 2026-09-25):
+//   * Modulun `func v3(...): Vec3`u her cagrida malloc'lu, hic serbest
+//     birakilmayan bir VM_OBJECT donduruyordu; `typeof` "object" diyordu.
+//     10M turluk `Vec3 p = v3(i, 0.0, 0.0); s += p.x` ~990 ms / 4581 MiB
+//     VmHWM; ayni struct ana programda 38 ms / 2,5 MiB. (Motorun derleyici
+//     yapisi + engine.tpr ile: 1013 ms / 4,65 GB -> 37 ms / 2,5 MB.)
+//   * Modulde `D[] ds = [];` hic DERLENMIYORDU ("struct dizisi yalnizca
+//     int/bool/float alanli bir struct icin kurulabilir").
+// Duzeltmeden onceki derleyiciyle bu paket derlenmiyor bile (ikinci hata);
+// struct dizisi satirlari cikarilinca kalan testler kutulu yolu yakaliyor.
+//
+// Ayni ad + farkli yerlesim DERLEME HATASI: tests/struct_import_hatalari.sh.
+// Calistir (depo kokunden — import yolu CWD'ye gore): ./tulpar tests/struct_import.test.tpr
+import "test";
+import "tests/moduller/struct_import_modul.tpr";
+
+// Ana programda AYNI yerlesimli struct: kutusuz yolun referansi.
+struct Yerel { float x; float y; float z; }
+func yv(float x, float y, float z): Yerel { return { x: x, y: y, z: z }; }
+
+// Ana programin global'leri, tipi MODULDEN gelen: ana programin Pass 0.1'i
+// modulun tiplerini ancak on tarama onlari once kaydettiyse taniyabilir.
+Vec3 g_v = { x: 0.5, y: 0.0, z: 0.0 };
+D[] g_ds = [];
+
+func run_donus_kutusuz() {
+    // `typeof` kutusuz struct icin ne dondururse dondursun, modulun struct'i
+    // ana programdakiyle AYNI yoldan gecmeli; eskiden modulunki "object",
+    // ana programinki baska bir sey diyordu.
+    assert_eq_str(typeof(v3(1.0, 2.0, 3.0)), typeof(yv(1.0, 2.0, 3.0)));
+    Vec3 a = v3(1.0, 2.0, 3.0);
+    assert_close(a.x + a.y + a.z, 6.0, 0.000001);
+}
+
+func run_deger_anlambilimi() {
+    // Kutusuz struct bir DEGER: kopya bagimsizdir. Kutulu yolda `b = a` ayni
+    // nesneyi paylasiyordu ve `b.x = 9.0` a'yi da degistiriyordu.
+    Vec3 a = v3(1.0, 2.0, 3.0);
+    Vec3 b = a;
+    b.x = 9.0;
+    assert_close(a.x, 1.0, 0.000001);
+    assert_close(b.x, 9.0, 0.000001);
+}
+
+func run_parametre() {
+    Vec3 a = v3(1.0, 2.0, 2.0);
+    assert_close(v3_uzunluk2(a), 9.0, 0.000001);          // yerel -> modul
+    assert_close(v3_uzunluk2(v3(0.0, 3.0, 4.0)), 25.0, 0.000001);  // cagri
+    Vec3 c = v3_topla(a, v3(1.0, 1.0, 1.0));
+    assert_close(c.x, 2.0, 0.000001);
+    assert_close(c.z, 3.0, 0.000001);
+}
+
+// Tipli struct'i TIPSIZ bir parametreye / `var`a vermek. Eskiden tipli
+// yerelin bellegi 16 baytlik VMValue diye okunuyordu (ilk alan etiket):
+// `v.x` "get islemi icin gecersiz hedef" ile dusuyordu. Modulun struct'lari
+// kutusuz olunca lib/scene3d.tpr bu yuzden kirildi (Bh3, `_bh_is_path3(b)`).
+func tipsiz_y(v): float { return v.y; }
+func run_tipsiz_parametre() {
+    Vec3 a = v3(1.0, 2.0, 3.0);
+    assert_close(tipsiz_x(a), 1.0, 0.000001);      // modulun tipsiz fonksiyonu
+    Yerel y = yv(4.0, 5.0, 6.0);
+    assert_close(tipsiz_y(y), 5.0, 0.000001);      // ana programin struct'i
+    var k = a;                                      // kutulu KOPYA
+    k.x = 7.0;
+    assert_close(a.x, 1.0, 0.000001);
+    assert_close(k.x, 7.0, 0.000001);
+    assert_eq_str(typeof(a), typeof(y));           // ikisi de ayni yoldan
+}
+
+func run_modul_dizisi() {
+    ekle(100);
+    ekle(50);
+    assert_eq_int(ds_say(), 2);
+    vur(0);                              // modulde `-=`
+    assert_eq_int(can_of(0), 70);
+    ds[1].can -= 5;                      // ana programda `-=`, modulun global'i
+    assert_eq_int(can_of(1), 45);
+    ds[1].can += 10;
+    assert_eq_int(ds[1].can, 55);        // ana program okur
+    faz_ilerlet(0, 0.25);
+    ds[0].faz += 0.5;
+    assert_close(faz_of(0), 0.75, 0.000001);
+    assert_eq_int(ds[1].can, 55);        // komsu eleman bozulmadi
+    push(ds, { can: 7, faz: 1.5 });      // ana program modulun dizisine ekler
+    assert_eq_int(ds_say(), 3);
+    assert_eq_int(can_of(2), 7);
+    D e = ds[2];                         // eleman kopyasi: deger
+    e.can = 99;
+    assert_eq_int(ds[2].can, 7);
+}
+
+func run_modul_struct_global() {
+    assert_close(konum_x(), 1.0, 0.000001);
+    konum_kaydir(0.5);                   // modul yazar
+    m_konum.x += 1.0;                    // ana program yazar
+    assert_close(konum_x(), 2.5, 0.000001);
+    assert_close(m_konum.y, 2.0, 0.000001);
+}
+
+func run_ana_global_modul_tipi() {
+    push(g_ds, { can: 1, faz: 0.0 });
+    g_ds[0].can += 41;
+    assert_eq_int(g_ds[0].can, 42);
+    g_v.x += 1.0;
+    assert_close(g_v.x, 1.5, 0.000001);
+}
+
+func run_ic_ice_modul() {
+    // Modulun kendi import ettigi kardes dosyadaki struct da kaydolmali.
+    Renk c = renk(1, 2, 3);
+    assert_eq_int(renk_toplam(c), 6);
+    assert_eq_str(typeof(renk(1, 2, 3)), typeof(yv(1.0, 2.0, 3.0)));
+}
+
+func run_dongu() {
+    // Olcumun kucuk ikizi: kutulu yolda her tur bir malloc'tu.
+    float s = 0.0;
+    for (int i = 0; i < 1000000; i++) {
+        Vec3 p = v3(i, 0.0, 0.0);
+        s += p.x;
+    }
+    assert_close(s, 499999500000.0, 1.0);
+}
+
+print("=== import edilen struct tests ===");
+test("modul struct donusu kutusuz", "run_donus_kutusuz");
+test("deger anlambilimi (kopya bagimsiz)", "run_deger_anlambilimi");
+test("modul fonksiyonuna struct parametresi", "run_parametre");
+test("tipsiz parametre / var (scene3d kalibi)", "run_tipsiz_parametre");
+test("modulun D[] global'i: modul + ana program, -= +=", "run_modul_dizisi");
+test("modulun tipli struct global'i", "run_modul_struct_global");
+test("ana programin global'i modul tipinde", "run_ana_global_modul_tipi");
+test("ic ice import edilen modulun struct'i", "run_ic_ice_modul");
+test("1M v3 dongusu", "run_dongu");
+test_summary();

@@ -1,0 +1,5 @@
+// tests/moduller/struct_import_modul.tpr'nin ic ice import ettigi kardes
+// modul (bkz. tests/struct_import.test.tpr).
+struct Renk { int r; int g; int b; }
+func renk(int r, int g, int b): Renk { return { r: r, g: g, b: b }; }
+func renk_toplam(Renk c): int { return c.r + c.g + c.b; }
