@@ -1,0 +1,154 @@
+// Struct ALANI hedefli bilesik atama ve ++/-- (2026-09-24).
+//
+// Neden var: `d[i].can -= 30` (tipli struct dizisi) SESSIZCE HIC-ISLEMDI —
+// deger 100'de kaliyordu, beklenen 70 — ve `s.x += 1.0` (tipli yerel struct)
+// calisma zamaninda "get islemi icin gecersiz hedef veya indeks" ile
+// dusuyordu. Duz atama (`d[i].can = d[i].can - 30`) calistigi icin oyun kodu
+// her yerde uzun bicimi yaziyordu. Iki hedef artik AST_ASSIGNMENT'in kutusuz
+// alan yolundan geciyor (llvm_backend.cpp: sf_target_resolve).
+//
+// Olculen: her operator (+= -= *= /= %= &= ++ --), int ve float alan, komsu
+// alan bozulmuyor, indeks BIR KEZ degerlendiriliyor, sag taraf diziye push
+// edip veriyi tasisa da dogru elemana yaziliyor, kutulu hedefler (json, int
+// dizisi) eski yolunda kaliyor.
+// Calistir: ./tulpar tests/struct_alan_bilesik.test.tpr
+import "test";
+
+struct Dusman { int id; int can; float x; float z; }
+struct Vec3 { float x; float y; float z; }
+
+Dusman[] g_dusmanlar = [];
+Vec3 g_konum = { x: 1.0, y: 2.0, z: 3.0 };
+int g_say = 0;
+
+func dusman(int id, int can, float x): Dusman {
+    Dusman d;
+    d.id = id;
+    d.can = can;
+    d.x = x;
+    d.z = 0.0;
+    return d;
+}
+
+func run_dizi_int_alan() {
+    Dusman[] d = [dusman(1, 100, 0.0), dusman(2, 100, 0.0)];
+    d[1].can -= 30;
+    assert_eq_int(d[1].can, 70);
+    d[1].can += 5;
+    assert_eq_int(d[1].can, 75);
+    d[1].can *= 2;
+    assert_eq_int(d[1].can, 150);
+    d[1].can /= 3;
+    assert_eq_int(d[1].can, 50);
+    d[1].can %= 7;
+    assert_eq_int(d[1].can, 1);
+    d[1].can &= 3;
+    assert_eq_int(d[1].can, 1);
+    assert_eq_int(d[0].can, 100); // komsu eleman bozulmadi
+    assert_eq_int(d[1].id, 2);    // komsu alan bozulmadi
+}
+
+func run_dizi_float_alan() {
+    Dusman[] d = [dusman(1, 100, 1.0)];
+    d[0].x += 0.5;
+    assert_close(d[0].x, 1.5, 0.000001);
+    d[0].x -= 2.0;
+    assert_close(d[0].x, -0.5, 0.000001);
+    d[0].x *= 4.0;
+    assert_close(d[0].x, -2.0, 0.000001);
+    d[0].z += 3;                   // int sag taraf -> float alan
+    assert_close(d[0].z, 3.0, 0.000001);
+}
+
+func run_artir_azalt() {
+    Dusman[] d = [dusman(1, 100, 1.0)];
+    d[0].can++;
+    assert_eq_int(d[0].can, 101);
+    d[0].can--;
+    d[0].can--;
+    assert_eq_int(d[0].can, 99);
+    d[0].x++;                      // float alan: 1.0 + 1
+    assert_close(d[0].x, 2.0, 0.000001);
+    Vec3 v = { x: 5.0, y: 0.0, z: 0.0 };
+    v.x--;
+    assert_close(v.x, 4.0, 0.000001);
+}
+
+func run_yerel_struct() {
+    Vec3 v = { x: 1.0, y: 2.0, z: 3.0 };
+    v.x += 1.0;
+    v.y -= 0.5;
+    v.z *= 2.0;
+    assert_close(v.x, 2.0, 0.000001);
+    assert_close(v.y, 1.5, 0.000001);
+    assert_close(v.z, 6.0, 0.000001);
+}
+
+func run_global_hedefler() {
+    g_dusmanlar = [dusman(9, 40, 0.0)];
+    g_dusmanlar[0].can += 2;
+    assert_eq_int(g_dusmanlar[0].can, 42);
+    g_konum.y += 0.25;
+    assert_close(g_konum.y, 2.25, 0.000001);
+}
+
+func say(): int {
+    g_say = g_say + 1;
+    return 0;
+}
+
+// Indeks bir kez degerlendirilir: `d[say()].can += 1` icinde say() tek sefer.
+func run_indeks_bir_kez() {
+    Dusman[] d = [dusman(1, 10, 0.0)];
+    g_say = 0;
+    d[say()].can += 1;
+    assert_eq_int(g_say, 1);
+    assert_eq_int(d[0].can, 11);
+    d[say()].can++;
+    assert_eq_int(g_say, 2);
+    assert_eq_int(d[0].can, 12);
+}
+
+func doldur(): int {
+    for (int i = 0; i < 200; i++) { push(g_dusmanlar, dusman(i, 0, 0.0)); }
+    return 7;
+}
+
+// Sag taraf diziye push edip veriyi TASIYABILIR: yazma yeni isaretciye.
+func run_sag_taraf_diziyi_buyutur() {
+    g_dusmanlar = [dusman(1, 100, 0.0)];
+    g_dusmanlar[0].can += doldur();
+    assert_eq_int(g_dusmanlar[0].can, 107);
+    assert_eq_int(len(g_dusmanlar), 201);
+}
+
+// Kutulu hedefler eski yolunda: json alani ve int dizisi.
+func run_kutulu_hedefler_degismedi() {
+    json j = { "n": 1 };
+    j.n += 2;
+    assert_eq_int(j.n, 3);
+    int[] a = [1, 2, 3];
+    a[1] += 5;
+    assert_eq_int(a[1], 7);
+}
+
+func run_donguda_birikim() {
+    Dusman[] d = [dusman(1, 0, 0.0), dusman(2, 0, 0.0), dusman(3, 0, 0.0)];
+    for (int k = 0; k < 10; k++) {
+        for (int i = 0; i < len(d); i++) { d[i].can += i + 1; }
+    }
+    assert_eq_int(d[0].can, 10);
+    assert_eq_int(d[1].can, 20);
+    assert_eq_int(d[2].can, 30);
+}
+
+test("tipli struct dizisi int alan: += -= *= /= %= &=", "run_dizi_int_alan");
+test("tipli struct dizisi float alan", "run_dizi_float_alan");
+test("++ / -- struct alaninda", "run_artir_azalt");
+test("yerel struct alani", "run_yerel_struct");
+test("global struct ve struct dizisi", "run_global_hedefler");
+test("indeks bir kez degerlendirilir", "run_indeks_bir_kez");
+test("sag taraf diziyi buyutur", "run_sag_taraf_diziyi_buyutur");
+test("kutulu hedefler degismedi", "run_kutulu_hedefler_degismedi");
+test("donguda birikim", "run_donguda_birikim");
+test_summary();

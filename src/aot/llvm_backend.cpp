@@ -3067,10 +3067,22 @@ static void sarr_push(LLVMBackend *backend, LLVMValueRef arr_val, LLVMValueRef s
 // yiyordu. Satir ici yolda ayni olcum asagidaki gibi (CHANGELOG'a yazildi).
 // nullptr = yerel bulunamadi (yakalanmis kapanis degiskeni vb.) — cagiran
 // genel yola dusmeli.
+static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
+                                     LLVMValueRef iv, const char *tag);
 static LLVMValueRef sarr_elem_ptr(LLVMBackend *backend, const char *arr_name,
                                   ASTNode_C *idx_node, const char *tag) {
+  if (!idx_node || !get_local(backend, arr_name)) return nullptr;
+  LLVMValueRef iv = codegen_expression(backend, idx_node);
+  if (!iv) return nullptr;
+  return sarr_elem_ptr_iv(backend, arr_name, iv, tag);
+}
+// Ayni yol, indeks ZATEN degerlendirilmis (VMValue). Bilesik atama ve ++/--
+// indeksi bir kez hesaplayip eleman isaretcisini iki kez (okuma, yazma) alir:
+// sag taraf diziye push edip veriyi tasiyabilir, eski isaretci sarkardi.
+static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
+                                     LLVMValueRef iv, const char *tag) {
   LLVMValueRef slot = get_local(backend, arr_name);
-  if (!slot || !idx_node) return nullptr;
+  if (!slot || !iv) return nullptr;
   const char *en = get_local_struct_array_elem(backend, arr_name);
   StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
   if (!est) return nullptr;
@@ -3078,8 +3090,6 @@ static LLVMValueRef sarr_elem_ptr(LLVMBackend *backend, const char *arr_name,
   LLVMValueRef arr = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot, tag);
   LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, tag);
   LLVMBuildStore(backend->builder, arr, tmp);
-  LLVMValueRef iv = codegen_expression(backend, idx_node);
-  if (!iv) return nullptr;
   LLVMValueRef idx = llvm_vm_val_to_int_payload(backend, iv);
 
   LLVMTypeRef i32t = backend->int32_type;
@@ -5019,6 +5029,83 @@ static int compound_op_to_binary(int op) {
 }
 
 
+// STRUCT ALANI hedefli bilesik atama ve ++/-- (2026-09-24).
+//
+// `d[i].x += v` (tipli struct dizisi) ve `s.x += v` (tipli yerel struct)
+// asagidaki KUTULU eleman yolundan geciyordu. O yol kabi kutulu bir deger
+// olarak okuyup vm_set_element ile yaziyor; struct ise kutusuz:
+//   * `d[i].can -= 30` SESSIZCE HIC-ISLEMDI: `d[i]` kutulu bir KOPYA olarak
+//     okunuyor, alan kopyada degisiyor, dizi ayni kaliyordu (olculdu: 100 ->
+//     100, beklenen 70). `d[i].can++` ve `*=` de ayni.
+//   * `s.x += 1.0` calisma zamaninda "get islemi icin gecersiz hedef" ile
+//     dusuyordu: yerel struct'in alloca'si kutulu deger diye okunuyordu.
+// Duz atama (`d[i].can = d[i].can - 30`) calisiyordu, cunku AST_ASSIGNMENT'in
+// bu iki hedef icin kendi kutusuz yolu var. Sonuc: oyun kodu her yerde uzun
+// bicimi yaziyordu (motor deposu engine_aksiyon.tpr). Burada ayni kutusuz
+// okuma/yazma yardimcilari kullaniliyor; indeks BIR KEZ degerlendiriliyor.
+struct SfTarget {
+  StructTypeEntry *st = nullptr;
+  int fi = -1;
+  const char *arr = nullptr;    // tipli struct dizisi: dizinin adi
+  LLVMValueRef iv = nullptr;    //   ... ve bir kez degerlendirilmis indeks
+  LLVMValueRef local = nullptr; // tipli yerel struct: alloca'si
+};
+// true: hedef bir struct alani (fi < 0 ise alan yok: hata bildirildi).
+// false: struct alani degil; cagiran genel kutulu yola devam eder.
+static bool sf_target_resolve(LLVMBackend *backend, ASTNode_C *acc, int line, SfTarget *t) {
+  if (!acc || acc->type != AST_ARRAY_ACCESS || !acc->index || acc->index->type != AST_STRING_LITERAL ||
+      !acc->index->value.string_value)
+    return false;
+  const char *field = acc->index->value.string_value;
+  ASTNode_C *base = acc->left;
+  // d[i].x
+  if (base && base->type == AST_ARRAY_ACCESS && base->left && base->left->type == AST_IDENTIFIER &&
+      base->left->name && base->index && base->index->type != AST_STRING_LITERAL) {
+    const char *en = sarr_elem_of_ident(backend, base->left);
+    StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
+    if (!est || !get_local(backend, base->left->name)) return false;
+    t->st = est;
+    t->arr = base->left->name;
+    t->iv = codegen_expression(backend, base->index);
+  } else {
+    // s.x — alici ya sol dugumde ya da dugumun adinda (AST_ASSIGNMENT ile ayni)
+    const char *recv = (base && base->type == AST_IDENTIFIER && base->name) ? base->name : acc->name;
+    if (!recv) return false;
+    const char *sn = get_local_struct_type(backend, recv);
+    StructTypeEntry *st = sn ? find_struct_type(backend, sn) : nullptr;
+    LLVMValueRef slot = st ? get_local(backend, recv) : nullptr;
+    if (!st || !slot) return false;
+    t->st = st;
+    t->local = slot;
+  }
+  t->fi = struct_type_field_index(t->st, field);
+  if (t->fi < 0) {
+    char msg[320];
+    snprintf(msg, sizeof(msg), "'%s' struct'inda '%s' alani yok / struct '%s' has no field '%s'", t->st->name, field, t->st->name,
+             field);
+    report_codegen_error(backend, line, "hata", msg, field, nullptr);
+  }
+  return true;
+}
+static LLVMValueRef sf_target_ptr(LLVMBackend *backend, SfTarget &t, const char *tag) {
+  return t.local ? t.local : sarr_elem_ptr_iv(backend, t.arr, t.iv, tag);
+}
+// Kutulu iki degerle genel ikili islem (int/float/dizgi; sifira bolme korumasi
+// vm_binary_op'ta). Eleman yolu ile ayni cagri.
+static LLVMValueRef emit_boxed_binop(LLVMBackend *backend, LLVMValueRef L, LLVMValueRef R, int op, const char *tag) {
+  LLVMValueRef L_ptr = llvm_build_alloca_at_entry(backend, backend->vm_value_type, tag);
+  LLVMBuildStore(backend->builder, L, L_ptr);
+  LLVMValueRef R_ptr = llvm_build_alloca_at_entry(backend, backend->vm_value_type, tag);
+  LLVMBuildStore(backend->builder, R, R_ptr);
+  LLVMValueRef res_ptr = llvm_build_alloca_at_entry(backend, backend->vm_value_type, tag);
+  LLVMValueRef args[] = {LLVMConstPointerNull(backend->ptr_type), LLVMBuildBitCast(backend->builder, L_ptr, backend->ptr_type, tag),
+                         LLVMBuildBitCast(backend->builder, R_ptr, backend->ptr_type, tag),
+                         LLVMConstInt(backend->int32_type, (unsigned long long)op, 0),
+                         LLVMBuildBitCast(backend->builder, res_ptr, backend->ptr_type, tag)};
+  LLVMBuildCall2(backend->builder, backend->vm_binary_op_type, backend->func_vm_binary_op, args, 5, "");
+  return LLVMBuildLoad2(backend->builder, backend->vm_value_type, res_ptr, tag);
+}
+
 // `a[0]++` / `j["n"]--`: ELEMAN hedefli artirma/azaltma.
 //
 // Eskiden SESSIZ HIC-ISLEMDI (parser `++` token'ini tuketip atiyordu; bkz.
@@ -5037,6 +5124,19 @@ static LLVMValueRef codegen_elem_step(LLVMBackend *backend, ASTNode_C *node,
         "++/-- yalniz degiskene ya da dizi/nesne elemanina uygulanabilir",
         nullptr, "hedefi bir degisken ya da a[i] bicimine getirin");
     return llvm_vm_val_int(backend, 0);
+  }
+  {
+    SfTarget sf;
+    if (sf_target_resolve(backend, acc, node->line, &sf)) {
+      if (sf.fi < 0) return llvm_vm_val_int(backend, 0);
+      LLVMValueRef p = sf_target_ptr(backend, sf, "step.sf.p");
+      if (!p) return llvm_vm_val_int(backend, 0);
+      LLVMValueRef old = struct_field_load_boxed(backend, sf.st, p, sf.fi, "step.sf.old");
+      // Float alanda da dogru: vm_binary_op float + int -> float.
+      LLVMValueRef nv = emit_boxed_binop(backend, old, llvm_vm_val_int(backend, delta), TOKEN_PLUS, "step.sf.new");
+      struct_field_store_from_boxed(backend, sf.st, p, sf.fi, nv, "step.sf.set");
+      return old; // post-increment: ESKI deger
+    }
   }
   // Kap ve indeks: `a[i]` dugumunde taban ya name'de ya left'te (bkz. 6g).
   LLVMValueRef cont = nullptr;
@@ -5105,6 +5205,28 @@ static LLVMValueRef codegen_elem_compound(LLVMBackend *backend,
         "bileşik atama yalnız değişkene ya da dizi/nesne elemanına uygulanabilir",
         nullptr, "hedefi bir değişken ya da a[i] biçimine getirin");
     return llvm_vm_val_int(backend, 0);
+  }
+  {
+    SfTarget sf;
+    if (sf_target_resolve(backend, acc, node->line, &sf)) {
+      if (sf.fi < 0) return llvm_vm_val_int(backend, 0);
+      LLVMValueRef p = sf_target_ptr(backend, sf, "ca.sf.p");
+      if (!p) return llvm_vm_val_int(backend, 0);
+      LLVMValueRef old = struct_field_load_boxed(backend, sf.st, p, sf.fi, "ca.sf.old");
+      LLVMValueRef rhs = codegen_expression(backend, node->right);
+      const int bop = compound_op_to_binary(node->op);
+      LLVMValueRef nv = nullptr;
+      if (is_bitwise_binary_op(bop)) {
+        LLVMValueRef bit_i = emit_bitwise_i64(backend, bop, llvm_vm_val_to_int_payload(backend, old),
+                                              llvm_vm_val_to_int_payload(backend, rhs));
+        if (bit_i) nv = llvm_vm_val_int_val(backend, bit_i);
+      }
+      if (!nv) nv = emit_boxed_binop(backend, old, rhs, bop, "ca.sf.new");
+      // Isaretci YENIDEN: sag taraf diziye push edip veriyi tasimis olabilir.
+      LLVMValueRef p2 = sf_target_ptr(backend, sf, "ca.sf.p2");
+      if (p2) struct_field_store_from_boxed(backend, sf.st, p2, sf.fi, nv, "ca.sf.set");
+      return nv; // bilesik atama: YENI deger
+    }
   }
   // Kap ve indeks: `a[i]` dugumunde taban ya name'de ya left'te (bkz. 6g).
   LLVMValueRef cont = nullptr;
