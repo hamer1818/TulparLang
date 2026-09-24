@@ -38,6 +38,21 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Düzeltildi — struct alanına bileşik atama sessizce hiçbir şey yapmıyordu
+
+- `d[i].can -= 30` (tipli struct dizisi, P1.1) **sessiz hiç-işlemdi**: değer
+  100'de kalıyordu (beklenen 70). `+= -= *= /= %= &=` ve `d[i].can++` / `--`
+  hepsi aynı. Sebep: bu hedefler kutulu eleman yoluna düşüyor, `d[i]` kutulu
+  bir KOPYA olarak okunuyor, alan kopyada değişiyor, dizi aynı kalıyordu.
+- `v.x += 1.0` (tipli yerel ya da global struct) çalışma zamanında
+  "get işlemi için geçersiz hedef veya indeks" ile düşüyordu.
+- Düz atama (`d[i].can = d[i].can - 30`) çalışıyordu; motor deposundaki
+  oyun kodu bu yüzden her yerde uzun biçimi yazıyordu. İki hedef artık
+  `AST_ASSIGNMENT`'in kutusuz alan yolundan geçiyor; indeks bir kez
+  değerlendiriliyor, sağ taraf diziye push edip veriyi taşısa da yazma doğru
+  elemana gidiyor. Paket: `tests/struct_alan_bilesik.test.tpr` (düzeltmeden
+  önce 9 testin ilk ikisi yanlış değer, üçüncüsü çökme).
+
 ### Düzeltildi — `tulpar update` Linux'ta hiç çalışmıyordu (`EXDEV`)
 
 Komut, indirmeyi ve SHA-256 doğrulamasını **başarıyla bitirdikten sonra** son
