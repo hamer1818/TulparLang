@@ -38,6 +38,42 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Düzeltildi — checkpoint içinde global'e yazılan değer geri sarmadan sonra ölüyordu
+
+Kare başına `arena_save()` / `arena_drop()` (motorun oyun döngüsü, `lib/tame.tpr`
+`run()`) içinde global'e yazılan değerin **kalıcılaştırılması** gerekiyor; yalnız
+düz atama (`g = v`) bunu yapıyordu. Aynı global'e yazan diğer yollar
+bariyeri hiç görmüyordu ve geri sarmadan sonra global serbest belleğe
+bakıyordu (Tuzaklar 7f):
+
+- `g += "COP"` (global'e bileşik atama): `"COPCOPCOP"` yerine `"0"` / çöp;
+  ikinci karede çökme. `g = g + "COP"` doğruydu.
+- `aot_persist` tipli struct dizisini (`P[]`) **kopyalamıyordu**, oysa dizi
+  geri sarılan bölgede kuruluyor: kare içinde `push(kalici, yerel_dizi)` ya
+  da tipli global'e `g = []` → use-after-free ("indeksleme hedefi bir struct
+  dizisi degil", ASan: `heap-use-after-free`, serbest bırakan
+  `aot_arena_rewind_to`). `persist(p_dizisi)` de kopya değil aynı tutamacı
+  dönüyordu; `thread_create` argümanı olarak da artık derin kopyalanıyor
+  (sözleşme "kopyayla girer").
+- `D[] g` global'ine düz atama hiç bariyer görmüyordu (`is_global_var` onu
+  yerel sayıyordu); checkpoint içindeki üst düzey bildirim
+  (`str g = "a" + b;`) de öyle.
+
+Artık bir global'e yazan her codegen yolu tek yardımcıdan
+(`emit_global_store_barrier`) geçiyor. Ek olarak:
+
+- Kalıcı bir dizgiyi global'e atamak (`durum = "menu"`) **artık kopyalamıyor**
+  (dizgi değişmez, fark gözlemlenemez): atama başına 80 B sızıntı → 0.
+- Kare içinde kurulan yerel struct dizisinin eleman deposu geri sarmada
+  serbest bırakılıyor: kare başına 144 B sızıntı → 0.
+- Değişmeyen/kalan: hesaplanan bir değeri global'e her kare yeniden atamak
+  hâlâ atama başına bir kalıcı kopya sızdırıyor (kısa dizgi 80 B, küçük json
+  384 B, yeniden kurulan 2 elemanlı struct dizisi 240 B) — eski değer,
+  takma adları izlenmediği için güvenle serbest bırakılamıyor (Tuzaklar 7f).
+
+Paket: `tests/arena_kalicilik.test.tpr` (yaz → geri sar → **çöple doldur** →
+oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
+
 ### Düzeltildi — struct alanına bileşik atama sessizce hiçbir şey yapmıyordu
 
 - `d[i].can -= 30` (tipli struct dizisi, P1.1) **sessiz hiç-işlemdi**: değer

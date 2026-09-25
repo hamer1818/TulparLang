@@ -15,6 +15,22 @@ AOT'ta her obje/dizi literali `malloc`'lanır (`arena_allocated=0`); GC sweep yo
 ## 3) Runtime write barrier
 `wb_persist_escape(container, v)`: transient bir değer **kalıcı** bir container'a (global / zaten-persist'lenmiş obje) yazılırsa derin kopyalanır (`aot_persist`). Değer-akışı tabanlı; alias'lar üzerinden de yakalar. Wings'te global'e yazma otomatik kalıcılaşır ([[Wings]] auto-persist).
 
+## 4) Küresel depolama bariyeri (codegen, 2026-09-25)
+Bir **global değişkene** yazmak kap mutasyonu değil, düz bir LLVM `store` —
+runtime bariyeri onu göremez. Bu yüzden global'e yazan **her** codegen yolu
+(düz atama, `+=` vb. bileşik atama, `D[] g = [...]` yeniden kurma, üst düzey
+bildirim) `emit_global_store_barrier`'dan geçer; etiket denetimi satır içi,
+yalnız yığın değerinde çağrı:
+- `aot_persist_global` (atama): dizgi + struct dizisi **yalnız geçiciyse**
+  kopya; dizi/json **her zaman** derin kopya (tarihsel anlam).
+- `aot_persist_escape` (üst düzey bildirim): yalnız geçiciyse kopya.
+
+Eskiden yalnız düz atama bariyerliydi; `g += x` ve struct dizisi yolları
+geri sarmadan sonra sarkıyordu. Eski kalıcı değer üzerine yazılınca
+**serbest bırakılamıyor** (takma adlar izlenmiyor) — kare başına yeniden
+atanan hesaplanmış değer sızar. Ayrıntı, ölçüm ve sınırlar (kapanışlar,
+kareyi aşan yereller): [[Tuzaklar#7f. Bariyer TEK yolda yazılıydı — aynı global'e yazan öbür yollar onu hiç görmedi]].
+
 ## ⚠️ Checkpoint disiplini (kritik)
 Stack **32 slot** (`AOT_ARENA_CHECKPOINT_MAX`). `arena_restore` checkpoint'i **korur** (`top=idx+1`) — tek-save-çok-restore döngüsü (varsayılan `listen()`) buna güvenir. Ama per-connection/per-request `arena_save` yapan kalıcı thread'ler (pool/evented) serbest bırakmazsa 32'den sonra `arena_save → -1`, restore no-op → **sınırsız sızıntı**. Çözüm: **`arena_drop(wm)`** = rewind + POP (`top=idx`). → [[Memory Leak Fixes]] · [[Wings Serve Modes]]
 

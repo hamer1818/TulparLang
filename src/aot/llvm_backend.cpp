@@ -1559,6 +1559,12 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // long-lived globals. Same 1-arg VMValue→VMValue shape, reuses fmt_iso_type.
   backend->func_aot_persist =
       LLVMAddFunction(backend->module, "aot_persist", fmt_iso_type);
+  // Kuresel depolama bariyerleri (emit_global_store_barrier). Kullanici
+  // yerlesigi degil; ayni 1 argumanli VMValue->VMValue sekli.
+  backend->func_aot_persist_global =
+      LLVMAddFunction(backend->module, "aot_persist_global", fmt_iso_type);
+  backend->func_aot_persist_escape =
+      LLVMAddFunction(backend->module, "aot_persist_escape", fmt_iso_type);
 
   // Regex (std::regex) builtins. Two-arg: match/search/capture; three-arg: replace.
   LLVMTypeRef regex2_params[] = {backend->vm_value_type, backend->vm_value_type};
@@ -3856,11 +3862,79 @@ static bool is_global_var(LLVMBackend *backend, const char *name) {
     return false;
   for (Scope *s = backend->current_scope; s; s = s->parent) {
     for (int i = 0; i < s->count; i++) {
-      if (strcmp(s->vars[i].name, name) == 0)
-        return false; // a local shadows the global → not a global write
+      if (strcmp(s->vars[i].name, name) == 0) {
+        // Kapsamda bulunan her ad YEREL degil: Pass 0.1 bazi globalleri
+        // (int, tipli struct, struct dizisi) kuresel kapsama da KAYDEDIYOR.
+        // Eskiden burada kosulsuz `false` donuluyordu, yani `D[] g`
+        // global'ine yazmak "yerel golgeliyor" sayiliyor ve bariyer HIC
+        // uygulanmiyordu (checkpoint icinde `g = yerel_sarr` -> geri
+        // sarmada serbest bellek). Olcut depolama: kaydin yuvasi bir LLVM
+        // GLOBAL'i ve kutulu VMValue ise global'dir. int global'inin yuvasi
+        // native_value'da (value null), tipli struct'inki struct tipinde —
+        // ikisi de skaler/deger tipi, bariyere ihtiyaclari yok.
+        LLVMValueRef slot = s->vars[i].value;
+        return slot && LLVMIsAGlobalVariable(slot) &&
+               LLVMGlobalGetValueType(slot) == backend->vm_value_type;
+      }
     }
   }
   return LLVMGetNamedGlobal(backend->module, gsym(name).c_str()) != nullptr;
+}
+
+// KURESEL DEPOLAMA BARIYERI — bir global'e yazan HER codegen yolu buradan
+// gecer (duz atama, bilesik atama, struct dizisi yeniden kurma, ust duzey
+// bildirim).
+//
+// Neden tek yardimci: bariyer eskiden yalniz duz atamanin icinde satir ici
+// yaziliydi. Ayni global'e yazan diger yollar onu HIC gormedi ve her biri
+// ayri bir sarkan-isaretci hatasiydi (olculdu 2026-09-25, TulparLang
+// 3eee948; hepsi "yaz -> geri sar -> arenayi copla doldur -> oku"):
+//   * `g += "COP"` (AST_COMPOUND_ASSIGN) -> "0" ya da cop okunuyor;
+//     `g = g + "COP"` dogruydu.
+//   * `D[] g; g = [];` (struct dizisi yeniden kurma) -> `g[0].x` 0.
+//   * checkpoint icinde ust duzey `str g = "a" + b;` -> cop.
+// Bariyer isteyen bir sonraki yol da buraya gelmeli; satir ici kopya yazmak
+// bu hata ailesinin kaynagiydi (Tuzaklar 7f).
+//
+// `persist_fn`: func_aot_persist_global (atama) ya da
+// func_aot_persist_escape (bildirim) — farki runtime_bindings.cpp'de.
+// `_request` muaf: wings her istekte onu gecici istek nesnesine yeniden
+// atiyor ve yalniz istek icinde okuyor; kalicilastirmak her istekte butun
+// nesneyi kopyalayip sizdirirdi.
+//
+// Etiket denetimi SATIR ICI: yalniz VM_VAL_OBJ ise cagriya gidiliyor. Skaler
+// global'lere cagri hic uretilmiyor — opak cagri dongu degismezlerini
+// yazmacta tutmayi engelliyordu (tipsiz kodda dongu basina bir cagri).
+static LLVMValueRef emit_global_store_barrier(LLVMBackend *backend,
+                                              const char *name,
+                                              LLVMValueRef val,
+                                              LLVMValueRef persist_fn) {
+  if (!val || !name || !persist_fn || strcmp(name, "_request") == 0 ||
+      !is_global_var(backend, name))
+    return val;
+  LLVMValueRef ptag = LLVMBuildExtractValue(backend->builder, val, 0, "ap.tag");
+  LLVMValueRef pisobj = LLVMBuildICmp(
+      backend->builder, LLVMIntEQ, ptag,
+      LLVMConstInt(backend->int32_type, /*VM_VAL_OBJ=*/4, 0), "ap.isobj");
+  LLVMValueRef pfn =
+      LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef pb_call = append_bb(backend, pfn, "ap.call");
+  LLVMBasicBlockRef pb_done = append_bb(backend, pfn, "ap.done");
+  LLVMBasicBlockRef pb_from = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildCondBr(backend->builder, pisobj, pb_call, pb_done);
+  LLVMPositionBuilderAtEnd(backend->builder, pb_call);
+  LLVMValueRef pargs[] = {val};
+  LLVMValueRef pcalled =
+      llvm_call_vmvalue_func(backend, persist_fn, pargs, 1, "global.persist");
+  LLVMBasicBlockRef pb_call_end = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, pb_done);
+  LLVMPositionBuilderAtEnd(backend->builder, pb_done);
+  LLVMValueRef pphi =
+      LLVMBuildPhi(backend->builder, backend->vm_value_type, "ap.res");
+  LLVMValueRef pin[] = {val, pcalled};
+  LLVMBasicBlockRef pbb[] = {pb_from, pb_call_end};
+  LLVMAddIncoming(pphi, pin, pbb, 2);
+  return pphi;
 }
 
 // If `arg` is an expression producing a trivially-unboxable struct VALUE — a
@@ -6476,6 +6550,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // y -= 2.5;` 7 veriyor, native yuvali ikiziyle ayni.
     if (get_local_type(backend, node->name) == INFERRED_INT)
       new_val = llvm_coerce_bool_tag_to_int(backend, new_val);
+    // GLOBAL HEDEFTE DUZ ATAMAYLA AYNI BARIYER (Tuzaklar 7f). Eskiden yoktu:
+    // `g += "COP"` birlestirmenin ARENA sonucunu dogrudan global'e yaziyordu,
+    // kare sonundaki geri sarmadan sonra global serbest bellege bakiyordu
+    // (olculdu: "COPCOPCOP" yerine "0"). `g = g + "COP"` dogruydu, cunku
+    // yalniz duz atama bariyerden geciyordu.
+    new_val = emit_global_store_barrier(backend, node->name, new_val,
+                                        backend->func_aot_persist_global);
     LLVMBuildStore(backend->builder, new_val, val_ptr);
     return new_val;
   }
@@ -9974,6 +10055,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       if (!sinit) sinit = llvm_vm_val_int(backend, 0);
       if (existing_global) {
         // Pass 0.1 hem global'i acti hem kuresel kapsama kaydetti.
+        // Ust duzey bildirim de bir global yazmasi: checkpoint icinde
+        // calisirsa (`int wm = arena_save(); D[] g = [];`) yeni dizi
+        // bolgede kalir (Tuzaklar 7f). Yalniz geciciyse kopya.
+        sinit = emit_global_store_barrier(backend, node->name, sinit,
+                                          backend->func_aot_persist_escape);
         LLVMBuildStore(backend->builder, sinit, existing_global);
         return existing_global;
       }
@@ -10220,6 +10306,14 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
     // Check if it's already a (boxed) global (from pre-scan).
     if (existing_global) {
+      // UST DUZEY BILDIRIM DE BIR GLOBAL YAZMASI (Tuzaklar 7f). Eskiden
+      // bariyersizdi: checkpoint icindeki `str g = "a" + b;` arena dizgisini
+      // global'e yaziyordu, geri sarmadan sonra cop okunuyordu (olculdu).
+      // Duz atamanin aksine YALNIZ GECICIYSE kopya (aot_persist_escape):
+      // bildirim oteden beri paylasiyordu (`json b = a;`), kalici kaynakta
+      // bu korunuyor.
+      init = emit_global_store_barrier(backend, node->name, init,
+                                       backend->func_aot_persist_escape);
       LLVMBuildStore(backend->builder, init, existing_global);
       return existing_global;
     }
@@ -10329,6 +10423,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           }
           sarr_push(backend, nv, src);
         }
+        // Global hedefte bariyer (Tuzaklar 7f): yeni dizi checkpoint icinde
+        // kurulduysa bolgede; geri sarmada serbest kalir. Elemanlar eklendikten
+        // SONRA — kopya onlari da tasisin.
+        nv = emit_global_store_barrier(backend, node->name, nv,
+                                       backend->func_aot_persist_global);
         LLVMBuildStore(backend->builder, nv, slot);
         return llvm_vm_val_int(backend, 0);
       }
@@ -10831,47 +10930,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // (`_users = kept`, `_lastError = "fail: " + reason`) would dangle after
       // arena_restore — deep-copy first. Whole-variable assignment is an LLVM
       // store, not a container mutation, so the runtime write barrier can't see
-      // it; this stays compile-time. `_request` is exempt: the wings dispatcher
-      // reassigns it every request to a transient arena object that is only
-      // read within the request, so persisting it would deep-copy (and leak)
-      // the whole request object on every call.
-      if (is_global_var(backend, node->name) &&
-          strcmp(node->name, "_request") != 0) {
-        // aot_persist YIGIN degerlerini kalici kopyaya cikariyor; skalerde
-        // (int/float/bool/void) degeri OLDUGU GIBI donduruyor. Buna ragmen
-        // her kutulu global atamasinda kosulsuz cagriliyordu — tipsiz kodda
-        // dongu basina bir runtime cagrisi. Cagrinin kendisinden daha pahali
-        // olan sey, LLVM'in onu asamamasi: cagri her seyi yazabilir sayildigi
-        // icin dongu degismezleri yazmacta kalamiyor.
-        //
-        // Etiket denetimi satir ici: yalniz VM_VAL_OBJ ise cagriya gidiliyor.
-        LLVMValueRef ptag =
-            LLVMBuildExtractValue(backend->builder, val, 0, "ap.tag");
-        LLVMValueRef pisobj = LLVMBuildICmp(
-            backend->builder, LLVMIntEQ, ptag,
-            LLVMConstInt(backend->int32_type, /*VM_VAL_OBJ=*/4, 0),
-            "ap.isobj");
-        LLVMValueRef pfn =
-            LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
-        LLVMBasicBlockRef pb_call = append_bb(backend, pfn, "ap.call");
-        LLVMBasicBlockRef pb_done = append_bb(backend, pfn, "ap.done");
-        LLVMBasicBlockRef pb_from = LLVMGetInsertBlock(backend->builder);
-        LLVMBuildCondBr(backend->builder, pisobj, pb_call, pb_done);
-        LLVMPositionBuilderAtEnd(backend->builder, pb_call);
-        LLVMValueRef pargs[] = {val};
-        LLVMValueRef pcalled = llvm_call_vmvalue_func(
-            backend, backend->func_aot_persist, pargs, 1,
-            "assign.autopersist");
-        LLVMBasicBlockRef pb_call_end = LLVMGetInsertBlock(backend->builder);
-        LLVMBuildBr(backend->builder, pb_done);
-        LLVMPositionBuilderAtEnd(backend->builder, pb_done);
-        LLVMValueRef pphi = LLVMBuildPhi(backend->builder,
-                                         backend->vm_value_type, "ap.res");
-        LLVMValueRef pin[] = {val, pcalled};
-        LLVMBasicBlockRef pbb[] = {pb_from, pb_call_end};
-        LLVMAddIncoming(pphi, pin, pbb, 2);
-        val = pphi;
-      }
+      // it; this stays compile-time. Kural, `_request` muafiyeti ve satir ici
+      // etiket denetimi emit_global_store_barrier'da — bilesik atama, struct
+      // dizisi yeniden kurma ve ust duzey bildirim de ayni yardimciyi cagiriyor.
+      val = emit_global_store_barrier(backend, node->name, val,
+                                      backend->func_aot_persist_global);
 
       LLVMValueRef target = get_local(backend, node->name);
       // Bildirilen tip `int` ise atanan degeri int'e zorla (float ise

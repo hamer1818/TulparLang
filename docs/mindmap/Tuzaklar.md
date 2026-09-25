@@ -1801,6 +1801,82 @@ bitmiş sayılmaz.**
 
 Nöbetçi: `tests/struct_import.test.tpr` + `tests/struct_import_hatalari.sh`.
 
+## 7f. Bariyer TEK yolda yazılıydı — aynı global'e yazan öbür yollar onu hiç görmedi
+
+Checkpoint (`arena_save` … `arena_drop`) içinde global'e yazılan değer,
+geri sarma onu serbest bırakmadan önce **kalıcılaştırılmalı**. Derleyici bunu
+düz atamada (`g = v`) satır içi yapıyordu. Aynı global'e yazan **dört yol
+daha** vardı ve hiçbiri bariyerden geçmiyordu (motor sondası, 2026-09-25,
+TulparLang 3eee948):
+
+| yol | belirti (yaz → geri sar → çöpla → oku) |
+|---|---|
+| `g += "COP"` (`AST_COMPOUND_ASSIGN`) | `"COPCOPCOP"` yerine `"0"`; ikinci karede `aot_string_concat_fast` içinde SEGV — dizginin `chars` işaretçisi çöpün baytları (`0x…504f4350` = "COP") |
+| `D[] g; g = [];` (struct dizisi yeniden kurma) | `g[0].x` 0 / -1; ASan: `heap-use-after-free`, serbest bırakan `aot_arena_rewind_to` |
+| `D[] g` global'ine düz atama | `is_global_var` onu **yerel** sayıyordu: Pass 0.1 struct dizisi global'ini küresel kapsama da kaydediyor, fonksiyon "kapsamda bulundu → yerel gölgeliyor" diyordu |
+| üst düzey `str g = "a" + b;` checkpoint içinde | çöp (`"COPCOPCOPCOPCOP-0"`) |
+
+Ve bir runtime deliği: `aot_persist` `OBJ_STRUCT_ARRAY`'i **olduğu gibi**
+döndürüyordu, oysa `aot_sarr_new` başlığı bölgeye kaydediyor. Yani barrier
+çalışsa bile (`push(kalici, yerel_dizi)` → `wb_persist_escape` →
+`aot_persist`) "kalıcı" kopya aynı ölü tutamaçtı.
+
+**Neden kimse görmedi:** `tests/autopersist.test.tpr` yazdıktan sonra
+arenayı **çöplemeden** okuyordu. Serbest bırakılan bellek henüz ezilmemişse
+sarkan işaretçi doğru veriyi okur — test yeşil, hiçbir şey ölçmüyor (1.
+sınıf). Yeni kalıp: yaz → geri sar → **arena + malloc parçalarını yeniden
+kullandıracak kadar ayır** → oku.
+
+**Kural:** bir değişmezi (burada "global'e giden değer kalıcıdır") bir
+çağrı sitesine satır içi yazma. Aynı hedefe yazan her yolu say
+(`AST_ASSIGNMENT`, `AST_COMPOUND_ASSIGN`, `++/--`, eleman yazması, üst düzey
+`VAR_DECL`, struct dizisi yeniden kurma) ve hepsini tek yardımcıdan geçir.
+Artık `emit_global_store_barrier` o yardımcı; `build.sh suites`'in
+`ap.isobj` IR bekçisi de onu ölçüyor.
+
+**Kalıcılaştırma kuralı (bilinçli, iki giriş):**
+- `aot_persist_global` (düz/bileşik atama): dizgi ve struct dizisi **yalnız
+  geçiciyse** kopyalanır; dizi/json **her zaman** derin kopya (tarihsel anlam:
+  `g = h; push(h, 1)` g'yi değiştirmez — yerellerde değiştirir; bu tutarsızlık
+  bilinçli olarak korunuyor, değişecekse karar olarak).
+- `aot_persist_escape` (üst düzey bildirim): yalnız geçiciyse kopya;
+  bildirim eskiden de paylaşıyordu (`json b = a;`).
+
+**Sızıntı — neden eski değer serbest bırakılamıyor (LEAK 3):** AOT yolu
+okumada/saklamada referans saymıyor (`arc_release` hiç çağrılmıyor, bkz.
+[[Concurrency]]). Kalıcılaştırılmış eski değere başka canlı referanslar
+kalabiliyor: `str onceki = g;` (yerel), `push(gecmis, g)` (yazma bariyeri
+kalıcı değeri kopyalamaz, **paylaştırır**), `h = g` (struct dizisi tutamacı),
+fonksiyon argümanı/dönüşü. Üzerine yazarken eskisini `free` etmek bunların
+hepsini sarkıtır. Ölçülen (Ryzen 7 9800X3D, Linux 7.2.7, 2026-09-25; 1M
+atama, her biri kendi checkpoint'inde, VmHWM farkı 200k→1M / 800k):
+
+| yük (kare başına) | önce | sonra |
+|---|---:|---:|
+| `g = "menu"` (kalıcı literal) | 79,9 B | **0** |
+| `g = "skor: " + toString(i)` | 80,1 B | 80,1 B (kalan) |
+| `g = {"a": i, "b": "x"}` (json) | 384,1 B | 384,2 B (kalan) |
+| `g = []` + 2 push (`P[]` global'i) | 143,9 B **ve yanlış sonuç** (`len(g)` 0) | 240,1 B (kalan; başlık 96 + 8 kapasiteli veri 144) |
+| kare-yerel `P[] y = []` + 2 push | 144,1 B | **0** (`region_free_one` artık `data`'yı da bırakıyor) |
+
+Kalan sızıntıdan kaçınmanın yolu oyun kodunda: kare başına yeniden atamak
+yerine init'te bir kez kurup yerinde güncellemek (alan yazması, `d[i].x = …`).
+
+**Bilinen sınır — kapanış:** `aot_persist` `OBJ_CLOSURE`'u olduğu gibi
+döndürüyor. Başlık kalıcı malloc ama `env` dizisi checkpoint içinde
+kurulduysa bölgede: kare içinde global'e konan lambda geri sarmadan sonra
+yakaladığı değeri kaybeder (ölçüldü: `"yakalandi-71"` yerine `"<object>1"`).
+Derin kopya paylaşılan yakalama anlambilimini bozar ve kendini yakalayan
+kapanışta sonsuz özyinelemeye girer; açık iş.
+
+**Tasarım gereği güvensiz:** kareler arasında yaşayan YEREL değişken (ör.
+kare döngüsünün dışındaki bir `str son = …` ya da döngü taşıyan yerel)
+bariyer görmez — yereller kalıcılaştırılmıyor. Kareyi aşacak değer global'e
+ya da kalıcı bir kaba konmalı.
+
+Nöbetçi: `tests/arena_kalicilik.test.tpr` (11 HATA + 4 NÖBET; düzeltmeden
+önceki derleyiciyle 11 HATA'nın 11'i kırmızı).
+
 ## 6ş. Döngü sınırı `n` mi `len(a)` mı — aynı iş, 3,5 kat fark
 
 40M elemanlık lineer okuma:

@@ -1046,7 +1046,8 @@ TPREOF
     #
     #   1) `srem`  = kutulu `%` için satır içi tamsayı yolu (build_checked_div).
     #      Yoksa her modulo vm_binary_op'a gidiyor: ölçüldü 134,6 -> 46,5 ms.
-    #   2) `ap.isobj` = global atamasındaki aot_persist etiket denetimi.
+    #   2) `ap.isobj` = global'e yazan her yolun ortak bariyerindeki
+    #      (emit_global_store_barrier -> aot_persist_global) etiket denetimi.
     #      Yoksa her kutulu global ataması koşulsuz runtime çağrısı:
     #      ölçüldü 90,8 -> 46,3 ms.
     #

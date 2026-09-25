@@ -1,0 +1,330 @@
+// Checkpoint (arena_save/arena_drop) icinde GLOBAL'e yazilan deger geri
+// sarmadan sonra da yasamali (Tuzaklar 7f).
+//
+// Neden var: motor (tulpar-engine) her oyun karesini bir checkpoint'e
+// sariyor (`var wm = arena_save(); ...kare...; arena_drop(wm)`), lib/tame.tpr
+// run() da ayni seyi yapiyor. Global'e yazilan deger kalicilastirilmazsa
+// kare sonundaki geri sarma onu serbest birakir ve global serbest bellege
+// bakar. 2026-09-25'te motor tarafindaki bir sonda (TulparLang 3eee948) iki
+// hata buldu:
+//   * `g += "COP"` kalicilastirilmiyordu — yalniz duz atama (`g = g + x`)
+//     bariyerden geciyordu. Sonuc "COPCOPCOP" yerine "0" ya da cop.
+//   * aot_persist struct dizisini (OBJ_STRUCT_ARRAY) KOPYALAMIYORDU, oysa
+//     aot_sarr_new onu geri sarilan bolgeye kaydediyor: `g = []` (tipli
+//     struct dizisi global'i) ya da kare icinde kurulan diziyi kalici bir
+//     kaba koymak geri sarmadan sonra use-after-free ("indeksleme hedefi bir
+//     struct dizisi degil").
+// Ayni aileden: ust duzey bildirim (`str g = "a" + b;`) checkpoint icinde
+// calisinca bariyersizdi; `D[] g` global'ine duz atama da hic bariyer
+// gormuyordu (is_global_var onu "yerel" sayiyordu).
+//
+// KALIP: yaz (checkpoint icinde) -> geri sar (arena_drop) -> COPLA (arenayi
+// ve serbest birakilan malloc parcalarini yeniden kullandir) -> oku.
+// Coplamasiz okuma HICBIR SEY olcmez: serbest birakilan bellek henuz ezilmedigi
+// icin sarkan isaretci dogru veriyi okur (tests/autopersist.test.tpr boyle
+// yazilmisti ve bu hatalari hic gormedi).
+//
+// Pozitif kontrol: duzeltmeden onceki derleyiciyle (3eee948) bu paketin
+// "HATA" etiketli testleri KIRMIZI; "NOBET" etiketliler iki derleyicide de
+// yesil (onlar gerileme bekcisi).
+//
+// Calistir (depo kokunden — import yolu CWD'ye gore):
+//   ./tulpar tests/arena_kalicilik.test.tpr
+import "test";
+import "tests/moduller/arena_kalicilik_modul.tpr";
+
+struct Parca { int x; float y; }
+
+func parca(int x, float y): Parca {
+    Parca p;
+    p.x = x;
+    p.y = y;
+    return p;
+}
+
+// Geri sarmadan sonra serbest kalan bellegi YENIDEN KULLANDIR: arena
+// dizgileri (geri sarilan arena tepesinin ustune yazar) + malloc'lu kaplar
+// ve struct dizileri (bolgeden free edilen parcalari malloc geri verir).
+func _cople() {
+    int k = 0;
+    while (k < 1500) {
+        str cop = "COPCOPCOPCOPCOP-" + toString(k) + "-COPCOPCOPCOPCOPCOP";
+        json o = {"a": cop, "b": [k, k, k]};
+        Parca[] t = [];
+        push(t, parca(-1, -1.0));
+        push(t, parca(-2, -2.0));
+        k = k + 1;
+    }
+}
+
+// Bir oyun karesi: checkpoint al, govdeyi calistir, geri sar + birak, copla.
+func _kare(str govde) {
+    int wm = arena_save();
+    call(govde);
+    arena_drop(wm);
+    _cople();
+}
+
+// ---------------------------------------------------------------------------
+// HATA 1 — global'e bilesik atama
+// ---------------------------------------------------------------------------
+str g_metin = "";
+str g_sayili = "n=";
+var g_tipsiz = "a";
+
+func _k_metin() { g_metin += "COP"; }
+func _k_sayili() {
+    g_sayili += 4;              // int sag taraf: birlestirmede toString'e zorlanir
+    g_sayili += toString(2);
+}
+func _k_tipsiz() { g_tipsiz += "b"; }
+
+func run_str_arti_esit() {
+    g_metin = "";
+    _kare("_k_metin");
+    _kare("_k_metin");
+    _kare("_k_metin");
+    assert_eq_str(g_metin, "COPCOPCOP");
+}
+
+func run_str_arti_esit_sayi() {
+    g_sayili = "n=";
+    _kare("_k_sayili");
+    _kare("_k_sayili");
+    assert_eq_str(g_sayili, "n=4242");
+}
+
+func run_tipsiz_arti_esit() {
+    g_tipsiz = "a";
+    _kare("_k_tipsiz");
+    _kare("_k_tipsiz");
+    assert_eq_str(g_tipsiz, "abb");
+}
+
+// IMPORT EDILEN modulun str global'i, modulun kendi fonksiyonundan `+=`.
+func _k_modul_metin() { mod_ekle("x"); }
+func run_modul_arti_esit() {
+    _kare("_k_modul_metin");
+    _kare("_k_modul_metin");
+    _kare("_k_modul_metin");
+    assert_eq_str(mod_gunluk_oku(), "xxx");
+}
+
+// NOBET: skaler bilesik atamalar (bariyer no-op olmali, deger dogru kalmali).
+float g_ondalik = 1.0;
+var g_tipsiz_sayi = 10;
+int g_tam = 0;
+func _k_skaler() {
+    g_ondalik *= 2.0;           // 2.0
+    g_ondalik -= 0.5;           // 1.5
+    g_ondalik /= 2.0;           // 0.75
+    g_tipsiz_sayi -= 3;         // 7
+    g_tipsiz_sayi *= 2;         // 14
+    g_tipsiz_sayi %= 5;         // 4
+    g_tam += 5;                 // 5
+    g_tam++;                    // 6
+    g_tam--;                    // 5
+    g_tam *= 3;                 // 15
+}
+func run_skaler_bilesik() {
+    g_ondalik = 1.0;
+    g_tipsiz_sayi = 10;
+    g_tam = 0;
+    _kare("_k_skaler");
+    assert_close(g_ondalik, 0.75, 0.000001);
+    assert_eq_int(g_tipsiz_sayi, 4);
+    assert_eq_int(g_tam, 15);
+}
+
+// NOBET: global KABIN elemanina bilesik atama / push / duz atama — calisma
+// zamani yazma bariyeri (wb_persist_escape) zaten kapsiyordu.
+json g_dizi = ["a"];
+json g_nesne = {"k": "b"};
+str g_duz = "";
+json g_duz_nesne = {};
+func _k_kap() {
+    g_dizi[0] += "x" + toString(1);
+    g_nesne["k"] += "y" + toString(2);
+    push(g_dizi, "p" + toString(3));
+    g_duz = "d-" + toString(9);
+    g_duz_nesne = {"a": "v" + toString(1)};
+}
+func run_kap_eleman_ve_duz_atama() {
+    _kare("_k_kap");
+    assert_eq_str(g_dizi[0], "ax1");
+    assert_eq_str(g_dizi[1], "p3");
+    assert_eq_str(g_nesne["k"], "by2");
+    assert_eq_str(g_duz, "d-9");
+    assert_eq_str(g_duz_nesne["a"], "v1");
+}
+
+// ---------------------------------------------------------------------------
+// HATA 2 — struct dizisi kalicilastirilmiyordu
+// ---------------------------------------------------------------------------
+Parca[] g_parcalar = [];
+Parca[] g_parcalar2 = [];
+Parca[] g_takma = [];
+json g_kutu = [];
+
+func _k_parca_kur() {
+    g_parcalar = [];
+    push(g_parcalar, parca(7, 1.5));
+    push(g_parcalar, parca(8, 2.5));
+}
+func run_sarr_global_yeniden_kur() {
+    _kare("_k_parca_kur");
+    try {
+        assert_eq_int(len(g_parcalar), 2);
+        assert_eq_int(g_parcalar[0].x, 7);
+        assert_close(g_parcalar[1].y, 2.5, 0.000001);
+        // Kalicilastirilmis kopya buyumeye devam edebilmeli (kapasite = sayi).
+        push(g_parcalar, parca(9, 3.5));
+        assert_eq_int(len(g_parcalar), 3);
+        assert_eq_int(g_parcalar[2].x, 9);
+        assert_eq_int(g_parcalar[0].x, 7);
+    } catch (e) {
+        assert(false, "struct dizisi global'i geri sarmadan sonra okunamadi: " + toString(e));
+    }
+}
+
+func _k_parca_literal() { g_parcalar = [parca(1, 0.25), parca(2, 0.75)]; }
+func run_sarr_global_literal() {
+    _kare("_k_parca_literal");
+    try {
+        assert_eq_int(len(g_parcalar), 2);
+        assert_eq_int(g_parcalar[1].x, 2);
+        assert_close(g_parcalar[0].y, 0.25, 0.000001);
+    } catch (e) {
+        assert(false, "literal ile kurulan struct dizisi global'i: " + toString(e));
+    }
+}
+
+// Kare icinde kurulan YEREL dizi global'e atanir (`g = yerel`, tutamac).
+func _k_yerelden_ata() {
+    Parca[] yerel = [];
+    push(yerel, parca(42, 4.5));
+    g_parcalar2 = yerel;
+}
+func run_sarr_yerelden_global() {
+    _kare("_k_yerelden_ata");
+    try {
+        assert_eq_int(len(g_parcalar2), 1);
+        assert_eq_int(g_parcalar2[0].x, 42);
+        assert_close(g_parcalar2[0].y, 4.5, 0.000001);
+    } catch (e) {
+        assert(false, "yerel struct dizisi global'e atandi: " + toString(e));
+    }
+}
+
+// Kare icinde kurulan struct dizisi KALICI kutulu diziye push edilir
+// (calisma zamani bariyeri -> aot_persist).
+func _k_sarr_it() {
+    Parca[] yerel = [];
+    push(yerel, parca(5, 0.5));
+    push(yerel, parca(6, 0.25));
+    push(g_kutu, yerel);
+}
+func run_sarr_kalici_kaba() {
+    g_kutu = [];
+    _kare("_k_sarr_it");
+    try {
+        assert_eq_int(len(g_kutu), 1);
+        Parca[] k0 = g_kutu[0];
+        assert_eq_int(len(k0), 2);
+        assert_eq_int(k0[1].x, 6);
+        assert_close(k0[0].y, 0.5, 0.000001);
+    } catch (e) {
+        assert(false, "kalici kaba konan struct dizisi: " + toString(e));
+    }
+}
+
+// IMPORT EDILEN modulun struct dizisi global'i, modul fonksiyonunda yeniden
+// kuruluyor (kuresel kapsamda kayitli global — is_global_var'in ikinci kolu).
+func _k_modul_parca() { mod_parcalari_kur(3); }
+func run_modul_sarr() {
+    _kare("_k_modul_parca");
+    try {
+        assert_eq_int(mod_parca_say(), 3);
+        assert_eq_int(mod_parca_a(2), 102);
+        assert_eq_int(mod_parca_a(0), 100);
+    } catch (e) {
+        assert(false, "modul struct dizisi global'i: " + toString(e));
+    }
+}
+
+// persist() struct dizisini DERIN kopyalamali (kaynaktan bagimsiz).
+func run_persist_sarr_bagimsiz() {
+    Parca[] yerel = [parca(1, 0.0)];
+    Parca[] kopya = persist(yerel);
+    yerel[0].x = 50;
+    assert_eq_int(kopya[0].x, 1);
+    assert_eq_int(yerel[0].x, 50);
+}
+
+// NOBET: KALICI kaynaktan struct dizisi atamasi TUTAMAC olarak kalir
+// (belgelenmis anlambilim, tests/struct_dizisi.test.tpr). Bariyer yalniz
+// gecici diziyi kopyalamali.
+func run_sarr_tutamac_paylasimi() {
+    g_parcalar = [parca(1, 0.0)];
+    g_takma = g_parcalar;
+    g_parcalar[0].x = 99;
+    assert_eq_int(g_takma[0].x, 99);
+}
+
+// ---------------------------------------------------------------------------
+// Ayni aile: UST DUZEY BILDIRIM checkpoint icinde
+// ---------------------------------------------------------------------------
+int _wm_bildirim = arena_save();
+str g_bildirim = "karar-" + toString(5);
+json g_bildirim_nesne = {"ad": "kutu-" + toString(7)};
+Parca[] g_bildirim_parcalar = [parca(3, 0.125)];
+arena_drop(_wm_bildirim);
+_cople();
+
+func run_ust_duzey_bildirim() {
+    assert_eq_str(g_bildirim, "karar-5");
+    assert_eq_str(g_bildirim_nesne["ad"], "kutu-7");
+    try {
+        assert_eq_int(len(g_bildirim_parcalar), 1);
+        assert_eq_int(g_bildirim_parcalar[0].x, 3);
+    } catch (e) {
+        assert(false, "ust duzey struct dizisi bildirimi: " + toString(e));
+    }
+}
+
+// NOBET — anlambilim kilitleri. Bariyer, onceden bellek-guvenli olan hicbir
+// programin davranisini degistirmemeli:
+//   * ust duzey bildirim KALICI kaynagi PAYLASIR (bariyer yalniz geciciyi
+//     kopyalar);
+//   * duz atama kutulu kabi HER ZAMAN derin kopyalar (oteden beri boyle;
+//     degisecekse bilincli bir karar olarak, bu satir guncellenerek —
+//     Tuzaklar 7f).
+json g_d1 = [1, 2];
+json g_d2 = g_d1;
+json g_kopya = [];
+func run_anlambilim_kilitleri() {
+    push(g_d1, 3);
+    assert_eq_int(len(g_d2), 3);
+    g_kopya = g_d1;
+    push(g_d1, 4);
+    assert_eq_int(len(g_kopya), 3);
+    assert_eq_int(len(g_d1), 4);
+}
+
+print("=== arena kalicilik (checkpoint + global) tests ===");
+test("HATA: str global += (3 kare)", "run_str_arti_esit");
+test("HATA: str global += int / toString", "run_str_arti_esit_sayi");
+test("HATA: tipsiz (var) global +=", "run_tipsiz_arti_esit");
+test("HATA: import edilen modulun str global'i +=", "run_modul_arti_esit");
+test("NOBET: skaler bilesik atamalar (*= -= /= %= ++ --)", "run_skaler_bilesik");
+test("NOBET: kap elemani +=, push, duz atama", "run_kap_eleman_ve_duz_atama");
+test("HATA: struct dizisi global'i kare icinde = [] + push", "run_sarr_global_yeniden_kur");
+test("HATA: struct dizisi global'i kare icinde = [literal]", "run_sarr_global_literal");
+test("HATA: kare icindeki yerel struct dizisi global'e atandi", "run_sarr_yerelden_global");
+test("HATA: kare icindeki struct dizisi kalici kaba push", "run_sarr_kalici_kaba");
+test("HATA: import edilen modulun struct dizisi global'i", "run_modul_sarr");
+test("HATA: persist(struct dizisi) derin kopya", "run_persist_sarr_bagimsiz");
+test("NOBET: kalici struct dizisi atamasi tutamac", "run_sarr_tutamac_paylasimi");
+test("HATA: checkpoint icinde ust duzey bildirim", "run_ust_duzey_bildirim");
+test("NOBET: bildirim paylasir, duz atama derin kopyalar", "run_anlambilim_kilitleri");
+test_summary();
