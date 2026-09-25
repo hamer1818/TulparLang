@@ -1877,6 +1877,29 @@ ya da kalıcı bir kaba konmalı.
 Nöbetçi: `tests/arena_kalicilik.test.tpr` (11 HATA + 4 NÖBET; düzeltmeden
 önceki derleyiciyle 11 HATA'nın 11'i kırmızı).
 
+## 7g. `call()` tümü-int fonksiyonu yanlış ABI ile çağırır — sessizce `null`
+
+Tümü-int imzalı `func f(int x): int` yerel (i64) ABI'li hızlı yola giriyor:
+kutulu `t_f` **üretilmiyor**, dışa açılan sembol çıplak `f` (ölçüldü 2026-09-25,
+`nm`: `T tipli`, `T t_tipli2` …). `call("f", 7)` önce önbelleğe (kayıtlı değil),
+sonra `dlsym("t_f")`'ye (yok), en son `dlsym("f")`'ye bakıyor ve **o bulunuyor**:
+`i64 f(i64)` bir `void(VMValue*, VMValue*)` gibi çağrılıyor. Sonuç yuvası hiç
+yazılmıyor, dönüş `null`; tanı yok, çıkış kodu 0:
+
+```tulpar
+func tipli(int x): int { return x * 3; }
+print(tipli(7));          // 21
+print(call("tipli", 7));  // null  — sessiz
+```
+
+`func f(int x)` (dönüş tipsiz) kutulu kalıyor ve `call()` ile doğru çalışıyor.
+**Durum: açık** (düzeltilmedi). `aot_func_lookup` (gömen için C yüzü) bu yüzden
+çıplak ada hiç düşmüyor — `tests/fonksiyon_arama.sh` çıplak sembolün var
+olduğunu ve aramanın onu DÖNDÜRMEDİĞİNİ birlikte ölçüyor. Kalıcı çözüm ya
+tümü-int fonksiyona da kutulu sarmalayıcı üretmek ya da `call()`'ın çıplak
+ad yedeğini kaldırmak — ikincisinden önce o yedeğe bilerek dayanan bir
+kullanım var mı ölçülmeli (bu turda bakılmadı).
+
 ## 6ş. Döngü sınırı `n` mi `len(a)` mı — aynı iş, 3,5 kat fark
 
 40M elemanlık lineer okuma:

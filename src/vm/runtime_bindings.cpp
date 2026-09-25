@@ -565,6 +565,49 @@ extern "C" void aot_register_func(const char *name, void *ptr, int arity) {
   aot_call_cache_insert(name, len, hash, (void (*)(VMValue *))ptr, arity);
 }
 
+// Bir Tulpar fonksiyonunu ADIYLA coz — CAGIRMADAN ve AYIRMADAN. Gomen (embedder)
+// icin C yuzu: donen isaretci `void t_<ad>(VMValue *sonuc, VMValue *a0, ...)`
+// kutulu giris noktasi, `*arity` onun kullanici parametre sayisi (sonuc
+// isaretcisi haric). Sira call() ile AYNI: once cagri onbellegi (main'in
+// girisinde aot_register_func ile tohumlanir, arite KAYITLI), sonra
+// dlsym("t_<ad>") — orada arite bilinmez, -1 (cagiran argc'ye guvenir; wasm'da
+// bu yol hic yok, her fonksiyon kayitli). Bilinmeyen ad: nullptr, *arity = -1.
+//
+// NEDEN VAR: tulpar-engine her betik kancasini `call()` yoluyla
+// (aot_call_dynamic_n) cagiriyordu ve bu yol HER CAGRIDA adi bir ObjString'e
+// kopyalamayi gerektiriyor. O dizgi AOT dizgi arenasina gider ve arena hic
+// sifirlanmaz: olculdu (2026-09-25, RTX 5080 + Ryzen 7 9800X3D masaustu,
+// motorda 200 bos kanca, 2000 pencersiz kare) kare basina +14.4 KB kalici
+// buyume (cagri basina 72 bayt), kanca basina ~56-66 ns dagitim. Motor artik
+// kancayi YUKLEMEDE bir kez cozup isaretciyi sakliyor; kare icinde ad, hash ve
+// ayirma yok — ayni olcumde ~5.2-5.8 ns ve kancaya dusen buyume 0.
+// Arite, eksik parametreyi VOID ile doldurup fazlasini dusurmek icin gerekli
+// (aot_invoke_boxed_n'in yaptigi is) — wasm'in tipli call_indirect'i yanlis
+// sayida isaretciyle cagrilan fonksiyonda tuzaga duser.
+//
+// Ciplak `ad` sembolune (call()'daki ikinci dlsym) BILEREK dusulmez: o yol
+// VMValue ABI'si OLMAYAN bir fonksiyonu bulabilir — tumu-int `func f(int x):
+// int` yerel ABI'li ve ciplak `f` olarak disa aciliyor (Tuzaklar 7g) — ve
+// cagiran onu kutulu imzayla cagirirdi. Ad kirpilmaz: sigmayan ad nullptr.
+extern "C" void *aot_func_lookup(const char *name, int *arity) {
+  if (arity) *arity = -1;
+  if (!name || !*name) return nullptr;
+  const size_t len = strlen(name);
+  int a = -1;
+  void (*fp)(VMValue *) =
+      aot_call_cache_lookup(name, len, aot_call_hash(name, len), &a);
+  if (fp) {
+    if (arity) *arity = a;
+    return (void *)fp;
+  }
+  char sym[256];
+  if (len + 3 > sizeof(sym)) return nullptr; // "t_" + ad + NUL sigmiyor
+  sym[0] = 't';
+  sym[1] = '_';
+  memcpy(sym + 2, name, len + 1);
+  return tulpar_dlsym(TULPAR_RTLD_DEFAULT, sym); // arite bilinmez: -1 kaldi
+}
+
 // AOT runtime initialization (locale/UTF-8, console modes)
 void aot_runtime_init(void) {
   static int initialized = 0;

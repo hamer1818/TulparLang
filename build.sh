@@ -527,6 +527,18 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # FONKSIYON ARAMA (aot_func_lookup): bir Tulpar fonksiyonunu adiyla,
+    # cagirmadan ve ayirmadan cozen C yuzu. Bu depoda cagiran YOK — tek
+    # tuketici tulpar-engine (betik kancalari yuklemede bir kez cozulur) —
+    # yani "kullanilmiyor" diye silinmesini ya da sessizce ayirmaya
+    # baslamasini ancak bu kapi yakalar. Kapi kendi pozitif kontrolunu kosar.
+    if [ -x tests/fonksiyon_arama.sh ]; then
+        if ! bash tests/fonksiyon_arama.sh ./tulpar; then
+            echo -e "${RED}fonksiyon arama kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
     # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz
     # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan
