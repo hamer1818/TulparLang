@@ -3,6 +3,13 @@
 // WITHOUT a manual persist(). This is what makes Wings handlers footgun-free
 // (see tests/compare_wings_users_api.tpr). The corruption it prevents was a
 // silent NUL-byte string once the request arena rewound.
+//
+// NOT (2026-09-25): bu paket geri sarmadan sonra arenayi COPLEMEDEN okuyor;
+// serbest birakilan bellek henuz ezilmediyse sarkan isaretci de dogru veriyi
+// okur, yani buradaki testler sarkmayi GOREMEZ. `g += x`, struct dizisi ve
+// ust duzey bildirim yollari tam bu yuzden yesil kalip bozuktu. Gercek olcum
+// (yaz -> geri sar -> copla -> oku): tests/arena_kalicilik.test.tpr
+// (Tuzaklar 7f).
 
 import "test";
 

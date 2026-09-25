@@ -1,0 +1,25 @@
+// tests/arena_kalicilik.test.tpr'nin modulu — KENDI BASINA bir paket degil.
+//
+// Motorun oyun kitapligi (tulpar-engine/tulpar/engine.tpr) kare durumunu
+// IMPORT EDILEN modulun globallerinde tutuyor. Bariyer modul globali icin de
+// ayni yoldan gecmeli: modulun str global'i kapsamda degil (gsym ile
+// LLVMGetNamedGlobal), struct dizisi global'i ise Pass 0.1'de kuresel kapsama
+// kayitli — is_global_var'in iki kolu da burada sinaniyor.
+struct ModParca { int a; float b; }
+
+str mod_gunluk = "";
+ModParca[] mod_parcalar = [];
+
+func mod_ekle(str s) { mod_gunluk += s; }
+func mod_gunluk_oku(): str { return mod_gunluk; }
+
+func mod_parcalari_kur(int n) {
+    mod_parcalar = [];
+    int i = 0;
+    while (i < n) {
+        push(mod_parcalar, { a: 100 + i, b: 0.5 * i });
+        i = i + 1;
+    }
+}
+func mod_parca_say(): int { return len(mod_parcalar); }
+func mod_parca_a(int i): int { return mod_parcalar[i].a; }

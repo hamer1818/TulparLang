@@ -335,6 +335,9 @@ typedef struct {
   LLVMValueRef func_aot_set_args;
   LLVMValueRef func_aot_object_clone;
   LLVMValueRef func_aot_persist; // persist(value) -> deep malloc'd copy (survives arena_restore)
+  // Kuresel depolama bariyerleri (ic yardimci; bkz. runtime_bindings.cpp):
+  LLVMValueRef func_aot_persist_global; // g = v / g += v: dizgi+sarr geciciyse, dizi/json her zaman kopya
+  LLVMValueRef func_aot_persist_escape; // ust duzey bildirim: yalniz geciciyse kopya
   LLVMValueRef func_aot_http_request;
   LLVMValueRef func_aot_http_request_h;
   LLVMValueRef func_aot_http_request_async; // (method,url,body) -> promise

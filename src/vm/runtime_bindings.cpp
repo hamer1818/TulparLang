@@ -769,6 +769,12 @@ static inline void region_free_one(Obj *o) {
     free(((ObjArray *)o)->items_);
     free(((ObjArray *)o)->idata);
     ((ObjArray *)o)->idata = nullptr;
+  } else if (o->type == OBJ_STRUCT_ARRAY) {
+    // Eleman deposu aot_sarr_push_ptr'de realloc'lu. Eskiden yalniz baslik
+    // serbest birakiliyordu: karede kurulan her `P[] tmp` geri sarmada
+    // verisini SIZDIRIYORDU (kare basina kapasite * alan * 8 bayt).
+    free(((ObjStructArray *)o)->data);
+    ((ObjStructArray *)o)->data = nullptr;
   }
   free(o);
 }
@@ -1207,13 +1213,114 @@ VMValue aot_persist(VMValue v) {
     }
     return VM_OBJ((Obj *)dst);
   }
+  // TIPLI STRUCT DIZISI (`P[] d`). Eskiden bu tur asagidaki "skaler ve
+  // digerleri" satirina dusuyor ve OLDUGU GIBI donuyordu — ama aot_sarr_new
+  // basligi istek-yerel bolgeye kaydediyor (region_track), yani checkpoint
+  // icinde kurulan bir struct dizisi geri sarmada FREE ediliyor. Kalici bir
+  // kaba (global, kalici dizi) "kalicilastirilmis" diye konan tutamac serbest
+  // bellege bakiyordu. Olculdu (2026-09-25, TulparLang 3eee948): kare icinde
+  // `push(kalici, yerel_sarr)` + geri sarma + arenayi copla doldurma ->
+  // "indeksleme hedefi bir struct dizisi degil"; `g = []` (tipli global) ->
+  // `g[0].x` 0 okunuyor. Elemanlar ARDISIK ve SKALER (int/bool i64, float
+  // double bit deseni; bkz. vm.hpp ObjStructArray), yani derin kopya tek bir
+  // memcpy — ic ice nesne yok. `type_name`/`field_names`/`field_types`
+  // modul duzeyi SABIT tablolar, paylasilmalari dogru.
+  if (IS_STRUCT_ARRAY(v)) {
+    ObjStructArray *src = AS_STRUCT_ARRAY(v);
+    ObjStructArray *dst =
+        static_cast<ObjStructArray *>(malloc(sizeof(ObjStructArray)));
+    if (!dst) return v;
+    *dst = *src;
+    dst->obj.arena_allocated = 0;
+    dst->obj.next = nullptr;
+    dst->obj.ref_count = 1;
+    dst->obj.is_moved = 0;
+    dst->capacity = src->count;
+    dst->data = nullptr;
+    size_t slots = (size_t)src->count * (size_t)src->field_count;
+    if (slots > 0) {
+      dst->data = static_cast<int64_t *>(malloc(slots * sizeof(int64_t)));
+      if (!dst->data) {
+        free(dst);
+        return v;
+      }
+      memcpy(dst->data, src->data, slots * sizeof(int64_t));
+    } else {
+      dst->count = 0;
+      dst->capacity = 0;
+    }
+    return VM_OBJ((Obj *)dst);
+  }
+  // Heap struct (ObjStruct, `match` konusunun kutusu): ARENADA ayriliyor
+  // (aot_struct_alloc), yani ayni sarkma sinifi. Alanlar skaler.
+  if (IS_STRUCT(v)) {
+    ObjStruct *src = AS_STRUCT(v);
+    int n = src->field_count > 0 ? src->field_count : 0;
+    size_t extra = (n > 1) ? (size_t)(n - 1) * sizeof(int64_t) : 0;
+    ObjStruct *dst = static_cast<ObjStruct *>(malloc(sizeof(ObjStruct) + extra));
+    if (!dst) return v;
+    memcpy(dst, src, sizeof(ObjStruct) + extra);
+    dst->obj.arena_allocated = 0;
+    dst->obj.next = nullptr;
+    dst->obj.ref_count = 1;
+    dst->obj.is_moved = 0;
+    return VM_OBJ((Obj *)dst);
+  }
   // Scalars and any other value type: copy by value, no heap.
+  // (OBJ_CLOSURE de buraya duser ve OLDUGU GIBI doner: baslik kalici malloc
+  // ama `env` dizisi checkpoint icinde kurulduysa bolgede. Derin kopya
+  // paylasilan yakalama anlambilimini bozar ve kendini yakalayan kapanista
+  // sonsuz ozyinelemeye girer — bilinen sinir, bkz. Tuzaklar 7f.)
   return v;
 }
 
 VMValue aot_persist_ptr(VMValue *v) {
   if (!v) return VM_VOID();
   return aot_persist(*v);
+}
+
+// ---------------------------------------------------------------------------
+// KURESEL DEPOLAMA BARIYERLERI (codegen'in ic yardimcilari — kullanici
+// yerlesigi degil, typeinfer/LSP kaydi yok; aot_div_error gibi).
+//
+// Codegen bir GLOBAL'e yazan her yolda (duz atama, bilesik atama, struct
+// dizisi yeniden kurma, ust duzey bildirim) degeri bunlardan birinden
+// geciriyor (emit_global_store_barrier). Iki ayri giris var, cunku iki yolun
+// GECMIS anlambilimi farkli ve bu duzeltme onceden bellek-guvenli olan hicbir
+// programin davranisini degistirmemeli:
+//
+// aot_persist_global — duz/bilesik atama (`g = v`, `g += v`):
+//   * dizgi ve struct dizisi: YALNIZ GECICIYSE kopya (aot_persist_escape).
+//     Dizgi degismez, yani kopya/paylasim ayrimi gozlemlenemez; kalici bir
+//     dizgiyi (interned literal, zaten kalicilastirilmis deger) yeniden
+//     kopyalamak yalniz SIZINTIYDI: `durum = "menu"` her atamada bir malloc
+//     (olcum: Tuzaklar 7f). Struct dizisinin belgelenmis anlambilimi TUTAMAC
+//     (`g = h` paylasir); kalici kaynakta o korunuyor, gecici kaynakta kopya
+//     zorunlu (yoksa geri sarmada serbest kalan bellege bakar).
+//   * dizi/json: HER ZAMAN derin kopya — atamanin oteden beri yaptigi sey.
+//     Kalici bir kabi paylasmaya cevirmek gozlemlenebilir bir anlam degisimi
+//     olurdu (`g = h; push(h, 1)` g'de gorunmeye baslardi); bu duzeltmenin
+//     konusu degil, Tuzaklar 7f'de kayitli.
+//
+// aot_persist_escape — ust duzey bildirim (`str g = ...` checkpoint icinde)
+//   ve yukaridaki dizgi/struct dizisi kolu: yalniz GECICIYSE kopya. Bildirim
+//   yolu hic bariyer uygulamiyordu (paylasim); kalici kaynakta paylasim
+//   korunuyor, yalniz geri sarmada olecek deger kopyalaniyor.
+//
+// "Gecici" = obj_is_transient: arena bellegi ya da bu thread'in bolgesinde
+// izlenen malloc kabi. Calisma zamani yazma bariyeri (wb_persist_escape)
+// AYNI testi kullaniyor; "kalici kap yalniz kalici deger tutar" degismezine
+// o bariyer bakiyor.
+VMValue aot_persist_escape(VMValue v) {
+  if (!IS_OBJ(v) || !obj_is_transient(AS_OBJ(v)))
+    return v;
+  return aot_persist(v);
+}
+
+VMValue aot_persist_global(VMValue v) {
+  if (IS_STRING(v) || IS_STRUCT_ARRAY(v))
+    return aot_persist_escape(v);
+  return aot_persist(v);
 }
 
 // Wrapper for AOT print (takes pointer to VMValue, calls vm_print_value which
