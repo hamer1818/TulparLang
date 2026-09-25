@@ -38,6 +38,28 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Eklendi — `aot_func_lookup`: fonksiyonu adıyla, çağırmadan ve ayırmadan çöz
+
+- Gömen (embedder) için C yüzü:
+  `extern "C" void *aot_func_lookup(const char *name, int *arity)`. Dönen
+  işaretçi `t_<ad>` kutulu giriş noktası; `*arity` kayıtlı kullanıcı
+  parametre sayısı. Sıra `call()` ile aynı: önce çağrı önbelleği (kayıtlı
+  arite), sonra `dlsym("t_<ad>")` (arite `-1`); bilinmeyen ad `nullptr`.
+  Çıplak ada düşülmez: tümü-int `func f(int x): int` yerel ABI'li ve çıplak
+  `f` sembolünü dışa açıyor — `call()`'ın ikinci `dlsym`'i onu bulup kutulu
+  imzayla çağırırdı.
+- Neden: tulpar-engine her betik kancasını `call()` yoluyla çağırıyordu;
+  o yol her çağrıda adı yeni bir ObjString'e kopyalıyor ve dizgi hiç
+  sıfırlanmayan AOT arenasında kalıyor. Ölçüldü (2026-09-25, RTX 5080 +
+  Ryzen 7 9800X3D masaüstü, motorda 200 boş kanca, 2000 pencersiz kare):
+  kare başına +14.4 KB kalıcı büyüme (çağrı başına 72 bayt), kanca başına
+  ~56–66 ns. Motor kancayı artık yüklemede bir kez çözüyor: ~5.2–5.8 ns, kancaya
+  düşen büyüme 0.
+- `tests/fonksiyon_arama.sh` (`build.sh suites`): 13 denetim, üretilen
+  ikilinin içinden; ayırma ölçüsü glibc `mallinfo2` (aynı sayaç eski yolun
+  büyümesini görmek zorunda — ölçeğin pozitif kontrolü) ve bozulmuş bir
+  sonda koşumu kırmızı dönmek zorunda (kapının pozitif kontrolü).
+
 ### Düzeltildi — checkpoint içinde global'e yazılan değer geri sarmadan sonra ölüyordu
 
 Kare başına `arena_save()` / `arena_drop()` (motorun oyun döngüsü, `lib/tame.tpr`
