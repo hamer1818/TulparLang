@@ -28,7 +28,8 @@ yalnız yığın değerinde çağrı:
 Eskiden yalnız düz atama bariyerliydi; `g += x` ve struct dizisi yolları
 geri sarmadan sonra sarkıyordu. Eski kalıcı değer üzerine yazılınca
 **serbest bırakılamıyor** (takma adlar izlenmiyor) — kare başına yeniden
-atanan hesaplanmış değer sızar. Ayrıntı, ölçüm ve sınırlar (kapanışlar,
+atanan hesaplanmış değer sızar. Kapanışın ortamı (env) yerinde kalıcılaşır — kopyalanmaz, paylaşım korunur
+(K129). Ayrıntı, ölçüm ve sınırlar (kapanış,
 kareyi aşan yereller): [[Tuzaklar#7f. Bariyer TEK yolda yazılıydı — aynı global'e yazan öbür yollar onu hiç görmedi]].
 
 ## ⚠️ Checkpoint disiplini (kritik)

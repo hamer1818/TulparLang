@@ -1869,12 +1869,30 @@ atama, her biri kendi checkpoint'inde, VmHWM farkı 200k→1M / 800k):
 Kalan sızıntıdan kaçınmanın yolu oyun kodunda: kare başına yeniden atamak
 yerine init'te bir kez kurup yerinde güncellemek (alan yazması, `d[i].x = …`).
 
-**Bilinen sınır — kapanış:** `aot_persist` `OBJ_CLOSURE`'u olduğu gibi
-döndürüyor. Başlık kalıcı malloc ama `env` dizisi checkpoint içinde
-kurulduysa bölgede: kare içinde global'e konan lambda geri sarmadan sonra
-yakaladığı değeri kaybeder (ölçüldü: `"yakalandi-71"` yerine `"<object>1"`).
-Derin kopya paylaşılan yakalama anlambilimini bozar ve kendini yakalayan
-kapanışta sonsuz özyinelemeye girer; açık iş.
+**Kapanış — KAPANDI (K129, 2026-09-27):** `aot_persist` `OBJ_CLOSURE`'u
+olduğu gibi döndürüyordu. Başlık kalıcı malloc ama `env` dizisi checkpoint
+içinde kurulduysa bölgede: kare içinde global'e konan lambda geri sarmadan
+sonra yakaladığı değeri kaybediyordu (ölçüldü: `"yakalandi-71"` yerine
+`"<object>"`; çöple doldurulunca "Dizi indeksi sınır dışında"). Çözüm
+**kopya değil, yerinde kalıcılaştırma**: ortam bölge kümesinden çıkarılıyor
+(geri sarma döngüsü `g_region_set.erase`'in dönüşüne bakıp onu atlıyor),
+geçici yuva değerleri kalıcılaşıyor, üst ortam zinciri (yuva 0) yürünüyor.
+Paylaşılan yakalama korunuyor (aynı çerçevenin kapanışları ve çerçevenin
+kendisi aynı diziye bakmaya devam ediyor) ve döngü ziyaret kümesi
+istemeden kırılıyor (ortam kümeden işlenmeden ÖNCE çıkıyor; ikinci ziyarette
+`erase` 0). Kalıcı kaba konan kapanış için bariyer de değişti: bir DEĞER
+olarak kapanış, ortamı geçiciyse geçicidir (`value_is_transient`).
+
+Aynı turun yan dersi: bu kolu önce `obj_is_transient`'in içine koydum. O
+fonksiyon her push/set'in KAP denetimi; GCC onu satır içi açmayı bıraktı ve
+geçici diziye push 5.2 → 7.5 ns, kare ölçüsü 182 → 285 ns oldu. Değer
+denetimi ayrı fonksiyonda (yalnız kalıcı kaba yazarken koşuyor), kap denetimi
+eskisi gibi — ölçü tabana döndü. **Sıcak yardımcıya "küçük bir kol" eklemek
+satır içi açma kararını değiştirebilir: önce/sonra ölçmeden birleştirme.**
+
+Ayrı ve AÇIK: lambda içinden yakalanan bir kapanışı ÇAĞIRMAK (`u = (k) =>
+t(k)`, `t` yakalanmış) checkpoint olmadan da "Hatalı parametre sayısı.
+Beklenen: <çöp>" fırlatıyor (2026-09-27; codegen, `tests/` kapsamıyor).
 
 **Tasarım gereği güvensiz:** kareler arasında yaşayan YEREL değişken (ör.
 kare döngüsünün dışındaki bir `str son = …` ya da döngü taşıyan yerel)
@@ -1882,7 +1900,7 @@ bariyer görmez — yereller kalıcılaştırılmıyor. Kareyi aşacak değer gl
 ya da kalıcı bir kaba konmalı.
 
 Nöbetçi: `tests/arena_kalicilik.test.tpr` (11 HATA + 4 NÖBET; düzeltmeden
-önceki derleyiciyle 11 HATA'nın 11'i kırmızı).
+önceki derleyiciyle 11 HATA'nın 11'i kırmızı; K129 ile +6 kapanış HATA'sı, eski runtime'la 6'sı da kırmızı).
 
 ## 7g. `call()` tümü-int fonksiyonu yanlış ABI ile çağırır — sessizce `null`
 

@@ -141,6 +141,31 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
 - STATUS'taki 07-21 kenar taraması strict sözleşmeye göre yeniden ölçüldü
   (sıfıra bölme ve sınır dışı erişim artık fırlatıyor; kayıt bayattı).
 
+### Düzeltildi — kare içinde global'e konan kapanış geri sarmadan sonra yakaladığını kaybediyordu
+
+- `aot_persist` kapanışı (`OBJ_CLOSURE`) olduğu gibi döndürüyordu: başlık
+  kalıcı, ama yakalanan değişkenlerin ortamı (`env` dizisi) checkpoint
+  içinde kurulduysa bölgedeydi ve `arena_drop` onu serbest bırakıyordu.
+  Ölçüldü (2026-09-27): kare içinde `kanca = () => etiket` → geri sarma +
+  çöp → `kanca()` "Dizi indeksi sınır dışında" fırlatıyordu; kalıcı diziye
+  `push` edilen kapanış `"0#0"`, iç içe lambda `"nullptr/<object>"`
+  veriyordu. Motorun oyun kodu kancayı tam böyle (kare içinde, global'e)
+  kuruyor.
+- Ortam **kopyalanmıyor, yerinde kalıcılaştırılıyor**: bölge kümesinden
+  çıkıyor (geri sarma onu atlıyor), geçici yuva değerleri kalıcılaşıyor, üst
+  ortam zinciri yürünüyor. Aynı çerçevenin kapanışları ortamı paylaşmaya
+  devam ediyor; kendini yakalayan kapanışın döngüsü ziyaret kümesi olmadan
+  kırılıyor. Kalıcı kaba yazma bariyeri kapanışı ortamına göre geçici sayıyor.
+- Performans: kap denetimi (her push/set'in sıcak yolu) değişmedi. İlk
+  denemede kapanış kolu onun içindeydi ve GCC satır içi açmayı bıraktı —
+  geçici diziye push 5.2 → 7.5 ns; değer denetimi ayrı fonksiyona alındı.
+  Ölçü (Ryzen 7 9800X3D, 2026-09-27, turla eşlenmiş 11 tur, medyan): kare
+  (checkpoint + 32 push + json + 2 global yazma + geri sarma) 178.6 → 178.4
+  ns, push 5.58 → 5.57 ns.
+- `tests/arena_kalicilik.test.tpr` +6 HATA (global'e atama, paylaşım, döngü,
+  iç içe lambda, kalıcı diziye push, kalıcılaştıktan sonra yakalanan
+  değişkene yazma); eski runtime'la altısı da kırmızı.
+
 ### Düzeltildi — checkpoint içinde global'e yazılan değer geri sarmadan sonra ölüyordu
 
 Kare başına `arena_save()` / `arena_drop()` (motorun oyun döngüsü, `lib/tame.tpr`
