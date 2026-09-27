@@ -2248,6 +2248,10 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     nokta; codegen zaten flat VMValue array + argc ile çağırıyor)
     `runtime/tulpar_async.cpp` içinde 9–16 case'leriyle genişletildi. 16 param +
     karışık tip doğrulandı (`/tmp` smoke). >16 hâlâ net hata mesajı verir.
+    **Güncelleme 2026-09-27:** "net hata mesajı" yanıltıcıydı — mesaj basılıp
+    `0` dönüyor, süreç 0 ile çıkıyordu. Switch artık `call()`/kapanışla ortak
+    (`src/vm/boxed_call.hpp`), tavan **32**, üstü çağrı yerinde fırlatır;
+    9–20 ve 33 parametre `tests/async.test.tpr`'de kalıcı test.
   - ✅ **reject/try hata yayılımı ÇALIŞIYOR.** Bir `async func` içindeki
     yakalanmayan `throw` promise'i **reject** eder (state=2); `await` reject'i
     bekleyen tarafta (coroutine veya main) yeniden fırlatır → normal `try/catch`
@@ -2276,8 +2280,9 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     `TULPAR_AOT_LINK_FLAGS` (örn. `-fsanitize=address`) final clang++ link'ine
     forward edilir (`src/aot/aot_pipeline.cpp`); set edilmezse no-op.
   - **Kalan (🟡):** yok — async/await v1 tamam (timer + gather + gerçek async
-    HTTP I/O + reject/try, reject-yolu temizliği dahil). Not: `>16` parametreli
-    async fn ileride. (VM paritesi yok — AOT-only.)
+    HTTP I/O + reject/try, reject-yolu temizliği dahil). ~~Not: `>16`
+    parametreli async fn ileride.~~ 32'ye kadar destekli (2026-09-27), üstü
+    fırlatır. (VM paritesi yok — AOT-only.)
 
 ### Runtime + codegen
 

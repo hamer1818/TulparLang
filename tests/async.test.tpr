@@ -213,6 +213,38 @@ func run_gather_reject() {
     assert_eq_str(got, "gboom");
 }
 
+// Parametre sayisi (2026-09-27). call_user_fn 16'dan sonrasini bilmiyordu:
+// stderr'e not basip VOID donuyordu, `await` 0 veriyordu, surec 0 ile
+// cikiyordu. 9-16 icin de depoda kalici test yoktu. Switch artik call() ile
+// ortak (src/vm/boxed_call.hpp, tavan 32); tavanin ustu cagri yerinde
+// FIRLATIR. Agirlikli toplam: kaymis/eksik bir isaretci sonucu degistirir,
+// bir await noktasi da coroutine'in gercekten askiya alinip dondugunu sinar.
+async func on_alti(int a1, int a2, int a3, int a4, int a5, int a6, int a7, int a8, int a9, int a10, int a11, str a12, float a13, int a14, int a15, int a16): int {
+    await sleep_async(1);
+    return a1 + a9*9 + a10*10 + len(a12) + toInt(a13) + a16*16;
+}
+async func yirmi(int a1, int a2, int a3, int a4, int a5, int a6, int a7, int a8, int a9, int a10, int a11, int a12, int a13, int a14, int a15, int a16, int a17, int a18, int a19, int a20): int {
+    await sleep_async(1);
+    return a1 + a17*17 + a20*20;
+}
+async func otuz_uc_async(int a1, int a2, int a3, int a4, int a5, int a6, int a7, int a8, int a9, int a10, int a11, int a12, int a13, int a14, int a15, int a16, int a17, int a18, int a19, int a20, int a21, int a22, int a23, int a24, int a25, int a26, int a27, int a28, int a29, int a30, int a31, int a32, int a33): int {
+    return a1 + a33;
+}
+func run_sixteen_params() {
+    // 1 + 81 + 100 + len("on iki")=6 + 13 + 256 = 457
+    assert_eq_int(await on_alti(1,2,3,4,5,6,7,8,9,10,11,"on iki",13.5,14,15,16), 457);
+}
+func run_twenty_params() {
+    // 1 + 289 + 400 = 690 (16'nin ustu: eskiden VOID -> 0)
+    assert_eq_int(await yirmi(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20), 690);
+}
+func _async_tavan_ustu() {
+    int r = await otuz_uc_async(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33);
+}
+func run_over_cap_throws() {
+    assert_throws("_async_tavan_ustu", "32");
+}
+
 print("=== async/await tests ===");
 test("basic spawn + await", "run_basic");
 test("await non-promise identity", "run_identity");
@@ -226,4 +258,7 @@ test("reject re-raises on await", "run_reject_caught");
 test("reject propagates through coroutine", "run_reject_propagates");
 test("coroutine catches own throw", "run_reject_self_heal");
 test("gather child rejection re-raises", "run_gather_reject");
+test("16-param async fn", "run_sixteen_params");
+test("20-param async fn (was VOID past 16)", "run_twenty_params");
+test("33-param async fn throws at call site", "run_over_cap_throws");
 test_summary();
