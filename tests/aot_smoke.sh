@@ -87,6 +87,10 @@ fi
 : > "$TMP/dosya"
 if LC_ALL=C "$TUL" build "$TMP/a.tpr" "$TMP/dosya/a" > "$TMP/e.log" 2>&1; then
     dustu "ust yolu DOSYA olan cikti basarili sayildi"
+    # Teshis: surucu ne dedi, ve cikti NEREYE yazildi?
+    sed 's/^/         log: /' "$TMP/e.log" | tail -6
+    ls -la "$TMP" | sed 's/^/         ls: /'
+    [ -d "$TMP/dosya" ] && ls -la "$TMP/dosya" | sed 's/^/         dosya\/: /'
 elif grep -q "not a directory: .*dosya" "$TMP/e.log"; then
     gecti "ust yolu dosya olan cikti: yolu adiyla hata"
 else
