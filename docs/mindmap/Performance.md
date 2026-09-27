@@ -474,9 +474,12 @@ paylaşımlı nesne yüklüyordu; OpenSSL'e dokunan kod
 Bu, kıyasların TAMAMINI etkileyen tek değişiklik — her Tulpar programı
 hiçbir şey yapmadan önce o kadar bekliyordu.
 
-**Sırada duran, ölçülmüş ama yapılmamış:** SQLite de aynı durumda
-(`runtime_bindings.cpp` `sqlite3_*` çağırıyor). Ayrılırsa her ikili
-636 KB küçülür; hız etkisi yok, çünkü statik bağlanıyor.
+**SQLite de ayrıldı (K214, 2026-09-27):** `src/vm/runtime_db.cpp`.
+Ölçü (x86_64, GCC 15, `tulpar build`): `print(1)` ikilisi **3 005 736 →
+1 437 680 bayt** (−%52; tahmin edilen 636 KB değil — SQLite'ın çektiği
+statik bağımlılıklar da gitti). Açılış 0,251 → 0,243 ms (400 tur, eşlenmiş),
+fib(38) 2,28 → 2,30 ms, matmul 55,1 → 54,5 ms, strcat 14,5 → 13,8 ms —
+hız değişmedi. DB kullanan program eskisiyle aynı boyda.
 
 ### Elek: bekçi kaldırmanın kazancı SIFIR (ölçüldü)
 C modelinde bekçi + soğuk yol 0,97 ms tutuyordu (`width2.c`). Tulpar'da

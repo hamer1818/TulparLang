@@ -390,6 +390,20 @@ oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
   paket çöküyor (özet satırı yok). Wings async handler interleave'i (K265 (1))
   ayrıca açık.
 
+### Değişti — SQLite ayrı derleme biriminde: SQLite kullanmayan ikili %52 küçük
+
+- `db_*` yerleşikleri `src/vm/runtime_bindings.cpp`'den `src/vm/runtime_db.cpp`'ye
+  taşındı (runtime_net.cpp / OpenSSL ile aynı kalıp). `runtime_bindings.o` her
+  AOT ikilisine giriyor; `sqlite3_*` orada durdukça bağlayıcı `sqlite3.o`'yu da
+  her ikiliye alıyordu.
+- Ölçü (x86_64, GCC 15, 2026-09-27): `print(1)` ikilisi 3 005 736 → 1 437 680
+  bayt (293 → 0 `sqlite3_*` sembolü). Açılış 0,251 → 0,243 ms; fib/matmul/
+  strcat değişmedi. DB kullanan programlar aynı.
+- Geri dönüş kapısı: `tests/source_gates.py` "sqlite ayri birimde"
+  (`runtime_bindings.cpp`'de `sqlite3_*` / `sqlite3 *` / `sqlite3.h` kırmızı;
+  eski kaynakta 79 isabet). Web/Android arşiv betikleri de yeni birimi
+  derliyor.
+
 ### Düzeltildi — struct alanına bileşik atama sessizce hiçbir şey yapmıyordu
 
 - `d[i].can -= 30` (tipli struct dizisi, P1.1) **sessiz hiç-işlemdi**: değer

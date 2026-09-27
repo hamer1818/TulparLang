@@ -50,6 +50,7 @@ RUNTIME_CPP=(
     "$ROOT/src/common/http_fetch.cpp"
     "$ROOT/src/vm/runtime_bindings.cpp"
     "$ROOT/src/vm/runtime_net.cpp"   # aot_http_request: arcade skor tablosu bunu cagiriyor
+    "$ROOT/src/vm/runtime_db.cpp"    # db_* (SQLite) — ayri birim, K214
     "$ROOT/src/vm/vm.cpp"
     "$ROOT/src/vm/bytecode.cpp"
     "$ROOT/runtime/tulpar_arc.cpp"
