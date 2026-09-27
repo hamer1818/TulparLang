@@ -560,6 +560,21 @@ Sekiz hata yolu `tests/tuple_hatalari.sh` ile kilitli (suites içinde);
 `tests/tuple_return.test.tpr` 11/11; `examples/44_coklu_donus.tpr`. LSP
 tamamlama `__` önekli derleyici geçicilerini (`__t0`, `__r0`) göstermez.
 
+### Düzeltildi — struct'ta yinelenen alan adı ve aynı dosyada iki yerleşim sessizdi
+
+- `struct C { int x; float x; }` sessizce kabul ediliyordu; `c.x = 3.5;
+  print(c.x)` `3` basıyordu (yazma bir yuvaya, okuma ilkine). Artık
+  ayrıştırma hatası: "'C' struct'ında 'x' alanı yinelendi" (enum'daki
+  yinelenen üye hatasıyla aynı sınıf).
+- Aynı dosyada aynı adlı iki struct, **farklı** yerleşimle: typeinfer
+  yalnız uyarıyordu (`--strict` olmadan program koşuyor), kodgen ilkini tutup
+  ikincisini yok sayıyordu. Artık derleme hatası — modüller arası aynı
+  durum zaten hataydı (`struct_import_hatalari.sh`). Aynı yerleşimli
+  yineleme davranışı değişmedi (uyarı).
+- Nöbetçi: `tests/struct_dizisi_hatalari.sh` (+2), yeni
+  `tests/typeinfer/fail/21_duplicate_struct.tpr` (tanı vardı, fikstürü
+  yoktu). Korpus taraması (bu depo + tulpar-engine/tulpar): 0 isabet.
+
 ### Added — float alanlı struct artık KUTUSUZ (P0.3)
 
 `struct Vec3 { float x; float y; float z; }` LLVM'de `{ double, double,

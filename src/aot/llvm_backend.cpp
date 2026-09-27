@@ -3973,8 +3973,11 @@ static ASTNode_C *main_fn_decl(LLVMBackend *backend, const char *name) {
 }
 
 // Ana programin kendi struct'larini "ilk bildirim" olarak isaretle
-// (Pass 0.0'dan hemen sonra). Ana programin kendi icindeki cift bildirim
-// davranisi DEGISMIYOR: ilk kazanir, register_struct_type zaten oyle.
+// (Pass 0.0'dan hemen sonra). Ayni dosyada ayni ad + AYNI yerlesim: ilk
+// kazanir (typeinfer "Duplicate struct" uyarir). FARKLI yerlesim artik
+// derleme hatasi (K062, 2026-09-27): register_struct_type ilkini tutup
+// ikincisini sessizce yok sayiyordu — ikinci yerlesimle yazilmis kod ilkinin
+// yuvalarina yazar (strict olmayan kosumda yalniz bir uyari satiri).
 static void import_seed_main_types(LLVMBackend *backend, ASTNode_C *program) {
   ImportState *ist = import_state_of(backend);
   const char *src = (backend->source_filename && *backend->source_filename)
@@ -3984,9 +3987,22 @@ static void import_seed_main_types(LLVMBackend *backend, ASTNode_C *program) {
     ASTNode_C *d = program->statements[i];
     if (!d || d->type != AST_TYPE_DECL || !d->name) continue;
     ist->seen_type_decls.insert(d);
-    if (ist->type_owner.find(d->name) == ist->type_owner.end()) {
+    auto own = ist->type_owner.find(d->name);
+    if (own == ist->type_owner.end()) {
       ist->type_owner[d->name] = d;
       ist->type_owner_src[d->name] = src;
+    } else if (!struct_decl_layout_equal(own->second, d)) {
+      std::string first_lay = struct_decl_layout_str(own->second);
+      std::string this_lay = struct_decl_layout_str(d);
+      char msg[1024];
+      snprintf(msg, sizeof(msg),
+               "'%s' struct'i ayni dosyada iki farkli yerlesimle bildirilmis: %s ile %s / "
+               "struct '%s' is declared twice with different layouts: %s vs %s",
+               d->name, first_lay.c_str(), this_lay.c_str(), d->name, first_lay.c_str(),
+               this_lay.c_str());
+      report_codegen_error(backend, d->line, "hata", msg, d->name,
+                           tulpar::i18n::tr_en("birini yeniden adlandirin",
+                                               "rename one of them"));
     }
   }
 }

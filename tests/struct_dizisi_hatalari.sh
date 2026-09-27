@@ -12,7 +12,8 @@ TUL="$(cd "$(dirname "$TUL")" && pwd)/$(basename "$TUL")"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 fail=0
-gecti() { printf "  \033[0;32mgecti\033[0m  %s\n" "$1"; }
+n_gecti=0
+gecti() { n_gecti=$((n_gecti + 1)); printf "  \033[0;32mgecti\033[0m  %s\n" "$1"; }
 dustu() { printf "  \033[0;31mDUSTU\033[0m  %s\n" "$1"; fail=1; }
 reddedilmeli() {
     local ad="$1" bekle="$2" kaynak="$3"
@@ -76,6 +77,23 @@ V[] vs = [];
 V v; v.x = 1.0; push(vs, v);
 print(vs[0].byo());'
 
+# K062: ayni struct'ta yinelenen alan adi AYRISTIRMA hatasi. Eskiden sessiz:
+# `struct C { int x; float x; }` + `c.x = 3.5; print(c.x)` "3" basiyordu.
+# K062: ayni dosyada ayni adli iki struct, FARKLI yerlesim: derleme hatasi
+# (eskiden ilki sessizce kazaniyordu; strict olmayan kosumda yalniz uyari).
+reddedilmeli iki_yerlesim_ayni_dosya "iki farkli yerlesimle bildirilmis" \
+'struct A { int x; }
+struct A { float y; float z; }
+A a;
+a.x = 1;
+print(a.x);'
+
+reddedilmeli yinelenen_alan "alani yinelendi" \
+'struct C { int x; float x; }
+C c;
+c.x = 3.5;
+print(c.x);'
+
 printf '%s\n' 'struct V { float x; float y; }
 V[] vs = [];
 V v; v.x = 1.5; v.y = 2.5;
@@ -87,5 +105,5 @@ out=$(cd "$TMP" && "$TUL" build gecerli.tpr gecerli.out 2>&1 && ./gecerli.out 2>
 if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^1 2.5$"; then gecti "gecerli struct dizisi derlenir ve calisir (pozitif kontrol)"
 else dustu "gecerli struct dizisi: rc=$rc cikti='$out'"; fi
 
-if [ "$fail" -eq 0 ]; then echo "struct_dizisi_hatalari: 8/8"; fi
+if [ "$fail" -eq 0 ]; then echo "struct_dizisi_hatalari: $n_gecti/$n_gecti"; fi
 exit $fail

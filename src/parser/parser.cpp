@@ -923,7 +923,19 @@ std::unique_ptr<ASTNode> Parser::parse_type_decl() {
     while (!check(TOKEN_RBRACE) && !is_at_end()) {
         DataType field_type = parse_type();
         Token field_name = expect(TOKEN_IDENTIFIER, "Expected field name");
-        
+
+        // Ayni struct'ta ayni alan adi IKI KEZ (K062, 2026-09-27): eskiden
+        // sessizce kabul ediliyordu — `struct C { int x; float x; }` icin
+        // `c.x = 3.5; print(c.x)` "3" basiyordu (yazma bir yuvaya, okuma
+        // ad aramasiyla ilkine). enum'daki yinelenen uye hatasiyla ayni sinif.
+        for (const auto& fn : type_decl.field_names) {
+            if (fn == field_name.value()) {
+                error("'" + name + "' struct'inda '" + fn + "' alani yinelendi / duplicate "
+                      "field '" + fn + "' in struct '" + name + "' at line " +
+                      std::to_string(field_name.line()));
+            }
+        }
+
         type_decl.field_types.push_back(field_type);
         type_decl.field_names.push_back(field_name.value());
         type_decl.field_custom_types.push_back(std::nullopt);
