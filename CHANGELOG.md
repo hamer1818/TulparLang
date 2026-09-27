@@ -376,6 +376,17 @@ oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
   gerçek `arr_debox` da 60/60 kırmızı (ölçüldü 2026-09-27). Windows'ta ve tek
   çekirdekte görünür biçimde atlanır.
 
+### Düzeltildi — typecheck korpus tabanı 9 → 0 (`call` argümanı, arcade/scene3d)
+
+- Kalan 9 korpus tanısının hepsi `Argument 1 of 'call': expected str, got
+  int` idi. Kök: kanca global'leri (`_start_fn`, `_frame_fn`, `_draw_fn`,
+  `_setup3_fn`, `_update3_fn`, `_hud3_fn`, `_s3_restart_fn`) `var x = 0;` ile
+  int nöbetçiyle başlatılıyordu — fonksiyon referansı çalışma zamanında
+  fonksiyonun ADI (dizgi). Nöbetçi `""`; scene3d çarpışma kancasındaki
+  `int fn = _hitF[h]` → `str`. Yanlış pozitifti (ölçüldü: `0` ve `""` aynı
+  davranış). arcade/scene3d CI dışı: örnekler derlendi, arcade kancaları
+  pencersiz `step()` ile doğrulandı.
+
 ### Düzeltildi — `tulpar update` Linux'ta hiç çalışmıyordu (`EXDEV`)
 
 Komut, indirmeyi ve SHA-256 doğrulamasını **başarıyla bitirdikten sonra** son

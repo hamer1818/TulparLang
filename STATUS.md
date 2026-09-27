@@ -1704,6 +1704,19 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
       denetlemez — yani arşivler aynı anda yenilenmezse ortaya tam olarak bu
       projenin "sessiz yanlış" sınıfı çıkar. Bu yüzden imza değişikliği
       arşiv yenilemesiyle **birlikte** yapılmalı, sonradan değil.
+    - `call` arg **TEŞHİS EDİLDİ ve DÜZELTİLDİ (2026-09-27, K082/K058)**:
+      kalan 9 korpus tanısının hepsi `Argument 1 of 'call': expected str,
+      got int` idi (`lib/arcade.tpr` 4, `lib/scene3d.tpr` 5). Kök: fonksiyon
+      referansı tutan kanca global'leri `var _start_fn = 0;` ile int nöbetçiyle
+      başlatılıyordu; typeinfer `var`'ı int sanıyor, `call()` dizgi bekliyor
+      (fonksiyon referansı çalışma zamanında fonksiyonun ADI — `typeof`
+      "string"). Bir de `int fn = _hitF[h]; call(fn);` (scene3d çarpışma
+      kancası, aslında dizgi). Yanlış pozitifti ve zararsızdı (`var` kutulu
+      kalıyor; ölçüldü: `0` ve `""` nöbetçiyle aynı davranış) — nöbetçi
+      `""`, yerel `str`. Taban **9 → 0**. arcade/scene3d CI dışı olduğu için
+      elle doğrulandı: `arcade_zipla`, `scene3d_arena`, `scene3d_collector`
+      derleniyor; arcade `on_frame`/`on_start` kancaları pencersiz `step()`
+      ile çağrılıyor, `_lx_clear` sonrası çağrılmıyor.
   - Regresyon: `tests/typeinfer/{pass,fail}/` altına 6 fixture. Üç `fail`
     fixture'ının **doğru mesajla** reddedildiği tek tek doğrulandı.
 

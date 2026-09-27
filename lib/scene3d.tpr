@@ -340,12 +340,12 @@ float _fog3 = 0.0;
 
 // callback'ler (0-arg; arcade deseni — call() ile güvenli).
 // fn referansları `var` ile tutulmalı — `int` global fn-değerini bozar.
-var _setup3_fn = 0;   int _has_setup3 = 0;
-var _update3_fn = 0;  int _has_update3 = 0;
+var _setup3_fn = "";  int _has_setup3 = 0;
+var _update3_fn = "";  int _has_update3 = 0;
 // HUD kancası: 3B sahne çizildikten SONRA, 2B katmanda çağrılır. 3B bir cisme
 // bağlı 2B çizimlerin (düşman üstü can barı, hasar sayısı, isim etiketi) tek
 // doğru yeri burasıdır — ekran_x3d/ekran_y3d ile konum alınır.
-var _hud3_fn = 0;     int _has_hud3 = 0;
+var _hud3_fn = "";    int _has_hud3 = 0;
 
 // çarpışma kancaları (en çok 16): tagA, tagB, fn
 array _hitA = [];
@@ -1198,7 +1198,7 @@ str _s3_title_sub = "";
 // `var`, `int` DEĞİL: fonksiyon referansı boxed bir değer, natif i64 global'e
 // yazılınca kırpılır ve call() hiçbir şey çağırmaz. Dosyadaki diğer kancalar
 // (_setup3_fn, _update3_fn, _hud3_fn) aynı sebeple `var`.
-var _s3_restart_fn = 0;
+var _s3_restart_fn = "";
 int _s3_has_restart = 0;
 int _s3_quit = 0;          // menüden çıkış istendi → oyun döngüsü biter
 
@@ -4502,7 +4502,7 @@ func _s3_collision() {
     while (h < hn) {
         int ta = _hitA[h];
         int tb = _hitB[h];
-        int fn = _hitF[h];
+        str fn = _hitF[h];   // fonksiyon ADI (dizgi); `int` typecheck uyarisi veriyordu
         int a = 0;
         while (a < n) {
             Ent3 ea = _e3[a];

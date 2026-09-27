@@ -250,8 +250,11 @@ yanlıştı (stdout/stderr · `LC_ALL=C` dil çevirisi · büyük/küçük harf)
    indeks 0,88× — yani indeks aritmetiği **bedava**.)
 2. **Float-dizi unboxing, kendi kapısıyla.** Tarama ≤2×, eleman ≤8 bayt.
    Ulaşılabilir (int lineer 0,97×). `matmul` gerekçesiyle **değil** (S11).
-3. **14 korpus tanısı** — `tests/typecheck_corpus_baseline.txt`'te kayıtlı,
-   bilinen ve kabul edilmiş. Sayı değişirse kapı kırmızı verir.
+3. ~~**14 korpus tanısı**~~ — **0 (2026-09-27).** 5'i a025b44'te (#323)
+   kapandı; kalan 9'u (`call` argümanı, `lib/arcade.tpr` + `lib/scene3d.tpr`:
+   fonksiyon referansı global'leri int nöbetçiyle başlatılıyordu) K082'de.
+   `tests/typecheck_corpus_baseline.txt` boş; yeni bir tanı kapıyı kırmızı
+   yapar.
 4. ~~`ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ otomasyon dışı.~~
    **KAPANDI (2026-09-11):** ikisi de `./build.sh suites` içinde. İlk kez
    koşulduğunda `wings_tls_smoke.py` **Linux'ta tamamen bozuk** çıktı — ikili
