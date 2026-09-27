@@ -58,10 +58,53 @@ func t_mod_variables() {
     assert(r > 0.99 && r < 1.01, "9.0 % 4.0 = 1");
 }
 
+// Kenar durumlarda da AYNI (K123, 2026-09-27). Eskiden sifir bolende
+// ayrisiyorlardi: `7 % 0` firlatiyordu, `mod(7, 0)` sessizce 0 donuyordu;
+// `mod(INT64_MIN, -1)` SIGFPE ile tek kelime etmeden oluyordu (cikis 136),
+// `%` ayni durumda tasma hatasi firlatiyor.
+func _yuzde_sifir() { int z = 0; int r = 7 % z; }
+func _mod_sifir() { int r = mod(7, 0); }
+func _yuzde_tasma() { int m = -9223372036854775807 - 1; int e = 0 - 1; int r = m % e; }
+func _mod_tasma() { int m = -9223372036854775807 - 1; int r = mod(m, 0 - 1); }
+func _mod_metin() { json s = "7"; var r = mod(s, 2); }
+// Mesaj yerele bagli (tr_en), o yuzden metni sabitlemek yerine IKI YAZIMIN
+// AYNI hatayi verdigi sinaniyor — her yerelde gecerli.
+func _hata_metni(str h): str {
+    str m = "FIRLATMADI";
+    try { call(h); } catch (e) { m = toString(e); }
+    return m;
+}
+func t_mod_zero_matches() {
+    str a = _hata_metni("_yuzde_sifir");
+    assert(a != "FIRLATMADI", "7 % 0 firlatmali");
+    assert_eq_str(_hata_metni("_mod_sifir"), a);
+}
+func t_mod_overflow_matches() {
+    str a = _hata_metni("_yuzde_tasma");
+    assert(a != "FIRLATMADI", "INT64_MIN % -1 firlatmali");
+    assert(a != _hata_metni("_yuzde_sifir"), "tasma, sifira bolmeden ayri bir hata");
+    assert_eq_str(_hata_metni("_mod_tasma"), a);
+}
+// Ondalikta ikisi de fmod: 0'a kalan NaN (IEEE), sessiz 0 degil. (Denetim
+// metin uzerinden: dilde `isnan` yok ve `x != x` NaN'da false donuyor.)
+func t_mod_float_zero_matches() {
+    float a = 7.5 % 0.0;
+    float b = mod(7.5, 0.0);
+    assert(contains(toString(a), "nan"), "7.5 % 0.0 NaN olmali, bulunan " + toString(a));
+    assert(contains(toString(b), "nan"), "mod(7.5, 0.0) NaN olmali, bulunan " + toString(b));
+}
+func t_mod_non_number_throws() {
+    assert_throws("_mod_metin", "mod()");  // "mod()" iki yerelde de gecer
+}
+
 test("tam sayi kalani", "t_mod_int");
 test("negatif kalan", "t_mod_negative");
 test("mod() ile ayni", "t_mod_matches_builtin");
 test("ondalik kalan", "t_mod_float");
 test("oncelik * / ile ayni", "t_mod_precedence");
 test("degiskenlerle kalan", "t_mod_variables");
+test("sifira bolme: % ile mod() ayni (firlatir)", "t_mod_zero_matches");
+test("INT64_MIN / -1: % ile mod() ayni (firlatir)", "t_mod_overflow_matches");
+test("ondalik sifir: % ile mod() ayni (NaN)", "t_mod_float_zero_matches");
+test("mod() sayi olmayan arguman firlatir", "t_mod_non_number_throws");
 test_summary();

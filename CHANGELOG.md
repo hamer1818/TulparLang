@@ -129,6 +129,18 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   büyümesini görmek zorunda — ölçeğin pozitif kontrolü) ve bozulmuş bir
   sonda koşumu kırmızı dönmek zorunda (kapının pozitif kontrolü).
 
+### Düzeltildi — `mod()` sıfır bölende `%`'den ayrışıyordu; `mod(INT64_MIN, -1)` SIGFPE
+
+- `tests/modulo.test.tpr` "`%` ile `mod()` AYNI şeyi yapıyor" diyordu; kenar
+  durumlarda yapmıyordu (ölçüldü 2026-09-27): `7 % 0` fırlatıyor, `mod(7, 0)`
+  sessizce `0` dönüyordu (çıkış 0); `mod(INT64_MIN, -1)` SIGFPE ile tanısız
+  ölüyordu (çıkış 136), `%` aynı durumda taşma hatası fırlatıyor; ondalıkta
+  `x % 0.0` NaN, `mod(x, 0.0)` 0.0. Artık üç kolda da aynı; sayı olmayan
+  argüman (eskiden çöp okuma) fırlatır. LSP imzası (`mod(a: int, b: int):
+  int`) gerçeğe uyduruldu: `int|float`.
+- STATUS'taki 07-21 kenar taraması strict sözleşmeye göre yeniden ölçüldü
+  (sıfıra bölme ve sınır dışı erişim artık fırlatıyor; kayıt bayattı).
+
 ### Düzeltildi — checkpoint içinde global'e yazılan değer geri sarmadan sonra ölüyordu
 
 Kare başına `arena_save()` / `arena_drop()` (motorun oyun döngüsü, `lib/tame.tpr`

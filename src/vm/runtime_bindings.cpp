@@ -8242,17 +8242,34 @@ VMValue aot_math_fmod_ptr(VMValue *x_ptr, VMValue *y_ptr) {
 // when both operands are int, return int (truncated `%`). Otherwise fall
 // back to fmod for float-domain math. Modulo-by-zero returns 0 (quiet) to
 // avoid crashing AOT'd binaries — divisor==0 is undefined for `%`.
+// mod(a, b) — `a % b` ile AYNI (tests/modulo.test.tpr bunu iddia ediyor).
+// Eskiden sifir bolende ayrisiyordu: `7 % 0` firlatiyordu, `mod(7, 0)` sessizce
+// 0 donuyordu (cikis 0); `mod(INT64_MIN, -1)` x86'da SIGFPE ile TEK KELIME
+// ETMEDEN oluyordu (cikis 136) — `%` ayni durumda tasma hatasi firlatiyor;
+// ondalikta `%` fmod (0'a NaN), mod 0.0 donuyordu. Olculdu 2026-09-27 (K123).
+// Artik uc kol da vm_binary_op'un TOKEN_MODULO dalinin aynisi. Sayi olmayan
+// arguman eskiden AS_FLOAT ile COP okuyordu; simdi firlatir.
 VMValue aot_math_mod(VMValue a, VMValue b) {
   if (IS_INT(a) && IS_INT(b)) {
     int64_t bv = AS_INT(b);
-    if (bv == 0)
+    if (bv == 0) {
+      aot_div_error(0);
       return VM_INT(0);
+    }
+    if (AS_INT(a) == INT64_MIN && bv == -1) {
+      aot_div_error(1);
+      return VM_INT(0);
+    }
     return VM_INT(AS_INT(a) % bv);
+  }
+  if (!(IS_INT(a) || IS_FLOAT(a)) || !(IS_INT(b) || IS_FLOAT(b))) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: mod() sayi bekler",
+        "Runtime Error: mod() expects numbers"));
+    return VM_INT(0);
   }
   double av = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
   double bv = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
-  if (bv == 0.0)
-    return VM_FLOAT(0.0);
   return VM_FLOAT(fmod(av, bv));
 }
 
