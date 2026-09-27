@@ -13,17 +13,21 @@
 //     and sends `-exec-run`. A background reader thread parses MI
 //     async records and pushes DAP events:
 //       *stopped(reason=breakpoint-hit)   →  stopped(reason=breakpoint)
-//       *stopped(reason=exited-normally)  →  stopped(reason=exit) + terminated
+//                                            (logpoint: output + continue)
+//       *stopped(reason=exited-normally)  →  exited(exitCode) + terminated
 //       *stopped(reason=signal-received)  →  stopped(reason=exception)
 //       ~"..." console + @"..." target    →  output(category=stdout)
 //   - `threads` → single fake thread { id: 1, name: "main" }.
 //   - `terminate` / `disconnect` → sends `-gdb-exit`, reaps subprocess.
 //
-// All DAP handlers are now fully implemented:
-//   - `stackTrace`, `scopes`, `variables` — working
-//   - `continue`, `next`, `stepIn`, `stepOut` — working
-//   - `evaluate`, `setVariable` — working
-//   - Conditional / log / hit-count / function breakpoints — working.
+// Handlers: stackTrace/scopes/variables, continue/next/stepIn/stepOut,
+// evaluate/setVariable, conditional / hit-count / log / function
+// breakpoints. What is MEASURED (tests/dap_audit.py, headless, needs gdb):
+// breakpoint stop, stackTrace, variables, conditional bp, logpoint,
+// exited+terminated. Until 2026-09-27 this comment said "all fully
+// implemented" while no `stopped`/`terminated` event was ever sent (the
+// MI prefix bug in the reader thread) — nothing measured the adapter.
+// Data / instruction breakpoints are still unmeasured.
 //
 // stdin/stdout are owned by this command — every diagnostic line goes
 // to stderr only (LSP follows the same rule, for the same reason).
@@ -32,6 +36,7 @@
 
 #include "debug_cmd.hpp"
 #include "../aot/aot_pipeline.hpp"
+#include "../common/localization.hpp"
 
 extern "C" {
 #include "../../runtime/cJSON.h"
@@ -394,6 +399,7 @@ class GdbProcess {
   void dispatch_async_record(const std::string &kind,
                              const std::string &record);
   void emit_stopped(const std::string &reason);
+  void emit_exited(int exit_code);
   void emit_terminated();
   void emit_output(const std::string &category,
                    const std::string &content);
@@ -462,6 +468,70 @@ GdbProcess g_gdb;
 std::mutex g_varobj_mu;
 std::unordered_map<int, std::string> g_varobj_refs;
 std::atomic<int> g_next_varobj_ref{1000};
+
+// Is gdb reachable on PATH? Checked BEFORE the AOT build in `launch`.
+// On POSIX a missing gdb is otherwise invisible at spawn time: fork()
+// succeeds, execlp fails in the child, and the session dies later with
+// a timeout on the first `-break-insert` — the client sees "launch ok"
+// and then nothing. On Windows CreateProcess fails with a bare error
+// code. Either way the user needs to be told WHAT to install (K222).
+bool gdb_on_path() {
+  const char *path = std::getenv("PATH");
+  if (!path || !*path) return false;
+#ifdef _WIN32
+  const char sep = ';';
+  const char *names[] = {"gdb.exe", "gdb"};
+#else
+  const char sep = ':';
+  const char *names[] = {"gdb"};
+#endif
+  std::string p(path);
+  size_t start = 0;
+  while (start <= p.size()) {
+    size_t end = p.find(sep, start);
+    if (end == std::string::npos) end = p.size();
+    std::string dir = p.substr(start, end - start);
+    if (dir.empty()) dir = ".";
+    for (const char *n : names) {
+      std::string full = dir + "/" + n;
+      struct stat st;
+      if (stat(full.c_str(), &st) == 0 && S_ISREG(st.st_mode)) return true;
+    }
+    start = end + 1;
+  }
+  return false;
+}
+
+// Platform-specific "how to get gdb" hint for the launch failure.
+const char *gdb_install_hint() {
+#ifdef _WIN32
+  return tulpar::i18n::tr_en(
+      "launch: gdb.exe PATH'te bulunamadi. `tulpar debug` gdb MI3 koprusu "
+      "kullanir; MSYS2 MINGW64 kabugunda kurun: "
+      "pacman -S mingw-w64-x86_64-gdb (sonra mingw64\\bin PATH'te olmali)",
+      "launch: gdb.exe not found on PATH. `tulpar debug` drives gdb over "
+      "MI3; install it from an MSYS2 MINGW64 shell: "
+      "pacman -S mingw-w64-x86_64-gdb (mingw64\\bin must be on PATH)");
+#elif defined(__APPLE__)
+  return tulpar::i18n::tr_en(
+      "launch: gdb PATH'te bulunamadi. `tulpar debug` bugun yalniz gdb MI3 "
+      "koprusu kullaniyor (lldb arka ucu yok); macOS'ta `brew install gdb` "
+      "Intel'de calisir, Apple Silicon'da gdb yok. Komut satirinda: "
+      "tulpar --debug build x.tpr x && lldb ./x",
+      "launch: gdb not found on PATH. `tulpar debug` currently drives only "
+      "gdb over MI3 (no lldb backend); on macOS `brew install gdb` works on "
+      "Intel, Apple Silicon has no gdb. From a shell: "
+      "tulpar --debug build x.tpr x && lldb ./x");
+#else
+  return tulpar::i18n::tr_en(
+      "launch: gdb PATH'te bulunamadi. `tulpar debug` gdb MI3 koprusu "
+      "kullanir; dagitiminizin paketiyle kurun (ornek: apt install gdb, "
+      "pacman -S gdb, dnf install gdb)",
+      "launch: gdb not found on PATH. `tulpar debug` drives gdb over MI3; "
+      "install your distribution's package (e.g. apt install gdb, "
+      "pacman -S gdb, dnf install gdb)");
+#endif
+}
 
 bool GdbProcess::start(const std::string &binary) {
   if (m_running.load()) {
@@ -714,9 +784,17 @@ void GdbProcess::reader_loop() {
                 m_results_cv.notify_all();
               }
             } else if (prefix == '*') {
-              dispatch_async_record("exec", body);
+              // Önek karakteri ('*' / '=') ATILARAK iletilir:
+              // dispatch_async_record kaydın "stopped,..." ile
+              // başlamasını bekliyor. Depo geçmişinin başından
+              // 2026-09-27'ye kadar `body` öneki taşıyordu, karşılaştırma
+              // hiç tutmuyordu ve HİÇBİR `stopped`/`terminated` olayı
+              // gönderilmiyordu: VS Code'da breakpoint'te duraklama
+              // görünmüyor, oturum program bitince kapanmıyor, logpoint'ler
+              // sessiz bir duraklamaya dönüşüyordu. Kapı: tests/dap_audit.py.
+              dispatch_async_record("exec", body.substr(1));
             } else if (prefix == '=') {
-              dispatch_async_record("notify", body);
+              dispatch_async_record("notify", body.substr(1));
             } else if (prefix == '~') {
               // Console stream: gdb's own chatter. Show it under
               // category=console so the client puts it in the
@@ -815,13 +893,24 @@ void GdbProcess::dispatch_async_record(const std::string &kind,
         std::string sig = mi_field(record, "signal-name");
         if (sig == "SIGINT" || sig == "0") reason = "_pause";
       }
-      emit_stopped(reason);
-      // exited-* reasons mean the inferior is gone — also emit
-      // `terminated` so the client tears down the session.
+      // exited-* : the inferior is gone. DAP wants `exited` (exit code)
+      // + `terminated`, NOT a `stopped` — a stopped event would show a
+      // paused thread for a process that no longer exists.
       if (reason == "exited-normally" || reason == "exited" ||
           reason == "exited-signalled") {
+        int code = 0;
+        if (reason == "exited") {
+          // MI reports the code in octal ("01", "0377").
+          code = static_cast<int>(
+              std::strtol(mi_field(record, "exit-code").c_str(), nullptr, 8));
+        } else if (reason == "exited-signalled") {
+          code = 128;  // signal name only; no numeric code in MI
+        }
+        emit_exited(code);
         emit_terminated();
+        return;
       }
+      emit_stopped(reason);
     }
     // *running is ignored — DAP `continued` event is only required
     // when WE initiated the resume; for `-exec-run` the client
@@ -852,6 +941,15 @@ void GdbProcess::emit_stopped(const std::string &mi_reason) {
   cJSON_AddStringToObject(body, "reason", dap_reason.c_str());
   cJSON_AddNumberToObject(body, "threadId", 1);
   cJSON_AddBoolToObject(body, "allThreadsStopped", true);
+  cJSON_AddItemToObject(evt, "body", body);
+  write_message(evt);
+  cJSON_Delete(evt);
+}
+
+void GdbProcess::emit_exited(int exit_code) {
+  cJSON *evt = make_event("exited");
+  cJSON *body = cJSON_CreateObject();
+  cJSON_AddNumberToObject(body, "exitCode", exit_code);
   cJSON_AddItemToObject(evt, "body", body);
   write_message(evt);
   cJSON_Delete(evt);
@@ -1061,6 +1159,16 @@ void handle_launch(cJSON *request) {
   if (program.empty()) {
     cJSON *resp = make_response(request, /*success=*/false,
                                 "launch: no `program` provided");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  if (!gdb_on_path()) {
+    const char *hint = gdb_install_hint();
+    std::fprintf(stderr, "[dap] %s\n", hint);
+    cJSON *resp = make_response(request, /*success=*/false, hint);
     cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
     write_message(resp);
     cJSON_Delete(resp);

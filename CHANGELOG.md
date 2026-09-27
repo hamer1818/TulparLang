@@ -107,6 +107,23 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   kontrol her koşumda (işaretli içerik bulunmamalı); elle: satır sökülünce
   mekanizma ayağı, lib dosyası değişip ikili yenilenmeyince etki ayağı
   kırmızı.
+### Düzeltildi — `tulpar debug` hiç `stopped`/`terminated` olayı göndermiyordu
+
+- gdb `*stopped,reason="breakpoint-hit"` ve `exited-normally` kayıtlarını
+  gönderiyordu, ama DAP okuyucusu kaydı `'*'` önekiyle iletiyor ve
+  `"stopped"` karşılaştırması hiç tutmuyordu (depo geçmişinin başından
+  beri). VS Code'da breakpoint'te duraklama görünmüyor, oturum program
+  bitince kapanmıyor, logpoint'ler sessiz bir duraklamaya dönüşüyordu.
+  Önek artık atılıyor; program bitişi `stopped(exit)` yerine DAP'in
+  beklediği `exited(exitCode)` + `terminated`.
+- gdb PATH'te yoksa `launch` artık platforma özgü kurulum ipucuyla düşüyor
+  (Windows: `pacman -S mingw-w64-x86_64-gdb`); eskiden POSIX'te "ok" dönüp
+  ilk breakpoint'te zaman aşımıyla ölüyordu.
+- Kapı `tests/dap_audit.py` (`build.sh suites`, penceresiz): breakpoint +
+  stackTrace + yerel değerler (a=2 b=3 c=5), koşullu breakpoint (koşulsuz
+  beş durma pozitif kontrolü), logpoint (5 çıktı, 0 durma), exited+terminated,
+  gdb'siz ipucu. Eski ikiliyle üç senaryo da kırmızı. Linux CI'a gdb
+  kuruldu; orada atlama yasak (`TULPAR_DAP_ZORUNLU=1`).
 
 ### Düzeltildi — dinamik çağrı 8 argümanda sessizce kırpıyordu; tavan tek yerde, 32
 

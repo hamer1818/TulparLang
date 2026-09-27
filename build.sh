@@ -450,6 +450,26 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # HATA AYIKLAYICI (DAP). `tulpar debug` hic denetlenmiyordu ve yorumu
+    # "tum handler'lar tamam" diyordu; olculdu (2026-09-27): HICBIR
+    # `stopped`/`terminated` olayi uretilmiyordu (MI onek hatasi) — VS
+    # Code'da breakpoint'te duraklama gorunmuyordu. Kapi penceresiz
+    # (stdin/stdout JSON), gdb yoksa GORUNUR atlanir (macOS CI'da gdb yok).
+    if command -v python3 >/dev/null 2>&1 && [ -f tests/dap_audit.py ]; then
+        DAP_OUT=$(python3 tests/dap_audit.py ./tulpar 2>&1)
+        DAP_RC=$?
+        if [ "$DAP_RC" -ne 0 ]; then
+            printf '%s\n' "$DAP_OUT"
+            echo -e "${RED}DAP denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        DAP_LAST=$(printf '%s\n' "$DAP_OUT" | tail -1)
+        case "$DAP_LAST" in
+            SKIP*) echo -e "${YELLOW}dap denetimi ATLANDI${NC} — $DAP_LAST" ;;
+            *)     echo -e "${GREEN}$DAP_LAST${NC}" ;;
+        esac
+    fi
+
     # BİÇİMLENDİRİCİ. `tulpar fmt --write` KULLANICININ KAYNAĞINI değiştiriyor,
     # yani buradaki bir hata doğrudan veri kaybı — ve bu denetim yokken üç
     # ayrı bozulma birden hayatta kaldı: `i++` → `i + +`, `=>` → `= >`,

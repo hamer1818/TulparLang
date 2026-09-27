@@ -519,6 +519,13 @@ tulpar update [--check]       # Self-update from tulparlang.dev
 tulpar --help                 # Show command reference
 ```
 
+`tulpar debug` is a bridge to **gdb** (MI3), so gdb must be on `PATH`:
+your distro's package on Linux (`apt install gdb`, `pacman -S gdb`),
+`pacman -S mingw-w64-x86_64-gdb` in an MSYS2 MINGW64 shell on Windows.
+There is no lldb backend yet — on Apple Silicon build with
+`tulpar --debug build x.tpr x` and use `lldb ./x` directly. Without gdb,
+`launch` fails with that install hint instead of hanging.
+
 CLI output language follows the system locale — Turkish on TR
 machines, English everywhere else. Override with `TULPAR_LANG=tr` or
 `TULPAR_LANG=en`. The `[typecheck]` warnings always run as a build

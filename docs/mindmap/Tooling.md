@@ -45,7 +45,21 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 > ayrıldı. Denetim: `tests/doc_audit.sh`.
 
 ## Hata ayıklayıcı — `tulpar debug`
-`src/cli/debug_cmd.cpp` — **deneysel** DAP adaptörü. Denetimi yok.
+`src/cli/debug_cmd.cpp` — DAP adaptörü, gdb MI3 köprüsü. Denetim: `tests/dap_audit.py`
+(`build.sh suites`, penceresiz stdin/stdout JSON): breakpoint durması + stackTrace +
+yerel değerler, koşullu breakpoint (koşulsuz beş durma pozitif kontrolüyle), logpoint
+(çıktı + devam, durma yok), `exited`+`terminated`, ve gdb yokken `launch`'ın kurulum
+ipucuyla düşmesi. gdb yoksa (macOS CI) görünür atlanır; Linux CI'da
+`TULPAR_DAP_ZORUNLU=1` atlamayı kırmızıya çeviriyor.
+
+> ⚠️ **"Bütün handler'lar tamam" diyordu, HİÇBİR durma olayı üretmiyordu**
+> (2026-09-27'de düzeltildi). Okuyucu iş parçacığı MI kaydını `'*'` önekiyle
+> iletiyordu; `"stopped"` karşılaştırması depo geçmişinin başından beri hiç
+> tutmadı. stackTrace/variables istekleri çalıştığı için elle sonda "çalışıyor"
+> diyordu — ama VS Code'da breakpoint'te duraklama görünmüyor, oturum program
+> bitince kapanmıyor, logpoint sessiz bir duraklamaya dönüşüyordu. Ders: istek
+> ↔ cevap çalışıyor diye OLAY yolu çalışıyor sayılmaz; kapı olayları bekliyor.
+> Ölçülmeyen: data/instruction breakpoint, pretty-printer (değerler ham `VMValue`).
 
 ## Self-update
 `src/cli/update_cmd.cpp` — `tulpar update [--check] [--force]`, GitHub Releases'ten;
@@ -65,8 +79,9 @@ yerleştirmeyi koşturuyor ve hangi aygıtlar üzerinde çalıştığını bası
 deneme sınırı hiç geçmediyse bunu söylüyor.
 
 ## Denetim durumu
-`./build.sh suites` fmt · doc · pkg · LSP · dist arşiv · builtin · argüman geçişi ·
-güncelleme yerleştirmesi denetimlerini koşuyor. **Denetimsiz kalan:** `tulpar debug`.
+`./build.sh suites` fmt · doc · pkg · LSP · DAP · dist arşiv · builtin · argüman geçişi ·
+güncelleme yerleştirmesi denetimlerini koşuyor. (`tulpar debug` 2026-09-27'ye kadar
+denetimsizdi — ve kırıktı.)
 
 Yayınlanan araçların sessizce çürüdüğü bir tur yaşandı — fmt derlenmeyen kod üretiyordu,
 doc üç stdlib modülünü belgeleyemiyordu, ikisi de bütün testler yeşilken.
