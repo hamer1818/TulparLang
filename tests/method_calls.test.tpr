@@ -40,9 +40,44 @@ func run_json_array_element() {
     assert_eq_int(js[0].wide(), 2);     // json receiver from an array element
 }
 
+// Alanda saklanan kapanis nokta ile (K004, 2026-09-27). `<ad>` diye bir
+// fonksiyon YOKSA ve alici kapanis tutabilecek bir deger ise (json / var /
+// cagri sonucu / eleman), `o.h(x)` == `o["h"](x)`. Eskiden "'h' adinda bir
+// fonksiyon bulunamadi" (derleme hatasi); tek yol `o["h"](x)` idi.
+// Fonksiyon varsa O kazanir (metot yolu degismedi).
+func run_field_closure() {
+    json o = {};
+    int taban = 10;
+    o["ekle"] = (int x) => x + taban;            // yakalama
+    o["carp"] = (int a, int b) => a * b;
+    o["sabit"] = () => 99;
+    assert_eq_int(o.ekle(5), 15);
+    assert_eq_int(o.carp(6, 7), 42);
+    assert_eq_int(o.sabit(), 99);
+    var arr = [1, 2, 3];
+    int t = 0;
+    for (int i = 0; i < len(arr); i = i + 1) { t = t + o.ekle(arr[i]); }
+    assert_eq_int(t, 36);                        // dongude (govde iki kez uretilebilir)
+    var dis = {"ic": o};
+    assert_eq_int(dis["ic"].ekle(1), 11);        // eleman alici
+    o["wide"] = (int x) => -1;                   // ayni adli FONKSIYON kazanir
+    json kutu = { "w": 4, "h": 1 };
+    assert_eq_int(kutu.wide(), 4);
+}
+
+func _alan_kapanis_degil() {
+    json o = { "sayi": 5 };
+    o.sayi(1);                                   // alan var ama kapanis degil
+}
+func run_field_not_closure() {
+    assert_throws("_alan_kapanis_degil", "sayi");
+}
+
 print("=== method-style calls on any receiver ===");
 test("identifier receiver", "run_identifier_receiver");
 test("array-element receiver", "run_array_element_receiver");
 test("call-result receiver", "run_call_result_receiver");
 test("json array-element receiver", "run_json_array_element");
+test("alanda saklanan kapanis nokta ile (K004)", "run_field_closure");
+test("alan kapanis degilse yakalanabilir hata", "run_field_not_closure");
 test_summary();

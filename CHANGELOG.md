@@ -424,6 +424,23 @@ açılamadığı için 23 örnek `exit 139`, Linux'ta her `scene3d` örneği ~16
 satırlık `lib/scene3d.tpr`'yi sıfırdan derliyordu) ve ölçtükleri şeyin sahibi
 artık başka bir depo.
 
+### Eklendi — alanda saklanan kapanış nokta ile çağrılır: `o.h(x)`
+
+- `o["h"] = (int x) => x + 1; o.h(4)` eskiden "'h' adında bir fonksiyon
+  bulunamadı" (derleme hatası) veriyordu; tek yol `o["h"](4)` idi. Artık
+  `<alıcı>.<ad>(...)` için `<ad>` diye bir fonksiyon yoksa ve alıcı kapanış
+  tutabilecek bir değerse (json / `var` / çağrı sonucu / dizi elemanı),
+  alandaki kapanış çağrılır. Aynı adlı fonksiyon varsa O kazanır (metot yolu
+  değişmedi). Alan kapanış değilse yakalanabilir çalışma zamanı hatası —
+  eskiden `o["h"](x)` bir sayıyı işaretçi diye okuyabilirdi.
+- Yazım hatası koruması korunuyor: alıcı kutusuz struct, struct dizisi
+  elemanı, int/float/bool/str/dizi yereli ya da `import ... as` takma adı
+  ise "fonksiyon bulunamadı" derleme hatası aynen (`r.aera()` → "bunu mu
+  demek istediniz: 'area'?").
+- Nöbetçi: `tests/method_calls.test.tpr` (+2 test; eskisiyle derlenmiyor),
+  `tests/struct_dizisi_hatalari.sh` (+2 yazım hatası yolu; genişletme
+  sabotajıyla ikisi de kırmızı). 16 kıyasın IR'ı birebir aynı.
+
 ### Added — tipli struct dizisi `Dusman[]` (P1.1)
 
 ```tpr
@@ -794,7 +811,6 @@ Adil kıyaslama takımındaki etkisi (`benchmarks/fair/`):
 | `sieve` 5M | 60,4 ms | **56,1 ms** |
 | `intloop` 50M | 135,2 ms | 135,1 ms (değişmedi, beklendiği gibi) |
 
-
 ## [v3.13.1] — 2026-09-02
 
 **Yama sürümü: macOS'ta AOT derleme çalışmıyordu, ve TameEngine indirilemiyordu.**
@@ -857,7 +873,6 @@ defalarca pahalıya patladı.
 Yol boyunca `RELEASING.md`'nin varlık tablosu da düzeltildi — hâlâ 3.13.0'da
 silinmiş Windows varlıklarını (`tulpar-windows-x64.exe`, Inno Setup
 installer, MinGW DLL'leri) ve onların `objdump` denetimini listeliyordu.
-
 
 ## [v3.13.0] — 2026-09-01
 
