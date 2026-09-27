@@ -1,0 +1,12 @@
+// tests/enum_import.test.tpr'nin modulu (K028). Kendi enum'unu kendisi de
+// kullanir; gecisli import'la bir enum daha getirir.
+import "tests/moduller/enum_ic.tpr";
+
+enum Yon { KUZEY, DOGU = 5, GUNEY }
+
+func yon_sag(Yon y): Yon {
+    if (y == Yon.KUZEY) { return Yon.DOGU; }
+    return Yon.GUNEY;
+}
+
+func katman_on(): int { return Katman.ON; }

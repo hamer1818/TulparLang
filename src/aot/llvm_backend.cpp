@@ -3531,7 +3531,11 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   lexer_free(lexer);
 
   Parser_C *parser = parser_create(tokens, token_count);
+  // K028: modulun KENDI import'larindaki enum'lar paket-yerel kardesten de
+  // cozulsun (ayristiricinin on taramasi; kodgenin cozum sirasiyla ayni).
+  tulpar_parser_set_import_dir(resolved_dir);
   ASTNode_C *module_ast = parser_parse(parser);
+  tulpar_parser_set_import_dir("");
   parser_free(parser);
 
   // parser_parse belirtecleri KOPYALAYIP ayristiriyor ve C-kopru AST'si her

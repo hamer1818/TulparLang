@@ -1,0 +1,2 @@
+// enum_modul.tpr'nin import ettigi ic modul (K028: gecisli enum gorunurlugu).
+enum Katman { ARKA, ORTA = 10, ON }
