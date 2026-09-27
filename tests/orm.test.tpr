@@ -71,6 +71,12 @@ func run_where_first_count() {
     assert_eq_int(length(keys(hic)), 0);
     assert_eq_int(T.count(), 3);
     assert_eq_int(length(T.all()), 3);
+    // Koşulsuz first (K297, 2026-09-27): eskiden "... WHERE  LIMIT 1" kuruluyor,
+    // SQL hatası yutuluyor ve satırlar varken SESSİZCE {} dönüyordu.
+    json bas = T.first();
+    assert_eq_str(bas["title"], "a");
+    json bos_kosul = T.first("", []);
+    assert_eq_str(bos_kosul["title"], "a");
 }
 
 // ---- where/all + opts: order/limit --------------------------------------------------

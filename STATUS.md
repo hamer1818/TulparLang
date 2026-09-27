@@ -2496,8 +2496,10 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   + `wings_dx.test.tpr` 10/10 regresyon temiz. `WINGS_CHEATSHEET.md`
   güncellendi.
   - **Kalan (🟢, talep görürse):** ilişkiler (`has_many`), migration
-    sistemi, tipli query-builder (`Note.q().eq(...)`), `where`'siz
-    `first(m)` overload'u. WINGS_DX.md "Kapsam dışı" bölümünde gerekçeli.
+    sistemi, tipli query-builder (`Note.q().eq(...)`). WINGS_DX.md "Kapsam
+    dışı" bölümünde gerekçeli. ~~`where`'siz `first(m)` overload'u~~ —
+    yapıldı (2026-09-27, K297): `first(m)` eskiden hata vermiyor, satırlar
+    varken sessizce `{}` dönüyordu (SQL "WHERE  LIMIT 1" yutuluyordu).
 
 ### Tooling
 

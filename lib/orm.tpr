@@ -237,11 +237,23 @@ func where(json m, str cond, array params, json opts) {
     return _orm_cast_rows(m, rows);
 }
 
-// first(m, cond, params) → ilk eşleşen satır ya da {}.
+// first(m[, cond, params]) → ilk eşleşen satır ya da {}. Koşulsuz
+// `Note.first()` tablonun ilk satırını verir. Eskiden koşul her zaman SQL'e
+// gömülüyordu: `first(m)` "... WHERE  LIMIT 1" kuruyor, SQL hatası yutuluyor
+// ve satırlar varken bile SESSİZCE {} dönüyordu (ölçüldü 2026-09-27, K297).
+// Eksik argümanlar default-arg dolgusuyla gelir (bkz. _orm_clause), o yüzden
+// typeof ile ayırt ediliyor.
 func first(json m, str cond, array params) {
-    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]) +
-        " WHERE " + cond + " LIMIT 1";
-    array rows = db_query(m["db"], sql, params);
+    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]);
+    if (typeof(cond) == "string" && length(cond) > 0) {
+        sql = sql + " WHERE " + cond;
+    }
+    sql = sql + " LIMIT 1";
+    array ps = [];
+    if (typeof(params) == "array") {
+        ps = params;
+    }
+    array rows = db_query(m["db"], sql, ps);
     if (length(rows) == 0) {
         json empty = {};
         return empty;
