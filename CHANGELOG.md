@@ -303,6 +303,21 @@ oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
   Linux dışında görünür biçimde atlanır). LSP açıklamaları "ikili güvenli"
   diyor.
 
+### Düzeltildi — iki thread aynı anda async kod koşturunca süreç çöküyordu
+
+- Async zamanlayıcının durumu (hazır kuyruğu, zamanlayıcılar, G/Ç kaynakları,
+  zamanlayıcı bağlamı) süreç-global'di: `thread_create` içinde `await`/`gather`
+  ya da `listen_pool` işçisinde async handler iki thread'de aynı anda
+  koşunca biri ötekinin bağlamına dönüyordu. Ölçüldü (2026-09-27): 4 thread ×
+  50 tur `gather` → "stack smashing detected" / SIGSEGV, üç koşumda üç kez.
+  Artık thread başına bir zamanlayıcı (`thread_local`); bir thread'de oluşan
+  promise başka thread'de beklenemez (zaten desteklenmiyordu).
+- Maliyet yok: spawn+await 355,3 → 355,1 ns, 4'lü `gather` 4569 → 4524 ns
+  (Ryzen 7 9800X3D, turla eşlenmiş 9 tur).
+- `tests/async.test.tpr` +1 (4 thread, beklenen toplam 7200); eski runtime'la
+  paket çöküyor (özet satırı yok). Wings async handler interleave'i (K265 (1))
+  ayrıca açık.
+
 ### Düzeltildi — struct alanına bileşik atama sessizce hiçbir şey yapmıyordu
 
 - `d[i].can -= 30` (tipli struct dizisi, P1.1) **sessiz hiç-işlemdi**: değer

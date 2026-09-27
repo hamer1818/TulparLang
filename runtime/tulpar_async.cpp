@@ -133,18 +133,27 @@ struct IoSource {
 };
 
 // ---- Scheduler state -----------------------------------------------------
-std::vector<Task *> g_ready;        // runnable tasks
-std::vector<Timer> g_timers;        // pending timers (unsorted; min-scanned)
-std::vector<IoSource> g_io_sources; // background-I/O completion polls
-Task *g_current = nullptr;          // task currently executing (null on main)
+// THREAD BASINA bir zamanlayici (thread_local). Eskiden surec-global'di: iki
+// thread ayni anda async kod kosturunca (thread_create icinde await/gather,
+// listen_pool isciisinde async handler) ayni g_ready'yi ve AYNI g_main_ctx'i
+// paylasiyorlardi — bir thread'in coroutine'i otekinin zamanlayici baglamina
+// swapcontext ile donuyordu. Olculdu (2026-09-27, K265): 4 thread x 50 tur
+// gather -> "stack smashing detected" / SIGSEGV, uc kosumun ucu de. Her
+// thread kendi olay dongusunu kosuyor; bir thread'de olusan promise baska bir
+// thread'de beklenemez (zaten desteklenmiyordu). Arka plan G/C kaynaklari
+// kaydedildikleri thread'in dongusunde yoklanir.
+thread_local std::vector<Task *> g_ready;        // runnable tasks
+thread_local std::vector<Timer> g_timers;        // pending timers (unsorted; min-scanned)
+thread_local std::vector<IoSource> g_io_sources; // background-I/O completion polls
+thread_local Task *g_current = nullptr;          // task currently executing (null on main)
 
 // How often to poll outstanding background I/O when nothing else is runnable.
 constexpr long long kIoPollMs = 1;
 
 #if TULPAR_ASYNC_FIBERS
-void *g_main_fiber = nullptr;    // scheduler fiber (converted from thread)
+thread_local void *g_main_fiber = nullptr;    // scheduler fiber (converted from thread)
 #else
-ucontext_t g_main_ctx;           // scheduler context
+thread_local ucontext_t g_main_ctx;           // scheduler context
 #endif
 
 long long now_ms() {
@@ -234,8 +243,9 @@ void CALLBACK fiber_trampoline(void *param) {
 }
 #else
 // makecontext can only pass ints; stash the task in a global the trampoline
-// reads on entry. Safe because tasks start one at a time under the scheduler.
-Task *g_starting = nullptr;
+// reads on entry. Safe because tasks start one at a time under the scheduler
+// (per thread: makecontext'in trambolini baslatan thread'de kosar).
+thread_local Task *g_starting = nullptr;
 void ctx_trampoline() {
   Task *t = g_starting;
   task_body(t);
