@@ -37,6 +37,16 @@ function(embed_library LIB_NAME LIB_FILE OUTPUT_VAR)
     set(LIB_PATH "${CMAKE_SOURCE_DIR}/lib/${LIB_FILE}")
     
     if(EXISTS "${LIB_PATH}")
+        # YENIDEN YAPILANDIRMA BAGIMLILIGI. Icerik burada, YAPILANDIRMA
+        # aninda okunuyor; bu satir olmadan `cmake --build` lib/*.tpr
+        # degisikligini hic gormuyordu — derleme "basarili" bitiyor, ikili
+        # ESKI stdlib'i gomulu tasiyordu ve test/wings/orm'a yapilan duzeltme
+        # "ise yaramamis" gorunuyordu (Tuzaklar 7). Dosya CMAKE_CONFIGURE_DEPENDS'e
+        # girince derleme sistemi onu izliyor: degisirse once cmake yeniden
+        # kosuyor, configure_file basligi yeniden yaziyor, onu iceren uc TU
+        # yeniden derleniyor. Kapisi: tests/gomulu_stdlib_tazelik.py.
+        set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY
+            CMAKE_CONFIGURE_DEPENDS "${LIB_PATH}")
         file(READ "${LIB_PATH}" LIB_CONTENT)
         escape_for_c_string("${LIB_CONTENT}" ESCAPED_CONTENT)
         set(${OUTPUT_VAR} "${ESCAPED_CONTENT}" PARENT_SCOPE)

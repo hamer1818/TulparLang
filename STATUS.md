@@ -1612,7 +1612,8 @@ karakter animasyonu bağlantısı, kamera-duvar çarpışması, dönen/küresel
 çarpışma gövdesi, eğimli zemin.
 
 Not: `scene3d` saf Tulpar (`lib/scene3d.tpr`) — C wiring'i olmayan her madde
-yalnız `./build.sh clean` re-embed'i ister. C binding'i olan madde 5-nokta
+yalnız yeniden derleme ister (`cmake --build` 2026-09-27'den beri
+yeniden gömüyor). C binding'i olan madde 5-nokta
 bağlama + **`wasm/dist` ve `android/dist` yeniden derlemesi** demek.
 
 - ✅ **Faz 7-10'un TAMAMI bitti (2026-08 boyunca).** Bu blok yazıldığında

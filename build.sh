@@ -158,6 +158,20 @@ if [ "$ACTION" = "suites" ]; then
     elif command -v gtimeout >/dev/null 2>&1; then
         SUITE_TIMEOUT_CMD="gtimeout 180"
     fi
+    # GOMULU STDLIB TAZELIGI — paketlerden ONCE, cunku ONKOSUL.
+    # lib/*.tpr derleyiciye gomulu; bayat bir ./tulpar ile kosulan her paket
+    # ESKI kutuphaneyi sinar ve bir stdlib duzeltmesi "ise yaramamis" gorunur.
+    # `cmake --build` bu dosyalari 2026-09-27'ye kadar hic izlemiyordu
+    # (Tuzaklar 7). Kapi iki ayakli (derleme sistemi bagimliligi + ikilideki
+    # icerik) ve kendi pozitif kontrolunu her kosumda kosuyor.
+    if command -v python3 >/dev/null 2>&1; then
+        if ! python3 tests/gomulu_stdlib_tazelik.py ./tulpar; then
+            echo -e "${RED}Gomulu stdlib bayat — paketler ESKI kutuphaneyi sinardi!${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${YELLOW}gomulu stdlib tazelik kapisi ATLANDI${NC} — python3 yok"
+    fi
     hw_begin
     SUITE_FAILED=0
     SUITE_N=0
