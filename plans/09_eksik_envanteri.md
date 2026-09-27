@@ -19,6 +19,25 @@ Bu depodaki bütün plan/durum belgeleri (STATUS, TODO, FINDINGS, DOGRULAMA, CHA
 
 Kural: bir kalem bitince `[x]` yapılır ve satırın sonuna PR numarası yazılır. Performans: derleyici/çalışma zamanı değişikliği `benchmarks/fair/run.py` ve `benchmarks/fair/shapes.py` ile önce/sonra ölçülür; gerileme = geri al. **Yerel ölçüm taze derlenmiş ikiliyle yapılır** — depo kökündeki `./tulpar` ve kurulu `tulpar` #344/#345/#347 öncesinden kalmış olabilir.
 
+## Önce bunlar: sessiz yanlış sonuç (hata yok, çıkış kodu 0)
+
+Kullanıcının iki hedefi var: kısa kodla oyun yazmak ve performansı düşürmemek. Aşağıdaki kalemler bu hedefleri doğrudan tehdit ediyor, çünkü hata vermeden yanlış sonuç üretiyorlar:
+
+- **K033**: `pop(ds)` tipli struct dizisinde (`Dusman[]`) hiçbir şey yapmıyor: uzunluk değişmiyor, 0 dönüyor.
+- **K132**: `call()` ya da kanca 8'den fazla argüman alınca fazlası sessizce kırpılıyor ve çağrılan fonksiyon çöp okuyor (UB).
+- **K092 / K009**: `call("tipli", 7)` tümü-int fonksiyonda `null` döndürüyor.
+- **K131**: Checkpoint dışında bildirilmiş yerele kare içinde atanan değer arena geri sarılınca `<obj>` oluyor.
+- **K198**: `toString(struct)` sonucu "1e-323" oluyor.
+- **K002 / K062**: Aynı adlı ikinci fonksiyon ve aynı struct'taki çift alan adı sessizce yutuluyor, sonuç yanlış çıkıyor.
+- **K061 / K068**: struct→int ataması ve async sonucu→int ataması tanısız geçiyor; ekrana işaretçi değeri basılıyor.
+- **K021 / K115**: 17 parametreli async fonksiyon 0 döndürüp çıkış 0 veriyor.
+- **K123**: `mod(x, 0)` 0 veriyor, oysa `x % 0` hata fırlatıyor.
+- **K297**: `first(m)` satırlar varken `{}` dönüyor.
+- **K144 / K146**: `tulpar build --strict` ve `tulpar build --debug` bayrakları sessizce düşüyor.
+- **K149**: DAP hiç `stopped` olayı göndermiyor, VS Code'da breakpoint'te duraklama görünmüyor.
+- **K170**: `lib/*.tpr` değişince `cmake --build` gömülü stdlib'i yenilemiyor.
+- **K174**: web ve android dist arşivlerinde 6 codegen sembolü eksik, bu hedeflere link kırık.
+
 ## Kol A — Derleyici: ön uç + typeinfer + codegen
 
 Hedef: Oyun dilindeki (struct dizisi, enum, tuple, metot, closure, call) sessiz yanlış sonuçları kapatmak ve kısa kodla oyun yazımını kolaylaştırmak; ardından ölçülü performans kazançları (for-in, eleman yazma) ve sistem alt kümesinin (@frame, f32, @repr(C), @no_alloc, atomik) temelleri. Hiçbir değişiklik benchmarks/fair ve shapes.py'de gerileme getirmemeli.
