@@ -82,9 +82,14 @@ V k = v_yap(3.0, 4.0);
 V[] vs = [];
 push(vs, k);
 vs[0].x += 1.0;
-print(toString(v_uzun2(k)) + " " + toString(vs[0].x) + " " + typeof(v_yap(1.0, 1.0)));' > "$TMP/gecerli/ana.tpr"
+print(toString(v_uzun2(k)) + " " + toString(vs[0].x) + " " + toString(v_yap(1.0, 1.0)));' > "$TMP/gecerli/ana.tpr"
+# Son parca KUTUSUZ donusun dedektoru: toString(<cagri>) `V { ... }` bicimini
+# YALNIZ cagri kutusuz struct donduruyorsa verir (Tuzaklar 7e'deki gibi kutulu
+# nesne donerse "<object>"). Eskiden `typeof(...) == "int"` idi — kutusuz
+# donusun GENEL baglamdaki sifir yer tutucusuna dayaniyordu; K198 (2026-09-27)
+# o yer tutucuyu gercek degere (kutulu nesne) cevirince "object" oldu.
 out=$(cd "$TMP/gecerli" && "$TUL" build ana.tpr ana.out 2>&1 && ./ana.out 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^25 4 int$"; then
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^25 4 V { x: 1, y: 1 }$"; then
     gecti "ayni yerlesim ana program + iki modulde tek tip (pozitif kontrol)"
 else
     dustu "ayni yerlesim: rc=$rc cikti='$out'"

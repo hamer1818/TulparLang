@@ -479,6 +479,31 @@ Destekleniyor: `push` / `len` / `d[i].alan` oku-yaz / `Dusman k = d[i]`
 `str` veya iç içe alan derleme hatası (`tests/struct_dizisi_hatalari.sh`).
 `tests/struct_dizisi.test.tpr` 10/10, `examples/45_struct_dizisi.tpr`.
 
+### Düzeltildi / Eklendi — `toString(<struct>)` çöp veriyordu; struct dönen çağrı genel bağlamda `0`; `assert_struct_eq`
+
+- **`toString(p)` (kutusuz struct) print ile aynı biçimi veriyor**:
+  `Point { x: 1, y: 2 }`. Eskiden tipli yerel `"<object>"`, struct döndüren
+  çağrı `"0"` (Eylül 22 ikilisinde `"1e-323"`) — tanı yok, rc=0. Struct
+  dizisi elemanı ve `pop(d)` da aynı yoldan; `print(d[i])` artık `"<object>"`
+  değil struct biçimini basıyor.
+- **Struct döndüren çağrı GENEL bağlamda sıfırdı**: `var q = mk(); q.x`
+  çalışma zamanı hatası, `toJson(mk())` `0`, `o["p"] = mk()` sıfır. Kod bunu
+  "iyi tipli kod bunu görmez" diye bilerek sıfır yer tutucu döndürüyordu.
+  Artık tipli yerelin genel okumasıyla aynı biçimde kutulanıyor. Tipli bağlam
+  (`Point p = mk()`, struct argümanı, `return mk()`) ve **deyim** (`mk();`)
+  kutulamıyor — ayırma yok.
+- **`lib/test.tpr`: `assert_struct_eq(actual, expected)`** (plans/04 PR6'da
+  istenip hiç yazılmamıştı): alan alan eşitlik, mesaj iki tarafı gösterir.
+  Negatif kontrollü test: farklı alan gerçekten düşürüyor.
+- `tests/struct_import_hatalari.sh`'in kutusuz dönüş dedektörü
+  `typeof(v_yap(..)) == "int"` idi — tam olarak yukarıdaki sıfır yer
+  tutucuya dayanıyordu; `toString(v_yap(..)) == "V { x: 1, y: 1 }"` ile
+  değiştirildi (kutulu dönüşte `"<object>"` verir, yani hâlâ ayırt ediyor).
+- Nöbetçi: `tests/struct_native.test.tpr` (+4 test). Kapsam dışı: struct'ta
+  `bool` alan print'te hâlâ `1`/`0` (print ile tutarlılık korundu).
+- 14 kıyasın IR'ı birebir aynı; CI'dan çıkarılmış `scene3d_engine` paketi
+  (sonda kopyası) yeni ve eski derleyiciyle aynı 210 PASS.
+
 ### Added — çoklu dönüş / tuple (P0.1)
 
 ```tpr
