@@ -45,9 +45,18 @@ reddedilmeli suslu_parantezsiz_govde "suslu parantezli govde" \
 int x = 1;
 if (x > 0) float a, b = f();'
 
-reddedilmeli tek_degiskene_baglama "tek degiskene baglanamaz" \
+# `var t = f();` K030'dan beri GECERLI (t._0 / t._1); tip yazilmis tek
+# degisken hala hata — bir tuple float degil.
+reddedilmeli tek_degiskene_baglama "bu tipe baglanamaz" \
 'func f(): (float, float) { return 1.0, 2.0; }
-var t = f();'
+float t = f();'
+
+# Hata KONUMU bildirimin satiri (K030): eskiden `;` tuketildikten sonra
+# basildigi icin bir SONRAKI satiri gosteriyordu.
+reddedilmeli hata_satiri_dogru "):2" \
+'func f(): (float, float) { return 1.0, 2.0; }
+float a, b, c = f();
+print(1);'
 
 reddedilmeli sag_taraf_cagri_degil "dogrudan cagrisi olmali" \
 'float a, b = 5;'
@@ -66,10 +75,12 @@ printf '%s\n' 'float a, b = f();
 func f(): (float, float) { return 1.0, 2.0; }
 a, b = f();
 int n, float h = g(3);
-func g(int k): (int, float) { return k, k * 0.5; }' > "$TMP/gecerli.tpr"
+func g(int k): (int, float) { return k, k * 0.5; }
+var t = g(4);
+float yarim = t._1;' > "$TMP/gecerli.tpr"
 out=$(cd "$TMP" && "$TUL" typecheck gecerli.tpr 2>&1); rc=$?
 if [ "$rc" -eq 0 ]; then gecti "gecerli tuple kabul (pozitif kontrol)"
 else dustu "gecerli tuple reddedildi (rc=$rc)"; echo "$out" | sed 's/^/         /'; fi
 
-if [ "$fail" -eq 0 ]; then echo "tuple_hatalari: 9/9"; fi
+if [ "$fail" -eq 0 ]; then echo "tuple_hatalari: 10/10"; fi
 exit $fail

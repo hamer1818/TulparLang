@@ -705,11 +705,24 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
 
     expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
 
-    // Tuple bir degiskene BUTUN olarak baglanamaz (v1): `var t = f();` yerine
-    // `float a, b = f();`. Sentezlenmis struct'in `_0/_1` adlari dile sizmasin.
-    if (initializer && tuple_sig_of_call(initializer.get())) {
-        error("'" + name + "': coklu donus tek degiskene baglanamaz; `a, b = f();` yaz / "
-              "a tuple result cannot bind to one variable; write `a, b = f();`");
+    // Tuple BUTUN olarak tek degiskene (K030, 2026-09-27): `var t = f();` ->
+    // t sentezlenmis `__tup_...` struct'i; elemanlar `t._0`, `t._1`. Yalniz
+    // `var` (tip yazilmamis): `int t = f();` hala hata — bir tuple int degil.
+    // v1 bunu bilerek reddediyordu ("_0/_1 adlari dile sizmasin"); envanter
+    // talebi `t._0` ile baglamayi istiyor, adlar Swift/Rust'in `t.0`ina en
+    // yakin gecerli tanimlayici.
+    if (initializer) {
+        if (const std::vector<TupleElem>* sig = tuple_sig_of_call(initializer.get())) {
+            if (type == TYPE_UNKNOWN && !custom_type_name) {
+                type = TYPE_CUSTOM;
+                custom_type_name = tuple_struct_name(*sig);
+            } else {
+                error("'" + name + "': coklu donus bu tipe baglanamaz; `var " + name +
+                      " = f();` ya da `a, b = f();` yaz / a tuple result cannot bind to "
+                      "this type; write `var " + name + " = f();` or `a, b = f();`"
+                      " at line " + std::to_string(loc.line));
+            }
+        }
     }
 
     // Kayit ADIN ALINMASINDAN SONRA: `const int x = x;` icindeki sagdaki
@@ -992,6 +1005,7 @@ struct ImportedEnumScan {
     bool filled = false;
     size_t src_hash = 0;
     std::vector<std::pair<std::string, ScanEnum>> enums;
+    std::vector<Parser::RawTupleSig> tuple_sigs;   // K030
     std::vector<std::string> imports;
     std::string dir;
 };
@@ -1011,6 +1025,24 @@ std::vector<std::string> collect_imports(const std::vector<Token>& toks) {
     }
     return out;
 }
+
+// Ayni tarama, `import "m" as a` takma adiyla (yoksa bos). Yalniz ana
+// dosyanin KOK import'lari icin: takma ad yalniz o modulun kendi ust duzey
+// fonksiyonlarini `a__ad`a cevirir (import_alias.cpp), ic ice modulleri degil.
+std::vector<std::pair<std::string, std::string>> collect_imports_alias(
+        const std::vector<Token>& toks) {
+    std::vector<std::pair<std::string, std::string>> out;
+    for (size_t i = 0; i + 1 < toks.size(); i++) {
+        if (toks[i].type() != TOKEN_IMPORT || toks[i + 1].type() != TOKEN_STRING_LITERAL)
+            continue;
+        std::string alias;
+        if (i + 3 < toks.size() && toks[i + 2].type() == TOKEN_IDENTIFIER &&
+            toks[i + 2].value() == "as" && toks[i + 3].type() == TOKEN_IDENTIFIER)
+            alias = toks[i + 3].value();
+        out.emplace_back(toks[i + 1].value(), alias);
+    }
+    return out;
+}
 }  // namespace
 
 void tulpar_parser_set_import_loader(TulparImportLoader fn) { g_import_loader = fn; }
@@ -1018,13 +1050,13 @@ void tulpar_parser_set_import_dir(const std::string& dir) { g_import_dir = dir; 
 
 void Parser::prescan_imported_enums() {
     if (!g_import_loader) return;
-    std::vector<std::string> roots = collect_imports(tokens_);
+    std::vector<std::pair<std::string, std::string>> roots = collect_imports_alias(tokens_);
     if (roots.empty()) return;
-    // (ad, ice aktaranin dizini, derinlik) — AOT'nin cozum sirasi gibi.
-    struct Item { std::string name, from_dir; int depth; };
+    // (ad, ice aktaranin dizini, derinlik, takma ad) — AOT'nin cozum sirasi gibi.
+    struct Item { std::string name, from_dir; int depth; std::string alias; };
     std::vector<Item> work;
     for (auto it = roots.rbegin(); it != roots.rend(); ++it)
-        work.push_back({*it, g_import_dir, 0});
+        work.push_back({it->first, g_import_dir, 0, it->second});
     std::unordered_map<std::string, bool> visited;
     while (!work.empty()) {
         Item cur = work.back();
@@ -1033,8 +1065,9 @@ void Parser::prescan_imported_enums() {
         std::string src, dir;
         if (!g_import_loader(cur.name, cur.from_dir, src, dir)) continue;
         const std::string key = dir + '\x1f' + cur.name;
-        if (visited.count(key)) continue;
-        visited[key] = true;
+        // Takma adli ve adsiz ayni modul ayri anahtarlar (imzalar farkli adla girer).
+        if (visited.count(key + '\x1f' + cur.alias)) continue;
+        visited[key + '\x1f' + cur.alias] = true;
         ImportedEnumScan& scan = import_scan_cache()[key];
         const size_t h = std::hash<std::string>{}(src);
         if (!scan.filled || scan.src_hash != h) {
@@ -1042,8 +1075,10 @@ void Parser::prescan_imported_enums() {
             scan.filled = true;
             scan.src_hash = h;
             scan.dir = dir;
-            // Ucuz on eleme: ne `enum` ne `import` geciyorsa sozcukleme yok.
-            if (src.find("enum") != std::string::npos || src.find("import") != std::string::npos) {
+            // Ucuz on eleme: ne `enum`, ne `import`, ne tuple donusu (`: (`)
+            // geciyorsa sozcukleme yok.
+            if (src.find("enum") != std::string::npos || src.find("import") != std::string::npos ||
+                src.find(": (") != std::string::npos || src.find(":(") != std::string::npos) {
                 std::vector<Token> toks;
                 try {
                     Lexer lx(src);
@@ -1057,6 +1092,7 @@ void Parser::prescan_imported_enums() {
                     toks.clear();
                 }
                 collect_enums(toks, scan.enums, true);
+                scan.tuple_sigs = scan_tuple_sigs_raw(toks);
                 scan.imports = collect_imports(toks);
             }
         }
@@ -1067,8 +1103,11 @@ void Parser::prescan_imported_enums() {
             info.decl_token = SIZE_MAX;
             enums_[e.first] = std::move(info);
         }
+        for (const auto& sig : scan.tuple_sigs)
+            imported_tuple_sigs_raw_.emplace_back(
+                cur.alias.empty() ? sig.first : cur.alias + "__" + sig.first, sig.second);
         for (auto it = scan.imports.rbegin(); it != scan.imports.rend(); ++it)
-            work.push_back({*it, scan.dir, cur.depth + 1});
+            work.push_back({*it, scan.dir, cur.depth + 1, std::string()});
     }
 }
 
@@ -2369,62 +2408,93 @@ static DataType tuple_array_of(DataType t) {
     }
 }
 
-void Parser::prescan_tuple_sigs() {
-    const size_t n = tokens_.size();
+// `func AD ( ... ) : ( T, T )` kaliplarinin HAM listesi (tanimlayicilar
+// cozulmeden). Hem yerel on tarama hem import onbellegi kullanir (K030).
+std::vector<Parser::RawTupleSig> Parser::scan_tuple_sigs_raw(const std::vector<Token>& toks) {
+    std::vector<RawTupleSig> out;
+    const size_t n = toks.size();
     for (size_t i = 0; i + 3 < n; i++) {
-        if (tokens_[i].type() != TOKEN_FUNC ||
-            tokens_[i + 1].type() != TOKEN_IDENTIFIER ||
-            tokens_[i + 2].type() != TOKEN_LPAREN) continue;
-        const std::string& fname = tokens_[i + 1].value();
+        if (toks[i].type() != TOKEN_FUNC ||
+            toks[i + 1].type() != TOKEN_IDENTIFIER ||
+            toks[i + 2].type() != TOKEN_LPAREN) continue;
+        const std::string& fname = toks[i + 1].value();
         // parametre listesini atla (eslesen parantez)
         size_t j = i + 3;
         int depth = 1;
         while (j < n && depth > 0) {
-            if (tokens_[j].type() == TOKEN_LPAREN) depth++;
-            else if (tokens_[j].type() == TOKEN_RPAREN) depth--;
+            if (toks[j].type() == TOKEN_LPAREN) depth++;
+            else if (toks[j].type() == TOKEN_RPAREN) depth--;
             j++;
         }
         if (depth != 0) continue;
-        if (j < n && tokens_[j].type() == TOKEN_COLON) j++;
-        if (j >= n || tokens_[j].type() != TOKEN_LPAREN) continue;
+        if (j < n && toks[j].type() == TOKEN_COLON) j++;
+        if (j >= n || toks[j].type() != TOKEN_LPAREN) continue;
         j++;
-        std::vector<TupleElem> elems;
+        std::vector<RawTupleElem> elems;
         bool ok = true;
-        while (j < n && tokens_[j].type() != TOKEN_RPAREN) {
-            TupleElem e;
-            const Token& t = tokens_[j];
+        while (j < n && toks[j].type() != TOKEN_RPAREN) {
+            RawTupleElem e;
+            const Token& t = toks[j];
             switch (t.type()) {
-                case TOKEN_INT_TYPE: e.type = TYPE_INT; break;
-                case TOKEN_FLOAT_TYPE: e.type = TYPE_FLOAT; break;
-                case TOKEN_STR_TYPE: e.type = TYPE_STRING; break;
-                case TOKEN_BOOL_TYPE: e.type = TYPE_BOOL; break;
-                case TOKEN_JSON_TYPE: e.type = TYPE_JSON; break;
-                case TOKEN_ARRAY_TYPE: e.type = TYPE_ARRAY; break;
-                case TOKEN_ARRAY_INT: e.type = TYPE_ARRAY_INT; break;
-                case TOKEN_ARRAY_FLOAT: e.type = TYPE_ARRAY_FLOAT; break;
-                case TOKEN_ARRAY_STR: e.type = TYPE_ARRAY_STR; break;
-                case TOKEN_ARRAY_BOOL: e.type = TYPE_ARRAY_BOOL; break;
-                case TOKEN_ARRAY_JSON: e.type = TYPE_ARRAY_JSON; break;
-                case TOKEN_IDENTIFIER:
-                    if (is_enum_name(t.value())) { e.type = TYPE_INT; }
-                    else { e.type = TYPE_CUSTOM; e.custom = t.value(); }
-                    break;
+                case TOKEN_INT_TYPE: e.base = TYPE_INT; break;
+                case TOKEN_FLOAT_TYPE: e.base = TYPE_FLOAT; break;
+                case TOKEN_STR_TYPE: e.base = TYPE_STRING; break;
+                case TOKEN_BOOL_TYPE: e.base = TYPE_BOOL; break;
+                case TOKEN_JSON_TYPE: e.base = TYPE_JSON; break;
+                case TOKEN_ARRAY_TYPE: e.base = TYPE_ARRAY; break;
+                case TOKEN_ARRAY_INT: e.base = TYPE_ARRAY_INT; break;
+                case TOKEN_ARRAY_FLOAT: e.base = TYPE_ARRAY_FLOAT; break;
+                case TOKEN_ARRAY_STR: e.base = TYPE_ARRAY_STR; break;
+                case TOKEN_ARRAY_BOOL: e.base = TYPE_ARRAY_BOOL; break;
+                case TOKEN_ARRAY_JSON: e.base = TYPE_ARRAY_JSON; break;
+                case TOKEN_IDENTIFIER: e.base = TYPE_CUSTOM; e.ident = t.value(); break;
                 default: ok = false; break;
             }
             if (!ok) break;
             j++;
-            while (j + 1 < n && tokens_[j].type() == TOKEN_LBRACKET &&
-                   tokens_[j + 1].type() == TOKEN_RBRACKET) {
-                e.type = tuple_array_of(e.type);
-                e.custom.reset();
+            while (j + 1 < n && toks[j].type() == TOKEN_LBRACKET &&
+                   toks[j + 1].type() == TOKEN_RBRACKET) {
+                e.arrays++;
                 j += 2;
             }
             elems.push_back(std::move(e));
-            if (j < n && tokens_[j].type() == TOKEN_COMMA) j++;
+            if (j < n && toks[j].type() == TOKEN_COMMA) j++;
         }
         if (!ok || elems.size() < 2) continue;
-        tuple_sigs_[fname] = std::move(elems);
+        out.emplace_back(fname, std::move(elems));
     }
+    return out;
+}
+
+// Ham elemanlari cozer: tanimlayici bir enum ise int, degilse struct adi;
+// her `[]` soneki dizi tipine cevirir (eski prescan_tuple_sigs ile ayni kural).
+std::vector<Parser::TupleElem> Parser::resolve_tuple_elems(
+        const std::vector<RawTupleElem>& raw) const {
+    std::vector<TupleElem> out;
+    out.reserve(raw.size());
+    for (const auto& r : raw) {
+        TupleElem e;
+        if (r.base == TYPE_CUSTOM) {
+            if (is_enum_name(r.ident)) { e.type = TYPE_INT; }
+            else { e.type = TYPE_CUSTOM; e.custom = r.ident; }
+        } else {
+            e.type = r.base;
+        }
+        for (int k = 0; k < r.arrays; k++) {
+            e.type = tuple_array_of(e.type);
+            e.custom.reset();
+        }
+        out.push_back(std::move(e));
+    }
+    return out;
+}
+
+void Parser::prescan_tuple_sigs() {
+    for (auto& sig : scan_tuple_sigs_raw(tokens_))
+        tuple_sigs_[sig.first] = resolve_tuple_elems(sig.second);
+    // Import edilen modullerin imzalari (K030): yerel ad kazanir.
+    for (const auto& sig : imported_tuple_sigs_raw_)
+        if (!tuple_sigs_.count(sig.first)) tuple_sigs_[sig.first] = resolve_tuple_elems(sig.second);
 }
 
 // '(' T, T, ... ')' — en az iki tip. `(` tuketilmemis gelir.
@@ -2460,7 +2530,14 @@ std::string Parser::tuple_struct_name(const std::vector<TupleElem>& elems) {
 const std::vector<Parser::TupleElem>* Parser::tuple_sig_of_call(const ASTNode* call) const {
     if (!call) return nullptr;
     const auto* fc = std::get_if<FunctionCall>(&call->value);
-    if (!fc || fc->name.empty() || fc->receiver || fc->callee) return nullptr;
+    if (!fc || fc->name.empty() || fc->callee) return nullptr;
+    if (fc->receiver) {
+        // `g.bol(...)` — `import "m" as g` ile gelen modul fonksiyonu (K030).
+        const auto* rid = std::get_if<Identifier>(&fc->receiver->value);
+        if (!rid) return nullptr;
+        auto it = tuple_sigs_.find(rid->name + "__" + fc->name);
+        return it == tuple_sigs_.end() ? nullptr : &it->second;
+    }
     auto it = tuple_sigs_.find(fc->name);
     return it == tuple_sigs_.end() ? nullptr : &it->second;
 }
@@ -2517,16 +2594,19 @@ std::unique_ptr<ASTNode> Parser::parse_tuple_var_decl(SourceLocation loc,
     expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
     const std::vector<TupleElem>* sig = tuple_sig_of_call(init.get());
     if (!sig) {
-        error("coklu bildirimin sag tarafi bu dosyada `: (T, T)` bildiren bir "
-              "fonksiyonun dogrudan cagrisi olmali / the right-hand side of a "
-              "tuple declaration must directly call a function declared with "
-              "`: (T, T)` in this file");
+        // Konum BILDIRIMIN satiri: `;` tuketildikten sonra imlec bir sonraki
+        // satirda (hata eskiden bir satir kayik basiliyordu, K030).
+        error("coklu bildirimin sag tarafi `: (T, T)` bildiren bir fonksiyonun "
+              "(bu dosyada ya da ice aktarilan modulde) dogrudan cagrisi olmali / "
+              "the right-hand side of a tuple declaration must directly call a "
+              "function declared with `: (T, T)` (here or in an imported module)"
+              " at line " + std::to_string(loc.line));
     }
     if (sig->size() != binds.size()) {
         error(std::to_string(binds.size()) + " ad, " + std::to_string(sig->size()) +
               " deger: coklu bildirim fonksiyonun tip sayisiyla eslesmeli / " +
               std::to_string(binds.size()) + " names but the function returns " +
-              std::to_string(sig->size()) + " values");
+              std::to_string(sig->size()) + " values at line " + std::to_string(loc.line));
     }
     const std::string sname = tuple_struct_name(*sig);
     const std::string tmp = "__t" + std::to_string(tuple_tmp_counter_++);
@@ -2558,16 +2638,17 @@ std::unique_ptr<ASTNode> Parser::parse_tuple_assignment() {
     expect(TOKEN_SEMICOLON, "Expected ';' after expression");
     const std::vector<TupleElem>* sig = tuple_sig_of_call(init.get());
     if (!sig) {
-        error("coklu atamanin sag tarafi bu dosyada `: (T, T)` bildiren bir "
-              "fonksiyonun dogrudan cagrisi olmali / the right-hand side of a "
-              "tuple assignment must directly call a function declared with "
-              "`: (T, T)` in this file");
+        error("coklu atamanin sag tarafi `: (T, T)` bildiren bir fonksiyonun "
+              "(bu dosyada ya da ice aktarilan modulde) dogrudan cagrisi olmali / "
+              "the right-hand side of a tuple assignment must directly call a "
+              "function declared with `: (T, T)` (here or in an imported module)"
+              " at line " + std::to_string(loc.line));
     }
     if (sig->size() != names.size()) {
         error(std::to_string(names.size()) + " ad, " + std::to_string(sig->size()) +
               " deger: coklu atama fonksiyonun tip sayisiyla eslesmeli / " +
               std::to_string(names.size()) + " names but the function returns " +
-              std::to_string(sig->size()) + " values");
+              std::to_string(sig->size()) + " values at line " + std::to_string(loc.line));
     }
     const std::string sname = tuple_struct_name(*sig);
     const std::string tmp = "__t" + std::to_string(tuple_tmp_counter_++);

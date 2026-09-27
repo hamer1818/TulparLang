@@ -1,0 +1,4 @@
+// tests/tuple_return.test.tpr'nin modulu (K030): coklu donus bildiren
+// fonksiyonlar baska dosyada.
+func mod_bol(int a, int b): (int, int) { return a / b, a % b; }
+func mod_yon(float x): (float, float) { return x * 2.0, x / 2.0; }
