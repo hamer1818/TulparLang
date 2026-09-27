@@ -4512,6 +4512,17 @@ VMValue aot_array_slice_ptr(VMValue *arr_ptr, long long start) {
 // File I/O Builtins
 // ============================================================================
 
+// read_file(path) -> str (ya da acilamazsa VOID).
+//
+// EOF'A KADAR okunur; boyut yalniz ilk tamponun ipucu. Eskiden
+// fseek(SEEK_END)/ftell ile alinan boyut kadar okunuyordu: /proc ve /sys
+// dosyalari boyutu 0 bildiriyor, yani `read_file("/proc/self/status")` bos
+// donuyordu (olculdu 2026-09-27, K143 — tulpar-engine RSS olcusunu bu yuzden
+// disaridan yapiyordu). Boruda (fifo) ftell -1; kisa okumada da uzunluk
+// boyuttan aliniyordu, yani tamponun ilklenmemis kuyrugu dizgiye giriyordu.
+//
+// Ikili guvenli: NUL iceren icerik oldugu gibi gelir (uzunluk fread'in
+// saydigi, strlen degil) — tests/file_io.test.tpr kilitliyor (K142).
 VMValue aot_read_file(VMValue path_val) {
   if (!IS_STRING(path_val))
     return VM_VOID();
@@ -4521,26 +4532,42 @@ VMValue aot_read_file(VMValue path_val) {
   if (!f)
     return VM_VOID();
 
-  fseek(f, 0, SEEK_END);
-  long fsize = ftell(f);
-  fseek(f, 0, SEEK_SET);
-
-  char *string = static_cast<char*>(malloc(fsize + 1));
-  if (string) {
-    size_t result = fread(string, 1, fsize, f);
-    string[fsize] = 0;
-    if (result != (size_t)fsize) {
-      // Read failed or partial
-    }
+  // Boyut IPUCU: duzenli dosyada tek okuma yeter (tampon boyut+1, kisa okuma
+  // = EOF). 0 ya da -1 (proc, boru) -> 4 KB'tan buyuyerek.
+  long hint = -1;
+  if (fseek(f, 0, SEEK_END) == 0) {
+    hint = ftell(f);
+    fseek(f, 0, SEEK_SET);
   }
+  size_t cap = (hint > 0) ? (size_t)hint + 1 : 4096;
+  size_t len = 0;
+  char *buf = static_cast<char *>(malloc(cap));
+  while (buf) {
+    size_t want = cap - len;
+    size_t n = fread(buf + len, 1, want, f);
+    len += n;
+    if (n < want)
+      break; // EOF ya da hata
+    size_t ncap = cap * 2;
+    char *nb = static_cast<char *>(realloc(buf, ncap));
+    if (!nb) {
+      free(buf);
+      buf = nullptr;
+      break;
+    }
+    buf = nb;
+    cap = ncap;
+  }
+  const bool failed = !buf || ferror(f);
   fclose(f);
-
-  if (!string)
-    return VM_VOID();
+  if (failed) {
+    free(buf);
+    return VM_VOID(); // okuma hatasi (or. dizin): acilamamakla ayni sozlesme
+  }
 
   // Create ObjString (copies char*)
-  ObjString *ostr = vm_alloc_string_aot(nullptr, string, (int)fsize);
-  free(string);
+  ObjString *ostr = vm_alloc_string_aot(nullptr, buf, (int)len);
+  free(buf);
 
   return VM_OBJ(ostr);
 }

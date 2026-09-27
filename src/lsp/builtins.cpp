@@ -259,8 +259,8 @@ const BuiltinEntry kBuiltins[] = {
     {"gather",       "gather(...promises): promise",                "Tüm promise'leri eşzamanlı bekler, sonuçları dizi olarak verir. `let r = await gather(a, b);`"},
 
     // ---- File ----
-    {"read_file",    "read_file(path: str): str",                   "Dosyayı tamamen okur."},
-    {"write_file",   "write_file(path: str, data: str): bool",      "Dosyayı yeniden yazar."},
+    {"read_file",    "read_file(path: str): str",                   "Dosyayı EOF'a kadar okur (boyutu 0 bildiren /proc ve borular dahil). İkili güvenli: NUL içeren içerik aynen gelir. Açılamazsa null."},
+    {"write_file",   "write_file(path: str, data: str): bool",      "Dosyayı yeniden yazar; ikili güvenli (NUL dahil tüm baytlar). Her bayt yazılınca true."},
     {"append_file",  "append_file(path: str, data: str): bool",     "Dosyaya ekler."},
     {"file_exists",  "file_exists(path: str): bool",                "Dosya/dizin var mı?"},
 

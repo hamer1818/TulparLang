@@ -32,9 +32,46 @@ func run_utf8_roundtrip() {
     assert_eq_str(read_file("_fio_t3.txt"), "türkçe ğüşiöç");
 }
 
+// İKİLİ GÜVENLİ (K142, 2026-09-27): NUL içeren blob (ör. .sahneb) read_file /
+// write_file'dan bayt bayt geçmeli. Fiilen çalışıyordu (uzunluk fread'in
+// saydığı, strlen değil) ama hiçbir test kilitlemiyordu — tulpar-engine'in
+// engine.tpr'si "NUL içeren bloblar Tulpar string'ine sığmaz" diye ayrı bir
+// kopyalama yolu tutuyordu.
+func run_binary_nul_roundtrip() {
+    str blob = "A" + chr(0) + "B" + chr(0) + chr(0) + "C" + chr(255) + chr(1);
+    assert_eq_int(length(blob), 8);
+    assert_eq_bool(write_file("_fio_t4.txt", blob), true);
+    str geri = read_file("_fio_t4.txt");
+    assert_eq_int(length(geri), 8);
+    assert_eq_int(ord(geri, 1), 0);
+    assert_eq_int(ord(geri, 2), 66);
+    assert_eq_int(ord(geri, 4), 0);
+    assert_eq_int(ord(geri, 6), 255);
+    assert_eq_int(ord(geri, 7), 1);
+    assert(geri == blob, "NUL içeren içerik aynen geri gelmeli");
+    // NUL'dan sonrası da birleştirmede kaybolmuyor.
+    assert_eq_int(length(geri + "Z"), 9);
+}
+
+// BOYUTU 0 BİLDİREN dosya (K143, 2026-09-27): /proc ve /sys dosyaları
+// ftell ile 0 bildiriyor; read_file boyut kadar okuduğu için boş dönüyordu.
+// tulpar-engine RSS ölçüsünü bu yüzden dışarıdan yapıyordu. /proc yalnız
+// Linux'ta var — başka platformda satır GÖRÜNÜR biçimde atlanır.
+func run_proc_zero_size() {
+    if (!file_exists("/proc/self/status")) {
+        print("      ATLANDI: /proc/self/status yok (Linux dışı)");
+        return;
+    }
+    str st = read_file("/proc/self/status");
+    assert(length(st) > 100, "/proc/self/status boş okunmamalı, uzunluk " + toString(length(st)));
+    assert_contains(st, "VmRSS");
+}
+
 print("=== file I/O contracts ===");
 test("write/read/append round-trip", "run_write_read_roundtrip");
 test("failed writes report false", "run_failure_reporting");
 test("exists + empty file", "run_exists_and_empty");
 test("utf-8 content round-trip", "run_utf8_roundtrip");
+test("binary (NUL) content round-trip", "run_binary_nul_roundtrip");
+test("zero-size-reporting file (/proc) reads to EOF", "run_proc_zero_size");
 test_summary();
