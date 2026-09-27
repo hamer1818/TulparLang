@@ -101,6 +101,15 @@ yok**. [[Tuzaklar#7b]] uyarınca tehlikeyi mekanizmadan çıkarıp sertleştirdi
 (çift denetimli kilit + eski tamponu serbest bırakmama), ama bunun *kanıtlanmış
 bir hatayı* değil, *incelemeyle görülen bir yarışı* kapattığını açıkça yazıyoruz.
 
+**Güncelleme 2026-09-27 — artık tetikleyen test VAR** (`tests/debox_yaris.sh`,
+`build.sh suites`). 8 thread × 60 taze dizi × 100 000 eleman bir bariyerde
+bekleyip aynı anda `arr_items` çağırıyor; her thread dönen tamponu kaydediyor.
+Tek çevrim = hepsi aynı tampon. Ölçü (Ryzen 7 9800X3D): gerçek `arr_debox`
+0/60 dizide çift çevrim; **kilitsiz kopya (pozitif kontrol, sertleştirmeden
+önceki algoritma) 60/60** — düzenek yarışı gerçekten üretiyor. Kilit geçici
+olarak sökülünce gerçek `arr_debox` da 60/60 kırmızı döndü. Yani yarış artık
+incelemeyle değil ölçümle görülüyor ve kilit onu kapatıyor.
+
 **P15 (paylaşılan json okuması) de temiz** — aynı düzeltilmiş düzenekle hata yok.
 
 ## Bunun Wings / `listen_pool` başlığına etkisi

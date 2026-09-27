@@ -573,6 +573,17 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # arr_debox YARISI (FINDINGS T4): N thread ayni kutusuz int[]'i ayni anda
+    # ilk kez kutulayan okuma yoluna sokuluyor; dizi TEK KEZ cevrilmeli. Kilit
+    # "gereksiz" diye sokulurse baska hicbir sey kirmizi olmaz. Kapi kendi
+    # pozitif kontrolunu (kilitsiz kopya cift cevirmek ZORUNDA) kosar.
+    if [ -x tests/debox_yaris.sh ]; then
+        if ! bash tests/debox_yaris.sh ./tulpar; then
+            echo -e "${RED}debox yaris kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
     # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz
     # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan
