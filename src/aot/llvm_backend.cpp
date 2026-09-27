@@ -1395,6 +1395,21 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMFunctionType(backend->ptr_type, sarr_elem_params, 2, 0);
   backend->func_aot_sarr_elem =
       LLVMAddFunction(backend->module, "aot_sarr_elem_ptr", sarr_elem_type);
+  // K033: aot_sarr_pop(VMValue *arr, i64 *dst) -> i32 ;
+  //       aot_sarr_remove_at(VMValue *arr, i64 idx, i64 *dst) -> i32
+  LLVMTypeRef sarr_pop_params[] = {backend->ptr_type, backend->ptr_type};
+  backend->func_aot_sarr_pop = LLVMAddFunction(
+      backend->module, "aot_sarr_pop",
+      LLVMFunctionType(backend->int32_type, sarr_pop_params, 2, 0));
+  LLVMTypeRef sarr_rm_params[] = {backend->ptr_type, backend->int_type, backend->ptr_type};
+  backend->func_aot_sarr_remove_at = LLVMAddFunction(
+      backend->module, "aot_sarr_remove_at",
+      LLVMFunctionType(backend->int32_type, sarr_rm_params, 3, 0));
+  // aot_array_remove_at(VMValue arr, VMValue idx) -> VMValue (duz + struct dizisi)
+  LLVMTypeRef arr_rm_params[] = {backend->vm_value_type, backend->vm_value_type};
+  backend->func_aot_array_remove_at = LLVMAddFunction(
+      backend->module, "aot_array_remove_at",
+      llvm_make_vmvalue_func_type(backend, arr_rm_params, 2, 0));
 
   // ====== Fast Array Access (value-based, no alloca) ======
   // aot_array_get_fast(VMValue arr, i64 index) -> VMValue
@@ -3201,6 +3216,58 @@ static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
   return phi;
 }
 
+// `<recv>.<ad>(...)` alicisini cagri dugumunde coz (alias ya da metot yolu).
+// AST_FUNCTION_CALL codegen'i de bunu cagirir; struct yardimcilari cagriyi
+// codegen'den ONCE incelediginde (`Dusman e = d.pop()`) ayni bicimi gorsun.
+static void resolve_call_receiver(LLVMBackend *backend, ASTNode_C *node) {
+  if (!node || node->type != AST_FUNCTION_CALL || !node->receiver) return;
+  auto func_in_module = [](const char *raw, void *ctx) -> int {
+    char prefixed[300];
+    snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
+    LLVMModuleRef m = static_cast<LLVMModuleRef>(ctx);
+    if (LLVMGetNamedFunction(m, prefixed)) return 1;
+    if (LLVMGetNamedFunction(m, raw)) return 1;
+    return 0;
+  };
+  resolve_qualified_call(node, func_in_module, backend->module);
+}
+
+// K033: `pop(d)` / `remove_at(d, i)` — `d` tipli struct dizisi yereli ve ad
+// kullanici fonksiyonuyla golgelenmemis. Eleman tipi dondurulur (degilse
+// nullptr; hicbir sey uretilmez).
+static StructTypeEntry *sarr_remove_call_elem(LLVMBackend *backend, ASTNode_C *n) {
+  if (!n || n->type != AST_FUNCTION_CALL || !n->name) return nullptr;
+  if (strcmp(n->name, "pop") != 0 && strcmp(n->name, "remove_at") != 0) return nullptr;
+  resolve_call_receiver(backend, n);
+  const bool is_pop = strcmp(n->name, "pop") == 0;
+  if (n->argument_count != (is_pop ? 1 : 2) || !n->arguments) return nullptr;
+  for (int i = 0; i < backend->function_count; i++)
+    if (backend->functions[i].name && strcmp(backend->functions[i].name, n->name) == 0)
+      return nullptr;  // kullanici tanimi yerlesigi golgeler
+  const char *en = sarr_elem_of_ident(backend, n->arguments[0]);
+  if (!en || !get_local(backend, n->arguments[0]->name)) return nullptr;
+  return find_struct_type(backend, en);
+}
+// Cikarmayi uret; eleman `dst`ye kopyalanir (nullptr = deger atilir). Kutulama
+// yok, ayirma yok — `Dusman e = pop(d)` ve `pop(d);` bu yoldan.
+static void emit_sarr_remove(LLVMBackend *backend, ASTNode_C *n, LLVMValueRef dst) {
+  LLVMValueRef arr = codegen_expression(backend, n->arguments[0]);
+  LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "sarr.rm.arr");
+  LLVMBuildStore(backend->builder, arr, tmp);
+  LLVMValueRef d = dst ? dst : LLVMConstPointerNull(backend->ptr_type);
+  if (strcmp(n->name, "pop") == 0) {
+    LLVMValueRef args[] = {tmp, d};
+    LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(backend->func_aot_sarr_pop),
+                   backend->func_aot_sarr_pop, args, 2, "");
+    return;
+  }
+  LLVMValueRef iv = codegen_expression(backend, n->arguments[1]);
+  LLVMValueRef idx = llvm_vm_val_to_int_payload(backend, iv);
+  LLVMValueRef args[] = {tmp, idx, d};
+  LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(backend->func_aot_sarr_remove_at),
+                 backend->func_aot_sarr_remove_at, args, 3, "");
+}
+
 // Struct DEGERI veren ifadeyi yerlesim isaretcisine indir (kopyalanacak
 // kaynak): tipli yerel -> alloca'si; struct donen cagri -> gecici + ipucu;
 // nesne literali -> gecici + alan yazimi; struct dizisi elemani -> eleman
@@ -3215,6 +3282,13 @@ static LLVMValueRef codegen_struct_expr_ptr(LLVMBackend *backend, ASTNode_C *arg
     return nullptr;
   }
   if (arg->type == AST_FUNCTION_CALL && arg->name) {
+    // `pop(d)` / `remove_at(d, i)` (K033): eleman dogrudan geciciye kopyalanir.
+    if (StructTypeEntry *rst = sarr_remove_call_elem(backend, arg)) {
+      if (strcmp(rst->name, st->name) != 0) return nullptr;
+      LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, st->llvm_type, "sarr.src.rm");
+      emit_sarr_remove(backend, arg, tmp);
+      return tmp;
+    }
     const char *rn = nullptr;
     for (int j = 0; j < backend->function_count; j++) {
       if (backend->functions[j].name && strcmp(backend->functions[j].name, arg->name) == 0) {
@@ -6773,17 +6847,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // import-alias call (`<recv>__<name>`) or a method call
     // (`<name>(<recv>, args...)`). The helper mutates the node in place
     // so the rest of this case stays oblivious to the receiver.
-    if (node->receiver) {
-      auto func_in_module = [](const char *raw, void *ctx) -> int {
-        char prefixed[300];
-        snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
-        LLVMModuleRef m = static_cast<LLVMModuleRef>(ctx);
-        if (LLVMGetNamedFunction(m, prefixed)) return 1;
-        if (LLVMGetNamedFunction(m, raw)) return 1;
-        return 0;
-      };
-      resolve_qualified_call(node, func_in_module, backend->module);
-    }
+    if (node->receiver) resolve_call_receiver(backend, node);
 
     // KULLANICI TANIMI YERLESIGI GOLGELER.
     //
@@ -7248,6 +7312,27 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // pop(array) -> value
+    // pop / remove_at bir struct dizisinde, deger GENEL baglamda (print,
+    // `var`, kutulu kaba push) — eleman kutusuz geciciye cikarilir, sonra
+    // `d[i]`nin tipsiz okumasiyla ayni bicimde (string anahtarli nesne)
+    // kutulanir. Tipli baglam (`Dusman e = pop(d)`) ve deyim (`pop(d);`)
+    // buraya gelmez (K033).
+    if (node->name && (strcmp(bi_name, "pop") == 0 || strcmp(bi_name, "remove_at") == 0)) {
+      if (StructTypeEntry *rst = sarr_remove_call_elem(backend, node)) {
+        LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, rst->llvm_type, "sarr.rm.val");
+        emit_sarr_remove(backend, node, tmp);
+        return box_native_struct_as_object(backend, tmp, rst);
+      }
+    }
+    // remove_at(dizi, i) -> cikarilan eleman (sira korunur; duz dizi ya da
+    // tipsiz baglamdan gelen struct dizisi).
+    if (node->name && strcmp(bi_name, "remove_at") == 0 && node->argument_count == 2) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1])};
+      if (!args[0] || !args[1]) return llvm_vm_val_int(backend, 0);
+      return llvm_call_vmvalue_func(backend, backend->func_aot_array_remove_at, args, 2,
+                                    "remove_at_res");
+    }
     if (node->name && strcmp(bi_name, "pop") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
@@ -10222,6 +10307,24 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
             init_is_struct_copy = true;
           }
         }
+        // `Dusman e = pop(d)` / `remove_at(d, i)` (K033): eleman kutulanmadan
+        // dogrudan yerele kopyalanir. Farkli eleman tipi derleme hatasi —
+        // yoksa kutulu geri acma alan adina gore SESSIZCE sifir doldururdu.
+        if (!init_is_struct_copy && node->right) {
+          if (StructTypeEntry *rst = sarr_remove_call_elem(backend, node->right)) {
+            if (strcmp(rst->name, st->name) != 0) {
+              char msg[320];
+              snprintf(msg, sizeof(msg),
+                       "%s(...) bir %s dondurur, %s degil / %s(...) returns a %s, not a %s",
+                       node->right->name, rst->name, st->name, node->right->name, rst->name,
+                       st->name);
+              report_codegen_error(backend, node->line, "hata", msg, node->right->name, nullptr);
+            } else {
+              emit_sarr_remove(backend, node->right, typed_alloca);
+            }
+            init_is_struct_copy = true;
+          }
+        }
         if (init_is_struct_copy) {
           // kopya yukarida yapildi
         } else if (init_is_object_literal) {
@@ -11390,9 +11493,39 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           return LLVMBuildRetVoid(backend->builder);
         }
       }
-      // Fallback: behave as before (store boxed VMValue). The caller side
-      // either won't reach here for typed struct returns or will mis-read
-      // the result; typeinfer is the right place to surface this.
+      if (st && struct_is_trivially_unboxable(st)) {
+        // Struct dizisi elemani / `pop(d)` / `remove_at(d, i)`: yerlesim
+        // isaretcisinden dogrudan kopya.
+        LLVMValueRef src = nullptr;
+        if (rv->type == AST_ARRAY_ACCESS || sarr_remove_call_elem(backend, rv))
+          src = codegen_struct_expr_ptr(backend, rv, st);
+        if (src) {
+          sarr_copy_struct(backend, st, src, res_ptr);
+        } else {
+          // Genel deger (kutulu dizi elemani, json alani, `var`): alan adina
+          // gore geri ac. ESKIDEN burada kutulu VMValue (16 bayt) struct
+          // sonuc yuvasina yaziliyordu: `func f(): D { return d[1]; }`
+          // cagirana cop okutuyordu (etiket 4 + isaretci; olculdu
+          // 2026-09-27) ve tek alanli (8 baytlik) struct'ta yuvayi tasiriyordu.
+          LLVMValueRef boxed = codegen_expression(backend, rv);
+          LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type), res_ptr);
+          if (boxed) emit_unpack_boxed_struct_into(backend, boxed, st, res_ptr);
+        }
+        emit_try_pops(backend, backend->try_depth);
+        return LLVMBuildRetVoid(backend->builder);
+      }
+    }
+    // Degersiz `return;` struct donduren fonksiyonda: varsayilan (sifir)
+    // struct — gövde sonundaki ortuk donusle ayni; kutulu 0 yazmak yuvayi
+    // tasirirdi.
+    if (backend->current_function_returns_struct && !node->return_value) {
+      StructTypeEntry *st = find_struct_type(backend, backend->current_function_returns_struct);
+      if (st && struct_is_trivially_unboxable(st)) {
+        LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
+                       LLVMGetParam(backend->current_function, 0));
+        emit_try_pops(backend, backend->try_depth);
+        return LLVMBuildRetVoid(backend->builder);
+      }
     }
     LLVMValueRef ret =
         node->return_value
@@ -11522,6 +11655,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   case AST_FUNCTION_DECL:
     return nullptr;
   case AST_FUNCTION_CALL:
+    // Deger kullanilmayan `pop(d);` / `remove_at(d, i);` (K033, d struct
+    // dizisi): yalniz cikar — kutulu kopya ayirmaya gerek yok.
+    if (sarr_remove_call_elem(backend, node)) {
+      emit_sarr_remove(backend, node, nullptr);
+      return nullptr;
+    }
     return codegen_expression(backend, node);
   case AST_IMPORT: {
     const char *rel_path = node->value.string_value;

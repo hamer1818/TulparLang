@@ -1312,6 +1312,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // Array mutation
       {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"pop", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
+      {"remove_at", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT}},
       // env() — process env var lookup, "" when missing
       {"env", TYPE_STRING, {TYPE_STRING}},
       // call(name, ...) — handler dispatch by string. Args are variadic;

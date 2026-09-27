@@ -398,6 +398,9 @@ typedef struct {
   LLVMValueRef func_aot_sarr_new;   // P1.1: tipli struct dizisi kur
   LLVMValueRef func_aot_sarr_push;  // P1.1: eleman ekle (yerlesim isaretcisinden kopya)
   LLVMValueRef func_aot_sarr_elem;  // P1.1: eleman isaretcisi (sinir denetimli)
+  LLVMValueRef func_aot_sarr_pop;        // K033: son elemani cikar (kopya hedefe)
+  LLVMValueRef func_aot_sarr_remove_at;  // K033: i. elemani cikar (sira korunur)
+  LLVMValueRef func_aot_array_remove_at; // K033: remove_at genel (kutulu) yolu
   LLVMValueRef func_aot_create_closure;
   LLVMValueRef func_aot_call_closure;
 

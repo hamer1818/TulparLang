@@ -52,6 +52,14 @@ W w; w.a = 1;
 V v; v.x = 1.0; push(vs, v);
 vs[0] = w;'
 
+# K033: eleman tipi farkli struct'a pop — eskiden kutulu geri acma alan adina
+# gore SESSIZCE sifir dolduruyordu.
+reddedilmeli pop_yanlis_tip "bir V dondurur, W degil" \
+'struct V { float x; float y; }
+struct W { int a; }
+V[] vs = [];
+W w = pop(vs);'
+
 printf '%s\n' 'struct V { float x; float y; }
 V[] vs = [];
 V v; v.x = 1.5; v.y = 2.5;
@@ -63,5 +71,5 @@ out=$(cd "$TMP" && "$TUL" build gecerli.tpr gecerli.out 2>&1 && ./gecerli.out 2>
 if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^1 2.5$"; then gecti "gecerli struct dizisi derlenir ve calisir (pozitif kontrol)"
 else dustu "gecerli struct dizisi: rc=$rc cikti='$out'"; fi
 
-if [ "$fail" -eq 0 ]; then echo "struct_dizisi_hatalari: 5/5"; fi
+if [ "$fail" -eq 0 ]; then echo "struct_dizisi_hatalari: 6/6"; fi
 exit $fail
