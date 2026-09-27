@@ -615,6 +615,16 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # `tulpar build --sanitize=address` (K166): uretilen IR gercekten
+    # enstrumante mi, ASan runtime'i bagli mi, onbellek kipi ayiriyor mu.
+    # Windows/MinGW'de gorunur atlar.
+    if [ -x tests/sanitize_smoke.sh ]; then
+        if ! bash tests/sanitize_smoke.sh ./tulpar; then
+            echo -e "${RED}sanitize kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # FONKSIYON ARAMA (aot_func_lookup): bir Tulpar fonksiyonunu adiyla,
     # cagirmadan ve ayirmadan cozen C yuzu. Bu depoda cagiran YOK — tek
     # tuketici tulpar-engine (betik kancalari yuklemede bir kez cozulur) —

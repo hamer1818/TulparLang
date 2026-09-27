@@ -1107,7 +1107,13 @@ değil, o fonksiyonun dar ve tek olmasında. Bir gün "indeks varsa yeter"
 diye gevşetilirse hiçbir test kırmayacak — bunu bilerek kabul ediyoruz.
 
 **Gelecek iş:** `tulpar build --sanitize` (üretilen IR'a ASan geçişi)
-bu sınıfı kapatırdı. Şu an yok.
+bu sınıfı kapatırdı. ~~Şu an yok.~~ **Geldi (2026-09-27, K166):**
+`tulpar build --sanitize=address` optimizasyondan SONRA her fonksiyona
+`sanitize_address` koyup LLVM `asan` geçişini koşturuyor ve
+`-fsanitize=address` ile linkliyor; sızıntı denetimi varsayılan kapalı
+(arena + ölümsüz kalıcılar LSan'a sızıntı görünür, `ASAN_OPTIONS=detect_leaks=1`
+açar). Kapı: `tests/sanitize_smoke.sh`. Runtime arşivi hâlâ
+enstrümante DEĞİL (onun için `tests/run_asan.sh`).
 
 ## 6p. Koşmayan kod, taşınabilirlik hatalarını SAKLAR
 
