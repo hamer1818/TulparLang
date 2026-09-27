@@ -65,6 +65,20 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   derlenmiyor, `pop` testi kırmızı), `tests/struct_dizisi_hatalari.sh` (6/6).
 - Kapsam dışı: dilim (`d[a:b]`) — dilde hiçbir dizi için dilim sözdizimi yok;
   yalnız struct dizisine eklemek dili kendiyle çelişik yapardı. Ayrı karar.
+### Düzeltildi — `cmake --build` gömülü stdlib değişikliğini görmüyordu
+
+- `lib/*.tpr` yapılandırma anında gömülüyordu ve derleme sistemi bu
+  dosyaları izlemiyordu: `cmake --build` "başarılı" bitiyor, ikili ESKİ
+  stdlib'i taşıyordu (ölçüldü 2026-09-27: `lib/test.tpr`'ye eklenen işaret
+  ne `src/embedded_libs.h`'de ne ikilide). Her gömülü dosya artık
+  `CMAKE_CONFIGURE_DEPENDS`'te; `--build` cmake'i kendiliğinden yeniden
+  koşturup üç TU'yu yeniden derliyor.
+- Kapı `tests/gomulu_stdlib_tazelik.py`, `build.sh suites`'in ilk adımı:
+  derleme sistemi (Makefile/Ninja) her gömülü dosyayı bağımlılık olarak
+  listeliyor mu + `./tulpar` her lib dosyasını aynen taşıyor mu. Pozitif
+  kontrol her koşumda (işaretli içerik bulunmamalı); elle: satır sökülünce
+  mekanizma ayağı, lib dosyası değişip ikili yenilenmeyince etki ayağı
+  kırmızı.
 
 ### Eklendi — `aot_func_lookup`: fonksiyonu adıyla, çağırmadan ve ayırmadan çöz
 

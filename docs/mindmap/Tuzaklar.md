@@ -1514,8 +1514,15 @@ geçtiği KAPSAMI** de sürmek gerekiyor. Bir dilde aynı ifade, bulunduğu
 kapsama göre başka kod üretir.
 
 ## 7. Derleme / gömülü lib
-- `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
-  `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
+- `lib/*.tpr` **yapılandırma zamanında gömülüyor**. 2026-09-27'ye kadar
+  `cmake --build` bu dosyaları izlemiyordu: derleme "başarılı" bitiyor, ikili
+  ESKİ stdlib'i taşıyor, düzeltme "işe yaramamış" görünüyordu (reconfigure
+  şarttı). Artık her gömülü dosya `CMAKE_CONFIGURE_DEPENDS`'te — `--build`
+  yeter. Kapı `tests/gomulu_stdlib_tazelik.py` bunu `suites`'in İLK adımında
+  iki ayakla ölçüyor (derleme sistemi bağımlılığı + ikilide içerik), yani
+  bayat bir `./tulpar` ile paket koşmuyor. Ders: "derleme yeşil" ile "ikili bu
+  kaynağı taşıyor" ayrı iddialar; ikincisini ölçen yoksa birincisi yalan
+  söyleyebilir.
 - Kökteki bayat `.a` arşivleri taze derlemeyi gölgeler.
 - Koşumları paralel çalıştırma: hepsi CWD'ye `a.out` yazar.
 - `./build.sh test` + `suites` aynı anda ~18 GB RAM'e çıkabiliyor → OOM ile

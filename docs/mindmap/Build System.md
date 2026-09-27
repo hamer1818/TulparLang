@@ -61,11 +61,21 @@ ayrıca `-DTULPAR_VERSION` ile eziyor), yani yalnız yereli yanıltır.
 **Sürüm yükselttikten sonra:** ya build dizinini sil, ya da
 `cmake -S . -B build-linux -DTULPAR_VERSION=<yeni>-dev` ile ez.
 
-## ⚠️ Gömülü lib değişikliği RECONFIGURE ister
-`lib/*.tpr` → `embedded_libs.h` (`EmbedLibraries.cmake`, `configure_file`). Değişikliği
-görmek için `cmake -S . -B build-linux` **yeniden yapılandırma** şart; yalnız `--build`
-yetmez. `src/embedded_libs.h` üretilen çıktıdır (gitignore) — elle düzenleme, şablon
-`src/embedded_libs.h.in` ve `lib/*.tpr` düzenlenir. SQLite `lib/sqlite3/sqlite3.c` hem
+## Gömülü lib: `cmake --build` yeter (2026-09-27'den beri)
+`lib/*.tpr` → `embedded_libs.h` (`EmbedLibraries.cmake`, `configure_file`). İçerik
+YAPILANDIRMA anında okunuyor; 2026-09-27'ye kadar derleme sistemi bu dosyaları
+izlemiyordu, yani `cmake --build` bir stdlib değişikliğini **sessizce görmüyor** ve
+ikili eski kütüphaneyi taşıyordu (yeniden yapılandırma şarttı). Artık her gömülü
+dosya `CMAKE_CONFIGURE_DEPENDS`'e giriyor: değişirse cmake kendiliğinden yeniden
+koşuyor, başlık yeniden yazılıyor, onu içeren üç TU yeniden derleniyor.
+Kapı: `tests/gomulu_stdlib_tazelik.py` (`build.sh suites`'in İLK adımı) — derleme
+sistemi bağımlılığı + `./tulpar`'ın her lib dosyasını AYNEN taşıması; bayat bir
+`./tulpar` ile paketler koşmaz. (CRLF'li lib dosyaları ikiliye LF'li gömülüyor —
+CMake CR'yi düşürüyor; kapı bunu normalize ediyor.)
+
+`src/embedded_libs.h` üretilen çıktıdır (gitignore) — elle düzenleme, şablon
+`src/embedded_libs.h.in` ve `lib/*.tpr` düzenlenir. **Yeni** bir lib dosyası hâlâ
+`EmbedLibraries.cmake` + şablonda bir yuva ister. SQLite `lib/sqlite3/sqlite3.c` hem
 `tulpar`'a hem `tulpar_runtime`'a derlenir. → [[Standard Library]] · [[SQLite and DB]]
 
 ## ⚠️ WSL stale-build
