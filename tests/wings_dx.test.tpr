@@ -130,6 +130,46 @@ func run_alias_accepts_returns() {
     assert_eq_str(_routes[last]["response_model"]["id"], "int");
 }
 
+// ---- bağımlılık enjeksiyonu (depends/dep) — gerçek dağıtıcıdan ---------------------
+// K289 (2026-09-27): DI'ın CI'da davranış testi yoktu (examples/wings_di_test.tpr
+// yalnız derleniyor). Skaler dönen bağımlılık `_dres["_status"]` okumasında
+// fırlatıyor, her istek 500 dönüyordu. İstek _wings_dispatch_cached'den geçer:
+// ara katman, DI, handler, zarf — canlı sunucunun kullandığı tek giriş.
+func _di_kullanici(req) {
+    str t = req["headers"]["Authorization"];
+    if (length(t) == 0) { return unauthorized("token gerekli"); }
+    return {"id": 1, "name": "Ada"};
+}
+func _di_token(req) { return "tok-" + toString(length(req["headers"]["Authorization"])); }
+func _di_sayi(req) { return 7; }
+func _di_profil(req) {
+    return ok({"user": dep("_di_kullanici"), "token": dep("_di_token"), "n": dep("_di_sayi")});
+}
+get("/di/profil", "_di_profil");
+depends("_di_kullanici");
+depends("_di_token");
+depends("_di_sayi");
+
+func _di_istek(str auth): str {
+    _request = {"method": "GET", "path": "/di/profil", "headers": {"Authorization": auth},
+                "params": {}, "cookies": {}};
+    int idx = _find_route("GET", "/di/profil");
+    str wire = _wings_dispatch_cached(idx, 0);
+    return wire;
+}
+func run_di_short_circuit() {
+    str w = _di_istek("");
+    assert_contains(w, " 401 ");
+    assert_contains(w, "token gerekli");
+}
+func run_di_inject_scalar() {
+    str w = _di_istek("abc");
+    assert_contains(w, " 200 ");
+    assert_contains(w, "\"name\":\"Ada\"");   // sözlük bağımlılık
+    assert_contains(w, "\"token\":\"tok-3\"");  // dizgi bağımlılık (eskiden 500)
+    assert_contains(w, "\"n\":7");              // int bağımlılık (eskiden 500)
+}
+
 print("=== wings DX (alias'lar + resource) ===");
 test("resource route kaydı + only/except", "run_resource_routes");
 test("resource şema türetme", "run_resource_schema");
@@ -141,4 +181,6 @@ test("metrics_prom() aliası", "run_alias_metrics");
 test("gzip() aliası", "run_alias_gzip");
 test("delete() route aliası", "run_alias_delete_route");
 test("accepts()/returns() aliasları", "run_alias_accepts_returns");
+test("DI: sözlük bağımlılık kısa devre (401)", "run_di_short_circuit");
+test("DI: sözlük + dizgi + int enjeksiyonu (200)", "run_di_inject_scalar");
 test_summary();

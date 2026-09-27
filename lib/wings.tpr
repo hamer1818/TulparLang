@@ -392,6 +392,8 @@ func group(str prefix, str register_fn) {
 // value is injected and read by the handler via `dep("name")`. A dependency may
 // short-circuit by returning a response dict (`_status` set, e.g.
 // `unauthorized(...)`), exactly like middleware — but per-route and value-producing.
+// Any value may be returned: a dict, but also a plain string / int / bool
+// (e.g. the raw token) — only a dict can short-circuit.
 //
 //   func current_user(req) {
 //       str t = req["headers"]["Authorization"];
@@ -1648,7 +1650,14 @@ func _wings_dispatch_inner(int route_idx, int keep) {
         while (_di < length(_dl)) {
             str _dname = _dl[_di];
             json _dres = call(_dname, _request);
-            int _dst = _dres["_status"];
+            // Yalnız bir SÖZLÜK yanıt olabilir. Skaler dönen bağımlılık
+            // (ör. token dizgisi, kullanıcı id'si) eskiden `_dres["_status"]`
+            // okumasında "get islemi icin gecersiz hedef" fırlatıyor ve her
+            // istek 500 dönüyordu (ölçüldü 2026-09-27, K289).
+            int _dst = 0;
+            if (typeof(_dres) == "object") {
+                _dst = _dres["_status"];
+            }
             if (_dst != 0) {
                 _wings_requests_total = _wings_requests_total + 1;
                 if (_dst >= 500) {

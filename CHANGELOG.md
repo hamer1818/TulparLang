@@ -194,6 +194,21 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   iç içe lambda, kalıcı diziye push, kalıcılaştıktan sonra yakalanan
   değişkene yazma); eski runtime'la altısı da kırmızı.
 
+### Düzeltildi — Wings DI skaler bağımlılıkta 500; ORM `first(m)` sessizce `{}`
+
+- **Wings `depends`/`dep`:** dizgi/int/bool döndüren bir bağımlılık (ör. ham
+  token) `_dres["_status"]` okumasında fırlatıyor, her istek 500 dönüyordu
+  (ölçüldü 2026-09-27). Artık yalnız sözlük yanıt kısa devre yapabiliyor,
+  skaler değer `dep("ad")` ile okunuyor. DI'ın CI'da davranış testi yoktu
+  (`examples/wings_di_test.tpr` yalnız derleniyor): `tests/wings_dx.test.tpr`
+  +2, istek gerçek dağıtıcıdan (`_wings_dispatch_cached`) geçiyor — 401 kısa
+  devre ve sözlük + dizgi + int enjeksiyonu.
+- **ORM `first(m)`:** koşul her zaman SQL'e gömülüyordu; koşulsuz çağrı
+  "`... WHERE  LIMIT 1`" kuruyor, SQL hatası yutuluyor ve satırlar varken
+  bile **sessizce `{}`** dönüyordu. Artık tablonun ilk satırı (boş koşul da
+  aynı). `tests/orm.test.tpr` +2 denetim.
+- Pozitif kontrol: eski gömülü kitaplıkla iki yeni test de kırmızı.
+
 ### Düzeltildi — checkpoint içinde global'e yazılan değer geri sarmadan sonra ölüyordu
 
 Kare başına `arena_save()` / `arena_drop()` (motorun oyun döngüsü, `lib/tame.tpr`
