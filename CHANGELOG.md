@@ -80,6 +80,33 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   mekanizma ayağı, lib dosyası değişip ikili yenilenmeyince etki ayağı
   kırmızı.
 
+### Düzeltildi — dinamik çağrı 8 argümanda sessizce kırpıyordu; tavan tek yerde, 32
+
+- `call(ad, a1, …, a10)` 10 parametreli fonksiyonu çağırınca 9. ve 10.
+  işaretçi çöpten okunuyordu (envanter sondası: boş satır + `0`, çıkış 0;
+  bu turun ilk ölçümünde SIGSEGV). `call(ad, x)` 3 parametreli fonksiyona
+  tek işaretçi veriyordu — o da SIGSEGV. Kapanış 8'de, `async` 16'da ayrı
+  tavan tutuyordu; 17 parametreli async fonksiyon stderr'e not basıp `0`
+  veriyordu, süreç 0 ile çıkıyordu.
+- Üç yol artık tek switch'ten geçiyor (`src/vm/boxed_call.hpp`,
+  `TULPAR_CALL_MAX_ARGS` = 32). Eksik argüman `null` (VOID), fazlası düşer
+  (eski sözleşme); 32'nin üstü **fırlatır** (`try/catch` yakalar, yakalanmazsa
+  çıkış 1). Async'te hata çağrı yerinde, coroutine kurulmadan.
+- Gömen için `aot_func_lookup`'ın çağrı eşi:
+  `extern "C" VMValue aot_func_invoke(void *fn, int arity, VMValue *args, int argc)`
+  — motor kendi 8'de kesen switch'ini taşımak zorunda kalmasın.
+- Performans (Ryzen 7 9800X3D, Linux 7.2.8, GCC 15, 2026-09-27; 20M çağrı,
+  iki ikili turla eşlenmiş 9 tur, medyan ns/çağrı, önce → sonra):
+  `call(ad)` 3.69 → 3.52, `call(ad, x)` 8.44 → **5.37**, `call(ad, a, b, c)`
+  6.71 → 5.36, 8 argüman 8.05 → 6.18, 3 parametreli kapanış 4.79 → 2.49.
+  `call(ad, x)`'in yavaşlığı bir store-forwarding kaçağıydı (değerle alınan
+  argüman iki 8 baytlık yazma + bir 16 baytlık `movdqa` okumayla
+  kopyalanıyordu); yeterince argüman verilen çağrıda artık kopya da yok.
+- Testler: `tests/call_nargs.test.tpr` +8 (10/32/33 argüman, eksik argüman,
+  kapanış), `tests/async.test.tpr` +3 (16/20/33 parametre),
+  `tests/fonksiyon_arama.sh` +3 (`aot_func_invoke` 10 argümanla). Pozitif
+  kontrol: eski runtime'la `call_nargs` 7. testte çöküyor, `async` 2 FAIL.
+
 ### Eklendi — `aot_func_lookup`: fonksiyonu adıyla, çağırmadan ve ayırmadan çöz
 
 - Gömen (embedder) için C yüzü:

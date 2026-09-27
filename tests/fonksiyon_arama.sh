@@ -20,6 +20,8 @@
 #   5. TUMU-int `func yerel(int x): int` yerel ABI'li: ciplak `yerel` sembolu
 #      VAR ama arama onu DONDURMEZ (call()'in ikinci dlsym'i dondururdu ve
 #      kutulu imzayla cagirirdi — isaretci ABI'si karisirdi)
+#   5b. aot_func_invoke (aramanin cagri esi, call() ile ayni dagitim): 10
+#      parametreli `onlu` dogru sonucu verir — eski tavan 8'di (2026-09-27)
 #   6. AYIRMA YOK (glibc: mallinfo2): 400 000 arama sonrasi yigin degismez.
 #      Olcegin POZITIF KONTROLU: ayni sayac, eski `call()` yolunun (cagri
 #      basina yeni dizgi) buyumesini GORMELI — goremiyorsa olcek kordur.
@@ -55,6 +57,8 @@ func ikili(a, b) { return a + b; }
 func sifir() { return 42; }
 func tipli(int x) { return x * 3; }
 func yerel(int x): int { return x * 3; }
+// 8'in ustu: gomen (motor) carpisma kancasi + yuzey normali = 10 arguman.
+func onlu(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) { return a1 + a2 * 2 + a9 * 9 + a10 * 10; }
 // Denetim sondanin icinde; call() onu dlsym ile bulur (t_arama_kontrol).
 call("arama_kontrol");
 TPREOF
@@ -72,6 +76,7 @@ cat > "$TMP/sonda.cpp" <<'CPPEOF'
 
 extern "C" void *aot_func_lookup(const char *name, int *arity);
 extern "C" VMValue aot_call_dynamic_n(VMValue func_name, VMValue *args, int argc);
+extern "C" VMValue aot_func_invoke(void *fn, int arity, VMValue *args, int argc);
 extern "C" ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length);
 
 typedef void (*F0)(VMValue *);
@@ -132,6 +137,22 @@ extern "C" void t_arama_kontrol(VMValue *result) {
   denet(aot_func_lookup("yok_boyle_bir_fonksiyon", &ar) == nullptr && ar == -1, "bilinmeyen ad: nullptr, arite -1");
   ar = 99;
   denet(aot_func_lookup("", &ar) == nullptr && ar == -1 && aot_func_lookup(nullptr, nullptr) == nullptr, "bos / null ad: nullptr");
+  // aot_func_invoke: cozulen isaretciyi call() ile AYNI dagitimla cagirir.
+  // 10 arguman (eski tavan 8: 9. ve 10. isaretci coptan okunurdu), motorun
+  // verdigi gibi VM_FLOAT. Eksik arguman VOID olur (toplama katilmaz: 0).
+  ar = 99;
+  void *p10 = aot_func_lookup("onlu", &ar);
+  denet(p10 != nullptr && ar == 10, "onlu: onbellekten, arite 10");
+  if (p10 && ar == 10) {
+    VMValue a[10];
+    for (int i = 0; i < 10; i++) a[i] = VM_FLOAT((double)(i + 1));
+    denet(sayi(aot_func_invoke(p10, ar, a, 10)) == 1.0 + 4.0 + 81.0 + 100.0,
+          "aot_func_invoke(onlu, 1..10) == 186 (8'in ustu isaretciler dogru)");
+  }
+  if (p) {
+    VMValue a[2] = {VM_INT(2), VM_INT(40)};
+    denet(sayi(aot_func_invoke(p, 2, a, 2)) == 42.0, "aot_func_invoke(ikili, 2, 40) == 42");
+  }
   char uzun[400];
   std::memset(uzun, 'x', sizeof uzun - 1);
   uzun[sizeof uzun - 1] = 0;

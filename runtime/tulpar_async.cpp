@@ -36,6 +36,8 @@
 
 #include "tulpar_async.h"
 #include "tulpar_arc.h"
+#include "../src/vm/boxed_call.hpp"
+#include "../src/common/localization.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -68,6 +70,7 @@ inline void async_sleep_ms(long long ms) {
 } // namespace
 
 extern "C" {
+void aot_runtime_error(const char *msg); // src/vm/runtime_bindings.cpp
 void arc_retain_vmvalue(VMValue *val);
 void arc_release_vmvalue(VMValue *val);
 // Exception-handler runtime (src/vm/runtime_bindings.cpp). Coroutines get their
@@ -152,32 +155,16 @@ long long now_ms() {
 
 // Invoke a top-level user function via the AOT ABI:
 //   void fn(VMValue* ret, VMValue* arg0, VMValue* arg1, ...)
+// The switch lives in src/vm/boxed_call.hpp, shared with call() and closures.
+// It used to be a hand-written 0..16 copy here whose default branch printed a
+// note and returned VOID — the awaiting code got 0 and the process exited 0
+// (measured 2026-09-27, 17-param async fn). aot_async_spawn now rejects
+// argc > TULPAR_CALL_MAX_ARGS at the call site, so this never sees it.
 VMValue call_user_fn(void *fn, VMValue *a, int argc) {
   VMValue r;
   r.type = VM_VAL_VOID;
   r.as.int_val = 0;
-  switch (argc) {
-    case 0: ((void (*)(VMValue *))fn)(&r); break;
-    case 1: ((void (*)(VMValue *, VMValue *))fn)(&r, &a[0]); break;
-    case 2: ((void (*)(VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1]); break;
-    case 3: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2]); break;
-    case 4: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3]); break;
-    case 5: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4]); break;
-    case 6: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]); break;
-    case 7: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6]); break;
-    case 8: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7]); break;
-    case 9: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8]); break;
-    case 10: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9]); break;
-    case 11: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10]); break;
-    case 12: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11]); break;
-    case 13: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11], &a[12]); break;
-    case 14: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11], &a[12], &a[13]); break;
-    case 15: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11], &a[12], &a[13], &a[14]); break;
-    case 16: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11], &a[12], &a[13], &a[14], &a[15]); break;
-    default:
-      fprintf(stderr, "Tulpar async: 16'dan fazla parametreli async fonksiyon desteklenmiyor / async functions with >16 params unsupported\n");
-      break;
-  }
+  tulpar_boxed_call(fn, &r, a, argc);
   return r;
 }
 
@@ -423,6 +410,26 @@ void aot_promise_settle(ObjPromise *p, VMValue value, int state) {
 
 ObjPromise *aot_async_spawn(void *fn, VMValue *args, int argc) {
   ensure_scheduler_inited();
+  if (argc > TULPAR_CALL_MAX_ARGS) {
+    // Cagri yerinde, senkron: coroutine hic kurulmaz. aot_runtime_error
+    // firlatir (yakalanmazsa cikis 1). Donus yalniz TULPAR_SOFT_RUNTIME'da:
+    // fonksiyon CAGRILMAZ (eksik isaretciyle cagri cop okumak olurdu), VOID
+    // ile yerine gelmis bir promise doner — yumusak modun "tani + 0" kurali.
+    char b[256];
+    std::snprintf(b, sizeof b, "%s: %d (%s %d)",
+                  tulpar::i18n::tr_en(
+                      "Calisma Zamani Hatasi: async fonksiyonun parametre sayisi tavani asiyor",
+                      "Runtime Error: async function has too many parameters"),
+                  argc, tulpar::i18n::tr_en("en fazla", "at most"),
+                  TULPAR_CALL_MAX_ARGS);
+    aot_runtime_error(b);
+    ObjPromise *p = aot_promise_new();
+    VMValue v;
+    v.type = VM_VAL_VOID;
+    v.as.int_val = 0;
+    aot_promise_settle(p, v, /*fulfilled*/ 1);
+    return p;
+  }
   Task *t = new Task();
   t->fn = fn;
   t->argc = argc;

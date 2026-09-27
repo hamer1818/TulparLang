@@ -9,6 +9,7 @@
 #include "../../runtime/tulpar_gzip.h"
 #include "vm.hpp"
 #include "runtime_http_obj.hpp"
+#include "boxed_call.hpp"
 
 // Windows MSVC compatibility: ssize_t is not standard on Windows
 #if defined(_MSC_VER) && !defined(ssize_t)
@@ -294,87 +295,85 @@ static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
   // cap this never trips.
 }
 
-// Invoke a resolved boxed entry point through a signature whose arity matches
-// the callee, so WebAssembly's strictly-typed call_indirect never traps. `fp`
-// is `void t_name(VMValue* result, [VMValue* arg0, ...])`; `arg` is the single
-// value call()/call(name,arg) supplies. arity is the callee's user-parameter
-// count (-1 = unknown → native ABI slack, use the 1-arg shape).
-static VMValue aot_invoke_boxed(void (*fp)(VMValue *), int arity, VMValue arg) {
-  VMValue result = VM_VOID();
-  if (arity == 0) {
-    fp(&result); // callee: void(VMValue*) — no user params
-  } else {
-    // arity >= 1 (or unknown): pass the single arg. 0-param handlers on native
-    // ignored it via ABI slack; on wasm arity is always known so we only reach
-    // here for genuine 1-param callees, whose signature this matches exactly.
-    ((void (*)(VMValue *, VMValue *))fp)(&result, &arg);
-  }
-  return result;
+// Dinamik cagri (call(), kapanis, gomen) aritesi tavani asti: SESSIZ DEGIL.
+// Eskiden call() 8'de kirpiyordu — cagrilan 9. ve sonraki isaretcileri
+// yazmaclardan/yigindan COP olarak okuyordu (olculdu 2026-09-27: 10
+// parametreli fonksiyon call() ile -> SIGSEGV; 2026-09-27 envanter sondasinda
+// bos satir + 0, cikis 0).
+static void aot_call_arity_error(const char *ne, int n) {
+  char b[256];
+  std::snprintf(b, sizeof b, "%s — %s: %d (%s %d)",
+                tulpar::i18n::tr_en("Calisma Zamani Hatasi: dinamik cagri tavani asildi",
+                                    "Runtime Error: dynamic call limit exceeded"),
+                ne, n, tulpar::i18n::tr_en("en fazla", "at most"),
+                TULPAR_CALL_MAX_ARGS);
+  aot_runtime_error(b);
 }
 
-// Maximum user-parameter count call(name, a, b, ...) can forward. 8 covers
-// every realistic callback (arcade/game hooks take 0-3); the codegen and the
-// switch below must agree on this cap.
-#define AOT_CALL_MAX_ARGS 8
-
-// N-argument generalisation of aot_invoke_boxed. `fp` is the boxed entry
+// N-argument dispatch. `fp` is the boxed entry
 // `void t_name(VMValue* result, [VMValue* arg0, ...])`; `args`/`argc` are the
 // values call(name, a, b, ...) supplied. We call through the signature the
 // callee ACTUALLY has (its registered `arity`), padding missing params with
 // VOID and dropping extras — so the pointer count always matches the callee
 // and wasm's typed call_indirect never traps. When arity is unknown (-1, the
-// native dlsym fallback) we trust argc.
+// native dlsym fallback) we trust argc. The switch itself lives in
+// boxed_call.hpp (shared with closures and async); above TULPAR_CALL_MAX_ARGS
+// it throws instead of truncating.
+//
+// When the caller supplied at least `n` values the callee gets pointers into
+// `args` itself — no copy. That is what closures and async already did: the
+// callee's prologue copies every param into its own slot on entry, it never
+// writes back through the pointer. Only a SHORT call needs the padded copy.
+// (Measured 2026-09-27, Ryzen 7 9800X3D: with the 32-slot copy loop always on,
+// call() with 8 args went 8.05 -> 9.31 ns; the 8-cap copy had been unrolled.)
 static VMValue aot_invoke_boxed_n(void (*fp)(VMValue *), int arity,
-                                  const VMValue *args, int argc) {
+                                  VMValue *args, int argc) {
   VMValue result = VM_VOID();
   int n = (arity >= 0) ? arity : argc;
   if (n < 0) n = 0;
-  if (n > AOT_CALL_MAX_ARGS) n = AOT_CALL_MAX_ARGS;
-  // Materialise exactly `n` param slots so each `&slots[i]` is a valid pointer
-  // even when the caller passed fewer values than the callee declares.
-  VMValue slots[AOT_CALL_MAX_ARGS];
+  if (n > TULPAR_CALL_MAX_ARGS) {
+    aot_call_arity_error(tulpar::i18n::tr_en("cagrilan fonksiyonun parametre sayisi",
+                                             "callee parameter count"),
+                         n);
+    return result;
+  }
+  if (argc >= n) {
+    tulpar_boxed_call((void *)fp, &result, args, n);
+    return result;
+  }
+  // Short call: materialise exactly `n` param slots so each `&slots[i]` is a
+  // valid pointer even though the caller passed fewer values.
+  VMValue slots[TULPAR_CALL_MAX_ARGS];
   for (int i = 0; i < n; i++) slots[i] = (i < argc) ? args[i] : VM_VOID();
-  switch (n) {
-  case 0:
-    fp(&result);
-    break;
-  case 1:
-    ((void (*)(VMValue *, VMValue *))fp)(&result, &slots[0]);
-    break;
-  case 2:
-    ((void (*)(VMValue *, VMValue *, VMValue *))fp)(&result, &slots[0],
-                                                    &slots[1]);
-    break;
-  case 3:
-    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *))fp)(
-        &result, &slots[0], &slots[1], &slots[2]);
-    break;
-  case 4:
-    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fp)(
-        &result, &slots[0], &slots[1], &slots[2], &slots[3]);
-    break;
-  case 5:
-    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
-               VMValue *))fp)(&result, &slots[0], &slots[1], &slots[2],
-                              &slots[3], &slots[4]);
-    break;
-  case 6:
-    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
-               VMValue *))fp)(&result, &slots[0], &slots[1], &slots[2],
-                              &slots[3], &slots[4], &slots[5]);
-    break;
-  case 7:
-    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
-               VMValue *, VMValue *))fp)(&result, &slots[0], &slots[1],
-                                        &slots[2], &slots[3], &slots[4],
-                                        &slots[5], &slots[6]);
-    break;
-  default: // 8
-    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
-               VMValue *, VMValue *, VMValue *))fp)(
-        &result, &slots[0], &slots[1], &slots[2], &slots[3], &slots[4],
-        &slots[5], &slots[6], &slots[7]);
-    break;
+  tulpar_boxed_call((void *)fp, &result, slots, n);
+  return result;
+}
+
+// call(name) / call(name, arg): one supplied value (VOID for call(name)).
+// arity is the callee's user-parameter count (-1 = unknown -> native ABI
+// slack, use the 1-arg shape). The 0- and 1-param shapes stay a direct call —
+// they are the Wings handler / game-hook hot path. A callee with MORE params
+// used to get the 1-arg shape too and read its 2nd.. pointers from garbage
+// registers (measured 2026-09-27: `func uc(a, b, c)` + `call("uc", 1)` ->
+// SIGSEGV); it now takes the padded N-path: missing params are VOID, exactly
+// like call(name, a, b) with fewer args than the callee declares.
+//
+// `argp` is a POINTER on purpose. Taken by value, the inlined copy of `arg`
+// compiled (GCC 15, x86-64) to two 8-byte spills of the argument registers
+// followed by one 16-byte `movdqa` reload of the same bytes — a store-to-load
+// forwarding miss on every call. call(name, x) cost 8.4 ns against 3.7 ns for
+// call(name) and 5.4 ns for call(name, a, b, c) (measured 2026-09-27, Ryzen 7
+// 9800X3D); with the pointer the argument is spilled once and handed over.
+static inline VMValue aot_invoke_boxed(void (*fp)(VMValue *), int arity,
+                                       VMValue *argp) {
+  if (UNLIKELY(arity > 1)) return aot_invoke_boxed_n(fp, arity, argp, 1);
+  VMValue result = VM_VOID();
+  if (arity == 0) {
+    fp(&result); // callee: void(VMValue*) — no user params
+  } else {
+    // arity 1, or unknown (native dlsym fallback): 0-param handlers ignore the
+    // extra arg via ABI slack. On wasm arity is always known.
+    ((void (*)(VMValue *, VMValue *))fp)(&result, argp);
   }
   return result;
 }
@@ -433,7 +432,8 @@ VMValue aot_call_dynamic(VMValue func_name) {
   // No-argument dispatch: a 0-param callee is invoked as void(VMValue*); a
   // 1-param callee (called with no arg) gets a VOID placeholder so the wasm
   // signature still matches. aot_invoke_boxed picks the shape from arity.
-  return aot_invoke_boxed(func_ptr, arity, VM_VOID());
+  VMValue none = VM_VOID();
+  return aot_invoke_boxed(func_ptr, arity, &none);
 }
 
 // call(name, arg) — dynamic dispatch that passes ONE argument to the target.
@@ -491,7 +491,7 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
     aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
   }
 
-  return aot_invoke_boxed(func_ptr, arity, arg);
+  return aot_invoke_boxed(func_ptr, arity, &arg);
 }
 
 // call(name, a, b, ...) — dynamic dispatch forwarding N arguments (N >= 2) to
@@ -606,6 +606,21 @@ extern "C" void *aot_func_lookup(const char *name, int *arity) {
   sym[1] = '_';
   memcpy(sym + 2, name, len + 1);
   return tulpar_dlsym(TULPAR_RTLD_DEFAULT, sym); // arite bilinmez: -1 kaldi
+}
+
+// aot_func_lookup'in CAGRI esi: cozulmus kutulu giris noktasini call() ile
+// AYNI dagitimla cagir — tam `arity` isaretci (eksik parametre VOID, fazlasi
+// duser; arity -1 ise argc'ye guvenilir). Gomen kendi switch'ini tasimasin
+// diye var: tulpar-engine'in eng_script_invoke'u 8'de kesen elle yazilmis bir
+// kopya tutuyordu, yani call() tavani kalksa bile motor kancasi 8'de kalirdi.
+// Tavan TULPAR_CALL_MAX_ARGS (vm/boxed_call.hpp); ustu firlatir. `args` const
+// DEGIL: yeterince deger verildiyse cagrilan dogrudan bu diziye isaretci alir
+// (girişte kopyalar, geri yazmaz — ama sozlesme bunu vaat etmiyor).
+extern "C" VMValue aot_func_invoke(void *fn, int arity, VMValue *args,
+                                   int argc) {
+  if (!fn) return VM_VOID();
+  if (argc < 0 || !args) argc = 0;
+  return aot_invoke_boxed_n((void (*)(VMValue *))fn, arity, args, argc);
 }
 
 // AOT runtime initialization (locale/UTF-8, console modes)
@@ -9775,11 +9790,11 @@ VMValue aot_is_object(VMValue v) { return VM_BOOL(IS_OBJECT(v)); }
 VMValue aot_is_bool(VMValue v) { return VM_BOOL(IS_BOOL(v)); }
 
 VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
+  VMValue result;
+  result.type = VM_VAL_VOID;
   if (!cls) {
     aot_runtime_error("Calisma Zamani Hatasi: Null closure cagirildi");
-    VMValue res;
-    res.type = VM_VAL_VOID;
-    return res;
+    return result;
   }
   if (cls->arity != argc) {
     {
@@ -9789,45 +9804,14 @@ VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
                     cls->arity, argc);
       aot_runtime_error(_b);
     }
-    VMValue res;
-    res.type = VM_VAL_VOID;
-    return res;
+    return result;
   }
-  VMValue result;
-  result.type = VM_VAL_VOID;
-  void *env = cls->env;
-  switch (argc) {
-    case 0:
-      ((void(*)(VMValue*, void*))cls->func_ptr)(&result, env);
-      break;
-    case 1:
-      ((void(*)(VMValue*, void*, VMValue*))cls->func_ptr)(&result, env, &args[0]);
-      break;
-    case 2:
-      ((void(*)(VMValue*, void*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1]);
-      break;
-    case 3:
-      ((void(*)(VMValue*, void*, VMValue*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1], &args[2]);
-      break;
-    case 4:
-      ((void(*)(VMValue*, void*, VMValue*, VMValue*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1], &args[2], &args[3]);
-      break;
-    case 5:
-      ((void(*)(VMValue*, void*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1], &args[2], &args[3], &args[4]);
-      break;
-    case 6:
-      ((void(*)(VMValue*, void*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1], &args[2], &args[3], &args[4], &args[5]);
-      break;
-    case 7:
-      ((void(*)(VMValue*, void*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1], &args[2], &args[3], &args[4], &args[5], &args[6]);
-      break;
-    case 8:
-      ((void(*)(VMValue*, void*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1], &args[2], &args[3], &args[4], &args[5], &args[6], &args[7]);
-      break;
-    default:
-      aot_runtime_error("Calisma Zamani Hatasi: 8'den fazla parametreli closure cagirimi desteklenmiyor");
-      break;
-  }
+  // Switch vm/boxed_call.hpp'de (call() ve async ile ortak). Eskiden burada
+  // elle yazilmis 0..8 kollari vardi ve tavan call()'unkiyle ayri tutuluyordu.
+  if (!tulpar_boxed_call_env(cls->func_ptr, &result, cls->env, args, argc))
+    aot_call_arity_error(tulpar::i18n::tr_en("kapanis parametre sayisi",
+                                             "closure parameter count"),
+                         argc);
   return result;
 }
 
