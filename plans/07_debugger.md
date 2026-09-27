@@ -6,6 +6,12 @@ Parça B (DAP server) PR'lar #178/#180/#186/#188/#190 + polish bundle'ları
 <file.tpr>` gdb-MI3 köprüsü üzerinden breakpoint/step/watch/condition/
 hit-count/logpoint/data+instruction breakpoint. Bkz. STATUS §
 "Çekirdek dil".
+⚠ **2026-09-27 düzeltmesi:** bağdaştırıcı o güne dek HİÇ `stopped` /
+`terminated` olayı göndermiyordu (MI kaydı `'*'` önekiyle karşılaştırılıyordu)
+— yani breakpoint'te duraklama, logpoint ve oturum kapanışı istemcide hiç
+çalışmadı. Düzeltildi; `tests/dap_audit.py` breakpoint, koşullu breakpoint,
+logpoint ve exited/terminated olaylarını ölçüyor. Data / instruction
+breakpoint hâlâ ölçülmedi.
 **Tahmin:** 5-7 PR (Parça A için 7 PR açıldı, kapandı; Parça B için
 3-4 PR daha)
 **Risk:** Yüksek — yeni codegen path (DWARF emit) + yeni TCP protokol
@@ -176,8 +182,8 @@ düşünülür.
 
 1. gdb mı kendi debugger mı? RFC B1 (gdb wrapper).
 2. Windows CodeView vs DWARF — toolchain ne diyorsa.
-3. JIT debugger? VM path'i için ayrı bir debugger gerekir; MVP AOT
-   yalnız.
+3. ~~JIT debugger?~~ Kapandı: VM ve JIT kaldırıldı (2026-06-15, AOT-only),
+   tek yol AOT.
 4. Source map'i AOT IR'da nasıl korunur? LLVM `!dbg` metadata zaten
    bu işi yapıyor.
 5. Async stack (Plan 06) debugger entegrasyonu — sonraki faz, async
@@ -189,8 +195,9 @@ düşünülür.
   gösterir, kullanıcı kafa karışır. AOT optimizer'a `--debug` modunda
   `-O0` zorla.
 - **Orta:** Windows DAP path debugger toolchain'ine bağımlı —
-  pacman'dan `mingw-w64-x86_64-gdb` yoksa fail. Doc + install
-  prompt gerek.
+  pacman'dan `mingw-w64-x86_64-gdb` yoksa fail. ✅ 2026-09-27: `launch`
+  gdb'yi PATH'te arıyor, yoksa platforma özgü kurulum komutuyla düşüyor;
+  README'de önkoşul notu var.
 - **Orta:** `--debug` build'i `-g` ile compile-time `-O0` üretmeli;
   prod binary ile karışmamalı. CMake target separation.
 - **Düşük:** DAP protocol changes — stable spec, low churn.

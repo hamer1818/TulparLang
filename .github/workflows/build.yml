@@ -249,8 +249,10 @@ jobs:
           # vulkan-validationlayers) yalnız motor RHI testleri içindi; motor
           # 2026-09-20'de ayrı depoya (tulpar-engine) taşındı ve onlarla
           # birlikte kaldırıldı. Kalanlar derleyici ve tame/raylib (X11) için.
-          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev
-          version: 1.3
+          # gdb: `tulpar debug` (DAP) gdb MI3 köprüsü; tests/dap_audit.py onu
+          # sürüyor ve bu işte ATLANMASI yasak (TULPAR_DAP_ZORUNLU, suites adımı).
+          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev gdb
+          version: 1.4
 
       - name: Verify apt packages installed
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
@@ -346,6 +348,10 @@ jobs:
       # hata sayar, yani bir paket sessizce "koşmuyor" duruma düşemez.
       - name: Run tests/*.test.tpr suites
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        env:
+          # DAP denetimi gdb yoksa görünür atlıyor (macOS'ta gdb yok). Linux'ta
+          # gdb kurulu olmalı; eksikse atlama KIRMIZI olsun, sessiz sarı değil.
+          TULPAR_DAP_ZORUNLU: "1"
         run: ./build.sh suites
         timeout-minutes: 15
 
