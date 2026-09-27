@@ -1,0 +1,16 @@
+// Beklenen: `call("ad")` dizgi sabitindeki ad bir kullanici fonksiyonu
+// degilse derleme zamaninda reddedilmeli (K009, 2026-09-27).
+//
+// Ciplak ad bicimi `call(yokboyle)` bilinmeyen adda zaten derleme hatasi
+// veriyordu; dizgi sabiti ise `tulpar typecheck`ten "ok" ile geciyor ve
+// ancak CALISMA ANINDA "Fonksiyon bulunamadi 't_yokboyle'" diye patliyordu.
+// Fazla arguman da dogrudan cagridaki kuralla ayni: hata.
+
+// EXPECT: [typecheck]
+// EXPECT: call(): no user function named 'yokboyle'
+// EXPECT: Function 'iki' expects 2 argument(s), got 3
+
+func iki(int a, int b): int { return a + b; }
+
+print(call("yokboyle"));
+print(call("iki", 1, 2, 3));

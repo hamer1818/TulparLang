@@ -46,6 +46,10 @@ struct TypeInferContext {
   std::unordered_map<std::string, TypeSymbol> symbols;
   std::unordered_map<std::string, FunctionSignature> functions;
   std::unordered_map<std::string, StructTypeInfo> struct_types;
+  // Kullanicinin (bu dosya + ice aktarilan moduller) tanimladigi fonksiyon
+  // adlari. `functions` yerlesikleri de tutuyor; `call("ad")` yalniz
+  // kullanici fonksiyonunu cagirabildigi icin ayri kume (K009).
+  std::set<std::string> user_functions;
 
   // P23 — COZUM ile BASLATMA ayri sorulardir.
   //

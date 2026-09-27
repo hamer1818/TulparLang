@@ -122,6 +122,28 @@ func run_closure_over_cap_throws() {
     assert_throws("_kapanis_tavan_ustu", "32");
 }
 
+// TUMU-int fonksiyonlar (K092 / Tuzaklar 7g, 2026-09-27). `func f(int x): int`
+// yerel (i64) ABI'li: kutulu `t_f` yoktu, call() ciplak `f` sembolune dusup
+// onu void(VMValue*, VMValue*) diye cagiriyordu — sonuc yuvasi hic
+// yazilmiyor, donus SESSIZCE null, cikis kodu 0. Artik derleyici kutulu bir
+// sarmalayici uretip call() onbellegine kaydediyor. Eski derleyiciyle bu
+// testlerin hepsi kirmizi (null != 21).
+func tipli(int x): int { return x * 3; }
+func topla(int a, int b): int { return a + b; }
+func dokuz(): int { return 9; }
+
+func run_native_abi() {
+    assert_eq_int(tipli(7), 21);                 // dogrudan cagri: yerel yol
+    assert_eq_int(call("tipli", 7), 21);         // dizgi adi
+    assert_eq_int(call(tipli, 7), 21);           // fonksiyon referansi
+    assert_eq_int(call(topla, 40, 2), 42);       // N arguman
+    assert_eq_int(call("dokuz"), 9);             // parametresiz
+    assert_eq_int(call(tipli, 2.9), 6);          // float -> int: kesilir, bit deseni gecmez
+    var reg = [];
+    push(reg, "topla");
+    assert_eq_int(call(reg[0], 1, 2), 3);        // adi calisma aninda gelen
+}
+
 print("=== call() N-argument dispatch ===");
 test("0-arg dispatch fires", "run_zero_arg");
 test("1-arg dispatch (Wings path)", "run_one_arg");
@@ -137,4 +159,5 @@ test("call(name) into 3-param fn pads VOID", "run_short_call_zero");
 test("call(name, a, b) into 3-param fn pads VOID", "run_short_call_two");
 test("10-param closure", "run_closure_ten");
 test("33-param closure throws", "run_closure_over_cap_throws");
+test("tumu-int (yerel ABI) fonksiyon call() ile (K092)", "run_native_abi");
 test_summary();

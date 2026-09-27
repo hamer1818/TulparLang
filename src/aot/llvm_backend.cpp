@@ -13292,6 +13292,61 @@ static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
   }
 }
 
+// Tumu-int yerel ABI'li kullanici fonksiyonu `fname` icin kutulu giris
+// noktasi `tb_<ad>`: void(VMValue *sonuc, VMValue *a0, ...). Argumanlar
+// dogrudan cagridaki gibi cozulur (llvm_vm_val_to_int_payload — float
+// argumani kesilir, bit deseni gecmez), donus int olarak kutulanir. Yerel
+// fonksiyon degilse nullptr. K092 / Tuzaklar 7g.
+static LLVMValueRef native_boxed_wrapper(LLVMBackend *backend, const char *fname) {
+  LLVMValueRef bare = LLVMGetNamedFunction(backend->module, fname);
+  if (!bare) return nullptr;
+  LLVMTypeRef bft = LLVMGlobalGetValueType(bare);
+  if (LLVMGetTypeKind(bft) != LLVMFunctionTypeKind ||
+      LLVMGetReturnType(bft) != backend->int_type)
+    return nullptr;
+  bool is_user_native = false;
+  for (int i = 0; i < backend->function_count && !is_user_native; i++)
+    is_user_native = backend->functions[i].name &&
+                     strcmp(backend->functions[i].name, fname) == 0 &&
+                     backend->functions[i].type == bft;
+  if (!is_user_native) return nullptr;
+  const unsigned pc = LLVMCountParamTypes(bft);
+  std::vector<LLVMTypeRef> ptys(pc);
+  if (pc) LLVMGetParamTypes(bft, ptys.data());
+  for (LLVMTypeRef t : ptys)
+    if (t != backend->int_type) return nullptr;
+
+  char wname[300];
+  snprintf(wname, sizeof(wname), "tb_%s", fname);
+  if (LLVMValueRef w = LLVMGetNamedFunction(backend->module, wname)) return w;
+  std::vector<LLVMTypeRef> wpt(pc + 1, backend->ptr_type);
+  LLVMTypeRef wft = LLVMFunctionType(backend->void_type, wpt.data(), pc + 1, 0);
+  LLVMValueRef w = LLVMAddFunction(backend->module, wname, wft);
+  LLVMSetLinkage(w, LLVMInternalLinkage);
+  LLVMBasicBlockRef prev = LLVMGetInsertBlock(backend->builder);
+  LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(backend->context, w, "entry");
+  LLVMPositionBuilderAtEnd(backend->builder, bb);
+  std::vector<LLVMValueRef> args(pc);
+  for (unsigned i = 0; i < pc; i++) {
+    LLVMValueRef av = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
+                                     LLVMGetParam(w, i + 1), "tb.arg");
+    args[i] = llvm_vm_val_to_int_payload(backend, av);
+  }
+  LLVMValueRef rv = LLVMBuildCall2(backend->builder, bft, bare, pc ? args.data() : nullptr,
+                                   pc, "tb.call");
+  // Govde sarmalayiciya SATIR ICINE ALINMASIN: sarmalayici yalniz call()
+  // yolu icin; her tumu-int fonksiyonun govdesini ikiye katlamak (olculdu:
+  // intloop'un `compute`u tb_compute'a tamamen acildi) ikili boyutunu
+  // buyutur, sicak yola hicbir sey kazandirmaz.
+  LLVMAddCallSiteAttribute(
+      rv, LLVMAttributeFunctionIndex,
+      LLVMCreateEnumAttribute(backend->context, LLVMGetEnumAttributeKindForName("noinline", 8), 0));
+  LLVMBuildStore(backend->builder, llvm_vm_val_int_val(backend, rv), LLVMGetParam(w, 0));
+  LLVMBuildRetVoid(backend->builder);
+  if (prev) LLVMPositionBuilderAtEnd(backend->builder, prev);
+  return w;
+}
+
 void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   if (node->type != AST_PROGRAM)
     return;
@@ -13455,7 +13510,17 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
       char boxed[256];
       snprintf(boxed, sizeof(boxed), "t_%s", fname);
       LLVMValueRef target = LLVMGetNamedFunction(backend->module, boxed);
-      if (!target) continue; // native-ABI or not emitted; not a call() target
+      // Tumu-int `func f(int x): int` yerel (i64) ABI'li: kutulu `t_f` YOK,
+      // disa acilan sembol ciplak `f`. call() onbellekte bulamayinca
+      // `dlsym("t_f")`e, o da yoksa `dlsym("f")`e dusuyor ve i64 f(i64)'i
+      // void(VMValue*, VMValue*) diye cagiriyordu: sonuc yuvasi hic
+      // yazilmiyor, donus SESSIZCE null (Tuzaklar 7g, K092). Kutulu bir
+      // sarmalayici (`tb_<ad>`, thread_create'in `tw_<ad>`i gibi) uretip
+      // onu onbellege kaydediyoruz: call() / aot_func_lookup ad aramasinda
+      // once onbellege baktigi icin ciplak ada hic inmiyor. Dogrudan cagrilar
+      // (`f(7)`) sarmalayiciyi GORMEZ — yerel yol ayni kalir.
+      if (!target) target = native_boxed_wrapper(backend, fname);
+      if (!target) continue; // not emitted; not a call() target
       // Arity = user param count: the boxed signature is
       // void(VMValue* result, [VMValue* arg0, ...]), so subtract the result ptr.
       // The dispatcher uses this to pick a wasm-type-correct call_indirect.

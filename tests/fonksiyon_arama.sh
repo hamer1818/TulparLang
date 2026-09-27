@@ -19,7 +19,9 @@
 #   4. bilinmeyen ad / bos ad / sigmayan ad -> nullptr, arite -1
 #   5. TUMU-int `func yerel(int x): int` yerel ABI'li: ciplak `yerel` sembolu
 #      VAR ama arama onu DONDURMEZ (call()'in ikinci dlsym'i dondururdu ve
-#      kutulu imzayla cagirirdi — isaretci ABI'si karisirdi)
+#      kutulu imzayla cagirirdi — isaretci ABI'si karisirdi). K092'den beri
+#      derleyicinin urettigi kutulu sarmalayiciyi (`tb_yerel`, onbellekte)
+#      dondurur; o kutulu imzayla cagrilabilir: yerel(7.0) == 21.
 #   5b. aot_func_invoke (aramanin cagri esi, call() ile ayni dagitim): 10
 #      parametreli `onlu` dogru sonucu verir — eski tavan 8'di (2026-09-27)
 #   6. AYIRMA YOK (glibc: mallinfo2): 400 000 arama sonrasi yigin degismez.
@@ -126,10 +128,20 @@ extern "C" void t_arama_kontrol(VMValue *result) {
     denet(sayi(r) == 21.0, "tipli(7.0) == 21 (float -> int donusumu cagrilanda)");
   }
   // Ciplak ad yedegi YOK: `yerel` sembolu var ama VMValue ABI'si degil;
-  // call()'in ikinci dlsym'i onu bulur ve kutulu imzayla cagirirdi.
+  // call()'in ikinci dlsym'i onu bulur ve kutulu imzayla cagirirdi. K092
+  // (2026-09-27) sonrasi derleyici tumu-int fonksiyona kutulu sarmalayici
+  // (`tb_yerel`) uretip ONBELLEGE kaydediyor: arama onu dondurmeli —
+  // ciplak sembolu DEGIL — ve kutulu imzayla cagrilabilir olmali.
   ar = 99;
-  denet(dlsym(RTLD_DEFAULT, "yerel") != nullptr && aot_func_lookup("yerel", &ar) == nullptr && ar == -1,
-        "yerel ABI'li `yerel`: ciplak sembol var, arama nullptr (kutulu imzayla cagrilamaz)");
+  void *py = aot_func_lookup("yerel", &ar);
+  void *ciplak = dlsym(RTLD_DEFAULT, "yerel");
+  denet(ciplak != nullptr && py != nullptr && py != ciplak && ar == 1,
+        "yerel ABI'li `yerel`: ciplak sembol var, arama KUTULU sarmalayiciyi donduruyor (arite 1)");
+  if (py && py != ciplak && ar == 1) {
+    VMValue r = VM_VOID(), a = VM_FLOAT(7.0);
+    ((F1)py)(&r, &a);
+    denet(sayi(r) == 21.0, "yerel(7.0) sarmalayicidan == 21 (float -> int donusumu sarmalayicida)");
+  }
   ar = 99;
   void *pd = aot_func_lookup("disari", &ar);
   denet(pd == (void *)&t_disari && ar == -1, "disari: kayitsiz, dlsym yedegi, arite -1");
@@ -160,6 +172,17 @@ extern "C" void t_arama_kontrol(VMValue *result) {
 #ifdef SONDA_MALLINFO
   {
     const int N = 100000;
+    // Isinma turu: olculen KARARLI durum. Basarisiz dlsym glibc'de hata
+    // dizgisini (dlerror, boyu sembol adina bagli) her seferinde yeniden
+    // ayiriyor; dongunun ilk basarisizligi, oncekinden kalan FARKLI boyutlu
+    // dizginin yerini alir. K092'de (2026-09-27) `yerel` onbellege girip
+    // oncesindeki basarisiz dlsym dizisi degisince bu tek seferlik fark
+    // olcume girdi: 400 000 aramada +64 bayt, BIR kez (cagri basina degil).
+    {
+      int a0 = 0;
+      (void)aot_func_lookup("ikili", &a0); (void)aot_func_lookup("sifir", &a0);
+      (void)aot_func_lookup("disari", &a0); (void)aot_func_lookup("yok_boyle", &a0);
+    }
     const long long y0 = yigin();
     uintptr_t iz = 0;
     for (int i = 0; i < N; i++) {
