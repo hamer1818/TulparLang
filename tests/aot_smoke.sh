@@ -71,7 +71,35 @@ else
     dustu "stdlib ornegi derlenemedi"; tail -15 "$TMP/c.log" | sed 's/^/         /'
 fi
 
-# 4) Surum satiri: yayinlanan ikilinin kendini dogru tanitmasi.
+# 4) OLMAYAN cikti dizini (K161). Eskiden ayristirma + kod uretiminden SONRA
+#    obje yaziminda ciplak "Error emitting object file: No such file or
+#    directory" ile dusuyordu — hangi yolun eksik oldugunu soylemeden. Artik
+#    ust dizin kuruluyor; ust yol bir DOSYA ise yol adiyla hata veriyor.
+#    Pozitif kontrol: dizin GERCEKTEN yoktu (once `[ ! -e ]`).
+[ ! -e "$TMP/yok" ] || dustu "kurulum: $TMP/yok zaten var — dizin olusturma sinanmaz"
+if "$TUL" build "$TMP/a.tpr" "$TMP/yok/alt/a" > "$TMP/d.log" 2>&1 && [ -x "$TMP/yok/alt/a" ]; then
+    out=$("$TMP/yok/alt/a" 2>&1)
+    if [ "$out" = "tulpar:42" ]; then gecti "olmayan cikti dizini olusturuluyor"
+    else dustu "olmayan dizine derlenen ikili yanlis cikti: '$out'"; fi
+else
+    dustu "olmayan cikti dizinine derleme basarisiz"; tail -5 "$TMP/d.log" | sed 's/^/         /'
+fi
+: > "$TMP/dosya"
+# GORELI yol, $TMP icinden. MSYS2 (Windows CI) POSIX argumani yerel yola
+# cevirirken bir bileseni DOSYA olan yolu CEVIREMIYOR ve `/tmp/...dosya/a`yi
+# oldugu gibi geciriyor; yerel tulpar.exe onu `C:\tmp\...` sanip orada dizin
+# kurdu ve derleme "basarili" oldu (olculdu 2026-09-27, teshis ciktisiyla).
+# Olculmek istenen surucunun davranisi, kabugun yol cevirisi degil.
+if (cd "$TMP" && LC_ALL=C "$TUL" build a.tpr dosya/a) > "$TMP/e.log" 2>&1; then
+    dustu "ust yolu DOSYA olan cikti basarili sayildi"
+    sed 's/^/         log: /' "$TMP/e.log" | tail -4
+elif grep -q "not a directory: .*dosya" "$TMP/e.log"; then
+    gecti "ust yolu dosya olan cikti: yolu adiyla hata"
+else
+    dustu "ust yolu dosya olan cikti: anlamli tani yok"; tail -3 "$TMP/e.log" | sed 's/^/         /'
+fi
+
+# 5) Surum satiri: yayinlanan ikilinin kendini dogru tanitmasi.
 v=$("$TUL" version 2>&1 | head -1)
 case "$v" in
     TulparLang\ *) gecti "surum satiri ($v)" ;;
@@ -79,7 +107,7 @@ case "$v" in
 esac
 
 if [ "$fail" -eq 0 ]; then
-    echo -e "\033[0;32maot dumani temiz\033[0m (derle+linkle+calistir, dogrudan kosum, stdlib, surum)"
+    echo -e "\033[0;32maot dumani temiz\033[0m (derle+linkle+calistir, dogrudan kosum, stdlib, cikti dizini, surum)"
 else
     echo -e "\033[0;31mAOT DUMANI BASARISIZ!\033[0m" >&2
 fi
