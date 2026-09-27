@@ -37,6 +37,7 @@
 #include <sys/wait.h> // WIFSIGNALED / WTERMSIG — POSIX; MinGW'de YOK
 #endif
 #include <chrono>
+#include <filesystem>
 #include <string>
 
 #include <llvm-c/Core.h>
@@ -1154,10 +1155,46 @@ AOTResult aot_compile_with_filename(const char *source,
                                          source_filename, /*emit_debug=*/0);
 }
 
+// Çıktının üst dizini yoksa OLUŞTURULUR (K161). Eskiden hiçbir hedef bunu
+// yapmıyordu ve `tulpar build x.tpr yok/alt/out` (yerel, web, android)
+// ayrıştırma + kod üretiminden SONRA obje yazımında çıplak
+// "Error emitting object file: No such file or directory" ile düşüyordu —
+// hangi yolun eksik olduğunu söylemeden. `go build -o` / `cargo` gibi dizini
+// kuruyoruz; üst yol bir DOSYA ise ya da oluşturulamıyorsa yolu adıyla
+// söyleyip derlemeye hiç başlamıyoruz. Kapı: tests/aot_smoke.sh.
+static bool ensure_output_parent_dir(const char *output_name) {
+  if (!output_name || !*output_name) return true;
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::path parent = fs::path(output_name).parent_path();
+  if (parent.empty() || fs::is_directory(parent, ec)) return true;
+  if (fs::exists(parent, ec)) {
+    fprintf(stderr, "%s%s\n",
+            tulpar::i18n::tr_en("[AOT] Hata: cikti dizini bir dizin degil: ",
+                                "[AOT] Error: output directory is not a directory: "),
+            parent.string().c_str());
+    return false;
+  }
+  fs::create_directories(parent, ec);
+  if (ec) {
+    fprintf(stderr, "%s%s (%s)\n",
+            tulpar::i18n::tr_en("[AOT] Hata: cikti dizini olusturulamadi: ",
+                                "[AOT] Error: cannot create output directory: "),
+            parent.string().c_str(), ec.message().c_str());
+    return false;
+  }
+  fprintf(stderr, "%s%s\n",
+          tulpar::i18n::tr_en("[AOT] cikti dizini olusturuldu: ",
+                              "[AOT] created output directory: "),
+          parent.string().c_str());
+  return true;
+}
+
 AOTResult aot_compile_with_filename_debug(const char *source,
                                           const char *output_name,
                                           const char *source_filename,
                                           int emit_debug_info) {
+  if (!ensure_output_parent_dir(output_name)) return AOT_ERROR_EMIT;
   ASTNode_C *ast;
   {
     AOTPhaseTimer t("parse");

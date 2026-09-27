@@ -12,6 +12,15 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — olmayan çıktı dizini çıplak hatayla düşüyordu
+
+- `tulpar build x.tpr yok/alt/out` (yerel, web, android — hepsi) ayrıştırma ve
+  kod üretiminden SONRA obje yazımında "Error emitting object file: No such
+  file or directory" ile düşüyordu; hangi yolun eksik olduğunu söylemiyordu.
+  Artık üst dizin derlemeye başlamadan oluşturuluyor; üst yol bir dosyaysa
+  ya da oluşturulamıyorsa yolu adıyla söylüyor. `tests/aot_smoke.sh` iki
+  vakayı da sınıyor (eski ikiliyle ikisi de kırmızı).
+
 ### ⚠ KIRICI DEĞİŞİKLİKLER
 
 Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
