@@ -2556,7 +2556,9 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
 }
 
 // pop(array) -> VMValue
+extern "C" VMValue aot_sarr_pop_boxed(VMValue arr);  // K033: struct dizisi
 VMValue aot_array_pop(VMValue arr_val) {
+  if (IS_STRUCT_ARRAY(arr_val)) return aot_sarr_pop_boxed(arr_val);
   if (IS_ARRAY(arr_val) && AS_ARRAY(arr_val)->count > 0) {
     ObjArray *arr = AS_ARRAY(arr_val);
     return arr_items(arr)[--arr->count];
@@ -2755,6 +2757,135 @@ extern "C" int64_t *aot_sarr_elem_ptr(VMValue *arr, long long idx) {
     return scratch;
   }
   return a->data + (size_t)idx * (size_t)a->field_count;
+}
+
+// pop / remove_at (K033, 2026-09-27). `idx`teki elemani `dst`ye kopyalar
+// (nullptr = deger kullanilmiyor, `pop(d);` deyimi) ve diziden cikarir;
+// arkadakiler bir sola kayar — SIRA KORUNUR (takas-cikar degil). Bos dizi /
+// sinir disi (negatif dahil): calisma zamani hatasi, `dst` sifirlanir, dizi
+// degismez; donus 0. Basari 1. `pop` ayni yol, indeks = son.
+//
+// Neden var: `pop(d)` eskiden genel aot_array_pop'a dusuyordu; o yalniz
+// OBJ_ARRAY'e bakip OBJ_STRUCT_ARRAY'i gormeden VM_INT(0) donduruyordu —
+// uzunluk degismiyor, deger 0, tani yok (sessiz).
+static int sarr_remove(VMValue *arr, long long idx, int64_t *dst, bool is_pop) {
+  if (!arr || !IS_STRUCT_ARRAY(*arr)) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: pop/remove_at hedefi bir struct dizisi degil",
+        "Runtime Error: pop/remove_at target is not a struct array"));
+    return 0;
+  }
+  ObjStructArray *a = AS_STRUCT_ARRAY(*arr);
+  const size_t fc = (size_t)a->field_count;
+  if (is_pop) idx = (long long)a->count - 1;
+  if (idx < 0 || idx >= a->count) {
+    char b[192];
+    if (is_pop)
+      snprintf(b, sizeof b, "%s",
+               tulpar::i18n::tr_en("Calisma Zamani Hatasi: bos struct dizisinden pop",
+                                   "Runtime Error: pop from an empty struct array"));
+    else
+      snprintf(b, sizeof b,
+               tulpar::i18n::tr_en(
+                   "Calisma Zamani Hatasi: remove_at indeksi sinir disinda: %lld (uzunluk %d)",
+                   "Runtime Error: remove_at index out of bounds: %lld (length %d)"),
+               idx, a->count);
+    aot_runtime_error(b);
+    if (dst && fc) memset(dst, 0, fc * sizeof(int64_t));
+    return 0;
+  }
+  int64_t *e = a->data + (size_t)idx * fc;
+  if (dst && fc) memcpy(dst, e, fc * sizeof(int64_t));
+  const size_t tail = (size_t)(a->count - 1 - idx);
+  if (tail && fc) memmove(e, e + fc, tail * fc * sizeof(int64_t));
+  a->count--;
+  return 1;
+}
+extern "C" int aot_sarr_remove_at(VMValue *arr, long long idx, int64_t *dst) {
+  return sarr_remove(arr, idx, dst, false);
+}
+extern "C" int aot_sarr_pop(VMValue *arr, int64_t *dst) {
+  return sarr_remove(arr, -1, dst, true);
+}
+
+// Tipsiz baglamin (`var`/`json`/`array` parametre uzerinden gelen dizi)
+// yedegi: cikarilan eleman vm_get_element'in `d[i]` okumasiyla AYNI bicimde
+// (string anahtarli VM_OBJECT) kutulanir. Tipli yol (`Dusman e = pop(d)`)
+// buraya ugramaz — kutulamadan kopyalar.
+static VMValue sarr_remove_boxed(VMValue arr, long long idx, bool is_pop) {
+  if (!IS_STRUCT_ARRAY(arr)) return VM_INT(0);
+  ObjStructArray *a = AS_STRUCT_ARRAY(arr);
+  // Yuva sayisi siniri aot_sarr_elem_ptr'in karalamasiyla ayni (256).
+  int64_t tmp[256];
+  if (a->field_count > 256) return VM_INT(0);
+  const int fc = a->field_count;
+  if (!sarr_remove(&arr, idx, tmp, is_pop)) return VM_INT(0);
+  ObjObject *o = vm_allocate_object_aot_wrapper(nullptr);
+  for (int f = 0; f < fc; f++) {
+    const char *fn = (a->field_names && a->field_names[f]) ? a->field_names[f] : "_";
+    const int ft = a->field_types ? a->field_types[f] : 0;
+    VMValue v;
+    if (ft == 1) { double d; memcpy(&d, &tmp[f], sizeof d); v = VM_FLOAT(d); }
+    else if (ft == 2) { v = VM_BOOL(tmp[f] != 0); }
+    else { v = VM_INT((long long)tmp[f]); }
+    vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(fn), v);
+  }
+  return VM_OBJ((Obj *)o);
+}
+extern "C" VMValue aot_sarr_pop_boxed(VMValue arr) { return sarr_remove_boxed(arr, -1, true); }
+
+// remove_at(dizi, i) — duz dizi icin de (dil kendiyle celismesin: struct
+// dizisinde olup duz dizide olmayan bir yerlesik olmasin). Sira korunur,
+// cikarilan eleman doner. Kutusuz depolama (`idata`, 32/64 bit) yerinde
+// kaydirilir — diziyi kutuluya CEVIRMEZ.
+extern "C" VMValue aot_array_remove_at(VMValue arr, VMValue index) {
+  if (!IS_INT(index)) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: remove_at indeksi int olmali",
+        "Runtime Error: remove_at index must be an int"));
+    return VM_INT(0);
+  }
+  const long long idx = AS_INT(index);
+  const bool is_sarr = IS_STRUCT_ARRAY(arr);
+  if (!is_sarr && !IS_ARRAY(arr)) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: remove_at hedefi bir dizi degil",
+        "Runtime Error: remove_at target is not an array"));
+    return VM_INT(0);
+  }
+  const int count = is_sarr ? AS_STRUCT_ARRAY(arr)->count : AS_ARRAY(arr)->count;
+  // Negatif indeks HATA — "sondan say" anlami yok; -1 sessizce "son" olmasin.
+  if (idx < 0 || idx >= count) {
+    char b[192];
+    snprintf(b, sizeof b,
+             tulpar::i18n::tr_en(
+                 "Calisma Zamani Hatasi: remove_at indeksi sinir disinda: %lld (uzunluk %d)",
+                 "Runtime Error: remove_at index out of bounds: %lld (length %d)"),
+             idx, count);
+    aot_runtime_error(b);
+    return VM_INT(0);
+  }
+  if (is_sarr) return sarr_remove_boxed(arr, idx, false);
+  ObjArray *a = AS_ARRAY(arr);
+  const size_t tail = (size_t)(a->count - 1 - idx);
+  if (a->idata) {
+    if (a->elem_bits == 32) {
+      int32_t *d = reinterpret_cast<int32_t *>(a->idata);
+      VMValue out = VM_INT((long long)d[idx]);
+      if (tail) memmove(d + idx, d + idx + 1, tail * sizeof(int32_t));
+      a->count--;
+      return out;
+    }
+    VMValue out = VM_INT(a->idata[idx]);
+    if (tail) memmove(a->idata + idx, a->idata + idx + 1, tail * sizeof(long long));
+    a->count--;
+    return out;
+  }
+  VMValue *items = a->items_;
+  VMValue out = items[idx];
+  if (tail) memmove(items + idx, items + idx + 1, tail * sizeof(VMValue));
+  a->count--;
+  return out;
 }
 
 // P0.3 (2026-09-21): aot_struct_unpack_named'in ALAN TIPLI hali. `types[i]`

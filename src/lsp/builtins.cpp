@@ -27,6 +27,7 @@ const BuiltinEntry kBuiltins[] = {
     {"length",       "length(value: any): int",                     "len() ile aynı; eski API."},
     {"push",         "push(arr: array, value: any): void",          "Dizinin sonuna ekler."},
     {"pop",          "pop(arr: array): any",                        "Dizinin son öğesini çıkarır."},
+    {"remove_at",    "remove_at(arr: array, i: int): any",          "i. öğeyi çıkarır ve döndürür; arkadakiler sola kayar (sıra korunur). Struct dizisinde de çalışır."},
     {"trim",         "trim(s: str): str",                           "Baş/son boşlukları siler."},
     {"upper",        "upper(s: str): str",                          "Büyük harfe çevirir."},
     {"lower",        "lower(s: str): str",                          "Küçük harfe çevirir."},

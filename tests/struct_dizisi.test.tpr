@@ -169,6 +169,93 @@ func run_dongu() {
     assert_close(d[99].x, 5000.0, 0.001);
 }
 
+// pop / remove_at (K033, 2026-09-27). Eskiden `pop(d)` genel aot_array_pop'a
+// dusuyordu: OBJ_STRUCT_ARRAY'i tanimadan 0 donduruyor, UZUNLUK DEGISMIYORDU
+// (sessiz). remove_at hic yoktu. Her iddia eski derleyicide kirmizi.
+func run_pop() {
+    Dusman[] d = [dusman_yap(1, 0.5, 0.0), dusman_yap(2, 1.5, 0.0), dusman_yap(3, 2.5, 0.0)];
+    Dusman e = pop(d);                           // tipli: kutulamadan kopya
+    assert_eq_int(len(d), 2);
+    assert_eq_int(e.id, 3);
+    assert_close(e.x, 2.5, 0.000001);
+    pop(d);                                      // deyim: deger atilir
+    assert_eq_int(len(d), 1);
+    var k = pop(d);                              // genel baglam: kutulu nesne
+    assert_eq_int(k.id, 1);
+    assert_close(k.x, 0.5, 0.000001);
+    assert_eq_int(len(d), 0);
+    push(d, dusman_yap(9, 0.0, 0.0));            // bosalan diziye yeniden ekle
+    Dusman m = d.pop();                          // metot bicimi
+    assert_eq_int(m.id, 9);
+    assert_eq_int(len(d), 0);
+}
+
+func run_remove_at() {
+    Dusman[] d = [];
+    int i = 0;
+    while (i < 5) { push(d, dusman_yap(i, i * 1.0, 0.0)); i = i + 1; }
+    Dusman r = remove_at(d, 1);
+    assert_eq_int(r.id, 1);
+    assert_eq_int(len(d), 4);
+    assert_eq_int(d[0].id, 0);                   // sira korunur
+    assert_eq_int(d[1].id, 2);
+    assert_eq_int(d[3].id, 4);
+    remove_at(d, 3);                             // son eleman, deyim
+    assert_eq_int(len(d), 3);
+    assert_eq_int(d[2].id, 3);
+    var kk = remove_at(d, 0);
+    assert_eq_int(kk.id, 0);
+    assert_eq_int(d[0].id, 2);
+    // duz dizi: kutusuz depolama (32 -> 64 bit genisleme dahil) ve kutulu
+    int[] xs = [10, 20, 30, 40];
+    assert_eq_int(remove_at(xs, 1), 20);
+    xs[0] = 5000000000;
+    assert_eq_int(remove_at(xs, 0), 5000000000);
+    assert_eq_str(toJson(xs), "[30,40]");
+    var ss = ["a", "b", "c"];
+    assert_eq_str(remove_at(ss, 2), "c");
+    assert_eq_str(toJson(ss), "[\"a\",\"b\"]");
+}
+
+// Struct donduren fonksiyon struct dizisi elemanini / pop'u dondurur. ESKIDEN
+// `return d[1];` kutulu VMValue'yu struct sonuc yuvasina yaziyordu — cagiran
+// id yerine etiket 4'u (VM_VAL_OBJ) ve x yerine isaretcinin bitlerini
+// okuyordu (olculdu 2026-09-27, rc=0).
+Dusman[] g_havuz = [];
+func havuzdan(int i): Dusman { return g_havuz[i]; }
+func havuz_son(): Dusman { return pop(g_havuz); }
+func kutudan(array a): Dusman { return a[0]; }
+func run_struct_donus() {
+    push(g_havuz, dusman_yap(7, 0.5, 0.0));
+    push(g_havuz, dusman_yap(8, 1.5, 0.0));
+    Dusman a = havuzdan(1);
+    assert_eq_int(a.id, 8);
+    assert_close(a.x, 1.5, 0.000001);
+    Dusman b = havuz_son();
+    assert_eq_int(b.id, 8);
+    assert_eq_int(len(g_havuz), 1);
+    var kutulu = [];
+    push(kutulu, dusman_yap(5, 2.5, 0.0));
+    Dusman c = kutudan(kutulu);
+    assert_eq_int(c.id, 5);
+    assert_close(c.x, 2.5, 0.000001);
+}
+
+func run_cikarma_sinir_disi() {
+    Dusman[] d = [dusman_yap(1, 0.0, 0.0)];
+    bool y1 = false;
+    try { Dusman z = remove_at(d, 5); z.id = 0; } catch (e) { y1 = true; }
+    assert(y1, "remove_at sinir disi calisma zamani hatasi vermeli");
+    bool y2 = false;
+    try { remove_at(d, -1); } catch (e) { y2 = true; }
+    assert(y2, "negatif indeks 'son' sayilmamali, hata vermeli");
+    assert_eq_int(len(d), 1);                    // hata diziyi degistirmedi
+    pop(d);
+    bool y3 = false;
+    try { pop(d); } catch (e) { y3 = true; }
+    assert(y3, "bos struct dizisinden pop hata vermeli");
+}
+
 print("=== tipli struct dizisi tests ===");
 test("kur + push (cagri/yerel/literal) + oku", "run_kur_ve_ekle");
 test("alan yazma", "run_alan_yaz");
@@ -180,4 +267,8 @@ test("genel rvalue (kutulama, toJson)", "run_genel_rvalue");
 test("for-in", "run_for_in");
 test("sinir disi indeks", "run_sinir_disi");
 test("1M alan guncellemesi", "run_dongu");
+test("pop (tipli / deyim / genel / metot)", "run_pop");
+test("remove_at (struct + duz dizi, sira korunur)", "run_remove_at");
+test("struct donduren fonksiyon: d[i] / pop / kutulu eleman", "run_struct_donus");
+test("pop / remove_at sinir disi", "run_cikarma_sinir_disi");
 test_summary();

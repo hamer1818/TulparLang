@@ -38,6 +38,34 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Eklendi / Düzeltildi — struct dizisinde `pop`, yeni `remove_at`; struct dönüşünde çöp
+
+- **`pop(d)` struct dizisinde SESSİZCE hiçbir şey yapmıyordu.** Genel
+  `aot_array_pop` yalnız `OBJ_ARRAY`'e bakıyor, `OBJ_STRUCT_ARRAY`'i görmeden
+  `0` döndürüyordu — uzunluk değişmiyor, tanı yok (ölçüldü 2026-09-27,
+  `D[] ds` 3 push + `pop(ds)` → `len` 3). Artık elemanı döndürüyor:
+  `Dusman e = pop(d)` kutulamadan doğrudan kopyalar (ayırma yok), `pop(d);`
+  deyimi yalnız çıkarır, genel bağlam (`var`, `print`) `d[i]`nin tipsiz
+  okumasıyla aynı biçimde kutular. Boş diziden `pop` çalışma zamanı hatası
+  (`try/catch` yakalar); farklı struct'a bağlamak (`W w = pop(ds)`) derleme
+  hatası — kutulu geri açma alan adına göre sessizce sıfır doldururdu.
+- **Yeni yerleşik `remove_at(dizi, i)`**: i. elemanı çıkarır ve döndürür,
+  arkadakiler sola kayar (sıra korunur). Hem struct dizisinde (tipli yol,
+  ayırmasız) hem düz dizide (kutusuz 32/64 bit depolama yerinde kaydırılır,
+  dizi kutuluya çevrilmez). Negatif / sınır dışı indeks hata — `-1` sessizce
+  "son" olmaz.
+- **`func f(): D { return d[i]; }` çağırana çöp okutuyordu.** Struct
+  döndüren fonksiyonun `return`'ü yalnız yerel / literal / struct döndüren
+  çağrıyı tanıyordu; geri kalan her şey (struct dizisi elemanı, kutulu dizi
+  elemanı, `var`) 16 baytlık VMValue olarak struct sonuç yuvasına yazılıyordu:
+  alan `id` yerine etiket `4`, `x` yerine işaretçinin bitleri (ölçüldü, rc=0);
+  tek alanlı struct'ta yuva taşıyordu. Artık eleman işaretçisinden kopya ya da
+  alan adına göre geri açma; değersiz `return;` sıfır struct.
+- Nöbetçi: `tests/struct_dizisi.test.tpr` (+4 test; eskisiyle `remove_at`
+  derlenmiyor, `pop` testi kırmızı), `tests/struct_dizisi_hatalari.sh` (6/6).
+- Kapsam dışı: dilim (`d[a:b]`) — dilde hiçbir dizi için dilim sözdizimi yok;
+  yalnız struct dizisine eklemek dili kendiyle çelişik yapardı. Ayrı karar.
+
 ### Eklendi — `aot_func_lookup`: fonksiyonu adıyla, çağırmadan ve ayırmadan çöz
 
 - Gömen (embedder) için C yüzü:
