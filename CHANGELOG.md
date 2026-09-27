@@ -38,6 +38,34 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Düzeltildi — `call()` tümü-int fonksiyonda sessizce `null`; `call("ad")` derleme zamanında denetleniyor
+
+- **`call("f", 7)` / `call(f, 7)` tümü-int `func f(int x): int` için
+  `null` döndürüyordu** (Tuzaklar 7g). Böyle bir fonksiyon yerel (i64)
+  ABI'li: kutulu `t_f` yoktu, `call()` çıplak `f` sembolüne düşüp onu
+  `void(VMValue*, VMValue*)` diye çağırıyordu — sonuç yuvası hiç yazılmıyor,
+  tanı yok, çıkış 0. Derleyici artık böyle her fonksiyona kutulu bir
+  sarmalayıcı (`tb_<ad>`, iç bağlantılı, gövde satır içine alınmaz) üretip
+  `call()` önbelleğine kaydediyor; `call()` ve `aot_func_lookup` ad
+  aramasında önce önbelleğe baktığı için çıplak ada hiç inmiyor. Doğrudan
+  çağrı (`f(7)`) sarmalayıcıyı görmez, yerel yol aynı. `aot_func_lookup`
+  tümü-int fonksiyon için artık `nullptr` değil sarmalayıcıyı döndürüyor
+  (motor kancası `func k(int x): int` biçiminde de çözülür).
+- **`call("yokboyle")` artık derleme zamanında yakalanıyor**: dizgi sabiti
+  bir kullanıcı fonksiyonu adı değilse `[typecheck]` tanısı (`tulpar
+  typecheck` / `--strict` hata), fazla argüman doğrudan çağrıdaki kuralla
+  aynı. Eskiden `typecheck` "ok" diyor, program ancak çalışırken "Fonksiyon
+  bulunamadı 't_yokboyle'" ile düşüyordu. Kodgen hatası DEĞİL, uyarı:
+  `TULPAR_AOT_LINK_FLAGS` ile bağlanan dış `t_<ad>` sembolü (gömen /
+  `tests/fonksiyon_arama.sh` sondası) meşru bir `call()` hedefi.
+- Nöbetçi: `tests/call_nargs.test.tpr` (+1 test, 7 iddia; eski derleyiciyle
+  kırmızı), `tests/typeinfer/{fail/20,pass/15}`, `tests/fonksiyon_arama.sh`
+  (+1 denetim; tümü-int araması artık sarmalayıcıyı döndürmeli ve
+  `yerel(7.0) == 21` olmalı).
+- Performans: sarmalayıcı yalnız `call()` yolunda; `intloop` 135,0 →
+  134,9 ms, `fib`/`tak`/`ackermann` değişmedi (7 koşum medyanı, 2026-09-27
+  Ryzen 7 9800X3D); diğer 10 kıyasın IR'ı birebir aynı.
+
 ### Eklendi / Düzeltildi — struct dizisinde `pop`, yeni `remove_at`; struct dönüşünde çöp
 
 - **`pop(d)` struct dizisinde SESSİZCE hiçbir şey yapmıyordu.** Genel

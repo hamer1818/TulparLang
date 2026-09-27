@@ -1,0 +1,11 @@
+// `call("ad")` dizgi sabiti: bilinen kullanici fonksiyonu (bu dosya ya da
+// ice aktarilan modul), eksik arguman (dogrudan cagridaki gibi serbest) ve
+// `main` kabul edilir — 20_call_unknown_name'in pozitif ikizi (K009).
+import "test";
+
+func iki(int a, int b): int { return a + b; }
+func tek(x) { return x; }
+
+print(call("iki", 1, 2));
+print(call("tek"));
+print(call("assert_eq_int", 1, 1));

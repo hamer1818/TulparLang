@@ -460,6 +460,37 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       }
     }
 
+    // `call("ad", ...)` (K009, 2026-09-27): ad bir DIZGI SABITIYSE derleme
+    // zamaninda bilinir — kullanici fonksiyonu olmali (yerlesikler call()
+    // ile cagrilamaz: calisma zamani `t_<ad>` arar). Eskiden bu yalniz
+    // calisma aninda "Fonksiyon bulunamadi 't_yokboyle'" diye patliyordu;
+    // ciplak ad bicimi `call(f)` ise zaten derleme hatasi veriyordu. Fazla
+    // arguman da dogrudan cagridaki kuralla ayni: hata.
+    if (effective_name == "call" && !ctx->user_functions.count("call") &&
+        !call->arguments.empty()) {
+      if (const auto *lit = as_node<StringLiteral>(call->arguments[0].get())) {
+        const std::string &target = lit->value;
+        if (target != "main" && !ctx->user_functions.count(target)) {
+          report_error(ctx,
+                       tulpar::i18n::tr_en(
+                           "call(): '%s' adinda bir kullanici fonksiyonu yok (satir %d)",
+                           "call(): no user function named '%s' at line %d"),
+                       target.c_str(), call->loc.line);
+        } else if (target != "main") {
+          auto tit = ctx->functions.find(target);
+          const int forwarded = static_cast<int>(call->arguments.size()) - 1;
+          if (tit != ctx->functions.end() &&
+              forwarded > static_cast<int>(tit->second.param_types.size())) {
+            report_error(ctx,
+                         "Function '%s' expects %d argument(s), got %d at line %d",
+                         target.c_str(),
+                         static_cast<int>(tit->second.param_types.size()),
+                         forwarded, call->loc.line);
+          }
+        }
+      }
+    }
+
     // User-defined function call: check arg count + arg types against the
     // signature we registered during the pre-pass. Built-ins are not in
     // ctx->functions and are skipped — their argument contracts are too
@@ -1761,6 +1792,7 @@ static void register_module_exports(TypeInferContext *ctx,
       // `a__<name>` (src/parser/import_alias.cpp); mirror that here or the
       // aliased call sites would look undefined.
       std::string name = alias.empty() ? func->name : alias + "__" + func->name;
+      ctx->user_functions.insert(name);
       if (ctx->functions.count(name)) {
         continue;
       }
@@ -1843,6 +1875,7 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       typeinfer_register_function(ctx, func->name.c_str(), func->return_type,
                                   param_types.empty() ? nullptr : param_types.data(),
                                   static_cast<int>(param_types.size()));
+      ctx->user_functions.insert(func->name);
     }
     // Pre-scan struct declarations so `<TypeName> ident;` decls
     // anywhere in the program (even before the type's definition
