@@ -813,6 +813,26 @@ static inline bool obj_is_transient(Obj *o) {
   return o && (o->arena_allocated || g_region_set.count(o));
 }
 
+// Bir DEGER (kaba yazilan, global'e atanan) gecici mi? obj_is_transient'ten
+// tek farki kapanis: basligi aot_create_closure'da malloc'lu ve bolgeye
+// KAYDEDILMEZ — baslik hic olmez. Olen sey ORTAMI (`env`, yakalanan
+// degiskenlerin dizisi): checkpoint icinde cagrilan fonksiyonun ortami
+// bolgede. Yani kapanis ortami geciciyse gecicidir; yoksa kalici bir kaba
+// konan kapanis bariyeri hic tetiklemez ve geri sarmadan sonra ortami serbest
+// bellege bakar (K129, Tuzaklar 7f "bilinen sinir").
+//
+// obj_is_transient'e KATILMADI: o, KAP denetimi olarak gecici kaba her
+// push/set'in sicak yolunda. Kapanis kolu eklenince GCC onu satir ici
+// acmayi birakti ve gecici diziye push 5.2 -> 7.5 ns, kare olcusu 182 -> 285
+// ns oldu (olculdu 2026-09-27, Ryzen 7 9800X3D). Deger denetimi yalniz KALICI
+// kaba yazarken kosuyor.
+static inline bool value_is_transient(Obj *o) {
+  if (obj_is_transient(o)) return true;
+  if (!o || o->type != OBJ_CLOSURE) return false;
+  Obj *env = (Obj *)((ObjClosure *)o)->env;
+  return env && g_region_set.count(env) != 0;
+}
+
 // Free a tracked malloc container plus its own malloc'd backing buffers. Does
 // NOT recurse: nested containers are tracked separately, and element strings
 // are arena-owned (reclaimed by the arena rewind).
@@ -843,7 +863,7 @@ static inline void region_free_one(Obj *o) {
 static inline VMValue wb_persist_escape(Obj *container, VMValue v) {
   if (!container || obj_is_transient(container))
     return v; // container itself is transient → freed together with v
-  if (!IS_OBJ(v) || !obj_is_transient(AS_OBJ(v)))
+  if (!IS_OBJ(v) || !value_is_transient(AS_OBJ(v)))
     return v; // scalar, or value already persistent
   return aot_persist(v);
 }
@@ -878,9 +898,12 @@ static void aot_arena_rewind_to(int idx) {
   // Free the malloc'd containers tracked since this checkpoint (a request's
   // transient objects/arrays), in lockstep with the arena string rewind.
   // Persisted/global objects were never tracked, so they survive untouched.
+  // An object that left the set while still listed here was PROMOTED in place
+  // (a closure environment, aot_persist) — it is permanent now, skip it. The
+  // erase was already paid for; only its return value is new.
   for (size_t i = cp->region_mark; i < g_region.size(); i++) {
-    g_region_set.erase(g_region[i]);
-    region_free_one(g_region[i]);
+    if (g_region_set.erase(g_region[i]))
+      region_free_one(g_region[i]);
   }
   if (cp->region_mark < g_region.size())
     g_region.resize(cp->region_mark);
@@ -1223,6 +1246,10 @@ static ObjString *aot_persist_string_obj(ObjString *src) {
 }
 
 VMValue aot_persist(VMValue v) {
+  // VM_OBJ(nullptr): kapanis ortaminin yuva 0'i (ust duzey ortamin "ust
+  // ortam yok" isareti) boyle. Asagidaki IS_* makrolari tipi okumak icin
+  // isaretciyi izliyor; bir ortam genel dizi yolundan kopyalanirsa bu SEGV'di.
+  if (IS_OBJ(v) && !AS_OBJ(v)) return v;
   if (IS_STRING(v)) {
     return VM_OBJ((Obj *)aot_persist_string_obj(AS_STRING(v)));
   }
@@ -1324,11 +1351,43 @@ VMValue aot_persist(VMValue v) {
     dst->obj.is_moved = 0;
     return VM_OBJ((Obj *)dst);
   }
+  // KAPANIS (K129). Baslik kalici malloc (aot_create_closure, bolgeye
+  // kaydedilmez); olen sey ORTAM: checkpoint icinde kurulduysa bolgede ve geri
+  // sarmada serbest kalir. Olculdu (2026-09-27): kare icinde global'e konan
+  // `() => etiket` geri sarma + coplamadan sonra "Dizi indeksi sinir disinda"
+  // firlatiyordu (ortam dizisinin sayaci cop).
+  //
+  // Ortam KOPYALANMAZ, yerinde KALICILASTIRILIR (bolge kumesinden cikar; geri
+  // sarma onu atlar — aot_arena_rewind_to). Iki sebep:
+  //   * paylasilan yakalama: ayni cercevede kurulan kapanislar ve cercevenin
+  //     kendisi AYNI ortami gosteriyor. Kopya onlari ayirirdi (birinin yazdigi
+  //     digerinde gorunmezdi); yerinde kalicilastirmada hepsi ayni diziye
+  //     bakmaya devam eder.
+  //   * dongu: kendini yakalayan kapanis (`f` ortaminda `f`) ortamina geri
+  //     doner. Ortam kumeden ISLENMEDEN ONCE cikiyor, yani ikinci ziyaret
+  //     `erase` 0 dondurur ve durur — ziyaret kumesi gerektirmez.
+  // Kalicilasan ortamin gecici DEGERLERI (yakalanan dizgi, dizi, ic kapanis)
+  // bu kuralla kalicilastirilir: yalniz geciciyse, kapanis ise ortami icin.
+  // Sonraki yazmalar zaten bariyerden geciyor (vm_array_set ->
+  // wb_persist_escape; kap artik kalici). Yuva 0 ust ortam (ic ice lambda);
+  // zincir onun uzerinden yurunur. Ust duzey ortamin yuva 0'i VM_OBJ(nullptr).
+  if (IS_CLOSURE(v)) {
+    ObjArray *e = AS_CLOSURE(v)->env;
+    while (e && g_region_set.erase((Obj *)e)) {
+      VMValue *it = arr_items(e);
+      for (int i = 1; i < e->count; i++) {
+        VMValue x = it[i];
+        if (IS_OBJ(x) && value_is_transient(AS_OBJ(x)))
+          it[i] = aot_persist(x); // kapanis: ayni deger, ortami kalicilasir
+      }
+      VMValue p = e->count > 0 ? it[0] : VM_VOID();
+      e = (IS_OBJ(p) && AS_OBJ(p) && AS_OBJ(p)->type == OBJ_ARRAY)
+              ? (ObjArray *)AS_OBJ(p)
+              : nullptr;
+    }
+    return v;
+  }
   // Scalars and any other value type: copy by value, no heap.
-  // (OBJ_CLOSURE de buraya duser ve OLDUGU GIBI doner: baslik kalici malloc
-  // ama `env` dizisi checkpoint icinde kurulduysa bolgede. Derin kopya
-  // paylasilan yakalama anlambilimini bozar ve kendini yakalayan kapanista
-  // sonsuz ozyinelemeye girer — bilinen sinir, bkz. Tuzaklar 7f.)
   return v;
 }
 
@@ -1370,7 +1429,7 @@ VMValue aot_persist_ptr(VMValue *v) {
 // AYNI testi kullaniyor; "kalici kap yalniz kalici deger tutar" degismezine
 // o bariyer bakiyor.
 VMValue aot_persist_escape(VMValue v) {
-  if (!IS_OBJ(v) || !obj_is_transient(AS_OBJ(v)))
+  if (!IS_OBJ(v) || !value_is_transient(AS_OBJ(v)))
     return v;
   return aot_persist(v);
 }

@@ -311,6 +311,116 @@ func run_anlambilim_kilitleri() {
     assert_eq_int(len(g_d1), 4);
 }
 
+// ---------------------------------------------------------------------------
+// HATA — kapanis (K129, 2026-09-27). aot_persist OBJ_CLOSURE'u oldugu gibi
+// donduruyordu: baslik kalici ama yakalanan degiskenlerin ORTAMI (env dizisi)
+// checkpoint icinde kurulduysa bolgede ve geri sarmada serbest kaliyordu.
+// Olculdu: kare icinde global'e konan `() => etiket` geri sarma + coplamadan
+// sonra "Dizi indeksi sinir disinda" firlatiyordu. Motorun oyun kodu kancayi
+// tam boyle kuruyor (kare icinde, global'e).
+// ---------------------------------------------------------------------------
+var g_kanca = 0;
+func _k_kapanis_kur() {
+    str etiket = "yakalandi-" + toString(71);
+    g_kanca = () => etiket;
+}
+func run_kapanis_global() {
+    _kare("_k_kapanis_kur");
+    str s = "";
+    try { s = g_kanca(); } catch (e) { s = "firlatti: " + toString(e); }
+    assert_eq_str(s, "yakalandi-71");
+}
+
+// Paylasilan yakalama: ayni cercevedeki iki kapanis AYNI ortami gosterir.
+// Ortam kopyalansaydi (her kapanisa bir kopya) g_oku artirmayi gormezdi.
+var g_artir = 0;
+var g_oku = 0;
+func _k_sayac_kur() {
+    int n = 40;
+    str ad = "sayac-" + toString(n);
+    g_artir = () => { n = n + 1; return n; };
+    g_oku = () => ad + ":" + toString(n);
+}
+func run_kapanis_paylasim() {
+    _kare("_k_sayac_kur");
+    g_artir();
+    g_artir();
+    str s = "";
+    try { s = g_oku(); } catch (e) { s = "firlatti: " + toString(e); }
+    assert_eq_str(s, "sayac-40:42");
+}
+
+// Kendini yakalayan kapanis: ortam kendi kapanisini tutuyor (dongu:
+// kapanis -> ortam -> yuva -> ayni kapanis). Derin kopya burada sonsuz
+// ozyinelemeye girerdi. (Kendini CAGIRAN kapanis burada kullanilmiyor: lambda
+// icinden yakalanan bir kapanisi cagirmak ayri bir codegen hatasi — checkpoint
+// olmadan da "Hatali parametre sayisi" firlatiyor, 2026-09-27.)
+var g_dongu = 0;
+func _k_dongu_kur() {
+    var kendi = 0;
+    str ad = "dongu-" + toString(5);
+    kendi = () => ad + "/" + typeof(kendi);
+    g_dongu = kendi;
+}
+func run_kapanis_kendini_yakalar() {
+    _kare("_k_dongu_kur");
+    str s = "";
+    try { s = g_dongu(); } catch (e) { s = "firlatti: " + toString(e); }
+    assert_eq_str(s, "dongu-5/object");
+}
+
+// Ic ice lambda: ic kapanisin ortami dis lambdanin ortamina (yuva 0) bagli;
+// zincirin ikisi de kalicilasmali.
+var g_ic = 0;
+func _k_ic_ice_kur() {
+    str a = "dis-" + toString(1);
+    var yap = () => {
+        str b = "ic-" + toString(2);
+        return () => a + "/" + b;
+    };
+    g_ic = yap();
+}
+func run_kapanis_ic_ice() {
+    _kare("_k_ic_ice_kur");
+    str s = "";
+    try { s = g_ic(); } catch (e) { s = "firlatti: " + toString(e); }
+    assert_eq_str(s, "dis-1/ic-2");
+}
+
+// Kalici kaba (global dizi) push: bariyer (wb_persist_escape) kapanisi
+// gecici saymali — basligi degil ORTAMI.
+array g_kancalar = [];
+func _k_kanca_it() {
+    str ad = "itildi-" + toString(3);
+    array liste = [1, 2, 3];
+    push(g_kancalar, () => ad + "#" + toString(len(liste)));
+}
+func run_kapanis_kalici_kaba() {
+    g_kancalar = [];
+    _kare("_k_kanca_it");
+    str s = "";
+    try {
+        var k = g_kancalar[0];
+        s = k();
+    } catch (e) { s = "firlatti: " + toString(e); }
+    assert_eq_str(s, "itildi-3#3");
+}
+
+// Cerceve, kapanis kalicilastiktan SONRA yakalanan degiskene yaziyor: yazma
+// kalici ortama gider, bariyer (vm_array_set) gecici dizgiyi kalicilastirir.
+var g_son = 0;
+func _k_sonra_yaz() {
+    str etiket = "once";
+    g_son = () => etiket;
+    etiket = "sonra-" + toString(9);
+}
+func run_kapanis_sonra_yaz() {
+    _kare("_k_sonra_yaz");
+    str s = "";
+    try { s = g_son(); } catch (e) { s = "firlatti: " + toString(e); }
+    assert_eq_str(s, "sonra-9");
+}
+
 print("=== arena kalicilik (checkpoint + global) tests ===");
 test("HATA: str global += (3 kare)", "run_str_arti_esit");
 test("HATA: str global += int / toString", "run_str_arti_esit_sayi");
@@ -327,4 +437,10 @@ test("HATA: persist(struct dizisi) derin kopya", "run_persist_sarr_bagimsiz");
 test("NOBET: kalici struct dizisi atamasi tutamac", "run_sarr_tutamac_paylasimi");
 test("HATA: checkpoint icinde ust duzey bildirim", "run_ust_duzey_bildirim");
 test("NOBET: bildirim paylasir, duz atama derin kopyalar", "run_anlambilim_kilitleri");
+test("HATA: kare icinde global'e konan kapanis", "run_kapanis_global");
+test("HATA: iki kapanis ayni ortami paylasir", "run_kapanis_paylasim");
+test("HATA: kendini yakalayan kapanis (dongu)", "run_kapanis_kendini_yakalar");
+test("HATA: ic ice lambda ortam zinciri", "run_kapanis_ic_ice");
+test("HATA: kapanis kalici diziye push", "run_kapanis_kalici_kaba");
+test("HATA: kalicilastiktan sonra yakalanan degiskene yazma", "run_kapanis_sonra_yaz");
 test_summary();
