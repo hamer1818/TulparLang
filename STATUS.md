@@ -2049,6 +2049,20 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   başarısız yazma (olmayan dizin, izin yok) başarıdan ayırt edilemiyordu.
   Artık yalnız dosya açılıp her byte yazılınca true. `tests/file_io.test.tpr`
   4/4.
+- ⚠ **2026-09-27 yeniden ölçüm (strict sözleşme, K123):** aşağıdaki 07-21
+  kaydının iki satırı strict flip'ten (2026-09-10) sonra BAYAT: `int / 0`,
+  `int % 0` ve dizi sınır dışı okuma/yazma artık **fırlatıyor** (`try/catch`
+  yakalar, yakalanmazsa çıkış 1) — "sessiz 0 / nötr değer" değil. `mod(x, 0)`
+  ise hâlâ sessizce 0 dönüyordu (çıkış 0) ve `%` ile ayrışıyordu;
+  `mod(INT64_MIN, -1)` SIGFPE ile tek kelime etmeden ölüyordu (çıkış 136),
+  ondalıkta `mod(x, 0.0)` 0.0 dönerken `x % 0.0` NaN. Düzeltildi: `mod()`
+  üç kolda da `%`'nin aynısı, sayı olmayan argüman fırlatır
+  (`tests/modulo.test.tpr` +4). Değişmeyenler yeniden ölçüldü ve aynı:
+  `float / 0` → inf, int64 `max + 1` → wrap, `toInt("12abc")` → 12,
+  `sqrt(-1)` → NaN, `round(±2.5)` → ±3, `split("a,,b")` → 3 parça, boş
+  iğneyle `replace` no-op, `substring` ters → "" / taşma kırpılır, `ord`
+  sınır dışı → -1 (fırlatmaz), `pop(boş)` → 0 (fırlatmaz). Yan bulgu: NaN
+  için `n != n` **false** dönüyor (IEEE: true; `n == n` doğru biçimde false).
 - ✅ **Ölçüldü, bug ÇIKMADI (2026-07-21 taraması):** sıfıra bölme (int→0
   sessiz, float→inf IEEE, mod(x,0)→0 — tanımlı davranış), int64 wraparound,
   toInt/toFloat strtol-önek semantiği, sqrt(-1)→NaN, round-half-away,

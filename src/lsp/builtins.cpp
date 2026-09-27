@@ -238,7 +238,7 @@ const BuiltinEntry kBuiltins[] = {
     {"round",        "round(x: float): float",                      "En yakına yuvarlama."},
     {"min",          "min(a, b): float",                            "İki değerin küçüğü."},
     {"max",          "max(a, b): float",                            "İki değerin büyüğü."},
-    {"mod",          "mod(a: int, b: int): int",                    "Tamsayı modulo (a % b)."},
+    {"mod",          "mod(a: int|float, b: int|float): int|float",  "a % b ile aynı: iki tamsayıda tamsayı kalan (işaret bölünenden), aksi halde fmod. Tamsayıda sıfıra bölme fırlatır."},
     {"fmod",         "fmod(a: float, b: float): float",             "Float modulo."},
     {"random",       "random(): float",                             "[0.0, 1.0) aralığında rastgele float."},
     {"randint",      "randint(min: int, max: int): int",            "[min, max] aralığında rastgele int."},
