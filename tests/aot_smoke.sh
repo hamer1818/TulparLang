@@ -85,12 +85,14 @@ else
     dustu "olmayan cikti dizinine derleme basarisiz"; tail -5 "$TMP/d.log" | sed 's/^/         /'
 fi
 : > "$TMP/dosya"
-if LC_ALL=C "$TUL" build "$TMP/a.tpr" "$TMP/dosya/a" > "$TMP/e.log" 2>&1; then
+# GORELI yol, $TMP icinden. MSYS2 (Windows CI) POSIX argumani yerel yola
+# cevirirken bir bileseni DOSYA olan yolu CEVIREMIYOR ve `/tmp/...dosya/a`yi
+# oldugu gibi geciriyor; yerel tulpar.exe onu `C:\tmp\...` sanip orada dizin
+# kurdu ve derleme "basarili" oldu (olculdu 2026-09-27, teshis ciktisiyla).
+# Olculmek istenen surucunun davranisi, kabugun yol cevirisi degil.
+if (cd "$TMP" && LC_ALL=C "$TUL" build a.tpr dosya/a) > "$TMP/e.log" 2>&1; then
     dustu "ust yolu DOSYA olan cikti basarili sayildi"
-    # Teshis: surucu ne dedi, ve cikti NEREYE yazildi?
-    sed 's/^/         log: /' "$TMP/e.log" | tail -6
-    ls -la "$TMP" | sed 's/^/         ls: /'
-    [ -d "$TMP/dosya" ] && ls -la "$TMP/dosya" | sed 's/^/         dosya\/: /'
+    sed 's/^/         log: /' "$TMP/e.log" | tail -4
 elif grep -q "not a directory: .*dosya" "$TMP/e.log"; then
     gecti "ust yolu dosya olan cikti: yolu adiyla hata"
 else
