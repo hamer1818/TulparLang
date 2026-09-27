@@ -11,10 +11,15 @@
 # ANLAMLI bir SemVer artisi alir (varsayilan YAMA), yani v3.13.1 -> v3.13.2 ->
 # v3.13.3. Kosum numarasi surum adina GIRMEZ.
 #
-# ARTIS SEVIYESI: varsayilan `patch`. Commit mesajinda (squash govdesi) bir
-# satir olarak `Surum: minor` ya da `Surum: major` (veya `Release: ...`)
-# gecerse o seviye kullanilir. CHANGELOG'daki SemVer politikasi boyle
-# uygulanir: ozellik -> minor, kirici degisiklik -> major.
+# ARTIS SEVIYESI: varsayilan `patch`. Birlesen PR'IN ACIKLAMASINDA ya da
+# commit mesajinda bir satir olarak `Surum: minor` ya da `Surum: major` (veya
+# `Release: ...`) gecerse o seviye kullanilir. CHANGELOG'daki SemVer
+# politikasi boyle uygulanir: ozellik -> minor, kirici degisiklik -> major.
+# PR ACIKLAMASI AYRICA OKUNUR: depo ayari squash commit govdesine PR
+# aciklamasini DEGIL commit mesajlarini koyuyor (squash_merge_commit_message =
+# COMMIT_MESSAGES); yalniz commit govdesine bakan eski hal PR'da yazilan
+# `Surum: minor`u hic gormuyordu. Ayni hata tulpar-engine'de iki ozellik
+# surumunu sessizce yama yapti (motor Tuzaklar 8cn, 2026-09-25).
 #
 # SURUMU BU IS YAYINLAMAZ, yalnizca ETIKETI iter. Etiketi build.yml gorur
 # (`tags: ['v*']`) ve DERLEYIP TESTLERI KOSTUKTAN sonra Release'i olusturur.
@@ -49,6 +54,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read   # birlesen PR'in aciklamasi (artis seviyesi, asagida)
 
 # Art arda iki merge: etiketler SIRAYLA hesaplanmali. Iptal etmiyoruz —
 # iptal edilen bir kosum, surumu hic cikmamis bir merge birakir.
@@ -81,6 +87,10 @@ jobs:
         env:
           # PAT yoksa is ACIKCA kirmizi olur: "surum cikmadi" sessiz kalmasin.
           GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
+          # PR aciklamasini OKUMAK icin is akisinin kendi belirteci (yukaridaki
+          # `pull-requests: read`). PAT'e bu yetkiyi eklemek gerekmesin diye
+          # ayri: PAT yalniz Contents yazma icin var.
+          GH_OKU: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -117,16 +127,49 @@ jobs:
           fi
 
           # --- 3) Artis seviyesi -------------------------------------------
-          # Commit govdesinde `Surum: minor` / `Release: major` gibi bir satir
-          # varsa o; yoksa YAMA. Squash merge PR govdesini commit govdesine
-          # koydugu icin PR'da yazmak yeterli.
+          # `Surum: minor` / `Release: major` gibi bir satir birlesen PR'in
+          # ACIKLAMASINDA ya da commit mesajinda varsa o; yoksa YAMA.
+          # Commit mesaji TEK BASINA YETMEZ (motor Tuzaklar 8cn): bu depoda squash
+          # govdesi PR aciklamasi degil commit mesajlaridir, PR'da yazilan
+          # satir oraya hic gelmez. PR, commit'ten API ile bulunur
+          # (commits/<sha>/pulls: main'e birlesmis olan).
           mesaj="$(git log -1 --format='%B')"
-          seviye="patch"
-          if echo "$mesaj" | grep -Eqi '^[[:space:]]*(surum|sürüm|release)[[:space:]]*:[[:space:]]*major[[:space:]]*$'; then
-            seviye="major"
-          elif echo "$mesaj" | grep -Eqi '^[[:space:]]*(surum|sürüm|release)[[:space:]]*:[[:space:]]*minor[[:space:]]*$'; then
-            seviye="minor"
+          pr_no=""
+          pr_govde=""
+          if pr_json="$(GH_TOKEN="$GH_OKU" gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                          --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0] // empty | {n: .number, b: (.body // "")}' 2>api_hata.log)"; then
+            if [ -n "$pr_json" ]; then
+              pr_no="$(jq -r '.n' <<< "$pr_json")"
+              pr_govde="$(jq -r '.b' <<< "$pr_json")"
+            fi
+          else
+            # Sessiz degil: seviye yalniz commit mesajindan okunur ve bu
+            # hem uyari hem is ozeti olarak GORUNUR.
+            echo "::warning::Birlesen PR API'den okunamadi — artis seviyesi yalniz commit mesajina gore: $(head -c 300 api_hata.log)"
+            ozet "> UYARI: birlesen PR okunamadi, seviye yalniz commit mesajindan."
           fi
+          # CRLF: web'de duzenlenen aciklamalar \r\n tasir; satir sonundaki \r
+          # `[[:space:]]*$` ile yutulur.
+          seviye_bul() {
+            if grep -Eqi '^[[:space:]]*(surum|sürüm|release)[[:space:]]*:[[:space:]]*major[[:space:]]*$' <<< "$1"; then
+              echo major
+            elif grep -Eqi '^[[:space:]]*(surum|sürüm|release)[[:space:]]*:[[:space:]]*minor[[:space:]]*$' <<< "$1"; then
+              echo minor
+            else
+              echo patch
+            fi
+          }
+          seviye_pr="$(seviye_bul "$pr_govde")"
+          seviye_commit="$(seviye_bul "$mesaj")"
+          # Ikisinden BUYUGU: PR'da minor, commit'te major yazan biri major ister.
+          seviye="patch"; seviye_kaynak="varsayilan"
+          for aday in "$seviye_pr:PR #${pr_no:-?} aciklamasi" "$seviye_commit:commit mesaji"; do
+            s="${aday%%:*}"; k="${aday#*:}"
+            if [ "$s" = major ] || { [ "$s" = minor ] && [ "$seviye" = patch ]; }; then
+              seviye="$s"; seviye_kaynak="$k"
+            fi
+          done
+          echo "artis: $seviye ($seviye_kaynak; PR #${pr_no:-yok}: $seviye_pr, commit: $seviye_commit)"
 
           # --- 4) Son surumden sonrakini hesapla ---------------------------
           son="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1)"
@@ -164,7 +207,8 @@ jobs:
           ozet "| | |"
           ozet "|---|---|"
           ozet "| onceki | \`$son\` |"
-          ozet "| artis | \`$seviye\` |"
+          ozet "| artis | \`$seviye\` ($seviye_kaynak) |"
+          ozet "| PR | ${pr_no:+#$pr_no} |"
           ozet "| commit | \`$konu\` |"
           ozet ""
           ozet "Etiket itildi; **Release'i build.yml olusturacak** (derleme + testler gectikten sonra)."
