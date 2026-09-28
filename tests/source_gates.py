@@ -98,6 +98,29 @@ def _balanced_call(txt, start):
     return seg
 
 
+# --------------------------------------------------------------------------
+# KAPI 3 — SQLite `runtime_bindings.cpp`'ye GIRMEZ (K214, 2026-09-27)
+#
+# `runtime_bindings.cpp` HER AOT ikilisine giriyor; orada tek bir `sqlite3_*`
+# cagrisi baglayiciya sqlite3.o'yu da HER ikiliye aldiriyor (636 KB; bos
+# program 3,0 MB). SQLite yerlesikleri bu yuzden `src/vm/runtime_db.cpp`'de.
+# Ayrim SESSIZCE geri alinabilir: yeni bir db yerlesigini aliskanlikla
+# runtime_bindings.cpp'ye yazmak derlenir, testler gecer, yalniz her ikili
+# 636 KB buyur. Bu kapi o geri donusu yakalar.
+SQLITE_RE = re.compile(r"\bsqlite3_\w+|\bsqlite3\s*\*|sqlite3\.h")
+
+
+def scan_sqlite(txt):
+    """runtime_bindings.cpp'de SQLite'a dokunan kod -> [(satir, metin)]."""
+    hits = []
+    for no, line in enumerate(txt.splitlines(), 1):
+        if COMMENT_RE.match(line):
+            continue
+        if SQLITE_RE.search(line.split("//", 1)[0]):
+            hits.append((no, line.strip()))
+    return hits
+
+
 def scan_typedvalue(txt):
     """Ilklendirilmemis TypedValue bildirimleri -> [(satir, metin)]."""
     hits = []
@@ -168,6 +191,24 @@ GATES = {
         "fix": "aot_runtime_error(...) kullanin (stderr + strict modda firlatir)",
         "red_msg": "TANI STDOUT'A SIZIYOR — aot_runtime_error kullanin!",
         "green_msg": "tani tek kapidan cikiyor",
+    },
+    "sqlite ayri birimde": {
+        "scan": scan_sqlite,
+        "files": ["src/vm/runtime_bindings.cpp"],
+        "bad": [
+            ("cagri",          "  int rc = sqlite3_exec(db, sql, 0, 0, 0);"),
+            ("tip",            "static sqlite3 *g_db = nullptr;"),
+            ("baslik",         '#include "../../lib/sqlite3/sqlite3.h"'),
+            ("satir sonu yorumlu", "  sqlite3_close(db); // kapat"),
+        ],
+        "good": [
+            ("yorum satiri",   "// SQLite yerlesikleri (db_*) src/vm/runtime_db.cpp'de"),
+            ("satir sonu yorumu", "  x = 1; // sqlite3_open burada degil"),
+            ("benzer ad",      "  int my_sqlite3x = 0;"),
+        ],
+        "fix": "SQLite'a dokunan kodu src/vm/runtime_db.cpp'ye koyun",
+        "red_msg": "SQLITE runtime_bindings.cpp'DE — her ikili 636 KB buyur!",
+        "green_msg": "sqlite ayri birimde",
     },
 }
 

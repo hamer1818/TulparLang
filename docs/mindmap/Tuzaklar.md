@@ -1283,8 +1283,14 @@ Sonuç: 13 → 6 paylaşımlı nesne, boş program 1,15 → 0,76 ms, fib
 5,08 → 4,54. İkili boyutu değişmedi.
 
 **Kural:** çalışma zamanına dışarıdan bir kütüphaneye dokunan kod
-eklerken onu ayrı bir TU'ya koy. Aynı sorun SQLite için hâlâ duruyor —
-her ikili 636 KB SQLite taşıyor (boyut; hız değil, statik).
+eklerken onu ayrı bir TU'ya koy. ~~Aynı sorun SQLite için hâlâ duruyor~~ —
+**SQLite de ayrıldı (K214, 2026-09-27):** `src/vm/runtime_db.cpp`. Beklenen
+"636 KB" değil **1,57 MB** çıktı: `print(1)` ikilisi 3 005 736 → 1 437 680
+bayt (text 2,66 → 1,19 MB; ikilideki 293 `sqlite3_*` sembolü 0'a indi).
+SQLite'ın kendi sembolleri 653 KB'tı; geri kalanı onun çektiği libc/libm
+ve statik bağımlılıklar. Açılış değişmedi (0,251 → 0,243 ms, 400 tur).
+Geri dönüşü `tests/source_gates.py` "sqlite ayri birimde" kapısı yakalıyor:
+`runtime_bindings.cpp`'de `sqlite3_*`/`sqlite3 *`/`sqlite3.h` kırmızı.
 
 ### `-static-libstdc++` önce BIRAKILDI, sonra ALINDI — okuma sırası önemli
 İlk ölçüm şunu dedi: açılıştan 0,26 ms kazandırıyor ama ikili 2,1 → 3,8 MB

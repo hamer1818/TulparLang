@@ -390,6 +390,12 @@ if [ "$ACTION" = "suites" ]; then
         if ! python3 tests/source_gates.py --gate="TypedValue ilklendirmesi"; then
             exit 1
         fi
+        # SQLite AYRI BIRIMDE (K214): runtime_bindings.cpp'ye yazilan tek bir
+        # sqlite3_* cagrisi her AOT ikilisine 636 KB SQLite ekler — derlenir,
+        # testler gecer, kimse fark etmez. Desen + ornek tablosu source_gates.py'de.
+        if ! python3 tests/source_gates.py --gate="sqlite ayri birimde"; then
+            exit 1
+        fi
         # KORPUS TANI TABANI (#26). Taban SAYI degil METIN tutuyor: bir tani
         # sessizce dogarsa ya da kaybolursa kirmizi verir. Tarayici, is
         # yapmadan once KENDINI siniyor (tani uretmesi kesin bir fikstur
