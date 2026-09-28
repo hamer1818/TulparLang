@@ -54,7 +54,11 @@ enum DataType {
 struct IntLiteral {
     long long value;
     SourceLocation loc;
-    
+    // K027: `Renk.MAVI` katlamasindan geldiyse enum'un adi (typeinfer nominal
+    // denetimi ve `match` tamligi icin); duz sayi literalinde bos. Kodgen
+    // gormez (enum hala int).
+    std::string enum_name;
+
     IntLiteral(long long v, SourceLocation l) : value(v), loc(l) {}
 };
 
@@ -189,7 +193,8 @@ struct Parameter {
     // `Dusman[] d` — dizi tipinin ELEMAN struct adi (P1.1). Yalniz dizi
     // tipleri icin dolu; codegen tipli struct dizisi yerelini bundan tanir.
     std::optional<std::string> elem_custom_type;
-    
+    std::optional<std::string> enum_type;   // K027: `func f(Renk r)` (tip int kalir)
+
     Parameter(const std::string& n, DataType t)
         : name(n), type(t) {}
 };
@@ -199,6 +204,7 @@ struct VariableDecl {
     DataType data_type;
     std::optional<std::string> custom_type;
     std::optional<std::string> elem_custom_type;  // `Dusman[] d` (P1.1)
+    std::optional<std::string> enum_type;         // K027: `Renk r` (tip int kalir)
     std::unique_ptr<ASTNode> initializer;
     bool is_moved;
     // `const int x = 5;` — yeniden atama YASAK. Denetim ayristiricida
@@ -279,6 +285,7 @@ struct FunctionDecl {
     std::vector<Parameter> parameters;
     DataType return_type;
     std::optional<std::string> return_custom_type;
+    std::optional<std::string> return_enum_type;   // K027: `func f(): Renk`
     std::unique_ptr<ASTNode> body;
     std::optional<std::string> receiver_type; // For methods
     bool is_async = false;                     // `async func` — coroutine

@@ -63,6 +63,14 @@ struct TypeInferContext {
   // Ana dosyanin kendi ust duzey fonksiyonlari (ad -> satir): modulun ayni
   // adli fonksiyonunu programin TAMAMINDA golgeler (K043).
   std::unordered_map<std::string, int> local_fn_line;
+  // K027: NOMINAL enum. Enum ayristiricida int'e katlaniyor; adlari burada
+  // izleniyor: uyeler (match tamligi), enum tipli semboller, fonksiyonlarin
+  // enum donus/parametre tipleri.
+  std::unordered_map<std::string, std::vector<std::pair<std::string, long long>>> enum_members;
+  std::unordered_map<std::string, std::string> enum_symbols;
+  std::unordered_map<std::string, std::string> fn_return_enum;
+  std::unordered_map<std::string, std::vector<std::string>> fn_param_enum;
+  std::string current_return_enum;   // gezilen fonksiyonun enum donus tipi
 
   // P23 — COZUM ile BASLATMA ayri sorulardir.
   //

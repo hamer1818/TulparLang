@@ -1,0 +1,27 @@
+// Beklenen: enum NOMINAL tip (plans/08 P0.2 v2, K027, 2026-09-27).
+//
+// Enum ayristirici sekeri: `Renk.MAVI` IntLiteral'e katlaniyor, `Renk` tip
+// adi int'e cozuluyor. Bu yuzden baska bir enum'un uyesi ya da duz bir sayi
+// enum tipli yuvaya SESSIZCE giriyordu (envanter sondasi: --strict kabul,
+// `tulpar typecheck` ok). enum -> int serbest (C gibi); `e + 1` ayni enum.
+
+// EXPECT: [typecheck]
+// EXPECT: Type mismatch in declaration of 'r': expected enum Renk, got enum Sekil
+// EXPECT: Type mismatch in declaration of 'q': expected enum Renk, got int
+// EXPECT: Type mismatch in assignment to 'ok': expected enum Renk, got enum Sekil
+// EXPECT: Argument 1 of 'boya': expected enum Renk, got enum Sekil
+// EXPECT: Argument 1 of 'boya': expected enum Renk, got int
+// EXPECT: Return type mismatch in 'kotu': expected enum Renk, got int
+
+enum Renk { KIRMIZI, YESIL, MAVI }
+enum Sekil { KARE, DAIRE }
+func boya(Renk r): Renk { return r; }
+func kotu(): Renk { return 3; }
+
+Renk r = Sekil.DAIRE;
+Renk q = 42;
+Renk ok = Renk.MAVI;
+ok = Sekil.KARE;
+print(boya(Sekil.KARE));
+print(boya(2));
+print(kotu());

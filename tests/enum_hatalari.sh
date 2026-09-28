@@ -64,5 +64,29 @@ out=$(cd "$TMP" && "$TUL" typecheck gecerli.tpr 2>&1); rc=$?
 if [ "$rc" -eq 0 ]; then gecti "gecerli enum kabul (pozitif kontrol)"
 else dustu "gecerli enum reddedildi (rc=$rc)"; echo "$out" | sed 's/^/         /'; fi
 
-if [ "$fail" -eq 0 ]; then echo "enum_hatalari: 6/6"; fi
+# `match` TAMLIGI (K027): eksik uye + `_` yok -> UYARI (sayilmaz, cikis 0);
+# tam ya da `_`li match -> uyari yok. Eskiden eksik kol SESSIZDI: eslesmeyen
+# degerde hicbir kol calismiyordu.
+printf '%s\n' 'enum Renk { KIRMIZI, YESIL, MAVI }
+Renk r = Renk.MAVI;
+str ad = match r {
+    Renk.KIRMIZI => "k",
+    Renk.YESIL => "y",
+};
+print(ad);' > "$TMP/eksik_match.tpr"
+out=$(cd "$TMP" && LC_ALL=C "$TUL" typecheck eksik_match.tpr 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -qF "enum 'Renk' members not covered: MAVI"; then
+    gecti "eksik match kolu: uyari (MAVI), sayilmiyor"
+else dustu "eksik match kolu uyarisi (rc=$rc)"; echo "$out" | sed 's/^/         /'; fi
+printf '%s\n' 'enum Renk { KIRMIZI, YESIL, MAVI }
+Renk r = Renk.MAVI;
+str a = match r { Renk.KIRMIZI => "k", Renk.YESIL => "y", Renk.MAVI => "m" };
+str b = match r { Renk.KIRMIZI => "k", _ => "d" };
+print(a + b);' > "$TMP/tam_match.tpr"
+out=$(cd "$TMP" && LC_ALL=C "$TUL" typecheck tam_match.tpr 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q "not covered"; then
+    gecti "tam / \`_\`li match: uyari yok (pozitif kontrol)"
+else dustu "tam match uyari verdi (rc=$rc)"; echo "$out" | sed 's/^/         /'; fi
+
+if [ "$fail" -eq 0 ]; then echo "enum_hatalari: 8/8"; fi
 exit $fail

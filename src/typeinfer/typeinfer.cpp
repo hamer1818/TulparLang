@@ -94,6 +94,70 @@ static bool concrete_slot(DataType t) {
          t != TYPE_ARRAY && t != TYPE_ARRAY_JSON;
 }
 static void report_future_misuse(TypeInferContext *ctx, const char *where, int line);
+// ---- K027 (2026-09-27): NOMINAL enum ---------------------------------------
+// Enum ayristiricida int'e katlaniyor (kodgen icin enum = int). typeinfer
+// adlari izliyor ve uc sessiz gecisi yakaliyor:
+//   * `Renk r = Sekil.DAIRE;`  baska bir enum'un uyesi
+//   * `Renk q = 42;`           duz int (literal, int degisken, int donen cagri)
+//   * `match r { Renk.A => .., Renk.B => .. }`  eksik uye, `_` yok (uyari)
+// enum -> int SERBEST (C'deki gibi genisletme): `int n = r + 5;` gecerli.
+static std::string enum_name_of(TypeInferContext *ctx, const ASTNode *expr) {
+  if (const auto *lit = as_node<IntLiteral>(expr)) return lit->enum_name;
+  if (const auto *id = as_node<Identifier>(expr)) {
+    auto it = ctx->enum_symbols.find(id->name);
+    return it == ctx->enum_symbols.end() ? "" : it->second;
+  }
+  if (const auto *call = as_node<FunctionCall>(expr)) {
+    if (call->callee || call->receiver) return "";
+    auto it = ctx->fn_return_enum.find(call->name);
+    return it == ctx->fn_return_enum.end() ? "" : it->second;
+  }
+  if (const auto *t = as_node<TernaryOp>(expr)) {
+    const std::string a = enum_name_of(ctx, t->then_branch.get());
+    const std::string b = enum_name_of(ctx, t->else_branch.get());
+    return a == b ? a : "";
+  }
+  // `e + 1` / `e - 1` (enum ± duz int) ayni enum'un bir degeridir — C'deki
+  // gibi; korpusta `func sonraki(Ekran e): Ekran { return e + 1; }` bu
+  // bicimde (tests/enum.test.tpr). Iki enum'un farki (`a - b`) ise int.
+  if (const auto *bin = as_node<BinaryOp>(expr)) {
+    if (bin->op == TOKEN_PLUS || bin->op == TOKEN_MINUS) {
+      const std::string l = enum_name_of(ctx, bin->left.get());
+      const std::string r = enum_name_of(ctx, bin->right.get());
+      if (!l.empty() && r.empty()) return l;
+      if (l.empty() && !r.empty() && bin->op == TOKEN_PLUS) return r;
+    }
+    return "";
+  }
+  return "";
+}
+
+// true: `want` enum'lu bir yuvaya (tip `got`, enum adi `got_enum`) yazilamaz.
+static bool enum_mismatch(const std::string &want, DataType got, const std::string &got_enum) {
+  if (want.empty()) return false;
+  if (!got_enum.empty()) return got_enum != want;
+  return got == TYPE_INT;
+}
+
+static std::string enum_label(DataType t, const std::string &e);
+
+static void register_fn_enum(TypeInferContext *ctx, const std::string &name,
+                             const FunctionDecl *func) {
+  if (func->return_enum_type) ctx->fn_return_enum[name] = *func->return_enum_type;
+  std::vector<std::string> ps;
+  bool any = false;
+  for (const auto &p : func->parameters) {
+    ps.push_back(p.enum_type ? *p.enum_type : "");
+    any = any || p.enum_type.has_value();
+  }
+  if (any) ctx->fn_param_enum[name] = std::move(ps);
+}
+
+static void set_symbol_enum(TypeInferContext *ctx, const std::string &name,
+                            const std::string &en) {
+  if (en.empty()) ctx->enum_symbols.erase(name);
+  else ctx->enum_symbols[name] = en;
+}
 
 // FONKSİYON REFERANSI: bir üst düzey fonksiyonun adı DEĞER olarak
 // kullanıldığında (`var f = selam; call(f)`), çalışma zamanında taşınan şey
@@ -298,6 +362,51 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     return TYPE_UNKNOWN;
   }
 
+  // `match` TAMLIGI (K027). Konu bir enum ise ve `_` kolu yoksa karsilanmayan
+  // uyeler UYARI olarak soylenir (sayilmaz — tamlik bir yazim tercihi olabilir;
+  // ama eksik kolda match hicbir kolu calistirmadan geciyor ve bu sessizdi).
+  // Kollar ve govdeler BURADA gezilmiyor: match eskiden de denetlenmiyordu,
+  // bu degisiklik yeni tip tanisi dogurmasin (korpus tabani).
+  if (const auto *mt = as_node<MatchExpr>(expr)) {
+    const std::string en = enum_name_of(ctx, mt->subject.get());
+    auto members = ctx->enum_members.find(en);
+    if (!en.empty() && members != ctx->enum_members.end()) {
+      bool reasoned = true;
+      std::set<long long> covered;
+      for (const auto &arm : mt->arms) {
+        if (!arm.pattern) { reasoned = false; break; }   // `_` -> tam
+        const auto *lit = as_node<IntLiteral>(arm.pattern.get());
+        if (!lit || (!lit->enum_name.empty() && lit->enum_name != en) ||
+            lit->enum_name.empty()) {
+          reasoned = false;   // baska bicim (degisken, ifade): akil yurutme yok
+          break;
+        }
+        covered.insert(lit->value);
+      }
+      if (reasoned) {
+        std::string missing;
+        for (const auto &m : members->second) {
+          if (covered.count(m.second)) continue;
+          if (!missing.empty()) missing += ", ";
+          missing += m.first;
+        }
+        if (!missing.empty()) {
+          const char *src = ctx->source_path.empty() ? "<kaynak>" : ctx->source_path.c_str();
+          fprintf(stderr,
+                  tulpar::i18n::tr_en(
+                      "[typecheck] %s: match (satir %d): '%s' sayiminin su uyeleri "
+                      "karsilanmiyor: %s — eslesmeyen degerde HICBIR kol calismaz; "
+                      "eksik kollari ya da `_ =>` ekle\n",
+                      "[typecheck] %s: match (line %d): enum '%s' members not covered: "
+                      "%s - no arm runs for them; add the arms or a `_ =>` arm\n"),
+                  src, mt->loc.line, en.c_str(), missing.c_str());
+        }
+      }
+    }
+    g_infer_fallback_hits++;   // tip sonucu eskisi gibi "cikarilamadi"
+    return TYPE_UNKNOWN;
+  }
+
   if (const auto *id = as_node<Identifier>(expr)) {
     if (symbol_is_moved(ctx, id->name)) {
       report_error(ctx, "Use of moved variable '%s' at line %d", id->name.c_str(),
@@ -480,7 +589,7 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     // for (e.g., `print(add(1))` — print has no signature, but `add(1)`
     // inside it still needs its arg-count checked).
     std::vector<DataType> arg_types;
-    std::vector<const ASTNode *> arg_nodes;   // K068: future argumani icin
+    std::vector<const ASTNode *> arg_nodes;   // K068 future argumani + K027 enum adi
     arg_types.reserve(call->arguments.size() + 1);
     for (const auto &arg : call->arguments) {
       arg_types.push_back(infer_expr(ctx, arg.get()));
@@ -633,6 +742,20 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
                      call->name.c_str(), i + 1);
             report_future_misuse(ctx, w, call->loc.line);
             continue;
+          }
+          // K027: enum parametre.
+          {
+            auto pe = ctx->fn_param_enum.find(effective_name);
+            if (pe != ctx->fn_param_enum.end() && i < (int)pe->second.size() &&
+                i < (int)arg_nodes.size()) {
+              const std::string ae = enum_name_of(ctx, arg_nodes[i]);
+              if (enum_mismatch(pe->second[i], arg_type, ae)) {
+                report_error(ctx, "Argument %d of '%s': expected enum %s, got %s at line %d",
+                             i + 1, call->name.c_str(), pe->second[i].c_str(),
+                             enum_label(arg_type, ae).c_str(), call->loc.line);
+                continue;
+              }
+            }
           }
 
           // Polymorphic position with concrete arg → use category check
@@ -822,9 +945,24 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
         report_error(ctx, "Type mismatch in declaration of '%s': expected %s, got %s at line %d",
                      decl->name.c_str(), datatype_to_string(declared_type),
                      datatype_to_string(init_type), decl->loc.line);
+      } else if (decl->enum_type) {
+        // K027: nominal enum (bkz. enum_mismatch).
+        const std::string ie = enum_name_of(ctx, decl->initializer.get());
+        if (enum_mismatch(*decl->enum_type, init_type, ie)) {
+          report_error(ctx, "Type mismatch in declaration of '%s': expected enum %s, got %s at line %d",
+                       decl->name.c_str(), decl->enum_type->c_str(),
+                       enum_label(init_type, ie).c_str(), decl->loc.line);
+        }
       }
     }
     typeinfer_add_symbol(ctx, decl->name.c_str(), declared_type);
+    // Sembolun enum'u: acik `Renk r` ya da `var r = Renk.A` (baslaticidan).
+    set_symbol_enum(ctx, decl->name,
+                    decl->enum_type ? *decl->enum_type
+                    : (decl->data_type == TYPE_UNKNOWN || decl->data_type == TYPE_VOID) &&
+                              decl->initializer
+                        ? enum_name_of(ctx, decl->initializer.get())
+                        : "");
     return;
   }
 
@@ -961,6 +1099,19 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                    assign->name.c_str(), assign->loc.line);
       return;
     }
+    {
+      // K027: enum tipli degiskene baska enum / duz int.
+      auto es = ctx->enum_symbols.find(assign->name);
+      if (es != ctx->enum_symbols.end()) {
+        const std::string ee = enum_name_of(ctx, assign->value.get());
+        if (enum_mismatch(es->second, expr_type, ee)) {
+          report_error(ctx, "Type mismatch in assignment to '%s': expected enum %s, got %s at line %d",
+                       assign->name.c_str(), es->second.c_str(),
+                       enum_label(expr_type, ee).c_str(), assign->loc.line);
+          return;
+        }
+      }
+    }
     if (!is_unknown(var_type) && !is_unknown(expr_type) &&
         !store_coercible(var_type, expr_type) &&
         !types_compatible(var_type, expr_type)) {
@@ -983,6 +1134,16 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                               tulpar::i18n::tr_en("' donusu", "'");
         report_future_misuse(ctx, w.c_str(), ret->loc.line);
         return;
+      }
+      // K027: `func f(): Renk { return 3; }` / baska enum.
+      if (!ctx->current_return_enum.empty()) {
+        const std::string re = enum_name_of(ctx, ret->value.get());
+        if (enum_mismatch(ctx->current_return_enum, ret_type, re)) {
+          report_error(ctx, "Return type mismatch in '%s': expected enum %s, got %s at line %d",
+                       ctx->current_function_name.c_str(), ctx->current_return_enum.c_str(),
+                       enum_label(ret_type, re).c_str(), ret->loc.line);
+          return;
+        }
       }
       // Don't flag against unknown-typed return expressions.
       if (ctx->current_return_type != TYPE_VOID &&
@@ -1104,23 +1265,28 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                                 static_cast<int>(param_types.size()));
 
     if (func->is_async) ctx->async_fns[func->name] = func->return_type;   // K068
+    register_fn_enum(ctx, func->name, func);
 
     const DataType prev_return = ctx->current_return_type;
     const std::string prev_func = ctx->current_function_name;
     const bool prev_async = ctx->current_is_async;
+    const std::string prev_ret_enum = ctx->current_return_enum;
     ctx->current_return_type = func->return_type;
     ctx->current_function_name = func->name;
     ctx->current_is_async = func->is_async;
+    ctx->current_return_enum = func->return_enum_type ? *func->return_enum_type : "";
 
     for (const auto &param : func->parameters) {
       typeinfer_add_symbol(ctx, param.name.c_str(), param.type);
       ctx->future_symbols.erase(param.name);
+      set_symbol_enum(ctx, param.name, param.enum_type ? *param.enum_type : "");
     }
     infer_stmt(ctx, func->body.get());
 
     ctx->current_return_type = prev_return;
     ctx->current_function_name = prev_func;
     ctx->current_is_async = prev_async;
+    ctx->current_return_enum = prev_ret_enum;
     return;
   }
 
@@ -1176,6 +1342,11 @@ static void report_future_misuse(TypeInferContext *ctx, const char *where, int l
                    "%s: the result of an async function is a FUTURE (promise) - use "
                    "`await` to get its value at line %d"),
                where, line);
+}
+
+static std::string enum_label(DataType t, const std::string &e) {
+  if (!e.empty()) return "enum " + e;
+  return datatype_to_string(t);
 }
 }  // namespace
 
@@ -2052,6 +2223,11 @@ static void register_module_exports(TypeInferContext *ctx,
           param_types.empty() ? nullptr : param_types.data(),
           static_cast<int>(param_types.size()));
       if (func->is_async) ctx->async_fns[name] = func->return_type;   // K068
+      register_fn_enum(ctx, name, func);   // K027
+      continue;
+    }
+    if (const auto *ed = as_node<EnumDecl>(stmt.get())) {   // K027 (K028 modul enum'lari)
+      if (!ctx->enum_members.count(ed->name)) ctx->enum_members[ed->name] = ed->members;
       continue;
     }
     if (const auto *type_decl = as_node<TypeDecl>(stmt.get())) {
@@ -2125,6 +2301,11 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       ctx->user_functions.insert(func->name);
       if (func->is_async) ctx->async_fns[func->name] = func->return_type;   // K068
       ctx->local_fn_line.emplace(func->name, func->loc.line);
+      register_fn_enum(ctx, func->name, func);
+    }
+    // K027: enum uyeleri (match tamligi).
+    if (const auto *ed = as_node<EnumDecl>(stmt.get())) {
+      if (!ctx->enum_members.count(ed->name)) ctx->enum_members[ed->name] = ed->members;
     }
     // Pre-scan struct declarations so `<TypeName> ident;` decls
     // anywhere in the program (even before the type's definition
@@ -2171,6 +2352,7 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       if (gvar->data_type != TYPE_UNKNOWN && gvar->data_type != TYPE_VOID &&
           gvar->data_type != TYPE_UNSPECIFIED) {
         typeinfer_add_symbol(ctx, gvar->name.c_str(), gvar->data_type);
+        if (gvar->enum_type) set_symbol_enum(ctx, gvar->name, *gvar->enum_type);  // K027
       }
       // Baslatma tarafi: hangi satirda bildirilmis? (tipi cikarilamayan
       // `var` global'leri de buraya girer — cozumlerini yapamasak da
