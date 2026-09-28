@@ -165,6 +165,19 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   kilit yakaladı.
 - `demo_users_api.tpr` başlığı `8080` diyordu; `serve()` varsayılanı 8484.
 
+### Düzeltildi — DAP: yüklü makinede breakpoint "gdb timeout" ile doğrulanmıyordu
+
+- `launch` gdb'yi başlatıp HEMEN cevap veriyordu; ilk `-break-insert` gdb'nin
+  bütün soğuk açılışını (sembol okuma dahil) 2 saniyelik tavanın içinde
+  karşılamak zorundaydı. Yüklü CI koşucusunda tavan doldu:
+  `setBreakpoints` → `verified:false, "gdb timeout"` (build-linux,
+  2026-09-28) — gdb breakpoint'i yine de kuruyordu. `launch` artık gdb'nin
+  hazır olduğunu (belirteçli `-list-features` gidiş-dönüşü, en çok 60 sn)
+  bekleyip öyle cevap veriyor; breakpoint tavanı 10 sn.
+- Yeniden üretildi: açılmadan önce 3 sn uyuyan bir `gdb` sarmalayıcısıyla
+  `tests/dap_audit.py`'nin her senaryosu düşüyordu; düzeltmeyle hepsi
+  geçiyor.
+
 ### Düzeltildi — `tulpar debug` hiç `stopped`/`terminated` olayı göndermiyordu
 
 - gdb `*stopped,reason="breakpoint-hit"` ve `exited-normally` kayıtlarını
