@@ -1815,6 +1815,9 @@ void aot_set_run_args(const char *quoted) {
   g_tulpar_run_args = quoted ? quoted : "";
 }
 
+static int g_last_run_exit_code = 0;
+int aot_last_run_exit_code(void) { return g_last_run_exit_code; }
+
 AOTResult aot_compile_and_run_silent(const char *source) {
   return aot_compile_and_run_silent_with_filename(source, nullptr);
 }
@@ -1863,8 +1866,19 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
 #if !PLATFORM_WINDOWS
   // Ctrl+C (SIGINT) on a long-running server is a normal stop, not a failure.
   if (WIFSIGNALED(run_result) && WTERMSIG(run_result) == SIGINT) {
+    g_last_run_exit_code = 0;
     return AOT_OK;
   }
+  // Keep the program's own exit code (the driver used to flatten every
+  // non-zero status to 1: `exit(3)` -> 1, measured 2026-09-28). system()
+  // returns a wait status here, not the code; a signal death is reported
+  // the way shells do, 128 + signal (SIGSEGV -> 139).
+  if (WIFEXITED(run_result)) g_last_run_exit_code = WEXITSTATUS(run_result);
+  else if (WIFSIGNALED(run_result)) g_last_run_exit_code = 128 + WTERMSIG(run_result);
+  else g_last_run_exit_code = run_result == 0 ? 0 : 1;
+#else
+  // On Windows system() returns the program's exit code itself.
+  g_last_run_exit_code = run_result;
 #endif
   return (run_result == 0) ? AOT_OK : AOT_RAN_NONZERO;
 }

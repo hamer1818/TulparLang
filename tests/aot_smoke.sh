@@ -53,6 +53,22 @@ out=$("$TUL" "$TMP/b.tpr" 2>&1 | tail -1)
 if [ "$out" = "toplam=6" ]; then gecti "dogrudan calistirma"
 else dustu "dogrudan calistirma ciktisi: '$out' (beklenen 'toplam=6')"; fi
 
+# 2b) Dogrudan calistirmada programin CIKIS KODU aynen gecmeli. Eskiden
+#     surucu sifir olmayan her kodu 1'e duzluyordu (`exit(3)` -> 1, olculdu
+#     2026-09-28): betik `exit(2)` ile yakalanmamis istisnayi ayirt
+#     edemiyordu. Pozitif kontrol: basarili program 0, yakalanmamis istisna
+#     1 — yani 3'u gormek "her sey 3" degil.
+printf 'print("x");\nexit(3);\n' > "$TMP/x3.tpr"
+printf 'int z = 0;\nprint(10 / z);\n' > "$TMP/xe.tpr"
+"$TUL" "$TMP/x3.tpr" > /dev/null 2>&1; rc3=$?
+"$TUL" "$TMP/xe.tpr" > /dev/null 2>&1; rce=$?
+"$TUL" "$TMP/b.tpr" > /dev/null 2>&1; rc0=$?
+if [ "$rc3" = "3" ] && [ "$rce" = "1" ] && [ "$rc0" = "0" ]; then
+    gecti "cikis kodu iletiliyor (exit(3) -> 3, istisna -> 1, basari -> 0)"
+else
+    dustu "cikis kodu: exit(3) -> $rc3, istisna -> $rce, basari -> $rc0 (beklenen 3 / 1 / 0)"
+fi
+
 # 3) Stdlib + dosya G/C: uretilen ikili CALISMA ZAMANI kutuphanesine de
 #    baglaniyor mu. Yalniz link degil, arena/dizgi/JSON yollari da kosuyor.
 cat > "$TMP/c.tpr" <<'T'
@@ -107,7 +123,7 @@ case "$v" in
 esac
 
 if [ "$fail" -eq 0 ]; then
-    echo -e "\033[0;32maot dumani temiz\033[0m (derle+linkle+calistir, dogrudan kosum, stdlib, cikti dizini, surum)"
+    echo -e "\033[0;32maot dumani temiz\033[0m (derle+linkle+calistir, dogrudan kosum, cikis kodu, stdlib, cikti dizini, surum)"
 else
     echo -e "\033[0;31mAOT DUMANI BASARISIZ!\033[0m" >&2
 fi

@@ -27,6 +27,10 @@ void aot_set_target_web(int enable);
 // `tulpar script.tpr a b` çağrısındaki fazladan argümanlar (kabuk için
 // alıntılanmış tek dize). Program bunları `args()` ile okuyor.
 void aot_set_run_args(const char *quoted);
+// Son `aot_compile_and_run_silent*` koşusunda programın çıkış kodu (kabuk
+// kuralıyla: normal çıkışta 0..255, sinyalle ölümde 128+sinyal). Sürücü
+// AOT_RAN_NONZERO'da bunu döndürür — eskiden her kodu 1'e düzlüyordu.
+int aot_last_run_exit_code(void);
 // `tulpar build --target=android`: emit arm64-v8a + x86_64 objects, link
 // them with the NDK toolchain into per-ABI libtulpargame.so files and
 // write an APK staging dir (<out>_apk/). Packaging into a signed .apk is
