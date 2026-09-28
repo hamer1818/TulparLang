@@ -608,6 +608,11 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
         }
     }
     
+    // Fonksiyon nitelikleri (K038/K041): `@frame func ...`, `@no_alloc func ...`.
+    if (check(TOKEN_AT)) {
+        return parse_attributed_function();
+    }
+
     // Function declaration (optionally prefixed with `async`)
     if (check(TOKEN_FUNC)) {
         return parse_function_decl();
@@ -1014,6 +1019,186 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     decl.return_enum_type = std::move(return_enum_name);
     decl.receiver_type = std::move(method_of);
     return std::make_unique<ASTNode>(std::move(decl));
+}
+
+// ---- `@frame` (K038, 2026-09-28) --------------------------------------------
+//
+// Oyun dongusunun her karesinde cagrilan fonksiyon gecici dizgi/dizi/nesne
+// uretiyor; motor bunu elle yapiyordu (tulpar-engine tulpar/engine.tpr:
+// `_kb_cp = arena_save(); ... arena_drop(_kb_cp)`). Elle yazim iki yerde
+// kolayca delinir: erken `return` drop'u atlar, `throw` da — ikisinde de
+// 32'lik kontrol noktasi yigini sizar ve 32 kareden sonra arena_save -1
+// doner (geri sarma durur, bellek birikir). `@frame` ayristiricida SEKER:
+//
+//   var __fcp = arena_save();
+//   if (__fcp < 0) { throw "@frame: ... yigini dolu"; }       // sessiz degil
+//   try { <govde: her `return e;` -> { T __fr = persist(e);
+//                                      arena_drop(__fcp); return __fr; }> }
+//   catch (__fe) { var __fe2 = persist(__fe); arena_drop(__fcp); throw __fe2; }
+//   arena_drop(__fcp);
+//
+// Donus degeri ve istisna `persist` ile kalici bellege kopyalanir — yoksa
+// drop onlari serbest birakip SARKAN deger dondururdu. Global'e yazilan deger
+// zaten yazma bariyeriyle kalici (#347). Lambda/ic fonksiyon govdesine
+// inilmez: onlarin `return`u kendi fonksiyonlarinindir.
+namespace {
+
+std::unique_ptr<ASTNode> frame_call(const char *fn, std::unique_ptr<ASTNode> arg,
+                                    SourceLocation L) {
+    std::vector<std::unique_ptr<ASTNode>> args;
+    if (arg) args.push_back(std::move(arg));
+    return std::make_unique<ASTNode>(FunctionCall(fn, std::move(args), L));
+}
+
+std::unique_ptr<ASTNode> frame_ident(const char *n, SourceLocation L) {
+    return std::make_unique<ASTNode>(Identifier(n, L));
+}
+
+void frame_rewrite_returns(std::unique_ptr<ASTNode> &node, DataType rt,
+                           const std::optional<std::string> &rcustom) {
+    if (!node) return;
+    auto &v = node->value;
+    if (auto *ret = std::get_if<ReturnStatement>(&v)) {
+        SourceLocation L = ret->loc;
+        std::vector<std::unique_ptr<ASTNode>> st;
+        if (ret->value) {
+            DataType dt = (rt == TYPE_VOID || rt == TYPE_UNSPECIFIED) ? TYPE_UNKNOWN : rt;
+            VariableDecl vd("__fr", dt, frame_call("persist", std::move(ret->value), L), L);
+            if (dt == TYPE_CUSTOM) vd.custom_type = rcustom;
+            st.push_back(std::make_unique<ASTNode>(std::move(vd)));
+            st.push_back(frame_call("arena_drop", frame_ident("__fcp", L), L));
+            st.push_back(std::make_unique<ASTNode>(ReturnStatement(frame_ident("__fr", L), L)));
+        } else {
+            st.push_back(frame_call("arena_drop", frame_ident("__fcp", L), L));
+            st.push_back(std::make_unique<ASTNode>(ReturnStatement(nullptr, L)));
+        }
+        node = std::make_unique<ASTNode>(Block(std::move(st), L));
+        return;
+    }
+    if (auto *b = std::get_if<Block>(&v)) {
+        for (auto &s : b->statements) frame_rewrite_returns(s, rt, rcustom);
+    } else if (auto *i = std::get_if<IfStatement>(&v)) {
+        frame_rewrite_returns(i->then_branch, rt, rcustom);
+        frame_rewrite_returns(i->else_branch, rt, rcustom);
+    } else if (auto *w = std::get_if<WhileLoop>(&v)) {
+        frame_rewrite_returns(w->body, rt, rcustom);
+    } else if (auto *f = std::get_if<ForLoop>(&v)) {
+        frame_rewrite_returns(f->body, rt, rcustom);
+    } else if (auto *fi = std::get_if<ForInLoop>(&v)) {
+        frame_rewrite_returns(fi->body, rt, rcustom);
+    } else if (auto *tc = std::get_if<TryCatch>(&v)) {
+        frame_rewrite_returns(tc->try_block, rt, rcustom);
+        frame_rewrite_returns(tc->catch_block, rt, rcustom);
+        frame_rewrite_returns(tc->finally_block, rt, rcustom);
+    } else if (auto *m = std::get_if<MatchExpr>(&v)) {
+        for (auto &arm : m->arms) frame_rewrite_returns(arm.body, rt, rcustom);
+    }
+    // LambdaExpr / FunctionDecl: BILEREK inilmiyor (kendi return'leri).
+}
+
+void frame_desugar(FunctionDecl &fd) {
+    SourceLocation L = fd.loc;
+    frame_rewrite_returns(fd.body, fd.return_type, fd.return_custom_type);
+    std::vector<std::unique_ptr<ASTNode>> st;
+    st.push_back(std::make_unique<ASTNode>(
+        VariableDecl("__fcp", TYPE_UNKNOWN, frame_call("arena_save", nullptr, L), L)));
+    {
+        std::vector<std::unique_ptr<ASTNode>> thr;
+        std::string msg = "@frame '" + fd.name +
+                          "': arena kontrol noktasi yigini dolu (32) — ic ice/ozyinelemeli "
+                          "@frame ya da dengesiz arena_save / frame checkpoint stack full";
+        thr.push_back(std::make_unique<ASTNode>(
+            ThrowStatement(std::make_unique<ASTNode>(StringLiteral(msg, L)), L)));
+        st.push_back(std::make_unique<ASTNode>(IfStatement(
+            std::make_unique<ASTNode>(BinaryOp(frame_ident("__fcp", L),
+                                               std::make_unique<ASTNode>(IntLiteral(0, L)),
+                                               TOKEN_LESS, L)),
+            std::make_unique<ASTNode>(Block(std::move(thr), L)), nullptr, L)));
+    }
+    {
+        std::vector<std::unique_ptr<ASTNode>> cb;
+        cb.push_back(std::make_unique<ASTNode>(VariableDecl(
+            "__fe2", TYPE_UNKNOWN, frame_call("persist", frame_ident("__fe", L), L), L)));
+        cb.push_back(frame_call("arena_drop", frame_ident("__fcp", L), L));
+        cb.push_back(std::make_unique<ASTNode>(ThrowStatement(frame_ident("__fe2", L), L)));
+        st.push_back(std::make_unique<ASTNode>(TryCatch(
+            std::move(fd.body), "__fe", std::make_unique<ASTNode>(Block(std::move(cb), L)),
+            nullptr, L)));
+    }
+    st.push_back(frame_call("arena_drop", frame_ident("__fcp", L), L));
+    fd.body = std::make_unique<ASTNode>(Block(std::move(st), L));
+}
+
+}  // namespace
+
+std::unique_ptr<ASTNode> Parser::parse_attributed_function() {
+    const int at_line = current().line();
+    bool frame = false, no_alloc = false;
+    while (match(TOKEN_AT)) {
+        Token a = expect(TOKEN_IDENTIFIER, "Expected attribute name after '@'");
+        if (a.value() == "frame") {
+            frame = true;
+        } else if (a.value() == "no_alloc") {
+            no_alloc = true;
+        } else {
+            error(std::string(tulpar::i18n::tr_en("bilinmeyen nitelik '@",
+                                                  "unknown attribute '@")) +
+                  a.value() +
+                  tulpar::i18n::tr_en("' (bilinenler: @frame, @no_alloc)",
+                                      "' (known: @frame, @no_alloc)") +
+                  " at line " + std::to_string(a.line()));
+        }
+    }
+    const bool is_async = match(TOKEN_ASYNC);
+    if (!check(TOKEN_FUNC)) {
+        error(std::string(tulpar::i18n::tr_en(
+                  "nitelik (@...) yalniz bir fonksiyon tanimindan once gelebilir",
+                  "an attribute (@...) may only precede a function declaration")) +
+              " at line " + std::to_string(at_line));
+    }
+    auto fn = parse_function_decl();
+    if (!fn || !std::holds_alternative<FunctionDecl>(fn->value)) return fn;
+    FunctionDecl &fd = std::get<FunctionDecl>(fn->value);
+    fd.is_async = is_async;
+    fd.no_alloc = no_alloc;
+    if (frame && no_alloc) {
+        // Celisik degil ama anlamsiz: @frame ayirmayi geri sarar, @no_alloc
+        // ayirmayi yasaklar; seker acilimi (try/catch, persist) da @no_alloc
+        // denetimini kendi urettigi kodla kirmizi yapardi.
+        report_soft_parse_error(
+            fd.loc.line,
+            tulpar::i18n::tr_en("@frame ve @no_alloc birlikte kullanilamaz (biri ayirmayi "
+                                "geri sarar, digeri yasaklar)",
+                                "@frame and @no_alloc cannot be combined (one reclaims "
+                                "allocations, the other forbids them)"),
+            "@frame", nullptr);
+        return fn;
+    }
+    if (frame) {
+        const bool tuple_ret = fd.return_custom_type &&
+                               fd.return_custom_type->rfind("__tup_", 0) == 0;
+        if (is_async) {
+            report_soft_parse_error(
+                fd.loc.line,
+                tulpar::i18n::tr_en("@frame async fonksiyonda desteklenmiyor (coroutine "
+                                    "kareyi asar)",
+                                    "@frame is not supported on an async function (the "
+                                    "coroutine outlives the frame)"),
+                "@frame", nullptr);
+        } else if (tuple_ret) {
+            report_soft_parse_error(
+                fd.loc.line,
+                tulpar::i18n::tr_en("@frame coklu donuslu (tuple) fonksiyonda henuz "
+                                    "desteklenmiyor",
+                                    "@frame is not yet supported on a tuple-returning "
+                                    "function"),
+                "@frame", nullptr);
+        } else {
+            frame_desugar(fd);
+        }
+        fd.is_frame = true;
+    }
+    return fn;
 }
 
 std::unique_ptr<ASTNode> Parser::parse_type_decl() {

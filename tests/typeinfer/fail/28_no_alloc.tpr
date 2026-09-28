@@ -1,0 +1,27 @@
+// Beklenen: `@no_alloc` fonksiyonu (gecisli) ayiran yapilarda reddedilir
+// (K041, 2026-09-28). Kural beyaz liste: dizgi birlestirme, dizi literali,
+// beyaz listede olmayan yerlesik, ayiran kullanici fonksiyonunu cagirmak.
+// Eski derleyici `@`i hic tanimiyordu (Lexer Error).
+
+// EXPECT: [typecheck]
+// EXPECT: 'ek' is @no_alloc but allocates: `+` may be a string concatenation
+// EXPECT: 'dolayli' is @no_alloc but allocates: call to 'kirli' allocates [
+// EXPECT: 'dizi_kur' is @no_alloc but allocates: array literal
+// EXPECT: 'yazdir' is @no_alloc but allocates: built-in 'print' may allocate
+
+func kirli(int a): str { return "x" + toString(a); }
+
+@no_alloc
+func ek(int n): int { str s = "a" + toString(n); return len(s); }
+
+@no_alloc
+func dolayli(int n): int { str k = kirli(n); return n; }
+
+@no_alloc
+func dizi_kur(): int { int[] b = [1, 2]; return len(b); }
+
+@no_alloc
+func yazdir(int n) { print(n); }
+
+print(ek(3) + dolayli(2) + dizi_kur());
+yazdir(1);

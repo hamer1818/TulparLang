@@ -2609,6 +2609,7 @@ static void register_module_exports(TypeInferContext *ctx,
       // aliased call sites would look undefined.
       std::string name = alias.empty() ? func->name : alias + "__" + func->name;
       ctx->user_functions.insert(name);
+      ctx->fn_decls.emplace(name, func);   // K041 (yerel tanim once kaydedildi, kazanir)
       // K043: iki FARKLI modul ayni ust duzey adi tanimliyor. AOT de tipler
       // de ilk tanimi aliyor; ikinci modulun fonksiyonu SESSIZCE yok sayiliyordu
       // (`import "ma"; import "mb"; ortak()` -> ma'ninki, tani yok).
@@ -2698,7 +2699,362 @@ static void register_module_exports(TypeInferContext *ctx,
                               depth + 1);
     }
   }
+  // fn_decls modulun FunctionDecl'lerini isaret ediyor (K041): AST yasamali.
+  ctx->module_asts.push_back(std::move(module_ast));
 }
+
+// ---- K041 (2026-09-28): `@no_alloc` — statik, gecisli ayirma denetimi -------
+//
+// Oyun dongusunun sicak fonksiyonu "karede 0 ayirma" iddiasini ancak olcerek
+// (AllocGate) ogrenebiliyordu; dil bunu SOYLEYEMIYORDU. `@no_alloc func f`
+// govdesinin (ve cagirdigi kullanici fonksiyonlarinin, gecisli) Tulpar
+// yiginina ayirma yapmadigini derleme zamaninda denetler.
+//
+// KURAL BEYAZ LISTE, bilerek: taninmayan her yapi / yerlesik "ayirabilir"
+// sayilir. Kara liste yanlis tarafa hata yapardi (yeni bir ayiran yerlesik
+// sessizce "temiz" gecerdi); beyaz liste en fazla gereksiz bir tani verir.
+//   * ayiran: dizi/nesne literali (skaler struct'a bildirim/donus haric),
+//     kapanis, dizgi birlestirme (`+` islenenleri SAYI olarak kanitlanamazsa),
+//     dizgi indeksleme, tipi bilinmeyen indeksleme, try/throw, await, dizi
+//     olmayan for-in, beyaz listede olmayan yerlesik, dolayli cagri;
+//   * temiz: sayi aritmetigi, karsilastirma, tipli dizi / struct alani okuma-
+//     yazma, dizgi SABITI (interned), beyaz listedeki matematik ve motor
+//     (`tm_*` skaler, yukleme/olusturma haric) cagrilari, temiz kullanici
+//     fonksiyonlari.
+// Tani typeinfer hatasi (typecheck/--strict kirmizi), nedeniyle ve — cagri
+// zincirindeyse — en derindeki yerin satiriyla.
+namespace {
+
+struct NoAllocState {
+  TypeInferContext *ctx;
+  std::unordered_map<std::string, std::string> memo;   // fn -> "" temiz / neden
+  std::set<std::string> active;                         // ozyineleme korumasi
+};
+
+static bool noalloc_builtin_ok(TypeInferContext *ctx, const std::string &n) {
+  static const std::set<std::string> ok = {
+      "len",   "length", "abs",   "sqrt",  "sin",    "cos",     "tan",     "asin",
+      "acos",  "atan",   "atan2", "sinh",  "cosh",   "tanh",    "exp",     "log",
+      "log2",  "log10",  "cbrt",  "pow",   "floor",  "ceil",    "round",   "trunc",
+      "fmod",  "hypot",  "min",   "max",   "mod",    "random",  "randint", "time_ms",
+      "clock_ms", "toInt", "toFloat", "toBool", "ord", "isInt",  "isFloat", "isBool",
+      "isString", "isArray", "isObject"};
+  if (ok.count(n)) return true;
+  // Motor (tame) cagrilari C tarafinda; skaler donenler Tulpar yiginina
+  // ayirmiyor. Kaynak yukleyen/olusturanlar ve dizgi/dizi donenler haric.
+  if (n.rfind("tm_", 0) == 0 || n.rfind("tm3_", 0) == 0) {
+    if (n.find("load") != std::string::npos || n.find("_new") != std::string::npos)
+      return false;
+    auto it = ctx->functions.find(n);
+    if (it == ctx->functions.end()) return false;
+    const DataType r = it->second.return_type;
+    return r == TYPE_INT || r == TYPE_FLOAT || r == TYPE_BOOL || r == TYPE_VOID;
+  }
+  return false;
+}
+
+static bool scalar_type(DataType t) {
+  return t == TYPE_INT || t == TYPE_FLOAT || t == TYPE_BOOL;
+}
+
+static std::string noalloc_check_fn(NoAllocState *st, const std::string &name);
+
+struct NoAllocWalk {
+  NoAllocState *st;
+  const FunctionDecl *fn;
+  std::unordered_map<std::string, DataType> types;
+  std::unordered_map<std::string, std::string> custom;   // ad -> struct adi
+  int line = 0;
+  std::string why;
+
+  bool fail(int l, const std::string &w) {
+    if (why.empty()) { line = l; why = w; }
+    return false;
+  }
+  DataType type_of(const std::string &n) const {
+    auto it = types.find(n);
+    if (it != types.end()) return it->second;
+    auto g = st->ctx->symbols.find(n);
+    return g != st->ctx->symbols.end() ? g->second.type : TYPE_UNKNOWN;
+  }
+  // Tum alanlari skaler, kayitli struct (kutusuz: yigina ayirmaz).
+  bool scalar_struct(const std::string &s) const {
+    auto it = st->ctx->struct_types.find(s);
+    if (it == st->ctx->struct_types.end()) return false;
+    for (DataType t : it->second.field_types)
+      if (!scalar_type(t)) return false;
+    return true;
+  }
+  std::string struct_of(const ASTNode *e) const {
+    if (const auto *id = as_node<Identifier>(e)) {
+      auto it = custom.find(id->name);
+      return it == custom.end() ? "" : it->second;
+    }
+    return "";
+  }
+  bool numeric(const ASTNode *e) const {
+    if (!e) return false;
+    if (as_node<IntLiteral>(e) || as_node<FloatLiteral>(e) || as_node<BoolLiteral>(e))
+      return true;
+    if (const auto *id = as_node<Identifier>(e)) return scalar_type(type_of(id->name));
+    if (const auto *b = as_node<BinaryOp>(e)) {
+      switch (b->op) {
+      case TOKEN_EQUAL: case TOKEN_NOT_EQUAL: case TOKEN_LESS: case TOKEN_GREATER:
+      case TOKEN_LESS_EQUAL: case TOKEN_GREATER_EQUAL: case TOKEN_AND: case TOKEN_OR:
+        return true;   // sonuc bool (islenenler ayrica denetleniyor)
+      default:
+        return numeric(b->left.get()) && numeric(b->right.get());
+      }
+    }
+    if (const auto *u = as_node<UnaryOp>(e))
+      return u->op != TOKEN_AWAIT && (u->op == TOKEN_BANG || numeric(u->operand.get()));
+    if (const auto *t = as_node<TernaryOp>(e))
+      return numeric(t->then_branch.get()) && numeric(t->else_branch.get());
+    if (const auto *c = as_node<FunctionCall>(e)) {
+      if (c->callee) return false;
+      auto it = st->ctx->functions.find(c->name);
+      return it != st->ctx->functions.end() && scalar_type(it->second.return_type);
+    }
+    if (const auto *a = as_node<ArrayAccess>(e)) {
+      if (const auto *id = as_node<Identifier>(a->object.get())) {
+        const DataType t = type_of(id->name);
+        if (t == TYPE_ARRAY_INT || t == TYPE_ARRAY_FLOAT || t == TYPE_ARRAY_BOOL) return true;
+        const std::string s = struct_of(a->object.get());
+        if (!s.empty()) {
+          if (const auto *key = as_node<StringLiteral>(a->index.get())) {
+            const auto &info = st->ctx->struct_types[s];
+            for (size_t i = 0; i < info.field_names.size(); i++)
+              if (info.field_names[i] == key->value) return scalar_type(info.field_types[i]);
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  bool expr(const ASTNode *e) {
+    if (!e || !why.empty()) return why.empty();
+    const auto &v = e->value;
+    if (as_node<IntLiteral>(e) || as_node<FloatLiteral>(e) || as_node<BoolLiteral>(e) ||
+        as_node<StringLiteral>(e) || as_node<NullLiteral>(e) || as_node<Identifier>(e))
+      return true;
+    if (const auto *b = std::get_if<BinaryOp>(&v)) {
+      if (b->op == TOKEN_PLUS && !(numeric(b->left.get()) && numeric(b->right.get())))
+        return fail(b->loc.line, tulpar::i18n::tr_en(
+                                     "`+` dizgi birlestirmesi olabilir (islenenler sayi "
+                                     "olarak kanitlanamadi)",
+                                     "`+` may be a string concatenation (operands not "
+                                     "proven numeric)"));
+      return expr(b->left.get()) && expr(b->right.get());
+    }
+    if (const auto *u = std::get_if<UnaryOp>(&v)) {
+      if (u->op == TOKEN_AWAIT) return fail(u->loc.line, "await");
+      return expr(u->operand.get());
+    }
+    if (const auto *t = std::get_if<TernaryOp>(&v))
+      return expr(t->condition.get()) && expr(t->then_branch.get()) &&
+             expr(t->else_branch.get());
+    if (const auto *al = std::get_if<ArrayLiteral>(&v))
+      return fail(al->loc.line, tulpar::i18n::tr_en("dizi literali", "array literal"));
+    if (const auto *ol = std::get_if<ObjectLiteral>(&v))
+      return fail(ol->loc.line, tulpar::i18n::tr_en("nesne literali", "object literal"));
+    if (const auto *lm = std::get_if<LambdaExpr>(&v))
+      return fail(lm->loc.line, tulpar::i18n::tr_en("kapanis (lambda)", "closure (lambda)"));
+    if (const auto *a = std::get_if<ArrayAccess>(&v)) {
+      const auto *id = as_node<Identifier>(a->object.get());
+      const DataType t = id ? type_of(id->name) : TYPE_UNKNOWN;
+      const bool typed_array = t == TYPE_ARRAY_INT || t == TYPE_ARRAY_FLOAT ||
+                               t == TYPE_ARRAY_BOOL || t == TYPE_ARRAY_STR;
+      const bool struct_field = !struct_of(a->object.get()).empty() &&
+                                as_node<StringLiteral>(a->index.get());
+      if (t == TYPE_STRING)
+        return fail(a->loc.line, tulpar::i18n::tr_en(
+                                     "dizgi indeksleme (tek karakterlik dizgi ayirir)",
+                                     "string indexing (allocates a one-char string)"));
+      if (!typed_array && !struct_field)
+        return fail(a->loc.line, tulpar::i18n::tr_en(
+                                     "tipi bilinmeyen indeksleme (dizgi olabilir)",
+                                     "indexing a value of unknown type (may be a string)"));
+      return expr(a->index.get());
+    }
+    if (const auto *c = std::get_if<FunctionCall>(&v)) {
+      if (c->callee)
+        return fail(c->loc.line, tulpar::i18n::tr_en("dolayli cagri", "indirect call"));
+      std::string target = c->name;
+      if (c->receiver) {
+        if (const auto *rid = as_node<Identifier>(c->receiver.get())) {
+          if (st->ctx->fn_decls.count(rid->name + "__" + c->name))
+            target = rid->name + "__" + c->name;   // takma adli modul
+          else if (!expr(c->receiver.get())) return false;
+        } else if (!expr(c->receiver.get())) {
+          return false;
+        }
+      }
+      for (const auto &arg : c->arguments)
+        if (!expr(arg.get())) return false;
+      if (st->ctx->fn_decls.count(target)) {
+        const std::string r = noalloc_check_fn(st, target);
+        if (!r.empty()) {
+          char b[640];
+          snprintf(b, sizeof b,
+                   tulpar::i18n::tr_en("'%s' cagrisi ayiriyor [%s]", "call to '%s' allocates [%s]"),
+                   target.c_str(), r.c_str());
+          return fail(c->loc.line, b);
+        }
+        return true;
+      }
+      if (noalloc_builtin_ok(st->ctx, target)) return true;
+      char b[256];
+      snprintf(b, sizeof b,
+               tulpar::i18n::tr_en("'%s' yerlesigi ayirabilir (beyaz listede degil)",
+                                   "built-in '%s' may allocate (not on the allowlist)"),
+               target.c_str());
+      return fail(c->loc.line, b);
+    }
+    if (const auto *m = std::get_if<MatchExpr>(&v)) {
+      if (!expr(m->subject.get())) return false;
+      for (const auto &arm : m->arms)
+        if (!stmt(arm.body.get())) return false;
+      return true;
+    }
+    if (const auto *as = std::get_if<Assignment>(&v)) {
+      if (as->target && !expr(as->target.get())) return false;
+      if (!as->target && !as->name.empty() && as_node<ObjectLiteral>(as->value.get())) {
+        auto it = custom.find(as->name);
+        if (it != custom.end() && scalar_struct(it->second)) return obj_fields(as->value.get());
+      }
+      return expr(as->value.get());
+    }
+    if (const auto *ca = std::get_if<CompoundAssign>(&v)) {
+      const bool num = ca->target ? numeric(ca->target.get()) : scalar_type(type_of(ca->name));
+      if (!num)
+        return fail(ca->loc.line, tulpar::i18n::tr_en(
+                                      "bilesik atama hedefi sayi olarak kanitlanamadi "
+                                      "(dizgi `+=` ayirir)",
+                                      "compound-assignment target not proven numeric "
+                                      "(string `+=` allocates)"));
+      if (ca->target && !expr(ca->target.get())) return false;
+      return expr(ca->value.get());
+    }
+    if (const auto *inc = std::get_if<IncrementOp>(&v))
+      return !inc->target || expr(inc->target.get());
+    if (const auto *dec = std::get_if<DecrementOp>(&v))
+      return !dec->target || expr(dec->target.get());
+    return fail(0, tulpar::i18n::tr_en("desteklenmeyen ifade", "unsupported expression"));
+  }
+
+  // Skaler struct'a yazilan nesne literali: alanlarin DEGERLERI denetlenir.
+  bool obj_fields(const ASTNode *e) {
+    const auto *ol = as_node<ObjectLiteral>(e);
+    if (!ol) return expr(e);
+    for (const auto &f : ol->fields)
+      if (!expr(f.second.get())) return false;
+    return true;
+  }
+
+  bool stmt(const ASTNode *s) {
+    if (!s || !why.empty()) return why.empty();
+    const auto &v = s->value;
+    if (const auto *b = std::get_if<Block>(&v)) {
+      for (const auto &x : b->statements)
+        if (!stmt(x.get())) return false;
+      return true;
+    }
+    if (const auto *d = std::get_if<VariableDecl>(&v)) {
+      DataType t = d->data_type;
+      if ((t == TYPE_UNKNOWN || t == TYPE_VOID) && d->initializer)
+        t = numeric(d->initializer.get()) ? TYPE_FLOAT : TYPE_UNKNOWN;
+      types[d->name] = t;
+      if (d->data_type == TYPE_CUSTOM && d->custom_type) {
+        custom[d->name] = *d->custom_type;
+        if (d->initializer && as_node<ObjectLiteral>(d->initializer.get()) &&
+            scalar_struct(*d->custom_type))
+          return obj_fields(d->initializer.get());
+      }
+      return !d->initializer || expr(d->initializer.get());
+    }
+    if (const auto *i = std::get_if<IfStatement>(&v))
+      return expr(i->condition.get()) && stmt(i->then_branch.get()) &&
+             (!i->else_branch || stmt(i->else_branch.get()));
+    if (const auto *w = std::get_if<WhileLoop>(&v))
+      return expr(w->condition.get()) && stmt(w->body.get());
+    if (const auto *f = std::get_if<ForLoop>(&v))
+      return (!f->init || stmt(f->init.get())) && (!f->condition || expr(f->condition.get())) &&
+             (!f->increment || stmt(f->increment.get())) && stmt(f->body.get());
+    if (const auto *fi = std::get_if<ForInLoop>(&v)) {
+      const auto *id = as_node<Identifier>(fi->iterable.get());
+      const DataType t = id ? type_of(id->name) : TYPE_UNKNOWN;
+      if (t == TYPE_ARRAY_INT || t == TYPE_ARRAY_BOOL) types[fi->variable] = TYPE_INT;
+      else if (t == TYPE_ARRAY_FLOAT) types[fi->variable] = TYPE_FLOAT;
+      else if (t == TYPE_ARRAY_STR) types[fi->variable] = TYPE_STRING;
+      else
+        return fail(fi->loc.line, tulpar::i18n::tr_en(
+                                      "for-in tipli dizi uzerinde degil (nesne anahtarlari "
+                                      "dizisi ayirir)",
+                                      "for-in not over a typed array (object keys allocate "
+                                      "an array)"));
+      return stmt(fi->body.get());
+    }
+    if (const auto *r = std::get_if<ReturnStatement>(&v)) {
+      if (!r->value) return true;
+      if (as_node<ObjectLiteral>(r->value.get()) && fn->return_type == TYPE_CUSTOM &&
+          fn->return_custom_type && scalar_struct(*fn->return_custom_type))
+        return obj_fields(r->value.get());
+      return expr(r->value.get());
+    }
+    if (std::get_if<BreakStatement>(&v) || std::get_if<ContinueStatement>(&v)) return true;
+    if (const auto *tc = std::get_if<TryCatch>(&v))
+      return fail(tc->loc.line, tulpar::i18n::tr_en("try/catch (istisna nesnesi ayirir)",
+                                                    "try/catch (exception objects allocate)"));
+    if (const auto *th = std::get_if<ThrowStatement>(&v))
+      return fail(th->loc.line, tulpar::i18n::tr_en("throw (istisna nesnesi ayirir)",
+                                                    "throw (exception objects allocate)"));
+    if (std::get_if<FunctionDecl>(&v) || std::get_if<TypeDecl>(&v) || std::get_if<EnumDecl>(&v))
+      return true;
+    return expr(s);
+  }
+};
+
+static std::string noalloc_check_fn(NoAllocState *st, const std::string &name) {
+  auto m = st->memo.find(name);
+  if (m != st->memo.end()) return m->second;
+  auto d = st->ctx->fn_decls.find(name);
+  if (d == st->ctx->fn_decls.end()) return "";
+  if (st->active.count(name)) return "";   // ozyineleme: govdenin geri kalani denetleniyor
+  st->active.insert(name);
+  NoAllocWalk w{st, d->second, {}, {}, 0, {}};
+  for (const auto &p : d->second->parameters) {
+    w.types[p.name] = p.type;
+    if (p.type == TYPE_CUSTOM && p.custom_type) w.custom[p.name] = *p.custom_type;
+  }
+  w.stmt(d->second->body.get());
+  st->active.erase(name);
+  std::string r;
+  if (!w.why.empty()) {
+    char b[800];
+    snprintf(b, sizeof b, tulpar::i18n::tr_en("%s (satir %d)", "%s at line %d"), w.why.c_str(),
+             w.line);
+    r = b;
+  }
+  st->memo[name] = r;
+  return r;
+}
+
+static void noalloc_check_program(TypeInferContext *ctx, const Program *prog) {
+  NoAllocState st{ctx, {}, {}};
+  for (const auto &s : prog->statements) {
+    const auto *fn = as_node<FunctionDecl>(s.get());
+    if (!fn || !fn->no_alloc) continue;
+    const std::string r = noalloc_check_fn(&st, fn->name);
+    if (!r.empty())
+      report_error(ctx,
+                   tulpar::i18n::tr_en("'%s' @no_alloc ama ayiriyor: %s (fonksiyon satir %d)",
+                                       "'%s' is @no_alloc but allocates: %s (function at line %d)"),
+                   fn->name.c_str(), r.c_str(), fn->loc.line);
+  }
+}
+
+}  // namespace
 
 void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   const auto *prog = as_node<Program>(program);
@@ -2752,6 +3108,7 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       ctx->local_fn_line.emplace(func->name, func->loc.line);
       register_fn_enum(ctx, func->name, func);
       register_fn_custom(ctx, func->name, func);
+      ctx->fn_decls.emplace(func->name, func);   // K041
     }
     // K027: enum uyeleri (match tamligi).
     if (const auto *ed = as_node<EnumDecl>(stmt.get())) {
@@ -2886,4 +3243,7 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       ctx->initialized_globals.insert(gvar->name);
     }
   }
+
+  // `@no_alloc` (K041): ana gezintiden SONRA — global sembol tipleri dolu.
+  noalloc_check_program(ctx, prog);
 }

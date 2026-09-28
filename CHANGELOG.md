@@ -1446,6 +1446,45 @@ alternatifi üretilen kodun sessizce yanlış adrese yazmasıydı.
   ile), `tests/to_struct_hatalari.sh` (3 derleme hatası + pozitif kontrol;
   eski derleyiciyle hepsi kırmızı).
 
+### Eklendi — fonksiyon nitelikleri: `@frame` (kare arenası) ve `@no_alloc` (statik ayırma denetimi)
+
+- **`@frame func f(...)`** (K038): gövde bir arena kontrol noktasında koşar;
+  girişte `arena_save`, **her** çıkışta (`return`, `throw`, sona düşme)
+  `arena_drop`. Motor bunu elle yapıyordu (`cp = arena_save(); ...;
+  arena_drop(cp)`) ve elle yazım erken `return`/`throw`da deliniyordu: drop
+  atlanır, 32'lik kontrol noktası yığını sızar, sonra `arena_save` -1 döner
+  ve geri sarma durur. Ayrıştırıcıda şeker açılıyor (try/catch + `persist`):
+  dönüş değeri ve istisna kalıcı belleğe kopyalanıyor (yoksa sarkan değer
+  dönerdi); global'e yazılan değer zaten yazma bariyeriyle kalıcı. Yığın
+  doluysa (iç içe/özyinelemeli `@frame`) yakalanabilir hata — sessiz değil.
+  `async` ve tuple dönüşlü fonksiyonda açık hata.
+  Ölçüm (bu makine, 2026-09-28): çağrı başına ~36 KB geçici dizgi üreten
+  fonksiyon, 20 000 çağrı — tepe RSS **733 064 kB → 2 960 kB**. Maliyet:
+  çağrı başına ~50 ns (2M çağrı 100 ms; setjmp + kayıt/geri sarma) — kare
+  fonksiyonu için, iç döngü yardımcısı için değil.
+- **`@no_alloc func f(...)`** (K041): gövdenin — ve çağırdığı kullanıcı
+  fonksiyonlarının, geçişli — Tulpar yığınına ayırmadığı derleme zamanında
+  denetleniyor (typeinfer tanısı; `typecheck`/`--strict` kırmızı). Kural
+  **beyaz liste**: dizi/nesne literali (skaler struct'a bildirim/dönüş
+  hariç), kapanış, `+` işlenenleri sayı olarak kanıtlanamıyorsa dizgi
+  birleştirme, dizgi/tipi bilinmeyen indeksleme, try/throw, await, dizi
+  olmayan for-in ve beyaz listede olmayan yerleşik "ayırabilir" sayılır;
+  sayı aritmetiği, tipli dizi / struct alanı, dizgi sabiti, matematik
+  yerleşikleri ve motorun skaler `tm_*` çağrıları (yükleme/oluşturma hariç)
+  temiz. Tanı nedeni ve çağrı zincirini söylüyor (`call to 'kirli' allocates
+  [...]`).
+- Sözdizimi: `@` yeni token (enum'un **sonuna** eklendi — önceden derlenmiş
+  arşivlerin numaralaması değişmez); bilinmeyen nitelik, fonksiyonsuz nitelik
+  ve `@frame @no_alloc` birlikte açık hata. Korpusta `@` kullanımı yoktu
+  (lexer reddediyordu) — kırılan program yok.
+- Nöbetçi: `tests/frame.test.tpr` (4 test: dönüş/istisna kalıcı, struct
+  dönüşü, 1500 çıkışta sıfır sızıntı, yığın dolu hatası),
+  `tests/frame_hatalari.sh` 8/8 (5 ayrıştırma hatası + tepe RSS kapısı,
+  @frame'siz sürümün büyümesi pozitif kontrol; /proc yoksa açıkça atlanır;
+  eski derleyiciyle 7'si kırmızı), typeinfer `fail/28_no_alloc.tpr`
+  (4 EXPECT), `pass/21_no_alloc_ok.tpr`. 14 kıyasın optimizasyon sonrası IR'ı
+  birebir aynı; korpus tanı tabanı 0 (değişmedi).
+
 ### Added — `array_fill(n, deger)`: diziyi tek çağrıda kur
 
 n elemanlı bir dizi kurmanın tek yolu n kez `push` çağırmaktı. Ölçüldü: çağrı
