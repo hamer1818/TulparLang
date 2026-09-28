@@ -608,6 +608,21 @@ extern "C" void *aot_func_lookup(const char *name, int *arity) {
   return tulpar_dlsym(TULPAR_RTLD_DEFAULT, sym); // arite bilinmez: -1 kaldi
 }
 
+// Program sonu async bosaltmasi. main() bunu KOSULSUZ cagiriyor; govde
+// runtime/tulpar_async.cpp'de ve zamanlayici ilk kullanildiginda
+// aot_async_set_drain ile kaydoluyor. Burada durmasinin sebebi: tanim
+// tulpar_async.cpp'de oldugu surece o nesne async kullanmayan her ikiliye
+// giriyordu (web'de +38 KB wasm, +15,6 KB js; olculdu 2026-09-28). Artik
+// yalniz async yerlesigi cagiran program onu cekiyor.
+static std::atomic<void (*)(void)> g_async_drain{nullptr};
+extern "C" void aot_async_set_drain(void (*fn)(void)) {
+  g_async_drain.store(fn, std::memory_order_release);
+}
+extern "C" void aot_event_loop_run(void) {
+  void (*fn)(void) = g_async_drain.load(std::memory_order_acquire);
+  if (fn) fn();
+}
+
 // aot_func_lookup'in CAGRI esi: cozulmus kutulu giris noktasini call() ile
 // AYNI dagitimla cagir — tam `arity` isaretci (eksik parametre VOID, fazlasi
 // duser; arity -1 ise argc'ye guvenilir). Gomen kendi switch'ini tasimasin

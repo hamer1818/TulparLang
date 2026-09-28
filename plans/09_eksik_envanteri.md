@@ -99,7 +99,7 @@ Dosyalar: src/vm/runtime_bindings.cpp (aot_invoke_boxed_n/aot_call_closure/aot_c
 - [x] **K112** async PR6: iptal + zaman aşımı — `with_timeout(promise, ms)` (timer + reject yarışı), görev iptali (kooperatif bayrak, await noktasında denetim, iptal edilen coroutine'in EhContext/ARC temizliği), Wings handler zaman aşımı entegrasyonu, testler. _(yok, L; T/plans/06_async_await.md:146)_ (#389; Wings handler zaman aşımı K265 async handler dağıtımına bağlı, açık)
 - [ ] **K265** async PR5: Wings handler entegrasyonu — (1) Dispatcher'ın async handler'ı coroutine olarak spawn edip beklerken başka bağlantılara geçmesi (listen_evented'e coroutine farkındalığı — plan 06 PR5); (2) async zamanlayıcı global'lerinin thread-local yapılması ya da tek-thread'e hapsedilmesi (listen_poo… _(yok, L; T/plans/06_async_await.md:139)_
 - [ ] **K156** async yığın izi + debugger entegrasyonu — Coroutine başına bekleyen->bekleten zincirini kaydeden meta veri + hata yığın izinde 'await' sınırlarının basılması + DAP'ta coroutine'leri ayrı thread/çerçeve olarak göstermek. _(yok, L; T/plans/06_async_await.md:167)_
-- [ ] **K233** Web ve Android'de async — ucontext'siz bir coroutine altyapısı ve iki hedefte async testinin koşması. _(yok, L; T/CLAUDE.md:165)_
+- [x] **K233** Web ve Android'de async — ucontext'siz bir coroutine altyapısı ve iki hedefte async testinin koşması. _(yok, L; T/CLAUDE.md:165)_ (#390)
 
 ## Kol C — Araçlar, CLI, pkg, test/CI ve belgeler
 
