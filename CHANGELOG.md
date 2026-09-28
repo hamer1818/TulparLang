@@ -893,6 +893,33 @@ döner.
   `{"k": 7, "s": "x"}`, `true`. Pozitif kontrol: yükleme sökülünce ham 128-bit
   sayılar ve kırmızı.
 
+### Performans — tipsiz fonksiyonun int-özel klonu: tipsiz `fib(32)` 7,5 → 0,21 ms
+
+- AOT tip çıkarımı kullanmıyor: `func fib(n)` her zaman kutulu (VMValue)
+  derleniyordu — her `n < 2`, `n - 1`, `+` bir etiket dağıtımı
+  (Performance.md: "kapatacak şey tip özelleştirmesi"). Artık gövde
+  "parametreler int ise bütün dönüşler int" diye **kanıtlanabiliyorsa**
+  fonksiyonun `<ad>$i` native (i64) klonu üretiliyor — tipli fonksiyonlarla
+  aynı kod yolu, öz-özyineleme zinciri dahil. Kutulu girişin ilk işi
+  argümanların etiketine bakmak: hepsi INT ise klon, değilse (float, dizgi,
+  bool, ...) eski kutulu gövde — **anlam değişmiyor**, yalnız int yolu
+  hızlanıyor. `call("fib", ...)` ve dolaylı çağrılar da girişten geçtiği için
+  aynı hızlı yolu alıyor.
+- Kanıt dar, bilerek: dönüş ifadeleri yalnız parametre, int sabiti, int
+  yerel, aritmetik/bit işlemi ve kendine / native-int fonksiyona çağrı;
+  karşılaştırma döndüren (`return x > 0` — kutulu yolda bool), dizgi yolu
+  olan, yan etkili çağrı, throw ya da sona düşen gövde **klonlanmıyor**.
+- Ölçüm (bu makine, 2026-09-28): tipsiz `fib(32)` **7,5 → 0,21 ms** (tipli
+  sürümle aynı); `benchmarks/fair` 8 + 6 kıyasın optimizasyon sonrası IR'ı
+  birebir aynı (hepsi tipli). `TULPAR_NO_INTSPEC=1` kapatır (A/B ve kutulu
+  yolun kendi testleri için).
+- Nöbetçi: `tests/tipsiz_int.sh` 5/5 (`build.sh suites`e bağlı): klon var
+  (`fib_u$i`, `mod3$i`, `ack$i`) / yok (`pos`, `karisik`); karışık tipli
+  çağrılardan oluşan program klonlu ve klonsuz derlemede **birebir aynı**
+  çıktı (sıfıra bölme hatası dahil); `tests/boxed_value_abi.test.tpr`
+  klonlar kapalıyken de geçiyor (int argümanlı testleri artık klondan
+  geçtiği için); hız. Eski derleyiciyle yapı kontrolü kırmızı.
+
 ### Performance — ölçümler daraltıldı ve kayan noktaya genişletildi
 
 ⚠ Aşağıdaki tablo **2026-09-02 durumudur**. Sonraki atribüsyon koşuları iki

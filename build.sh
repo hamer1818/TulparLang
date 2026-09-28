@@ -1285,6 +1285,14 @@ TPREOF
     echo -e "${GREEN}kutulu deger ABI'si duruyor${NC} (t_<ad>.f)"
     rm -rf "$VA_TMP"
 
+    # TIPSIZ FONKSIYONUN INT-OZEL KLONU (K216): yapi (klon var/yok), anlam
+    # (klonlu == klonsuz cikti), kutulu yol (boxed_value_abi klonlar kapali),
+    # hiz. Ayrinti ve pozitif kontrol betigin basinda.
+    if ! bash tests/tipsiz_int.sh ./tulpar; then
+        echo -e "${RED}tipsiz int ozellestirmesi bozuk!${NC}"
+        exit 1
+    fi
+
     # Kod üretimi DENKLİK denetimi (scene3d_export + sahne JSON'ları) 2026-09-22'de
     # ÇIKARILDI: sahne/arayüz hattı artık tulpar-engine deposunda ölçülüyor.
     # Kapı `examples/scene3d_export.tpr`yi çalıştırıp ürettiği kodun aynı sahneyi
