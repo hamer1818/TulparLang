@@ -1227,6 +1227,14 @@ TPREOF
         exit 1
     fi
 
+    # KANITLI YAZMA kurallari (K215): i32'ye sigmasi kanitlanamayan yazma
+    # hizli (32-bit) surumu ACMAMALI (eskiden kirpiyor / genisletip cop
+    # okuyordu); `a[i] = k`, `a[i] = i * 2` acmali. Iki yon de olculuyor.
+    if ! bash tests/kanitli_yazma.sh ./tulpar; then
+        echo -e "${RED}kanitli yazma kurallari bozuk!${NC}"
+        exit 1
+    fi
+
     # KUTULU FONKSİYONLARIN DEĞER ABI'si duruyor mu?
     #
     # Kutulu gövde `t_<ad>.f` içinde yaşıyor ve VMValue'yu DEĞER olarak

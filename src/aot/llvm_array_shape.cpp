@@ -214,74 +214,196 @@ static bool visit_len_of(ASTNode_C *n, void *p) {
 // diyordu; o yuzden `for (i...) { a[i] = i; }` gibi DOLDURMA dongulerinin
 // tamami bekcili kaliyor ve vektorlesemiyordu.
 
-// Bir ifadenin degeri KESIN tamsayi mi?
+// ---- Eleman yazmasi guvenligi: TAMSAYI + i32'ye SIGMA (K215, 2026-09-28) ----
 //
-// Yalniz "evet" cevabi yuk tasiyor; "hayir" en fazla optimizasyonu
-// kaciriyor. O yuzden liste beyaz: taniniamayan her dugum "hayir".
+// Hizli surum 32-BIT depoya gore DALSIZ uretiliyor (surum kosulu `is32`).
+// O surumde bir eleman yazmasi diziyi GENISLETIRSE (i32'ye sigmayan deger:
+// calisma zamani depoyu 64-bit'e cevirir) sonraki kanitli erisimler hala
+// 32-bit adresliyor. Iki olculmus sessiz bozulma (2026-09-28):
+//   * kanitli yazma `a[i] = i + 2147483647` degeri i32'ye KIRPIYORDU
+//     (array_fill(3,0) -> `2147483647 -2147483648 -2147483647`);
+//   * bekcili yazma (`a[i] += 2000000000`, ya da takma ad `b[0] = i + 3e9`)
+//     diziyi genisletiyor, ayni turdaki kanitli `s = s + a[i]` okumasi 32-bit
+//     adresle cop okuyordu (toplam 12e9 yerine 1410065408).
+// O yuzden kural "tamsayi" degil "tamsayi VE i32'ye SIGAR": her yazilan
+// ifadenin DEGER ARALIGI hesaplaniyor. Sigdigi kanitlanamayan yazma (ve
+// `+=`/`-=`/`*=`/`<<=`/`++`/`--` — sonuc elemanin kendisine bagli) dongunun
+// kanitini dusurur; genel (bekcili) surum her durumu dogru isliyor.
+//
+// Aralik double ile tutuluyor: yalniz i32 sinirlarina gore karsilastirma
+// yapiliyor, 2^53'e kadar tam; daha buyuk uclar zaten "sigmaz".
+//
+// Dongu degiskeni: 0 <= i <= ivar_hi (for: i < len(a) <= count <= INT32_MAX;
+// while: i <= UB < count). ivar_hi kucultulerek (`i * 2` gibi) sigmayan bir
+// ifade icin EN BUYUK izinli ust sinir aranir; codegen onu surum kosuluna
+// `count <= sinir + 1` olarak ekler (ivar_max_out).
+//
+// DONGU-DEGISMEZI AD (K215): dongude yeniden baglanmayan bir ad (`a[i] = k`)
+// da kabul; turunu derleme zamani bilmiyor, o yuzden ad `inv` listesine
+// yaziliyor ve codegen dongu basinda `tag(k) == INT && k i32'ye sigar`
+// sinavini SURUM KOSULUNA ekliyor. Aralik [INT32_MIN, INT32_MAX].
 //
 // bool BILEREK DISARIDA: etiketi 0 (INT) degil 2, yani `a[i] = true`
 // kutusuz diziye dogrudan yazilamaz.
 struct IntCtx {
-  const char *ivar;  // dongu degiskeni: int oldugu dongu BICIMINDEN belli
+  const char *ivar;       // dongu degiskeni: int oldugu dongu BICIMINDEN belli
+  double ivar_hi;         // dongu degiskeninin ust siniri (aralik hesabi icin)
+  ASTNode_C *cond, *body, *incr;   // degismezlik sinavi icin (nullptr = kapali)
+  const char **inv;       // kabul edilen dongu-degismezi adlar (codegen sinar)
+  int *n_inv;
+  int max_inv;
 };
 
-static bool expr_is_int(ASTNode_C *n, IntCtx *ic) {
+static const double kI32Min = -2147483648.0;
+static const double kI32Max = 2147483647.0;
+
+struct IRange {
+  double lo, hi;
+};
+
+static bool fits_i32(IRange r) { return r.lo >= kI32Min && r.hi <= kI32Max; }
+
+static bool note_invariant(IntCtx *ic, const char *name) {
+  if (!ic->inv || !ic->n_inv) return false;
+  if (tulpar_loop_rebinds_name(ic->cond, ic->body, ic->incr, name)) return false;
+  for (int k = 0; k < *ic->n_inv; k++)
+    if (strcmp(ic->inv[k], name) == 0) return true;
+  if (*ic->n_inv >= ic->max_inv) return false;
+  ic->inv[(*ic->n_inv)++] = name;
+  return true;
+}
+
+// Deger KESIN tamsayi mi, ve araligi ne? Yalniz "evet" yuk tasiyor; "hayir"
+// en fazla optimizasyonu kaciriyor. Beyaz liste: taniniamayan her dugum hayir.
+static bool expr_int_range(ASTNode_C *n, IntCtx *ic, IRange *r) {
   if (!n) return false;
   switch (n->type) {
   case AST_INT_LITERAL:
+    r->lo = r->hi = (double)n->value.int_value;
     return true;
   case AST_IDENTIFIER:
-    // TEK kabul edilen ad DONGU DEGISKENI. Int oldugu dongunun BICIMINDEN
-    // belli: init bir int sabiti, artim int sabiti ekliyor ve govde onu
-    // yeniden baglamiyor — ucu de tulpar_loop_index_proven'in on kosulu.
+    if (!n->name) return false;
+    // Dongu degiskeni: int oldugu ve araligi dongunun BICIMINDEN belli (init
+    // bir int sabiti >= 0, artim pozitif int sabiti, govde onu yeniden
+    // baglamiyor — ucu de kanitin on kosulu).
     //
-    // BASKA HICBIR AD KABUL EDILMIYOR, cunku turunu bilmenin yolu yok:
     // `int k` yazan bir yerel bile kutulu bir VMValue yuvasinda duruyor ve
-    // icine calisma zamaninda float girebilir (parametreye cagiran float
-    // gecebilir). Bir sure codegen'e "bu ad native i64 yuvasinda mi" diye
-    // soran bir geri cagri vardi; OLCULDU (2026-09-06) ve pratikte HIC
-    // "evet" demiyor — yalniz dar bicimli "native fonksiyon" yayicisinda
-    // native yuva olusuyor. Sinanamayan bir kanit yolu tasimaktansa
-    // kaldirildi.
-    //
-    // Genisletmenin dogru yolu bu degil: `a[i] = k` gibi dongu-DEGISMEZI
-    // bir adin etiketi de dongu degismezidir, yani `tag(k) == INT` sinavi
-    // dongu BASINA, surumleme kosuluna (`count_slot != 0` yanina)
-    // eklenebilir. Kiyaslamalarin hicbiri buna bagli olmadigi icin
-    // yapilmadi.
-    return n->name && ic->ivar && strcmp(n->name, ic->ivar) == 0;
-  case AST_UNARY_OP:
-    // `~x` tamsayi uretir (bit degili), `-x` de oyle.
-    return (n->op == TOKEN_MINUS || n->op == TOKEN_BIT_NOT) && expr_is_int(n->left, ic);
-  case AST_BINARY_OP:
+    // icine calisma zamaninda float girebilir; derleme zamaninda turunu
+    // bilmenin yolu yok. Dongu-DEGISMEZI adin etiketi ise dongu degismezi:
+    // sinav dongu BASINA, surum kosuluna gidiyor (note_invariant).
+    if (ic->ivar && strcmp(n->name, ic->ivar) == 0) {
+      r->lo = 0.0;
+      r->hi = ic->ivar_hi;
+      return true;
+    }
+    if (note_invariant(ic, n->name)) {
+      r->lo = kI32Min;
+      r->hi = kI32Max;
+      return true;
+    }
+    return false;
+  case AST_UNARY_OP: {
+    IRange a;
+    if (!expr_int_range(n->left, ic, &a)) return false;
+    if (n->op == TOKEN_MINUS) { r->lo = -a.hi; r->hi = -a.lo; return true; }
+    if (n->op == TOKEN_BIT_NOT) { r->lo = -a.hi - 1.0; r->hi = -a.lo - 1.0; return true; }
+    return false;
+  }
+  case AST_BINARY_OP: {
+    IRange a, b;
     switch (n->op) {
     // Tulpar'da int/int TAMSAYI bolme (`7 / 2 == 3`), yani `/` de int
     // koruyor. Karsilastirmalar bool uretiyor: listede yoklar.
     case TOKEN_PLUS:
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      r->lo = a.lo + b.lo; r->hi = a.hi + b.hi;
+      return true;
     case TOKEN_MINUS:
-    case TOKEN_MULTIPLY:
-    case TOKEN_DIVIDE:
-    case TOKEN_MODULO:
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      r->lo = a.lo - b.hi; r->hi = a.hi - b.lo;
+      return true;
+    case TOKEN_MULTIPLY: {
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      double p[4] = {a.lo * b.lo, a.lo * b.hi, a.hi * b.lo, a.hi * b.hi};
+      r->lo = r->hi = p[0];
+      for (double v : p) { if (v < r->lo) r->lo = v; if (v > r->hi) r->hi = v; }
+      return true;
+    }
+    case TOKEN_DIVIDE: {
+      // |a / b| <= |a| (b != 0); b araligi 0'i iceriyorsa sifira bolme —
+      // sonuc bilinmiyor, "sigmaz" say.
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      const bool has0 = b.lo <= 0.0 && b.hi >= 0.0;
+      double m = a.lo < 0 ? -a.lo : a.lo;
+      if ((a.hi < 0 ? -a.hi : a.hi) > m) m = a.hi < 0 ? -a.hi : a.hi;
+      r->lo = has0 ? -1e300 : -m;
+      r->hi = has0 ? 1e300 : m;
+      return true;
+    }
+    case TOKEN_MODULO: {
+      // |a % b| < |b| ve <= |a|; b 0'i iceriyorsa bilinmiyor.
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      const bool has0 = b.lo <= 0.0 && b.hi >= 0.0;
+      double mb = (b.lo < 0 ? -b.lo : b.lo);
+      if ((b.hi < 0 ? -b.hi : b.hi) > mb) mb = b.hi < 0 ? -b.hi : b.hi;
+      double ma = a.lo < 0 ? -a.lo : a.lo;
+      if ((a.hi < 0 ? -a.hi : a.hi) > ma) ma = a.hi < 0 ? -a.hi : a.hi;
+      double m = (mb - 1.0 < ma) ? mb - 1.0 : ma;
+      r->lo = has0 ? -1e300 : (a.lo < 0 ? -m : 0.0);
+      r->hi = has0 ? 1e300 : (a.hi > 0 ? m : 0.0);
+      return true;
+    }
     // BIT ISLECLERI (2026-09-16): iki taraf da tamsayi olarak KANITLIYSA
-    // sonuc da tamsayidir — kaydirma miktari ve maske dahil. typeinfer float
-    // operandi zaten reddediyor, ama buradaki kanit ondan BAGIMSIZ: yalniz
-    // kanitlanmis int ifadeler bu dala giriyor.
-    //
-    // OLCULDU ve HIZ KAZANCI GORULMEDI (2026-09-16): 4096 elemanli dizide
-    // 20 000 tur `a[i] = (i*3) & 4095` eski ve yeni ikilide 30 ms — LLVM her
-    // iki yolu da ayni sekilde indirgiyor. Burada durmasinin sebebi hiz degil
-    // TUTARLILIK: `expr_is_int`'in sozu "kanitlanmis int ifade" ve bit isleci
-    // tam olarak oydu; disarida birakmak kanitin kendisinde bir bosluktu.
-    // Hiz iddiasi yok, cunku sayi yok.
+    // sonuc da tamsayidir. Iki taraf i32'ye sigiyorsa `&`/`|`/`^` sonucu da
+    // sigar (ikiye tumleyen); negatif olmayan bir maskeyle `&` [0, maske].
     case TOKEN_BIT_AND:
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      if (a.lo >= 0 && b.lo >= 0) { r->lo = 0; r->hi = a.hi < b.hi ? a.hi : b.hi; return true; }
+      if (a.lo >= 0) { r->lo = 0; r->hi = a.hi; return true; }
+      if (b.lo >= 0) { r->lo = 0; r->hi = b.hi; return true; }
+      if (fits_i32(a) && fits_i32(b)) { r->lo = kI32Min; r->hi = kI32Max; return true; }
+      r->lo = -1e300; r->hi = 1e300;
+      return true;
     case TOKEN_PIPE:
     case TOKEN_BIT_XOR:
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      if (fits_i32(a) && fits_i32(b)) {
+        // Iki taraf negatif degilse sonuc da negatif degil; ust sinir iki
+        // ucun en buyugunun bit genisligini asmaz.
+        if (a.lo >= 0 && b.lo >= 0) {
+          double m = a.hi > b.hi ? a.hi : b.hi, p = 1.0;
+          while (p <= m) p *= 2.0;
+          r->lo = 0; r->hi = p - 1.0;
+        } else {
+          r->lo = kI32Min; r->hi = kI32Max;
+        }
+        return true;
+      }
+      r->lo = -1e300; r->hi = 1e300;
+      return true;
     case TOKEN_SHIFT_LEFT:
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      if (b.lo == b.hi && b.lo >= 0 && b.lo <= 62) {
+        double f = 1.0;
+        for (int k = 0; k < (int)b.lo; k++) f *= 2.0;
+        r->lo = a.lo * f; r->hi = a.hi * f;
+        return true;
+      }
+      r->lo = -1e300; r->hi = 1e300;
+      return true;
     case TOKEN_SHIFT_RIGHT:
-      return expr_is_int(n->left, ic) && expr_is_int(n->right, ic);
+      // Aritmetik kaydirma: sonuc x ile 0 arasinda (kaydirma >= 0 ise).
+      if (!expr_int_range(n->left, ic, &a) || !expr_int_range(n->right, ic, &b)) return false;
+      if (b.lo >= 0) {
+        r->lo = a.lo < 0 ? a.lo : 0.0; r->hi = a.hi > 0 ? a.hi : 0.0;
+        return true;
+      }
+      r->lo = -1e300; r->hi = 1e300;
+      return true;
     default:
       return false;
     }
+  }
   default:
     return false;
   }
@@ -290,38 +412,49 @@ static bool expr_is_int(ASTNode_C *n, IntCtx *ic) {
 struct WriteCtx {
   IntCtx ic;
   bool unsafe;
+  bool need_limit;   // bir yazma ancak ivar_hi kucultulurse sigiyor
 };
 
 static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
   WriteCtx *w = (WriteCtx *)p;
   if (!n->left || n->left->type != AST_ARRAY_ACCESS) return true;
+  IRange rg;
   switch (n->type) {
   case AST_INCREMENT:
   case AST_DECREMENT:
-    // Kutusuz dizide eleman zaten int; int +-1 yine int.
-    return true;
+    // Sonuc ELEMANIN kendisine bagli: INT32_MAX'ta `++` i32'den tasar ve
+    // diziyi genisletir (bkz. yukaridaki not). Kanit dusuyor.
+    break;
   case AST_ASSIGNMENT:
-    if (expr_is_int(n->right, &w->ic)) return true;
+    if (expr_int_range(n->right, &w->ic, &rg)) {
+      if (fits_i32(rg)) return true;
+      // Dongu degiskeni iceren ifade daha kucuk bir ust sinirla sigabilir
+      // (`i * 2`): cagiran sinir arayacak.
+      w->need_limit = true;
+      return true;
+    }
     break;
   case AST_COMPOUND_ASSIGN:
-    // `a[i] op= x`: sol taraf (kutusuz dizide) int, op int koruyor ve x
-    // int ise sonuc int.
+    // `a[i] op= x`: sol taraf i32'de (kutusuz 32-bit dizi). Sonucu elemandan
+    // BAGIMSIZ olarak i32'de kalan islecler guvenli: `&= | ^=` (iki i32'nin
+    // bit islemi i32), `>>=` (x ile 0 arasi), `%=` (|sonuc| <= |eleman|), `/=`
+    // bolen 0 ve -1'i icermiyorsa (INT32_MIN / -1 = 2^31 tasar). `+= -= *=
+    // <<=` tasabilir: kanit dusuyor.
+    if (!expr_int_range(n->right, &w->ic, &rg)) break;
     switch (n->op) {
-    case TOKEN_PLUS_EQUAL:
-    case TOKEN_MINUS_EQUAL:
-    case TOKEN_MULTIPLY_EQUAL:
-    case TOKEN_DIVIDE_EQUAL:
-    case TOKEN_MODULO_EQUAL:
-    // BIT BICIMLERI (2026-09-16, `a[i] &= y` dile girdiginde): sol taraf
-    // kutusuz dizide int, bit isleci int koruyor, sag taraf kanitliysa
-    // sonuc int. Bu satirlar olmadan yeni sozdizim yazilabilir ama
-    // kutusuz yolu her seferinde dusururdu.
     case TOKEN_BIT_AND_EQUAL:
     case TOKEN_BIT_OR_EQUAL:
     case TOKEN_BIT_XOR_EQUAL:
-    case TOKEN_SHIFT_LEFT_EQUAL:
+      if (fits_i32(rg)) return true;
+      break;
     case TOKEN_SHIFT_RIGHT_EQUAL:
-      if (expr_is_int(n->right, &w->ic)) return true;
+      if (rg.lo >= 0) return true;
+      break;
+    case TOKEN_MODULO_EQUAL:
+      if (!(rg.lo <= 0.0 && rg.hi >= 0.0)) return true;
+      break;
+    case TOKEN_DIVIDE_EQUAL:
+      if (!(rg.lo <= 0.0 && rg.hi >= -1.0)) return true;
       break;
     default:
       break;
@@ -332,6 +465,67 @@ static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
   }
   w->unsafe = true;
   return false;
+}
+
+// Govdedeki yazmalar ivar_hi ile guvenli mi? need_limit ise sigmayan yazma
+// icin EN BUYUK izinli ust siniri ikili aramayla bulur (aralik ivar_hi'de
+// monoton: buyuyen ust sinir araligi yalniz genisletir). Donus: -1 kanit yok,
+// 0 sinirsiz, >0 ivar <= donus-1 (codegen `count <= donus` sinar).
+static long long elem_writes_limit(ASTNode_C *cond, ASTNode_C *body, ASTNode_C *incr,
+                                   const char *ivar, const char **inv, int *n_inv,
+                                   int max_inv) {
+  auto run = [&](double hi, bool *need) -> bool {
+    int saved = n_inv ? *n_inv : 0;
+    WriteCtx wc{IntCtx{ivar, hi, cond, body, incr, inv, n_inv, max_inv}, false, false};
+    walk_all(body, visit_elem_write_ok, &wc);
+    walk_all(cond, visit_elem_write_ok, &wc);
+    walk_all(incr, visit_elem_write_ok, &wc);
+    if (need) *need = wc.need_limit;
+    if (wc.unsafe || wc.need_limit) {
+      if (n_inv) *n_inv = saved;   // basarisiz denemenin adlari sayilmasin
+      return false;
+    }
+    return true;
+  };
+  bool need = false;
+  if (run(kI32Max - 1.0, &need)) return 0;
+  if (!need) return -1;   // guvensiz yazma: sinir kurtarmaz
+  // En buyuk guvenli ust sinir: [0, INT32_MAX-1] icinde ikili arama.
+  long long lo = 0, hi = 2147483646LL, best = -1;
+  while (lo <= hi) {
+    long long mid = lo + (hi - lo) / 2;
+    int saved = n_inv ? *n_inv : 0;
+    if (run((double)mid, nullptr)) {
+      best = mid;
+      lo = mid + 1;
+      if (n_inv) *n_inv = saved;   // son (en iyi) calistirma asagida
+    } else {
+      hi = mid - 1;
+    }
+  }
+  // Cok kucuk sinir (`a[i] = i + 2147483647` -> count <= 1) hizli surumu
+  // pratikte hic acmaz; ikinci bir govde uretmeye degmez.
+  if (best + 1 < 1024) return -1;
+  // Adlari en iyi sinirla bir kez daha topla.
+  if (!run((double)best, nullptr)) return -1;
+  return best + 1;   // count <= best + 1  <=>  ivar <= best
+}
+
+// Kanit fonksiyonlarinin ortak yazma kurali. `wp` NULL ise dongu-degismezi
+// ad ve sayim siniri KABUL EDILMEZ (cagiran onlari sinayamaz).
+static bool write_proof(ASTNode_C *cond, ASTNode_C *body, ASTNode_C *incr, const char *ivar,
+                        TulparWriteProof *wp) {
+  int n_local = 0;
+  const char *local_inv[TULPAR_WP_MAX_INV];
+  const char **inv = wp ? wp->inv : local_inv;
+  int *n_inv = wp ? &wp->n_inv : &n_local;
+  if (wp) { wp->n_inv = 0; wp->count_limit = 0; }
+  long long lim = elem_writes_limit(cond, body, incr, ivar, wp ? inv : nullptr,
+                                    wp ? n_inv : nullptr, TULPAR_WP_MAX_INV);
+  if (lim < 0) return false;
+  if (lim > 0 && !wp) return false;
+  if (wp) wp->count_limit = lim;
+  return true;
 }
 
 // `for (int i = C; i < len(a); i = i + K)` bicimi mi, ve `a[i]` icin SINIR
@@ -351,7 +545,8 @@ static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
 extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
                                         ASTNode_C *body, ASTNode_C *incr,
                                         const char *array_name,
-                                        const char **ivar_out) {
+                                        const char **ivar_out,
+                                        TulparWriteProof *wp) {
   if (!init || !cond || !incr || !array_name) return 0;
 
   // init: `int i = C;`  (C >= 0)
@@ -394,12 +589,9 @@ extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
   // `i` govdede baska yerde ATANMAMALI (kosul/artim disinda).
   if (tulpar_loop_rebinds_name(nullptr, body, nullptr, ivar)) return 0;
 
-  // HER eleman yazmasi KESIN tamsayi olmali — yoksa kutulama riski.
-  WriteCtx wc{IntCtx{ivar}, false};
-  walk_all(body, visit_elem_write_ok, &wc);
-  walk_all(cond, visit_elem_write_ok, &wc);
-  walk_all(incr, visit_elem_write_ok, &wc);
-  if (wc.unsafe) return 0;
+  // HER eleman yazmasi KESIN tamsayi VE i32'ye sigmali — yoksa kutulama ya
+  // da genisletme riski (bkz. elem_writes_limit, K215).
+  if (!write_proof(cond, body, incr, ivar, wp)) return 0;
 
   if (ivar_out) *ivar_out = ivar;
   return 1;
@@ -460,7 +652,8 @@ extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
                                          const char **ub_out,
                                          const char **step_out,
                                          long long *step_const_out,
-                                         int *inclusive_out) {
+                                         int *inclusive_out,
+                                         TulparWriteProof *wp) {
   if (!cond || !body) return 0;
 
   // kosul: `v <= UB` ya da `v < UB`, ikisi de AD.
@@ -506,10 +699,7 @@ extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
   if (step && tulpar_loop_rebinds_name(cond, body, nullptr, step)) return 0;
 
   // Kutulayabilen eleman yazmasi olmamali (for kanitiyla ayni kural).
-  WriteCtx wc{IntCtx{ivar}, false};
-  walk_all(body, visit_elem_write_ok, &wc);
-  walk_all(cond, visit_elem_write_ok, &wc);
-  if (wc.unsafe) return 0;
+  if (!write_proof(cond, body, nullptr, ivar, wp)) return 0;
 
   if (ivar_out) *ivar_out = ivar;
   if (ub_out) *ub_out = ub;
@@ -585,11 +775,8 @@ extern "C" int tulpar_loop_index_why(ASTNode_C *init, ASTNode_C *cond, ASTNode_C
     if (detail_out) *detail_out = ivar;
     return TLW_REBIND;
   }
-  WriteCtx wc{IntCtx{ivar}, false};
-  walk_all(body, visit_elem_write_ok, &wc);
-  walk_all(cond, visit_elem_write_ok, &wc);
-  walk_all(incr, visit_elem_write_ok, &wc);
-  if (wc.unsafe) return TLW_WRITE;
+  TulparWriteProof wpw;
+  if (!write_proof(cond, body, incr, ivar, &wpw)) return TLW_WRITE;
   return TLW_OK;
 }
 
@@ -627,10 +814,8 @@ extern "C" int tulpar_while_index_why(ASTNode_C *cond, ASTNode_C *body,
     if (detail_out) *detail_out = step;
     return TLW_W_UB_REBIND;
   }
-  WriteCtx wc{IntCtx{ivar}, false};
-  walk_all(body, visit_elem_write_ok, &wc);
-  walk_all(cond, visit_elem_write_ok, &wc);
-  if (wc.unsafe) return TLW_WRITE;
+  TulparWriteProof wpw;
+  if (!write_proof(cond, body, nullptr, ivar, &wpw)) return TLW_WRITE;
   return TLW_OK;
 }
 

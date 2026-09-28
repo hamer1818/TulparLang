@@ -799,6 +799,31 @@ döner.
 kazanımı geri çekti ve `fib`in gerekçesini değiştirdi — düzeltmeler tablonun
 hemen altında.
 
+### Düzeltildi / Performans — kanıtlı dizi yazması i32'ye kırpıyordu; `a[i] = k` artık kanıtlı
+
+- **İki sessiz bozulma** (hızlı sürüm 32-bit depoya göre dalsız üretiliyor):
+  kanıtlı yazma değeri **i32'ye kırpıyordu** — `array_fill(3, 0)` üzerinde
+  `d[i] = i + 2147483647` → `2147483647 -2147483648 -2147483647`; ve döngüde
+  dizi **genişleyince** (i32'ye sığmayan bekçili yazma: `a[i] += 2000000000`
+  ya da takma ad `b[0] = i + 3000000000`) aynı sürümdeki kanıtlı okuma 32-bit
+  adresle çöp okuyordu (toplam 12e9 yerine `1410065408`). Artık her eleman
+  yazmasının **değer aralığı** hesaplanıyor ve i32'ye sığmalı; sığdığı
+  kanıtlanamayan yazma (`+=`, `-=`, `*=`, `<<=`, `++`, `--`, büyük sabit)
+  hızlı sürümü açmıyor — genel sürüm her durumu doğru işliyor.
+- `a[i] = i * 2` gibi ifadeler döngü başında `count <= sınır` sınavıyla
+  kanıtlı kalıyor (sınır 1024'ten küçükse sürüm açılmıyor).
+- **K215:** `a[i] = k` (döngü-değişmezi ad) artık kanıtlı: döngü başında
+  `tag(k) == INT && k i32'ye sığar` sınavı sürüm koşuluna ekleniyor
+  (float/büyük `k` genel sürüme gider). Ölçüm (bu makine, 2026-09-28, 20M
+  int, 10 tur): `a[i] = k` **79 → 10–12 ms**; `a[i] = i * 2` 21 → 20 ms
+  (değişmedi, kanıtlı kaldı); `a[i] += 1` 1735 → 1740 ms (değişmedi — o
+  şekil eskiden de genel yoldaydı). `benchmarks/fair` 8 + 6 kıyasın
+  optimizasyon sonrası IR'ı birebir aynı; `shapes.py` sıralaması korunuyor.
+- Nöbetçi: `tests/kanitli_yazma.test.tpr` (4 test; eski derleyiciyle 2'si
+  kırmızı), `tests/kanitli_yazma.sh` 11/11 — kanıt kararını `TULPAR_DBG_VER`
+  çıkışından iki yönde ölçüyor (kurulmalı / kurulmamalı; eski derleyiciyle
+  5'i kırmızı). Perf ipucu (`TULPAR_PERF_HINTS`) yeni nedeni söylüyor.
+
 ### Performance — dokuz dilin ÜÇÜNDE BİRİNCİ, ikisinde C ile başa baş
 
 `benchmarks/fair/` düzeneğinde (her dil `BENCH_N`i ortamdan okuyor, aynı

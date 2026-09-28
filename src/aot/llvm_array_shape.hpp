@@ -16,11 +16,26 @@ extern "C" int tulpar_loop_rebinds_name(ASTNode_C *cond, ASTNode_C *body,
 extern "C" int tulpar_collect_indexed_names(ASTNode_C *cond, ASTNode_C *body,
                                             const char **out, int max);
 
-// `a[i]` sinir denetimi elenebilir mi? Bkz. tanimdaki kanit.
+// Kanitin CALISMA ZAMANINDA sinanacak kismi (K215): hizli surumdeki eleman
+// yazmalarinin i32'ye sigmasi icin gerekenler. Codegen ikisini de SURUM
+// KOSULUNA ekler:
+//   inv[0..n_inv)  dongu-degismezi adlar: `tag == INT && deger i32'ye sigar`;
+//   count_limit    > 0 ise `count <= count_limit` (dongu degiskeni en fazla
+//                  count_limit-1 — `a[i] = i * 2` gibi ifadeler icin), 0 sinirsiz.
+#define TULPAR_WP_MAX_INV 4
+struct TulparWriteProof {
+  const char *inv[TULPAR_WP_MAX_INV];
+  int n_inv;
+  long long count_limit;
+};
+
+// `a[i]` sinir denetimi elenebilir mi? Bkz. tanimdaki kanit. `wp` NULL
+// olabilir: o zaman calisma zamani sinavi gerektiren kanit reddedilir.
 extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
                                         ASTNode_C *body, ASTNode_C *incr,
                                         const char *array_name,
-                                        const char **ivar_out);
+                                        const char **ivar_out,
+                                        TulparWriteProof *wp);
 
 // `while (v <= UB) { ...; v = v + STEP; }` — BICIM dogrulamasi. Kanitin
 // sayisal kismini (v>=0, STEP>0, UB<count) codegen dongu basinda SINIYOR.
@@ -30,7 +45,8 @@ extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
                                          const char **ub_out,
                                          const char **step_out,
                                          long long *step_const_out,
-                                         int *inclusive_out);
+                                         int *inclusive_out,
+                                         TulparWriteProof *wp);
 
 extern "C" int tulpar_loop_uses_len(ASTNode_C *cond, ASTNode_C *body,
                                     ASTNode_C *incr, const char *name);
