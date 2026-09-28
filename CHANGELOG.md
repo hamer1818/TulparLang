@@ -245,6 +245,16 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   büyümesini görmek zorunda — ölçeğin pozitif kontrolü) ve bozulmuş bir
   sonda koşumu kırmızı dönmek zorunda (kapının pozitif kontrolü).
 
+### Düzeltildi — `tulpar dosya.tpr` programın çıkış kodunu 1'e düzlüyordu
+
+- Doğrudan çalıştırmada sürücü sıfır olmayan her kodu 1 ile döndürüyordu:
+  `exit(3)` → 1 (ölçüldü 2026-09-28). Bir betik `exit(2)` ile yakalanmamış
+  istisnayı ayırt edemiyordu. Kod artık aynen geçiyor. Sinyalle ölüm kabuk
+  kuralıyla 128 + sinyal (SIGSEGV → 139). Ctrl+C (SIGINT) eskisi gibi 0.
+  `tulpar build` ile üretilen ikili zaten kendi kodunu veriyordu.
+- `tests/aot_smoke.sh`: `exit(3)` → 3, yakalanmamış istisna → 1, başarı → 0
+  (üç platformda koşuyor).
+
 ### Düzeltildi — `mod()` sıfır bölende `%`'den ayrışıyordu; `mod(INT64_MIN, -1)` SIGFPE
 
 - `tests/modulo.test.tpr` "`%` ile `mod()` AYNI şeyi yapıyor" diyordu; kenar
