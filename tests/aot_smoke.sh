@@ -122,8 +122,21 @@ case "$v" in
     *) dustu "surum satiri beklenmedik: '$v'" ;;
 esac
 
+# TULPAR_CC (K225): linkleyici surucusu secilebilir. Iki ayak, ikisi de her
+# platformda (Windows'ta system() cmd.exe'den gecer, sarmalayici betik
+# kullanilamaz): sacma bir surucu adiyla link DUSMELI (degisken GERCEKTEN
+# okunuyor — pozitif kontrol), acikca `clang++` ile GECMELI.
+if TULPAR_AOT_NOCACHE=1 TULPAR_CC=tulpar_olmayan_surucu_xyz "$TUL" build "$TMP/a.tpr" "$TMP/cc_bad" > "$TMP/cc1.log" 2>&1; then
+    dustu "TULPAR_CC okunmuyor: olmayan surucuyla link basarili sayildi"
+elif TULPAR_AOT_NOCACHE=1 TULPAR_CC=clang++ "$TUL" build "$TMP/a.tpr" "$TMP/cc_ok" > "$TMP/cc2.log" 2>&1 \
+        && [ "$("$TMP/cc_ok" 2>&1)" = "tulpar:42" ]; then
+    gecti "TULPAR_CC: olmayan surucu dusuruyor, clang++ ile calisiyor"
+else
+    dustu "TULPAR_CC=clang++ ile derleme basarisiz"; tail -5 "$TMP/cc2.log" | sed 's/^/         /'
+fi
+
 if [ "$fail" -eq 0 ]; then
-    echo -e "\033[0;32maot dumani temiz\033[0m (derle+linkle+calistir, dogrudan kosum, cikis kodu, stdlib, cikti dizini, surum)"
+    echo -e "\033[0;32maot dumani temiz\033[0m (derle+linkle+calistir, dogrudan kosum, cikis kodu, stdlib, cikti dizini, surum, TULPAR_CC)"
 else
     echo -e "\033[0;31mAOT DUMANI BASARISIZ!\033[0m" >&2
 fi

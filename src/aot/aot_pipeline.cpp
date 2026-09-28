@@ -391,6 +391,19 @@ static std::string build_link_search_dirs() {
   return out;
 }
 
+// Link driver for native targets. `clang++` by default; `TULPAR_CC`
+// overrides it (e.g. `g++`, a versioned `clang++-18`, a cross or wrapper
+// driver like `ccache clang++`). Until 2026-09-27 the name was hard-coded in
+// all three link commands, so a machine whose clang is only reachable under
+// another name (MSYS2 without the clang package, distros shipping
+// `clang++-NN` only) could not build a single program. Web (em++) and
+// Android (NDK clang++) keep their own drivers. Gate: tests/aot_smoke.sh
+// (a bogus TULPAR_CC must make the link fail — proves the variable is read).
+static const char *aot_link_driver() {
+  const char *cc = getenv("TULPAR_CC");
+  return (cc && *cc) ? cc : "clang++";
+}
+
 // Optional extra flags spliced into the final clang++ AOT link command. Set
 // TULPAR_AOT_LINK_FLAGS to forward switches to the link step — e.g.
 // "-fsanitize=address" to leak/UB-check the AOT'd binary against an ASan-built
@@ -1662,8 +1675,8 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   } else {
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s%s -o %s%s %s %s%s%s%s 2>&1",
-      debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      "%s %s%s -o %s%s %s %s%s%s%s 2>&1",
+      aot_link_driver(), debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, search_dirs.c_str(),
       tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
       extra_flags.c_str());
@@ -1773,16 +1786,16 @@ static AOTResult aot_compile_silent(const char *source,
 #if PLATFORM_WINDOWS
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s%s%s 2>NUL",
-      obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      "%s %s -o %s%s %s %s%s%s%s 2>NUL",
+      aot_link_driver(), obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
       tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str());
 #else
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s%s%s 2>/dev/null",
-      obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      "%s %s -o %s%s %s %s%s%s%s 2>/dev/null",
+      aot_link_driver(), obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
       tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str());
