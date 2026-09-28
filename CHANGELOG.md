@@ -851,6 +851,30 @@ düzey, aynı dosya; nominal değil. Bkz. `plans/08_oyun_dili_p0.md`.
 - Nöbetçi: `tests/typeinfer/fail/23_var_global_use_before_decl.tpr` (eski
   derleyici "ok"), `pass/17_var_global_use_before_decl.tpr`.
 
+### Düzeltildi — kontrol noktası dışındaki yerele içeride atanan yığın değeri sessizce ölüyordu (tanı)
+
+- Tuzaklar 7f "bilinen sınır": global'e yazılan değer #347'den beri yazma
+  bariyeriyle kalıcı, **yerel** değil. Fonksiyonda `arena_save`'den ÖNCE
+  bildirilmiş bir yerele, nokta açıkken yığın değeri atanınca değer
+  `arena_drop`/`arena_restore`'da serbest kalıyordu; sonraki okuma çöp.
+  Ölçüldü (bu makine, 2026-09-28): `son = "deger-" + toString(i) + ...`
+  döngüde, ardından birkaç ayırma → `print(son)` **`<obj>`** basıyor.
+- Yerel bariyer bilerek yok (her yerel atamaya kalıcı kopya = her turda
+  sızıntı). Onun yerine şekil **derleme zamanında** yakalanıyor: typeinfer
+  tanısı (typecheck/`--strict` kırmızı) — değişkeni, `arena_save` satırını,
+  atama satırını ve çareyi (`x = persist(...)` ya da değişkeni içeride
+  bildir) söylüyor. Dar, bilerek: yalnız AÇIKÇA yığın üreten sağ taraflar
+  (dizgi birleştirme / `+=`, dizgi/dizi/json döndüren çağrı, dizi/nesne
+  literali); ad, sabit ve sayı atamaları sessiz; global'ler ve üst düzey kod
+  dışarıda (bariyerleri var).
+- Korpus tanı tabanı 0 (değişmedi); `lib/wings.tpr`, `tame`, `arcade`,
+  `wings_tls` (gerçek `arena_save` kullanıcıları) ve tulpar-engine korpusu
+  tanısız.
+- Nöbetçi: `tests/typeinfer/fail/29_checkpoint_outer_local.tpr` (3 EXPECT:
+  atama, dizi literali, `+=`; eski derleyici "ok"),
+  `pass/22_checkpoint_local_ok.tpr` (`persist`, içeride bildirim, sayı,
+  nokta kapandıktan sonra, global).
+
 ### Yeni — paylaşılan global lint'i
 
 `thread_create` işçisinde yazılıp ana akışta senkronizasyonsuz okunan bir

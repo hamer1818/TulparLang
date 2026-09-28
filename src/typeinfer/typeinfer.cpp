@@ -1470,6 +1470,241 @@ DataType typeinfer_expression(TypeInferContext *ctx, const ASTNode *expr) {
   return infer_expr(ctx, expr);
 }
 
+// ---- K131 (2026-09-28): kontrol noktasi DISINDAKI yerele ICERIDE atama -----
+//
+// Tuzaklar 7f: "karelerde yasayan YEREL degisken bariyer gormez". Global'e
+// yazilan deger #347'den beri yazma bariyeriyle kalicilasiyor; yerel
+// kalicilasmiyor, bilerek (her yerel atamaya bariyer = her dongu turunda
+// kalici kopya = sinirsiz sizinti). Sonuc SESSIZ:
+//
+//   str son = "";
+//   for (...) { int cp = arena_save(); son = "deger-" + ...; arena_drop(cp); }
+//   print(son);          // serbest birakilmis bellegi okur (olculdu: cop)
+//
+// Bu gecis o SEKLI derleme zamaninda yakalar: bir fonksiyonda arena_save'den
+// ONCE bildirilmis bir yerele, kontrol noktasi acikken (arena_drop /
+// arena_restore'a kadar) YIGIN degeri ureten bir ifade (dizgi birlestirme,
+// dizgi/dizi/json donduren cagri, dizi/nesne literali) ataniyorsa tani verir.
+// Dar, bilerek: yalniz ACIKCA yigin ureten sag taraflar; ad/sabit/sayi
+// atamalari sessiz (yanlis pozitif = kapatilan lint). Global'ler disarida
+// (bariyerleri var); ust duzey kod da (orada bildirimler global).
+namespace {
+
+struct CpLint {
+  TypeInferContext *ctx;
+  std::vector<std::set<std::string>> scopes;   // yerel adlar (kapsam yigini)
+  struct Cp {
+    std::string var;
+    int line;
+    size_t depth;
+    std::set<std::string> outer;               // save aninda gorunen yereller
+  };
+  std::vector<Cp> cps;
+  std::set<std::pair<std::string, int>> reported;
+
+  bool is_local(const std::string &n) const {
+    for (const auto &s : scopes)
+      if (s.count(n)) return true;
+    return false;
+  }
+  std::set<std::string> visible() const {
+    std::set<std::string> v;
+    for (const auto &s : scopes) v.insert(s.begin(), s.end());
+    return v;
+  }
+  static bool is_call(const ASTNode *e, const char *name) {
+    const auto *c = as_node<FunctionCall>(e);
+    return c && !c->receiver && !c->callee && c->name == name;
+  }
+  bool heap_typed_call(const FunctionCall *c) const {
+    if (c->callee) return false;
+    auto it = ctx->functions.find(c->name);
+    if (it == ctx->functions.end()) return false;
+    const DataType r = it->second.return_type;
+    return r == TYPE_STRING || r == TYPE_JSON || r == TYPE_ARRAY || r == TYPE_ARRAY_INT ||
+           r == TYPE_ARRAY_FLOAT || r == TYPE_ARRAY_STR || r == TYPE_ARRAY_BOOL ||
+           r == TYPE_ARRAY_JSON;
+  }
+  bool stringish(const ASTNode *e) const {
+    if (as_node<StringLiteral>(e)) return true;
+    if (const auto *c = as_node<FunctionCall>(e)) {
+      auto it = ctx->functions.find(c->name);
+      return !c->callee && it != ctx->functions.end() && it->second.return_type == TYPE_STRING;
+    }
+    if (const auto *b = as_node<BinaryOp>(e))
+      return b->op == TOKEN_PLUS && (stringish(b->left.get()) || stringish(b->right.get()));
+    return false;
+  }
+  // Sag taraf ACIKCA yigin degeri uretiyor mu?
+  bool heap_rhs(const ASTNode *e) const {
+    if (!e) return false;
+    if (as_node<ArrayLiteral>(e) || as_node<ObjectLiteral>(e)) return true;
+    if (const auto *c = as_node<FunctionCall>(e)) return heap_typed_call(c);
+    if (const auto *b = as_node<BinaryOp>(e))
+      return b->op == TOKEN_PLUS && (stringish(b->left.get()) || stringish(b->right.get()));
+    return false;
+  }
+  void check_assign(const std::string &name, const ASTNode *rhs, int line) {
+    if (cps.empty() || !is_local(name)) return;
+    const Cp &cp = cps.back();
+    if (!cp.outer.count(name) || !heap_rhs(rhs)) return;
+    if (!reported.insert({name, line}).second) return;
+    report_error(ctx,
+                 tulpar::i18n::tr_en(
+                     "'%s' kontrol noktasinin (arena_save, satir %d) DISINDA bildirilmis ama "
+                     "ICINDE yigin degeri ataniyor (satir %d) - deger arena_drop/restore'da "
+                     "serbest kalir, sonraki okuma cop okur; `%s = persist(...)` yaz ya da "
+                     "degiskeni kontrol noktasinin icinde bildir",
+                     "'%s' is declared OUTSIDE the checkpoint (arena_save at line %d) but a "
+                     "heap value is assigned to it INSIDE (line %d) - the value is freed at "
+                     "arena_drop/restore and a later read sees garbage; write `%s = "
+                     "persist(...)` or declare it inside the checkpoint"),
+                 name.c_str(), cp.line, line, name.c_str());
+  }
+  void expr(const ASTNode *e) {
+    if (!e) return;
+    const auto &v = e->value;
+    if (const auto *c = std::get_if<FunctionCall>(&v)) {
+      if ((c->name == "arena_drop" || c->name == "arena_restore") && !c->receiver &&
+          !c->arguments.empty()) {
+        if (const auto *id = as_node<Identifier>(c->arguments[0].get())) {
+          for (size_t i = cps.size(); i-- > 0;)
+            if (cps[i].var == id->name) { cps.resize(i); break; }
+        }
+      }
+      for (const auto &a : c->arguments) expr(a.get());
+      expr(c->receiver.get());
+      return;
+    }
+    if (const auto *a = std::get_if<Assignment>(&v)) {
+      expr(a->value.get());
+      if (!a->name.empty()) {
+        check_assign(a->name, a->value.get(), a->loc.line);
+        if (is_call(a->value.get(), "arena_save"))
+          cps.push_back({a->name, a->loc.line, scopes.size(), visible()});
+      }
+      return;
+    }
+    if (const auto *ca = std::get_if<CompoundAssign>(&v)) {
+      expr(ca->value.get());
+      // `s += "x"`: yeni dizgi s'ye yaziliyor.
+      if (!ca->name.empty() && ca->op == TOKEN_PLUS_EQUAL && !cps.empty() &&
+          is_local(ca->name) && cps.back().outer.count(ca->name) &&
+          (stringish(ca->value.get()) || heap_rhs(ca->value.get()))) {
+        if (reported.insert({ca->name, ca->loc.line}).second) {
+          report_error(ctx,
+                       tulpar::i18n::tr_en(
+                           "'%s' kontrol noktasinin (arena_save, satir %d) DISINDA "
+                           "bildirilmis ama ICINDE `+=` ile dizgi ekleniyor (satir %d) - "
+                           "deger arena_drop/restore'da serbest kalir",
+                           "'%s' is declared OUTSIDE the checkpoint (arena_save at line %d) "
+                           "but `+=` appends a string to it INSIDE (line %d) - the value is "
+                           "freed at arena_drop/restore"),
+                       ca->name.c_str(), cps.back().line, ca->loc.line);
+        }
+      }
+      return;
+    }
+    if (const auto *b = std::get_if<BinaryOp>(&v)) { expr(b->left.get()); expr(b->right.get()); return; }
+    if (const auto *u = std::get_if<UnaryOp>(&v)) { expr(u->operand.get()); return; }
+    if (const auto *t = std::get_if<TernaryOp>(&v)) {
+      expr(t->condition.get()); expr(t->then_branch.get()); expr(t->else_branch.get());
+      return;
+    }
+    if (const auto *m = std::get_if<MatchExpr>(&v)) {
+      expr(m->subject.get());
+      for (const auto &arm : m->arms) stmt(arm.body.get());
+      return;
+    }
+    // Lambda govdesi ayri bir fonksiyon: inilmiyor.
+  }
+  void block_scope(const ASTNode *s) {
+    scopes.emplace_back();
+    const size_t depth = scopes.size();
+    stmt(s);
+    // Kapsamda acilip kapatilmamis kontrol noktasi kapsamla biter.
+    while (!cps.empty() && cps.back().depth >= depth) cps.pop_back();
+    scopes.pop_back();
+  }
+  void stmt(const ASTNode *s) {
+    if (!s) return;
+    const auto &v = s->value;
+    if (const auto *b = std::get_if<Block>(&v)) {
+      for (const auto &x : b->statements) stmt(x.get());
+      return;
+    }
+    if (const auto *d = std::get_if<VariableDecl>(&v)) {
+      expr(d->initializer.get());
+      if (!scopes.empty()) scopes.back().insert(d->name);
+      // `__fcp`: `@frame` seker acilimi (#406, K038) — kontrol noktasi
+      // fonksiyonun TAMAMINI sariyor; disarida yalniz parametreler var ve
+      // onlar fonksiyonla olur (donus degeri zaten persist ediliyor).
+      // Parametreye atama burada yanlis pozitif olurdu.
+      if (is_call(d->initializer.get(), "arena_save") && d->name != "__fcp")
+        cps.push_back({d->name, d->loc.line, scopes.size(), visible()});
+      return;
+    }
+    if (const auto *i = std::get_if<IfStatement>(&v)) {
+      expr(i->condition.get());
+      block_scope(i->then_branch.get());
+      block_scope(i->else_branch.get());
+      return;
+    }
+    if (const auto *w = std::get_if<WhileLoop>(&v)) {
+      expr(w->condition.get());
+      block_scope(w->body.get());
+      return;
+    }
+    if (const auto *f = std::get_if<ForLoop>(&v)) {
+      scopes.emplace_back();
+      const size_t depth = scopes.size();
+      stmt(f->init.get());
+      expr(f->condition.get());
+      block_scope(f->body.get());
+      stmt(f->increment.get());
+      while (!cps.empty() && cps.back().depth >= depth) cps.pop_back();
+      scopes.pop_back();
+      return;
+    }
+    if (const auto *fi = std::get_if<ForInLoop>(&v)) {
+      expr(fi->iterable.get());
+      scopes.emplace_back();
+      scopes.back().insert(fi->variable);
+      block_scope(fi->body.get());
+      scopes.pop_back();
+      return;
+    }
+    if (const auto *tc = std::get_if<TryCatch>(&v)) {
+      block_scope(tc->try_block.get());
+      scopes.emplace_back();
+      scopes.back().insert(tc->catch_var);
+      stmt(tc->catch_block.get());
+      scopes.pop_back();
+      block_scope(tc->finally_block.get());
+      return;
+    }
+    if (const auto *r = std::get_if<ReturnStatement>(&v)) { expr(r->value.get()); return; }
+    if (const auto *t = std::get_if<ThrowStatement>(&v)) { expr(t->expression.get()); return; }
+    if (std::get_if<FunctionDecl>(&v) || std::get_if<TypeDecl>(&v) || std::get_if<EnumDecl>(&v) ||
+        std::get_if<ImportStatement>(&v))
+      return;
+    expr(s);
+  }
+};
+
+static void checkpoint_local_lint(TypeInferContext *ctx, const Program *prog) {
+  for (const auto &s : prog->statements) {
+    const auto *fn = as_node<FunctionDecl>(s.get());
+    if (!fn || !fn->body) continue;
+    CpLint L{ctx, {}, {}, {}};
+    L.scopes.emplace_back();
+    for (const auto &p : fn->parameters) L.scopes.back().insert(p.name);
+    L.stmt(fn->body.get());
+  }
+}
+
+}  // namespace
+
 void typeinfer_statement(TypeInferContext *ctx, const ASTNode *stmt) {
   infer_stmt(ctx, stmt);
 }
@@ -2464,6 +2699,8 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   // kosuyor ki tanilari kaynak sirasinda gorunsun.
   ctx->error_count += tulpar::thread_lint_run(program, ctx->source_path,
                                               ctx->warning_mode);
+  // K131: kontrol noktasi disindaki yerele iceride yigin degeri atamasi.
+  checkpoint_local_lint(ctx, prog);
 
   for (const auto &stmt : prog->statements) {
     infer_stmt(ctx, stmt.get());
