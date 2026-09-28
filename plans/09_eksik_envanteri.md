@@ -161,7 +161,7 @@ Doğrulamada belgenin iddiasının gerçekle çeliştiği yerler:
 - [ ] T/CLAUDE.md:68 'wings_tls_smoke.py Manual; not run by CI' yanlış (build.sh:411 suites); T/FINDINGS.md:743 ve :1118 'otomasyon dışı' satırları bayat.
 - [ ] T/CLAUDE.md:116 ve T/AGENTS.md:95 '(registry deps are still TODO)' yanlış — path:, url: ve semver registry bağımlılıkları kuruluyor; src/pkg/pkg_cli.cpp:1770 ve :1783-1784 yardım metni de yalnız `path:` diyor.
 - [ ] T/CLAUDE.md:131 'bool don = ... silently truncates the module' bayat — suçlu kelimeyi söyleyen tanı var (içe aktarılan modülde konum (stdin) ve typecheck rc=0 kusuru K056'da).
-- [ ] T/CLAUDE.md:165 çıktı dizini sorununu yalnız WASM'a bağlıyor; yerel `tulpar build` de aynı çıplak hatayı veriyor.
+- [x] T/CLAUDE.md:165 çıktı dizini sorununu yalnız WASM'a bağlıyor; yerel `tulpar build` de aynı çıplak hatayı veriyor. (#355)
 - [ ] T/CLAUDE.md:179 'scene/UI line is exercised in the engine repo' yanıltıcı — motor deposu kendi sahne hattını ölçüyor, lib/scene3d.tpr'yi hiçbir yer ölçmüyor; aynı paragraftaki 'libtulpar_tame.a zincirinin linklenip koştuğu artık ölçülmüyor' cümlesi (build.sh:1515-1518, CHANGELOG ~:150) yanlış: build.yml:422 + tools/package_tameengine.sh:127-139 TameEngine'i hâlâ linkleyip başlatıyor.
 - [ ] T/CLAUDE.md:190 'packages/ testlerini CI'da hiçbir şey koşmuyor' yanlış — build.sh:633-660 suites içinde, üç CI işinde koşuyor.
 - [ ] T/AGENTS.md:19 'Native Windows is not supported', :51 '*_smoke.py manual', :53 'only the Linux job runs the test steps / no Windows job', :60-63/:72/:82/:87-88 VM fallback/--vm/--repl, :84 'bool→int call'da reddedilir' — hepsi bayat.
