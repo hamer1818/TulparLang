@@ -1213,6 +1213,14 @@ TPREOF
     echo -e "${GREEN}dizi elemani 32-bit${NC} (kanitli erisim i32)"
     rm -rf "$AW_TMP"
 
+    # FOR-IN sayacli dongunun kanitli yolunda mi? (K209) — for-in acilimi
+    # kosulda `length` kullaniyordu ve 20M int[]'de 10 kat yavasti. Yapisal
+    # kapi, ayrinti ve pozitif kontrol betigin basinda.
+    if ! bash tests/forin_sekil.sh ./tulpar; then
+        echo -e "${RED}for-in sayacli donguyle ayni yoldan gecmiyor!${NC}"
+        exit 1
+    fi
+
     # KUTULU FONKSİYONLARIN DEĞER ABI'si duruyor mu?
     #
     # Kutulu gövde `t_<ad>.f` içinde yaşıyor ve VMValue'yu DEĞER olarak

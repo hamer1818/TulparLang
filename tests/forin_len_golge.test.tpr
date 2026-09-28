@@ -1,0 +1,25 @@
+// for-in acilimi + kullanicinin `len`i (K209, 2026-09-27).
+//
+// for-in `{ it = <dizi>; for (idx = 0; idx < len(it); ...) }` diye aciliyor
+// — kosulda `len`, cunku sayacli dongunun kanitli hizli yolu (sekil
+// onbellegi, surumleme) onu taniyor. Ama kullanici tanimi yerlesigi
+// programin TAMAMINDA golgeler: acilim kullanicinin `len`ini cagirsa for-in
+// 999 tur donerdi. Acilim bu durumda `length`e donuyor; bu paket onu kilitliyor.
+// (Ayri dosya: `len` golgesi dosyanin tamamini etkiler; lib/test.tpr `len`
+// kullanmiyor.)
+import "test";
+
+func len(x) { return 999; }
+
+func run_forin_golgelenmis_len() {
+    int[] a = [4, 5, 6];
+    int tur = 0;
+    int s = 0;
+    for (x in a) { tur = tur + 1; s = s + x; }
+    assert_eq_int(tur, 3);
+    assert_eq_int(s, 15);
+    assert_eq_int(len(a), 999);             // golge gercekten etkin
+}
+
+test("for-in kullanicinin len'ini cagirmaz", "run_forin_golgelenmis_len");
+test_summary();

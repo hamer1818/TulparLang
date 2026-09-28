@@ -170,6 +170,82 @@ func run_len_kutulu_dizi() {
 }
 
 // Dongu icinde dizi buyurse len GUNCEL olmali (push cagri -> onbellek yok).
+// FOR-IN (K209, 2026-09-27): for-in acilimi artik kosulunda `len` kullanip
+// sayacli dongunun kanitli/surumlu yoluna giriyor (eskiden `length` ile her
+// turda aot_len cagrisi: 20M int[]'de 19 ms'ye karsi 2 ms). Hizlanmanin
+// bedeli sessiz bozulma olmamali — buradaki testler for-in'in bu yoldaki
+// dogrulugunu, onbellegin BOZULABILECEGI durumlarla birlikte olcuyor.
+func run_forin_int() {
+    int[] a = array_fill(1000, 0);
+    for (int i = 0; i < len(a); i = i + 1) { a[i] = i; }
+    int s = 0;
+    for (x in a) { s = s + x; }
+    assert_eq_int(s, 499500);
+    xs_carp_topla(a);
+}
+func xs_carp_topla(int[] p) {               // parametre dizi
+    int t = 0;
+    for (x in p) { t = t + x * 2; }
+    assert_eq_int(t, 999000);
+}
+func run_forin_break_continue() {
+    int[] a = [5, 1, 7, 2, 9, 4];
+    int s = 0;
+    for (x in a) {
+        if (x == 2) { continue; }
+        if (x == 9) { break; }
+        s = s + x;
+    }
+    assert_eq_int(s, 13);                   // 5 + 1 + 7
+}
+func run_forin_ic_ice() {
+    int[] a = [1, 2, 3];
+    int[] b = [10, 20];
+    int s = 0;
+    for (x in a) { for (y in b) { s = s + x * y; } }
+    assert_eq_int(s, 180);
+}
+func run_forin_buyume() {                   // govde diziyi buyutuyor: onbellek YOK
+    int[] a = [1, 2, 3];
+    int s = 0;
+    int tur = 0;
+    for (x in a) {
+        s = s + x;
+        if (len(a) < 6) { push(a, 100); }
+        tur = tur + 1;
+    }
+    assert_eq_int(tur, 6);                  // yeni elemanlar da gezildi (eski anlam)
+    assert_eq_int(s, 306);
+}
+func run_forin_kutuya_donus() {             // govde diziyi kutuya ceviriyor
+    int[] a = array_fill(8, 2);
+    int s = 0;
+    int i = 0;
+    for (x in a) {
+        if (i == 3) { a[5] = 0.5; }
+        s = s + toInt(x * 10);
+        i = i + 1;
+    }
+    assert_eq_int(s, 145);                  // 7*20 + 5
+}
+func run_forin_diger_tipler() {
+    float[] f = [0.5, 1.5, 2.0];
+    float fs = 0.0;
+    for (v in f) { fs = fs + v; }
+    assert_close(fs, 4.0, 0.000001);
+    str[] ss = ["a", "b", "c"];
+    str birles = "";
+    for (w in ss) { birles = birles + w; }
+    assert_eq_str(birles, "abc");
+    var js = [1, "x", 2.5];
+    int n = 0;
+    for (e in js) { n = n + 1; }
+    assert_eq_int(n, 3);
+    str harfler = "";
+    for (c in "tulpar") { harfler = c + harfler; }
+    assert_eq_str(harfler, "raplut");
+}
+
 func run_len_buyume() {
     int[] c = array_fill(2, 1);
     int son = 0;
@@ -252,4 +328,10 @@ test("len onbellekten", "run_len_onbellek");
 test("len dizgide onbellege girmez", "run_len_dizgi");
 test("len kutulu dizide dogru", "run_len_kutulu_dizi");
 test("len buyume sonrasi guncel", "run_len_buyume");
+test("for-in int[] (K209: kanitli yol)", "run_forin_int");
+test("for-in break/continue", "run_forin_break_continue");
+test("for-in ic ice", "run_forin_ic_ice");
+test("for-in govdede buyume (onbellek yok)", "run_forin_buyume");
+test("for-in govdede kutuya donus", "run_forin_kutuya_donus");
+test("for-in float/str/json/dizgi", "run_forin_diger_tipler");
 test_summary();

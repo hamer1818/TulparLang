@@ -592,9 +592,21 @@ static void lower_for_in_in_place(LLVMBackend *backend, ASTNode_C *node) {
   idx_decl->right = mk_int(0);
   idx_decl->line = line;
 
-  // length(__forin_it_<line>)
+  // len(__forin_it_<line>)
+  //
+  // `len`, `length` DEGIL (K209, 2026-09-27): sayacli dongunun kanitli
+  // hizli yolu (`i < len(a)` -> sekil onbellegi, surumleme, vektorlestirme)
+  // kosuldaki `len`i onbellekteki uzunluktan okuyor; `length`in o yolu yok
+  // ve her turda aot_len cagrisi yapiyordu. Olculdu (20M int[], tek gecis,
+  // Ryzen 7 9800X3D): for-in 19 ms, ayni isi yapan sayacli dongu 2 ms;
+  // `len` ile for-in 2 ms. Kullanici `len` tanimladiysa (yerlesigi golgeler)
+  // `length`e don — yoksa acilim KULLANICININ fonksiyonunu cagirirdi.
+  bool user_len = false;
+  for (int i = 0; i < backend->function_count; i++)
+    if (backend->functions[i].name && strcmp(backend->functions[i].name, "len") == 0)
+      user_len = true;
   ASTNode_C *len_call = ast_node_create(AST_FUNCTION_CALL);
-  len_call->name = strdup("length");
+  len_call->name = strdup(user_len ? "length" : "len");
   len_call->argument_count = 1;
   len_call->arguments =
       static_cast<ASTNode_C **>(std::calloc(1, sizeof(ASTNode_C *)));

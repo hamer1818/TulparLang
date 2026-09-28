@@ -661,6 +661,28 @@ global artık `[typecheck]` uyarısı alıyor. Dilin bellek modeli olmadığı i
 o yazma okuyana hiç görünmeyebilir; bekleme döngüleri sessizce sonsuza kadar
 döner.
 
+### Performans — `for (x in a)` sayaçlı döngü kadar hızlı (int[]'de ~8×)
+
+- for-in açılımı koşulda `length(it)` kullanıyordu; sayaçlı döngünün kanıtlı
+  hızlı yolu (şekil önbelleği + sürümleme + vektörleştirme) koşuldaki `len`i
+  önbellekteki uzunluktan okuyor, `length`in o yolu yoktu: her turda
+  `aot_len` çağrısı, vektörleştirme yok. Açılım artık `len` kullanıyor
+  (kullanıcı `len` tanımladıysa `length`e döner — yoksa kullanıcının
+  fonksiyonunu çağırırdı).
+- Ölçüm (2026-09-27, Ryzen 7 9800X3D, LLVM 22, 3 koşum, tek geçiş): 20M
+  `int[]` toplamı for-in **19–20 → 2–3 ms** (aynı işi yapan sayaçlı döngü
+  2 ms); 2M kutulu dizi 3–4 → 1–2 ms; `float[]` (5M) ve struct dizisi (2M)
+  değişmedi (10–11 / 2 ms). `benchmarks/fair/` ve diğer 6 kıyasın IR'ı
+  birebir aynı (hiçbiri for-in kullanmıyor).
+- Nöbetçi: yeni yapısal kapı `tests/forin_sekil.sh` (`build.sh suites`):
+  aynı işi yapan for-in ve sayaçlı programın optimizasyon ÖNCESİ IR'ı `aot_len`
+  çağrısı ve `length` yolu sayısında aynı olmalı (LLVM sürümünden bağımsız;
+  eski derleyiciyle 5/3 ve 4/0 → kırmızı). Doğruluk:
+  `tests/array_shape_cache.test.tpr` +6 for-in testi (break/continue, iç içe,
+  gövdede büyüme, gövdede kutuya dönüş, float/str/json/dizgi),
+  `tests/forin_len_golge.test.tpr` (gölgelenmiş `len`; sabote edilince
+  kırmızı).
+
 ### Performance — ölçümler daraltıldı ve kayan noktaya genişletildi
 
 ⚠ Aşağıdaki tablo **2026-09-02 durumudur**. Sonraki atribüsyon koşuları iki
