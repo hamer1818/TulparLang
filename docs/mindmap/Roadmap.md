@@ -42,7 +42,9 @@ araç:
 - Bir düzine **sessiz veri kaybı** bulunup kapatıldı (tablo: [[Editor]]).
 
 Açık kalanlar: yuva içinde SIRALAMA / sekme / yüzen pencere (bilerek
-yapılmadı → [[Decisions]]; paylaşım artık ayarlanabiliyor, sıra değil).
+yapılmadı → [[Decisions]]; paylaşım artık ayarlanabiliyor, sıra değil). *(2026-09-28:
+TameEngine hattı 2026-09-14'te donduruldu; bunlar tulpar-engine'in editöründe ImGui
+docking ile karşılandı — burada yapılmayacak.)*
 
 ## 🟢 DB katmanı (paralel-read kapandı)
 - ✅ `db_open` WAL + busy_timeout varsayılan (yapıldı, write 2.3×). → [[SQLite and DB]]
@@ -75,7 +77,9 @@ Express/Gin/FastAPI'ye karşı tüm kapatılabilir boşluklar kapandı: middlewa
 - ✅ **TLS yük altında test edildi** (`api_wings_tls`, OpenSSL 3.5.5) — 1000 istek/50 paralel → 0 hata ~663 req/s, keep-alive ~1.5ms, sunucu stabil, log temiz. → [[Performance]]
 
 ## 🟢 Dil/altsistem
-- `obj.method(x)` gerçek obje method çağrısı desteklenmiyor. → [[Imports and Modules]]
+- ~~`obj.method(x)` gerçek obje method çağrısı desteklenmiyor~~ — BAYATTI: her alıcıda
+  çalışıyor (PR #44; `rs[0].area()`, `mk(3,5).area()`; `tests/method_calls.test.tpr`).
+  Hâlâ yok: alanda saklanan kapanışı nokta ile çağırmak (`obj.handler()`). → [[Imports and Modules]]
 - ~~pkg registry bağımlılıkları~~ — not BAYATMIŞ: `path:`in yanında `url:` ve
   registry yolu (`fetch_versions` + indirme) kodda var. Ölçüldü (2026-08-31):
   yerel zincir (init/add/install/import) çalışıyor ve ulaşılamayan registry

@@ -549,6 +549,22 @@ Hata aylarca durdu ve ancak TameEngine paketleme adımı macOS'ta **ilk kez bir
 sınamak değildir. Yayınlanan her platformda **en az bir uçtan uca iş** koşmalı
 (bir `tulpar build` + çalıştır yeter).
 
+## 3g. Windows (MSYS2) — üç kabuk tuzağı, üçü de ölçüldü (2026-09-21)
+
+Windows CI geri gelince ilk koşumlar üç ayrı sebepten kırmızı döndü; üçü de kodun değil,
+KABUĞUN davranışıydı ve Linux'ta taklit edilemiyor:
+1. **MSYS2 `OS` değişkenini `MINGW64_NT-*` yapıyor.** `uname -s` / `$OS`'a bakan betikler
+   `Windows_NT` beklerken bunu görüyor; `build.sh` platformu `MINGW*|MSYS*|CYGWIN*` ile
+   tanıyor, yeni betik de öyle tanımalı.
+2. **cmd.exe `.\` öneki ister, `./` değil.** Sürücü üretilen ikiliyi `system()` ile
+   çalıştırdığında (cmd.exe) yol `./prog` ise bulunamaz.
+3. **cmd.exe tek tırnağı alıntılamaz.** POSIX `'yol/dosya.json'` yazımı programa
+   tırnaklarıyla birlikte ulaşıyordu (`sahne bulunamadi: 'examples/...'`). Argümanlar
+   Windows'ta çift tırnak + CRT kuralıyla alıntılanıyor (`src/main.cpp`); kapı
+   `tests/args_gecis.sh`.
+Ders: bir platform uzun süre ölçülmezse, orada ilk kırılan şey çoğu zaman dil değil
+çevre olur (bkz. §3e).
+
 ## 3f. `LLVMConstNamedStruct` tip uyuşmazlığını SESSİZCE `undef` yapıyor
 Bu, bir performans işinden çıktı ama asıl ders C API'sinin kendisiyle ilgili.
 
@@ -628,16 +644,19 @@ koşar. Görsel/oynanış testini **kullanıcı yapar**.
   "kaç bölüm oynanabilir" aynı şey değil.
 
 ## 6. Dil ve codegen tuzakları
-- **Yerel değişken GLOBAL'i gölgeliyor** (açık codegen hatası) → probe/test
-  yazarken benzersiz ad kullan.
+- ~~**Yerel değişken GLOBAL'i gölgeliyor** (açık codegen hatası)~~ — DÜZELDİ
+  (2026-08-06); nöbetçi `tests/global_shadow.test.tpr` (yeniden ölçüldü
+  2026-09-28: `int g=5; func h(){ int g=1; return g; }` → h()=1, g=5).
 - **Aynı adlı iki fonksiyon**: derleyici uyarmıyor, biri sessizce ölüyor.
   `bolum_git3d` iki kez tanımlıydı; sonra `_ed_capture3` (0 argümanlı eski
   hâli + yeni 1 argümanlı) aynı tuzağa düştü — belirtisi "düzeltmem hiç
   çalışmıyor" oldu. Koruma çalışıyor: `t_no_duplicate_function_names`
   kaynağı okuyup ADI VEREREK kırmızıya dönüyor. **Yeni yardımcıya ad
   verirken önce `grep "func <ad>("`.**
-- **`%` yok** → `mod()`/`fmod()`. **`/` bir operand float ise float bölme.**
-- **Çoklu dönüş yok** → sonuç global ile döner (`_dk_rect3`, `_ed_ray3`).
+- ~~`%` yok~~ — VAR (`7 % 3` → 1); `mod()`/`fmod()` da duruyor. **`/` bir operand
+  float ise float bölme.**
+- ~~Çoklu dönüş yok~~ — VAR (P0.1, 2026-09-21: `func f(): (int, int)`, `a, b = f()`);
+  eski kodda sonucun global ile döndüğü yerler (`_dk_rect3`, `_ed_ray3`) o günden kalma.
 - Ayrılmış kelimeler: `len`, `tip`, `icinde`, `don`, `dene`, `move`, `metin`,
   `tekrar` — yerel değişken adı olarak kullanma.
 - `toString(30.0)` bir ara `"3e+01"` veriyordu (düzeltildi) — üretilen Tulpar
@@ -1601,10 +1620,11 @@ dil tamamen kullanılamaz haldeydi.
 
 **Neden geç fark edildi.** Yerel geliştirme Linux; suites, örnekler ve
 typeinfer'in üçü de Linux'ta koşuyor ve **hepsi yeşildi**. CI'da macOS işi
-var ama testleri koşmuyor (bkz. CLAUDE.md) — tek işlevsel adımı
-`AOT end-to-end smoke`. Hatayı yakalayan tek şey o adım oldu (PR #310).
-Yani **macOS'un tüm güvencesi tek bir smoke adımı**; onu zayıflatmak, bu
-sınıf hataların doğrudan main'e girmesi demek.
+var ama o gün testleri koşmuyordu — tek işlevsel adımı
+`AOT end-to-end smoke` idi. Hatayı yakalayan tek şey o adım oldu (PR #310).
+O gün **macOS'un tüm güvencesi tek bir smoke adımıydı**; onu zayıflatmak, bu
+sınıf hataların doğrudan main'e girmesi demekti. *(Güncel: macOS işi artık
+`build.sh suites`'i de koşuyor — "Language suites (arm64)", bkz. §6p.)*.
 
 **Kural.** Yeni bir bağlantı bayrağı eklerken önce şunu sor: *bu GNU'ya mı
 özgü?* Öyleyse `#elif PLATFORM_LINUX` dalına koy. Taşıyıcı `#else` dalı

@@ -1616,6 +1616,24 @@ alternatifi üretilen kodun sessizce yanlış adrese yazmasıydı.
   hatası, 3 lint yönü, pozitif kontrol; eski derleyiciyle 10'u kırmızı).
   14 kıyasın optimizasyon sonrası IR'ı birebir aynı.
 
+### Belgeler — bayat iddialar düzeltildi (envanter belge düzeltmeleri, 1. parti)
+
+- `docs/PLATFORM_SUPPORT.md` baştan yazıldı: MSVC/VM/JIT/REPL satırları ve
+  "Intel + Apple Silicon" iddiası yerine CI'da gerçekten ölçülen platformlar
+  (`tulpar-macos-universal` aslında yalnız arm64).
+- CLAUDE.md: Windows CI işi var; shim'lerin Windows dalları derleniyor ve
+  koşuyor; `wings_tls_smoke.py` / `packages/*` testleri `suites`'te; `bool don`
+  artık suçlu kelimeyi söylüyor; TameEngine link zinciri CI'da ölçülüyor.
+- `docs/mindmap`: Build System/Testing (Windows, üç CI işi), Tuzaklar (§3g üç
+  Windows kabuk tuzağı; gölgeleme hatası, `%` ve çoklu dönüş "yok" satırları
+  bayattı), Roadmap (`obj.method()` çalışıyor).
+- `plans/`: 01 (VM adımları geçersiz), 03 (`var` açık sorusu kapandı, korpus
+  kapısı), 04 (PR 4/5), 05 (VM monomorfizasyonu geçersiz), 06 (async v1
+  stackful coroutine ile yapıldı; açıklar K068/K112/K265/K233), 08 (P1.1
+  birleşti, fikstür adları).
+- Kod yorumları: `examples/04_math_logic.tpr`, `tests/vm_struct_by_value.test.tpr`,
+  `tests/element_step.test.tpr`, `src/cli/line_edit.cpp`, `CMakeLists.txt`.
+
 ### Added — `array_fill(n, deger)`: diziyi tek çağrıda kur
 
 n elemanlı bir dizi kurmanın tek yolu n kez `push` çağırmaktı. Ölçüldü: çağrı

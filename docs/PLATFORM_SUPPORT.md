@@ -1,270 +1,48 @@
 # Platform Support
 
-TulparLang supports the following platforms:
+This page says what is **built and measured**, not what might work. Every row
+below names the evidence. (Rewritten 2026-09-28: the previous version still
+described MSVC/Visual Studio builds, a JIT, a VM mode and a REPL — none of
+which exist any more — and claimed Intel + Apple Silicon for macOS.)
 
-## Fully Supported Platforms
+## Host platforms (the `tulpar` compiler itself)
 
-### Linux
-- **Status**: Primary development platform ✅
-- **Tested on**: Ubuntu 20.04+, Fedora 35+, Arch Linux
-- **Compilers**: GCC 9+, Clang 12+
-- **Build System**: CMake + Make
-- **Architectures**: x86_64, ARM64
+| Platform | Status | Evidence |
+|---|---|---|
+| **Linux x86_64** | ✅ primary | CI `build-linux` (Ubuntu, LLVM 18): build, `build.sh test` (every runnable example), `build.sh suites` (all `tests/*.test.tpr` + audits), typeinfer gate. Developer machines: Arch/CachyOS with LLVM 22. |
+| **macOS arm64 (Apple Silicon)** | ✅ | CI `build-macos` (`macos-latest`, Homebrew `llvm@18`): build, AOT smoke, `build.sh suites`. This is the only place the AArch64 code path runs in CI. |
+| **Windows x86_64 (MSYS2 MINGW64)** | ✅ since 2026-09-21 | CI `build-windows`: build with MinGW gcc, `build.sh test`, `build.sh suites`, typeinfer gate, DLL-import gate, Inno Setup installer. Known gap: `errors.test.tpr` is skipped (a `throw` re-raised across a `call()` boundary crashes on MinGW — open bug). |
+| macOS x86_64 (Intel) | ⚠️ not built | No CI job. The release asset named `tulpar-macos-universal` is an **arm64-only** binary (no `lipo`); the name is kept because `tulpar update` downloads it by that name. |
+| Linux arm64 | ⚠️ not built | No CI job; the AArch64 backend is exercised only on macOS. |
+| Windows MSVC / Visual Studio | ❌ | Not built, not tested. There is no `build.ps1` / `build.bat`; use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,clang,cmake,ninja,llvm,zlib,zstd,libxml2,openssl}`, then `./build.sh`). |
 
-### macOS
-- **Status**: Fully supported ✅
-- **Tested on**: macOS 10.15 (Catalina) and later
-- **Architectures**: x86_64 (Intel) and ARM64 (Apple Silicon)
-- **Compilers**: Clang (via Xcode Command Line Tools)
-- **Build System**: CMake + Make
+Requirements everywhere: CMake 3.14+, **LLVM 18–22**, a C++17 compiler. The
+AOT link step calls `clang++`, so `clang` must be on
+`PATH` to compile programs — also on Windows.
 
-### Windows
-- **Status**: Native support (NEW!) ✅
-- **Tested on**: Windows 10/11
-- **Compilers**: MSVC (Visual Studio 2019/2022)
-- **Build System**: CMake + MSBuild
-- **Alternative**: WSL2 with Linux build
+## Target platforms (`tulpar build --target=…`)
 
-## Prerequisites
+| Target | Status | Evidence / notes |
+|---|---|---|
+| native (host) | ✅ | Every CI job above. |
+| `web` (wasm32, Emscripten) | ✅ | Prebuilt `wasm/dist` archives (`wasm/build_tame_web.sh`); `tests/dist_archive_audit.py` checks their symbols. `async` is not available (no ucontext). |
+| `android` (arm64-v8a + x86_64) | ✅ | Prebuilt `android/dist` archives (`android/build_tame_android.sh`, NDK); `build.sh suites` links a real game for both ABIs when the archives exist. `async` is not available (bionic has no `makecontext`). |
 
-### All Platforms
-- **CMake**: 3.14 or later
-- **LLVM**: 18.0 or later
-- **C++ Compiler**: Supporting C++17 standard
+## Release assets
 
-### Platform-Specific Dependencies
+`tulpar-linux-x64`, `tulpar-macos-universal` (arm64, see above),
+`tulpar-windows-x64.zip` (portable, `tulpar.exe` + the MinGW/OpenSSL DLLs it
+imports), `tulpar-setup-windows-x64.exe` (per-user installer),
+`libtulpar_runtime-<platform>.a`, `SHA256SUMS.txt` (+ `.asc`). `tulpar update`
+verifies every download against `SHA256SUMS.txt`.
 
-#### Linux
-```bash
-# Ubuntu/Debian
-sudo apt-get install build-essential cmake llvm-18-dev clang
+## Execution model
 
-# Fedora
-sudo dnf install gcc-c++ cmake llvm-devel clang
+There is **one** execution path: AOT through LLVM. The bytecode VM, the REPL,
+the tree-walk interpreter and the x64 JIT were removed (2026-05 / 2026-06-15);
+`--vm` / `--run` are ignored with a warning, `--repl` exits with a notice.
 
-# Arch Linux
-sudo pacman -S base-devel cmake llvm clang
-```
+## Getting help
 
-#### macOS
-```bash
-# Install Homebrew if not already installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Install dependencies
-brew install cmake llvm@18
-
-# Add LLVM to PATH
-export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"
-```
-
-#### Windows
-
-**Option 1: Native Windows Build (Recommended)**
-
-1. **Visual Studio**: Install Visual Studio 2019 or 2022
-   - During installation, select "Desktop development with C++" workload
-   - This includes MSVC compiler and MSBuild
-
-2. **CMake**: Download from [cmake.org](https://cmake.org/download/)
-   - Use the Windows installer
-   - Add CMake to system PATH during installation
-
-3. **LLVM**: Download LLVM 18.x Windows installer
-   - Get from [LLVM GitHub Releases](https://github.com/llvm/llvm-project/releases)
-   - Look for `LLVM-18.1.8-win64.exe` or similar
-   - **Important**: Check "Add LLVM to system PATH" during installation
-
-**Option 2: WSL (Windows Subsystem for Linux)**
-
-If you prefer a Linux environment:
-```bash
-# Install WSL (PowerShell as Administrator)
-wsl --install
-
-# Inside WSL, follow Linux instructions
-```
-
-## Building from Source
-
-### Linux/macOS
-```bash
-git clone https://github.com/hamer1818/TulparLang.git
-cd TulparLang
-./build.sh
-```
-
-### Windows (Native)
-
-**Using Batch Script:**
-```batch
-build.bat
-```
-
-**Using PowerShell:**
-```powershell
-.\build.ps1
-```
-
-**Using CMake Directly:**
-```batch
-mkdir build-windows
-cd build-windows
-cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
-cmake --build . --config Release
-```
-
-## Platform-Specific Features
-
-### Networking
-- **Linux/macOS**: Uses POSIX sockets (`sys/socket.h`)
-- **Windows**: Uses Winsock2 (`winsock2.h`)
-- All platforms support the same TulparLang socket API
-
-### Threading
-- **Linux/macOS**: POSIX threads (pthread)
-- **Windows**: Windows threading API (CreateThread, Critical Sections)
-- Cross-platform abstraction in `src/common/platform_threads.h`
-
-### Dynamic Loading
-- **Linux/macOS**: `dlopen`, `dlsym`, `dlclose`
-- **Windows**: `LoadLibrary`, `GetProcAddress`, `FreeLibrary`
-- Unified interface in `src/common/platform_dl.h`
-
-### File Paths
-- **Linux/macOS**: Forward slashes (`/`)
-- **Windows**: Backslashes (`\`) or forward slashes (both supported)
-
-## Known Limitations
-
-### Windows-Specific
-- **Console UTF-8**: For best UTF-8 support, use Windows Terminal
-- **Legacy Console**: Enable UTF-8 in Console Properties if using cmd.exe
-- **DLL Dependencies**: LLVM DLLs must be in PATH or same directory as executable
-
-### WebAssembly Build
-- **Networking**: Not available in WASM builds (`TULPAR_WASM_BUILD` disables sockets)
-- **SQLite**: Compiled conditionally
-- **File I/O**: Limited to Emscripten virtual filesystem
-
-## Troubleshooting
-
-### Windows Build Issues
-
-**Problem: LLVM not found**
-```
-Solution: Ensure LLVM bin directory is in system PATH
-1. Search for "Environment Variables" in Windows
-2. Add LLVM bin path (e.g., C:\Program Files\LLVM\bin) to PATH
-3. Restart terminal/IDE
-```
-
-**Problem: UTF-8 console errors**
-```
-Solution: Use Windows Terminal or enable UTF-8 in Console
-- Windows Terminal: https://aka.ms/terminal
-- Or: chcp 65001  (in cmd.exe to enable UTF-8)
-```
-
-**Problem: Missing DLLs when running tulpar.exe**
-```
-Solution: Install Visual C++ Redistributable
-Download from: https://aka.ms/vs/17/release/vc_redist.x64.exe
-```
-
-**Problem: CMake can't find LLVM**
-```
-Solution: Specify LLVM_DIR manually
-cmake .. -G "Visual Studio 17 2022" -A x64 -DLLVM_DIR="C:/Program Files/LLVM/lib/cmake/llvm"
-```
-
-### Linux Build Issues
-
-**Problem: LLVM version mismatch**
-```bash
-# Install specific LLVM version
-sudo apt install llvm-18-dev llvm-18
-```
-
-**Problem: Missing pthread**
-```bash
-# Should be included in build-essential
-sudo apt install build-essential
-```
-
-### macOS Build Issues
-
-**Problem: LLVM not found**
-```bash
-# Ensure LLVM is in PATH
-export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"
-echo 'export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"' >> ~/.zshrc
-```
-
-**Problem: Apple Silicon (M1/M2) specific**
-```bash
-# LLVM should auto-detect ARM64
-# Verify with: arch
-# Should show: arm64
-```
-
-## Testing Your Build
-
-After building, test with a simple program:
-
-**Linux/macOS:**
-```bash
-echo 'print("Hello, TulparLang!");' > test.tpr
-./tulpar test.tpr
-```
-
-**Windows:**
-```batch
-echo print("Hello, TulparLang!"); > test.tpr
-tulpar.exe test.tpr
-```
-
-Expected output: `Hello, TulparLang!`
-
-## Continuous Integration
-
-TulparLang uses GitHub Actions for automated builds:
-- **Linux**: Ubuntu latest with LLVM 18
-- **macOS**: macOS latest with LLVM 18 (both Intel and Apple Silicon)
-- **Windows**: Windows latest with Visual Studio 2022 and LLVM 18
-
-All platforms build successfully on every commit to `main` branch.
-
-## Performance Notes
-
-- **Compiled performance** is similar across all platforms (native LLVM code)
-- **JIT performance** varies by architecture:
-  - x64 (Intel/AMD): Optimized
-  - ARM64 (Apple Silicon, ARM servers): Experimental
-- **VM mode**: Consistent across all platforms
-
-## Support Matrix
-
-| Feature | Linux | macOS | Windows |
-|---------|-------|-------|---------|
-| AOT Compilation | ✅ | ✅ | ✅ |
-| VM Mode | ✅ | ✅ | ✅ |
-| JIT Compiler | ✅ | ✅ | ✅ |
-| Networking | ✅ | ✅ | ✅ |
-| Threading | ✅ | ✅ | ✅ |
-| SQLite | ✅ | ✅ | ✅ |
-| File I/O | ✅ | ✅ | ✅ |
-| REPL | ✅ | ✅ | ✅ |
-| WebAssembly | ✅ | ✅ | ✅ |
-
-## Getting Help
-
-If you encounter platform-specific issues:
-1. Check this documentation
-2. Review closed issues on GitHub
-3. Open a new issue with:
-   - Operating system and version
-   - Compiler version
-   - LLVM version
-   - Complete error message
-   - Steps to reproduce
+Open an issue with: OS and version, `tulpar version`, `llvm-config --version`,
+the complete error message and the steps to reproduce.

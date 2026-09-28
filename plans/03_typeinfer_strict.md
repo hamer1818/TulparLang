@@ -187,17 +187,17 @@ kritik.
   sonrası).
 - CI workflow'unda yeni bir job: `typeinfer-strict` — Linux'ta
   `for f in examples/*.tpr; do TULPAR_STRICT=1 ./tulpar typecheck "$f"; done`
-  toplam exit 0.
+  toplam exit 0. *(Yapılmadı, yerine: `tests/typecheck_corpus_scan.py --check`
+  (`build.sh suites`) bütün korpusun tanı METNİNİ bir tabana karşı kilitliyor.)*
 - Mevcut `./build.sh test` davranışı değişmez (strict default kapalı).
 
 ## Açık sorular
 
 - **`--strict` precedence:** CLI > env > manifest. Doğru mu? Önerim:
   evet (en spesifik en geçerli).
-- **`var` keyword'ü stricter olabilir mi?** Şu an `var x = "a"; x = 1;`
-  sessiz kabul ediliyor (TYPE_UNKNOWN). Strict mode'da first-write tipi
-  kilitlenip ikinci atamada hata mı? Faz 2'ye bırak — geriye
-  uyumsuzluk riski var.
+- ~~**`var` keyword'ü stricter olabilir mi?**~~ Kapandı (#313, 2026-09-11):
+  `var x = e;` artık `T x = e;` demek (T = infer(e)); `var x = "a"; x = 1;`
+  tip hatası veriyor — fikstür `tests/typeinfer/fail/12_var_cross_type.tpr`.
 - **JSON `arr["key"]`'ın kategori muafiyeti:** Strict'te bile
   `int y = arr["key"];` OK mu, yoksa `var y = arr["key"];` zorunlu mu?
   Önerim: ilk versiyon OK (geriye uyumlu), ikinci faz "must use var" —

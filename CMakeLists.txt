@@ -1,5 +1,6 @@
 # TulparLang - Programming Language (Modern C++17 + LLVM Backend)
-# Supported platforms: Linux, macOS, Windows (native MSVC support)
+# Built and tested in CI: Linux x86_64, macOS arm64, Windows x86_64 via MSYS2
+# MINGW64 (MSVC is not built or tested) — see docs/PLATFORM_SUPPORT.md
 # Minimum CMake version
 cmake_minimum_required(VERSION 3.14)
 

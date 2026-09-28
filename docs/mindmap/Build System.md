@@ -27,11 +27,12 @@ yazımlarını buna göre `#if`'liyor — tek bir sürümü sabitleme.
 > İkisini aynı anda başlatma — OOM ile öldürülebilir; **ayrı komutlarda** çalıştır.
 > → [[Tuzaklar]] §7
 
-## Native Windows YOK (3.13.0'da düşürüldü)
-`build.bat` / `build.ps1` / `run_tests.ps1` / Inno Setup installer ve `build-windows` CI
-işi **yok**. Windows'ta geliştirme **WSL** içinde, yukarıdaki Linux yolundan yapılıyor —
-web ve Android hedefleri dahil her şey orada çalışıyor. Shim'lerdeki `PLATFORM_WINDOWS`
-dalları bilerek bırakıldı ama **bakımsız ve sınanmamış**. → [[Cross-platform]]
+## Native Windows GERİ GELDİ (2026-09-21, MSYS2 MINGW64)
+3.13.0'da düşürülmüştü; #340–#342 ile `build-windows` CI işi, testler ve Inno Setup
+kurulumcusu geri geldi. Derleme MSYS2 MINGW64 kabuğunda `./build.sh` ile (paket listesi
+CLAUDE.md "Build"). `build.bat` / `build.ps1` / `run_tests.ps1` YOK ve gelmedi — `build.sh`
+Windows'ta da tek giriş. Shim'lerdeki `PLATFORM_WINDOWS` dalları artık derleniyor ve
+koşuyor. Windows'a özgü üç tuzak [[Tuzaklar]] §3g'de. → [[Cross-platform]]
 
 ## Üç hedef
 `tulpar` (derleyici) · `tulpar_runtime` (static lib, `-DTULPAR_RUNTIME_ONLY`, AOT
@@ -117,10 +118,11 @@ Deneme PR'ı yalnız-belge seçildi ki `detect-docs-only` derlemeleri atlasın.
 ölçümü: [[Decisions]].
 
 ## CI
-`.github/workflows/build.yml` — Ubuntu + macOS. Test adımlarını **yalnız Linux işi**
-koşuyor: `./build.sh test`, `./build.sh suites`, typeinfer koşucusu, SHA-256 yardımcısı.
-Hiçbiri `continue-on-error` **değil**: bir test hatası CI'yı kırmızıya çeviriyor.
-Windows işi yok (yukarı bak).
+`.github/workflows/build.yml` — Ubuntu + macOS + Windows. Linux: `./build.sh test`,
+`./build.sh suites`, typeinfer koşucusu, SHA-256 yardımcısı. macOS (arm64): AOT dumanı +
+`./build.sh suites` (AArch64 yolunun tek ölçüldüğü yer). Windows (MSYS2): `./build.sh
+test`, `./build.sh suites`, typeinfer, DLL kapısı, kurulumcu. Hiçbiri `continue-on-error`
+**değil**: bir test hatası CI'yı kırmızıya çeviriyor.
 
 ## İlgili
 [[Standard Library]] · [[Runtime]] · [[Cross-platform]] · [[AOT Backend]] · [[Testing]] · [[Tuzaklar]]

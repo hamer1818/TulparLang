@@ -1,6 +1,10 @@
 # Plan 06 — `async` / `await` keywords (state-machine transform)
 
-**Durum:** PROPOSED
+**Durum:** v1 YAPILDI, farklı yoldan — `async`/`await` **stackful coroutine** ile
+(`runtime/tulpar_async.cpp`, ucontext), state-machine dönüşümü (PR 4, `llvm.coro`)
+YAPILMADI ve gerekmedi. Testler: `tests/async.test.tpr`. Açık: PR 2 Future tipi
+typeinfer'da (envanter K068), PR 5 Wings async handler (K265), PR 6 iptal/zaman aşımı
+(K112), web/Android'de async yok (ucontext yok — K233). (2026-09-28 notu)
 **Tahmin:** 4-6 PR
 **Risk:** Yüksek — state machine transform AOT'da yeni bir lowering;
 ABI + heap allocation kararları zincirde 5+ noktayı etkiler
@@ -162,7 +166,7 @@ noktasında flag check). PR 6: structured cancellation
 - **Yüksek:** LLVM coroutine lowering subtle — frame layout
   hataları segfault üretir, debugger yok (Plan 07 ön-koşul).
 - **Yüksek:** Wings handler'larında shared state yarış durumu.
-  `_request` zaten TLS olmalı (STATUS açık eksik).
+  ~~`_request` zaten TLS olmalı (STATUS açık eksik)~~ — yapıldı (PR #79).
 - **Orta:** Stack trace okunaksızlığı — async stack'ler frame
   chain'ine bakılarak rebuild edilmeli; sonraki faz.
 - **Düşük:** Performans — coroutine frame allocation ölçülmeli;
@@ -172,6 +176,5 @@ noktasında flag check). PR 6: structured cancellation
 
 - Plan 07 (Debugger MVP) — async stack'lerin debug deneyimi için
   şart.
-- STATUS açık: LLVM thread-local globals (`_request`/`_response`) —
-  cooperative scheduler altında bile gerekli.
+- ~~STATUS açık: LLVM thread-local globals (`_request`/`_response`)~~ — yapıldı (PR #79).
 - `lib/wings.tpr` `listen_evented` — async runtime'ı buradan kurar.

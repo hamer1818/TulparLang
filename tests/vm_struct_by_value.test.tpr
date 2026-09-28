@@ -1,23 +1,12 @@
-// Guards the VM struct-by-value param fix.
+// Struct parametreleri DEĞERLE geçer: `func _translate(Point p, int dx)`
+// içinde `p.x` değiştirmek çağıranın struct'ına dokunmamalı.
 //
-// Pre-fix: VM bound typed-struct params by reference (the caller's
-// ObjObject pointer was shared with the callee), so
-// `func _translate(Point p, int dx) { p.x = p.x + dx; return p; }`
-// mutated the CALLER'S struct. AOT's Plan 04 native-struct codegen
-// (alloca + per-field GEP/store) had always given the test
-// `tests/struct_native.test.tpr struct_arg_pass_by_value` real
-// pass-by-value semantics; only the VM diverged.
-//
-// Fix: VM compiler emits a `LOAD_LOCAL N; clone; STORE_LOCAL N`
-// prologue for every TYPE_CUSTOM parameter. The new VM opcode 129
-// (`clone`) delegates to `aot_object_clone`, which shallow-copies
-// the ObjObject — sufficient for primitive-field structs (the
-// dominant use case driving this), with nested objects still shared
-// by reference (a follow-up could deep-clone if needed).
-//
-// Smoke checks below mirror `tests/struct_native.test.tpr` cases
-// but isolate them so the fix is regression-tested even if the
-// upstream suite changes shape.
+// Tarihçe: bu paket bytecode VM'deki bir hatayı (parametreyi referansla
+// bağlıyordu; `clone` opcode'uyla düzeltilmişti) kilitlemek için yazıldı.
+// VM 2026-06-15'te kaldırıldı; paket artık AYNI sözleşmeyi AOT yolunda
+// sınıyor (`tests/struct_native.test.tpr` vakalarının yalıtılmış kopyası —
+// o paket şekil değiştirse de sözleşme kilitli kalsın diye). Dosya adı
+// tarihsel.
 
 import "test";
 

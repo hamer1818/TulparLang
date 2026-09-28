@@ -1,4 +1,6 @@
-// Minimal cross-platform line editor for tulpar --repl.
+// Minimal cross-platform line editor. Written for `tulpar --repl`, which was
+// removed with the VM on 2026-06-15; nothing in the tree calls it today
+// (kept compiling in the `tulpar` target — candidate for deletion).
 // See line_edit.hpp for goals and limits.
 
 #include "line_edit.hpp"
