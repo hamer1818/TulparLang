@@ -12,6 +12,28 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `call()` struct alan/döndüren fonksiyonda çöp, `null` ya da segfault
+
+- Kutusuz struct döndüren ya da struct parametre alan fonksiyonun kutulu
+  giriş noktası (`t_<ad>`) `call()` sözleşmesine uymuyordu: struct
+  parametreyi yerel struct işaretçisi diye okuyor, dönüşü sonuç yuvasına
+  yerel yerleşimle yazıyor. `call("mk", 3)` (`P{3,6}`) **`null`**,
+  float ilk alanlı dönüş **`1e-323`**, ilk alanı 4 olan dönüş OBJ sanılıp
+  **segfault**; 3+ alanlı struct 16 baytlık yuvanın **dışına** yazıyordu;
+  `call("g", p)` VMValue baytlarını struct diye okuyup çöp döndürüyordu
+  (ölçüldü 2026-09-28). Tanı yoktu. Derleyici artık böyle her fonksiyon
+  için `tc_<ad>` sarmalayıcısını (iç bağlantılı) `call()` önbelleğine
+  kaydediyor: kutulu struct argümanını tipli geçiciye açıyor, struct
+  dönüşünü doğrudan çağrının genel bağlamdaki biçimiyle kutuluyor
+  (`var q = mk(3)` ile aynı değer). Motorun `aot_func_lookup` kancaları da
+  aynı önbellekten çözülüyor. Doğrudan çağrı sarmalayıcıyı görmez.
+- Nöbetçi: `tests/call_nargs.test.tpr` (+1 test: dönüş, tipli bağlama, 4
+  alan, float/bool alan, struct parametre, N argüman, adı çalışma anında
+  gelen); eski derleyiciyle süreç segfault (139).
+- Performans: 14 kıyastan 13'ünün optimizasyon sonrası IR'ı birebir aynı;
+  `sarr_push` yalnız soğuk `tc_make_v3` eklendiği için farklı, 134,8 →
+  133,0 ms (9 koşum medyanı, gürültü; 2026-09-28 Ryzen 7 9800X3D).
+
 ### Düzeltildi — olmayan çıktı dizini çıplak hatayla düşüyordu
 
 - `tulpar build x.tpr yok/alt/out` (yerel, web, android — hepsi) ayrıştırma ve

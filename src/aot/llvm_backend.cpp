@@ -14078,6 +14078,87 @@ static LLVMValueRef native_boxed_wrapper(LLVMBackend *backend, const char *fname
   return w;
 }
 
+// call() / aot_func_lookup sozlesmesi void(VMValue *sonuc, VMValue *a0, ...).
+// Kutusuz struct alan ya da donduren fonksiyonun `t_<ad>`i bu sozlesmeye
+// UYMUYOR: struct parametreyi yerel struct isaretcisi diye okur, struct
+// donusunu sonuc yuvasina yerel yerlesimle ({i64|double, ...}) yazar.
+// call("mk", 3) 16 baytlik VMValue yuvasina {x, y} yaziyordu — etiket = x:
+// P{3,6} null, P{1,2} 1e-323, P{4,7} OBJ sanilip segfault; 3+ alanli struct
+// yuvanin DISINA yaziyordu. call("g", p) VMValue baytlarini P diye okuyup
+// cop donuyordu (olculdu 2026-09-28). Sarmalayici `tc_<ad>` ikisini ceviriyor:
+// kutulu struct argumanini tipli geciciye acar (dogrudan cagrinin `f(d[i])`
+// yolu), struct donusunu kutular (dogrudan cagrinin genel baglam bicimi,
+// K198). Dogrudan cagrilar sarmalayiciyi GORMEZ — yerel yol ayni kalir.
+// Uyan bir `t_<ad>` icin nullptr (kayit dogrudan onu kullanir).
+static LLVMValueRef struct_abi_call_wrapper(LLVMBackend *backend,
+                                            const char *fname,
+                                            LLVMValueRef target) {
+  FunctionEntry *fe = nullptr;
+  for (int i = 0; i < backend->function_count && !fe; i++)
+    if (backend->functions[i].name && strcmp(backend->functions[i].name, fname) == 0)
+      fe = &backend->functions[i];
+  if (!fe || fe->is_async) return nullptr;
+  StructTypeEntry *rst =
+      fe->return_struct_name ? find_struct_type(backend, fe->return_struct_name) : nullptr;
+  if (rst && !struct_is_trivially_unboxable(rst)) rst = nullptr;
+  const unsigned pc = LLVMCountParams(target);
+  if (pc == 0) return nullptr;
+  std::vector<StructTypeEntry *> pst(pc - 1, nullptr);
+  bool any = rst != nullptr;
+  for (unsigned j = 0; j + 1 < pc && fe->param_struct_names && (int)j < fe->param_count; j++) {
+    if (!fe->param_struct_names[j]) continue;
+    StructTypeEntry *st = find_struct_type(backend, fe->param_struct_names[j]);
+    if (st && struct_is_trivially_unboxable(st)) { pst[j] = st; any = true; }
+  }
+  if (!any) return nullptr;
+
+  char wname[300];
+  snprintf(wname, sizeof(wname), "tc_%s", fname);
+  if (LLVMValueRef w = LLVMGetNamedFunction(backend->module, wname)) return w;
+  std::vector<LLVMTypeRef> wpt(pc, backend->ptr_type);
+  LLVMTypeRef wft = LLVMFunctionType(backend->void_type, wpt.data(), pc, 0);
+  LLVMValueRef w = LLVMAddFunction(backend->module, wname, wft);
+  LLVMSetLinkage(w, LLVMInternalLinkage);
+
+  LLVMBasicBlockRef prev = LLVMGetInsertBlock(backend->builder);
+  LLVMValueRef prev_fn = backend->current_function;
+  // Sarmalayicinin DISubprogram'i yok: cagiranin (main) hata ayiklama konumu
+  // buradaki komutlara yapismasin.
+  LLVMMetadataRef prev_loc = LLVMGetCurrentDebugLocation2(backend->builder);
+  LLVMSetCurrentDebugLocation2(backend->builder, nullptr);
+  backend->current_function = w;
+  LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(backend->context, w, "entry");
+  LLVMPositionBuilderAtEnd(backend->builder, bb);
+
+  std::vector<LLVMValueRef> args(pc);
+  if (rst) {
+    args[0] = llvm_build_alloca_at_entry(backend, rst->llvm_type, "tc.ret");
+    LLVMBuildStore(backend->builder, LLVMConstNull(rst->llvm_type), args[0]);
+  } else {
+    args[0] = LLVMGetParam(w, 0);
+  }
+  for (unsigned j = 0; j + 1 < pc; j++) {
+    LLVMValueRef ap = LLVMGetParam(w, j + 1);
+    if (!pst[j]) { args[j + 1] = ap; continue; }
+    LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, pst[j]->llvm_type, "tc.arg");
+    LLVMBuildStore(backend->builder, LLVMConstNull(pst[j]->llvm_type), tmp);
+    LLVMValueRef boxed = LLVMBuildLoad2(backend->builder, backend->vm_value_type, ap, "tc.boxed");
+    emit_unpack_boxed_struct_into(backend, boxed, pst[j], tmp);
+    args[j + 1] = tmp;
+  }
+  LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(target), target, args.data(), pc, "");
+  if (rst) {
+    LLVMValueRef boxed = box_native_struct_as_object(backend, args[0], rst);
+    LLVMBuildStore(backend->builder, boxed, LLVMGetParam(w, 0));
+  }
+  LLVMBuildRetVoid(backend->builder);
+
+  backend->current_function = prev_fn;
+  if (prev) LLVMPositionBuilderAtEnd(backend->builder, prev);
+  LLVMSetCurrentDebugLocation2(backend->builder, prev_loc);
+  return w;
+}
+
 void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   if (node->type != AST_PROGRAM)
     return;
@@ -14253,6 +14334,8 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
       // once onbellege baktigi icin ciplak ada hic inmiyor. Dogrudan cagrilar
       // (`f(7)`) sarmalayiciyi GORMEZ — yerel yol ayni kalir.
       if (!target) target = native_boxed_wrapper(backend, fname);
+      else if (LLVMValueRef w = struct_abi_call_wrapper(backend, fname, target))
+        target = w;  // kutusuz struct parametre/donus: tc_<ad>
       if (!target) continue; // not emitted; not a call() target
       // Arity = user param count: the boxed signature is
       // void(VMValue* result, [VMValue* arg0, ...]), so subtract the result ptr.

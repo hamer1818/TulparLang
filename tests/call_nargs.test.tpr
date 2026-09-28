@@ -144,6 +144,48 @@ func run_native_abi() {
     assert_eq_int(call(reg[0], 1, 2), 3);        // adi calisma aninda gelen
 }
 
+// Kutusuz struct ALAN ya da DONDUREN fonksiyon call() ile (2026-09-28).
+// `t_<ad>` struct parametreyi yerel struct isaretcisi diye okur, struct
+// donusunu sonuc yuvasina yerel yerlesimle yazar; call() ise VMValue verip
+// VMValue bekliyor. Eskiden (olculdu): call("c_mk", 3) null; float ilk alanli
+// donus 1e-323 (etiket = ilk alanin alt 32 biti); ilk alani 4 olan donus OBJ
+// sanilip SEGFAULT; 4 alanli donus 16 baytlik yuvanin DISINA yaziyordu;
+// call("c_top", p) VMValue baytlarini struct diye okuyup cop donuyordu.
+// Derleyici artik `tc_<ad>` sarmalayicisini onbellege kaydediyor (motorun
+// aot_func_lookup kancalari da ayni onbellekten cozuluyor).
+type CNokta { int x; int y; }
+type CDortlu { int a; int b; int c; int d; }
+type CKarisik { float u; bool b; int n; }
+func c_mk(int a): CNokta { CNokta p = { x: a, y: a * 2 }; return p; }
+func c_dort(int a): CDortlu { CDortlu d = { a: a, b: a + 1, c: a + 2, d: a + 3 }; return d; }
+func c_kar(float u): CKarisik { CKarisik k = { u: u, b: true, n: 7 }; return k; }
+func c_top(CNokta p): int { return p.x + p.y; }
+func c_olcek(CNokta p, int k): CNokta { CNokta r = { x: p.x * k, y: p.y * k }; return r; }
+
+func run_struct_abi() {
+    var r = call("c_mk", 4);                     // ilk alan 4: eskiden OBJ sanilip segfault
+    assert_eq_int(r.x, 4);
+    assert_eq_int(r.y, 8);
+    assert_struct_eq(r, c_mk(4));                // dogrudan cagriyla ayni deger
+    CNokta t = call(c_mk, 3);                    // tipli baglama, fonksiyon referansi
+    assert_eq_int(t.x + t.y, 9);
+    var d = call("c_dort", 10);                  // 32 bayt: eskiden yuvanin disina
+    assert_eq_int(d.a + d.b + d.c + d.d, 46);
+    var k = call("c_kar", 2.5);                  // float ilk alan: eskiden 1e-323
+    assert_close(k.u, 2.5, 0.000001);
+    assert_eq_bool(k.b, true);
+    assert_eq_int(k.n, 7);
+    CNokta p = { x: 3, y: 4 };
+    assert_eq_int(call("c_top", p), 7);          // struct parametre
+    var s = call("c_olcek", p, 2);               // N arguman: struct al + dondur
+    assert_eq_int(s.x, 6);
+    assert_eq_int(s.y, 8);
+    var reg = [];
+    push(reg, "c_olcek");
+    CNokta s2 = call(reg[0], p, 3);              // adi calisma aninda gelen
+    assert_eq_int(s2.x + s2.y, 21);
+}
+
 print("=== call() N-argument dispatch ===");
 test("0-arg dispatch fires", "run_zero_arg");
 test("1-arg dispatch (Wings path)", "run_one_arg");
@@ -160,4 +202,5 @@ test("call(name, a, b) into 3-param fn pads VOID", "run_short_call_two");
 test("10-param closure", "run_closure_ten");
 test("33-param closure throws", "run_closure_over_cap_throws");
 test("tumu-int (yerel ABI) fonksiyon call() ile (K092)", "run_native_abi");
+test("kutusuz struct alan/donduren fonksiyon call() ile", "run_struct_abi");
 test_summary();
