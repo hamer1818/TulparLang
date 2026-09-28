@@ -2720,10 +2720,14 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 5. **Stable release süreci** — `v*` git tag + binary release artifact'leri;
    `tulpar update` bunu çekiyor (✓ v2.2.0 + v3.0.0 yayınlandı).
 
-**Şu an konumumuz:** **v3.13.0 yayınlandı.** (1) karşılandı; (2) yalnız
-tamsayı çekirdeklerinde — FP ve HTTP (2026-09-28 ölçümü) karşılanmıyor — 59 paket ·
-129 örnek · 8 denetim yeşil. (3) altyapı tam, içerik az. (4) reference büyük
-ölçüde hazır, canlı deploy eksik. (5) süreç işliyor.
+**Şu an konumumuz (2026-09-28):** son etiket **`v3.18.3`** (her birleşme
+otomatik sürüm çıkarıyor). (1) karşılandı; (2) yalnız tamsayı çekirdeklerinde
+— FP ve HTTP (2026-09-28 ölçümü) karşılanmıyor — 85 paket (`build.sh
+suites`) · 103 örnek (+30 İngilizce ikiz, `GRAFIK_DESEN` ile atlanıyor) · CI
+üç platformda (Linux, macOS arm64, Windows MSYS2). (3) altyapı tam, içerik
+az (registry'de 3 paket). (4) reference büyük ölçüde hazır, site Vercel'de
+canlı. (5) süreç işliyor. *(Eski metin "v3.13.0 yayınlandı · 59 paket · 129
+örnek · canlı deploy eksik" diyordu — 2026-09-01'in durumu.)*
 
 **Sürüm turundan çıkan kalıcı ders:** CI üç kez kırmızı döndü ve üçü de gerçek
 hataydı ama üçü de **yerelde görünmeyen ortam farkındandı** — ses aygıtı yok,
