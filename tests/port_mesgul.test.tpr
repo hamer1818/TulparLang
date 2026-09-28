@@ -1,0 +1,53 @@
+import "test";
+
+// DOLU PORT: ikinci dinleyici bind EDEMEMELI (2026-09-28).
+//
+// Wings'in iki sozlesmesi buna dayaniyor: "acik port doluysa kullaniciya
+// soyle" (`_wings_bind_failed`) ve "varsayilan 8484 doluysa bir sonrakine
+// gec" (`_wings_bind`). `socket_server` SO_REUSEADDR kuruyor; Linux/macOS'ta
+// bu yalniz TIME_WAIT'ten hizli yeniden baslamayi acar, ama Windows'ta
+// SO_REUSEADDR ayni portu DINLEYEN baska bir soket varken de bind'e izin
+// verir. Belirti: `build.sh test`te ayni portu paylasan iki ornek Windows
+// CI'da ikisi de ayakta kaliyordu ve probe olen surece dusuyordu (#393).
+//
+// Ikinci test SO_REUSEADDR'in ASIL isini kilitliyor: sunucu tarafinda
+// TIME_WAIT'te bir baglanti kalmisken ayni port yeniden bind edilebilmeli
+// (sunucuyu yeniden baslatmak). Linux'ta SO_REUSEADDR olmadan bu duser.
+
+int PORT_A = 18833;
+int PORT_B = 18834;
+
+func run_ikinci_dinleyici_reddedilir() {
+    int a = socket_server("127.0.0.1", PORT_A);
+    assert(a >= 0, "ilk bind basarisiz (port baska surecte mi?): " + toString(a));
+    int b = socket_server("127.0.0.1", PORT_A);
+    if (b >= 0) {
+        socket_close(b);
+    }
+    socket_close(a);
+    assert(b < 0, "ayni porta ikinci dinleyici bind edebildi (fd " + toString(b) + ")");
+}
+
+func run_time_wait_sonrasi_yeniden_bind() {
+    int s = socket_server("127.0.0.1", PORT_B);
+    assert(s >= 0, "ilk bind basarisiz: " + toString(s));
+    // Baglanti backlog'da tamamlanir; accept hemen doner.
+    int c = socket_client("127.0.0.1", PORT_B);
+    assert(c >= 0, "istemci baglanamadi: " + toString(c));
+    int k = socket_accept(s);
+    assert(k >= 0, "accept basarisiz: " + toString(k));
+    // Sunucu tarafi ONCE kapatir -> sunucu tarafi TIME_WAIT'e duser.
+    socket_close(k);
+    socket_close(c);
+    socket_close(s);
+    int s2 = socket_server("127.0.0.1", PORT_B);
+    if (s2 >= 0) {
+        socket_close(s2);
+    }
+    assert(s2 >= 0, "TIME_WAIT varken ayni port yeniden bind edilemedi (sunucu yeniden baslatilamaz)");
+}
+
+print("=== dolu port / yeniden bind ===");
+test("ayni porta ikinci dinleyici reddedilir", "run_ikinci_dinleyici_reddedilir");
+test("TIME_WAIT sonrasi ayni port yeniden bind edilir", "run_time_wait_sonrasi_yeniden_bind");
+test_summary();

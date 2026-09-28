@@ -5796,8 +5796,20 @@ VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
     return VM_INT(-1);
 
   int opt = 1;
+#if defined(_WIN32)
+  // Windows'ta SO_REUSEADDR POSIX'teki anlamda DEGIL: portu DINLEYEN baska
+  // bir soket varken de bind'e izin veriyor (port "calma"). Asagidaki
+  // SO_REUSEPORT notundaki iki Wings sozlesmesi ("acik port doluysa soyle",
+  // "8484 doluysa bir sonrakine gec") Windows'ta bu yuzden calismiyordu, ve
+  // `build.sh test`te ayni portu paylasan iki ornek ikisi de ayakta kalip
+  // probe'u olen surece dusuruyordu (#393). Windows'un varsayilani ikinci
+  // dinleyiciyi reddediyor; TIME_WAIT'ten yeniden baslamayi da engellemiyor.
+  // Olculdu: tests/port_mesgul.test.tpr (Windows CI, 2026-09-28).
+  (void)opt;
+#else
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt,
              sizeof(opt));
+#endif
 
   // NOTE: SO_REUSEPORT is deliberately NOT set. With it, two unrelated
   // processes could both bind the same port (kernel load-balances), so a
