@@ -135,6 +135,11 @@ ObjString *aot_intern_string(const char *chars, int length);
 // Program sonu bosaltmasini kaydet (aot_event_loop_run runtime_bindings'de).
 void aot_async_set_drain(void (*fn)(void));
 void tulpar_async_drain_all(void); // asagida, extern "C" blogunda
+
+// Async iz (K156): kutulu giris noktasinin kaynak adi + yakalanmayan istisna
+// kancasi (src/vm/runtime_bindings.cpp).
+const char *aot_func_name_of(void *fn);
+void aot_set_uncaught_hook(void (*hook)(VMValue));
 // Runtime array allocators (src/vm/runtime_bindings.cpp). The plain
 // vm_allocate_array/vm_array_push deref the VM*, so the AOT runtime (no VM)
 // must go through these null-safe wrappers, which malloc when vm == nullptr.
@@ -301,6 +306,9 @@ struct Task {
   // cancel() gorevi o promise'in bekleyen listesinden cikarip hazir kuyruga
   // koyar ki park etmis bir gorev iptali HEMEN gorsun.
   ObjPromise *waiting_on = nullptr;
+  // Bu gorevde await'in en son yeniden firlattigi red (async iz): kok catch
+  // ayni degeri yakalarsa "bu gorev o promise'in reddini iletti" demektir.
+  ObjPromise *rethrow_src = nullptr;
   // BAG gorevi (with_timeout): coroutine DEGIL — yigin yok. `link_src`
   // yerine gelince `result`'u ayni sonucla yerine getirir. resume() bunu
   // baglam degistirmeden isler.
@@ -351,6 +359,7 @@ struct SchedState {
   std::vector<Task *> ready;        // runnable tasks
   std::vector<Timer> timers;        // pending timers (unsorted; min-scanned)
   std::vector<IoSource> io_sources; // background-I/O completion polls
+  std::vector<ObjPromise *> rejected; // koken kaydi olan redler (async iz, K156)
 };
 thread_local SchedState *t_sched = nullptr;
 inline SchedState &sched() {
@@ -361,6 +370,7 @@ inline SchedState &sched() {
 #define g_ready (sched().ready)
 #define g_timers (sched().timers)
 #define g_io_sources (sched().io_sources)
+#define g_rejected (sched().rejected)
 thread_local Task *g_current = nullptr;          // task currently executing (null on main)
 
 // How often to poll outstanding background I/O when nothing else is runnable.
@@ -421,6 +431,89 @@ void drop_timeout_timer(ObjPromise *r) {
 }
 
 int cancel_promise(ObjPromise *p);
+
+// ---- Async iz (K156) -------------------------------------------------------
+// Senkron kodda yakalanmayan hata en azindan mesajini basiyordu; async'te
+// hatanin HANGI gorevde dogdugu ve hangi await'lerden gectigi kayboluyordu:
+// ic ice uc async fonksiyonda "Uncaught Exception: boom" ve baska hicbir sey.
+// Ustelik hic await edilmeyen gorevin hatasi SESSIZCE yutuluyordu (cikis 0).
+// Promise reddedilince kokeni kaydedilir; yakalanmayan hatada zincir, program
+// sonunda da hic gozlenmemis redler stderr'e basilir.
+struct AsyncOrigin {
+  const char *name;   // reddeden gorevin fonksiyonu ("gather" / "?")
+  ObjPromise *cause;  // bu gorev baska bir promise'in reddini await'te ilettiyse
+  bool observed;      // biri await etti / bagla iletildi
+};
+thread_local ObjPromise *g_main_rethrow_src = nullptr; // ana thread'in son iletimi
+
+bool same_value(VMValue a, VMValue b) {
+  return a.type == b.type && memcmp(&a.as, &b.as, sizeof a.as) == 0;
+}
+
+void mark_observed(ObjPromise *p) {
+  if (p && p->origin) static_cast<AsyncOrigin *>(p->origin)->observed = true;
+}
+
+// Reddedilen gorev promise'ine koken yaz (task_body'nin kok catch'i).
+void record_origin(ObjPromise *p, const char *name, VMValue exc, ObjPromise *rethrow_src) {
+  AsyncOrigin *o = static_cast<AsyncOrigin *>(malloc(sizeof(AsyncOrigin)));
+  if (!o) return;
+  o->name = name ? name : "?";
+  o->cause = (rethrow_src && rethrow_src->state == 2 &&
+              same_value(rethrow_src->value, exc)) ? rethrow_src : nullptr;
+  o->observed = false;
+  p->origin = o;
+  g_rejected.push_back(p);
+}
+
+void print_chain(ObjPromise *p) {
+  // p: ana thread'in await'te yeniden firlattigi promise. Zincir en distan
+  // (ana thread'in bekledigi gorev) en ice (hatanin dogdugu gorev) dogru.
+  int n = 0;
+  for (ObjPromise *q = p; q && q->origin && n < 64; n++)
+    q = static_cast<AsyncOrigin *>(q->origin)->cause;
+  if (n == 0) return;
+  std::fprintf(stderr, "%s\n", tulpar::i18n::tr_en(
+      "  async iz (await zinciri, en distaki once):",
+      "  async trace (await chain, outermost first):"));
+  int i = 0;
+  for (ObjPromise *q = p; q && q->origin && i < 64; i++) {
+    AsyncOrigin *o = static_cast<AsyncOrigin *>(q->origin);
+    const bool last = !o->cause || !o->cause->origin;
+    std::fprintf(stderr, "    %s %s  %s\n", i == 0 ? "at" : "  ", o->name,
+                 last ? tulpar::i18n::tr_en("<- hata burada firlatildi",
+                                            "<- thrown here")
+                      : tulpar::i18n::tr_en("(await ile iletti)",
+                                            "(re-raised at await)"));
+    q = o->cause;
+  }
+}
+
+void async_uncaught_hook(VMValue exc) {
+  ObjPromise *p = g_main_rethrow_src;
+  if (p && p->state == 2 && same_value(p->value, exc)) print_chain(p);
+}
+
+// Program sonu: hic gozlenmemis redler (await edilmemis gorevin hatasi).
+// Iptal edilen gorevler sayilmaz (asyncio da uyarmiyor). Cikis kodu
+// DEGISMEZ — yalniz stderr.
+void report_unobserved() {
+  for (ObjPromise *p : g_rejected) {
+    AsyncOrigin *o = static_cast<AsyncOrigin *>(p->origin);
+    if (!o || o->observed) continue;
+    if (same_value(p->value, cancel_error())) continue;
+    o->observed = true; // bir kez
+    std::fprintf(stderr, "%s %s: ", tulpar::i18n::tr_en(
+                     "Uyari: hic await edilmeyen async gorevin hatasi yutuldu —",
+                     "Warning: unhandled error in an async task that was never awaited —"),
+                 o->name);
+    if (IS_STRING(p->value))
+      std::fprintf(stderr, "%s\n", AS_STRING(p->value)->chars);
+    else
+      std::fprintf(stderr, "<value type=%d>\n", p->value.type);
+  }
+  g_rejected.clear();
+}
 
 #if TULPAR_ASYNC_FIBERS
 thread_local void *g_main_fiber = nullptr;    // scheduler fiber (converted from thread)
@@ -509,7 +602,10 @@ void task_body(Task *t) {
     }
     t->done = true;
     if (t->result->task == t) t->result->task = nullptr;
-    aot_promise_settle(t->result, aot_get_exception(), /*rejected*/ 2);
+    VMValue exc = aot_get_exception();
+    const char *nm = t->fn ? aot_func_name_of(t->fn) : "gather";
+    record_origin(t->result, nm, exc, t->rethrow_src);
+    aot_promise_settle(t->result, exc, /*rejected*/ 2);
     return;
   }
   VMValue rv = t->gather ? gather_body(t->gather)
@@ -597,6 +693,7 @@ void resume(Task *t) {
     // with_timeout bagi: kaynak yerine geldi -> sonucu aktar. Yigin yok.
     ObjPromise *src = t->link_src, *dst = t->result;
     if (dst->task == t) dst->task = nullptr;
+    mark_observed(src); // red bagla iletildi: artik dst'nin sorunu
     drop_timeout_timer(dst);
     if (dst->state == 0) aot_promise_settle(dst, src->value, src->state);
     delete t;
@@ -711,6 +808,9 @@ void ensure_scheduler_inited() {
                                                kAsyncifyStackSize);
   }
 #endif
+
+  static const bool hook_set = (aot_set_uncaught_hook(async_uncaught_hook), true);
+  (void)hook_set;
 #if TULPAR_ASYNC_FIBERS
   if (!g_main_fiber) {
     g_main_fiber = ConvertThreadToFiber(nullptr);
@@ -864,6 +964,7 @@ ObjPromise *aot_promise_new(void) {
   p->nwaiters = 0;
   p->cap_waiters = 0;
   p->task = nullptr;
+  p->origin = nullptr;
   return p;
 }
 
@@ -952,7 +1053,11 @@ VMValue aot_await(VMValue awaited) {
     }
     // A rejected promise re-raises in the awaiting coroutine (caught by a user
     // try/catch on its stack, or its task_body root → rejects its own promise).
-    if (p->state == 2) aot_throw_ptr(&p->value);
+    if (p->state == 2) {
+      mark_observed(p);
+      t->rethrow_src = p;
+      aot_throw_ptr(&p->value);
+    }
     return p->value;
   }
 
@@ -961,8 +1066,13 @@ VMValue aot_await(VMValue awaited) {
     if (!loop_step()) break; // nothing left to run → would deadlock
   }
   // Rejection on the main thread surfaces as a throw (caught by a top-level
-  // try/catch, else the uncaught-exception handler exits).
-  if (p->state == 2) aot_throw_ptr(&p->value);
+  // try/catch, else the uncaught-exception handler exits — and prints the
+  // await chain through async_uncaught_hook).
+  if (p->state == 2) {
+    mark_observed(p);
+    g_main_rethrow_src = p;
+    aot_throw_ptr(&p->value);
+  }
   return p->value;
 }
 
@@ -1003,6 +1113,7 @@ void tulpar_async_drain_all() {
   if (!t_sched) return; // bu thread'de async hic kullanilmadi
   ensure_scheduler_inited();
   while (loop_step(/*drain*/ true)) { /* drain */ }
+  report_unobserved();
 }
 
 // with_timeout(p, ms) -> promise (K112). `p` `ms` milisaniye icinde yerine

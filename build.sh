@@ -596,6 +596,16 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # ASYNC IZ (K156): async gorevde dogan yakalanmayan hata await zincirini
+    # basiyor mu, hic await edilmeyen gorevin hatasi yutuluyor mu? Kapi
+    # uretilen ikililerin stderr'ini LC_ALL=C ile okuyor.
+    if [ -x tests/async_iz.sh ]; then
+        if ! bash tests/async_iz.sh ./tulpar; then
+            echo -e "${RED}async iz kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # FONKSIYON ARAMA (aot_func_lookup): bir Tulpar fonksiyonunu adiyla,
     # cagirmadan ve ayirmadan cozen C yuzu. Bu depoda cagiran YOK — tek
     # tuketici tulpar-engine (betik kancalari yuklemede bir kez cozulur) —

@@ -623,6 +623,20 @@ extern "C" void aot_event_loop_run(void) {
   if (fn) fn();
 }
 
+// Ters arama: kutulu giris noktasindan fonksiyonun KAYNAK adini bul (cagri
+// onbellegi — main'in girisinde aot_register_func her kutulu fonksiyonu
+// tohumluyor). Yalniz soguk yol (hata raporu, async iz): 2048 yuvayi tarar.
+// Bulunamazsa nullptr. dladdr degil: Windows ve wasm'da da calissin.
+extern "C" const char *aot_func_name_of(void *fn) {
+  if (!fn) return nullptr;
+  for (uint32_t i = 0; i < AOT_CALL_CACHE_SLOTS; i++) {
+    const AOTCallCacheEntry *e = &g_call_cache[i];
+    const char *k = e->key.load(std::memory_order_acquire);
+    if (k && (void *)e->ptr == fn) return k;
+  }
+  return nullptr;
+}
+
 // aot_func_lookup'in CAGRI esi: cozulmus kutulu giris noktasini call() ile
 // AYNI dagitimla cagir — tam `arity` isaretci (eksik parametre VOID, fazlasi
 // duser; arity -1 ise argc'ye guvenilir). Gomen kendi switch'ini tasimasin
@@ -5724,6 +5738,12 @@ void aot_try_pop(void) {
     eh_cur->depth--;
 }
 
+// Yakalanmayan istisna kancasi: async calisma zamani (runtime/tulpar_async.cpp)
+// hata bir await zincirinden geldiyse zinciri basmak icin kurar. Kanca yoksa
+// (async hic kullanilmadiysa) davranis ayni.
+static void (*g_uncaught_hook)(VMValue) = nullptr;
+extern "C" void aot_set_uncaught_hook(void (*hook)(VMValue)) { g_uncaught_hook = hook; }
+
 void aot_throw(VMValue exception) {
   if (eh_cur->depth == 0) {
     fprintf(stderr, "Uncaught Exception: ");
@@ -5734,6 +5754,7 @@ void aot_throw(VMValue exception) {
     } else {
       fprintf(stderr, "<value type=%d>\n", exception.type);
     }
+    if (g_uncaught_hook) g_uncaught_hook(exception);
     exit(1);
   }
   eh_cur->exception = exception;

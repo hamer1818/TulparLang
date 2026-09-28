@@ -1931,6 +1931,35 @@ tümü-int fonksiyona da kutulu sarmalayıcı üretmek ya da `call()`'ın çıpl
 ad yedeğini kaldırmak — ikincisinden önce o yedeğe bilerek dayanan bir
 kullanım var mı ölçülmeli (bu turda bakılmadı).
 
+## 7h. Windows'ta fiber içinde İLK dokunulan yıkıcılı `thread_local` — çökme başka yerde görünür
+
+Async hata izi (K156, 2026-09-28) red kökenlerini `thread_local
+std::vector<ObjPromise*>`'de tutuyordu. İlk `push_back` bir coroutine'in —
+Windows'ta bir **fiber**'ın — `catch` yolunda oluyordu. Linux (ucontext / el
+yazımı geçiş) ve macOS yeşil; Windows CI'da async paketi **3 koşumda 3 kez**
+çöktü, her seferinde FARKLI yerde (bir koşumda `unutulan.tpr`, ötekilerde
+"reject re-raises on await"). Yerleştirilen VEH izi (vectored exception
+handler: kod, adres, son işaretçi, geri izleme): `c0000005` okuma yığının
+TABANININ ötesinde + `c00000fd` yığın taşması, `longjmp`'ın SEH geri
+sarımında (ntdll); `g_current` ana yığındayken dolu — yani durum bozuk.
+
+Kaplar `thread_local` **işaretçinin** arkasına (yığında, trivially
+destructible) alınınca Windows yeşil (iki bağımsız koşum). Mekanizma
+**çıkarım, ölçülmedi**: MinGW'de yıkıcılı bir `thread_local`'ın yıkıcı kaydı
+ilk erişimin olduğu fiber'a bağlanıyor ve `DeleteFiber`'da koşuyor — kap,
+thread hâlâ kullanırken yıkılıyor, sonraki yazma serbest belleğe gidiyor.
+
+**Neden sinsi:** hata ilk erişimde değil, fiber silindikten SONRA ve alakasız
+bir yolda (longjmp geri sarımı) patlıyor; bisect'te (#389/#390 taslakları) K112
+ve K233 dalları temiz, K156 kirliydi — yani kusurlu satır "koken listesine
+push" gibi masum görünüyordu.
+
+**Kural:** `runtime/tulpar_async.cpp`'de coroutine içinden dokunulabilen
+yıkıcılı `thread_local` NESNE yok; thread başına durum `SchedState`'te,
+`thread_local SchedState *` arkasında. Coroutine içinde ilk kez dokunulabilecek
+her yeni kap oraya girer. (Tek istisna `StackPool`: yalnız zamanlayıcı
+bağlamında — `resume()` — dokunuluyor ve Windows fiber yolunda hiç derlenmiyor.)
+
 ## 6ş. Döngü sınırı `n` mi `len(a)` mı — aynı iş, 3,5 kat fark
 
 40M elemanlık lineer okuma:
