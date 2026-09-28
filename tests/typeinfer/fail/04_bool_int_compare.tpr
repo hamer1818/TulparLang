@@ -9,6 +9,9 @@
 //
 // Strict mode should turn each of these into exit 1 with a `[typecheck]` line
 // saying the comparison is always false / always true.
+//
+// EXPECT: comparison between 'bool' and 'int' is always false
+// EXPECT: comparison between 'bool' and 'int' is always true
 
 bool b = true;
 

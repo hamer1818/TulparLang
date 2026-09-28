@@ -4,6 +4,9 @@
 //
 // Strict mode should turn this into exit 1 with a `[typecheck]` line
 // mentioning the receiver type.
+//
+// EXPECT: Argument 1 of 'len'
+// EXPECT: got int
 
 int n = len(42);
 print(n);

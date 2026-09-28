@@ -1,5 +1,8 @@
 // Expected: typeinfer should reject `abs(string)` — abs only accepts
 // numeric (int, float). Same poly-builtin category check as fail/01.
+//
+// EXPECT: Argument 1 of 'abs'
+// EXPECT: expected int or float, got str
 
 float r = abs("hello");
 print(r);

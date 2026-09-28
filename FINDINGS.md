@@ -1116,7 +1116,10 @@ için değil; **eksik hâli zararlı olduğu için**.
 5. ~~P11/P12 (`fib` atribüsyonu; gcc bayrak ikili araması)~~ — **KAPANDI 2026-09-11**
 
 Küçük kalemler: `ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ
-otomasyon dışı · yığın taraması async/closure/match şekillerini kapsamıyor ·
+otomasyon dışı · ~~yığın taraması async/closure/match şekillerini kapsamıyor~~
+(KAPANDI 2026-09-27: lambda, closure yakalama, match ifade/deyim, `chr`, async
+gövdede await şekilleri eklendi — ikisi GERÇEK sızıntı buldu: yakalanan yerele
+yazma ve `chr()` döngüde ~500 bin / 2 milyon yinelemede SIGSEGV veriyordu) ·
 `benchmarks/RESULTS.md` ve tulparlang.dev tabloları FP satırlarını henüz
 içermiyor (veri hazır, yayın kararı bekliyor).
 

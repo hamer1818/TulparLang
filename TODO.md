@@ -286,6 +286,11 @@ boşluklar; backlog'da yoklardı.
       `// EXPECT: <parça>` satırları. Yalnız çıkış koduna bakmak yetmiyordu:
       fonksiyon referansı tanısını kasten bozan iki deneme, YANLIŞ ama yine de
       sıfırdan farklı çıkış veren bir hata sayesinde fixture'lardan kaçtı.
+      ⚠ Kapsam 2026-09-27'ye kadar 11/19'du: 01-05 ve 11-13 EXPECT'siz, yani
+      yanlış sebeple reddedilse de yeşildi. Şimdi 19/19 ve `run.sh`
+      EXPECT'siz fail fikstürünü KENDİSİ kırmızı sayıyor. Yan bulgu: CRLF'li
+      fikstürde beklenen metin sonda CR taşıyor ve hiç eşleşmiyordu — `run.sh`
+      artık CR'yi atıyor.
 
 - [x] **Argüman sınırında `bool`→`int` geldi.** ✅ 2026-08-25 — çağrılan
       tarafın parametre önsözü artık bildirimle AYNI yardımcıyı çağırıyor
