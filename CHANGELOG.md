@@ -976,6 +976,19 @@ tamamlama `__` önekli derleyici geçicilerini (`__t0`, `__r0`) göstermez.
   `tests/typeinfer/fail/21_duplicate_struct.tpr` (tanı vardı, fikstürü
   yoktu). Korpus taraması (bu depo + tulpar-engine/tulpar): 0 isabet.
 
+### Eklendi — `[registry] mirrors`: okuma yedeği registry'ler
+
+- `tulpar.toml` `[registry]` bölümü artık `mirrors = ["https://a", "https://b"]`
+  kabul ediyor. `install`/`search`/`info` birincil `url` ulaşılamaz ya da 2xx dışı
+  dönerse aynaları sırayla deniyor, ilk 2xx kazanıyor; lock hangi aynadan
+  çözüldüğünü kaydediyor; aynı ad@sürümün sha256'sı aynalar arasında da
+  tutmalı (farklı bayt veren ayna reddedilir). `publish` yalnız `url`'e gider.
+  `pkg add`/`remove` manifesti yeniden yazarken listeyi koruyor; dizi olmayan
+  `mirrors` sessizce yutulmuyor, hata veriyor.
+- `tests/pkg_registry_audit.py`'ye dört denetim: ölü `url` + aynasız düşüyor
+  (pozitif kontrol), ölü `url` + canlı ayna kuruyor ve lock aynayı kaydediyor,
+  `pkg add` sonrası `mirrors` duruyor, bozuk `mirrors` hata.
+
 ### Düzeltildi / Eklendi — `pkg install`: lock sürümü sabitliyor, `.tpkg` önbelleği, `--update`
 
 - Aralık (`^1.0.0`) her install'da registry'ye karşı yeniden çözülüyordu:

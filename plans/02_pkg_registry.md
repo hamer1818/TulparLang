@@ -258,6 +258,10 @@ diye ertele.
   *(Cevaplandı: `init` gerçek adresi yazıyor — `https://api.pkg.tulparlang.dev`.)*
 - **Forks/mirrors:** Birden fazla registry destekleyelim mi? Faz 1 için
   HAYIR — `[registry] url` tek string. İleride array yapılabilir.
+  *(Yapıldı 2026-09-28, K251: `[registry] mirrors = ["https://a", …]` —
+  okuma yedeği; `url` ulaşılamaz ya da 2xx dışı dönerse sırayla denenir,
+  ilk 2xx kazanır, lock hangi aynadan geldiğini kaydeder, aynı
+  ad@sürüm için sha256 aynalar arasında da tutmalı. `publish` yalnız `url`'e.)*
 - **Yansıma (`tulpar pkg search`, `tulpar pkg info`):** PR 2'den sonra
   ayrı bir PR ile gelir; `/api/registry.json` indeksi zaten hazır
   oluyor. *(Cevaplandı: `pkg search` ve `pkg info` var.)*
