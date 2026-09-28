@@ -679,6 +679,23 @@ değişmedi. Tipsiz `fib` 11,9 → 7,7 ms.
 TU'ya alındı) ve libstdc++ dinamik bağlanıyordu. Boş program 1,15 →
 0,23 ms — C'nin 0,17'siyle aynı bantta.
 
+### Düzeltildi — `tulpar build --strict` / `--debug` sessizce yok sayılıyordu
+
+- `build`'den SONRA yazılan `--strict`, `--no-typecheck`, `--debug`/`-g`
+  düşüyordu: bayrak döngüsü `build`'de duruyor, konumsal döngü `-` ile
+  başlayanı atlıyordu. Ölçüldü (2026-09-27): `tulpar build --strict x.tpr`
+  uyarıya rağmen çıkış 0 ile ikili üretti; `tulpar build --debug x.tpr`
+  SIFIR `.debug_*` bölümlü ikili bıraktı — plan 03 ve 07'nin kendi
+  yazımları. Artık iki konum da tanınıyor; tanınmayan bayrak uyarı basıyor.
+- `tulpar build` önbelleği yalnız mtime'a bakıyordu: debugsız ikiliden sonra
+  `--debug` "Cache hit" alıp DWARF'sız ikiliyi, debug ikilisinden sonra düz
+  derleme OPTİMİZASYONSUZ ikiliyi bırakıyordu. `--debug` önbelleği
+  kullanmıyor; düz derleme hata ayıklama bilgisi taşıyan ikiliye isabet
+  etmiyor.
+- Kapı `tests/build_bayraklari.sh` (`build.sh suites`, üç platform): 14
+  denetim, iki pozitif kontrol (strict'siz derleniyor; aynı kipte ikinci
+  derleme isabet ediyor). Eski ikiliyle 8'i kırmızı.
+
 ### Fixed — `int` hedefe float yazmak SESSİZCE bozuk sonuç veriyordu
 
 ```

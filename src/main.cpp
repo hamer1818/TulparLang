@@ -129,6 +129,37 @@ static time_t newest_local_import_mtime(const char *src, const char *src_path,
   return newest;
 }
 
+// Çıktı ikilisi hata ayıklama bilgisi taşıyor mu? `tulpar build` önbelleği
+// yalnız mtime'a bakıyordu: `--debug` ile derlenmiş (optimizasyonsuz, DWARF'lı)
+// bir ikilinin ardından gelen düz `tulpar build` "Cache hit" alıp YAVAŞ debug
+// ikilisini bırakıyordu (ve tersi: debugsız ikiliden sonra `--debug` DWARF'sız
+// ikili bırakıyordu). Durum dosyası yazmamak için ikilinin kendisine bakılıyor —
+// "herhangi bir DWARF" değil, BİZİM ürettiğimiz DWARF:
+//   ELF / PE-COFF  -> DW_AT_producer dizgisi "Tulpar AOT" (.debug_str)
+//   Mach-O         -> hata ayıklama haritasındaki (N_OSO) nesne yolu
+//                     "<çıktı>.o" — ld64 DWARF'ı ikiliye kopyalamaz, yalnız
+//                     nesneyi işaret eder.
+// ".debug_info" bölüm adına bakmak YANLIŞTI: MinGW'de düz derleme de CRT /
+// libstdc++'dan gelen .debug_info taşıyor — ölçüldü (2026-09-27, Windows CI):
+// önbellek Windows'ta HİÇ isabet etmedi. Kapısı: tests/build_bayraklari.sh
+// (üç platformda; "aynı kipte ikinci derleme isabet eder" pozitif kontrolü
+// tam bunu yakaladı).
+static bool binary_has_debug_info(const char *path, const char *output_name) {
+  FILE *f = fopen(path, "rb");
+  if (!f) return false;
+  std::string data;
+  char buf[1 << 16];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) data.append(buf, n);
+  fclose(f);
+  if (data.find("Tulpar AOT") != std::string::npos) return true;
+  const char *base = strrchr(output_name, '/');
+  base = base ? base + 1 : output_name;
+  std::string oso = std::string("/") + base + ".o";
+  oso.push_back('\0');
+  return data.find(oso) != std::string::npos;
+}
+
 static void print_help() {
   std::printf("TulparLang %s (LLVM AOT Backend)\n\n", tulpar::kVersion);
 
@@ -326,12 +357,11 @@ int main(int argc, char **argv) {
     }
   }
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
-  // Plan 07 PR 1: `tulpar build --debug` (or `-g`) requests an AOT
-  // build that keeps debug symbols. Today this just forwards `-g` to
-  // clang at link time; the LLVMDIBuilder metadata that lets gdb /
-  // lldb step through .tpr source lines lands in Plan 07 PR 2-3 (the
-  // backend slot is already plumbed through so callers don't need
-  // another signature break later).
+  // Plan 07: `--debug` (or `-g`) requests an AOT build with DWARF
+  // (LLVMDIBuilder metadata, verify-only pipeline, `-g` at link). Both
+  // `tulpar --debug build x.tpr` and `tulpar build --debug x.tpr` work —
+  // the second form was silently dropped until 2026-09-27 (see the
+  // positional loop in the build branch).
   int emit_debug = 0;
   // --strict flips the typeinfer pre-pass from informational to
   // exit-blocking. Precedence (lowest to highest):
@@ -477,10 +507,42 @@ int main(int argc, char **argv) {
     if (aab_package) aot_set_android_aab(1);
     // Pozisyonel argümanlar: bayraklar (`--target=web`, `--debug`, ...)
     // build'den sonra da gelebilir; '-' ile başlayanları atla.
+    //
+    // `build`'den SONRA yazılan tip denetimi / hata ayıklama bayrakları da
+    // burada tanınıyor. Eskiden yukarıdaki bayrak döngüsü `build`'de duruyor,
+    // bu döngü de '-' ile başlayanı SESSİZCE atlıyordu: plan 03/07'nin kendi
+    // yazımı `tulpar build --strict x.tpr` çıkış 0 ile ikili üretiyor,
+    // `tulpar build --debug x.tpr` DWARF'sız ikili bırakıyordu (ölçüldü
+    // 2026-09-27). Tanınmayan bir bayrak artık uyarı basıyor — bir sonraki
+    // bayrak da sessizce düşmesin.
     const char *src_arg = nullptr;
     const char *out_arg = nullptr;
     for (int i = arg_offset + 1; i < argc; i++) {
-      if (argv[i][0] == '-') continue;
+      if (argv[i][0] == '-') {
+        const char *f = argv[i];
+        if (strcmp(f, "--strict") == 0) {
+          strict_typecheck = 1;
+        } else if (strcmp(f, "--no-typecheck") == 0) {
+          skip_typecheck = 1;
+        } else if (strcmp(f, "--debug") == 0 || strcmp(f, "-g") == 0) {
+          emit_debug = 1;
+        } else if (strcmp(f, "--target=web") == 0 || strcmp(f, "--web") == 0 ||
+                   strcmp(f, "--target=android") == 0 ||
+                   strcmp(f, "--android") == 0 || strcmp(f, "--apk") == 0 ||
+                   strcmp(f, "--aab") == 0 || strcmp(f, "-o") == 0 ||
+                   strcmp(f, "--aot") == 0 || strcmp(f, "--build") == 0 ||
+                   strcmp(f, "--vm") == 0 || strcmp(f, "--run") == 0) {
+          // Yukarıda (hedef taraması) ya da konumdan ele alınıyor; `-o`
+          // sonraki argümanı çıktı yapar — o zaten konumsal kurala uyuyor.
+        } else {
+          std::fprintf(stderr, "%s%s\n",
+                       tulpar::i18n::tr_en(
+                           "[build] Uyari: taninmayan bayrak yok sayildi: ",
+                           "[build] Warning: unrecognised flag ignored: "),
+                       f);
+        }
+        continue;
+      }
       if (!src_arg) src_arg = argv[i];
       else if (!out_arg) out_arg = argv[i];
     }
@@ -568,7 +630,11 @@ int main(int argc, char **argv) {
       // yanlış pozitif "up-to-date" üretir — Android'de bu özellikle sinsiydi,
       // çünkü kullanıcının önceden `mkdir`lediği çıktı dizini stat'i geçiyor ve
       // mtime'ı taze olduğu için derleme tamamen atlanıyordu.
-      if (!web_target && !android_target &&
+      // `--debug` önbelleği hiç kullanmıyor: debug derlemesi optimizasyonsuz
+      // ve hızlı, önceki ikilinin hangi kipte üretildiğini tahmin etmekten
+      // ucuz. Tersi yön (debug ikilisinin ardından düz derleme) aşağıda
+      // `binary_has_debug_info` ile yakalanıyor.
+      if (!web_target && !android_target && !emit_debug &&
           !(nocache && *nocache && *nocache != '0')) {
         char exe_path[512];
 #ifdef _WIN32
@@ -592,7 +658,8 @@ int main(int argc, char **argv) {
           time_t imp_mtime = newest_local_import_mtime(source, src_arg, seen, 0);
           if (exe_st.st_mtime >= src_st.st_mtime &&
               exe_st.st_mtime >= imp_mtime &&
-              (!driver_ok || exe_st.st_mtime >= drv_st.st_mtime)) {
+              (!driver_ok || exe_st.st_mtime >= drv_st.st_mtime) &&
+              !binary_has_debug_info(exe_path, output_name)) {
             printf("[AOT] Cache hit: %s up-to-date\n", exe_path);
             free(source);
             return 0;
