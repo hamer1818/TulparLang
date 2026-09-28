@@ -2380,6 +2380,13 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     olduğundan ve doğrulama kapısı zorunlu olduğundan, çalışan Linux yolunu
     bozma riskiyle körlemesine ABI değişikliği yapılmadı — Windows test
     erişimi gelene kadar açık bırakıldı.
+  - ✅ **KAPANDI — ÖLÇÜMLE (2026-09-27).** Windows CI 2026-09-21'den beri var
+    ama çok çerçeve vakası hiçbir platformda ölçülmüyordu (sonda tek çerçeve
+    gönderiyordu). `tests/ws_masked_client_smoke.py` artık AYNI bağlantıda
+    beş maskeli çerçeve gönderiyor (kısa, 16-bit uzunluk, tek `send`'de
+    BİTİŞİK iki çerçeve, son kısa) ve `build-windows` işi onu ayrı bir
+    adımda koşuyor: MinGW64'te **PASS** (Linux ve macOS'ta da). Güncel ağaçta
+    belirti yok; kod değişikliği gerekmedi. Kapı geri gelmesini önlüyor.
 
 - 🟢 **VM'de native struct desteği yok.** `tests/struct_native.test.tpr`
   altında 17/19 yeşil ama `_translate_x(Point p, int dx)` gibi
