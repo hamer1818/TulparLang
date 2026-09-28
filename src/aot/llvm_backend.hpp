@@ -415,6 +415,8 @@ typedef struct {
   LLVMValueRef func_aot_sleep_async;   // (i64 ms) -> ptr
   LLVMValueRef func_aot_gather;        // (ptr args, i32 argc) -> ptr
   LLVMValueRef func_aot_event_loop_run;// () -> void
+  LLVMValueRef func_aot_async_with_timeout; // (VMValue* p, VMValue* ms) -> VMValue
+  LLVMValueRef func_aot_async_cancel;       // (VMValue* p) -> VMValue
 
   // Fast String Operations
   LLVMValueRef func_aot_string_concat_fast;

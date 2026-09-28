@@ -1375,6 +1375,10 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // `gather(...promises)` gercekten degisken argumanli — asagidaki arite
       // muafiyetine eklendi.
       {"gather", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
+      // K112: zaman asimi + iptal. with_timeout promise dondurur (await'le
+      // acilir); ms int ya da float.
+      {"with_timeout", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"cancel", TYPE_BOOL, {TYPE_UNKNOWN}},
       // --- Denetimsiz kalan 40 builtin (2026-08-25) ---
       // Tabloda olmayan bir builtin HİÇ denetlenmiyor: dönüşü VOID sayılıyor,
       // o yüzden hem argümanları hem de sonucu kullanan her satır atlanıyor.

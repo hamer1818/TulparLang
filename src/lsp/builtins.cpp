@@ -258,6 +258,8 @@ const BuiltinEntry kBuiltins[] = {
     {"sleep",        "sleep(ms: int): void",                        "Verilen milisaniye kadar bekler (bloklar)."},
     {"sleep_async",  "sleep_async(ms: int): promise",               "Bloklamayan timer; `await sleep_async(ms)` ile kullanılır. AOT async."},
     {"gather",       "gather(...promises): promise",                "Tüm promise'leri eşzamanlı bekler, sonuçları dizi olarak verir. `let r = await gather(a, b);`"},
+    {"with_timeout", "with_timeout(p: promise, ms: int): promise",  "p `ms` milisaniyede yerine gelmezse \"zaman asimi / timeout\" ile reddedilir ve p'nin işi iptal edilir. `await with_timeout(getir(), 500)`; `try/catch` ile yakalanır."},
+    {"cancel",       "cancel(p: promise): bool",                    "Görevi kooperatif iptal eder: bir sonraki `await`'inde \"iptal edildi / cancelled\" fırlatır (yakalanabilir). gather iptali çocuklarını da iptal eder. Zaten bitmişse false."},
 
     // ---- File ----
     {"read_file",    "read_file(path: str): str",                   "Dosyayı EOF'a kadar okur (boyutu 0 bildiren /proc ve borular dahil). İkili güvenli: NUL içeren içerik aynen gelir. Açılamazsa null."},

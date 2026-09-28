@@ -61,6 +61,14 @@ void aot_event_loop_run(void);
 // 1 if the value is a promise.
 int aot_is_promise(VMValue v);
 
+// with_timeout(p, ms): p `ms` icinde yerine gelmezse ZAMAN ASIMI ile reddedilen
+// bir promise; zaman asiminda p'nin isi iptal edilir (K112).
+VMValue aot_async_with_timeout_ptr(VMValue *p, VMValue *ms);
+
+// cancel(p) -> bool: gorevi kooperatif olarak iptal et (bir sonraki await'te
+// "iptal edildi / cancelled" firlatir); gorevsiz promise dogrudan reddedilir.
+VMValue aot_async_cancel_ptr(VMValue *p);
+
 // Register a background-I/O completion source with the event loop. Each
 // scheduler tick the loop calls `poll(ud)` on the main thread; a non-zero
 // return means the source has finished — the loop drops it (the callback is

@@ -2138,6 +2138,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_event_loop_run() -> void
   LLVMTypeRef loop_type = LLVMFunctionType(backend->void_type, nullptr, 0, 0);
   backend->func_aot_event_loop_run = LLVMAddFunction(backend->module, "aot_event_loop_run", loop_type);
+  // aot_async_with_timeout_ptr(VMValue* p, VMValue* ms) -> VMValue (K112)
+  LLVMTypeRef wto_params[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef wto_type = llvm_make_vmvalue_func_type(backend, wto_params, 2, 0);
+  backend->func_aot_async_with_timeout =
+      LLVMAddFunction(backend->module, "aot_async_with_timeout_ptr", wto_type);
+  // aot_async_cancel_ptr(VMValue* p) -> VMValue(bool) (K112)
+  LLVMTypeRef cancel_params[] = {backend->ptr_type};
+  LLVMTypeRef cancel_type = llvm_make_vmvalue_func_type(backend, cancel_params, 1, 0);
+  backend->func_aot_async_cancel =
+      LLVMAddFunction(backend->module, "aot_async_cancel_ptr", cancel_type);
 
   // ====== Fast String Operations ======
   // aot_string_concat_fast_ptr(VMValue*, VMValue*) -> VMValue
@@ -9154,6 +9164,30 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           LLVMGlobalGetValueType(backend->func_aot_sleep_async),
           backend->func_aot_sleep_async, args, 1, "sleep_async_p");
       return llvm_build_vm_val_obj(backend, pr);
+    }
+
+    // with_timeout(p, ms) -> promise (K112): p `ms` icinde yerine gelmezse
+    // "zaman asimi / timeout" ile reddedilir ve p'nin isi iptal edilir.
+    // cancel(p) -> bool: gorevi kooperatif iptal eder (bir sonraki await'te
+    // "iptal edildi / cancelled" firlatir). Isaretci ABI'si: argumanlar
+    // yigina yazilip adresleri gecilir (kutulu deger, Win64/wasm by-value
+    // struct tuzagi yok).
+    if ((strcmp(bi_name, "with_timeout") == 0 && node->argument_count >= 2) ||
+        (strcmp(bi_name, "cancel") == 0 && node->argument_count >= 1)) {
+      const bool wto = bi_name[0] == 'w';
+      const int n = wto ? 2 : 1;
+      LLVMValueRef ptrs[2];
+      for (int i = 0; i < n; i++) {
+        LLVMValueRef av = codegen_expression(backend, node->arguments[i]);
+        LLVMValueRef slot = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, wto ? "wto_arg" : "cancel_arg");
+        LLVMBuildStore(backend->builder, av, slot);
+        ptrs[i] = slot;
+      }
+      return llvm_call_vmvalue_func(
+          backend,
+          wto ? backend->func_aot_async_with_timeout : backend->func_aot_async_cancel,
+          ptrs, n, wto ? "wto_res" : "cancel_res");
     }
 
     // gather(p1, p2, ...) -> promise of [v1, v2, ...]. Awaits every argument

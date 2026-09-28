@@ -291,6 +291,9 @@ typedef struct ObjPromise {
   void *waiters; // Task** (engine-private)
   int nwaiters;
   int cap_waiters;
+  // Bu promise'i ureten gorev (engine-private Task*; async fn / gather /
+  // with_timeout bagi). Gorev bitince null. cancel() buradan gorevi bulur.
+  void *task;
 } ObjPromise;
 
 // Heap-allocated struct (Plan 04 v2 — heap promotion).
