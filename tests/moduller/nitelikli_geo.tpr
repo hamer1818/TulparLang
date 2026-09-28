@@ -1,0 +1,6 @@
+// tests/nitelikli_tip.test.tpr modulu (K013): `import ... as g` ile gelir.
+struct Nokta2 { int x; int y; }
+struct Hiz { float vx; float vy; }
+enum Kose { SOL_UST, SAG_ALT }
+func yap(int a, int b): Nokta2 { return { x: a, y: b }; }
+func topla(Nokta2 p): int { return p.x + p.y; }

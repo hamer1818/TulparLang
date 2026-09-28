@@ -82,6 +82,14 @@ private:
     // (`Dusman[]` -> "Dusman"); dizi bildirimleri eleman struct adini
     // buradan alir (P1.1). Her parse_type girisinde sifirlanir.
     std::optional<std::string> last_type_custom_name_;
+    // K013: `import "geo" as g;` takma adlari (on tarama) ve son parse_type
+    // `g.Point` bicimindeyse true — cagiranin tip adi anlik goruntusu (alias
+    // adini tutar) last_type_custom_name_ ile duzeltilmeli.
+    std::vector<std::string> import_aliases_;
+    bool last_type_qualified_ = false;
+    bool is_import_alias(const std::string& name) const;
+    // Imlec `offset`teki token `ALIAS . AD` nitelikli tip adinin basi mi.
+    bool qualified_type_at(int offset) const;
     std::string parse_custom_type_name();
     
     // Error handling

@@ -1,0 +1,53 @@
+// MODUL NITELIKLI TIP ADI `g.Nokta2` (K013, 2026-09-27).
+//
+// `import "geo" as g;` sonrasi `g.Point p;` "ifadeden sonra ';'
+// bekleniyordu" ile ayristirilamiyordu (parse_type yalniz TANIMLAYICI
+// tabani aliyordu); niteliksiz `Point p;` calisiyordu. Artik takma ad +
+// nokta + ad bir tip adi: bildirim, parametre, donus, dizi, literal. Struct
+// ve enum adlari (fonksiyonlarin aksine) takma adla yeniden adlandirilmiyor —
+// nitelikli yazim ayni tipi adlar.
+//
+// Yolda: `Nokta2 q = g.yap(5, 6);` (takma adli modulden struct donduren
+// cagri) SESSIZCE sifirdi — VarDecl alicinin cozumunden once struct donusu
+// ariyordu. Eski derleyiciyle bu paket derlenmiyor.
+// Calistir (depo kokunden): ./tulpar tests/nitelikli_tip.test.tpr
+import "test";
+import "tests/moduller/nitelikli_geo.tpr" as g;
+
+func iki_kat(g.Nokta2 a): g.Nokta2 { return { x: a.x * 2, y: a.y * 2 }; }
+
+func run_bildirim() {
+    g.Nokta2 p;
+    p.x = 3;
+    p.y = 4;
+    assert_eq_int(p.x + p.y, 7);
+    g.Nokta2 r = { x: 1, y: 2 };
+    assert_eq_int(g.topla(r), 3);
+    g.Hiz h = { vx: 0.5, vy: 1.5 };
+    assert_close(h.vx + h.vy, 2.0, 0.000001);
+}
+
+func run_cagri_ve_donus() {
+    g.Nokta2 q = g.yap(5, 6);            // eskiden q = {0, 0} (sessiz)
+    assert_eq_int(q.x, 5);
+    assert_eq_int(g.topla(q), 11);
+    g.Nokta2 s = iki_kat(q);
+    assert_eq_int(s.y, 12);
+    Nokta2 nitsiz = g.yap(1, 1);         // niteliksiz ad da ayni tip
+    assert_eq_int(g.topla(nitsiz), 2);
+}
+
+func run_dizi_ve_enum() {
+    g.Nokta2[] ps = [];
+    push(ps, g.yap(7, 8));
+    assert_eq_int(len(ps), 1);
+    assert_eq_int(ps[0].y, 8);
+    g.Kose k = Kose.SAG_ALT;
+    assert_eq_int(k, 1);
+}
+
+print("=== nitelikli tip adi ===");
+test("g.Tip bildirim + literal", "run_bildirim");
+test("g.Tip parametre/donus + takma adli struct donduren cagri", "run_cagri_ve_donus");
+test("g.Tip[] ve g.Enum", "run_dizi_ve_enum");
+test_summary();
