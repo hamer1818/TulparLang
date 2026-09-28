@@ -100,6 +100,10 @@ struct TypeInferContext {
   // edilen modülden gelmiş olabilir (typeinfer modül kaynağını parse etmiyor,
   // aynı sebeple import edilen bilinmeyen fonksiyonlara da uyarı vermez).
   bool has_imports = false;
+  // K053: `var` global'lerin tipini on-geciste cikarirken infer_expr'in
+  // tanilari BASILMASIN / SAYILMASIN (ana gezinti ayni ifadeyi yeniden
+  // denetler; ikinci kez raporlamak cift tani olurdu).
+  bool silent = false;
 };
 
 // ============================================================================

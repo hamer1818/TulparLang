@@ -622,6 +622,21 @@ düzey, aynı dosya; nominal değil. Bkz. `plans/08_oyun_dili_p0.md`.
   `HTTP/1.1 500` enjekte ediyordu. Üç fazlı sözleşme yazıldı ve
   `tests/stream_contract_smoke.py` ile kilitlendi.
 
+### Düzeltildi — `var` global'in tipi bildirim sırasına bağlıydı (P23-v2)
+
+- `func oku(): int { return length(sayac); }  var sayac = 5;` typecheck'ten
+  geçiyordu (aynısı `int sayac` ile yakalanıyordu): P23 ön geçidi yalnız açık
+  tipli global'leri kaydediyordu. Artık `var` global'lerin başlatıcısı ön
+  geçitte **sessizce** çıkarılıyor (tanı basılmaz/sayılmaz, sembol tablosu yan
+  etkileri geri alınır), başka bir `var`a dayanan için sabit noktaya kadar
+  (≤4 tur).
+- Yolda: `var x = e;` başlatıcısı iki kez geziliyordu, içindeki her tanı İKİ
+  KEZ basılıyordu (`var ikiz = sayac * 2;` üstünde "NOT YET INITIALISED" iki
+  satır). Artık bir kez.
+- Korpus tanı tabanı değişmedi (9); tulpar-engine/tulpar 1 → 1.
+- Nöbetçi: `tests/typeinfer/fail/23_var_global_use_before_decl.tpr` (eski
+  derleyici "ok"), `pass/17_var_global_use_before_decl.tpr`.
+
 ### Yeni — paylaşılan global lint'i
 
 `thread_create` işçisinde yazılıp ana akışta senkronizasyonsuz okunan bir

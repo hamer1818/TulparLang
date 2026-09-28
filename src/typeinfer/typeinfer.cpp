@@ -28,6 +28,7 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr);
 void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt);
 
 static void report_error(TypeInferContext *ctx, const char *format, ...) {
+  if (ctx->silent) return;  // K053 on-gecisi: bkz. typeinfer.hpp
   char buffer[512];
   va_list args;
   va_start(args, format);
@@ -772,12 +773,17 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       }
       ctx->future_symbols.erase(decl->name);
     }
+    // Baslatici BIR KEZ cikarilir. Eskiden `var x = e;` icin e iki kez
+    // gezildi ve icindeki her tani IKI KEZ basildi (olculdu 2026-09-27:
+    // `var ikiz = sayac * 2;` "NOT YET INITIALISED" satirini iki kez basiyor,
+    // tani sayaci 2 diyordu).
+    DataType init_type = TYPE_UNKNOWN;
+    if (decl->initializer) init_type = infer_expr(ctx, decl->initializer.get());
     if ((declared_type == TYPE_VOID || declared_type == TYPE_UNKNOWN) &&
         decl->initializer) {
-      declared_type = infer_expr(ctx, decl->initializer.get());
+      declared_type = init_type;
     }
     if (decl->initializer) {
-      DataType init_type = infer_expr(ctx, decl->initializer.get());
       // Skip the check when either side is unknown: TYPE_VOID often means
       // "expression returns from a built-in we haven't catalogued";
       // TYPE_CUSTOM means a user-declared struct whose field set typeinfer
@@ -2184,6 +2190,46 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       if (const auto *imp = as_node<ImportStatement>(stmt.get())) {
         register_module_exports(ctx, imp->path, imp->alias, visited, 0);
       }
+    }
+  }
+
+  // P23-v2 (K053, 2026-09-27): `var` GLOBAL'lerin tipi de SIRADAN BAGIMSIZ.
+  // Yukaridaki on-gecis yalniz acik tipli global'leri kaydediyordu: `func
+  // oku(): int { return length(sayac); }  var sayac = 5;` KACIYORDU (ayni
+  // sey `int sayac` ile yakalaniyordu). Burada baslatici SESSIZCE cikariliyor
+  // (tani basilmaz/sayilmaz — ana gezinti ayni ifadeyi yeniden denetler);
+  // yan etkiler (sembol tablosu) tur sonunda geri aliniyor, yalniz bulunan
+  // global tipleri ekleniyor. Bir `var` baska bir, daha ASAGIDA bildirilen
+  // `var`'a dayanabilir: sabit noktaya kadar (en cok 4 tur).
+  {
+    std::vector<const VariableDecl *> var_globals;
+    for (const auto &stmt : prog->statements) {
+      const auto *gv = as_node<VariableDecl>(stmt.get());
+      if (gv && gv->initializer &&
+          (gv->data_type == TYPE_UNKNOWN || gv->data_type == TYPE_VOID) &&
+          !ctx->symbols.count(gv->name))
+        var_globals.push_back(gv);
+    }
+    for (int round = 0; round < 4 && !var_globals.empty(); round++) {
+      const auto saved_symbols = ctx->symbols;
+      const bool saved_silent = ctx->silent;
+      const int saved_errors = ctx->error_count;
+      ctx->silent = true;
+      std::vector<std::pair<const VariableDecl *, DataType>> found;
+      for (const auto *gv : var_globals) {
+        DataType t = infer_expr(ctx, gv->initializer.get());
+        if (t != TYPE_UNKNOWN && t != TYPE_VOID && t != TYPE_UNSPECIFIED)
+          found.emplace_back(gv, t);
+      }
+      ctx->silent = saved_silent;
+      ctx->error_count = saved_errors;
+      ctx->symbols = saved_symbols;
+      if (found.empty()) break;
+      for (const auto &f : found) typeinfer_add_symbol(ctx, f.first->name.c_str(), f.second);
+      std::vector<const VariableDecl *> rest;
+      for (const auto *gv : var_globals)
+        if (!ctx->symbols.count(gv->name)) rest.push_back(gv);
+      var_globals.swap(rest);
     }
   }
 

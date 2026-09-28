@@ -1,0 +1,18 @@
+// P23-v2 (K053, 2026-09-27): 14_global_use_before_decl'in `var` ikizi.
+//
+// P23 on-gecisi yalniz ACIK tipli global'leri kaydediyordu; `var`in tipi
+// baslaticidan cikiyor ve on-geciste cikarilmiyordu. Bu dosya bu yuzden
+// `tulpar typecheck`ten "ok" ile geciyordu (FINDINGS.md:241 "P23-v2 adayi").
+// `ikiz` baska bir `var`a (sayac) dayaniyor: on-gecis sabit noktaya kadar doner.
+func oku(): int {
+    return length(sayac);   // sayac bir int; length(int) hatadir
+}
+func oku2(): int {
+    return length(ikiz);    // ikiz = sayac * 2, o da int
+}
+var sayac = 5;
+var ikiz = sayac * 2;
+print(oku());
+print(oku2());
+// EXPECT: Argument 1 of 'length': expected string, array or json, got int at line 8
+// EXPECT: Argument 1 of 'length': expected string, array or json, got int at line 11

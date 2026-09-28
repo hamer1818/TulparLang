@@ -1,0 +1,16 @@
+// 10_global_use_before_decl'in `var` ikizi (K053): bildirimden once
+// kullanilan DOGRU tipli `var` global'i sessizce gecmeli; on-gecisin sessiz
+// cikarimi ikinci bir tani (cift rapor) uretmemeli.
+func oku(): int {
+    return sayac + 1;
+}
+func yaz(): str {
+    return ad + "!";
+}
+var ad = "x";
+var sayac = 5;
+var liste = [1, 2, 3];
+func boy(): int { return length(liste); }
+print(oku());
+print(yaz());
+print(boy());
