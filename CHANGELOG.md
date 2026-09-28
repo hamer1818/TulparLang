@@ -147,6 +147,24 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   kontrol her koşumda (işaretli içerik bulunmamalı); elle: satır sökülünce
   mekanizma ayağı, lib dosyası değişip ikili yenilenmeyince etki ayağı
   kırmızı.
+### Düzeltildi — örnek smoke'larında port çakışması: probe atılmadan PASS, Windows'ta rastgele FAIL
+
+- `build.sh test` örnekleri `xargs -P` ile paralel koşuyor, ama `api_wings` ile
+  `api_wings_crud` ikisi de 3000'i, `11_router_app` / `api_router_crud` /
+  `09_socket_server` / `14_api_server` 8080'i dinliyordu. Linux'ta bind'i düşen
+  sunucu "Port kullanımda" deyip exit 0 ile çıkıyor ve "2 sn içinde temiz çıktı →
+  PASS" dalı onu probe hiç atılmadan geçiriyordu (ölçüldü: 3001'i başka süreç
+  tutarken `api_wings_crud` → `PASS (compile-only +smoke)`). Windows'ta
+  SO_REUSEADDR aynı portu iki sürece birden verdiği için probe ölen sürece düşüp
+  `probe_failed_no_response` veriyordu (#358'in Windows işi iki kez).
+- Portlar ayrıldı: `api_wings_crud` 3001, `11_router_app` 8081, `api_router_crud`
+  8082. İki kilit: `smoke_probe_for` tablosunda aynı port koşum başlamadan HATA;
+  probe'u olan örnek probe'dan önce çıkarsa (exit 0 olsa da) `FAIL (smoke
+  server_exited_before_probe)`. Pozitif kontroller: port dolu iken FAIL, tabloya
+  tekrar eklenince HATA; tam koşumda `api_router_crud` 8080 çakışmasını ikinci
+  kilit yakaladı.
+- `demo_users_api.tpr` başlığı `8080` diyordu; `serve()` varsayılanı 8484.
+
 ### Düzeltildi — `tulpar debug` hiç `stopped`/`terminated` olayı göndermiyordu
 
 - gdb `*stopped,reason="breakpoint-hit"` ve `exited-normally` kayıtlarını
