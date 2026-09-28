@@ -29,7 +29,9 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 > indirdi. Artık kilitli sürüm aralığı karşıladıkça kullanılıyor (`--update`
 > yeniden çözer) ve arşiv `tulpar_modules/<ad>/.<ad>.tpkg` olarak saklanıyor;
 > isabet için arşiv özeti + açılmış her dosyanın aynen durması gerekiyor. Açık:
-> projeler arası global önbellek (`~/.cache/tulpar`) yok; birden çok registry/ayna yok.
+> projeler arası global önbellek (`~/.cache/tulpar`) yok. **Aynalar** var (2026-09-28):
+> `[registry] mirrors = [...]` okuma yedeği, lock hangi aynadan geldiğini kaydeder ve aynı
+> ad@sürümün sha256'sı aynalar arasında da tutmalı; `publish` yalnız `url`'e.
 
 ## Analiz — `tulpar analyze` (K157, 2026-09-29)
 `src/cli/analyze_cmd.cpp`: derlemeden/linklemeden (i) dosyanın her üst düzey fonksiyonu için

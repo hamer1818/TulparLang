@@ -704,6 +704,27 @@ std::string locked_registry_version(const std::string &registry_url,
     return ver;
 }
 
+// Read registries in order: `[registry] url`, then `mirrors` (K251). A
+// mirror is a read fallback — tried when an earlier registry is unreachable
+// or answers non-2xx; the first 2xx wins. Trailing slashes trimmed.
+std::vector<std::string> registry_list(const Manifest &m) {
+    std::vector<std::string> out;
+    auto add = [&](std::string u) {
+        while (!u.empty() && u.back() == '/') u.pop_back();
+        if (u.empty()) return;
+        for (const auto &x : out) if (x == u) return;
+        out.push_back(u);
+    };
+    add(m.registry_url);
+    for (const auto &u : m.registry_mirrors) add(u);
+    return out;
+}
+
+std::string registry_source_url(const std::string &reg, const std::string &name,
+                                const std::string &version) {
+    return reg + "/v1/packages/" + name + "/versions/" + version + "/source";
+}
+
 int cmd_install(int argc, char **argv) {
     // `--update`: re-resolve range specs against the registry instead of
     // reusing the version pinned in tulpar.lock (npm update / cargo update).
@@ -961,7 +982,8 @@ int cmd_install(int argc, char **argv) {
         // Plain "1.2.3" stays exact — the lookup still hits the same
         // endpoint, just without the resolution step.
         if (spec.rfind("path:", 0) != 0) {
-            if (m.registry_url.empty()) {
+            const std::vector<std::string> regs = registry_list(m);
+            if (regs.empty()) {
                 std::fprintf(stdout,
                              "  - %s (%s) — no `[registry] url` configured; "
                              "use `path:./dir` or `url:http://...` for now\n",
@@ -981,12 +1003,20 @@ int cmd_install(int argc, char **argv) {
             // spec; `--update` re-resolves. Measured 2026-09-27 with a
             // local fake registry (tests/pkg_registry_audit.py).
             std::string pinned;
+            // Which registry served the locked URL (primary or a mirror) —
+            // it is tried first for the download.
+            std::string used_reg = regs[0];
             if (is_range_spec(spec) && !update) {
                 auto rit = prev_resolved.find(name);
                 if (rit != prev_resolved.end()) {
-                    std::string v =
-                        locked_registry_version(m.registry_url, name, rit->second);
-                    if (!v.empty() && match_range(spec, v)) pinned = v;
+                    for (const auto &r : regs) {
+                        std::string v = locked_registry_version(r, name, rit->second);
+                        if (!v.empty() && match_range(spec, v)) {
+                            pinned = v;
+                            used_reg = r;
+                            break;
+                        }
+                    }
                 }
             }
             if (!pinned.empty()) {
@@ -995,12 +1025,26 @@ int cmd_install(int argc, char **argv) {
                              name.c_str(), spec.c_str(), pinned.c_str());
             } else if (is_range_spec(spec)) {
                 std::vector<std::string> available;
-                std::string err;
-                if (!fetch_versions(m.registry_url, name, available, err)) {
+                std::string err, all_err;
+                bool got = false;
+                for (const auto &r : regs) {
+                    available.clear();
+                    err.clear();
+                    if (fetch_versions(r, name, available, err)) {
+                        got = true;
+                        used_reg = r;
+                        if (r != regs[0])
+                            std::fprintf(stdout, "  ~ %s: ayna kullanildi (%s)\n",
+                                         name.c_str(), r.c_str());
+                        break;
+                    }
+                    all_err += (all_err.empty() ? "" : "; ") + r + ": " + err;
+                }
+                if (!got) {
                     std::fprintf(stderr,
                                  "tulpar pkg install: %s@%s: range resolve "
                                  "failed: %s\n",
-                                 name.c_str(), spec.c_str(), err.c_str());
+                                 name.c_str(), spec.c_str(), all_err.c_str());
                     return 1;
                 }
                 resolved_version = pick_best_match(spec, available);
@@ -1016,13 +1060,16 @@ int cmd_install(int argc, char **argv) {
                 std::fprintf(stdout, "  > %s@%s -> resolved %s\n", name.c_str(),
                              spec.c_str(), resolved_version.c_str());
             }
-            std::string url = m.registry_url;
-            if (!url.empty() && url.back() == '/') url.pop_back();
-            url += "/v1/packages/";
-            url += name;
-            url += "/versions/";
-            url += resolved_version;
-            url += "/source";
+            // Exact version with no range resolution: the lock may name a
+            // mirror — keep using it if it is still in the list.
+            if (!is_range_spec(spec)) {
+                auto rit = prev_resolved.find(name);
+                if (rit != prev_resolved.end())
+                    for (const auto &r : regs)
+                        if (rit->second == registry_source_url(r, name, resolved_version))
+                            used_reg = r;
+            }
+            std::string url = registry_source_url(used_reg, name, resolved_version);
 
             if (local_matches_lock(name, url)) {
                 std::fprintf(stdout,
@@ -1031,30 +1078,54 @@ int cmd_install(int argc, char **argv) {
                 lock_entries.push_back({name, url, prev_sha[name]});
                 installed++;
                 if (wants_binary(m, name)) {
-                    try_fetch_binary(m.registry_url, name, resolved_version,
+                    try_fetch_binary(used_reg, name, resolved_version,
                                      modules_dir / name);
                 }
                 continue;
             }
 
+            // Download: the chosen registry first, then the others in order.
             std::string body, err;
             int status = 0;
-            if (!tulpar::http_fetch_url(url, body, status, err)) {
-                std::fprintf(stderr,
-                             "tulpar pkg install: %s@%s: registry fetch "
-                             "failed: %s\n",
-                             name.c_str(), spec.c_str(), err.c_str());
-                return 1;
-            }
-            if (status < 200 || status >= 300) {
-                std::fprintf(stderr,
-                             "tulpar pkg install: %s@%s: HTTP %d from %s\n",
-                             name.c_str(), spec.c_str(), status, url.c_str());
-                return 1;
+            {
+                std::vector<std::string> order{used_reg};
+                for (const auto &r : regs) if (r != used_reg) order.push_back(r);
+                std::string all_err;
+                bool ok = false;
+                for (const auto &r : order) {
+                    std::string u = registry_source_url(r, name, resolved_version);
+                    body.clear(); err.clear(); status = 0;
+                    if (tulpar::http_fetch_url(u, body, status, err) &&
+                        status >= 200 && status < 300) {
+                        ok = true;
+                        url = u;
+                        used_reg = r;
+                        break;
+                    }
+                    all_err += (all_err.empty() ? "" : "; ") + u + ": " +
+                               (err.empty() ? "HTTP " + std::to_string(status) : err);
+                }
+                if (!ok) {
+                    std::fprintf(stderr,
+                                 "tulpar pkg install: %s@%s: registry fetch "
+                                 "failed: %s\n",
+                                 name.c_str(), spec.c_str(), all_err.c_str());
+                    return 1;
+                }
             }
             std::string body_sha = tulpar::sha256_hex(body);
             auto sit = prev_sha.find(name);
-            if (sit != prev_sha.end() && prev_resolved[name] == url &&
+            // The pin also holds ACROSS registries: the same name@version
+            // from a mirror must be byte-identical to what the lock recorded
+            // from the primary (and vice versa) — a mirror serving different
+            // bytes is exactly what the checksum exists to catch.
+            bool same_pkg_locked = prev_resolved[name] == url;
+            if (!same_pkg_locked) {
+                for (const auto &r : regs)
+                    if (prev_resolved[name] == registry_source_url(r, name, resolved_version))
+                        same_pkg_locked = true;
+            }
+            if (sit != prev_sha.end() && same_pkg_locked &&
                 sit->second != body_sha) {
                 std::fprintf(stderr,
                              "tulpar pkg install: %s@%s: lockfile sha256 "
@@ -1127,7 +1198,7 @@ int cmd_install(int argc, char **argv) {
             lock_entries.push_back({name, url, body_sha});
             installed++;
             if (wants_binary(m, name)) {
-                try_fetch_binary(m.registry_url, name, resolved_version, dest_dir);
+                try_fetch_binary(used_reg, name, resolved_version, dest_dir);
             }
             continue;
         }
@@ -1666,6 +1737,16 @@ int cmd_search(int argc, char **argv) {
 
     std::string err;
     cJSON *doc = fetch_catalog(registry, err);
+    if (!doc && flag_registry.empty()) {
+        // Mirrors (K251): only when the registry came from the manifest.
+        for (const auto &r : registry_list(m)) {
+            if (r == registry) continue;
+            std::string e2;
+            doc = fetch_catalog(r, e2);
+            if (doc) break;
+            err += "; " + r + ": " + e2;
+        }
+    }
     if (!doc) {
         std::fprintf(stderr, "tulpar pkg search: %s\n", err.c_str());
         return 1;
@@ -1768,7 +1849,20 @@ int cmd_info(int argc, char **argv) {
     std::string body;
     int status = 0;
     std::string err;
-    if (!tulpar::http_fetch_url(url, body, status, err)) {
+    bool fetched = tulpar::http_fetch_url(url, body, status, err);
+    if ((!fetched || status < 200 || status >= 300) && flag_registry.empty()) {
+        // Mirrors (K251): only when the registry came from the manifest.
+        for (const auto &r : registry_list(m)) {
+            if (r == registry) continue;
+            std::string u = r + "/v1/packages/" + name, b, e2;
+            int s = 0;
+            if (tulpar::http_fetch_url(u, b, s, e2) && s >= 200 && s < 300) {
+                fetched = true; body = b; status = s; url = u; registry = r;
+                break;
+            }
+        }
+    }
+    if (!fetched) {
         std::fprintf(stderr, "tulpar pkg info: %s\n", err.c_str());
         return 1;
     }
@@ -1893,8 +1987,10 @@ void print_usage() {
         "  url = \"https://api.pkg.tulparlang.dev\"\n"
         "\n"
         "Override via `--registry <url>`, TULPAR_REGISTRY env, or by editing\n"
-        "that line directly. Publish auth: TULPAR_PUBLISH_TOKEN env or\n"
-        "`--token <tok>`.\n");
+        "that line directly. Read-only fallbacks for install/search/info:\n"
+        "  mirrors = [\"https://mirror-a\", \"https://mirror-b\"]\n"
+        "(tried in order when `url` fails; publish always uses `url`).\n"
+        "Publish auth: TULPAR_PUBLISH_TOKEN env or `--token <tok>`.\n");
 }
 
 }  // namespace
