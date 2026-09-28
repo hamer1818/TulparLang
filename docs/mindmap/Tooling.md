@@ -66,7 +66,16 @@ ipucuyla düşmesi. gdb yoksa (macOS CI) görünür atlanır; Linux CI'da
 > diyordu — ama VS Code'da breakpoint'te duraklama görünmüyor, oturum program
 > bitince kapanmıyor, logpoint sessiz bir duraklamaya dönüşüyordu. Ders: istek
 > ↔ cevap çalışıyor diye OLAY yolu çalışıyor sayılmaz; kapı olayları bekliyor.
-> Ölçülmeyen: data/instruction breakpoint, pretty-printer (değerler ham `VMValue`).
+> Ölçülmeyen: data/instruction breakpoint.
+
+**Değerler okunur (2026-09-27).** Her Tulpar yereli DWARF'ta 128 bitlik opak `VMValue`
+temel tipi; gdb/DAP `str ad = "Hamza"` için `130514698818214998946349060` basıyordu.
+`tools/gdb/tulpar_printers.py` etiketi + yükü çözüyor (`"Hamza"`, `2.5`, `[1, 2, 3]`,
+`{"k": 7}`, `true`); bağdaştırıcı onu ikiliye gömülü taşıyor ve gdb'yi başlatınca
+yüklüyor, düz gdb kullanıcısı için `tulpar debug --gdb-script > t.py` + `source t.py`.
+Nesne düzeni (`ObjString`/`ObjArray`/`ObjObject` ofsetleri) runtime DWARF'sız
+linklendiği için betikte YAZILI — `vm.hpp`'de düzen değişirse `dap_audit.py`'nin
+"okunur değerler" senaryosu kızarır.
 
 ## Self-update
 `src/cli/update_cmd.cpp` — `tulpar update [--check] [--force]`, GitHub Releases'ten;

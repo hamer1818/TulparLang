@@ -524,7 +524,9 @@ your distro's package on Linux (`apt install gdb`, `pacman -S gdb`),
 `pacman -S mingw-w64-x86_64-gdb` in an MSYS2 MINGW64 shell on Windows.
 There is no lldb backend yet — on Apple Silicon build with
 `tulpar --debug build x.tpr x` and use `lldb ./x` directly. Without gdb,
-`launch` fails with that install hint instead of hanging.
+`launch` fails with that install hint instead of hanging. Values show decoded
+(`"Hamza"`, `[1, 2, 3]`, `{"k": 7}`) through an embedded gdb pretty-printer; for a
+plain gdb session, `tulpar debug --gdb-script > t.py` and `(gdb) source t.py`.
 
 CLI output language follows the system locale — Turkish on TR
 machines, English everywhere else. Override with `TULPAR_LANG=tr` or

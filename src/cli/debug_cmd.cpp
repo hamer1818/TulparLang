@@ -37,6 +37,8 @@
 #include "debug_cmd.hpp"
 #include "../aot/aot_pipeline.hpp"
 #include "../common/localization.hpp"
+// tools/gdb/tulpar_printers.py, derleme dizinine gömülü (cmake/EmbedLibraries.cmake).
+#include "tulpar_gdb_printers.h"
 
 extern "C" {
 #include "../../runtime/cJSON.h"
@@ -48,6 +50,8 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <sys/stat.h>
@@ -1141,6 +1145,50 @@ char *slurp_file(const char *path) {
 // result code in the message — the DAP client renders that in its
 // "DEBUG CONSOLE" pane verbatim. gdb spawn / `-exec-run` /
 // `stopped` event come in PR 4c.
+// Load the embedded VMValue pretty-printer into the running gdb. Every
+// Tulpar local is a 128-bit opaque `VMValue` in DWARF, so without it
+// `variables` / `evaluate` / hover show `130514698818214998946349060` for
+// `str ad = "Hamza"` (measured 2026-09-27). With it: `"Hamza"`, `2.5`,
+// `[1, 2, 3]`, `{"k": 7}`. Best effort — a failure is logged, never fatal:
+// the adapter still works with raw values.
+static void load_gdb_printers() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::path dir = fs::temp_directory_path(ec);
+  if (ec) {
+    std::fprintf(stderr, "[dap] printers: no temp dir (%s)\n", ec.message().c_str());
+    return;
+  }
+  fs::path script = dir / "tulpar_gdb_printers.py";
+  {
+    std::ofstream out(script, std::ios::binary | std::ios::trunc);
+    if (!out) {
+      std::fprintf(stderr, "[dap] printers: cannot write %s\n", script.string().c_str());
+      return;
+    }
+    out << kTulparGdbPrinters;
+  }
+  // MI c-string: forward slashes (gdb accepts them on Windows too), and
+  // escape `"` / `\\` for the quoted console command.
+  std::string path = script.generic_string();
+  std::string esc;
+  for (char c : path) {
+    if (c == '"' || c == '\\') esc.push_back('\\');
+    esc.push_back(c);
+  }
+  int tok = g_gdb.send_command("-interpreter-exec console \"source " + esc + "\"",
+                               /*prefix_token=*/true);
+  std::string res = tok ? g_gdb.wait_for_result(tok, 5000) : std::string();
+  if (res.compare(0, 5, "^done") != 0) {
+    std::fprintf(stderr, "[dap] printers: source failed: %s\n", res.c_str());
+    return;
+  }
+  tok = g_gdb.send_command("-enable-pretty-printing", /*prefix_token=*/true);
+  if (tok) g_gdb.wait_for_result(tok, 5000);
+  std::fprintf(stderr, "[dap] printers: VMValue pretty-printer loaded (%s)\n",
+               path.c_str());
+}
+
 void handle_launch(cJSON *request) {
   cJSON *args = cJSON_GetObjectItem(request, "arguments");
 
@@ -1278,6 +1326,7 @@ void handle_launch(cJSON *request) {
     }
   }
 
+  load_gdb_printers();
   g_launched = true;
 
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
@@ -2206,7 +2255,13 @@ void handle_variables(cJSON *request) {
       if (value.empty()) {
         child_ref = try_make_drilldown_ref(name);
         if (child_ref == 0) {
-          value = "<aggregate>";
+          // No children: ask gdb to print it — this path goes through the
+          // pretty-printer (Tulpar's VMValue is a 128-bit leaf that some
+          // gdb versions leave valueless under --simple-values).
+          std::string ev = gdb_query("-data-evaluate-expression \"" + name + "\"");
+          std::string evv = (ev.compare(0, 5, "^done") == 0) ? mi_field(ev, "value")
+                                                             : std::string();
+          value = evv.empty() ? "<aggregate>" : evv;
         }
       }
 
@@ -2525,9 +2580,17 @@ int debug_cmd_main(int argc, char **argv) {
   // diagnostics come later, when the debugger actually tries to use
   // it; for now we only validate that *something* was passed so the
   // DAP scaffold has a placeholder to log against.
+  // `tulpar debug --gdb-script`: print the embedded VMValue pretty-printer
+  // so a plain gdb / CLI user of an INSTALLED tulpar (no tools/ dir) can
+  // `source` it: `tulpar debug --gdb-script > t.py` then `(gdb) source t.py`.
+  if (argc >= 3 && std::strcmp(argv[2], "--gdb-script") == 0) {
+    std::fputs(kTulparGdbPrinters, stdout);
+    return 0;
+  }
   if (argc < 3) {
     std::fprintf(stderr,
                  "Usage: tulpar debug <file.tpr>\n"
+                 "       tulpar debug --gdb-script   (print the gdb pretty-printer)\n"
                  "Opens a DAP-speaking stdio server. Connect with VS Code's "
                  "\"Run and Debug\" panel (configured via the vscode-tulpar "
                  "extension) or any other DAP client.\n");
