@@ -872,6 +872,22 @@ değişmeden yeşil.
 - Nöbetçi: `tests/tuple_return.test.tpr` (+3 test; eskisiyle derlenmiyor),
   `tests/tuple_hatalari.sh` (10/10; satır denetimi eskisiyle `:3` görüyor).
 
+### Düzeltildi — `tulpar update` ve `install.ps1` Windows'ta sürümde olmayan dosyaları indiriyordu
+
+- `tulpar update` Windows'ta `tulpar-windows-x64.exe` ve MinGW DLL'lerini ayrı
+  sürüm varlıkları olarak indiriyor, sitedeki `install.ps1` de aynı adları
+  bekliyordu; sürümler yalnız `tulpar-windows-x64.zip` yayınlıyordu — ikisi
+  de indirme adımında düşüyordu. Güncelleyicinin DLL listesi ayrıca OpenSSL
+  DLL'lerini (`libssl-3-x64.dll`, `libcrypto-3-x64.dll`) içermiyordu.
+  Zip'in içeriği artık ayrıca, tek tek yayınlanıyor ve SHA256SUMS'ta;
+  güncelleyici beş DLL'in hepsini indiriyor (ilk kez bir SONRAKİ sürümde
+  etkili — varlıklar o sürümle gelir).
+- Kapı `tests/surum_varliklari.py` (`build.sh suites`): güncelleyicinin
+  indirdiği her varlık yayın listesinde ve SHA256SUMS'ta mı, Windows DLL
+  listesi CI DLL kapısınınkiyle aynı mı. Eski kaynakla 9 hata.
+- README: var olmayan `build.ps1`/`build.bat` yerine MSYS2 + `build.sh`;
+  Windows paketinin program derlemek için `clang++` istediği notu.
+
 ### Added — `enum`: adlandırılmış tamsayı sabitleri (P0.2)
 
 Durum makineleri `int EKRAN_MENU = 0; int EKRAN_OYUN = 1;` diye sihirli
