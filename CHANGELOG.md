@@ -1087,6 +1087,35 @@ alternatifi üretilen kodun sessizce yanlış adrese yazmasıydı.
   (4 EXPECT), `pass/21_no_alloc_ok.tpr`. 14 kıyasın optimizasyon sonrası IR'ı
   birebir aynı; korpus tanı tabanı 0 (değişmedi).
 
+### Eklendi — atomikler (`atomic_load/store/add/sub/xchg/cas`) ve `@thread_local` global
+
+- Dilin bellek modeli yoktu: thread'ler arası paylaşılan sayaç ya kilitle
+  korunuyor ya da **tanımsız** davranıyordu. Ölçüm (bu makine, 2026-09-28):
+  4 thread × 500 000 `n = n + 1` → **1 541 006 – 1 557 144** (artışların
+  ~%23'ü düşüyor); aynı döngü `atomic_add` ile tam **2 000 000**. Kullanıcıya
+  açık atomik yoktu (`atomic_add` → "fonksiyon bulunamadı"); tek iz
+  derleyicinin içindeki wings sayacı beyaz listesiydi.
+- `atomic_load(g)`, `atomic_store(g, v)`, `atomic_add/sub/xchg(g, d)`
+  (**eski** değeri döndürür), `atomic_cas(g, beklenen, yeni)` (yazıldı mı) —
+  `g` üst düzey bir `int` global (native i64; LLVM `load/store atomic`,
+  `atomicrmw`, `cmpxchg`). İsteğe bağlı son argüman bellek sırası:
+  `"relaxed"`, `"acquire"`, `"release"`, `"acq_rel"`, `"seq_cst"`
+  (varsayılan); geçersiz bileşim (acquire yazma, release okuma) derleme hatası.
+- `@thread_local int x = 0;` — her thread'in kendi kopyası (TLS, InitialExec;
+  wings'in `_request`'i için zaten kullanılan mekanizma). Şimdilik
+  int/float/bool ve yalnız üst düzey; başlatıcı ana thread'de koşar, diğer
+  thread'ler sıfırdan başlar.
+- `thread_lint` ile ilişki: atomik okuma senkronize (uyarı yok), atomik yazma
+  YAZMA sayılıyor (aynı global'i düz okumak hâlâ uyarı — `atomic_store(f, 1)`
+  + `while (f == 0)` aynı tuzak), `@thread_local` global paylaşılmıyor (lint
+  dışı). Atomikler `@no_alloc` beyaz listesinde. typeinfer + LSP kaydı,
+  `builtin_audit` temiz.
+- Nöbetçi: `tests/atomik.test.tpr` (3 test: tek thread işlemleri; 4 thread ×
+  50 000 `atomic_add` → tam 200 000 ve `@thread_local` sayaçlar ayrı;
+  release/acquire yayını), `tests/atomik_hatalari.sh` 12/12 (8 derleme
+  hatası, 3 lint yönü, pozitif kontrol; eski derleyiciyle 10'u kırmızı).
+  14 kıyasın optimizasyon sonrası IR'ı birebir aynı.
+
 ### Added — `array_fill(n, deger)`: diziyi tek çağrıda kur
 
 n elemanlı bir dizi kurmanın tek yolu n kez `push` çağırmaktı. Ölçüldü: çağrı

@@ -1040,21 +1040,58 @@ void frame_desugar(FunctionDecl &fd) {
 
 std::unique_ptr<ASTNode> Parser::parse_attributed_function() {
     const int at_line = current().line();
-    bool frame = false, no_alloc = false;
+    bool frame = false, no_alloc = false, thread_local_attr = false;
     while (match(TOKEN_AT)) {
         Token a = expect(TOKEN_IDENTIFIER, "Expected attribute name after '@'");
         if (a.value() == "frame") {
             frame = true;
         } else if (a.value() == "no_alloc") {
             no_alloc = true;
+        } else if (a.value() == "thread_local") {
+            thread_local_attr = true;
         } else {
             error(std::string(tulpar::i18n::tr_en("bilinmeyen nitelik '@",
                                                   "unknown attribute '@")) +
                   a.value() +
-                  tulpar::i18n::tr_en("' (bilinenler: @frame, @no_alloc)",
-                                      "' (known: @frame, @no_alloc)") +
+                  tulpar::i18n::tr_en("' (bilinenler: @frame, @no_alloc, @thread_local)",
+                                      "' (known: @frame, @no_alloc, @thread_local)") +
                   " at line " + std::to_string(a.line()));
         }
+    }
+    // `@thread_local int x = 0;` (K040): ust duzey global'in thread basina
+    // kopyasi. Fonksiyon nitelikleriyle karismaz.
+    if (thread_local_attr) {
+        if (frame || no_alloc || check(TOKEN_FUNC) || check(TOKEN_ASYNC)) {
+            error(std::string(tulpar::i18n::tr_en(
+                      "@thread_local yalniz bir global degisken bildirimine uygulanir",
+                      "@thread_local applies only to a global variable declaration")) +
+                  " at line " + std::to_string(at_line));
+        }
+        const bool top = decl_scopes_.size() <= 1;
+        auto vd_node = parse_variable_decl();
+        auto *vd = vd_node ? std::get_if<VariableDecl>(&vd_node->value) : nullptr;
+        if (!vd) return vd_node;
+        if (!top) {
+            report_soft_parse_error(
+                vd->loc.line,
+                tulpar::i18n::tr_en("@thread_local yalniz UST DUZEY global'de anlamli (yerel "
+                                    "degisken zaten thread'e ozel)",
+                                    "@thread_local is only meaningful on a TOP-LEVEL global (a "
+                                    "local is already per-thread)"),
+                "@thread_local", nullptr);
+        } else if (vd->data_type != TYPE_INT && vd->data_type != TYPE_FLOAT &&
+                   vd->data_type != TYPE_BOOL) {
+            report_soft_parse_error(
+                vd->loc.line,
+                tulpar::i18n::tr_en("@thread_local simdilik yalniz int/float/bool global "
+                                    "(nesne tutan thread'e ozel global arena/bariyer "
+                                    "anlamini degistirirdi)",
+                                    "@thread_local currently supports only int/float/bool "
+                                    "globals"),
+                "@thread_local", nullptr);
+        }
+        vd->is_thread_local = true;
+        return vd_node;
     }
     const bool is_async = match(TOKEN_ASYNC);
     if (!check(TOKEN_FUNC)) {
@@ -3134,6 +3171,7 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
             if (n.elem_custom_type.has_value()) {
                 out->elem_custom_type = dup_cstr(n.elem_custom_type.value());  // P1.1
             }
+            out->is_thread_local = n.is_thread_local ? 1 : 0;   // K040
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, Assignment>) {
             out->type = AST_ASSIGNMENT;
