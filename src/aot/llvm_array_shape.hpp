@@ -27,6 +27,22 @@ struct TulparWriteProof {
   const char *inv[TULPAR_WP_MAX_INV];
   int n_inv;
   long long count_limit;
+  // for kosulunun ust siniri `len(a)` degilse (yalniz for kaniti doldurur):
+  //   bound_name   `i < n` / `i <= n` — codegen `n` int ve n (<|<=) count(a)
+  //                 sinar (bound_incl: `<=`);
+  //   bound_len_of `i < len(b)` — codegen b kutusuz, bos degil ve
+  //                 count(b) <= count(a) sinar.
+  const char *bound_name = nullptr;
+  const char *bound_len_of = nullptr;
+  int bound_incl = 0;
+  // K201 (yalniz for kaniti): hizli surumde int kabul edilen `X[i]` okumalari
+  // — codegen her X'in de kanitli oldugunu dogrular, degilse kaniti geri
+  // alir; ve i32'ye sigdigi KANITLANAMAYAN ama govdenin ILK deyimi olan yazma
+  // (`a[i] = a[i] + b[i]`): hizli surumde sigma sinavi, sigmazsa ayni turu
+  // genel surumde bastan kosmaya gecis (deopt).
+  const char *arr[TULPAR_WP_MAX_INV];
+  int n_arr = 0;
+  ASTNode_C *deopt_write = nullptr;
 };
 
 // `a[i]` sinir denetimi elenebilir mi? Bkz. tanimdaki kanit. `wp` NULL

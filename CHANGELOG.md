@@ -1117,6 +1117,42 @@ gereksizdi (`n > 0` zaten eliyor), kaldırıldı.
   değişken yokken sessiz, program sonucu doğru. Eski derleyiciyle 5'i kırmızı.
   14 kıyasın optimizasyon sonrası IR'ı birebir aynı.
 
+### Performans — dizi yazma yolu: oku-yaz `a[i] = a[i] + b[i]` 2,65× → 0,80× C; `for (i < n)` ve `i < len(b)` kanıtlı (K201)
+
+- **Kök neden adlandırıldı (K201):** `a[i] = a[i] + b[i]` kanıtlı yola hiç
+  girmiyordu, çünkü hızlı sürüm 32-bit depoya göre dalsız ve kanıt yazılan
+  değerin i32'ye **sığdığını** statik olarak göstermek zorunda (#405); iki
+  i32'nin toplamı sığmayabilir. Ayrıca `b[i]` okuması (sınır `len(a)`)
+  kanıtlı değildi. Tüm döngü bekçili yolda kalıyordu (tag/sınır/genişlik
+  dalları, vektörleşme yok).
+- **Çözüm 1 — sınır döngü başında sınanır:** `for` kanıtı yalnız `i <
+  len(a)`yı kabul ediyordu; artık `i < n` / `i <= n` (döngüde değişmeyen ad)
+  ve `i < len(b)` de: sınır bir kez sınanıp sürüm koşuluna giriyor (`n <=
+  count(a)`, `n < count(a)`; `b` kutusuz, boş değil ve `count(b) <=
+  count(a)`) — `while` kanıtıyla aynı fikir.
+- **Çözüm 2 — dizi okuması + genel sürüme geçiş:** hızlı sürümde kanıtlı
+  dizinin `X[i]` okuması i32 aralığında sayılıyor (X de kanıtlı değilse kanıt
+  geri alınıyor). Sığdığı kanıtlanamayan yazma gövdenin **ilk deyimiyse**
+  hızlı sürümde tek bir sığma sınavı var; sığmazsa yazma **yapılmadan**
+  genel sürüme geçiliyor ve tur orada baştan koşuyor — o deyimden önce
+  hiçbir etki olmadığı için eşdeğer. İlk deyim değilse kanıt yok (eski yol).
+- Ölçüm (bu makine, 2026-09-28, `shapes.py` 40M int): **oku-yaz 2,65× →
+  0,80×** (53–64 → 16–17 ms; C 20 ms), **iki dizi 1,56× → 0,87×**; ayrıca 20M
+  int, 5 tur toplama `i < n` **256 → 11 ms**. `benchmarks/fair` 8 + 6 kıyasın
+  optimizasyon sonrası IR'ı birebir aynı (hepsi `len(a)` sınırlı ya da iç içe
+  dizi). `shapes.py`'nin "en pahalı şekil oku-yaz" iddiası artık yanlış —
+  **oran eşiğine** çevrildi: hiçbir şekil C'nin 1,5 katını aşmamalı.
+  FINDINGS M-serisi / S11 kararı bu sıralamaya dayanıyordu: yeniden
+  değerlendirilmeli.
+- Nöbetçi: `tests/kanitli_yazma.sh` 31/31 — kanıt kuruluyor (`i < n`, `i <=
+  n`, `i < len(b)`, oku-yaz, ilk-deyim taşan yazma) VE kurulmuyor (ilk deyim
+  olmayan taşan yazma, indekslenmeyen `b`); sınav tutmayınca (`n > len`)
+  genel yol sınır dışını yakalıyor. `tests/kanitli_yazma.test.tpr` +1: geçiş
+  ortada / ilk turda / hiç. **Pozitif kontroller:** `<=` sınavı sabote
+  edilince `a[len]` sessizce okunuyor (`1998601057`); sığma sınavı sabote
+  edilince toplam kırpılıyor (`-2147482895`) — ikisinde de kapı kırmızı.
+  `perf_ipucu.sh` yeni kurallara göre güncellendi.
+
 ### Performance — dizgi sabitleri bir kez ayrılıyor (interning)
 
 Her `AST_STRING_LITERAL` **değerlendirmesi** yeni bir `ObjString` ayırıyordu —

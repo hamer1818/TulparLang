@@ -17,7 +17,8 @@ degisiyor, veri ve is ayni:
 
 Beklenen sonuc (FINDINGS M-serisi): indeks aritmetigi BEDAVA, maliyet
 ELEMAN YAZMA yolunda. Sayilar makineye gore kayar; SIRALAMA kaymaz ve
-iddia budur.
+iddia buydu — 2026-09-28'e (K201) kadar. O gun oku-yaz kanitli yola girdi
+(2,65x -> 0,80x) ve iddia bir ORAN ESIGINE donustu (bkz. main() sonu).
 
 --------------------------------------------------------------------------
 ⚠ BU OLCUMUN IKI TUZAGI VAR. Ikisine de denetim sirasinda DUSULDU:
@@ -208,18 +209,28 @@ def main():
         print(RED + "Sekil olcumu GECERSIZ" + RESET + ": %s" % ", ".join(fails))
         return 1
 
-    # IDDIA: eleman YAZMA en pahali sekil. Sayilar makineye gore kayar,
-    # siralama kaymaz — olculen sey budur, mutlak ms degil.
-    en_pahali = max(rows, key=lambda r: r[1])[0]
-    if en_pahali != "oku-yaz":
+    # IDDIA (2026-09-28, K201'den beri): eleman YAZMA artik pahali sekil DEGIL.
+    # Eskiden `a[i] = a[i] + b[i]` kanitli yola giremiyordu (toplamin i32'ye
+    # sigdigi kanitlanamiyordu) ve en pahali sekildi (2,30-3,0x C; FINDINGS
+    # M-serisi ve S11 karari bu siralamaya dayaniyordu). Simdi hizli surumde
+    # sigma sinavi + sigmazsa genel surume gecis var; olculdu (bu makine):
+    # oku-yaz 2,65x -> 0,80x, iki dizi 1,56x -> 0,87x.
+    #
+    # Kapi ORAN ESIGI: hicbir sekil C'nin 1,5 katini asmamali. Mutlak ms makineye
+    # gore kayar; oran esigi, ayni makinede C ile yan yana olculdugu icin kaymaz.
+    # 1,5x bilerek genis: hesapli indeks (adim 2, kanitsiz) ~1,1x'te duruyor.
+    ESIK = 1.5
+    asan = [(n, o) for (n, o) in rows if o > ESIK]
+    if asan:
         print(RED + "IDDIA CURUDU" + RESET +
-              ": en pahali sekil 'oku-yaz' degil, '%s'. FINDINGS M-serisi ve "
-              "S11 karari bu siralamaya dayaniyor — yeniden degerlendirin."
-              % en_pahali)
+              ": %s C'nin %.1f katini asiyor. Kanitli yol (K201/K215) bir sekilde "
+              "kapanmis olabilir — TULPAR_DBG_VER=1 ile `[ver]` satirlarina bakin."
+              % (", ".join("%s %.2fx" % a for a in asan), ESIK))
         return 1
-    print(GREEN + "Siralama korunuyor" + RESET +
-          " — en pahali sekil 'oku-yaz' (%.2fx), indeks aritmetigi bedava (%.2fx)"
-          % (dict(rows)["oku-yaz"], dict(rows)["hesapli indeks"]))
+    en_pahali = max(rows, key=lambda r: r[1])
+    print(GREEN + "Esik korunuyor" + RESET +
+          " — hicbir sekil %.1fx'i asmiyor (en pahali '%s' %.2fx; oku-yaz %.2fx)"
+          % (ESIK, en_pahali[0], en_pahali[1], dict(rows)["oku-yaz"]))
     return 0
 
 

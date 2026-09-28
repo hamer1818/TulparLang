@@ -252,6 +252,12 @@ struct IntCtx {
   const char **inv;       // kabul edilen dongu-degismezi adlar (codegen sinar)
   int *n_inv;
   int max_inv;
+  // K201: `X[i]` OKUMASI (i dongu degiskeni) int kabul edilir — yalniz X de
+  // kanitli (32-bit kutusuz) olursa dogru; ad `arr` listesine yazilir ve
+  // codegen X kanitli degilse kaniti geri alir. NULL = kapali.
+  const char **arr;
+  int *n_arr;
+  int max_arr;
 };
 
 static const double kI32Min = -2147483648.0;
@@ -262,6 +268,15 @@ struct IRange {
 };
 
 static bool fits_i32(IRange r) { return r.lo >= kI32Min && r.hi <= kI32Max; }
+
+static bool note_arr_read(IntCtx *ic, const char *name) {
+  if (!ic->arr || !ic->n_arr || !name) return false;
+  for (int k = 0; k < *ic->n_arr; k++)
+    if (strcmp(ic->arr[k], name) == 0) return true;
+  if (*ic->n_arr >= ic->max_arr) return false;
+  ic->arr[(*ic->n_arr)++] = name;
+  return true;
+}
 
 static bool note_invariant(IntCtx *ic, const char *name) {
   if (!ic->inv || !ic->n_inv) return false;
@@ -302,6 +317,19 @@ static bool expr_int_range(ASTNode_C *n, IntCtx *ic, IRange *r) {
       return true;
     }
     return false;
+  case AST_ARRAY_ACCESS: {
+    // `X[i]` (K201): kanitli 32-bit kutusuz dizinin elemani i32 araliginda.
+    const char *base = n->name ? n->name
+                       : (n->left && n->left->type == AST_IDENTIFIER) ? n->left->name
+                                                                      : nullptr;
+    if (!base || !n->index || n->index->type != AST_IDENTIFIER || !n->index->name ||
+        !ic->ivar || strcmp(n->index->name, ic->ivar) != 0)
+      return false;
+    if (!note_arr_read(ic, base)) return false;
+    r->lo = kI32Min;
+    r->hi = kI32Max;
+    return true;
+  }
   case AST_UNARY_OP: {
     IRange a;
     if (!expr_int_range(n->left, ic, &a)) return false;
@@ -413,6 +441,12 @@ struct WriteCtx {
   IntCtx ic;
   bool unsafe;
   bool need_limit;   // bir yazma ancak ivar_hi kucultulurse sigiyor
+  // K201: govdenin ILK deyimi `A[i] = e` ise ve e sigmiyorsa hizli surumde
+  // calisma zamani sinavi + GENEL SURUME GECIS (deopt) ile kabul edilir: o
+  // deyimden once hicbir etki olmadigi icin turu genel surumde bastan kosmak
+  // esdeger. Kullanilirsa deopt_used.
+  ASTNode_C *deopt_node;
+  bool deopt_used;
 };
 
 static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
@@ -428,6 +462,10 @@ static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
   case AST_ASSIGNMENT:
     if (expr_int_range(n->right, &w->ic, &rg)) {
       if (fits_i32(rg)) return true;
+      if (n == w->deopt_node) {
+        w->deopt_used = true;
+        return true;
+      }
       // Dongu degiskeni iceren ifade daha kucuk bir ust sinirla sigabilir
       // (`i * 2`): cagiran sinir arayacak.
       w->need_limit = true;
@@ -473,18 +511,23 @@ static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
 // 0 sinirsiz, >0 ivar <= donus-1 (codegen `count <= donus` sinar).
 static long long elem_writes_limit(ASTNode_C *cond, ASTNode_C *body, ASTNode_C *incr,
                                    const char *ivar, const char **inv, int *n_inv,
-                                   int max_inv) {
+                                   int max_inv, const char **arr, int *n_arr, int max_arr,
+                                   ASTNode_C *deopt_node, bool *deopt_used) {
   auto run = [&](double hi, bool *need) -> bool {
     int saved = n_inv ? *n_inv : 0;
-    WriteCtx wc{IntCtx{ivar, hi, cond, body, incr, inv, n_inv, max_inv}, false, false};
+    int saved_arr = n_arr ? *n_arr : 0;
+    WriteCtx wc{IntCtx{ivar, hi, cond, body, incr, inv, n_inv, max_inv, arr, n_arr, max_arr},
+                false, false, deopt_node, false};
     walk_all(body, visit_elem_write_ok, &wc);
     walk_all(cond, visit_elem_write_ok, &wc);
     walk_all(incr, visit_elem_write_ok, &wc);
     if (need) *need = wc.need_limit;
     if (wc.unsafe || wc.need_limit) {
       if (n_inv) *n_inv = saved;   // basarisiz denemenin adlari sayilmasin
+      if (n_arr) *n_arr = saved_arr;
       return false;
     }
+    if (deopt_used) *deopt_used = wc.deopt_used;
     return true;
   };
   bool need = false;
@@ -495,10 +538,12 @@ static long long elem_writes_limit(ASTNode_C *cond, ASTNode_C *body, ASTNode_C *
   while (lo <= hi) {
     long long mid = lo + (hi - lo) / 2;
     int saved = n_inv ? *n_inv : 0;
+    int saved_arr = n_arr ? *n_arr : 0;
     if (run((double)mid, nullptr)) {
       best = mid;
       lo = mid + 1;
       if (n_inv) *n_inv = saved;   // son (en iyi) calistirma asagida
+      if (n_arr) *n_arr = saved_arr;
     } else {
       hi = mid - 1;
     }
@@ -514,17 +559,33 @@ static long long elem_writes_limit(ASTNode_C *cond, ASTNode_C *body, ASTNode_C *
 // Kanit fonksiyonlarinin ortak yazma kurali. `wp` NULL ise dongu-degismezi
 // ad ve sayim siniri KABUL EDILMEZ (cagiran onlari sinayamaz).
 static bool write_proof(ASTNode_C *cond, ASTNode_C *body, ASTNode_C *incr, const char *ivar,
-                        TulparWriteProof *wp) {
+                        TulparWriteProof *wp, bool for_loop = false) {
   int n_local = 0;
   const char *local_inv[TULPAR_WP_MAX_INV];
   const char **inv = wp ? wp->inv : local_inv;
   int *n_inv = wp ? &wp->n_inv : &n_local;
-  if (wp) { wp->n_inv = 0; wp->count_limit = 0; }
+  if (wp) { wp->n_inv = 0; wp->count_limit = 0; wp->n_arr = 0; wp->deopt_write = nullptr; }
+  // K201 (yalniz for, yalniz cagiran sinayabiliyorsa): dizi okumasi ve ilk
+  // deyimde deopt'lu yazma.
+  const bool k201 = for_loop && wp;
+  ASTNode_C *first = nullptr;
+  if (k201 && body && body->type == AST_BLOCK && body->statement_count >= 1 &&
+      body->statements) {
+    ASTNode_C *s0 = body->statements[0];
+    if (s0 && s0->type == AST_ASSIGNMENT && s0->left && s0->left->type == AST_ARRAY_ACCESS &&
+        s0->left->index && s0->left->index->type == AST_IDENTIFIER && s0->left->index->name &&
+        strcmp(s0->left->index->name, ivar) == 0)
+      first = s0;
+  }
+  bool deopt_used = false;
   long long lim = elem_writes_limit(cond, body, incr, ivar, wp ? inv : nullptr,
-                                    wp ? n_inv : nullptr, TULPAR_WP_MAX_INV);
+                                    wp ? n_inv : nullptr, TULPAR_WP_MAX_INV,
+                                    k201 ? wp->arr : nullptr, k201 ? &wp->n_arr : nullptr,
+                                    TULPAR_WP_MAX_INV, first, &deopt_used);
   if (lim < 0) return false;
   if (lim > 0 && !wp) return false;
   if (wp) wp->count_limit = lim;
+  if (wp && deopt_used) wp->deopt_write = first;
   return true;
 }
 
@@ -555,19 +616,40 @@ extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
   if (!iv || iv->type != AST_INT_LITERAL || iv->value.int_value < 0) return 0;
   const char *ivar = init->name;
 
-  // cond: `i < len(a)`
-  if (cond->type != AST_BINARY_OP || cond->op != TOKEN_LESS) return 0;
+  // cond: `i < len(a)` — ya da (2026-09-28) sinir DONGU BASINDA sinanabilen
+  // bir sey: `i < n` / `i <= n` (dongude yeniden baglanmayan ad) ya da
+  // `i < len(b)` (b baska bir dizi). Ucu de ayni kanit: sinir <= count(a)
+  // dongu basinda BIR KEZ sinanir ve surum kosuluna girer (codegen,
+  // TulparWriteProof::bound_*). Olculdu (20M int, 5 tur toplama, bu makine):
+  // `i < n` 256 ms -> kanitli yol; eskiden yalniz `i < len(a)` kanitlaniyordu
+  // ve `i < n` sessizce bekcili kaliyordu (K167 ipucu bunu soyluyordu).
+  if (cond->type != AST_BINARY_OP ||
+      (cond->op != TOKEN_LESS && cond->op != TOKEN_LESS_EQUAL))
+    return 0;
   ASTNode_C *lhs = cond->left, *rhs = cond->right;
   if (!lhs || lhs->type != AST_IDENTIFIER || !lhs->name ||
       strcmp(lhs->name, ivar) != 0)
     return 0;
-  if (!rhs || rhs->type != AST_FUNCTION_CALL || !rhs->name) return 0;
-  if (strcmp(rhs->name, "len") != 0 && strcmp(rhs->name, "length") != 0)
+  const char *bound_name = nullptr, *bound_len_of = nullptr;
+  const bool incl = cond->op == TOKEN_LESS_EQUAL;
+  if (rhs && rhs->type == AST_FUNCTION_CALL && rhs->name &&
+      (strcmp(rhs->name, "len") == 0 || strcmp(rhs->name, "length") == 0) &&
+      rhs->argument_count == 1 && rhs->arguments && rhs->arguments[0] &&
+      rhs->arguments[0]->type == AST_IDENTIFIER && rhs->arguments[0]->name && !incl) {
+    if (strcmp(rhs->arguments[0]->name, array_name) != 0) {
+      bound_len_of = rhs->arguments[0]->name;
+      // Sinir dizisi de dongude yeniden baglanmamali (sekli zaten kanitli
+      // olacak: codegen onu sekil onbelleginde bulamazsa kaniti geri alir).
+      if (tulpar_loop_rebinds_name(cond, body, incr, bound_len_of)) return 0;
+    }
+  } else if (rhs && rhs->type == AST_IDENTIFIER && rhs->name && strcmp(rhs->name, ivar) != 0) {
+    bound_name = rhs->name;
+    if (tulpar_loop_rebinds_name(cond, body, incr, bound_name)) return 0;
+  } else {
     return 0;
-  if (rhs->argument_count != 1 || !rhs->arguments || !rhs->arguments[0] ||
-      rhs->arguments[0]->type != AST_IDENTIFIER || !rhs->arguments[0]->name ||
-      strcmp(rhs->arguments[0]->name, array_name) != 0)
-    return 0;
+  }
+  // Calisma zamani sinavi gereken sinir, cagiran sinayamiyorsa (wp NULL) yok.
+  if ((bound_name || bound_len_of) && !wp) return 0;
 
   // incr: `i = i + K` (K > 0) ya da `i++`
   bool incr_ok = false;
@@ -591,7 +673,12 @@ extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
 
   // HER eleman yazmasi KESIN tamsayi VE i32'ye sigmali — yoksa kutulama ya
   // da genisletme riski (bkz. elem_writes_limit, K215).
-  if (!write_proof(cond, body, incr, ivar, wp)) return 0;
+  if (!write_proof(cond, body, incr, ivar, wp, /*for_loop=*/true)) return 0;
+  if (wp) {
+    wp->bound_name = bound_name;
+    wp->bound_len_of = bound_len_of;
+    wp->bound_incl = incl ? 1 : 0;
+  }
 
   if (ivar_out) *ivar_out = ivar;
   return 1;
@@ -739,7 +826,8 @@ extern "C" int tulpar_loop_index_why(ASTNode_C *init, ASTNode_C *cond, ASTNode_C
       init->right->type != AST_INT_LITERAL || init->right->value.int_value < 0)
     return TLW_INIT;
   const char *ivar = init->name;
-  if (!cond || cond->type != AST_BINARY_OP || cond->op != TOKEN_LESS || !cond->left ||
+  if (!cond || cond->type != AST_BINARY_OP ||
+      (cond->op != TOKEN_LESS && cond->op != TOKEN_LESS_EQUAL) || !cond->left ||
       cond->left->type != AST_IDENTIFIER || !cond->left->name ||
       strcmp(cond->left->name, ivar) != 0)
     return TLW_COND_OP;
@@ -748,15 +836,21 @@ extern "C" int tulpar_loop_index_why(ASTNode_C *init, ASTNode_C *cond, ASTNode_C
                       (strcmp(rhs->name, "len") == 0 || strcmp(rhs->name, "length") == 0) &&
                       rhs->argument_count == 1 && rhs->arguments && rhs->arguments[0] &&
                       rhs->arguments[0]->type == AST_IDENTIFIER && rhs->arguments[0]->name;
-  if (!is_len) {
-    if (rhs && rhs->type == AST_IDENTIFIER && rhs->name) {
-      if (detail_out) *detail_out = rhs->name;
-      return TLW_BOUND_NAME;
+  // Sinir: `len(<dizi>)` ya da dongude degismeyen bir AD (`i < n`, `i <= n`) —
+  // ikisi de dongu basinda sinaniyor (kanit bunlari kabul ediyor).
+  if (is_len) {
+    if (cond->op == TOKEN_LESS_EQUAL) return TLW_COND_OP;
+    if (strcmp(rhs->arguments[0]->name, array_name) != 0 &&
+        tulpar_loop_rebinds_name(cond, body, incr, rhs->arguments[0]->name)) {
+      if (detail_out) *detail_out = rhs->arguments[0]->name;
+      return TLW_W_UB_REBIND;
     }
-    return TLW_BOUND_OTHER;
-  }
-  if (strcmp(rhs->arguments[0]->name, array_name) != 0) {
-    if (detail_out) *detail_out = rhs->arguments[0]->name;
+  } else if (rhs && rhs->type == AST_IDENTIFIER && rhs->name && strcmp(rhs->name, ivar) != 0) {
+    if (tulpar_loop_rebinds_name(cond, body, incr, rhs->name)) {
+      if (detail_out) *detail_out = rhs->name;
+      return TLW_W_UB_REBIND;
+    }
+  } else {
     return TLW_BOUND_OTHER;
   }
   bool incr_ok = false;
@@ -776,7 +870,7 @@ extern "C" int tulpar_loop_index_why(ASTNode_C *init, ASTNode_C *cond, ASTNode_C
     return TLW_REBIND;
   }
   TulparWriteProof wpw;
-  if (!write_proof(cond, body, incr, ivar, &wpw)) return TLW_WRITE;
+  if (!write_proof(cond, body, incr, ivar, &wpw, /*for_loop=*/true)) return TLW_WRITE;
   return TLW_OK;
 }
 
