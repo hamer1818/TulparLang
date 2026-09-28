@@ -1394,6 +1394,14 @@ Node 100,4 · Python 199,1 — **3. sıra**, Java ve C'nin önünde.
   14 kıyasın optimizasyon sonrası IR'ı birebir aynı; korpus tanı tabanı 9
   (değişmedi), tulpar-engine korpusu 1 → 1.
 
+### Ölçüm — Tulpar ↔ runtime LTO: kazanç yok, yapılmadı
+
+- `benchmarks/lto_olcum.py`: aynı O3 sonrası IR, clang runtime ile LTO'suz ve
+  tam LTO ile linklenip tur eşli ölçülüyor. 2026-09-28 (Ryzen 7 9800X3D, LLVM
+  22): sekiz adil kıyas çekirdeğinde C/B 0,96–1,06 (arrayiter 2 ms'de 0,83,
+  gürültü). Karar: runtime'ı bitcode dağıtmak şimdi yapılmaz. İlk ölçümdeki
+  "matmul 1,77x" `-march` farkıydı; betik iki kolu aynı bayrakla derliyor.
+
 ### Performance — dizi erişimi artık SATIR İÇİ (`sieve` 42,1 → 23,6 ms)
 
 Her `a[i]` bir `vm_get_element_ptr` **çağrısıydı**: iki alloca, iki store, bir

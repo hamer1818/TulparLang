@@ -526,6 +526,23 @@ Go'ya karşı 4 galibiyet 1 yenilgi (elek, 0,2 ms), Rust'a karşı 4 galibiyet
 
 Kalan tek açık **elek**; ölçülmüş tek kaldıraç i32 dizi elemanı (0,60 ms).
 
+## Runtime ile LTO: ölçüldü, kazanç yok (2026-09-28)
+
+Tulpar modülleri zaten tek LLVM modülünde (import edilenler dahil, O3 bütün
+programda) — modüller arası satır içi alma var. Açık olan Tulpar kodu ↔
+`libtulpar_runtime.a` (C++) arası. `benchmarks/lto_olcum.py` aynı O3 sonrası
+IR'ı iki kez linkliyor: clang runtime ile LTO'suz (B) ve tam LTO ile (C).
+Ryzen 7 9800X3D, LLVM 22, 5 tur ortanca, C/B: intloop 1,01 · fib 0,96 · sieve
+1,06 · strcat 0,97 · arrayiter 0,83 (2 ms, gürültü) · mandelbrot 0,97 · matmul
+1,03 · nbody 0,96. **Ölçülebilir kazanç yok** — sıcak yolların runtime
+çağrıları zaten IR'da satır içi; kayan nokta açığı kutulamadan. LTO altyapısı
+(bitcode runtime dağıtımı, lld zorunluluğu) yapılmadı.
+
+> ⚠️ **Tuzak:** `-march=native`'siz ilk ölçüm "LTO matmul'u 1,77x
+> hızlandırıyor" dedi. LTO'suz kol jenerik x86-64 için derleniyordu, LTO
+> kolu IR'daki `target-cpu` özniteliğiyle yerel CPU için. Fark LTO değil
+> hedef CPU'ydu. İki kolu AYNI bayraklarla derle, tek değişken bırak.
+
 ## Özyineleme: LLVM'in yapmadığı işi biz yapıyoruz (2026-09-07)
 
 fib'de gcc her LLVM dilini 2,4 kat geçiyordu ve bu "gcc işte" diye
