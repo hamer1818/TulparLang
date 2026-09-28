@@ -8,13 +8,16 @@
 #                                   produce at least one `[typecheck]`
 #                                   line on stderr.
 #
-# A fail fixture may also carry one or more
+# Every fail fixture MUST carry one or more
 #   // EXPECT: <substring>
 # lines. Each substring must appear in the output. Without them a fixture
 # only proves that SOMETHING was rejected, not that the right thing was —
 # and that is not hypothetical: two deliberate breakages of the
 # function-reference diagnostic were caught by neither fixture, because a
 # different (misleading) error still made the exit code non-zero.
+# Until 2026-09-27 EXPECT was optional and 8 of 19 fail fixtures had none
+# (a wrong-reason rejection kept them green); a fixture without EXPECT is
+# now itself a failure, so the gap cannot silently reopen.
 #
 # Run from repo root: `./tests/typeinfer/run.sh`. The runner expects
 # `./tulpar` (or `./tulpar.exe` on Git Bash) to exist and be built.
@@ -61,6 +64,11 @@ for f in tests/typeinfer/fail/*.tpr; do
     [ -f "$f" ] || continue
     out=$("$TULPAR" --strict "$f" 2>&1)
     rc=$?
+    if ! grep -q '^// *EXPECT: *[^ ]' "$f"; then
+        printf "${RED}FAIL${NC} %s — '// EXPECT:' satiri YOK (yanlis sebeple reddedilse de yesil kalirdi)\n" "$f"
+        failures=$((failures + 1))
+        continue
+    fi
     if [ $rc -ne 0 ] && echo "$out" | grep -q '\[typecheck\]'; then
         # EXPECT: satırları varsa MESAJ da denetleniyor — yalnız reddedilmiş
         # olmak, DOĞRU sebeple reddedilmiş olmak demek değil.
@@ -70,7 +78,10 @@ for f in tests/typeinfer/fail/*.tpr; do
             if ! echo "$out" | grep -qF -- "$want"; then
                 missing="$missing\n      beklenen: $want"
             fi
-        done <<< "$(sed -n 's|^// *EXPECT: *||p' "$f")"
+        # `tr -d '\r'`: CRLF'li fikstürde (01-03 öyle) beklenen metin sonda
+        # bir CR taşır ve çıktıda HİÇ bulunamaz — fikstür doğru tanıyla
+        # kırmızı kalırdı (ölçüldü 2026-09-27, EXPECT ilk eklendiğinde).
+        done <<< "$(sed -n 's|^// *EXPECT: *||p' "$f" | tr -d '\r')"
         if [ -n "$missing" ]; then
             printf "${RED}FAIL${NC} %s — reddedildi ama BEKLENEN MESAJ yok%b\n" \
                    "$f" "$missing"

@@ -3849,10 +3849,15 @@ LocalVar *get_local_var(LLVMBackend *backend, const char *name) {
 // through vm_array_set_aot_ptr_wrapper, so the value is spilled to a
 // stack slot and passed by pointer — the by-value struct-arg ABI drops
 // the payload eightbyte and corrupts captured variables to 0.
+// The slot lives in the ENTRY block: this runs on every write to a
+// captured variable, and a raw alloca at the current insert point inside
+// a loop body grows the stack each iteration — `int k = ...; var g = () =>
+// k;` in a loop SIGSEGV'd after ~500 000 iterations on an 8 MB stack
+// (measured 2026-09-27, tests/stack_growth_smoke.py "closure yakalama").
 static void llvm_emit_array_set(LLVMBackend *backend, LLVMValueRef array,
                                 LLVMValueRef idx_val, LLVMValueRef value) {
-  LLVMValueRef vptr = LLVMBuildAlloca(backend->builder, backend->vm_value_type,
-                                      "arr_set_val");
+  LLVMValueRef vptr = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "arr_set_val");
   LLVMBuildStore(backend->builder, value, vptr);
   LLVMValueRef args[] = {array, idx_val, vptr};
   LLVMBuildCall2(backend->builder,
@@ -7608,8 +7613,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (node->name && strcmp(bi_name, "chr") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef cv = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef cslot = LLVMBuildAlloca(backend->builder,
-                                           backend->vm_value_type, "chr_c");
+      // Entry-block slot: a raw alloca here grew the stack on every call in
+      // a loop (`chr()` 2 000 000 times -> SIGSEGV, measured 2026-09-27;
+      // tests/stack_growth_smoke.py "chr() + ord()").
+      LLVMValueRef cslot = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "chr_c");
       LLVMBuildStore(backend->builder, cv, cslot);
       LLVMValueRef cvoid = LLVMBuildBitCast(backend->builder, cslot,
                                             backend->ptr_type, "chr_c_void");

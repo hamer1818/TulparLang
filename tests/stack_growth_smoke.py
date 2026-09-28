@@ -55,6 +55,40 @@ SHAPES = [
     ("dizgi birlestirme",   'str s = "a" + toString(i); n = n + length(s);', "",                     None),
     ("eleman yazma",        "g[0] = i; n = n + g[0];",                 "array g = [1, 2, 3];",       N * (N - 1) // 2),
     ("ic ice dizi literali", "array j = [[1, 2], [3, 4]]; n = n + len(j);", "",                      2 * N),
+    # K193 (2026-09-27): lambda/closure, match ve async sekilleri HIC yoktu.
+    # Her biri AYRI bir codegen yolu (kapanis ortami + cagri, match dallari,
+    # coroutine govdesi) — birinde dongu govdesine dusen alloca digerlerinin
+    # yesilinde gorunmez. Beklenenler sekillerin kendi aritmetiginden:
+    #   (i % 3) + 1 dizisi 1,2,3,... -> N = 3q + r icin 6q + (1..r toplami)
+    ("lambda olustur+cagir", "var f = (int x) => x + 1; n = n + f(i % 3);", "",
+     6 * (N // 3) + sum(range(1, N % 3 + 1))),
+    ("closure yakalama",    "int k = i % 2; var g = () => k + 1; n = n + g();", "",
+     (N - N // 2) * 1 + (N // 2) * 2),
+    ("match ifadesi",       "int m = match i % 3 { 0 => 1, 1 => 2, _ => 3 }; n = n + m;", "",
+     6 * (N // 3) + sum(range(1, N % 3 + 1))),
+    ("match deyimi",        "match i % 2 { 0 => { n = n + 1; }, _ => { n = n + 2; } }", "",
+     (N - N // 2) * 1 + (N // 2) * 2),
+    # Elle yazilmis (makro DISI) builtin: asagidaki builtin taramasi yalniz
+    # MATH/STR/TYPE_CHECK makrolarini goruyor, `chr` o listede yok. Bu sekil
+    # eklenince `chr` 2M yinelemede SIGSEGV verdi (2026-09-27) — ham alloca.
+    ("chr() + ord()",       "str c = chr(65 + i % 3); n = n + ord(c, 0) - 64;", "",
+     6 * (N // 3) + sum(range(1, N % 3 + 1))),
+]
+
+# Dongu govdesi bir FONKSIYONUN icinde olmasi gereken sekiller (sablonun ust
+# duzey `while`'i yetmiyor). async: dongu COROUTINE govdesinde ve her
+# yinelemede `await` ediyor — coroutine'in kendi yigini ana yigindan kucuk,
+# yani sizinti orada daha ERKEN patlar. (ad, program, beklenen)
+FULL_SHAPES = [
+    ("async govdede await",
+     "async func dongu(int m) {\n"
+     "    int n = 0; int i = 0;\n"
+     "    while (i < m) { int v = await i; n = n + v; i = i + 1; }\n"
+     "    return n;\n"
+     "}\n"
+     "int r = await dongu(%d);\n"
+     "print(toString(r));\n" % N,
+     N * (N - 1) // 2),
 ]
 
 
@@ -201,6 +235,21 @@ def main():
                                  name, detail))
         if not ok:
             fails.append(name)
+    for idx, (name, text, expect) in enumerate(FULL_SHAPES):
+        rc, out = build_and_run(text, tmp, "f%d" % idx, env)
+        live = out not in ("", "0")
+        ok = rc == 0 and live and out == str(expect)
+        detail = ""
+        if rc is None:
+            detail = "DERLENMEDI — olculmedi: %s" % out[-120:]
+        elif rc != 0:
+            detail = "rc=%s <- yigin tukendi" % rc
+        elif not ok:
+            detail = "cikti=%s beklenen=%s" % (out, expect)
+        print("  %s %-24s %s" % (GREEN + "TEMIZ  " + RESET if ok else RED + "SIZINTI" + RESET,
+                                 name, detail))
+        if not ok:
+            fails.append(name)
 
     # Faz 2: kutulu-ABI builtin'leri (liste kaynaktan turetilir).
     bad, total, measured = scan_builtins(tmp, env)
@@ -225,7 +274,7 @@ def main():
         return 1
     print(GREEN + "Yigin temiz" + RESET +
           " — %d sekil + %d builtin (%d/%d olculdu), kontrol kirmizi verebiliyor"
-          % (len(SHAPES), measured, measured, total))
+          % (len(SHAPES) + len(FULL_SHAPES), measured, measured, total))
     return 0
 
 

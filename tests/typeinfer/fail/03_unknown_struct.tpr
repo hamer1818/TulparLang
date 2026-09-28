@@ -2,6 +2,8 @@
 // unknown struct type at the variable declaration. Codegen would
 // otherwise produce a runtime "field not found" diagnostic instead
 // of a compile-time message.
+//
+// EXPECT: Unknown type 'Pont'
 
 type Point {
     int x;

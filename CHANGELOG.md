@@ -341,6 +341,24 @@ güncellemeyi çoğu Linux kullanıcısında tamamen çalışmaz kılıyordu.
 Geçici çözüm (düzeltme yayınlanana kadar, eski ikiliyle): hazırlık dizinini
 hedefle aynı dosya sistemine alın — `TMPDIR=~/.cache tulpar update`.
 
+### Düzeltildi — döngüde yakalanan yerele yazma ve `chr()` yığını tüketiyordu
+
+- `int k = ...; var g = () => k + 1;` gibi, döngü gövdesinde kapanışın
+  yakaladığı bir yerele yazan her yineleme yığında 16 bayt harcıyordu
+  (`llvm_emit_array_set` ham `alloca`'yı o anki bloğa koyuyordu); 8 MB
+  yığında ~500 000 yinelemede SIGSEGV. `chr()` aynı hatayı taşıyordu
+  (2 000 000 çağrıda SIGSEGV). İkisi de artık giriş bloğunda (ölçüldü
+  2026-09-27).
+- `tests/stack_growth_smoke.py`'ye altı şekil: lambda oluştur+çağır, closure
+  yakalama, match ifadesi, match deyimi, `chr()+ord()` (makro dışı builtin),
+  async gövdede `await`. Pozitif kontrol: lambda/match/await codegen'ine
+  geçici ham `alloca` enjekte edilince ilgili şekiller kırmızı.
+- typeinfer fail fikstürlerinin 8'inde (01-05, 11-13) `// EXPECT:` yoktu —
+  yanlış sebeple reddedilseler de yeşil kalıyorlardı. Artık 19/19 ve
+  `tests/typeinfer/run.sh` EXPECT'siz fail fikstürünü kendisi kırmızı sayıyor;
+  CRLF'li fikstürlerde beklenen metnin sonundaki CR atılıyor (yoksa hiç
+  eşleşmiyordu).
+
 ### Kaldırıldı — sahne/arayüz hattı CI kapsamından çıktı
 
 Oyun/arayüz tarafı artık **tulpar-engine** deposunda ölçülüyor; TulparLang CI'ı

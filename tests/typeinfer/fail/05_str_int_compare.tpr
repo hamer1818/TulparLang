@@ -4,6 +4,8 @@
 // constant. `int == float` is the one cross-type pair that IS meaningful
 // (numeric promotion makes `1 == 1.0` genuinely true) — see
 // tests/typeinfer/pass/04_cross_type_ok.tpr, which guards that it stays legal.
+//
+// EXPECT: comparison between 'str' and 'int' is always false
 
 str s = "1";
 int n = 1;
