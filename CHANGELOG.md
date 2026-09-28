@@ -271,6 +271,23 @@ Artık bir global'e yazan her codegen yolu tek yardımcıdan
 Paket: `tests/arena_kalicilik.test.tpr` (yaz → geri sar → **çöple doldur** →
 oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
 
+### Düzeltildi — `read_file` /proc ve borularda boş dönüyordu; ikili (NUL) yol artık kilitli
+
+- `read_file` boyutu `fseek(SEEK_END)/ftell` ile alıp o kadar okuyordu:
+  `/proc` ve `/sys` dosyaları boyutu 0 bildiriyor, yani
+  `read_file("/proc/self/status")` **boş** dönüyordu (ölçüldü 2026-09-27;
+  tulpar-engine RSS ölçüsünü bu yüzden dışarıdan yapıyordu). Borularda
+  `ftell` -1; kısa okumada da uzunluk boyuttan alınıyor, tamponun ilklenmemiş
+  kuyruğu dizgiye giriyordu. Artık EOF'a kadar okunuyor (boyut yalnız ilk
+  tamponun ipucu; düzenli dosyada yine tek `fread`). Dizin ve okuma hatası
+  `null` (açılamamakla aynı sözleşme).
+- İkili güvenlik (NUL içeren blob, ör. `.sahneb`) fiilen çalışıyordu ama
+  hiçbir test kilitlemiyordu. `tests/file_io.test.tpr` +2: NUL'lu 8 baytlık
+  blob gidiş-dönüşü (pozitif kontrol: `write_file` `strlen`'e çevrilince
+  `expected 8 got 1`) ve `/proc/self/status` (eski runtime'la `uzunluk 0`;
+  Linux dışında görünür biçimde atlanır). LSP açıklamaları "ikili güvenli"
+  diyor.
+
 ### Düzeltildi — struct alanına bileşik atama sessizce hiçbir şey yapmıyordu
 
 - `d[i].can -= 30` (tipli struct dizisi, P1.1) **sessiz hiç-işlemdi**: değer
