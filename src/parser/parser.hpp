@@ -305,6 +305,7 @@ typedef struct ASTNode_C {
   
   uint8_t is_moved;
   uint8_t is_async; // AST_FUNCTION_DECL: declared with `async`
+  uint8_t is_thread_local; // AST_VARIABLE_DECL: `@thread_local` ust duzey global (K040)
 
   struct ASTNode_C *condition;
   struct ASTNode_C *then_branch;

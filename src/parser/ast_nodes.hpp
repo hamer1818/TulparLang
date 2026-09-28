@@ -212,6 +212,10 @@ struct VariableDecl {
     // bugun codegen'i etkilemiyor; AST'de durmasinin sebebi LSP/fmt gibi
     // sonraki tuketicilerin bilgiyi KAYBETMEMESI.
     bool is_const;
+    // `@thread_local int x = 0;` (K040): her thread'in kendi kopyasi. Yalniz
+    // ust duzey global'de anlamli; baslatici ana thread'de kosar, diger
+    // thread'ler sifirdan baslar.
+    bool is_thread_local = false;
     SourceLocation loc;
     
     VariableDecl(const std::string& n, DataType dt,

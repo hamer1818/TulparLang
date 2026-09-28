@@ -683,6 +683,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # Atomikler ve @thread_local (K040): derleme hatalari + thread_lint ile
+    # iliskisi (atomik yazma yazma sayilir, atomik okuma senkronize).
+    if [ -x tests/atomik_hatalari.sh ]; then
+        if ! bash tests/atomik_hatalari.sh ./tulpar; then
+            echo -e "${RED}atomik / thread_local kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
     # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz
     # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan

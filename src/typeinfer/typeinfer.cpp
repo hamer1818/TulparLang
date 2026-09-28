@@ -2081,6 +2081,14 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // to_struct(json, "Ad") -> Ad (K133); ad bir struct'i adlayan dizgi
       // SABITI olmali — asagida ayrica denetleniyor.
       {"to_struct", TYPE_CUSTOM, {TYPE_UNKNOWN, TYPE_STRING}},
+      // Atomikler (K040): ilk arguman ust duzey `int` global (codegen
+      // denetler), son arguman istege bagli bellek sirasi dizgisi.
+      {"atomic_load", TYPE_INT, {TYPE_INT, TYPE_STRING}},
+      {"atomic_store", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_STRING}},
+      {"atomic_add", TYPE_INT, {TYPE_INT, TYPE_INT, TYPE_STRING}},
+      {"atomic_sub", TYPE_INT, {TYPE_INT, TYPE_INT, TYPE_STRING}},
+      {"atomic_xchg", TYPE_INT, {TYPE_INT, TYPE_INT, TYPE_STRING}},
+      {"atomic_cas", TYPE_BOOL, {TYPE_INT, TYPE_INT, TYPE_INT, TYPE_STRING}},
       // env() — process env var lookup, "" when missing
       {"env", TYPE_STRING, {TYPE_STRING}},
       // call(name, ...) — handler dispatch by string. Args are variadic;
@@ -2738,7 +2746,9 @@ static bool noalloc_builtin_ok(TypeInferContext *ctx, const std::string &n) {
       "log2",  "log10",  "cbrt",  "pow",   "floor",  "ceil",    "round",   "trunc",
       "fmod",  "hypot",  "min",   "max",   "mod",    "random",  "randint", "time_ms",
       "clock_ms", "toInt", "toFloat", "toBool", "ord", "isInt",  "isFloat", "isBool",
-      "isString", "isArray", "isObject"};
+      "isString", "isArray", "isObject",
+      // K040: atomikler yigina dokunmuyor (tek bir makine komutu).
+      "atomic_load", "atomic_store", "atomic_add", "atomic_sub", "atomic_xchg", "atomic_cas"};
   if (ok.count(n)) return true;
   // Motor (tame) cagrilari C tarafinda; skaler donenler Tulpar yiginina
   // ayirmiyor. Kaynak yukleyen/olusturanlar ve dizgi/dizi donenler haric.
