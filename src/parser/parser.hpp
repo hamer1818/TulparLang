@@ -125,6 +125,10 @@ private:
     };
     std::unordered_map<std::string, EnumInfo> enums_;
     void prescan_enums();
+    // K028: `import "m"` edilen modullerin (gecisli) enum'larini tabloya
+    // ekler; yerel bildirim her zaman kazanir. Bkz. dosya sonundaki
+    // TulparImportLoader notu.
+    void prescan_imported_enums();
     bool is_enum_name(const std::string& name) const;
     // Uye yoksa nullptr.
     const long long* enum_member_value(const std::string& enum_name,
@@ -342,5 +346,22 @@ extern "C" {
     // trustworthy enough to walk.
     int parser_get_error_count(void);
 }
+
+// ---- import edilen modulun `enum`lari (K028, 2026-09-27) -------------------
+// Enum ayristirici sekeri oldugu icin (`Mod.B` IntLiteral'e katlanir) baska
+// dosyadaki enum'u ANCAK ayristirici bilirse kullanilabilir. Modul cozumu
+// (gomulu stdlib dahil) ayristiricida degil: cagiran bir yukleyici kurar
+// (main -> typeinfer_install_parser_import_loader). Kurulmazsa (runtime
+// kitapligi, testler) import taranmaz — eski davranis.
+//   name     : `import "<name>"` dizgisi
+//   from_dir : ice aktaran modulun dizini ("" = CWD) — AOT'nin paket-yerel
+//              kardes adimiyla ayni
+//   out_src / out_dir : kaynak metni ve cozulen dosyanin dizini
+typedef bool (*TulparImportLoader)(const std::string &name, const std::string &from_dir,
+                                   std::string &out_src, std::string &out_dir);
+void tulpar_parser_set_import_loader(TulparImportLoader fn);
+// SONRAKI ayristirmalarin "bu kaynak hangi dizinde" bilgisi (AOT bir modulu
+// ayristirirken kurar, sonra "" yapar).
+void tulpar_parser_set_import_dir(const std::string &dir);
 
 #endif // TULPAR_PARSER_HPP

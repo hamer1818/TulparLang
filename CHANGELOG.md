@@ -47,6 +47,21 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Eklendi — import edilen modülün `enum`ları görünür
+
+- Modülde `enum Yon {...}` bildirip içe aktaran dosyada `Yon.DOGU` yazmak
+  "'Yon' değişkeni tanımlanmamış" veriyordu (enum ayrıştırıcı şekeri; ön
+  tarama yalnız kendi dosyasının token'larına bakıyordu). Artık ayrıştırıcı
+  `import "..."` edilen modüllerin enum'larını da — geçişli, `as` takma adlı
+  içe aktarmada da — tarar; üye değeri, tip adı (`Yon y`), `match` kolu
+  hepsi çalışır. Çözüm sırası AOT'ninkiyle aynı (gömülü stdlib → dosya →
+  `tulpar_modules/`, paket-yerel kardeş dahil). Yerel bildirim her zaman
+  kazanır.
+- Nöbetçi: `tests/enum_import.test.tpr` (4 test; eski derleyiciyle
+  derlenmiyor). Derleme süresi değişmedi (`arcade_2048` 1849 → 1846 ms,
+  `scene3d_arena` 8907 → 8928 ms, medyan/5 ve 3 koşum, 2026-09-27 Ryzen 7
+  9800X3D); 12 kıyasın IR'ı birebir aynı.
+
 ### Düzeltildi — `call()` tümü-int fonksiyonda sessizce `null`; `call("ad")` derleme zamanında denetleniyor
 
 - **`call("f", 7)` / `call(f, 7)` tümü-int `func f(int x): int` için
@@ -598,7 +613,6 @@ int v = (yan() + 1) * (yan() + 1);    // 2 yerine 6 — iç içe katlanıyor
 Sonuç *değeri* hep doğruydu, o yüzden hiçbir test göremedi. Tipli
 fonksiyonda görünmüyordu; yalnız kutulu operandlı karışık ifadelerde.
 
-
 ### Fixed/Performance — VMValue'nun dolgusu artık bayt bayt kopyalanmıyor
 
 `VMValue` LLVM'de `{i32, [4 x i8], i64}` modellenmişti ve dolgu bir bayt
@@ -738,7 +752,6 @@ test koşmuyor**, yalnız derleyip artefakt yüklüyor:
 
 İkincisini düzeltirken birincisi ortaya çıktı — paketleme adımı macOS'ta ilk
 kez bir `tulpar build` çağırdığı için.
-
 
 ### Fixed — macOS'ta `tulpar build` HİÇBİR ŞEYİ derleyemiyordu (`library 'ssl' not found`)
 
@@ -891,7 +904,6 @@ her biri için bir denetim yazıldı (`build.sh suites`):
 59 test paketi · 52 örnek · 8 denetim — hepsi yeşil. `scene3d` motorunun
 **653 testi pencere açmadan** koşuyor. Belgelerde geçen 197 API adının hepsi
 motora karşı doğrulandı.
-
 
 ### Fixed — SAHNE DENETİMİ ses aygıtı olmayan makinede sahneyi haksız suçluyordu
 
@@ -1059,7 +1071,6 @@ bir örnekte geçsin" denetimi bilerek YAZILMADI: 286 özellik grubunun 197'si
 "kapsanmamış" görünüyor (editör API'si, sorgular, JSON'dan sürülen
 davranışlar) ve hep kırmızı bir denetim, kırmızıyı görmezden gelmeyi öğretir.
 
-
 ### Added — 3B örnekte SES: motorun ses yolu ilk kez gösteriliyor
 
 Kullanıcı ses ayarını denemek isteyince "oyundan hiç ses gelmiyor" dedi.
@@ -1094,7 +1105,6 @@ bu ayrım bilerek). Ses ayarına hiç dokunmamış kullanıcı her başlangıçt
 uyarı görüyordu. Anahtar yoksa varsayılan artık bir kez yazılıyor: ilk
 açılışta bir uyarı, sonraki açılışlarda sıfır.
 
-
 ### Added — paket yöneticisi denetimi (`tests/pkg_audit.sh`)
 
 `tulpar pkg` kullanıcının PROJE DİZİNİNE yazıyor (`tulpar.toml`,
@@ -1115,7 +1125,6 @@ yolda `return 1` → `continue`) ve denetim kızardı. ~0.1 sn.
 
 Yol üstünde iki bayat belge düzeltildi: `path:` dışındaki bağımlılıklar
 "TODO" diye yazılıydı, oysa `url:` ve registry yolu kodda var.
-
 
 ### Fixed — `tulpar doc` üç stdlib modülünü HİÇ belgeleyemiyordu
 
@@ -1139,7 +1148,6 @@ veriyor ve çıktı boş değil; ayrıca **ayrışmayan** bir dosyanın hâlâ h
 verdiği sınanıyor — "her zaman 0 dön" biçiminde bir düzeltme denetimi işe
 yaramaz hâle getirirdi. İki bozma da denendi (kodgen hatasında yine at;
 ayrışma hatasında da 0 dön) ve ikisi de yakalandı.
-
 
 ### Added — LSP duman testi (`tests/lsp_audit.py`)
 
@@ -1165,7 +1173,6 @@ denendi (hover işleyicisi kapatıldı) ve denetim kızardı.
 Yan not: ilk yazımda imleç sütunlarını elle yazmıştım, sonra örnek metni
 kısaltınca aynı sütun parantezin içine düştü ve denetim sunucuyu değil kendi
 aritmetiğini kızarttı. Konumlar artık metinden hesaplanıyor.
-
 
 ### Fixed — `tulpar fmt` DERLENMEYEN kod üretiyordu (üç ayrı bozulma)
 
@@ -1202,7 +1209,6 @@ değişir), ve çıktı **hâlâ ayrışıyor**. Bozma denendi ve denetim kızar
 Ayrıca altı örnekte formatlanmış hâlin ÇALIŞMA çıktısı da karşılaştırıldı:
 beşi birebir aynı, altıncısında tek fark zaman ölçen satırlar.
 
-
 ### Fixed — ANDROID: paket kimliği artık oyun adından türüyor (iki oyun birbirini siliyordu)
 
 `tulpar.toml` yazmayan her oyun `dev.tulparlang.game` paket kimliğini
@@ -1228,7 +1234,6 @@ bozma denendi ve denetim kızardı. Zincirin tamamı doğrulandı: iki farklı o
 farklı kimlik alıyor, toml ezmesi çalışıyor, aapt2 alt çizgili paketi kabul
 ediyor (18 MB imzalı APK üretildi).
 
-
 ### Added — ANDROID DERLEME DENETİMİ: hedefin çalıştığı artık her koşumda ölçülüyor
 
 Bugünkü iki kırık (bayat arşivler, NDK aramasının Android Studio kurulumunu
@@ -1248,7 +1253,6 @@ arşivler yokken kızarıyor (android/dist geçici olarak kenara alındı — li
 kopuyor, `.so` üretilmiyor), normalde yeşil. Ölçüm sırasında bir sınamamın
 geçersiz olduğu da çıktı: `TULPAR_ANDROID_LIB_DIR` arama yolunu DEĞİŞTİRMİYOR,
 EKLİYOR — boş bir dizin göstermek link'i bozmuyor.
-
 
 ### Fixed — WEB HEDEFİ KIRIKTI: önceden derlenmiş arşivler sessizce çürüyor
 
@@ -1297,7 +1301,6 @@ dosyada yazılıysa aynı olduklarını ölçmek gerekiyor.
 Android hedefi uçtan uca doğrulandı: `scene3d_collector` iki ABI'ye derlendi,
 `package_apk.sh` imzalı bir APK üretti (24 MB).
 
-
 ### Added — SAHNE DENETİMİ: iki sessiz durum daha görünür oldu
 
 **Yol bulma açık ama katı duvar yok.** `nav_build3d` duvarsız sahnede erken
@@ -1321,7 +1324,6 @@ olmayan bir sorun bağırırdı.
 saklanan kopya canlı sahneyle aynıydı — yani iki kez bakmak da aynı cevabı
 veriyordu. Korumanın var olma sebebi olan BAYAT kopya durumu kurulunca
 yakalandı.
-
 
 ### Added — MOTOR: A* yol bulma artık SAHNEDEN de erişilebilir
 
@@ -1356,7 +1358,6 @@ bayrağı — düz kovalama takılmak, yol bulan varmak ZORUNDA. Bir bozma kaçt
 (etiket denetimini silmek): testte hareket eden tek şey duvardı, yani
 "devriye gezen düşman uyarı sebebi değil" durumu hiç kurulmamıştı.
 
-
 ### Added — MOTOR: ayarlar ekranı ve ANA ses seviyesi (`tm_master_volume`)
 
 Motorda ana ses seviyesi **yoktu**: yalnız müzik başına `music_volume` vardı,
@@ -1390,7 +1391,6 @@ soyutlama sırayı değiştiren ilk düzenlemeye kadar yalnız kâğıt üstünd
 7 regresyon testi (632 → 639) ve 9 bozma denemesi. Biri kaçtı (yukarıdaki
 dejenere eşleme), bir tanesi de önceki bozma turunun diske bıraktığı artığı
 okuyup yanlış yere kızardı — ikisi de [[Tuzaklar]]'a yazıldı.
-
 
 ### Added — MOTOR: bölüm seçme ekranı ve "Devam" (kayıt sistemi sözünü tutuyor)
 
@@ -1434,7 +1434,6 @@ ancak 25 bölümde görülüyor), iki koşullu bir kuralın sınanmayan koşulu 
 sağlanmıyordu, ve `_lvlN` ile `_lvl_js3` karışmıştı. Üçü de [[Tuzaklar]]'a
 yazıldı.
 
-
 ### Fixed/Added — EDİTÖR: yazılan sayı geri alınabiliyor, bölge varlıkla aynı jestlerden geçiyor
 
 **Sayı alanına YAZILAN değer geri alınamıyordu.** Alanın iki düzenleme yolu
@@ -1467,7 +1466,6 @@ tanımı değil, "şu an içeride kim var" durumu.
 
 9 regresyon testi (614 → 623) ve 21 bozma denemesi, hepsi doğru testi
 kızarttı.
-
 
 ### Added — EDİTÖR: bölge tutamakları, kutu seçimi, sürükleme hayaleti
 
@@ -1516,7 +1514,6 @@ döngünün sonunda ölçüyordu (son çağrı panelin kendi yuvasınaydı) ve a
 adımı varsayılan yerleşimde zaten fark yaratmıyordu. Üçü de [[Tuzaklar]]'a
 yazıldı.
 
-
 ### Fixed — EDİTÖR: yineleme (CTRL+Y) yapısal işi geri getirmiyor, sahneyi siliyordu
 
 "Bölüm ekle → CTRL+Z → CTRL+Y" ölçüldü: bölüm geri gelmiyor ve üstüne 1.
@@ -1545,7 +1542,6 @@ Süitteki `t_no_duplicate_function_names` adı vererek yakaladı.
 Altı regresyon testi (`tests/scene3d_engine.test.tpr`, 588 → 593) ve altı
 bozma denemesi; kural testi, karşı görüntünün biçimini sabite çevirmeyi de
 yakalıyor.
-
 
 ### Added — sahne artık VERİ: JSON sahne biçimi + davranışlar + kurallar
 
@@ -2780,7 +2776,6 @@ Düzeltme fizik motorlarının standardı: temas taraması cisimleri küçük bi
 (6 cm) şişirerek bakıyor. Pay AABB/küre/silindir/SAT ayrımını bilmiyor —
 boyutlar geçici olarak büyütülüp AYNI `_overlap3` çağrılıyor, çünkü şekil
 matematiği ikinci bir yerde tekrarlansaydı er geç ondan sapardı.
-
 
 ### Added — 3B tetikleyici bölge: "buraya girince şu olsun"
 

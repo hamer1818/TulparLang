@@ -1,0 +1,54 @@
+// IMPORT EDILEN modulun `enum`lari (K028, 2026-09-27).
+//
+// Neden var: enum tamamen ayristirici sekeri (`Yon.DOGU` IntLiteral'e
+// katlanir, `Yon` tip adi int'e cozulur) ve ayristirici yalniz KENDI
+// dosyasinin token'larini on tariyordu. Modulde `enum Yon {...}` bildirip
+// ice aktaran dosyada `Yon.DOGU` yazmak "'Yon' degiskeni tanimlanmamis"
+// veriyordu (modulun kendi icindeki kullanim calisiyordu). Artik
+// ayristirici `import "..."` edilen modullerin enum'larini (gecisli) de
+// tarar; cozum sirasi AOT'ninkiyle ayni. Yerel bildirim her zaman kazanir.
+//
+// Duzeltmeden onceki derleyiciyle bu paket DERLENMIYOR.
+// Calistir (depo kokunden — import yolu CWD'ye gore): ./tulpar tests/enum_import.test.tpr
+import "test";
+import "tests/moduller/enum_modul.tpr";
+
+// Yerel ad, ic moduldeki `Katman`la AYNI: yerel kazanir.
+enum Katman { A, B, C }
+
+func run_uye_degeri() {
+    assert_eq_int(Yon.KUZEY, 0);
+    assert_eq_int(Yon.DOGU, 5);
+    assert_eq_int(Yon.GUNEY, 6);
+}
+
+func run_tip_adi() {
+    Yon y = Yon.KUZEY;                 // tip adi olarak
+    Yon s = yon_sag(y);                // modul fonksiyonunun parametre/donus tipi
+    assert_eq_int(s, Yon.DOGU);
+    assert_eq_int(yon_sag(Yon.DOGU), Yon.GUNEY);
+}
+
+func run_match() {
+    Yon y = Yon.GUNEY;
+    str ad = match y {
+        Yon.KUZEY => "kuzey",
+        Yon.DOGU => "dogu",
+        _ => "guney",
+    };
+    assert_eq_str(ad, "guney");
+}
+
+func run_gecisli_ve_yerel_oncelik() {
+    // Modulun kendisi ic modulun Katman'ini goruyor (ON = 11)...
+    assert_eq_int(katman_on(), 11);
+    // ...bu dosyada ise yerel `Katman` kazaniyor (C = 2, ORTA yok).
+    assert_eq_int(Katman.C, 2);
+}
+
+print("=== enum import tests ===");
+test("modul enum uye degerleri", "run_uye_degeri");
+test("modul enum tip adi + modul fonksiyonu", "run_tip_adi");
+test("modul enum ile match", "run_match");
+test("gecisli import + yerel ad kazanir", "run_gecisli_ve_yerel_oncelik");
+test_summary();

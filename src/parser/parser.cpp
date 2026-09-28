@@ -923,30 +923,32 @@ static long long enum_int_literal(const std::string& tok) {
     }
 }
 
-void Parser::prescan_enums() {
-    const size_t n = tokens_.size();
+// Token dizisindeki ust duzey `enum AD { ... }` kaliplarini topla (hata
+// vermez). `decl_base` yerel dosyada 0 (decl_token = token indeksi); import
+// edilen modulde SIZE_MAX (hicbir yerel bildirimle eslesmez).
+template <typename Info>
+static void collect_enums(const std::vector<Token>& toks,
+                          std::vector<std::pair<std::string, Info>>& out,
+                          bool imported) {
+    const size_t n = toks.size();
     for (size_t i = 0; i + 2 < n; i++) {
-        if (tokens_[i].type() != TOKEN_ENUM) continue;
-        if (tokens_[i + 1].type() != TOKEN_IDENTIFIER ||
-            tokens_[i + 2].type() != TOKEN_LBRACE) continue;
-        const std::string& name = tokens_[i + 1].value();
-        // Ilk bildirim kazanir; ikincisini parse_enum_decl "yeniden
-        // tanimlandi" diye reddeder (decl_token karsilastirmasi).
-        if (enums_.count(name)) continue;
-        EnumInfo info;
-        info.decl_token = i;
+        if (toks[i].type() != TOKEN_ENUM) continue;
+        if (toks[i + 1].type() != TOKEN_IDENTIFIER ||
+            toks[i + 2].type() != TOKEN_LBRACE) continue;
+        Info info;
+        info.decl_token = imported ? SIZE_MAX : i;
         long long next = 0;
         size_t j = i + 3;
-        while (j < n && tokens_[j].type() == TOKEN_IDENTIFIER) {
-            const std::string member = tokens_[j].value();
+        while (j < n && toks[j].type() == TOKEN_IDENTIFIER) {
+            const std::string member = toks[j].value();
             long long val = next;
             j++;
-            if (j < n && tokens_[j].type() == TOKEN_ASSIGN) {
+            if (j < n && toks[j].type() == TOKEN_ASSIGN) {
                 j++;
                 bool neg = false;
-                if (j < n && tokens_[j].type() == TOKEN_MINUS) { neg = true; j++; }
-                if (j < n && tokens_[j].type() == TOKEN_INT_LITERAL) {
-                    val = enum_int_literal(tokens_[j].value());
+                if (j < n && toks[j].type() == TOKEN_MINUS) { neg = true; j++; }
+                if (j < n && toks[j].type() == TOKEN_INT_LITERAL) {
+                    val = enum_int_literal(toks[j].value());
                     if (neg) val = -val;
                     j++;
                 } else {
@@ -955,9 +957,118 @@ void Parser::prescan_enums() {
             }
             info.members.emplace_back(member, val);
             next = val + 1;
-            if (j < n && tokens_[j].type() == TOKEN_COMMA) j++;
+            if (j < n && toks[j].type() == TOKEN_COMMA) j++;
         }
-        enums_[name] = std::move(info);
+        out.emplace_back(toks[i + 1].value(), std::move(info));
+    }
+}
+
+void Parser::prescan_enums() {
+    std::vector<std::pair<std::string, EnumInfo>> found;
+    collect_enums(tokens_, found, false);
+    for (auto& e : found) {
+        // Ilk bildirim kazanir; ikincisini parse_enum_decl "yeniden
+        // tanimlandi" diye reddeder (decl_token karsilastirmasi).
+        if (enums_.count(e.first)) continue;
+        enums_[e.first] = std::move(e.second);
+    }
+    prescan_imported_enums();
+}
+
+// ---- import edilen modulun enum'lari (K028) -------------------------------
+namespace {
+TulparImportLoader g_import_loader = nullptr;
+std::string g_import_dir;
+
+// Modul basina bir kez sozcuklenir: AOT her modulu ayri ayristiriyor ve her
+// ayristirma kendi import'larini yeniden tarar; kaynak ayniysa (ozet) sonuc
+// yeniden kullanilir. Anahtar dizin + ad — LSP'de dosya degisince ozet tutmaz
+// ve yeniden sozcuklenir.
+struct ScanEnum {
+    std::vector<std::pair<std::string, long long>> members;
+    size_t decl_token = 0;
+};
+struct ImportedEnumScan {
+    bool filled = false;
+    size_t src_hash = 0;
+    std::vector<std::pair<std::string, ScanEnum>> enums;
+    std::vector<std::string> imports;
+    std::string dir;
+};
+std::unordered_map<std::string, ImportedEnumScan>& import_scan_cache() {
+    static std::unordered_map<std::string, ImportedEnumScan> c;
+    return c;
+}
+
+// Token dizisindeki `import "<ad>"` adlari (ust duzey olmasi gerekmez:
+// AOT da yalniz ust duzeyi isliyor ama yanlis pozitif burada zararsiz —
+// bulunamayan modul sessizce atlanir).
+std::vector<std::string> collect_imports(const std::vector<Token>& toks) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i + 1 < toks.size(); i++) {
+        if (toks[i].type() == TOKEN_IMPORT && toks[i + 1].type() == TOKEN_STRING_LITERAL)
+            out.push_back(toks[i + 1].value());
+    }
+    return out;
+}
+}  // namespace
+
+void tulpar_parser_set_import_loader(TulparImportLoader fn) { g_import_loader = fn; }
+void tulpar_parser_set_import_dir(const std::string& dir) { g_import_dir = dir; }
+
+void Parser::prescan_imported_enums() {
+    if (!g_import_loader) return;
+    std::vector<std::string> roots = collect_imports(tokens_);
+    if (roots.empty()) return;
+    // (ad, ice aktaranin dizini, derinlik) — AOT'nin cozum sirasi gibi.
+    struct Item { std::string name, from_dir; int depth; };
+    std::vector<Item> work;
+    for (auto it = roots.rbegin(); it != roots.rend(); ++it)
+        work.push_back({*it, g_import_dir, 0});
+    std::unordered_map<std::string, bool> visited;
+    while (!work.empty()) {
+        Item cur = work.back();
+        work.pop_back();
+        if (cur.depth > 8) continue;
+        std::string src, dir;
+        if (!g_import_loader(cur.name, cur.from_dir, src, dir)) continue;
+        const std::string key = dir + '\x1f' + cur.name;
+        if (visited.count(key)) continue;
+        visited[key] = true;
+        ImportedEnumScan& scan = import_scan_cache()[key];
+        const size_t h = std::hash<std::string>{}(src);
+        if (!scan.filled || scan.src_hash != h) {
+            scan = ImportedEnumScan{};
+            scan.filled = true;
+            scan.src_hash = h;
+            scan.dir = dir;
+            // Ucuz on eleme: ne `enum` ne `import` geciyorsa sozcukleme yok.
+            if (src.find("enum") != std::string::npos || src.find("import") != std::string::npos) {
+                std::vector<Token> toks;
+                try {
+                    Lexer lx(src);
+                    while (true) {
+                        Token t = lx.next_token();
+                        const bool eof = t.type() == TOKEN_EOF;
+                        toks.push_back(std::move(t));
+                        if (eof) break;
+                    }
+                } catch (...) {
+                    toks.clear();
+                }
+                collect_enums(toks, scan.enums, true);
+                scan.imports = collect_imports(toks);
+            }
+        }
+        for (const auto& e : scan.enums) {
+            if (enums_.count(e.first)) continue;  // yerel / ilk gelen kazanir
+            EnumInfo info;
+            info.members = e.second.members;
+            info.decl_token = SIZE_MAX;
+            enums_[e.first] = std::move(info);
+        }
+        for (auto it = scan.imports.rbegin(); it != scan.imports.rend(); ++it)
+            work.push_back({*it, scan.dir, cur.depth + 1});
     }
 }
 

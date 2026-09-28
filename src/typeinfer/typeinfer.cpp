@@ -1739,6 +1739,45 @@ static bool load_import_source(const std::string &name, std::string &out) {
   return false;
 }
 
+// K028: ayristiricinin import on taramasi (modul enum'lari) icin yukleyici.
+// Cozum sirasi AOT'nin import_load_module'u ile AYNI — paket-yerel kardes
+// (`from_dir/<ad>.tpr`) dahil; gomulu stdlib hepsinden once.
+static bool parser_import_loader(const std::string &name, const std::string &from_dir,
+                                 std::string &out_src, std::string &out_dir) {
+  out_dir.clear();
+  if (const char *embedded = get_embedded_lib(name.c_str())) {
+    out_src = embedded;
+    return true;
+  }
+  std::vector<std::string> candidates;
+  if (!from_dir.empty()) candidates.push_back(from_dir + "/" + name + ".tpr");
+  candidates.push_back(name);
+  candidates.push_back(name + ".tpr");
+  candidates.push_back("tulpar_modules/" + name + "/" + name + ".tpr");
+  candidates.push_back("tulpar_modules/" + name + ".tpr");
+  for (const auto &path : candidates) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) continue;
+    std::stringstream ss;
+    ss << in.rdbuf();
+    out_src = ss.str();
+    const size_t slash = path.find_last_of("/\\");
+    if (slash != std::string::npos && slash > 0) out_dir = path.substr(0, slash);
+    return true;
+  }
+  return false;
+}
+
+// Derleyici ikilisine baglanan her yol (calistir/derle, typecheck, LSP)
+// ayristiricinin import taramasini alsin diye statik kurulum: parser.cpp'deki
+// isaretci sabit ilklendirmeli (nullptr), yani burasi ondan once de sonra da
+// kosabilir. Runtime kitapligi typeinfer'i baglamaz -> orada tarama yok.
+namespace {
+struct ParserImportLoaderInstall {
+  ParserImportLoaderInstall() { tulpar_parser_set_import_loader(&parser_import_loader); }
+} g_parser_import_loader_install;
+}  // namespace
+
 static std::unique_ptr<ASTNode> parse_module_source(const std::string &source) {
   try {
     Lexer lexer(source);
