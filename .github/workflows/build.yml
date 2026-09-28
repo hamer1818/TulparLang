@@ -633,6 +633,21 @@ jobs:
           ./tests/typeinfer/run.sh
         timeout-minutes: 5
 
+      # WEBSOCKET COK CERCEVE (K270). "Ayni baglantida ardisik recv MinGW'de
+      # fd kaydiriyor / ikinci cerceveyi bozuyor" bildirimi aylarca "Windows
+      # kutusu gerekir" diye acik kaldi (HANDOFF.md, STATUS.md) — Windows CI
+      # 2026-09-21'den beri var ama cok cerceve vakasi HICBIR platformda
+      # olculmuyordu. Harness Python; bu iste python3 bilerek YOK (yukaridaki
+      # MSYS2 notu: suites'teki Python denetimlerini tetiklememek icin), o
+      # yuzden YALNIZ bu adimda kuruluyor. Linux/macOS'ta ayni harness
+      # `build.sh suites` icinde kosuyor.
+      - name: WebSocket cok cerceve (MinGW recv)
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        run: |
+          pacman -S --noconfirm --needed mingw-w64-x86_64-python
+          python3 tests/ws_masked_client_smoke.py ./tulpar
+        timeout-minutes: 8
+
       - name: Paketle + DLL kapisi
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         shell: pwsh

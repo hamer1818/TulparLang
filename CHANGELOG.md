@@ -597,6 +597,17 @@ artık başka bir depo.
   `tests/struct_dizisi_hatalari.sh` (+2 yazım hatası yolu; genişletme
   sabotajıyla ikisi de kırmızı). 16 kıyasın IR'ı birebir aynı.
 
+### Test — WebSocket çok çerçeve; MinGW "ardışık recv" bildirimi ölçümle kapandı
+
+- `tests/ws_masked_client_smoke.py` tek çerçeve gönderiyordu; aylarca "Windows
+  kutusu gerekir" diye açık kalan "MinGW'de ardışık `wings_ws_recv_frame`
+  fd kaydırıyor" bildirimi bu yüzden hiçbir yerde ölçülemiyordu. Artık aynı
+  bağlantıda beş maskeli çerçeve (kısa, 16-bit uzunluk, tek `send`'de bitişik
+  iki çerçeve, son kısa); Windows CI'da ayrı bir adımda koşuyor (orada
+  python yalnız o adımda kuruluyor). Sonuç: MinGW64, Linux ve macOS'ta PASS —
+  belirti güncel ağaçta yok. Pozitif kontrol: sunucu bir çerçeve eksik
+  yankılayınca sonda 4/5 ile kırmızı.
+
 ### Added — tipli struct dizisi `Dusman[]` (P1.1)
 
 ```tpr

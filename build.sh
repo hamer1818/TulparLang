@@ -411,7 +411,10 @@ if [ "$ACTION" = "suites" ]; then
         # Ikisi de gercek soket kullaniyor ve sozlesmenin YAZILI olup
         # SINANMAYAN yarisini kapatiyor: `ws_masked_client_smoke.py` RFC 6455'in
         # istemci->sunucu MASKELI yonunu (ornekler yalniz maskesiz yonu
-        # kapsiyordu), `wings_tls_smoke.py` ise `wings_tls` dinleyicisini.
+        # kapsiyordu) — 2026-09-27'den beri AYNI baglantida bes cerceve
+        # (16-bit uzunluk + tek send'de bitisik iki cerceve dahil; Windows
+        # CI'da ayri adimda da kosuyor) — `wings_tls_smoke.py` ise
+        # `wings_tls` dinleyicisini.
         #
         # ⚠ NEDEN GECIKTI VE NE BULUNDU: bunlar "elle kosulur" diye duruyordu
         # ve 2026-09-11 denetiminde ILK KEZ kosuldugunda `wings_tls_smoke.py`

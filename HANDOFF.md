@@ -40,10 +40,14 @@ round. Everything lives in `lib/wings.tpr` + one new C builtin:
   curl-verified). Full regression green: all examples + 33 focused suites.
 - Version bumped to 3.6.0 (CMakeLists + CHANGELOG + STATUS.md + banner).
 
-### The ONE wings item still open
-- **WebSocket recv multi-frame** — MinGW64/Windows-only calling-conv quirk
-  (STATUS.md "WebSocket recv" note). Cannot be reproduced/verified on Linux;
-  needs a Windows box. Do NOT blind-fix.
+### ~~The ONE wings item still open~~ — closed by measurement (2026-09-27)
+- **WebSocket recv multi-frame** — was a MinGW64/Windows-only calling-conv
+  report that "needed a Windows box". Windows CI has existed since
+  2026-09-21; `tests/ws_masked_client_smoke.py` now sends five masked frames
+  on ONE connection (short, 16-bit length, two coalesced in one send,
+  trailing) and the `build-windows` job runs it in its own step: **PASS on
+  MinGW64** (and Linux, macOS). The quirk does not reproduce on the current
+  tree; no code change was needed. The gate keeps it from coming back.
 
 ## 3. Quick deploy cheatsheet
 
