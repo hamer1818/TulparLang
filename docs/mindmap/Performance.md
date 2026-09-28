@@ -1015,3 +1015,11 @@ Bu işten önce "kutulamanın çağrı maliyeti 2,4 kat" diye tahmin etmiştim
 ABI payı ~1,5 kat; kalan fark **kutulu aritmetiğin etiket dağıtımı**. Onu
 kapatacak şey ABI değil, tip özelleştirmesi (`n`in int olduğunu bilmek).
 
+## Wings TLS yük altında (2026-06-22)
+
+`examples/api_wings_tls.tpr`, OpenSSL 3.5.5, 1000 istek / 50 paralel: **0 hata,
+~663 istek/sn**, keep-alive gecikmesi ~1,5 ms, sunucu kararlı, günlük temiz.
+Makine kaydı o gün yazılmamış; sayı STATUS.md "Küçük cila turu (2026-06-22)"
+kaydından. Roadmap'teki "TLS yük altında test edildi → [[Performance]]"
+bağlantısı bu bölüme bakar (2026-09-28'e dek bu belgede TLS ölçümü yoktu).
+Düz HTTP tavanı ve Node kıyası için `benchmarks/WINGS_STRESS.md`.
