@@ -71,6 +71,11 @@ struct TypeInferContext {
   std::unordered_map<std::string, std::string> fn_return_enum;
   std::unordered_map<std::string, std::vector<std::string>> fn_param_enum;
   std::string current_return_enum;   // gezilen fonksiyonun enum donus tipi
+  // K061: struct (TYPE_CUSTOM) ADLARI — kullanici fonksiyonunun donus ve
+  // parametre struct adlari. Sembollerinki TypeSymbol::custom_type_name'de.
+  // Ad bilinmiyorsa kayit yok: karsilastirma yalniz iki taraf da biliniyorsa.
+  std::unordered_map<std::string, std::string> fn_return_custom;
+  std::unordered_map<std::string, std::vector<std::string>> fn_param_custom;
 
   // P23 — COZUM ile BASLATMA ayri sorulardir.
   //
