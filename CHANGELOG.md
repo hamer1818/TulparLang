@@ -374,6 +374,27 @@ oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
   Linux dışında görünür biçimde atlanır). LSP açıklamaları "ikili güvenli"
   diyor.
 
+### Eklendi — async hata izi: yakalanmayan hatada await zinciri, yutulan hatada uyarı
+
+- Async görevde doğan yakalanmayan hata artık nereden geldiğini söylüyor:
+  ```
+  Uncaught Exception: dosya bulunamadi: seviye3
+    async iz (await zinciri, en distaki once):
+      at oyun_baslat  (await ile iletti)
+         seviye_yukle  (await ile iletti)
+         veri_oku  <- hata burada firlatildi
+  ```
+  Eskiden yalnız ilk satır basılıyordu.
+- Hiç await edilmeyen görevin hatası SESSİZCE yutuluyordu (çıkış 0). Artık
+  program sonunda stderr uyarısı: `Uyari: hic await edilmeyen async gorevin
+  hatasi yutuldu — unutulan: ...`. Çıkış kodu değişmedi; iptal edilen görevler
+  uyarı vermez.
+- Maliyet yalnız red yolunda: spawn+await 118,9 → 119,6 ns (gürültü içi).
+- Kapı `tests/async_iz.sh` (`build.sh suites`), 5 denetim; pozitif kontrol:
+  kanca ve program sonu raporu sökülünce 2 denetim kırmızı.
+- K156'nın DAP kısmı (coroutine'leri hata ayıklayıcıda ayrı thread olarak
+  göstermek) açık.
+
 ### Değişti — async artık Android'de ve web'de var; masaüstünde 3 kat hızlı
 
 - `runtime/tulpar_async.cpp` x86_64 ve AArch64'te (Linux, macOS, Android)

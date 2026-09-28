@@ -294,6 +294,10 @@ typedef struct ObjPromise {
   // Bu promise'i ureten gorev (engine-private Task*; async fn / gather /
   // with_timeout bagi). Gorev bitince null. cancel() buradan gorevi bulur.
   void *task;
+  // Red kokeni (engine-private AsyncOrigin*): hangi gorev firlatti, hangi
+  // promise'in reddini await'te iletti, biri await etti mi. Yalniz red
+  // yolunda ayrilir; yakalanmayan hatada await zinciri buradan basilir (K156).
+  void *origin;
 } ObjPromise;
 
 // Heap-allocated struct (Plan 04 v2 — heap promotion).
