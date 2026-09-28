@@ -1,0 +1,15 @@
+// Beklenen: ayni adli iki struct bildirimi reddedilmeli (plans/04 PR2, K062).
+//
+// Tani vardi (typeinfer "Duplicate struct/type declaration") ama hicbir
+// fixture onu kilitlemiyordu. Codegen ilk bildirimi kaydedip ikincisini
+// sessizce yok sayiyor — ikinci yerlesimi yazan kod ilkinin yuvalarina yazar.
+
+// EXPECT: [typecheck]
+// EXPECT: Duplicate struct/type declaration 'A'
+
+struct A { int x; }
+struct A { float y; float z; }
+
+A a;
+a.x = 1;
+print(a.x);
