@@ -337,6 +337,31 @@ oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
   Linux dışında görünür biçimde atlanır). LSP açıklamaları "ikili güvenli"
   diyor.
 
+### Eklendi — async zaman aşımı ve iptal: `with_timeout(p, ms)`, `cancel(p)`
+
+- `await with_timeout(getir(), 500)`: `p` süresinde yerine gelmezse
+  `"zaman asimi / timeout"` ile reddedilir (`try/catch` yakalar) ve `p`'nin işi
+  **iptal edilir** — zaman aşımına uğrayan iş arkada koşmaya devam etmez.
+  Zamanında biten işte zamanlayıcı kaldırılıyor; `with_timeout(x, 60000)`
+  programı 60 sn bekletmez.
+- `cancel(p) -> bool`: kooperatif ve tek atış. Görev bir sonraki `await`'inde
+  `"iptal edildi / cancelled"` fırlatır (yakalayıp temizlik yapabilir); park
+  etmiş görev hemen uyandırılır; hiç başlamamış görevin gövdesi hiç koşmaz;
+  `gather` iptali çocuklarını da iptal eder; görevsiz promise (sleep, async
+  HTTP) doğrudan reddedilir. Bitmiş görevde `false`. Hata metinleri yerelden
+  bağımsız, iki dilli.
+- Yığın havuzu: biten coroutine'in 256 KB yığını thread başına havuza döner.
+  Ölçü (Ryzen 7 9800X3D, 2026-09-28, turla eşlenmiş 11 tur, medyan): 4'lü
+  `gather` 4560 → 3463 ns (−%24); spawn+await 358,7 → 360,1 ns (gürültü içi).
+- Windows sağlamlaştırması: zamanlayıcı kapları (`thread_local` vector'lar)
+  thread başına yığında, `thread_local` işaretçinin arkasında. Yıkıcılı bir
+  `thread_local`'ın ilk erişimi coroutine (fiber) içinde olunca Windows CI'da
+  async paketi 3 koşumda 3 kez çöktü (bu dizinin sonraki bir dalında ölçüldü);
+  işaretçiyle temiz. Hız farkı yok.
+- Wings handler zaman aşımı async handler dağıtımına (K265) bağlı; açık.
+- `tests/async.test.tpr` +5. Pozitif kontrol: zamanlayıcının iptali ve
+  `cancelled` bayrağı sökülünce 4 test kırmızı.
+
 ### Düzeltildi — iki thread aynı anda async kod koşturunca süreç çöküyordu
 
 - Async zamanlayıcının durumu (hazır kuyruğu, zamanlayıcılar, G/Ç kaynakları,

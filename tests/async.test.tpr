@@ -287,6 +287,79 @@ func run_async_in_threads() {
     assert_eq_int(top, 7200);
 }
 
+// --- Zaman asimi + iptal (K112, plan 06 PR6, 2026-09-28) -------------------
+// Hata degerleri yerelden bagimsiz, iki dilli sabit metin: "zaman asimi /
+// timeout", "iptal edildi / cancelled".
+int g_iptal_adim = 0;
+async func _ip_uzun(): int {
+    int i = 0;
+    while (i < 200) {
+        await sleep_async(5);
+        g_iptal_adim = g_iptal_adim + 1;
+        i = i + 1;
+    }
+    return 99;
+}
+async func _ip_yakalayan(): str {
+    try {
+        await sleep_async(5000);
+        return "bitti";
+    } catch (e) {
+        return "yakaladi: " + toString(e);
+    }
+}
+func run_timeout_fast_path() {
+    // Zamaninda biten is: sonucu gelir; 60 sn'lik zamanlayici programi
+    // BEKLETMEZ (bag erken bitince zamanlayici kaldiriliyor).
+    int a = await with_timeout(after(5, 7), 60000);
+    assert_eq_int(a, 7);
+    assert_eq_int(await with_timeout(42, 10), 42); // promise olmayan: aynen
+}
+func run_timeout_fires_and_cancels() {
+    g_iptal_adim = 0;
+    str m = "YOK";
+    float t0 = clock_ms();
+    try {
+        int b = await with_timeout(_ip_uzun(), 30);
+        m = "ULASILMAMALI " + toString(b);
+    } catch (e) {
+        m = toString(e);
+    }
+    assert_contains(m, "timeout");
+    assert(clock_ms() - t0 < 1000.0, "zaman asimi 30 ms'de dusmeli, 1 sn'den once");
+    // Sarilan is IPTAL edildi: adim sayaci artik artmiyor.
+    int o_an = g_iptal_adim;
+    await sleep_async(50);
+    assert_eq_int(g_iptal_adim, o_an);
+    assert(o_an < 200, "is bitmeden kesilmeli");
+}
+func run_cancel_is_catchable() {
+    var p = _ip_yakalayan();
+    await sleep_async(5);
+    assert_eq_bool(cancel(p), true);
+    assert_eq_str(await p, "yakaladi: iptal edildi / cancelled");
+    assert_eq_bool(cancel(p), false); // bitmis gorev
+}
+func run_cancel_before_start() {
+    var q = after(5, 1);
+    assert_eq_bool(cancel(q), true);
+    str m = "YOK";
+    try { int r = await q; m = "ULASILMAMALI"; } catch (e) { m = toString(e); }
+    assert_contains(m, "cancelled");
+}
+func run_cancel_gather_cancels_children() {
+    g_iptal_adim = 0;
+    var g = gather(_ip_uzun(), _ip_uzun());
+    await sleep_async(12);
+    cancel(g);
+    str m = "YOK";
+    try { var r = await g; m = "ULASILMAMALI"; } catch (e) { m = toString(e); }
+    assert_contains(m, "cancelled");
+    int o_an = g_iptal_adim;
+    await sleep_async(40);
+    assert_eq_int(g_iptal_adim, o_an); // iki cocuk da durdu
+}
+
 print("=== async/await tests ===");
 test("basic spawn + await", "run_basic");
 test("await non-promise identity", "run_identity");
@@ -301,6 +374,11 @@ test("reject propagates through coroutine", "run_reject_propagates");
 test("coroutine catches own throw", "run_reject_self_heal");
 test("gather child rejection re-raises", "run_gather_reject");
 test("async in 4 threads concurrently (per-thread scheduler)", "run_async_in_threads");
+test("with_timeout: fast path + non-promise", "run_timeout_fast_path");
+test("with_timeout: fires, rejects, cancels inner work", "run_timeout_fires_and_cancels");
+test("cancel: catchable at await point, one-shot", "run_cancel_is_catchable");
+test("cancel: before start rejects, body never runs", "run_cancel_before_start");
+test("cancel: gather cancels its children", "run_cancel_gather_cancels_children");
 test("16-param async fn", "run_sixteen_params");
 test("20-param async fn (was VOID past 16)", "run_twenty_params");
 test("33-param async fn throws at call site", "run_over_cap_throws");

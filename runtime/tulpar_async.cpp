@@ -83,6 +83,8 @@ VMValue aot_get_exception(void);
 void *aot_eh_context_new(void);
 void aot_eh_context_free(void *ctx);
 void *aot_eh_context_swap(void *ctx);
+// Kalici (malloc'lu, olumsuz) dizgi — iptal/zaman asimi hata degeri icin.
+ObjString *aot_intern_string(const char *chars, int length);
 // Runtime array allocators (src/vm/runtime_bindings.cpp). The plain
 // vm_allocate_array/vm_array_push deref the VM*, so the AOT runtime (no VM)
 // must go through these null-safe wrappers, which malloc when vm == nullptr.
@@ -117,12 +119,30 @@ struct Task {
   void *eh_ctx = nullptr;        // this coroutine's exception-handler context
   bool done = false;
   bool started = false;
+  // IPTAL (K112). cancel(p) bayragi kaldirir; gorev bir sonraki `await`
+  // noktasinda (ya da hic baslamadiysa baslarken) iptal hatasini firlatir.
+  // Kooperatif ve TEK ATIS: firlatinca bayrak iner — hatayi yakalayip devam
+  // eden gorev normal biter (asyncio CancelledError ile ayni).
+  bool cancelled = false;
+  // Gorevin su an bekledigi promise (await icinde, yield'den once yazilir).
+  // cancel() gorevi o promise'in bekleyen listesinden cikarip hazir kuyruga
+  // koyar ki park etmis bir gorev iptali HEMEN gorsun.
+  ObjPromise *waiting_on = nullptr;
+  // BAG gorevi (with_timeout): coroutine DEGIL — yigin yok. `link_src`
+  // yerine gelince `result`'u ayni sonucla yerine getirir. resume() bunu
+  // baglam degistirmeden isler.
+  ObjPromise *link_src = nullptr;
 };
 
 // ---- Timer ---------------------------------------------------------------
 struct Timer {
   long long deadline_ms;
   ObjPromise *promise;
+  // 0 = sleep_async: suresi dolunca VOID ile yerine gelir.
+  // 1 = with_timeout: suresi dolunca `promise` ZAMAN ASIMI ile reddedilir ve
+  //     `target` (sarilan is) iptal edilir.
+  int kind = 0;
+  ObjPromise *target = nullptr;
 };
 
 // ---- Background-I/O source -----------------------------------------------
@@ -142,13 +162,92 @@ struct IoSource {
 // thread kendi olay dongusunu kosuyor; bir thread'de olusan promise baska bir
 // thread'de beklenemez (zaten desteklenmiyordu). Arka plan G/C kaynaklari
 // kaydedildikleri thread'in dongusunde yoklanir.
-thread_local std::vector<Task *> g_ready;        // runnable tasks
-thread_local std::vector<Timer> g_timers;        // pending timers (unsorted; min-scanned)
-thread_local std::vector<IoSource> g_io_sources; // background-I/O completion polls
+//
+// Kaplar thread_local NESNE degil, thread_local ISARETCIYLE ulasilan yigin
+// nesnesi. Olculen (2026-09-28, Windows CI, MinGW fiber yolu): yikicili bir
+// thread_local vector'un ILK erisimi bir coroutine'in (fiber'in) icinde
+// oldugunda async paketi uc kosumda uc kez coktu (erisim ihlali + yigin
+// tasmasi, longjmp geri sariminda, yiginin disinda); ayni kaplar isaretcinin
+// arkasina alininca temiz. Mekanizma (cikarim, olculmedi): MinGW'de
+// thread_local yikici kaydi ilk erisimin oldugu fiber'a baglaniyor ve
+// DeleteFiber'da kosuyor — kap, thread hala kullanirken yikiliyor. Isaretci
+// trivially destructible: kayit yok, yikim yok. Bedeli: async kullanan her
+// thread'in birkac bos vector'u thread bitince birakilmiyor. Hiz farki yok
+// (spawn+await 119,5 -> 119,5 ns).
+struct SchedState {
+  std::vector<Task *> ready;        // runnable tasks
+  std::vector<Timer> timers;        // pending timers (unsorted; min-scanned)
+  std::vector<IoSource> io_sources; // background-I/O completion polls
+};
+thread_local SchedState *t_sched = nullptr;
+inline SchedState &sched() {
+  SchedState *st = t_sched;
+  if (__builtin_expect(st == nullptr, 0)) st = t_sched = new SchedState();
+  return *st;
+}
+#define g_ready (sched().ready)
+#define g_timers (sched().timers)
+#define g_io_sources (sched().io_sources)
 thread_local Task *g_current = nullptr;          // task currently executing (null on main)
 
 // How often to poll outstanding background I/O when nothing else is runnable.
 constexpr long long kIoPollMs = 1;
+
+// Iptal / zaman asimi hata degerleri. Yerelden BAGIMSIZ, iki dilli sabit metin:
+// kullanici `contains(toString(e), "iptal")` ya da "cancelled" ile ayirt
+// edebilsin, LC_ALL'a gore degismesin. Kalici (intern) dizgi — promise'te
+// saklanan deger kare/istek arenasi geri sarilinca olmemeli.
+VMValue async_error_value(const char *text) {
+  ObjString *s = aot_intern_string(text, (int)strlen(text));
+  VMValue v;
+  v.type = VM_VAL_OBJ;
+  v.as.obj = (Obj *)s;
+  return v;
+}
+VMValue cancel_error() {
+  static VMValue v = async_error_value("iptal edildi / cancelled");
+  return v;
+}
+VMValue timeout_error() {
+  static VMValue v = async_error_value("zaman asimi / timeout");
+  return v;
+}
+
+// `t`yi `p`nin bekleyen listesinden cikar. Bulunduysa true.
+bool remove_waiter(ObjPromise *p, Task *t) {
+  if (!p || !p->waiters) return false;
+  Task **w = (Task **)p->waiters;
+  for (int i = 0; i < p->nwaiters; i++) {
+    if (w[i] == t) {
+      for (int j = i + 1; j < p->nwaiters; j++) w[j - 1] = w[j];
+      p->nwaiters--;
+      return true;
+    }
+  }
+  return false;
+}
+
+void add_waiter(ObjPromise *p, Task *t) {
+  if (p->nwaiters >= p->cap_waiters) {
+    int nc = p->cap_waiters ? p->cap_waiters * 2 : 4;
+    p->waiters = realloc(p->waiters, sizeof(Task *) * nc);
+    p->cap_waiters = nc;
+  }
+  ((Task **)p->waiters)[p->nwaiters++] = t;
+}
+
+// with_timeout'un zamanlayicisini kaldir (R erken yerine geldi): kalirsa olay
+// dongusu program sonunda suresinin dolmasini BEKLERDI.
+void drop_timeout_timer(ObjPromise *r) {
+  for (size_t i = 0; i < g_timers.size(); i++) {
+    if (g_timers[i].kind == 1 && g_timers[i].promise == r) {
+      g_timers.erase(g_timers.begin() + i);
+      return;
+    }
+  }
+}
+
+int cancel_promise(ObjPromise *p);
 
 #if TULPAR_ASYNC_FIBERS
 thread_local void *g_main_fiber = nullptr;    // scheduler fiber (converted from thread)
@@ -223,6 +322,7 @@ void task_body(Task *t) {
       t->gather = nullptr;
     }
     t->done = true;
+    if (t->result->task == t) t->result->task = nullptr;
     aot_promise_settle(t->result, aot_get_exception(), /*rejected*/ 2);
     return;
   }
@@ -230,6 +330,7 @@ void task_body(Task *t) {
                          : call_user_fn(t->fn, t->args, t->argc);
   aot_try_pop(); // pop the root frame on the normal (non-throwing) path
   t->done = true;
+  if (t->result->task == t) t->result->task = nullptr;
   aot_promise_settle(t->result, rv, /*fulfilled*/ 1);
 }
 
@@ -253,8 +354,65 @@ void ctx_trampoline() {
 }
 #endif
 
+#if !TULPAR_ASYNC_FIBERS
+// Coroutine yigini havuzu (thread basina). Her async cagri 256 KB'lik bir
+// yigin istiyordu (malloc + free); biten gorevin yigini burada bekletilip
+// sonraki gorevde yeniden kullaniliyor. Tavanli: patlama sonrasi (binlerce
+// eszamanli gorev) fazlasi serbest birakilir, havuz bellegi tutmaz.
+// Olculdu 2026-09-28 (Ryzen 7 9800X3D): bkz. CHANGELOG K112 girdisi.
+constexpr size_t kStackPoolMax = 32;
+// Thread bitince havuzdaki yiginlar da birakilir (thread_create'in isci
+// thread'leri biter; havuz onlarla birlikte 8 MB'a kadar sizdirirdi).
+struct StackPool {
+  std::vector<char *> v;
+  ~StackPool() {
+    for (char *st : v) free(st);
+  }
+};
+thread_local StackPool g_stack_pool;
+char *stack_acquire() {
+  if (!g_stack_pool.v.empty()) {
+    char *st = g_stack_pool.v.back();
+    g_stack_pool.v.pop_back();
+    return st;
+  }
+  return static_cast<char *>(malloc(kCoroStackSize));
+}
+void stack_release(char *st) {
+  if (!st) return;
+  if (g_stack_pool.v.size() < kStackPoolMax) g_stack_pool.v.push_back(st);
+  else free(st);
+}
+#endif
+
 // Resume a task: run it until it yields (await) or finishes.
 void resume(Task *t) {
+  if (t->link_src) {
+    // with_timeout bagi: kaynak yerine geldi -> sonucu aktar. Yigin yok.
+    ObjPromise *src = t->link_src, *dst = t->result;
+    if (dst->task == t) dst->task = nullptr;
+    drop_timeout_timer(dst);
+    if (dst->state == 0) aot_promise_settle(dst, src->value, src->state);
+    delete t;
+    return;
+  }
+  if (t->cancelled && !t->started) {
+    // Hic baslamadan iptal: kullanici kodu KOSMAZ, promise reddedilir.
+    if (t->result->task == t) t->result->task = nullptr;
+    if (t->gather) {
+      GatherState *gs = t->gather;
+      for (int i = 0; i < gs->n; i++) arc_release_vmvalue(&gs->items[i]);
+      free(gs->items);
+      delete gs;
+    }
+    if (t->args) {
+      for (int i = 0; i < t->argc; i++) arc_release_vmvalue(&t->args[i]);
+      free(t->args);
+    }
+    aot_promise_settle(t->result, cancel_error(), /*rejected*/ 2);
+    delete t;
+    return;
+  }
   g_current = t;
   // Install this coroutine's exception-handler context for the duration of the
   // slice, restoring the caller's (scheduler / outer coroutine) afterwards so
@@ -272,7 +430,7 @@ void resume(Task *t) {
   if (!t->started) {
     t->started = true;
     getcontext(&t->ctx);
-    t->stack = static_cast<char *>(malloc(kCoroStackSize));
+    t->stack = stack_acquire();
     t->ctx.uc_stack.ss_sp = t->stack;
     t->ctx.uc_stack.ss_size = kCoroStackSize;
     t->ctx.uc_link = &g_main_ctx;
@@ -287,7 +445,7 @@ void resume(Task *t) {
 #if TULPAR_ASYNC_FIBERS
     if (t->fiber) DeleteFiber(t->fiber);
 #else
-    free(t->stack);
+    stack_release(t->stack);
 #endif
     if (t->args) free(t->args);
     if (t->eh_ctx) aot_eh_context_free(t->eh_ctx);
@@ -333,7 +491,16 @@ bool poll_io_sources() {
 }
 
 // Run one scheduler step. Returns false when there is nothing left to do.
-bool loop_step() {
+//
+// `drain` = program sonu bosaltmasi (aot_event_loop_run). Orada BEKLEYENI
+// OLMAYAN bir sleep_async zamanlayicisi hicbir seyi uyandiramaz: calisacak
+// gorev yok, G/C yok, onu bekleyen de yok — suresini beklemek yalniz cikisi
+// geciktirir. Bu, iptal (K112) ile somutlasti: iptal edilen gorev
+// `sleep_async(1000)`in bekleyen listesinden cikiyor ve program cikisi 1 sn
+// bekliyordu (olculdu 2026-09-28). Ana thread'in `await`i ise (drain=false)
+// her zamanlayiciyi canli sayar: orada bekleyen ANA thread'dir, gorev degil,
+// yani bekleyen listesinde gorunmez.
+bool loop_step(bool drain = false) {
   // Settle any background I/O that finished since the last tick first; this may
   // queue ready tasks (waiters of the settled promise).
   bool io_done = poll_io_sources();
@@ -347,6 +514,12 @@ bool loop_step() {
   if (io_done) return true;
 
   bool has_io = !g_io_sources.empty();
+  if (drain && !has_io) {
+    bool live = false;
+    for (const Timer &tm : g_timers)
+      if (tm.kind != 0 || tm.promise->nwaiters > 0) { live = true; break; }
+    if (!live) return false;
+  }
   if (!g_timers.empty()) {
     // Find the earliest deadline, sleep until it, fire all that are due. While
     // background I/O is outstanding, cap the wait so we keep polling it.
@@ -359,17 +532,29 @@ bool loop_step() {
       async_sleep_ms(wait);
     long long t_now = now_ms();
     // Collect & fire all due timers (settling moves waiters onto g_ready).
-    std::vector<ObjPromise *> fire;
+    std::vector<Timer> fire;
     std::vector<Timer> keep;
     for (auto &tm : g_timers) {
-      if (tm.deadline_ms <= t_now) fire.push_back(tm.promise);
+      if (tm.deadline_ms <= t_now) fire.push_back(tm);
       else keep.push_back(tm);
     }
     g_timers.swap(keep);
     VMValue v;
     v.type = VM_VAL_VOID;
     v.as.int_val = 0;
-    for (ObjPromise *p : fire) aot_promise_settle(p, v, 1);
+    for (const Timer &tm : fire) {
+      if (tm.kind == 1) {
+        // with_timeout: sure doldu. Sonucu ZAMAN ASIMI ile reddet, sarilan
+        // isi iptal et (asyncio.wait_for gibi — zaman asimina ugrayan is
+        // arkada kosmaya devam etmesin).
+        if (tm.promise->state == 0) {
+          aot_promise_settle(tm.promise, timeout_error(), 2);
+          cancel_promise(tm.target);
+        }
+      } else {
+        aot_promise_settle(tm.promise, v, 1);
+      }
+    }
     return true;
   }
   if (has_io) {
@@ -379,6 +564,35 @@ bool loop_step() {
     return true;
   }
   return false;
+}
+
+// Promise'i iptal et. Donus: 1 = iptal istendi / uygulandi, 0 = zaten yerine
+// gelmis ya da iptal edilecek bir sey yok.
+//   * gorev promise'i (async fn, gather): gorev bayraklanir; park etmisse
+//     uyandirilir, bir sonraki await'inde iptal hatasini firlatir. gather
+//     iptal edilirse cocuklari da iptal edilir (yapisal).
+//   * with_timeout sonucu: sarilan kaynak iptal edilir; sonuc onu izler.
+//   * gorevsiz promise (sleep_async, async HTTP): dogrudan reddedilir.
+int cancel_promise(ObjPromise *p) {
+  if (!p || p->state != 0) return 0;
+  Task *t = (Task *)p->task;
+  if (!t) {
+    aot_promise_settle(p, cancel_error(), 2);
+    return 1;
+  }
+  if (t->link_src) return cancel_promise(t->link_src);
+  if (t->done) return 0;
+  t->cancelled = true;
+  if (t->gather) {
+    GatherState *gs = t->gather;
+    for (int i = 0; i < gs->n; i++)
+      if (IS_PROMISE(gs->items[i])) cancel_promise(AS_PROMISE(gs->items[i]));
+  }
+  if (t != g_current && t->waiting_on && remove_waiter(t->waiting_on, t)) {
+    t->waiting_on = nullptr;
+    g_ready.push_back(t);
+  }
+  return 1;
 }
 
 } // namespace
@@ -401,6 +615,7 @@ ObjPromise *aot_promise_new(void) {
   p->waiters = nullptr;
   p->nwaiters = 0;
   p->cap_waiters = 0;
+  p->task = nullptr;
   return p;
 }
 
@@ -449,6 +664,7 @@ ObjPromise *aot_async_spawn(void *fn, VMValue *args, int argc) {
     for (int i = 0; i < argc; i++) arc_retain_vmvalue(&t->args[i]);
   }
   t->result = aot_promise_new();
+  t->result->task = t;
   g_ready.push_back(t);
   return t->result;
 }
@@ -470,15 +686,21 @@ VMValue aot_await(VMValue awaited) {
 
   if (g_current) {
     // Inside a coroutine: register as a waiter and yield until settled.
+    Task *t = g_current;
     while (p->state == 0) {
-      Task *t = g_current;
-      if (p->nwaiters >= p->cap_waiters) {
-        int nc = p->cap_waiters ? p->cap_waiters * 2 : 4;
-        p->waiters = realloc(p->waiters, sizeof(Task *) * nc);
-        p->cap_waiters = nc;
-      }
-      ((Task **)p->waiters)[p->nwaiters++] = t;
+      if (t->cancelled) break;
+      add_waiter(p, t);
+      t->waiting_on = p;
       yield_to_scheduler(t);
+      t->waiting_on = nullptr;
+    }
+    if (t->cancelled) {
+      // Iptal bu await noktasinda gorunur: tek atis — bayrak iner, hata
+      // coroutine'in kendi yiginina firlar (kullanici try/catch'i yakalar,
+      // yoksa task_body kokunden promise reddedilir).
+      t->cancelled = false;
+      VMValue ce = cancel_error();
+      aot_throw_ptr(&ce);
     }
     // A rejected promise re-raises in the awaiting coroutine (caught by a user
     // try/catch on its stack, or its task_body root → rejects its own promise).
@@ -518,13 +740,70 @@ ObjPromise *aot_gather(VMValue *args, int argc) {
   Task *t = new Task();
   t->gather = gs;
   t->result = aot_promise_new();
+  t->result->task = t;
   g_ready.push_back(t);
   return t->result;
 }
 
 void aot_event_loop_run(void) {
   ensure_scheduler_inited();
-  while (loop_step()) { /* drain */ }
+  while (loop_step(/*drain*/ true)) { /* drain */ }
+}
+
+// with_timeout(p, ms) -> promise (K112). `p` `ms` milisaniye icinde yerine
+// gelirse onun sonucu; gelmezse ZAMAN ASIMI ile reddedilir ve `p`nin isi iptal
+// edilir. Promise olmayan ya da zaten yerine gelmis `p` oldugu gibi doner.
+// Sonuca bagli iki sey var: kaynagin bekleyen listesindeki BAG gorevi (yigin
+// yok, resume() baglam degistirmeden aktarir) ve zamanlayici (kind 1). Hangisi
+// once olursa sonucu belirler; bag erken biterse zamanlayiciyi kaldirir.
+VMValue aot_async_with_timeout_ptr(VMValue *pv, VMValue *msv) {
+  VMValue none;
+  none.type = VM_VAL_VOID;
+  none.as.int_val = 0;
+  if (!pv) return none;
+  VMValue v = *pv;
+  if (!IS_PROMISE(v) || AS_PROMISE(v)->state != 0) return v;
+  long long ms = 0;
+  if (msv && IS_INT(*msv)) {
+    ms = AS_INT(*msv);
+  } else if (msv && IS_FLOAT(*msv)) {
+    ms = (long long)AS_FLOAT(*msv);
+  } else {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: with_timeout() ikinci arguman milisaniye (sayi) bekler",
+        "Runtime Error: with_timeout() expects milliseconds (a number) as its second argument"));
+    return v;
+  }
+  ensure_scheduler_inited();
+  ObjPromise *src = AS_PROMISE(v);
+  ObjPromise *r = aot_promise_new();
+  Task *link = new Task();
+  link->link_src = src;
+  link->result = r;
+  r->task = link;
+  add_waiter(src, link);
+  Timer tm;
+  tm.deadline_ms = now_ms() + (ms < 0 ? 0 : ms);
+  tm.promise = r;
+  tm.kind = 1;
+  tm.target = src;
+  g_timers.push_back(tm);
+  VMValue out;
+  out.type = VM_VAL_OBJ;
+  out.as.obj = (Obj *)r;
+  return out;
+}
+
+// cancel(p) -> bool (K112). Bkz. cancel_promise.
+VMValue aot_async_cancel_ptr(VMValue *pv) {
+  VMValue out;
+  out.type = VM_VAL_BOOL;
+  out.as.int_val = 0;
+  if (pv && IS_PROMISE(*pv)) {
+    ensure_scheduler_inited();
+    out.as.bool_val = cancel_promise(AS_PROMISE(*pv)) != 0;
+  }
+  return out;
 }
 
 } // extern "C"
