@@ -65,6 +65,31 @@ else
 fi
 
 # 2) Calisma
+#
+# ARAC ZINCIRI KONTROLU. macOS arm64 CI'da (brew llvm@18, 2026-09-28)
+# ASan'li ikili main'e hic varmadi: `sample` yigini ASan'in KENDI acilisinda
+# kilitlendigini gosterdi — AsanInitInternal -> InitializeShadowMemory ->
+# get_dyld_hdr -> dyld_shared_cache_iterate_text_swift -> _Block_copy ->
+# malloc -> AsanInitFromRtl -> StaticSpinMutex::LockSlow (kendi kilidini
+# bekliyor). Yani sorun Tulpar kodunda degil, bu macOS'un dyld'i ile bu
+# compiler-rt surumu arasinda. Bunu IDDIA etmek yerine OLCUYORUZ: ayni
+# linkleyiciyle derlenen DUZ bir C++ programi da ASan'la asiliyorsa
+# calisma denetimleri gorunur atlanir; duz program calisip Tulpar ikilisi
+# asiliyorsa bu bizim hatamizdir ve DUSER.
+printf 'int main() { return 0; }\n' > "$TMP/kontrol.cpp"
+KONTROL_OK=1
+if "${TULPAR_CC:-clang++}" -fsanitize=address "$TMP/kontrol.cpp" -o "$TMP/kontrol" > "$TMP/kontrol.log" 2>&1; then
+    sureli 30 "$TMP/kontrol" > /dev/null 2>&1; KRC=$?
+    if [ $KRC -ne 0 ]; then
+        KONTROL_OK=0
+        echo "  ATLANDI  calisma denetimleri: bu arac zincirinde ASan runtime'i TULPAR'DAN BAGIMSIZ asiliyor/dusuyor (duz C++ kontrol programi rc=$KRC; 142 = 30 sn'de bitmedi)"
+    fi
+else
+    KONTROL_OK=0
+    echo "  ATLANDI  calisma denetimleri: ${TULPAR_CC:-clang++} -fsanitize=address duz programi bile derleyemiyor"
+    sed -n '1,3p' "$TMP/kontrol.log" | sed 's/^/      /'
+fi
+if [ $KONTROL_OK -eq 1 ]; then
 OUT=$(sureli 60 "$TMP/asan" 2>"$TMP/asan_run.err"); RC=$?
 if [ $RC -eq 0 ] && [ "$OUT" = "12:tulpar" ]; then
     gecti "sanitize'li ikili dogru cikti, cikis 0 (sizinti denetimi varsayilan kapali)"
@@ -86,6 +111,7 @@ if ASAN_OPTIONS=help=1 sureli 60 "$TMP/asan" 2>&1 | grep -q 'AddressSanitizer'; 
     gecti "ASan runtime'i yuklu (ASAN_OPTIONS=help=1 bayrak listesi)"
 else
     dustu "ASan runtime'i YUKLU DEGIL — IR enstrumante ama baglanmamis?"
+fi
 fi
 
 # 3) Onbellek
@@ -110,4 +136,8 @@ echo "$O" | grep -q 'Cache hit' && gecti "kontrol: ayni kipte ikinci derleme isa
     && gecti "build disinda --sanitize: net hata" || dustu "build disinda --sanitize rc=$RC"
 
 if [ $FAIL -ne 0 ]; then echo "sanitize kapisi DUSTU"; exit 1; fi
-echo "sanitize kapisi temiz ($OK denetim: IR enstrumantasyonu, ASan runtime, onbellek, hata yollari)"
+if [ $KONTROL_OK -eq 1 ]; then
+    echo "sanitize kapisi temiz ($OK denetim: IR enstrumantasyonu, ASan runtime, onbellek, hata yollari)"
+else
+    echo "sanitize kapisi temiz ($OK denetim; CALISMA DENETIMLERI ATLANDI — arac zincirinin ASan'i kendi basina calismiyor, yukariya bakin)"
+fi

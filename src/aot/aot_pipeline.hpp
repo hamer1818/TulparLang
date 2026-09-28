@@ -31,7 +31,6 @@ void aot_set_run_args(const char *quoted);
 // kuralıyla: normal çıkışta 0..255, sinyalle ölümde 128+sinyal). Sürücü
 // AOT_RAN_NONZERO'da bunu döndürür — eskiden her kodu 1'e düzlüyordu.
 int aot_last_run_exit_code(void);
-
 // `tulpar build --sanitize=address` (K166): ÜRETİLEN kodu AddressSanitizer
 // ile enstrümante et (her fonksiyona `sanitize_address` + LLVM `asan`
 // geçişi) ve `-fsanitize=address` ile linkle. Yalnız yerel hedef. 0 = kapalı.
