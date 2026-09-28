@@ -1,0 +1,15 @@
+// Beklenen: yontemin acik bicimi `Rect.scaled(a, ...)` (K003, 2026-09-28)
+// yontemin imzasiyla denetlenir — `self` ilk parametre. Tip adi alici bir
+// degisken sanilmaz; ayni adli serbest fonksiyonun imzasi karismaz.
+
+// EXPECT: [typecheck]
+// EXPECT: expects 2 argument(s), got 3
+// EXPECT: Argument 2 of 'scaled': expected int, got str
+
+struct Rect { int w; int h; }
+func Rect.scaled(int k): int { return self.w * k; }
+func scaled(str s): str { return s; }
+
+Rect a = { w: 2, h: 3 };
+print(Rect.scaled(a, 2, 3));
+print(Rect.scaled(a, "iki"));

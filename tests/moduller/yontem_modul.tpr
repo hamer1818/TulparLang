@@ -1,0 +1,8 @@
+// tests/yontem.test.tpr modulu (K003): `import ... as g` ile gelir. Ayni
+// adli serbest fonksiyon (`norm1`) ve yontem (`Pt.norm1`) yan yana: modul
+// icindeki `self.norm1()` takma ad yeniden yazimindan sonra da yonteme gider.
+struct Pt { int x; int y; }
+func norm1(int v): int { return v * 1000; }
+func Pt.norm1(): int { return abs(self.x) + abs(self.y); }
+func Pt.twice(): int { return self.norm1() * 2; }
+func mkpt(int a, int b): Pt { return { x: a, y: b }; }

@@ -582,6 +582,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # Yontem (`func Tip.ad`) ve yinelenen fonksiyon tanimi hata yollari
+    # (K003 + K002): eskiden ikinci tanim sessizce yutuluyordu.
+    if [ -x tests/yontem_hatalari.sh ]; then
+        if ! bash tests/yontem_hatalari.sh ./tulpar; then
+            echo -e "${RED}yontem hata yollari basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ARGUMAN GECISI. tests/args.test.tpr argv'nin VAR oldugunu olcuyor ama
     # hic arguman GECIRMIYOR; bu bosluk Windows'ta argumanlarin tek tirnakla
     # programa yapisik ulastigi hatayi gizledi (2026-09-21). Kapi uretilen

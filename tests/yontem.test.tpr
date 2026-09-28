@@ -1,0 +1,91 @@
+// YONTEM: `func Tip.ad(...)` + alici tipine gore dagitim (K003 + K002,
+// 2026-09-28).
+//
+// Once `func Point.greet(...)` "fonksiyon adindan sonra '(' bekleniyordu"
+// ile ayristirilamiyordu; tipe gore ayri govde yazmanin tek yolu ayni adli
+// iki serbest fonksiyondu ve ikincisi SESSIZCE yutuluyordu: `func
+// area(Rect)` + `func area(Circle)` ikisi de kabul, `c.area()` Rect govdesini
+// Circle verisiyle kosup 0 basiyordu (beklenen 12). Artik:
+//   * `func Rect.area()` govdede ortuk `Rect self` alir; adi `Rect.area`
+//     oldugundan serbest fonksiyonlarla ve baska tiplerin yontemleriyle
+//     carpismaz;
+//   * `r.area()` alicinin STATIK struct tipine gore `Rect.area(r)`ya cozulur
+//     (ayni adli serbest fonksiyondan once); `Rect.area(r)` acik bicimi de var;
+//   * ayni dosyada ayni adli iki fonksiyon ayristirma hatasi
+//     (tests/yontem_hatalari.sh).
+// Yolda: `k.dbl() + 1` (tipli ifade, native `dbl`) alicisiz cagriliyordu —
+// cop deger (4238593, beklenen 11).
+// Calistir (depo kokunden): ./tulpar tests/yontem.test.tpr
+import "test";
+import "tests/moduller/yontem_modul.tpr" as g;
+
+struct Rect { int w; int h; }
+struct Circle { int r; }
+struct V2 { float x; float y; }
+
+func Rect.area(): int { return self.w * self.h; }
+func Circle.area(): int { return self.r * self.r * 3; }
+func Rect.scaled(int k): Rect { return { w: self.w * k, h: self.h * k }; }
+func Rect.grow() { self.w = self.w + 1; }   // self DEGER kopyasi
+func Rect.label(str on): str { return on + toString(self.area()); }
+func V2.add(V2 o): V2 { return { x: self.x + o.x, y: self.y + o.y }; }
+func V2.len2(): float { return self.x * self.x + self.y * self.y; }
+// Ayni adli serbest fonksiyon: yontem alicinin tipiyle secilir, bu da
+// dogrudan cagrida kalir.
+func area(int n): int { return n * 100; }
+func dbl(int n): int { return n * 2; }
+func via_param(Rect q): int { return q.area() + 1; }
+
+func run_tipe_gore_dagitim() {
+    Rect a = { w: 2, h: 3 };
+    Circle c = { r: 2 };
+    assert_eq_int(a.area(), 6);
+    assert_eq_int(c.area(), 12);          // eskiden 0 (Rect govdesi)
+    assert_eq_int(area(5), 500);          // serbest fonksiyon yerinde
+    assert_eq_int(Rect.area(a), 6);       // acik bicim
+    assert_eq_int(via_param(a), 7);       // parametre alici, tipli ifade
+    assert_eq_str(a.label("alan="), "alan=6");
+}
+
+func run_struct_donus_ve_zincir() {
+    Rect a = { w: 2, h: 3 };
+    Rect b = a.scaled(2);
+    assert_eq_int(b.w, 4);
+    assert_eq_int(b.h, 6);
+    assert_eq_int(a.scaled(3).area(), 54);
+    V2 u = { x: 1.0, y: 2.0 };
+    V2 v = u.add(u);
+    assert_close(v.x, 2.0, 0.000001);
+    assert_close(v.len2(), 20.0, 0.000001);
+}
+
+func run_dizi_elemani_ve_deger_semantigi() {
+    Rect a = { w: 2, h: 3 };
+    Rect[] rs = [];
+    push(rs, a);
+    push(rs, a.scaled(2));
+    assert_eq_int(rs[1].area(), 24);
+    a.grow();                             // kopya uzerinde: a degismez
+    assert_eq_int(a.w, 2);
+}
+
+func run_modul_yontemi() {
+    Pt p = g.mkpt(3, -4);
+    assert_eq_int(p.norm1(), 7);          // modulun yontemi, takma ad yok
+    assert_eq_int(p.twice(), 14);         // modul icinde self.norm1()
+    assert_eq_int(g.norm1(2), 2000);      // ayni adli serbest fonksiyon
+}
+
+func run_tipli_ifade_alici() {
+    int k = 5;
+    int r = k.dbl() + 1;                  // eskiden cop (alicisiz native cagri)
+    assert_eq_int(r, 11);
+}
+
+print("=== yontem: func Tip.ad ===");
+test("alici tipine gore dagitim", "run_tipe_gore_dagitim");
+test("struct donduren yontem ve zincir", "run_struct_donus_ve_zincir");
+test("dizi elemani alici + self deger kopyasi", "run_dizi_elemani_ve_deger_semantigi");
+test("modul yontemi (takma adli import)", "run_modul_yontemi");
+test("tipli ifadede alicili cagri", "run_tipli_ifade_alici");
+test_summary();
