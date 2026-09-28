@@ -1003,6 +1003,14 @@ düzey, aynı dosya; nominal değil. Bkz. `plans/08_oyun_dili_p0.md`.
   `pass/22_checkpoint_local_ok.tpr` (`persist`, içeride bildirim, sayı,
   nokta kapandıktan sonra, global).
 
+### Eklendi — adil kıyasın dondurulmuş CSV'si (checksum kolonuyla)
+
+- `benchmarks/fair/run.py` artık `results.json`'un yanına `results.csv`
+  yazıyor: kıyas × dil başına bir satır, `output` (dokuz dilin ortak
+  bastığı sonuç — checksum) ve `agree` kolonlarıyla. `run.py --csv`
+  yeniden ölçmeden JSON'dan üretir. Depoya 2026-09-11 turunun (#313) 72
+  satırı girdi (8 kıyas × 9 dil).
+
 ### Yeni — paylaşılan global lint'i
 
 `thread_create` işçisinde yazılıp ana akışta senkronizasyonsuz okunan bir
