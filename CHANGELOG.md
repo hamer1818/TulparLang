@@ -744,6 +744,29 @@ kırpma yazarken olur (C ile aynı). Ayrıca `int` bildirilen **yerel**
 değişkenlerde bildirilen tip hiç uygulanmıyordu (`int y = 10; y -= 2.5;`
 yerelde 7,5 küresel de 7 veriyordu); iki yol artık uyuşuyor.
 
+### Düzeltildi — modül ad çakışması: yerel tanım AOT'de kaybediyordu, iki modül çakışması sessizdi
+
+- Ana dosya import edilen modülle **aynı adlı** bir fonksiyon tanımlayınca
+  typeinfer "yerel tanım kazanır" deyip yerel imzayı denetliyor, AOT ise
+  **modülün** gövdesini çalıştırıyordu: `func yardim(): int { return 9; }`
+  yazan program modülün `7`sini basıyordu (sessiz; iki katman ayrışıyordu).
+  Artık AOT de yerel tanımı kullanıyor — modülün kendi çağrıları dahil
+  (yerleşik gölgelemeyle aynı kural) — ve bir `[typecheck]` uyarısı iki
+  tanımın yerini söylüyor.
+- Takma adsız iki modül aynı üst düzey adı tanımlayınca ilki sessizce
+  kazanıyordu; davranış aynı, artık uyarı: iki tanımın yeri + `import "..." as
+  ad` önerisi. Uyarı sayılmıyor (`--strict`/`typecheck`'i kırmızı yapmaz):
+  çakışma kullanıcının düzeltemeyeceği iki stdlib modülü arasında olabiliyor.
+- **Uyarının ilk bulduğu:** `lib/tame.tpr` ve `lib/arcade.tpr` ikisi de
+  `dokunuldu()` tanımlıyor, farklı anlamla (tame: "parmak var mı", arcade:
+  "bu kare yeni dokunuldu mu"); arcade oyunlarında tame'inki kazanıyor —
+  `arcade_ucus` / `arcade_launcher` dokunmayı basılı tutunca her kare
+  çırpıyor, İngilizce ikizi (`tapped()`) doğru. Kütüphane düzeltmesi ayrı iş.
+- Nöbetçi: `tests/modul_ad_cakismasi.test.tpr` (eski derleyiciyle `yardim()`
+  7 → kırmızı), `tests/modul_ad_cakismasi.sh` (`build.sh suites`, 5/5;
+  eskisiyle 3'ü kırmızı). Korpus: yalnız tame/arcade çakışması (27 dosya,
+  uyarı); tanı tabanı değişmedi.
+
 ### Fixed — yan etkiler İKİ KEZ çalışıyordu
 
 `codegen_typed_expr`in ikili işlem dalı iki operandı üretiyor, tipli yol

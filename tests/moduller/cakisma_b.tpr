@@ -1,0 +1,8 @@
+// tests/modul_ad_cakismasi.test.tpr modulu (K043). `ortak` cakisma_a'da da
+// var (ilk ice aktarilan kazanir); `yardim` ve `etiket` ana dosyada da
+// tanimli (YEREL kazanir — modulun kendi cagrilari dahil).
+func ortak(): int { return 2; }
+func yardim(): int { return 7; }
+func kullan(): int { return yardim() * 10; }
+func etiket(x) { return "modul-" + toString(x); }
+func sar(x): str { return toString(etiket(x)) + "!"; }

@@ -56,6 +56,13 @@ struct TypeInferContext {
   std::unordered_map<std::string, DataType> async_fns;
   std::unordered_map<std::string, DataType> future_symbols;
   bool current_is_async = false;
+  // K043: takma adsiz ice aktarilan modullerin ust duzey fonksiyonlari
+  // hangi modulden geldi (ad -> (modul, satir)). Iki FARKLI modul ayni adi
+  // tanimlarsa ilki sessizce kazaniyordu.
+  std::unordered_map<std::string, std::pair<std::string, int>> module_fn_origin;
+  // Ana dosyanin kendi ust duzey fonksiyonlari (ad -> satir): modulun ayni
+  // adli fonksiyonunu programin TAMAMINDA golgeler (K043).
+  std::unordered_map<std::string, int> local_fn_line;
 
   // P23 — COZUM ile BASLATMA ayri sorulardir.
   //

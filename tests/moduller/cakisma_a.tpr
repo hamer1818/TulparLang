@@ -1,0 +1,2 @@
+// tests/modul_ad_cakismasi.test.tpr modulu (K043): `ortak` cakisma_b'de de var.
+func ortak(): int { return 1; }

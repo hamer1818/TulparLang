@@ -1956,6 +1956,55 @@ static void register_module_exports(TypeInferContext *ctx,
       // aliased call sites would look undefined.
       std::string name = alias.empty() ? func->name : alias + "__" + func->name;
       ctx->user_functions.insert(name);
+      // K043: iki FARKLI modul ayni ust duzey adi tanimliyor. AOT de tipler
+      // de ilk tanimi aliyor; ikinci modulun fonksiyonu SESSIZCE yok sayiliyordu
+      // (`import "ma"; import "mb"; ortak()` -> ma'ninki, tani yok).
+      //
+      // UYARI, hata degil (yerlesik golgeleme uyarisiyla ayni sinif): cakisma
+      // cogu zaman kullanicinin DUZELTEMEYECEGI bir yerde (iki stdlib modulu
+      // arasinda) olabiliyor — olculdu: lib/tame.tpr ve lib/arcade.tpr ikisi de
+      // `dokunuldu()` tanimliyor, farkli anlamla; arcade oyunlarinda tame'inki
+      // kazaniyor. Sayilan bir tani `--strict`i ve `tulpar typecheck`i kullanicinin
+      // elinde olmayan bir sebeple kirmiziya cevirirdi. Gorunur ama sayilmaz.
+      auto warn = [&](const std::string &msg) {
+        const char *src = ctx->source_path.empty() ? "<kaynak>" : ctx->source_path.c_str();
+        fprintf(stderr, "[typecheck] %s: %s\n", src, msg.c_str());
+      };
+      if (alias.empty()) {
+        auto lo = ctx->local_fn_line.find(name);
+        if (lo != ctx->local_fn_line.end()) {
+          char b[512];
+          snprintf(b, sizeof b,
+                   tulpar::i18n::tr_en(
+                       "'%s' (satir %d) ice aktarilan '%s' modulundeki ayni adli fonksiyonu "
+                       "(satir %d) programin TAMAMINDA golgeliyor — modulun kendi cagrilari "
+                       "da seninkine gider",
+                       "'%s' (line %d) shadows the function of the same name in imported "
+                       "module '%s' (line %d) across the WHOLE program - the module's own "
+                       "calls go to yours too"),
+                   name.c_str(), lo->second, module_name.c_str(), func->loc.line);
+          warn(b);
+        }
+      }
+      if (!ctx->local_fn_line.count(name)) {
+        auto o = ctx->module_fn_origin.find(name);
+        if (o == ctx->module_fn_origin.end()) {
+          ctx->module_fn_origin[name] = {module_name, func->loc.line};
+        } else if (o->second.first != module_name) {
+          char b[640];
+          snprintf(b, sizeof b,
+                   tulpar::i18n::tr_en(
+                       "'%s' iki ice aktarilan modulde tanimli: '%s' (satir %d) ve '%s' "
+                       "(satir %d) — ilki kullaniliyor, ikincisi SESSIZCE yok sayiliyordu; "
+                       "birini `import \"...\" as ad` ile ice aktar",
+                       "'%s' is defined in two imported modules: '%s' (line %d) and '%s' "
+                       "(line %d) - the first one wins and the second is ignored; import "
+                       "one of them with `import \"...\" as name`"),
+                   name.c_str(), o->second.first.c_str(), o->second.second,
+                   module_name.c_str(), func->loc.line);
+          warn(b);
+        }
+      }
       if (ctx->functions.count(name)) {
         continue;
       }
@@ -2041,6 +2090,7 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
                                   static_cast<int>(param_types.size()));
       ctx->user_functions.insert(func->name);
       if (func->is_async) ctx->async_fns[func->name] = func->return_type;   // K068
+      ctx->local_fn_line.emplace(func->name, func->loc.line);
     }
     // Pre-scan struct declarations so `<TypeName> ident;` decls
     // anywhere in the program (even before the type's definition

@@ -1,0 +1,36 @@
+// Takma adsiz ice aktarmada AD CAKISMASI (K043, 2026-09-27).
+//
+// Tulpar'in tek kuresel ad alani var (`import "m"` adlari duzlestirir).
+// Iki sessiz davranis vardi:
+//   * ana dosya modulle AYNI adli bir fonksiyon tanimlayinca typeinfer
+//     "yerel tanim kazanir" deyip YEREL imzayi denetliyor, AOT ise MODULUN
+//     govdesini calistiriyordu: `func yardim(): int { return 9; }` yazan
+//     program 7 basiyordu. Artik AOT de yerel tanimi kullaniyor — modulun
+//     kendi cagrilari dahil (yerlesik golgelemeyle ayni kural).
+//   * iki modul ayni adi tanimlayinca ilki SESSIZCE kazaniyordu. Davranis
+//     ayni (ilk ice aktarilan) ama artik [typecheck] uyarisi basiliyor
+//     (tests/modul_ad_cakismasi.sh olcuyor).
+// Eski derleyiciyle `yardim()` 7, `kullan()` 70 -> kirmizi.
+// Calistir (depo kokunden): ./tulpar tests/modul_ad_cakismasi.test.tpr
+import "test";
+import "tests/moduller/cakisma_a.tpr";
+import "tests/moduller/cakisma_b.tpr";
+
+func yardim(): int { return 9; }
+func etiket(int x): int { return x + 1000; }
+
+func run_yerel_kazanir() {
+    assert_eq_int(yardim(), 9);
+    assert_eq_int(kullan(), 90);          // modulun kendi cagrisi da yerele gider
+    assert_eq_str(sar(5), "1005!");
+    assert_eq_int(call("yardim"), 9);      // ad ile dinamik cagri da ayni tanima
+}
+
+func run_iki_modul_ilki_kazanir() {
+    assert_eq_int(ortak(), 1);             // cakisma_a once ice aktarildi
+}
+
+print("=== modul ad cakismasi ===");
+test("yerel tanim modulunkini golgeler (AOT == typeinfer)", "run_yerel_kazanir");
+test("iki modulde ayni ad: ilki kazanir", "run_iki_modul_ilki_kazanir");
+test_summary();

@@ -550,6 +550,14 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # Modul ad cakismasi uyarilari (K043): iki modul ayni ad / yerel golge.
+    if [ -x tests/modul_ad_cakismasi.sh ]; then
+        if ! bash tests/modul_ad_cakismasi.sh ./tulpar; then
+            echo -e "${RED}modul ad cakismasi uyarilari basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ARGUMAN GECISI. tests/args.test.tpr argv'nin VAR oldugunu olcuyor ama
     # hic arguman GECIRMIYOR; bu bosluk Windows'ta argumanlarin tek tirnakla
     # programa yapisik ulastigi hatayi gizledi (2026-09-21). Kapi uretilen
