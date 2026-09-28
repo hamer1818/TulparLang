@@ -67,6 +67,9 @@ int typecheck_cmd_main(int argc, char **argv) {
     if (eof) break;
   }
 
+  // Tani baglami: dosya adi + satir alintisi. Eskiden verilmiyordu ve her
+  // ayristirma hatasi `--> (stdin):N` diye basiliyordu (K056).
+  parser_set_diagnostic_context(source.c_str(), path);
   std::unique_ptr<ASTNode> ast;
   try {
     Parser parser(std::move(tokens));

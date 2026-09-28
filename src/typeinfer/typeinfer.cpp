@@ -2044,9 +2044,11 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
 // slots that `tulpar pkg install` populates. Returns false when nothing
 // resolves; that stays silent here on purpose, because the AOT path owns the
 // "Could not import file" error and we must not double-report it.
-static bool load_import_source(const std::string &name, std::string &out) {
+static bool load_import_source(const std::string &name, std::string &out,
+                               std::string &out_path) {
   if (const char *embedded = get_embedded_lib(name.c_str())) {
     out = embedded;
+    out_path = "<gomulu:" + name + ">";
     return true;
   }
   const std::string candidates[] = {
@@ -2063,6 +2065,7 @@ static bool load_import_source(const std::string &name, std::string &out) {
     std::stringstream ss;
     ss << in.rdbuf();
     out = ss.str();
+    out_path = path;
     return true;
   }
   return false;
@@ -2107,7 +2110,26 @@ struct ParserImportLoaderInstall {
 } g_parser_import_loader_install;
 }  // namespace
 
-static std::unique_ptr<ASTNode> parse_module_source(const std::string &source) {
+// Modulu ayristir. Tani baglami MODULUN kendisi (K056: eskiden `(stdin):2`);
+// on-gecis (warning_mode, calistir/derle yolu) SESSIZ — AOT ayni modulu
+// ayristirip ayni hatayi modul adiyla zaten basiyor, iki kez basmak gurultu.
+// `tulpar typecheck` (hata kipi) basar. Ayristirma hatasi varsa `*failed`.
+static std::unique_ptr<ASTNode> parse_module_source(const std::string &source,
+                                                    const std::string &path, bool quiet,
+                                                    bool *failed) {
+  const char *prev_text = nullptr, *prev_file = nullptr;
+  parser_get_diagnostic_context(&prev_text, &prev_file);
+  const int prev_quiet = parser_get_quiet();
+  parser_set_diagnostic_context(source.c_str(), path.c_str());
+  parser_set_quiet(quiet ? 1 : 0);
+  struct Restore {
+    const char *t, *f;
+    int q;
+    ~Restore() {
+      parser_set_diagnostic_context(t, f);
+      parser_set_quiet(q);
+    }
+  } restore{prev_text, prev_file, prev_quiet};
   try {
     Lexer lexer(source);
     std::vector<Token> tokens;
@@ -2120,9 +2142,14 @@ static std::unique_ptr<ASTNode> parse_module_source(const std::string &source) {
       }
     }
     Parser parser(std::move(tokens));
-    return parser.parse();
+    std::unique_ptr<ASTNode> ast = parser.parse();
+    if (parser_get_error_count() > 0) {
+      if (failed) *failed = true;
+      return nullptr;
+    }
+    return ast;
   } catch (...) {
-    // A module that won't parse is not this pass's problem to report.
+    if (failed) *failed = true;
     return nullptr;
   }
 }
@@ -2141,11 +2168,24 @@ static void register_module_exports(TypeInferContext *ctx,
   if (depth > 8 || !visited.insert(module_name).second) {
     return;
   }
-  std::string source;
-  if (!load_import_source(module_name, source)) {
+  std::string source, path;
+  if (!load_import_source(module_name, source, path)) {
     return;
   }
-  std::unique_ptr<ASTNode> module_ast = parse_module_source(source);
+  bool parse_failed = false;
+  std::unique_ptr<ASTNode> module_ast =
+      parse_module_source(source, path, ctx->warning_mode, &parse_failed);
+  if (parse_failed) {
+    // `tulpar typecheck` ice aktarilan modulde ayristirma hatasi varken
+    // "ok" deyip 0 donuyordu (K056): hata basiliyor ama sayilmiyordu.
+    if (!ctx->warning_mode) {
+      report_error(ctx,
+                   tulpar::i18n::tr_en("ice aktarilan '%s' modulu ayristirilamadi (%s)",
+                                       "imported module '%s' failed to parse (%s)"),
+                   module_name.c_str(), path.c_str());
+    }
+    return;
+  }
   if (!module_ast) {
     return;
   }

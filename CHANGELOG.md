@@ -967,6 +967,20 @@ TU'ya alındı) ve libstdc++ dinamik bağlanıyordu. Boş program 1,15 →
   denetim, iki pozitif kontrol (strict'siz derleniyor; aynı kipte ikinci
   derleme isabet ediyor). Eski ikiliyle 8'i kırmızı.
 
+### Düzeltildi — import edilen modülün ayrıştırma hatası yanlış yerde, iki kez, ve `typecheck` "ok" diyordu
+
+- Modülde `int don = 3;` (ayrılmış sözcük) gibi bir ayrıştırma hatası: konum
+  `(stdin):2` basılıyordu; çalıştır yolunda ikinci kopya **ana** dosyanın adı
+  ve o satırın metniyle geliyordu (`--> ana.tpr:2` + `print(f());`), ardından
+  yanıltıcı "'f' adında bir fonksiyon bulunamadı". Artık tek kopya, modülün
+  kendi adı ve satır alıntısıyla (`--> modul.tpr:2` + `int don = 3;`); import
+  satırında "'modul' modülü ayrıştırılamadı", "bulunamadı" gürültüsü yok.
+- `tulpar typecheck ana.tpr` modül hatalarını basıp "ok" deyip **0**
+  dönüyordu; artık sayıyor ve ≠0 dönüyor. Ana dosyada da `(stdin)` yerine
+  dosya adı.
+- Nöbetçi: yeni `tests/modul_ayristirma_hatalari.sh` (`build.sh suites`,
+  4/4; eski derleyiciyle 3'ü kırmızı).
+
 ### Fixed — `int` hedefe float yazmak SESSİZCE bozuk sonuç veriyordu
 
 ```

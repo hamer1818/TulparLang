@@ -53,7 +53,7 @@ float t = f();'
 
 # Hata KONUMU bildirimin satiri (K030): eskiden `;` tuketildikten sonra
 # basildigi icin bir SONRAKI satiri gosteriyordu.
-reddedilmeli hata_satiri_dogru "):2" \
+reddedilmeli hata_satiri_dogru "hata_satiri_dogru.tpr:2" \
 'func f(): (float, float) { return 1.0, 2.0; }
 float a, b, c = f();
 print(1);'

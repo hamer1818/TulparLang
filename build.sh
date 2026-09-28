@@ -531,6 +531,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # Ayrilmis sozcuk + import edilen modulde ayristirma hatasi (K056): konum
+    # modulun adi, typecheck "ok" demez, tek kopya.
+    if [ -x tests/modul_ayristirma_hatalari.sh ]; then
+        if ! bash tests/modul_ayristirma_hatalari.sh ./tulpar; then
+            echo -e "${RED}modul ayristirma hata yollari basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # Coklu donus / tuple HATA YOLLARI (P0.1): ayni gerekce.
     if [ -x tests/tuple_hatalari.sh ]; then
         if ! bash tests/tuple_hatalari.sh ./tulpar; then
