@@ -57,6 +57,8 @@ private:
     std::unique_ptr<ASTNode> parse_statement();
     std::unique_ptr<ASTNode> parse_variable_decl();
     std::unique_ptr<ASTNode> parse_function_decl();
+    // `@frame` / `@no_alloc` nitelikli fonksiyon (K038/K041).
+    std::unique_ptr<ASTNode> parse_attributed_function();
     std::unique_ptr<ASTNode> parse_type_decl();
     std::unique_ptr<ASTNode> parse_enum_decl();
     std::unique_ptr<ASTNode> parse_if_statement();

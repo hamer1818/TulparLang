@@ -1,0 +1,92 @@
+// `@frame` — dil duzeyinde kare arenasi (K038, 2026-09-28).
+//
+// Oyun dongusu her karede gecici dizgi/dizi/nesne uretiyor; motor bunu elle
+// yapiyordu (`cp = arena_save(); ... arena_drop(cp)`). Elle yazim erken
+// `return` ve `throw`da DELINIR: drop atlanir, 32'lik kontrol noktasi yigini
+// sizar ve sonra arena_save -1 doner (geri sarma durur, bellek birikir).
+// `@frame func` ayristiricida seker aciliyor: girişte arena_save, her
+// cikista (return / throw / sona dusme) arena_drop; donus degeri ve istisna
+// `persist` ile kalici bellege kopyalaniyor. Yigin doluysa (ic ice/ozyineli
+// @frame) yakalanabilir hata — sessiz degil.
+// Bellek (tepe RSS) kapisi ve hata yollari: tests/frame_hatalari.sh.
+// Calistir (depo kokunden): ./tulpar tests/frame.test.tpr
+import "test";
+
+struct V { float x; float y; }
+str[] kalici = [];
+
+@frame
+func etiket(int x): str {
+    str s = "v" + toString(x);
+    for (int i = 0; i < 3; i++) { s = s + "."; }
+    if (x > 2) { return s + "!"; }                 // erken donus
+    if (x < 0) { throw "negatif: " + toString(x); }
+    push(kalici, "k" + toString(x));               // global'e: bariyerle kalici
+    return s;
+}
+
+@frame
+func topla(V a, V b): V {
+    str tmp = "gecici" + toString(a.x);
+    return { x: a.x + b.x, y: a.y + b.y };
+}
+
+@frame
+func yan_etki(int n) {
+    for (int i = 0; i < n; i++) {
+        str t = "x" + toString(i);
+        if (i == 2) { return; }                    // void erken donus
+    }
+}
+
+@frame
+func derin(int n): int {
+    if (n == 0) { return 0; }
+    return derin(n - 1) + 1;
+}
+
+func run_donus_ve_istisna() {
+    assert_eq_str(etiket(3), "v3...!");
+    assert_eq_str(etiket(1), "v1...");
+    str yakalanan = "";
+    try { str x = etiket(-5); } catch (e) { yakalanan = toString(e); }
+    assert_eq_str(yakalanan, "negatif: -5");       // istisna drop'tan sag cikti
+    assert_eq_str(kalici[len(kalici) - 1], "k1");
+}
+
+func run_struct_donus() {
+    V a = { x: 1.0, y: 2.0 };
+    V r = topla(a, a);
+    assert_close(r.x, 2.0, 0.000001);
+    assert_close(r.y, 4.0, 0.000001);
+}
+
+func run_yigin_sizmiyor() {
+    int once = arena_save();
+    arena_drop(once);
+    for (int i = 0; i < 500; i++) {
+        str q = etiket(4);
+        yan_etki(5);
+        try { str w = etiket(-1); } catch (e) { }
+    }
+    int sonra = arena_save();
+    arena_drop(sonra);
+    assert_eq_int(sonra, once);                    // 1500 cikis, sifir sizinti
+}
+
+func run_yigin_dolu_sessiz_degil() {
+    assert_eq_int(derin(10), 10);
+    str msg = "";
+    try { int d = derin(40); } catch (e) { msg = toString(e); }
+    assert_contains(msg, "kontrol noktasi yigini dolu");
+    int cp = arena_save();                         // hata sonrasi yigin temiz
+    arena_drop(cp);
+    assert(cp < 4, "yigin temizlenmedi");
+}
+
+print("=== @frame ===");
+test("donus degeri ve istisna kalici", "run_donus_ve_istisna");
+test("struct donduren @frame", "run_struct_donus");
+test("return/throw/void: kontrol noktasi sizmiyor", "run_yigin_sizmiyor");
+test("yigin dolu: yakalanabilir hata", "run_yigin_dolu_sessiz_degil");
+test_summary();

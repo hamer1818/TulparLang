@@ -282,6 +282,12 @@ struct FunctionDecl {
     std::unique_ptr<ASTNode> body;
     std::optional<std::string> receiver_type; // For methods
     bool is_async = false;                     // `async func` — coroutine
+    // `@frame` (K038): govde bir arena kontrol noktasinda kosar — ayristirici
+    // arena_save/drop + try/catch olarak SEKER acar; bayrak LSP/typeinfer icin.
+    bool is_frame = false;
+    // `@no_alloc` (K041): govde (gecisli) yigin ayirmasi yapmamali —
+    // typeinfer statik olarak denetler.
+    bool no_alloc = false;
     SourceLocation loc;
 
     FunctionDecl(const std::string& n, std::vector<Parameter> params,

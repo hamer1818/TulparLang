@@ -628,6 +628,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # `@frame` / `@no_alloc` nitelikleri (K038/K041): ayristirma hatalari ve
+    # kare arenasinin tepe RSS'i gercekten geri sardigi (pozitif kontrollu).
+    if [ -x tests/frame_hatalari.sh ]; then
+        if ! bash tests/frame_hatalari.sh ./tulpar; then
+            echo -e "${RED}@frame / nitelik kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
     # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz
     # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan

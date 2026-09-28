@@ -139,7 +139,12 @@ enum TulparTokenType {
     // Yine SONA eklendi (yukaridaki renumaralama notu). Codegen bu tokeni
     // HIC gormez: `Ekran.MENU` ayristiricida IntLiteral'e katlanir, bildirim
     // ise AST_ENUM_DECL (codegen'de no-op, LSP icin sembol kaynagi) olur.
-    TOKEN_ENUM           // "enum"
+    TOKEN_ENUM,          // "enum"
+
+    // `@` — fonksiyon niteligi (`@frame`, `@no_alloc`; K038/K041, 2026-09-28).
+    // Yine SONA eklendi (renumaralama notu). Codegen bu tokeni HIC gormez:
+    // nitelik ayristiricida FunctionDecl'e islenir (`@frame` orada seker).
+    TOKEN_AT
 };
 
 // Modern C++ Token class
