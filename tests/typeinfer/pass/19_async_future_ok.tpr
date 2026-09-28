@@ -1,0 +1,17 @@
+// 25_async_future_misuse'un pozitif ikizi (K068): future'in MESRU yollari
+// tanisiz — `await f()`, `var p = f(); await p`, json yuvasi, tipsiz/json
+// parametre, `await 7` (kimlik), async fonksiyonun kendi `return`u.
+async func f(): int { await sleep_async(1); return 48; }
+async func ikiye(int n) { return n * 2; }
+async func zincir(): int { int a = await f(); return a + 1; }
+func bekle_hepsi(json p) { return 1; }
+
+int a = await f();
+var p = f();
+int b = await p;
+json j = ikiye(5);
+int c = await j;
+int d = await 7;
+int e = await zincir();
+print(bekle_hepsi(f()));
+print(a + b + c + d + e);

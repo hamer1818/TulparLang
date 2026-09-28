@@ -1,0 +1,25 @@
+// Beklenen: async fonksiyonun sonucu await'siz somut bir yuvaya girmemeli
+// (plans/06 PR2, K068, 2026-09-27).
+//
+// typeinfer async'i modellemiyordu: `f()`yi dogrudan `int` sayiyordu.
+// Envanter sondasi: `int r = f(); print(r + 1);` tanisiz gecip PROMISE
+// ISARETCISINI (49342881) basti. `await <future-olmayan>` dilde kimlik
+// islemi (tests/async.test.tpr `await 7`) — bu fixture ona dokunmuyor.
+
+// EXPECT: [typecheck]
+// EXPECT: return of 'sar': the result of an async function is a FUTURE
+// EXPECT: declaration of 'r': the result of an async function is a FUTURE
+// EXPECT: arithmetic: the result of an async function is a FUTURE
+// EXPECT: call 'al', argument 1: the result of an async function is a FUTURE
+// EXPECT: assignment to 'w': the result of an async function is a FUTURE
+
+async func f(): int { await sleep_async(1); return 48; }
+func al(int x): int { return x; }
+func sar(): int { return f(); }
+
+int r = f();
+print(f() + 1);
+print(al(f()));
+int w = 0;
+w = f();
+print(r + w + sar());

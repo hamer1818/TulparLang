@@ -50,6 +50,12 @@ struct TypeInferContext {
   // adlari. `functions` yerlesikleri de tutuyor; `call("ad")` yalniz
   // kullanici fonksiyonunu cagirabildigi icin ayri kume (K009).
   std::set<std::string> user_functions;
+  // K068: `async func` cagrisinin sonucu bir FUTURE (calisma zamaninda
+  // promise). async fonksiyon adi -> bildirilen donus tipi (await sonrasi T);
+  // future tutan semboller -> T.
+  std::unordered_map<std::string, DataType> async_fns;
+  std::unordered_map<std::string, DataType> future_symbols;
+  bool current_is_async = false;
 
   // P23 — COZUM ile BASLATMA ayri sorulardir.
   //
