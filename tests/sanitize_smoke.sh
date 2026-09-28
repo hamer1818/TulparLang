@@ -29,6 +29,10 @@ trap 'rm -rf "$TMP"' EXIT
 FAIL=0; OK=0
 gecti() { echo "  gecti  $1"; OK=$((OK + 1)); }
 dustu() { echo "  DUSTU  $1"; FAIL=1; }
+# Sureli kosum: `timeout` macOS'ta yok, perl her yerde var. Asilan ikili
+# CI isini 25 dakikalik adim tavanina kadar kilitlemesin (macOS arm64,
+# 2026-09-28: ASan'li ikili hic donmedi, adim zaman asimina dustu).
+sureli() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 
 cat > "$TMP/p.tpr" <<'T'
 func topla(array a): int {
@@ -61,13 +65,24 @@ else
 fi
 
 # 2) Calisma
-OUT=$("$TMP/asan" 2>"$TMP/asan_run.err"); RC=$?
+OUT=$(sureli 60 "$TMP/asan" 2>"$TMP/asan_run.err"); RC=$?
 if [ $RC -eq 0 ] && [ "$OUT" = "12:tulpar" ]; then
     gecti "sanitize'li ikili dogru cikti, cikis 0 (sizinti denetimi varsayilan kapali)"
 else
-    dustu "sanitize'li ikili: rc=$RC cikti='$OUT'"; tail -5 "$TMP/asan_run.err" | sed 's/^/      /'
+    dustu "sanitize'li ikili: rc=$RC cikti='$OUT' (142 = 60 sn'de bitmedi)"; tail -5 "$TMP/asan_run.err" | sed 's/^/      /'
+    if [ "$(uname -s)" = "Darwin" ] && [ $RC -eq 142 ]; then
+        # Teshis: asilan surecin yiginlari (sample) + ASan'in kendi gunlugu.
+        ASAN_OPTIONS=verbosity=1 "$TMP/asan" > "$TMP/v.out" 2> "$TMP/v.err" &
+        vp=$!
+        sleep 8
+        echo "      --- sample (asili surec) ---"
+        sample "$vp" 1 2>/dev/null | grep -E '^ *[0-9+!:| ]+[A-Za-z_]' | head -60 | sed 's/^/      /'
+        kill -9 "$vp" 2>/dev/null
+        echo "      --- ASAN verbosity=1 (son 30 satir) ---"
+        tail -30 "$TMP/v.err" | sed 's/^/      /'
+    fi
 fi
-if ASAN_OPTIONS=help=1 "$TMP/asan" 2>&1 | grep -q 'AddressSanitizer'; then
+if ASAN_OPTIONS=help=1 sureli 60 "$TMP/asan" 2>&1 | grep -q 'AddressSanitizer'; then
     gecti "ASan runtime'i yuklu (ASAN_OPTIONS=help=1 bayrak listesi)"
 else
     dustu "ASan runtime'i YUKLU DEGIL — IR enstrumante ama baglanmamis?"
