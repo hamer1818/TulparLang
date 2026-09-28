@@ -1,0 +1,25 @@
+// Kontrol noktasi ile guvenli yerel kaliplari (K131, 2026-09-28): tani YOK.
+//   * `persist(...)` ile kalicilastirilan atama;
+//   * nokta ICINDE bildirilen gecici;
+//   * sayi atamasi (yigin degil);
+//   * nokta KAPANDIKTAN sonra atama;
+//   * global'e yazma (yazma bariyeri var).
+
+str sonuc_g = "";
+
+func iyi(int n): str {
+    str son = "";
+    int toplam = 0;
+    for (int i = 0; i < n; i++) {
+        int cp = arena_save();
+        str ic = "deger-" + toString(i);
+        son = persist(ic);
+        toplam = toplam + len(ic);
+        sonuc_g = "g-" + toString(i);
+        arena_drop(cp);
+    }
+    son = son + "!" + toString(toplam);
+    return son;
+}
+
+print(iyi(3), sonuc_g);

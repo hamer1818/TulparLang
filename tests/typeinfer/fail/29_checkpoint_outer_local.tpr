@@ -1,0 +1,26 @@
+// Beklenen: kontrol noktasinin (arena_save) DISINDA bildirilmis yerele,
+// nokta ACIKKEN yigin degeri atamak reddedilir (K131, 2026-09-28). Deger
+// arena_drop'ta serbest kaliyor; olculdu: asagidaki `kotu(3)` + sonraki
+// ayirmalar `print` ile "<obj>" basiyor (beklenen "deger-2-...").
+// Eski derleyici bunu "ok" ile geciriyordu.
+
+// EXPECT: [typecheck]
+// EXPECT: 'son' is declared OUTSIDE the checkpoint (arena_save at line 17)
+// EXPECT: 'liste' is declared OUTSIDE the checkpoint
+// EXPECT: 'log' is declared OUTSIDE the checkpoint (arena_save at line 17) but `+=`
+
+func kotu(int n): str {
+    str son = "";
+    int[] liste = [];
+    str log = "";
+    for (int i = 0; i < n; i++) {
+        int cp = arena_save();
+        son = "deger-" + toString(i);
+        liste = [i, i + 1];
+        log += "x";
+        arena_drop(cp);
+    }
+    return son + log;
+}
+
+print(kotu(3));
