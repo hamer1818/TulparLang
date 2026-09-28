@@ -60,6 +60,22 @@ struct W { int a; }
 V[] vs = [];
 W w = pop(vs);'
 
+# K004: alanda saklanan kapanisa nokta ile cagri (`o.h()`) YALNIZ kapanis
+# tutabilecek alicida. Kutusuz struct / struct dizisi elemani kapanis
+# tutamaz: metot adindaki yazim hatasi DERLEME hatasi kalmali.
+reddedilmeli metot_yazim_struct "adında bir fonksiyon bulunamadı" \
+'struct V { float x; float y; }
+func boy(V v): float { return v.x; }
+V v; v.x = 1.0;
+print(v.byo());'
+
+reddedilmeli metot_yazim_struct_dizisi "adında bir fonksiyon bulunamadı" \
+'struct V { float x; float y; }
+func boy(V v): float { return v.x; }
+V[] vs = [];
+V v; v.x = 1.0; push(vs, v);
+print(vs[0].byo());'
+
 printf '%s\n' 'struct V { float x; float y; }
 V[] vs = [];
 V v; v.x = 1.5; v.y = 2.5;
@@ -71,5 +87,5 @@ out=$(cd "$TMP" && "$TUL" build gecerli.tpr gecerli.out 2>&1 && ./gecerli.out 2>
 if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^1 2.5$"; then gecti "gecerli struct dizisi derlenir ve calisir (pozitif kontrol)"
 else dustu "gecerli struct dizisi: rc=$rc cikti='$out'"; fi
 
-if [ "$fail" -eq 0 ]; then echo "struct_dizisi_hatalari: 6/6"; fi
+if [ "$fail" -eq 0 ]; then echo "struct_dizisi_hatalari: 8/8"; fi
 exit $fail

@@ -3219,6 +3219,15 @@ static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
 // `<recv>.<ad>(...)` alicisini cagri dugumunde coz (alias ya da metot yolu).
 // AST_FUNCTION_CALL codegen'i de bunu cagirir; struct yardimcilari cagriyi
 // codegen'den ONCE incelediginde (`Dusman e = d.pop()`) ayni bicimi gorsun.
+// Metot yoluna (`<ad>(<alici>, ...)`) yeniden yazilmis cagri dugumleri. Dugum
+// ayni derlemede IKI KEZ uretilebilir (dongu surumleme govdeyi kopyalar) ve
+// ikinci uretimde `receiver` artik bos — bilgi dugumun kendisinde kalmali.
+// Alanda saklanan kapanisa (`o.h()`) dusme karari buna bakar (K004).
+static std::unordered_set<const ASTNode_C *> &method_rewritten_calls() {
+  static std::unordered_set<const ASTNode_C *> s;
+  return s;
+}
+
 static void resolve_call_receiver(LLVMBackend *backend, ASTNode_C *node) {
   if (!node || node->type != AST_FUNCTION_CALL || !node->receiver) return;
   auto func_in_module = [](const char *raw, void *ctx) -> int {
@@ -3229,7 +3238,138 @@ static void resolve_call_receiver(LLVMBackend *backend, ASTNode_C *node) {
     if (LLVMGetNamedFunction(m, raw)) return 1;
     return 0;
   };
-  resolve_qualified_call(node, func_in_module, backend->module);
+  if (resolve_qualified_call(node, func_in_module, backend->module) == 2)
+    method_rewritten_calls().insert(node);
+}
+
+// Kapanis cagrisi: `cls_ptr` ObjClosure*, argumanlar sirayla kutulu.
+static LLVMValueRef emit_closure_call(LLVMBackend *backend, LLVMValueRef cls_ptr,
+                                      ASTNode_C **argv, int argc) {
+  LLVMValueRef args_ptr_void = nullptr;
+  if (argc > 0) {
+    LLVMTypeRef arr_type = LLVMArrayType(backend->vm_value_type, argc);
+    LLVMValueRef args_array_ptr = llvm_build_alloca_at_entry(backend, arr_type, "closure_call_args");
+    for (int i = 0; i < argc; i++) {
+      LLVMValueRef arg_val = codegen_expression(backend, argv[i]);
+      LLVMValueRef index_vals[] = {LLVMConstInt(backend->int32_type, 0, 0),
+                                   LLVMConstInt(backend->int32_type, i, 0)};
+      LLVMValueRef elem_ptr = LLVMBuildGEP2(backend->builder, arr_type, args_array_ptr,
+                                            index_vals, 2, "arg_elem_ptr");
+      LLVMBuildStore(backend->builder, arg_val, elem_ptr);
+    }
+    args_ptr_void = LLVMBuildBitCast(backend->builder, args_array_ptr, backend->ptr_type, "args_void");
+  } else {
+    args_ptr_void = LLVMConstPointerNull(backend->ptr_type);
+  }
+  LLVMValueRef argc_val = LLVMConstInt(backend->int32_type, argc, 0);
+  LLVMValueRef call_args[] = {cls_ptr, args_ptr_void, argc_val};
+  return llvm_call_vmvalue_func(backend, backend->func_aot_call_closure, call_args, 3,
+                                "closure_call_res");
+}
+
+// K004: metot yoluna yazilmis `<alici>.<ad>(...)` icin `<ad>` diye bir
+// fonksiyon yoksa, alicinin `<ad>` ALANINDA saklanan kapanisa dus
+// (`o["h"](...)` ile ayni). Alici kapanis TUTAMAYACAK bir sey olarak
+// biliniyorsa (tipli struct / struct dizisi elemani / int-float-bool-str-dizi
+// yereli, sabit) dusulmez: yazim hatasi (`r.aera()`) derleme hatasi kalir.
+static bool receiver_may_hold_closure(LLVMBackend *backend, ASTNode_C *r) {
+  if (!r) return false;
+  switch (r->type) {
+  case AST_INT_LITERAL:
+  case AST_FLOAT_LITERAL:
+  case AST_STRING_LITERAL:
+  case AST_BOOL_LITERAL:
+  case AST_ARRAY_LITERAL:
+    return false;
+  case AST_IDENTIFIER: {
+    if (!r->name) return false;
+    // Degisken degil (ornegin `import "m" as a` takma adi: `a.fnn()` yazim
+    // hatasi) — "fonksiyon bulunamadi" tanisi kalsin, "'a' tanimsiz" degil.
+    if (!get_local(backend, r->name) &&
+        !LLVMGetNamedGlobal(backend->module, gsym(r->name).c_str()))
+      return false;
+    if (get_local_struct_type(backend, r->name)) return false;
+    if (get_local_struct_array_elem(backend, r->name)) return false;
+    switch (get_local_type(backend, r->name)) {
+    case INFERRED_INT:
+    case INFERRED_FLOAT:
+    case INFERRED_BOOL:
+    case INFERRED_STRING:
+    case INFERRED_ARRAY:
+      return false;
+    default:
+      return true;
+    }
+  }
+  case AST_ARRAY_ACCESS:
+    // `d[i].h()` — d struct dizisiyse eleman kutusuz struct: kapanis yok.
+    if (r->left && r->left->type == AST_IDENTIFIER && sarr_elem_of_ident(backend, r->left))
+      return false;
+    return true;
+  default:
+    return true;
+  }
+}
+
+static LLVMValueRef emit_field_closure_call(LLVMBackend *backend, ASTNode_C *node) {
+  // `alici["ad"]` — ayni ArrayAccess kodgeni (kutulu nesne/json alani).
+  ASTNode_C key;
+  memset(&key, 0, sizeof(key));
+  key.type = AST_STRING_LITERAL;
+  key.value.string_value = node->name;
+  key.line = node->line;
+  ASTNode_C acc;
+  memset(&acc, 0, sizeof(acc));
+  acc.type = AST_ARRAY_ACCESS;
+  acc.left = node->arguments[0];
+  acc.index = &key;
+  acc.line = node->line;
+  LLVMValueRef fv = codegen_expression(backend, &acc);
+  // Alan gercekten bir kapanis mi? (etiket OBJ + nesne turu OBJ_CLOSURE).
+  // Degilse isaretciyi coz(e)me — `o.h()`de h bir sayiysa aot_call_closure
+  // sayiyi isaretci diye okurdu; bunun yerine yakalanabilir bir hata firlat.
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef bb_chk = append_bb(backend, fn, "fcl.chk");
+  LLVMBasicBlockRef bb_call = append_bb(backend, fn, "fcl.call");
+  LLVMBasicBlockRef bb_err = append_bb(backend, fn, "fcl.err");
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, fv, 0, "fcl.tag");
+  LLVMValueRef is_obj = LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                      LLVMConstInt(backend->int32_type, 4 /* VM_VAL_OBJ */, 0),
+                                      "fcl.isobj");
+  LLVMBuildCondBr(backend->builder, is_obj, bb_chk, bb_err);
+  LLVMPositionBuilderAtEnd(backend->builder, bb_chk);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, fv);
+  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, backend->int32_type, objp, "fcl.ot");
+  LLVMValueRef is_cls = LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                      LLVMConstInt(backend->int32_type, 5 /* OBJ_CLOSURE */, 0),
+                                      "fcl.iscls");
+  LLVMBuildCondBr(backend->builder, is_cls, bb_call, bb_err);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_err);
+  {
+    char msg[320];
+    snprintf(msg, sizeof(msg), "%s '%s'",
+             tulpar::i18n::tr_en(
+                 "Calisma Zamani Hatasi: ne fonksiyon ne de kapanis tutan bir alan:",
+                 "Runtime Error: neither a function nor a field holding a closure:"),
+             node->name);
+    LLVMValueRef s = LLVMBuildGlobalStringPtr(backend->builder, msg, "fcl.msg");
+    LLVMValueRef sargs[] = {LLVMConstNull(backend->ptr_type), s,
+                            LLVMConstInt(backend->int32_type, (unsigned)strlen(msg), 0)};
+    LLVMValueRef so = LLVMBuildCall2(backend->builder,
+                                     LLVMGlobalGetValueType(backend->func_vm_alloc_string),
+                                     backend->func_vm_alloc_string, sargs, 3, "fcl.str");
+    LLVMValueRef exc = llvm_build_vm_val_obj(backend, so);
+    LLVMValueRef exc_ptr = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "fcl.exc");
+    LLVMBuildStore(backend->builder, exc, exc_ptr);
+    LLVMValueRef targs[] = {exc_ptr};
+    LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(backend->func_aot_throw),
+                   backend->func_aot_throw, targs, 1, "");
+    LLVMBuildUnreachable(backend->builder);
+  }
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_call);
+  return emit_closure_call(backend, objp, node->arguments + 1, node->argument_count - 1);
 }
 
 // K033: `pop(d)` / `remove_at(d, i)` — `d` tipli struct dizisi yereli ve ad
@@ -9005,27 +9145,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     if (is_closure_call && closure_val) {
-      LLVMValueRef cls_ptr = llvm_extract_vm_val_ptr(backend, closure_val);
-      LLVMValueRef args_ptr_void = nullptr;
-      if (node->argument_count > 0) {
-        LLVMTypeRef arr_type = LLVMArrayType(backend->vm_value_type, node->argument_count);
-        LLVMValueRef args_array_ptr = llvm_build_alloca_at_entry(backend, arr_type, "closure_call_args");
-        for (int i = 0; i < node->argument_count; i++) {
-          LLVMValueRef arg_val = codegen_expression(backend, node->arguments[i]);
-          LLVMValueRef index_vals[] = {
-            LLVMConstInt(backend->int32_type, 0, 0),
-            LLVMConstInt(backend->int32_type, i, 0)
-          };
-          LLVMValueRef elem_ptr = LLVMBuildGEP2(backend->builder, arr_type, args_array_ptr, index_vals, 2, "arg_elem_ptr");
-          LLVMBuildStore(backend->builder, arg_val, elem_ptr);
-        }
-        args_ptr_void = LLVMBuildBitCast(backend->builder, args_array_ptr, backend->ptr_type, "args_void");
-      } else {
-        args_ptr_void = LLVMConstPointerNull(backend->ptr_type);
-      }
-      LLVMValueRef argc_val = LLVMConstInt(backend->int32_type, node->argument_count, 0);
-      LLVMValueRef call_args[] = {cls_ptr, args_ptr_void, argc_val};
-      return llvm_call_vmvalue_func(backend, backend->func_aot_call_closure, call_args, 3, "closure_call_res");
+      return emit_closure_call(backend, llvm_extract_vm_val_ptr(backend, closure_val),
+                               node->arguments, node->argument_count);
     }
 
     // Async call: spawn a coroutine and yield its promise. The callee uses the
@@ -9428,6 +9549,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return result;
     }
 
+    // `o.h(4)`: `h` diye bir fonksiyon yok ama alici bir nesne — alanda
+    // saklanan kapanisi cagir (K004). Eskiden "fonksiyon bulunamadi"ydi;
+    // gecici yol `o["h"](4)` idi.
+    if (node->name && node->argument_count >= 1 &&
+        method_rewritten_calls().count(node) &&
+        receiver_may_hold_closure(backend, node->arguments[0])) {
+      return emit_field_closure_call(backend, node);
+    }
     {
       char msg[256];
       snprintf(msg, sizeof(msg),
@@ -13363,6 +13492,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   if (node->type != AST_PROGRAM)
     return;
 
+  method_rewritten_calls().clear();
   analyze_module_captures(backend, node, 0, node);
 
   // MAIN FUNCTION: int main() -> returns raw i32 (OS exit code)
