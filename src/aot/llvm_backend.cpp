@@ -10587,6 +10587,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // declaration's struct type. Cheap (linear scan over function table)
       // and only runs when the rhs is a function call, so the cost stays
       // proportional to actually-typed-struct VAR_DECLs.
+      //
+      // `T x = g.bol(...)` (`import "m" as g`): alici ONCE cozulsun ki ad
+      // `g__bol` olsun — yoksa struct donduren cagri taninmaz, genel yoldan
+      // gecer (K030: takma adli modulden tuple baglama).
+      if (node->right && node->right->type == AST_FUNCTION_CALL && node->right->receiver)
+        resolve_call_receiver(backend, node->right);
       if (node->right && node->right->type == AST_FUNCTION_CALL &&
           node->right->name) {
         for (int i = 0; i < backend->function_count; i++) {

@@ -155,6 +155,22 @@ private:
         std::optional<std::string> custom;
     };
     std::unordered_map<std::string, std::vector<TupleElem>> tuple_sigs_;
+public:
+    // Ham (henuz cozulmemis) tuple imza elemani: anahtar kelime tipi ya da
+    // tanimlayici (enum mu struct mu, ANCAK enum tablosu bilinince
+    // cozulur) + `[]` sonek sayisi. Import onbellegi bunu tutar (K030).
+    struct RawTupleElem {
+        DataType base = TYPE_UNKNOWN;
+        std::string ident;
+        int arrays = 0;
+    };
+    using RawTupleSig = std::pair<std::string, std::vector<RawTupleElem>>;
+    static std::vector<RawTupleSig> scan_tuple_sigs_raw(const std::vector<Token>& toks);
+private:
+    // import edilen modullerin tuple imzalari — anahtar ad, `import ... as a`
+    // ile gelende `a__ad`; yerel imza kazanir (prescan_tuple_sigs birlestirir).
+    std::vector<RawTupleSig> imported_tuple_sigs_raw_;
+    std::vector<TupleElem> resolve_tuple_elems(const std::vector<RawTupleElem>& raw) const;
     std::unordered_map<std::string, std::vector<TupleElem>> synth_tuple_structs_;
     std::vector<TupleElem> current_tuple_types_;   // bos = tuple donmuyor
     std::vector<std::unique_ptr<ASTNode>> pending_after_;

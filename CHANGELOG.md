@@ -591,6 +591,23 @@ Alan erişimi yazan her yeni codegen noktası `struct_field_load_boxed` /
 varsayma). `tests/struct_float.test.tpr` 10/10; mevcut struct paketleri
 değişmeden yeşil.
 
+### Eklendi — çoklu dönüş v2: import edilen modülden, `var t = f(); t._0`
+
+- `int q, r = bol(17, 5);` sağ taraf **import edilen modülün** fonksiyonu
+  olabiliyor (`import "m" as g` ile `g.bol(...)` de). v1'de "sağ taraf bu
+  dosyada `: (T, T)` bildiren bir fonksiyonun doğrudan çağrısı olmalı"
+  hatasıydı. Modül imzaları, modül enum'larının (K028) aynı ön taramasıyla
+  okunuyor; yerel imza kazanır.
+- **Tuple bütün olarak tek değişkene**: `var t = bol(17, 5); t._0 + t._1`.
+  `t` sentezlenmiş `__tup_int_int` struct'ı (kutusuz, ayırma yok). Yalnız
+  `var`: tipi yazılmış tek değişken (`int t = f()`) hâlâ hata.
+- Tuple bildirim/atama hatalarının konumu artık bildirimin satırı (eskiden
+  `;` tüketildikten sonra basıldığı için bir sonraki satırı gösteriyordu).
+- Kapsam dışı: closure/değişken üzerinden çağrı sağ tarafı — lambda tuple
+  döndüremiyor ve `var g = f; g(..)` dilde zaten çalışmıyor (ayrı iş).
+- Nöbetçi: `tests/tuple_return.test.tpr` (+3 test; eskisiyle derlenmiyor),
+  `tests/tuple_hatalari.sh` (10/10; satır denetimi eskisiyle `:3` görüyor).
+
 ### Added — `enum`: adlandırılmış tamsayı sabitleri (P0.2)
 
 Durum makineleri `int EKRAN_MENU = 0; int EKRAN_OYUN = 1;` diye sihirli

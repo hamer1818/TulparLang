@@ -12,6 +12,8 @@
 //     fonksiyon olmali (v1).
 // Calistir: ./tulpar tests/tuple_return.test.tpr
 import "test";
+import "tests/moduller/tuple_modul.tpr";
+import "tests/moduller/tuple_modul_ad.tpr" as tm;
 
 // Bildirimden ONCE kullanim — on tarama olmasa `ikili` tuple sanilmazdi.
 func run_once_kullanim() {
@@ -124,8 +126,47 @@ func run_blok_kapsami() {
     assert_close(toplam, 3.0, 0.000001);
 }
 
+// ---- v2 (K030, 2026-09-27) ----------------------------------------------
+// (1) Sag taraf IMPORT edilen modulun fonksiyonu (takma adli bicim dahil).
+//     v1: "coklu bildirimin sag tarafi bu dosyada `: (T, T)` bildiren bir
+//     fonksiyonun dogrudan cagrisi olmali" — derlenmiyordu.
+// (2) Tuple BUTUN olarak tek degiskene: `var t = f(); t._0` (v1: "coklu
+//     donus tek degiskene baglanamaz").
+// Eski derleyiciyle bu paket DERLENMIYOR.
+func run_modulden() {
+    int q, r = mod_bol(17, 5);
+    assert_eq_int(q, 3);
+    assert_eq_int(r, 2);
+    float a, b = mod_yon(3.0);
+    assert_close(a, 6.0, 0.000001);
+    assert_close(b, 1.5, 0.000001);
+    q, r = mod_bol(20, 6);
+    assert_eq_int(q * 10 + r, 32);
+}
+
+func run_takma_adli_modulden() {
+    int q, r = tm.mod_bol(9, 4);
+    assert_eq_int(q, 2);
+    assert_eq_int(r, 1);
+    var x, y = tm.mod_yon(1.0);
+    assert_close(x + y, 2.5, 0.000001);
+}
+
+func run_tek_degiskene() {
+    var t = ikili(4.0, 5.0);
+    assert_close(t._0, 4.0, 0.000001);
+    assert_close(t._1, 5.0, 0.000001);
+    var m = mod_bol(17, 5);                  // modulden de
+    assert_eq_int(m._0 * 10 + m._1, 32);
+    t = ikili(7.0, 8.0);                      // yeniden atama
+    assert_close(t._1, 8.0, 0.000001);
+}
+
 print("=== tuple / coklu donus tests ===");
 test("bildirimden once kullanim (on tarama)", "run_once_kullanim");
+test("modulden coklu donus (K030)", "run_modulden");
+test("takma adli modulden coklu donus (K030)", "run_takma_adli_modulden");
+test("tuple tek degiskene: t._0 (K030)", "run_tek_degiskene");
 test("float cifti (yon)", "run_float_cifti");
 test("var olan degiskene atama", "run_var_olan_degiskene_atama");
 test("var ile", "run_var_ile");
