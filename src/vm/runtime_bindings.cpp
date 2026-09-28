@@ -3084,6 +3084,84 @@ extern "C" void aot_struct_unpack_named(VMValue *vp, int field_count,
   for (int i = 0; i < field_count; i++) dst[i] = 0;
 }
 
+// K133 (2026-09-28): `to_struct(json, "Ad")` — ACIK ve DENETIMLI donusum.
+// Ortuk yol (`Nokta p = j;` -> aot_struct_unpack_typed) eksik ya da yanlis
+// tipli alani SESSIZCE 0 yapar; to_struct ise yakalanabilir hata firlatir.
+// Sonuc YENI bir nesne: yalniz bildirilen alanlar, alanin kendi tipinde
+// (float alana gelen int -> float). Fazla alanlar yok sayilir (JSON'da
+// olagan). Tip kodlari: 0 int, 1 float, 2 bool, 3 str, 4 dizi, 5 nesne
+// (ic ice struct), 6 herhangi (json/var).
+static const char *to_struct_kind_name(VMValue v) {
+  if (IS_INT(v)) return "int";
+  if (IS_FLOAT(v)) return "float";
+  if (IS_BOOL(v)) return "bool";
+  if (IS_VOID(v)) return "null";
+  if (IS_STRING(v)) return "str";
+  if (IS_ARRAY(v) || IS_STRUCT_ARRAY(v)) return "array";
+  if (IS_OBJECT(v) || IS_STRUCT(v)) return "object";
+  return "?";
+}
+
+[[noreturn]] static void to_struct_fail(const char *msg) {
+  aot_throw(aot_string_from_cstr(msg));
+  abort();   // aot_throw geri donmez (longjmp); derleyici icin
+}
+
+extern "C" VMValue aot_struct_from_json(VMValue *vp, const char *type_name, int field_count,
+                                        const char *const *names, const int *types) {
+  char msg[512];
+  const char *tn = type_name ? type_name : "?";
+  if (!vp || !IS_OBJECT(*vp)) {
+    snprintf(msg, sizeof msg,
+             "to_struct: '%s' icin bir json NESNESI bekleniyordu, %s geldi", tn,
+             vp ? to_struct_kind_name(*vp) : "null");
+    to_struct_fail(msg);
+  }
+  ObjObject *src = AS_OBJECT(*vp);
+  ObjObject *out = vm_allocate_object_aot_wrapper(nullptr);
+  for (int i = 0; i < field_count; i++) {
+    const char *fname = names ? names[i] : nullptr;
+    if (!fname) continue;
+    VMValue fv = VM_VOID();
+    bool found = false;
+    for (int k = 0; k < src->count; k++) {
+      if (strcmp(src->keys[k]->chars, fname) == 0) {
+        fv = src->values[k];
+        found = true;
+        break;
+      }
+    }
+    if (!found || IS_VOID(fv)) {
+      snprintf(msg, sizeof msg, "to_struct: '%s' alani '%s' eksik%s", tn, fname,
+               found ? " (null)" : "");
+      to_struct_fail(msg);
+    }
+    const int t = types ? types[i] : 6;
+    bool ok = true;
+    const char *want = "any";
+    switch (t) {
+    case 0: want = "int"; ok = IS_INT(fv); break;
+    case 1:
+      want = "float";
+      ok = IS_FLOAT(fv) || IS_INT(fv);
+      if (ok && IS_INT(fv)) fv = VM_FLOAT((double)AS_INT(fv));
+      break;
+    case 2: want = "bool"; ok = IS_BOOL(fv); break;
+    case 3: want = "str"; ok = IS_STRING(fv); break;
+    case 4: want = "array"; ok = IS_ARRAY(fv) || IS_STRUCT_ARRAY(fv); break;
+    case 5: want = "object"; ok = IS_OBJECT(fv) || IS_STRUCT(fv); break;
+    default: break;
+    }
+    if (!ok) {
+      snprintf(msg, sizeof msg, "to_struct: '%s.%s' %s bekliyordu, %s geldi", tn, fname, want,
+               to_struct_kind_name(fv));
+      to_struct_fail(msg);
+    }
+    vm_object_set(nullptr, out, const_cast<char *>(fname), fv);
+  }
+  return VM_OBJ((Obj *)out);
+}
+
 // ============================================================================
 // JSON Serialization - Optimized for Performance
 // ============================================================================

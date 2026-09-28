@@ -202,6 +202,7 @@ const BuiltinEntry kBuiltins[] = {
     {"toFloat",      "toFloat(value: any): float",                  "float parse / cast."},
     {"toJson",       "toJson(value: any): str",                     "Değeri JSON string'ine serileştirir."},
     {"fromJson",     "fromJson(s: str): json",                      "JSON string'i tipsiz değere parse eder."},
+    {"to_struct",    "to_struct(v: json, tip: \"Ad\"): Ad",         "json nesnesini adı verilen struct'a denetimli çevirir; eksik ya da yanlış tipli alanda hata fırlatır (fazla alanlar yok sayılır). Ad bir dizgi sabiti olmalı."},
 
     // ---- Math ----
     {"abs",          "abs(x: int|float): int|float",                "Mutlak değer."},

@@ -1,0 +1,89 @@
+// `to_struct(json, "Ad")` — ACIK ve DENETIMLI donusum (K133, 2026-09-28).
+//
+// Ortuk yol `Nokta p = j;` eksik ya da yanlis tipli alani SESSIZCE 0 yapar
+// (tasarim geregi: kutulu elemani acmak). plans/04 "acik coerce icin
+// to_struct(json, "Point") builtin'i ileride" diyordu; yoktu. Artik:
+//   * ikinci arguman derleme zamaninda bilinen bir struct adi (dizgi sabiti);
+//   * eksik alan / yanlis tip -> yakalanabilir hata ("to_struct: ..."). JSON
+//     `null` ayirt edilemiyor: fromJson onu 0 yapiyor (ayri kalem);
+//   * float alana int kabul (JSON'da 1 ile 1.0 ayrimi kaybolur), fazla
+//     alanlar yok sayilir;
+//   * sonuc yeni bir deger — kaynak json'la paylasilmiyor.
+// Hata yollari (derleme zamani): tests/to_struct_hatalari.sh.
+// Calistir (depo kokunden): ./tulpar tests/to_struct.test.tpr
+import "test";
+
+struct Nokta { int x; int y; }
+struct Hiz { float vx; float vy; bool aktif; }
+struct Oyuncu { str ad; int can; int[] envanter; }
+
+func uzunluk2(Nokta p): int { return p.x * p.x + p.y * p.y; }
+
+func run_temel() {
+    json j = fromJson("{\"x\": 3, \"y\": 4, \"fazla\": \"yok sayilir\"}");
+    Nokta p = to_struct(j, "Nokta");
+    assert_eq_int(p.x, 3);
+    assert_eq_int(p.y, 4);
+    assert_eq_int(uzunluk2(to_struct(j, "Nokta")), 25);   // struct parametresi
+    assert_eq_int(to_struct(j, "Nokta").y, 4);            // cagri sonucu alani
+}
+
+func run_float_ve_bool() {
+    json j = fromJson("{\"vx\": 1, \"vy\": 2.5, \"aktif\": true}");
+    Hiz h = to_struct(j, "Hiz");
+    assert_close(h.vx, 1.0, 0.000001);                    // int -> float
+    assert_close(h.vy, 2.5, 0.000001);
+    assert(h.aktif, "aktif true olmali");
+}
+
+func run_kutulu_struct_ve_kopya() {
+    json j = fromJson("{\"ad\": \"ali\", \"can\": 7, \"envanter\": [1, 2]}");
+    Oyuncu o = to_struct(j, "Oyuncu");
+    assert_eq_str(o.ad, "ali");
+    assert_eq_int(o.can, 7);
+    assert_eq_int(len(o.envanter), 2);
+    o.can = 99;
+    assert_eq_int(j["can"], 7);                           // kaynak paylasilmiyor
+}
+
+func eksik_alan() {
+    Nokta p = to_struct(fromJson("{\"x\": 1}"), "Nokta");
+    print(p.y);
+}
+
+func yanlis_tip() {
+    Nokta p = to_struct(fromJson("{\"x\": 1, \"y\": \"iki\"}"), "Nokta");
+    print(p.y);
+}
+
+func float_int_alana() {
+    Nokta p = to_struct(fromJson("{\"x\": 1.5, \"y\": 2}"), "Nokta");
+    print(p.x);
+}
+
+func nesne_degil() {
+    Nokta p = to_struct(fromJson("[1, 2]"), "Nokta");
+    print(p.x);
+}
+
+func run_hatalar_yakalanir() {
+    assert_throws("eksik_alan", "'Nokta' alani 'y' eksik");
+    assert_throws("yanlis_tip", "'Nokta.y' int bekliyordu, str geldi");
+    assert_throws("float_int_alana", "'Nokta.x' int bekliyordu, float geldi");
+    assert_throws("nesne_degil", "json NESNESI bekleniyordu, array geldi");
+}
+
+func run_ortuk_yol_degismedi() {
+    // Ortuk acma hala sessiz 0 — to_struct'in ACIK oldugunun kontrolu.
+    json j = fromJson("{\"x\": 1}");
+    Nokta p = j;
+    assert_eq_int(p.y, 0);
+}
+
+print("=== to_struct ===");
+test("temel: tipli bildirim, parametre, alan", "run_temel");
+test("float/bool alanlar, int -> float", "run_float_ve_bool");
+test("kutulu struct (str/dizi alanli), kopya", "run_kutulu_struct_ve_kopya");
+test("eksik / yanlis tip / nesne degil yakalanir", "run_hatalar_yakalanir");
+test("ortuk acma degismedi (sessiz 0)", "run_ortuk_yol_degismedi");
+test_summary();

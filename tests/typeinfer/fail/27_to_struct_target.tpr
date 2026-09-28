@@ -1,0 +1,15 @@
+// Beklenen: `to_struct(json, "Ad")` hedef tipi derleme zamaninda bilinmeli
+// (K133, 2026-09-28): ikinci arguman kayitli bir struct'i adlayan dizgi
+// SABITI. Degisken ad ya da olmayan struct typecheck'te de tani.
+
+// EXPECT: [typecheck]
+// EXPECT: to_struct: no struct named 'Yok'
+// EXPECT: the second argument must be a string LITERAL naming a struct
+
+struct Nokta { int x; int y; }
+
+json j = fromJson("{\"x\": 1, \"y\": 2}");
+Nokta a = to_struct(j, "Yok");
+str ad = "Nokta";
+Nokta b = to_struct(j, ad);
+print(a.x + b.y);

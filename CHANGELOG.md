@@ -851,6 +851,25 @@ Ofsetler codegen'e sabit gömülü olduğu için `runtime_bindings.cpp`'ye
 enum sıraları `static_assert` ile sabitlendi. Düzen değişirse derleme kırılır —
 alternatifi üretilen kodun sessizce yanlış adrese yazmasıydı.
 
+### Eklendi — `to_struct(json, "Ad")`: json'dan struct'a açık ve denetimli dönüşüm
+
+- `Nokta p = to_struct(j, "Nokta");` — plans/04'ün "açık coerce için
+  `to_struct(json, "Point")` ileride" dediği builtin yoktu; tek yol örtük
+  `Nokta p = j;` idi ve o eksik ya da yanlış tipli alanı **sessizce 0**
+  yapıyor (kutulu elemanı açmanın tasarımı; değişmedi, testle kilitli).
+- `to_struct` ise eksik alan, yanlış tip (`int` alana `"iki"` ya da
+  `1.5`) ve nesne olmayan kaynakta **yakalanabilir hata** fırlatıyor
+  (`to_struct: 'Nokta.y' int bekliyordu, str geldi`). `float` alana `int`
+  kabul (JSON'da 1 ile 1.0 ayrımı kaybolur); fazla alanlar yok sayılır.
+  Sonuç yeni bir değer — kaynak json'la paylaşılmıyor. str/dizi alanlı
+  (kutulu) struct'lar da çalışıyor.
+- Hedef tip derleme zamanında bilinmeli: ikinci argüman dizgi **sabiti** ve
+  kayıtlı bir struct adı olmalı — değilse derleme hatası (codegen) ve
+  typecheck tanısı. typeinfer + LSP kaydı; `builtin_audit` temiz.
+- Nöbetçi: `tests/to_struct.test.tpr` (5 test, 5 hata yolu `assert_throws`
+  ile), `tests/to_struct_hatalari.sh` (3 derleme hatası + pozitif kontrol;
+  eski derleyiciyle hepsi kırmızı).
+
 ### Added — `array_fill(n, deger)`: diziyi tek çağrıda kur
 
 n elemanlı bir dizi kurmanın tek yolu n kez `push` çağırmaktı. Ölçüldü: çağrı
