@@ -1255,6 +1255,29 @@ void handle_launch(cJSON *request) {
     return;
   }
 
+  // Wait until gdb is actually READY before answering. gdb reads the
+  // binary's symbols before it processes its first command, so a tokened
+  // no-op round-trip is the readiness signal. Without it `launch`
+  // answered right after spawning and the first `-break-insert` had to
+  // cover gdb's whole cold start inside its 2 s cap: on a loaded CI
+  // runner that expired and the breakpoint came back
+  // `verified:false, "gdb timeout"` (build-linux, 2026-09-28) — while gdb
+  // went on to insert it anyway. Reproduced with a gdb wrapper that
+  // sleeps 3 s before exec: every tests/dap_audit.py scenario failed.
+  {
+    int tok = g_gdb.send_command("-list-features", /*prefix_token=*/true);
+    std::string ready = g_gdb.wait_for_result(tok, 60000);
+    if (ready.empty()) {
+      cJSON *resp = make_response(request, /*success=*/false,
+                                  "launch: gdb did not become ready within "
+                                  "60 s");
+      cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+      write_message(resp);
+      cJSON_Delete(resp);
+      return;
+    }
+  }
+
   g_launched = true;
 
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
@@ -1380,9 +1403,10 @@ void handle_set_breakpoints(cJSON *request) {
       cmd.push_back('"');
 
       int tok = g_gdb.send_command(cmd, /*prefix_token=*/true);
-      // 2-second cap per breakpoint — gdb usually replies in <50ms
-      // but we shouldn't hang the DAP wire if it stalls.
-      std::string result = g_gdb.wait_for_result(tok, 2000);
+      // Cap per breakpoint — gdb usually replies in <50ms once ready
+      // (launch waits for readiness), but we shouldn't hang the DAP wire
+      // if it stalls. 10 s, not 2: a loaded CI runner is not "stalled".
+      std::string result = g_gdb.wait_for_result(tok, 10000);
 
       cJSON *out_bp = cJSON_CreateObject();
       bool ok = result.compare(0, 5, "^done") == 0;
