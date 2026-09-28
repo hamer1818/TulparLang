@@ -193,9 +193,9 @@ int _hit_self  = -1;
 int _hit_other = -1;
 
 // ---- Sahne callback'leri ----------------------------------------------------
-var _start_fn = 0;   // baslangicta(fn): kurulum + R sonrası yeniden
-var _frame_fn = 0;   // her_kare(fn): kare başı kullanıcı mantığı (opsiyonel)
-var _draw_fn  = 0;   // ciz_ustune(fn): otomatik çizim üstüne ek çizim
+var _start_fn = "";   // baslangicta(fn): kurulum + R sonrası yeniden
+var _frame_fn = "";   // her_kare(fn): kare başı kullanıcı mantığı (opsiyonel)
+var _draw_fn  = "";   // ciz_ustune(fn): otomatik çizim üstüne ek çizim
 bool _has_start = false;
 bool _has_frame = false;
 bool _has_draw  = false;
@@ -2015,9 +2015,9 @@ func menu_basligi(s)   { launcher_title(s); }
 // bölüm kayıtları, çarpışma kuralları, hint/HUD ve fizik de temizlenmeli —
 // yoksa yeni oyun eskisinin handler'larını miras alır.
 func _lx_clear() {
-    _start_fn = 0; _has_start = false;
-    _frame_fn = 0; _has_frame = false;
-    _draw_fn  = 0; _has_draw  = false;
+    _start_fn = ""; _has_start = false;
+    _frame_fn = ""; _has_frame = false;
+    _draw_fn  = ""; _has_draw  = false;
     _levels = []; _level_n = 0; _cur_level = 1; _has_levels = false;
     _ca = []; _cb = []; _cfn = [];
     _hint = ""; _has_hint = false;

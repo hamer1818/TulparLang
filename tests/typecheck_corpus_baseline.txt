@@ -1,9 +1,1 @@
-lib/arcade.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 452
-lib/arcade.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 1565
-lib/arcade.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 1747
-lib/arcade.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 1882
-lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 1342
-lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 4521
-lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6309
-lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6432
-lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6503
+
