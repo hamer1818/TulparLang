@@ -21,8 +21,11 @@ beklentisi)
 
 ## Parça A (DWARF emit) tamamlandı — PR'lar #160 / #161 / #164 / #165 / #167 / #169 / #171 / #173
 
-`tulpar --debug build <file>` AOT komutu artık tam DWARF metadata
-emit ediyor. Aşağıdaki katmanlar IR'da `!dbg` metadata olarak görünür:
+`tulpar --debug build <file>` (ya da `tulpar build --debug <file>`)
+AOT komutu artık tam DWARF metadata emit ediyor. ⚠ İkinci yazım
+2026-09-27'ye kadar bayrağı sessizce düşürüyor ve DWARF'sız ikili
+bırakıyordu; önbellek de debug/düz derlemeyi ayırt etmiyordu. İkisi
+düzeltildi, `tests/build_bayraklari.sh` (`build.sh suites`) kilitliyor. Aşağıdaki katmanlar IR'da `!dbg` metadata olarak görünür:
 
 | Katman | PR | Açıklama |
 |---|---|---|

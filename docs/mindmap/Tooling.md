@@ -27,6 +27,13 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 `--no-typecheck` / `TULPAR_NO_TYPECHECK=1` kapatır, `--strict` uyarıları sert hataya
 çevirir. → [[Type Inference]]
 
+> ⚠️ **Bayrak KONUMA göre sessizce düşüyordu** (2026-09-27'de düzeltildi).
+> `tulpar build --strict x.tpr` çıkış 0 veriyor, `tulpar build --debug x.tpr`
+> DWARF'sız ikili bırakıyordu — yalnız `tulpar --strict build` biçimi
+> çalışıyordu; önbellek de debug/düz derlemeyi ayırt etmiyordu. Kapı:
+> `tests/build_bayraklari.sh`. Ders: bir bayrağın "var" olması, her yazımda
+> ETKİ ettiği anlamına gelmez; tanınmayan bayrak artık uyarı basıyor.
+
 > ⚠️ **Ayrıştırma hatalarına KÖR'dü.** Ayrıştırıcı hatadan kurtuluyor: tanıyı basıp
 > KISMİ bir AST döndürüyor, istisna atmıyor. Yalnız `catch` ve `!ast` denetimine güvenen
 > komut, sözdizimi bozuk bir dosyaya **"ok" deyip çıkış kodu 0** dönüyordu — yani onu

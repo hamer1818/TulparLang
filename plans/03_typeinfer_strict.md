@@ -3,7 +3,12 @@
 **Durum:** COMPLETED (2026-05, PR #43 + PR #32 pre-pass çerçevesi) —
 `tulpar typecheck` standalone subcommand + her `build`/`run`/`--vm`
 çağrısında `[typecheck]` uyarıları (`--no-typecheck`/
-`TULPAR_NO_TYPECHECK=1` opt-out). Bkz. STATUS § "Çekirdek dil".
+`TULPAR_NO_TYPECHECK=1` opt-out) + **strict kipi**: `--strict`,
+`TULPAR_STRICT=1` ve `tulpar.toml` `strict = true` (öncelik CLI > env >
+toml; uyarı varsa çıkış 1, `aborting run/build`). Bkz. STATUS § "Çekirdek dil".
+⚠ 2026-09-27'ye kadar `build`'den SONRA yazılan `--strict` (bu planın
+aşağıdaki `tulpar build --strict` örneği dahil) sessizce yok sayılıyordu —
+düzeltildi, iki yazım da `tests/build_bayraklari.sh` ile kilitli.
 **Tahmin:** 1-2 PR (false-positive cleanup ayrı PR)
 **Risk:** Düşük (mevcut altyapı %90 hazır, opt-in flag)
 **Mottoya katkı:** Python kolay (erken hata, runtime'a kalmadan)

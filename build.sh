@@ -561,6 +561,18 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # `tulpar build` BAYRAKLARI. `build`'den SONRA yazilan --strict /
+    # --no-typecheck / --debug / -g sessizce yok sayiliyordu (plan 03 ve
+    # 07'nin kendi yazimlari cikis 0 / DWARF'siz ikili verdi, olculdu
+    # 2026-09-27) ve onbellek debug ile duz derlemeyi ayirt etmiyordu.
+    # Kapi uc platformda kosuyor ve iki pozitif kontrol tasiyor.
+    if [ -x tests/build_bayraklari.sh ]; then
+        if ! bash tests/build_bayraklari.sh ./tulpar; then
+            echo -e "${RED}build bayrak kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # FONKSIYON ARAMA (aot_func_lookup): bir Tulpar fonksiyonunu adiyla,
     # cagirmadan ve ayirmadan cozen C yuzu. Bu depoda cagiran YOK — tek
     # tuketici tulpar-engine (betik kancalari yuklemede bir kez cozulur) —
