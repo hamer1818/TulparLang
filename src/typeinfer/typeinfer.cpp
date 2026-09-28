@@ -63,6 +63,37 @@ static DataType lookup_symbol_type(TypeInferContext *ctx, const std::string &nam
   return it->second.type;
 }
 
+// ---- K068 (2026-09-27): async sonucu FUTURE --------------------------------
+// `async func f(): int` cagrisi hemen bir promise doner; deger `await` ile
+// gelir. typeinfer eskiden `f()`yi dogrudan int sayiyordu: `int r = f();
+// print(r + 1)` tanisiz gecip PROMISE ISARETCISINI (49342881) basiyordu.
+// Future'i bekleyen yer: `await`, `var`/`json` yuvasi, tipsiz/json parametre
+// (gather gibi). Somut tipli yuvaya (int/str/...) ya da aritmetige girmesi
+// artik tani. `await <future-olmayan>` DOKUNULMADI: dilde kimlik islemi
+// olarak tanimli ve testli (tests/async.test.tpr `await 7`).
+static bool is_future_expr(TypeInferContext *ctx, const ASTNode *expr, DataType *inner) {
+  if (const auto *call = as_node<FunctionCall>(expr)) {
+    if (call->callee || call->receiver) return false;
+    auto it = ctx->async_fns.find(call->name);
+    if (it == ctx->async_fns.end()) return false;
+    if (inner) *inner = it->second;
+    return true;
+  }
+  if (const auto *id = as_node<Identifier>(expr)) {
+    auto it = ctx->future_symbols.find(id->name);
+    if (it == ctx->future_symbols.end()) return false;
+    if (inner) *inner = it->second;
+    return true;
+  }
+  return false;
+}
+// Somut (dinamik olmayan) bir tip mi: future buraya await'siz giremez.
+static bool concrete_slot(DataType t) {
+  return t != TYPE_UNKNOWN && t != TYPE_VOID && t != TYPE_UNSPECIFIED && t != TYPE_JSON &&
+         t != TYPE_ARRAY && t != TYPE_ARRAY_JSON;
+}
+static void report_future_misuse(TypeInferContext *ctx, const char *where, int line);
+
 // FONKSİYON REFERANSI: bir üst düzey fonksiyonun adı DEĞER olarak
 // kullanıldığında (`var f = selam; call(f)`), çalışma zamanında taşınan şey
 // fonksiyonun ADIDIR — bir string. `f + 0` yazınca "selam0" çıkması bunun
@@ -311,6 +342,14 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
   if (const auto *bin = as_node<BinaryOp>(expr)) {
     DataType left_type = infer_expr(ctx, bin->left.get());
     DataType right_type = infer_expr(ctx, bin->right.get());
+    // K068: `f() + 1` (f async) — promise isaretcisiyle aritmetik.
+    if ((bin->op == TOKEN_PLUS || bin->op == TOKEN_MINUS || bin->op == TOKEN_MULTIPLY ||
+         bin->op == TOKEN_DIVIDE || bin->op == TOKEN_MODULO) &&
+        (is_future_expr(ctx, bin->left.get(), nullptr) ||
+         is_future_expr(ctx, bin->right.get(), nullptr))) {
+      report_future_misuse(ctx, tulpar::i18n::tr_en("aritmetik", "arithmetic"),
+                           bin->loc.line);
+    }
 
     switch (bin->op) {
     case TOKEN_EQUAL:
@@ -399,6 +438,13 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
 
   if (const auto *un = as_node<UnaryOp>(expr)) {
     DataType operand_type = infer_expr(ctx, un->operand.get());
+    // `await <future>` -> async fonksiyonun bildirilen donus tipi (K068).
+    // Future olmayanda kimlik (dil kurali, tests/async.test.tpr).
+    if (un->op == TOKEN_AWAIT) {
+      DataType inner = TYPE_UNKNOWN;
+      if (is_future_expr(ctx, un->operand.get(), &inner)) return inner;
+      return operand_type;
+    }
     if (un->op == TOKEN_BANG) {
       return TYPE_BOOL;
     }
@@ -433,9 +479,11 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     // for (e.g., `print(add(1))` — print has no signature, but `add(1)`
     // inside it still needs its arg-count checked).
     std::vector<DataType> arg_types;
+    std::vector<const ASTNode *> arg_nodes;   // K068: future argumani icin
     arg_types.reserve(call->arguments.size() + 1);
     for (const auto &arg : call->arguments) {
       arg_types.push_back(infer_expr(ctx, arg.get()));
+      arg_nodes.push_back(arg.get());
     }
 
     // Method-call dispatch awareness: when the parser saw
@@ -457,6 +505,7 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       if (!resolved_as_alias) {
         // Method path: receiver counts as first positional arg.
         arg_types.insert(arg_types.begin(), receiver_type);
+        arg_nodes.insert(arg_nodes.begin(), call->receiver.get());
       }
     }
 
@@ -552,6 +601,17 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
         for (int i = 0; i < got && i < expected; ++i) {
           DataType param_type = sig.param_types[i];
           DataType arg_type = arg_types[i];
+
+          // K068: future, somut tipli parametreye await'siz.
+          if (i < (int)arg_nodes.size() && concrete_slot(param_type) &&
+              is_future_expr(ctx, arg_nodes[i], nullptr)) {
+            char w[160];
+            snprintf(w, sizeof w,
+                     tulpar::i18n::tr_en("'%s' cagrisi, arguman %d", "call '%s', argument %d"),
+                     call->name.c_str(), i + 1);
+            report_future_misuse(ctx, w, call->loc.line);
+            continue;
+          }
 
           // Polymorphic position with concrete arg → use category check
           // instead of the wildcard-skip default.
@@ -670,6 +730,27 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     // infer(e) cozulemezse degisken UNKNOWN dogar ve bugunku gibi denetimsiz
     // kalir (gurultulu hata yerine sessiz gecis) — bunu HATAYA cevirmek ayri
     // bir karar, once infer kapsaminin olculmesi gerekiyor.
+    // K068: baslatici bir FUTURE (await'siz async cagri / future degisken).
+    {
+      DataType inner = TYPE_UNKNOWN;
+      if (decl->initializer && is_future_expr(ctx, decl->initializer.get(), &inner)) {
+        infer_expr(ctx, decl->initializer.get());   // argumanlar yine denetlensin
+        if (concrete_slot(declared_type)) {
+          const std::string w = std::string(tulpar::i18n::tr_en("'", "declaration of '")) +
+                                decl->name + tulpar::i18n::tr_en("' bildirimi", "'");
+          report_future_misuse(ctx, w.c_str(), decl->loc.line);
+          typeinfer_add_symbol(ctx, decl->name.c_str(), declared_type);
+          ctx->future_symbols.erase(decl->name);
+        } else {
+          // `var p = f();` / `json p = f();`: p bir future tutar; `await p` -> T.
+          typeinfer_add_symbol(ctx, decl->name.c_str(),
+                               declared_type == TYPE_JSON ? TYPE_JSON : TYPE_UNKNOWN);
+          ctx->future_symbols[decl->name] = inner;
+        }
+        return;
+      }
+      ctx->future_symbols.erase(decl->name);
+    }
     if ((declared_type == TYPE_VOID || declared_type == TYPE_UNKNOWN) &&
         decl->initializer) {
       declared_type = infer_expr(ctx, decl->initializer.get());
@@ -804,6 +885,21 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     }
     DataType var_type = lookup_symbol_type(ctx, assign->name);
     DataType expr_type = infer_expr(ctx, assign->value.get());
+    {
+      // K068: future somut tipli degiskene await'siz.
+      DataType inner = TYPE_UNKNOWN;
+      if (is_future_expr(ctx, assign->value.get(), &inner)) {
+        if (concrete_slot(var_type) && !ctx->future_symbols.count(assign->name)) {
+          const std::string w = std::string(tulpar::i18n::tr_en("'", "assignment to '")) +
+                                assign->name + tulpar::i18n::tr_en("' atamasi", "'");
+          report_future_misuse(ctx, w.c_str(), assign->loc.line);
+        } else {
+          ctx->future_symbols[assign->name] = inner;
+        }
+        return;
+      }
+      ctx->future_symbols.erase(assign->name);
+    }
     // See VariableDecl note above: don't flag against unknown-typed sides.
     auto is_unknown = [](DataType t) {
       return t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
@@ -851,6 +947,16 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   if (const auto *ret = as_node<ReturnStatement>(stmt)) {
     if (ret->value) {
       DataType ret_type = infer_expr(ctx, ret->value.get());
+      // K068: async OLMAYAN, somut donus tipli fonksiyon await'siz future
+      // donduruyor (async fonksiyonun kendi `return`u zaten T).
+      if (concrete_slot(ctx->current_return_type) && !ctx->current_is_async &&
+          is_future_expr(ctx, ret->value.get(), nullptr)) {
+        const std::string w = std::string(tulpar::i18n::tr_en("'", "return of '")) +
+                              ctx->current_function_name +
+                              tulpar::i18n::tr_en("' donusu", "'");
+        report_future_misuse(ctx, w.c_str(), ret->loc.line);
+        return;
+      }
       // Don't flag against unknown-typed return expressions.
       if (ctx->current_return_type != TYPE_VOID &&
           ctx->current_return_type != TYPE_UNSPECIFIED &&
@@ -970,18 +1076,24 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                                 param_types.empty() ? nullptr : param_types.data(),
                                 static_cast<int>(param_types.size()));
 
+    if (func->is_async) ctx->async_fns[func->name] = func->return_type;   // K068
+
     const DataType prev_return = ctx->current_return_type;
     const std::string prev_func = ctx->current_function_name;
+    const bool prev_async = ctx->current_is_async;
     ctx->current_return_type = func->return_type;
     ctx->current_function_name = func->name;
+    ctx->current_is_async = func->is_async;
 
     for (const auto &param : func->parameters) {
       typeinfer_add_symbol(ctx, param.name.c_str(), param.type);
+      ctx->future_symbols.erase(param.name);
     }
     infer_stmt(ctx, func->body.get());
 
     ctx->current_return_type = prev_return;
     ctx->current_function_name = prev_func;
+    ctx->current_is_async = prev_async;
     return;
   }
 
@@ -1027,6 +1139,18 @@ const char *datatype_to_string(DataType type) {
     return "unknown";
   }
 }
+
+namespace {
+static void report_future_misuse(TypeInferContext *ctx, const char *where, int line) {
+  report_error(ctx,
+               tulpar::i18n::tr_en(
+                   "%s: async fonksiyonun sonucu bir FUTURE (promise) — degeri icin "
+                   "`await` kullan (satir %d)",
+                   "%s: the result of an async function is a FUTURE (promise) - use "
+                   "`await` to get its value at line %d"),
+               where, line);
+}
+}  // namespace
 
 int types_compatible(DataType a, DataType b) {
   if (a == b) {
@@ -1844,6 +1968,7 @@ static void register_module_exports(TypeInferContext *ctx,
           ctx, name.c_str(), func->return_type,
           param_types.empty() ? nullptr : param_types.data(),
           static_cast<int>(param_types.size()));
+      if (func->is_async) ctx->async_fns[name] = func->return_type;   // K068
       continue;
     }
     if (const auto *type_decl = as_node<TypeDecl>(stmt.get())) {
@@ -1915,6 +2040,7 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
                                   param_types.empty() ? nullptr : param_types.data(),
                                   static_cast<int>(param_types.size()));
       ctx->user_functions.insert(func->name);
+      if (func->is_async) ctx->async_fns[func->name] = func->return_type;   // K068
     }
     // Pre-scan struct declarations so `<TypeName> ident;` decls
     // anywhere in the program (even before the type's definition

@@ -47,6 +47,22 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   *"her zaman doğru"* uyarısı alıyor (eski "boolean ya da integer olmalı"
   cümlesi yanlıştı — o şekiller izinli ve tanımlı).
 
+### Düzeltildi — typeinfer async sonucunu değer sanıyordu (Future)
+
+- `async func f(): int` çağrısı hemen bir promise döndürür; typeinfer onu
+  doğrudan `int` sayıyordu: `int r = f(); print(r + 1);` tanısız geçip promise
+  işaretçisini (`49342881`) basıyordu. Artık async çağrının sonucu bir
+  FUTURE: somut tipli yuvaya (bildirim, atama, parametre, async olmayan
+  fonksiyonun dönüşü) ya da aritmetiğe `await`'siz girmesi tanı; `await f()`
+  / `var p = f(); await p` bildirilen `T`yi veriyor; `var`/`json` yuvası ve
+  tipsiz/json parametre (ör. `gather`) serbest.
+- `await <future-olmayan>` **değişmedi**: dilde kimlik işlemi olarak tanımlı
+  ve testli (`tests/async.test.tpr` `await 7`) — envanterin "yalnız Future
+  üstünde" isteği mevcut geçerli programları kırardı.
+- Korpus tanı tabanı değişmedi (9).
+- Nöbetçi: `tests/typeinfer/fail/25_async_future_misuse.tpr` (5 EXPECT;
+  eski derleyici "ok"), `pass/19_async_future_ok.tpr`.
+
 ### Eklendi — import edilen modülün `enum`ları görünür
 
 - Modülde `enum Yon {...}` bildirip içe aktaran dosyada `Yon.DOGU` yazmak
