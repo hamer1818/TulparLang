@@ -2382,9 +2382,10 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   "AOT derleme/baglama basarisiz" sanıp yanıltıcı mesaj basıyordu
   (`aot_compile_and_run_silent` `run_result != 0` için `AOT_ERROR_LINK`
   döndürüyordu). Yeni `AOT_RAN_NONZERO` durumu eklendi: derleme+link zaten
-  başarılı, program çalıştı → sürücü mesajsız çıkar *(kodu aynen iletmiyor:
-  sıfır olmayan her kod 1'e düzleniyor — 2026-09-28'de `exit(3)` → 1
-  ölçüldü)*. SIGINT
+  başarılı, program çalıştı → sürücü mesajsız çıkar *(kodu aynen
+  iletmiyordu: sıfır olmayan her kod 1'e düzleniyordu — 2026-09-28'de
+  `exit(3)` → 1 ölçüldü; #401 kodu aynen geçiriyor, sinyalle ölüm 128 +
+  sinyal)*. SIGINT
   (Ctrl+C, sunucu için normal durdurma) `WIFSIGNALED`+`SIGINT` ile temiz çıkışa
   (exit 0) eşlenir. `aot_pipeline.cpp/.hpp` + `main.cpp`.
 

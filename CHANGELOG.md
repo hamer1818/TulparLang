@@ -276,7 +276,7 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   check elle kaldırılmalı" (tehlikeli) tavsiyesi kaldırıldı; silinmiş sahne
   paketleri ve denklik kapısı, `examples/en`'in 30/30 atlandığı, `input`
   arity düzeltmesi, strict flip sonrası sıfıra bölme / sınır dışı, float'ın
-  64-bit olduğu, çıkış kodunun 1'e düzlendiği, Vercel'deki canlı site, son
+  64-bit olduğu, çıkış kodunun 1'e düzlendiği (#401 düzeltiyor), Vercel'deki canlı site, son
   etiket, macOS CI'ın suites koşması, korpus sayıları, F5 formülü — hepsi
   2026-09-28'de sonda / grep / `git tag` ile yeniden doğrulanarak.
 - README: "statically-typed" daraltıldı (tipli kod derlemede denetlenir,
