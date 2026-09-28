@@ -1405,6 +1405,12 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_sarr_remove_at = LLVMAddFunction(
       backend->module, "aot_sarr_remove_at",
       LLVMFunctionType(backend->int32_type, sarr_rm_params, 3, 0));
+  // K198: aot_struct_format(ptr type_name, i32 fc, ptr names, ptr types, ptr data) -> VMValue
+  LLVMTypeRef st_fmt_params[] = {backend->ptr_type, backend->int32_type, backend->ptr_type,
+                                 backend->ptr_type, backend->ptr_type};
+  backend->func_aot_struct_format = LLVMAddFunction(
+      backend->module, "aot_struct_format",
+      llvm_make_vmvalue_func_type(backend, st_fmt_params, 5, 0));
   // aot_array_remove_at(VMValue arr, VMValue idx) -> VMValue (duz + struct dizisi)
   LLVMTypeRef arr_rm_params[] = {backend->vm_value_type, backend->vm_value_type};
   backend->func_aot_array_remove_at = LLVMAddFunction(
@@ -3081,6 +3087,33 @@ static const char *sarr_elem_of_ident(LLVMBackend *backend, ASTNode_C *n) {
   return get_local_struct_array_elem(backend, n->name);
 }
 
+// Struct'in alan adi ve tip kodu (0 int, 1 float, 2 bool) tablolari: modul
+// duzeyi sabit global'ler; donen isaretciler ilk elemanlarina.
+static void struct_meta_tables(LLVMBackend *backend, StructTypeEntry *st,
+                               LLVMValueRef *names_out, LLVMValueRef *types_out) {
+  std::vector<LLVMValueRef> names, types;
+  for (int i = 0; i < st->field_count; i++) {
+    names.push_back(LLVMBuildGlobalStringPtr(backend->builder, st->field_names[i], "st.fn"));
+    unsigned code = st->field_types[i] == TYPE_FLOAT ? 1u
+                    : st->field_types[i] == TYPE_BOOL ? 2u : 0u;
+    types.push_back(LLVMConstInt(backend->int32_type, code, 0));
+  }
+  LLVMTypeRef names_ty = LLVMArrayType(backend->ptr_type, (unsigned)st->field_count);
+  LLVMValueRef names_g = LLVMAddGlobal(backend->module, names_ty, "st.names");
+  LLVMSetInitializer(names_g, LLVMConstArray(backend->ptr_type, names.data(), (unsigned)st->field_count));
+  LLVMSetGlobalConstant(names_g, 1);
+  LLVMSetLinkage(names_g, LLVMPrivateLinkage);
+  LLVMTypeRef types_ty = LLVMArrayType(backend->int32_type, (unsigned)st->field_count);
+  LLVMValueRef types_g = LLVMAddGlobal(backend->module, types_ty, "st.types");
+  LLVMSetInitializer(types_g, LLVMConstArray(backend->int32_type, types.data(), (unsigned)st->field_count));
+  LLVMSetGlobalConstant(types_g, 1);
+  LLVMSetLinkage(types_g, LLVMPrivateLinkage);
+  LLVMValueRef z0 = LLVMConstInt(backend->int32_type, 0, 0);
+  LLVMValueRef zz[] = {z0, z0};
+  *names_out = LLVMBuildGEP2(backend->builder, names_ty, names_g, zz, 2, "st.np");
+  *types_out = LLVMBuildGEP2(backend->builder, types_ty, types_g, zz, 2, "st.tp");
+}
+
 // `[]`den yeni dizi: ad + alan tablolari modul duzeyi sabit global'ler.
 static LLVMValueRef sarr_new_value(LLVMBackend *backend, StructTypeEntry *st) {
   LLVMValueRef tn = LLVMBuildGlobalStringPtr(backend->builder, st->name, "sarr.tn");
@@ -3466,6 +3499,32 @@ static LLVMValueRef codegen_struct_expr_ptr(LLVMBackend *backend, ASTNode_C *arg
       return sarr_elem_ptr(backend, arg->left->name, arg->index, "sarr.src.elem");
   }
   return nullptr;
+}
+
+// Ifade kutusuz bir struct DEGERI mi (degerlendirmeden)? Tipli yerel, struct
+// donduren kullanici cagrisi, struct dizisi elemani, `pop(d)`/`remove_at`.
+// Yalniz tamamen kutusuzlar (int/bool/float alanli). nullptr = degil.
+static StructTypeEntry *struct_expr_type(LLVMBackend *backend, ASTNode_C *arg) {
+  if (!arg) return nullptr;
+  StructTypeEntry *st = nullptr;
+  if (arg->type == AST_IDENTIFIER && arg->name) {
+    const char *sn = get_local_struct_type(backend, arg->name);
+    if (sn && get_local(backend, arg->name)) st = find_struct_type(backend, sn);
+  } else if (arg->type == AST_FUNCTION_CALL && arg->name) {
+    if (StructTypeEntry *rst = sarr_remove_call_elem(backend, arg)) return rst;
+    for (int j = 0; j < backend->function_count; j++) {
+      if (backend->functions[j].name && strcmp(backend->functions[j].name, arg->name) == 0) {
+        if (backend->functions[j].return_struct_name)
+          st = find_struct_type(backend, backend->functions[j].return_struct_name);
+        break;
+      }
+    }
+  } else if (arg->type == AST_ARRAY_ACCESS && arg->left && arg->left->type == AST_IDENTIFIER &&
+             arg->index && arg->index->type != AST_STRING_LITERAL) {
+    const char *en = sarr_elem_of_ident(backend, arg->left);
+    if (en && get_local(backend, arg->left->name)) st = find_struct_type(backend, en);
+  }
+  return (st && struct_is_trivially_unboxable(st)) ? st : nullptr;
 }
 
 // Butun yapiyi `src`den `dst`ye kopyala (ikisi de st yerlesimli isaretci).
@@ -7107,58 +7166,18 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           LLVMBuildCall2(backend->builder,
                          LLVMGlobalGetValueType(backend->func_printf),
                          backend->func_printf, printf_args, 2, "");
-        } else if (
-            (arg->type == AST_IDENTIFIER && arg->name &&
-             get_local_struct_type(backend, arg->name)) ||
-            (arg->type == AST_FUNCTION_CALL && arg->name && [&]() {
-               for (int j = 0; j < backend->function_count; j++) {
-                 if (strcmp(backend->functions[j].name, arg->name) == 0) {
-                   return backend->functions[j].return_struct_name != nullptr;
-                 }
-               }
-               return false;
-             }())) {
+        } else if (StructTypeEntry *pst = struct_expr_type(backend, arg)) {
           // Typed-struct print: emit `Name { f1: <int>, f2: <int>, ... }`
-          // directly via printf calls, GEP-loading each field's i64
-          // payload. Avoids feeding a raw struct alloca through the
-          // VMValue print pipeline (which would mis-read the bytes).
-          // Trivially-unboxable (int/bool) is the only path PR3-PR5 takes,
-          // so every field is an i64 here. bool prints as 0/1 — same as
-          // the boxed VMValue print path treats it.
+          // directly via printf calls, GEP-loading each field's payload.
+          // Avoids feeding a raw struct alloca through the VMValue print
+          // pipeline (which would mis-read the bytes). bool prints as 0/1.
           //
-          // Two sources for the struct alloca:
-          //   - identifier:    the local's pinned alloca (no allocation)
-          //   - function call: alloca a temp of the callee's return
-          //                    struct, pin the hint, evaluate the call
-          //                    (writes into our temp), then format from
-          //                    the temp.
-          const char *struct_name = nullptr;
-          StructTypeEntry *st = nullptr;
-          LLVMValueRef alloca = nullptr;
-          if (arg->type == AST_IDENTIFIER) {
-            struct_name = get_local_struct_type(backend, arg->name);
-            st = find_struct_type(backend, struct_name);
-            alloca = get_local(backend, arg->name);
-          } else {
-            for (int j = 0; j < backend->function_count; j++) {
-              if (strcmp(backend->functions[j].name, arg->name) == 0) {
-                struct_name = backend->functions[j].return_struct_name;
-                break;
-              }
-            }
-            st = find_struct_type(backend, struct_name);
-            if (st) {
-              alloca = llvm_build_alloca_at_entry(
-                  backend, st->llvm_type, "print.struct.call");
-              LLVMBuildStore(backend->builder,
-                             LLVMConstNull(st->llvm_type), alloca);
-              backend->pending_struct_result_ptr = alloca;
-              backend->pending_struct_result_name = st->name;
-              (void)codegen_expression(backend, arg);
-              backend->pending_struct_result_ptr = nullptr;
-              backend->pending_struct_result_name = nullptr;
-            }
-          }
+          // Kaynak isaretci codegen_struct_expr_ptr'den: tipli yerelin
+          // alloca'si (ayirma yok), struct donduren cagri icin ipucuna
+          // baglanmis gecici, struct dizisi elemani / `pop(d)` (K198 —
+          // eskiden `print(d[0])` "<object>" basiyordu).
+          StructTypeEntry *st = pst;
+          LLVMValueRef alloca = codegen_struct_expr_ptr(backend, arg, st);
           if (st && alloca) {
             char hdr[256];
             snprintf(hdr, sizeof(hdr), "%s { ", st->name);
@@ -7242,6 +7261,18 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // toString(value) -> string (for print, returns char*)
     if (node->name && strcmp(bi_name, "toString") == 0 &&
         node->argument_count >= 1) {
+      // Kutusuz struct: print ile ayni `Ad { ... }` bicimi (K198).
+      if (StructTypeEntry *tst = struct_expr_type(backend, node->arguments[0])) {
+        if (LLVMValueRef sp = codegen_struct_expr_ptr(backend, node->arguments[0], tst)) {
+          LLVMValueRef np, tp;
+          struct_meta_tables(backend, tst, &np, &tp);
+          LLVMValueRef fargs[] = {
+              LLVMBuildGlobalStringPtr(backend->builder, tst->name, "st.tn"),
+              LLVMConstInt(backend->int32_type, (unsigned)tst->field_count, 0), np, tp, sp};
+          return llvm_call_vmvalue_func(backend, backend->func_aot_struct_format, fargs, 5,
+                                        "struct_to_str");
+        }
+      }
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "to_str_arg");
@@ -9329,11 +9360,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         // pinned its alloca on backend->pending_struct_result_ptr (with
         // the matching struct name). Use that alloca directly so the call
         // writes its return into `p` — avoids an intermediate temp + copy.
+        bool struct_hint_used = false;
         if (ret_st && backend->pending_struct_result_ptr &&
             backend->pending_struct_result_name &&
             strcmp(backend->pending_struct_result_name,
                    ret_st->name) == 0) {
           res_ptr = backend->pending_struct_result_ptr;
+          struct_hint_used = true;
         } else if (ret_st) {
           res_ptr = llvm_build_alloca_at_entry(
               backend, ret_st->llvm_type, "call_res_struct_ptr");
@@ -9509,14 +9542,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         free(args);
 
         // 4. Load Result
-        // Struct-returning callee in plain expression context: there is no
-        // sensible 16-byte VMValue projection of a multi-i64 struct, so we
-        // hand back a zero VMValue placeholder. The VAR_DECL path for
-        // `Point p = make_point();` intercepts struct-return calls before
-        // they reach this branch, so well-typed code never observes the
-        // zero. Anything else is a typeinfer-level issue.
+        // Struct donduren cagri: tipli baglam (`Point p = mk()`, struct
+        // argumani, `return mk()`, deyim) ipucu yuvasini verdi — deger orada,
+        // donen VMValue kullanilmaz, ayirma yok. GENEL baglamda (`var q =
+        // mk()`, tipsiz parametre, `toJson(mk())`, json alanina atama)
+        // ESKIDEN burada sifir VMValue donuyordu: `var q = mk(); q.x`
+        // calisma zamani hatasi, `toString(mk())` "0" (olculdu 2026-09-27,
+        // K198). Simdi `d[i]` / tipli yerelin genel okumasiyla ayni bicimde
+        // kutulaniyor (string anahtarli nesne).
         if (ret_st) {
-          return llvm_vm_val_int(backend, 0);
+          if (struct_hint_used) return llvm_vm_val_int(backend, 0);
+          return box_native_struct_as_object(backend, res_ptr, ret_st);
         }
         return LLVMBuildLoad2(backend->builder, backend->vm_value_type, res_ptr,
                               "call_res_loaded");
@@ -11801,6 +11837,29 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (sarr_remove_call_elem(backend, node)) {
       emit_sarr_remove(backend, node, nullptr);
       return nullptr;
+    }
+    // Deger kullanilmayan struct donduren cagri (`adim(d);`, donus `D`):
+    // sonuc kutulanmasin — ipucu yuvasina yazsin. Genel baglamdaki kutulama
+    // (K198) deyimde bosuna ayirma olurdu.
+    resolve_call_receiver(backend, node);
+    if (node->name && !node->callee) {
+      for (int i = 0; i < backend->function_count; i++) {
+        if (!backend->functions[i].name || strcmp(backend->functions[i].name, node->name) != 0)
+          continue;
+        StructTypeEntry *rst = backend->functions[i].return_struct_name
+                                   ? find_struct_type(backend, backend->functions[i].return_struct_name)
+                                   : nullptr;
+        if (rst && struct_is_trivially_unboxable(rst)) {
+          LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, rst->llvm_type, "stmt.struct.res");
+          backend->pending_struct_result_ptr = tmp;
+          backend->pending_struct_result_name = rst->name;
+          (void)codegen_expression(backend, node);
+          backend->pending_struct_result_ptr = nullptr;
+          backend->pending_struct_result_name = nullptr;
+          return nullptr;
+        }
+        break;
+      }
     }
     return codegen_expression(backend, node);
   case AST_IMPORT: {

@@ -2962,6 +2962,36 @@ extern "C" VMValue aot_array_remove_at(VMValue arr, VMValue index) {
   return out;
 }
 
+// toString(<kutusuz struct>) (K198, 2026-09-27): print(<struct>) ile AYNI
+// bicim — `Ad { a: 1, b: 2.5 }`; int/bool `%lld`, float `%g` (codegen'in
+// satir ici printf yolu). Eskiden toString tipli struct'i genel kutulu yoldan
+// geciriyordu: yerel "<object>", struct donduren cagri "0" (Eylul 22
+// ikilisinde "1e-323") — sessiz yanlis sonuc. `data` yerlesim isaretcisi
+// (field_count adet 8 baytlik yuva), `types` 0 int / 1 float / 2 bool.
+extern "C" VMValue aot_struct_format(const char *type_name, int field_count,
+                                     const char *const *names, const int *types,
+                                     const int64_t *data) {
+  std::string s = type_name ? type_name : "?";
+  s += " { ";
+  char num[64];
+  for (int f = 0; f < field_count; f++) {
+    if (f > 0) s += ", ";
+    s += (names && names[f]) ? names[f] : "_";
+    s += ": ";
+    const int t = types ? types[f] : 0;
+    if (t == 1) {
+      double d;
+      memcpy(&d, &data[f], sizeof d);
+      snprintf(num, sizeof num, "%g", d);
+    } else {
+      snprintf(num, sizeof num, "%lld", (long long)data[f]);
+    }
+    s += num;
+  }
+  s += " }";
+  return VM_OBJ((Obj *)aot_allocate_string(s.c_str(), (int)s.size()));
+}
+
 // P0.3 (2026-09-21): aot_struct_unpack_named'in ALAN TIPLI hali. `types[i]`
 // 0 int, 1 float, 2 bool. Yuva 8 bayt: float alan icin double'in bit deseni
 // dst[i]'ye memcpy ile girer (codegen alan tipini bildigi icin geri bitcast

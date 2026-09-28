@@ -153,6 +153,23 @@ func assert_contains(json haystack, json needle) {
     }
 }
 
+// Struct esitligi (plans/04 PR6, K198): iki struct degeri ALAN ALAN esit mi.
+// Tipli struct tipsiz parametreye kutulu nesne olarak gelir (alan adi ->
+// deger, bildirim sirasiyla); toJson iki tarafi ayni bicimde yazar, yani
+// farkli bir alan degeri ya da farkli alan kumesi farkli dizgi demek. Mesaj
+// iki tarafi da gosterir. Struct dizisi elemani (`d[i]`) ve struct donduren
+// cagri (`mk()`) da gecer.
+//
+//   Point beklenen = { x: 1, y: 2 };
+//   assert_struct_eq(p, beklenen);
+func assert_struct_eq(actual, expected) {
+    str sa = toJson(actual);
+    str sb = toJson(expected);
+    if (sa != sb) {
+        _test_set_fail("struct: expected " + sb + " got " + sa);
+    }
+}
+
 // Throws assertion: invokes `handler` (function name, no `t_` prefix) and
 // asserts that it raises an exception. If `expected_msg_contains` is
 // non-empty, also asserts the caught message contains that substring.

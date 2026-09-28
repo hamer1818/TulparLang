@@ -401,6 +401,7 @@ typedef struct {
   LLVMValueRef func_aot_sarr_pop;        // K033: son elemani cikar (kopya hedefe)
   LLVMValueRef func_aot_sarr_remove_at;  // K033: i. elemani cikar (sira korunur)
   LLVMValueRef func_aot_array_remove_at; // K033: remove_at genel (kutulu) yolu
+  LLVMValueRef func_aot_struct_format;   // K198: toString(<struct>) = print bicimi
   LLVMValueRef func_aot_create_closure;
   LLVMValueRef func_aot_call_closure;
 
