@@ -856,14 +856,17 @@ static void emit_perf_hint(LLVMBackend *backend, int line, const char *arr, cons
     break;
   case TLW_WRITE:
     snprintf(why_msg, sizeof why_msg, "%s",
-             tulpar::i18n::tr_en("govdede int OLMAYAN bir eleman yazmasi var (diziyi "
-                                 "kutulayabilir)",
-                                 "the body writes a non-int element (it could box the array)"));
+             tulpar::i18n::tr_en("govdede int OLMAYAN bir eleman yazmasi var ya da i32'ye "
+                                 "sigdigi kanitlanamiyor (`+=`, `++`, buyuk deger) — diziyi "
+                                 "kutulayabilir/genisletebilir",
+                                 "the body writes a non-int element or one not proven to fit "
+                                 "i32 (`+=`, `++`, a large value) — it could box/widen the "
+                                 "array"));
     snprintf(fix, sizeof fix, "%s",
-             tulpar::i18n::tr_en("int diziye yalniz int ifade yazin; ondalik ise ayri bir "
-                                 "diziye alin",
-                                 "write only int expressions to an int array; keep floats in "
-                                 "a separate array"));
+             tulpar::i18n::tr_en("int diziye yalniz int, i32 araliginda kalan ifade yazin "
+                                 "(`a[i] = <ifade>`); ondalik ise ayri bir diziye alin",
+                                 "write only int expressions within i32 range to an int array "
+                                 "(`a[i] = <expr>`); keep floats in a separate array"));
     break;
   case TLW_W_BOUND:
     snprintf(why_msg, sizeof why_msg, "%s",
@@ -5978,6 +5981,22 @@ static LLVMValueRef emit_fits_i32(LLVMBackend *backend, LLVMValueRef v) {
                                    "fit.tr"),
                     backend->int_type, "fit.sx"),
       v, "fit.ok");
+}
+
+// Yazma kanitinin CALISMA ZAMANI kismi (K215): kanit, dongu-degismezi adlari
+// (`a[i] = k`) turunu bilmeden kabul etti; burada dongu BASINDA bir kez
+// `tag(k) == INT && k i32'ye sigar` sinaniyor ve surum kosuluna ekleniyor.
+// Ad yuklenemezse (yerel/global degil) false — cagiran kaniti geri alir.
+// ⚠ Kod uretir; temel blok yaratilmadan once cagrilmali (Tuzaklar 6q).
+static bool emit_write_proof_checks(LLVMBackend *backend, const TulparWriteProof *wp,
+                                    LLVMValueRef *ok) {
+  for (int k = 0; k < wp->n_inv; k++) {
+    LLVMValueRef v = load_loop_int(backend, wp->inv[k], ok);
+    if (!v) return false;
+    LLVMValueRef f = emit_fits_i32(backend, v);
+    *ok = *ok ? LLVMBuildAnd(backend->builder, *ok, f, "wp.fit") : f;
+  }
+  return true;
 }
 
 // Dongu basinda: sekli kanitlanabilen dizileri onbellege al.
@@ -11643,10 +11662,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         }
       }
     }
+    TulparWriteProof w_wp;
     if (backend->shape_count > 0 &&
         (backend->loop_depth == 0 || getenv("TULPAR_X_NEST")) &&
         tulpar_while_index_proven(node->condition, node->body, &w_ivar, &w_ub,
-                                  &w_step, &w_step_const, &w_incl)) {
+                                  &w_step, &w_step_const, &w_incl, &w_wp)) {
       LLVMValueRef ok = nullptr;
       LLVMValueRef v_val = load_loop_int(backend, w_ivar, &ok);
       LLVMValueRef ub_val = load_loop_int(backend, w_ub, &ok);
@@ -11656,7 +11676,18 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           w_step ? load_loop_int(backend, w_step, &ok)
                  : LLVMConstInt(backend->int_type,
                                 (unsigned long long)w_step_const, 0);
-      if (v_val && ub_val && st_val) wver = 1;
+      // Yazma kanitinin calisma zamani kismi (K215): degismez adlar int ve
+      // i32'ye sigar; sayim siniri varsa en buyuk indeks (UB ya da UB-1) onun
+      // altinda.
+      bool wp_ok = emit_write_proof_checks(backend, &w_wp, &ok);
+      if (wp_ok && ub_val && w_wp.count_limit > 0) {
+        LLVMValueRef lim = LLVMConstInt(backend->int_type,
+                                        (unsigned long long)w_wp.count_limit, 0);
+        LLVMValueRef c = LLVMBuildICmp(backend->builder, w_incl ? LLVMIntSLT : LLVMIntSLE,
+                                       ub_val, lim, "wv.lim");
+        ok = ok ? LLVMBuildAnd(backend->builder, ok, c, "wv.limand") : c;
+      }
+      if (v_val && ub_val && st_val && wp_ok) wver = 1;
       if (wver) {
         LLVMValueRef zero = LLVMConstInt(backend->int_type, 0, 0);
         LLVMValueRef num = LLVMBuildAnd(
@@ -11777,12 +11808,29 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // Ic ice dongulerde katlanarak buyumemesi icin yalniz EN DIS
     // seviyede aciliyor.
     int ver_count = 0;
+    LLVMValueRef ver_extra = nullptr;   // K215: yazma kanitinin calisma zamani kismi
     if (backend->loop_depth == 0 && node->init && node->condition) {
       for (int i = shape_saved; i < backend->shape_count; i++) {
         const char *ivar = nullptr;
+        TulparWriteProof wp;
+        LLVMValueRef chk = nullptr;
         if (tulpar_loop_index_proven(node->init, node->condition, node->body,
                                      node->increment,
-                                     backend->shape_cache[i].name, &ivar)) {
+                                     backend->shape_cache[i].name, &ivar, &wp) &&
+            emit_write_proof_checks(backend, &wp, &chk)) {
+          if (wp.count_limit > 0) {
+            // En buyuk indeks count-1 <= count_limit-1 (`a[i] = i * 2`).
+            LLVMValueRef cn = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                             backend->shape_cache[i].count_slot, "ver.lcn");
+            LLVMValueRef c = LLVMBuildICmp(
+                backend->builder, LLVMIntSLE, cn,
+                LLVMConstInt(backend->int_type, (unsigned long long)wp.count_limit, 0),
+                "ver.lim");
+            chk = chk ? LLVMBuildAnd(backend->builder, chk, c, "ver.limand") : c;
+          }
+          if (chk)
+            ver_extra = ver_extra ? LLVMBuildAnd(backend->builder, ver_extra, chk, "ver.xand")
+                                  : chk;
           backend->shape_cache[i].proven_ivar = ivar;
           ver_count++;
           if (getenv("TULPAR_DBG_VER")) fprintf(stderr, "[ver] %s[%s]\n", backend->shape_cache[i].name, ivar);
@@ -11826,6 +11874,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         all_ok = all_ok ? LLVMBuildAnd(backend->builder, all_ok, ok, "ver.and")
                         : ok;
       }
+      if (ver_extra) all_ok = LLVMBuildAnd(backend->builder, all_ok, ver_extra, "ver.wp");
       set_branch_weights(
           backend, LLVMBuildCondBr(backend->builder, all_ok, vb_fast, vb_gen),
           2000, 1);
