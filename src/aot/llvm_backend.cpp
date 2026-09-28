@@ -1553,6 +1553,12 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_struct_format = LLVMAddFunction(
       backend->module, "aot_struct_format",
       llvm_make_vmvalue_func_type(backend, st_fmt_params, 5, 0));
+  // K133: aot_struct_from_json(ptr v, ptr type_name, i32 fc, ptr names, ptr types) -> VMValue
+  LLVMTypeRef st_fj_params[] = {backend->ptr_type, backend->ptr_type, backend->int32_type,
+                                backend->ptr_type, backend->ptr_type};
+  backend->func_aot_struct_from_json = LLVMAddFunction(
+      backend->module, "aot_struct_from_json",
+      llvm_make_vmvalue_func_type(backend, st_fj_params, 5, 0));
   // aot_array_remove_at(VMValue arr, VMValue idx) -> VMValue (duz + struct dizisi)
   LLVMTypeRef arr_rm_params[] = {backend->vm_value_type, backend->vm_value_type};
   backend->func_aot_array_remove_at = LLVMAddFunction(
@@ -7643,6 +7649,75 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                      LLVMGlobalGetValueType(backend->func_aot_array_push),
                      backend->func_aot_array_push, args, 2, "");
       return llvm_vm_val_int(backend, 0);
+    }
+
+    // to_struct(json, "Ad") -> Ad (K133): ACIK ve denetimli donusum. Ikinci
+    // arguman DERLEME ZAMANINDA bilinen bir struct adi olmali (dizgi sabiti).
+    // Sonuc Ad'in alanlariyla kurulmus yeni bir nesne; tipli baglam (`Ad p =
+    // to_struct(...)`, struct parametresi) onu kutulu-acma yoluyla kutusuz
+    // yerlesime indirir. Eksik / yanlis tipli alan: yakalanabilir hata.
+    if (node->name && strcmp(bi_name, "to_struct") == 0) {
+      StructTypeEntry *tst = nullptr;
+      if (node->argument_count == 2 && node->arguments[1] &&
+          node->arguments[1]->type == AST_STRING_LITERAL &&
+          node->arguments[1]->value.string_value)
+        tst = find_struct_type(backend, node->arguments[1]->value.string_value);
+      if (!tst) {
+        char msg[320];
+        if (node->argument_count == 2 && node->arguments[1] &&
+            node->arguments[1]->type == AST_STRING_LITERAL)
+          snprintf(msg, sizeof(msg), "to_struct: '%s' adinda bir struct yok",
+                   node->arguments[1]->value.string_value
+                       ? node->arguments[1]->value.string_value : "");
+        else
+          snprintf(msg, sizeof(msg),
+                   "to_struct(json, \"Ad\"): ikinci arguman struct adini veren bir "
+                   "dizgi SABITI olmali");
+        report_codegen_error_with_suggestion(backend, node->line, "hata", msg, "to_struct",
+                                             "ornek: `Nokta p = to_struct(j, \"Nokta\");`");
+        return llvm_vm_val_int(backend, 0);
+      }
+      std::vector<LLVMValueRef> names, types;
+      for (int i = 0; i < tst->field_count; i++) {
+        names.push_back(LLVMBuildGlobalStringPtr(backend->builder, tst->field_names[i], "ts.fn"));
+        unsigned code;
+        switch (tst->field_types[i]) {
+        case TYPE_INT: code = 0; break;
+        case TYPE_FLOAT: code = 1; break;
+        case TYPE_BOOL: code = 2; break;
+        case TYPE_STRING: code = 3; break;
+        case TYPE_ARRAY: case TYPE_ARRAY_INT: case TYPE_ARRAY_FLOAT:
+        case TYPE_ARRAY_STR: case TYPE_ARRAY_BOOL: case TYPE_ARRAY_JSON: code = 4; break;
+        case TYPE_CUSTOM: code = 5; break;
+        default: code = 6; break;
+        }
+        types.push_back(LLVMConstInt(backend->int32_type, code, 0));
+      }
+      LLVMTypeRef names_ty = LLVMArrayType(backend->ptr_type, (unsigned)tst->field_count);
+      LLVMValueRef names_g = LLVMAddGlobal(backend->module, names_ty, "ts.names");
+      LLVMSetInitializer(names_g, LLVMConstArray(backend->ptr_type, names.data(),
+                                                 (unsigned)tst->field_count));
+      LLVMSetGlobalConstant(names_g, 1);
+      LLVMSetLinkage(names_g, LLVMPrivateLinkage);
+      LLVMTypeRef types_ty = LLVMArrayType(backend->int32_type, (unsigned)tst->field_count);
+      LLVMValueRef types_g = LLVMAddGlobal(backend->module, types_ty, "ts.types");
+      LLVMSetInitializer(types_g, LLVMConstArray(backend->int32_type, types.data(),
+                                                 (unsigned)tst->field_count));
+      LLVMSetGlobalConstant(types_g, 1);
+      LLVMSetLinkage(types_g, LLVMPrivateLinkage);
+      LLVMValueRef z0 = LLVMConstInt(backend->int32_type, 0, 0);
+      LLVMValueRef zz[] = {z0, z0};
+      LLVMValueRef src = codegen_expression(backend, node->arguments[0]);
+      if (!src) return llvm_vm_val_int(backend, 0);
+      LLVMValueRef sp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ts.src");
+      LLVMBuildStore(backend->builder, src, sp);
+      LLVMValueRef fargs[] = {
+          sp, LLVMBuildGlobalStringPtr(backend->builder, tst->name, "ts.tn"),
+          LLVMConstInt(backend->int32_type, (unsigned)tst->field_count, 0),
+          LLVMBuildGEP2(backend->builder, names_ty, names_g, zz, 2, "ts.np"),
+          LLVMBuildGEP2(backend->builder, types_ty, types_g, zz, 2, "ts.tp")};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_struct_from_json, fargs, 5,
+                                    "to_struct_res");
     }
 
     // pop(array) -> value

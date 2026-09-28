@@ -540,6 +540,27 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       }
     }
 
+    // `to_struct(j, "Ad")` (K133): hedef tip derleme zamaninda bilinmeli.
+    if (effective_name == "to_struct" && !ctx->user_functions.count("to_struct")) {
+      const auto *lit = call->arguments.size() == 2
+                            ? as_node<StringLiteral>(call->arguments[1].get())
+                            : nullptr;
+      if (!lit) {
+        report_error(ctx,
+                     tulpar::i18n::tr_en(
+                         "to_struct(json, \"Ad\"): ikinci arguman struct adini veren bir "
+                         "dizgi SABITI olmali (satir %d)",
+                         "to_struct(json, \"Name\"): the second argument must be a string "
+                         "LITERAL naming a struct at line %d"),
+                     call->loc.line);
+      } else if (!ctx->struct_types.count(lit->value)) {
+        report_error(ctx,
+                     tulpar::i18n::tr_en("to_struct: '%s' adinda bir struct yok (satir %d)",
+                                         "to_struct: no struct named '%s' at line %d"),
+                     lit->value.c_str(), call->loc.line);
+      }
+    }
+
     // User-defined function call: check arg count + arg types against the
     // signature we registered during the pre-pass. Built-ins are not in
     // ctx->functions and are skipped — their argument contracts are too
@@ -1468,6 +1489,9 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"pop", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
       {"remove_at", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT}},
+      // to_struct(json, "Ad") -> Ad (K133); ad bir struct'i adlayan dizgi
+      // SABITI olmali — asagida ayrica denetleniyor.
+      {"to_struct", TYPE_CUSTOM, {TYPE_UNKNOWN, TYPE_STRING}},
       // env() — process env var lookup, "" when missing
       {"env", TYPE_STRING, {TYPE_STRING}},
       // call(name, ...) — handler dispatch by string. Args are variadic;

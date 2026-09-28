@@ -533,6 +533,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # to_struct(json, "Ad") derleme zamani hata yollari (K133): hedef tip
+    # bir dizgi sabiti ve bilinen bir struct olmali.
+    if [ -x tests/to_struct_hatalari.sh ]; then
+        if ! bash tests/to_struct_hatalari.sh ./tulpar; then
+            echo -e "${RED}to_struct hata yollari basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # Tipli struct dizisi HATA YOLLARI (P1.1): codegen hatalari, `tulpar build`.
     if [ -x tests/struct_dizisi_hatalari.sh ]; then
         if ! bash tests/struct_dizisi_hatalari.sh ./tulpar; then
