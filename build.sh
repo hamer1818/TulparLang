@@ -178,14 +178,11 @@ if [ "$ACTION" = "suites" ]; then
     # WINDOWS'TA BILINEREK ATLANAN PAKETLER. Liste DAR ve her satir bir
     # ACIK BULGUYU isaretler; "Windows'ta calismiyor" diye toptan atlama YOK.
     #
-    #   errors.test.tpr — `call()` sinirindan gecen bir `throw` yeniden
-    #     firlatildiginda surec cokuyor (exit 1, ozet satirina varmadan).
-    #     Tulpar try/catch'i setjmp/longjmp ile yapiyor; MinGW'de bu, dinamik
-    #     olarak dagitilan bir cagri cercevesiyle beklendigi gibi
-    #     etkilesmiyor. GERCEK BIR HATA, ortam farki degil — ayri bir is
-    #     olarak duruyor (depo kokundeki win_rethrow_probe.exe daha onceki
-    #     bir incelemenin artigi). Windows CI'i bunun ardinda bekletmemek
-    #     icin atlaniyor; Linux ve macOS'ta KOSUYOR, yani kapsama kaybi yok.
+    # Liste 2026-09-28'den beri BOS. Son girdi errors.test.tpr idi: `call()`
+    # sinirindan gecen bir `throw` yeniden firlatilinca surec cokuyordu.
+    # Sebep kodlanan `_setjmpex(buf, cerceve)`: NULL olmayan cerceve
+    # longjmp'i SEH geri sarmasina ceviriyordu. Cerceve artik NULL
+    # (llvm_backend.cpp AST_TRY_CATCH notu); paket Windows CI'da kosuyor.
     #
     # Atlama SESSIZ DEGIL: her biri ayri bir satir basiyor ve ozette sayiliyor.
     WINDOWS_SKIP_SUITES=()
