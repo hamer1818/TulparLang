@@ -735,6 +735,17 @@ tamsayı olmayan değer, yinelenen üye — beşi de ayrıştırma hatası
 anahtar kelimesini ve üyeleri (değerleriyle) görüyor. Sınır (v1): yalnız üst
 düzey, aynı dosya; nominal değil. Bkz. `plans/08_oyun_dili_p0.md`.
 
+### Eklendi — `TULPAR_CC`: yerel link sürücüsü seçilebilir
+
+- AOT link komutu üç yerde sabit `clang++` yazıyordu; clang'ı yalnız başka
+  adla (`clang++-18`) bulunan ya da hiç olmayan (MSYS2'de clang paketi
+  kurulmamış) bir makinede tek program derlenemiyordu. `TULPAR_CC` artık
+  sürücüyü değiştiriyor (`g++`, `clang++-18`, `ccache clang++` …); web
+  (`em++`) ve Android (NDK) kendi sürücülerinde kalıyor.
+- `tests/aot_smoke.sh`: olmayan bir sürücü adıyla link DÜŞMELİ (değişken
+  gerçekten okunuyor — eski ikiliyle bu denetim kırmızı), `TULPAR_CC=clang++`
+  ile geçmeli. Üç platformda koşuyor.
+
 ### Doğruluk — üç sessiz hata sınıfı kapandı
 
 - **Yığın sızıntısı (R11).** `AST_ARRAY_LITERAL` ve dört kutulu-ABI builtin
