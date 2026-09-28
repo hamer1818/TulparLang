@@ -318,6 +318,15 @@ oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
   elemana gidiyor. Paket: `tests/struct_alan_bilesik.test.tpr` (düzeltmeden
   önce 9 testin ilk ikisi yanlış değer, üçüncüsü çökme).
 
+### Test — `arr_debox` eşzamanlılık yarışı artık ölçülüyor (FINDINGS T4)
+
+- `tests/debox_yaris.sh` (`build.sh suites`): 8 thread aynı kutusuz `int[]`'i
+  aynı anda ilk kez kutulayan okuma yoluna (`arr_items` → `arr_debox`)
+  giriyor; dizi tek kez çevrilmeli. Kapının pozitif kontrolü her koşumda:
+  kilitsiz kopya 60/60 dizide çift çeviriyor. Kilit geçici olarak sökülünce
+  gerçek `arr_debox` da 60/60 kırmızı (ölçüldü 2026-09-27). Windows'ta ve tek
+  çekirdekte görünür biçimde atlanır.
+
 ### Düzeltildi — `tulpar update` Linux'ta hiç çalışmıyordu (`EXDEV`)
 
 Komut, indirmeyi ve SHA-256 doğrulamasını **başarıyla bitirdikten sonra** son

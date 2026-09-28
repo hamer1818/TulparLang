@@ -47,8 +47,11 @@ func run_donguda() {
 
 // SEKIL ONBELLEGI ile birlikte: `a[i]++` runtime'a (vm_get_element) giriyor,
 // o da arr_items -> arr_debox cagiriyor ve KUTUSUZ dizinin idata'sini FREE
-// edip kutulu items_'e geciyor. Dongu basinda onbellege alinan idata o an
-// SARKIYOR; ayni dongudeki sonraki onbellekli erisim serbest bellege yaziyor.
+// edip kutulu items_'e geciyordu. Dongu basinda onbellege alinan idata o an
+// SARKIYORDU; ayni dongudeki sonraki onbellekli erisim serbest bellege
+// yaziyordu. (2026-09-09'dan beri arr_debox idata'yi BILEREK serbest
+// birakmiyor — eszamanlilik sertlestirmesi, tests/debox_yaris.sh — ama
+// onbellekli erisim yine BAYAT tampona yazardi; kilit asagidaki duzeltme.)
 //
 // Olculdu (2026-09-05): "malloc(): unsorted double linked list corrupted".
 // Duzeltme: get/set cagrilarindan sonra emit_shape_refresh_all.

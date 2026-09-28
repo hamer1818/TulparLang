@@ -53,7 +53,7 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | T1 | Paylaşılan global'ler atomik | **çürütüldü** — korumasız 8 thread × bir artırma → 7; **`mutex_*` ile tam 400 000** | Concurrency |
 | T2 | Thread yazmaları görünür | **çürütüldü** — spin-wait sonsuza döner; `sleep()` varken kazara çalışır | Concurrency |
 | T3 | Paylaşılan dizinin eşzamanlı okunması bozuluyor | **GERİ ÇEKİLDİ** — test `push` dönüşünü atıyordu, dizi tek thread'de bile boştu | [Tuzaklar 7a](docs/mindmap/Tuzaklar.md) |
-| T4 | `arr_debox` okuma yolundan yazıyor | **açık (incelemeyle)** — sertleştirildi, ama tetikleyen test yok | Concurrency |
+| T4 | `arr_debox` okuma yolundan yazıyor | **kilitli (2026-09-27)** — sertleştirildi; `tests/debox_yaris.sh` 8 thread × 60 dizide tek çevrimi ölçüyor, kilitsiz kopya (pozitif kontrol) 60/60 çift çeviriyor, kilit sökülünce gerçek arr_debox da 60/60 kırmızı | Concurrency |
 | T7 | json okuma yolu da yazma içeriyor (P15) | **çürütüldü (incelemeyle)** — `vm_get_element`→`vm_object_get` saf doğrusal tarama; `ObjObject`'te tembel/önbellek alanı yok. Dizilerdeki `arr_items`→`arr_debox` yazmasının karşılığı json'da **yok** | P15 |
 | R11 | Dizi literali döngüde güvenli | **çürütüldü, DÜZELTİLDİ** — döngü gövdesine düşen `alloca` yinelemede yığın harcıyordu; `[1,2,3]` 175 000 yinelemede **SIGSEGV**. Aşağıda | S3 fikstürü |
 | R10 | Tanı sızıntısı kalmadı | **çürütüldü, DÜZELTİLDİ** — `vm_get_element`/`vm_set_element`'in "gecersiz hedef" tanıları stdout'a yazıyordu; ilk #19 koruması **satır-bazlı olduğu için göremedi** | P15 turu |
