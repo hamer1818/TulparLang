@@ -12048,16 +12048,21 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         backend->builder, LLVMGlobalGetValueType(backend->func_aot_try_push),
         backend->func_aot_try_push, nullptr, 0, "eh_buf");
 
-    // int result = setjmp(buf)  -- on Windows x64 we actually call
-    // _setjmpex(buf, frame_addr) so the SEH frame is recorded; longjmp
-    // later needs that to walk the stack without crashing.
+    // int result = setjmp(buf)  -- on Windows x64 we call the 2-arg
+    // _setjmpex(buf, frame). The frame is NULL on purpose: a non-NULL
+    // frame makes the matching longjmp an SEH *unwinding* longjmp
+    // (RtlUnwindEx through every frame back to the setjmp). That walk
+    // crashed when a throw from a catch block crossed a `call()` frame
+    // (errors.test.tpr "re-throw wraps message": exit 1 before the
+    // summary, skipped on Windows CI until 2026-09-28). With NULL the CRT
+    // does a plain register restore — the same semantics as POSIX
+    // longjmp, which is what the Linux/macOS path has always had (no
+    // destructors run in between on any platform). The 2-arg form is
+    // still required: the 1-arg call leaves the second register as
+    // garbage, which the CRT then reads as a frame.
     LLVMValueRef result;
     if (backend->func_frameaddress) {
-      LLVMValueRef fa_args[] = {LLVMConstInt(backend->int32_type, 0, 0)};
-      LLVMValueRef frame_addr = LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_frameaddress),
-          backend->func_frameaddress, fa_args, 1, "eh_frame");
+      LLVMValueRef frame_addr = LLVMConstNull(backend->ptr_type);
       LLVMValueRef setjmp_args[] = {buf, frame_addr};
       result = LLVMBuildCall2(
           backend->builder, LLVMGlobalGetValueType(backend->func_setjmp),

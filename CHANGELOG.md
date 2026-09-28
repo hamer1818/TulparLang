@@ -133,6 +133,17 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   derlenmiyor, `pop` testi kırmızı), `tests/struct_dizisi_hatalari.sh` (6/6).
 - Kapsam dışı: dilim (`d[a:b]`) — dilde hiçbir dizi için dilim sözdizimi yok;
   yalnız struct dizisine eklemek dili kendiyle çelişik yapardı. Ayrı karar.
+### Düzeltildi — Windows: catch içinden yeniden fırlatılan throw `call()` sınırında süreci çökertiyordu
+
+- Üretilen kod try'da `_setjmpex(buf, <çerçeve>)` çağırıyordu. NULL olmayan
+  çerçeve Windows'ta longjmp'i SEH geri sarmasına çeviriyor. Bir catch
+  bloğundan atılan throw bir `call()` çerçevesini geçince bu geri sarma
+  süreci çökertiyordu (`errors.test.tpr` "re-throw wraps message": özete
+  varmadan exit 1). Paket bu yüzden Windows CI'da atlanıyordu.
+- Çerçeve artık NULL: CRT düz yazmaç geri yüklemesi yapıyor, POSIX longjmp
+  ile aynı anlambilim. Atlama listesi boş; `errors.test.tpr` Windows CI'da
+  3/3 (önce yalnız atlamayı kaldıran commit'le aynı yerde düştüğü ölçüldü).
+
 ### Düzeltildi — `cmake --build` gömülü stdlib değişikliğini görmüyordu
 
 - `lib/*.tpr` yapılandırma anında gömülüyordu ve derleme sistemi bu
