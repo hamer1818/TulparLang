@@ -531,6 +531,18 @@ oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
   eski kaynakta 79 isabet). Web/Android arşiv betikleri de yeni birimi
   derliyor.
 
+### Düzeltildi — Wings handler'ı skaler döndürünce her istek 500 dönüyordu
+
+- `func h(req) { return "merhaba"; }` (ya da `return 42;`, `return true;`)
+  her istekte 500 veriyordu: dağıtıcı sonucu sözlük sanıp `result["_stream"]`
+  okuyordu, skalerde "get islemi icin gecersiz hedef" fırlıyordu (ölçüldü
+  2026-09-28). Artık FastAPI gibi JSON: 200, gövde `"merhaba"` / `42`
+  (`application/json`); düz metin için `text(...)`. Sözlük ve dizi yolu
+  değişmedi.
+- Denetim ayırmayan `isObject` ile (sözlükte tek çağrı; `typeof` her istekte
+  bir dizgi ayırırdı). DI bağımlılık denetimi de `isObject`'e geçti.
+- `tests/wings_dx.test.tpr` +1 (dizgi, int, dizi dönüşü gerçek dağıtıcıdan).
+
 ### Düzeltildi — struct alanına bileşik atama sessizce hiçbir şey yapmıyordu
 
 - `d[i].can -= 30` (tipli struct dizisi, P1.1) **sessiz hiç-işlemdi**: değer

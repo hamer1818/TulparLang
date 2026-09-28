@@ -1655,7 +1655,7 @@ func _wings_dispatch_inner(int route_idx, int keep) {
             // okumasında "get islemi icin gecersiz hedef" fırlatıyor ve her
             // istek 500 dönüyordu (ölçüldü 2026-09-27, K289).
             int _dst = 0;
-            if (typeof(_dres) == "object") {
+            if (isObject(_dres)) {   // isObject ayirmaz; typeof her cagrida dizgi ayirir
                 _dst = _dres["_status"];
             }
             if (_dst != 0) {
@@ -1682,6 +1682,15 @@ func _wings_dispatch_inner(int route_idx, int keep) {
     // no parameter simply ignore it (ABI-safe) and read the `_request` global
     // instead — both styles work.
     json result = call(route["handler"], _request);
+    // Skaler donus (dizgi / sayi / bool): FastAPI gibi JSON olarak gonderilir
+    // (`return "merhaba";` -> 200, govde "merhaba" JSON dizgisi; duz metin
+    // icin `text(...)`). Eskiden asagidaki `result["_stream"]` okumasi skalerde
+    // "get islemi icin gecersiz hedef" firlatiyor, her istek 500 donuyordu
+    // (olculdu 2026-09-28). Sozluk ve dizi yolu degismedi. isObject/isArray
+    // AYIRMAZ (typeof her istekte bir dizgi ayirirdi — sicak yol).
+    if (!isObject(result) && !isArray(result)) {
+        result = {"_raw": toJson(result), "_content_type": "application/json"};
+    }
     _wings_requests_total = _wings_requests_total + 1;
     // Streaming handlers (SSE / WS upgrade / long-poll) signal
     // "I've already written to the socket myself; don't try to
