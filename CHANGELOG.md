@@ -415,6 +415,21 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   `tests/fonksiyon_arama.sh` +3 (`aot_func_invoke` 10 argümanla). Pozitif
   kontrol: eski runtime'la `call_nargs` 7. testte çöküyor, `async` 2 FAIL.
 
+### Düzeltildi — DAP: veri breakpoint'i `reason` yanlış, komut breakpoint'ine adres yoktu
+
+- Veri breakpoint'i (`setDataBreakpoints`) duruyordu ama `stopped.reason`
+  ham gdb dizgisi `watchpoint-trigger` gidiyordu; DAP değeri
+  `"data breakpoint"`. Eşlendi (okuma / okuma-yazma tetikleri dahil).
+- Komut breakpoint'i (`setInstructionBreakpoints`) bildiriliyordu ama
+  istemcinin eline hiçbir adres geçmiyordu: stackTrace çerçevelerinde
+  `instructionPointerReference` yoktu, ayrıştırma isteği de yok. Çerçevenin
+  program sayacı artık bu alanda.
+- `tests/dap_audit.py`'ye iki senaryo (K151): global `t`'ye yazma izleyicisi
+  tam dört durma, `t` = 10, 30, 60, 100 (i=0 turu değeri değiştirmediği için
+  durmamalı); komut breakpoint'i ilk durmanın adresiyle kalan dört çağrıda,
+  `i` = 1..4. Pozitif kontrol: eski bağdaştırıcıyla ikisi de DÜŞÜYOR
+  (`reason {'watchpoint-trigger'}`, `ip=None`).
+
 ### Eklendi — `aot_func_lookup`: fonksiyonu adıyla, çağırmadan ve ayırmadan çöz
 
 - Gömen (embedder) için C yüzü:
