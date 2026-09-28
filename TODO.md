@@ -376,13 +376,16 @@ boşluklar; backlog'da yoklardı.
       `aot_tm_is_web_ptr`, `aot_tm3_anim_blend_ptr`,
       `aot_tm3_billboard_pro_ptr`, `aot_tm_sound_pan_ptr`) HİÇBİRİ yok.
 
-      Tazelemek NDK istiyor ve bu makinede NDK YOK: `~/Android/android-ndk-*`,
-      `ndk-build`, `sdkmanager` — üçü de arandı, hiçbiri bulunamadı,
-      `TULPAR_ANDROID_NDK` boş. Yani bu, yapılmamış bir iş değil, bu makinede
-      yapılamayan bir iş; artık her `build.sh suites` koşumunda tazeleme
-      komutuyla birlikte bildiriliyor. Dosyalar gitignore'lu derleme çıktısı
-      olduğu için silinmedi — kullanıcının başka bir makineden senkronlaması
-      mümkün.
+      ~~Tazelemek NDK istiyor ve bu makinede NDK YOK~~ — BAYATTI: makinede
+      `~/Android/Sdk/ndk/` altında iki NDK var (27.1, 30.0) ve betik onları
+      2026-09 başından beri buluyor. ✅ 2026-09-27: arşivler (web 22 sn,
+      android ~90 sn) yeniden üretildi, `dist_archive_audit.py` rc=0 — önceki
+      hâlde codegen'in çağırdığı 6 çekirdek sembol (aot_persist_escape,
+      aot_sarr_new, ...) YOKTU, yani her web/android derlemesi link'te
+      ölüyordu. Kalıcı çözüm: CI'nın Linux işi artık iki arşivi de kaynaktan
+      üretiyor ve denetimi `TULPAR_DIST_ZORUNLU=1` ile koşuyor (eksik sembol
+      android'de de HATA, arşivin hiç bulunmaması da HATA); Android derleme
+      dumanı da orada gerçek NDK linki yapıyor.
 
 - [x] **`lib/test.tpr` artık BÜTÜN hataları gösteriyor.** ✅ 2026-08-24 —
       mesaj eziliyordu, yani ilk kırılan iddia (asıl sebebi söyleyen o)
