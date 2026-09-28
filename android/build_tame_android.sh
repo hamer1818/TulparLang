@@ -15,10 +15,11 @@
 #      $ANDROID_HOME/ndk/*) ve tek başına indirilen (~/Android/android-ndk-*)
 #      kurulumlar aranır — Android Studio ilkini kuruyor.
 # wasm/build_tame_web.sh'nin birebir kardeşi. Notlar:
-# - tulpar_async.cpp derlenmez (bionic'te makecontext/swapcontext yok —
-#   Emscripten'dekiyle aynı sınırlama). android_stubs.cpp koşulsuz
-#   aot_event_loop_run() referansını karşılar; async KULLANAN program
-#   link hatası alır (doğru davranış).
+# - tulpar_async.cpp DERLENIYOR (2026-09-28, K233): bionic'te
+#   makecontext/swapcontext yok, ama async artık x86_64/AArch64'te el yazımı
+#   bağlam geçişi kullanıyor (runtime/tulpar_async.cpp, TULPAR_ASYNC_ASM) —
+#   iki Android ABI'sinin ikisi de o yolda. Eskiden burada async'i abort
+#   eden android_stubs.cpp vardı; kaldırıldı.
 # - raylib'de rglfw.c DERLENMEZ (masaüstü); pencere/girdi
 #   platforms/rcore_android.c + NDK native_app_glue üzerinden gelir.
 # - Android 15+ 16KB sayfa imajları için .so linkinde
@@ -102,7 +103,7 @@ build_abi() {
         "$ROOT/src/parser/parser.cpp"
         "$ROOT/src/parser/import_alias.cpp"
         "$ROOT/src/pkg/sha256.cpp"
-        "android_stubs.cpp"
+        "$ROOT/runtime/tulpar_async.cpp"
     )
     for f in "${RUNTIME_CPP[@]}"; do
         local o="$OBJ/$(basename "${f%.*}").o"

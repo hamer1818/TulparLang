@@ -1,6 +1,12 @@
 // Tulpar Async Runtime — implementation. See tulpar_async.h for the model.
 //
-// Stackful coroutines: POSIX via <ucontext.h>, Windows via the Fiber API.
+// Stackful coroutines, four context-switch backends:
+//   * x86_64 / AArch64 (Linux, macOS, Android): a hand-written switch
+//     (tulpar_ctx_swap below) — callee-saved registers + stack pointer only.
+//   * Windows: the Fiber API.
+//   * Web (Emscripten, wasm32): emscripten_fiber_* — rides on ASYNCIFY, which
+//     every web link already enables (aot_pipeline.cpp, raylib's loop).
+//   * anything else POSIX: <ucontext.h>.
 // The scheduler runs on the "main" context; resuming a task swaps to its
 // context, and the task swaps back on `await` or completion. Because tasks
 // never run nested (a task always yields before another runs), a single
@@ -43,6 +49,7 @@
 #include <cstring>
 #include <cstdio>
 #include <csetjmp>
+#include <cstdint>
 #include <vector>
 #include <chrono> // steady_clock only (header-only; safe on all toolchains)
 
@@ -53,6 +60,46 @@
 #if defined(_WIN32)
 #define TULPAR_ASYNC_FIBERS 1
 #include <windows.h>
+#elif defined(__EMSCRIPTEN__)
+// Web (K233): wasm'da yigin isaretcisine el ile dokunulamaz; Emscripten'in
+// fiber API'si her coroutine'e bir C yigini + bir ASYNCIFY tamponu verir.
+// ASYNCIFY web linkinde zaten acik (raylib'in EndDrawing'i emscripten_sleep
+// cagiriyor), yani async'i olmayan oyunlarin ikilisi bundan etkilenmez.
+#define TULPAR_ASYNC_EMFIBER 1
+#include <emscripten/fiber.h>
+#include <unistd.h> // usleep
+#elif defined(__x86_64__) || defined(__aarch64__)
+// El yazimi baglam gecisi (K233). NEDEN:
+//   1. Android: bionic makecontext/swapcontext'i KALDIRDI (NDK r27
+//      sysroot'unda yok) — async bu yuzden Android'de hic yoktu.
+//   2. Hiz: glibc swapcontext her geciste sinyal maskesini kaydedip yukluyor
+//      (rt_sigprocmask SISTEM CAGRISI); bir spawn+await iki gecis + bir
+//      getcontext = uc sistem cagrisi. Olculdu (2026-09-28, Ryzen 7 9800X3D):
+//      spawn+await ~360 ns'nin cogu buydu.
+// Tulpar coroutine'leri sinyal maskesine dokunmuyor; gecis yalniz ABI'nin
+// callee-saved yazmaclari + yigin isaretcisi. tulpar-engine'in
+// fiber_switch_*.S'i ile ayni kalip.
+#define TULPAR_ASYNC_ASM 1
+#include <unistd.h> // usleep
+// AddressSanitizer yigin degisimini BILMEZ (swapcontext'i yakaliyordu, el
+// yazimi gecisi yakalayamaz): bildirilmezse coroutine yiginindaki her
+// erisim sahte "stack-buffer-overflow" olur. tests/run_asan.sh ve
+// TULPAR_AOT_LINK_FLAGS=-fsanitize=address taramalari bunu kullaniyor.
+#if defined(__SANITIZE_ADDRESS__)
+#define TULPAR_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define TULPAR_ASAN 1
+#endif
+#endif
+#if TULPAR_ASAN
+#include <sanitizer/common_interface_defs.h>
+#define ASAN_START(fake, bottom, size) __sanitizer_start_switch_fiber((fake), (bottom), (size))
+#define ASAN_FINISH(fake, bottom, size) __sanitizer_finish_switch_fiber((fake), (bottom), (size))
+#else
+#define ASAN_START(fake, bottom, size) ((void)0)
+#define ASAN_FINISH(fake, bottom, size) ((void)0)
+#endif
 #else
 #include <ucontext.h>
 #include <unistd.h> // usleep
@@ -85,12 +132,130 @@ void aot_eh_context_free(void *ctx);
 void *aot_eh_context_swap(void *ctx);
 // Kalici (malloc'lu, olumsuz) dizgi — iptal/zaman asimi hata degeri icin.
 ObjString *aot_intern_string(const char *chars, int length);
+// Program sonu bosaltmasini kaydet (aot_event_loop_run runtime_bindings'de).
+void aot_async_set_drain(void (*fn)(void));
+void tulpar_async_drain_all(void); // asagida, extern "C" blogunda
 // Runtime array allocators (src/vm/runtime_bindings.cpp). The plain
 // vm_allocate_array/vm_array_push deref the VM*, so the AOT runtime (no VM)
 // must go through these null-safe wrappers, which malloc when vm == nullptr.
 ObjArray *vm_allocate_array_aot_wrapper(void *vm);
 void vm_array_push_aot_wrapper(void *vm, ObjArray *array, VMValue value);
 }
+
+#if TULPAR_ASYNC_ASM
+// ---------------------------------------------------------------------------
+// tulpar_ctx_swap(void **save_sp, void *load_sp)
+//   Cagiranin callee-saved yazmaclarini KENDI yiginina iter, yigin
+//   isaretcisini *save_sp'ye yazar, load_sp'deki cerceveyi yukleyip oradan
+//   `ret` eder. Ilk kez girilen coroutine icin cerceveyi ctx_init_stack kurar:
+//   `ret` tulpar_ctx_entry'ye duser, o da coro_main(Task*)'i cagirir.
+//
+// x86_64 SysV: rbx rbp r12-r15 + MXCSR/x87 kontrol sozcugu (ABI callee-saved
+//   sayar). Cerceve (dusuk adresten): [mxcsr,fpucw][r15][r14][r13][r12][rbx]
+//   [rbp][donus] = 64 bayt.
+// AArch64 AAPCS64 (Linux, Android, Apple): x19-x28, x29(fp), x30(lr),
+//   d8-d15 = 160 bayt. x18'e (Apple'da platform yazmaci) dokunulmaz.
+#if defined(__APPLE__)
+#define TULPAR_ASM_SYM(x) "_" #x
+#define TULPAR_ASM_FN(x) ".globl _" #x "\n.p2align 4\n_" #x ":\n"
+#else
+#define TULPAR_ASM_SYM(x) #x
+#define TULPAR_ASM_FN(x) ".globl " #x "\n.hidden " #x "\n.type " #x ", %function\n.p2align 4\n" #x ":\n"
+#endif
+extern "C" void tulpar_ctx_swap(void **save_sp, void *load_sp);
+extern "C" void tulpar_ctx_entry(void);
+#if defined(__x86_64__)
+__asm__(".text\n" TULPAR_ASM_FN(tulpar_ctx_swap)
+        "  pushq %rbp\n"
+        "  pushq %rbx\n"
+        "  pushq %r12\n"
+        "  pushq %r13\n"
+        "  pushq %r14\n"
+        "  pushq %r15\n"
+        "  subq $8, %rsp\n"
+        "  stmxcsr (%rsp)\n"
+        "  fnstcw 4(%rsp)\n"
+        "  movq %rsp, (%rdi)\n"
+        "  movq %rsi, %rsp\n"
+        "  ldmxcsr (%rsp)\n"
+        "  fldcw 4(%rsp)\n"
+        "  addq $8, %rsp\n"
+        "  popq %r15\n"
+        "  popq %r14\n"
+        "  popq %r13\n"
+        "  popq %r12\n"
+        "  popq %rbx\n"
+        "  popq %rbp\n"
+        "  ret\n"
+        TULPAR_ASM_FN(tulpar_ctx_entry)
+        "  movq %r12, %rdi\n"   // Task*
+        "  callq *%r13\n"       // coro_main(Task*) — donmez
+        "  ud2\n");
+#else // __aarch64__
+__asm__(".text\n" TULPAR_ASM_FN(tulpar_ctx_swap)
+        "  sub sp, sp, #160\n"
+        "  stp x19, x20, [sp, #0]\n"
+        "  stp x21, x22, [sp, #16]\n"
+        "  stp x23, x24, [sp, #32]\n"
+        "  stp x25, x26, [sp, #48]\n"
+        "  stp x27, x28, [sp, #64]\n"
+        "  stp x29, x30, [sp, #80]\n"
+        "  stp d8, d9, [sp, #96]\n"
+        "  stp d10, d11, [sp, #112]\n"
+        "  stp d12, d13, [sp, #128]\n"
+        "  stp d14, d15, [sp, #144]\n"
+        "  mov x9, sp\n"
+        "  str x9, [x0]\n"
+        "  mov sp, x1\n"
+        "  ldp x19, x20, [sp, #0]\n"
+        "  ldp x21, x22, [sp, #16]\n"
+        "  ldp x23, x24, [sp, #32]\n"
+        "  ldp x25, x26, [sp, #48]\n"
+        "  ldp x27, x28, [sp, #64]\n"
+        "  ldp x29, x30, [sp, #80]\n"
+        "  ldp d8, d9, [sp, #96]\n"
+        "  ldp d10, d11, [sp, #112]\n"
+        "  ldp d12, d13, [sp, #128]\n"
+        "  ldp d14, d15, [sp, #144]\n"
+        "  add sp, sp, #160\n"
+        "  ret\n"
+        TULPAR_ASM_FN(tulpar_ctx_entry)
+        "  mov x0, x19\n"       // Task*
+        "  blr x20\n"           // coro_main(Task*) — donmez
+        "  brk #0\n");
+#endif
+
+namespace {
+// Yeni coroutine yigininin ustune, tulpar_ctx_swap'in "geri yukleyecegi"
+// ilk cerceveyi kur. Donus: coroutine'in kaydedilmis yigin isaretcisi.
+void *ctx_init_stack(char *stack, size_t size, void *task, void *fn) {
+  // Tepe 16'ya hizali, 16 bayt pay birakilir.
+  uintptr_t top = ((uintptr_t)(stack + size) & ~(uintptr_t)15) - 16;
+#if defined(__x86_64__)
+  // `ret` sonrasi rsp = top (16'ya hizali): entry'deki `call` ABI'ye uygun.
+  uint64_t *f = (uint64_t *)(top - 64);
+  uint32_t csr[2] = {0x1F80u /* mxcsr varsayilan */, 0x037Fu /* x87 cw */};
+  memcpy(&f[0], csr, 8);
+  f[1] = 0;                  // r15
+  f[2] = 0;                  // r14
+  f[3] = (uint64_t)fn;       // r13 -> coro_main
+  f[4] = (uint64_t)task;     // r12 -> Task*
+  f[5] = 0;                  // rbx
+  f[6] = 0;                  // rbp
+  f[7] = (uint64_t)&tulpar_ctx_entry; // ret hedefi
+  return f;
+#else
+  uint64_t *f = (uint64_t *)(top - 160);
+  memset(f, 0, 160);
+  f[0] = (uint64_t)task;     // x19 -> Task*
+  f[1] = (uint64_t)fn;       // x20 -> coro_main
+  f[10] = 0;                 // x29 (fp) = 0: geri izleme burada durur
+  f[11] = (uint64_t)&tulpar_ctx_entry; // x30 (lr) -> ret hedefi
+  return f;
+#endif
+}
+} // namespace
+#endif // TULPAR_ASYNC_ASM
 
 namespace {
 
@@ -107,6 +272,14 @@ struct GatherState {
 struct Task {
 #if TULPAR_ASYNC_FIBERS
   void *fiber = nullptr; // CreateFiber handle
+#elif TULPAR_ASYNC_EMFIBER
+  emscripten_fiber_t fib;     // C yigini + ASYNCIFY tamponu tanimi
+  char *stack = nullptr;      // C yigini (havuzdan)
+  char *astack = nullptr;     // ASYNCIFY tamponu (askida canli wasm yerelleri)
+#elif TULPAR_ASYNC_ASM
+  void *sp = nullptr;     // kaydedilmis yigin isaretcisi (askidayken)
+  char *stack = nullptr;
+  void *asan_fake = nullptr; // ASan sahte yigin tutamaci (yalniz ASan'da)
 #else
   ucontext_t ctx;
   char *stack = nullptr;
@@ -251,6 +424,19 @@ int cancel_promise(ObjPromise *p);
 
 #if TULPAR_ASYNC_FIBERS
 thread_local void *g_main_fiber = nullptr;    // scheduler fiber (converted from thread)
+#elif TULPAR_ASYNC_EMFIBER
+// ASYNCIFY tamponu: askidaki baglamin canli wasm yerelleri buraya yazilir.
+// Tulpar fonksiyonlari giris-yukseltilmis VMValue alloca'lariyla dolu; link
+// satirindaki ASYNCIFY_STACK_SIZE (128 KB, aot_pipeline.cpp) ile ayni gerekce.
+constexpr size_t kAsyncifyStackSize = 128 * 1024;
+thread_local emscripten_fiber_t g_main_fib;   // zamanlayicinin (ana) baglami
+thread_local char *g_main_astack = nullptr;
+#elif TULPAR_ASYNC_ASM
+thread_local void *g_main_sp = nullptr;       // zamanlayicinin kaydedilmis yigini
+#if TULPAR_ASAN
+thread_local const void *g_main_stack_bottom = nullptr; // ASan: zamanlayici yigini
+thread_local size_t g_main_stack_size = 0;
+#endif
 #else
 thread_local ucontext_t g_main_ctx;           // scheduler context
 #endif
@@ -342,6 +528,26 @@ void CALLBACK fiber_trampoline(void *param) {
   // again (done==true).
   SwitchToFiber(g_main_fiber);
 }
+#elif TULPAR_ASYNC_EMFIBER
+// Fiber girisi: donmemeli (Emscripten'de tanimsiz) — gorev bitince
+// zamanlayiciya gecer, bu fiber'a bir daha girilmez.
+void em_coro_main(void *arg) {
+  Task *t = static_cast<Task *>(arg);
+  task_body(t);
+  emscripten_fiber_swap(&t->fib, &g_main_fib);
+  __builtin_trap(); // ulasilmaz
+}
+#elif TULPAR_ASYNC_ASM
+// Yeni coroutine'in ilk isi (tulpar_ctx_entry buraya Task* ile atlar).
+// Donmez: gorev bitince zamanlayiciya gecer ve bu yigina bir daha girilmez
+// (resume() gorevi siler, yigini havuza verir).
+void coro_main(Task *t) {
+  ASAN_FINISH(nullptr, &g_main_stack_bottom, &g_main_stack_size);
+  task_body(t);
+  ASAN_START(nullptr /* bu yigin oluyor */, g_main_stack_bottom, g_main_stack_size);
+  tulpar_ctx_swap(&t->sp, g_main_sp);
+  __builtin_trap(); // ulasilmaz
+}
 #else
 // makecontext can only pass ints; stash the task in a global the trampoline
 // reads on entry. Safe because tasks start one at a time under the scheduler
@@ -426,6 +632,28 @@ void resume(Task *t) {
                            (LPFIBER_START_ROUTINE)fiber_trampoline, t);
   }
   SwitchToFiber(t->fiber);
+#elif TULPAR_ASYNC_EMFIBER
+  if (!t->started) {
+    t->started = true;
+    t->stack = stack_acquire();
+    t->astack = static_cast<char *>(malloc(kAsyncifyStackSize));
+    emscripten_fiber_init(&t->fib, em_coro_main, t, t->stack, kCoroStackSize,
+                          t->astack, kAsyncifyStackSize);
+  }
+  emscripten_fiber_swap(&g_main_fib, &t->fib);
+#elif TULPAR_ASYNC_ASM
+  if (!t->started) {
+    t->started = true;
+    t->stack = stack_acquire();
+    t->sp = ctx_init_stack(t->stack, kCoroStackSize, t, (void *)&coro_main);
+  }
+  {
+    void *main_fake = nullptr;
+    (void)main_fake;
+    ASAN_START(&main_fake, t->stack, kCoroStackSize);
+    tulpar_ctx_swap(&g_main_sp, t->sp);
+    ASAN_FINISH(main_fake, nullptr, nullptr);
+  }
 #else
   if (!t->started) {
     t->started = true;
@@ -447,6 +675,9 @@ void resume(Task *t) {
 #else
     stack_release(t->stack);
 #endif
+#if TULPAR_ASYNC_EMFIBER
+    free(t->astack);
+#endif
     if (t->args) free(t->args);
     if (t->eh_ctx) aot_eh_context_free(t->eh_ctx);
     delete t;
@@ -457,12 +688,29 @@ void resume(Task *t) {
 void yield_to_scheduler(Task *t) {
 #if TULPAR_ASYNC_FIBERS
   SwitchToFiber(g_main_fiber);
+#elif TULPAR_ASYNC_EMFIBER
+  emscripten_fiber_swap(&t->fib, &g_main_fib);
+#elif TULPAR_ASYNC_ASM
+  ASAN_START(&t->asan_fake, g_main_stack_bottom, g_main_stack_size);
+  tulpar_ctx_swap(&t->sp, g_main_sp);
+  ASAN_FINISH(t->asan_fake, &g_main_stack_bottom, &g_main_stack_size);
 #else
   swapcontext(&t->ctx, &g_main_ctx);
 #endif
 }
 
 void ensure_scheduler_inited() {
+  // Surec basina bir kez; sihirli static thread-guvenli (isciler de async
+  // kullanabilir). Sonraki cagrilarda yalniz bir guard okumasi.
+  static const bool drain_set = (aot_async_set_drain(tulpar_async_drain_all), true);
+  (void)drain_set;
+#if TULPAR_ASYNC_EMFIBER
+  if (!g_main_astack) {
+    g_main_astack = static_cast<char *>(malloc(kAsyncifyStackSize));
+    emscripten_fiber_init_from_current_context(&g_main_fib, g_main_astack,
+                                               kAsyncifyStackSize);
+  }
+#endif
 #if TULPAR_ASYNC_FIBERS
   if (!g_main_fiber) {
     g_main_fiber = ConvertThreadToFiber(nullptr);
@@ -745,7 +993,14 @@ ObjPromise *aot_gather(VMValue *args, int argc) {
   return t->result;
 }
 
-void aot_event_loop_run(void) {
+// aot_event_loop_run'in govdesi. aot_event_loop_run'in KENDISI
+// src/vm/runtime_bindings.cpp'de: main() onu KOSULSUZ cagiriyor ve burada
+// tanimli oldugu surece bu nesne (ve web'de Emscripten'in fiber JS'i)
+// async kullanmayan her ikiliye giriyordu — olculdu (2026-09-28): web oyunu
+// arcade_zipla .wasm +38 KB, .js +15,6 KB. Zamanlayici ilk kullanimda bu
+// fonksiyonu kaydeder (aot_async_set_drain); kullanilmadiysa cagri no-op.
+void tulpar_async_drain_all() {
+  if (!t_sched) return; // bu thread'de async hic kullanilmadi
   ensure_scheduler_inited();
   while (loop_step(/*drain*/ true)) { /* drain */ }
 }

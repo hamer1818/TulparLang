@@ -10,8 +10,9 @@
 # (bkz. src/aot/aot_pipeline.cpp web yolu). Ana CMake build'ine dokunmaz.
 #
 # Notlar:
-# - tulpar_async.cpp derlenmez (ucontext — Emscripten'de yok). Async
-#   kullanan program web hedefinde link hatası alır; oyunlar kullanmaz.
+# - tulpar_async.cpp DERLENIYOR (2026-09-28, K233): ucontext yerine
+#   emscripten_fiber_* (ASYNCIFY — web linkinde zaten açık). Eskiden async
+#   web'de hiç yoktu (web_stubs.cpp yalnız aot_event_loop_run'ı karşılıyordu).
 # - TLS (OpenSSL) kapalı; http_fetch düz-soket yolu derlenir ama tarayıcıda
 #   ham soket çalışmaz (Emscripten stub). Oyunlar için sorun değil.
 # - raylib web'de rglfw.c DERLENMEZ: Emscripten'in kendi GLFW JS
@@ -60,7 +61,7 @@ RUNTIME_CPP=(
     "$ROOT/src/parser/parser.cpp"
     "$ROOT/src/parser/import_alias.cpp"
     "$ROOT/src/pkg/sha256.cpp"
-    "web_stubs.cpp"
+    "$ROOT/runtime/tulpar_async.cpp"
 )
 for f in "${RUNTIME_CPP[@]}"; do
     o="$OBJ/$(basename "${f%.*}").o"

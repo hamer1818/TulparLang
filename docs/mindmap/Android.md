@@ -22,9 +22,12 @@ WSL'de 2 ve 3 numaralı betikler **Windows** SDK araçlarını interop ile süre
 (`.exe`, `wslpath -w`, `%LOCALAPPDATA%\Temp`). Linux SDK için `TULPAR_ANDROID_SDK`.
 
 ## Zor öğrenilmiş kısıtlar
-- **bionic'te `makecontext`/`swapcontext` YOK** → `tulpar_async.cpp` dışlanır (web ile aynı);
-  `android/android_stubs.cpp` async-HTTP sembollerini karşılar (çağrılırsa abort).
-  `async` bu hedefte desteklenmiyor.
+- **bionic'te `makecontext`/`swapcontext` YOK** — async bu yüzden uzun süre
+  dışlanmıştı (`android_stubs.cpp` çağrılınca abort ediyordu). **2026-09-28'den
+  beri async VAR** (K233): `runtime/tulpar_async.cpp` x86_64/AArch64'te el yazımı
+  bağlam geçişi kullanıyor, ucontext istemiyor; arşive giriyor, stub kaldırıldı.
+  Doğrulanan: iki ABI'de `.so` linki (`--no-undefined`) async programla temiz;
+  cihazda koşum henüz ölçülmedi.
 - **`.so` linki `-Wl,--no-undefined`** ile: eksik sembol **link** zamanında patlar,
   cihazda `UnsatisfiedLinkError` olarak değil.
 - **x86_64 nesneleri PIC olmalı**, yoksa `R_X86_64_32 cannot be used against local symbol`.

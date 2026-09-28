@@ -350,6 +350,36 @@ oku; düzeltmeden önceki derleyiciyle 11 "HATA" testinin 11'i kırmızı).
   Linux dışında görünür biçimde atlanır). LSP açıklamaları "ikili güvenli"
   diyor.
 
+### Değişti — async artık Android'de ve web'de var; masaüstünde 3 kat hızlı
+
+- `runtime/tulpar_async.cpp` x86_64 ve AArch64'te (Linux, macOS, Android)
+  `ucontext` yerine el yazımı bir bağlam geçişi kullanıyor: yalnız callee-saved
+  yazmaçlar + yığın işaretçisi (tulpar-engine'in `fiber_switch_*.S` kalıbı).
+  Windows fiber'da, diğer mimariler `ucontext`'te kalıyor.
+- **Android'de async artık var:** bionic `makecontext`/`swapcontext`'i
+  kaldırmıştı; `tulpar_async.cpp` Android arşivine giriyor, async'i abort eden
+  `android/android_stubs.cpp` kaldırıldı. Doğrulanan: iki ABI'de async
+  programın `.so` linki (`-Wl,--no-undefined`) temiz, arşivde AArch64 geçişi
+  beklenen kod; cihazda koşum henüz ölçülmedi.
+- **Web'de async artık var:** wasm'da `emscripten_fiber_*` (her coroutine'e
+  C yığını + ASYNCIFY tamponu); ASYNCIFY web linkinde zaten açıktı (raylib).
+  `tulpar_async.cpp` web arşivine giriyor, `wasm/web_stubs.cpp` kaldırıldı.
+  Doğrulanan: `--target=web` ile derlenen async program (zincir, `gather`,
+  `cancel`, `with_timeout`, 20 eşzamanlı coroutine'de 500+ derinlik
+  özyineleme) node'da doğru çıktı. Bilinen sınır (önceden de vardı):
+  `try/catch` kullanan program web'de linklenmiyor (`setjmp` tanımsız).
+- **Async kullanmayan ikili büyümedi:** `main()`'in koşulsuz çağırdığı
+  `aot_event_loop_run` artık `runtime_bindings.cpp`'de ve zamanlayıcı ilk
+  kullanımda kendini kaydediyor; yani `tulpar_async.o` yalnız async kullanan
+  programa giriyor. Olmasaydı web oyunu `arcade_zipla` .wasm +38 KB, .js
+  +15,6 KB büyüyordu; bu hâliyle +88 B / +101 B.
+- **Hız:** glibc `swapcontext` her geçişte sinyal maskesi için sistem çağrısı
+  yapıyordu. Ölçü (Ryzen 7 9800X3D, Linux 7.2.8, 2026-09-28, turla eşlenmiş
+  11 tur, medyan): spawn+await 356 → **118 ns**, 4'lü `gather` 4578 →
+  **1230 ns**.
+- ASan: el yazımı geçiş ASan'a `__sanitizer_start/finish_switch_fiber` ile
+  bildiriliyor; `tests/async.test.tpr` ASan altında 21/21 temiz.
+
 ### Eklendi — async zaman aşımı ve iptal: `with_timeout(p, ms)`, `cancel(p)`
 
 - `await with_timeout(getir(), 500)`: `p` süresinde yerine gelmezse

@@ -90,15 +90,15 @@ RUNTIME_ARCHIVES = [
 
 # Hedefte BILEREK olmayan aileler: eksiklikleri hata degil (sebebi yazili).
 EXPECTED_MISSING = {
-    # Async: stackful coroutine ucontext ister; Emscripten'de ve bionic'te yok.
-    # Async ailesi: stackful coroutine ucontext ister (Emscripten'de ve bionic'te yok).
+    # Async ailesi artik iki hedefte de var (K233): web emscripten_fiber_*,
+    # Android el yazimi baglam gecisi.
     # TLS ailesi: OpenSSL yok; bu hedeflerde TLS derlenmiyor (TULPAR_HAS_TLS tanimsiz).
-    "web-runtime": ("aot_spawn", "aot_await", "aot_promise", "aot_async", "aot_event_loop",
-                    "aot_io_register", "aot_sleep_async", "aot_gather", "aot_tls_"),
-    "android/arm64-v8a-runtime": ("aot_spawn", "aot_await", "aot_async", "aot_promise",
-                                  "aot_io_register", "aot_sleep_async", "aot_gather", "aot_tls_"),
-    "android/x86_64-runtime": ("aot_spawn", "aot_await", "aot_async", "aot_promise",
-                               "aot_io_register", "aot_sleep_async", "aot_gather", "aot_tls_"),
+    # Web'de async VAR (K233, 2026-09-28: emscripten_fiber_*) — yalniz TLS.
+    "web-runtime": ("aot_tls_",),
+    # Android'de async VAR (K233, 2026-09-28: el yazimi baglam gecisi, bionic
+    # ucontext'i istemiyor) — yalniz TLS ailesi beklenen eksik.
+    "android/arm64-v8a-runtime": ("aot_tls_",),
+    "android/x86_64-runtime": ("aot_tls_",),
 }
 
 
