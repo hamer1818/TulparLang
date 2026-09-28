@@ -90,6 +90,8 @@ private:
     bool is_import_alias(const std::string& name) const;
     // Imlec `offset`teki token `ALIAS . AD` nitelikli tip adinin basi mi.
     bool qualified_type_at(int offset) const;
+    // K027: son parse_type bir ENUM adina cozulduyse (dizi soneki yoksa) adi.
+    std::optional<std::string> last_type_enum_name_;
     std::string parse_custom_type_name();
     
     // Error handling

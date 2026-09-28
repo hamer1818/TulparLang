@@ -1,0 +1,25 @@
+// 24_enum_nominal'in pozitif ikizi (K027): enum'un MESRU kullanimlari
+// tanisiz gecmeli — ayni enum, enum -> int genisletme, `e + 1` (ayni enum),
+// karsilastirma, tam `match` (kollarla ya da `_` ile).
+enum Renk { KIRMIZI, YESIL, MAVI }
+func sonraki(Renk r): Renk {
+    if (r == Renk.MAVI) { return Renk.KIRMIZI; }
+    return r + 1;
+}
+Renk r = Renk.YESIL;
+Renk s = sonraki(r);
+var v = Renk.MAVI;
+v = Renk.KIRMIZI;
+int n = r + 5;
+int ham = s;
+bool ayni = r == Renk.YESIL;
+str ad = match r {
+    Renk.KIRMIZI => "k",
+    Renk.YESIL => "y",
+    Renk.MAVI => "m",
+};
+str tam = match s { Renk.KIRMIZI => "k", _ => "diger" };
+print(n + ham);
+print(ayni);
+print(ad + tam);
+print(v);

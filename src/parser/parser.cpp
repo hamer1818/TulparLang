@@ -672,6 +672,7 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     // Parse type
     DataType type = parse_type();
     if (last_type_qualified_ && type == TYPE_CUSTOM) custom_type_name = last_type_custom_name_;  // K013
+    const std::optional<std::string> enum_t = last_type_enum_name_;  // K027
     const int fixed_n = last_fixed_array_n_;  // `T[N]` ise N, degilse 0
     // `Dusman[] d` — eleman struct adi (P1.1). parse_type `[]` sonekiyle
     // TYPE_ARRAY'e dusuyor ve asagida custom_type_name sifirlaniyor; eleman
@@ -766,6 +767,7 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     VariableDecl vd(name, type, std::move(initializer), loc);
     vd.custom_type = std::move(custom_type_name);
     vd.elem_custom_type = elem_custom;
+    vd.enum_type = enum_t;   // K027
     vd.is_const = is_const;
     return std::make_unique<ASTNode>(std::move(vd));
 }
@@ -844,6 +846,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
                                           "Expected parameter name");
                 Parameter par(param_name.value(), param_type);
                 par.custom_type = std::move(param_custom_type);
+                par.enum_type = last_type_enum_name_;   // K027
                 par.elem_custom_type = is_array_type(param_type) ? last_type_custom_name_ : std::nullopt;  // `Dusman[] d` (P1.1)
                 parameters.push_back(std::move(par));
             }
@@ -859,6 +862,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     //   func name(...): int { ... }         // colon-prefixed (idiomatic)
     DataType return_type = TYPE_UNSPECIFIED;  // yazilmadi != void
     std::optional<std::string> return_custom_type_name;
+    std::optional<std::string> return_enum_name;   // K027
     match(TOKEN_COLON); // consume ':' if present, harmless otherwise
     std::vector<TupleElem> tuple_types;  // bos = coklu donus degil
     if (check(TOKEN_LPAREN)) {
@@ -877,6 +881,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
         return_type = parse_type();
         if (last_type_qualified_ && return_type == TYPE_CUSTOM) return_custom_type_name = last_type_custom_name_;  // K013
         if (return_type != TYPE_CUSTOM) return_custom_type_name.reset();
+        return_enum_name = last_type_enum_name_;   // K027
     }
 
     // Fonksiyon govdesi KENDI kapsaminda; parametreler oraya CONST OLMAYAN
@@ -906,6 +911,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     FunctionDecl decl(name, std::move(parameters), return_type,
                       std::move(body), loc);
     decl.return_custom_type = std::move(return_custom_type_name);
+    decl.return_enum_type = std::move(return_enum_name);
     return std::make_unique<ASTNode>(std::move(decl));
 }
 
@@ -2184,7 +2190,9 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
                               "' adli uye yok / enum '" + head->name +
                               "' has no member '" + field.value() + "'");
                     }
-                    expr = std::make_unique<ASTNode>(IntLiteral(*v, dot_loc));
+                    IntLiteral lit(*v, dot_loc);
+                    lit.enum_name = head->name;   // K027: nominal denetim + match tamligi
+                    expr = std::make_unique<ASTNode>(std::move(lit));
                     continue;
                 }
             }
@@ -2726,6 +2734,7 @@ DataType Parser::parse_type() {
     DataType base = TYPE_UNKNOWN;
     last_type_custom_name_.reset();
     last_type_qualified_ = false;
+    last_type_enum_name_.reset();
     bool matched = true;
 
     if (match(TOKEN_INT_TYPE)) base = TYPE_INT;
@@ -2752,10 +2761,14 @@ DataType Parser::parse_type() {
         const std::string tn = current().value();
         advance();
         last_type_qualified_ = true;
-        if (is_enum_name(tn)) { base = TYPE_INT; }
+        if (is_enum_name(tn)) { last_type_enum_name_ = tn; base = TYPE_INT; }   // K027
         else { last_type_custom_name_ = tn; base = TYPE_CUSTOM; }
     }
-    else if (check(TOKEN_IDENTIFIER) && is_enum_name(current().value())) { advance(); base = TYPE_INT; }
+    else if (check(TOKEN_IDENTIFIER) && is_enum_name(current().value())) {
+        last_type_enum_name_ = current().value();   // K027
+        advance();
+        base = TYPE_INT;
+    }
     else if (check(TOKEN_IDENTIFIER)) { last_type_custom_name_ = current().value(); advance(); base = TYPE_CUSTOM; }
     else matched = false;
 
@@ -2806,6 +2819,7 @@ DataType Parser::parse_type() {
         }
         break;  // `arr[i]` gibi bir ifade — tip sonekini burada bitir.
     }
+    if (base != TYPE_INT) last_type_enum_name_.reset();  // `Renk[]` izlenmiyor
     return base;
 }
 

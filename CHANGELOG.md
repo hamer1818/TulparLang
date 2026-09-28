@@ -1024,6 +1024,27 @@ int v = (yan() + 1) * (yan() + 1);    // 2 yerine 6 — iç içe katlanıyor
 Sonuç *değeri* hep doğruydu, o yüzden hiçbir test göremedi. Tipli
 fonksiyonda görünmüyordu; yalnız kutulu operandlı karışık ifadelerde.
 
+### Eklendi — enum v2: nominal tip denetimi + `match` tamlık uyarısı
+
+- Enum ayrıştırıcı şekeri olarak kalıyor (kodgen için int), ama typeinfer
+  adları izliyor: `Renk r = Sekil.DAIRE;`, `Renk q = 42;`, enum parametreye
+  başka enum ya da düz int, `func f(): Renk { return 3; }` artık tanı
+  (`expected enum Renk, got enum Sekil` / `got int`). Önceden hepsi `--strict`
+  dahil kabul ediliyordu. Serbest kalanlar (C gibi): enum → int
+  (`int n = r + 5`), `e + 1` / `e - 1` aynı enum'un değeri
+  (`tests/enum.test.tpr`'deki `sonraki` bu biçimde).
+- `match` konusu bir enum ise ve `_` kolu yoksa karşılanmayan üyeler
+  `[typecheck]` **uyarısı** (sayılmaz): eşleşmeyen değerde hiçbir kol
+  çalışmıyordu ve bu sessizdi.
+- Ayrıştırıcı enum adını AST'de taşıyor (`IntLiteral::enum_name`, bildirim /
+  parametre / dönüş `enum_type`); kodgen bunları görmüyor (enum programlarının
+  IR'ı birebir aynı). Modül enum'ları (K028) da tamlık denetimine giriyor.
+- Korpus tanı tabanı değişmedi (9); tulpar-engine `engine_aksiyon.tpr`
+  (4 enum) tanısız.
+- Nöbetçi: `tests/typeinfer/fail/24_enum_nominal.tpr` (6 EXPECT; eski
+  derleyici "ok"), `pass/18_enum_nominal_ok.tpr`, `tests/enum_hatalari.sh`
+  (6 → 8: eksik kol uyarısı + tam match'te uyarı yok).
+
 ### Fixed/Performance — VMValue'nun dolgusu artık bayt bayt kopyalanmıyor
 
 `VMValue` LLVM'de `{i32, [4 x i8], i64}` modellenmişti ve dolgu bir bayt
