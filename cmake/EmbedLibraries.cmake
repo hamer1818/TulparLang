@@ -81,3 +81,24 @@ configure_file(
 )
 
 message(STATUS "Generated: src/embedded_libs.h")
+
+# ============================================
+# gdb pretty-printer'ı (tools/gdb/tulpar_printers.py) -> `tulpar debug`
+# ============================================
+# DAP bağdaştırıcısı gdb'yi başlatınca bu betiği yüklüyor; kurulu bir tulpar'ın
+# yanında tools/ dizini olmadığı için metin ikiliye gömülüyor (tek kaynak:
+# .py dosyası). Başlık DERLEME dizininde üretiliyor, kaynak ağacına yazılmıyor;
+# içerik aynıysa dosyaya dokunulmuyor (configure_file COPYONLY), yani her
+# yeniden yapılandırma debug_cmd.cpp'yi yeniden derletmiyor.
+set(TULPAR_GDB_SCRIPT "${CMAKE_SOURCE_DIR}/tools/gdb/tulpar_printers.py")
+set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY
+    CMAKE_CONFIGURE_DEPENDS "${TULPAR_GDB_SCRIPT}")
+file(READ "${TULPAR_GDB_SCRIPT}" TULPAR_GDB_SCRIPT_CONTENT)
+file(WRITE "${CMAKE_BINARY_DIR}/generated/tulpar_gdb_printers.h.tmp"
+"// URETILMIS — tools/gdb/tulpar_printers.py'den (cmake/EmbedLibraries.cmake). Elle duzenleme.
+#pragma once
+static const char *kTulparGdbPrinters = R\"TPGDB(${TULPAR_GDB_SCRIPT_CONTENT})TPGDB\";
+")
+configure_file("${CMAKE_BINARY_DIR}/generated/tulpar_gdb_printers.h.tmp"
+               "${CMAKE_BINARY_DIR}/generated/tulpar_gdb_printers.h" COPYONLY)
+include_directories("${CMAKE_BINARY_DIR}/generated")

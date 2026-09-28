@@ -55,7 +55,8 @@ Geriye kalan adımlar PR 4-6 kapsamında:
   / `continue` / `next` / `stepIn` translation.
 - **PR 5**: `vscode-tulpar` eklentisinde `contributes.debuggers`
   bloğu + `launch.json` snippet.
-- **PR 6 (opsiyonel)**: gdb pretty-printer Tulpar VMValue
+- **PR 6 (opsiyonel)**: gdb pretty-printer — ✅ 2026-09-27: `tools/gdb/tulpar_printers.py`,
+  `tulpar debug` gömülü yüklüyor, `tulpar debug --gdb-script` düz gdb için basıyor Tulpar VMValue
   tag/payload'unu decode etsin (right now debugger 16-byte opaque
   blob görüyor; pretty-printer ile "json {k: 1}", "str hamza" gibi
   okunabilir display).

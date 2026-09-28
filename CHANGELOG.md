@@ -736,6 +736,19 @@ döner.
   `tests/forin_len_golge.test.tpr` (gölgelenmiş `len`; sabote edilince
   kırmızı).
 
+### Eklendi — hata ayıklayıcıda okunur değerler (gdb pretty-printer)
+
+- Her Tulpar yereli DWARF'ta 128 bitlik opak `VMValue`; gdb ve `tulpar debug`
+  `str ad = "Hamza"` için `130514698818214998946349060` basıyordu.
+  `tools/gdb/tulpar_printers.py` etiketi ve yükü çözüyor: int, float, bool,
+  dizgi, dizi (kutulu + 32/64-bit kutusuz), nesne (json). `tulpar debug` betiği
+  ikiliye gömülü taşıyor ve gdb'yi başlatınca yüklüyor (`-enable-pretty-printing`
+  dahil); `tulpar debug --gdb-script` düz gdb için basıyor.
+- `tests/dap_audit.py`'ye "okunur değerler" senaryosu: DAP `variables` ve
+  `--gdb-script` ile düz gdb'de `"Hamza"`, `2.5`, `[1, 2, 3]`,
+  `{"k": 7, "s": "x"}`, `true`. Pozitif kontrol: yükleme sökülünce ham 128-bit
+  sayılar ve kırmızı.
+
 ### Performance — ölçümler daraltıldı ve kayan noktaya genişletildi
 
 ⚠ Aşağıdaki tablo **2026-09-02 durumudur**. Sonraki atribüsyon koşuları iki

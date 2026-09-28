@@ -22,6 +22,9 @@ NE ÖLÇÜLÜYOR (üç senaryo, her biri ayrı `tulpar debug` süreci)
   2. koşullu breakpoint (`i == 3`, döngüde): TAM BİR kez durur ve `i` = 3.
   3. logpoint (`i={i}`): hiç `stopped` YOK, beş `output` olayı i=0..4 ile,
      sonra `terminated`.
+  4. okunur değerler (K153): gömülü VMValue pretty-printer'ı yüklü —
+     `ad="Hamza"`, `f=2.5`, `a=[1, 2, 3]`, `j={"k": 7, ...}`, `b=true`; ve
+     `tulpar debug --gdb-script` çıktısı düz gdb'de aynı değerleri veriyor.
 
 POZİTİF KONTROL: 1. senaryodaki değişken değerleri programın kendi
 hesabından (a=2, b=3, c=5) geliyor, bağdaştırıcının bir sabitinden değil;
@@ -50,6 +53,17 @@ PROG_FUNC = (
     "}\n"                                  # 4
     "int r = topla(2, 3);\n"               # 5
     "print(r);\n"                          # 6
+)
+PROG_VALS = (
+    "func goster(int n) {\n"                          # 1
+    "    str ad = \"Hamza\";\n"                        # 2
+    "    float f = 2.5;\n"                             # 3
+    "    array a = [1, 2, 3];\n"                       # 4
+    "    json j = {\"k\": 7, \"s\": \"x\"};\n"            # 5
+    "    bool b = true;\n"                             # 6
+    "    print(ad);\n"                                 # 7  <- breakpoint
+    "}\n"                                              # 8
+    "goster(4);\n"                                     # 9
 )
 PROG_LOOP = (
     "func adim(int i): int {\n"            # 1
@@ -267,6 +281,45 @@ def scenario_logpoint(exe, work):
         a.close()
 
 
+def scenario_values(exe, work):
+    """Yerel değerler OKUNUR mu (K153)? Her Tulpar yereli DWARF'ta 128 bitlik
+    opak `VMValue`; pretty-printer olmadan `ad` için 130514698818214998946349060
+    gibi bir sayı geliyordu. Bağdaştırıcı gömülü tools/gdb/tulpar_printers.py'yi
+    yükleyince dizgi/float/dizi/json/bool çözülmeli.
+
+    İkinci ayak: `tulpar debug --gdb-script` çıktısı düz gdb'de de aynı işi
+    yapmalı (kurulu tulpar'da tools/ dizini yok)."""
+    a = start(exe, work, PROG_VALS, [{"line": 7}])
+    try:
+        a.wait(is_event("stopped"), "breakpoint'te `stopped`")
+        _, vars_ = locals_of(a)
+        want = {"n": "4", "ad": '"Hamza"', "f": "2.5", "a": "[1, 2, 3]",
+                "j": '{"k": 7, "s": "x"}', "b": "true"}
+        bad = {k: vars_.get(k) for k, v in want.items() if vars_.get(k) != v}
+        if bad:
+            raise AssertionError("okunmayan degerler: %s (hepsi: %s)" % (bad, vars_))
+        a.call("continue", {"threadId": 1})
+        run_to_exit(a)
+    finally:
+        a.close()
+    # --gdb-script + düz gdb
+    script = os.path.join(work, "t.py")
+    with open(script, "w") as fh:
+        fh.write(subprocess.run([exe, "debug", "--gdb-script"], capture_output=True,
+                                text=True).stdout)
+    binp = os.path.join(work, "prog_bin")
+    subprocess.run([exe, "--debug", "build", os.path.join(work, "prog.tpr"), binp],
+                   capture_output=True, cwd=work)
+    r = subprocess.run(["gdb", "-batch", "-nx", "-ex", "source " + script,
+                        "-ex", "break prog.tpr:7", "-ex", "run", "-ex", "info locals",
+                        binp], capture_output=True, text=True, cwd=work, timeout=TIMEOUT)
+    if 'ad = "Hamza"' not in r.stdout or "a = [1, 2, 3]" not in r.stdout:
+        raise AssertionError("--gdb-script ile duz gdb degerleri cozmedi:\n%s"
+                             % r.stdout[-400:])
+    return ("okunur degerler: ad=\"Hamza\" f=2.5 a=[1, 2, 3] j={...} b=true "
+            "(DAP + --gdb-script ile duz gdb)")
+
+
 def scenario_no_gdb_hint(exe, work):
     """gdb PATH'te yoksa `launch` NET bir kurulum ipucuyla düşmeli (K222).
 
@@ -322,7 +375,8 @@ def main():
             return 1
         print("SKIP dap denetimi: gdb yok (bagdastirici gdb MI3 kopru)")
         return 0
-    for fn in (scenario_breakpoint, scenario_conditional, scenario_logpoint):
+    for fn in (scenario_breakpoint, scenario_conditional, scenario_logpoint,
+               scenario_values):
         work = tempfile.mkdtemp(prefix="tulpar_dap_")
         try:
             print("  gecti  " + fn(exe, work))
