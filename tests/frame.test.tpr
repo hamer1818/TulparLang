@@ -45,12 +45,33 @@ func derin(int n): int {
     return derin(n - 1) + 1;
 }
 
+// ⚠ ISTISNALI SENARYOLAR UST DUZEYDE kosuyor, test() icinde degil: test()
+// fonksiyonu call() ile cagiriyor ve MinGW'de call() ile dagitilan cercevede
+// YENIDEN firlatilan throw sureci cokertiyor (errors.test.tpr'yi Windows'ta
+// atlatan ayni bilinen hata; duzeltmesi #404). @frame'in catch'i yeniden
+// firlatiyor, yani bu senaryolar oraya girerse Windows'ta paket duser.
+// Sonuclar global'lere yaziliyor, test()'ler yalniz iddia ediyor.
+str g_yakalanan = "";
+try { str x = etiket(-5); } catch (e) { g_yakalanan = toString(e); }
+int g_once = arena_save();
+arena_drop(g_once);
+for (int i = 0; i < 500; i++) {
+    str q = etiket(4);
+    yan_etki(5);
+    try { str w = etiket(-1); } catch (e) { }
+}
+int g_sonra = arena_save();
+arena_drop(g_sonra);
+int g_derin10 = derin(10);
+str g_derin_msg = "";
+try { int d = derin(40); } catch (e) { g_derin_msg = toString(e); }
+int g_derin_cp = arena_save();
+arena_drop(g_derin_cp);
+
 func run_donus_ve_istisna() {
     assert_eq_str(etiket(3), "v3...!");
     assert_eq_str(etiket(1), "v1...");
-    str yakalanan = "";
-    try { str x = etiket(-5); } catch (e) { yakalanan = toString(e); }
-    assert_eq_str(yakalanan, "negatif: -5");       // istisna drop'tan sag cikti
+    assert_eq_str(g_yakalanan, "negatif: -5");     // istisna drop'tan sag cikti
     assert_eq_str(kalici[len(kalici) - 1], "k1");
 }
 
@@ -62,26 +83,13 @@ func run_struct_donus() {
 }
 
 func run_yigin_sizmiyor() {
-    int once = arena_save();
-    arena_drop(once);
-    for (int i = 0; i < 500; i++) {
-        str q = etiket(4);
-        yan_etki(5);
-        try { str w = etiket(-1); } catch (e) { }
-    }
-    int sonra = arena_save();
-    arena_drop(sonra);
-    assert_eq_int(sonra, once);                    // 1500 cikis, sifir sizinti
+    assert_eq_int(g_sonra, g_once);                // 1500 cikis, sifir sizinti
 }
 
 func run_yigin_dolu_sessiz_degil() {
-    assert_eq_int(derin(10), 10);
-    str msg = "";
-    try { int d = derin(40); } catch (e) { msg = toString(e); }
-    assert_contains(msg, "kontrol noktasi yigini dolu");
-    int cp = arena_save();                         // hata sonrasi yigin temiz
-    arena_drop(cp);
-    assert(cp < 4, "yigin temizlenmedi");
+    assert_eq_int(g_derin10, 10);
+    assert_contains(g_derin_msg, "kontrol noktasi yigini dolu");
+    assert(g_derin_cp < 4, "yigin temizlenmedi");  // hata sonrasi yigin temiz
 }
 
 print("=== @frame ===");
