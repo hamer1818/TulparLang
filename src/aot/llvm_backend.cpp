@@ -10,6 +10,7 @@
 #include "../common/diagnostics.hpp"
 #include "llvm_types.hpp"
 #include "llvm_values.hpp"
+#include "llvm_array_shape.hpp"   // TLW_* (perf ipucu, K167); asagida da dahil
 #include <llvm-c/Analysis.h>
 #include <llvm-c/IRReader.h>
 #include <llvm-c/Target.h>
@@ -751,6 +752,147 @@ static int collect_visible_names(LLVMBackend *backend, const char **out,
     }
   }
   return n;
+}
+
+// ---- PERFORMANS IPUCU (K167, 2026-09-28) ------------------------------------
+// `TULPAR_PERF_HINTS=1`: kanitli (sinir denetimsiz, dalsiz) dizi erisimi
+// KURULAMAYAN en dis donguler icin nedenini ve cozumunu stderr'e yaz. Eskiden
+// kanit kurulamayinca erisim sessizce bekcili yola dusuyordu — `i < n` ile
+// `i < len(a)` arasindaki fark kiyaslamalarda birkac kat ve hicbir sey bunu
+// soylemiyordu (olculdu: 20M int, 5 tur toplama 256 ms -> 11 ms, bu makine,
+// 2026-09-28). Varsayilan KAPALI (derleme ciktisi degismiyor); hata DEGIL,
+// had_error'a dokunmaz. Yalniz EN DIS donguler (surumleme yalniz orada).
+static int perf_hints_enabled() {
+  static int v = -1;
+  if (v < 0) {
+    const char *e = getenv("TULPAR_PERF_HINTS");
+    v = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+  }
+  return v;
+}
+
+static void emit_perf_hint(LLVMBackend *backend, int line, const char *arr, const char *ivar,
+                           int why, const char *detail) {
+  const char *a = arr ? arr : "?";
+  const char *v = ivar ? ivar : "i";
+  const char *d = detail ? detail : "?";
+  char why_msg[320], fix[320];
+  switch (why) {
+  case TLW_INIT:
+    snprintf(why_msg, sizeof why_msg,
+             tulpar::i18n::tr_en("sayac `int %s = <sabit >= 0>` ile baslamiyor",
+                                 "the counter does not start as `int %s = <constant >= 0>`"),
+             v);
+    snprintf(fix, sizeof fix, "%s",
+             tulpar::i18n::tr_en("sayaci dongu basliginda bir sabitle baslatin",
+                                 "initialise the counter with a constant in the loop header"));
+    break;
+  case TLW_COND_OP:
+    snprintf(why_msg, sizeof why_msg,
+             tulpar::i18n::tr_en("kosul `%s < ...` biciminde degil",
+                                 "the condition is not of the form `%s < ...`"),
+             v);
+    snprintf(fix, sizeof fix, "%s",
+             tulpar::i18n::tr_en("`<` kullanin (`<=`, `!=`, `>` kanitlanmiyor)",
+                                 "use `<` (`<=`, `!=`, `>` are not proven)"));
+    break;
+  case TLW_BOUND_NAME:
+    snprintf(why_msg, sizeof why_msg,
+             tulpar::i18n::tr_en("dongu siniri `%s`, `len(%s)` degil",
+                                 "the loop bound is `%s`, not `len(%s)`"),
+             d, a);
+    snprintf(fix, sizeof fix,
+             tulpar::i18n::tr_en("`%s < len(%s)` yazin — sinir dizinin uzunlugu olunca "
+                                 "erisim kanitli ve dalsiz",
+                                 "write `%s < len(%s)` — with the array's length as the "
+                                 "bound the access is proven and branch-free"),
+             v, a);
+    break;
+  case TLW_BOUND_OTHER:
+    if (detail)
+      snprintf(why_msg, sizeof why_msg,
+               tulpar::i18n::tr_en("dongu siniri `len(%s)`, erisilen dizi `%s`",
+                                   "the loop bound is `len(%s)` but the indexed array is `%s`"),
+               d, a);
+    else
+      snprintf(why_msg, sizeof why_msg,
+               tulpar::i18n::tr_en("dongu siniri `len(%s)` degil",
+                                   "the loop bound is not `len(%s)`"),
+               a);
+    snprintf(fix, sizeof fix,
+             tulpar::i18n::tr_en("sinir olarak erisilen dizinin uzunlugunu verin: `%s < len(%s)`",
+                                 "bound the loop by the indexed array's length: `%s < len(%s)`"),
+             v, a);
+    break;
+  case TLW_INCR:
+    snprintf(why_msg, sizeof why_msg,
+             tulpar::i18n::tr_en("artim `%s++` ya da `%s = %s + <pozitif sabit>` degil",
+                                 "the increment is not `%s++` or `%s = %s + <positive constant>`"),
+             v, v, v);
+    snprintf(fix, sizeof fix, "%s",
+             tulpar::i18n::tr_en("sayaci sabit, pozitif bir adimla artirin",
+                                 "advance the counter by a constant positive step"));
+    break;
+  case TLW_REBIND:
+    snprintf(why_msg, sizeof why_msg,
+             tulpar::i18n::tr_en("`%s` govdede yeniden ataniyor",
+                                 "`%s` is reassigned in the body"),
+             d);
+    snprintf(fix, sizeof fix, "%s",
+             tulpar::i18n::tr_en("sayaci yalniz dongu basligi / son adim degistirsin",
+                                 "let only the loop header / final step change the counter"));
+    break;
+  case TLW_WRITE:
+    snprintf(why_msg, sizeof why_msg, "%s",
+             tulpar::i18n::tr_en("govdede int OLMAYAN bir eleman yazmasi var (diziyi "
+                                 "kutulayabilir)",
+                                 "the body writes a non-int element (it could box the array)"));
+    snprintf(fix, sizeof fix, "%s",
+             tulpar::i18n::tr_en("int diziye yalniz int ifade yazin; ondalik ise ayri bir "
+                                 "diziye alin",
+                                 "write only int expressions to an int array; keep floats in "
+                                 "a separate array"));
+    break;
+  case TLW_W_BOUND:
+    snprintf(why_msg, sizeof why_msg, "%s",
+             tulpar::i18n::tr_en("while kosulunun siniri bir AD degil",
+                                 "the while condition's bound is not a NAME"));
+    snprintf(fix, sizeof fix,
+             tulpar::i18n::tr_en("`int n = len(%s); while (%s < n) { ...; %s = %s + 1; }` "
+                                 "ya da `for (int %s = 0; %s < len(%s); %s++)`",
+                                 "`int n = len(%s); while (%s < n) { ...; %s = %s + 1; }` "
+                                 "or `for (int %s = 0; %s < len(%s); %s++)`"),
+             a, v, v, v, v, v, a, v);
+    break;
+  case TLW_W_STEP:
+    snprintf(why_msg, sizeof why_msg,
+             tulpar::i18n::tr_en("while govdesinin SON deyimi `%s = %s + <adim>` degil",
+                                 "the last statement of the while body is not `%s = %s + <step>`"),
+             v, v);
+    snprintf(fix, sizeof fix, "%s",
+             tulpar::i18n::tr_en("adimi govdenin son deyimi yapin",
+                                 "make the step the last statement of the body"));
+    break;
+  case TLW_W_UB_REBIND:
+    snprintf(why_msg, sizeof why_msg,
+             tulpar::i18n::tr_en("sinir/adim `%s` dongude degisiyor",
+                                 "the bound/step `%s` changes inside the loop"),
+             d);
+    snprintf(fix, sizeof fix, "%s",
+             tulpar::i18n::tr_en("siniri ve adimi dongu disinda sabitleyin",
+                                 "fix the bound and step outside the loop"));
+    break;
+  default:
+    return;
+  }
+  fprintf(stderr, "%s: `%s[%s]` %s — %s\n",
+          tulpar::i18n::tr_en("performans ipucu", "performance hint"), a, v,
+          tulpar::i18n::tr_en("sinir denetimli kaldi", "stays bounds-checked"), why_msg);
+  fprintf(stderr, "  --> %s:%d\n",
+          backend->source_filename && *backend->source_filename ? backend->source_filename
+                                                                : "(stdin)",
+          line);
+  fprintf(stderr, "    = %s: %s\n", tulpar::i18n::tr_en("ipucu", "hint"), fix);
 }
 
 // Suggestion-aware error reporter. Wraps report_codegen_error and appends
@@ -11309,6 +11451,25 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     long long w_step_const = 0;
     int w_incl = 0;
     const char *w_saved_ivar[4] = {nullptr, nullptr, nullptr, nullptr};
+    // Performans ipucu (K167): bicim kanitlanamadiysa ve govde bir diziyi
+    // kosul degiskeniyle indeksliyorsa nedenini soyle.
+    if (perf_hints_enabled() && backend->shape_count > 0 && backend->loop_depth == 0 &&
+        node->condition && node->condition->type == AST_BINARY_OP &&
+        node->condition->left && node->condition->left->type == AST_IDENTIFIER &&
+        node->condition->left->name) {
+      const char *detail = nullptr;
+      int why = tulpar_while_index_why(node->condition, node->body, &detail);
+      if (why != TLW_OK) {
+        for (int i = 0; i < backend->shape_count; i++) {
+          if (tulpar_body_indexes_by(node->body, backend->shape_cache[i].name,
+                                     node->condition->left->name)) {
+            emit_perf_hint(backend, node->line, backend->shape_cache[i].name,
+                           node->condition->left->name, why, detail);
+            break;
+          }
+        }
+      }
+    }
     if (backend->shape_count > 0 &&
         (backend->loop_depth == 0 || getenv("TULPAR_X_NEST")) &&
         tulpar_while_index_proven(node->condition, node->body, &w_ivar, &w_ub,
@@ -11452,6 +11613,15 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           backend->shape_cache[i].proven_ivar = ivar;
           ver_count++;
           if (getenv("TULPAR_DBG_VER")) fprintf(stderr, "[ver] %s[%s]\n", backend->shape_cache[i].name, ivar);
+        } else if (perf_hints_enabled() && node->init->name &&
+                   tulpar_body_indexes_by(node->body, backend->shape_cache[i].name,
+                                          node->init->name)) {
+          const char *detail = nullptr;
+          int why = tulpar_loop_index_why(node->init, node->condition, node->body,
+                                          node->increment, backend->shape_cache[i].name,
+                                          &detail);
+          emit_perf_hint(backend, node->line, backend->shape_cache[i].name,
+                         node->init->name, why, detail);
         }
       }
     }

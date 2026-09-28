@@ -585,6 +585,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # PERFORMANS IPUCU (K167): TULPAR_PERF_HINTS=1 kanitli erisim kurulamayan
+    # dongunun nedenini soyler; kanitli donguye ipucu basmaz, varsayilan kapali.
+    if [ -x tests/perf_ipucu.sh ]; then
+        if ! bash tests/perf_ipucu.sh ./tulpar; then
+            echo -e "${RED}performans ipucu kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # arr_debox YARISI (FINDINGS T4): N thread ayni kutusuz int[]'i ayni anda
     # ilk kez kutulayan okuma yoluna sokuluyor; dizi TEK KEZ cevrilmeli. Kilit
     # "gereksiz" diye sokulurse baska hicbir sey kirmizi olmaz. Kapi kendi

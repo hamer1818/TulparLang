@@ -839,6 +839,28 @@ biçimde yakalanamayan bir sınıf, o yüzden ihlal imkânsız kılındı.
 İğneleme bir de **ölü kod** buldu: `array_fill`deki negatif kelepçe
 gereksizdi (`n > 0` zaten eliyor), kaldırıldı.
 
+### Eklendi — performans ipucu: `TULPAR_PERF_HINTS=1` kanıtlı erişimin neden kurulamadığını söylüyor
+
+- Kanıtlı (sınır denetimsiz, dalsız, vektörleşebilen) dizi erişimi
+  kurulamayınca erişim **sessizce** bekçili yola düşüyordu. Fark büyük:
+  `for (int i = 0; i < n; i++) s = s + a[i];` ile `i < len(a)` — 20M int,
+  5 tur toplama **256 ms → 11 ms** (bu makine, 2026-09-28) — ve hiçbir şey
+  bunu söylemiyordu (Tuzaklar: "açık bir iş kalemi").
+- `TULPAR_PERF_HINTS=1 tulpar build x.tpr`: en dış `for`/`while`
+  döngüsünde gövde bir diziyi sayaçla indeksliyor ama kanıt kurulamıyorsa
+  nedeni ve çaresi stderr'e: sınır bir ad (`i < n` → `i < len(a)` yaz),
+  sınır başka dizinin uzunluğu, `<=`/`!=` koşulu, sabit olmayan başlangıç ya
+  da adım, sayacın gövdede yeniden atanması, int olmayan eleman yazması
+  (diziyi kutulayabilir), `while (i < len(a))` (sınır bir ad olmalı), adımın
+  son deyim olmaması, sınırın döngüde değişmesi. Neden, kanıt
+  fonksiyonlarının adımlarını aynı sırayla yürüyen tanı fonksiyonlarından
+  (`tulpar_*_index_why`) geliyor; karar kanıtın kendisinde kalıyor.
+- Varsayılan **kapalı**; hata değil (derleme sonucu değişmiyor).
+- Nöbetçi: `tests/perf_ipucu.sh` 9/9 (`build.sh test`e bağlı): dört neden
+  sınıfı doğru satırda, kanıtlı döngüye ipucu **yok** (pozitif kontrol),
+  değişken yokken sessiz, program sonucu doğru. Eski derleyiciyle 5'i kırmızı.
+  14 kıyasın optimizasyon sonrası IR'ı birebir aynı.
+
 ### Performance — dizgi sabitleri bir kez ayrılıyor (interning)
 
 Her `AST_STRING_LITERAL` **değerlendirmesi** yeni bir `ObjString` ayırıyordu —

@@ -531,3 +531,131 @@ extern "C" int tulpar_loop_uses_len(ASTNode_C *cond, ASTNode_C *body,
   walk_all(incr, visit_len_of, &c);
   return c.used ? 1 : 0;
 }
+
+// ---- K167 (2026-09-28): kanit neden kurulamadi (performans ipucu) ----------
+//
+// Kanit kurulamayinca erisim SESSIZCE bekcili yola dusuyordu; `i < n` ile
+// `i < len(a)` arasindaki fark birkac kat ama hicbir sey soylemiyordu
+// (Tuzaklar: "acik bir is kalemi"). Asagidakiler kanit fonksiyonlarinin
+// adimlarini AYNI SIRAYLA yuruyup ilk dusen adimi adlandirir. Kanit karari
+// burada VERILMIYOR — codegen tulpar_*_index_proven'e bakiyor; bunlar yalniz
+// o "hayir" dediginde cagriliyor.
+
+extern "C" int tulpar_loop_index_why(ASTNode_C *init, ASTNode_C *cond, ASTNode_C *body,
+                                     ASTNode_C *incr, const char *array_name,
+                                     const char **detail_out) {
+  if (detail_out) *detail_out = nullptr;
+  if (!init || init->type != AST_VARIABLE_DECL || !init->name || !init->right ||
+      init->right->type != AST_INT_LITERAL || init->right->value.int_value < 0)
+    return TLW_INIT;
+  const char *ivar = init->name;
+  if (!cond || cond->type != AST_BINARY_OP || cond->op != TOKEN_LESS || !cond->left ||
+      cond->left->type != AST_IDENTIFIER || !cond->left->name ||
+      strcmp(cond->left->name, ivar) != 0)
+    return TLW_COND_OP;
+  ASTNode_C *rhs = cond->right;
+  const bool is_len = rhs && rhs->type == AST_FUNCTION_CALL && rhs->name &&
+                      (strcmp(rhs->name, "len") == 0 || strcmp(rhs->name, "length") == 0) &&
+                      rhs->argument_count == 1 && rhs->arguments && rhs->arguments[0] &&
+                      rhs->arguments[0]->type == AST_IDENTIFIER && rhs->arguments[0]->name;
+  if (!is_len) {
+    if (rhs && rhs->type == AST_IDENTIFIER && rhs->name) {
+      if (detail_out) *detail_out = rhs->name;
+      return TLW_BOUND_NAME;
+    }
+    return TLW_BOUND_OTHER;
+  }
+  if (strcmp(rhs->arguments[0]->name, array_name) != 0) {
+    if (detail_out) *detail_out = rhs->arguments[0]->name;
+    return TLW_BOUND_OTHER;
+  }
+  bool incr_ok = false;
+  if (incr && incr->type == AST_INCREMENT && incr->name && !incr->left &&
+      strcmp(incr->name, ivar) == 0) {
+    incr_ok = true;
+  } else if (incr && incr->type == AST_ASSIGNMENT && incr->name && !incr->left &&
+             strcmp(incr->name, ivar) == 0 && incr->right &&
+             incr->right->type == AST_BINARY_OP && incr->right->op == TOKEN_PLUS) {
+    ASTNode_C *a = incr->right->left, *b = incr->right->right;
+    incr_ok = a && b && a->type == AST_IDENTIFIER && a->name && strcmp(a->name, ivar) == 0 &&
+              b->type == AST_INT_LITERAL && b->value.int_value > 0;
+  }
+  if (!incr_ok) return TLW_INCR;
+  if (tulpar_loop_rebinds_name(nullptr, body, nullptr, ivar)) {
+    if (detail_out) *detail_out = ivar;
+    return TLW_REBIND;
+  }
+  WriteCtx wc{IntCtx{ivar}, false};
+  walk_all(body, visit_elem_write_ok, &wc);
+  walk_all(cond, visit_elem_write_ok, &wc);
+  walk_all(incr, visit_elem_write_ok, &wc);
+  if (wc.unsafe) return TLW_WRITE;
+  return TLW_OK;
+}
+
+extern "C" int tulpar_while_index_why(ASTNode_C *cond, ASTNode_C *body,
+                                      const char **detail_out) {
+  if (detail_out) *detail_out = nullptr;
+  if (!cond || cond->type != AST_BINARY_OP ||
+      (cond->op != TOKEN_LESS && cond->op != TOKEN_LESS_EQUAL) || !cond->left ||
+      cond->left->type != AST_IDENTIFIER || !cond->left->name)
+    return TLW_COND_OP;
+  const char *ivar = cond->left->name;
+  ASTNode_C *r = cond->right;
+  if (!r || r->type != AST_IDENTIFIER || !r->name || strcmp(r->name, ivar) == 0)
+    return TLW_W_BOUND;
+  const char *ub = r->name;
+  if (!body || body->type != AST_BLOCK || body->statement_count < 1 || !body->statements)
+    return TLW_W_STEP;
+  const char *step = nullptr;
+  long long step_const = 0;
+  if (!stmt_is_step(body->statements[body->statement_count - 1], ivar, &step, &step_const) ||
+      (step && strcmp(step, ivar) == 0)) {
+    if (detail_out) *detail_out = ivar;
+    return TLW_W_STEP;
+  }
+  for (int i = 0; i < body->statement_count - 1; i++)
+    if (tulpar_loop_rebinds_name(nullptr, body->statements[i], nullptr, ivar)) {
+      if (detail_out) *detail_out = ivar;
+      return TLW_REBIND;
+    }
+  if (tulpar_loop_rebinds_name(cond, body, nullptr, ub)) {
+    if (detail_out) *detail_out = ub;
+    return TLW_W_UB_REBIND;
+  }
+  if (step && tulpar_loop_rebinds_name(cond, body, nullptr, step)) {
+    if (detail_out) *detail_out = step;
+    return TLW_W_UB_REBIND;
+  }
+  WriteCtx wc{IntCtx{ivar}, false};
+  walk_all(body, visit_elem_write_ok, &wc);
+  walk_all(cond, visit_elem_write_ok, &wc);
+  if (wc.unsafe) return TLW_WRITE;
+  return TLW_OK;
+}
+
+struct IndexedByCtx {
+  const char *arr;
+  const char *ivar;
+  bool found;
+};
+
+static bool visit_indexed_by(ASTNode_C *n, void *p) {
+  IndexedByCtx *c = (IndexedByCtx *)p;
+  if (n->type == AST_ARRAY_ACCESS && n->left && n->left->type == AST_IDENTIFIER &&
+      n->left->name && strcmp(n->left->name, c->arr) == 0 && n->index &&
+      n->index->type == AST_IDENTIFIER && n->index->name &&
+      strcmp(n->index->name, c->ivar) == 0) {
+    c->found = true;
+    return false;
+  }
+  return true;
+}
+
+extern "C" int tulpar_body_indexes_by(ASTNode_C *body, const char *array_name,
+                                      const char *ivar) {
+  if (!body || !array_name || !ivar) return 0;
+  IndexedByCtx c{array_name, ivar, false};
+  walk_all(body, visit_indexed_by, &c);
+  return c.found ? 1 : 0;
+}

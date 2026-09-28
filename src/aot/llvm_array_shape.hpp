@@ -35,4 +35,30 @@ extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
 extern "C" int tulpar_loop_uses_len(ASTNode_C *cond, ASTNode_C *body,
                                     ASTNode_C *incr, const char *name);
 
+// PERFORMANS IPUCU (K167): kanit NEDEN kurulamadi? Kanit fonksiyonlarinin
+// adimlarini ayni sirayla yeniden yuruyup ilk dusen adimin kodunu verir
+// (0 = kanitli). `detail_out` sinirin/adimin ADINI tasir (yoksa NULL).
+// Karar degil yalniz TANI: kanitin kendisi yukaridaki fonksiyonlarda kalir.
+enum TulparLoopWhy {
+  TLW_OK = 0,
+  TLW_INIT,          // for: sayac `int i = <sabit >= 0>` ile baslamiyor
+  TLW_COND_OP,       // kosul `i < ...` biciminde degil
+  TLW_BOUND_NAME,    // for: sinir bir AD (`i < n`), `len(a)` degil
+  TLW_BOUND_OTHER,   // for: sinir baska dizinin uzunlugu / baska ifade
+  TLW_INCR,          // for: artim `i++` / `i = i + K` (K > 0) degil
+  TLW_REBIND,        // sayac govdede yeniden ataniyor
+  TLW_WRITE,         // govdede int OLMAYAN (kutulayabilen) eleman yazmasi
+  TLW_W_BOUND,       // while: sinir bir AD degil (`i < len(a)`)
+  TLW_W_STEP,        // while: son deyim `v = v + ADIM` degil
+  TLW_W_UB_REBIND,   // while: sinir ya da adim dongude degisiyor
+};
+extern "C" int tulpar_loop_index_why(ASTNode_C *init, ASTNode_C *cond, ASTNode_C *body,
+                                     ASTNode_C *incr, const char *array_name,
+                                     const char **detail_out);
+extern "C" int tulpar_while_index_why(ASTNode_C *cond, ASTNode_C *body,
+                                      const char **detail_out);
+// Govde `<dizi>[<ad>]` erisimi iceriyor mu (ipucu yalniz o zaman anlamli).
+extern "C" int tulpar_body_indexes_by(ASTNode_C *body, const char *array_name,
+                                      const char *ivar);
+
 #endif
