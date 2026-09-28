@@ -1,0 +1,55 @@
+// `@frame` ISTISNALI yollar (K038, 2026-09-28): throw kontrol noktasini
+// sizdirmiyor, istisna degeri drop'tan sag cikiyor, yigin doluysa (ic ice /
+// ozyinelemeli @frame) yakalanabilir hata.
+//
+// Ayri paket cunku @frame'in catch'i istisnayi YENIDEN firlatiyor ve #404'ten
+// once MinGW'de bu sureci cokertiyordu (cikis 127, errors.test.tpr ile ayni
+// hata); cokme istisnasiz yollari (frame.test.tpr) da gotururdu.
+// Calistir (depo kokunden): ./tulpar tests/frame_istisna.test.tpr
+import "test";
+
+@frame
+func etiket(int x): str {
+    str s = "v" + toString(x);
+    if (x < 0) { throw "negatif: " + toString(x); }
+    return s;
+}
+
+@frame
+func derin(int n): int {
+    if (n == 0) { return 0; }
+    return derin(n - 1) + 1;
+}
+
+func run_istisna_kalici() {
+    str yakalanan = "";
+    try { str x = etiket(-5); } catch (e) { yakalanan = toString(e); }
+    assert_eq_str(yakalanan, "negatif: -5");       // istisna drop'tan sag cikti
+}
+
+func run_throw_sizdirmiyor() {
+    int once = arena_save();
+    arena_drop(once);
+    for (int i = 0; i < 500; i++) {
+        try { str w = etiket(-1); } catch (e) { }
+    }
+    int sonra = arena_save();
+    arena_drop(sonra);
+    assert_eq_int(sonra, once);                    // 500 throw, sifir sizinti
+}
+
+func run_yigin_dolu_sessiz_degil() {
+    assert_eq_int(derin(10), 10);
+    str msg = "";
+    try { int d = derin(40); } catch (e) { msg = toString(e); }
+    assert_contains(msg, "kontrol noktasi yigini dolu");
+    int cp = arena_save();                         // hata sonrasi yigin temiz
+    arena_drop(cp);
+    assert(cp < 4, "yigin temizlenmedi");
+}
+
+print("=== @frame istisna ===");
+test("istisna degeri drop'tan sag cikiyor", "run_istisna_kalici");
+test("throw kontrol noktasini sizdirmiyor", "run_throw_sizdirmiyor");
+test("yigin dolu: yakalanabilir hata", "run_yigin_dolu_sessiz_degil");
+test_summary();

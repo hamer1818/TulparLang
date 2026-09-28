@@ -6,9 +6,11 @@
 // sizar ve sonra arena_save -1 doner (geri sarma durur, bellek birikir).
 // `@frame func` ayristiricida seker aciliyor: girişte arena_save, her
 // cikista (return / throw / sona dusme) arena_drop; donus degeri ve istisna
-// `persist` ile kalici bellege kopyalaniyor. Yigin doluysa (ic ice/ozyineli
-// @frame) yakalanabilir hata — sessiz degil.
-// Bellek (tepe RSS) kapisi ve hata yollari: tests/frame_hatalari.sh.
+// `persist` ile kalici bellege kopyalaniyor.
+// ISTISNALI yollar (throw, yigin dolu hatasi): tests/frame_istisna.test.tpr —
+// ayri, cunku MinGW'de yeniden firlatma sureci cokertiyor (Windows'ta o paket
+// bilinen hata olarak atlaniyor; duzeltmesi #404). Bellek (tepe RSS) kapisi ve
+// hata yollari: tests/frame_hatalari.sh.
 // Calistir (depo kokunden): ./tulpar tests/frame.test.tpr
 import "test";
 
@@ -20,7 +22,6 @@ func etiket(int x): str {
     str s = "v" + toString(x);
     for (int i = 0; i < 3; i++) { s = s + "."; }
     if (x > 2) { return s + "!"; }                 // erken donus
-    if (x < 0) { throw "negatif: " + toString(x); }
     push(kalici, "k" + toString(x));               // global'e: bariyerle kalici
     return s;
 }
@@ -39,39 +40,9 @@ func yan_etki(int n) {
     }
 }
 
-@frame
-func derin(int n): int {
-    if (n == 0) { return 0; }
-    return derin(n - 1) + 1;
-}
-
-// ⚠ ISTISNALI SENARYOLAR UST DUZEYDE kosuyor, test() icinde degil: test()
-// fonksiyonu call() ile cagiriyor ve MinGW'de call() ile dagitilan cercevede
-// YENIDEN firlatilan throw sureci cokertiyor (errors.test.tpr'yi Windows'ta
-// atlatan ayni bilinen hata; duzeltmesi #404). @frame'in catch'i yeniden
-// firlatiyor, yani bu senaryolar oraya girerse Windows'ta paket duser.
-// Sonuclar global'lere yaziliyor, test()'ler yalniz iddia ediyor.
-str g_yakalanan = "";
-try { str x = etiket(-5); } catch (e) { g_yakalanan = toString(e); }
-int g_once = arena_save();
-arena_drop(g_once);
-for (int i = 0; i < 500; i++) {
-    str q = etiket(4);
-    yan_etki(5);
-    try { str w = etiket(-1); } catch (e) { }
-}
-int g_sonra = arena_save();
-arena_drop(g_sonra);
-int g_derin10 = derin(10);
-str g_derin_msg = "";
-try { int d = derin(40); } catch (e) { g_derin_msg = toString(e); }
-int g_derin_cp = arena_save();
-arena_drop(g_derin_cp);
-
-func run_donus_ve_istisna() {
+func run_donus() {
     assert_eq_str(etiket(3), "v3...!");
     assert_eq_str(etiket(1), "v1...");
-    assert_eq_str(g_yakalanan, "negatif: -5");     // istisna drop'tan sag cikti
     assert_eq_str(kalici[len(kalici) - 1], "k1");
 }
 
@@ -83,18 +54,19 @@ func run_struct_donus() {
 }
 
 func run_yigin_sizmiyor() {
-    assert_eq_int(g_sonra, g_once);                // 1500 cikis, sifir sizinti
-}
-
-func run_yigin_dolu_sessiz_degil() {
-    assert_eq_int(g_derin10, 10);
-    assert_contains(g_derin_msg, "kontrol noktasi yigini dolu");
-    assert(g_derin_cp < 4, "yigin temizlenmedi");  // hata sonrasi yigin temiz
+    int once = arena_save();
+    arena_drop(once);
+    for (int i = 0; i < 500; i++) {
+        str q = etiket(4);
+        yan_etki(5);
+    }
+    int sonra = arena_save();
+    arena_drop(sonra);
+    assert_eq_int(sonra, once);                    // 1000 cikis, sifir sizinti
 }
 
 print("=== @frame ===");
-test("donus degeri ve istisna kalici", "run_donus_ve_istisna");
+test("donus degeri kalici, global'e yazilan kalici", "run_donus");
 test("struct donduren @frame", "run_struct_donus");
-test("return/throw/void: kontrol noktasi sizmiyor", "run_yigin_sizmiyor");
-test("yigin dolu: yakalanabilir hata", "run_yigin_dolu_sessiz_degil");
+test("return/void: kontrol noktasi sizmiyor", "run_yigin_sizmiyor");
 test_summary();

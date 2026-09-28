@@ -1477,8 +1477,12 @@ alternatifi üretilen kodun sessizce yanlış adrese yazmasıydı.
   arşivlerin numaralaması değişmez); bilinmeyen nitelik, fonksiyonsuz nitelik
   ve `@frame @no_alloc` birlikte açık hata. Korpusta `@` kullanımı yoktu
   (lexer reddediyordu) — kırılan program yok.
-- Nöbetçi: `tests/frame.test.tpr` (4 test: dönüş/istisna kalıcı, struct
-  dönüşü, 1500 çıkışta sıfır sızıntı, yığın dolu hatası),
+- Windows (MinGW): `@frame`in catch'i istisnayı yeniden fırlatıyor; #404'ten
+  önce bu süreci çökertiyordu (`errors.test.tpr`'yi atlatan aynı hata, CI'da
+  çıkış 127). #404 birleştikten sonra istisna yolları Windows'ta da koşuyor.
+- Nöbetçi: `tests/frame.test.tpr` (3 test: dönüş kalıcı, struct dönüşü,
+  1000 çıkışta sıfır sızıntı), `tests/frame_istisna.test.tpr` (3 test:
+  istisna kalıcı, 500 throw'da sıfır sızıntı, yığın dolu hatası),
   `tests/frame_hatalari.sh` 8/8 (5 ayrıştırma hatası + tepe RSS kapısı,
   @frame'siz sürümün büyümesi pozitif kontrol; /proc yoksa açıkça atlanır;
   eski derleyiciyle 7'si kırmızı), typeinfer `fail/28_no_alloc.tpr`
