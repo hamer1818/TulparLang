@@ -188,7 +188,7 @@ if [ "$ACTION" = "suites" ]; then
     #     icin atlaniyor; Linux ve macOS'ta KOSUYOR, yani kapsama kaybi yok.
     #
     # Atlama SESSIZ DEGIL: her biri ayri bir satir basiyor ve ozette sayiliyor.
-    WINDOWS_SKIP_SUITES=("errors.test.tpr")
+    WINDOWS_SKIP_SUITES=()
     for suite in tests/*.test.tpr; do
         [ -f "$suite" ] || continue
         SUITE_N=$((SUITE_N + 1))
