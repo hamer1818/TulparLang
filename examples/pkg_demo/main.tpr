@@ -1,0 +1,19 @@
+// Paket yöneticisi örneği — registry bağımlılığı, kilit ve vendor.
+//
+//   cd examples/pkg_demo
+//   tulpar pkg install     # çevrimdışı çalışır: lock + tulpar_modules/ hazır
+//   tulpar main.tpr
+//
+// `tulpar.toml` `demo = "^1.0.0"` istiyor; `tulpar.lock` onu 1.0.1'e ve
+// kaynağın sha256'sına sabitliyor. `tulpar_modules/demo/demo.tpr` o
+// baytların vendor edilmiş kopyası. Üçü birlikte depoya girer: install
+// diskteki dosyanın özeti lock'la tutunca registry'ye HİÇ gitmez
+// ("installed: 0, skipped: 1"). Dosya bozulursa ya da silinirse
+// registry'den yeniden indirir ve baytlar lock'la tutmazsa REDDEDER.
+// `tulpar pkg install --update` aralık içindeki en yeni sürüme geçer.
+// Sınayan: tests/pkg_registry_audit.py.
+
+import "demo";
+
+hello();
+goodbye();

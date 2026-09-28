@@ -1012,6 +1012,10 @@ tamamlama `__` önekli derleyici geçicilerini (`__t0`, `__r0`) göstermez.
 - `tests/pkg_registry_audit.py`'ye dört denetim: ölü `url` + aynasız düşüyor
   (pozitif kontrol), ölü `url` + canlı ayna kuruyor ve lock aynayı kaydediyor,
   `pkg add` sonrası `mirrors` duruyor, bozuk `mirrors` hata.
+- Örnek proje `examples/pkg_demo/` (K171): `tulpar.toml` + `tulpar.lock` +
+  vendor edilmiş `tulpar_modules/demo` (registry'deki `demo@1.0.1`'in
+  baytları). `pkg install` ağa çıkmadan kuruyor; denetim hem bunu hem
+  programın çıktısını ölçüyor.
 
 ### Düzeltildi / Eklendi — `pkg install`: lock sürümü sabitliyor, `.tpkg` önbelleği, `--update`
 
