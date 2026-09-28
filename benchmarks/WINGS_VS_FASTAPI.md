@@ -61,7 +61,9 @@ CRUD. See STATUS.md → "Runtime + codegen".
   under load) — native AOT doing what it should.
 - **RPS:** inconclusive here (client-bound). A native load tool is needed to
   find Wings' true ceiling, and `serve()` is single-threaded — `listen_pool()`
-  would scale across cores.
+  would scale across cores. *(Since done: `benchmarks/loadtest.c` is that
+  native tool; ceilings and the turn-paired Node comparison are in
+  [WINGS_STRESS.md](WINGS_STRESS.md).)*
 - **Footprint at rest + deploy:** Wings clearly lighter (single 2 MB binary,
   no runtime).
 - **Memory under load:** the benchmark caught a per-request leak in Wings; it

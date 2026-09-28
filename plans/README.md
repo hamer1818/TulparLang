@@ -16,7 +16,7 @@ oluşturulma sırasıdır.
 | 03 | [typeinfer strict mode](03_typeinfer_strict.md) | ✅ DONE (PR'lar #32 + #43) | 1-2 PR | Düşük |
 | 04 | [Native record/struct types (unboxed)](04_native_structs.md) | ✅ DONE (PR'lar #48–#50) | 4-6 PR | Yüksek |
 | 05 | [Generics (parametric polymorphism)](05_generics.md) | 🔲 PROPOSED | 5-8 PR | Yüksek |
-| 06 | [`async` / `await` keywords](06_async_await.md) | 🔲 PROPOSED | 4-6 PR | Yüksek |
+| 06 | [`async` / `await` keywords](06_async_await.md) | ✅ v1 DONE (stackful coroutine; PR4 llvm.coro geçersiz; kalanlar — Future tipi, Wings, iptal — plans/09'da) | 4-6 PR | Yüksek |
 | 07 | [Debugger MVP (DWARF + DAP)](07_debugger.md) | ✅ DONE (PR'lar #160–#223) | 5-7 PR | Yüksek |
 | 08 | [Oyun dili P0: `enum`, kutusuz float struct, çoklu dönüş](08_oyun_dili_p0.md) | ✅ DONE (P0 + P1.1; P1 kalanı → 09) | 3 PR (+1 motor) | Orta |
 | 09 | [Eksik envanteri: istenip yapılmayanlar (383 talep, 145 açık)](09_eksik_envanteri.md) | 🔶 IN PROGRESS (3 kol) | çok PR | Karışık |

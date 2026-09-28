@@ -16,18 +16,26 @@
 
 ## What is TulparLang?
 
-**TulparLang** is an open-source, statically-typed, ahead-of-time compiled
-programming language built on **LLVM** (18 through 22). It pairs
+**TulparLang** is an open-source, ahead-of-time compiled programming
+language built on **LLVM** (18 through 22), with static type checking:
+annotated code is checked at compile time and lowered to native types,
+while unannotated parameters and `json` values stay dynamically typed
+(boxed) at run time. It pairs
 Python-shaped syntax with native binary performance. On a nine-language microbenchmark suite
 where every language reads its workload size from the environment and
-the outputs are verified to match, Tulpar AOT **beats C on `fib`
-(2.7× vs `gcc -O3 -march=native -flto`) and ties it on `sieve` and
+the outputs are verified to match, Tulpar AOT **beats C on `fib`**
+(by a margin that grows with `n` — a point on a curve, not a constant:
+2.7× vs `gcc -O3 -march=native -flto` in the flag-matrix run, 4× vs
+`gcc -O2` at n=32 in `benchmarks/fair/RESULTS.md`) and ties it on `sieve` and
 `intloop`**, while C takes `arrayiter` and `strcat` once given equal
 flags and the same integer-formatting routine. See
 [Performance](#performance) for the flag matrix and the follow-up
 attribution run. On a localhost JSON-API
-micro-benchmark the `listen_async` Wings listener serves **~1.9× the
-throughput of Node.js' built-in `http`**. It ships with a
+micro-benchmark (2026-05, 4 connections) the `listen_async` Wings listener
+served **~1.9× the throughput of Node.js' built-in `http`**; a 2026-09-28
+re-measurement with a native load generator and 50 connections puts a
+single-threaded Wings at 1.3× single-process Node and a Wings worker pool
+at 0.8× Node cluster (details under [Performance](#performance)). It ships with a
 batteries-included standard library so you can build a production
 HTTP/HTTPS API without installing a single external dependency.
 
@@ -247,10 +255,13 @@ with SHA-256 checksums so re-installs are byte-stable.
 ## Why TulparLang
 
 - **Native speed.** LLVM AOT compilation, in C's performance class on
-  integer kernels: 2.7× C on `fib`, tied on `sieve` and `intloop`, and
-  far ahead of Node/Python/Java/C# throughout. On a localhost JSON-API microbenchmark the `listen_async`
-  Wings listener is **1.91× Node.js' `http`** and **2.91× CPython's
-  `ThreadingHTTPServer`** in throughput. See
+  integer kernels and scalar floating point: ahead of C on `fib` (the
+  margin grows with `n`), tied on `sieve`, `intloop` and `mandelbrot`, and
+  far ahead of Node/Python/Java/C# there. Float-array code is the
+  exception — still boxed, 11–27× C (`nbody`, `matmul`). On a localhost
+  JSON-API microbenchmark (2026-05) the `listen_async` Wings listener was
+  **1.91× Node.js' `http`** and **2.91× CPython's `ThreadingHTTPServer`**;
+  the 2026-09-28 re-measurement below is more modest. See
   [Performance](#performance) and
   [benchmarks/fair/README.md](benchmarks/fair/README.md) for the
   methodology.
@@ -381,14 +392,18 @@ Two further disclosures the numbers alone don't carry:
 #### What this suite does *not* establish
 
 Five integer/string kernels on one machine cannot support "fastest
-language". Not covered: floating point and SIMD (matmul, n-body,
-mandelbrot), allocation pressure and hash-map/JSON workloads — which is
-where the arena model's costs would actually appear — pointer chasing,
-sorting, multi-threaded scaling, RSS, and sustained-load p99 latency.
-The defensible reading is: Tulpar is **in C's performance class on
-integer kernels** and decisively ahead of Node/Python/Java/C#. Its flat
-loop and recursion codegen is C-class, not above it; the one verified
-win over C is `fib`.
+language". Floating point is now measured in the same harness
+([`benchmarks/fair/RESULTS.md`](benchmarks/fair/RESULTS.md)) and splits
+in two: scalar FP is C-class (`mandelbrot` 158.4 vs C 158.6 ms, ≈1.00×),
+float arrays are not (`nbody` 11.6× C, `matmul` 26.6× C) because
+`float[]` elements are still boxed. Not covered: SIMD, allocation
+pressure and hash-map/JSON workloads — which is where the arena model's
+costs would actually appear — pointer chasing, sorting, multi-threaded
+scaling, RSS, and sustained-load p99 latency. The defensible reading is:
+Tulpar is **in C's performance class on integer kernels and scalar FP**,
+an order of magnitude behind on float arrays, and decisively ahead of
+Node/Python/Java/C# on the integer side. Its flat loop and recursion
+codegen is C-class, not above it; the one verified win over C is `fib`.
 
 #### How these numbers are kept honest
 
@@ -433,6 +448,16 @@ closed form and "won" without executing them. The suite in
 > _Baked from local benchmark run (best of 5). Last run: **2026-05-21T08:23:24Z** UTC · commit [`d91f184`](../../commit/d91f184c4447c2607d73dca070c704faaf87fbf3) · runner `Windows` · `developer machine` (16 CPUs). Methodology + Local Run instructions: [benchmarks/CI.md](benchmarks/CI.md)._
 <!-- BENCH:META END -->
 
+
+> ⚠ **These tables are from 2026-05-21** (Windows dev machine, Python
+> client, 4/16 connections, single run — the pre-audit harness in
+> [benchmarks/CI.md](benchmarks/CI.md)). A 2026-09-28 re-measurement on
+> Linux (Ryzen 7 9800X3D, native `benchmarks/loadtest.c`, 50 keep-alive
+> connections, turn-paired, node v26.10.0) could **not** reproduce the
+> 1.6–2.8× lead: `listen_evented` vs single-process Node **1.29–1.32×**
+> (275k / 208k RPS), `listen_pool` vs Node `cluster` **0.81–0.83×**
+> (1.01M / 1.23M RPS — Node ahead across cores). See
+> [benchmarks/WINGS_STRESS.md](benchmarks/WINGS_STRESS.md).
 
 3000 GETs across 4 keep-alive connections, single localhost loop. Same
 JSON handler running on every server.

@@ -228,7 +228,7 @@ büyüme tabanı ölçülür — clang 1,604 · gcc 1,607 · Tulpar zincirsiz 1,
 | `stream_contract_smoke.py` | S4 üç fazlı akış | `_wings_stream_started` kancalarını sök |
 | `arena_contract_smoke.py` | `restore` bırakmaz / `drop` bırakır | kolları aynı yap |
 | `stack_growth_smoke.py` | R11, 13 şekil + **kaynaktan türetilen** 50 builtin (etiket `50/50` = ölçülen/keşfedilen) | bir makroyu ham `LLVMBuildAlloca`ya çevir · ya da bir `OVERRIDE`ı derlenmez yap (artık **sessiz atlamıyor**) |
-| `typecheck_corpus_scan.py` | korpus tanı tabanı (**metin** tutar), 233 dosya — `examples/**` özyinelemeli, `tests/typeinfer/` hariç | bir dosyaya tip hatası ekle (`examples/en/` dahil) |
+| `typecheck_corpus_scan.py` | korpus tanı tabanı (**metin** tutar), 233 dosya (2026-09-28: 242) — `examples/**` özyinelemeli, `tests/typeinfer/` hariç | bir dosyaya tip hatası ekle (`examples/en/` dahil) |
 | `truthiness.test.tpr` | S1 tablosu | — |
 | `thread_copy.test.tpr` | S7/S8 thread + handle | — |
 | `shared_json_read.test.tpr` | S6 paylaşılan okuma | — |
@@ -264,7 +264,10 @@ yanlıştı (stdout/stderr · `LC_ALL=C` dil çevirisi · büyük/küçük harf)
    ölçüldü, TLS'in sessiz SKIP'i sarı `ATLANDI` satırıyla görünür yapıldı.
    Ders: [[Tuzaklar]] 1m.
 5. **Sürüm etiketi kesilmedi.** `main`'de 5 kırıcı değişiklik birikti; SemVer
-   politikası (`CHANGELOG.md`) **MAJOR** diyor.
+   politikası (`CHANGELOG.md`) **MAJOR** diyor. **Güncelleme 2026-09-28:**
+   etiket kesildi ama MAJOR DEĞİL — beş kırıcı değişiklik `v3.13.2`
+   (2026-09-21, otomatik sürüm, yama) ile yayınlandı. Politika ile sürüm
+   arasındaki sapma CHANGELOG'daki kırıcı değişiklikler bölümüne yazıldı.
 
 ---
 
@@ -321,8 +324,8 @@ kapatıldı:
 | F1 | Yığın tarayıcısı **"50 builtin" deyip 49 ölçüyordu**: `join`in argümanı tek tırnaklıydı, program derlenmiyordu, `rc is None` dalı sessizce atlıyordu | tırnak düzeltildi; atlama artık **kırmızı**, etiket `ölçülen/keşfedilen` yazıyor | bir `OVERRIDE` bozuldu → `builtin taramasi (49/50) repeat (DERLENMEDI — olculmedi)` |
 | F2 | #19 kapısı `fprintf(stdout, …)` ve `puts(…)`'u **görmüyordu** (`\bprintf` bütün `fprintf`leri eliyor) | desen `f?printf\|f?puts`'a genişletildi, `stderr` muaf | üç sızıntı enjekte edildi, üçü de yakalandı; yetkili `stderr` muaf kaldı |
 | F3 | TypedValue kapısı `TypedValue a, b;` ve `TypedValue d[2];` biçimlerini **kaçırıyordu** | desen ilklendiricisiz HER bildirimi yakalar hâle getirildi | üç biçim enjekte edildi, üçü de yakalandı; temiz ağaçta 0 yanlış pozitif |
-| F4 | Korpus taraması `examples/en/`'i (30 dosya) **hiç görmüyordu** | `examples/**` özyinelemeli, `tests/typeinfer/` hariç — 198 → **233 dosya**, taban yine 14 | `examples/en/breakout.tpr`'ye tanı eklendi → kapı kırmızı |
-| F5 | `async.test.tpr`'nin `assert(dt < 50)` **duvar saati eşiği** macOS/arm64 CI'ı dört koşumda kırmıştı (gather bozulmadan) | iki kollu **fark** ölçümüne çevrildi (`esz * 2 < seri`) — orantılı yük altında düşmez | gather kolu seri yapıldı → kırmızı; marj: seri 60 ms / eşzamanlı 20 ms |
+| F4 | Korpus taraması `examples/en/`'i (30 dosya) **hiç görmüyordu** | `examples/**` özyinelemeli, `tests/typeinfer/` hariç — 198 → **233 dosya** (2026-09-28: 242), taban yine 14 (2026-09-27'den beri 0) | `examples/en/breakout.tpr`'ye tanı eklendi → kapı kırmızı |
+| F5 | `async.test.tpr`'nin `assert(dt < 50)` **duvar saati eşiği** macOS/arm64 CI'ı dört koşumda kırmıştı (gather bozulmadan) | iki kollu **fark** ölçümüne çevrildi (o gün `esz * 2 < seri`; macOS'ta bu da düştü, bugünkü biçim `seri - esz > GATHER_UYKU` — `tests/async.test.tpr` başlığında gerekçesiyle) — orantılı yük altında düşmez | gather kolu seri yapıldı → kırmızı; marj: seri 60 ms / eşzamanlı 20 ms |
 | F6 | D.1/D.2'nin sayıları **elle yazılmış tabloydu**, koşucusu yoktu — oysa S11 kararı ona dayanıyor | `benchmarks/fair/shapes.py` eklendi: dört şekil, C tabanı, çıktı mutabakatı, sıralama iddiası | çıktıyı ayırma → `AYRISIYOR`; sıralamayı bozma → `IDDIA CURUDU` |
 
 **F5, defterde ZATEN yazılı bir dersti** ([[Tuzaklar]] 6z, aynı sınıf, aynı

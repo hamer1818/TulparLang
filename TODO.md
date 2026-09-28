@@ -56,15 +56,17 @@ Mimari kararlar ve gerekçeleri:
       can, davranış listesi + ekle/sil, çoğalt/sil). Anlık-kip widget seti;
       sayı alanları hem sürüklenip hem yazılabiliyor. Detay: CHANGELOG.
 
-- [x] **Editör bağımsız uygulama oldu.** ✅ 2026-08-24 — `./editor`; menü şeridi,
+- [x] **Editör bağımsız uygulama oldu.** ✅ 2026-08-24 — `./editor` (bugün
+      adı `TameEngine`, `tools/package_tameengine.sh`); menü şeridi,
       araç çubuğu (OYNAT–DUR ortada), hiyerarşi | sahne görünümü | özellikler,
       konsol, durum çubuğu. Sahne görünümü render texture. TAB kaplaması
       kaldırıldı. Detay: CHANGELOG.
 
 - [x] **Editör komut satırından dosya açıyor.** ✅ 2026-08-24 —
-      `./editor benim_sahnem.json`; olmayan dosya yeni sahne demek. Dile
-      `args()` eklendi (üretilen `main` artık argc/argv alıyor). Bir
-      `tulpar editor` alt komutu hâlâ yapılabilir ama artık zorunlu değil.
+      `./editor benim_sahnem.json` (bugün `./TameEngine`); olmayan dosya yeni
+      sahne demek. Dile `args()` eklendi (üretilen `main` artık argc/argv
+      alıyor). `tulpar editor` alt komutu YAPILMAYACAK: yeni editör
+      tulpar-engine deposundaki `engine_editor`.
 
 - [x] **Editörün Unity/Unreal parçaları tamam.** ✅ 2026-08-24 — prefab dahil.
       (Hiyerarşide sürükle-bırak sıralama BİLEREK yapılmadı: bu motorda
@@ -113,7 +115,9 @@ Mimari kararlar ve gerekçeleri:
 - [x] **Kod üretimi.** ✅ 2026-08-24 — `sahne_kod3d()` + `scene3d_export.tpr`.
       Üretilen şey tek bir `kur()` FONKSİYONU (tam program değil) ki denklik
       ölçülebilsin. `build.sh suites` üretilen kodu derleyip çalıştırıyor ve
-      kurduğu sahneyi kaynakla karşılaştırıyor.
+      kurduğu sahneyi kaynakla karşılaştırıyordu — bu denklik kapısı
+      2026-09-22'de ÇIKARILDI (`build.sh`'teki "Kod üretimi DENKLİK" notu);
+      örnek duruyor, kapı yok.
 
 - [x] **`wasm/dist` arşivleri tazelendi.** ✅ 2026-08-24 — web hedefi bağlanıyor
       (`scene3d_data_game` .html/.js/.wasm üretiyor). `android/dist` duruyor
@@ -196,7 +200,8 @@ Mimari kararlar ve gerekçeleri:
       `su_altinda3d(id)` sorgusu, yüzme fiziği (azalmış yerçekimi + sürtünme +
       `zipla3` = yüzme vuruşu, zemin gerektirmez). Su EN SONDA çiziliyor: opak
       cisimlerden önce çizilirse derinlik tamponu altındaki her şeyi eler ve su
-      düz bir levhaya döner. Kaldırma kuvveti (yüzdürme) bilerek modellenmedi.
+      düz bir levhaya döner. Kaldırma kuvveti o gün bilerek modellenmedi
+      (2026-08-24'te geldi — hemen aşağıdaki madde).
       Detay: CHANGELOG.
 
 - [x] **Suda kaldırma kuvveti geldi.** ✅ 2026-08-24 — `yuz_davranis3d(id,
@@ -282,7 +287,9 @@ boşluklar; backlog'da yoklardı.
       zamanında çöp üretiyordu (ölçüldü: 140276196302865). Artık hata.
       Fixture'lar: typeinfer fail/07, fail/08, pass/07.
 
-- [x] **typeinfer fixture'ları artık MESAJI da denetliyor.** ✅ 2026-08-25 —
+- [x] **typeinfer fixture'ları artık MESAJI da denetliyor.** ✅ 2026-08-25
+      (o gün 19 fail fikstürünün 11'inde; 2026-09-27'den beri 19/19 ve
+      `run.sh` EXPECT'siz fikstürü reddediyor — #357) —
       `// EXPECT: <parça>` satırları. Yalnız çıkış koduna bakmak yetmiyordu:
       fonksiyon referansı tanısını kasten bozan iki deneme, YANLIŞ ama yine de
       sıfırdan farklı çıkış veren bir hata sayesinde fixture'lardan kaçtı.
@@ -430,9 +437,11 @@ boşluklar; backlog'da yoklardı.
       düzeltildi ve "Tarayıcıda" bölümü yazıldı.
       Belgelerdeki **197 API adının hepsi motora karşı doğrulandı** — uydurma
       ad yok. Site derleniyor (72 sayfa).
-      Yerel dalda commit edildi (`f955252`); **push YAPILMADI**.
+      Yerel dalda commit edildi (`f955252`); o gün **push YAPILMADI** —
+      2026-09-11'de tulpar-lang-web PR #18 ile birleşti ve yayında.
 
-- [ ] **`tulpar-lang-web` dal birleştirme kararı KULLANICININ.** Yerel dal
+- [x] **`tulpar-lang-web` dal birleştirme kararı** — KAPANDI: PR #18
+      (2026-09-11) birleşti, `games/*` master'da. Aşağısı o günün notu. Yerel dal
       `docs/debugger-and-tls`, `origin/master`'ın atası değil ve ikisi
       AYRIŞIK içerik taşıyor: master'da `games/{arcade,tame,build,quickstart}`
       var, bu dalda yok; bu dalda `games/{overview,scene3d,editor}` var,
@@ -450,6 +459,9 @@ boşluklar; backlog'da yoklardı.
       — koşucu yalnız `examples/*.tpr` üzerinde geziyordu, yani ikizler
       kaynaktan ayrışsa (yeniden adlandırılmış API, kaldırılmış builtin)
       kimse görmezdi. Artık hepsi compile-only olarak koşuyor.
+      **Güncelleme 2026-09-28:** YANLIŞ — 2026-09-22'den beri `GRAFIK_DESEN`
+      tame/arcade/scene3d import eden örnekleri atlıyor; `examples/en/`'in
+      30 dosyasının 30'u derlenmiyor.
 
       İkizleri yazarken İngilizce API adlarının bir kısmını yanlış tahmin
       ettim (`zone3d`, `self3`, `title3d`…); gerçekte hepsi VAR ama başka
@@ -457,7 +469,9 @@ boşluklar; backlog'da yoklardı.
       tutulmuş — eksik olan yalnız ikizlerdi.
 
 - [x] **Windows shim'leri: KARAR VERİLDİ, iş yok.** Natif Windows 3.13.0'da
-      bırakıldı; `PLATFORM_WINDOWS` dalları BİLEREK yerinde. Bunu bir görev
+      bırakıldı, 2026-09-21/22'de geri geldi (#340/#341) — shim'ler artık
+      `build-windows` CI işinde derlenip koşuyor, aşağıdaki "bakımsız ve test
+      edilmemiş" o günün durumu. `PLATFORM_WINDOWS` dalları BİLEREK yerinde. Bunu bir görev
       olarak taşımak yanlış — CLAUDE.md kararı zaten kayıtlı: sökmek
       soketler/thread'ler/dl/yollar boyunca büyük ve riskli bir refactor,
       desteklenen platformlarda görünür bir kazancı yok, durmasının maliyeti

@@ -147,14 +147,15 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > bölüm sistemi + codegen düzeltmeleri. GitHub Release'te 3-OS ikilileri +
 > Windows installer + GPG-imzalı SHA256SUMS.
 >
-> **Geliştirme (yayınlanmadı) — platform politikası:** 3.13.0'dan itibaren
-> **natif Windows desteklenmiyor**; Windows kullanıcıları **WSL** içinde Linux
-> sürümünü kullanıyor. CI'daki `build-windows` işi, Windows release varlıkları,
-> `build.bat`/`build.ps1`/`run_tests.*` ve Inno Setup installer kaldırıldı.
-> Kaynaktaki `PLATFORM_WINDOWS` dalları bilerek bırakıldı ama artık **bakımsız
-> ve test edilmemiş**. ⚠️ `main`'in branch protection ayarından `build-windows`
-> zorunlu check'i **elle kaldırılmalı**. Detay: CHANGELOG "natif Windows
-> desteği bırakıldı".
+> **Platform politikası (2026-09-28 itibarıyla):** natif Windows 3.13.0'da
+> bırakılmıştı, 2026-09-21/22'de **geri geldi** (#340, #341, #342): CI'daki
+> `build-windows` işi MSYS2 MINGW64 ile derliyor, örnekleri ve `build.sh
+> suites`i koşuyor, Inno Setup kurulumcusunu üretiyor; sürümde Windows
+> varlıkları var. `build-windows` dal korumasında **zorunlu** check'tir.
+> ⚠️ Buradaki eski metin "zorunlu check elle kaldırılmalı" diyordu; bu artık
+> **yanlış ve tehlikeli** (Windows kırmızısı sessizce birleşirdi). Ayrıntı:
+> `docs/PLATFORM_SUPPORT.md`. `build.bat`/`build.ps1` geri gelmedi; Windows'ta
+> derleme MSYS2 kabuğunda `build.sh` ile.
 >
 > **Geliştirme (yayınlanmadı) — 3D oyun katmanı:** TulparLang artık 3D oyun
 > yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **35 `tm3_*` builtin**
@@ -544,6 +545,9 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   `tests/kod_uretimi_tam.scene.json` (kutu+küre bölge, eylem+miktar+ses,
   tek atım, kapalı bölge, sesli/sessiz kural). Üç bozma da iğnelemeyle
   doğrulandı; ikisini yalnız yeni düzenek yakalıyor. → [[Scene3D]]
+  *(Tarihsel: denklik kapısı ve `tests/kod_uretimi_tam.scene.json`
+  2026-09-22'de (2d72fd0, #341) silindi — sahne hattı artık tulpar-engine
+  deposunda; `lib/scene3d.tpr`'yi bu depoda hiçbir kapı koşmuyor.)*
 
 - **`tulpar build` önbelleği import edilen modül değişikliklerini görmüyordu
   (2026-09-01):** önbellek denetimi yalnız ANA kaynağın ve sürücü ikilisinin
@@ -964,7 +968,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     - ✅ **Küçük cila turu (2026-06-22):** (1) **Wings banner tutarlılığı** —
       tüm serve modları ortak `_wings_print_banner(port, suffix)` helper'ını
       çağırıyor (renkli kutu + route tablosu her modda aynı, mod Server satırında,
-      sürüm v3.1). (2) **Wings TLS yük testi** (OpenSSL 3.5.5) — 1000 istek/50
+      sürüm o gün v3.1; bugün banner `Tulpar Wings v3.6`). (2) **Wings TLS yük testi** (OpenSSL 3.5.5) — 1000 istek/50
       paralel → 0 hata ~663 req/s, keep-alive ~1.5ms, stabil. (3) **DB
       per-connection `cache_size`** — `db_apply_pragmas` her bağlantıya
       `PRAGMA cache_size=-2048` (2 MiB, `TULPAR_DB_CACHE_KB` ile tunable) → pool'da
@@ -1588,7 +1592,8 @@ girildiğinde ne yapacağımı bilelim.
 
 **Durum (2026-08-04):** Faz 7, 8 ve 9 bitti; aşağıdaki maddelerin tamamı
 uygulandı ve `tests/scene3d_engine.test.tpr`de **49 headless test** ile
-korunuyor. Motor artık "gezilebilir sahne" değil, **üstüne oyun yazılabilir**:
+korunuyordu *(o paket 2026-09-22'de (2d72fd0, #341) silindi; sahne hattı
+tulpar-engine deposunda ölçülüyor)*. Motor artık "gezilebilir sahne" değil, **üstüne oyun yazılabilir**:
 bölüm sistemi, düşman AI, mermi, can/hasar, parçacık, karakter animasyonu,
 konumsal ses, kamera-duvar çarpışması, şekil farkında (küre/kapsül/OBB)
 çarpışma, katı gövde çözümü ve rampalı zemin var. Örnek:
@@ -1656,7 +1661,7 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 #### ✅ Güven altyapısı — hepsi kapandı
 
-- ✅ **54 test paketi artık CI'da (2026-08-04).** Bu paketler daha önce
+- ✅ **54 test paketi artık CI'da (2026-08-04; 2026-09-28'de 85).** Bu paketler daha önce
   HİÇBİR otomasyonda koşmuyordu — 49 testlik `scene3d_engine.test.tpr` dahil.
   `assert` hatası tam olarak bu körlükte yaşadı: paketler yeşil görünüyordu
   ama hiçbir şey doğrulamıyordu. Yeni `./build.sh suites` hedefi hepsini
@@ -1699,7 +1704,11 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
       onu öğretiyor ve `123456789012345678901234567890 * 2` için **`-2`** basıyordu
       (literal int64'e doyuyor, çarpım sarıyor). Bölüm, int64 sınırını ve taşma
       davranışını doğru gösteren bir bölümle değiştirildi.
-    - `input` arity **AÇIK, kasten dokunulmadı**: `input("You: ")` istemi
+    - `input` arity **DÜZELTİLDİ (a025b44, 2026-09-17)**: bugün
+      `VMValue aot_input(VMValue promptVal)` istemi basıyor;
+      `tests/dist_archive_audit.py` aynı committe genişletildi, ön-derlenmiş
+      arşivlerin kendisi yenilenmedi (plans/09 K174/K232). Aşağısı o günün
+      teşhisi: `input("You: ")` istemi
       **sessizce düşüyor** — `aot_input()` sıfır argümanlı (`runtime_bindings.cpp`)
       ve codegen argümanı okumadan atıyor, yani kullanıcı istemi hiç görmüyor
       (`examples/09_socket_server.tpr:38`, `09_socket_client.tpr:17`). Aile
@@ -1897,7 +1906,8 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   Artık `kovala` davranışının bir bayrağı ("duvarlari dolas"), biçimde
   `"path": 1`. Izgara ihtiyaç anında tembel kuruluyor, bölüm değişince
   geçersiz kılınıyor.
-  🟢 **Kalan:** ızgara statik — duvar TAŞINIRSA `nav_build3d` yeniden
+  ⏸ **Kalan (DONDURULDU — sahne hattı 2026-09-22'den beri tulpar-engine
+  deposunda; bu depoda iş açılmayacak):** ızgara statik — duvar TAŞINIRSA `nav_build3d` yeniden
   çağrılmalı. Artık sessiz değil: sahne denetimi hareketli duvar + yol bulma
   birlikteyken uyarıyor. Açık liste doğrusal taranıyor (ızgara tavanı 4096,
   yol birkaç karede bir hesaplandığı için ölçülebilir bir sorun değil).
@@ -1938,7 +1948,8 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     kilidi otomatik bırakılıyor (FPS modunda düğmeye tıklanamazdı).
   - Yan kazanç: `is_over3d()` / `bitti_mi3d()` ve `alive_count3d()` —
     arcade'de karşılıkları vardı, 3B'de yoktu.
-  - Regresyon: 9 test (`tests/scene3d_engine.test.tpr`, 52 → 61). Biri
+  - Regresyon: 9 test (`tests/scene3d_engine.test.tpr`, 52 → 61; paket
+    2026-09-22'de #341 ile silindi). Biri
     yazarken gerçek bir hata yakaladı: kanca `int` global'de saklanıyordu ve
     fonksiyon referansı natif i64'e kırpılıyordu — dosyadaki diğer kancalar
     zaten `var` kullanıyordu.
@@ -1959,7 +1970,9 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   ölçekliyor; seviye duraklat menüsündeki Ayarlar ekranından sürülüyor ve
   kayıt açıksa diske yazılıyor. Seviye ses aygıtı açılmadan önce de
   ayarlanabiliyor (C tarafında saklanıp aygıt açılınca uygulanıyor).
-- 🟢 **Menü katmanının kalan eksikleri.** arcade'de olan ama 3B'ye
+- ⏸ **Menü katmanının kalan eksikleri — DONDURULDU** (sahne/arayüz hattı
+  2026-09-22'de tulpar-engine deposuna devredildi; bu depoda iş açılmayacak).
+  arcade'de olan ama 3B'ye
   taşınmayanlar: rozet/başarım, skor tablosu, dil/FPS ayarı (dil sistem
   yerelinden geliyor, FPS'i motor sürmüyor — ikisi de "ayar" olarak
   eklenirse çalışmayan düğme olurdu).
@@ -2000,19 +2013,24 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 - ✅ **`scene3d` ve editör belgeleri yazıldı.** Starlight'ta
   `games/{overview,scene3d,editor}` (TR+EN). 197 API adının hepsi motora
   karşı doğrulandı — uydurma ad yok.
-  🟢 **Kalan:** web deposunda dal birleştirme kararı (yerel dal ile master
-  ayrışık içerik taşıyor); ayrıntı TODO.md'de.
+  ✅ **Dal birleştirme KAPANDI:** tulpar-lang-web PR #18 (2026-09-11) ile
+  birleşti; `games/*` sayfaları master'da ve yayında.
 - ✅ **3B örneklerin İngilizce ikizi geldi (2026-08-25).** 15 dosya:
   8 `scene3d_*` + 7 `tame3d_*`. Yan bulgu: `examples/en/` HİÇ test
   edilmiyormuş — koşucu yalnız `examples/*.tpr` üzerinde geziyordu, yani
   ikizler kaynaktan ayrışsa kimse görmezdi. Artık hepsi koşuyor.
+  **Güncelleme 2026-09-28:** bu artık YANLIŞ — 2026-09-22'den beri
+  `build.sh test`'teki `GRAFIK_DESEN` tame/arcade/scene3d import eden her
+  örneği atlıyor; `examples/en/`'in 30 dosyasının 30'u bu yüzden hiç
+  derlenmiyor (koşum "N sahne/arayuz ornegi atlandi" satırında sayıyor).
 
 #### 🟢 Temizlik
 
 - ✅ **Windows shim'leri: KARAR VERİLDİ, iş yok.** Dallar bilerek duruyor;
   sökmek soketler/thread'ler/dl/yollar boyunca büyük ve riskli bir refactor,
-  desteklenen platformlarda kazancı yok, durmasının maliyeti sıfır. Bakımsız
-  ve test edilmemiş sayılıyorlar. Açık madde olarak taşımak yanlıştı.
+  kazancı yok. **Güncelleme 2026-09-28:** "bakımsız ve test edilmemiş"
+  artık doğru değil — Windows 2026-09-21/22'de geri geldi (#340/#341) ve
+  shim'ler `build-windows` CI işinde derlenip örnekler + suites ile koşuyor.
 - ✅ **`%` operatörü geldi (2026-08-24).** `mod()` duruyor ve ikisi AYNI
   sonucu veriyor (işaret bölünenden, C ile aynı). Ondalıkta `fmod`.
   Maddenin şikâyet ettiği "sessizce kesen sözcükleyici hatası" da ayrıca
@@ -2083,7 +2101,11 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   iğneyle `replace` no-op, `substring` ters → "" / taşma kırpılır, `ord`
   sınır dışı → -1 (fırlatmaz), `pop(boş)` → 0 (fırlatmaz). Yan bulgu: NaN
   için `n != n` **false** dönüyor (IEEE: true; `n == n` doğru biçimde false).
-- ✅ **Ölçüldü, bug ÇIKMADI (2026-07-21 taraması):** sıfıra bölme (int→0
+- ✅ **Ölçüldü, bug ÇIKMADI (2026-07-21 taraması):** *(Bu kaydın sıfıra
+  bölme ve dizi sınırı kısmı 2026-09-10 strict flip'inden beri BAYAT: int
+  `x / 0`, `mod(x, 0)` ve sınır dışı dizi okuma/yazma artık fırlatıyor,
+  yakalanmazsa exit ≠ 0 — 2026-09-28'de yeniden ölçüldü. `pop(boş)` → 0
+  değişmedi.)* sıfıra bölme (int→0
   sessiz, float→inf IEEE, mod(x,0)→0 — tanımlı davranış), int64 wraparound,
   toInt/toFloat strtol-önek semantiği, sqrt(-1)→NaN, round-half-away,
   string kenarları (split boş parça korunur, replace boş-needle no-op,
@@ -2144,6 +2166,8 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 - ✅ **Float→string en-kısa-round-trip (düzeltildi 2026-07-20).** `toString(1000000.5)`
   → "1e+06" veriyordu (`%g` 6 basamak → kesir kaybı + bilimsel gösterim); float 32-bit
   olduğu için sabit yüksek precision da gürültü gösteriyordu (3.14 → "3.14000010490417").
+  *(Bugün `float` 64-bit double: 2026-09-28'de `0.1 + 0.2` → `0.30000000000000004`,
+  `3.14` → `3.14`; aşağıdaki float32 örnekleri o günün.)*
   Artık aynı float32'ye round-trip eden en kısa ondalık basılıyor (`aot_format_float`;
   toString/print/concat/JSON ortak): 3.14→"3.14", 1000000.5→"1000000.5", 0.1+0.2→"0.3".
 - ✅ **String sıralama karşılaştırması (`<`,`>`,`<=`,`>=`) ÇALIŞIYOR (düzeltildi 2026-07-20).**
@@ -2358,7 +2382,9 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   "AOT derleme/baglama basarisiz" sanıp yanıltıcı mesaj basıyordu
   (`aot_compile_and_run_silent` `run_result != 0` için `AOT_ERROR_LINK`
   döndürüyordu). Yeni `AOT_RAN_NONZERO` durumu eklendi: derleme+link zaten
-  başarılı, program çalıştı → sürücü çıkış kodunu mesajsız iletir. SIGINT
+  başarılı, program çalıştı → sürücü mesajsız çıkar *(kodu aynen iletmiyor:
+  sıfır olmayan her kod 1'e düzleniyor — 2026-09-28'de `exit(3)` → 1
+  ölçüldü)*. SIGINT
   (Ctrl+C, sunucu için normal durdurma) `WIFSIGNALED`+`SIGINT` ile temiz çıkışa
   (exit 0) eşlenir. `aot_pipeline.cpp/.hpp` + `main.cpp`.
 
@@ -2519,7 +2545,8 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   0-arg `all()` çağrıları değişmeden çalışır (typeinfer eksik trailing arg'ı
   serbest bırakıyor). `order` ham SQL parçasıdır (`raw()` gibi kullanıcı
   girdisini gömme uyarısıyla belgelendi); `limit` `toInt(toString(...))` ile
-  coerce edilir. `tests/orm.test.tpr` yeni test + tümü **13/13**; tüm örnek
+  coerce edilir. `tests/orm.test.tpr` yeni test + tümü **13/13** (2026-09-28'de
+  dosyada 12 test); tüm örnek
   + `wings_dx.test.tpr` 10/10 regresyon temiz. `WINGS_CHEATSHEET.md`
   güncellendi.
   - **Kalan (🟢, talep görürse):** ilişkiler (`has_many`), migration
@@ -2568,7 +2595,8 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 - 🟢 **Server-side `/v1/search` endpoint.** Bugün `pkg search`
   client-side filtreliyor — registry catalog'u büyüdüğünde
   server-side full-text + featured-flag endpoint'ine geçmek gerek.
-  Şu anki paket sayısı (2) ile gereksiz.
+  Şu anki paket sayısı ile gereksiz (2026-09-28: registry'de 3 — `demo`,
+  `multipkg`, `wings_jwt`).
   - **Sıradaki adım:** N>50 paket olduğunda; tulpar-be'ye
     `/v1/search?q=…` ekle, SQLite FTS5 ile.
 
@@ -2676,27 +2704,27 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     doğrulandı (401 token'sız, hatalı kimlik bilgisinde 401, login→token→
     `/me` claim'leri doğru). `astro build` sonrası 72 sayfa temiz.
   - **Kalan:** pkg/wings derinlemesine başka guide'lar genişletilebilir.
-    **Site canlı deploy (Cloudflare Pages/wrangler) — dışa-dönük, credential
-    gerekir:** `astro build` lokalde temiz çalışıyor (`./node_modules/.bin/astro
-    build` → `dist/`);
-    deploy adımı kullanıcının CF hesabı/wrangler auth'unu istiyor
-    (`wrangler pages deploy dist`). v1.0 release blocker'ının büyük kısmı kapandı.
+    **Site canlı deploy: KAPANDI.** tulparlang.dev Vercel'de canlı —
+    `tulpar-lang-web` `master`'a push = yayın (Cloudflare Pages/wrangler
+    yolu kullanılmadı). Belgeler `/docs/` altında değil, kök yollarda.
 
 ---
 
 ## 🎯 Olgunluk kriterleri (sürüm bağımsız)
 
-> **Sürümleme notu (2026-09-01'de tazelendi):** Proje **v1.0'ın çok ötesinde**
-> — yayınlı son tag **`v3.13.1`** (2026-09-02). `v3.13.0` (2026-09-01) 3B oyun
+> **Sürümleme notu (2026-09-28'de tazelendi):** Proje **v1.0'ın çok ötesinde**
+> — yayınlı son tag **`v3.18.3`** (2026-09-28). 2026-09-21'den beri `main`'e
+> giren her PR `otomatik-surum.yml` ile bir sürüm çıkarıyor (varsayılan yama;
+> `Surum: minor` satırı büyütür). Aşağısı 2026-09-01 notu: `v3.13.0` (2026-09-01) 3B oyun
 > motorunu + TameEngine sahne editörünü + mobil hedefleri getirdi (PR #300,
 > 165 commit, +23k satır); `v3.13.1` onun iki eksiğini kapattı: macOS'ta
 > `tulpar build`in hiçbir şeyi derleyememesi (`library 'ssl' not found`) ve
 > TameEngine'in indirilebilir olmaması.
 >
-> ⚠️ **macOS CI işi test KOŞMUYOR** — yalnız derleyip artefakt yüklüyor.
-> v3.13.0'ın iki eksiği de bu kör noktadan geldi ve biri ancak tesadüfen
-> bulundu. Yayınlanan her platformda en az bir uçtan uca iş koşmalı.
-> → [[Tuzaklar]] §3e
+> ~~⚠️ **macOS CI işi test KOŞMUYOR**~~ — **KAPANDI:** macOS işi bugün
+> "AOT end-to-end smoke" ve "Language suites (arm64)" adımlarını koşuyor
+> (`build.yml`). O gün yalnız derleyip artefakt yüklüyordu; v3.13.0'ın iki
+> eksiği de bu kör noktadan gelmişti. → [[Tuzaklar]] §3e
 > Aşağıdaki kriterler "dil olgun mu?" kalıcı gate'leridir, bir sürüm
 > numarasına bağlı değil.
 >

@@ -1,5 +1,18 @@
 # Tulpar Benchmarks & Reproduction
 
+> ⚠ **Stale flow (noted 2026-09-28).** The `ci_run.py` → `RESULTS.md` →
+> `update_readme.py` pipeline below is the pre-audit harness: the
+> 2026-09-02 audit found C/Rust folding the loops to constants, different
+> algorithms per language and best-of-1 timings (see the banner in
+> [RESULTS.md](RESULTS.md)). Nothing runs it automatically. Current tools:
+>
+> - **CPU, nine languages:** `python3 benchmarks/fair/run.py` — every language
+>   reads `BENCH_N` from the environment, outputs are cross-checked, and it
+>   writes [`fair/RESULTS.md`](fair/RESULTS.md) itself.
+> - **HTTP:** the native load generator `benchmarks/loadtest.c` and
+>   `benchmarks/run_stress.sh` ([WINGS_STRESS.md](WINGS_STRESS.md)).
+> - The README's HTTP table is still the 2026-05-21 output of this old flow.
+
 The benchmark numbers shown in [README.md](../README.md) and [RESULTS.md](RESULTS.md) are baked from local runs performed on developer machines. We do not run the benchmarks automatically on GitHub Actions CI to avoid putting unnecessary load on the CI system and to ensure we get reliable, low-variance timings that are free from the noisy co-tenant scheduling issues of shared cloud VMs.
 
 Anyone can run these benchmarks on their own computer using the exact same orchestrator scripts.
@@ -38,7 +51,8 @@ Ensure you have the required compilers and interpreters installed:
 
 1. **Build Tulpar first:**
    - On Linux/macOS: `./build.sh`
-   - On Windows: `./build.bat` or `./build.ps1`
+   - On Windows: `./build.sh` from an MSYS2 MINGW64 shell (`build.bat` /
+     `build.ps1` were removed in 3.13.0)
 
 2. **Execute the benchmark runner:**
    ```bash
