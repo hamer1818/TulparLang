@@ -517,6 +517,16 @@ if [ "$ACTION" = "suites" ]; then
             exit 1
         fi
     fi
+    # REGISTRY yolu (aralik cozumu, tulpar.lock, sha256, .tpkg, onbellek,
+    # --update, registry kapali). pkg_audit.sh yalniz `path:` zincirini
+    # siniyordu; bu yol HICBIR testte gecmiyordu ve olculdugunde uc kusur
+    # cikti (2026-09-27). Yerel sahte registry, istek gunlugu sayiliyor. ~2 sn.
+    if command -v python3 >/dev/null 2>&1 && [ -f tests/pkg_registry_audit.py ]; then
+        if ! python3 tests/pkg_registry_audit.py ./tulpar; then
+            echo -e "${RED}Paket registry denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
 
     # UÇTAN UCA AOT DUMANI: derleyici gerçekten program üretebiliyor mu?
     # "İkili oluştu" ile "ikili çalışıyor" ayrı iddialar; ikincisi macOS'ta

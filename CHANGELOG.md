@@ -954,6 +954,24 @@ tamamlama `__` önekli derleyici geçicilerini (`__t0`, `__r0`) göstermez.
   `tests/typeinfer/fail/21_duplicate_struct.tpr` (tanı vardı, fikstürü
   yoktu). Korpus taraması (bu depo + tulpar-engine/tulpar): 0 isabet.
 
+### Düzeltildi / Eklendi — `pkg install`: lock sürümü sabitliyor, `.tpkg` önbelleği, `--update`
+
+- Aralık (`^1.0.0`) her install'da registry'ye karşı yeniden çözülüyordu:
+  yeni sürüm yayınlanınca sessizce yükseliyor ve lock yeniden yazılıyordu,
+  registry kapalıyken kilitli ve diskte duran bağımlılık bile düşüyordu.
+  Artık kilitli sürüm aralığı karşıladıkça kullanılıyor; `pkg install
+  --update` yeniden çözüyor (yeni bayrak).
+- `.tpkg` (çok dosyalı) paketler önbelleğe hiç isabet etmiyordu — lock
+  arşivin özetini, önbellek denetimi açılmış `<ad>.tpr`'yi özetliyordu; her
+  install yeniden indiriyordu. Arşiv artık `tulpar_modules/<ad>/.<ad>.tpkg`
+  olarak saklanıyor; isabet için arşiv özeti ve açılmış her dosyanın aynen
+  durması gerekiyor (elle bozulan dosya yeniden indiriliyor).
+- `tests/pkg_registry_audit.py` (`build.sh suites`): yerel sahte registry ile
+  13 denetim, her adımda istek günlüğü sayılıyor. Eski ikiliyle 3'ü kırmızı
+  (ikinci install yeniden indiriyor, yeni sürüme sessizce geçiyor, registry
+  kapalıyken düşüyor). `pkg` yardım metni ve CLAUDE.md/AGENTS.md'deki
+  "registry deps are still TODO" düzeltildi.
+
 ### Added — float alanlı struct artık KUTUSUZ (P0.3)
 
 `struct Vec3 { float x; float y; float z; }` LLVM'de `{ double, double,
