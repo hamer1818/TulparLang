@@ -850,6 +850,20 @@ uyuşmayan sabiti **hata vermeden `undef`e çeviriyor**. Global'lere
 `{ i32 1, i32 undef, i64 ... }` yazılıyordu. Sabit artık tipini struct'ın
 kendisinden alıyor, yani alan değişse de uyuyor.
 
+### Eklendi — modül nitelikli tip adı `g.Point`; takma adlı modülden struct dönüşü sıfırdı
+
+- `import "geo" as g;` sonrası `g.Point p;` "ifadeden sonra ';'
+  bekleniyordu" ile ayrıştırılamıyordu. Artık takma ad + nokta + ad bir tip
+  adı: bildirim (literal başlatıcı dahil), parametre, dönüş, `g.Point[]`,
+  `g.Enum`. Struct/enum adları (fonksiyonların aksine) takma adla yeniden
+  adlandırılmıyor — nitelikli yazım aynı tipi adlar; aynı adlı iki farklı
+  yerleşim zaten derleme hatası.
+- **Yolda bulunan sessiz hata:** `Point q = g.mk(5, 6);` (takma adlı modülden
+  struct döndüren çağrı) `q`yu **sıfır** bırakıyordu: VarDecl, `push` ve
+  struct argümanı yolları alıcıyı çözmeden `mk` adını arıyordu (`g__mk`).
+- Nöbetçi: yeni `tests/nitelikli_tip.test.tpr` (+ `tests/moduller/
+  nitelikli_geo.tpr`); eski derleyiciyle derlenmiyor.
+
 ### Performance — dizgi kurma 5,2× hızlandı (`strcat` 163,6 → 31,2 ms)
 
 Üç ayrı darboğaz, üçü de ölçülerek bulundu:

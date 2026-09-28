@@ -3615,6 +3615,8 @@ static LLVMValueRef codegen_struct_expr_ptr(LLVMBackend *backend, ASTNode_C *arg
     return nullptr;
   }
   if (arg->type == AST_FUNCTION_CALL && arg->name) {
+    // `g.yap(..)` (takma adli modul): ad `g__yap` olsun (K013).
+    if (arg->receiver) resolve_call_receiver(backend, arg);
     // `pop(d)` / `remove_at(d, i)` (K033): eleman dogrudan geciciye kopyalanir.
     if (StructTypeEntry *rst = sarr_remove_call_elem(backend, arg)) {
       if (strcmp(rst->name, st->name) != 0) return nullptr;
@@ -4412,6 +4414,7 @@ static LLVMValueRef codegen_struct_expr_as_object(LLVMBackend *backend,
     return nullptr;
   }
   if (arg->type == AST_FUNCTION_CALL && arg->name) {
+    if (arg->receiver) resolve_call_receiver(backend, arg);  // `g.yap(..)` (K013)
     const char *rn = nullptr;
     for (int j = 0; j < backend->function_count; j++) {
       if (backend->functions[j].name &&

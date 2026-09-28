@@ -527,6 +527,20 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
     if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_IDENTIFIER) {
         return parse_variable_decl();
     }
+    // `g.Point p;` / `g.Point[] ps;` — takma adli modulun tipi (K013). Eskiden
+    // ifade deyimi sanilip "ifadeden sonra ';' bekleniyordu" veriyordu.
+    if (qualified_type_at(0)) {
+        int k = 3;
+        while (peek(k).type() == TOKEN_LBRACKET) {
+            if (peek(k + 1).type() == TOKEN_RBRACKET) { k += 2; continue; }
+            if (peek(k + 1).type() == TOKEN_INT_LITERAL && peek(k + 2).type() == TOKEN_RBRACKET) {
+                k += 3;
+                continue;
+            }
+            break;
+        }
+        if (peek(k).type() == TOKEN_IDENTIFIER) return parse_variable_decl();
+    }
     if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_LBRACKET) {
         // Ileri bakis: IDENT ( '[' ']' | '[' SAYI ']' )+ IDENT
         // KASITLI DAR: koseli parantez icinde yalniz BOSLUK ya da TAMSAYI
@@ -657,6 +671,7 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
 
     // Parse type
     DataType type = parse_type();
+    if (last_type_qualified_ && type == TYPE_CUSTOM) custom_type_name = last_type_custom_name_;  // K013
     const int fixed_n = last_fixed_array_n_;  // `T[N]` ise N, degilse 0
     // `Dusman[] d` — eleman struct adi (P1.1). parse_type `[]` sonekiyle
     // TYPE_ARRAY'e dusuyor ve asagida custom_type_name sifirlaniyor; eleman
@@ -823,6 +838,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
                     param_custom_type = current().value();
                 }
                 DataType param_type = parse_type();
+                if (last_type_qualified_ && param_type == TYPE_CUSTOM) param_custom_type = last_type_custom_name_;  // K013
                 if (param_type != TYPE_CUSTOM) param_custom_type.reset();
                 Token param_name = expect(TOKEN_IDENTIFIER,
                                           "Expected parameter name");
@@ -859,6 +875,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
             return_custom_type_name = current().value();
         }
         return_type = parse_type();
+        if (last_type_qualified_ && return_type == TYPE_CUSTOM) return_custom_type_name = last_type_custom_name_;  // K013
         if (return_type != TYPE_CUSTOM) return_custom_type_name.reset();
     }
 
@@ -976,7 +993,26 @@ static void collect_enums(const std::vector<Token>& toks,
     }
 }
 
+bool Parser::is_import_alias(const std::string& name) const {
+    for (const auto& a : import_aliases_)
+        if (a == name) return true;
+    return false;
+}
+
+bool Parser::qualified_type_at(int offset) const {
+    const Token& a = peek(offset);
+    return a.type() == TOKEN_IDENTIFIER && is_import_alias(a.value()) &&
+           peek(offset + 1).type() == TOKEN_DOT && peek(offset + 2).type() == TOKEN_IDENTIFIER;
+}
+
 void Parser::prescan_enums() {
+    // K013: `import "..." as <ad>` takma adlari — `ad.Tip` nitelikli tip adi.
+    for (size_t i = 0; i + 3 < tokens_.size(); i++) {
+        if (tokens_[i].type() == TOKEN_IMPORT && tokens_[i + 1].type() == TOKEN_STRING_LITERAL &&
+            tokens_[i + 2].type() == TOKEN_IDENTIFIER && tokens_[i + 2].value() == "as" &&
+            tokens_[i + 3].type() == TOKEN_IDENTIFIER)
+            import_aliases_.push_back(tokens_[i + 3].value());
+    }
     std::vector<std::pair<std::string, EnumInfo>> found;
     collect_enums(tokens_, found, false);
     for (auto& e : found) {
@@ -2050,6 +2086,7 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
                             param_custom_type = current().value();
                         }
                         DataType param_type = parse_type();
+                        if (last_type_qualified_ && param_type == TYPE_CUSTOM) param_custom_type = last_type_custom_name_;  // K013
                         if (param_type != TYPE_CUSTOM) param_custom_type.reset();
                         Token param_name = expect(TOKEN_IDENTIFIER, "Expected parameter name");
                         Parameter par(param_name.value(), param_type);
@@ -2676,6 +2713,7 @@ void Parser::reject_pending() {
 DataType Parser::parse_type() {
     DataType base = TYPE_UNKNOWN;
     last_type_custom_name_.reset();
+    last_type_qualified_ = false;
     bool matched = true;
 
     if (match(TOKEN_INT_TYPE)) base = TYPE_INT;
@@ -2693,6 +2731,18 @@ DataType Parser::parse_type() {
     // Enum adi bir TAMSAYI tipidir (P0.2): `Ekran e = Ekran.MENU;`,
     // `func f(Ekran e): Ekran`. Cagiranlar TYPE_CUSTOM disinda yakaladiklari
     // tip adini zaten sifirliyor, yani "Unknown type" uyarisi dogmaz.
+    // `g.Point` (K013): takma adli modulun tipi. Struct/enum adlari Tulpar'da
+    // (fonksiyonlarin aksine) takma adla yeniden adlandirilmiyor — modulun
+    // `Point`u zaten niteliksiz gorunuyor; nitelikli yazim ayni tipi adlar.
+    else if (qualified_type_at(0)) {
+        advance();  // takma ad
+        advance();  // '.'
+        const std::string tn = current().value();
+        advance();
+        last_type_qualified_ = true;
+        if (is_enum_name(tn)) { base = TYPE_INT; }
+        else { last_type_custom_name_ = tn; base = TYPE_CUSTOM; }
+    }
     else if (check(TOKEN_IDENTIFIER) && is_enum_name(current().value())) { advance(); base = TYPE_INT; }
     else if (check(TOKEN_IDENTIFIER)) { last_type_custom_name_ = current().value(); advance(); base = TYPE_CUSTOM; }
     else matched = false;
