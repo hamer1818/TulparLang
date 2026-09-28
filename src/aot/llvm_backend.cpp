@@ -3940,6 +3940,18 @@ static std::string struct_decl_layout_str(ASTNode_C *d) {
   return s;
 }
 
+// Ana programin ust duzey `func <ad>` bildirimi (yoksa nullptr). Import
+// edilen modulun ayni adli fonksiyonu yerine bu kullanilir (K043).
+static ASTNode_C *main_fn_decl(LLVMBackend *backend, const char *name) {
+  ASTNode_C *prog = backend->main_program;
+  if (!prog || !name || !prog->statements) return nullptr;
+  for (int i = 0; i < prog->statement_count; i++) {
+    ASTNode_C *s = prog->statements[i];
+    if (s && s->type == AST_FUNCTION_DECL && s->name && strcmp(s->name, name) == 0) return s;
+  }
+  return nullptr;
+}
+
 // Ana programin kendi struct'larini "ilk bildirim" olarak isaretle
 // (Pass 0.0'dan hemen sonra). Ana programin kendi icindeki cift bildirim
 // davranisi DEGISMIYOR: ilk kazanir, register_struct_type zaten oyle.
@@ -12098,6 +12110,18 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           LLVMValueRef saved_func = backend->current_function;
           for (int i = 0; i < module_ast->statement_count; i++) {
             if (module_ast->statements[i]->type == AST_FUNCTION_DECL) {
+              // YEREL TANIM KAZANIR (K043, 2026-09-27): ana program ayni adli
+              // bir fonksiyon tanimliyorsa modulunkinin YERINE onun imzasi
+              // simdi bildiriliyor (modulun govdeleri ana programin Pass
+              // 1a'sindan ONCE uretiliyor ve kendi cagrilari bu adi bulmali).
+              // Eskiden modulunki sessizce kazaniyordu: `func yardim(): int
+              // { return 9; }` yazan program modulun 7'sini basiyordu — typeinfer
+              // ise yerel imzayi denetliyordu (iki katman ayrisiyordu).
+              if (ASTNode_C *mainfn = main_fn_decl(backend, module_ast->statements[i]->name)) {
+                predeclare_func_signature(backend, mainfn);
+                selfrec_predeclare(backend, mainfn);
+                continue;
+              }
               predeclare_func_signature(backend, module_ast->statements[i]);
               selfrec_predeclare(backend, module_ast->statements[i]);
             }
@@ -12127,6 +12151,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_FUNCTION_DECL) {
             ASTNode_C *fn = module_ast->statements[i];
+            if (main_fn_decl(backend, fn->name)) continue;  // yerel tanim kazanir (K043)
             int rec = selfrec_begin(backend, fn);
             codegen_func_def(backend, fn);
             selfrec_finish(backend, fn, rec);
@@ -13720,6 +13745,7 @@ static LLVMValueRef native_boxed_wrapper(LLVMBackend *backend, const char *fname
 void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   if (node->type != AST_PROGRAM)
     return;
+  backend->main_program = node;
 
   method_rewritten_calls().clear();
   analyze_module_captures(backend, node, 0, node);
