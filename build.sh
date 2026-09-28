@@ -1295,18 +1295,54 @@ if [ "$ACTION" = "test" ]; then
     # is alive at +2s, GET this URL with a 5s timeout and require any HTTP
     # response code". We DON'T validate the body or status — the bug fires
     # before the response is even built — we just need a roundtrip.
+    #
+    # PORTLAR BENZERSIZ OLMAK ZORUNDA (2026-09-28). Ornekler `xargs -P` ile
+    # paralel kosuyor; `api_wings` ile `api_wings_crud` ikisi de 3000'i,
+    # `11_router_app` ile `api_router_crud` ikisi de 8080'i dinliyordu.
+    # Linux'ta ayni anda kosan ikisinden birinin bind'i dusuyor, sunucu
+    # "Port kullanimda" deyip exit 0 ile cikiyor ve asagidaki "2 sn icinde
+    # temiz cikti -> PASS" dali onu GECIRIYORDU — probe hic atilmadan
+    # (olculdu: 3000'i baska surec tutarken `./build.sh test
+    # examples/api_wings_crud.tpr` -> "PASS (compile-only +smoke)").
+    # Windows'ta SO_REUSEADDR ayni portu iki surece birden verdiginden
+    # ikisi de ayakta kaliyor ve probe olen surece dusup "no response"
+    # veriyordu (#358'in Windows isi 2026-09-27/28'de iki kez). Iki kilit:
+    # asagidaki tekrar denetimi (tabloda ayni port = kosum baslamadan HATA)
+    # ve run_test'te "probe'lu ornek probe'dan once cikti = FAIL". Tablo
+    # denetimi YALNIZ tabloyu gorur: 8080'i probe'suz `09_socket_server` ile
+    # `14_api_server` da tutuyor ve `api_router_crud` tam kosumda bu yuzden
+    # dustu — onu ikinci kilit yakaladi, port 8082'ye tasindi. Yeni bir
+    # sunucu ornegi eklerken portunu `grep -rn 'listen(\|serve(\|
+    # socket_server(' examples/` ile karsilastirin.
     smoke_probe_for() {
         case "$1" in
             api_wings.tpr)        echo "http://127.0.0.1:3000/" ;;
-            api_wings_crud.tpr)   echo "http://127.0.0.1:3000/" ;;
+            api_wings_crud.tpr)   echo "http://127.0.0.1:3001/" ;;
             api_wings_tls.tpr)    echo "https://127.0.0.1:8443/" ;;
             api_wings_sse.tpr)    echo "http://127.0.0.1:8093/" ;;
-            api_router_crud.tpr)  echo "http://127.0.0.1:8080/" ;;
-            11_router_app.tpr)    echo "http://127.0.0.1:8080/" ;;
+            api_router_crud.tpr)  echo "http://127.0.0.1:8082/" ;;
+            11_router_app.tpr)    echo "http://127.0.0.1:8081/" ;;
             12_threaded_server.tpr) echo "http://127.0.0.1:8089/" ;;
             *) echo "" ;;
         esac
     }
+    probe_port_tekrari=""
+    probe_portlari=" "
+    for co_file in "${COMPILE_ONLY_TESTS[@]}"; do
+        probe_url=$(smoke_probe_for "$co_file")
+        [ -n "$probe_url" ] || continue
+        probe_port=${probe_url##*:}
+        probe_port=${probe_port%%/*}
+        case "$probe_portlari" in
+            *" $probe_port "*) probe_port_tekrari="$probe_port_tekrari $co_file:$probe_port" ;;
+        esac
+        probe_portlari="$probe_portlari$probe_port "
+    done
+    if [ -n "$probe_port_tekrari" ]; then
+        echo -e "${RED}HATA: smoke_probe_for tablosunda ayni port iki kez:${NC}$probe_port_tekrari"
+        echo "  Paralel kosan iki sunucu ayni portu paylasamaz (build.sh'teki notu okuyun)."
+        exit 1
+    fi
 
     # run_test runs ONE example and returns 0 (pass) / 1 (fail).
     #
@@ -1458,6 +1494,20 @@ if [ "$ACTION" = "test" ]; then
                     # wait on a known-dead pid returns the exit status.
                     wait "$smoke_pid" 2>/dev/null
                     local smoke_rc=$?
+                    # Probe'u olan bir ornek SUNUCUDUR: 2 sn icinde cikmasi
+                    # "dinlemeye hic baslamadi" demek (tipik sebep: port
+                    # dolu, bkz. smoke_probe_for notu). Exit 0 olsa da PASS
+                    # degil — yoksa probe hic atilmadan gecer.
+                    if [ "$smoke_rc" = "0" ] && [ -n "$(smoke_probe_for "$(basename "$example")")" ]; then
+                        printf "Testing %s... ${RED}FAIL (smoke server_exited_before_probe)${NC}\n" "$example"
+                        {
+                            echo "----- smoke log: $example -----"
+                            sed 's/^/    /' "$smoke_log" | head -n 40
+                            echo "----- end log -----"
+                        } > "$fail_dir/$name.log" 2>&1
+                        rm -f "$smoke_log" "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                        return 1
+                    fi
                     if [ "$smoke_rc" = "0" ]; then
                         # Cleanly exited within 2s — usually a script
                         # that runs to completion and doesn't actually
@@ -1556,9 +1606,10 @@ if [ "$ACTION" = "test" ]; then
         #     basename, so no two writes collide;
         #   * the only examples touching shared on-disk state use DIFFERENT
         #     files (08_file_io -> test_file.txt, 13_database -> test.db);
-        #   * the compile-only server smokes each bind a distinct port,
-        #     and their 34 x `sleep 2` startup waits now overlap instead of
-        #     summing to ~68s of serial idling.
+        #   * the compile-only server smokes each bind a distinct port
+        #     (2026-09-28'e dek bu YANLISTI — iki cift ayni portu paylasiyordu;
+        #     bkz. smoke_probe_for notu), and their `sleep 2` startup waits
+        #     overlap instead of summing to ~68s of serial idling.
         # ------------------------------------------------------------------
         work_list=$(mktemp)
         # SAHNE/ARAYUZ ORNEKLERI NE DERLENIYOR NE KOSUYOR (2026-09-22 karari).

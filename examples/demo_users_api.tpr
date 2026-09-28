@@ -1,5 +1,5 @@
 // Basit bir REST API — Wings ile. Az satır, okunur, güçlü.
-// Çalıştır:  tulpar examples/demo_users_api.tpr   (sonra http://127.0.0.1:8080)
+// Çalıştır:  tulpar examples/demo_users_api.tpr   (sonra http://127.0.0.1:8484 — serve() varsayılanı)
 
 import "wings";
 
