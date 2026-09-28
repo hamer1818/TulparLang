@@ -262,6 +262,9 @@ diye ertele.
   okuma yedeği; `url` ulaşılamaz ya da 2xx dışı dönerse sırayla denenir,
   ilk 2xx kazanır, lock hangi aynadan geldiğini kaydeder, aynı
   ad@sürüm için sha256 aynalar arasında da tutmalı. `publish` yalnız `url`'e.)*
+  *(Örnek proje de geldi (K171): `examples/pkg_demo/` — manifest + lock +
+  vendor edilmiş `tulpar_modules/demo`; install ağa çıkmadan kuruyor,
+  `tests/pkg_registry_audit.py` bunu ölçüyor.)*
 - **Yansıma (`tulpar pkg search`, `tulpar pkg info`):** PR 2'den sonra
   ayrı bir PR ile gelir; `/api/registry.json` indeksi zaten hazır
   oluyor. *(Cevaplandı: `pkg search` ve `pkg info` var.)*

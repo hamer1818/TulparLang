@@ -1,0 +1,8 @@
+// demo package v1.0.1 — adds `goodbye()`.
+func hello() {
+    print("hello from demo@1.0.1");
+}
+
+func goodbye() {
+    print("goodbye from demo@1.0.1");
+}

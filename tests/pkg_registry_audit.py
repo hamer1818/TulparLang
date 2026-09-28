@@ -242,6 +242,22 @@ def main():
         check(rc != 0 and "mirrors must be an array" in out,
               "bozuk mirrors (dizi degil) sessizce yutulmuyor", out)
 
+        # 9) DEPODAKI ORNEK (K171): examples/pkg_demo/ — tulpar.toml + lock +
+        #    vendor edilmis tulpar_modules/demo. Gercek registry URL'sini
+        #    tasiyor ama install AGA CIKMAMALI: diskteki dosyanin ozeti
+        #    lock'la tutuyor. "cached" satiri bunun kaniti (indirme olsa
+        #    satir "installed ... from"). Ornek bozulursa (lock ya da vendor
+        #    dosyasi degisirse) bu denetim onu yakalar.
+        ornek = os.path.join(work, "pkg_demo")
+        shutil.copytree(os.path.join(ROOT, "examples", "pkg_demo"), ornek)
+        rc, out = run(exe, ["pkg", "install"], ornek)
+        check(rc == 0 and "(cached, sha256 matches lockfile)" in out,
+              "examples/pkg_demo: install agsiz — vendor dosyasi lock'la tutuyor", out)
+        rc, out = run(exe, ["main.tpr"], ornek)
+        check(rc == 0 and out.strip().splitlines()[-2:] ==
+              ["hello from demo@1.0.1", "goodbye from demo@1.0.1"],
+              "examples/pkg_demo: program vendor edilmis paketi kullaniyor", out)
+
         # 7) publish --dry-run: iki dosyali proje -> .tpkg
         pub = os.path.join(work, "yayin")
         os.mkdir(pub)
@@ -265,7 +281,7 @@ def main():
         print("pkg registry denetimi DUSTU (%d/%d)" % (len(fails), len(fails) + ok_n))
         return 1
     print("pkg registry denetimi temiz (%d denetim: aralik+lock+sha256, .tpkg, onbellek, "
-          "--update, cevrimdisi, bozulma, ayna, publish sekli)" % ok_n)
+          "--update, cevrimdisi, bozulma, ayna, ornek proje, publish sekli)" % ok_n)
     return 0
 
 
