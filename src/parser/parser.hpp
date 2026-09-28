@@ -365,6 +365,10 @@ extern "C" {
     // reaches stderr. Callers that re-parse later (typeinfer pre-pass)
     // use this to avoid double-reporting the same syntax error.
     void parser_set_quiet(int quiet);
+    // K056: import edilen modul ayristirilirken baglami kaydet/geri koy.
+    void parser_get_diagnostic_context(const char **source_text,
+                                       const char **source_filename);
+    int parser_get_quiet(void);
 
     // How many parse errors fired during the last `Parser::parse()`. The
     // parser recovers and returns a partial AST regardless; pre-pass

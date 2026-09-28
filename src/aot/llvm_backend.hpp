@@ -401,6 +401,9 @@ typedef struct {
   // K043: ana programin AST'si — import edilen modulun fonksiyonu ana
   // programda AYNI adla tanimliysa yerel tanim kazanir (typeinfer ile ayni).
   struct ASTNode_C *main_program;
+  // K056: bir import edilen modul ayristirilamadi — sonraki "fonksiyon
+  // bulunamadi" tanilari o modulun fonksiyonlari icin yaniltici gurultu.
+  int import_parse_failed;
   LLVMValueRef func_aot_sarr_pop;        // K033: son elemani cikar (kopya hedefe)
   LLVMValueRef func_aot_sarr_remove_at;  // K033: i. elemani cikar (sira korunur)
   LLVMValueRef func_aot_array_remove_at; // K033: remove_at genel (kutulu) yolu

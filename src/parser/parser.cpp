@@ -174,6 +174,16 @@ extern "C" void parser_set_diagnostic_context(const char *source_text,
 
 extern "C" void parser_set_quiet(int quiet) { g_parser_quiet = quiet ? 1 : 0; }
 
+// K056: import edilen modulu ayristiran cagiran (AOT, typeinfer) baglami
+// modulun kendisine cevirip sonra geri koyabilsin — yoksa modulun hatasi
+// `(stdin):2` ya da ANA dosyanin adi ve satiriyla basiliyordu.
+extern "C" void parser_get_diagnostic_context(const char **source_text,
+                                              const char **source_filename) {
+    if (source_text) *source_text = g_parser_source_text;
+    if (source_filename) *source_filename = g_parser_source_filename;
+}
+extern "C" int parser_get_quiet(void) { return g_parser_quiet; }
+
 extern "C" int parser_get_error_count(void) { return g_parser_error_count; }
 
 // Render a Rust-style multi-line parse error. Mirrors the AOT codegen's

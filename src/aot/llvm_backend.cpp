@@ -3815,6 +3815,9 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
 
   char *source = nullptr;
   char resolved_dir[256] = "";
+  // Ayristirma tanisinin gosterecegi ad (K056): cozulen dosya yolu; gomulu
+  // stdlib icin `<gomulu:ad>`.
+  std::string diag_file = std::string("<gomulu:") + rel_path + ">";
   const char *embedded_code = get_embedded_lib(rel_path);
   if (embedded_code) {
     source = strdup(embedded_code);
@@ -3853,6 +3856,7 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
       if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
     }
     if (!f) return &mod;  // found=false
+    diag_file = resolved_path;
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -3904,9 +3908,16 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   Parser_C *parser = parser_create(tokens, token_count);
   // K028: modulun KENDI import'larindaki enum'lar paket-yerel kardesten de
   // cozulsun (ayristiricinin on taramasi; kodgenin cozum sirasiyla ayni).
+  // Tani baglami MODULUN kendisi (K056): eskiden modulun ayristirma hatasi
+  // ANA dosyanin adi ve o satirin metniyle basiliyordu (`--> ana.tpr:2` +
+  // ana dosyanin 2. satiri). Ana baglam ayristirmadan sonra geri konur.
+  const char *prev_diag_text = nullptr, *prev_diag_file = nullptr;
+  parser_get_diagnostic_context(&prev_diag_text, &prev_diag_file);
+  parser_set_diagnostic_context(source, diag_file.c_str());
   tulpar_parser_set_import_dir(resolved_dir);
   ASTNode_C *module_ast = parser_parse(parser);
   tulpar_parser_set_import_dir("");
+  parser_set_diagnostic_context(prev_diag_text, prev_diag_file);
   parser_free(parser);
 
   // parser_parse belirtecleri KOPYALAYIP ayristiriyor ve C-kopru AST'si her
@@ -9887,7 +9898,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         receiver_may_hold_closure(backend, node->arguments[0])) {
       return emit_field_closure_call(backend, node);
     }
-    {
+    // Bir modul ayristirilamadiysa (K056) hata zaten verildi ve derleme
+    // duracak; o modulun fonksiyonlari icin "bulunamadi" gurultusu basma.
+    if (!backend->import_parse_failed) {
       char msg[256];
       snprintf(msg, sizeof(msg),
                "'%s' adında bir fonksiyon bulunamadı", node->name);
@@ -9895,6 +9908,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend, node->line, "hata", msg, node->name,
           "fonksiyon adını doğru yazdığınızdan ve gerekli modülü import "
           "ettiğinizden emin olun");
+    } else {
+      backend->had_error = 1;
     }
     return llvm_vm_val_int(backend, 0);
   }
@@ -12219,6 +12234,20 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       return nullptr;
     }
     ASTNode_C *module_ast = imod->ast;
+    if (!module_ast) {
+      // Modul bulundu ama AYRISTIRILAMADI (hatalari yukarida, modulun kendi
+      // adi ve satiriyla). Eskiden burada sessizce devam ediliyordu ve ilk
+      // gorunen "tani" modulun fonksiyonu icin yaniltici "'f' adinda bir
+      // fonksiyon bulunamadi" oluyordu (K056).
+      char msg[512];
+      snprintf(msg, sizeof(msg),
+               "'%s' modulu ayristirilamadi (hatalar yukarida) / module '%s' failed to parse "
+               "(errors above)",
+               rel_path, rel_path);
+      report_codegen_error(backend, node->line, "hata", msg, rel_path, nullptr);
+      backend->import_parse_failed = 1;
+      return nullptr;
+    }
     // Track the resolved file's directory so nested imports inside a
     // multi-file bundle (Plan 02 PR3) can find their siblings. Empty
     // when we resolve via embedded libs / cwd-rooted candidates.
