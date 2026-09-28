@@ -515,10 +515,17 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **Tooling:** `tulpar fmt`, `tulpar --lsp`, `tulpar typecheck`,
   `tulpar update`. VS Code eklentisi (`vscode-tulpar` v0.3+) LSP
   client.
-- **Performans:** AOT loopsum ~1.9 ms (C'nin 3.17×ı), fib(35) ~32 ms
-  (C'nin 1.87×ı, Rust seviyesinde). HTTP Wings ~22-26k rps CI Linux,
-  Node.js'i 1.7-2.1× geçiyor. Bench auto-refresh CI'da çalışıyor,
-  README + RESULTS.md her commit'te güncelleniyor.
+- **Performans (2026-09-28'de yeniden ölçüldü):** CPU tarafı
+  `benchmarks/fair/RESULTS.md`'de (9 dil, çıktı mutabakatlı): tamsayı
+  çekirdeklerinde C sınıfı (`intloop` 134,8 / C 134,6 ms, `sieve` 8,0 / 7,7),
+  kayan nokta dizilerinde uzak (`matmul` 26,6×, `nbody` 11,6× C). Eski
+  "loopsum C'nin 3.17×ı" satırı eski düzenektendi. **HTTP:** eski "Node.js'i
+  1.7-2.1× geçiyor" iddiası yeniden ÜRETİLEMEDİ. `benchmarks/http_vs_node.sh`
+  (tur eşli, aynı `loadtest.c`, keep-alive 50 bağlantı, istemci aynı makinede;
+  Ryzen 7 9800X3D, node v26.10.0): `listen_evented` ↔ node tek süreç
+  **1,29–1,32×** (275k / 208k RPS), `listen_pool` ↔ node cluster **0,81–0,83×**
+  (1,01M / 1,23M RPS — Node önde). Bench auto-refresh CI'da koşmuyor
+  (`benchmarks/CI.md` bayat).
 
 ---
 
@@ -2701,6 +2708,10 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
    yeşil (`./build.sh test` 48/48 örnek + 27 focused suite yeşil).
 2. **Motto taşınıyor** — bench'ler C/Rust sınıfında (loopsum 3×C içinde,
    HTTP Node'u 2×+ geçiyor); örnekler Python kadar okunur.
+   *Ölçüm 2026-09-28:* tamsayı çekirdekleri ✓ (C ile başa baş), kayan nokta
+   dizileri ✗ (11–27× C, FINDINGS "Float dizi unboxing"), HTTP ✗ — tek
+   süreçte Node'un 1,3 katı, çok çekirdekte (pool ↔ cluster) Node'un 0,8'i
+   (`benchmarks/http_vs_node.sh`). Kriter bugün KARŞILANMIYOR.
 3. **Ekosistem self-host** — tulpar-be prod'da, kullanıcı `tulpar pkg
    add foo@^1` ile çalışan dep ekleyebiliyor (✓ teknik altyapı; içerik
    eksik).
@@ -2709,7 +2720,8 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 5. **Stable release süreci** — `v*` git tag + binary release artifact'leri;
    `tulpar update` bunu çekiyor (✓ v2.2.0 + v3.0.0 yayınlandı).
 
-**Şu an konumumuz:** **v3.13.0 yayınlandı.** (1) ve (2) karşılandı — 59 paket ·
+**Şu an konumumuz:** **v3.13.0 yayınlandı.** (1) karşılandı; (2) yalnız
+tamsayı çekirdeklerinde — FP ve HTTP (2026-09-28 ölçümü) karşılanmıyor — 59 paket ·
 129 örnek · 8 denetim yeşil. (3) altyapı tam, içerik az. (4) reference büyük
 ölçüde hazır, canlı deploy eksik. (5) süreç işliyor.
 

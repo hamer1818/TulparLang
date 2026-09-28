@@ -18,6 +18,32 @@ multiplexes all connections on a single `poll()` thread. So a measurement has
 two regimes: **keep-alive** (persistent connections — peak per-connection
 throughput) and **Connection: close** (many short-lived clients).
 
+## Node.js karşılaştırması (2026-09-28)
+
+`benchmarks/http_vs_node.sh` — aynı iş (`/ping` "pong", `/users` 3 kayıtlı
+JSON), aynı ölçüm aracı (`loadtest.c`, keep-alive, 50 bağlantı, 5 sn × 3
+tur, ORTANCA), iki sunucu turla eşli ölçülüyor ve cevap gövdeleri önce
+karşılaştırılıyor. İstemci aynı makinede, çekirdekleri paylaşıyor — mutlak
+RPS makineye bağlı, oran aynı koşula bakıyor.
+
+| Wings | Node | `/ping` | `/users` |
+|---|---|---:|---:|
+| `listen_evented` (tek iş parçacığı) | `http` tek süreç | 274 919 / 207 622 = **1,32×** | 265 814 / 205 815 = **1,29×** |
+| `listen_pool` (CPU başına işçi) | `cluster` (CPU başına süreç) | 1 013 745 / 1 220 873 = **0,83×** | 1 004 537 / 1 246 261 = **0,81×** |
+
+AMD Ryzen 7 9800X3D (16 iş parçacığı), Linux, node v26.10.0, tulpar main
+(2026-09-28). STATUS'taki eski "Node'un 1.7-2.1 katı" bu ölçümle
+üretilemedi; olgunluk kriteri 2'nin "HTTP Node'u 2×+ geçiyor" ayağı
+karşılanmıyor.
+
+**Ölçüm tuzağı (betikte kapatıldı):** ilk koşumda Node'un bütün "RPS"i
+hataydı — iki ayrı sebeple: arka planda `node` stdin bir TTY olduğu için
+SIGTTIN ile DURDU; ve `writeHead` + `end` Node'u chunked kodlamaya
+geçiriyor, `loadtest.c` ise Content-Length ile çerçeveliyor. Betik artık
+`loadtest`'in `other`/`err` sayaçları sıfır değilse sayı yerine `HATALI`
+basıyor (oranı `GECERSIZ`), sunucuların stdin'i `/dev/null`, Node açıkça
+Content-Length yazıyor, ve ölçümden önce iki gövde karşılaştırılıyor.
+
 ## Headline numbers
 
 | Mode | keep-alive peak `/ping` | p50 / p99 | close `/ping` (200 conn) | peak RSS |
