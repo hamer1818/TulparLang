@@ -13545,7 +13545,175 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
     LLVMPositionBuilderAtEnd(backend->builder, prev_block);
 }
 
+// ---- K216 (2026-09-28): tipsiz fonksiyonun INT-OZEL KLONU ---------------------
+//
+// AOT tip cikarimi kullanmiyor: `func fib(n)` her zaman kutulu (VMValue)
+// derleniyor — her `n < 2`, `n - 1`, `+` bir etiket dagitimi. Olculdu (bu
+// makine, 2026-09-28): tipsiz fib(32) 7,5 ms; ayni govde `int` ile yazilinca
+// native yol. Performance.md: "kalan fark kutulu aritmetigin etiket dagitimi;
+// kapatacak sey tip ozellestirmesi".
+//
+// Bekcili ozellestirme: govde "tum parametreler int ise butun donusler int"
+// olarak KANITLANABILIYORSA (asagidaki beyaz liste), fonksiyonun `<ad>$i`
+// adli native (i64) bir KLONU uretilir. Kutulu govdenin girisinde her
+// argumanin etiketi INT ise klon cagrilir ve sonuc kutulanir; degilse (float,
+// dizgi, ...) eski kutulu govde calisir — yani anlam DEGISMIYOR, yalniz int
+// yolu hizlaniyor. Klonun icinde kendine cagri klona gider (spec_from/to).
+//
+// Kanit dar, bilerek: donus ifadeleri yalniz parametre, int sabiti, int
+// yerel, aritmetik/bit islemi ve kendine / native-int fonksiyona cagri;
+// karsilastirma DONMEZ (kutulu yolda bool, klonda int olurdu). Govdenin son
+// deyimi `return` olmali (sona dusmek kutulu yolda 0 ama tip farkli olabilir).
+static std::unordered_map<std::string, LLVMValueRef> &int_spec_clones() {
+  static std::unordered_map<std::string, LLVMValueRef> m;
+  return m;
+}
+
+static bool spec_int_valued(LLVMBackend *backend, ASTNode_C *e, ASTNode_C *fn,
+                            const std::unordered_set<std::string> &ints) {
+  if (!e) return false;
+  switch (e->type) {
+  case AST_INT_LITERAL:
+    return true;
+  case AST_IDENTIFIER:
+    return e->name && ints.count(e->name);
+  case AST_UNARY_OP:
+    return (e->op == TOKEN_MINUS || e->op == TOKEN_BIT_NOT) &&
+           spec_int_valued(backend, e->left, fn, ints);
+  case AST_BINARY_OP:
+    switch (e->op) {
+    case TOKEN_PLUS: case TOKEN_MINUS: case TOKEN_MULTIPLY: case TOKEN_DIVIDE:
+    case TOKEN_MODULO: case TOKEN_BIT_AND: case TOKEN_PIPE: case TOKEN_BIT_XOR:
+    case TOKEN_SHIFT_LEFT: case TOKEN_SHIFT_RIGHT:
+      return spec_int_valued(backend, e->left, fn, ints) &&
+             spec_int_valued(backend, e->right, fn, ints);
+    default:
+      return false;
+    }
+  case AST_FUNCTION_CALL: {
+    if (!e->name || e->receiver || e->callee) return false;
+    for (int i = 0; i < e->argument_count; i++)
+      if (!spec_int_valued(backend, e->arguments[i], fn, ints)) return false;
+    if (strcmp(e->name, fn->name) == 0) return e->argument_count == fn->param_count;
+    // Baska bir native-int kullanici fonksiyonu (ciplak i64 imza).
+    LLVMValueRef f = LLVMGetNamedFunction(backend->module, e->name);
+    if (!f) return false;
+    LLVMTypeRef ft = LLVMGlobalGetValueType(f);
+    return LLVMGetReturnType(ft) == backend->int_type &&
+           (int)LLVMCountParamTypes(ft) == e->argument_count;
+  }
+  default:
+    return false;
+  }
+}
+
+static bool spec_stmt_ok(LLVMBackend *backend, ASTNode_C *s, ASTNode_C *fn,
+                         std::unordered_set<std::string> &ints) {
+  if (!s) return true;
+  switch (s->type) {
+  case AST_BLOCK:
+    for (int i = 0; i < s->statement_count; i++)
+      if (!spec_stmt_ok(backend, s->statements[i], fn, ints)) return false;
+    return true;
+  case AST_RETURN:
+    return s->return_value && spec_int_valued(backend, s->return_value, fn, ints);
+  case AST_IF:
+    return spec_stmt_ok(backend, s->then_branch, fn, ints) &&
+           spec_stmt_ok(backend, s->else_branch, fn, ints);
+  case AST_WHILE:
+    return spec_stmt_ok(backend, s->body, fn, ints);
+  case AST_FOR:
+    return spec_stmt_ok(backend, s->init, fn, ints) &&
+           spec_stmt_ok(backend, s->increment, fn, ints) &&
+           spec_stmt_ok(backend, s->body, fn, ints);
+  case AST_VARIABLE_DECL:
+    if ((s->data_type != TYPE_UNKNOWN && s->data_type != TYPE_INT) || !s->name || !s->right ||
+        !spec_int_valued(backend, s->right, fn, ints))
+      return false;
+    ints.insert(s->name);
+    return true;
+  case AST_ASSIGNMENT:
+    return s->name && !s->left && ints.count(s->name) &&
+           spec_int_valued(backend, s->right, fn, ints);
+  case AST_INCREMENT:
+  case AST_DECREMENT:
+    return s->name && !s->left && ints.count(s->name);
+  case AST_BREAK:
+  case AST_CONTINUE:
+    return true;
+  default:
+    return false;   // yan etkili cagri, throw, dizi/dizgi islemi, ...
+  }
+}
+
+static bool int_spec_eligible(LLVMBackend *backend, ASTNode_C *fn) {
+  // Kapatma anahtari (TULPAR_NO_SELFREC ile ayni gerekce): A/B olcumu ve
+  // kutulu yolun kendi testlerinin (tests/boxed_value_abi) int argumanla da
+  // kosabilmesi icin — tests/tipsiz_int.sh ikisini de kullaniyor.
+  static int disabled = -1;
+  if (disabled < 0) {
+    const char *e = getenv("TULPAR_NO_INTSPEC");
+    disabled = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+  }
+  if (disabled) return false;
+  if (!fn || fn->type != AST_FUNCTION_DECL || !fn->name || fn->is_async) return false;
+  if (!backend->use_static_typing || strcmp(fn->name, "main") == 0) return false;
+  if (strchr(fn->name, '.') || strchr(fn->name, '$')) return false;
+  if (fn->param_count < 1) return false;
+  if (fn->return_type != TYPE_UNSPECIFIED && fn->return_type != TYPE_UNKNOWN) return false;
+  if (fn->return_custom_type && *fn->return_custom_type) return false;
+  std::unordered_set<std::string> ints;
+  for (int i = 0; i < fn->param_count; i++) {
+    ASTNode_C *p = fn->parameters[i];
+    if (!p || !p->name || p->data_type != TYPE_UNKNOWN) return false;
+    ints.insert(p->name);
+  }
+  if (!fn->body || fn->body->type != AST_BLOCK || fn->body->statement_count < 1 ||
+      fn->body->statements[fn->body->statement_count - 1]->type != AST_RETURN)
+    return false;
+  CaptureData *cd = (CaptureData *)backend->capture_data;
+  if (cd && cd->slots.find(fn) != cd->slots.end() && !cd->slots[fn].empty()) return false;
+  if (!spec_stmt_ok(backend, fn->body, fn, ints)) return false;
+  return native_codegen_supports_body(fn->body) != 0;
+}
+
+// Klon: AST gecici olarak `int`-tipli ve `<ad>$i` adli hale getirilir, govdedeki
+// kendine cagrilar klona yeniden baglanir (selfrec_rewire) ve native yoldan
+// — tipli fonksiyonlarla AYNI kod, oz-ozyineleme zinciri dahil — uretilir.
+// Cikista AST kaynaktaki haline doner. `$` kaynak dilinde tanimlayici
+// karakteri degil: klon adi kullanici fonksiyonlariyla carpisamaz.
+static void emit_int_spec_clone(LLVMBackend *backend, ASTNode_C *fn) {
+  std::string cname = std::string(fn->name) + "$i";
+  char *saved_name = fn->name;
+  std::vector<DataType> saved_pt;
+  for (int i = 0; i < fn->param_count; i++) {
+    saved_pt.push_back(fn->parameters[i]->data_type);
+    fn->parameters[i]->data_type = TYPE_INT;
+  }
+  const DataType saved_rt = fn->return_type;
+  fn->return_type = TYPE_INT;
+  selfrec_rewire(fn->body, saved_name, cname.c_str());
+  fn->name = const_cast<char *>(cname.c_str());
+  if (native_abi_eligible(backend, fn)) {
+    predeclare_func_signature(backend, fn);
+    selfrec_predeclare(backend, fn);
+    int rec = selfrec_begin(backend, fn);
+    codegen_func_def(backend, fn);
+    selfrec_finish(backend, fn, rec);
+  }
+  fn->name = saved_name;
+  selfrec_rewire(fn->body, cname.c_str(), saved_name);
+  fn->return_type = saved_rt;
+  for (int i = 0; i < fn->param_count; i++) fn->parameters[i]->data_type = saved_pt[i];
+  int_spec_clones()[saved_name] = LLVMGetNamedFunction(backend->module, cname.c_str());
+}
+
 void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
+  // K216: tipsiz ama int'e ozellestirilebilir govde -> once native klon.
+  if (!int_spec_clones().count(node->name ? node->name : "") &&
+      int_spec_eligible(backend, node))
+    emit_int_spec_clone(backend, node);
+
   // Check if function has explicit return type - use native codegen.
   // Async functions are exempt: they must use the boxed `t_<name>` ABI (the
   // coroutine engine calls them through it), matching the predeclare pass.
@@ -13857,6 +14025,38 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
         // PR 3f: surface this boxed parameter to the debugger.
         llvm_backend_emit_local_vmvalue_declare(
             backend, pname, alloca, node->line);
+      }
+    }
+  }
+
+  // K216 dagitimi: butun argumanlar INT ise int-ozel klona git, sonucu kutula.
+  {
+    auto sit = int_spec_clones().find(node->name);
+    if (sit != int_spec_clones().end() && sit->second && !has_captures &&
+        !backend->current_function_returns_struct) {
+      LLVMValueRef all_int = nullptr;
+      std::vector<LLVMValueRef> pays;
+      bool ok = true;
+      for (int i = 0; i < node->param_count && ok; i++) {
+        LLVMValueRef slot = get_local(backend, node->parameters[i]->name);
+        if (!slot) { ok = false; break; }
+        LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot, "spec.a");
+        LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, v, 0, "spec.tag");
+        LLVMValueRef isint = LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                           LLVMConstInt(backend->int32_type, 0, 0), "spec.int");
+        all_int = all_int ? LLVMBuildAnd(backend->builder, all_int, isint, "spec.all") : isint;
+        pays.push_back(LLVMBuildExtractValue(backend->builder, v, 2, "spec.p"));
+      }
+      if (ok && all_int) {
+        LLVMBasicBlockRef bb_spec = append_bb(backend, func, "spec.int");
+        LLVMBasicBlockRef bb_gen = append_bb(backend, func, "spec.gen");
+        LLVMBuildCondBr(backend->builder, all_int, bb_spec, bb_gen);
+        LLVMPositionBuilderAtEnd(backend->builder, bb_spec);
+        LLVMValueRef r = LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(sit->second),
+                                        sit->second, pays.data(), (unsigned)pays.size(),
+                                        "spec.r");
+        emit_boxed_fn_return(backend, llvm_vm_val_int_val(backend, r));
+        LLVMPositionBuilderAtEnd(backend->builder, bb_gen);
       }
     }
   }
