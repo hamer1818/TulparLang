@@ -877,6 +877,31 @@ döner.
 kazanımı geri çekti ve `fib`in gerekçesini değiştirdi — düzeltmeler tablonun
 hemen altında.
 
+### Düzeltildi / Performans — kanıtlı dizi yazması i32'ye kırpıyordu; `a[i] = k` artık kanıtlı
+
+- **İki sessiz bozulma** (hızlı sürüm 32-bit depoya göre dalsız üretiliyor):
+  kanıtlı yazma değeri **i32'ye kırpıyordu** — `array_fill(3, 0)` üzerinde
+  `d[i] = i + 2147483647` → `2147483647 -2147483648 -2147483647`; ve döngüde
+  dizi **genişleyince** (i32'ye sığmayan bekçili yazma: `a[i] += 2000000000`
+  ya da takma ad `b[0] = i + 3000000000`) aynı sürümdeki kanıtlı okuma 32-bit
+  adresle çöp okuyordu (toplam 12e9 yerine `1410065408`). Artık her eleman
+  yazmasının **değer aralığı** hesaplanıyor ve i32'ye sığmalı; sığdığı
+  kanıtlanamayan yazma (`+=`, `-=`, `*=`, `<<=`, `++`, `--`, büyük sabit)
+  hızlı sürümü açmıyor — genel sürüm her durumu doğru işliyor.
+- `a[i] = i * 2` gibi ifadeler döngü başında `count <= sınır` sınavıyla
+  kanıtlı kalıyor (sınır 1024'ten küçükse sürüm açılmıyor).
+- **K215:** `a[i] = k` (döngü-değişmezi ad) artık kanıtlı: döngü başında
+  `tag(k) == INT && k i32'ye sığar` sınavı sürüm koşuluna ekleniyor
+  (float/büyük `k` genel sürüme gider). Ölçüm (bu makine, 2026-09-28, 20M
+  int, 10 tur): `a[i] = k` **79 → 10–12 ms**; `a[i] = i * 2` 21 → 20 ms
+  (değişmedi, kanıtlı kaldı); `a[i] += 1` 1735 → 1740 ms (değişmedi — o
+  şekil eskiden de genel yoldaydı). `benchmarks/fair` 8 + 6 kıyasın
+  optimizasyon sonrası IR'ı birebir aynı; `shapes.py` sıralaması korunuyor.
+- Nöbetçi: `tests/kanitli_yazma.test.tpr` (4 test; eski derleyiciyle 2'si
+  kırmızı), `tests/kanitli_yazma.sh` 11/11 — kanıt kararını `TULPAR_DBG_VER`
+  çıkışından iki yönde ölçüyor (kurulmalı / kurulmamalı; eski derleyiciyle
+  5'i kırmızı). Perf ipucu (`TULPAR_PERF_HINTS`) yeni nedeni söylüyor.
+
 ### Performance — dokuz dilin ÜÇÜNDE BİRİNCİ, ikisinde C ile başa baş
 
 `benchmarks/fair/` düzeneğinde (her dil `BENCH_N`i ortamdan okuyor, aynı
@@ -1204,6 +1229,49 @@ gereksizdi (`n > 0` zaten eliyor), kaldırıldı.
   sınıfı doğru satırda, kanıtlı döngüye ipucu **yok** (pozitif kontrol),
   değişken yokken sessiz, program sonucu doğru. Eski derleyiciyle 5'i kırmızı.
   14 kıyasın optimizasyon sonrası IR'ı birebir aynı.
+
+### Performans — dizi yazma yolu: oku-yaz `a[i] = a[i] + b[i]` 2,65× → 0,80× C; `for (i < n)` ve `i < len(b)` kanıtlı (K201)
+
+- **Kök neden adlandırıldı (K201):** `a[i] = a[i] + b[i]` kanıtlı yola hiç
+  girmiyordu, çünkü hızlı sürüm 32-bit depoya göre dalsız ve kanıt yazılan
+  değerin i32'ye **sığdığını** statik olarak göstermek zorunda (#405); iki
+  i32'nin toplamı sığmayabilir. Ayrıca `b[i]` okuması (sınır `len(a)`)
+  kanıtlı değildi. Tüm döngü bekçili yolda kalıyordu (tag/sınır/genişlik
+  dalları, vektörleşme yok).
+- **Çözüm 1 — sınır döngü başında sınanır:** `for` kanıtı yalnız `i <
+  len(a)`yı kabul ediyordu; artık `i < n` / `i <= n` (döngüde değişmeyen ad)
+  ve `i < len(b)` de: sınır bir kez sınanıp sürüm koşuluna giriyor (`n <=
+  count(a)`, `n < count(a)`; `b` kutusuz, boş değil ve `count(b) <=
+  count(a)`) — `while` kanıtıyla aynı fikir.
+- **Çözüm 2 — dizi okuması + genel sürüme geçiş:** hızlı sürümde kanıtlı
+  dizinin `X[i]` okuması i32 aralığında sayılıyor (X de kanıtlı değilse kanıt
+  geri alınıyor). Sığdığı kanıtlanamayan yazma gövdenin **ilk deyimiyse**
+  hızlı sürümde tek bir sığma sınavı var; sığmazsa yazma **yapılmadan**
+  genel sürüme geçiliyor ve tur orada baştan koşuyor — o deyimden önce
+  hiçbir etki olmadığı için eşdeğer. İlk deyim değilse kanıt yok (eski yol).
+  Geçişli yazmanın hedefi de kanıtlı olmalı (yoksa bekçili yoldan genişleyip
+  takma adlı kanıtlı diziyi bozabilirdi). Sayım sınırıyla kanıtlanabilen yazma
+  (`a[i] = i * 2`) geçişe değil sınıra gidiyor — döngüde sınav yok.
+- **`a[i] += e` / `-=` / `*=`** aynı yoldan: ilk deyimse eleman 32-bit depodan
+  okunup işlem i64'te yapılıyor, sığmazsa geçiş. Eskiden her tur
+  `vm_get_element` + `vm_binary_op` + `vm_set_element` çağrısıydı: 20M int ×
+  10 tur `a[i] += 1` **1740 → 42 ms**; `a[i] = k + (i & 7)` 468 → 72 ms.
+- Ölçüm (bu makine, 2026-09-28, `shapes.py` 40M int): **oku-yaz 2,65× →
+  0,80×** (53–64 → 16–17 ms; C 20 ms), **iki dizi 1,56× → 0,87×**; ayrıca 20M
+  int, 5 tur toplama `i < n` **256 → 11 ms**. `benchmarks/fair` 8 + 6 kıyasın
+  optimizasyon sonrası IR'ı birebir aynı (hepsi `len(a)` sınırlı ya da iç içe
+  dizi). `shapes.py`'nin "en pahalı şekil oku-yaz" iddiası artık yanlış —
+  **oran eşiğine** çevrildi: hiçbir şekil C'nin 1,5 katını aşmamalı.
+  FINDINGS M-serisi / S11 kararı bu sıralamaya dayanıyordu: yeniden
+  değerlendirilmeli.
+- Nöbetçi: `tests/kanitli_yazma.sh` 32/32 — kanıt kuruluyor (`i < n`, `i <=
+  n`, `i < len(b)`, oku-yaz, ilk-deyim taşan yazma) VE kurulmuyor (ilk deyim
+  olmayan taşan yazma, indekslenmeyen `b`); sınav tutmayınca (`n > len`)
+  genel yol sınır dışını yakalıyor. `tests/kanitli_yazma.test.tpr` +1: geçiş
+  ortada / ilk turda / hiç. **Pozitif kontroller:** `<=` sınavı sabote
+  edilince `a[len]` sessizce okunuyor (`1998601057`); sığma sınavı sabote
+  edilince toplam kırpılıyor (`-2147482895`) — ikisinde de kapı kırmızı.
+  `perf_ipucu.sh` yeni kurallara göre güncellendi.
 
 ### Performance — dizgi sabitleri bir kez ayrılıyor (interning)
 

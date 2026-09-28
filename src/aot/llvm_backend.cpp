@@ -821,20 +821,16 @@ static void emit_perf_hint(LLVMBackend *backend, int line, const char *arr, cons
              v, a);
     break;
   case TLW_BOUND_OTHER:
-    if (detail)
-      snprintf(why_msg, sizeof why_msg,
-               tulpar::i18n::tr_en("dongu siniri `len(%s)`, erisilen dizi `%s`",
-                                   "the loop bound is `len(%s)` but the indexed array is `%s`"),
-               d, a);
-    else
-      snprintf(why_msg, sizeof why_msg,
-               tulpar::i18n::tr_en("dongu siniri `len(%s)` degil",
-                                   "the loop bound is not `len(%s)`"),
-               a);
+    snprintf(why_msg, sizeof why_msg, "%s",
+             tulpar::i18n::tr_en("dongu siniri ne bir ad ne `len(<dizi>)` (ornegin `n - 1`)",
+                                 "the loop bound is neither a name nor `len(<array>)` "
+                                 "(e.g. `n - 1`)"));
     snprintf(fix, sizeof fix,
-             tulpar::i18n::tr_en("sinir olarak erisilen dizinin uzunlugunu verin: `%s < len(%s)`",
-                                 "bound the loop by the indexed array's length: `%s < len(%s)`"),
-             v, a);
+             tulpar::i18n::tr_en("siniri donguden once bir degiskene alin: `int m = ...; "
+                                 "for (...; %s < m; ...)` ya da `%s < len(%s)`",
+                                 "hoist the bound into a variable before the loop: `int m = "
+                                 "...; for (...; %s < m; ...)` or `%s < len(%s)`"),
+             v, v, a);
     break;
   case TLW_INCR:
     snprintf(why_msg, sizeof why_msg,
@@ -856,14 +852,17 @@ static void emit_perf_hint(LLVMBackend *backend, int line, const char *arr, cons
     break;
   case TLW_WRITE:
     snprintf(why_msg, sizeof why_msg, "%s",
-             tulpar::i18n::tr_en("govdede int OLMAYAN bir eleman yazmasi var (diziyi "
-                                 "kutulayabilir)",
-                                 "the body writes a non-int element (it could box the array)"));
+             tulpar::i18n::tr_en("govdede int OLMAYAN bir eleman yazmasi var ya da i32'ye "
+                                 "sigdigi kanitlanamiyor (`+=`, `++`, buyuk deger) — diziyi "
+                                 "kutulayabilir/genisletebilir",
+                                 "the body writes a non-int element or one not proven to fit "
+                                 "i32 (`+=`, `++`, a large value) — it could box/widen the "
+                                 "array"));
     snprintf(fix, sizeof fix, "%s",
-             tulpar::i18n::tr_en("int diziye yalniz int ifade yazin; ondalik ise ayri bir "
-                                 "diziye alin",
-                                 "write only int expressions to an int array; keep floats in "
-                                 "a separate array"));
+             tulpar::i18n::tr_en("int diziye yalniz int, i32 araliginda kalan ifade yazin "
+                                 "(`a[i] = <ifade>`); ondalik ise ayri bir diziye alin",
+                                 "write only int expressions within i32 range to an int array "
+                                 "(`a[i] = <expr>`); keep floats in a separate array"));
     break;
   case TLW_W_BOUND:
     snprintf(why_msg, sizeof why_msg, "%s",
@@ -5980,6 +5979,63 @@ static LLVMValueRef emit_fits_i32(LLVMBackend *backend, LLVMValueRef v) {
       v, "fit.ok");
 }
 
+// K201: hizli surumde deopt'lu yazma dugumleri ve gecis hedefi (genel surum).
+static LLVMBasicBlockRef g_deopt_bb = nullptr;
+static std::unordered_set<const ASTNode_C *> &deopt_writes() {
+  static std::unordered_set<const ASTNode_C *> s;
+  return s;
+}
+
+// Yazma kanitinin CALISMA ZAMANI kismi (K215): kanit, dongu-degismezi adlari
+// (`a[i] = k`) turunu bilmeden kabul etti; burada dongu BASINDA bir kez
+// `tag(k) == INT && k i32'ye sigar` sinaniyor ve surum kosuluna ekleniyor.
+// Ad yuklenemezse (yerel/global degil) false — cagiran kaniti geri alir.
+// ⚠ Kod uretir; temel blok yaratilmadan once cagrilmali (Tuzaklar 6q).
+static bool emit_write_proof_checks(LLVMBackend *backend, const TulparWriteProof *wp,
+                                    LLVMValueRef *ok) {
+  for (int k = 0; k < wp->n_inv; k++) {
+    LLVMValueRef v = load_loop_int(backend, wp->inv[k], ok);
+    if (!v) return false;
+    LLVMValueRef f = emit_fits_i32(backend, v);
+    *ok = *ok ? LLVMBuildAnd(backend->builder, *ok, f, "wp.fit") : f;
+  }
+  return true;
+}
+
+// for kosulunun ust siniri `len(a)` degilse (2026-09-28): sinir dongu
+// basinda bir kez sinanir. `i < n` -> n int ve n <= count(a) (`<=` ise n <
+// count(a)); `i < len(b)` -> b sekil onbelleginde, kutusuz ve bos degil
+// (count(b) != 0) ve count(b) <= count(a). b onbellekte yoksa false: kanit
+// geri alinir. Olculdu (20M int, 5 tur toplama, bu makine): `i < n` 256 ->
+// 11 ms; shapes.py "iki dizi" 1,56x -> 0,88x (b de kanitli). Tek-bir-fazla
+// hatasi sessiz okuma olurdu: tests/kanitli_yazma.sh `<=` sinavini sabote
+// edilmis haliyle yakaliyor (a[len] sessizce okunuyordu).
+// ⚠ Kod uretir; temel blok yaratilmadan once (Tuzaklar 6q).
+static bool emit_for_bound_checks(LLVMBackend *backend, const TulparWriteProof *wp,
+                                  LLVMBackend::ArrShapeEntry *a, LLVMValueRef *ok) {
+  if (!wp->bound_name && !wp->bound_len_of) return true;
+  LLVMValueRef cna =
+      LLVMBuildLoad2(backend->builder, backend->int_type, a->count_slot, "vb.cna");
+  LLVMValueRef c = nullptr;
+  if (wp->bound_name) {
+    LLVMValueRef n = load_loop_int(backend, wp->bound_name, ok);
+    if (!n) return false;
+    c = LLVMBuildICmp(backend->builder, wp->bound_incl ? LLVMIntSLT : LLVMIntSLE, n, cna,
+                      "vb.n");
+  } else {
+    LLVMBackend::ArrShapeEntry *b = shape_lookup(backend, wp->bound_len_of);
+    if (!b) return false;
+    LLVMValueRef cnb =
+        LLVMBuildLoad2(backend->builder, backend->int_type, b->count_slot, "vb.cnb");
+    c = LLVMBuildAnd(backend->builder,
+                     LLVMBuildICmp(backend->builder, LLVMIntNE, cnb,
+                                   LLVMConstInt(backend->int_type, 0, 0), "vb.bnz"),
+                     LLVMBuildICmp(backend->builder, LLVMIntSLE, cnb, cna, "vb.ble"), "vb.b");
+  }
+  *ok = *ok ? LLVMBuildAnd(backend->builder, *ok, c, "vb.and") : c;
+  return true;
+}
+
 // Dongu basinda: sekli kanitlanabilen dizileri onbellege al.
 static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
                                      ASTNode_C *body, ASTNode_C *incr) {
@@ -6239,6 +6295,35 @@ static LLVMValueRef codegen_elem_compound(LLVMBackend *backend,
       LLVMValueRef p2 = sf_target_ptr(backend, sf, "ca.sf.p2");
       if (p2) struct_field_store_from_boxed(backend, sf.st, p2, sf.fi, nv, "ca.sf.set");
       return nv; // bilesik atama: YENI deger
+    }
+  }
+  // K201 (devami): kanitli hizli surumde `a[i] += e` / `-=` / `*=` — govdenin
+  // ilk deyimiyse (deopt kumesi). Eleman 32-bit depodan okunur, islem i64'te
+  // yapilir (iki i32'nin toplami/carpimi i64'e sigar), sonuc i32'ye sigmazsa
+  // yazma yapilmadan genel surume gecilir. Genel yol (asagida) her okumada
+  // vm_get_element + vm_binary_op + vm_set_element cagiriyordu (olculdu:
+  // 20M int, 10 tur `a[i] += 1` 1740 ms).
+  {
+    const int bop0 = compound_op_to_binary(node->op);
+    LLVMBackend::ArrShapeEntry *kshp = shape_lookup(backend, array_base_name(acc));
+    if (backend->shape_want32 == 1 && g_deopt_bb && deopt_writes().count(node) &&
+        shape_access_proven(kshp, acc->index) &&
+        (bop0 == TOKEN_PLUS || bop0 == TOKEN_MINUS || bop0 == TOKEN_MULTIPLY)) {
+      LLVMValueRef kix =
+          typed_to_int_payload(backend, codegen_typed_expr(backend, acc->index));
+      LLVMValueRef kid =
+          LLVMBuildLoad2(backend->builder, backend->ptr_type, kshp->idata_slot, "ca.k.id");
+      LLVMValueRef kold = emit_shape_elem_load(backend, kid, kshp->is32_slot, kix, "ca.k.old");
+      LLVMValueRef krhs =
+          typed_to_int_payload(backend, codegen_typed_expr(backend, node->right));
+      LLVMValueRef knv = bop0 == TOKEN_PLUS    ? LLVMBuildAdd(backend->builder, kold, krhs, "ca.k.n")
+                         : bop0 == TOKEN_MINUS ? LLVMBuildSub(backend->builder, kold, krhs, "ca.k.n")
+                                               : LLVMBuildMul(backend->builder, kold, krhs, "ca.k.n");
+      LLVMBasicBlockRef bb_ok = append_bb(backend, backend->current_function, "ca.k.fit");
+      LLVMBuildCondBr(backend->builder, emit_fits_i32(backend, knv), bb_ok, g_deopt_bb);
+      LLVMPositionBuilderAtEnd(backend->builder, bb_ok);
+      emit_shape_elem_store(backend, kid, kshp->is32_slot, kix, knv, "ca.k.set");
+      return llvm_vm_val_int_val(backend, knv);
     }
   }
   // Kap ve indeks: `a[i]` dugumunde taban ya name'de ya left'te (bkz. 6g).
@@ -11258,9 +11343,16 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                                               backend->ptr_type,
                                               pshp->idata_slot, "set.pid");
             LLVMValueRef pix = llvm_extract_vm_val_int(backend, pidx);
-            emit_shape_elem_store(backend, pid, pshp->is32_slot, pix,
-                                  llvm_extract_vm_val_int(backend, val),
-                                  "set.pep");
+            LLVMValueRef pv = llvm_extract_vm_val_int(backend, val);
+            // K201 DEOPT: i32'ye sigdigi kanitlanamayan ilk-deyim yazmasi.
+            // Sigmazsa yazma YAPILMADAN genel surume gecilir; tur orada
+            // bastan kosar (bu deyimden once etki yok — kanit sarti).
+            if (g_deopt_bb && backend->shape_want32 == 1 && deopt_writes().count(node)) {
+              LLVMBasicBlockRef bb_ok = append_bb(backend, backend->current_function, "set.fit");
+              LLVMBuildCondBr(backend->builder, emit_fits_i32(backend, pv), bb_ok, g_deopt_bb);
+              LLVMPositionBuilderAtEnd(backend->builder, bb_ok);
+            }
+            emit_shape_elem_store(backend, pid, pshp->is32_slot, pix, pv, "set.pep");
             return val;
           }
         }
@@ -11643,10 +11735,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         }
       }
     }
+    TulparWriteProof w_wp;
     if (backend->shape_count > 0 &&
         (backend->loop_depth == 0 || getenv("TULPAR_X_NEST")) &&
         tulpar_while_index_proven(node->condition, node->body, &w_ivar, &w_ub,
-                                  &w_step, &w_step_const, &w_incl)) {
+                                  &w_step, &w_step_const, &w_incl, &w_wp)) {
       LLVMValueRef ok = nullptr;
       LLVMValueRef v_val = load_loop_int(backend, w_ivar, &ok);
       LLVMValueRef ub_val = load_loop_int(backend, w_ub, &ok);
@@ -11656,7 +11749,18 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           w_step ? load_loop_int(backend, w_step, &ok)
                  : LLVMConstInt(backend->int_type,
                                 (unsigned long long)w_step_const, 0);
-      if (v_val && ub_val && st_val) wver = 1;
+      // Yazma kanitinin calisma zamani kismi (K215): degismez adlar int ve
+      // i32'ye sigar; sayim siniri varsa en buyuk indeks (UB ya da UB-1) onun
+      // altinda.
+      bool wp_ok = emit_write_proof_checks(backend, &w_wp, &ok);
+      if (wp_ok && ub_val && w_wp.count_limit > 0) {
+        LLVMValueRef lim = LLVMConstInt(backend->int_type,
+                                        (unsigned long long)w_wp.count_limit, 0);
+        LLVMValueRef c = LLVMBuildICmp(backend->builder, w_incl ? LLVMIntSLT : LLVMIntSLE,
+                                       ub_val, lim, "wv.lim");
+        ok = ok ? LLVMBuildAnd(backend->builder, ok, c, "wv.limand") : c;
+      }
+      if (v_val && ub_val && st_val && wp_ok) wver = 1;
       if (wver) {
         LLVMValueRef zero = LLVMConstInt(backend->int_type, 0, 0);
         LLVMValueRef num = LLVMBuildAnd(
@@ -11777,12 +11881,31 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // Ic ice dongulerde katlanarak buyumemesi icin yalniz EN DIS
     // seviyede aciliyor.
     int ver_count = 0;
+    LLVMValueRef ver_extra = nullptr;   // K215: yazma kanitinin calisma zamani kismi
+    TulparWriteProof ver_wp[8];         // K201: kanitli girdilerin okuma/deopt bilgisi
     if (backend->loop_depth == 0 && node->init && node->condition) {
       for (int i = shape_saved; i < backend->shape_count; i++) {
         const char *ivar = nullptr;
+        TulparWriteProof &wp = ver_wp[(i - shape_saved) & 7];
+        LLVMValueRef chk = nullptr;
         if (tulpar_loop_index_proven(node->init, node->condition, node->body,
                                      node->increment,
-                                     backend->shape_cache[i].name, &ivar)) {
+                                     backend->shape_cache[i].name, &ivar, &wp) &&
+            emit_write_proof_checks(backend, &wp, &chk) &&
+            emit_for_bound_checks(backend, &wp, &backend->shape_cache[i], &chk)) {
+          if (wp.count_limit > 0) {
+            // En buyuk indeks count-1 <= count_limit-1 (`a[i] = i * 2`).
+            LLVMValueRef cn = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                             backend->shape_cache[i].count_slot, "ver.lcn");
+            LLVMValueRef c = LLVMBuildICmp(
+                backend->builder, LLVMIntSLE, cn,
+                LLVMConstInt(backend->int_type, (unsigned long long)wp.count_limit, 0),
+                "ver.lim");
+            chk = chk ? LLVMBuildAnd(backend->builder, chk, c, "ver.limand") : c;
+          }
+          if (chk)
+            ver_extra = ver_extra ? LLVMBuildAnd(backend->builder, ver_extra, chk, "ver.xand")
+                                  : chk;
           backend->shape_cache[i].proven_ivar = ivar;
           ver_count++;
           if (getenv("TULPAR_DBG_VER")) fprintf(stderr, "[ver] %s[%s]\n", backend->shape_cache[i].name, ivar);
@@ -11795,6 +11918,30 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                                           &detail);
           emit_perf_hint(backend, node->line, backend->shape_cache[i].name,
                          node->init->name, why, detail);
+        }
+      }
+      // K201: kanit `X[i]` okumasini int saydiysa X de kanitli olmali (32-bit
+      // kutusuz, sinir sinanmis) — degilse o okuma bekcili ve kutulu/float
+      // donebilir. Kanitsiz bir diziye dayanan kaniti geri al; sabit noktaya
+      // kadar (geri alma baskasini da dusurebilir). Uretilmis sinav kodu
+      // zararsiz kalir (surum kosulu yalniz sikilasir).
+      for (bool changed = true; changed;) {
+        changed = false;
+        for (int i = shape_saved; i < backend->shape_count; i++) {
+          if (!backend->shape_cache[i].proven_ivar) continue;
+          const TulparWriteProof &wp = ver_wp[(i - shape_saved) & 7];
+          for (int k = 0; k < wp.n_arr; k++) {
+            LLVMBackend::ArrShapeEntry *x = shape_lookup(backend, wp.arr[k]);
+            if (!x || !x->proven_ivar) {
+              backend->shape_cache[i].proven_ivar = nullptr;
+              ver_count--;
+              changed = true;
+              if (getenv("TULPAR_DBG_VER"))
+                fprintf(stderr, "[ver-geri] %s (okunan %s kanitsiz)\n",
+                        backend->shape_cache[i].name, wp.arr[k]);
+              break;
+            }
+          }
         }
       }
     }
@@ -11826,6 +11973,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         all_ok = all_ok ? LLVMBuildAnd(backend->builder, all_ok, ok, "ver.and")
                         : ok;
       }
+      if (ver_extra) all_ok = LLVMBuildAnd(backend->builder, all_ok, ver_extra, "ver.wp");
       set_branch_weights(
           backend, LLVMBuildCondBr(backend->builder, all_ok, vb_fast, vb_gen),
           2000, 1);
@@ -11833,7 +11981,15 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       int v_saved_want = backend->shape_want32;
       LLVMPositionBuilderAtEnd(backend->builder, vb_fast);
       backend->shape_want32 = 1;                         // hizli surum: 32-bit
+      // K201: deopt'lu yazmalar (sigmazsa genel surume gec).
+      for (int i = shape_saved; i < backend->shape_count; i++)
+        if (backend->shape_cache[i].proven_ivar && ver_wp[(i - shape_saved) & 7].deopt_write)
+          deopt_writes().insert(ver_wp[(i - shape_saved) & 7].deopt_write);
+      LLVMBasicBlockRef saved_deopt = g_deopt_bb;
+      g_deopt_bb = deopt_writes().empty() ? nullptr : vb_gen;
       codegen_for_body(backend, node, vb_done);          // proven_ivar DOLU
+      g_deopt_bb = saved_deopt;
+      deopt_writes().clear();
 
       for (int i = shape_saved; i < backend->shape_count; i++)
         backend->shape_cache[i].proven_ivar = nullptr;   // genel surum: BEKCILI

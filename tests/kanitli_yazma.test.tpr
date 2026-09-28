@@ -1,0 +1,143 @@
+// KANITLI ELEMAN YAZMASI: i32'ye sigma + dongu-degismezi ad (K215,
+// 2026-09-28).
+//
+// Hizli surum 32-bit depoya gore dalsiz uretiliyor. Iki SESSIZ bozulma
+// olculdu (eski derleyici):
+//   * kanitli yazma degeri i32'ye KIRPIYORDU: array_fill(3, 0) uzerinde
+//     `d[i] = i + 2147483647` -> `2147483647 -2147483648 -2147483647`;
+//   * dongude dizi GENISLEYINCE (i32'ye sigmayan bekcili yazma — `a[i] +=`
+//     ya da takma ad `b[0] = i + 3e9`) ayni surumdeki kanitli okuma 32-bit
+//     adresle cop okuyordu (toplam 12e9 yerine 1410065408).
+// Artik her eleman yazmasinin DEGER ARALIGI i32'ye sigmali; sigmiyorsa dongu
+// genel (bekcili) surume gidiyor. `a[i] = i * 2` gibi ifadeler dongu basinda
+// `count <= sinir` sinaviyla kanitli kaliyor; `a[i] = k` (dongu-degismezi ad)
+// `tag(k) == INT && k i32'ye sigar` sinaviyla kanitli (eskiden hic degildi).
+// Hizli yolun gercekten kullanildigi: tests/kanitli_yazma.sh.
+// Calistir (depo kokunden): ./tulpar tests/kanitli_yazma.test.tpr
+import "test";
+
+func doldur_k(int[] a, int k) {
+    for (int i = 0; i < len(a); i++) { a[i] = k; }
+}
+func doldur_ofset(int[] a) {
+    for (int i = 0; i < len(a); i++) { a[i] = i + 2147483647; }
+}
+func doldur_carp(int[] a) {
+    for (int i = 0; i < len(a); i++) { a[i] = i * 3000000000; }
+}
+func doldur_iki(int[] a) {
+    for (int i = 0; i < len(a); i++) { a[i] = i * 2; }
+}
+func topla_ve_buyut(int[] a): int {
+    int s = 0;
+    for (int i = 0; i < len(a); i++) {
+        s = s + a[i];
+        a[i] += 2000000000;
+    }
+    return s;
+}
+func takma_ad(int[] a, int[] b): int {
+    int s = 0;
+    for (int i = 0; i < len(a); i++) {
+        b[0] = i + 3000000000;
+        s = s + a[i];
+    }
+    return s;
+}
+func dongu_k(int[] a, var k) {
+    for (int i = 0; i < len(a); i++) { a[i] = k; }
+}
+
+func run_kirpma_yok() {
+    int[] d = array_fill(3, 0);
+    doldur_ofset(d);
+    assert_eq_int(d[1], 2147483648);
+    assert_eq_int(d[2], 2147483649);
+    int[] e = array_fill(4, 0);
+    doldur_carp(e);
+    assert_eq_int(e[3], 9000000000);
+}
+
+func run_genisleme_dongude() {
+    int[] a = array_fill(6, 2000000000);
+    assert_eq_int(topla_ve_buyut(a), 12000000000);   // eskiden 1410065408
+    assert_eq_int(a[5], 4000000000);
+    int[] c = array_fill(4, 1);
+    assert_eq_int(takma_ad(c, c), 3000000003);         // eskiden -1294967295
+}
+
+func run_degismez_ad() {
+    int[] a = array_fill(5, 0);
+    doldur_k(a, 7);
+    assert_eq_int(a[0] + a[4], 14);
+    doldur_k(a, 5000000000);                           // i32'ye sigmaz: genel surum
+    assert_eq_int(a[2], 5000000000);
+    int[] b = array_fill(3, 0);
+    dongu_k(b, 2.5);                                   // float: genel surum, kutular
+    assert_close(b[1], 2.5, 0.000001);
+}
+
+func run_sayim_siniri() {
+    int[] a = array_fill(1000, 0);
+    doldur_iki(a);
+    assert_eq_int(a[999], 1998);
+}
+
+// K201 oku-yaz: `a[i] = a[i] + b[i]` hizli surumde; toplam i32'ye sigmazsa
+// yazma YAPILMADAN genel surume gecilir ve tur orada bastan kosar.
+func oku_yaz(int[] a, int[] b): int {
+    for (int i = 0; i < len(a); i++) { a[i] = a[i] + b[i]; }
+    int s = 0;
+    for (int i = 0; i < len(a); i++) { s = s + a[i]; }
+    return s;
+}
+
+func run_oku_yaz_deopt() {
+    int[] a = array_fill(8, 100);
+    int[] b = array_fill(8, 1);
+    b[3] = 2147483600;                                // a[3] + b[3] i32'yi asar
+    b[6] = -5;
+    assert_eq_int(oku_yaz(a, b), 2147484401);
+    assert_eq_int(a[3], 2147483700);                  // kirpilmadi
+    assert_eq_int(a[2], 101);                         // gecisten once yazilanlar
+    assert_eq_int(a[6], 95);                          // gecisten sonra (genel surum)
+    int[] c = array_fill(6, 2000000000);
+    int[] d = array_fill(6, 2000000000);
+    assert_eq_int(oku_yaz(c, d), 24000000000);        // ilk turda gecis
+    int[] e = array_fill(5, 3);
+    int[] f = array_fill(5, 4);
+    assert_eq_int(oku_yaz(e, f), 35);                 // hic gecis yok
+}
+
+// `a[i] += e` / `-=` / `*=` ilk deyimde: ayni hizli yol + gecis.
+func arti(int[] a, int[] b) { for (int i = 0; i < len(a); i++) { a[i] += b[i]; } }
+func eksi(int[] a, int k) { for (int i = 0; i < len(a); i++) { a[i] -= k; } }
+func carp(int[] a, int k) { for (int i = 0; i < len(a); i++) { a[i] *= k; } }
+
+func run_bilesik_deopt() {
+    int[] a = array_fill(6, 10);
+    int[] b = array_fill(6, 1);
+    b[2] = 2147483647;                                // a[2] + b[2] tasar
+    arti(a, b);
+    assert_eq_int(a[1], 11);
+    assert_eq_int(a[2], 2147483657);
+    assert_eq_int(a[5], 11);
+    int[] c = array_fill(4, -2147483000);
+    eksi(c, 1000);                                    // ilk turda gecis
+    assert_eq_int(c[3], -2147484000);
+    int[] d = array_fill(5, 100000);
+    carp(d, 100000);                                  // 10^10: tasar
+    assert_eq_int(d[4], 10000000000);
+    int[] e = array_fill(5, 7);
+    carp(e, 3);                                       // gecis yok
+    assert_eq_int(e[0] + e[4], 42);
+}
+
+print("=== kanitli eleman yazmasi ===");
+test("i32'ye sigmayan kanitli yazma kirpilmiyor", "run_kirpma_yok");
+test("dongude genisleyen dizi, kanitli okuma dogru", "run_genisleme_dongude");
+test("a[i] = k: int / buyuk / float", "run_degismez_ad");
+test("a[i] = i * 2: sayim siniriyla kanitli", "run_sayim_siniri");
+test("oku-yaz: sigmayan toplamda genel surume gecis (K201)", "run_oku_yaz_deopt");
+test("a[i] += / -= / *=: ayni hizli yol + gecis", "run_bilesik_deopt");
+test_summary();
