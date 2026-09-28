@@ -196,6 +196,20 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   gdb'siz ipucu. Eski ikiliyle üç senaryo da kırmızı. Linux CI'a gdb
   kuruldu; orada atlama yasak (`TULPAR_DAP_ZORUNLU=1`).
 
+### Düzeltildi — Windows'ta dolu porta ikinci sunucu bind edebiliyordu
+
+- `socket_server` her platformda SO_REUSEADDR kuruyordu. Windows'ta bu,
+  portu DİNLEYEN bir soket varken de bind'e izin veriyor (POSIX'te yalnız
+  TIME_WAIT'ten yeniden başlamayı açar). Wings'in "açık port doluysa söyle"
+  ve "8484 doluysa bir sonrakine geç" davranışları Windows'ta hiç
+  çalışmıyordu. Ölçüldü (Windows CI): ikinci dinleyici `fd 268` aldı.
+  Windows'ta artık seçenek kurulmuyor (varsayılan ikinci dinleyiciyi
+  reddediyor). SO_EXCLUSIVEADDRUSE, TIME_WAIT'ten yeniden bind'i
+  engelleyebildiği için seçilmedi.
+- `tests/port_mesgul.test.tpr`: ikinci dinleyici reddedilir; TIME_WAIT
+  varken aynı port yeniden bind edilir. Pozitif kontroller: düzeltmesiz
+  Windows'ta birincisi, SO_REUSEADDR'sız Linux'ta ikincisi düşüyor.
+
 ### Düzeltildi — dinamik çağrı 8 argümanda sessizce kırpıyordu; tavan tek yerde, 32
 
 - `call(ad, a1, …, a10)` 10 parametreli fonksiyonu çağırınca 9. ve 10.
