@@ -43,6 +43,7 @@
 #include <llvm-c/Core.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
+#include <llvm-c/Transforms/PassBuilder.h>
 
 #if PLATFORM_MACOS
   #include <mach-o/dyld.h>
@@ -402,6 +403,68 @@ static std::string build_link_search_dirs() {
 static const char *aot_link_driver() {
   const char *cc = getenv("TULPAR_CC");
   return (cc && *cc) ? cc : "clang++";
+}
+
+// --- AddressSanitizer (K166) --------------------------------------------------
+// `TULPAR_AOT_LINK_FLAGS=-fsanitize=address` yalnız ASan RUNTIME'ını
+// bağlıyordu; üretilen IR enstrümante edilmediği için Tulpar kodunun kendi
+// yığın/yığıt erişimleri hiç denetlenmiyordu (Tuzaklar 6o sınıfı: yığından
+// taşan okuma çıktı testiyle yakalanmıyor). `--sanitize=address` IR'ı da
+// enstrümante ediyor. Runtime arşivi (libtulpar_runtime.a) enstrümante
+// DEĞİL — onun için tests/run_asan.sh var; ama malloc/free ASan'ın
+// araya girmesinden geçtiği için çift/geçersiz free orada da yakalanır.
+static int g_sanitize_address = 0;
+
+void aot_set_sanitize_address(int enable) { g_sanitize_address = enable; }
+
+// Optimizasyondan SONRA koşar (clang'ın sırası: asan optimize edilmiş IR'ı
+// enstrümante eder; önce koşarsa optimizasyon denetimleri kısmen siler).
+static bool aot_apply_address_sanitizer(LLVMBackend *backend) {
+  LLVMModuleRef m = backend->module;
+  unsigned kind = LLVMGetEnumAttributeKindForName("sanitize_address", 16);
+  LLVMContextRef ctx = LLVMGetModuleContext(m);
+  int n = 0;
+  for (LLVMValueRef f = LLVMGetFirstFunction(m); f; f = LLVMGetNextFunction(f)) {
+    if (LLVMIsDeclaration(f)) continue;
+    LLVMAddAttributeAtIndex(f, LLVMAttributeFunctionIndex,
+                            LLVMCreateEnumAttribute(ctx, kind, 0));
+    n++;
+  }
+  // Varsayılan ASan seçenekleri: SIZINTI DENETİMİ KAPALI. Tulpar'ın bellek
+  // modeli arena + ölümsüz kalıcılar; süreç sonunda serbest bırakılmayan her
+  // şey LeakSanitizer'a "sızıntı" görünüyor ve boş bir program bile çıkış 1
+  // veriyordu (ölçüldü 2026-09-27: 5 ayırma, 440 bayt). `ASAN_OPTIONS`
+  // ortam değişkeni bunu ezer (`detect_leaks=1`). Enstrümantasyondan ÖNCE
+  // eklenir; kendisi `sanitize_address` taşımaz (declaration değil ama
+  // yalnız sabit döndürüyor).
+  {
+    LLVMTypeRef ptr_t = LLVMPointerTypeInContext(ctx, 0);
+    const char opts_txt[] = "detect_leaks=0";
+    LLVMValueRef str = LLVMConstStringInContext(ctx, opts_txt,
+                                                (unsigned)sizeof(opts_txt) - 1, 0);
+    LLVMValueRef g = LLVMAddGlobal(m, LLVMTypeOf(str), "tulpar.asan.opts");
+    LLVMSetInitializer(g, str);
+    LLVMSetGlobalConstant(g, 1);
+    LLVMSetLinkage(g, LLVMPrivateLinkage);
+    LLVMTypeRef fty = LLVMFunctionType(ptr_t, nullptr, 0, 0);
+    LLVMValueRef fn = LLVMAddFunction(m, "__asan_default_options", fty);
+    LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(ctx, fn, "entry");
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(ctx);
+    LLVMPositionBuilderAtEnd(b, bb);
+    LLVMBuildRet(b, g);
+    LLVMDisposeBuilder(b);
+  }
+  LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
+  LLVMErrorRef err = LLVMRunPasses(m, "asan", nullptr, opts);
+  LLVMDisposePassBuilderOptions(opts);
+  if (err) {
+    char *msg = LLVMGetErrorMessage(err);
+    fprintf(stderr, "[AOT] Hata: AddressSanitizer gecisi basarisiz: %s\n", msg);
+    LLVMDisposeErrorMessage(msg);
+    return false;
+  }
+  AOT_PROGRESS("[AOT] AddressSanitizer: %d fonksiyon enstrumante edildi\n", n);
+  return true;
 }
 
 // Optional extra flags spliced into the final clang++ AOT link command. Set
@@ -1275,6 +1338,21 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     AOT_PROGRESS("[AOT] Optimizing...\n");
     llvm_backend_optimize(backend);
   }
+  if (g_sanitize_address) {
+    if (g_target_web || g_target_android) {
+      fprintf(stderr, "%s\n", tulpar::i18n::tr_en(
+          "[AOT] Hata: --sanitize yalniz yerel hedefte destekleniyor.",
+          "[AOT] Error: --sanitize is only supported for the native target."));
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_CODEGEN;
+    }
+    if (!aot_apply_address_sanitizer(backend)) {
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_CODEGEN;
+    }
+  }
 
   // Plan 07 PR 2: close the debug-info graph before any IR consumer
   // (emit_ir_file / emit_object) walks it. Finalize must come AFTER
@@ -1631,7 +1709,11 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   AOT_PROGRESS("[AOT] Linking executable: %s\n", exe_filename);
   std::string search_dirs = build_link_search_dirs();
   std::string extra_flags = aot_extra_link_flags();
-  const char *debug_flag = emit_debug_info ? "-g " : "";
+  // --sanitize=address: ASan runtime'ı linkle (enstrümantasyon yukarıda).
+  const char *debug_flag = g_sanitize_address
+                               ? (emit_debug_info ? "-g -fsanitize=address "
+                                                  : "-fsanitize=address ")
+                               : (emit_debug_info ? "-g " : "");
   char link_cmd[2048];
   if (g_target_web) {
     // Web hedefi: em++ (Emscripten) linkler → <out>.html + .js + .wasm.

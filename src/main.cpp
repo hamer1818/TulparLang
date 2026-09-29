@@ -160,6 +160,38 @@ static bool binary_has_debug_info(const char *path, const char *output_name) {
   return data.find(oso) != std::string::npos;
 }
 
+// `--sanitize[=address]` / `--asan` (K166). 1 = tanındı, 0 = bu bayrak
+// değil, -1 = desteklenmeyen tür (hata basıldı). UBSan/TSan kaynak düzeyinde
+// ön uç işi (clang denetimleri AST'den ekler); Tulpar IR'ına sonradan
+// eklenemiyor — bu yüzden yalnız `address`.
+static int parse_sanitize_flag(const char *f) {
+  if (strcmp(f, "--asan") == 0 || strcmp(f, "--sanitize") == 0 ||
+      strcmp(f, "--sanitize=address") == 0)
+    return 1;
+  if (strncmp(f, "--sanitize=", 11) == 0) {
+    std::fprintf(stderr, "%s'%s'\n",
+                 tulpar::i18n::tr_en(
+                     "Desteklenmeyen sanitizer (yalniz --sanitize=address): ",
+                     "Unsupported sanitizer (only --sanitize=address): "),
+                 f + 11);
+    return -1;
+  }
+  return 0;
+}
+
+// ASan'lı bir ikili mi? (`__asan_init` çağrısı modül kurucusundan gelir.)
+// Önbellek, sanitize kipi değişince eski ikiliyi bırakmasın diye.
+static bool binary_is_asan(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) return false;
+  std::string data;
+  char buf[1 << 16];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) data.append(buf, n);
+  fclose(f);
+  return data.find("__asan_init") != std::string::npos;
+}
+
 static void print_help() {
   std::printf("TulparLang %s (LLVM AOT Backend)\n\n", tulpar::kVersion);
 
@@ -200,6 +232,12 @@ static void print_help() {
               tulpar::i18n::tr_en(
                   "- run/build oncesi tip uyarilarini kapat",
                   "- Disable pre-build [typecheck] warnings"));
+  std::printf("  --sanitize=address (--asan)      %s\n",
+              tulpar::i18n::tr_en(
+                  "- build: uretilen kodu AddressSanitizer ile enstrumante et "
+                  "(yalniz yerel hedef)",
+                  "- build: instrument generated code with AddressSanitizer "
+                  "(native target only)"));
   std::printf("  --strict                         %s\n",
               tulpar::i18n::tr_en(
                   "- [typecheck] uyarilarini hata olarak ele al "
@@ -363,6 +401,7 @@ int main(int argc, char **argv) {
   // the second form was silently dropped until 2026-09-27 (see the
   // positional loop in the build branch).
   int emit_debug = 0;
+  int sanitize_address = 0;  // --sanitize=address / --asan (yalnız build)
   // --strict flips the typeinfer pre-pass from informational to
   // exit-blocking. Precedence (lowest to highest):
   //   1. Default: 0 (warnings only)
@@ -425,6 +464,9 @@ int main(int argc, char **argv) {
       // `tulpar build --debug` opt-in. Doesn't shift arg_offset on its
       // own — the next non-flag arg still sets the file index.
       emit_debug = 1;
+    } else if (int s = parse_sanitize_flag(argv[i])) {
+      if (s < 0) return 2;
+      sanitize_address = 1;
     } else if (strcmp(argv[i], "--aot") == 0 ||
                strcmp(argv[i], "--build") == 0 ||
                strcmp(argv[i], "build") == 0) {
@@ -462,6 +504,15 @@ int main(int argc, char **argv) {
                 "tulpar build --target=web oyun.tpr [cikti]",
                 "--target=web only works with 'tulpar build': "
                 "tulpar build --target=web game.tpr [output]"));
+    return 1;
+  }
+  if (sanitize_address && !build_mode) {
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en(
+                "--sanitize yalnizca 'tulpar build' ile kullanilir: "
+                "tulpar build --sanitize=address x.tpr [cikti]",
+                "--sanitize only works with 'tulpar build': "
+                "tulpar build --sanitize=address x.tpr [output]"));
     return 1;
   }
   if (android_target && !build_mode) {
@@ -526,6 +577,9 @@ int main(int argc, char **argv) {
           skip_typecheck = 1;
         } else if (strcmp(f, "--debug") == 0 || strcmp(f, "-g") == 0) {
           emit_debug = 1;
+        } else if (int s = parse_sanitize_flag(f)) {
+          if (s < 0) return 2;
+          sanitize_address = 1;
         } else if (strcmp(f, "--target=web") == 0 || strcmp(f, "--web") == 0 ||
                    strcmp(f, "--target=android") == 0 ||
                    strcmp(f, "--android") == 0 || strcmp(f, "--apk") == 0 ||
@@ -634,7 +688,7 @@ int main(int argc, char **argv) {
       // ve hızlı, önceki ikilinin hangi kipte üretildiğini tahmin etmekten
       // ucuz. Tersi yön (debug ikilisinin ardından düz derleme) aşağıda
       // `binary_has_debug_info` ile yakalanıyor.
-      if (!web_target && !android_target && !emit_debug &&
+      if (!web_target && !android_target && !emit_debug && !sanitize_address &&
           !(nocache && *nocache && *nocache != '0')) {
         char exe_path[512];
 #ifdef _WIN32
@@ -659,7 +713,8 @@ int main(int argc, char **argv) {
           if (exe_st.st_mtime >= src_st.st_mtime &&
               exe_st.st_mtime >= imp_mtime &&
               (!driver_ok || exe_st.st_mtime >= drv_st.st_mtime) &&
-              !binary_has_debug_info(exe_path, output_name)) {
+              !binary_has_debug_info(exe_path, output_name) &&
+              !binary_is_asan(exe_path)) {
             printf("[AOT] Cache hit: %s up-to-date\n", exe_path);
             free(source);
             return 0;
@@ -668,6 +723,7 @@ int main(int argc, char **argv) {
       }
     }
 
+    if (sanitize_address) aot_set_sanitize_address(1);
     AOTResult result = aot_compile_with_filename_debug(
         source, output_name, src_arg, emit_debug);
     free(source);

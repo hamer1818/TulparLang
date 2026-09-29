@@ -314,6 +314,25 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
 - STATUS'taki 07-21 kenar taraması strict sözleşmeye göre yeniden ölçüldü
   (sıfıra bölme ve sınır dışı erişim artık fırlatıyor; kayıt bayattı).
 
+### Eklendi — `tulpar build --sanitize=address`
+
+- `TULPAR_AOT_LINK_FLAGS=-fsanitize=address` yalnız ASan runtime'ını
+  bağlıyordu; üretilen IR enstrümante edilmediği için Tulpar kodunun kendi
+  bellek erişimleri denetlenmiyordu (Tuzaklar 6o). Yeni bayrak (`--asan`
+  kısaltması) optimizasyondan sonra her fonksiyona `sanitize_address`
+  ekleyip LLVM `asan` geçişini koşturuyor, `-fsanitize=address` ile
+  linkliyor. Sızıntı denetimi varsayılan kapalı (`__asan_default_options` =
+  `detect_leaks=0`; arena + ölümsüz kalıcılar LSan'a sızıntı görünüyor ve
+  boş program bile çıkış 1 veriyordu), `ASAN_OPTIONS` ezer. Yalnız yerel
+  hedef ve yalnız `build`; UBSan/TSan kaynak düzeyinde ön uç işi olduğu
+  için yok (`--sanitize=thread` rc 2).
+- Önbellek kipi ayırıyor: ASan'lı ikiliden sonra düz derleme (ve tersi)
+  isabet etmiyor.
+- `tests/sanitize_smoke.sh` (`build.sh suites`, Linux/macOS): IR'da
+  enstrümantasyon var / düzde yok, ikili doğru çıktı + çıkış 0, ASan
+  runtime'ı yüklü (`ASAN_OPTIONS=help=1`), önbellek (aynı kipte isabet —
+  pozitif kontrol), hata yolları.
+
 ### Düzeltildi — kare içinde global'e konan kapanış geri sarmadan sonra yakaladığını kaybediyordu
 
 - `aot_persist` kapanışı (`OBJ_CLOSURE`) olduğu gibi döndürüyordu: başlık
