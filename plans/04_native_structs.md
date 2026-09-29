@@ -5,6 +5,11 @@ turları) — `struct Point { int x; int y; }` typed alloca + GEP yolundan
 LLVM IR'da native i64×N olarak temsil ediliyor; typed fn arg/return,
 `print(struct)` formatter, `benchmarks/struct_sum` eklendi. Bkz. STATUS
 § "Çekirdek dil".
+*(2026-09-28 notu: PR 4 "ARC + `runtime/tulpar_struct`" o biçimde yapılmadı — kutulu
+struct arena'dan ayrılıyor ve `runtime_bindings.cpp`'de (`OBJ_STRUCT`); tekil kutusuz
+struct (float alanlılar dahil, P0.3) ve tipli struct dizisi `T[]` (P1.1) 2026-09-21'de
+geldi. PR 5 "VM bytecode + REPL" GEÇERSİZ (VM kaldırıldı). PR 6'daki
+`assert_struct_eq` yapılmadı — envanter K198.)*
 **Tahmin:** 4-6 PR (parser → AST → typeinfer → AOT codegen → VM → benchmark/cleanup)
 **Risk:** Yüksek (codegen, runtime ABI ve typeinfer üçlüsünü birden değiştirir)
 **Mottoya katkı:** C kadar hızlı (somut, ölçülebilir kazanç)

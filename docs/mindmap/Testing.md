@@ -7,9 +7,9 @@ tags: [moc, testing]
 ## Üç koşum
 | Komut | Kapsam | CI |
 |---|---|---|
-| `./build.sh test` | `examples/*.tpr` uçtan uca (AOT → çalıştır → çıkış kodu) | ✅ Linux |
-| `./build.sh suites` | `tests/*.test.tpr` (59 paket, gömülü `test` kütüphanesi) **+ denetimler** | ✅ Linux |
-| `./tests/typeinfer/run.sh` | `tests/typeinfer/{pass,fail}/` fixture'ları | ✅ Linux |
+| `./build.sh test` | `examples/*.tpr` uçtan uca (AOT → çalıştır → çıkış kodu) | ✅ Linux, Windows |
+| `./build.sh suites` | `tests/*.test.tpr` (2026-09-28: 90+ paket, gömülü `test` kütüphanesi) **+ denetimler** | ✅ Linux, macOS, Windows |
+| `./tests/typeinfer/run.sh` | `tests/typeinfer/{pass,fail}/` fixture'ları | ✅ Linux, Windows |
 
 `build.sh suites`, **`Tests:` özeti basmayan** bir süiti başarısız sayar. Gerekçe:
 `test_summary()` `exit(1)` çağıran şeydir — onu unutan süit asla kırmızıya dönemez.
@@ -27,9 +27,10 @@ sessiz no-op olarak aylarca yaşaması bu körlükten.
 > ```
 > → [[Tuzaklar]] §3c
 
-**Denetimler** paket döngüsünden SONRA koşuyor: builtin · kama mesh · dist arşiv ·
-LSP · fmt · doc · pkg · Android derleme dumanı · ayrılmış kelime ve parametre adı
-tanılamaları · `packages/wings_jwt` · **kod üretimi denkliği** (iki sahne).
+**Denetimler** paket döngüsünden SONRA koşuyor (gömülü stdlib tazeliği ise ÖNCE):
+builtin · kama mesh · dist arşiv · LSP · DAP · fmt · doc · pkg · AOT dumanı · Android
+derleme dumanı · ayrılmış kelime ve parametre adı tanılamaları · `packages/*`.
+(**Kod üretimi denkliği** 2026-09-22'de sahne hattıyla birlikte çıkarıldı.)
 Bunlar test değil, **çürüme dedektörü**: yayınlanan bir aracın veya önceden derlenmiş
 bir arşivin, bütün testler yeşilken sessizce bozulduğu bir tur yaşandı → [[Tuzaklar]] §6b, §6c.
 

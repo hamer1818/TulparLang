@@ -4,6 +4,10 @@
 çözücüsü modül alias değilse `m.f(args)` → `f(m, args)` rewrite'ı
 yapıyor; serbest-fn dispatch'i üzerinden çalışıyor. Bkz. STATUS §
 "Çekirdek dil + derleme zinciri".
+*(2026-09-28 notu: aşağıdaki "VM compiler" adımları GEÇERSİZ — VM 2026-06-15'te
+kaldırıldı, tek yol AOT. `tulpar fmt` açık sorusu da kapandı: biçimlendirici satır
+tabanlı, yeni AST düğümü gerektirmedi. Alanda saklanan kapanışı `obj.f()` ile çağırmak
+hâlâ yok.)*
 **Tahmin:** 2-3 PR
 **Risk:** Düşük-Orta (parser tek nokta + codegen fallback; runtime değişikliği yok)
 **Mottoya katkı:** Python kolay (idiomatic OOP-style yazım)

@@ -117,7 +117,7 @@ tablosunda recursion guard gerekir.
 - Recursion guard: in-progress instantiation set.
 - Test: `examples/generic_identity.tpr` AOT compile + run.
 
-### PR 4 — VM monomorphization
+### PR 4 — VM monomorphization *(GEÇERSİZ — VM 2026-06-15'te kaldırıldı, tek yol AOT)*
 
 - `vm/compiler.cpp`: aynı strateji bytecode için.
 - Veya: boxed-only path (tek fonksiyon, VMValue dispatch).

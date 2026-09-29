@@ -42,7 +42,9 @@ araç:
 - Bir düzine **sessiz veri kaybı** bulunup kapatıldı (tablo: [[Editor]]).
 
 Açık kalanlar: yuva içinde SIRALAMA / sekme / yüzen pencere (bilerek
-yapılmadı → [[Decisions]]; paylaşım artık ayarlanabiliyor, sıra değil).
+yapılmadı → [[Decisions]]; paylaşım artık ayarlanabiliyor, sıra değil). *(2026-09-28:
+TameEngine hattı 2026-09-14'te donduruldu; bunlar tulpar-engine'in editöründe ImGui
+docking ile karşılandı — burada yapılmayacak.)*
 
 ## 🟢 DB katmanı (paralel-read kapandı)
 - ✅ `db_open` WAL + busy_timeout varsayılan (yapıldı, write 2.3×). → [[SQLite and DB]]
@@ -71,11 +73,13 @@ yapılmadı → [[Decisions]]; paylaşım artık ayarlanabiliyor, sıra değil).
 Express/Gin/FastAPI'ye karşı tüm kapatılabilir boşluklar kapandı: middleware (`use`), route grupları (`group`), static servis (`static`, binary dahil), tipli query-param (`query*`), response model (`response_model`), multipart/upload (`parse_multipart`+`form`/`uploaded_files`), DI (`depends`/`dep`). Biri hariç hepsi saf `.tpr`; multipart C builtin + DI bir satır C (TLS). Her biri canlı doğrulandı; her birine `examples/wings_*_test.tpr`.
 
 ## ✅ Wings polish (2026-06-22)
-- ✅ **Banner tutarlılığı** — tüm serve modları (`listen`/`listen_pool`/`listen_evented`/`listen_async`) ortak `_wings_print_banner(port, suffix)` helper'ını çağırıyor; renkli kutu + route tablosu her modda aynı, mod Server satırında, sürüm v3.1'e güncellendi. → [[Wings Serve Modes]]
+- ✅ **Banner tutarlılığı** — tüm serve modları (`listen`/`listen_pool`/`listen_evented`/`listen_async`) ortak `_wings_print_banner(port, suffix)` helper'ını çağırıyor; renkli kutu + route tablosu her modda aynı, mod Server satırında, sürüm o gün v3.1'e güncellendi (bugün banner `Tulpar Wings v3.6`). → [[Wings Serve Modes]]
 - ✅ **TLS yük altında test edildi** (`api_wings_tls`, OpenSSL 3.5.5) — 1000 istek/50 paralel → 0 hata ~663 req/s, keep-alive ~1.5ms, sunucu stabil, log temiz. → [[Performance]]
 
 ## 🟢 Dil/altsistem
-- `obj.method(x)` gerçek obje method çağrısı desteklenmiyor. → [[Imports and Modules]]
+- ~~`obj.method(x)` gerçek obje method çağrısı desteklenmiyor~~ — BAYATTI: her alıcıda
+  çalışıyor (PR #44; `rs[0].area()`, `mk(3,5).area()`; `tests/method_calls.test.tpr`).
+  Hâlâ yok: alanda saklanan kapanışı nokta ile çağırmak (`obj.handler()`). → [[Imports and Modules]]
 - ~~pkg registry bağımlılıkları~~ — not BAYATMIŞ: `path:`in yanında `url:` ve
   registry yolu (`fetch_versions` + indirme) kodda var. Ölçüldü (2026-08-31):
   yerel zincir (init/add/install/import) çalışıyor ve ulaşılamayan registry

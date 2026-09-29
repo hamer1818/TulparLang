@@ -1,9 +1,9 @@
 # Plan 08 — Oyun dili P0: `enum`, kutusuz float struct, çoklu dönüş
 
 **Durum:** P0 TAMAM + P1.1 ✅ (2026-09-21) — P0.2 `enum`, P0.3 float struct, P0.1 tuple `main`'de
-(#335); P0.4 oyun yeniden yazımı motor deposunda (#18). **P1.1 tipli struct dizisi** `dil/struct-dizisi`
-dalında: motorun 11 paralel dizisinin dil tarafındaki karşılığı hazır, motor tarafı (düşman kaydını
-`Dusman[]`e taşımak) sıradaki iş.
+(#335); P0.4 oyun yeniden yazımı motor deposunda (#18). **P1.1 tipli struct dizisi** `main`'de
+(#338); motor tarafı (düşman kaydı `Dusman[]`) tulpar-engine #22 ile birleşti. P1'in kalanı
+(`@no_alloc`, `tulpar analyze`, Tracy/LLDB) plan 09'a taşındı.
 **Tahmin:** 3 PR (enum → float struct → tuple), sonra motor deposunda 1 PR (oyun yeniden yazımı).
 **Risk:** Orta — P0.2/P0.1 ayrıştırıcı şekeri (codegen'e dokunmaz); P0.3 codegen'in 20+ struct
 yerleşim noktasına dokunur.
@@ -107,14 +107,14 @@ döngüleri her deyimden sonra boşaltır. `dx, dz = f()` ve `var a, b = f()` ca
 aynı ön tarama (`func AD (…) : ( T, T )`). v1: callee doğrudan adlandırılmış fonksiyon; tuple
 bütün olarak bağlanamaz.
 
-Doğrulama: `tests/tuple_return.test.tpr`, `tests/typeinfer/fail/2x_tuple_arity.tpr`,
-`examples/44_tuple.tpr`; IR kanıtı: çağrı yerinde `aot_arena_alloc`/`malloc` yok.
+Doğrulama: `tests/tuple_return.test.tpr`, `tests/tuple_hatalari.sh` (hata yolları),
+`examples/44_coklu_donus.tpr`; IR kanıtı: çağrı yerinde `aot_arena_alloc`/`malloc` yok.
 
 ## Motor tarafı (tulpar-engine, ayrı PR)
 
 `engine_aksiyon.tpr`: `enum Ekran/Durum/Hal`, `yon_hesapla(): (float, float)`; düşman kaydı
-11 paralel dizi olarak kalır (P1 typed dizi bekleniyor — boxed dizide struct her kare 11
-string-anahtarlı unpack/box demek). Kapı: otopilot özeti önce/sonra aynı
+o gün 11 paralel dizi olarak kaldı (P1 typed dizi bekleniyordu); P1.1 sonrası `Dusman[]`e
+taşındı (tulpar-engine #22). Kapı: otopilot özeti önce/sonra aynı
 (`kare=3200 bolum=2 gecis=1 oldurulen=9 kalan_dusman=0 can=26 skor=900 navmesh=true hata=0`).
 
 ## P1.1 — tipli struct dizisi ✅ (2026-09-21, dal `dil/struct-dizisi`)
