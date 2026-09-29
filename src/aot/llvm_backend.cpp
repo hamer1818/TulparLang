@@ -4200,7 +4200,7 @@ static void predeclare_top_level_global(LLVMBackend *backend, ASTNode_C *decl,
     // tarihsel olarak internal; oraya dokunulmadi.
     if (is_import) LLVMSetLinkage(ig, LLVMInternalLinkage);
     add_local_typed(backend, decl->name, nullptr, INFERRED_INT, ig);
-    if (global_needs_tls(decl->name)) {
+    if (global_needs_tls(decl->name) || decl->is_thread_local) {   // K040 @thread_local
       // LocalExec: Tulpar AOT always produces executables (never shared
       // libraries), so TLS slots resolve at link time with direct
       // segment-register offsets. Avoids `__emutls_get_address` on MinGW,
@@ -4247,7 +4247,7 @@ static void predeclare_top_level_global(LLVMBackend *backend, ASTNode_C *decl,
       backend->module, backend->vm_value_type, gsym(decl->name).c_str());
   LLVMSetInitializer(global_var, LLVMConstNull(backend->vm_value_type));
   if (is_import) LLVMSetLinkage(global_var, LLVMInternalLinkage);
-  if (global_needs_tls(decl->name)) {
+  if (global_needs_tls(decl->name) || decl->is_thread_local) {   // K040 @thread_local
     LLVMSetThreadLocalMode(global_var, LLVMInitialExecTLSModel);
   }
   // PR 3g: surface this boxed global to the debugger.
@@ -4648,6 +4648,110 @@ LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv);
 // bitleri), `int a = 3.7;` ise 0. Dogrusu `toInt` ile ayni: sifira dogru
 // kirp. Yukarida `else` dali da sessizce 0 verdigi icin iki ayri sessiz
 // yanlis cevap vardi.
+// ---- ATOMIKLER (K040, 2026-09-28) --------------------------------------------
+//
+// Dilin bellek modeli yoktu: thread'ler arasi paylasilan bir sayac ya kilitle
+// (mutex_lock) korunuyor ya da TANIMSIZ davraniyordu — thread_lint'in olctugu
+// `while (fin == 0)` donmesi (okuma donguden cikariliyor). Tek atomik iz,
+// derleyicinin icindeki wings sayaci beyaz listesiydi (global_needs_atomic_rmw).
+// Artik kullaniciya acik:
+//   atomic_load(g [, sira])          -> int
+//   atomic_store(g, v [, sira])
+//   atomic_add(g, d [, sira])        -> ESKI deger     (atomic_sub ayni)
+//   atomic_xchg(g, v [, sira])       -> ESKI deger
+//   atomic_cas(g, beklenen, yeni [, sira]) -> bool (yazildi mi)
+// `g` bir `int` UST DUZEY global olmali (yerel global degil: zaten thread'e
+// ozel). `sira` dizgi SABITI: "relaxed" | "acquire" | "release" | "acq_rel" |
+// "seq_cst" (varsayilan). Gecersiz bilesim (acquire yazma, release okuma)
+// derleme hatasi.
+static LLVMValueRef typed_to_int_payload(LLVMBackend *backend, TypedValue tv);
+TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node);
+
+static LLVMValueRef emit_atomic_builtin(LLVMBackend *backend, ASTNode_C *node,
+                                        const char *op) {
+  const bool is_load = strcmp(op, "atomic_load") == 0;
+  const bool is_store = strcmp(op, "atomic_store") == 0;
+  const bool is_cas = strcmp(op, "atomic_cas") == 0;
+  const int need = is_load ? 1 : is_cas ? 3 : 2;
+  auto err = [&](const char *msg) {
+    report_codegen_error_with_suggestion(backend, node->line, "hata", msg, op,
+                                         "ornek: `int n = 0; ... atomic_add(n, 1);` "
+                                         "(n ust duzey `int` global)");
+    return llvm_vm_val_int(backend, 0);
+  };
+  if (node->argument_count != need && node->argument_count != need + 1) {
+    char m[200];
+    snprintf(m, sizeof m, "%s: %d arguman bekleniyordu (+ istege bagli bellek sirasi)", op,
+             need);
+    return err(m);
+  }
+  ASTNode_C *g = node->arguments[0];
+  LLVMValueRef ptr = (g && g->type == AST_IDENTIFIER && g->name &&
+                      get_local_type(backend, g->name) == INFERRED_INT)
+                         ? get_local_native(backend, g->name)
+                         : nullptr;
+  if (!ptr || !LLVMIsAGlobalVariable(ptr)) {
+    char m[240];
+    snprintf(m, sizeof m, "%s: ilk arguman ust duzey bir `int` global olmali", op);
+    return err(m);
+  }
+  LLVMAtomicOrdering ord = LLVMAtomicOrderingSequentiallyConsistent;
+  const char *ord_name = "seq_cst";
+  if (node->argument_count == need + 1) {
+    ASTNode_C *o = node->arguments[need];
+    if (!o || o->type != AST_STRING_LITERAL || !o->value.string_value)
+      return err("atomic_*: bellek sirasi bir dizgi SABITI olmali (\"relaxed\", \"acquire\", "
+                 "\"release\", \"acq_rel\", \"seq_cst\")");
+    ord_name = o->value.string_value;
+    if (strcmp(ord_name, "relaxed") == 0) ord = LLVMAtomicOrderingMonotonic;
+    else if (strcmp(ord_name, "acquire") == 0) ord = LLVMAtomicOrderingAcquire;
+    else if (strcmp(ord_name, "release") == 0) ord = LLVMAtomicOrderingRelease;
+    else if (strcmp(ord_name, "acq_rel") == 0) ord = LLVMAtomicOrderingAcquireRelease;
+    else if (strcmp(ord_name, "seq_cst") == 0) ord = LLVMAtomicOrderingSequentiallyConsistent;
+    else return err("atomic_*: bilinmeyen bellek sirasi (relaxed/acquire/release/acq_rel/seq_cst)");
+  }
+  if (is_load && (ord == LLVMAtomicOrderingRelease || ord == LLVMAtomicOrderingAcquireRelease))
+    return err("atomic_load: \"release\"/\"acq_rel\" okumada gecersiz");
+  if (is_store && (ord == LLVMAtomicOrderingAcquire || ord == LLVMAtomicOrderingAcquireRelease))
+    return err("atomic_store: \"acquire\"/\"acq_rel\" yazmada gecersiz");
+
+  auto int_arg = [&](int i) {
+    return typed_to_int_payload(backend, codegen_typed_expr(backend, node->arguments[i]));
+  };
+  if (is_load) {
+    LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->int_type, ptr, "atomic.ld");
+    LLVMSetOrdering(v, ord);
+    LLVMSetAlignment(v, 8);
+    return llvm_vm_val_int_val(backend, v);
+  }
+  if (is_store) {
+    LLVMValueRef st = LLVMBuildStore(backend->builder, int_arg(1), ptr);
+    LLVMSetOrdering(st, ord);
+    LLVMSetAlignment(st, 8);
+    return llvm_vm_val_int(backend, 0);
+  }
+  if (is_cas) {
+    LLVMValueRef expv = int_arg(1);
+    LLVMValueRef newv = int_arg(2);
+    // Basarisizlik sirasi release icermez (LLVM kurali).
+    LLVMAtomicOrdering fail_ord =
+        ord == LLVMAtomicOrderingSequentiallyConsistent ? LLVMAtomicOrderingSequentiallyConsistent
+        : (ord == LLVMAtomicOrderingAcquire || ord == LLVMAtomicOrderingAcquireRelease)
+            ? LLVMAtomicOrderingAcquire
+            : LLVMAtomicOrderingMonotonic;
+    LLVMValueRef pair = LLVMBuildAtomicCmpXchg(backend->builder, ptr, expv, newv, ord,
+                                               fail_ord, /*singleThread=*/0);
+    LLVMValueRef ok = LLVMBuildExtractValue(backend->builder, pair, 1, "atomic.cas.ok");
+    return llvm_vm_val_bool_val(backend, ok);
+  }
+  LLVMAtomicRMWBinOp bop = strcmp(op, "atomic_add") == 0   ? LLVMAtomicRMWBinOpAdd
+                           : strcmp(op, "atomic_sub") == 0 ? LLVMAtomicRMWBinOpSub
+                                                           : LLVMAtomicRMWBinOpXchg;
+  LLVMValueRef old = LLVMBuildAtomicRMW(backend->builder, bop, ptr, int_arg(1), ord,
+                                        /*singleThread=*/0);
+  return llvm_vm_val_int_val(backend, old);
+}
+
 static LLVMValueRef typed_to_int_payload(LLVMBackend *backend, TypedValue tv) {
   if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) return tv.value;
   if (tv.type == INFERRED_FLOAT && tv.value)
@@ -7852,6 +7956,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                      LLVMGlobalGetValueType(backend->func_aot_array_push),
                      backend->func_aot_array_push, args, 2, "");
       return llvm_vm_val_int(backend, 0);
+    }
+
+    // ATOMIKLER (K040): `int` global uzerinde atomik oku/yaz/ekle/degistir.
+    if (node->name && (strcmp(bi_name, "atomic_load") == 0 ||
+                       strcmp(bi_name, "atomic_store") == 0 ||
+                       strcmp(bi_name, "atomic_add") == 0 ||
+                       strcmp(bi_name, "atomic_sub") == 0 ||
+                       strcmp(bi_name, "atomic_xchg") == 0 ||
+                       strcmp(bi_name, "atomic_cas") == 0)) {
+      return emit_atomic_builtin(backend, node, bi_name);
     }
 
     // to_struct(json, "Ad") -> Ad (K133): ACIK ve denetimli donusum. Ikinci

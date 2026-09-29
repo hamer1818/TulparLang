@@ -204,6 +204,14 @@ const BuiltinEntry kBuiltins[] = {
     {"fromJson",     "fromJson(s: str): json",                      "JSON string'i tipsiz değere parse eder."},
     {"to_struct",    "to_struct(v: json, tip: \"Ad\"): Ad",         "json nesnesini adı verilen struct'a denetimli çevirir; eksik ya da yanlış tipli alanda hata fırlatır (fazla alanlar yok sayılır). Ad bir dizgi sabiti olmalı."},
 
+    // ---- Atomikler (K040): ilk argüman üst düzey `int` global ----
+    {"atomic_load",  "atomic_load(g: int, sira?: str): int",          "Global'i atomik okur. sira: \"relaxed\" | \"acquire\" | \"seq_cst\" (varsayılan)."},
+    {"atomic_store", "atomic_store(g: int, v: int, sira?: str)",      "Global'e atomik yazar. sira: \"relaxed\" | \"release\" | \"seq_cst\"."},
+    {"atomic_add",   "atomic_add(g: int, d: int, sira?: str): int",   "Atomik ekler, ESKİ değeri döndürür (kilitsiz sayaç)."},
+    {"atomic_sub",   "atomic_sub(g: int, d: int, sira?: str): int",   "Atomik çıkarır, ESKİ değeri döndürür."},
+    {"atomic_xchg",  "atomic_xchg(g: int, v: int, sira?: str): int",  "Atomik değiştirir, ESKİ değeri döndürür."},
+    {"atomic_cas",   "atomic_cas(g: int, beklenen: int, yeni: int, sira?: str): bool", "g == beklenen ise yeni'yi yazar; yazıldıysa true (karşılaştır-değiştir)."},
+
     // ---- Math ----
     {"abs",          "abs(x: int|float): int|float",                "Mutlak değer."},
     {"sqrt",         "sqrt(x: float): float",                       "Karekök."},

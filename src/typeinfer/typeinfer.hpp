@@ -54,6 +54,11 @@ struct TypeInferContext {
   // promise). async fonksiyon adi -> bildirilen donus tipi (await sonrasi T);
   // future tutan semboller -> T.
   std::unordered_map<std::string, DataType> async_fns;
+  // K041: `@no_alloc` gecisli denetimi icin fonksiyon tanimlari (ana program
+  // + ice aktarilan moduller; modul AST'leri burada yasatiliyor ki
+  // isaretciler gecerli kalsin).
+  std::unordered_map<std::string, const FunctionDecl *> fn_decls;
+  std::vector<std::unique_ptr<ASTNode>> module_asts;
   std::unordered_map<std::string, DataType> future_symbols;
   bool current_is_async = false;
   // K043: takma adsiz ice aktarilan modullerin ust duzey fonksiyonlari

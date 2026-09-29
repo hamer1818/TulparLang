@@ -1,0 +1,29 @@
+// `@no_alloc` temiz govde (K041, 2026-09-28): tipli dizi oku/yaz, skaler
+// struct literali ve alani, matematik yerlesikleri, motor skaler cagrisi
+// yok (tame bagli degil), temiz kullanici fonksiyonu, for-in tipli dizi.
+// Hicbiri tani vermemeli. `@frame` ayrica: tani yok, calisir.
+
+struct V { float x; float y; }
+int[] skor = [1, 2, 3];
+
+func yardimci(int a): int { return a * 2 + 1; }
+
+@no_alloc
+func temiz(int[] a, float dt): float {
+    float t = 0.0;
+    for (int i = 0; i < len(a); i++) {
+        t = t + toFloat(a[i]) * dt;
+        a[i] = yardimci(a[i]);
+    }
+    for (x in a) { t = t + toFloat(x); }
+    V v = { x: 1.0, y: 2.0 };
+    v.x = v.x + sqrt(t);
+    if (v.x > 100.0 && dt < 1.0) { return 0.0; }
+    return v.x + floor(dt);
+}
+
+@frame
+func etiket(int n): str { return "e" + toString(n); }
+
+print(temiz(skor, 0.5));
+print(etiket(3));

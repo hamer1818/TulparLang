@@ -57,6 +57,8 @@ private:
     std::unique_ptr<ASTNode> parse_statement();
     std::unique_ptr<ASTNode> parse_variable_decl();
     std::unique_ptr<ASTNode> parse_function_decl();
+    // `@frame` / `@no_alloc` nitelikli fonksiyon (K038/K041).
+    std::unique_ptr<ASTNode> parse_attributed_function();
     std::unique_ptr<ASTNode> parse_type_decl();
     std::unique_ptr<ASTNode> parse_enum_decl();
     std::unique_ptr<ASTNode> parse_if_statement();
@@ -303,6 +305,7 @@ typedef struct ASTNode_C {
   
   uint8_t is_moved;
   uint8_t is_async; // AST_FUNCTION_DECL: declared with `async`
+  uint8_t is_thread_local; // AST_VARIABLE_DECL: `@thread_local` ust duzey global (K040)
 
   struct ASTNode_C *condition;
   struct ASTNode_C *then_branch;

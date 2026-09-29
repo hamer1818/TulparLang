@@ -1,0 +1,66 @@
+// ATOMIKLER ve @thread_local (K040, 2026-09-28).
+//
+// Dilin bellek modeli yoktu: thread'ler arasi paylasilan sayac ya kilitle
+// korunuyor ya da TANIMSIZ davraniyordu (yarisli `n = n + 1` artis
+// DUSURUYOR; thread_lint'in olctugu `while (fin == 0)` sonsuza donuyor).
+// Kullaniciya acik atomik yoktu (`atomic_add` -> "fonksiyon bulunamadi").
+// Artik `int` ust duzey global uzerinde atomic_load/store/add/sub/xchg/cas
+// (istege bagli bellek sirasi) ve `@thread_local` global.
+// Calistir (depo kokunden): ./tulpar tests/atomik.test.tpr
+import "test";
+
+int sayac = 0;
+int duz = 0;
+int bayrak = 0;
+@thread_local int yerel_sayac = 0;
+
+func _isci(int n): int {
+    for (int i = 0; i < n; i++) {
+        atomic_add(sayac, 1, "relaxed");
+        yerel_sayac = yerel_sayac + 1;          // her thread'in kendi kopyasi
+    }
+    return yerel_sayac;
+}
+
+func _yayinci(int x): int {
+    atomic_store(bayrak, x, "release");
+    return 0;
+}
+
+func run_tek_thread_islemleri() {
+    int g = 0;
+    atomic_store(sayac, 10);
+    assert_eq_int(atomic_load(sayac), 10);
+    assert_eq_int(atomic_add(sayac, 5), 10);      // ESKI deger
+    assert_eq_int(atomic_sub(sayac, 3), 15);
+    assert_eq_int(atomic_xchg(sayac, 100), 12);
+    assert_eq_bool(atomic_cas(sayac, 100, 7), true);
+    assert_eq_bool(atomic_cas(sayac, 100, 8), false); // beklenen tutmadi
+    assert_eq_int(atomic_load(sayac, "acquire"), 7);
+}
+
+func run_yarissiz_sayac() {
+    atomic_store(sayac, 0);
+    int[] th = [];
+    for (int k = 0; k < 4; k++) { push(th, thread_create(_isci, 50000)); }
+    int yerel_toplam = 0;
+    for (int k = 0; k < 4; k++) { yerel_toplam = yerel_toplam + thread_join(th[k]); }
+    assert_eq_int(atomic_load(sayac), 200000);   // hic artis dusmedi
+    assert_eq_int(yerel_toplam, 200000);          // her thread kendi 50000'ini saydi
+    assert_eq_int(yerel_sayac, 0);                // ana thread'in kopyasi dokunulmadi
+}
+
+func run_yayin_gorunur() {
+    atomic_store(bayrak, 0);
+    int t = thread_create(_yayinci, 42);
+    int donus = 0;
+    while (atomic_load(bayrak, "acquire") == 0 && donus < 200000000) { donus = donus + 1; }
+    thread_join(t);
+    assert_eq_int(atomic_load(bayrak), 42);       // dongu donmedi, deger gorundu
+}
+
+print("=== atomikler ===");
+test("tek thread: load/store/add/sub/xchg/cas", "run_tek_thread_islemleri");
+test("4 thread x 50000 atomic_add: dusen artis yok; @thread_local", "run_yarissiz_sayac");
+test("release/acquire yayin: dongu degeri goruyor", "run_yayin_gorunur");
+test_summary();

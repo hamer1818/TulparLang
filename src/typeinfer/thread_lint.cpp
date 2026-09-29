@@ -139,8 +139,17 @@ struct Collector {
             thread_roots.insert(root->name);
         }
       }
+      // ATOMIK erisim (K040): ilk arguman bir global'in KENDISI. Atomik okuma
+      // senkronize — korumasiz okuma sayilmaz; degistiren atomikler (store/
+      // add/sub/xchg/cas) ise YAZMA — o global'i baska yerde duz okumak hala
+      // uyari almali (`atomic_store(f, 1)` + `while (f == 0)` ayni tuzak).
+      const bool atomic_op = x->name.rfind("atomic_", 0) == 0 && !x->arguments.empty() &&
+                             node_as<Identifier>(x->arguments[0].get());
+      if (atomic_op && x->name != "atomic_load")
+        note_write(node_as<Identifier>(x->arguments[0].get())->name);
       for (size_t i = 0; i < x->arguments.size(); i++) {
         if (x->name == "thread_create" && i == 0) continue; // ad, okuma degil
+        if (atomic_op && i == 0) continue;                  // atomik: senkronize
         walk(x->arguments[i].get());
       }
       walk(x->receiver.get());
@@ -225,7 +234,9 @@ int thread_lint_run(const ASTNode *program, const std::string &source_path,
   // 1. Ust duzey global'ler ve fonksiyon adlari (ON-GECIS — lint de sirasiz
   //    calismali; P23'un dersi burada da gecerli).
   for (const auto &st : prog->statements) {
-    if (const auto *v = std::get_if<VariableDecl>(&st->value)) col.globals.insert(v->name);
+    // `@thread_local` (K040) global her thread'de ayri: paylasim yok, lint disi.
+    if (const auto *v = std::get_if<VariableDecl>(&st->value))
+      if (!v->is_thread_local) col.globals.insert(v->name);
     if (const auto *f = std::get_if<FunctionDecl>(&st->value)) col.known_functions.insert(f->name);
   }
   if (col.globals.empty()) return 0;

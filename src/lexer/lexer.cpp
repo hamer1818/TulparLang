@@ -814,6 +814,9 @@ Token Lexer::next_token() {
             case '&': return Token(TOKEN_BIT_AND, value, start_line, start_column);
             case '^': return Token(TOKEN_BIT_XOR, value, start_line, start_column);
             case '~': return Token(TOKEN_BIT_NOT, value, start_line, start_column);
+            // Fonksiyon niteligi (K038/K041): `@frame func ...`. Yalniz
+            // ayristirici `func` onunde kabul ediyor; baska yerde hata.
+            case '@': return Token(TOKEN_AT, value, start_line, start_column);
             default:
                 fprintf(stderr, tulpar::i18n::tr_for_en("Lexer Error: Unknown character '%c' at line %d, col %d\n"),
                         ch, start_line, start_column);

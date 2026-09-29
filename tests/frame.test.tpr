@@ -1,0 +1,72 @@
+// `@frame` — dil duzeyinde kare arenasi (K038, 2026-09-28).
+//
+// Oyun dongusu her karede gecici dizgi/dizi/nesne uretiyor; motor bunu elle
+// yapiyordu (`cp = arena_save(); ... arena_drop(cp)`). Elle yazim erken
+// `return` ve `throw`da DELINIR: drop atlanir, 32'lik kontrol noktasi yigini
+// sizar ve sonra arena_save -1 doner (geri sarma durur, bellek birikir).
+// `@frame func` ayristiricida seker aciliyor: girişte arena_save, her
+// cikista (return / throw / sona dusme) arena_drop; donus degeri ve istisna
+// `persist` ile kalici bellege kopyalaniyor.
+// ISTISNALI yollar (throw, yigin dolu hatasi): tests/frame_istisna.test.tpr —
+// ayri, cunku MinGW'de yeniden firlatma sureci cokertiyor (Windows'ta o paket
+// bilinen hata olarak atlaniyor; duzeltmesi #404). Bellek (tepe RSS) kapisi ve
+// hata yollari: tests/frame_hatalari.sh.
+// Calistir (depo kokunden): ./tulpar tests/frame.test.tpr
+import "test";
+
+struct V { float x; float y; }
+str[] kalici = [];
+
+@frame
+func etiket(int x): str {
+    str s = "v" + toString(x);
+    for (int i = 0; i < 3; i++) { s = s + "."; }
+    if (x > 2) { return s + "!"; }                 // erken donus
+    push(kalici, "k" + toString(x));               // global'e: bariyerle kalici
+    return s;
+}
+
+@frame
+func topla(V a, V b): V {
+    str tmp = "gecici" + toString(a.x);
+    return { x: a.x + b.x, y: a.y + b.y };
+}
+
+@frame
+func yan_etki(int n) {
+    for (int i = 0; i < n; i++) {
+        str t = "x" + toString(i);
+        if (i == 2) { return; }                    // void erken donus
+    }
+}
+
+func run_donus() {
+    assert_eq_str(etiket(3), "v3...!");
+    assert_eq_str(etiket(1), "v1...");
+    assert_eq_str(kalici[len(kalici) - 1], "k1");
+}
+
+func run_struct_donus() {
+    V a = { x: 1.0, y: 2.0 };
+    V r = topla(a, a);
+    assert_close(r.x, 2.0, 0.000001);
+    assert_close(r.y, 4.0, 0.000001);
+}
+
+func run_yigin_sizmiyor() {
+    int once = arena_save();
+    arena_drop(once);
+    for (int i = 0; i < 500; i++) {
+        str q = etiket(4);
+        yan_etki(5);
+    }
+    int sonra = arena_save();
+    arena_drop(sonra);
+    assert_eq_int(sonra, once);                    // 1000 cikis, sifir sizinti
+}
+
+print("=== @frame ===");
+test("donus degeri kalici, global'e yazilan kalici", "run_donus");
+test("struct donduren @frame", "run_struct_donus");
+test("return/void: kontrol noktasi sizmiyor", "run_yigin_sizmiyor");
+test_summary();
