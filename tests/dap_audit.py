@@ -54,6 +54,26 @@ PROG_FUNC = (
     "int r = topla(2, 3);\n"               # 5
     "print(r);\n"                          # 6
 )
+PROG_ASYNC = (
+    "async func veri_oku(int n): int {\n"          # 1
+    "    await sleep_async(50);\n"                  # 2
+    "    return n;\n"                               # 3
+    "}\n"                                           # 4
+    "async func seviye_yukle(int n): int {\n"      # 5
+    "    int v = await veri_oku(n);\n"              # 6
+    "    return v * 10;\n"                          # 7
+    "}\n"                                           # 8
+    "async func hesapla(int x): int {\n"           # 9
+    "    int y = x + 1;\n"                          # 10
+    "    return y;\n"                               # 11 <- breakpoint
+    "}\n"                                           # 12
+    "var a = seviye_yukle(1);\n"                    # 13
+    "var b = seviye_yukle(2);\n"                    # 14
+    "int t = await hesapla(5);\n"                   # 15
+    "t = t + await a + await b;\n"                  # 16
+    "print(t);\n"                                   # 17
+)
+
 PROG_VALS = (
     "func goster(int n) {\n"                          # 1
     "    str ad = \"Hamza\";\n"                        # 2
@@ -320,6 +340,56 @@ def scenario_values(exe, work):
             "(DAP + --gdb-script ile duz gdb)")
 
 
+def scenario_async_threads(exe, work):
+    """Async coroutine'leri DAP'ta ayri "thread" olarak gorunuyor mu (K156)?
+
+    hesapla:11'de durulur. O anda iki seviye_yukle (1, 2) ilk await'lerinde
+    kendi veri_oku gorevlerini BEKLIYOR, iki veri_oku henuz baslamadi, hesapla
+    kosuyor. `threads` main + bes coroutine dondurmeli; bekleyen bir
+    seviye_yukle'nin stackTrace'i await zinciri: seviye_yukle -> veri_oku.
+
+    POZITIF KONTROL: ayni oturumda async OLMAYAN program (PROG_FUNC) tek
+    thread (main) dondurmeli — liste programdan geliyor, sabit degil."""
+    a = start(exe, work, PROG_ASYNC, [{"line": 11}])
+    try:
+        a.wait(is_event("stopped"), "hesapla:11'de `stopped`")
+        th = a.call("threads")["body"]["threads"]
+        names = {t["id"]: t["name"] for t in th}
+        co = {i: n for i, n in names.items() if i != 1}
+        if 1 not in names or len(co) != 5:
+            raise AssertionError("threads: main + 5 coroutine bekleniyordu: %s" % names)
+        running = [n for n in co.values() if "hesapla" in n]
+        waiting = [i for i, n in co.items() if "seviye_yukle" in n and "veri_oku" in n]
+        if len(running) != 1 or len(waiting) != 2:
+            raise AssertionError("coroutine adlari/durumlari beklenmedik: %s" % co)
+        st = a.call("stackTrace", {"threadId": waiting[0]})["body"]["stackFrames"]
+        chain = [f["name"].split(" ")[0] for f in st]
+        if chain != ["seviye_yukle", "veri_oku"]:
+            raise AssertionError("await zinciri %s (beklenen seviye_yukle -> veri_oku)" % chain)
+        sc = a.call("scopes", {"frameId": st[0]["id"]})["body"]["scopes"]
+        if sc:
+            raise AssertionError("sentetik cercevenin scopes'u bos olmali: %s" % sc)
+        top = a.call("stackTrace", {"threadId": 1})["body"]["stackFrames"][0]
+        if top.get("name") not in ("hesapla", "t_hesapla") or top.get("line") != 11:
+            raise AssertionError("thread 1 ust cerceve %s:%s" % (top.get("name"), top.get("line")))
+        a.call("continue", {"threadId": 1})
+        run_to_exit(a)
+    finally:
+        a.close()
+    a = start(exe, work, PROG_FUNC, [{"line": 3}])
+    try:
+        a.wait(is_event("stopped"), "kontrol: topla:3'te `stopped`")
+        th = a.call("threads")["body"]["threads"]
+        if [t["id"] for t in th] != [1]:
+            raise AssertionError("async'siz programda threads: %s (beklenen yalniz main)" % th)
+        a.call("continue", {"threadId": 1})
+        run_to_exit(a)
+    finally:
+        a.close()
+    return ("async: main + 5 coroutine thread, bekleyenin await zinciri "
+            "seviye_yukle -> veri_oku; async'siz programda yalniz main (kontrol)")
+
+
 def scenario_no_gdb_hint(exe, work):
     """gdb PATH'te yoksa `launch` NET bir kurulum ipucuyla düşmeli (K222).
 
@@ -376,7 +446,7 @@ def main():
         print("SKIP dap denetimi: gdb yok (bagdastirici gdb MI3 kopru)")
         return 0
     for fn in (scenario_breakpoint, scenario_conditional, scenario_logpoint,
-               scenario_values):
+               scenario_values, scenario_async_threads):
         work = tempfile.mkdtemp(prefix="tulpar_dap_")
         try:
             print("  gecti  " + fn(exe, work))
@@ -395,7 +465,7 @@ def main():
     if failed:
         print("dap denetimi DUSTU")
         return 1
-    print("dap denetimi temiz (breakpoint + kosullu + logpoint; stopped/exited/terminated olaylari)")
+    print("dap denetimi temiz (breakpoint + kosullu + logpoint + async coroutine'ler; stopped/exited/terminated olaylari)")
     return 0
 
 

@@ -12,6 +12,25 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — `tulpar debug`: async coroutine'ler ayrı thread, askıdakinin await zinciri
+
+- Hata ayıklayıcıda (DAP) her canlı coroutine artık ayrı bir thread:
+  `async seviye_yukle — bekliyor: veri_oku`, `async hesapla — kosuyor
+  (thread 1)`. Askıdaki coroutine'in yığını gdb'nin görebildiği yığın değil;
+  stackTrace'i await zinciri (`seviye_yukle` → `veri_oku`), kaynak satırsız.
+  Koşan coroutine'in gerçek yığını thread 1'de ve `tulpar_ctx_entry`'de
+  temiz bitiyor (CFI; eskiden `?? 0x0` çerçevesi).
+- Mekanizma: bağdaştırıcı duraklamada runtime'ın
+  `tulpar_async_debug_tasks()`'ini çağırıyor; görevler zamanlayıcı
+  durumundan yürünerek bulunuyor. **Sıcak yola maliyet yok:** ilk sürüm canlı
+  görev listesi tutuyordu, spawn+await 120,8 → 122,8 ns ölçüldü (ortam
+  bayrağıyla kapalıyken bile +1 ns); yürüme yöntemiyle 122,66 → 122,43 ns
+  (aynı ikilinin kopyası 122,14 — gürültü; Ryzen 7 9800X3D, 25 tur).
+- `tests/dap_audit.py` +1 senaryo: main + 5 coroutine, bekleyenin zinciri,
+  sentetik çerçevenin boş scopes'u; async'siz programda yalnız main (kontrol).
+  Pozitif kontrol: runtime listesi boşaltılınca senaryo kırmızı.
+- Görünmeyen tek sınıf: yalnız async HTTP promise'ini bekleyen görev zinciri.
+
 ### Düzeltildi — `call()` struct alan/döndüren fonksiyonda çöp, `null` ya da segfault
 
 - Kutusuz struct döndüren ya da struct parametre alan fonksiyonun kutulu
