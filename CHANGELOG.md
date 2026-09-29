@@ -324,6 +324,15 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   Karar ("matmul kapısı geçilemez") duruyor; "kök eleman yazma yolu"
   açıklaması yanlıştı — açık iç içe döngüde hesaplı indeks.
 
+### Belgeler — AGENTS.md artık CLAUDE.md'ye yönlendiren kısa bir sayfa
+
+- AGENTS.md, CLAUDE.md'nin elle tutulan ve ondan ayrışmış eski bir kopyasıydı
+  (başlığı bile "# CLAUDE.md"). Windows desteklenmiyor / Windows CI yok, smoke
+  harness'leri elle koşulur, VM geri düşüşü + `--vm` + `--repl`, registry
+  bağımlılıkları TODO, `obj.method()` yok diyordu — beşi de yanlış. Düzeltip
+  ikinci kopyayı yaşatmak aynı ayrışmayı yeniden üretirdi; tek kaynak
+  CLAUDE.md.
+
 ### Düzeltildi — `cmake --build` gömülü stdlib değişikliğini görmüyordu
 
 - `lib/*.tpr` yapılandırma anında gömülüyordu ve derleme sistemi bu
