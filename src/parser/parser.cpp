@@ -1133,7 +1133,7 @@ void frame_desugar(FunctionDecl &fd) {
 
 std::unique_ptr<ASTNode> Parser::parse_attributed_function() {
     const int at_line = current().line();
-    bool frame = false, no_alloc = false, thread_local_attr = false;
+    bool frame = false, no_alloc = false, thread_local_attr = false, repr_c = false;
     while (match(TOKEN_AT)) {
         Token a = expect(TOKEN_IDENTIFIER, "Expected attribute name after '@'");
         if (a.value() == "frame") {
@@ -1142,14 +1142,39 @@ std::unique_ptr<ASTNode> Parser::parse_attributed_function() {
             no_alloc = true;
         } else if (a.value() == "thread_local") {
             thread_local_attr = true;
+        } else if (a.value() == "repr") {
+            // `@repr(C)` (K036). Yalniz C: std140/std430 GLSL'e ozgu (vec3
+            // hizalamasi) ve dilde vektor tipi yok — sessizce C'ye dusmesin.
+            expect(TOKEN_LPAREN, "Expected '(' after @repr");
+            Token r = expect(TOKEN_IDENTIFIER, "Expected layout name in @repr(...)");
+            expect(TOKEN_RPAREN, "Expected ')' after @repr(...)");
+            if (r.value() != "C") {
+                error(std::string(tulpar::i18n::tr_en("desteklenmeyen yerlesim '@repr(",
+                                                      "unsupported layout '@repr(")) +
+                      r.value() +
+                      tulpar::i18n::tr_en(")' (yalniz @repr(C))", ")' (only @repr(C))") +
+                      " at line " + std::to_string(r.line()));
+            }
+            repr_c = true;
         } else {
             error(std::string(tulpar::i18n::tr_en("bilinmeyen nitelik '@",
                                                   "unknown attribute '@")) +
                   a.value() +
-                  tulpar::i18n::tr_en("' (bilinenler: @frame, @no_alloc, @thread_local)",
-                                      "' (known: @frame, @no_alloc, @thread_local)") +
+                  tulpar::i18n::tr_en("' (bilinenler: @frame, @no_alloc, @thread_local, @repr(C))",
+                                      "' (known: @frame, @no_alloc, @thread_local, @repr(C))") +
                   " at line " + std::to_string(a.line()));
         }
+    }
+    // `@repr(C) type T { ... }` (K036): struct'a C yerlesimi sozu. Fonksiyon /
+    // degisken nitelikleriyle karismaz.
+    if (repr_c) {
+        if (frame || no_alloc || thread_local_attr || !check(TOKEN_TYPE_KW)) {
+            error(std::string(tulpar::i18n::tr_en(
+                      "@repr(C) yalniz bir struct (type) bildirimine uygulanir",
+                      "@repr(C) applies only to a struct (type) declaration")) +
+                  " at line " + std::to_string(at_line));
+        }
+        return parse_type_decl(true);
     }
     // `@thread_local int x = 0;` (K040): ust duzey global'in thread basina
     // kopyasi. Fonksiyon nitelikleriyle karismaz.
@@ -1238,14 +1263,15 @@ std::unique_ptr<ASTNode> Parser::parse_attributed_function() {
     return fn;
 }
 
-std::unique_ptr<ASTNode> Parser::parse_type_decl() {
+std::unique_ptr<ASTNode> Parser::parse_type_decl(bool repr_c) {
     SourceLocation loc(current().line(), current().column());
     advance(); // consume 'type'
-    
+
     Token name_tok = expect(TOKEN_IDENTIFIER, "Expected type name");
     std::string name = name_tok.value();
-    
+
     TypeDecl type_decl(name, loc);
+    type_decl.repr_c = repr_c;
     
     expect(TOKEN_LBRACE, "Expected '{' after type name");
     
@@ -1296,17 +1322,29 @@ std::unique_ptr<ASTNode> Parser::parse_type_decl() {
     // 4 baytlik depolama yalniz KUTUSUZ struct'ta var (butun alanlar
     // int/float/bool). str/dizi/json/ic ice struct alanli bir struct kutulu
     // nesne olarak yasar; orada `f32` sessizce 8 baytlik float olurdu.
-    if (has_small) {
+    // `@repr(C)` (K036) ayni kural: C'de temsil edilemeyen alan (str, dizi,
+    // json, ic ice struct) yerlesim sozunu bozar.
+    if (has_small || repr_c) {
         for (size_t i = 0; i < type_decl.field_types.size(); i++) {
             const DataType ft = type_decl.field_types[i];
             if (ft != TYPE_INT && ft != TYPE_FLOAT && ft != TYPE_BOOL) {
-                error("'" + name + "': f32/i32 alanli struct yalniz int/float/bool/f32/i32 "
-                      "alan tasiyabilir ('" + type_decl.field_names[i] + "' degil) / a struct "
-                      "with f32/i32 fields may only hold scalar fields ('" +
-                      type_decl.field_names[i] + "' is not) at line " + std::to_string(loc.line));
+                if (repr_c)
+                    error("'" + name + "': @repr(C) struct yalniz int/float/bool/f32/i32 alan "
+                          "tasiyabilir ('" + type_decl.field_names[i] + "' degil) / a @repr(C) "
+                          "struct may only hold scalar fields ('" + type_decl.field_names[i] +
+                          "' is not) at line " + std::to_string(loc.line));
+                else
+                    error("'" + name + "': f32/i32 alanli struct yalniz int/float/bool/f32/i32 "
+                          "alan tasiyabilir ('" + type_decl.field_names[i] + "' degil) / a struct "
+                          "with f32/i32 fields may only hold scalar fields ('" +
+                          type_decl.field_names[i] + "' is not) at line " + std::to_string(loc.line));
                 break;
             }
         }
+        // C'deki `bool` 1 bayt (_Bool); varsayilan yerlesimde bool i64 yuva.
+        if (repr_c)
+            for (size_t i = 0; i < type_decl.field_types.size(); i++)
+                if (type_decl.field_types[i] == TYPE_BOOL) type_decl.field_bits[i] = 8;
     }
 
     return std::make_unique<ASTNode>(std::move(type_decl));
@@ -3477,6 +3515,7 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
                     }
                     out->field_defaults[i] = convert_ast_node_ptr(n.field_defaults[i]);
                 }
+                out->repr_c = n.repr_c ? 1 : 0;   // K036
                 bool any_bits = false;
                 for (unsigned char b : n.field_bits) any_bits = any_bits || b != 0;
                 if (any_bits) {
