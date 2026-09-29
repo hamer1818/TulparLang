@@ -60,7 +60,26 @@ BENCH = {
     "mandelbrot": ("2000",    "kayan nokta aritmetigi (dizi YOK)"),
     "matmul":     ("640",     "kayan nokta dizisi (depolama + bant genisligi)"),
     "nbody":      ("3000000", "kayan nokta + kucuk dizi + sqrt"),
+    # --- GENISLETILMIS SET (2026-09-29) --------------------------------
+    # Ilk bes cekirdek tamsayi/dizgi agirlikliydi; README'nin "KANITLAMADIGI
+    # seyler" listesi (hash-map, siralama, tahsis baskisi, dolayli cagri,
+    # ayristirma) burada kapatiliyor. Her biri bir ALAN temsil ediyor:
+    #   hashmap   : dizgi anahtarli sozluk (her dil kendi standart sozlugu)
+    #   qsort     : elle Hoare hizli siralama (rastgele erisim + ozyineleme)
+    #   particles : oyun dongusu — struct DIZISI uzerinde fizik adimi
+    #   callfn    : fonksiyon degeri tablosundan dolayli cagri (kanca kalibi)
+    #   parse     : metin kur + bol + tamsayiya cevir (CSV/log okuma)
+    "hashmap":   ("1000000",  "dizgi anahtarli sozluk: N ekleme + N arama"),
+    "qsort":     ("1000000",  "elle hizli siralama (rastgele erisim + ozyineleme)"),
+    "particles": ("1000000",  "struct dizisi uzerinde fizik adimi (50 adim)"),
+    "callfn":    ("20000000", "fonksiyon degeri tablosundan dolayli cagri"),
+    "parse":     ("5000000",  "metin kur + bol + tamsayiya cevir"),
 }
+
+# Tek bir kosumun ust siniri (sn). Bir dil bir cekirdekte asiri yavassa
+# (ornek: dogrusal taramali sozluk) butun takim saatlerce beklemesin; satir
+# "ZAMAN ASIMI > TIMEOUT_S" olarak GORUNUR yazilir, sessizce dusmez.
+TIMEOUT_S = float(os.environ.get("TIMEOUT_S", "60"))
 
 LANGS = ["c", "cpp", "rust", "go", "csharp", "java", "node", "python", "tulpar"]
 LABEL = {
@@ -137,8 +156,50 @@ def _src(bench, ext):
     return (HERE / f"{bench}.{ext}").exists()
 
 
+def _size_kb(path):
+    try:
+        return round(Path(path).stat().st_size / 1024.0, 1)
+    except OSError:
+        return None
+
+
 def build(bench):
-    """Her dil için (çalıştırma komutu, hata) döndürür."""
+    """Her dil için (çalıştırma komutu, hata) döndürür.
+
+    Yan urun: BUILD_INFO[bench][dil] = {"ms": derleme suresi, "kb": ikili
+    boyutu} — derleme hizi ve dagitim boyutu da olculen alanlar arasinda.
+    """
+    t_start = time.perf_counter()
+    cmds, errs = _build_inner(bench)
+    info = {}
+    for lang, cmd in cmds.items():
+        if not cmd:
+            continue
+        exe = None
+        if lang in ("c", "cpp", "rust", "go", "tulpar"):
+            exe = cmd[0]
+        elif lang == "csharp" and len(cmd) > 1:
+            exe = cmd[1]
+        elif lang == "java":
+            exe = str(OUT / f"{bench}.class")
+        info[lang] = {"kb": _size_kb(exe) if exe else None,
+                      "ms": BUILD_MS.get((bench, lang))}
+    BUILD_INFO[bench] = info
+    return cmds, errs
+
+
+BUILD_INFO = {}
+BUILD_MS = {}
+
+
+def _timed(bench, lang, fn):
+    t0 = time.perf_counter()
+    r = fn()
+    BUILD_MS[(bench, lang)] = round((time.perf_counter() - t0) * 1000.0, 1)
+    return r
+
+
+def _build_inner(bench):
     cmds, errs = {}, {}
     if not _src(bench, "c"):
         cmds["c"] = None; errs["c"] = "kaynak yok (%s.c)" % bench
@@ -147,7 +208,7 @@ def build(bench):
         # -lm: C'de libm AYRI baglanir (C++/Rust/Go'da degil). Bu bayrak
         # yokken nbody yalniz C satirinda "DERLENEMEDI" oluyordu ve tablo
         # C'siz yayinlanacakti — yani referans dil eksik kalacakti.
-        r = sh(["gcc", "-O2", f"{bench}.c", "-o", str(c), "-lm"])
+        r = _timed(bench, "c", lambda: sh(["gcc", "-O2", f"{bench}.c", "-o", str(c), "-lm"]))
         cmds["c"] = [str(c)] if r.returncode == 0 else None
         if r.returncode: errs["c"] = r.stderr.strip()[:200]
 
@@ -155,7 +216,7 @@ def build(bench):
         cmds["rust"] = None; errs["rust"] = "kaynak yok (%s.rs)" % bench
     else:
         rs = OUT / f"{bench}_rs"
-        r = sh(["rustc", "-C", "opt-level=3", f"{bench}.rs", "-o", str(rs)])
+        r = _timed(bench, "rust", lambda: sh(["rustc", "-C", "opt-level=3", f"{bench}.rs", "-o", str(rs)]))
         cmds["rust"] = [str(rs)] if r.returncode == 0 else None
         if r.returncode: errs["rust"] = r.stderr.strip()[:200]
 
@@ -163,27 +224,27 @@ def build(bench):
         cmds["cpp"] = None; errs["cpp"] = "kaynak yok (%s.cpp)" % bench
     else:
         cpp = OUT / f"{bench}_cpp"
-        r = sh(["g++", "-O2", "-std=c++17", f"{bench}.cpp", "-o", str(cpp)])
+        r = _timed(bench, "cpp", lambda: sh(["g++", "-O2", "-std=c++17", f"{bench}.cpp", "-o", str(cpp)]))
         cmds["cpp"] = [str(cpp)] if r.returncode == 0 else None
         if r.returncode: errs["cpp"] = r.stderr.strip()[:200]
 
     if not _src(bench, "cs"):
         cmds["csharp"] = None; errs["csharp"] = "kaynak yok (%s.cs)" % bench
     else:
-        cmds["csharp"] = _build_csharp(bench, errs)
+        cmds["csharp"] = _timed(bench, "csharp", lambda: _build_csharp(bench, errs))
 
     if not _src(bench, "go"):
         cmds["go"] = None; errs["go"] = "kaynak yok (%s.go)" % bench
     else:
         g = OUT / f"{bench}_go"
-        r = sh(["go", "build", "-o", str(g), f"{bench}.go"])
+        r = _timed(bench, "go", lambda: sh(["go", "build", "-o", str(g), f"{bench}.go"]))
         cmds["go"] = [str(g)] if r.returncode == 0 else None
         if r.returncode: errs["go"] = r.stderr.strip()[:200]
 
     if not _src(bench, "java"):
         cmds["java"] = None; errs["java"] = "kaynak yok (%s.java)" % bench
     else:
-        r = sh(["javac", "-d", str(OUT), f"{bench}.java"])
+        r = _timed(bench, "java", lambda: sh(["javac", "-d", str(OUT), f"{bench}.java"]))
         cmds["java"] = ["java", "-cp", str(OUT), bench] if r.returncode == 0 else None
         if r.returncode: errs["java"] = r.stderr.strip()[:200]
 
@@ -196,25 +257,101 @@ def build(bench):
         cmds["tulpar"] = None; errs["tulpar"] = "kaynak yok (%s.tpr)" % bench
         return cmds, errs
     t = OUT / f"{bench}_tulpar"
-    r = sh([str(TULPAR), "build", f"{bench}.tpr", str(t)])
+    r = _timed(bench, "tulpar", lambda: sh([str(TULPAR), "build", f"{bench}.tpr", str(t)]))
     cmds["tulpar"] = [str(t)] if (r.returncode == 0 and t.exists()) else None
     if cmds["tulpar"] is None:
         errs["tulpar"] = (r.stdout + r.stderr).strip()[-200:]
     return cmds, errs
 
 
-def timeit(cmd, env, repeats):
-    """En iyi ve ortanca duvar saati (ms). İlk koşum ısıtma, sayılmıyor."""
-    subprocess.run(cmd, capture_output=True, text=True, env=env)  # ısıtma
+class _Timeout(Exception):
+    pass
+
+
+def _alarm(signum, frame):
+    raise _Timeout()
+
+
+def _run1(cmd, env, timeout):
+    """Tek kosum: (sure ms, rc, stdout, stderr, ru_maxrss) ya da zaman asimi.
+
+    ru_maxrss burada KULLANILMAZ (exec oncesi Python kopyasini da sayar; bkz.
+    rss_of). Cikti borusu degil GECICI DOSYA ve bekleme BLOKLAYAN wait4 + SIGALRM:
+    okuyucu/bekleyici iplik baslatmak bos programin ~0,2 ms'lik suresine
+    kendi maliyetini (olculdu: +0,2 ms) eklerdi.
+    """
+    import signal, tempfile
+    with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
+        t0 = time.perf_counter()
+        p = subprocess.Popen(cmd, stdout=fo, stderr=fe, env=env)
+        old = signal.signal(signal.SIGALRM, _alarm)
+        signal.setitimer(signal.ITIMER_REAL, timeout)
+        try:
+            _, status, ru = os.wait4(p.pid, 0)
+            t1 = time.perf_counter()
+        except _Timeout:
+            p.kill()
+            os.wait4(p.pid, 0)
+            p.returncode = -9
+            return None
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old)
+        p.returncode = os.waitstatus_to_exitcode(status)
+        fo.seek(0); fe.seek(0)
+        return ((t1 - t0) * 1000.0, p.returncode,
+                fo.read().decode(errors="replace"),
+                fe.read().decode(errors="replace"), ru.ru_maxrss)
+
+
+RSSWRAP = OUT / "rsswrap"
+
+
+def rss_of(cmd, env):
+    """Tek ek kosum: tepe yerlesik bellek (KB), rsswrap.c sarmalayicisiyla.
+
+    Sure kosumlarindan AYRI: Python'dan dogrudan alinan ru_maxrss, exec'ten
+    once catallanan Python kopyasini da sayiyordu (olculdu 2026-09-29: bos C
+    programi bile 17 MB gorunuyordu). Sarmalayicinin kendi kopyasi ~1,7 MB.
+    Sarmalayici derlenemezse None: bellek sutunu bos kalir, sure etkilenmez.
+    """
+    if not RSSWRAP.exists():
+        if sh(["gcc", "-O2", "rsswrap.c", "-o", str(RSSWRAP)]).returncode != 0:
+            return None
+    try:
+        p = subprocess.run([str(RSSWRAP)] + list(cmd), capture_output=True,
+                           text=True, env=env, timeout=TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None
+    for line in reversed(p.stderr.strip().splitlines()):
+        if line.startswith("RSS_KB="):
+            return int(line[7:])
+    return None
+
+
+def timeit(cmd, env, repeats, stats=None):
+    """En iyi ve ortanca duvar saati (ms). İlk koşum ısıtma, sayılmıyor.
+
+    Isitma kosumu TIMEOUT_S'i asarsa tekrarlar hic kosmaz ve
+    `stats["timeout"]` yazilir. Tepe bellek AYRI olculur (rss_of).
+    """
+    w = _run1(cmd, env, TIMEOUT_S)  # ısıtma
+    if w is None:
+        if stats is not None:
+            stats["timeout"] = TIMEOUT_S
+        return None, None, "ZAMAN ASIMI > %.0f sn" % TIMEOUT_S
     times, out = [], None
     for _ in range(repeats):
-        t0 = time.perf_counter()
-        p = subprocess.run(cmd, capture_output=True, text=True, env=env)
-        t1 = time.perf_counter()
-        if p.returncode != 0:
-            return None, None, (p.stderr or p.stdout).strip()[:200]
-        out = p.stdout.strip()
-        times.append((t1 - t0) * 1000.0)
+        r = _run1(cmd, env, TIMEOUT_S)
+        if r is None:
+            if stats is not None:
+                stats["timeout"] = TIMEOUT_S
+            return None, None, "ZAMAN ASIMI > %.0f sn" % TIMEOUT_S
+        ms, rc, so, se, maxrss = r
+        if rc != 0:
+            return None, None, (se or so).strip()[:200]
+        out = so.strip()
+        times.append(ms)
     return (min(times), statistics.median(times)), out, None
 
 
@@ -246,12 +383,49 @@ def baseline():
     et = OUT / "empty_tulpar"
     if sh([str(TULPAR), "build", "empty.tpr", str(et)]).returncode == 0 and et.exists():
         base["tulpar"], _, _ = timeit([str(et)], os.environ.copy(), 5)
+    # Genisletilmis set (2026-09-29): baslatma tablosunda Rust/Go/Java da
+    # olsun — "Tulpar hizli basliyor" iddiasi yalniz C/Python/Node'a karsi
+    # degil, butun satirlara karsi okunabilsin.
+    (HERE / "empty.rs").write_text("fn main(){}\n")
+    er = OUT / "empty_rs"
+    if sh(["rustc", "-C", "opt-level=3", "empty.rs", "-o", str(er)]).returncode == 0:
+        base["rust"], _, _ = timeit([str(er)], os.environ.copy(), 5)
+    (HERE / "empty.go").write_text("package main\n\nfunc main() {}\n")
+    eg = OUT / "empty_go"
+    if sh(["go", "build", "-o", str(eg), "empty.go"]).returncode == 0:
+        base["go"], _, _ = timeit([str(eg)], os.environ.copy(), 5)
+    (HERE / "empty.java").write_text("public class empty{public static void main(String[] a){}}\n")
+    if sh(["javac", "-d", str(OUT), "empty.java"]).returncode == 0:
+        base["java"], _, _ = timeit(["java", "-cp", str(OUT), "empty"], os.environ.copy(), 5)
+    sizes = {"c": _size_kb(e), "cpp": _size_kb(ec), "rust": _size_kb(er),
+             "go": _size_kb(eg), "tulpar": _size_kb(et)}
+    BASE_SIZES.update({k: v for k, v in sizes.items() if v})
     return {k: (v[0] if v else None) for k, v in base.items()}
+
+
+BASE_SIZES = {}
 
 
 def main():
     # `--csv`: yeniden OLCMEDEN, depodaki results.json'dan results.csv uret
     # (tablo dondurulmus olcumden turer; olcum turu dakikalar suruyor).
+    if "--rss" in sys.argv[1:]:
+        # Yeniden SURE OLCMEDEN yalniz bellek sutununu doldur (sure turu
+        # dakikalar suruyor; bellek tek kosum). results.json yerinde guncellenir.
+        d = json.loads((HERE / "results.json").read_text())
+        for bench, r in d["results"].items():
+            cmds, _ = build(bench)
+            env = os.environ.copy(); env["BENCH_N"] = r["n"]; env["LC_ALL"] = "C"
+            for lang, row in r["rows"].items():
+                if row and "best" in row and cmds.get(lang):
+                    row["rss_kb"] = rss_of(cmds[lang], env)
+            print(bench, {l: (x or {}).get("rss_kb") for l, x in r["rows"].items()})
+        (HERE / "results.json").write_text(json.dumps(d, indent=2))
+        BASE_SIZES.update(d.get("baseline_size_kb") or {})
+        write_markdown(d["results"], d["baseline"])
+        write_csv(d["results"], d.get("repeats", REPEATS))
+        print("-> results.json + RESULTS.md + results.csv (bellek)")
+        return 0
     if "--csv" in sys.argv[1:]:
         d = json.loads((HERE / "results.json").read_text())
         write_csv(d["results"], d.get("repeats", REPEATS))
@@ -270,12 +444,14 @@ def main():
                 row[lang] = None
                 print(f"   {LABEL[lang]:16s} DERLENEMEDI: {errs.get(lang,'')[:80]}")
                 continue
-            t, out, err = timeit(cmd, env, REPEATS)
+            st = {}
+            t, out, err = timeit(cmd, env, REPEATS, st)
             if t is None:
-                row[lang] = None
+                row[lang] = {"timeout": st["timeout"]} if "timeout" in st else None
                 print(f"   {LABEL[lang]:16s} KOSMADI: {err[:80]}")
                 continue
-            row[lang] = {"best": round(t[0], 1), "median": round(t[1], 1)}
+            row[lang] = {"best": round(t[0], 1), "median": round(t[1], 1),
+                         "rss_kb": rss_of(cmd, env)}
             outs[lang] = out
             print(f"   {LABEL[lang]:16s} {t[0]:9.1f} ms  (ort {t[1]:.1f})   -> {out[:28]}")
         uniq = set(outs.values())
@@ -284,13 +460,15 @@ def main():
             print(f"   !! CIKTILAR AYRISIYOR -> GECERSIZ: {uniq}")
         results[bench] = {"n": n, "desc": desc, "rows": row,
                           "output": (outs and list(uniq)[0]) or None,
-                          "agree": len(uniq) == 1}
+                          "agree": len(uniq) == 1,
+                          "build": BUILD_INFO.get(bench, {})}
         print()
     base = baseline()
     print("Bos program taban cizgisi (ms):",
           {k: (round(v, 1) if v else None) for k, v in base.items()})
     (HERE / "results.json").write_text(json.dumps(
-        {"results": results, "baseline": base, "repeats": REPEATS}, indent=2))
+        {"results": results, "baseline": base, "baseline_size_kb": BASE_SIZES,
+         "repeats": REPEATS, "timeout_s": TIMEOUT_S}, indent=2))
     write_markdown(results, base)
     write_csv(results, REPEATS)
     print("\n-> results.json + RESULTS.md + results.csv")
@@ -310,15 +488,20 @@ def write_csv(results, repeats):
     import csv
     with open(HERE / "results.csv", "w", newline="") as fh:
         w = csv.writer(fh, lineterminator="\n")
+        # Ilk sekiz kolon 2026-09-11 bicimiyle AYNI (eski okuyucular kirilmasin);
+        # yenileri sona: tepe RSS, ikili boyutu, derleme suresi, zaman asimi.
         w.writerow(["kernel", "n", "lang", "best_ms", "median_ms", "output",
-                    "agree", "repeats"])
+                    "agree", "repeats", "rss_kb", "bin_kb", "build_ms",
+                    "timeout_s"])
         for bench, r in results.items():
             for lang in LANGS:
-                row = r["rows"].get(lang)
+                row = r["rows"].get(lang) or {}
+                b = (r.get("build") or {}).get(lang) or {}
                 w.writerow([bench, r["n"], lang,
-                            row["best"] if row else "",
-                            row["median"] if row else "",
-                            r["output"] or "", 1 if r["agree"] else 0, repeats])
+                            row.get("best", ""), row.get("median", ""),
+                            r["output"] or "", 1 if r["agree"] else 0, repeats,
+                            row.get("rss_kb") or "", b.get("kb") or "",
+                            b.get("ms") or "", row.get("timeout", "")])
 
 
 def write_markdown(results, base):
@@ -343,7 +526,21 @@ def write_markdown(results, base):
         cells = []
         for b, r in results.items():
             row = r["rows"].get(lang)
-            cells.append(("%.1f" % row["best"]) if row else "—")
+            if row and "best" in row:
+                cells.append("%.1f" % row["best"])
+            elif row and "timeout" in row:
+                cells.append("> %.0f s" % row["timeout"])
+            else:
+                cells.append("—")
+        lines.append("| %s | %s |" % (LABEL[lang], " | ".join(cells)))
+    lines += ["", "## Tepe bellek (MB, rsswrap ile ayri bir kosumda ru_maxrss)", "",
+              "Dusuk = az bellek. Sure ile ayni kosumdan olculur.", "",
+              head, "|---|" + "---:|" * len(results)]
+    for lang in order:
+        cells = []
+        for b, r in results.items():
+            row = r["rows"].get(lang)
+            cells.append(("%.1f" % (row["rss_kb"] / 1024.0)) if row and row.get("rss_kb") else "—")
         lines.append("| %s | %s |" % (LABEL[lang], " | ".join(cells)))
     lines += ["", "## Is yukleri ve cikti mutabakati", "",
               "| Kiyas | BENCH_N | Ne olcer | Ortak cikti |", "|---|---:|---|---|"]
@@ -356,6 +553,23 @@ def write_markdown(results, base):
     lines.append("| " + " | ".join(LABEL.get(k, k) for k in base) + " |")
     lines.append("|" + "---:|" * len(base))
     lines.append("| " + " | ".join(("%.1f" % v) if v else "—" for v in base.values()) + " |")
+    lines.append("")
+    # Derleme suresi ve ikili boyutu: cekirdekler uzerinde ORTANCA (tek bir
+    # cekirdegin aykiri degeri tabloyu belirlemesin). Yorumlanan diller
+    # (Node/Python) derlenmez; Java .class, C# .dll boyutu calisma zamanini
+    # (JVM/CLR) icermez — dogrudan kiyaslanamaz, yalniz bilgi.
+    lines += ["## Derleme suresi ve ikili boyutu (cekirdekler uzerinde ortanca)", "",
+              "| Dil | derleme (ms) | ikili (KB) | bos program ikilisi (KB) |",
+              "|---|---:|---:|---:|"]
+    for lang in order:
+        ms = [((r.get("build") or {}).get(lang) or {}).get("ms") for r in results.values()]
+        kb = [((r.get("build") or {}).get(lang) or {}).get("kb") for r in results.values()]
+        ms = [x for x in ms if x]; kb = [x for x in kb if x]
+        lines.append("| %s | %s | %s | %s |" % (
+            LABEL[lang],
+            ("%.0f" % statistics.median(ms)) if ms else "—",
+            ("%.0f" % statistics.median(kb)) if kb else "—",
+            ("%.0f" % BASE_SIZES[lang]) if BASE_SIZES.get(lang) else "—"))
     lines.append("")
     (HERE / "RESULTS.md").write_text("\n".join(lines) + "\n")
 

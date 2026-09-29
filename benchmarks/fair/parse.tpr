@@ -1,0 +1,17 @@
+// Metin ayristirma: N sayiyi virgulle birlestir, sonra bol ve tamsayiya
+// cevir, topla. CSV/log/ayar dosyasi okumanin cekirdegi. Her dil kendi
+// deyimsel aracini kullaniyor: split + parse (Tulpar/Rust/Go/C#/Java/JS/
+// Python), C++ find + from_chars, C strtol ile yerinde yurume (C'de split yok).
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 1000000; }
+var sb = StringBuilder(1024);
+for (int i = 0; i < n; i = i + 1) {
+    if (i > 0) { sb_append(sb, ","); }
+    sb_append(sb, (i * 7919) % 100000);
+}
+str s = sb_tostring(sb);
+sb_free(sb);
+array parts = split(s, ",");
+int sum = 0;
+for (int i = 0; i < len(parts); i = i + 1) { sum = sum + toInt(parts[i]); }
+print(toString(len(parts)) + " " + toString(sum));

@@ -1,0 +1,14 @@
+// Dolayli cagri: fonksiyon DEGERLERI tablosundan, verinin sectigi girise
+// cagri (geri cagirim / olay isleyici / oyun kancasi kalibi). Indis bir
+// onceki sonuca bagli (acc & 1) — derleyici hangi fonksiyonun cagrilacagini
+// bilemez, satir ici alamaz. C/C++/Rust islev isaretcisi (Rust'ta tablo
+// black_box ile gizli), Go func degeri, C# delegate, Java LongUnaryOperator,
+// JS/Python fonksiyon nesnesi, Tulpar fonksiyon referansi + call().
+func f(int x): int { return (x * 31 + 7) % 1000003; }
+func g(int x): int { return (x * 17 + 3) % 1000003; }
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 20000000; }
+var tab = [f, g];
+int acc = 1;
+for (int i = 0; i < n; i = i + 1) { acc = call(tab[acc & 1], acc); }
+print(acc);

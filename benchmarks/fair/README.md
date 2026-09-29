@@ -245,3 +245,62 @@ koşucu `FileNotFoundError` ile **tamamen** çöküyordu — yani tek bir dilin
 eksik kaynağı ötekilerin ölçümünü de götürüyordu. C'nin `-lm` bağlantısı da
 eklendi (`nbody` yalnız C satırında "DERLENEMEDI" oluyordu; referans dilin
 eksik olduğu bir tablo yayınlanacaktı).
+
+## Genişletilmiş set (2026-09-29)
+
+İlk sekiz çekirdek tamsayı, dizgi ve kayan nokta ağırlıklıydı. Yukarıdaki
+"KANITLAMADIĞI şeyler" listesinden beş alan eklendi, her biri dokuz dilde
+aynı algoritmayla ve çıktı doğrulamasıyla:
+
+| çekirdek | alan | ne ölçer |
+|---|---|---|
+| `hashmap` | veri yapıları | dizgi anahtarlı sözlük: N ekleme + N arama; her dil kendi standart sözlüğü, C'de elle açık adresleme + FNV-1a |
+| `qsort` | diziler | elle Hoare hızlı sıralama (orta pivot, özyinelemeli); kütüphane sıralaması farklı algoritmaları kıyaslardı |
+| `particles` | oyun döngüsü | struct dizisi üzerinde yerçekimi + sekme, 1M parçacık × 50 adım; Tulpar'da kutusuz `P[]` |
+| `callfn` | soyutlama | fonksiyon değeri tablosundan dolaylı çağrı; indis bir önceki sonuca bağlı, satır içi alınamaz (Rust'ta `black_box`, C'de const olmayan global tablo) |
+| `parse` | metin | virgüllü metin kur + böl + tamsayıya çevir; C'de `split` yok, `strtol` ile yerinde yürüme |
+
+Koşucu artık süreden başka dört şey ölçüyor: **tepe bellek** (`rsswrap.c` ile
+ayrı bir koşumda `ru_maxrss`; Python'dan doğrudan alınan değer exec öncesi
+çatallanan Python kopyasını da saydığı için her küçük program 17 MB
+görünüyordu), **başlatma** (Rust, Go ve Java da eklendi), **derleme süresi** ve
+**ikili boyutu**. Tek koşum `TIMEOUT_S` (varsayılan 60 s) saniyeyi aşarsa satır
+"ZAMAN ASIMI" olarak yazılır ve tekrarlar koşmaz; sessizce düşmez.
+`python3 run.py --rss` süreleri yeniden ölçmeden yalnız bellek sütununu doldurur.
+
+Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
+`RESULTS.md`, canlı karne yukarıdaki bağlantıda):
+
+| | Tulpar | C | Tulpar / C | sıra (9 dil) |
+|---|---:|---:|---:|---:|
+| `intloop` | 134,6 | 134,7 | 1,00× | 1. |
+| `fib` | 0,4 | 1,7 | 0,24× | 1. |
+| `sieve` | 7,7 | 8,0 | 0,96× | 1. |
+| `strcat` | 14,1 | 37,8 | 0,37× | 1. |
+| `arrayiter` | 1,2 | 2,3 | 0,52× | 1. |
+| `mandelbrot` | 158,4 | 158,7 | 1,00× | 3. |
+| `qsort` | 121,2 | 57,4 | 2,1× | 8. |
+| `callfn` | 298,6 | 91,1 | 3,3× | 8. |
+| `parse` | 196,3 | 56,7 | 3,5× | 6. |
+| `particles` | 329,6 | 42,2 | 7,8× | 8. |
+| `nbody` | 1304,8 | 114,5 | 11,4× | 8. |
+| `matmul` | 821,3 | 31,1 | 26,4× | 8. |
+| `hashmap` | > 60 s | 72,7 | — | 9. (zaman aşımı) |
+
+Bulgular, sırayla ele alınması önerilen:
+
+1. **`hashmap` karesel.** `json` nesnesi her eklemede ve aramada anahtarları
+   baştan sona `strcmp` ile tarıyor (`src/vm/runtime_bindings.cpp`,
+   `vm_object_set`). 12 500 anahtar 0,25 s, 25 000 0,95 s, 50 000 3,8 s:
+   anahtar ikiye katlanınca süre dörde katlanıyor. Öteki diller 1M anahtarı
+   0,07–0,41 s'de bitiriyor. Nesneye hash indeksi gerekiyor.
+2. **Float dizileri** (`matmul`, `nbody`) 11 Eylül'den beri yerinde sayıyor;
+   dizisiz `mandelbrot` C ile başa baş, yani sorun aritmetik değil depolama ve
+   iç içe döngüde kanıtlı erişim. `matmul`'ün belleği de C'nin iki katı.
+3. **`particles`** (oyun döngüsü) C'nin 7,8 katı. Aynı kod bir fonksiyonun
+   içine alınınca 185 ms (4,4×): üst düzey değişkenler global ve her erişim
+   bellekten geçiyor; kalan fark struct dizisi alan erişiminde.
+4. **`parse`** hızda Java'yla başa baş ama tepe bellek 443 MB (C 32 MB):
+   `split` beş milyon ayrı dizgi nesnesi kuruyor.
+5. **Başlatma 0,25 ms, derleme ortancası 61 ms, ikili 1,4 MB**; belleğin çoğu
+   çekirdekte C ile aynı (`arrayiter`'de 32 bitlik dizi sayesinde yarısı).
