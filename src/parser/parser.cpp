@@ -1249,8 +1249,25 @@ std::unique_ptr<ASTNode> Parser::parse_type_decl() {
     
     expect(TOKEN_LBRACE, "Expected '{' after type name");
     
+    bool has_small = false;   // f32 / i32 alan var mi
     while (!check(TOKEN_RBRACE) && !is_at_end()) {
-        DataType field_type = parse_type();
+        // `f32` / `i32` (K037/K035): BAGLAMSAL tip adi — anahtar sozcuk
+        // degil; `float f32 = ...` gibi bir degisken adi gecerli kalir
+        // (tests/float_precision.test.tpr). Yalniz struct alaninda ve ardindan
+        // alan adi gelirken. Ayni adli bir kullanici tipi (`type f32 {..}`)
+        // varsa o kazanir. Degerin dildeki tipi float/int; depolama 4 bayt.
+        unsigned char bits = 0;
+        DataType field_type;
+        if (check(TOKEN_IDENTIFIER) &&
+            (current().value() == "f32" || current().value() == "i32") &&
+            peek(1).type() == TOKEN_IDENTIFIER && !user_type_declared(current().value())) {
+            field_type = current().value() == "f32" ? TYPE_FLOAT : TYPE_INT;
+            bits = 32;
+            has_small = true;
+            advance();
+        } else {
+            field_type = parse_type();
+        }
         Token field_name = expect(TOKEN_IDENTIFIER, "Expected field name");
 
         // Ayni struct'ta ayni alan adi IKI KEZ (K062, 2026-09-27): eskiden
@@ -1269,12 +1286,29 @@ std::unique_ptr<ASTNode> Parser::parse_type_decl() {
         type_decl.field_names.push_back(field_name.value());
         type_decl.field_custom_types.push_back(std::nullopt);
         type_decl.field_defaults.push_back(nullptr);
-        
+        type_decl.field_bits.push_back(bits);
+
         expect(TOKEN_SEMICOLON, "Expected ';' after field");
     }
-    
+
     expect(TOKEN_RBRACE, "Expected '}' after type body");
-    
+
+    // 4 baytlik depolama yalniz KUTUSUZ struct'ta var (butun alanlar
+    // int/float/bool). str/dizi/json/ic ice struct alanli bir struct kutulu
+    // nesne olarak yasar; orada `f32` sessizce 8 baytlik float olurdu.
+    if (has_small) {
+        for (size_t i = 0; i < type_decl.field_types.size(); i++) {
+            const DataType ft = type_decl.field_types[i];
+            if (ft != TYPE_INT && ft != TYPE_FLOAT && ft != TYPE_BOOL) {
+                error("'" + name + "': f32/i32 alanli struct yalniz int/float/bool/f32/i32 "
+                      "alan tasiyabilir ('" + type_decl.field_names[i] + "' degil) / a struct "
+                      "with f32/i32 fields may only hold scalar fields ('" +
+                      type_decl.field_names[i] + "' is not) at line " + std::to_string(loc.line));
+                break;
+            }
+        }
+    }
+
     return std::make_unique<ASTNode>(std::move(type_decl));
 }
 
@@ -1337,6 +1371,15 @@ static void collect_enums(const std::vector<Token>& toks,
 bool Parser::is_import_alias(const std::string& name) const {
     for (const auto& a : import_aliases_)
         if (a == name) return true;
+    return false;
+}
+
+bool Parser::user_type_declared(const std::string& name) const {
+    for (size_t i = 0; i + 1 < tokens_.size(); i++) {
+        if (tokens_[i].type() == TOKEN_TYPE_KW && tokens_[i + 1].type() == TOKEN_IDENTIFIER &&
+            tokens_[i + 1].value() == name)
+            return true;
+    }
     return false;
 }
 
@@ -3434,6 +3477,14 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
                     }
                     out->field_defaults[i] = convert_ast_node_ptr(n.field_defaults[i]);
                 }
+                bool any_bits = false;
+                for (unsigned char b : n.field_bits) any_bits = any_bits || b != 0;
+                if (any_bits) {
+                    out->field_bits = static_cast<unsigned char*>(
+                        std::calloc(out->field_count, sizeof(unsigned char)));
+                    for (int i = 0; i < out->field_count && i < (int)n.field_bits.size(); ++i)
+                        out->field_bits[i] = n.field_bits[i];
+                }
             }
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, EnumDecl>) {
@@ -3587,6 +3638,7 @@ static void ast_node_free_recursive(ASTNode_C* node) {
     }
 
     free(node->field_types);
+    free(node->field_bits);
     free(node->elem_custom_type);
     free(node->field_types_nodes);
     free(node->field_defaults);

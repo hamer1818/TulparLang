@@ -1,0 +1,14 @@
+// Beklenen: `f32` / `i32` yalniz struct ALANI tipi (K037/K035, 2026-09-29).
+// Yerel olarak anlami yok — kodgen tipsiz degisken diye derliyor, yani
+// "4 bayt float" sozu tutulmuyordu. Import olsa da soyleniyor (eski "Unknown
+// type" tanisi import varken susuyordu).
+
+// EXPECT: [typecheck]
+// EXPECT: 'f32' is only a struct field type (4-byte storage); local 'hiz' should use 'float'
+// EXPECT: 'i32' is only a struct field type (4-byte storage); local 'adet' should use 'int'
+
+import "math";
+
+f32 hiz = 1.5;
+i32 adet = 3;
+print(hiz, adet);

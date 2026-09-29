@@ -1,0 +1,26 @@
+// f32 / i32 struct alanlari (K037/K035): alan degeri dilde float / int —
+// float/int ile karisik aritmetik, float/int yerele atama, parametre ve
+// donus, struct dizisi elemani typecheck'ten tanisiz gecmeli. `f32`
+// degisken ADI olarak da gecerli (baglamsal tip adi).
+
+type Tepe { f32 x; f32 y; i32 renk; bool gorunur; }
+
+func uzunluk2(Tepe t): float {
+    return t.x * t.x + t.y * t.y;
+}
+
+func yap(float a, int r): Tepe {
+    Tepe t = { x: a, y: a * 2.0, renk: r, gorunur: true };
+    return t;
+}
+
+Tepe t = yap(0.5, 3);
+float u = uzunluk2(t);
+int r = t.renk + 1;
+t.x = t.x + 1.0;
+t.renk = r * 2;
+Tepe[] d = [];
+push(d, t);
+float toplam = d[0].x + d[0].y;
+float f32 = toplam;
+print(u, r, toplam, f32, d[0].gorunur);

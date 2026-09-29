@@ -1,0 +1,124 @@
+// `f32` / `i32` STRUCT ALANLARI (K037/K035, 2026-09-29).
+//
+// Sozlesme:
+//   * `type V { f32 x; i32 n; }` — alan 4 bayt depolanir. Degerin dildeki tipi
+//     float/int: okumada genisler (f32 -> double kayipsiz, i32 isaretli),
+//     yazmada daralir (f32 en yakina yuvarlanir, i32 alt 32 bit — C'deki
+//     `(int32_t)` gibi SARAR).
+//   * Yerlesim C'ninki: bildirim sirasi, hedefin hizalama/dolgu kurali.
+//     Struct dizisi (`V[] d`) elemanlari C dizisi gibi ardisik, adim
+//     sizeof(V) (C tarafindan dogrulamasi: tests/f32_yerlesim.sh).
+//   * `f32`/`i32` BAGLAMSAL tip adi — `float f32 = 1.0;` gibi bir degisken
+//     adi gecerli kalir (tests/float_precision.test.tpr). Yalniz struct
+//     alaninda; yerel `f32 x` typecheck hatasi.
+// Eski derleyici `f32`yi bilinmeyen tip sayip struct'i kutulu nesneye
+// dusuruyordu: alan 8 baytlik double, yuvarlama yok, struct dizisi yok.
+// Calistir: ./tulpar tests/f32_alan.test.tpr
+import "test";
+
+type Tepe { f32 x; f32 y; f32 z; i32 renk; }
+type Karma { i32 a; float b; f32 c; int d; bool e; }
+
+Tepe g_tepe = { x: 1, y: 2, z: 3, renk: 4 };
+
+func run_yuvarlama() {
+    Tepe t = { x: 0.1, y: 2.5, z: -3.0, renk: 0 };
+    // 0.1 f32'de temsil edilemez: en yakin f32 degeri 0.100000001490116...
+    assert(t.x != 0.1, "f32 alan 0.1'i double olarak tutmamali");
+    assert_close(t.x, 0.100000001490116, 0.000000000000001);
+    assert_close(t.y, 2.5, 0.0);                  // tam temsil edilen deger aynen
+    float a = t.x;                                // genisletme kayipsiz
+    assert_close(a, 0.100000001490116, 0.000000000000001);
+    t.x = t.x + 1.0;                              // yazmada tekrar yuvarlanir
+    assert_close(t.x, 1.10000002384185791, 0.000000000000001);
+    t.y += 0.5;
+    assert_close(t.y, 3.0, 0.0);
+    Tepe u = { x: 16777217, y: 0, z: 0, renk: 0 };   // 2^24 + 1: f32'de 2^24
+    assert_close(u.x, 16777216.0, 0.0);
+}
+
+func run_i32_sarma() {
+    Karma k = { a: 2147483647, b: 0.1, c: 1.5, d: 5000000000, e: true };
+    k.a = k.a + 1;                                // i32: sarar
+    assert_eq_int(k.a, -2147483648);
+    assert_eq_int(k.d, 5000000000);               // int alan 64 bit kalir
+    assert_close(k.b, 0.1, 0.0);                  // float alan double kalir
+    k.a = -5;
+    assert_eq_int(k.a, -5);                       // isaretli genisleme
+    k.a++;
+    assert_eq_int(k.a, -4);
+    assert_eq_bool(k.e, true);
+}
+
+func run_bicim() {
+    Karma k = { a: -7, b: 0.25, c: 1.5, d: 9, e: false };
+    assert_eq_str(toString(k), "Karma { a: -7, b: 0.25, c: 1.5, d: 9, e: 0 }");
+    assert_eq_str(toJson(k), "{\"a\":-7,\"b\":0.25,\"c\":1.5,\"d\":9,\"e\":false}");
+    var kutulu = k;                               // genel baglam: kutulu nesne
+    assert_eq_int(kutulu.a, -7);
+    assert_close(kutulu.c, 1.5, 0.0);
+}
+
+func run_dizi() {
+    Tepe[] d = [];
+    Tepe a = { x: 0.1, y: 1.0, z: 2.0, renk: 1 };
+    push(d, a);
+    push(d, { x: 4, y: 5, z: 6, renk: -1 });
+    push(d, g_tepe);
+    assert_eq_int(len(d), 3);
+    assert_close(d[0].x, 0.100000001490116, 0.000000000000001);
+    assert_eq_int(d[1].renk, -1);
+    d[1].z = 11.5;
+    d[1].renk += 10;
+    assert_close(d[1].z, 11.5, 0.0);
+    assert_eq_int(d[1].renk, 9);
+    assert_eq_str(toJson(d[2]), "{\"x\":1,\"y\":2,\"z\":3,\"renk\":4}");
+    float s = 0.0;
+    for (e in d) { s = s + e.y; }
+    assert_close(s, 8.0, 0.0);
+    Tepe son = pop(d);
+    assert_eq_int(son.renk, 4);
+    remove_at(d, 0);
+    assert_eq_int(len(d), 1);
+    assert_close(d[0].z, 11.5, 0.0);
+    var dd = d;                                   // tipsiz baglamdan okuma
+    assert_close(dd[0].z, 11.5, 0.0);
+    assert_eq_str(toJson(d), "[{\"x\":4,\"y\":5,\"z\":11.5,\"renk\":9}]");
+}
+
+func tepe_yap(float v): Tepe {
+    Tepe t = { x: v, y: v * 2.0, z: v * 3.0, renk: 1 };
+    return t;
+}
+func tepe_topla(Tepe t): float { return t.x + t.y + t.z; }
+
+func run_cagri() {
+    Tepe t = tepe_yap(0.5);
+    assert_close(tepe_topla(t), 3.0, 0.0);
+    var c = call("tepe_yap", 1.5);                // call(): kutulu donus
+    assert_close(c.z, 4.5, 0.0);
+    assert_close(call("tepe_topla", t), 3.0, 0.0);
+    json j = {"x": 0.3, "y": 1, "z": 2.75, "renk": 5};
+    Tepe u = j;                                   // json -> struct acma
+    assert_close(u.x, 0.300000011920929, 0.000000000000001);
+    assert_eq_int(u.renk, 5);
+    Tepe w = to_struct(j, "Tepe");
+    assert_close(w.z, 2.75, 0.0);
+    match t { Tepe{x, y, z, renk} => assert_close(x + y + z, 3.0, 0.0) }
+}
+
+func run_global() {
+    assert_close(g_tepe.x + g_tepe.y + g_tepe.z, 6.0, 0.0);
+    g_tepe.x = 0.1;
+    assert_close(g_tepe.x, 0.100000001490116, 0.000000000000001);
+    g_tepe.x = 1.0;
+}
+
+print("=== f32 / i32 struct alanlari ===");
+test("f32: yazmada yuvarlama, okumada kayipsiz genisleme", "run_yuvarlama");
+test("i32: 32 bite sarma, isaretli genisleme; int/float alan 8 bayt kalir", "run_i32_sarma");
+test("toString / toJson / kutulu nesne", "run_bicim");
+test("struct dizisi: push, eleman yaz/oku, for-in, pop, remove_at, toJson", "run_dizi");
+test("donus/parametre, call(), json acma, to_struct, match", "run_cagri");
+test("global f32 struct", "run_global");
+test_summary();

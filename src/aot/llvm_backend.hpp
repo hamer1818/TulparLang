@@ -92,6 +92,13 @@ typedef struct {
   char **field_names;    // declaration-ordered (matches LLVM struct order)
   DataType *field_types;
   int field_count;
+  // K037/K035: alan basina depolama genisligi (0 = 8 baytlik yuva; 32 = f32 /
+  // i32). NULL = hepsi 0. `compact` 1 ise yerlesim "alan basina 8 bayt"
+  // DEGIL — LLVM'in dogal (C) yerlesimi: runtime'in yuva tabanli yardimcilarina
+  // (aot_struct_unpack_typed / format / alloc_from_fields) yuva gecicisi
+  // uzerinden gidilir, struct dizisi elemani C'nin sizeof'u kadar.
+  unsigned char *field_bits;
+  int compact;
 } StructTypeEntry;
 
 typedef struct {

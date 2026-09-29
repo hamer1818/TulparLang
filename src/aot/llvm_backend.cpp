@@ -3085,10 +3085,50 @@ int struct_is_trivially_unboxable(StructTypeEntry *st) {
   return 1;
 }
 
+static int struct_field_bits(StructTypeEntry *st, int idx) {
+  return st->field_bits ? st->field_bits[idx] : 0;
+}
+
+// Alanin DEPOLAMA tipi: int/bool i64, float double; `f32` float (4 bayt),
+// `i32` i32 (K037/K035).
 static LLVMTypeRef struct_field_llvm_type(LLVMBackend *backend,
                                           StructTypeEntry *st, int idx) {
-  return st->field_types[idx] == TYPE_FLOAT ? backend->float_type
-                                            : backend->int_type;
+  const bool small = struct_field_bits(st, idx) == 32;
+  if (st->field_types[idx] == TYPE_FLOAT)
+    return small ? LLVMFloatTypeInContext(backend->context) : backend->float_type;
+  return small ? backend->int32_type : backend->int_type;
+}
+
+// Alanin DEGERI (dildeki tip): int/bool -> i64, float -> double. f32
+// genisletilir (fpext, kayipsiz), i32 isaretli genisletilir.
+static LLVMValueRef struct_field_load_value(LLVMBackend *backend, StructTypeEntry *st,
+                                            LLVMValueRef base, int idx, const char *tag) {
+  LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type, base,
+                                        (unsigned)idx, tag);
+  LLVMValueRef fv =
+      LLVMBuildLoad2(backend->builder, struct_field_llvm_type(backend, st, idx), fp, tag);
+  if (struct_field_bits(st, idx) == 32) {
+    if (st->field_types[idx] == TYPE_FLOAT)
+      return LLVMBuildFPExt(backend->builder, fv, backend->float_type, tag);
+    return LLVMBuildSExt(backend->builder, fv, backend->int_type, tag);
+  }
+  return fv;
+}
+
+// Degeri (i64 / double) alana yaz. f32: en yakina yuvarlanir (fptrunc); i32:
+// alt 32 bit (C'deki `(int32_t)` gibi sarar) — bildirilen genislik bu.
+static void struct_field_store_value(LLVMBackend *backend, StructTypeEntry *st,
+                                     LLVMValueRef base, int idx, LLVMValueRef v,
+                                     const char *tag) {
+  if (struct_field_bits(st, idx) == 32) {
+    if (st->field_types[idx] == TYPE_FLOAT)
+      v = LLVMBuildFPTrunc(backend->builder, v, LLVMFloatTypeInContext(backend->context), tag);
+    else
+      v = LLVMBuildTrunc(backend->builder, v, backend->int32_type, tag);
+  }
+  LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type, base,
+                                        (unsigned)idx, tag);
+  LLVMBuildStore(backend->builder, v, fp);
 }
 
 // GEP + alan tipinde yuk + kutula (int -> VM_INT, bool -> VM_BOOL,
@@ -3097,10 +3137,7 @@ static LLVMValueRef struct_field_load_boxed(LLVMBackend *backend,
                                             StructTypeEntry *st,
                                             LLVMValueRef alloca, int idx,
                                             const char *tag) {
-  LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type,
-                                        alloca, (unsigned)idx, tag);
-  LLVMValueRef fv = LLVMBuildLoad2(
-      backend->builder, struct_field_llvm_type(backend, st, idx), fp, tag);
+  LLVMValueRef fv = struct_field_load_value(backend, st, alloca, idx, tag);
   switch (st->field_types[idx]) {
   case TYPE_FLOAT:
     return llvm_build_vm_val_float(backend, fv);
@@ -3146,9 +3183,42 @@ static void struct_field_store_from_boxed(LLVMBackend *backend,
                                           LLVMValueRef alloca, int idx,
                                           LLVMValueRef boxed, const char *tag) {
   LLVMValueRef v = struct_field_payload_from_boxed(backend, st, idx, boxed, tag);
-  LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type,
-                                        alloca, (unsigned)idx, tag);
-  LLVMBuildStore(backend->builder, v, fp);
+  struct_field_store_value(backend, st, alloca, idx, v, tag);
+}
+
+// Kucuk alanli (compact) struct <-> runtime'in YUVA bicimi (alan basina 8
+// bayt: int/bool i64, float double bit deseni). aot_struct_unpack_typed /
+// aot_struct_format / aot_struct_alloc_from_fields yuva bekliyor; compact
+// struct'in yerlesimi farkli (K037/K035). Varsayilan struct icin kopya YOK:
+// `src` oldugu gibi doner (uretilen IR degismez).
+static LLVMValueRef struct_native_to_slots(LLVMBackend *backend, StructTypeEntry *st,
+                                           LLVMValueRef src) {
+  if (!st->compact) return src;
+  LLVMTypeRef slots_ty = LLVMArrayType(backend->int_type, (unsigned)st->field_count);
+  LLVMValueRef slots = llvm_build_alloca_at_entry(backend, slots_ty, "st.slots");
+  for (int i = 0; i < st->field_count; i++) {
+    LLVMValueRef v = struct_field_load_value(backend, st, src, i, "st.slot.v");
+    if (st->field_types[i] == TYPE_FLOAT)
+      v = LLVMBuildBitCast(backend->builder, v, backend->int_type, "st.slot.bits");
+    LLVMValueRef idx[] = {LLVMConstInt(backend->int32_type, 0, 0),
+                          LLVMConstInt(backend->int32_type, (unsigned)i, 0)};
+    LLVMValueRef p = LLVMBuildGEP2(backend->builder, slots_ty, slots, idx, 2, "st.slot.p");
+    LLVMBuildStore(backend->builder, v, p);
+  }
+  return slots;
+}
+static void struct_slots_to_native(LLVMBackend *backend, StructTypeEntry *st,
+                                   LLVMValueRef slots, LLVMValueRef dst) {
+  LLVMTypeRef slots_ty = LLVMArrayType(backend->int_type, (unsigned)st->field_count);
+  for (int i = 0; i < st->field_count; i++) {
+    LLVMValueRef idx[] = {LLVMConstInt(backend->int32_type, 0, 0),
+                          LLVMConstInt(backend->int32_type, (unsigned)i, 0)};
+    LLVMValueRef p = LLVMBuildGEP2(backend->builder, slots_ty, slots, idx, 2, "st.slot.p");
+    LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->int_type, p, "st.slot.v");
+    if (st->field_types[i] == TYPE_FLOAT)
+      v = LLVMBuildBitCast(backend->builder, v, backend->float_type, "st.slot.d");
+    struct_field_store_value(backend, st, dst, i, v, "st.slot.set");
+  }
 }
 
 // Box a native (trivially-unboxable) struct's fields into a plain key-value
@@ -3237,10 +3307,16 @@ static void emit_unpack_boxed_struct_into(LLVMBackend *backend,
                                          types_glob, nz, 2, "struct.unpack.tptr");
   LLVMValueRef fc =
       LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0);
-  LLVMValueRef ua[] = {rhs_tmp, fc, names_ptr, types_ptr, dst};
+  // Kucuk alanli struct: runtime yuva bicimine acar, sonra alan alan daralt.
+  LLVMValueRef target = dst;
+  if (st->compact)
+    target = llvm_build_alloca_at_entry(
+        backend, LLVMArrayType(backend->int_type, (unsigned)st->field_count), "st.unpack.slots");
+  LLVMValueRef ua[] = {rhs_tmp, fc, names_ptr, types_ptr, target};
   LLVMBuildCall2(backend->builder,
                  LLVMGlobalGetValueType(backend->func_aot_struct_unpack_typed),
                  backend->func_aot_struct_unpack_typed, ua, 5, "");
+  if (st->compact) struct_slots_to_native(backend, st, target, dst);
 }
 
 // ---- Tipli struct dizisi (P1.1, 2026-09-21) --------------------------------
@@ -3284,7 +3360,9 @@ static void struct_meta_tables(LLVMBackend *backend, StructTypeEntry *st,
 }
 
 // `[]`den yeni dizi: ad + alan tablolari modul duzeyi sabit global'ler.
+static LLVMValueRef sarr_new_value_layout(LLVMBackend *backend, StructTypeEntry *st);
 static LLVMValueRef sarr_new_value(LLVMBackend *backend, StructTypeEntry *st) {
+  if (st->compact) return sarr_new_value_layout(backend, st);
   LLVMValueRef tn = LLVMBuildGlobalStringPtr(backend->builder, st->name, "sarr.tn");
   std::vector<LLVMValueRef> names, types;
   for (int i = 0; i < st->field_count; i++) {
@@ -3309,6 +3387,62 @@ static LLVMValueRef sarr_new_value(LLVMBackend *backend, StructTypeEntry *st) {
   LLVMValueRef types_p = LLVMBuildGEP2(backend->builder, types_ty, types_g, zz, 2, "sarr.tp");
   LLVMValueRef args[] = {tn, LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0), names_p, types_p};
   return llvm_call_vmvalue_func(backend, backend->func_aot_sarr_new, args, 4, "sarr.new");
+}
+
+// `sizeof(T)` / `offsetof(T, i)` HEDEFIN veri yerlesimiyle: `gep T, null, ..`
+// sabit ifadesi, yerlesim emit'te baglanir (Android iki ABI'yi ayri katlar).
+static LLVMValueRef struct_const_sizeof(LLVMBackend *backend, StructTypeEntry *st) {
+  LLVMValueRef one = LLVMConstInt(backend->int32_type, 1, 0);
+  LLVMValueRef g = LLVMConstGEP2(st->llvm_type, LLVMConstNull(backend->ptr_type), &one, 1);
+  return LLVMConstPtrToInt(g, backend->int32_type);
+}
+static LLVMValueRef struct_const_offsetof(LLVMBackend *backend, StructTypeEntry *st, int i) {
+  LLVMValueRef idx[] = {LLVMConstInt(backend->int32_type, 0, 0),
+                        LLVMConstInt(backend->int32_type, (unsigned)i, 0)};
+  LLVMValueRef g = LLVMConstGEP2(st->llvm_type, LLVMConstNull(backend->ptr_type), idx, 2);
+  return LLVMConstPtrToInt(g, backend->int32_type);
+}
+
+// Kucuk alanli (compact) struct'in dizisi (K037/K035): eleman C yerlesiminde,
+// adim sizeof(T). Tip tablosu 2*fc: kodlar (0 int, 1 float, 2 bool, 3 f32,
+// 4 i32) + bayt ofsetleri. aot_sarr_new_layout yalniz burada bildiriliyor —
+// kullanmayan programin IR'i degismesin.
+static LLVMValueRef sarr_new_value_layout(LLVMBackend *backend, StructTypeEntry *st) {
+  LLVMValueRef tn = LLVMBuildGlobalStringPtr(backend->builder, st->name, "sarr.tn");
+  const unsigned fc = (unsigned)st->field_count;
+  std::vector<LLVMValueRef> names, types;
+  for (unsigned i = 0; i < fc; i++) {
+    names.push_back(LLVMBuildGlobalStringPtr(backend->builder, st->field_names[i], "sarr.fn"));
+    const bool small = struct_field_bits(st, (int)i) == 32;
+    unsigned code = st->field_types[i] == TYPE_FLOAT ? (small ? 3u : 1u)
+                    : st->field_types[i] == TYPE_BOOL ? 2u : (small ? 4u : 0u);
+    types.push_back(LLVMConstInt(backend->int32_type, code, 0));
+  }
+  for (unsigned i = 0; i < fc; i++) types.push_back(struct_const_offsetof(backend, st, (int)i));
+  LLVMTypeRef names_ty = LLVMArrayType(backend->ptr_type, fc);
+  LLVMValueRef names_g = LLVMAddGlobal(backend->module, names_ty, "sarr.names");
+  LLVMSetInitializer(names_g, LLVMConstArray(backend->ptr_type, names.data(), fc));
+  LLVMSetGlobalConstant(names_g, 1);
+  LLVMSetLinkage(names_g, LLVMPrivateLinkage);
+  LLVMTypeRef types_ty = LLVMArrayType(backend->int32_type, 2 * fc);
+  LLVMValueRef types_g = LLVMAddGlobal(backend->module, types_ty, "sarr.layout");
+  LLVMSetInitializer(types_g, LLVMConstArray(backend->int32_type, types.data(), 2 * fc));
+  LLVMSetGlobalConstant(types_g, 1);
+  LLVMSetLinkage(types_g, LLVMPrivateLinkage);
+  LLVMValueRef z0 = LLVMConstInt(backend->int32_type, 0, 0);
+  LLVMValueRef zz[] = {z0, z0};
+  LLVMValueRef names_p = LLVMBuildGEP2(backend->builder, names_ty, names_g, zz, 2, "sarr.np");
+  LLVMValueRef types_p = LLVMBuildGEP2(backend->builder, types_ty, types_g, zz, 2, "sarr.tp");
+  LLVMValueRef fn = LLVMGetNamedFunction(backend->module, "aot_sarr_new_layout");
+  if (!fn) {
+    LLVMTypeRef ps[] = {backend->ptr_type, backend->int32_type, backend->ptr_type,
+                        backend->ptr_type, backend->int32_type};
+    fn = LLVMAddFunction(backend->module, "aot_sarr_new_layout",
+                         llvm_make_vmvalue_func_type(backend, ps, 5, 0));
+  }
+  LLVMValueRef args[] = {tn, LLVMConstInt(backend->int32_type, fc, 0), names_p, types_p,
+                         struct_const_sizeof(backend, st)};
+  return llvm_call_vmvalue_func(backend, fn, args, 5, "sarr.new");
 }
 
 // push: dizi tutamaci (VMValue) + kaynak yerlesim isaretcisi.
@@ -3392,13 +3526,19 @@ static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
 
   LLVMPositionBuilderAtEnd(backend->builder, bb_fast);
   LLVMValueRef datap = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
-                                           objp, 8, "sarr.datap");
+                                           objp, 9, "sarr.datap");
   LLVMValueRef data = LLVMBuildLoad2(backend->builder, backend->ptr_type, datap, "sarr.data");
   llvm_tbaa_tag(backend, data, 0);
-  LLVMValueRef off = LLVMBuildMul(backend->builder, idx,
-                                  LLVMConstInt(backend->int_type, (unsigned long long)est->field_count, 0),
-                                  "sarr.off");
-  LLVMValueRef ep_fast = LLVMBuildGEP2(backend->builder, backend->int_type, data, &off, 1, "sarr.ep");
+  LLVMValueRef ep_fast;
+  if (est->compact) {
+    // Kucuk alanli struct (K037/K035): adim C'nin sizeof(T)'si — GEP T.
+    ep_fast = LLVMBuildGEP2(backend->builder, est->llvm_type, data, &idx, 1, "sarr.ep");
+  } else {
+    LLVMValueRef off = LLVMBuildMul(backend->builder, idx,
+                                    LLVMConstInt(backend->int_type, (unsigned long long)est->field_count, 0),
+                                    "sarr.off");
+    ep_fast = LLVMBuildGEP2(backend->builder, backend->int_type, data, &off, 1, "sarr.ep");
+  }
   LLVMBuildBr(backend->builder, bb_done);
 
   // Yavas yol: runtime hatayi bildirir (sinir disi / yanlis tur) ve sifirlanmis
@@ -3793,6 +3933,17 @@ StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl
     st->field_names[i] = my_strdup(type_decl->field_names[i]);
     st->field_types[i] = type_decl->field_types[i];
   }
+  // K037/K035: f32/i32 alanlar (ayristirici yalniz skaler struct'ta izin
+  // veriyor). Biri bile varsa yerlesim "alan basina 8 bayt" degil.
+  st->field_bits = nullptr;
+  st->compact = 0;
+  if (type_decl->field_bits) {
+    st->field_bits = static_cast<unsigned char *>(malloc((size_t)st->field_count));
+    for (int i = 0; i < st->field_count; i++) {
+      st->field_bits[i] = type_decl->field_bits[i];
+      if (st->field_bits[i]) st->compact = 1;
+    }
+  }
 
   // Build the LLVM struct layout. Unboxable fields are 8-byte scalars:
   // int/bool map to i64 (bool promoted so the struct stays naturally aligned
@@ -3806,10 +3957,10 @@ StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl
       static_cast<LLVMTypeRef *>(malloc(sizeof(LLVMTypeRef) * st->field_count));
   for (int i = 0; i < st->field_count; i++) {
     DataType ft = st->field_types[i];
-    if (ft == TYPE_INT || ft == TYPE_BOOL) {
-      field_llvm[i] = backend->int_type;
-    } else if (ft == TYPE_FLOAT) {
-      field_llvm[i] = backend->float_type;
+    if (ft == TYPE_INT || ft == TYPE_BOOL || ft == TYPE_FLOAT) {
+      // f32 -> float, i32 -> i32 (4 bayt); LLVM'in dogal yerlesimi C'nin
+      // hizalama/dolgu kurali (hedef veri yerlesimiyle).
+      field_llvm[i] = struct_field_llvm_type(backend, st, i);
     } else {
       field_llvm[i] = backend->vm_value_type;
     }
@@ -4008,6 +4159,9 @@ static bool struct_decl_layout_equal(ASTNode_C *a, ASTNode_C *b) {
     const char *bn = b->field_names ? b->field_names[i] : nullptr;
     if (!an || !bn || strcmp(an, bn) != 0) return false;
     if (a->field_types[i] != b->field_types[i]) return false;
+    // `f32 x` ile `float x` ayni yerlesim DEGIL (K037).
+    if ((a->field_bits ? a->field_bits[i] : 0) != (b->field_bits ? b->field_bits[i] : 0))
+      return false;
     const char *ac = a->field_custom_types ? a->field_custom_types[i] : nullptr;
     const char *bc = b->field_custom_types ? b->field_custom_types[i] : nullptr;
     if ((ac == nullptr) != (bc == nullptr)) return false;
@@ -4021,9 +4175,10 @@ static std::string struct_decl_layout_str(ASTNode_C *d) {
   std::string s = "{ ";
   for (int i = 0; i < d->field_count; i++) {
     const char *tn;
+    const bool small = d->field_bits && d->field_bits[i] == 32;
     switch (d->field_types[i]) {
-    case TYPE_INT: tn = "int"; break;
-    case TYPE_FLOAT: tn = "float"; break;
+    case TYPE_INT: tn = small ? "i32" : "int"; break;
+    case TYPE_FLOAT: tn = small ? "f32" : "float"; break;
     case TYPE_BOOL: tn = "bool"; break;
     case TYPE_STRING: tn = "str"; break;
     default:
@@ -7675,12 +7830,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                        st->field_names[f]);
               LLVMValueRef fname_fmt = LLVMBuildGlobalStringPtr(
                   backend->builder, fname_lit, "struct.print.field");
-              LLVMValueRef field_ptr = LLVMBuildStructGEP2(
-                  backend->builder, st->llvm_type, alloca,
-                  (unsigned)f, "struct.print.gep");
-              LLVMValueRef field_val = LLVMBuildLoad2(
-                  backend->builder, struct_field_llvm_type(backend, st, f),
-                  field_ptr, "struct.print.fld");
+              // Deger (f32 double'a, i32 i64'e genisletilmis) — printf'in
+              // %g/%lld'si 8 baytlik arguman bekliyor.
+              LLVMValueRef field_val = struct_field_load_value(
+                  backend, st, alloca, f, "struct.print.fld");
               LLVMValueRef pf_args[] = {fname_fmt, field_val};
               LLVMBuildCall2(backend->builder,
                              LLVMGlobalGetValueType(backend->func_printf),
@@ -7733,6 +7886,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         if (LLVMValueRef sp = codegen_struct_expr_ptr(backend, node->arguments[0], tst)) {
           LLVMValueRef np, tp;
           struct_meta_tables(backend, tst, &np, &tp);
+          sp = struct_native_to_slots(backend, tst, sp);  // f32/i32: yuva bicimi
           LLVMValueRef fargs[] = {
               LLVMBuildGlobalStringPtr(backend->builder, tst->name, "st.tn"),
               LLVMConstInt(backend->int32_type, (unsigned)tst->field_count, 0), np, tp, sp};
@@ -10377,7 +10531,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
               backend->builder, st->name, "match.struct.type");
           LLVMValueRef field_count =
               LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0);
-          LLVMValueRef alloc_args[] = {name_str, field_count, src_alloca};
+          LLVMValueRef alloc_args[] = {name_str, field_count,
+                                       struct_native_to_slots(backend, st, src_alloca)};
           subj = llvm_call_vmvalue_func(
               backend, backend->func_aot_struct_alloc_from_fields, alloc_args, 3,
               "match.struct.heap");

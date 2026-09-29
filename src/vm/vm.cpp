@@ -866,6 +866,7 @@ ObjStructArray *vm_allocate_struct_array(VM *vm) {
   a->field_count = 0;
   a->count = 0;
   a->capacity = 0;
+  a->elem_size = 0;
   a->data = nullptr;
   return a;
 }

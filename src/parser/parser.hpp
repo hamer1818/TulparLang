@@ -90,6 +90,9 @@ private:
     std::vector<std::string> import_aliases_;
     bool last_type_qualified_ = false;
     bool is_import_alias(const std::string& name) const;
+    // Bu dosyada `type <name> {` / `struct <name> {` bildirimi var mi (K037:
+    // baglamsal `f32`/`i32` tip adini ayni adli kullanici tipi golgeler).
+    bool user_type_declared(const std::string& name) const;
     // Imlec `offset`teki token `ALIAS . AD` nitelikli tip adinin basi mi.
     bool qualified_type_at(int offset) const;
     // K027: son parse_type bir ENUM adina cozulduyse (dizi soneki yoksa) adi.
@@ -292,6 +295,9 @@ typedef struct ASTNode_C {
   char **field_custom_types;
   int field_count;
   struct ASTNode_C **field_defaults;
+  // TYPE_DECL: alan basina depolama genisligi (bkz. ast_nodes.hpp TypeDecl::
+  // field_bits). NULL = hepsi varsayilan (0).
+  unsigned char *field_bits;
 
   struct ASTNode_C **parameters;
   int param_count;
