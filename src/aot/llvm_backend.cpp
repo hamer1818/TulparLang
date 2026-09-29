@@ -3430,8 +3430,69 @@ static std::unordered_set<const ASTNode_C *> &method_rewritten_calls() {
   return s;
 }
 
+static void resolve_call_receiver(LLVMBackend *backend, ASTNode_C *node);
+
+static bool user_function_declared(LLVMBackend *backend, const char *raw) {
+  char prefixed[300];
+  snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
+  return LLVMGetNamedFunction(backend->module, prefixed) ||
+         LLVMGetNamedFunction(backend->module, raw);
+}
+
+// Alici ifadenin STATIK struct tipi (K003): tipli yerel/parametre, struct
+// dizisi elemani, struct donduren cagri. Bilinmiyorsa nullptr — kutulu
+// (json) alici yontem cozumune girmez, eski serbest fonksiyon yolunda kalir.
+static const char *receiver_struct_name(LLVMBackend *backend, ASTNode_C *r) {
+  if (!r) return nullptr;
+  if (r->type == AST_IDENTIFIER && r->name) return get_local_struct_type(backend, r->name);
+  if (r->type == AST_ARRAY_ACCESS && r->left && r->left->type == AST_IDENTIFIER &&
+      r->index && r->index->type != AST_STRING_LITERAL)
+    return sarr_elem_of_ident(backend, r->left);
+  if (r->type == AST_FUNCTION_CALL && r->name) {
+    if (r->receiver) resolve_call_receiver(backend, r);
+    for (int j = 0; j < backend->function_count; j++)
+      if (backend->functions[j].name && strcmp(backend->functions[j].name, r->name) == 0)
+        return backend->functions[j].return_struct_name;
+  }
+  return nullptr;
+}
+
 static void resolve_call_receiver(LLVMBackend *backend, ASTNode_C *node) {
   if (!node || node->type != AST_FUNCTION_CALL || !node->receiver) return;
+  // YONTEM (K003): `r.area()` ve r'nin statik tipi Rect ise `Rect.area`
+  // tanimliysa ona cozulur — ayni adli serbest fonksiyondan ONCE (tipin kendi
+  // yontemi daha ozgul). Alici ilk arguman olur (metot yolu).
+  if (const char *tn = receiver_struct_name(backend, node->receiver)) {
+    std::string m = std::string(tn) + "." + node->name;
+    // Takma adli modulun ICINDE ayni adli serbest fonksiyon varsa cagri adi
+    // `g__ad`a yeniden yazilmis olur (apply_import_alias); yontem yine `Tip.ad`.
+    if (!user_function_declared(backend, m.c_str())) {
+      const char *us = strstr(node->name, "__");
+      const char *last = nullptr;
+      while (us) { last = us; us = strstr(us + 2, "__"); }
+      if (last && last[2]) m = std::string(tn) + "." + (last + 2);
+    }
+    if (user_function_declared(backend, m.c_str())) {
+      free(node->name);
+      node->name = my_strdup(m.c_str());
+      if (resolve_qualified_call(node, nullptr, nullptr) == 2)
+        method_rewritten_calls().insert(node);
+      return;
+    }
+  }
+  // Acik bicim `Rect.area(r)`: alici bir DEGISKEN degil, struct tipinin adi.
+  if (node->receiver->type == AST_IDENTIFIER && node->receiver->name &&
+      !get_local(backend, node->receiver->name) &&
+      find_struct_type(backend, node->receiver->name)) {
+    std::string m = std::string(node->receiver->name) + "." + node->name;
+    if (user_function_declared(backend, m.c_str())) {
+      free(node->name);
+      node->name = my_strdup(m.c_str());
+      ast_node_free(node->receiver);
+      node->receiver = nullptr;
+      return;
+    }
+  }
   auto func_in_module = [](const char *raw, void *ctx) -> int {
     char prefixed[300];
     snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
@@ -5296,6 +5357,11 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_FUNCTION_CALL: {
+    // Alici ONCE cozulsun (K003, 2026-09-28): `k.dbl() + 1` tipli ifadede
+    // `dbl` native bulunup alicisiz (0 arguman) cagriliyordu — gecersiz IR,
+    // cop deger (olculdu: 4238593, beklenen 11). Yontem (`q.area()`) de
+    // buradan `Rect.area(q)`ya cozulur.
+    if (node->receiver) resolve_call_receiver(backend, node);
     // Look up the function
     LLVMValueRef func = LLVMGetNamedFunction(backend->module, node->name);
     if (func) {
@@ -14145,6 +14211,19 @@ static LLVMValueRef emit_boxed_fn_return(LLVMBackend *backend,
 // forward references / mutual recursion in Pass 1b can resolve.
 static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
   if (node->type != AST_FUNCTION_DECL) return;
+
+  // `func Tip.ad` (K003): Tip bir struct olmali — degilse `self` kutulu
+  // dolasir ve hicbir alici bu yonteme cozulmez (sessiz olu kod).
+  if (node->receiver_type_name && !find_struct_type(backend, node->receiver_type_name)) {
+    char msg[320];
+    snprintf(msg, sizeof(msg), "'%s' yontemi: '%s' bir struct tipi degil", node->name,
+             node->receiver_type_name);
+    report_codegen_error_with_suggestion(backend, node->line, "hata", msg,
+                                         node->receiver_type_name,
+                                         "yontem yalniz `struct` ile bildirilmis bir tipe "
+                                         "tanimlanabilir");
+    return;
+  }
 
   // Native ABI karari native_abi_eligible()'da — codegen_func_def ile AYNI
   // fonksiyon. predeclare imzayi, codegen govdeyi uretiyor; ikisi ayrisirsa

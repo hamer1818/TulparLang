@@ -161,7 +161,11 @@ void apply_import_alias(ASTNode_C *program, const char *alias) {
   std::unordered_set<std::string> local_names;
   for (int i = 0; i < program->statement_count; ++i) {
     ASTNode_C *stmt = program->statements[i];
-    if (stmt && stmt->type == AST_FUNCTION_DECL && stmt->name) {
+    // Yontem (`func Tip.ad`, K003) takma adla yeniden adlandirilmaz: tipe
+    // aittir ve struct adlari da takma adla adlandirilmiyor; cagri alicinin
+    // tipinden `Tip.ad`ya cozulur.
+    if (stmt && stmt->type == AST_FUNCTION_DECL && stmt->name &&
+        !std::strchr(stmt->name, '.')) {
       local_names.insert(stmt->name);
     }
   }

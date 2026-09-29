@@ -679,9 +679,19 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     // against the function shape the AOT/VM will actually emit.
     std::string effective_name = call->name;
     if (call->receiver) {
-      DataType receiver_type = infer_expr(ctx, call->receiver.get());
+      const auto *recv_id = as_node<Identifier>(call->receiver.get());
+      // `Rect.area(r)` (K003): alici bir struct TIPININ adi — deger degil;
+      // gezilmez (tanimsiz degisken sanilmasin), yontem acik bicimde.
+      const bool type_receiver = recv_id && !ctx->symbols.count(recv_id->name) &&
+                                 ctx->struct_types.count(recv_id->name) &&
+                                 ctx->functions.count(recv_id->name + "." + call->name);
+      DataType receiver_type =
+          type_receiver ? TYPE_UNKNOWN : infer_expr(ctx, call->receiver.get());
       bool resolved_as_alias = false;
-      if (const auto *recv_id = as_node<Identifier>(call->receiver.get())) {
+      if (type_receiver) {
+        effective_name = recv_id->name + "." + call->name;
+        resolved_as_alias = true;
+      } else if (recv_id) {
         std::string mangled = recv_id->name + "__" + call->name;
         if (ctx->functions.count(mangled)) {
           effective_name = mangled;
@@ -689,6 +699,30 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
         }
       }
       if (!resolved_as_alias) {
+        // YONTEM (K003): kodgen `r.area()`yi alicinin statik struct tipine
+        // gore `Rect.area`ya cozer. Alicinin struct adi biliniyorsa ayni
+        // secim burada; bilinmiyor ama bu adda bir yontem VARSA serbest
+        // fonksiyonun imzasiyla denetleme — yanlis pozitif olurdu.
+        std::string rs;
+        if (recv_id) {
+          auto sit = ctx->symbols.find(recv_id->name);
+          if (sit != ctx->symbols.end() && sit->second.type == TYPE_CUSTOM &&
+              sit->second.custom_type_name)
+            rs = *sit->second.custom_type_name;
+        }
+        if (!rs.empty() && ctx->functions.count(rs + "." + call->name)) {
+          effective_name = rs + "." + call->name;
+        } else if (receiver_type == TYPE_CUSTOM || receiver_type == TYPE_UNKNOWN ||
+                   receiver_type == TYPE_UNSPECIFIED) {
+          const std::string suffix = "." + call->name;
+          for (const auto &uf : ctx->user_functions) {
+            if (uf.size() > suffix.size() &&
+                uf.compare(uf.size() - suffix.size(), suffix.size(), suffix) == 0) {
+              effective_name.clear();   // hangi yontem oldugu belirsiz: denetleme
+              break;
+            }
+          }
+        }
         // Method path: receiver counts as first positional arg.
         arg_types.insert(arg_types.begin(), receiver_type);
         arg_nodes.insert(arg_nodes.begin(), call->receiver.get());
@@ -886,8 +920,10 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       }
     }
 
+    if (effective_name.empty()) return TYPE_UNKNOWN;   // belirsiz yontem (K003)
     DataType ret = function_return_type(ctx, effective_name);
-    if (ret == TYPE_VOID && call->name != "print" && call->name != "println") {
+    if (ret == TYPE_VOID && effective_name.find('.') == std::string::npos &&
+        call->name != "print" && call->name != "println") {
       if (call->name == "len")
         return TYPE_INT;
       if (call->name == "to_string")

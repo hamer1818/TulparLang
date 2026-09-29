@@ -272,6 +272,20 @@ static void render_parse_error_pretty(int line, const std::string& message,
     }
 }
 
+// FIRLATMAYAN ayristirma hatasi: deyim zaten tam ayristi, yalniz anlami
+// gecersiz (ornegin yinelenen tanim). Hata sayaci artar — derleme durur —
+// ama panik kurtarmasi bir sonraki deyimi yutmaz.
+static void report_soft_parse_error(int line, const std::string& message,
+                                    const char *caret, const char *hint) {
+    g_parser_error_count++;
+    if (g_parser_quiet) return;
+    render_parse_error_pretty(line,
+                              std::string(tulpar::i18n::tr_en("ayrıştırma hatası: ",
+                                                              "parse error: ")) +
+                                  message,
+                              caret, hint);
+}
+
 void Parser::error(const std::string& message) {
     g_parser_error_count++;
     // The legacy Parser::error is invoked from inside parse_* helpers;
@@ -411,10 +425,35 @@ std::unique_ptr<ASTNode> Parser::parse() {
     // ayni sebeple (bkz. tuple notu).
     prescan_enums();
     prescan_tuple_sigs();
-    
+    // Ust duzey fonksiyon adi -> ilk tanimin satiri (K002, yinelenen tanim).
+    std::unordered_map<std::string, int> top_fn_lines;
+
     while (!is_at_end()) {
         try {
             statements.push_back(parse_statement());
+            // AYNI DOSYADA AYNI ADLI IKI FONKSIYON (K002, 2026-09-28): eskiden
+            // ikincisi sessizce yutuluyordu — ilk tanim kazaniyor, `func
+            // area(Rect)` + `func area(Circle)` ikisi de kabul, `c.area()`
+            // Rect govdesini Circle verisiyle kosup 0 basiyordu. Tulpar'da
+            // asiri yukleme yok; tipe gore ayri govde `func Tip.ad` yontemidir.
+            // Korpusta (338 .tpr, 2026-09-28) yinelenen tanim 0 — kirilan yok.
+            if (auto *fd = std::get_if<FunctionDecl>(&statements.back()->value)) {
+                auto ins = top_fn_lines.emplace(fd->name, fd->loc.line);
+                if (!ins.second) {
+                    report_soft_parse_error(
+                        fd->loc.line,
+                        std::string(tulpar::i18n::tr_en("'", "function '")) + fd->name +
+                            tulpar::i18n::tr_en("' fonksiyonu iki kez tanimlandi (ilki satir ",
+                                                "' is defined twice (first at line ") +
+                            std::to_string(ins.first->second) + ")",
+                        ("func " + fd->name).c_str(),
+                        tulpar::i18n::tr_en(
+                            "asiri yukleme yok: birini yeniden adlandir; tipe gore ayri govde "
+                            "icin `func Tip.ad(...)` yontemi yaz",
+                            "no overloading: rename one; for a per-type body write a "
+                            "`func Type.name(...)` method"));
+                }
+            }
             drain_pending(statements);
         } catch (const std::exception& e) {
             // Yarim kalmis bir coklu bildirimin ekleri sonraki deyime
@@ -789,11 +828,30 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     // Function name
     Token name_tok = expect(TOKEN_IDENTIFIER, "Expected function name");
     std::string name = name_tok.value();
-    
+
+    // YONTEM: `func Tip.ad(...)` (K003, 2026-09-28). Govdede ortuk ilk
+    // parametre `Tip self`; fonksiyonun adi `Tip.ad` — nokta tanimlayicida
+    // gecemedigi icin kullanici fonksiyonlariyla CARPISAMAZ ve iki tipin
+    // ayni adli yontemleri (`Rect.area`, `Circle.area`) yan yana yasar.
+    // `r.area()` cagrisini kodgen alicinin STATIK struct tipine gore
+    // `Rect.area(r)`ya cozer; `Rect.area(r)` acik bicimi de gecerli.
+    std::optional<std::string> method_of;
+    if (check(TOKEN_DOT)) {
+        advance();  // '.'
+        Token mname = expect(TOKEN_IDENTIFIER, "Expected method name after '.'");
+        method_of = name;
+        name = name + "." + mname.value();
+    }
+
     // Parameters
     expect(TOKEN_LPAREN, "Expected '(' after function name");
     std::vector<Parameter> parameters;
-    
+    if (method_of) {
+        Parameter self_par("self", TYPE_CUSTOM);
+        self_par.custom_type = method_of;
+        parameters.push_back(std::move(self_par));
+    }
+
     if (!check(TOKEN_RPAREN)) {
         do {
             // Two accepted forms per parameter:
@@ -865,6 +923,38 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
 
     expect(TOKEN_RPAREN, "Expected ')' after parameters");
 
+    if (method_of) {
+        // `self` ortuk; ikinci bir `self` parametresi govdede birini gizlerdi.
+        // Sozdizimi tam ayristi; hatalar FIRLATMADAN (panik kurtarmasi
+        // govdeyi ust duzey deyim sanip gurultu basmasin).
+        for (size_t i = 1; i < parameters.size(); i++) {
+            if (parameters[i].name == "self") {
+                report_soft_parse_error(
+                    name_tok.line(),
+                    std::string(tulpar::i18n::tr_en(
+                        "yontemde 'self' ortuk ilk parametredir, yeniden bildirilemez: '",
+                        "'self' is the implicit first parameter of a method and cannot be "
+                        "redeclared: '")) + name + "'",
+                    "self",
+                    tulpar::i18n::tr_en("parametreyi yeniden adlandir; alici `self` ile okunur",
+                                        "rename the parameter; the receiver is `self`"));
+            }
+        }
+        // Enum ayristiricida int'e katlaniyor; alicinin statik tipi `int`
+        // olur ve yontem hicbir zaman bulunamazdi — sessiz degil, burada soyle.
+        if (is_enum_name(*method_of)) {
+            report_soft_parse_error(
+                name_tok.line(),
+                std::string(tulpar::i18n::tr_en(
+                    "yontem yalniz struct tipine tanimlanabilir; '",
+                    "methods can only be defined on struct types; '")) +
+                    *method_of + tulpar::i18n::tr_en("' bir enum", "' is an enum"),
+                method_of->c_str(),
+                tulpar::i18n::tr_en("enum icin serbest fonksiyon yaz: `func ad(Renk r)`",
+                                    "write a free function for an enum: `func name(Color c)`"));
+        }
+    }
+
     // Return type (optional, defaults to void).
     // Two forms accepted:
     //   func name(...) { ... }              // no return type
@@ -922,6 +1012,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
                       std::move(body), loc);
     decl.return_custom_type = std::move(return_custom_type_name);
     decl.return_enum_type = std::move(return_enum_name);
+    decl.receiver_type = std::move(method_of);
     return std::make_unique<ASTNode>(std::move(decl));
 }
 

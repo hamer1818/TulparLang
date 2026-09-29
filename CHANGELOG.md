@@ -1292,6 +1292,39 @@ döngüsü; 7,78 MB'lık metinde ~1,3 GB/s).
 Sıralama: Rust 18,5 · Go 24,6 · **Tulpar 31,2** · Java 32,9 · C 37,5 ·
 Node 100,4 · Python 199,1 — **3. sıra**, Java ve C'nin önünde.
 
+### Eklendi — yöntem: `func Tip.ad(...)`, alıcı tipine göre dağıtım; yinelenen fonksiyon tanımı artık hata
+
+- `func Rect.area(): int { return self.w * self.h; }` — gövdede örtük
+  `Rect self`. Fonksiyonun adı `Rect.area`: noktalı ad kullanıcı
+  fonksiyonlarıyla çarpışamaz, iki tipin aynı adlı yöntemleri (`Rect.area`,
+  `Circle.area`) yan yana yaşar. `r.area()` alıcının **statik** struct
+  tipine göre (tipli yerel/parametre, struct dizisi elemanı, struct döndüren
+  çağrı) `Rect.area(r)`ya çözülür — aynı adlı serbest fonksiyondan önce;
+  `Rect.area(r)` açık biçimi de geçerli. Struct döndüren yöntem, zincir
+  (`a.scaled(3).area()`), takma adlı modülün yöntemi çalışıyor. `self` değer
+  kopyası (struct parametresiyle aynı anlam): değiştirmek için yeni değer
+  döndür. Kutulu (json) alıcı yöntem çözümüne girmez — eski yol.
+- **Sessiz hata kapandı:** aynı dosyada aynı adlı ikinci fonksiyon sessizce
+  yutuluyordu (ilk tanım kazanıyor): `func area(Rect)` + `func area(Circle)`
+  ikisi de kabul, `c.area()` Rect gövdesini Circle verisiyle koşup `0`
+  basıyordu (beklenen 12). Artık ayrıştırma hatası ("iki kez tanımlandı
+  (ilki satır N)", ipucu: `func Tip.ad`). Korpusta (338 `.tpr`, bu depo +
+  tulpar-engine) yinelenen tanım 0 — kırılan program yok.
+- **Yolda bulunan sessiz hata:** tipli ifadede alıcılı çağrı alıcısız
+  çağrılıyordu — `int r = k.dbl() + 1;` (native `dbl`) çöp basıyordu
+  (ölçüldü: `4238593`, beklenen 11; IR geçersizdi, O3 muhafazakâr yola
+  düşüyordu). Alıcı artık önce çözülüyor.
+- Hatalar: struct olmayan tipe yöntem, enum'a yöntem, `self`i yeniden
+  bildirmek — hepsi açık tanı. typeinfer yöntemin imzasıyla denetliyor
+  (`Rect.scaled(a, 2, 3)` → fazla argüman); alıcı tipi bilinmiyorsa ve bu
+  adda bir yöntem varsa serbest fonksiyonun imzası uygulanmıyor (yanlış
+  pozitif olurdu).
+- Nöbetçi: `tests/yontem.test.tpr` (5 test) + `tests/moduller/yontem_modul.tpr`,
+  `tests/yontem_hatalari.sh` (7/7; eski derleyiciyle 7'si de kırmızı),
+  typeinfer `fail/26_method_static_call.tpr`, `pass/20_methods_ok.tpr`.
+  14 kıyasın optimizasyon sonrası IR'ı birebir aynı; korpus tanı tabanı 9
+  (değişmedi), tulpar-engine korpusu 1 → 1.
+
 ### Performance — dizi erişimi artık SATIR İÇİ (`sieve` 42,1 → 23,6 ms)
 
 Her `a[i]` bir `vm_get_element_ptr` **çağrısıydı**: iki alloca, iki store, bir
