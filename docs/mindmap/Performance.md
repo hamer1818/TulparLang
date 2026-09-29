@@ -24,7 +24,7 @@ taban çizgisi. Çalıştır: `python3 benchmarks/fair/run.py [test]`.
 | strcat (2M) | 37.8 | 19.1 | 25.4 | **31.6** | 35.9 | 105.6 | **3.** |
 | arrayiter (5M) | 2.3 | 1.7 | 4.0 | **6.6** | 19.5 | 21.3 | 4. |
 
-Hedef "her alanda 2.–3. sıra" bu koşumda 5 testin 3'ünde tutuyordu.
+Hedef "her alanda 2.–3. sıra" bu koşumda (2026-09-03) 5 testin 3'ünde tutuyordu.
 
 `arrayiter` sonradan eklendi (2026-09-04): önceki dördü Tulpar'ın **en yaygın
 döngü kalıbını** hiç ölçmüyordu — `for (int i = 0; i < len(a); ...)`. O kalıp
@@ -395,6 +395,11 @@ Tulpar daha yavaş. Kıyas sayıları yerel (LLVM 22) ölçümlerdir.
 `TULPAR_TARGET_CPU=native` — Zen4'te AVX-512 seçimleri kazandırmıyor
 (arrayiter 2,91 vs generic 2,77; intloop 151,9 vs 135). Kaçış kapısı
 olarak duruyor, varsayılan `generic` (rustc tabanıyla aynı).
+**Tek ölçüm (2026-09-28, Ryzen 7 9800X3D, LLVM 22, fair N'leri, en iyi 9,
+süreç dahil):** `arrayiter` generic 1,71 / native 1,77 ms; `intloop`
+134,85 / 134,85 ve `sieve` 7,67 / 7,75 — ikisinin ikilisi native ile bayt
+bayt aynı. `llvm_backend.cpp`'deki "generic 2,8 / native 1,0" yorumu eski
+kod yolundandı, bu ölçüme indirildi.
 
 ## `while` döngü sürümlemesi ve ELEK'İN GERÇEK açığı (2026-09-06)
 
@@ -518,8 +523,11 @@ En iyi / (ortanca), 7 tekrar:
 | strcat | 37,8 | 14,8 | 19,2 | 24,6 | **18,7** | **2.** |
 | sieve | 7,6 | 8,1 | 8,2 | 8,4 | **8,6** | 5. |
 
-**fib'de birinciyiz** — C'nin 2,7, Rust'ın 6, Go'nun 11 katı hızlı. Sebebi
-gcc'nin bile yapmadığı kadar derin özyineleme açılımı (aşağıdaki bölüm).
+**fib'de birinciyiz** — bu koşumda (n=32) C'nin 2,7, Rust'ın 6, Go'nun 11
+katı hızlı. Oran bir SABİT değil: fark `n` ile büyüyen bir eğri üstünde bir
+nokta (C ve Tulpar farklı üslerle ölçekleniyor; DOGRULAMA "Bu bir sabit
+değil"). `fair/RESULTS.md`'nin son koşumunda aynı n'de 4×. Sebebi gcc'nin
+bile yapmadığı kadar derin özyineleme açılımı (aşağıdaki bölüm).
 
 Go'ya karşı 4 galibiyet 1 yenilgi (elek, 0,2 ms), Rust'a karşı 4 galibiyet
 1 yenilgi (elek, 0,4 ms). Boş program tabanı: C 0,19 · Tulpar 0,28.
@@ -743,7 +751,8 @@ Argümanlar ve dönüş BELLEKTEN geçiyor (çağrı başına ~6 bellek işlemi)
 kaldırır, ama `call()` kayıt defteri, async coroutine motoru, struct
 parametreleri ve wasm sret yolu aynı imzaya bağlı. Güvenli biçimi: gövde
 kayıt-ABI'li `t_f$fast`e taşınır, `t_f` ince bir sarmalayıcı olarak kalır.
-Henüz yapılmadı.
+~~Henüz yapılmadı.~~ Yapıldı (2026-09-08): aşağıdaki "Kutulu fonksiyonlar
+DEĞER ABI'sine geçti" bölümü (`t_<ad>.f`).
 
 ## Elek: BEŞ deneme, hepsi ölçüldü, hiçbiri ödemedi (2026-09-08)
 
@@ -783,7 +792,8 @@ LSR fazladan bir sayaç ekliyor (7→8 komut) ve net −0,58.
 `f[i]` doğrudan i64 döndürmeli, yani `codegen_typed_expr` AST_ARRAY_ACCESS'i
 tanımalı (şu an tanımıyor — yalnız literal/tanımlayıcı/çağrı/ikili işlem).
 O zaman `f[i] == 0` düz bir i64 karşılaştırması olur, etiket makinesi ve geri
-düşüş çağrısı hiç üretilmez. Yapılmadı.
+düşüş çağrısı hiç üretilmez. ~~Yapılmadı.~~ Yapıldı (2026-09-08): aşağıdaki
+"Elek: 5. sıradan 2. sıraya — çağrıyı IR'DEN kaldırmak" bölümü.
 
 ### Nereye kadar gidilebilir
 - Tulpar i64 **8,33** < clang'ın i64 C modeli **8,72** → erişim yolumuz düz
@@ -953,7 +963,7 @@ kapatmak üçüncü bir gövde kopyası gerektirir, o da ölçülmüş bir kayı
 | | C | C++ | Rust | Go | **Tulpar** | sıra |
 |---|--:|--:|--:|--:|--:|:--:|
 | fib | 1,6 | 1,9 | 3,8 | 6,9 | **0,6** | **1.** |
-| **sieve** | 7,9 | 8,1 | 8,4 | 8,8 | **7,8** | **1.** |
+| **sieve** | 7,9 | 8,1 | 8,4 | 8,8 | **7,8** | **1.** (bu koşumda; `fair/RESULTS.md`'nin son koşumunda Go ile eşit 8,0, C 7,7) |
 | strcat | 37,7 | 14,7 | 18,8 | 25,1 | **13,8** | **1.** |
 | arrayiter | 2,4 | 3,1 | 1,6 | 4,2 | **1,3** | **1.** |
 | intloop | 135,0 | 135,6 | 144,5 | 135,0 | **135,4** | 3. (%0,3) |
@@ -1005,3 +1015,11 @@ Bu işten önce "kutulamanın çağrı maliyeti 2,4 kat" diye tahmin etmiştim
 ABI payı ~1,5 kat; kalan fark **kutulu aritmetiğin etiket dağıtımı**. Onu
 kapatacak şey ABI değil, tip özelleştirmesi (`n`in int olduğunu bilmek).
 
+## Wings TLS yük altında (2026-06-22)
+
+`examples/api_wings_tls.tpr`, OpenSSL 3.5.5, 1000 istek / 50 paralel: **0 hata,
+~663 istek/sn**, keep-alive gecikmesi ~1,5 ms, sunucu kararlı, günlük temiz.
+Makine kaydı o gün yazılmamış; sayı STATUS.md "Küçük cila turu (2026-06-22)"
+kaydından. Roadmap'teki "TLS yük altında test edildi → [[Performance]]"
+bağlantısı bu bölüme bakar (2026-09-28'e dek bu belgede TLS ölçümü yoktu).
+Düz HTTP tavanı ve Node kıyası için `benchmarks/WINGS_STRESS.md`.

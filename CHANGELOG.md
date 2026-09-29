@@ -134,6 +134,13 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
 (*MAJOR for breaking language/stdlib/ABI changes*) bir sonraki sürüm
 **MAJOR** olmalıdır.
 
+> **Gerçekte olan (2026-09-28 notu):** bu beş değişiklik `v3.13.2`
+> (2026-09-21) ile otomatik **yama** sürümü olarak yayınlandı; politika ile
+> sürüm arasındaki sapma burada kayıtlı. `v3.13.2`'den beri `main`'e giren
+> her PR bir sürüm çıkarıyor (`otomatik-surum.yml`) ve bu dosyaya sürüm
+> başlığı yazılmıyor: `[Unreleased]` v3.13.1'den bu yana birikenin tamamını
+> tutuyor. Hangi değişikliğin hangi etikette çıktığı GitHub Releases'ta.
+
 - **Çalışma zamanı hataları artık GÖRÜNÜR (strict varsayılan).** Eskiden
   sınır dışı erişim, sıfıra bölme vb. stdout'a yazıp süreç **0 ile
   çıkıyordu**; artık tanı stderr'e gidiyor ve yakalanmazsa çıkış kodu ≠ 0.
@@ -250,6 +257,37 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
 - Çerçeve artık NULL: CRT düz yazmaç geri yüklemesi yapıyor, POSIX longjmp
   ile aynı anlambilim. Atlama listesi boş; `errors.test.tpr` Windows CI'da
   3/3 (önce yalnız atlamayı kaldıran commit'le aynı yerde düştüğü ölçüldü).
+
+
+### Değişti — natif Windows geri geldi (CI + testler + GUI kurulumcu)
+
+- 3.13.0'da bırakılan natif Windows 2026-09-21/22'de geri geldi: CI'da
+  `build-windows` işi MSYS2 MINGW64 ile derliyor (#340), örnekleri ve
+  `build.sh suites`i koşuyor ve Inno Setup kurulumcusunu yeniden üretiyor
+  (#341); kurulumcunun dosya sürümü yapıdan türetiliyor (#342). İlk içeren
+  etiketler: `v3.14.0` (#340, #341), `v3.15.1` (#342). `build-windows` dal
+  korumasında zorunlu check. `build.bat`/`build.ps1` geri gelmedi; Windows'ta
+  derleme MSYS2 kabuğunda `build.sh` ile. Bu girdi o PR'larda yazılmamıştı
+  (K362).
+
+### Belgeler — bayat iddialar, 2. parti (K362, K368, K379)
+
+- STATUS/TODO/DOGRULAMA/FINDINGS/HANDOFF: Windows "desteklenmiyor, zorunlu
+  check elle kaldırılmalı" (tehlikeli) tavsiyesi kaldırıldı; silinmiş sahne
+  paketleri ve denklik kapısı, `examples/en`'in 30/30 atlandığı, `input`
+  arity düzeltmesi, strict flip sonrası sıfıra bölme / sınır dışı, float'ın
+  64-bit olduğu, çıkış kodunun 1'e düzlendiği (#401 düzeltiyor), Vercel'deki canlı site, son
+  etiket, macOS CI'ın suites koşması, korpus sayıları, F5 formülü — hepsi
+  2026-09-28'de sonda / grep / `git tag` ile yeniden doğrulanarak.
+- README: "statically-typed" daraltıldı (tipli kod derlemede denetlenir,
+  tipsiz parametre ve `json` çalışma zamanında dinamik); `fib` oranı sabit
+  değil, n ile büyüyen eğri; kayan nokta artık ölçülü (`mandelbrot` ≈1,00×
+  C, `nbody` 11,6×, `matmul` 26,6×); HTTP tablosu 2026-05 tarihli diye
+  işaretlendi, 2026-09-28 yeniden ölçümü yanına yazıldı.
+- `benchmarks/RESULTS.md` otomatik bloğu boşaltıldı (fair/RESULTS.md'ye
+  yönlendiriyor), `benchmarks/CI.md` bayat akış diye işaretlendi,
+  `Performance.md`'de "Henüz yapılmadı" diyen iki bölüm yapılan bölümlere
+  bağlandı.
 
 ### Düzeltildi — `cmake --build` gömülü stdlib değişikliğini görmüyordu
 

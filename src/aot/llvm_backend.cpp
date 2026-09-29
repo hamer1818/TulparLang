@@ -15138,9 +15138,13 @@ static LLVMTargetMachineRef make_opt_machine(LLVMBackend *backend) {
   if (LLVMGetTargetFromTriple(triple, &target, &error) == 0) {
     // CPU dizesi. Varsayilan "generic": tasinabilir ikili, `gcc -O2` ve
     // `rustc` varsayilanlariyla ayni taban. `TULPAR_TARGET_CPU=native`
-    // konak islemcisine gore uretir (gcc'nin -march=native karsiligi) —
-    // olculdu (arrayiter, C ile): jenerik 2,8 ms, native 1,0 ms. Uretilen
-    // ikili o makineye baglanir, o yuzden VARSAYILAN DEGIL.
+    // konak islemcisine gore uretir (gcc'nin -march=native karsiligi).
+    // Uretilen ikili o makineye baglanir, o yuzden VARSAYILAN DEGIL — ve
+    // kazanci da yok: 2026-09-28, Ryzen 7 9800X3D, LLVM 22, fair
+    // `arrayiter` N=5M, en iyi 9 (surec dahil): jenerik 1,71 ms, native
+    // 1,77 ms; `intloop` ve `sieve` ikilileri native ile bayt bayt AYNI.
+    // Burada eskiden yazan "jenerik 2,8 / native 1,0" eski kod yolundandi
+    // (Performance.md "Denenip BIRAKILAN").
     const char *cpu = getenv("TULPAR_TARGET_CPU");
     char *host_cpu = nullptr;
     if (cpu && strcmp(cpu, "native") == 0) {

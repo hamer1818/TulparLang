@@ -1,5 +1,14 @@
 # Session Handoff — 2026-07-02
 
+> ⚠ **TARİHSEL NOT (2026-09-28).** Bu dosya 2026-07-02'nin devir notudur ve
+> bütünüyle o günü anlatır; güncel durum `STATUS.md`, açık işler
+> `plans/09_eksik_envanteri.md`. Bayatlayanlar: §1 "multi-file tarballs"
+> (`.tpkg` çok dosyalı paket geldi; yalnız tulpar-be'nin GitHub yayın yolu tek
+> dosya çekiyor — K246), §2 WebSocket çok çerçeve "Windows kutusu gerekir"
+> (Windows CI 2026-09-21'den beri var), §4.1 v3.6.0 commit/push (yapıldı),
+> §4.2 `wings_jwt` yayını (2026-07-04'te canlı), §4.4 JetBrains (2026-07-04
+> kararı: YAPILMAYACAK).
+
 Pick-up notes for the next session. Goal: resume efficiently (low token cost).
 Cross-session project context also lives in Claude's memory
 (`pkg-registry-rearchitecture.md`, `tulpar-v330-security-apis.md`, etc.).

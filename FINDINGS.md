@@ -57,14 +57,14 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | T7 | json okuma yolu da yazma içeriyor (P15) | **çürütüldü (incelemeyle)** — `vm_get_element`→`vm_object_get` saf doğrusal tarama; `ObjObject`'te tembel/önbellek alanı yok. Dizilerdeki `arr_items`→`arr_debox` yazmasının karşılığı json'da **yok** | P15 |
 | R11 | Dizi literali döngüde güvenli | **çürütüldü, DÜZELTİLDİ** — döngü gövdesine düşen `alloca` yinelemede yığın harcıyordu; `[1,2,3]` 175 000 yinelemede **SIGSEGV**. Aşağıda | S3 fikstürü |
 | R10 | Tanı sızıntısı kalmadı | **çürütüldü, DÜZELTİLDİ** — `vm_get_element`/`vm_set_element`'in "gecersiz hedef" tanıları stdout'a yazıyordu; ilk #19 koruması **satır-bazlı olduğu için göremedi** | P15 turu |
-| Y1 | Dil statik tipli | **daraltılmalı** — `var` çapraz-tip yeniden atamaya izin veriyor | `tests/typeinfer/` |
+| Y1 | Dil statik tipli | **daraltılmalı** — `var` çapraz-tip yeniden atamaya izin veriyor *(2026-09-28: `var` artık izin vermiyor (Y4); dinamik kalan tipsiz parametre ve `json`. README daraltıldı — "static type checking … unannotated parameters and `json` stay dynamically typed"; site sayfaları henüz "statically-typed" diyor)* | `tests/typeinfer/` |
 | Y2 | `void` dönüşün atanması denetleniyor | **çürütüldü, DÜZELTİLDİ** — `e = push(e,3)` geçiyordu; artık hata | `tests/typeinfer/fail/11_void_assignment.tpr` |
-| Y3 | Eleman ataması tip denetleniyor | **çürütüldü, DÜZELTİLDİ (branch)** — `str[] s; s[0]=5;` geçiyor VE çalışıyordu | `fail/13_element_assign_type.tpr` |
-| Y4 | `var` çıkarıldığı tipte kalıyor | **çürütüldü, DÜZELTİLDİ (branch)** — `var b=[1,2]; b=5;` geçiyordu | `fail/12_var_cross_type.tpr` |
+| Y3 | Eleman ataması tip denetleniyor | **çürütüldü, DÜZELTİLDİ (main'de, #313)** — `str[] s; s[0]=5;` geçiyor VE çalışıyordu | `fail/13_element_assign_type.tpr` |
+| Y4 | `var` çıkarıldığı tipte kalıyor | **çürütüldü, DÜZELTİLDİ (main'de, #313)** — `var b=[1,2]; b=5;` geçiyordu | `fail/12_var_cross_type.tpr` |
 | Y5 | `call("ad")` adın varlığını doğruluyor | **çürütüldü** — literal adda bile doğrulamıyor; hata çalışma zamanına kalıyor | P25 |
 | R1 | Çalışma zamanı hatası süreci başarısız kılıyor | **çürütüldü, DÜZELTİLDİ (FLIP 2026-09-10)** — strict artık **varsayılan**: tanı stderr'e, yakalanmazsa exit≠0; `TULPAR_SOFT_RUNTIME=1` bir sürüm döngüsü kaçış kapısı | P25 |
 | R5 | "Sınır dışı → 0, devam" bir kaza | **çürütüldü; SÖZLEŞME DEĞİŞTİ** — `loop_versioning` 8 testi yeni sözleşmeye göre yazıldı (fırlatma = bekçinin kanıtı) | R1 seti · P36/P37 |
-| R9 | Tüm çalışma zamanı hataları aynı sözleşmede | **çürütüldü, DÜZELTİLDİ** — `aot_div_error`'ün taşma dalı flip'te gözden kaçmıştı (farklı `printf` biçimi); sıfıra bölme fırlatırken taşma stdout'a yazıp 0 ile çıkıyordu | flip |
+| R9 | Tüm çalışma zamanı hataları aynı sözleşmede | **çürütüldü, DÜZELTİLDİ** *(2026-09-28: iki kaçak da kapandı — `mod(x, 0)` artık fırlatıyor (ölçüldü), 32'den fazla parametreli async çağrı 2026-09-27'den beri fırlatıyor (STATUS); ayrı not: `tulpar dosya.tpr` `exit(3)`'ü 1'e düzlüyordu, #401 kodu aynen geçiriyor)* — `aot_div_error`'ün taşma dalı flip'te gözden kaçmıştı (farklı `printf` biçimi); sıfıra bölme fırlatırken taşma stdout'a yazıp 0 ile çıkıyordu | flip |
 | R8 | strict'te longjmp runtime çerçevelerini bozar | **çürütüldü** — 76 suite strict altında koşuldu, **0 çökme** | P26b |
 | R6 | Sondalar tanıyı doğru yerde arıyor | **çürütüldü, DÜZELTİLDİ** — `silent_failure_probe.py` tanıyı stdout'ta bekliyordu; stderr süzgeci eklendi | R1 seti |
 | R7 | Site'nin "invalid body → 422" vaadi tutuyor | **doğrulandı** — 422 + alan detayı (`name: required`, `expected str, got int`) | P28 |
@@ -740,8 +740,8 @@ bugünkü hâlini fotoğraflamıyor.
 `tests/wings_tls_smoke.py` hiçbir otomasyonda koşmuyordu. Yeni üç harness
 (`stream_contract_smoke`, `arena_contract_smoke`, `stack_growth_smoke`)
 `build.sh suites`e bağlandı — çünkü **yalnız elle koşulan bir test yoktur**
-(#19'un yapısal hâli). Eski iki harness hâlâ otomasyon dışı; S4 artık kendi
-fikstürüyle korunduğu için bu bir borç değil, bir temizlik kalemi.
+(#19'un yapısal hâli). ~~Eski iki harness hâlâ otomasyon dışı~~ — KAPANDI
+(2026-09-11): ikisi de `build.sh suites` içinde, üç CI işinde koşuyor.
 
 **S1'in ampirik yarısı (P38a):** korpusta `if(<ad>)` deseninde **165 site**,
 bunların **39'u** bool bildirimi olmayan değerler — yani truthiness'e yaslanıyor.
@@ -1115,13 +1115,15 @@ için değil; **eksik hâli zararlı olduğu için**.
 4. **Float dizi unboxing'i** — yol haritası + kârlılık kapısı yukarıda yazılı
 5. ~~P11/P12 (`fib` atribüsyonu; gcc bayrak ikili araması)~~ — **KAPANDI 2026-09-11**
 
-Küçük kalemler: `ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ
-otomasyon dışı · ~~yığın taraması async/closure/match şekillerini kapsamıyor~~
+Küçük kalemler: ~~`ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ
+otomasyon dışı~~ (KAPANDI 2026-09-11, suites) · ~~yığın taraması async/closure/match şekillerini kapsamıyor~~
 (KAPANDI 2026-09-27: lambda, closure yakalama, match ifade/deyim, `chr`, async
 gövdede await şekilleri eklendi — ikisi GERÇEK sızıntı buldu: yakalanan yerele
 yazma ve `chr()` döngüde ~500 bin / 2 milyon yinelemede SIGSEGV veriyordu) ·
-`benchmarks/RESULTS.md` ve tulparlang.dev tabloları FP satırlarını henüz
-içermiyor (veri hazır, yayın kararı bekliyor).
+~~`benchmarks/RESULTS.md` ve tulparlang.dev tabloları FP satırlarını henüz
+içermiyor~~ (KAPANDI 2026-09-28: site `ecosystem/benchmarks.mdx` FP bölümünü
+taşıyor, `benchmarks/RESULTS.md` `fair/RESULTS.md`'ye yönlendiriyor, README
+"does not establish" bölümü FP sonuçlarını içeriyor).
 
 `srv_json` soak · `thread_join` dönüş değeri · `thread_create` derin kopya
 (5 koşulla onaylı) · global lint · ~~donmuş 9 dilli CSV + checksum kolonu~~
