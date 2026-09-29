@@ -1878,6 +1878,108 @@ void handle_configuration_done(cJSON *request) {
 // until the threading runtime grows DAP integration), so we report a
 // single fake thread with id=1. Clients tolerate this fine when the
 // stopped event also references thread 1.
+// ---------------------------------------------------------------------------
+// Async coroutine'leri (K156). Duraklamis surecte runtime'in
+// tulpar_async_debug_tasks()'i cagrilir (tulpar_async.o yalniz async kullanan
+// programa girer; yoksa gdb "No symbol" der ve liste bos kalir). Her canli
+// coroutine ayri bir DAP "thread"i olur: id = kAsyncThreadBase + gorev id'si.
+// Askidaki coroutine'in yigini gdb'nin gorebildigi tek yigin degil, o yuzden
+// stackTrace'i AWAIT ZINCIRIDIR: gorev -> bekledigi gorev -> ... (kaynak
+// satiri yok, yalniz adlar). Kosan coroutine'in gercek yigini thread 1'de.
+constexpr int kAsyncThreadBase = 1000;
+constexpr int kAsyncFrameBase = 1000000; // sentetik cerceve id'leri (scopes bos)
+
+struct AsyncTaskInfo {
+  int id = 0;
+  std::string name, state, waits_what;
+  int waits_id = 0;
+};
+
+// gdb'nin C dizgisi yazimini coz: `0x... <sym> "a\tb\n"` -> a<TAB>b<LF>.
+std::string c_string_literal(const std::string &v) {
+  size_t q = v.find('"');
+  std::string out;
+  if (q == std::string::npos) return out;
+  for (size_t i = q + 1; i < v.size(); i++) {
+    char c = v[i];
+    if (c == '"') break;
+    if (c == '\\' && i + 1 < v.size()) {
+      char e = v[++i];
+      switch (e) {
+        case 't': out.push_back('\t'); break;
+        case 'n': out.push_back('\n'); break;
+        case '"': out.push_back('"'); break;
+        case '\\': out.push_back('\\'); break;
+        default:
+          if (e >= '0' && e <= '7') { // sekizlik (UTF-8 baytlari)
+            int val = e - '0';
+            for (int k = 0; k < 2 && i + 1 < v.size() && v[i + 1] >= '0' && v[i + 1] <= '7'; k++)
+              val = val * 8 + (v[++i] - '0');
+            out.push_back(static_cast<char>(val));
+          } else {
+            out.push_back(e);
+          }
+      }
+      continue;
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+std::string gdb_query(const std::string &cmd, int timeout_ms);
+
+std::vector<AsyncTaskInfo> query_async_tasks() {
+  std::vector<AsyncTaskInfo> out;
+  if (!g_gdb.running()) return out;
+  // Uzun metin: gdb varsayilani 200 karakterde keser, 10 tekrarda
+  // "<repeats>" yazar. Gecici olarak ac, sonra varsayilana dondur.
+  gdb_query("-gdb-set print elements unlimited", 2000);
+  gdb_query("-gdb-set print repeats unlimited", 2000);
+  std::string r = gdb_query(
+      "-data-evaluate-expression \"(char*)tulpar_async_debug_tasks()\"", 3000);
+  gdb_query("-gdb-set print elements 200", 2000);
+  gdb_query("-gdb-set print repeats 10", 2000);
+  if (r.compare(0, 5, "^done") != 0) return out; // async yok / surec yok
+  std::string text = c_string_literal(mi_field(r, "value"));
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t eol = text.find('\n', pos);
+    if (eol == std::string::npos) eol = text.size();
+    std::string line = text.substr(pos, eol - pos);
+    pos = eol + 1;
+    std::vector<std::string> f;
+    size_t a = 0;
+    while (true) {
+      size_t tab = line.find('\t', a);
+      f.push_back(line.substr(a, tab == std::string::npos ? std::string::npos : tab - a));
+      if (tab == std::string::npos) break;
+      a = tab + 1;
+    }
+    if (f.size() < 5) continue;
+    AsyncTaskInfo t;
+    t.id = std::atoi(f[0].c_str());
+    t.name = f[1];
+    t.state = f[2];
+    t.waits_id = std::atoi(f[3].c_str());
+    t.waits_what = f[4];
+    if (t.id > 0) out.push_back(t);
+  }
+  return out;
+}
+
+std::string async_state_label(const AsyncTaskInfo &t) {
+  using tulpar::i18n::tr_en;
+  if (t.state == "kosan") return tr_en("kosuyor (thread 1)", "running (thread 1)");
+  if (t.state == "bekliyor") {
+    std::string what = t.waits_what;
+    if (what == "uyku") what = tr_en("uyku", "sleep");
+    return std::string(tr_en("bekliyor: ", "awaiting: ")) + what;
+  }
+  if (t.state == "yeni") return tr_en("baslamadi", "not started");
+  return tr_en("hazir", "ready");
+}
+
 void handle_threads(cJSON *request) {
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
   cJSON *body = cJSON_CreateObject();
@@ -1886,6 +1988,13 @@ void handle_threads(cJSON *request) {
   cJSON_AddNumberToObject(t, "id", 1);
   cJSON_AddStringToObject(t, "name", "main");
   cJSON_AddItemToArray(threads, t);
+  for (const AsyncTaskInfo &a : query_async_tasks()) {
+    cJSON *ct = cJSON_CreateObject();
+    cJSON_AddNumberToObject(ct, "id", kAsyncThreadBase + a.id);
+    std::string nm = "async " + a.name + " — " + async_state_label(a);
+    cJSON_AddStringToObject(ct, "name", nm.c_str());
+    cJSON_AddItemToArray(threads, ct);
+  }
   cJSON_AddItemToObject(body, "threads", threads);
   cJSON_AddItemToObject(resp, "body", body);
   write_message(resp);
@@ -2000,6 +2109,43 @@ void handle_stack_trace(cJSON *request) {
     return;
   }
 
+  int thread_id = 1;
+  {
+    cJSON *args = cJSON_GetObjectItem(request, "arguments");
+    cJSON *tid = cJSON_IsObject(args) ? cJSON_GetObjectItem(args, "threadId") : nullptr;
+    if (cJSON_IsNumber(tid)) thread_id = static_cast<int>(tid->valuedouble);
+  }
+  if (thread_id >= kAsyncThreadBase) {
+    // Coroutine: await zinciri, en ustte coroutine'in kendisi.
+    std::vector<AsyncTaskInfo> tasks = query_async_tasks();
+    cJSON *resp = make_response(request, /*success=*/true, nullptr);
+    cJSON *body = cJSON_CreateObject();
+    cJSON *frames = cJSON_CreateArray();
+    int want = thread_id - kAsyncThreadBase, depth = 0;
+    while (want > 0 && depth < 64) {
+      const AsyncTaskInfo *cur = nullptr;
+      for (const AsyncTaskInfo &a : tasks)
+        if (a.id == want) { cur = &a; break; }
+      if (!cur) break;
+      cJSON *f = cJSON_CreateObject();
+      cJSON_AddNumberToObject(f, "id", kAsyncFrameBase + (thread_id - kAsyncThreadBase) * 100 + depth);
+      std::string nm = cur->name + " (async, " + async_state_label(*cur) + ")";
+      cJSON_AddStringToObject(f, "name", nm.c_str());
+      cJSON_AddNumberToObject(f, "line", 0);
+      cJSON_AddNumberToObject(f, "column", 0);
+      cJSON_AddStringToObject(f, "presentationHint", "label");
+      cJSON_AddItemToArray(frames, f);
+      depth++;
+      want = cur->waits_id;
+    }
+    cJSON_AddItemToObject(body, "stackFrames", frames);
+    cJSON_AddNumberToObject(body, "totalFrames", depth);
+    cJSON_AddItemToObject(resp, "body", body);
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
   std::string result = gdb_query("-stack-list-frames");
   if (result.compare(0, 5, "^done") != 0) {
     // gdb hasn't loaded a stack yet (e.g. the program already exited
@@ -2081,6 +2227,14 @@ void handle_scopes(cJSON *request) {
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
   cJSON *body = cJSON_CreateObject();
   cJSON *scopes = cJSON_CreateArray();
+  if (frame_id >= kAsyncFrameBase) {
+    // Askidaki coroutine'in sentetik (await zinciri) cercevesi: yerel yok.
+    cJSON_AddItemToObject(body, "scopes", scopes);
+    cJSON_AddItemToObject(resp, "body", body);
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
 
   cJSON *locals = cJSON_CreateObject();
   cJSON_AddStringToObject(locals, "name", "Locals");

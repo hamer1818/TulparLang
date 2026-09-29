@@ -65,6 +65,9 @@ int aot_is_promise(VMValue v);
 // bir promise; zaman asiminda p'nin isi iptal edilir (K112).
 VMValue aot_async_with_timeout_ptr(VMValue *p, VMValue *ms);
 
+// Hata ayiklayici icin canli coroutine listesi (metin; bkz. tulpar_async.cpp).
+const char *tulpar_async_debug_tasks(void);
+
 // cancel(p) -> bool: gorevi kooperatif olarak iptal et (bir sonraki await'te
 // "iptal edildi / cancelled" firlatir); gorevsiz promise dogrudan reddedilir.
 VMValue aot_async_cancel_ptr(VMValue *p);

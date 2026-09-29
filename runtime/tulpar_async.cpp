@@ -51,6 +51,8 @@
 #include <csetjmp>
 #include <cstdint>
 #include <vector>
+#include <algorithm>
+#include <unordered_map>
 #include <chrono> // steady_clock only (header-only; safe on all toolchains)
 
 // NOTE: deliberately NOT <thread>/<std::this_thread>. MinGW built with the
@@ -193,9 +195,12 @@ __asm__(".text\n" TULPAR_ASM_FN(tulpar_ctx_swap)
         "  popq %rbp\n"
         "  ret\n"
         TULPAR_ASM_FN(tulpar_ctx_entry)
+        "  .cfi_startproc\n"
+        "  .cfi_undefined rip\n" // geri izleme burada biter (gdb/DAP: "?? 0x0" yok)
         "  movq %r12, %rdi\n"   // Task*
         "  callq *%r13\n"       // coro_main(Task*) — donmez
-        "  ud2\n");
+        "  ud2\n"
+        "  .cfi_endproc\n");
 #else // __aarch64__
 __asm__(".text\n" TULPAR_ASM_FN(tulpar_ctx_swap)
         "  sub sp, sp, #160\n"
@@ -225,9 +230,12 @@ __asm__(".text\n" TULPAR_ASM_FN(tulpar_ctx_swap)
         "  add sp, sp, #160\n"
         "  ret\n"
         TULPAR_ASM_FN(tulpar_ctx_entry)
+        "  .cfi_startproc\n"
+        "  .cfi_undefined x30\n" // geri izleme burada biter
         "  mov x0, x19\n"       // Task*
         "  blr x20\n"           // coro_main(Task*) — donmez
-        "  brk #0\n");
+        "  brk #0\n"
+        "  .cfi_endproc\n");
 #endif
 
 namespace {
@@ -371,6 +379,7 @@ inline SchedState &sched() {
 #define g_timers (sched().timers)
 #define g_io_sources (sched().io_sources)
 #define g_rejected (sched().rejected)
+
 thread_local Task *g_current = nullptr;          // task currently executing (null on main)
 
 // How often to poll outstanding background I/O when nothing else is runnable.
@@ -1114,6 +1123,93 @@ void tulpar_async_drain_all() {
   ensure_scheduler_inited();
   while (loop_step(/*drain*/ true)) { /* drain */ }
   report_unobserved();
+}
+
+// tulpar_async_debug_tasks() -> metin (K156, hata ayiklayici). `tulpar debug`
+// (DAP) duraklamada bunu gdb ile cagirir ve her coroutine'i bir "thread"
+// olarak gosterir. Satir basina bir gorev, sekmeyle ayrilmis:
+//   <id> <ad> <durum> <bekledigi gorevin id'si ya da 0> <bekledigi sey>
+// durum: kosan | hazir | bekliyor | yeni. Bekledigi sey: gorev adi, "uyku",
+// "gather" ya da "promise".
+//
+// SICAK YOLA SIFIR MALIYET: canli gorev listesi TUTULMUYOR. Ilk surum spawn'da
+// listeye ekleyip silmede cikariyordu; olculdu (2026-09-29, Ryzen 7 9800X3D,
+// turla eslenmis 21 tur): spawn+await 120,8 -> 122,8 ns, ortam bayragiyla
+// kapatilmis haliyle bile +1 ns. Bunun yerine gorevler duraklamada zamanlayici
+// durumundan YURUNEREK bulunur: kosan + hazir kuyrugu + zamanlayici
+// promise'lerinin bekleyenleri, sonra her bulunan gorevin sonuc promise'ini
+// bekleyenler (await zinciri yukari). Bulunamayan tek sinif: yalniz arka plan
+// G/C promise'ini (async HTTP) bekleyen gorev ve onu bekleyenler.
+// Id'ler duraklamalar arasinda sabit (gorev -> id eslemesi burada tutulur).
+// Kullanici kodu cagirmaz; yalniz duraklamis surecte cagrilmak icin.
+const char *tulpar_async_debug_tasks(void) {
+  static char buf[16384];
+  static std::unordered_map<Task *, unsigned> ids;
+  static unsigned next_id = 0;
+  size_t n = 0;
+  buf[0] = 0;
+  if (!t_sched) return buf;
+  std::vector<Task *> all;
+  std::unordered_map<Task *, bool> seen;
+  auto visit = [&](Task *t) {
+    if (t && seen.emplace(t, true).second) all.push_back(t);
+  };
+  if (g_current) visit(g_current);
+  for (Task *t : g_ready) visit(t);
+  for (const Timer &tm : g_timers)
+    for (int i = 0; i < tm.promise->nwaiters; i++)
+      visit(((Task **)tm.promise->waiters)[i]);
+  for (size_t k = 0; k < all.size(); k++) {
+    ObjPromise *r = all[k]->result;
+    if (!r) continue;
+    for (int i = 0; i < r->nwaiters; i++) visit(((Task **)r->waiters)[i]);
+  }
+  // Bag gorevleri (with_timeout) kullanici kodu kosturmuyor: listelenmez, ama
+  // bekleyenleri (with_timeout sonucunu await eden) yukarida bulundu.
+  std::unordered_map<Task *, unsigned> fresh;
+  std::vector<std::pair<unsigned, Task *>> order;
+  for (Task *t : all) {
+    if (t->link_src) continue;
+    auto it = ids.find(t);
+    unsigned id = it != ids.end() ? it->second : ++next_id;
+    fresh[t] = id;
+    order.push_back({id, t});
+  }
+  ids.swap(fresh);
+  std::sort(order.begin(), order.end(),
+            [](const std::pair<unsigned, Task *> &a,
+               const std::pair<unsigned, Task *> &b) { return a.first > b.first; });
+  for (auto &it : order) {
+    if (n + 256 >= sizeof buf) break;
+    Task *t = it.second;
+    const char *name = t->gather ? "gather" : aot_func_name_of(t->fn);
+    if (!name) name = "?";
+    const char *state = "hazir";
+    if (t == g_current) state = "kosan";
+    else if (t->waiting_on) state = "bekliyor";
+    else if (!t->started) state = "yeni";
+    unsigned wid = 0;
+    const char *wwhat = "";
+    if (t->waiting_on) {
+      Task *w = static_cast<Task *>(t->waiting_on->task);
+      if (w && w->link_src) w = static_cast<Task *>(w->link_src->task);
+      auto wi = w ? ids.find(w) : ids.end();
+      if (wi != ids.end()) {
+        wid = wi->second;
+        wwhat = w->gather ? "gather" : aot_func_name_of(w->fn);
+        if (!wwhat) wwhat = "?";
+      } else {
+        wwhat = "promise";
+        for (const Timer &tm : g_timers)
+          if (tm.promise == t->waiting_on) { wwhat = "uyku"; break; }
+      }
+    }
+    int k = std::snprintf(buf + n, sizeof buf - n, "%u\t%s\t%s\t%u\t%s\n",
+                          it.first, name, state, wid, wwhat);
+    if (k < 0) break;
+    n += (size_t)k;
+  }
+  return buf;
 }
 
 // with_timeout(p, ms) -> promise (K112). `p` `ms` milisaniye icinde yerine
