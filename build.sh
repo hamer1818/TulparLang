@@ -673,6 +673,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # `tulpar analyze` (K157): ayirma raporu @no_alloc denetimiyle fonksiyon
+    # fonksiyon AYNI mi, hizli yol ipucu + kontrol, cikis kodlari.
+    if [ -x tests/analyze_smoke.sh ]; then
+        if ! bash tests/analyze_smoke.sh ./tulpar; then
+            echo -e "${RED}analyze kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # arr_debox YARISI (FINDINGS T4): N thread ayni kutusuz int[]'i ayni anda
     # ilk kez kutulayan okuma yoluna sokuluyor; dizi TEK KEZ cevrilmeli. Kilit
     # "gereksiz" diye sokulurse baska hicbir sey kirmizi olmaz. Kapi kendi

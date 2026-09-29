@@ -27,6 +27,7 @@
 #include "cli/debug_cmd.hpp"
 #include "cli/doc_cmd.hpp"
 #include "cli/typecheck_cmd.hpp"
+#include "cli/analyze_cmd.hpp"
 #include "cli/update_cmd.hpp"
 #include "typeinfer/typeinfer_warn.hpp"
 #include "common/version.hpp"
@@ -222,6 +223,9 @@ static void print_help() {
   std::printf("  tulpar typecheck <source.tpr>    %s\n",
               tulpar::i18n::tr_en("- Statik tip kontrolu (deneysel)",
                                   "- Static type check (experimental)"));
+  std::printf("  tulpar analyze <source.tpr>      %s\n",
+              tulpar::i18n::tr_en("- Ayirma raporu (@no_alloc kurali) + hizli yol ipuclari",
+                                  "- Allocation report (@no_alloc rule) + fast-path hints"));
   std::printf("  tulpar doc <source.tpr>          %s\n",
               tulpar::i18n::tr_en(
                   "- Markdown referansi uret (fonksiyon + global'lerin "
@@ -316,6 +320,12 @@ int main(int argc, char **argv) {
   // it as a tool so authors and CI can opt in while we shape the rules.
   if (argc >= 2 && std::strcmp(argv[1], "typecheck") == 0) {
     return tulpar::typecheck_cmd_main(argc, argv);
+  }
+
+  // `tulpar analyze <file>` (K157): ayirma raporu (@no_alloc kurali, her
+  // fonksiyon) + hizli yol ipuclari (TULPAR_PERF_HINTS) tek komutta.
+  if (argc >= 2 && std::strcmp(argv[1], "analyze") == 0) {
+    return tulpar::analyze_cmd_main(argc, argv);
   }
 
   // `tulpar doc <file>` emits a markdown reference (functions +

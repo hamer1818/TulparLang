@@ -333,6 +333,30 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   ikinci kopyayı yaşatmak aynı ayrışmayı yeniden üretirdi; tek kaynak
   CLAUDE.md.
 
+### Eklendi — `tulpar analyze`: ayırma raporu + hızlı yol ipuçları (K157)
+
+- `tulpar analyze <dosya.tpr>` derlemeden, linklemeden iki rapor veriyor:
+  - **ayırma**: dosyanın her üst düzey fonksiyonu için `@no_alloc` kuralıyla
+    (K041'in geçişli, beyaz listeli denetimi) "ayırmasız" ya da "AYIRIYOR —
+    neden (satır)". Geçişli nedenler çağrılanı adıyla söylüyor. Eskiden bu
+    soruyu sormanın tek yolu fonksiyona tek tek `@no_alloc` koyup derlemekti.
+  - **hızlı yol**: `TULPAR_PERF_HINTS` ipuçları (K167) raporun içinde; kanıtlı
+    dizi erişimi kurulamayan döngü, neden ve çözüm.
+- Kural kopyası yok: rapor typeinfer'ın denetimini ve backend'in ipucu kodunu
+  çağırıyor. Çıkış: 0 temiz, 1 tip sorunu (`@no_alloc` ihlali dahil), 2
+  kullanım/ayrıştırma hatası.
+- Kapsam: "ayırmasız" kurala göre kanıtlı, "AYIRIYOR" temkinli olabilir
+  (tanınmayan yerleşik ayırabilir sayılır); çalışma zamanında ölçülmedi.
+  Bilinen yanlış pozitif kuralın kendisinden: metot çağrısı `p.f()`
+  "beyaz listede olmayan yerleşik" sayılıyor (K003 + K041; ölçüldü: temiz
+  `P.toplam`ı çağıran fonksiyon AYIRIYOR). Kural düzelince rapor da düzelir.
+- `tests/analyze_smoke.sh` (`build.sh suites`, üç CI işi): rapordaki her
+  fonksiyona `@no_alloc` konup `tulpar typecheck` koşuluyor — "ayırmasız"
+  dediklerinde temiz, "AYIRIYOR" dediklerinde reddediyor. Ayrıca geçişli
+  neden, hızlı yol ipucu ve `len(a)` ile ipucunun kaybolması (kontrol), çıkış
+  kodları. Pozitif kontrol: rapor her şeye "ayırmasız" dedirtilince kapı
+  kırmızı (3 fonksiyon typecheck'ten reddedildi).
+
 ### Düzeltildi — `cmake --build` gömülü stdlib değişikliğini görmüyordu
 
 - `lib/*.tpr` yapılandırma anında gömülüyordu ve derleme sistemi bu

@@ -3080,6 +3080,23 @@ static void noalloc_check_program(TypeInferContext *ctx, const Program *prog) {
 
 }  // namespace
 
+// `tulpar analyze` (K157): ayni denetimi @no_alloc isareti OLMAYAN
+// fonksiyonlara da uygular — raporun kaynagi derleyicinin kendi kurali,
+// ayri bir kopya degil (tests/analyze_smoke.sh bunu isaretleyip olcuyor).
+std::vector<TypeinferAllocRow> typeinfer_alloc_report(TypeInferContext *ctx,
+                                                      const ASTNode *program) {
+  std::vector<TypeinferAllocRow> rows;
+  const auto *prog = as_node<Program>(program);
+  if (!ctx || !prog) return rows;
+  NoAllocState st{ctx, {}, {}};
+  for (const auto &s : prog->statements) {
+    const auto *fn = as_node<FunctionDecl>(s.get());
+    if (!fn) continue;
+    rows.push_back({fn->name, fn->loc.line, fn->no_alloc, noalloc_check_fn(&st, fn->name)});
+  }
+  return rows;
+}
+
 void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   const auto *prog = as_node<Program>(program);
   if (!prog) {

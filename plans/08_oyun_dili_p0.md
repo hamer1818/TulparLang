@@ -143,4 +143,5 @@ Sınırlar: eleman struct'ı yalnız int/bool/float alanlı (derleme hatası, 5 
 
 P1: iç içe struct kutusuz, `f32`, köprüde `Vec3` register geçişi + callback. P2 frame arena
 (`@frame`), `unsafe { ptr<T> }`, atomikler. P3 `@no_alloc`, `@repr(C)`, `tulpar analyze`,
-Tracy/LLDB.
+Tracy/LLDB. *(2026-09-29: `@frame`, `@no_alloc`, atomikler #406 ile; `tulpar analyze`
+— her fonksiyona `@no_alloc` kuralı + hızlı yol ipuçları — K157 ile geldi. Tracy/LLDB açık, K158.)*

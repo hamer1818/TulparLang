@@ -148,6 +148,19 @@ void typeinfer_register_function(TypeInferContext *ctx, const char *name,
                                   DataType return_type, DataType *param_types, int param_count);
 DataType typeinfer_get_function_return_type(TypeInferContext *ctx, const char *name);
 
+// `tulpar analyze` (K157): bu dosyanin UST DUZEY her fonksiyonu icin
+// `@no_alloc` kuraliyla (ayni gecisli, beyaz listeli denetim) ayirma raporu.
+// `typeinfer_program`dan SONRA cagrilir. Kaynak sirasiyla; neden bos ise
+// fonksiyon kurala gore ayirmasiz.
+struct TypeinferAllocRow {
+  std::string name;
+  int line;
+  bool no_alloc_marked;
+  std::string reason;   // "" = ayirmasiz
+};
+std::vector<TypeinferAllocRow> typeinfer_alloc_report(TypeInferContext *ctx,
+                                                      const ASTNode *program);
+
 // Error handling
 int typeinfer_has_errors(TypeInferContext *ctx);
 const char *typeinfer_get_last_error(TypeInferContext *ctx);
