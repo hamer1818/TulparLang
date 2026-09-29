@@ -142,7 +142,7 @@ Dosyalar: cmake/EmbedLibraries.cmake, CMakeLists.txt; src/main.cpp (bayrak döng
 - [ ] **K377** pkg/wings derinlemesine rehberler — Kapsam tanımsız. Somut olan kısım: oturum/cookie/CORS/rate-limit/gzip/ETag için derin rehber (K367). Paket yazarlığı için ayrı bir derin rehber (modül yapısı, sürümleme, yayın) istenirse o da eklenir. _(kısmen, M; T/STATUS.md:2629)_
 - [ ] **K157** tulpar analyze (P3) — Tamamı: `tulpar analyze` (en azından ayırma yapan çağrıları/@no_alloc ihlallerini ve hızlı-yol kaçırmalarını — K167 — raporlayan statik geçiş). _(yok, L; T/plans/08_oyun_dili_p0.md:145)_
 - [ ] **K158** Tracy / LLDB entegrasyonu — (1) Üretilen koda Tracy bölgeleri (fonksiyon giriş/çıkış, `--profile`/`TULPAR_TRACY` ile) — derleyici düzeyinde hiç yok. (2) DAP için lldb-dap/lldb-mi arka ucu (macOS'ta gdb yok). _(kısmen, L; T/plans/08_oyun_dili_p0.md:146)_
-- [ ] **K096** Tüm program optimizasyonu (cross-module inlining) — Tulpar ile runtime/motor C++ arasında modüller arası inlining (bitcode/LTO) yok; teng_* ve aot_* çağrıları inline edilemiyor. Kazancı ölçen bir çalışma da yok. _(kısmen, L; E/docs/PLAN.md:272)_
+- [x] **K096** Tüm program optimizasyonu (cross-module inlining) — Tulpar ile runtime/motor C++ arasında modüller arası inlining (bitcode/LTO) yok; teng_* ve aot_* çağrıları inline edilemiyor. Kazancı ölçen bir çalışma da yok. _(kısmen, L; E/docs/PLAN.md:272)_ (#387 — ölçüldü: runtime ile LTO kazanç vermiyor; altyapı bilerek yapılmadı)
 
 ## Belge düzeltmeleri (Kol C)
 
