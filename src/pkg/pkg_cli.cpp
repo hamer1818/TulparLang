@@ -656,7 +656,68 @@ int cmd_add(int argc, char **argv) {
 // `tulpar_modules/<name>/`. The entry-point file `<name>.tpr` inside
 // it is what `import "<name>"` will load (resolution lives in
 // aot_pipeline.cpp).
-int cmd_install() {
+// Where a `.tpkg` bundle's raw archive bytes are kept next to its
+// extracted files. The lockfile's checksum is the sha256 of the ARCHIVE,
+// so the cache check needs the archive — hashing the extracted
+// `<name>.tpr` (what single-file packages do) never matched, and every
+// `.tpkg` dependency was re-downloaded on every install (measured
+// 2026-09-27 against a local fake registry: second install fetched
+// `/v1/packages/multi/versions/1.2.0/source` again).
+fs::path tpkg_cache_path(const fs::path &dest_dir, const std::string &name) {
+    return dest_dir / ("." + name + ".tpkg");
+}
+
+bool write_tpkg_cache(const fs::path &dest_dir, const std::string &name,
+                      const std::string &body) {
+    std::ofstream out(tpkg_cache_path(dest_dir, name),
+                      std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(body.data(), (std::streamsize)body.size());
+    return (bool)out;
+}
+
+std::string slurp_binary(const fs::path &p, bool &ok) {
+    std::ifstream in(p, std::ios::binary);
+    ok = (bool)in;
+    if (!in) return "";
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    return buf.str();
+}
+
+// `<registry>/v1/packages/<name>/versions/<ver>/source` -> `<ver>`, or ""
+// when `url` is not that shape for this registry + name.
+std::string locked_registry_version(const std::string &registry_url,
+                                    const std::string &name,
+                                    const std::string &url) {
+    std::string prefix = registry_url;
+    if (!prefix.empty() && prefix.back() == '/') prefix.pop_back();
+    prefix += "/v1/packages/" + name + "/versions/";
+    const std::string suffix = "/source";
+    if (url.size() <= prefix.size() + suffix.size()) return "";
+    if (url.compare(0, prefix.size(), prefix) != 0) return "";
+    if (url.compare(url.size() - suffix.size(), suffix.size(), suffix) != 0)
+        return "";
+    std::string ver = url.substr(prefix.size(),
+                                 url.size() - prefix.size() - suffix.size());
+    if (ver.empty() || ver.find('/') != std::string::npos) return "";
+    return ver;
+}
+
+int cmd_install(int argc, char **argv) {
+    // `--update`: re-resolve range specs against the registry instead of
+    // reusing the version pinned in tulpar.lock (npm update / cargo update).
+    bool update = false;
+    for (int i = 0; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--update") == 0 ||
+            std::strcmp(argv[i], "-u") == 0) {
+            update = true;
+        } else {
+            std::fprintf(stderr, "tulpar pkg install: unknown flag '%s' "
+                         "(only --update)\n", argv[i]);
+            return 2;
+        }
+    }
     Manifest m;
     std::string err;
     if (!manifest_load(kManifestFile, m, err)) {
@@ -744,13 +805,26 @@ int cmd_install() {
         auto sit = prev_sha.find(name);
         if (rit == prev_resolved.end() || sit == prev_sha.end()) return false;
         if (rit->second != expected_url) return false;
+        // Single-file package: the lock hashes the `.tpr` itself.
+        bool ok = false;
         fs::path target = modules_dir / name / (name + ".tpr");
-        std::ifstream in(target, std::ios::binary);
-        if (!in) return false;
-        std::ostringstream buf;
-        buf << in.rdbuf();
-        std::string body = buf.str();
-        return tulpar::sha256_hex(body) == sit->second;
+        std::string body = slurp_binary(target, ok);
+        if (ok && tulpar::sha256_hex(body) == sit->second) return true;
+        // `.tpkg` bundle: the lock hashes the ARCHIVE. The archive must
+        // match AND every extracted file must still be byte-identical —
+        // a locally edited vendored file is a cache miss (re-extract),
+        // same as an edited single-file package.
+        std::string archive =
+            slurp_binary(tpkg_cache_path(modules_dir / name, name), ok);
+        if (!ok || tulpar::sha256_hex(archive) != sit->second) return false;
+        Tpkg pkg;
+        std::string perr;
+        if (!tpkg_parse(archive, pkg, perr)) return false;
+        for (const auto &f : pkg.files) {
+            std::string disk = slurp_binary(modules_dir / name / f.path, ok);
+            if (!ok || disk != f.content) return false;
+        }
+        return true;
     };
 
     int installed = 0;
@@ -844,6 +918,7 @@ int cmd_install() {
                                  name.c_str(), perr.c_str());
                     return 1;
                 }
+                write_tpkg_cache(dest_dir, name, body);
                 std::fprintf(stdout,
                              "  + %s (.tpkg, %zu files) -> %s "
                              "(%zu archive bytes, sha256 %.12s...)\n",
@@ -895,7 +970,30 @@ int cmd_install() {
                 continue;
             }
             std::string resolved_version = spec;
-            if (is_range_spec(spec)) {
+            // LOCK PIN. A range spec used to be re-resolved against the
+            // registry on EVERY install, and the sha256 check only fired
+            // when the resolved URL equalled the locked one — so the day a
+            // new matching version was published, `^1.0.0` silently moved
+            // to it and the lock was rewritten ("re-installs are
+            // reproducible" did not hold), and with the registry down an
+            // already-installed, locked dependency failed to install.
+            // Now the locked version wins while it still satisfies the
+            // spec; `--update` re-resolves. Measured 2026-09-27 with a
+            // local fake registry (tests/pkg_registry_audit.py).
+            std::string pinned;
+            if (is_range_spec(spec) && !update) {
+                auto rit = prev_resolved.find(name);
+                if (rit != prev_resolved.end()) {
+                    std::string v =
+                        locked_registry_version(m.registry_url, name, rit->second);
+                    if (!v.empty() && match_range(spec, v)) pinned = v;
+                }
+            }
+            if (!pinned.empty()) {
+                resolved_version = pinned;
+                std::fprintf(stdout, "  > %s@%s -> %s (tulpar.lock)\n",
+                             name.c_str(), spec.c_str(), pinned.c_str());
+            } else if (is_range_spec(spec)) {
                 std::vector<std::string> available;
                 std::string err;
                 if (!fetch_versions(m.registry_url, name, available, err)) {
@@ -1002,6 +1100,7 @@ int cmd_install() {
                                  name.c_str(), spec.c_str(), perr.c_str());
                     return 1;
                 }
+                write_tpkg_cache(dest_dir, name, body);
                 std::fprintf(stdout,
                              "  + %s@%s (.tpkg, %zu files) -> %s "
                              "(%zu archive bytes, sha256 %.12s...)\n",
@@ -1767,8 +1866,14 @@ void print_usage() {
         "  list                   Show name, version and dependencies.\n"
         "  add <name>[@<ver>]     Add or update a dependency line.\n"
         "  remove <name>          Drop a dependency line.\n"
-        "  install                Vendor every `path:` dependency into\n"
-        "                         tulpar_modules/<name>/.\n"
+        "  install [--update]     Install every dependency into\n"
+        "                         tulpar_modules/<name>/: `path:` (copied),\n"
+        "                         `url:` (fetched), or a registry version /\n"
+        "                         range (`1.2.0`, `^1.2`, `~1.0`, `*`).\n"
+        "                         tulpar.lock pins resolved versions + sha256;\n"
+        "                         a locked, intact dependency is not fetched\n"
+        "                         again (works offline).\n"
+        "                           --update   re-resolve ranges (newest match)\n"
         "  search [query] [flags] Browse the registry catalog. Empty\n"
         "                         query lists every package.\n"
         "                           --registry <url>   override the registry root\n"
@@ -1808,7 +1913,7 @@ int pkg_cli_main(int argc, char **argv) {
     if (std::strcmp(sub, "list") == 0)    return cmd_list();
     if (std::strcmp(sub, "add") == 0)     return cmd_add(sub_argc, sub_argv);
     if (std::strcmp(sub, "remove") == 0)  return cmd_remove(sub_argc, sub_argv);
-    if (std::strcmp(sub, "install") == 0) return cmd_install();
+    if (std::strcmp(sub, "install") == 0) return cmd_install(sub_argc, sub_argv);
     if (std::strcmp(sub, "search") == 0)  return cmd_search(sub_argc, sub_argv);
     if (std::strcmp(sub, "info") == 0)    return cmd_info(sub_argc, sub_argv);
     if (std::strcmp(sub, "publish") == 0) return cmd_publish(sub_argc, sub_argv);

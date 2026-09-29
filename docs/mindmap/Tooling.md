@@ -19,7 +19,17 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 > kopyalanması (`line_opens_block_comment` / `line_closes_block_comment`).
 
 ## Package Manager
-`src/pkg/` — `tulpar pkg <init|add|install|list|remove|search>`. `manifest.cpp` `tulpar.toml` okur; `pkg_cli.cpp` `path:` bağımlılıkları `tulpar_modules/<name>/`'e vendor'lar, `url:` tek dosya çeker, gerisi registry'den (`fetch_versions` + indirme — "registry TODO" notu BAYATTI). Bağımlılık sözdizimi bir DİZGİ: `mathx = "path:../dir"`; inline tablo (`{ path = ... }`) desteklenmiyor ve net hata veriyor. Denetim: `tests/pkg_audit.sh` (`build.sh suites`) — init/add/install zinciri, vendor edilenin GERÇEKTEN import edilebilmesi, ve hata yollarının sıfırdan farklı dönmesi. → [[Imports and Modules]]
+`src/pkg/` — `tulpar pkg <init|add|install|list|remove|search>`. `manifest.cpp` `tulpar.toml` okur; `pkg_cli.cpp` `path:` bağımlılıkları `tulpar_modules/<name>/`'e vendor'lar, `url:` tek dosya çeker, gerisi registry'den (`fetch_versions` + indirme — "registry TODO" notu BAYATTI). Bağımlılık sözdizimi bir DİZGİ: `mathx = "path:../dir"`; inline tablo (`{ path = ... }`) desteklenmiyor ve net hata veriyor. Denetim: `tests/pkg_audit.sh` (`build.sh suites`) — init/add/install zinciri, vendor edilenin GERÇEKTEN import edilebilmesi, ve hata yollarının sıfırdan farklı dönmesi. Registry yolu: `tests/pkg_registry_audit.py` — yerel sahte registry, her adımda İSTEK GÜNLÜĞÜ sayılıyor (aralık+lock+sha256, `.tpkg` kardeş import, önbellek, `--update`, registry kapalı, bozulan dosya, publish şekli). → [[Imports and Modules]]
+
+> ⚠️ **Lock sürümü SABİTLEMİYORDU, `.tpkg` önbelleğe hiç girmiyordu** (2026-09-27'de
+> düzeltildi). Aralık (`^1`) her install'da registry'ye karşı yeniden çözülüyordu:
+> yeni sürüm yayınlanınca sessizce yükseliyor, registry kapalıyken kilitli ve diskte
+> duran bağımlılık bile düşüyordu. `.tpkg`'de lock ARŞİVİN özetini tutuyor, önbellek
+> denetimi açılmış `<ad>.tpr`'yi özetliyordu — hiç tutmadı, her install yeniden
+> indirdi. Artık kilitli sürüm aralığı karşıladıkça kullanılıyor (`--update`
+> yeniden çözer) ve arşiv `tulpar_modules/<ad>/.<ad>.tpkg` olarak saklanıyor;
+> isabet için arşiv özeti + açılmış her dosyanın aynen durması gerekiyor. Açık:
+> projeler arası global önbellek (`~/.cache/tulpar`) yok; birden çok registry/ayna yok.
 
 ## Type checker — `tulpar typecheck`
 `src/cli/typecheck_cmd.cpp` — ön-geçişteki (`[typecheck]` uyarıları) aynı denetleyici,

@@ -92,7 +92,7 @@ Pipeline, top to bottom:
 Auxiliary subsystems share the same AST and live alongside the backends:
 - `src/lsp/` — LSP server (`tulpar --lsp`). `document_index.cpp` reparses on every change; `builtins.cpp` registers the native built-in symbol table for completion/hover.
 - `src/fmt/` — source formatter (`tulpar fmt`).
-- `src/pkg/` — package manager (`tulpar pkg`). `manifest.cpp` reads `tulpar.toml`; `pkg_cli.cpp` vendors `path:` deps into `tulpar_modules/<name>/` (registry deps are still TODO).
+- `src/pkg/` — package manager (`tulpar pkg`). `manifest.cpp` reads `tulpar.toml`; `pkg_cli.cpp` installs `path:` (copied), `url:` (fetched) and registry deps (exact version or semver range resolved against `[registry] url`, single `.tpr` or multi-file `.tpkg`) into `tulpar_modules/<name>/`. `tulpar.lock` pins the resolved URL + sha256; a locked, intact dependency is not fetched again (offline works), `pkg install --update` re-resolves ranges. Gates: `tests/pkg_audit.sh` (path chain) and `tests/pkg_registry_audit.py` (local fake registry).
 - `src/cli/` — extra subcommands (currently `update_cmd.cpp` for `tulpar update`).
 
 ### Standard library is embedded at build time

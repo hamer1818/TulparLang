@@ -5,6 +5,22 @@
 CLI `init/list/add/remove/install/publish/search/info` + `.tpkg`
 multi-file bundle + lockfile + full semver 2.0.0 ranges. Bkz. STATUS §
 "Pkg ekosistemi".
+
+**Güncel durum (2026-09-27, ölçüldü):** Aşağıdaki "Eksik client
+davranışları" listesi plan yazıldığı ANA ait — hepsi kapandı. `.tpkg` çok
+dosyalı paket 59a282e ile geldi (JSON arşiv; tar/zip bilinçli olarak
+seçilmedi, bkz. `src/pkg/tpkg.hpp`). Lockfile `[resolved]` + `[checksums]`
+tutuyor; 2026-09-27'den beri kilitli sürüm aralığı karşıladıkça KULLANILIYOR
+(önceden her install'da yeniden çözülüyor ve sessizce yükseliyordu),
+`pkg install --update` yeniden çözüyor, kilitli + diskte sağlam bağımlılık
+ağa gitmiyor (registry kapalıyken de kuruluyor) ve `.tpkg` paketleri de
+önbelleğe isabet ediyor (önceden hiç etmiyordu). Test: `tests/pkg_audit.sh`
+(`path:` zinciri) + `tests/pkg_registry_audit.py` (yerel sahte registry, 13
+denetim). Açık kalanlar: projeler arası global önbellek (`~/.cache/tulpar`),
+birden çok registry/ayna, tulpar-be'nin GitHub self-servis yayını yalnız giriş
+dosyasını çekiyor (çok dosyalı paket o yoldan yayınlanamıyor),
+`examples/17_pkg_demo.tpr` (örnekler depo kökünden koşuyor; vendor edilmiş
+modül kökte `tulpar_modules/` ister — yapılmadı).
 **Tahmin:** 2-4 PR (1 client + 1 server + 1 entegrasyon + opsiyonel auth)
 **Risk:** Düşük (mevcut altyapı %80 hazır)
 **Mottoya katkı:** Ekosistem genişletme
@@ -36,7 +52,7 @@ eden Pages Function ile bytes serving yapsın.
 - [src/pkg/pkg_cli.cpp:216-224](../src/pkg/pkg_cli.cpp#L216-L224)
   `registry_url` boşsa "no registry configured" mesajı atlıyor.
 
-### Eksik client davranışları
+### Eksik client davranışları (TARİHSEL — hepsi kapandı, başlıktaki güncel duruma bak)
 
 1. **Lockfile yok.** Aynı projeyi iki farklı makinede `install` farklı
    versiyon çekebilir (registry'de upstream güncellenmişse). `tulpar.lock`
@@ -185,6 +201,7 @@ http_client = { version = "1.0", entry = "main.tpr" }
 
 **Karar:** PR 3'ü ertele. Tek dosya yeterli ilk versiyon için; tek
 dosyada yetmeyenler `path:` ile vendoring'e devam eder.
+*(Tarihsel: ertelenmedi — 59a282e ile `.tpkg` JSON arşivi olarak yapıldı.)*
 
 ### PR 4 — Auth + publish komutu (opsiyonel, çok sonra)
 
@@ -233,16 +250,19 @@ diye ertele.
 - **Versioning policy:** semver mi, calver mi? `1.0.0` mı, `2026-05-05`
   mi? Resolve algoritması bu seçime bağlı. Önerim: semver (`^`, `~`,
   `>=`, exact).
+- *(Cevaplandı: semver; `^`, `~`, `>=`/`<` kısıtları ve `*` destekleniyor.)*
 - **Registry URL default'u:** `tulpar.toml` `[registry] url`'siz
   bir paket eklenince fallback `pkg.tulparlang.dev` olsun mu? Yoksa
   her zaman explicit mi olsun? Önerim: tulpar.toml `init` komutu
   default'u yazar (`https://pkg.tulparlang.dev`); kullanıcı silebilir.
+  *(Cevaplandı: `init` gerçek adresi yazıyor — `https://api.pkg.tulparlang.dev`.)*
 - **Forks/mirrors:** Birden fazla registry destekleyelim mi? Faz 1 için
   HAYIR — `[registry] url` tek string. İleride array yapılabilir.
 - **Yansıma (`tulpar pkg search`, `tulpar pkg info`):** PR 2'den sonra
   ayrı bir PR ile gelir; `/api/registry.json` indeksi zaten hazır
-  oluyor.
+  oluyor. *(Cevaplandı: `pkg search` ve `pkg info` var.)*
 - **`tulpar pkg add` davranışı:** Şu an
   ([src/pkg/pkg_cli.cpp](../src/pkg/pkg_cli.cpp)) sadece `tulpar.toml`'a
   satır ekliyor mu, yoksa indirip install da ediyor mu? Kontrol edip
-  bu plana ek bir alt madde olarak hizala.
+  bu plana ek bir alt madde olarak hizala. *(Cevaplandı: yalnız
+  `tulpar.toml`'a satır ekliyor; kurulum `pkg install`.)*
