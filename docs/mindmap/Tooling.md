@@ -31,6 +31,13 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 > isabet için arşiv özeti + açılmış her dosyanın aynen durması gerekiyor. Açık:
 > projeler arası global önbellek (`~/.cache/tulpar`) yok; birden çok registry/ayna yok.
 
+## Analiz — `tulpar analyze` (K157, 2026-09-29)
+`src/cli/analyze_cmd.cpp`: derlemeden/linklemeden (i) dosyanın her üst düzey fonksiyonu için
+`@no_alloc` kuralıyla ayırma raporu (typeinfer `typeinfer_alloc_report`, geçişli, beyaz liste —
+"ayırmasız" kanıtlı, "AYIRIYOR" temkinli olabilir) ve (ii) `TULPAR_PERF_HINTS` hızlı yol ipuçları.
+Kural kopyası yok. Kapı `tests/analyze_smoke.sh`: raporun her satırı `@no_alloc` + `typecheck` ile
+aynı sonucu veriyor mu. Çalışma zamanında ölçülmedi.
+
 ## Type checker — `tulpar typecheck`
 `src/cli/typecheck_cmd.cpp` — ön-geçişteki (`[typecheck]` uyarıları) aynı denetleyici,
 **hata kipinde**. Her `tulpar`/`tulpar build` çağrısında zaten koşuyor;

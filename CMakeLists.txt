@@ -269,6 +269,8 @@ set(CLI_SOURCES
     src/cli/line_edit.hpp
     src/cli/typecheck_cmd.cpp
     src/cli/typecheck_cmd.hpp
+    src/cli/analyze_cmd.cpp
+    src/cli/analyze_cmd.hpp
     src/cli/doc_cmd.cpp
     src/cli/doc_cmd.hpp
     src/cli/debug_cmd.cpp

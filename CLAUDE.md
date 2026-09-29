@@ -80,6 +80,7 @@ A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchma
 
 ./tulpar fmt script.tpr         # Source formatter (src/fmt/)
 ./tulpar typecheck script.tpr   # Standalone type checker in error mode (src/cli/typecheck_cmd.cpp)
+./tulpar analyze script.tpr     # Per-function allocation report (@no_alloc rule) + fast-path hints (src/cli/analyze_cmd.cpp)
 ./tulpar doc script.tpr         # Markdown reference from leading-comment docstrings (src/cli/doc_cmd.cpp)
 ./tulpar debug script.tpr       # Experimental DAP debug adapter (src/cli/debug_cmd.cpp)
 ./tulpar pkg <init|add|install> # Package manager (src/pkg/)
@@ -114,7 +115,7 @@ Auxiliary subsystems share the same AST and live alongside the backends:
 - `src/lsp/` — LSP server (`tulpar --lsp`). `document_index.cpp` reparses on every change; `builtins.cpp` registers the native built-in symbol table for completion/hover.
 - `src/fmt/` — source formatter (`tulpar fmt`).
 - `src/pkg/` — package manager (`tulpar pkg`). `manifest.cpp` reads `tulpar.toml`; `pkg_cli.cpp` installs `path:` (copied), `url:` (fetched) and registry deps (exact version or semver range resolved against `[registry] url`, single `.tpr` or multi-file `.tpkg`) into `tulpar_modules/<name>/`. `tulpar.lock` pins the resolved URL + sha256; a locked, intact dependency is not fetched again (offline works), `pkg install --update` re-resolves ranges. Gates: `tests/pkg_audit.sh` (path chain) and `tests/pkg_registry_audit.py` (local fake registry).
-- `src/cli/` — extra subcommands: `update_cmd.cpp` (`tulpar update`), `typecheck_cmd.cpp` (`tulpar typecheck`, the pre-pass checker in error mode), `doc_cmd.cpp` (`tulpar doc`), `debug_cmd.cpp` (`tulpar debug`, experimental DAP), plus `line_edit.cpp` (shared line editor).
+- `src/cli/` — extra subcommands: `update_cmd.cpp` (`tulpar update`), `typecheck_cmd.cpp` (`tulpar typecheck`, the pre-pass checker in error mode), `analyze_cmd.cpp` (`tulpar analyze`: the `@no_alloc` rule applied to every function + `TULPAR_PERF_HINTS`, gate `tests/analyze_smoke.sh`), `doc_cmd.cpp` (`tulpar doc`), `debug_cmd.cpp` (`tulpar debug`, experimental DAP), plus `line_edit.cpp` (shared line editor).
 
 ### Standard library is embedded at build time
 
