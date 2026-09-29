@@ -1221,6 +1221,16 @@ kendisinden alıyor, yani alan değişse de uyuyor.
 - Nöbetçi: yeni `tests/nitelikli_tip.test.tpr` (+ `tests/moduller/
   nitelikli_geo.tpr`); eski derleyiciyle derlenmiyor.
 
+### Ölçüm — Wings ↔ Node.js HTTP yeniden ölçüldü; "Node'un 1.7-2.1 katı" üretilemedi
+
+- `benchmarks/http_vs_node.sh`: aynı iş, aynı `loadtest.c`, tur eşli, gövde
+  ön denetimli. 2026-09-28, Ryzen 7 9800X3D, node v26.10.0, keep-alive 50:
+  `listen_evented` ↔ node tek süreç 1,29–1,32×; `listen_pool` ↔ node cluster
+  0,81–0,83× (Node önde). STATUS'taki eski iddia ve olgunluk kriteri 2'nin
+  HTTP ayağı buna göre düzeltildi.
+- İlk koşum Node'u yanlış ölçtü (SIGTTIN ile durmuş süreç + chunked cevap —
+  her istek `err`); betik artık hatalı sayacı sayı yerine `HATALI` basıyor.
+
 ### Performance — dizgi kurma 5,2× hızlandı (`strcat` 163,6 → 31,2 ms)
 
 Üç ayrı darboğaz, üçü de ölçülerek bulundu:
