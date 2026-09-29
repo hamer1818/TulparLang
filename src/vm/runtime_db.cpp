@@ -70,8 +70,11 @@ static thread_local std::vector<sqlite3 *> g_db_tls_conns;
 // connections are per-thread (g_db_tls_conns), this is naturally lock-free on
 // the hot path. db_query reuses a compiled statement via sqlite3_reset instead
 // of re-preparing identical SQL, a win for read-heavy endpoints running the
-// same SELECT repeatedly. Queries are raw SQL strings (no bound params), so
-// only EXACT repeats hit; values baked into the SQL each get their own entry.
+// same SELECT repeatedly. The key is the SQL text: `db_query_params` binds
+// `?` placeholders after the cached prepare, so one parameterised statement
+// serves every value; SQL with values baked into the text (plain `db_query`)
+// gets one entry per distinct string. (This comment used to say "no bound
+// params" — true before `db_query_params` existed.)
 // Bounded with FIFO eviction (the evicted statement is finalized). prepare_v2
 // auto-reprepares cached statements across schema changes, so caching is safe.
 // db_close uses sqlite3_close_v2 so any still-cached statements don't block the
