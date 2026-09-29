@@ -302,6 +302,14 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
             exit 1
         fi
+        # SURUM VARLIKLARI <-> `tulpar update`. Uc liste uc yerde elle
+        # tutuluyordu (update_cmd.cpp, build.yml yayin listesi, CI DLL
+        # kapisi) ve `tulpar update` Windows'ta surumde OLMAYAN varliklari
+        # indirmeye calisiyordu (K226, 2026-09-27). Kaynak denetimi, ag yok.
+        if ! python3 tests/surum_varliklari.py; then
+            echo -e "${RED}Surum varlik denetimi basarisiz!${NC}"
+            exit 1
+        fi
         # PAKET BOYUTU + SPIR-V TAZELIK + ACILIS SURESI.
         #
         # Ucu de "sessizce bozulan" sinifindan ve hicbiri otomasyonda degildi:

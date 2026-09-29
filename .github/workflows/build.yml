@@ -747,6 +747,22 @@ jobs:
           name: tulpar-windows-x64
           path: dist/tulpar-windows-x64.zip
 
+      # ZIP'IN ICINDEKILER AYRICA, TEK TEK (K226). `tulpar update` Windows'ta
+      # ve sitedeki install.ps1 `tulpar-windows-x64.exe` + DLL'leri AYRI
+      # surum varliklari olarak indiriyor; surumde yalniz zip vardi, yani
+      # ikisi de Windows'ta indirme adiminda dusuyordu ("Release ... icinde
+      # 'tulpar-windows-x64.exe' bulunamadi"). Zip tasinabilir paket olarak
+      # kaliyor; ayni dosyalar SHA256SUMS'a girip ayrica yayinlaniyor.
+      # Kapi: tests/surum_varliklari.py (update listesi <-> yayin listesi).
+      - name: Upload loose Windows files (update / install.ps1)
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tulpar-windows-x64-dosyalar
+          path: |
+            dist/tulpar-windows-x64.exe
+            dist/*.dll
+
       - name: Upload installer
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
@@ -1066,7 +1082,13 @@ jobs:
               TameEngine-macos-universal.tar.gz \
               tulpar-windows-x64.zip \
               tulpar-setup-windows-x64.exe \
-              libtulpar_runtime-windows-x64.a; do
+              libtulpar_runtime-windows-x64.a \
+              tulpar-windows-x64.exe \
+              libwinpthread-1.dll \
+              zlib1.dll \
+              libzstd.dll \
+              libssl-3-x64.dll \
+              libcrypto-3-x64.dll; do
             if [ ! -f "$f" ]; then
               echo "ERROR: expected release artifact missing: $f" >&2
               exit 1
@@ -1133,6 +1155,9 @@ jobs:
             - `tulpar-windows-x64.zip` - Windows (x64) portable — `tulpar.exe`
               plus the MinGW runtime DLLs it needs. Unzip anywhere and run
               from inside the folder; nothing is written outside it.
+            - `tulpar-windows-x64.exe` + the five `*.dll` files — the same
+              zip contents as loose assets; `tulpar update` and the
+              one-line `install.ps1` download these individually.
 
             **TameEngine — 3D scene editor** (standalone, no install; the compiler is *not* required to run it):
             - `TameEngine-linux-x64.tar.gz`
@@ -1183,6 +1208,12 @@ jobs:
             tulpar-windows-x64.zip
             tulpar-setup-windows-x64.exe
             libtulpar_runtime-windows-x64.a
+            tulpar-windows-x64.exe
+            libwinpthread-1.dll
+            zlib1.dll
+            libzstd.dll
+            libssl-3-x64.dll
+            libcrypto-3-x64.dll
             libtulpar_runtime-linux-x64.a
             libtulpar_runtime-macos-universal.a
             TameEngine-linux-x64.tar.gz

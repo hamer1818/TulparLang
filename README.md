@@ -85,7 +85,11 @@ Add/Remove Programs entries. Or take `tulpar-windows-x64.zip` for a
 portable folder: unzip anywhere, run `tulpar.exe` from inside it, nothing
 is written outside. Both are self-contained — CI checks on every build that
 the binary imports nothing beyond Windows system DLLs and the MinGW ones
-shipped alongside it.
+shipped alongside it. One caveat on Windows: compiling a program (`tulpar
+file.tpr`, `tulpar build`) links through `clang++`, which the packages do
+not ship — install it from an MSYS2 MINGW64 shell
+(`pacman -S mingw-w64-x86_64-clang`) and put `mingw64\bin` on `PATH`.
+`tulpar version`, `fmt`, `typecheck`, `pkg` and `--lsp` work without it.
 
 ### Verifying releases
 
@@ -544,12 +548,15 @@ OpenSSL (enables `https://` for the HTTP client and `wings_tls`).
 ./build.sh
 ```
 
-**Windows (MSYS2 MinGW64):**
+**Windows (MSYS2 MINGW64 shell):**
 
-```powershell
-.\build.ps1
-# or: build.bat
+```bash
+pacman -S mingw-w64-x86_64-{gcc,clang,cmake,ninja,llvm,zlib,zstd,libxml2,openssl}
+./build.sh
 ```
+
+(There is no `build.ps1` / `build.bat`; CI's `build-windows` job builds the
+same way.)
 
 **Direct CMake (incremental):**
 
@@ -558,7 +565,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-`build.sh` and `build.ps1` wipe the build directory each time. For
+`build.sh` wipes the build directory each time. For
 incremental rebuilds during development, use CMake directly. The
 output is a `tulpar` (`tulpar.exe` on Windows) copied to the repo root
 plus `libtulpar_runtime.a` linked by AOT-compiled user binaries.

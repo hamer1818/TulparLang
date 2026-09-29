@@ -58,6 +58,14 @@ std::vector<Asset> assets_for_platform() {
         {"libwinpthread-1.dll",               "libwinpthread-1.dll",   true },
         {"zlib1.dll",                         "zlib1.dll",             true },
         {"libzstd.dll",                       "libzstd.dll",           true },
+        // OpenSSL 3: tulpar.exe imports both (https for update / pkg /
+        // http_client). They were missing here, so even with the loose
+        // assets published an update would have left a binary that
+        // cannot start on a box without them. The CI DLL gate's
+        // `$bundledDlls` is the source of truth; tests/surum_varliklari.py
+        // keeps this list equal to it.
+        {"libssl-3-x64.dll",                  "libssl-3-x64.dll",      true },
+        {"libcrypto-3-x64.dll",               "libcrypto-3-x64.dll",   true },
     };
 #elif defined(__APPLE__)
     return {
