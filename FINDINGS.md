@@ -476,7 +476,9 @@ Karar ikiye ayrıldı:
    traversal 5,45× → ~1×, bellek 16,1 → 8,1 bayt/eleman.
 2. **`matmul` açığı AYRI bir iş kalemi: eleman yazma yolu.** 2,84×'lik tek
    şekil, üç ölçümün en büyüğü. Onu kapatmadan hiçbir depolama değişikliği
-   `matmul`i kapıdan geçiremez.
+   `matmul`i kapıdan geçiremez. *(2026-09-29: eleman yazma yolu K201 (#405)
+   ile KAPANDI — oku-yaz 0,85× C — ama int `matmul` 6,14× kaldı; asıl açık
+   iç içe döngüde hesaplı indeks, bkz. S11.)*
 
 ⚠ **Kaydedilmesi gereken:** bu turun ürünü kod değil, **yapılmayan iş**.
 Ölçüm yapılmasaydı ~117 değinmelik bir refactor yapılacak, sonunda `matmul`
@@ -643,7 +645,7 @@ yalnız `&&`/`||`'de idi.
 | S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ, KAPANDI ve KİLİTLENDİ** — `tests/stream_contract_smoke.py` (16 kontrol; kancalar sökülünce kırmızı verdiği **ölçüldü**) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
 | S7 | Thread sözleşmesi: **kopyayla girer, join'le çıkar** | **yazıldı** — argüman derin kopya, join sonucu taşır; paylaşmak isteyen `mutex_*` kullanır |
-| S11 | **Float-dizi unboxing İKİ KAPILIDIR** | **ölçüldü, iş YAPILMADI** — *depolama kapısı* (tarama ≤2×, eleman ≤8 bayt) değerli ve ulaşılabilir (int lineer **0,97×** kanıt). *`matmul` kapısı* (≤4×) **geçilemez**: tavan, zaten kutusuz olan int yolunun bugünkü oranıdır ve o **5,95×**. Önce eleman-yazma yolu (tek başına 2,84×). Bu satır, bir yıl sonra *"float kutulu, unboxing yapsak?"* diye soracak kişi için yazıldı: soru zaten soruldu, ölçüldü, ve cevabı sırayla bağlı |
+| S11 | **Float-dizi unboxing İKİ KAPILIDIR** | *(2026-09-29 yeniden ölçüldü — dayanağın YARISI değişti, SONUÇ değişmedi: K201 (#405) izole oku-yaz şeklini 2,84× → **0,85×** C'ye indirdi (`shapes.py`), ama int `matmul` hâlâ **6,14×** (C 68,5 / Tulpar 420,4 ms, N=640, en iyi 5, çıktı aynı, Ryzen 7 9800X3D). Kalan açık iç içe döngüde hesaplı indeks: kanıt yalnız EN DIŞ döngüde kuruluyor, `matmul`ün iç `j` döngüsü sınır denetimli kalıyor. Yani "`matmul` kapısı geçilemez" DURUYOR; "kök eleman yazma yolu" açıklaması artık YANLIŞ.)* **ölçüldü, iş YAPILMADI** — *depolama kapısı* (tarama ≤2×, eleman ≤8 bayt) değerli ve ulaşılabilir (int lineer **0,97×** kanıt). *`matmul` kapısı* (≤4×) **geçilemez**: tavan, zaten kutusuz olan int yolunun bugünkü oranıdır ve o **5,95×**. Önce eleman-yazma yolu (tek başına 2,84×). Bu satır, bir yıl sonra *"float kutulu, unboxing yapsak?"* diye soracak kişi için yazıldı: soru zaten soruldu, ölçüldü, ve cevabı sırayla bağlı |
 | S10 | **Lint'in mutex-ilişkilendirmesi yaklaşıktır** | **belgelendi** — kilit derinliği *deyim* düzeyinde izleniyor ama **hangi mutex'in hangi global'i koruduğu bilinmiyor** (dilde o bağ yok); dallanma/erken dönüş de izlenmiyor. Yanlış negatif üretebilir, yanlış pozitif üretmemesi bilerek seçildi (#25) |
 | S9 | Uzun ömürlü süreçte **değer-başı geri kazanım yok** (join-dönüş dahil) | **ölçüldü** — join-dönüş değerleri sürecin ömrü boyunca yaşar; binlerce join içeren süreçte RSS ~N×değer-boyu artar (P43). M2'nin çözülmesi bu sınıfın **tamamını** kapatır; yamayı her ekleme noktasına serpmek değil, kök düzeltme tek yerde |
 | S8 | Handle sözleşmesi | **yazıldı + fikstür** — *join handle'ı tüketir; ikinci join hatadır; detach edilmiş handle join edilemez* |
@@ -1250,7 +1252,9 @@ Geriye **iki adlandırılmış iş kalemi** kalıyor, ikisi de ölçülmüş ger
 
 1. **Eleman yazma yolu** — `a[i] = a[i] + b[i]` tek başına **2,84×**; üç
    erişim şeklinin en büyüğü ve `matmul` açığının kökü. Bu kapanmadan hiçbir
-   depolama değişikliği `matmul`ü kapıdan geçiremez.
+   depolama değişikliği `matmul`ü kapıdan geçiremez. *(2026-09-29: KAPANDI —
+   K201 (#405), oku-yaz 0,85× C; ama "kökü" değilmiş: int `matmul` hâlâ
+   6,14×, açık iç içe döngüde hesaplı indekste — S11.)*
 2. **Float-dizi unboxing, kendi kapısıyla** — tarama ≤2× ve eleman ≤8 bayt.
    Ulaşılabilir (int lineer **0,97×**). `matmul` gerekçesiyle değil.
 

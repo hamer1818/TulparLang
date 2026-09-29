@@ -120,7 +120,7 @@ taşındı (tulpar-engine #22). Kapı: otopilot özeti önce/sonra aynı
 ## P1.1 — tipli struct dizisi ✅ (2026-09-21, dal `dil/struct-dizisi`)
 
 `Dusman[] d` — yeni runtime nesnesi `ObjStructArray` (vm.hpp): elemanlar ardışık ve kutusuz,
-eleman = `field_count` adet 8 baytlık yuva, kutusuz struct'ın LLVM yerleşimiyle aynı bit deseni,
+eleman = `field_count` adet 8 baytlık yuva *(2026-09-29'dan beri eleman adımı `sizeof(T)`: f32/i32 alan 4 bayt #414, `@repr(C)` bool 1 bayt #418)*, kutusuz struct'ın LLVM yerleşimiyle aynı bit deseni,
 yani `d[i]` ↔ tipli alloca kopyası bit kopyasıdır. Tutamaç sıradan bir VMValue
 (`OBJ_STRUCT_ARRAY`), yani yerel/global/parametre olarak kutulu dolaşır; codegen eleman tipini
 yerel kaydından (`LocalVar::struct_array_elem`) bilir.

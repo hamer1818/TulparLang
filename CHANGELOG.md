@@ -311,6 +311,19 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   `Performance.md`'de "Henüz yapılmadı" diyen iki bölüm yapılan bölümlere
   bağlandı.
 
+### Belgeler — struct yerleşimi 8 bayt değil; S11'in dayanağı yeniden ölçüldü
+
+- "Kutusuz struct alanı / struct dizisi elemanı 8 baytlık yuva" diyen
+  belgeler (AOT Backend, STATUS P0.3 kaydı, plans/08 P1.1) #414 (`f32`/`i32`
+  alan 4 bayt) ve #418 (`@repr(C)` bool 1 bayt) sonrası bayattı; notlandı.
+  Memory Model'de `ObjArray` 56 → 64 bayt (`sizeof` ile ölçüldü) ve `idata`
+  8 bayt/eleman değil, i32 başlayıp genişliyor.
+- FINDINGS S11: K201 (#405) izole oku-yaz şeklini 2,84× → 0,85× C'ye indirdi
+  (`benchmarks/fair/shapes.py`, 2026-09-29), ama int `matmul` yeniden
+  ölçüldü ve hâlâ **6,14×** (C 68,5 / Tulpar 420,4 ms, N=640, çıktı aynı).
+  Karar ("matmul kapısı geçilemez") duruyor; "kök eleman yazma yolu"
+  açıklaması yanlıştı — açık iç içe döngüde hesaplı indeks.
+
 ### Düzeltildi — `cmake --build` gömülü stdlib değişikliğini görmüyordu
 
 - `lib/*.tpr` yapılandırma anında gömülüyordu ve derleme sistemi bu
