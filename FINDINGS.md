@@ -1124,7 +1124,8 @@ yazma ve `chr()` döngüde ~500 bin / 2 milyon yinelemede SIGSEGV veriyordu) ·
 içermiyor (veri hazır, yayın kararı bekliyor).
 
 `srv_json` soak · `thread_join` dönüş değeri · `thread_create` derin kopya
-(5 koşulla onaylı) · global lint · donmuş 9 dilli CSV + checksum kolonu ·
+(5 koşulla onaylı) · global lint · ~~donmuş 9 dilli CSV + checksum kolonu~~
+(KAPANDI 2026-09-27: `benchmarks/fair/results.csv`) ·
 llvm-mca ile `fib` atribüsyonu · gcc üstünlüğünün bayrak ikili araması ·
 FP/SIMD.
 

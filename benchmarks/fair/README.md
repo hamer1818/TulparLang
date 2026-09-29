@@ -44,7 +44,14 @@ yok, hiçbir derleyici katlayamıyor.
 cd benchmarks/fair && REPEATS=5 python3 run.py
 ```
 
-Ölçüm makinesi sonuçları değiştirir; tablo `results.json`'a yazılır.
+Ölçüm makinesi sonuçları değiştirir; tablo `results.json`'a yazılır, ondan
+`RESULTS.md` (insan için) ve `results.csv` (araçlar için) üretilir.
+`results.csv` dondurulmuş, makinece okunur tablodur: kıyas × dil başına bir
+satır — `kernel,n,lang,best_ms,median_ms,output,agree,repeats`. `output`
+dokuz dilin ORTAK bastığı sonuç (checksum), `agree=0` o kıyasın geçersiz
+olduğu anlamına gelir. Yeniden ölçmeden JSON'dan üretmek için:
+`python3 run.py --csv`. Depodaki `results.csv`, `results.json`'daki
+2026-09-11 turundan (#313, 5 tekrar, aşağıdaki makine) üretildi.
 
 ## Sonuçlar
 

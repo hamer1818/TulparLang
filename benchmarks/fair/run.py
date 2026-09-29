@@ -250,6 +250,13 @@ def baseline():
 
 
 def main():
+    # `--csv`: yeniden OLCMEDEN, depodaki results.json'dan results.csv uret
+    # (tablo dondurulmus olcumden turer; olcum turu dakikalar suruyor).
+    if "--csv" in sys.argv[1:]:
+        d = json.loads((HERE / "results.json").read_text())
+        write_csv(d["results"], d.get("repeats", REPEATS))
+        print("-> results.csv (results.json'dan)")
+        return 0
     print(f"Adil kıyaslama — {REPEATS} tekrar, en iyi + ortanca\n")
     results, invalid = {}, []
     for bench, (n, desc) in BENCH.items():
@@ -285,8 +292,33 @@ def main():
     (HERE / "results.json").write_text(json.dumps(
         {"results": results, "baseline": base, "repeats": REPEATS}, indent=2))
     write_markdown(results, base)
-    print("\n-> results.json + RESULTS.md")
+    write_csv(results, REPEATS)
+    print("\n-> results.json + RESULTS.md + results.csv")
     return 1 if invalid else 0
+
+
+def write_csv(results, repeats):
+    """Dondurulmus, makinece okunur tablo: kiyas x dil, cikti (checksum) +
+    mutabakat kolonuyla.
+
+    RESULTS.md insan icin; baska bir aracla (tablo, grafik, iki turu
+    karsilastiran betik) okunacak bir bicim yoktu — FINDINGS'in "donmus 9
+    dilli CSV + checksum kolonu" maddesi. `output` her dilin bastigi ortak
+    sonuc: bir dil farkli basarsa `agree` 0 olur ve satir GECERSIZDIR
+    (hizli ama yanlis bir sonuc kiyas degildir).
+    """
+    import csv
+    with open(HERE / "results.csv", "w", newline="") as fh:
+        w = csv.writer(fh, lineterminator="\n")
+        w.writerow(["kernel", "n", "lang", "best_ms", "median_ms", "output",
+                    "agree", "repeats"])
+        for bench, r in results.items():
+            for lang in LANGS:
+                row = r["rows"].get(lang)
+                w.writerow([bench, r["n"], lang,
+                            row["best"] if row else "",
+                            row["median"] if row else "",
+                            r["output"] or "", 1 if r["agree"] else 0, repeats])
 
 
 def write_markdown(results, base):
