@@ -782,6 +782,23 @@ Destekleniyor: `push` / `len` / `d[i].alan` oku-yaz / `Dusman k = d[i]`
 - 14 kıyasın IR'ı birebir aynı; CI'dan çıkarılmış `scene3d_engine` paketi
   (sonda kopyası) yeni ve eski derleyiciyle aynı 210 PASS.
 
+### CI — web/android dist arşivleri artık CI'da üretiliyor ve ölçülüyor
+
+- `wasm/dist` ve `android/dist` gitignore'lu ve CI'da hiç üretilmiyordu, yani
+  `dist_archive_audit.py` ile Android derleme dumanı CI'da hep "arşiv yok —
+  atlandı" diyordu. Ölçüldü (2026-09-27): yerel arşivlerde codegen'in
+  çağırdığı 6 çekirdek sembol yoktu — her `--target=web/android` derlemesi
+  link'te ölüyordu, CI yeşildi. Linux işi artık iki arşivi kaynaktan üretiyor
+  (Emscripten 5.0.0 + runner'daki NDK) ve denetimi `TULPAR_DIST_ZORUNLU=1`
+  ile koşuyor: android'de eksik sembol de HATA, arşivin hiç denetlenememesi de
+  HATA. Pozitif kontrol: bayat bir x86_64 runtime arşiviyle zorunlu kip
+  rc=1 (9 sembol eksik), varsayılan kip yalnız UYARI.
+- Zorunlu kip ilk CI koşumunda ikinci bir kör noktayı yakaladı: denetim
+  sembolleri `llvm-nm` ya da `nm` ile okuyordu; Ubuntu'da yalnız `llvm-nm-18`
+  var, GNU `nm` wasm okuyamıyor — web arşivleri "okunamadı — atlandı" deyip
+  denetim dışında kalıyordu. Artık sürüm ekli `llvm-nm-N` ve `emnm` de
+  aranıyor (yalnız GNU `nm` ile zorunlu kip "4/6 arşiv" diye kırmızı).
+
 ### Added — çoklu dönüş / tuple (P0.1)
 
 ```tpr

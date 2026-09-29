@@ -39,6 +39,7 @@ oraya gitti. Bu depoda artik eng_* builtin'i YOK, yani burada aranmasi
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -133,7 +134,16 @@ def archive_symbols(path, prefixes=("aot_",)):
     """
     pat = (r"^[0-9a-fA-F]* *[A-TV-Za-tv-z] +((?:%s)[A-Za-z0-9_]+)$"
            % "|".join(re.escape(x) for x in prefixes))
-    for tool in ("llvm-nm", "nm"):
+    # SÜRÜM EKLİ llvm-nm ve emnm de aranıyor. GNU `nm` wasm nesnelerini
+    # okuyamıyor; Ubuntu'nun LLVM paketi ise yalnız `llvm-nm-18` kuruyor
+    # (sonsuz `llvm-nm` yok). Sonuç: web arşivleri "okunamadı — atlandı"
+    # deyip denetim DIŞINDA kalıyordu ve özet "temiz" diyordu. Ölçüldü
+    # 2026-09-27: CI'da arşivler üretilince zorunlu kip "4/6 arşiv
+    # denetlenebildi" diye tam bunu yakaladı.
+    tools = ["llvm-nm"] + ["llvm-nm-%d" % v for v in range(23, 17, -1)] + ["emnm", "nm"]
+    for tool in tools:
+        if not shutil.which(tool):
+            continue
         try:
             out = subprocess.run([tool, path], capture_output=True, text=True)
         except FileNotFoundError:
@@ -207,6 +217,7 @@ def check_archive_freshness(driver_srcs):
                 newer.append(s)
         if not newer:
             continue
+        hard = hard or os.environ.get("TULPAR_DIST_ZORUNLU") == "1"
         head = "HATA" if hard else "UYARI"
         print("%s: %s arsivi BAYAT — %d kaynak dosyasi arsivden YENI. Sembol "
               "denetimi bunu goremez: var olan bir sembolun IMZASI degistiyse "
@@ -253,6 +264,11 @@ def check_ndk_search_agrees():
 
 
 def main():
+    # ZORUNLU KİP (CI, 2026-09-27): Linux işi arşivleri kaynaktan ÜRETİYOR,
+    # yani orada eksik ya da hiç bulunmayan arşiv "geliştiricinin NDK'sı yok"
+    # değil, bir KUSUR. Yerelde varsayılan davranış (android UYARI, yoksa
+    # atla) değişmiyor.
+    strict = os.environ.get("TULPAR_DIST_ZORUNLU") == "1"
     wanted = table_symbols()
     fail = False
     checked = 0
@@ -269,6 +285,7 @@ def main():
         missing = [s for s in wanted if s not in have]
         if not missing:
             continue
+        hard = hard or strict
         head = "HATA" if hard else "UYARI"
         print("%s: %s arsivinde %d builtin YOK — bu hedefin her derlemesi "
               "link'te patlar" % (head, label, len(missing)))
@@ -295,6 +312,7 @@ def main():
         missing = [x for x in core if x not in have and not x.startswith(skip)]
         if not missing:
             continue
+        hard = hard or strict
         head = "HATA" if hard else "UYARI"
         print("%s: %s arsivinde codegen'in bildirdigi %d cekirdek sembol YOK — "
               "bu hedefin her derlemesi link'te patlar" % (head, label, len(missing)))
@@ -318,6 +336,13 @@ def main():
         if fbad:
             fail = True
         dirty += fstale
+
+    expected = len(ARCHIVES) + len(RUNTIME_ARCHIVES)
+    if strict and checked < expected:
+        print("HATA: TULPAR_DIST_ZORUNLU=1 ama %d/%d arsiv denetlenebildi — "
+              "arsivler uretilmemis ya da okunamiyor; kapi olcmeden yesil "
+              "veremez" % (checked, expected))
+        fail = True
 
     if check_ndk_search_agrees():
         print("    surucu ve betik AYNI yerlere bakmali (ikisi de Android "
