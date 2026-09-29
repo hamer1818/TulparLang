@@ -1352,6 +1352,13 @@ TPREOF
         exit 1
     fi
 
+    # `@repr(C)` (K036): tanilar + 1 baytlik bool'lu struct dizisinin C
+    # dizisiyle bayt bayt ayni oldugu (C++ sondasi, pozitif kontrol).
+    if ! bash tests/repr_c.sh ./tulpar; then
+        echo -e "${RED}@repr(C) yerlesimi bozuk!${NC}"
+        exit 1
+    fi
+
     # Kod üretimi DENKLİK denetimi (scene3d_export + sahne JSON'ları) 2026-09-22'de
     # ÇIKARILDI: sahne/arayüz hattı artık tulpar-engine deposunda ölçülüyor.
     # Kapı `examples/scene3d_export.tpr`yi çalıştırıp ürettiği kodun aynı sahneyi

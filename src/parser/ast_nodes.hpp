@@ -464,6 +464,9 @@ struct TypeDecl {
     // float/int (yuklemede genisler, yazmada daralir). Bos ya da kisa vektor =
     // hepsi 0 (sentezlenen tuple struct'lari doldurmaz).
     std::vector<unsigned char> field_bits;
+    // `@repr(C)` (K036): yerlesim C'ninki olmak ZORUNDA — butun alanlar
+    // skaler, `bool` 1 bayt (field_bits 8). Kodgen struct'i compact sayar.
+    bool repr_c = false;
     SourceLocation loc;
 
     TypeDecl(const std::string& n, SourceLocation l) : name(n), loc(l) {}

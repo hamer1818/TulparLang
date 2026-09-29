@@ -59,6 +59,28 @@ tag still works;
 - `benchmarks/fair` + struct kıyaslarının 14/14 optimizasyon sonrası IR'ı
   birebir aynı (hiçbiri `var` struct'ı kullanmıyor).
 
+### Eklendi — `@repr(C)`: struct'a C yerleşimi sözü
+
+- **`@repr(C) type Bayrak { bool a; f32 x; bool b; i32 n; }`** (K036):
+  alanlar bildirim sırasında, hedefin hizalama/dolgu kuralıyla; `bool` C'deki
+  gibi **1 bayt** (`_Bool` — varsayılan yerleşimde 8 baytlık yuva), f32/i32
+  4 bayt, int/float 8 bayt. Struct dizisinin (`Bayrak[] d`) deposu aynı
+  alanları taşıyan C struct'ının dizisiyle bayt bayt aynı; motor tamponu
+  C'ye/GPU'ya kopyasız verebilir. Değerin dildeki anlamı varsayılan
+  struct'la aynı (yazmada bool 0/1'e normalleşir).
+- Yalnız skaler alan (int/float/bool/f32/i32): str/dizi/json/iç içe struct
+  C'de temsil edilemez → ayrıştırma hatası. Yalnız `C`: `@repr(std140)` /
+  `std430` GLSL'e özgü (vec3 hizalaması) ve dilde vektör tipi yok —
+  sessizce C'ye düşmesin diye hata. Fonksiyona/değişkene `@repr` hata.
+  Modülde `@repr(C)`, ana dosyada nitelsiz aynı adlı struct: yerleşim
+  çatışması derleme hatası.
+- Nöbetçi: `tests/repr_c.test.tpr` (3 test), `tests/repr_c.sh` 7/7
+  (`build.sh suites`e bağlı): 5 tanı/pozitif denetim + C++ sondası
+  (`sizeof(Bayrak)=16`, `offsetof(Bayrak,b)=8`, `sizeof(Kay)=24` —
+  sondaki 1 baytlık bool'dan sonra kuyruk dolgusu; iki yön) + bool'u 8
+  bayt sanan sondanın kırmızı olduğu pozitif kontrol. Eski derleyiciyle 0/6.
+- `@repr(C)` kullanmayan kodun IR'ı değişmedi (14/14 kıyas birebir aynı).
+
 ### Eklendi — `f32` / `i32` struct alanları: 4 baytlık depolama, C yerleşimi
 
 - **`type Tepe { f32 x; f32 y; f32 z; i32 renk; }`** (K037, K035): alan 4
@@ -85,7 +107,7 @@ tag still works;
   baytlık float olurdu) — ayrıştırma hatası. Modülde `f32 x`, ana dosyada
   `float x` aynı adlı struct: yerleşim çatışması derleme hatası.
 - Kapsam dışı (sonraki adım): `f32` yerel/parametre tipi ve `f32[]` düz
-  dizi; `@repr(C)` niteliği (C'deki 1 baytlık `bool` için) ve std140/std430.
+  dizi; std140/std430. (`@repr(C)` yukarıdaki girdide.)
 - Nöbetçi: `tests/f32_alan.test.tpr` (6 test: yuvarlama, sarma, biçim,
   struct dizisi, çağrı/`call()`/json/`match`, global — `f32` depolaması
   kapatılınca 5'i kırmızı), `tests/f32_yerlesim.sh` 9/9 (`build.sh

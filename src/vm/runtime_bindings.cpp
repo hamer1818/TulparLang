@@ -1146,6 +1146,7 @@ static VMValue sarr_field_value(const ObjStructArray *a, const char *e, int f) {
   case 2: { int64_t v; memcpy(&v, p, sizeof v); return VM_BOOL(v != 0); }
   case 3: { float x; memcpy(&x, p, sizeof x); return VM_FLOAT((double)x); }
   case 4: { int32_t v; memcpy(&v, p, sizeof v); return VM_INT((long long)v); }
+  case 5: { uint8_t v; memcpy(&v, p, sizeof v); return VM_BOOL(v != 0); }   // @repr(C) bool (K036)
   default: { int64_t v; memcpy(&v, p, sizeof v); return VM_INT((long long)v); }
   }
 }

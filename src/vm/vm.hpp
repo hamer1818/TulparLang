@@ -338,7 +338,8 @@ typedef struct {
 // KUCUK ALANLI struct (K037/K035, 2026-09-29: `f32` / `i32` alan): eleman
 // C YERLESIMINDE (hedefin hizalama/dolgu kurali, adim C'nin sizeof'u) —
 // `elem_size` > 0 bunu soyler ve `field_types` 2*field_count uzunlukta:
-// kodlar (0 int, 1 float, 2 bool, 3 f32, 4 i32) + alan bayt ofsetleri.
+// kodlar (0 int, 1 float, 2 bool, 3 f32, 4 i32, 5 C bool — @repr(C), K036) +
+// alan bayt ofsetleri.
 // `elem_size` == 0: yukaridaki eski yerlesim (field_count * 8, ofset i*8).
 // Eleman okuyan her yer sarr_* yardimcilarindan gecmeli (runtime_bindings).
 typedef struct {

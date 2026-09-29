@@ -1,0 +1,73 @@
+// `@repr(C)` (K036, 2026-09-29): struct'a C yerlesimi sozu. `bool` 1 bayt
+// (C `_Bool`), f32/i32 4 bayt, int/float 8 bayt; bildirim sirasi, hedefin
+// hizalama/dolgu kurali. Anlam (bu dosya) varsayilan struct'la AYNI olmali;
+// bayt duzeyi (C++ sondasi) tests/repr_c.sh'de.
+// Calistir: ./tulpar tests/repr_c.test.tpr
+import "test";
+
+@repr(C)
+type Bayrak { bool a; f32 x; bool b; i32 n; }
+
+@repr(C)
+type Kay { int a; float b; bool c; }
+
+func bayrak_yap(bool a, int n): Bayrak {
+    Bayrak r = { a: a, x: 0.5, b: !a, n: n };
+    return r;
+}
+
+func run_alanlar() {
+    Bayrak v = { a: true, x: 1.5, b: false, n: -3 };
+    assert_eq_bool(v.a, true);
+    assert_eq_bool(v.b, false);
+    v.b = true;
+    v.a = false;
+    assert_eq_bool(v.a, false);
+    assert_eq_bool(v.b, true);
+    v.n = v.n * 2;
+    assert_eq_int(v.n, -6);
+    assert_eq_str(toJson(v), "{\"a\":false,\"x\":1.5,\"b\":true,\"n\":-6}");
+    Kay k = { a: 5000000000, b: 0.1, c: true };
+    assert_eq_int(k.a, 5000000000);
+    assert_close(k.b, 0.1, 0.0);
+    assert_eq_bool(k.c, true);
+}
+
+func run_dizi() {
+    Bayrak[] d = [];
+    push(d, bayrak_yap(true, 1));
+    push(d, bayrak_yap(false, 2));
+    push(d, { a: true, x: 2.0, b: true, n: 3 });
+    assert_eq_int(len(d), 3);
+    assert_eq_bool(d[1].a, false);
+    assert_eq_bool(d[1].b, true);
+    d[0].b = true;
+    assert_eq_bool(d[0].b, true);
+    int t = 0;
+    for (e in d) { if (e.b) { t = t + e.n; } }
+    assert_eq_int(t, 6);
+    Bayrak son = pop(d);
+    assert_eq_int(son.n, 3);
+    assert_eq_str(toJson(d), "[{\"a\":true,\"x\":0.5,\"b\":true,\"n\":1},{\"a\":false,\"x\":0.5,\"b\":true,\"n\":2}]");
+    var dd = d;
+    assert_eq_bool(dd[0].a, true);
+}
+
+func run_cagri() {
+    Bayrak b = bayrak_yap(false, 9);
+    var c = call("bayrak_yap", true, 4);
+    assert_eq_bool(c.a, true);
+    assert_eq_bool(c.b, false);
+    assert_eq_int(c.n + b.n, 13);
+    json j = {"a": false, "x": 3.25, "b": true, "n": 11};
+    Bayrak u = j;
+    assert_eq_bool(u.b, true);
+    assert_close(u.x, 3.25, 0.0);
+    assert_eq_str(toString(u), "Bayrak { a: 0, x: 3.25, b: 1, n: 11 }");
+}
+
+print("=== @repr(C) ===");
+test("alanlar: 1 baytlik bool, f32/i32, int/float", "run_alanlar");
+test("struct dizisi: push, eleman yaz/oku, for-in, pop, toJson, tipsiz okuma", "run_dizi");
+test("donus, call(), json acma, toString", "run_cagri");
+test_summary();

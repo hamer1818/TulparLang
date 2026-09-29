@@ -3090,10 +3090,12 @@ static int struct_field_bits(StructTypeEntry *st, int idx) {
 }
 
 // Alanin DEPOLAMA tipi: int/bool i64, float double; `f32` float (4 bayt),
-// `i32` i32 (K037/K035).
+// `i32` i32 (K037/K035); `@repr(C)` struct'ta bool i8 (C `_Bool`, K036).
 static LLVMTypeRef struct_field_llvm_type(LLVMBackend *backend,
                                           StructTypeEntry *st, int idx) {
-  const bool small = struct_field_bits(st, idx) == 32;
+  const int bits = struct_field_bits(st, idx);
+  if (bits == 8) return LLVMInt8TypeInContext(backend->context);
+  const bool small = bits == 32;
   if (st->field_types[idx] == TYPE_FLOAT)
     return small ? LLVMFloatTypeInContext(backend->context) : backend->float_type;
   return small ? backend->int32_type : backend->int_type;
@@ -3112,6 +3114,11 @@ static LLVMValueRef struct_field_load_value(LLVMBackend *backend, StructTypeEntr
       return LLVMBuildFPExt(backend->builder, fv, backend->float_type, tag);
     return LLVMBuildSExt(backend->builder, fv, backend->int_type, tag);
   }
+  if (struct_field_bits(st, idx) == 8)  // C bool: 0 disi her bayt dogru
+    return LLVMBuildZExt(backend->builder,
+                         LLVMBuildICmp(backend->builder, LLVMIntNE, fv,
+                                       LLVMConstInt(LLVMTypeOf(fv), 0, 0), tag),
+                         backend->int_type, tag);
   return fv;
 }
 
@@ -3125,6 +3132,11 @@ static void struct_field_store_value(LLVMBackend *backend, StructTypeEntry *st,
       v = LLVMBuildFPTrunc(backend->builder, v, LLVMFloatTypeInContext(backend->context), tag);
     else
       v = LLVMBuildTrunc(backend->builder, v, backend->int32_type, tag);
+  } else if (struct_field_bits(st, idx) == 8) {  // C bool: 0/1
+    v = LLVMBuildZExt(backend->builder,
+                      LLVMBuildICmp(backend->builder, LLVMIntNE, v,
+                                    LLVMConstInt(backend->int_type, 0, 0), tag),
+                      LLVMInt8TypeInContext(backend->context), tag);
   }
   LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type, base,
                                         (unsigned)idx, tag);
@@ -3415,7 +3427,8 @@ static LLVMValueRef sarr_new_value_layout(LLVMBackend *backend, StructTypeEntry 
     names.push_back(LLVMBuildGlobalStringPtr(backend->builder, st->field_names[i], "sarr.fn"));
     const bool small = struct_field_bits(st, (int)i) == 32;
     unsigned code = st->field_types[i] == TYPE_FLOAT ? (small ? 3u : 1u)
-                    : st->field_types[i] == TYPE_BOOL ? 2u : (small ? 4u : 0u);
+                    : st->field_types[i] == TYPE_BOOL ? (struct_field_bits(st, (int)i) == 8 ? 5u : 2u)
+                                                  : (small ? 4u : 0u);
     types.push_back(LLVMConstInt(backend->int32_type, code, 0));
   }
   for (unsigned i = 0; i < fc; i++) types.push_back(struct_const_offsetof(backend, st, (int)i));
@@ -3944,6 +3957,9 @@ StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl
       if (st->field_bits[i]) st->compact = 1;
     }
   }
+  // `@repr(C)` (K036): yerlesim sozu — struct dizisi her zaman C adimli
+  // (aot_sarr_new_layout), bool'suz/f32'siz olsa bile.
+  if (type_decl->repr_c) st->compact = 1;
 
   // Build the LLVM struct layout. Unboxable fields are 8-byte scalars:
   // int/bool map to i64 (bool promoted so the struct stays naturally aligned
@@ -4154,6 +4170,8 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
 // tipleri (ozel tipte tip adi da).
 static bool struct_decl_layout_equal(ASTNode_C *a, ASTNode_C *b) {
   if (a->field_count != b->field_count) return false;
+  if (a->repr_c != b->repr_c) return false;   // K036: yerlesim sozu farkli
+
   for (int i = 0; i < a->field_count; i++) {
     const char *an = a->field_names ? a->field_names[i] : nullptr;
     const char *bn = b->field_names ? b->field_names[i] : nullptr;
@@ -4172,7 +4190,7 @@ static bool struct_decl_layout_equal(ASTNode_C *a, ASTNode_C *b) {
 
 // Hata mesaji icin `{ float x; int y; }`.
 static std::string struct_decl_layout_str(ASTNode_C *d) {
-  std::string s = "{ ";
+  std::string s = d->repr_c ? "@repr(C) { " : "{ ";
   for (int i = 0; i < d->field_count; i++) {
     const char *tn;
     const bool small = d->field_bits && d->field_bits[i] == 32;
