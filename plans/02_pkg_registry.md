@@ -15,12 +15,12 @@ tutuyor; 2026-09-27'den beri kilitli sürüm aralığı karşıladıkça KULLANI
 `pkg install --update` yeniden çözüyor, kilitli + diskte sağlam bağımlılık
 ağa gitmiyor (registry kapalıyken de kuruluyor) ve `.tpkg` paketleri de
 önbelleğe isabet ediyor (önceden hiç etmiyordu). Test: `tests/pkg_audit.sh`
-(`path:` zinciri) + `tests/pkg_registry_audit.py` (yerel sahte registry, 13
-denetim). Açık kalanlar: projeler arası global önbellek (`~/.cache/tulpar`),
-birden çok registry/ayna, tulpar-be'nin GitHub self-servis yayını yalnız giriş
-dosyasını çekiyor (çok dosyalı paket o yoldan yayınlanamıyor),
-`examples/17_pkg_demo.tpr` (örnekler depo kökünden koşuyor; vendor edilmiş
-modül kökte `tulpar_modules/` ister — yapılmadı).
+(`path:` zinciri) + `tests/pkg_registry_audit.py` (yerel sahte registry, 19
+denetim). Aynalar (`[registry] mirrors`) ve örnek proje (`examples/pkg_demo/`,
+kendi dizininde manifest + lock + vendor edilmiş `tulpar_modules/demo`)
+2026-09-29'da geldi (K251, K171). Açık kalanlar: projeler arası global
+önbellek (`~/.cache/tulpar`), tulpar-be'nin GitHub self-servis yayını yalnız
+giriş dosyasını çekiyor (çok dosyalı paket o yoldan yayınlanamıyor — dış depo).
 **Tahmin:** 2-4 PR (1 client + 1 server + 1 entegrasyon + opsiyonel auth)
 **Risk:** Düşük (mevcut altyapı %80 hazır)
 **Mottoya katkı:** Ekosistem genişletme
@@ -241,7 +241,9 @@ diye ertele.
 
 - `examples/` altına bir paket-kullanan örnek: `examples/17_pkg_demo.tpr`
   → vendored bir `tulpar_modules/demo/demo.tpr` ile birlikte commit'le
-  (CI'da gerçek registry call'ı yapma).
+  (CI'da gerçek registry call'ı yapma). *(Yapıldı 2026-09-29: kökteki
+  `examples/*.tpr` depo kökünden koştuğu için örnek kendi dizininde —
+  `examples/pkg_demo/`; `pkg install` ağa çıkmadan kuruyor.)*
 - README'de `tulpar pkg add http_client` komutunun çalıştığı bir
   quickstart bölümü.
 
