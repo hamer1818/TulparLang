@@ -1,0 +1,37 @@
+// Elle hizli siralama (Hoare bolmesi, orta pivot, ozyinelemeli) — her dilde
+// AYNI algoritma; kutuphane sort'u kullanilmiyor (introsort/timsort/pdqsort
+// farkli algoritmalari kiyaslardi). Veri minstd LCG ile: sonuc belirlenimli.
+// Olculen: rastgele dizi erisimi + takas + ozyineleme.
+func qs(int[] a, int lo, int hi) {
+    int i = lo;
+    int j = hi;
+    int p = a[(lo + hi) / 2];
+    while (i <= j) {
+        while (a[i] < p) { i = i + 1; }
+        while (a[j] > p) { j = j - 1; }
+        if (i <= j) {
+            int t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+    if (lo < j) { qs(a, lo, j); }
+    if (i < hi) { qs(a, i, hi); }
+}
+
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 1000000; }
+int[] a = array_fill(n, 0);
+int seed = 42;
+for (int i = 0; i < n; i = i + 1) {
+    seed = (seed * 48271) % 2147483647;
+    a[i] = seed % 1000000;
+}
+qs(a, 0, n - 1);
+int bad = 0;
+for (int i = 1; i < n; i = i + 1) { if (a[i - 1] > a[i]) { bad = bad + 1; } }
+int cs = 0;
+for (int i = 0; i < n; i = i + 1) { cs = (cs + a[i] * (i % 1000)) % 1000000007; }
+print(toString(a[0]) + " " + toString(a[n / 2]) + " " + toString(a[n - 1]) + " " + toString(cs) + " " + toString(bad));

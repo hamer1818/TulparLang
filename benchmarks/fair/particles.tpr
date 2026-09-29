@@ -1,0 +1,26 @@
+// Parcacik guncellemesi — oyun dongusunun en tipik isi: struct DIZISI
+// (x, y, vx, vy) uzerinde yercekimi + duvardan sekme, 50 adim. Her dil kendi
+// deger/nesne dizisini kullaniyor (C/C++/Rust/Go/C# struct dizisi, Java/JS/
+// Python nesne dizisi, Tulpar kutusuz tipli struct dizisi `P[]`).
+struct P { float x; float y; float vx; float vy; }
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 200000; }
+P[] ps = [];
+for (int i = 0; i < n; i = i + 1) {
+    push(ps, { x: toFloat(i % 1000) * 0.5, y: toFloat(i % 777) * 0.25, vx: toFloat((i % 13) - 6) * 0.1, vy: toFloat((i % 7) - 3) * 0.2 });
+}
+float dt = 0.01;
+float g = 9.81;
+float w = 500.0;
+for (int s = 0; s < 50; s = s + 1) {
+    for (int i = 0; i < n; i = i + 1) {
+        ps[i].vy = ps[i].vy - g * dt;
+        ps[i].x = ps[i].x + ps[i].vx * dt;
+        ps[i].y = ps[i].y + ps[i].vy * dt;
+        if (ps[i].x < 0.0 || ps[i].x > w) { ps[i].vx = 0.0 - ps[i].vx; }
+        if (ps[i].y < 0.0) { ps[i].y = 0.0 - ps[i].y; ps[i].vy = (0.0 - ps[i].vy) * 0.9; }
+    }
+}
+float sum = 0.0;
+for (int i = 0; i < n; i = i + 1) { sum = sum + ps[i].x + ps[i].y; }
+print(toInt(round(sum * 1000.0)));

@@ -1,0 +1,11 @@
+// Dizgi anahtarli sozluk: N ekleme + N arama. Her dil KENDI standart
+// sozlugunu kullaniyor (unordered_map, HashMap, map, Dictionary, Map, dict);
+// C'de stdlib sozlugu yok, elle acik adresleme + FNV-1a. Anahtar "k<sayi>":
+// dizgi kurma + hash + esitlik karsilastirmasi birlikte olculuyor.
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 1000000; }
+json m = {};
+for (int i = 0; i < n; i = i + 1) { m["k" + toString(i)] = i; }
+int s = 0;
+for (int i = 0; i < n; i = i + 1) { s = s + m["k" + toString((i * 7) % n)]; }
+print(toString(len(m)) + " " + toString(s));
