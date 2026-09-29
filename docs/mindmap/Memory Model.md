@@ -44,9 +44,13 @@ Zaten güvenli: arena/checkpoint/region/`js_small_buffer`/`g_wings_current_fd` T
 
 ## Dizi temsili: kutulu / kutulanmamış (2026-09-03)
 
-`ObjArray` (56 bayt) iki depodan **tam olarak birini** tutar:
+`ObjArray` (64 bayt; `sizeof` ile ölçüldü 2026-09-29, x86_64 Linux —
+`elem_bits` eklenince 56'dan büyüdü) iki depodan **tam olarak birini** tutar:
 - `items_` — `VMValue*`, 16 bayt/eleman, her tür değer.
-- `idata` — `long long*`, 8 bayt/eleman, yalnız int.
+- `idata` — yalnız int; eleman genişliği `elem_bits`: dizi **4 bayt/eleman
+  (i32)** başlar, i32'ye sığmayan bir değer yazılınca 8 bayta **genişler**
+  (`aot_arr_widen`) — kutulanmaz. Tür `long long*` ama 32-bit dizide
+  bellek i32 dizisi olarak okunur.
 
 Diğeri **NULL**. Bu bilinçli: kutulanmamış bir dizide `items_` NULL olduğu için
 atlanan her yol sessizce bozulmak yerine **gürültüyle patlar**.
