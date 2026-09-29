@@ -207,6 +207,57 @@ def main():
         rc, out = run(exe, ["pkg", "install"], proj)
         check(rc != 0 and "mismatch" in out, "lock sha256 bozulunca install REDDEDIYOR", out)
 
+        # 8) AYNA (K251): birincil registry OLU, `mirrors` canli. Pozitif
+        #    kontrol once: aynasiz ayni manifest DUSMELI (yoksa aynanin
+        #    "isledigi" bir sey kanitlamaz).
+        import socket as _s
+        olu = _s.socket()
+        olu.bind(("127.0.0.1", 0))
+        olu_port = olu.getsockname()[1]
+        olu.close()  # port bos: baglanti reddedilir
+        ay = os.path.join(work, "ayna")
+        os.mkdir(ay)
+        def ayna_manifest(mirrors):
+            with open(os.path.join(ay, "tulpar.toml"), "w") as fh:
+                fh.write('name = "ayna"\nversion = "0.1.0"\n\n[registry]\n'
+                         'url = "http://127.0.0.1:%d"\n%s\n[dependencies]\n'
+                         'single = "^1.0.0"\n' % (olu_port, mirrors))
+        ayna_manifest("")
+        rc, out = run(exe, ["pkg", "install"], ay)
+        check(rc != 0, "kontrol: olu registry, ayna YOK -> install dusuyor", out)
+        ayna_manifest('mirrors = ["http://127.0.0.1:%d"]\n' % reg.port)
+        before = len(reg.log)
+        rc, out = run(exe, ["pkg", "install"], ay)
+        lt = open(os.path.join(ay, "tulpar.lock")).read() if os.path.exists(os.path.join(ay, "tulpar.lock")) else ""
+        check(rc == 0 and len(reg.log) > before and "127.0.0.1:%d/v1/packages/single" % reg.port in lt,
+              "olu registry + canli ayna -> ayna kullanildi, lock aynayi kaydetti", out + "\n" + lt)
+        rc, out = run(exe, ["pkg", "add", "multi@^1"], ay)
+        man = open(os.path.join(ay, "tulpar.toml")).read()
+        check(rc == 0 and 'mirrors = ["http://127.0.0.1:%d"]' % reg.port in man,
+              "pkg add manifesti yeniden yazinca mirrors korunuyor", man)
+        bozuk = man.replace('mirrors = ["', 'mirrors = "', 1)
+        with open(os.path.join(ay, "tulpar.toml"), "w") as fh:
+            fh.write(bozuk)
+        rc, out = run(exe, ["pkg", "install"], ay)
+        check(rc != 0 and "mirrors must be an array" in out,
+              "bozuk mirrors (dizi degil) sessizce yutulmuyor", out)
+
+        # 9) DEPODAKI ORNEK (K171): examples/pkg_demo/ — tulpar.toml + lock +
+        #    vendor edilmis tulpar_modules/demo. Gercek registry URL'sini
+        #    tasiyor ama install AGA CIKMAMALI: diskteki dosyanin ozeti
+        #    lock'la tutuyor. "cached" satiri bunun kaniti (indirme olsa
+        #    satir "installed ... from"). Ornek bozulursa (lock ya da vendor
+        #    dosyasi degisirse) bu denetim onu yakalar.
+        ornek = os.path.join(work, "pkg_demo")
+        shutil.copytree(os.path.join(ROOT, "examples", "pkg_demo"), ornek)
+        rc, out = run(exe, ["pkg", "install"], ornek)
+        check(rc == 0 and "(cached, sha256 matches lockfile)" in out,
+              "examples/pkg_demo: install agsiz — vendor dosyasi lock'la tutuyor", out)
+        rc, out = run(exe, ["main.tpr"], ornek)
+        check(rc == 0 and out.strip().splitlines()[-2:] ==
+              ["hello from demo@1.0.1", "goodbye from demo@1.0.1"],
+              "examples/pkg_demo: program vendor edilmis paketi kullaniyor", out)
+
         # 7) publish --dry-run: iki dosyali proje -> .tpkg
         pub = os.path.join(work, "yayin")
         os.mkdir(pub)
@@ -230,7 +281,7 @@ def main():
         print("pkg registry denetimi DUSTU (%d/%d)" % (len(fails), len(fails) + ok_n))
         return 1
     print("pkg registry denetimi temiz (%d denetim: aralik+lock+sha256, .tpkg, onbellek, "
-          "--update, cevrimdisi, bozulma, publish sekli)" % ok_n)
+          "--update, cevrimdisi, bozulma, ayna, ornek proje, publish sekli)" % ok_n)
     return 0
 
 

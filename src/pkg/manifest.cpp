@@ -135,6 +135,50 @@ bool manifest_parse(const std::string &source, Manifest &out,
             return false;
         }
 
+        // `[registry] mirrors = ["a", "b"]` — the one array-valued key.
+        // Single-line array of quoted strings; anything else is an error
+        // (not silently dropped: a mirror list that parses to nothing would
+        // make the fallback look configured while it never runs).
+        if (section == SEC_REGISTRY && key == "mirrors") {
+            std::string arr = val_part;
+            size_t hash = std::string::npos;
+            // comment after the closing bracket
+            size_t close = arr.rfind(']');
+            if (close != std::string::npos) hash = arr.find('#', close);
+            if (hash != std::string::npos) arr = strip(arr.substr(0, hash));
+            if (arr.size() < 2 || arr.front() != '[' || arr.back() != ']') {
+                out_err = "line " + std::to_string(lineno) +
+                          ": [registry] mirrors must be an array of strings, "
+                          "e.g. mirrors = [\"https://a\", \"https://b\"]";
+                return false;
+            }
+            std::string body = strip(arr.substr(1, arr.size() - 2));
+            size_t pos = 0;
+            while (pos < body.size()) {
+                while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t')) pos++;
+                if (pos >= body.size()) break;
+                std::string item;
+                size_t consumed = 0;
+                if (body[pos] != '"' || !parse_quoted_string(body, pos, item, consumed)) {
+                    out_err = "line " + std::to_string(lineno) +
+                              ": [registry] mirrors: expected a quoted string";
+                    return false;
+                }
+                if (!item.empty()) out.registry_mirrors.push_back(item);
+                pos = consumed;
+                while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t')) pos++;
+                if (pos < body.size()) {
+                    if (body[pos] != ',') {
+                        out_err = "line " + std::to_string(lineno) +
+                                  ": [registry] mirrors: expected ',' between strings";
+                        return false;
+                    }
+                    pos++;
+                }
+            }
+            continue;
+        }
+
         // `[binaries]` entries are bare booleans (`name = true`), not
         // strings — the opt-in is presence-in-list, not a value to keep.
         if (section == SEC_BINARIES) {
@@ -190,7 +234,7 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 else {
                     out_err = "line " + std::to_string(lineno) +
                               ": [registry] key '" + key +
-                              "' is not recognised (only 'url' for now)";
+                              "' is not recognised (only 'url' and 'mirrors')";
                     return false;
                 }
             } else if (section == SEC_ANDROID) {
@@ -261,11 +305,26 @@ std::string Manifest::to_toml() const {
         out += "strict = true\n";
     }
 
-    if (!registry_url.empty()) {
+    if (!registry_url.empty() || !registry_mirrors.empty()) {
         out += "\n[registry]\n";
-        out += "url = \"";
-        out += escape_for_toml(registry_url);
-        out += "\"\n";
+        if (!registry_url.empty()) {
+            out += "url = \"";
+            out += escape_for_toml(registry_url);
+            out += "\"\n";
+        }
+        if (!registry_mirrors.empty()) {
+            // Round-trip matters: `pkg add` / `pkg remove` rewrite the
+            // manifest, and a dropped key here would silently delete the
+            // user's mirror list.
+            out += "mirrors = [";
+            for (size_t i = 0; i < registry_mirrors.size(); ++i) {
+                if (i) out += ", ";
+                out += "\"";
+                out += escape_for_toml(registry_mirrors[i]);
+                out += "\"";
+            }
+            out += "]\n";
+        }
     }
 
     if (!dependencies.empty()) {

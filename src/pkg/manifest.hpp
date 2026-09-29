@@ -42,6 +42,11 @@ struct Manifest {
     // specs without `path:` or `url:` prefix are an error at install
     // time. Override via `[registry]\nurl = "..."` in tulpar.toml.
     std::string registry_url;
+    // `[registry] mirrors = ["https://a", "https://b"]` — FALLBACK registries
+    // for reads (`install`, `search`, `info`), tried in order AFTER `url`
+    // when it is unreachable or answers non-2xx. `publish` always goes to
+    // `url` only (a mirror is read-only by definition).
+    std::vector<std::string> registry_mirrors;
     // dep name -> version requirement (as written in the manifest).
     // Order is preserved via a parallel vector so `tulpar pkg list`
     // shows them in the order the user wrote them.
