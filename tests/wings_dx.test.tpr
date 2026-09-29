@@ -170,6 +170,31 @@ func run_di_inject_scalar() {
     assert_contains(w, "\"n\":7");              // int bağımlılık (eskiden 500)
 }
 
+// ---- skaler handler dönüşü (2026-09-28) -------------------------------------------
+// `return "merhaba";` / `return 42;` her isteği 500 yapıyordu
+// (`result["_stream"]` skalerde fırlatıyordu). Artık FastAPI gibi JSON.
+func _sk_yazi(req) { return "merhaba"; }
+func _sk_sayi(req) { return 42; }
+func _sk_dizi(req) { return [1, 2]; }
+get("/sk/yazi", "_sk_yazi");
+get("/sk/sayi", "_sk_sayi");
+get("/sk/dizi", "_sk_dizi");
+func _sk_istek(str p): str {
+    _request = {"method": "GET", "path": p, "headers": {}, "params": {}, "cookies": {}};
+    str wire = _wings_dispatch_cached(_find_route("GET", p), 0);
+    return wire;
+}
+func run_scalar_handler_return() {
+    str w = _sk_istek("/sk/yazi");
+    assert_contains(w, " 200 ");
+    assert_contains(w, "\r\n\r\n\"merhaba\"");
+    str w2 = _sk_istek("/sk/sayi");
+    assert_contains(w2, " 200 ");
+    assert_contains(w2, "\r\n\r\n42");
+    str w3 = _sk_istek("/sk/dizi");   // dizi yolu değişmedi
+    assert_contains(w3, "\r\n\r\n[1,2]");
+}
+
 print("=== wings DX (alias'lar + resource) ===");
 test("resource route kaydı + only/except", "run_resource_routes");
 test("resource şema türetme", "run_resource_schema");
@@ -183,4 +208,5 @@ test("delete() route aliası", "run_alias_delete_route");
 test("accepts()/returns() aliasları", "run_alias_accepts_returns");
 test("DI: sözlük bağımlılık kısa devre (401)", "run_di_short_circuit");
 test("DI: sözlük + dizgi + int enjeksiyonu (200)", "run_di_inject_scalar");
+test("skaler handler dönüşü JSON (eskiden 500)", "run_scalar_handler_return");
 test_summary();
