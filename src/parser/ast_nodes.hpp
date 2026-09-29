@@ -458,8 +458,14 @@ struct TypeDecl {
     std::vector<DataType> field_types;
     std::vector<std::optional<std::string>> field_custom_types;
     std::vector<std::unique_ptr<ASTNode>> field_defaults;
+    // K037/K035: alanin DEPOLAMA genisligi (bit). 0 = varsayilan (8 baytlik
+    // yuva: int/bool i64, float double). 32 = `f32` (field_types FLOAT) /
+    // `i32` (field_types INT) — 4 baytlik depolama; degerin dildeki tipi yine
+    // float/int (yuklemede genisler, yazmada daralir). Bos ya da kisa vektor =
+    // hepsi 0 (sentezlenen tuple struct'lari doldurmaz).
+    std::vector<unsigned char> field_bits;
     SourceLocation loc;
-    
+
     TypeDecl(const std::string& n, SourceLocation l) : name(n), loc(l) {}
 };
 

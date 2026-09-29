@@ -59,6 +59,44 @@ tag still works;
 - `benchmarks/fair` + struct kıyaslarının 14/14 optimizasyon sonrası IR'ı
   birebir aynı (hiçbiri `var` struct'ı kullanmıyor).
 
+### Eklendi — `f32` / `i32` struct alanları: 4 baytlık depolama, C yerleşimi
+
+- **`type Tepe { f32 x; f32 y; f32 z; i32 renk; }`** (K037, K035): alan 4
+  bayt depolanır. Değerin dildeki tipi yine `float` / `int` — okumada
+  genişler (f32 → double kayıpsız, i32 işaretli), yazmada daralır (f32 en
+  yakına yuvarlanır, i32 alt 32 bit, C'deki `(int32_t)` gibi sarar).
+  `float`/`int`/`bool` alanlarla karışık kullanılabilir.
+- **Yerleşim C'ninki**: bildirim sırası, hedefin hizalama/dolgu kuralı
+  (LLVM'in hedef veri yerleşimi; Android'in iki ABI'si ayrı katlanır).
+  Struct dizisi (`Tepe[] d`) elemanları C dizisi gibi ardışık, adım
+  `sizeof(Tepe)` — motor bir tepe/parçacık tamponunu kopyalamadan GPU'ya ya
+  da C'ye verebilir. `tests/f32_yerlesim.sh` bunu bir C++ sondasıyla
+  ölçüyor: sonda `ObjStructArray::data`yı `struct Tepe *` / `struct Karma *`
+  diye okuyor (sizeof, dolgu, her alan) ve C tarafından yazıyor, Tulpar
+  yazılanı okuyor; eski 8 bayt/alan yerleşimini varsayan sonda kırmızı
+  (pozitif kontrol).
+- `f32`/`i32` **bağlamsal** tip adı, anahtar sözcük değil: `float f32 =
+  1.0;` gibi bir değişken adı geçerli kalır; aynı adlı kullanıcı tipi
+  (`type f32 {..}`) kazanır. Yalnız struct alanında; yerel `f32 x` artık
+  açık bir typecheck tanısı (`'f32' yalniz struct alani tipi ... 'float'
+  kullanin`) — eskiden "Unknown type" idi, import varken hiç söylenmiyordu.
+  f32/i32 alanlı struct yalnız skaler alan taşıyabilir (str/dizi/iç içe
+  struct alanlı struct kutulu nesne olarak yaşıyor; orada `f32` sessizce 8
+  baytlık float olurdu) — ayrıştırma hatası. Modülde `f32 x`, ana dosyada
+  `float x` aynı adlı struct: yerleşim çatışması derleme hatası.
+- Kapsam dışı (sonraki adım): `f32` yerel/parametre tipi ve `f32[]` düz
+  dizi; `@repr(C)` niteliği (C'deki 1 baytlık `bool` için) ve std140/std430.
+- Nöbetçi: `tests/f32_alan.test.tpr` (6 test: yuvarlama, sarma, biçim,
+  struct dizisi, çağrı/`call()`/json/`match`, global — `f32` depolaması
+  kapatılınca 5'i kırmızı), `tests/f32_yerlesim.sh` 9/9 (`build.sh
+  suites`e bağlı; eski derleyiciyle 2/7), typeinfer `fail/30_f32_local`,
+  `pass/23_f32_fields_ok`.
+- Ölçüm (bu makine, Ryzen 7 9800X3D, 2026-09-29): 2M parçacık × 6 alan,
+  20 kare konum güncellemesi — tepe RSS **96,2 → 49,6 MB**, süre değişmedi
+  (203 → 204 ms, 7 koşum medyanı). `benchmarks/fair` + struct kıyaslarının
+  14'ünün optimizasyon sonrası IR'ı birebir aynı (f32 kullanmayan kod
+  değişmiyor).
+
 ### Düzeltildi — `call()` struct alan/döndüren fonksiyonda çöp, `null` ya da segfault
 
 - Kutusuz struct döndüren ya da struct parametre alan fonksiyonun kutulu

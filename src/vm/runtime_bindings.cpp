@@ -1112,15 +1112,43 @@ static_assert(offsetof(ObjStructArray, type_name) == 32, "ObjStructArray::type_n
 static_assert(offsetof(ObjStructArray, field_count) == 56, "ObjStructArray::field_count @56 olmali");
 static_assert(offsetof(ObjStructArray, count) == 60, "ObjStructArray::count @60 olmali");
 static_assert(offsetof(ObjStructArray, capacity) == 64, "ObjStructArray::capacity @64 olmali");
+static_assert(offsetof(ObjStructArray, elem_size) == 68, "ObjStructArray::elem_size @68 olmali (dolgu boslugu)");
 static_assert(offsetof(ObjStructArray, data) == 72, "ObjStructArray::data @72 olmali");
 #else
-static_assert(sizeof(ObjStructArray) == 48, "ObjStructArray 48 bayt olmali (codegen varsayimi, 32-bit)");
+static_assert(sizeof(ObjStructArray) == 52, "ObjStructArray 52 bayt olmali (codegen varsayimi, 32-bit)");
 static_assert(offsetof(ObjStructArray, type_name) == 20, "ObjStructArray::type_name @20 olmali (32-bit)");
 static_assert(offsetof(ObjStructArray, field_count) == 32, "ObjStructArray::field_count @32 olmali (32-bit)");
 static_assert(offsetof(ObjStructArray, count) == 36, "ObjStructArray::count @36 olmali (32-bit)");
 static_assert(offsetof(ObjStructArray, capacity) == 40, "ObjStructArray::capacity @40 olmali (32-bit)");
-static_assert(offsetof(ObjStructArray, data) == 44, "ObjStructArray::data @44 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, elem_size) == 44, "ObjStructArray::elem_size @44 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, data) == 48, "ObjStructArray::data @48 olmali (32-bit)");
 #endif
+
+// ---- Struct dizisi eleman erisimi (K037/K035, 2026-09-29) ------------------
+// Eleman BAYT adimi ve alan cozumu. elem_size 0: eski yerlesim (field_count
+// adet 8 baytlik yuva, kodlar 0/1/2). elem_size > 0: C yerlesimi, tip tablosu
+// kodlar + ofsetler (bkz. vm.hpp ObjStructArray). Elemani okuyan HER yer
+// buradan gecsin — yeni bir okuyucu 8 bayt varsayarsa f32 dizide cop okur.
+static inline size_t sarr_esz(const ObjStructArray *a) {
+  return a->elem_size > 0 ? (size_t)a->elem_size : (size_t)a->field_count * sizeof(int64_t);
+}
+static inline char *sarr_elem_at(const ObjStructArray *a, long long i) {
+  return (char *)a->data + (size_t)i * sarr_esz(a);
+}
+static VMValue sarr_field_value(const ObjStructArray *a, const char *e, int f) {
+  const int code = a->field_types ? a->field_types[f] : 0;
+  const size_t off = (a->elem_size > 0 && a->field_types)
+                         ? (size_t)a->field_types[a->field_count + f]
+                         : (size_t)f * sizeof(int64_t);
+  const char *p = e + off;
+  switch (code) {
+  case 1: { double d; memcpy(&d, p, sizeof d); return VM_FLOAT(d); }
+  case 2: { int64_t v; memcpy(&v, p, sizeof v); return VM_BOOL(v != 0); }
+  case 3: { float x; memcpy(&x, p, sizeof x); return VM_FLOAT((double)x); }
+  case 4: { int32_t v; memcpy(&v, p, sizeof v); return VM_INT((long long)v); }
+  default: { int64_t v; memcpy(&v, p, sizeof v); return VM_INT((long long)v); }
+  }
+}
 static_assert((int)OBJ_STRUCT_ARRAY == 7, "OBJ_STRUCT_ARRAY = 7 olmali (codegen varsayimi)");
 static_assert(offsetof(Obj, type) == 0, "Obj::type @0 olmali");
 static_assert((int)VM_VAL_INT == 0 && (int)VM_VAL_OBJ == 4,
@@ -1351,14 +1379,14 @@ VMValue aot_persist(VMValue v) {
     dst->obj.is_moved = 0;
     dst->capacity = src->count;
     dst->data = nullptr;
-    size_t slots = (size_t)src->count * (size_t)src->field_count;
-    if (slots > 0) {
-      dst->data = static_cast<int64_t *>(malloc(slots * sizeof(int64_t)));
+    const size_t bytes = (size_t)src->count * sarr_esz(src);
+    if (bytes > 0) {
+      dst->data = static_cast<int64_t *>(malloc(bytes));
       if (!dst->data) {
         free(dst);
         return v;
       }
-      memcpy(dst->data, src->data, slots * sizeof(int64_t));
+      memcpy(dst->data, src->data, bytes);
     } else {
       dst->count = 0;
       dst->capacity = 0;
@@ -2336,15 +2364,10 @@ VMValue vm_get_element(VMValue target, VMValue index) {
         return VM_INT(0);
       }
       ObjObject *o = vm_allocate_object_aot_wrapper(nullptr);
-      const int64_t *e = a->data + (size_t)idx * (size_t)a->field_count;
+      const char *e = sarr_elem_at(a, idx);
       for (int f = 0; f < a->field_count; f++) {
         const char *fn = (a->field_names && a->field_names[f]) ? a->field_names[f] : "_";
-        const int ft = a->field_types ? a->field_types[f] : 0;
-        VMValue v;
-        if (ft == 1) { double d; memcpy(&d, &e[f], sizeof d); v = VM_FLOAT(d); }
-        else if (ft == 2) { v = VM_BOOL(e[f] != 0); }
-        else { v = VM_INT((long long)e[f]); }
-        vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(fn), v);
+        vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(fn), sarr_field_value(a, e, f));
       }
       return VM_OBJ((Obj *)o);
     }
@@ -2412,17 +2435,15 @@ void print_vm_value(VMValue value) {
       for (int i = 0; i < a->count; i++) {
         if (i > 0) printf(", ");
         printf("%s { ", a->type_name ? a->type_name : "struct");
-        const int64_t *e = a->data + (size_t)i * (size_t)a->field_count;
+        const char *e = sarr_elem_at(a, i);
         for (int f = 0; f < a->field_count; f++) {
           if (f > 0) printf(", ");
           printf("%s: ", (a->field_names && a->field_names[f]) ? a->field_names[f] : "_");
-          if (a->field_types && a->field_types[f] == 1) {
-            double d;
-            memcpy(&d, &e[f], sizeof d);
-            printf("%g", d);
-          } else {
-            printf("%lld", (long long)e[f]);
-          }
+          // bool 0/1 basilir (print(struct) ile ayni bicim).
+          const VMValue fv = sarr_field_value(a, e, f);
+          if (IS_FLOAT(fv)) printf("%g", AS_FLOAT(fv));
+          else if (IS_BOOL(fv)) printf("%d", AS_BOOL(fv) ? 1 : 0);
+          else printf("%lld", (long long)AS_INT(fv));
         }
         printf(" }");
       }
@@ -2806,6 +2827,7 @@ extern "C" VMValue aot_sarr_new(const char *type_name, int field_count,
   a->obj.is_moved = 0;
   a->count = 0;
   a->capacity = 0;
+  a->elem_size = 0;
   a->data = nullptr;
   region_track((Obj *)a);
   a->type_name = type_name;
@@ -2813,6 +2835,25 @@ extern "C" VMValue aot_sarr_new(const char *type_name, int field_count,
   a->field_types = types;
   a->field_count = field_count < 0 ? 0 : field_count;
   return VM_OBJ(a);
+}
+
+// Kucuk alanli (f32 / i32) struct'in dizisi (K037/K035): eleman C
+// yerlesiminde, `elem_size` bayt (hedefin sizeof'u, codegen sabit ifadeyle
+// verir); `types` kodlar + ofsetler (2*field_count). Eleman boyu 8*alan'i
+// asamaz (her alan en fazla 8 bayt + dolgu); asiyorsa tablo bozuk — eski
+// yerlesime dusmek cop okurdu, hata ver.
+extern "C" VMValue aot_sarr_new_layout(const char *type_name, int field_count,
+                                       const char *const *names, const int *types,
+                                       int elem_size) {
+  VMValue v = aot_sarr_new(type_name, field_count, names, types);
+  if (!IS_STRUCT_ARRAY(v)) return v;
+  ObjStructArray *a = AS_STRUCT_ARRAY(v);
+  if (elem_size <= 0 || elem_size > a->field_count * 8) {
+    aot_runtime_error("Calisma Zamani Hatasi: struct dizisi eleman boyu gecersiz");
+    elem_size = a->field_count * 8;
+  }
+  a->elem_size = elem_size;
+  return v;
 }
 
 extern "C" void aot_sarr_push_ptr(VMValue *arr, const int64_t *src) {
@@ -2823,14 +2864,13 @@ extern "C" void aot_sarr_push_ptr(VMValue *arr, const int64_t *src) {
     return;
   }
   ObjStructArray *a = AS_STRUCT_ARRAY(*arr);
+  const size_t esz = sarr_esz(a);
   if (a->count + 1 > a->capacity) {
     int nc = a->capacity < 8 ? 8 : a->capacity * 2;
-    a->data = static_cast<int64_t *>(
-        realloc(a->data, (size_t)nc * (size_t)a->field_count * sizeof(int64_t)));
+    a->data = static_cast<int64_t *>(realloc(a->data, (size_t)nc * esz));
     a->capacity = nc;
   }
-  memcpy(a->data + (size_t)a->count * (size_t)a->field_count, src,
-         (size_t)a->field_count * sizeof(int64_t));
+  memcpy(sarr_elem_at(a, a->count), src, esz);
   a->count++;
 }
 
@@ -2859,7 +2899,7 @@ extern "C" int64_t *aot_sarr_elem_ptr(VMValue *arr, long long idx) {
     memset(scratch, 0, sizeof scratch);
     return scratch;
   }
-  return a->data + (size_t)idx * (size_t)a->field_count;
+  return reinterpret_cast<int64_t *>(sarr_elem_at(a, idx));
 }
 
 // pop / remove_at (K033, 2026-09-27). `idx`teki elemani `dst`ye kopyalar
@@ -2879,7 +2919,7 @@ static int sarr_remove(VMValue *arr, long long idx, int64_t *dst, bool is_pop) {
     return 0;
   }
   ObjStructArray *a = AS_STRUCT_ARRAY(*arr);
-  const size_t fc = (size_t)a->field_count;
+  const size_t esz = sarr_esz(a);   // bayt (K037: kucuk alanli struct C yerlesimi)
   if (is_pop) idx = (long long)a->count - 1;
   if (idx < 0 || idx >= a->count) {
     char b[192];
@@ -2894,13 +2934,13 @@ static int sarr_remove(VMValue *arr, long long idx, int64_t *dst, bool is_pop) {
                    "Runtime Error: remove_at index out of bounds: %lld (length %d)"),
                idx, a->count);
     aot_runtime_error(b);
-    if (dst && fc) memset(dst, 0, fc * sizeof(int64_t));
+    if (dst && esz) memset(dst, 0, esz);
     return 0;
   }
-  int64_t *e = a->data + (size_t)idx * fc;
-  if (dst && fc) memcpy(dst, e, fc * sizeof(int64_t));
+  char *e = sarr_elem_at(a, idx);
+  if (dst && esz) memcpy(dst, e, esz);
   const size_t tail = (size_t)(a->count - 1 - idx);
-  if (tail && fc) memmove(e, e + fc, tail * fc * sizeof(int64_t));
+  if (tail && esz) memmove(e, e + esz, tail * esz);
   a->count--;
   return 1;
 }
@@ -2926,12 +2966,8 @@ static VMValue sarr_remove_boxed(VMValue arr, long long idx, bool is_pop) {
   ObjObject *o = vm_allocate_object_aot_wrapper(nullptr);
   for (int f = 0; f < fc; f++) {
     const char *fn = (a->field_names && a->field_names[f]) ? a->field_names[f] : "_";
-    const int ft = a->field_types ? a->field_types[f] : 0;
-    VMValue v;
-    if (ft == 1) { double d; memcpy(&d, &tmp[f], sizeof d); v = VM_FLOAT(d); }
-    else if (ft == 2) { v = VM_BOOL(tmp[f] != 0); }
-    else { v = VM_INT((long long)tmp[f]); }
-    vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(fn), v);
+    vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(fn),
+                              sarr_field_value(a, reinterpret_cast<const char *>(tmp), f));
   }
   return VM_OBJ((Obj *)o);
 }
@@ -3462,16 +3498,13 @@ static void js_serialize(JSBuilder *b, VMValue v, int depth) {
     for (int i = 0; i < a->count; i++) {
       if (i > 0) js_append_char(b, ',');
       js_append_char(b, '{');
-      const int64_t *e = a->data + (size_t)i * (size_t)a->field_count;
+      const char *e = sarr_elem_at(a, i);
       for (int f = 0; f < a->field_count; f++) {
         if (f > 0) js_append_char(b, ',');
         const char *fn = (a->field_names && a->field_names[f]) ? a->field_names[f] : "_";
         js_escape_string(b, fn, strlen(fn));
         js_append_char(b, ':');
-        const int ft = a->field_types ? a->field_types[f] : 0;
-        if (ft == 1) { double d; memcpy(&d, &e[f], sizeof d); js_serialize(b, VM_FLOAT(d), depth + 1); }
-        else if (ft == 2) { js_serialize(b, VM_BOOL(e[f] != 0), depth + 1); }
-        else { js_serialize(b, VM_INT((long long)e[f]), depth + 1); }
+        js_serialize(b, sarr_field_value(a, e, f), depth + 1);
       }
       js_append_char(b, '}');
     }

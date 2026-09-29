@@ -987,7 +987,21 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     // the type system runs in warning mode and the lookup fails — the
     // strict mode (Plan 03) is what turns this into an exit-blocking
     // error.
+    // `f32` / `i32` (K037/K035) yalniz struct ALANI tipi (4 bayt depolama).
+    // Yerel olarak hicbir anlami yok — kodgen onu tipsiz degisken diye
+    // derliyor; import olsa da soylensin.
     if (decl->data_type == TYPE_CUSTOM && decl->custom_type.has_value() &&
+        (*decl->custom_type == "f32" || *decl->custom_type == "i32") &&
+        !ctx->struct_types.count(*decl->custom_type)) {
+      report_error(ctx,
+                   tulpar::i18n::tr_en(
+                       "'%s' yalniz struct alani tipi (4 bayt depolama); '%s' yereli icin "
+                       "'%s' kullanin (satir %d)",
+                       "'%s' is only a struct field type (4-byte storage); local '%s' "
+                       "should use '%s' at line %d"),
+                   decl->custom_type->c_str(), decl->name.c_str(),
+                   *decl->custom_type == "f32" ? "float" : "int", decl->loc.line);
+    } else if (decl->data_type == TYPE_CUSTOM && decl->custom_type.has_value() &&
         !ctx->struct_types.count(decl->custom_type.value()) &&
         !ctx->has_imports) {
       report_error(ctx, "Unknown type '%s' in declaration of '%s' at line %d",

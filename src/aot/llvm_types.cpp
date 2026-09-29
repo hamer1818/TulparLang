@@ -92,9 +92,10 @@ void llvm_init_types(LLVMBackend *backend) {
       LLVMInt32TypeInContext(ctx),                                // field_count
       LLVMInt32TypeInContext(ctx),                                // count
       LLVMInt32TypeInContext(ctx),                                // capacity
+      LLVMInt32TypeInContext(ctx),                                // elem_size (K037; 64-bit'te dolgu boslugu)
       LLVMPointerType(LLVMInt8TypeInContext(ctx), 0)              // data
   };
-  LLVMStructSetBody(backend->obj_sarr_type, obj_sarr_elements, 9, 0);
+  LLVMStructSetBody(backend->obj_sarr_type, obj_sarr_elements, 10, 0);
 
   // --- Define VMValue Body ---
   // struct VMValue {

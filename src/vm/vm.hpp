@@ -334,15 +334,23 @@ typedef struct {
 // (print / toJson icin; 0 int, 1 float, 2 bool — aot_struct_unpack_typed ile
 // ayni kod). `data` ObjArray::items_ gibi malloc/realloc; nesne basligi
 // allocate_object ile (vm_allocate_struct_array).
+//
+// KUCUK ALANLI struct (K037/K035, 2026-09-29: `f32` / `i32` alan): eleman
+// C YERLESIMINDE (hedefin hizalama/dolgu kurali, adim C'nin sizeof'u) —
+// `elem_size` > 0 bunu soyler ve `field_types` 2*field_count uzunlukta:
+// kodlar (0 int, 1 float, 2 bool, 3 f32, 4 i32) + alan bayt ofsetleri.
+// `elem_size` == 0: yukaridaki eski yerlesim (field_count * 8, ofset i*8).
+// Eleman okuyan her yer sarr_* yardimcilarindan gecmeli (runtime_bindings).
 typedef struct {
   Obj obj;
   const char *type_name;
   const char *const *field_names;
   const int *field_types;
-  int field_count;   // eleman basina yuva
+  int field_count;   // eleman basina alan
   int count;         // eleman sayisi
   int capacity;      // eleman cinsinden
-  int64_t *data;     // count * field_count yuva
+  int elem_size;     // bayt; 0 = field_count * 8 (64-bit'te dolgu boslugunda)
+  int64_t *data;     // count eleman (bayt adimi: elem_size ya da field_count*8)
 } ObjStructArray;
 #define IS_STRUCT_ARRAY(v) (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_STRUCT_ARRAY)
 #define AS_STRUCT_ARRAY(v) ((ObjStructArray *)AS_OBJ(v))

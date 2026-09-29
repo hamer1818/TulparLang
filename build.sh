@@ -1345,6 +1345,13 @@ TPREOF
         exit 1
     fi
 
+    # f32 / i32 STRUCT ALANLARI (K037/K035): tanilar + struct dizisi deposunun
+    # C dizisiyle bayt bayt ayni oldugu (C++ sondasi, iki yon, pozitif kontrol).
+    if ! bash tests/f32_yerlesim.sh ./tulpar; then
+        echo -e "${RED}f32/i32 alan yerlesimi bozuk!${NC}"
+        exit 1
+    fi
+
     # Kod üretimi DENKLİK denetimi (scene3d_export + sahne JSON'ları) 2026-09-22'de
     # ÇIKARILDI: sahne/arayüz hattı artık tulpar-engine deposunda ölçülüyor.
     # Kapı `examples/scene3d_export.tpr`yi çalıştırıp ürettiği kodun aynı sahneyi
