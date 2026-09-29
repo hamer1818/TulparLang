@@ -93,4 +93,12 @@ extern "C" int tulpar_while_index_why(ASTNode_C *cond, ASTNode_C *body,
 extern "C" int tulpar_body_indexes_by(ASTNode_C *body, const char *array_name,
                                       const char *ivar);
 
+// K064: `var q = mk(..)` bildirimindeki `q` fonksiyon `fn` icinde KACIYOR mu?
+// 0 yalniz `q`nun her gecisi `q.<alan>` OKUMASIYSA (alan `fields`ta); ciplak
+// kullanim, alan yazmasi, yeniden atama/bildirim, kapanis icinde gecis -> 1.
+// Kacmayan `q` tipli yerel (yigin) olabilir: deger ve referans anlambilimi
+// yalniz okumada ayni (bkz. .cpp).
+extern "C" int tulpar_struct_var_escapes(ASTNode_C *fn, ASTNode_C *decl,
+                                         const char *const *fields, int nfields);
+
 #endif

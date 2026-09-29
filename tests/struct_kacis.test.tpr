@@ -1,0 +1,113 @@
+// STRUCT `var`INDA KACIS ANALIZI (K064, 2026-09-29).
+//
+// `var q = mk(..)` (mk kutusuz struct dondurur) eskiden HER ZAMAN string
+// anahtarli nesneye kutulaniyordu. Artik `q` fonksiyonda KACMIYORSA (yalniz
+// `q.<alan>` okunuyorsa) tipli yerel oluyor — ayirma yok. Kutulu nesne
+// REFERANS, tipli yerel DEGER anlambilimli; bu dosya kacan her bicimin
+// KUTULU kaldigini (anlam degismedi) ve kacmayanin ayni sonucu verdigini
+// kilitliyor. Yapisal kanit (hangi `var` kutusuz): tests/struct_kacis.sh.
+// Calistir: ./tulpar tests/struct_kacis.test.tpr
+import "test";
+
+type P { int x; int y; }
+type F { float u; bool b; }
+
+func mk(int a): P { P p = { x: a, y: a + 1 }; return p; }
+func mkf(float u): F { F f = { u: u, b: u > 1.0 }; return f; }
+
+// Kacmaz: yalniz alan okumasi (dongude) -> tipli yerel.
+func run_okuma() {
+    int s = 0;
+    for (int i = 0; i < 1000; i++) {
+        var q = mk(i);
+        s = s + q.x * 2 + q.y;
+    }
+    assert_eq_int(s, 1499500);
+    var f = mkf(2.5);
+    assert_close(f.u, 2.5, 0.0);
+    assert_eq_bool(f.b, true);
+}
+
+// Kacar: takma ad — `b` ayni nesneyi gosterir (kutulu anlambilim korunur).
+func run_takma_ad() {
+    var a = mk(1);
+    var b = a;
+    b.x = 50;
+    assert_eq_int(a.x, 50);
+}
+
+// Kacar: alan yazmasi — kutulu nesnenin alani dinamik; int alana float
+// yazilabilir ve aynen okunur (tipli yerel donustururdu).
+func run_alan_yazma() {
+    var q = mk(1);
+    q.x = 1.5;
+    assert_close(q.x, 1.5, 0.0);
+}
+
+// Kacar: tipsiz parametreye arguman — cagrilan ayni nesneyi degistirir.
+func artir(p) { p.x = p.x + 1; }
+func run_arguman() {
+    var q = mk(10);
+    artir(q);
+    assert_eq_int(q.x, 11);
+}
+
+// Kacar: print/toString — kutulu nesnenin bicimi degismesin.
+func run_bicim() {
+    var q = mk(3);
+    assert_eq_str(toString(q), "<object>");
+    assert_eq_str(toJson(q), "{\"x\":3,\"y\":4}");
+}
+
+// Kacar: kapanis yakalamasi.
+func run_kapanis() {
+    var q = mk(7);
+    var f = () => q.x + q.y;
+    assert_eq_int(f(), 15);
+}
+
+// Kacmaz: bildirim bir lambdanin KENDI govdesinde (kok lambda "kapanis
+// icinde" sayilmaz; ic ice lambda sayilir).
+func run_lambda_ici() {
+    var f = (int a) => {
+        var q = mk(a);
+        return q.x + q.y;
+    };
+    assert_eq_int(f(4), 9);
+}
+
+// Kacar: yeniden atama ve golgeleme.
+func run_yeniden() {
+    var q = mk(1);
+    q = mk(5);
+    assert_eq_int(q.y, 6);
+    int t = 0;
+    for (int i = 0; i < 3; i++) {
+        var r = mk(i);
+        t = t + r.x;
+    }
+    var r = mk(100);
+    assert_eq_int(t + r.x, 103);
+}
+
+// Kacar: return — cagiran kutulu nesneyi alir.
+func ver(int a) {
+    var q = mk(a);
+    return q;
+}
+func run_donus() {
+    var z = ver(4);
+    assert_eq_int(z.x + z.y, 9);
+}
+
+print("=== struct var kacis analizi ===");
+test("kacmayan var: yalniz alan okumasi, ayni sonuc", "run_okuma");
+test("takma ad: referans anlambilimi korunur", "run_takma_ad");
+test("alan yazmasi: dinamik alan korunur", "run_alan_yazma");
+test("tipsiz parametre: cagrilan degistirir", "run_arguman");
+test("toString/toJson bicimi degismez", "run_bicim");
+test("kapanis yakalamasi", "run_kapanis");
+test("lambda govdesindeki var", "run_lambda_ici");
+test("yeniden atama / golgeleme", "run_yeniden");
+test("return ile kacis", "run_donus");
+test_summary();
