@@ -27,7 +27,10 @@
 // exited+terminated. Until 2026-09-27 this comment said "all fully
 // implemented" while no `stopped`/`terminated` event was ever sent (the
 // MI prefix bug in the reader thread) — nothing measured the adapter.
-// Data / instruction breakpoints are still unmeasured.
+// Data breakpoints (write watch on a global) and instruction breakpoints
+// (address from the frame's instructionPointerReference) are measured
+// since 2026-09-28; read/readWrite watches and the disassembly view
+// (supportsDisassembleRequest=false) are not.
 //
 // stdin/stdout are owned by this command — every diagnostic line goes
 // to stderr only (LSP follows the same rule, for the same reason).
@@ -937,6 +940,13 @@ void GdbProcess::emit_stopped(const std::string &mi_reason) {
            mi_reason == "function-finished") dap_reason = "step";
   else if (mi_reason == "_pause") dap_reason = "pause";
   else if (mi_reason == "signal-received") dap_reason = "exception";
+  // Watchpoints (setDataBreakpoints). Until 2026-09-28 these fell through
+  // as the raw MI string "watchpoint-trigger" — measured by
+  // tests/dap_audit.py scenario_data; the spec value is "data breakpoint".
+  else if (mi_reason == "watchpoint-trigger" ||
+           mi_reason == "read-watchpoint-trigger" ||
+           mi_reason == "access-watchpoint-trigger")
+    dap_reason = "data breakpoint";
   else if (mi_reason == "exited-normally" || mi_reason == "exited" ||
            mi_reason == "exited-signalled") dap_reason = "exit";
 
@@ -2177,10 +2187,18 @@ void handle_stack_trace(cJSON *request) {
     std::string file = mi_field(t, "file");
     std::string fullname = mi_field(t, "fullname");
     std::string line = mi_field(t, "line");
+    std::string addr = mi_field(t, "addr");
 
     int id = level.empty() ? total : std::atoi(level.c_str());
     cJSON_AddNumberToObject(f, "id", id);
     cJSON_AddStringToObject(f, "name", func.empty() ? "??" : func.c_str());
+    // The frame's program counter. Without it a client has no address to
+    // hand to `setInstructionBreakpoints` (we advertise that capability,
+    // but no disassemble request) — the handler existed and was never
+    // reachable from a client. Measured: tests/dap_audit.py
+    // scenario_instruction.
+    if (!addr.empty())
+      cJSON_AddStringToObject(f, "instructionPointerReference", addr.c_str());
     cJSON_AddNumberToObject(f, "line", line.empty() ? 0 : std::atoi(line.c_str()));
     cJSON_AddNumberToObject(f, "column", 1);
 

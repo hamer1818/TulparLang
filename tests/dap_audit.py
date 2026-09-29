@@ -14,7 +14,7 @@ bitince kapanmıyor, logpoint'ler sessiz bir duraklamaya dönüşüyordu —
 stackTrace/variables istekleri ise çalıştığı için elle sonda "çalışıyor"
 diyordu.
 
-NE ÖLÇÜLÜYOR (üç senaryo, her biri ayrı `tulpar debug` süreci)
+NE ÖLÇÜLÜYOR (yedi senaryo, her biri ayrı `tulpar debug` süreci)
   1. breakpoint: initialize -> launch -> setBreakpoints(verified) ->
      configurationDone -> `stopped(reason=breakpoint)` -> stackTrace'in üst
      çerçevesi breakpoint SATIRINDA -> scopes -> variables yerel DEĞERLERİ
@@ -25,6 +25,15 @@ NE ÖLÇÜLÜYOR (üç senaryo, her biri ayrı `tulpar debug` süreci)
   4. okunur değerler (K153): gömülü VMValue pretty-printer'ı yüklü —
      `ad="Hamza"`, `f=2.5`, `a=[1, 2, 3]`, `j={"k": 7, ...}`, `b=true`; ve
      `tulpar debug --gdb-script` çıktısı düz gdb'de aynı değerleri veriyor.
+  5. veri breakpoint'i (K151): global `t`'ye yazma izleyicisi —
+     `dataBreakpointInfo` + `setDataBreakpoints(write)`, kaynak breakpoint
+     silinince tam DÖRT `stopped(reason="data breakpoint")`, her birinde
+     `evaluate t` sırayla 10, 30, 60, 100 (i=0 turu değeri değiştirmez).
+  6. komut breakpoint'i (K151): `adim`'daki ilk durmanın
+     `instructionPointerReference`'ı ile `setInstructionBreakpoints`,
+     kaynak breakpoint silinince kalan dört çağrıda durur, `i` = 1..4.
+  7. async coroutine'ler (K156): ayrı "thread" olarak görünüyor, bekleyenin
+     stackTrace'i await zinciri (senaryonun kendi notuna bakın).
 
 POZİTİF KONTROL: 1. senaryodaki değişken değerleri programın kendi
 hesabından (a=2, b=3, c=5) geliyor, bağdaştırıcının bir sabitinden değil;
@@ -390,6 +399,89 @@ def scenario_async_threads(exe, work):
             "seviye_yukle -> veri_oku; async'siz programda yalniz main (kontrol)")
 
 
+def scenario_data(exe, work):
+    """Veri breakpoint'i: `t` değiştikçe durmalı, değerler programın kendi
+    hesabı (0+0, +10, +20, +30, +40). Pozitif kontrol: i=0 turu `t`'yi
+    DEĞİŞTİRMEZ (0 -> 0), yani dört durma "her yazmada" değil "her değişimde"
+    — bir izleyicinin gerçekten değeri izlediğinin kanıtı."""
+    a = start(exe, work, PROG_LOOP, [{"line": 5}])
+    try:
+        a.wait(is_event("stopped"), "satır 5'te `stopped`")
+        info = a.call("dataBreakpointInfo", {"name": "t"})["body"]
+        if not info.get("dataId"):
+            raise AssertionError("dataBreakpointInfo dataId vermedi: %s" % info)
+        r = a.call("setDataBreakpoints", {"breakpoints": [
+            {"dataId": info["dataId"], "accessType": "write"}]})
+        got = r["body"]["breakpoints"]
+        if len(got) != 1 or not got[0].get("verified"):
+            raise AssertionError("setDataBreakpoints doğrulanmadı: %s" % got)
+        a.call("setBreakpoints", {"source": {"path": os.path.join(work, "prog.tpr")},
+                                  "breakpoints": []})
+        a.call("continue", {"threadId": 1})
+        vals, reasons = [], set()
+        while True:
+            m = a.wait(lambda m: m.get("type") == "event" and
+                       m.get("event") in ("stopped", "terminated"), "stopped/terminated")
+            if m["event"] == "terminated":
+                break
+            reasons.add(m.get("body", {}).get("reason"))
+            fr = a.call("stackTrace", {"threadId": 1})["body"]["stackFrames"][0]
+            vals.append(a.call("evaluate", {"expression": "t",
+                                            "frameId": fr["id"]})["body"]["result"])
+            if len(vals) > 8:
+                raise AssertionError("izleyici durmuyor: %s" % vals)
+            a.call("continue", {"threadId": 1})
+        if vals != ["10", "30", "60", "100"]:
+            raise AssertionError("veri breakpoint degerleri %s (beklenen 10,30,60,100)" % vals)
+        if reasons != {"data breakpoint"}:
+            raise AssertionError("stopped.reason %s (beklenen 'data breakpoint')" % reasons)
+        return "veri breakpoint'i: t yazma izleyicisi 4 durma, t=10,30,60,100, reason='data breakpoint'"
+    finally:
+        a.close()
+
+
+def scenario_instruction(exe, work):
+    """Komut breakpoint'i: adres, ilk durmanın stackTrace'inden
+    (`instructionPointerReference`) — istemcinin elindeki tek adres kaynağı.
+    Pozitif kontrol: kaynak breakpoint'i silindikten sonra gelen her durma
+    komut breakpoint'inin eseri; `i` 1..4 onların DÖRT ayrı çağrı olduğunu
+    gösteriyor."""
+    a = start(exe, work, PROG_LOOP, [{"line": 2}])
+    try:
+        a.wait(is_event("stopped"), "satır 2'de `stopped`")
+        frames, vars_ = locals_of(a)
+        ip = frames[0].get("instructionPointerReference")
+        if not ip or vars_.get("i") != "0":
+            raise AssertionError("ilk durma: ip=%r i=%r" % (ip, vars_.get("i")))
+        a.call("setBreakpoints", {"source": {"path": os.path.join(work, "prog.tpr")},
+                                  "breakpoints": []})
+        r = a.call("setInstructionBreakpoints", {"breakpoints": [
+            {"instructionReference": ip}]})
+        got = r["body"]["breakpoints"]
+        if len(got) != 1 or not got[0].get("verified"):
+            raise AssertionError("setInstructionBreakpoints doğrulanmadı: %s" % got)
+        a.call("continue", {"threadId": 1})
+        seen = []
+        while True:
+            m = a.wait(lambda m: m.get("type") == "event" and
+                       m.get("event") in ("stopped", "terminated"), "stopped/terminated")
+            if m["event"] == "terminated":
+                break
+            fr, vs = locals_of(a)
+            if fr[0].get("instructionPointerReference") != ip:
+                raise AssertionError("başka adreste durdu: %s (beklenen %s)" %
+                                     (fr[0].get("instructionPointerReference"), ip))
+            seen.append(vs.get("i"))
+            if len(seen) > 8:
+                raise AssertionError("komut breakpoint'i durmuyor: %s" % seen)
+            a.call("continue", {"threadId": 1})
+        if seen != ["1", "2", "3", "4"]:
+            raise AssertionError("komut breakpoint'inde i=%s (beklenen 1..4)" % seen)
+        return "komut breakpoint'i: %s adresinde 4 durma, i=1..4" % ip
+    finally:
+        a.close()
+
+
 def scenario_no_gdb_hint(exe, work):
     """gdb PATH'te yoksa `launch` NET bir kurulum ipucuyla düşmeli (K222).
 
@@ -446,7 +538,8 @@ def main():
         print("SKIP dap denetimi: gdb yok (bagdastirici gdb MI3 kopru)")
         return 0
     for fn in (scenario_breakpoint, scenario_conditional, scenario_logpoint,
-               scenario_values, scenario_async_threads):
+               scenario_values, scenario_async_threads, scenario_data,
+               scenario_instruction):
         work = tempfile.mkdtemp(prefix="tulpar_dap_")
         try:
             print("  gecti  " + fn(exe, work))
@@ -465,7 +558,8 @@ def main():
     if failed:
         print("dap denetimi DUSTU")
         return 1
-    print("dap denetimi temiz (breakpoint + kosullu + logpoint + async coroutine'ler; stopped/exited/terminated olaylari)")
+    print("dap denetimi temiz (breakpoint + kosullu + logpoint + degerler + async coroutine'ler + "
+          "veri + komut breakpoint'i; stopped/exited/terminated olaylari)")
     return 0
 
 

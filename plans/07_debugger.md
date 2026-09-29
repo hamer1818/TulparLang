@@ -11,7 +11,13 @@ hit-count/logpoint/data+instruction breakpoint. Bkz. STATUS §
 — yani breakpoint'te duraklama, logpoint ve oturum kapanışı istemcide hiç
 çalışmadı. Düzeltildi; `tests/dap_audit.py` breakpoint, koşullu breakpoint,
 logpoint ve exited/terminated olaylarını ölçüyor. Data / instruction
-breakpoint hâlâ ölçülmedi.
+breakpoint 2026-09-28'den beri ölçülüyor (K151): global'e yazma
+izleyicisi dört değişimde `stopped(reason="data breakpoint")` veriyor —
+o güne dek `reason` ham MI dizgisi `watchpoint-trigger` gidiyordu — ve
+komut breakpoint'i, stackTrace'e eklenen `instructionPointerReference`
+adresiyle duruyor; o alan olmadan istemcinin elinde adres yoktu (ayrıştırma
+görünümü `supportsDisassembleRequest=false`). Okuma/okuma-yazma izleyicisi
+ölçülmedi.
 **Tahmin:** 5-7 PR (Parça A için 7 PR açıldı, kapandı; Parça B için
 3-4 PR daha)
 **Risk:** Yüksek — yeni codegen path (DWARF emit) + yeni TCP protokol
