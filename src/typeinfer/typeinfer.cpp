@@ -132,6 +132,31 @@ static std::string enum_name_of(TypeInferContext *ctx, const ASTNode *expr) {
   return "";
 }
 
+// ---- K061 (2026-09-27): struct tipi artik "bilinmeyen" DEGIL ---------------
+// TYPE_CUSTOM her `is_unknown`da muaf tutuluyordu ("alan tipleri izlenmiyor"
+// — artik izleniyor). Sonuc: `int a = p;` (p struct), `f(p)` (f int alir),
+// `Nokta q = 5;` typecheck'ten geciyor, --strict kosumu ISARETCI DEGERINI
+// basiyordu. Kural (dar, yanlis pozitif vermesin diye):
+//   * struct <-> skaler / dizgi / dizi: uyusmazlik;
+//   * struct <-> json / bilinmeyen: serbest (json her degeri tasir; nesne
+//     literali struct'a yazilir, kutulu eleman struct'a acilir);
+//   * struct <-> struct: iki tarafin ADI biliniyor ve farkliysa uyusmazlik.
+static std::string custom_name_of(TypeInferContext *ctx, const ASTNode *expr) {
+  if (const auto *id = as_node<Identifier>(expr)) {
+    auto it = ctx->symbols.find(id->name);
+    if (it != ctx->symbols.end() && it->second.type == TYPE_CUSTOM &&
+        it->second.custom_type_name)
+      return *it->second.custom_type_name;
+    return "";
+  }
+  if (const auto *call = as_node<FunctionCall>(expr)) {
+    if (call->callee || call->receiver) return "";
+    auto it = ctx->fn_return_custom.find(call->name);
+    return it == ctx->fn_return_custom.end() ? "" : it->second;
+  }
+  return "";
+}
+
 // true: `want` enum'lu bir yuvaya (tip `got`, enum adi `got_enum`) yazilamaz.
 static bool enum_mismatch(const std::string &want, DataType got, const std::string &got_enum) {
   if (want.empty()) return false;
@@ -157,6 +182,57 @@ static void set_symbol_enum(TypeInferContext *ctx, const std::string &name,
                             const std::string &en) {
   if (en.empty()) ctx->enum_symbols.erase(name);
   else ctx->enum_symbols[name] = en;
+}
+
+static void set_symbol_custom(TypeInferContext *ctx, const std::string &name,
+                              const std::string &cname) {
+  auto it = ctx->symbols.find(name);
+  if (it == ctx->symbols.end()) return;
+  if (cname.empty()) it->second.custom_type_name.reset();
+  else it->second.custom_type_name = cname;
+}
+
+// TYPE_CUSTOM ancak ADI bilinen ve KAYITLI bir struct ise "somut" sayilir.
+// Kayitsiz ad (`string s = "x"` — `string` anahtar kelime degil, ozel tip adi
+// olarak ayristiriliyor ve kodgen onu tipsiz degisken gibi derliyor; korpusta
+// scene3d/strings testi boyle yaziyor) ya da adi cikarilamayan ifade
+// BILINMEYEN kalir — yoksa yanlis pozitif.
+static bool known_struct(TypeInferContext *ctx, DataType t, const std::string &name) {
+  return t == TYPE_CUSTOM && !name.empty() && ctx->struct_types.count(name);
+}
+
+static bool custom_mismatch(TypeInferContext *ctx, DataType want, const std::string &want_name,
+                            DataType got, const std::string &got_name) {
+  const bool ws = known_struct(ctx, want, want_name);
+  const bool gs = known_struct(ctx, got, got_name);
+  if (!ws && !gs) return false;
+  auto dynamic = [&](DataType t, bool is_known_struct) {
+    return (t == TYPE_CUSTOM && !is_known_struct) || t == TYPE_JSON || t == TYPE_UNKNOWN ||
+           t == TYPE_UNSPECIFIED || t == TYPE_VOID;
+  };
+  if (ws && gs) return want_name != got_name;
+  return !dynamic(want, ws) && !dynamic(got, gs);
+}
+
+static std::string type_label(DataType t, const std::string &cname);
+
+// Fonksiyonun donus / parametre struct adlarini kaydet (K061).
+static void register_fn_custom(TypeInferContext *ctx, const std::string &name,
+                               const FunctionDecl *func) {
+  if (func->return_type == TYPE_CUSTOM && func->return_custom_type)
+    ctx->fn_return_custom[name] = *func->return_custom_type;
+  std::vector<std::string> ps;
+  ps.reserve(func->parameters.size());
+  bool any = false;
+  for (const auto &p : func->parameters) {
+    if (p.type == TYPE_CUSTOM && p.custom_type) {
+      ps.push_back(*p.custom_type);
+      any = true;
+    } else {
+      ps.push_back("");
+    }
+  }
+  if (any) ctx->fn_param_custom[name] = std::move(ps);
 }
 
 // FONKSİYON REFERANSI: bir üst düzey fonksiyonun adı DEĞER olarak
@@ -589,7 +665,7 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     // for (e.g., `print(add(1))` — print has no signature, but `add(1)`
     // inside it still needs its arg-count checked).
     std::vector<DataType> arg_types;
-    std::vector<const ASTNode *> arg_nodes;   // K068 future argumani + K027 enum adi
+    std::vector<const ASTNode *> arg_nodes;   // K068 future argumani + K027 enum adi + K061 struct adi
     arg_types.reserve(call->arguments.size() + 1);
     for (const auto &arg : call->arguments) {
       arg_types.push_back(infer_expr(ctx, arg.get()));
@@ -758,21 +834,39 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
             }
           }
 
+          // K061: struct parametre / arguman (bkz. custom_mismatch).
+          {
+            std::string pname, aname;
+            auto pit = ctx->fn_param_custom.find(effective_name);
+            if (pit != ctx->fn_param_custom.end() && i < (int)pit->second.size())
+              pname = pit->second[i];
+            if (i < (int)arg_nodes.size()) aname = custom_name_of(ctx, arg_nodes[i]);
+            if (custom_mismatch(ctx, param_type, pname, arg_type, aname)) {
+              report_error(ctx, "Argument %d of '%s': expected %s, got %s at line %d", i + 1,
+                           call->name.c_str(), type_label(param_type, pname).c_str(),
+                           type_label(arg_type, aname).c_str(), call->loc.line);
+              continue;
+            }
+          }
           // Polymorphic position with concrete arg → use category check
-          // instead of the wildcard-skip default.
-          if (param_type == TYPE_UNKNOWN && i == 0 && !is_unknown(arg_type)) {
+          // instead of the wildcard-skip default. Struct da "somut" (K061):
+          // `abs(p)` / `len(p)` anlamsiz.
+          if (param_type == TYPE_UNKNOWN && i == 0 &&
+              (!is_unknown(arg_type) ||
+               (i < (int)arg_nodes.size() &&
+                known_struct(ctx, arg_type, custom_name_of(ctx, arg_nodes[i]))))) {
+            const std::string alabel = type_label(
+                arg_type, i < (int)arg_nodes.size() ? custom_name_of(ctx, arg_nodes[i]) : "");
             if (poly_collection && !is_collection(arg_type)) {
               report_error(ctx,
                            "Argument %d of '%s': expected string, array or json, got %s at line %d",
-                           i + 1, call->name.c_str(),
-                           datatype_to_string(arg_type), call->loc.line);
+                           i + 1, call->name.c_str(), alabel.c_str(), call->loc.line);
               continue;
             }
             if (poly_numeric && !is_numeric(arg_type)) {
               report_error(ctx,
                            "Argument %d of '%s': expected int or float, got %s at line %d",
-                           i + 1, call->name.c_str(),
-                           datatype_to_string(arg_type), call->loc.line);
+                           i + 1, call->name.c_str(), alabel.c_str(), call->loc.line);
               continue;
             }
           }
@@ -902,11 +996,26 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     // tani sayaci 2 diyordu).
     DataType init_type = TYPE_UNKNOWN;
     if (decl->initializer) init_type = infer_expr(ctx, decl->initializer.get());
+    // Struct adi (K061): acik `Nokta p` -> bildirilen ad; `var p = mk()` ->
+    // baslaticinin adi.
+    std::string declared_cname =
+        (decl->data_type == TYPE_CUSTOM && decl->custom_type) ? *decl->custom_type : "";
+    const std::string init_cname =
+        decl->initializer ? custom_name_of(ctx, decl->initializer.get()) : std::string();
     if ((declared_type == TYPE_VOID || declared_type == TYPE_UNKNOWN) &&
         decl->initializer) {
       declared_type = init_type;
+      if (declared_type == TYPE_CUSTOM) declared_cname = init_cname;
     }
     if (decl->initializer) {
+      if (custom_mismatch(ctx, declared_type, declared_cname, init_type, init_cname)) {
+        report_error(ctx, "Type mismatch in declaration of '%s': expected %s, got %s at line %d",
+                     decl->name.c_str(), type_label(declared_type, declared_cname).c_str(),
+                     type_label(init_type, init_cname).c_str(), decl->loc.line);
+        typeinfer_add_symbol(ctx, decl->name.c_str(), declared_type);
+        if (declared_type == TYPE_CUSTOM) set_symbol_custom(ctx, decl->name, declared_cname);
+        return;
+      }
       // Skip the check when either side is unknown: TYPE_VOID often means
       // "expression returns from a built-in we haven't catalogued";
       // TYPE_CUSTOM means a user-declared struct whose field set typeinfer
@@ -963,6 +1072,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                               decl->initializer
                         ? enum_name_of(ctx, decl->initializer.get())
                         : "");
+    if (declared_type == TYPE_CUSTOM) set_symbol_custom(ctx, decl->name, declared_cname);
     return;
   }
 
@@ -1036,8 +1146,13 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
         default: break;
         }
         DataType got = infer_expr(ctx, assign->value.get());
-        if (want != TYPE_UNKNOWN && got != TYPE_UNKNOWN &&
-            got != TYPE_CUSTOM && got != TYPE_UNSPECIFIED &&
+        // Bilinen struct (TYPE_CUSTOM) artik muaf degil (K061): `int[]`
+        // elemanina struct yazmak anlamsiz. Kayitsiz ozel tip adi muaf kalir.
+        const bool got_unknown_custom =
+            got == TYPE_CUSTOM &&
+            !known_struct(ctx, got, custom_name_of(ctx, assign->value.get()));
+        if (want != TYPE_UNKNOWN && got != TYPE_UNKNOWN && !got_unknown_custom &&
+            got != TYPE_UNSPECIFIED &&
             !store_coercible(want, got) && !types_compatible(want, got)) {
           report_error(ctx,
                        "Element type mismatch: array holds %s, assigned %s at line %d",
@@ -1110,6 +1225,20 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                        enum_label(expr_type, ee).c_str(), assign->loc.line);
           return;
         }
+      }
+      // K061: struct hedef/kaynak (bkz. custom_mismatch).
+      std::string var_cname;
+      {
+        auto sit = ctx->symbols.find(assign->name);
+        if (sit != ctx->symbols.end() && sit->second.custom_type_name)
+          var_cname = *sit->second.custom_type_name;
+      }
+      const std::string expr_cname = custom_name_of(ctx, assign->value.get());
+      if (custom_mismatch(ctx, var_type, var_cname, expr_type, expr_cname)) {
+        report_error(ctx, "Type mismatch in assignment to '%s': expected %s, got %s at line %d",
+                     assign->name.c_str(), type_label(var_type, var_cname).c_str(),
+                     type_label(expr_type, expr_cname).c_str(), assign->loc.line);
+        return;
       }
     }
     if (!is_unknown(var_type) && !is_unknown(expr_type) &&
@@ -1266,6 +1395,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
 
     if (func->is_async) ctx->async_fns[func->name] = func->return_type;   // K068
     register_fn_enum(ctx, func->name, func);
+    register_fn_custom(ctx, func->name, func);
 
     const DataType prev_return = ctx->current_return_type;
     const std::string prev_func = ctx->current_function_name;
@@ -1280,6 +1410,8 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       typeinfer_add_symbol(ctx, param.name.c_str(), param.type);
       ctx->future_symbols.erase(param.name);
       set_symbol_enum(ctx, param.name, param.enum_type ? *param.enum_type : "");
+      if (param.type == TYPE_CUSTOM && param.custom_type)
+        set_symbol_custom(ctx, param.name, *param.custom_type);
     }
     infer_stmt(ctx, func->body.get());
 
@@ -1346,6 +1478,11 @@ static void report_future_misuse(TypeInferContext *ctx, const char *where, int l
 
 static std::string enum_label(DataType t, const std::string &e) {
   if (!e.empty()) return "enum " + e;
+  return datatype_to_string(t);
+}
+
+static std::string type_label(DataType t, const std::string &cname) {
+  if (t == TYPE_CUSTOM && !cname.empty()) return cname;
   return datatype_to_string(t);
 }
 }  // namespace
@@ -2499,6 +2636,7 @@ static void register_module_exports(TypeInferContext *ctx,
           static_cast<int>(param_types.size()));
       if (func->is_async) ctx->async_fns[name] = func->return_type;   // K068
       register_fn_enum(ctx, name, func);   // K027
+      register_fn_custom(ctx, name, func);
       continue;
     }
     if (const auto *ed = as_node<EnumDecl>(stmt.get())) {   // K027 (K028 modul enum'lari)
@@ -2577,6 +2715,7 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       if (func->is_async) ctx->async_fns[func->name] = func->return_type;   // K068
       ctx->local_fn_line.emplace(func->name, func->loc.line);
       register_fn_enum(ctx, func->name, func);
+      register_fn_custom(ctx, func->name, func);
     }
     // K027: enum uyeleri (match tamligi).
     if (const auto *ed = as_node<EnumDecl>(stmt.get())) {

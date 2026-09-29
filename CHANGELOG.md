@@ -844,6 +844,23 @@ düzey, aynı dosya; nominal değil. Bkz. `plans/08_oyun_dili_p0.md`.
   gerçekten okunuyor — eski ikiliyle bu denetim kırmızı), `TULPAR_CC=clang++`
   ile geçmeli. Üç platformda koşuyor.
 
+### Düzeltildi — typeinfer struct tipini "bilinmeyen" sayıyordu
+
+- `TYPE_CUSTOM` her `is_unknown` denetiminde muaftı ("struct alan tipleri
+  izlenmiyor" — artık izleniyor). `int a = p;` (p struct), `f(p)` (f `int`
+  alır), `abs(p)`, `Nokta q = 5;`, `Nokta w = renk;` hepsi typecheck'ten
+  "ok" ile geçiyordu; `--strict` koşumu `int a = p` için işaretçi değerini
+  basıyordu. Artık: struct ↔ skaler/dizgi/dizi uyuşmazlık, iki farklı
+  struct (adları biliniyorsa) uyuşmazlık; struct ↔ json/bilinmeyen serbest
+  (nesne literali ve kutulu eleman struct'a açılır). Tanı struct adını
+  söylüyor ("expected int, got Nokta").
+- Yalnız **kayıtlı** struct somut sayılıyor: kayıtsız özel tip adı
+  (`string s = ...`, korpusta var) bilinmeyen kalıyor.
+- Korpus tanı tabanı (`typecheck_corpus_scan.py --check`): 9 tanı,
+  **değişmedi**; tulpar-engine/tulpar korpusu (19 dosya): 1 → 1.
+- Nöbetçi: `tests/typeinfer/fail/22_struct_scalar_mismatch.tpr` (7 EXPECT;
+  eski derleyici "ok"), `pass/16_struct_flows_ok.tpr`.
+
 ### Doğruluk — üç sessiz hata sınıfı kapandı
 
 - **Yığın sızıntısı (R11).** `AST_ARRAY_LITERAL` ve dört kutulu-ABI builtin

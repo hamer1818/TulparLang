@@ -1,0 +1,26 @@
+// 22_struct_scalar_mismatch'in pozitif ikizi (K061): struct'in MESRU
+// akislari tani vermemeli.
+//   * ayni struct arasi (yerel, parametre, donus, `var`)
+//   * struct -> json ve json/nesne literali -> struct (json her degeri tasir;
+//     kutulu eleman struct'a acilir)
+// (Kayitsiz ozel tip adi — `string s = ...`, import'lu dosyada "Unknown
+// type" bastirilir — bilinmeyen kalir; korpus taramasi onu kapsiyor: scene3d
+// ve strings testi boyle yaziyor ve taban degismedi.)
+struct Nokta { float x; float y; }
+func mk(float a): Nokta { return { x: a, y: a }; }
+func uzunluk(Nokta n): float { return n.x + n.y; }
+func genel(json o): int { return 1; }
+
+Nokta p = mk(1.5);
+Nokta q = p;
+var v = mk(2.0);
+Nokta z = v;
+q = mk(3.0);
+json j = p;
+Nokta r = { x: 0.5, y: 0.5 };
+var kutulu = [];
+push(kutulu, p);
+Nokta e = kutulu[0];
+print(uzunluk(p) + uzunluk(z) + uzunluk(r) + uzunluk(e));
+print(genel(p));
+print(p.genel());

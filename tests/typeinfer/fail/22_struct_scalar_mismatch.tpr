@@ -1,0 +1,32 @@
+// Beklenen: struct <-> skaler ve farkli struct'lar arasi akis reddedilmeli
+// (plans/03 + plans/04 PR2, K061, 2026-09-27).
+//
+// TYPE_CUSTOM her `is_unknown` denetiminde muaf tutuluyordu ("struct alan
+// tipleri izlenmiyor" — artik izleniyor). Olculen: bu dosya `tulpar
+// typecheck`ten "ok" ile geciyordu ve --strict kosumu `int a = p;` icin
+// ISARETCI DEGERINI (144840416), `abs(p)` icin 0 basiyordu.
+
+// EXPECT: [typecheck]
+// EXPECT: Type mismatch in declaration of 'a': expected int, got Nokta
+// EXPECT: Argument 1 of 'f': expected int, got Nokta
+// EXPECT: Argument 1 of 'abs': expected int or float, got Nokta
+// EXPECT: Type mismatch in declaration of 'q': expected Nokta, got int
+// EXPECT: Type mismatch in declaration of 'w': expected Nokta, got Renk
+// EXPECT: Argument 1 of 'g': expected Nokta, got Renk
+// EXPECT: Type mismatch in assignment to 'b': expected int, got Nokta
+
+struct Nokta { float x; float y; }
+struct Renk { int r; int g; }
+func f(int a): int { return a + 1; }
+func g(Nokta n): float { return n.x; }
+
+Nokta p = { x: 1.0, y: 2.0 };
+Renk k = { r: 1, g: 2 };
+int a = p;
+print(f(p));
+print(abs(p));
+Nokta q = 5;
+Nokta w = k;
+print(g(k));
+int b = 0;
+b = p;
