@@ -31,6 +31,34 @@ tag still works;
   Pozitif kontrol: runtime listesi boşaltılınca senaryo kırmızı.
 - Görünmeyen tek sınıf: yalnız async HTTP promise'ini bekleyen görev zinciri.
 
+### Performans — `var q = mk(..)` kaçmıyorsa kutusuz: struct `var`ı için kaçış analizi
+
+- Kutusuz struct döndüren çağrı `var`a bağlanınca (`var q = mk(i)`) değer
+  **her bildirimde** string anahtarlı bir nesneye kutulanıyordu (nesne
+  ayırması + alan başına anahtarlı yazma; her `q.x` bir ad araması). Aynı
+  döngü `P q = mk(i)` yazılınca yığındaki yerele iniyordu. Ölçüldü (Ryzen 7
+  9800X3D, 2026-09-29): 5M tur `var q = mk(i); s += q.x + q.y` **463 ms →
+  ~0 ms** (tipli yazımla aynı IR; döngü katlanıyor).
+- K064: fonksiyon gövdesinde `q`nun **her geçişi `q.<alan>` okumasıysa**
+  `q` tipli yerel olur. Kutulu nesne referans, tipli yerel değer
+  anlambilimli — yalnız okumada ayırt edilemezler. Aşağıdakilerden biri
+  varsa `q` **kutulu kalır** (davranış birebir eskisi gibi): çıplak
+  kullanım (argüman, atama sağ tarafı, `return`, `print`/`toString`,
+  `match`, metot alıcısı, literal içinde), alan yazması (`q.x = ..`,
+  `+=`, `++` — kutulu nesnenin alanı dinamik), yeniden atama, aynı adla
+  ikinci bildirim/parametre/for-in/catch, kapanış içinde herhangi bir
+  geçiş. Üst düzey (global) `var` ve `async` dönüşü kapsam dışı.
+  `TULPAR_NO_STRUCT_ESCAPE=1` analizi kapatır.
+- Nöbetçi: `tests/struct_kacis.test.tpr` (9 test: kaçmayan okuma, lambda gövdesindeki var + kaçan
+  her biçimin kutulu anlambilimi — takma ad, dinamik alan yazması, tipsiz
+  parametrenin değiştirmesi, `toString` "<object>", kapanış, yeniden
+  atama/gölgeleme, `return`), `tests/struct_kacis.sh` 4/4 (`build.sh
+  suites`e bağlı; ön-optimizasyon IR'ında kaçmayan fonksiyonda
+  `vm_allocate_object` yok, kaçanda var; analiz kapalıyken kaçmayanda da
+  var — pozitif kontrol; eski derleyiciyle 3/4).
+- `benchmarks/fair` + struct kıyaslarının 14/14 optimizasyon sonrası IR'ı
+  birebir aynı (hiçbiri `var` struct'ı kullanmıyor).
+
 ### Düzeltildi — `call()` struct alan/döndüren fonksiyonda çöp, `null` ya da segfault
 
 - Kutusuz struct döndüren ya da struct parametre alan fonksiyonun kutulu

@@ -10810,6 +10810,38 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     //   - struct-returning  -> alloca + pin as pending_struct_result_ptr,
     //     function call        let AST_FUNCTION_CALL write its return
     //                          straight into the alloca (Plan 04 PR5).
+    //
+    // K064 (2026-09-29): `var q = mk(..)` — mk kutusuz struct donduruyor ve
+    // `q` fonksiyonda KACMIYOR (yalniz `q.<alan>` okunuyor; bkz.
+    // tulpar_struct_var_escapes) — `S q = mk(..)` gibi tipli yerel olur.
+    // Eskiden genel baglam sayilip her bildirimde string anahtarli nesneye
+    // kutulaniyordu (olculdu: 5M tur 444 ms, tipli yazimda ~0). Kacan `q`
+    // (takma ad, alan yazmasi, print, arguman...) kutulu kalir: referans
+    // anlambilimi ve cikti bicimi degismez. Ust duzeyde (global) yok.
+    // TULPAR_NO_STRUCT_ESCAPE=1 kapatir (olcum / pozitif kontrol).
+    if ((node->data_type == TYPE_UNKNOWN || node->data_type == TYPE_VOID) && node->name &&
+        strncmp(node->name, "__", 2) != 0 && node->right &&
+        node->right->type == AST_FUNCTION_CALL && node->right->name &&
+        !node->return_custom_type && !at_top_level_scope(backend) &&
+        backend->current_function_node &&
+        backend->current_function_node->type != AST_PROGRAM) {
+      if (node->right->receiver) resolve_call_receiver(backend, node->right);
+      const char *rs = nullptr;
+      for (int i = 0; i < backend->function_count; i++) {
+        if (backend->functions[i].name && strcmp(backend->functions[i].name, node->right->name) == 0) {
+          rs = backend->functions[i].is_async ? nullptr : backend->functions[i].return_struct_name;
+          break;
+        }
+      }
+      StructTypeEntry *rst = rs ? find_struct_type(backend, rs) : nullptr;
+      const char *off = getenv("TULPAR_NO_STRUCT_ESCAPE");
+      if (rst && struct_is_trivially_unboxable(rst) && !(off && *off && *off != '0') &&
+          !tulpar_struct_var_escapes(backend->current_function_node, node,
+                                     rst->field_names, rst->field_count)) {
+        node->data_type = TYPE_CUSTOM;
+        node->return_custom_type = my_strdup(rst->name);
+      }
+    }
     bool init_is_object_literal =
         node->right && node->right->type == AST_OBJECT_LITERAL;
     bool init_is_struct_call = false;

@@ -973,3 +973,123 @@ extern "C" int tulpar_body_indexes_by(ASTNode_C *body, const char *array_name,
   walk_all(body, visit_indexed_by, &c);
   return c.found ? 1 : 0;
 }
+
+// ---- K064: struct DEGERI tutan `var`in kacis analizi (2026-09-29) ----------
+//
+// `var q = mk(..)` (mk kutusuz bir struct dondurur) GENEL baglam sayiliyor ve
+// deger string anahtarli bir nesneye KUTULANIYORDU: her bildirimde bir nesne
+// ayirmasi + alan basina bir strcmp'li yazma, her `q.x` bir ad aramasi. Ayni
+// dongu `P q = mk(..)` ile yazilinca yigindaki alloca'ya iniyor. Olculdu
+// (2026-09-29, Ryzen 7 9800X3D): 5M tur `var q = mk(i); s += q.x + q.y`
+// 444 ms, `P q = ...` ~0 ms (katlaniyor).
+//
+// Kutulu nesne REFERANS anlambilimli, tipli yerel DEGER (kopya) — `q`
+// yalniz ALAN OKUMASIYLA kullaniliyorsa ikisi ayirt edilemez. Kural (dar,
+// bilerek): fonksiyon govdesinde `q`nun HER gecisi `q.<alan>` okumasi olmali
+// (alan struct'ta var). Asagidakilerin HERHANGI biri "kacar" -> kutulu kalir:
+//   * `q`nun ciplak kullanimi (arguman, atama sag tarafi, return, print,
+//     toJson, match, metot alicisi, dizi/nesne literali...) — takma ad olusur
+//     ya da cikti bicimi degisir (print(q) kutuluda "<object>");
+//   * `q.x = ..` / `q.x += ..` / `q.x++` — kutulu nesnenin alani dinamik
+//     (int alana 1.5 yazilabilir), tipli alan donusturur;
+//   * `q = ..` yeniden atama, ayni adla ikinci bildirim / parametre / for-in
+//     degiskeni / catch baglamasi (golgeleme);
+//   * bir kapanisin (lambda) icinde herhangi bir gecis.
+// 1: kacar (kutulu kal), 0: kacmaz (tipli yerel olabilir).
+namespace {
+struct EscCtx {
+  const char *name;
+  ASTNode_C *decl;
+  const char *const *fields;
+  int nfields;
+  bool esc;
+};
+
+static bool esc_is_base(ASTNode_C *acc, const char *name) {
+  if (!acc || acc->type != AST_ARRAY_ACCESS) return false;
+  if (acc->left) return acc->left->type == AST_IDENTIFIER && acc->left->name &&
+                        strcmp(acc->left->name, name) == 0;
+  return acc->name && strcmp(acc->name, name) == 0;
+}
+
+static bool esc_field_ok(ASTNode_C *acc, const EscCtx &c) {
+  if (!acc->index || acc->index->type != AST_STRING_LITERAL ||
+      !acc->index->value.string_value)
+    return false;
+  for (int i = 0; i < c.nfields; i++)
+    if (c.fields[i] && strcmp(c.fields[i], acc->index->value.string_value) == 0) return true;
+  return false;
+}
+
+static void esc_children(ASTNode_C *n, EscCtx &c, int in_lambda);
+
+static void esc_walk(ASTNode_C *n, EscCtx &c, int in_lambda) {
+  if (!n || c.esc) return;
+  const char *nm = c.name;
+  switch (n->type) {
+  case AST_ARRAY_ACCESS:
+    if (esc_is_base(n, nm)) {
+      // `q.<alan>` OKUMASI: izinli (lambda icinde degilse). Hedef konumu
+      // (yazma) atama dugumlerinde ayrica yakalaniyor.
+      if (in_lambda || !esc_field_ok(n, c)) { c.esc = true; return; }
+      return;
+    }
+    break;
+  case AST_ASSIGNMENT:
+  case AST_COMPOUND_ASSIGN:
+  case AST_INCREMENT:
+  case AST_DECREMENT:
+    if ((n->name && strcmp(n->name, nm) == 0) || esc_is_base(n->left, nm) ||
+        (n->left && n->left->type == AST_IDENTIFIER && n->left->name &&
+         strcmp(n->left->name, nm) == 0)) {
+      c.esc = true;
+      return;
+    }
+    break;
+  case AST_VARIABLE_DECL:
+    if (n != c.decl && n->name && strcmp(n->name, nm) == 0) { c.esc = true; return; }
+    break;
+  case AST_LAMBDA:
+    in_lambda++;
+    break;
+  default:
+    if (n->name && strcmp(n->name, nm) == 0) {  // IDENTIFIER, cagri adi, for-in, catch...
+      c.esc = true;
+      return;
+    }
+    break;
+  }
+  esc_children(n, c, in_lambda);
+}
+
+static void esc_children(ASTNode_C *n, EscCtx &c, int in_lambda) {
+  ASTNode_C *singles[] = {n->left,       n->right,        n->body,
+                          n->receiver,   n->callee,       n->condition,
+                          n->then_branch, n->else_branch, n->init,
+                          n->increment,  n->iterable,     n->return_value,
+                          n->index,      n->try_block,    n->catch_block,
+                          n->finally_block, n->throw_expr};
+  for (ASTNode_C *ch : singles) esc_walk(ch, c, in_lambda);
+  struct { ASTNode_C **arr; int count; } lists[] = {
+      {n->field_types_nodes, n->field_count},
+      {n->field_defaults, n->field_count},
+      {n->parameters, n->param_count},
+      {n->statements, n->statement_count},
+      {n->arguments, n->argument_count},
+      {n->elements, n->element_count},
+      {n->object_values, n->object_count}};
+  for (auto &l : lists)
+    if (l.arr)
+      for (int i = 0; i < l.count; i++) esc_walk(l.arr[i], c, in_lambda);
+}
+}  // namespace
+
+extern "C" int tulpar_struct_var_escapes(ASTNode_C *fn, ASTNode_C *decl,
+                              const char *const *fields, int nfields) {
+  if (!fn || !decl || !decl->name) return 1;
+  EscCtx c{decl->name, decl, fields, nfields, false};
+  // Kokun kendisi (fonksiyon ya da bildirimin ICINDE bulundugu lambda)
+  // "kapanis icinde" sayilmaz — yalniz govdesindeki ic ice lambdalar.
+  esc_children(fn, c, 0);
+  return c.esc ? 1 : 0;
+}
