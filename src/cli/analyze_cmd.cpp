@@ -13,6 +13,12 @@
 // ayirabilir sayilir). Calisma zamaninda olculmedi; dogrulugu
 // `@no_alloc`un kendi fiksturlerine (tests/typeinfer/*no_alloc*) dayaniyor,
 // raporla denetimin AYNI sonucu verdigini tests/analyze_smoke.sh olcuyor.
+//
+// BILINEN YANLIS POZITIF (kuralin kendisinden, K003 + K041): metot cagrisi
+// `p.f()` bugun "beyaz listede olmayan yerlesik 'f'" diye AYIRIYOR sayiliyor
+// (olculdu 2026-09-29: temiz `P.toplam`i cagiran `kullan` -> ALLOCATES).
+// Rapor ayni kurali kullandigi icin ayni seyi soyluyor; kural duzelince
+// rapor da kendiliginden duzelir.
 
 #include "analyze_cmd.hpp"
 

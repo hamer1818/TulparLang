@@ -347,6 +347,9 @@ Bu turda beş kırıcı değişiklik indi. Projenin SemVer politikası gereği
   kullanım/ayrıştırma hatası.
 - Kapsam: "ayırmasız" kurala göre kanıtlı, "AYIRIYOR" temkinli olabilir
   (tanınmayan yerleşik ayırabilir sayılır); çalışma zamanında ölçülmedi.
+  Bilinen yanlış pozitif kuralın kendisinden: metot çağrısı `p.f()`
+  "beyaz listede olmayan yerleşik" sayılıyor (K003 + K041; ölçüldü: temiz
+  `P.toplam`ı çağıran fonksiyon AYIRIYOR). Kural düzelince rapor da düzelir.
 - `tests/analyze_smoke.sh` (`build.sh suites`, üç CI işi): rapordaki her
   fonksiyona `@no_alloc` konup `tulpar typecheck` koşuluyor — "ayırmasız"
   dediklerinde temiz, "AYIRIYOR" dediklerinde reddediyor. Ayrıca geçişli

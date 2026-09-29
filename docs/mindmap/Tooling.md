@@ -36,7 +36,8 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 `@no_alloc` kuralıyla ayırma raporu (typeinfer `typeinfer_alloc_report`, geçişli, beyaz liste —
 "ayırmasız" kanıtlı, "AYIRIYOR" temkinli olabilir) ve (ii) `TULPAR_PERF_HINTS` hızlı yol ipuçları.
 Kural kopyası yok. Kapı `tests/analyze_smoke.sh`: raporun her satırı `@no_alloc` + `typecheck` ile
-aynı sonucu veriyor mu. Çalışma zamanında ölçülmedi.
+aynı sonucu veriyor mu. Çalışma zamanında ölçülmedi. Bilinen yanlış pozitif (kuraldan): metot
+çağrısı `p.f()` "beyaz listede olmayan yerleşik" sayılıyor (K003 + K041).
 
 ## Type checker — `tulpar typecheck`
 `src/cli/typecheck_cmd.cpp` — ön-geçişteki (`[typecheck]` uyarıları) aynı denetleyici,
