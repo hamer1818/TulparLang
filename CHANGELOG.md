@@ -50,6 +50,67 @@ tag still works;
   `tests/try_yerel.sh` (IR kararı + pozitif kontrol), `tests/main_yerel.sh`
   (üst düzey yol). Bkz. `docs/mindmap/Tuzaklar.md` 7i.
 
+### Performans — geçici dizgiler: sözlük anahtarı ve `toString` birleştirmesi bellek biriktirmiyor (hashmap 439 → 118 MB)
+
+- **Kök neden (ölçüldü):** `benchmarks/fair` hashmap (1M ekleme + 1M arama,
+  anahtar `"k" + toString(i)`) 439 MB tepe bellek (C 65 MB). Dört kaynak:
+  (1) `toString(i)` arenaya bir dizgi kurup birleştirme onu hemen kopyalıyordu
+  — ifade başına iki 64 B'lık ayırma; (2) arama anahtarı erişimden sonra hiç
+  geri alınmıyordu (1M arama = 2 × 64 MB); (3) `vm_object_set` anahtarı önce
+  arenaya, kalıcı kapta bir de malloc'a kopyalıyordu ve bunu anahtar ZATEN
+  VARKEN de yapıyordu (arama kopyadan sonra); (4) yazma bariyeri arenadaki
+  her dizgiyi geçici sayıyordu — açık checkpoint yokken bile — ve kalıcı kaba
+  yazılan dizgiyi kopyalıyordu (parse'ta üst düzey `str s = sb_tostring(sb)`
+  29 MB'lık metni ikinci kez).
+- **`S + toString(x)` tek ayırma:** birleştirme dizgi olmayan tarafı zaten
+  toString kuralıyla zorluyordu; zorlama artık ara dizgi ayırmıyor
+  (`aot_value_text`, `aot_to_string` ile aynı fonksiyon) ve codegen
+  `toString(x)` operandını doğrudan birleştirmeye veriyor. Kullanıcı
+  `toString` tanımlamışsa ya da argüman kutusuz struct ise (biçim farklı)
+  devreye girmiyor. `TULPAR_NO_TOSTR_FUSE=1` (derleme anı) kapatır.
+- **Geçici anahtar geri alınıyor:** `m[<saf dizgi ifadesi>]` — literal,
+  değişken, `+ - * / %`, `toString`; kullanıcı çağrısı, dizi erişimi, atama
+  yok — anahtardan önce arena işareti alınıyor, erişimden sonra geri
+  bırakılıyor; yazmada yalnız erişim anahtarı TUTMADIYSA (mevcut anahtar,
+  ya da kalıcı kabın malloc kopyası). `TULPAR_NO_TMPKEY=1` kapatır.
+- **Anahtar kopyası:** önce arama; mevcut anahtarda hiçbir şey ayrılmıyor.
+  Yeni anahtar tek kopya, kabın ömrüne göre yerinde; dizgi nesnesi
+  verildiyse (`m[k] = v`) ve ARC'nin hiç serbest bırakmayacağı bir dizgiyse
+  (arena dizgisi ya da interned literal) kopya hiç yok.
+- **Yerleşmiş arena dizgisi:** arena yalnız checkpoint geri sarmasıyla geri
+  alınıyor (`aot_arena_reset`/`destroy`'un çağıranı yok). Bu thread'de açık
+  checkpoint YOKKEN arenanın canlı kısmında duran dizgi bir daha geri
+  alınamaz; yazma bariyeri onu artık kopyalamıyor. Yalnız dizgi (değişmez,
+  çocuksuz); `arena_drop` ile bırakılmış ölü dizgi ucun üstünde kaldığı için
+  eskisi gibi kopyalanıp "kurtarılıyor".
+- **Ölçüm** (Ryzen 7 9800X3D, `taskset -c 6,7`, taban `d6ad680f` ile
+  dönüşümlü A/B, depo DIŞINDA izole dizinde, 2026-10-01; makine başka
+  derlemelerle paylaşımlı): `hashmap` en iyi **196,8 → 122,2 ms**, 15 tur
+  ortanca 230 → 162 ms, tepe bellek **439 → 118,8 MB**; `parse` 125,6 →
+  124,7 ms, **440 → 412 MB**; `strcat` 24,7 → 17,4 MB. Gerileme denetimi
+  (en iyi 5, taban/yeni ms): `intloop` 136,3/136,7 · `fib` 0,6/0,6 · `sieve`
+  7,9/7,7 · `strcat` 13,3/13,5 · `arrayiter` 1,3/1,3 · `mandelbrot`
+  160,4/160,3 · `matmul` 37,5/37,4 · `nbody` 189,8/189,4 · `qsort`
+  123,7/124,1 · `particles` 53,7/53,0. `callfn` 174 → 213 ms görünüyor ama
+  IR'si BAYT BAYT aynı: runtime'ın `.cold` kodu büyüdüğü için kullanıcı
+  kodu 32 bayt kaydı (main %64: 48 → 16). Kaynağa tek bir yardımcı
+  fonksiyon eklenince taban 195,5, yeni 173,8 ms — hizalama gürültüsü
+  (Tuzaklar 7i ailesi), gerileme değil. `strcat`'in sıcak döngüsü de aynı;
+  20M'de 134,0/134,4 ms.
+- Testler: `tests/gecici_dizgi.test.tpr` (13 senaryo: zorlama metni, iki
+  taraf toString, tek değerlendirme, yinelenen anahtar, checkpoint
+  sonrası/içi anahtar kalıcılığı, geçici json, iç içe okuma/yazma, kalıcı
+  dizide yerleşmiş dizgi, ölü dizginin kurtarılması, thread'in yazdığı
+  anahtar) ve `tests/gecici_dizgi.sh` kapısı (`build.sh suites`): 2,9M ek
+  arama < 16 MB (taban 354 MB), anahtar başına < 192 B (taban 602, yeni
+  122), 30 MB metin farkı < 72 MB (taban 83, yeni 56), IR'de yardımcılar var
+  ve `aot_to_string_ptr` yok, kullanıcı `toString`'i gölgeleniyor; kendi
+  pozitif kontrolü: iki mekanizma kapalı derlenince arama farkı 354 MB.
+  Sabotajla: uç denetimi kaldırılınca "ölü dizgi" testi, checkpoint denetimi
+  kaldırılınca checkpoint içi anahtar testi (paket çöküyor) ve
+  `arena_kalicilik`, tutulan anahtarda da geri bırakılınca ekle/oku testi ve
+  `shared_json_read` kırmızı.
+
 ### Performans — float dizisi: kutusuz double depo + iç içe döngüde kanıtlı erişim (matmul 26× → 1,2× C)
 
 - **Kök neden (ölçüldü, IR + zamanlama):** `float[]` her elemanı 16 baytlık

@@ -1,0 +1,279 @@
+// GECICI DIZGILER — anlambilim fiksturu (2026-10-01).
+//
+// Uc degisiklik, hepsi benchmarks/fair hashmap'in 439 MB tepe bellegini
+// indirmek icin (mekanizma ve bellek esigi: tests/gecici_dizgi.sh):
+//   1. `S + toString(x)` ara dizgi ayirmiyor (codegen birlestirmeye x'i
+//      dogrudan veriyor; zorlama ayni aot_value_text).
+//   2. `m[<saf dizgi ifadesi>]` anahtari arena isaretiyle geri aliniyor —
+//      erisim anahtari TUTMADIYSA.
+//   3. Yazma bariyeri: acik checkpoint YOKKEN arenanin canli kismindaki dizgi
+//      kalici sayiliyor (kopyalanmiyor); kalici json'a yeni anahtar tek kopya
+//      ya da hic kopya (dizgi nesnesi paylasilir); mevcut anahtarda kopya yok.
+//
+// Buradaki her test bir YANLIS sonucun sessizce gecebilecegi yeri sinar:
+// zorlamanin metni, anahtarin geri sarma/coplama sonrasi kaliciligi,
+// yinelenen anahtar, thread'in yazdigi anahtar, olu dizginin kurtarilmasi.
+//
+// KALIP (tests/arena_kalicilik.test.tpr ile ayni): yaz -> geri sar -> COPLA
+// -> oku. Coplamasiz okuma hicbir sey olcmez.
+//
+// Global'ler FONKSIYONLARDAN kullaniliyor: #431'den beri ust duzey degisken
+// main'in yereline terfi ediyor; fonksiyondan erisilen gercek global kalir.
+//
+// Calistir (depo kokunden): ./tulpar tests/gecici_dizgi.test.tpr
+import "test";
+
+func _cople() {
+    int k = 0;
+    while (k < 2000) {
+        str cop = "COPCOPCOPCOPCOP-" + toString(k) + "-COPCOPCOPCOPCOPCOP";
+        json o = {"a": cop, "b": [k, k, k]};
+        k = k + 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 1. toString zorlamasi — metin eski yolla bayt bayt ayni
+// ---------------------------------------------------------------------------
+func run_tostring_birlestirme_metni() {
+    int i = 5;
+    float f = 1.5;
+    bool b = true;
+    var arr = [1, 2];
+    assert_eq_str("n=" + toString(42), "n=42");
+    assert_eq_str(toString(-7) + "!", "-7!");
+    assert_eq_str("f=" + toString(f), "f=1.5");
+    assert_eq_str("g=" + toString(0.1 + 0.2), "g=0.30000000000000004");
+    assert_eq_str("b=" + toString(b), "b=true");
+    assert_eq_str("c=" + toString(1 < 2), "c=true");
+    assert_eq_str("x" + toString(arr), "x<object>");
+    assert_eq_str(toString("abc") + 1, "abc1");
+    assert_eq_str(toString(-9223372036854775807 - 1) + "", "-9223372036854775808");
+}
+
+func run_tostring_iki_taraf() {
+    int i = 5;
+    // Iki taraf da toString: birlestirme, TOPLAMA DEGIL.
+    assert_eq_str(toString(3) + toString(4), "34");
+    assert_eq_str(toString(i) + i, "55");
+    assert_eq_str(i + toString(i), "55");
+    assert_eq_str(toString(i) + 2.5, "52.5");
+    assert_eq_str(1 + toString(2) + 3, "123");
+    assert_eq_int(len("k" + toString(123456)), 7);
+}
+
+// Yan etkili arguman bir kez ve sirayla degerlendirilir.
+int g_sayac = 0;
+func _art(): int { g_sayac = g_sayac + 1; return g_sayac; }
+func run_tostring_sira_ve_tek_degerlendirme() {
+    g_sayac = 0;
+    str s = toString(_art()) + "-" + toString(_art());
+    assert_eq_str(s, "1-2");
+    assert_eq_int(g_sayac, 2);
+}
+
+// ---------------------------------------------------------------------------
+// 2/3. Gecici anahtar: kalici json, yinelenen anahtar, okuma
+// ---------------------------------------------------------------------------
+json g_sozluk = {};
+
+func _doldur(int n, int carpan) {
+    for (int i = 0; i < n; i = i + 1) { g_sozluk["k" + toString(i)] = i * carpan; }
+}
+
+func run_anahtar_ekle_oku() {
+    g_sozluk = {};
+    _doldur(100, 1);
+    assert_eq_int(len(g_sozluk), 100);
+    int s = 0;
+    for (int i = 0; i < 100; i = i + 1) { s = s + g_sozluk["k" + toString(i)]; }
+    assert_eq_int(s, 4950);
+    // olmayan anahtar 0
+    assert_eq_int(g_sozluk["k" + toString(1000)], 0);
+}
+
+func run_yinelenen_anahtar() {
+    g_sozluk = {};
+    _doldur(40, 1);
+    _doldur(40, 3);              // ayni anahtarlar: yalniz deger degisir
+    assert_eq_int(len(g_sozluk), 40);
+    assert_eq_int(g_sozluk["k39"], 117);
+    var ks = keys(g_sozluk);
+    assert_eq_int(len(ks), 40);
+    assert_eq_str(ks[0], "k0");
+    assert_eq_str(ks[39], "k39");
+}
+
+// Acik checkpoint YOKKEN yazilan anahtar arenada paylasiliyor (kopya yok).
+// Sonradan alinan checkpoint'ler onun USTUNDE: geri sarma + coplama anahtari
+// bozmamali.
+func _bos_kare() { _cople(); }
+func run_yerlesmis_anahtar_checkpoint_sonrasi() {
+    g_sozluk = {};
+    _doldur(64, 2);
+    int t = 0;
+    while (t < 3) {
+        int wm = arena_save();
+        _bos_kare();
+        arena_drop(wm);
+        _cople();
+        t = t + 1;
+    }
+    int s = 0;
+    for (int i = 0; i < 64; i = i + 1) { s = s + g_sozluk["k" + toString(i)]; }
+    assert_eq_int(s, 4032);      // 2 * (0+...+63)
+    var ks = keys(g_sozluk);
+    assert_eq_str(ks[63], "k63");
+}
+
+// Checkpoint ICINDE kalici json'a yazilan anahtar kalici kopya almali.
+func _kare_icinde_yaz() {
+    for (int i = 0; i < 50; i = i + 1) { g_sozluk["c" + toString(i)] = i; }
+}
+func run_checkpoint_icinde_anahtar() {
+    g_sozluk = {};
+    int wm = arena_save();
+    _kare_icinde_yaz();
+    arena_drop(wm);
+    _cople();
+    assert_eq_int(len(g_sozluk), 50);
+    int s = 0;
+    for (int i = 0; i < 50; i = i + 1) { s = s + g_sozluk["c" + toString(i)]; }
+    assert_eq_int(s, 1225);
+    var ks = keys(g_sozluk);
+    assert_eq_str(ks[49], "c49");
+}
+
+// Checkpoint icindeki GECICI json: anahtar onunla ayni omurde; kare
+// icinde okunan deger dogru, ara anahtar dizgileri geri birakilsa da.
+int g_kare_toplam = 0;
+func _kare_gecici_json() {
+    json t = {};
+    for (int i = 0; i < 300; i = i + 1) { t["t" + toString(i)] = i; }
+    int s = 0;
+    for (int r = 0; r < 3; r = r + 1) {
+        for (int i = 0; i < 300; i = i + 1) { s = s + t["t" + toString(i)]; }
+    }
+    g_kare_toplam = s;
+}
+func run_gecici_json_kare_icinde() {
+    int wm = arena_save();
+    _kare_gecici_json();
+    arena_drop(wm);
+    _cople();
+    assert_eq_int(g_kare_toplam, 3 * 44850);
+}
+
+// Okuma yolunun geri biraktigi bolgeye yeni ayirma: onceki anahtarlar
+// (yazmada tutulanlar) etkilenmemeli — okuma dongusu yazmalarla ic ice.
+func run_okuma_yazma_ic_ice() {
+    json m = {};
+    int s = 0;
+    for (int i = 0; i < 500; i = i + 1) {
+        m["a" + toString(i)] = i;
+        s = s + m["a" + toString(i / 2)];
+        str ara = "ara" + toString(i);      // geri birakilan bolgeyi doldur
+        m["b" + toString(i)] = ara;
+    }
+    int t = 0;
+    for (int i = 0; i < 500; i = i + 1) { t = t + m["a" + toString(i)]; }
+    assert_eq_int(t, 124750);
+    assert_eq_str(m["b" + toString(499)], "ara499");
+    assert_eq_int(len(m), 1000);
+    assert_eq_int(s, 62250);   // sum(i/2), i=0..499
+}
+
+// Kalici diziye konan dizgi (acik checkpoint yok): yerlesmis, kopya yok;
+// sonraki checkpoint dongusu onu bozmamali.
+var g_dizi = [];
+func _dizi_doldur() {
+    for (int i = 0; i < 40; i = i + 1) { push(g_dizi, "v" + toString(i)); }
+}
+func run_yerlesmis_dizgi_dizide() {
+    g_dizi = [];
+    _dizi_doldur();
+    int wm = arena_save();
+    _cople();
+    arena_drop(wm);
+    _cople();
+    assert_eq_str(g_dizi[0], "v0");
+    assert_eq_str(g_dizi[39], "v39");
+}
+
+// OLU dizgi: checkpoint icinde kurulup arena_drop ile birakilmis, ama
+// uzerine henuz yazilmamis. Eski bariyer onu global'e atarken kopyalayip
+// "kurtariyordu"; yeni kural onu yerlesmis SAYMAMALI (ucun ustunde).
+str g_kurtarilan = "";
+str g_olu_kaynak = "";
+func _olu_kur() { g_olu_kaynak = "olu" + toString(7); }
+func _olu_kurtar(str d) { g_kurtarilan = d; }
+func run_olu_dizgi_kurtarilir() {
+    int wm = arena_save();
+    str d = "olu-dizgi-" + toString(12345);
+    arena_drop(wm);
+    _olu_kurtar(d);
+    _cople();
+    assert_eq_str(g_kurtarilan, "olu-dizgi-12345");
+}
+
+// Thread'in yazdigi anahtar: thread'in arenasinda (thread bitince
+// serbest kalmiyor) ya da kopya — ana thread dogru okumali.
+json g_paylas = {};
+int g_thr_bitti = 0;
+var g_kilit = mutex_create();
+func _thr_yaz(int id) {
+    for (int i = 0; i < 100; i = i + 1) {
+        mutex_lock(g_kilit);
+        g_paylas["t" + toString(id) + "_" + toString(i)] = id * 1000 + i;
+        mutex_unlock(g_kilit);
+    }
+    mutex_lock(g_kilit); g_thr_bitti = g_thr_bitti + 1; mutex_unlock(g_kilit);
+    return 0;
+}
+func run_thread_anahtari() {
+    g_paylas = {};
+    g_thr_bitti = 0;
+    for (int t = 0; t < 4; t = t + 1) { thread_create(_thr_yaz, t); }
+    int tur = 0;
+    while (g_thr_bitti < 4 && tur < 400) { sleep(10); tur = tur + 1; }
+    assert_eq_int(g_thr_bitti, 4);
+    _cople();
+    assert_eq_int(len(g_paylas), 400);
+    int s = 0;
+    for (int t = 0; t < 4; t = t + 1) {
+        for (int i = 0; i < 100; i = i + 1) { s = s + g_paylas["t" + toString(t) + "_" + toString(i)]; }
+    }
+    assert_eq_int(s, 1000 * 100 * 6 + 4 * 4950);
+}
+
+// Anahtar json'a yazildiktan SONRA json'un kendisi baska bir kaba
+// konuyor ve geri sarma/coplama geciyor.
+json g_kap = {};
+func run_ic_ice_kalicilik() {
+    json ic = {};
+    for (int i = 0; i < 20; i = i + 1) { ic["i" + toString(i)] = "d" + toString(i); }
+    g_kap["ic"] = ic;
+    int wm = arena_save();
+    _cople();
+    arena_drop(wm);
+    _cople();
+    json geri = g_kap["ic"];
+    assert_eq_str(geri["i" + toString(19)], "d19");
+    assert_eq_int(len(geri), 20);
+}
+
+print("=== gecici dizgiler: toString zorlamasi, gecici anahtar, yerlesmis dizgi ===");
+test("toString birlestirme metni ayni", "run_tostring_birlestirme_metni");
+test("iki taraf toString: birlestirme", "run_tostring_iki_taraf");
+test("toString argumani bir kez, sirayla", "run_tostring_sira_ve_tek_degerlendirme");
+test("gecici anahtarla ekle/oku", "run_anahtar_ekle_oku");
+test("yinelenen anahtar yalniz degeri degistirir", "run_yinelenen_anahtar");
+test("yerlesmis anahtar checkpoint sonrasi saglam", "run_yerlesmis_anahtar_checkpoint_sonrasi");
+test("checkpoint icinde kalici json anahtari", "run_checkpoint_icinde_anahtar");
+test("checkpoint icinde gecici json", "run_gecici_json_kare_icinde");
+test("okuma/yazma ic ice", "run_okuma_yazma_ic_ice");
+test("yerlesmis dizgi kalici dizide", "run_yerlesmis_dizgi_dizide");
+test("olu dizgi kopyalanarak kurtarilir", "run_olu_dizgi_kurtarilir");
+test("thread'in yazdigi anahtar", "run_thread_anahtari");
+test("ic ice kalicilik", "run_ic_ice_kalicilik");
+test_summary();

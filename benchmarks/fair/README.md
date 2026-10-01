@@ -285,7 +285,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `particles` | 329,6 → **54,8** (2026-10-01) | 42,2 | 7,8× → 1,3× | 8. → **4.** |
 | `nbody` | 1304,8 → **187,3** (2026-10-01) | 114,5 | 11,4× → **1,6×** | 8. → **7.** |
 | `matmul` | 821,3 → **37,1** (2026-10-01) | 31,1 | 26,4× → **1,2×** | 8. → **4.** |
-| `hashmap` | > 60 s → **170,3** (2026-10-01) | 72,7 | 2,3× | 9. → **2.** |
+| `hashmap` | > 60 s → **170,3** (2026-10-01; bellek 439 → 119 MB ve A/B'de −38 % aynı gün) | 72,7 | 2,3× | 9. → **2.** |
 
 Bulgular, sırayla ele alınması önerilen:
 
@@ -293,7 +293,13 @@ Bulgular, sırayla ele alınması önerilen:
    eklemede ve aramada anahtarları baştan sona `strcmp` ile tarıyordu
    (12 500 anahtar 0,25 s, 50 000 3,8 s, 1M zaman aşımı). 16+ anahtarlı
    nesneye yazma yollarında kurulan hash indeksi eklendi: 1M anahtar
-   **170 ms**, dokuz dil arasında 2. Tepe bellek hâlâ yüksek (450 MB, C 66).
+   **170 ms**, dokuz dil arasında 2. ~~Tepe bellek hâlâ yüksek (450 MB, C
+   66).~~ **Bellek de kapandı (2026-10-01): 439 → 118,8 MB**, aynı A/B'de
+   süre en iyi 196,8 → 122,2 ms (makine yük altındaydı; taban o koşumda
+   170 değil 197). `"k" + toString(i)` artık tek ayırma, arama anahtarı
+   erişimden sonra arenaya geri bırakılıyor, yeni anahtar tek kopya (mevcut
+   anahtarda hiç), açık checkpoint yokken arenadaki dizgi yazma bariyerinde
+   kopyalanmıyor. Ayrıntı: `docs/mindmap/Performance.md` "Geçici dizgiler".
 2. ~~**Float dizileri** (`matmul`, `nbody`) 11 Eylül'den beri yerinde
    sayıyor.~~ **Kapandı (2026-10-01):** sorun aritmetik değil depolama ve iç
    içe döngüde kanıtlı erişimdi — `float[]` 16 baytlık VMValue tutuyordu ve
@@ -321,6 +327,9 @@ Bulgular, sırayla ele alınması önerilen:
    200 → **126 ms** (Go 116, Rust 77, C 57). Tepe bellek AYNI (440 MB, C
    32): parçalar canlı ve her biri 56 baytlık `ObjString` başlığı taşıyor —
    geri alınmayan çöp değil, temsil maliyeti (`docs/mindmap/Performance.md`).
+   2026-10-01: üst düzey `str s = sb_tostring(sb)` metni artık tek kopya
+   (yazma bariyeri yerleşmiş arena dizgisini kopyalamıyor): **440 → 412 MB**.
+   Kalanı başlık temsili; neden bu turda yapılmadığı Performance.md'de.
 5. **`callfn`** — **kısmen kapandı (2026-10-01):** fonksiyon referansı her
    değerlendirmede yeni bir arena dizgisiydi (döngüde `call(f, x)` 20M kez →
    1,26 GB) ve `call()` her çağrıda adı hash'leyip önbelleği yokluyordu.

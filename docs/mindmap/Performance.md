@@ -1092,9 +1092,10 @@ Kalanlar:
   dolgu); alanları yeniden sıralamak onu 24'e, `ObjString`'i 48'e indirir —
   `parse`'ta −40 MB. ABI değişikliği (codegen GEP'leri, `obj_header_pad`,
   wasm32 düzeni), ayrı iş.
-- Üst düzeyde `str s = sb_tostring(sb)` 29 MB'lık metni İKİ kez tutuyor:
-  arena kopyası + global bariyerinin kalıcı kopyası. Arena kopyası artık çöp
-  ama geri alınmıyor.
+- ~~Üst düzeyde `str s = sb_tostring(sb)` 29 MB'lık metni İKİ kez tutuyor:
+  arena kopyası + global bariyerinin kalıcı kopyası.~~ Kapandı (2026-10-01,
+  "Geçici dizgiler" aşağıda): bariyer yerleşmiş arena dizgisini
+  kopyalamıyor, 440 → 412 MB.
 - Linux dağıtımlarının çoğunda THP varsayılanı `madvise`: orada büyük arena
   bloğu `madvise(MADV_HUGEPAGE)` istemeden 2 MB sayfa almaz (bu makine
   `always`). Sayfa hatası kazancı o sistemlerde ölçülmedi.
@@ -1104,6 +1105,7 @@ ekleme başına `toString` + birleştirme (2 × 64 B), `vm_object_set` anahtarı
 önce arenaya sonra kalıcıya kopyalıyor (64 B fazladan), arama başına yine
 2 × 64 B geçici anahtar; hiçbiri geri alınmıyor. Yalnız çift kopyayı kaldıran
 bir deneme 439 → 378 MB, 190 → 155 ms ölçtü (gönderilmedi; ayrı iş).
+Kapandı: aşağıda "Geçici dizgiler" (439 → 118,8 MB).
 
 ## `call(f, ...)`: ayırmasız fonksiyon referansı + satır içi havuz çağrısı (2026-10-01)
 
@@ -1338,3 +1340,83 @@ kalabilir — teoride daha ucuz; ölçüldü: `tloop` 244,4, `tdizi` 311,1 ms
 (volatile'dan yavaş: kaçan alloca her bilinmeyen saklamayla örtüşebilir
 sayılıyor). On üç adil kıyasın ikilisi düzeltmeden önce ve sonra bayt bayt
 AYNI (hiçbiri try kullanmıyor).
+
+## Geçici dizgiler: sözlük anahtarı ve `toString` birleştirmesi — hashmap 439 → 118 MB (2026-10-01)
+
+Hız karnesinin `hashmap` çekirdeği hash indeksinden (#428) sonra hızlıydı ama
+439 MB tepe bellek ölçüyordu (C 65). Ekleme başına ölçülen yol
+(`m["k" + toString(i)] = i`, kalıcı `m`): `toString` 64 B arena + birleştirme
+64 B arena + `vm_object_set`'in anahtar kopyası 64 B arena + kalıcı kap
+olduğu için bir de malloc kopyası (~80 B) + tablo. Arama başına yine iki
+64 B'lık geçici. Hiçbiri geri alınmıyordu: arena yalnız checkpoint geri
+sarmasıyla küçülüyor ve döngüde checkpoint yok.
+
+Dört ayrı düzeltme, her biri ayrı ölçülebilir:
+
+1. **Birleştirme zorlaması ayırmıyor.** `aot_string_concat_fast` dizgi
+   olmayan tarafı `aot_to_string` ile arenaya kurup kopyalıyordu; artık
+   `aot_value_text` (toString ile AYNI fonksiyon) yığındaki tampona yazıyor.
+   Codegen `S + toString(x)`'i `S + x` olarak buraya getiriyor. Eşitlik her
+   S için geçerli (toString(x) dizgi olduğundan `+` hep birleştirme, o da iki
+   tarafı aynı kuralla zorluyor) — iki taraf da toString ise ikisi de
+   açılıyor. Kutusuz struct (`Ad { ... }` biçimi) ve kullanıcı tanımlı
+   `toString` hariç.
+2. **Geçici anahtar geri bırakılıyor.** Anahtar ifadesi SAF ise (literal,
+   değişken, `+ - * / %`, tekli eksi, toString — çağrı, dizi erişimi, atama
+   YOK: `arr_debox` okuma yolunda dizi başlığına yazabiliyor) codegen
+   anahtardan önce `aot_arena_mark`, erişimden sonra runtime yardımcısı
+   `aot_arena_release`. Okuma hiçbir şey tutmaz; yazma yalnız anahtar
+   zaten varsa ya da kalıcı kabın malloc kopyası alındıysa bırakır.
+   Checkpoint değil: bölgeye ve yığına dokunmuyor, yalnız arena ucunu geri
+   çekiyor (bloklar arası geçişte `aot_arena_rewind_to` ile aynı değişmez).
+3. **Anahtar kopyası.** Önce arama — mevcut anahtarda hiçbir şey
+   ayrılmıyor. Yeni anahtar tek kopya; dizgi NESNESİ verildiyse (`m[k] = v`
+   yolu, `vm_object_set_key`) ve ARC'nin asla serbest bırakmayacağı bir
+   dizgiyse (arena ya da ölümsüz interned literal) kopya hiç yok. Sıradan
+   malloc dizgisi (ref_count 1) kopyalanıyor: async'in `arc_free_object`'i
+   anahtarları bırakıyor.
+4. **Yerleşmiş arena dizgisi.** `aot_arena_reset`/`aot_arena_destroy`'un
+   çağıranı yok; geri sarma yalnız bir `arena_save`'in kaydettiği uca kadar
+   gidiyor. Yani bu thread'de açık checkpoint YOKKEN arenanın canlı kısmında
+   (ucun altında) duran nesne bir daha geri alınamaz. Yazma bariyeri bunu
+   bilmiyordu ve kalıcı kaba yazılan her arena dizgisini kopyalıyordu.
+   Artık yalnız DİZGİ için (değişmez, çocuksuz — paylaşım gözlemlenemez)
+   kopya yok. "Ucun altında" şartı ölü dizgiyi ayırıyor: `arena_drop` ile
+   bırakılmış ama üstüne yazılmamış dizgi ucun ÜSTÜNDE, eskisi gibi
+   kopyalanıp kurtarılıyor. Başka thread'in arenası aranmıyor (kopya), blok
+   yürüyüşü 64 adımla sınırlı (aşılırsa kopya).
+
+| (Ryzen 7 9800X3D, `taskset -c 6,7`, izole dizin, dönüşümlü A/B) | taban `d6ad680f` | yeni |
+|---|---:|---:|
+| `hashmap` en iyi (15 tur) | 196,8 ms | 122,2 ms |
+| `hashmap` ortanca (15 tur) | 230 ms | 162 ms |
+| `hashmap` tepe bellek | 439 MB | 118,8 MB |
+| `parse` en iyi / tepe bellek | 125,6 ms / 440 MB | 124,7 ms / 412 MB |
+| `strcat` tepe bellek | 24,7 MB | 17,4 MB |
+| kapı: 2,9M ek arama | +354 MB | +0 MB |
+| kapı: anahtar başına (iki tur yazma) | 602 B | 122 B |
+
+Makine başka derlemelerle paylaşımlıydı (taban hashmap o gün 170 değil 197
+ms); oran dönüşümlü koşumdan.
+
+**`callfn` 174 → 213 ms bir gerileme DEĞİL.** IR bayt bayt aynı; runtime'ın
+`.cold` bölümleri (kullanıcı kodundan ÖNCE bağlanıyor) büyüdüğü için `main`
+32 bayt kaydı (`main % 64`: 48 → 16). Kaynağa bir yardımcı fonksiyon
+eklenince taban 195,5, yeni 173,8 ms; 0–5 ek fonksiyonla iki derleyici de
+173–213 aralığında geziyor. `call()` döngüsü kod yerleşimine bu kadar
+duyarlı — `callfn` sayısını tek koşumdan okumayın (Tuzaklar 7i ailesi).
+
+**Yapılmadı — başlık küçültme (`parse`'ın kalan 412 MB'ı).** Hesap: parça
+başına 64 B (56 B `ObjString` + ~6 karakter, 8'e yuvarlı). `ObjString`'in
+`capacity` alanı yalnız YAZILIYOR (okuyan yok) — kaldırmak başlığı 48'e,
+parçayı 56'ya indirir: 5M × 8 B = −40 MB (~%10). `Obj`'u yeniden sıralamak
+(32 → 24) bir −40 MB daha. Bu turda yapılmadı, çünkü: (a) `AOTFnRef`
+düzeni (`fp`@56, `arity`@64, 72 B) `call()` satır içi yolunun codegen
+sabitleri — o yol aynı gün başka bir işte değişiyordu; (b) `Obj` sırası
+`ObjArray`/`ObjStructArray` ofsetlerini (codegen `obj_header_pad` 28/16,
+satır içi dizi yolları) ve wasm32 düzenini değiştiriyor, o yollar da aynı
+gün başka işteydi; (c) web/Android arşivleri aynı değişiklikte
+tazelenmeli (Tuzaklar 8aq). Kazanç %10–20, risk iki paralel işle
+çakışmak; sıradaki adım `capacity`'yi tek başına kaldırmak.
+
+Test: `tests/gecici_dizgi.test.tpr` + `tests/gecici_dizgi.sh` (bkz. CHANGELOG).
