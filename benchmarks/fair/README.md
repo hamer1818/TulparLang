@@ -283,7 +283,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `callfn` | 298,6 → 209,6 → **65,5** (2026-10-01) | 91,1 | 2,3× → **0,7×** | 8. → ~3.* |
 | `parse` | 196,3 → **126,2** (2026-10-01) | 56,7 | 2,2× | 6. → **4.** |
 | `particles` | 329,6 → **54,8** (2026-10-01) | 42,2 | 7,8× → 1,3× | 8. → **4.** |
-| `nbody` | 1304,8 → **187,3** (2026-10-01) | 114,5 | 11,4× → **1,6×** | 8. → **7.** |
+| `nbody` | 1304,8 → 187,3 → **115,3** (2026-10-01) | 114,5 | 11,4× → 1,6× → **1,0×** | 8. → 7. → ~2.* |
 | `matmul` | 821,3 → **37,1** (2026-10-01) | 31,1 | 26,4× → **1,2×** | 8. → **4.** |
 | `hashmap` | > 60 s → **170,3** (2026-10-01; bellek 439 → 119 MB ve A/B'de −38 % aynı gün) | 72,7 | 2,3× | 9. → **2.** |
 
@@ -310,9 +310,14 @@ Bulgular, sırayla ele alınması önerilen:
    `sqrt` satır içi. `matmul` 820 → **37,1 ms** (1,2× C, iç döngü
    vektörleşiyor; tepe bellek 22,1 → 12,3 MB, C 11,8), `nbody` 1301 →
    **187,3 ms** (1,6× C). Sıralar 2026-09-29 tablosunun öteki dillerine
-   göre. Kalan nbody farkı döngü girişi: beş cisimde iç döngü 0–4 tur
-   dönüyor ve her girişte yedi dizinin deposu yeniden sınanıyor (bkz.
-   Performance.md).
+   göre. **nbody'nin kalan farkı da kapandı (2026-10-01):** beş cisimde iç
+   döngü 0–4 tur dönüyor ve her girişte yedi dizinin deposu + ~20 erişimin
+   aralığı sınanıyordu, üstüne int şekil önbelleği dört başlığı yeniden
+   okuyordu. Sınav artık dış döngü başında bir kez (iç içe sürüm, uç nokta
+   sınavı) ve int şekil önbelleği float sürümlü döngüde yalnız genel
+   gövdede: 187,5 → **115,3 ms** (aynı düzenekte C gcc -O2 114,8).
+   *Sıra resmî koşumda ölçülmedi; `results.json`'daki öteki dillerle
+   (C/Rust 114,7, C++ 115,1, Java 122,8) yan yana ~2. — C ile aynı sınıf.
 3. ~~**`particles`** (oyun döngüsü) C'nin 7,8 katı.~~ **Kapandı
    (2026-10-01):** iki ayrı maliyet vardı. (a) Üst düzey değişkenler kutulu
    LLVM global'iydi — yalnız main'de görülenler artık main'in yereli; (b)

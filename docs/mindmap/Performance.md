@@ -1237,14 +1237,58 @@ yavaşlatabiliyor (yukarıdaki "İç içe döngü sürümlemesi").
 [[Tuzaklar]] 7i.
 
 **Kalan:**
-- nbody 1,6×: beş cisimde iç döngü 0–4 tur dönüyor ve HER girişte yedi
-  global dizinin deposu yeniden sınanıyor (çağrı başına altı giriş). Sınavı
-  dış döngüye taşımak (dış döngüyü de sürümlemek) bir sonraki adım.
+- ~~nbody 1,6×: beş cisimde iç döngü 0–4 tur dönüyor ve HER girişte yedi
+  global dizinin deposu yeniden sınanıyor (çağrı başına altı giriş).~~
+  **Kapandı (2026-10-01)**, aşağıdaki "nbody: iç döngü sınavı dış döngü
+  başına" bölümü.
 - ~~Tamsayı dizisinde iç içe/afin kanıt yok (`matmul_int` 530 ms).~~
   **Kapandı (2026-10-01):** aşağıdaki "Fonksiyon içi `int` yereller" bölümü
   (`matmul_int` 586 → 121 ms).
 - `X[j - 1]` biçimi (`-` ile ofset) plana girmiyor; `X[j + -1]` giriyor.
 - `a[i] += x` (bileşik eleman yazması) float sürümünde reddediliyor.
+
+## nbody: iç döngü sınavı dış döngü başına — 187,5 → 115,3 ms, C ile aynı (2026-10-01)
+
+Önce ÖLÇ: en iç sürümün sınavı sabit `true`ya çekilince (deney ikilisi,
+genel kopyalar ölü kod) nbody 187 → 115 ms = C. Yani kalan farkın tamamı
+sınavdı, gövde değil. İki parça:
+
+1. **Sınav yeri.** `advance`'te i döngüsü içindeki j döngüsü (0–4 tur) her
+   girişte yedi dizinin deposunu (`tulpar.f64_probe`: VMValue + otype +
+   idata + eb + count) ve 24 erişimin aralığını sınıyordu; genel kopya i
+   döngüsünün İÇİNDE kaldığı için (çağrılı) LLVM başlıkları dışarı
+   taşıyamıyordu. **İç içe sürüm** (`tulpar_float_nest_plan` +
+   `fvn_try_version`): dış döngü O'nun gövdesi yalnız plan kabul eden en iç
+   `for`lardan ve dizisiz deyimlerden oluşuyorsa, iç döngülerin sınavı O'nun
+   başında BİR KEZ, i'nin [I0, UBo) aralığının uç noktalarıyla yapılıyor
+   (J0 = `i + c` ve j'siz taban `i + c` i'de artan; j'li taban ve iç UB O'da
+   değişmez). Tutarsa hızlı O gövdesinde iç döngüler sınavsız ve genel
+   kopyasız; tutmazsa genel O gövdesi bugünkü gibi (iç döngüler kendi
+   sınavlarıyla; sınır dışı orada hâlâ hata). Muhafazakâr: O'da iç döngü
+   dışında dizi erişimi varsa (matmul'ün k döngüsü, energy) dokunulmuyor.
+2. **Boşa doldurulan int şekil önbelleği.** `AST_FOR` her döngünün başında
+   int dizi şekil önbelleğini (4 başlık okuması + yenileme yuvaları) float
+   sürümünden ÖNCE kuruyordu; hızlı gövde onu hiç okumuyor. Artık float
+   sürümlü döngüde yalnız genel gövdenin başında kuruluyor.
+
+| (Ryzen 7 9800X3D, `taskset -c 10,11`, en iyi 5–11) | nbody ms |
+|---|---:|
+| önce | 187,5 |
+| yalnız 2 (`TULPAR_NO_FVNEST=1`) | 172,4 |
+| 1 + 2 | **115,3** |
+| aynı düzenekte C (gcc -O2) | 114,8 |
+
+Yalnız 1 (önbellek düzeltmesi olmadan) 140 ms ölçüldü: dış döngü başındaki
+int önbellek dolumu tek başına ~25 ms'ydi. On üç kıyastan yalnız matmul ve
+nbody'nin ikilisi değişti (öteki on bir bayt bayt aynı); matmul 37,2 → 37,1
+(15 tur). Denenip bırakılan: f64 sondasının yüklemelerine TBAA etiketi
+(ikinci döngünün sondalarını CSE'lesin diye) — 141,4 → 140,0, gürültü.
+Kapılar: `tests/float_ic_ice.sh` (IR: `fvn_fast` / `fvn_ic_done`, dallanma
+öncesi `shape.ty` yok, matmul biçimi dokunulmuyor; `TULPAR_NO_FVNEST=1`
+pozitif kontrol; üç sabotajla kırmızı) ve `tests/float_ic_ice.test.tpr`
+(7 test: nbody biçimi elle hesapla, iki iç döngü + adım 2 + `<=`, `len()`
+sınırı ve parametre dizileri, uç nokta tutmayan dört durumda genel yol +
+hata).
 
 ## particles: üst düzey global + struct dizisi başlığı — 336 → 55 ms (2026-10-01)
 

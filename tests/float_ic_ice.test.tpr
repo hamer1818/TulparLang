@@ -1,0 +1,162 @@
+// FLOAT DIZI IC ICE SURUM — anlam paketi (2026-10-01).
+//
+// Dis dongu O yalniz en ic float donguleri (ve dizisiz deyimleri) tasiyorsa
+// ic dongulerin dongu basi sinavi O'nun basina tasiniyor ve O'nun hizli
+// govdesinde ic donguler sinavsiz uretiliyor (src/aot/llvm_backend.cpp
+// fvn_try_version; plan llvm_array_shape.cpp tulpar_float_nest_plan).
+// Burada ANLAM sinaniyor: sonuclar elle hesaplanan / dogrudan yazilan
+// karsiliklariyla ayni; uc nokta sinavi tutmayan (sinir disi, i - 1 ile
+// negatif baslangic, i + 1 tabani, float olmayan degismez, kutulu dizi)
+// her durumda genel yola dusuluyor ve sinir disi erisim HALA hata.
+// Yolun gercekten kullanildigini tests/float_ic_ice.sh sinar (IR, iki yon).
+import "test";
+
+// ---- 1) nbody bicimi: J0 = i + 1, j'li ve j'siz erisim --------------------
+float[] fx = array_fill(5, 0.0);
+float[] fv = array_fill(5, 0.0);
+float[] fm = array_fill(5, 0.0);
+func ic_cift(float dt) {
+    for (int i = 0; i < 5; i = i + 1) {
+        for (int j = i + 1; j < 5; j = j + 1) {
+            float d = fx[i] - fx[j];
+            fv[i] = fv[i] - d * fm[j] * dt;
+            fv[j] = fv[j] + d * fm[i] * dt;
+        }
+    }
+}
+func run_nbody_bicimi() {
+    for (int k = 0; k < 5; k = k + 1) {
+        fx[k] = toFloat(k * k) * 0.5;
+        fv[k] = 0.0;
+        fm[k] = toFloat(k + 1);
+    }
+    for (int s = 0; s < 3; s = s + 1) { ic_cift(0.25); }
+    // Ayni hesap dizisiz, elle (yerel degiskenlerle) — 3 tur:
+    float[] x = [0.0, 0.5, 2.0, 4.5, 8.0];
+    float[] m = [1.0, 2.0, 3.0, 4.0, 5.0];
+    float v0 = 0.0; float v1 = 0.0; float v2 = 0.0; float v3 = 0.0; float v4 = 0.0;
+    float[] v = [0.0, 0.0, 0.0, 0.0, 0.0];
+    for (int s = 0; s < 3; s = s + 1) {
+        int i = 0;
+        while (i < 5) {
+            int j = i + 1;
+            while (j < 5) {
+                float d = x[i] - x[j];
+                v[i] = v[i] - d * m[j] * 0.25;
+                v[j] = v[j] + d * m[i] * 0.25;
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+    }
+    float t = 0.0;
+    float u = 0.0;
+    for (int k = 0; k < 5; k = k + 1) { t = t + fv[k] * toFloat(k + 1); u = u + v[k] * toFloat(k + 1); }
+    assert_close(t, u, 0.000000001);
+}
+
+// ---- 2) iki ic dongu + dizisiz deyim, adim 2, `<=` ----------------------
+func run_iki_ic() {
+    float[] a = array_fill(10, 1.0);
+    float[] b = array_fill(10, 0.0);
+    int sayac = 0;
+    for (int i = 0; i <= 8; i = i + 2) {
+        sayac = sayac + 1;
+        for (int j = 0; j < 10; j = j + 1) { b[j] = b[j] + a[i] * 2.0; }
+        for (int j = i; j <= 9; j = j + 1) { a[j] = a[j] + 0.5; }
+    }
+    assert_eq_int(sayac, 5);
+    float tb = 0.0;
+    float ta = 0.0;
+    for (int k = 0; k < 10; k = k + 1) { tb = tb + b[k]; ta = ta + a[k]; }
+    // a[i] okumasi her turda: i=0:1.0 i=2:1.5 i=4:2.0 i=6:2.5 i=8:3.0 -> b her
+    // eleman 2*(1+1.5+2+2.5+3)=20; a: k. eleman floor(k/2)+1 kez 0.5 aldi.
+    assert_close(tb, 200.0, 0.000001);
+    float bek = 0.0;
+    for (int k = 0; k < 10; k = k + 1) { bek = bek + 1.0 + 0.5 * toFloat(k / 2 + 1); }
+    assert_close(ta, bek, 0.000001);
+}
+
+// ---- 3) ic ust sinir len(), parametre dizileri, bos dis dongu ------------
+func ic_len(float[] p, float[] q, int n): float {
+    float t = 0.0;
+    for (int i = 0; i < n; i = i + 1) {
+        for (int j = 0; j < len(p); j = j + 1) { q[j] = q[j] + p[j] * p[i]; }
+    }
+    for (int k = 0; k < len(q); k = k + 1) { t = t + q[k]; }
+    return t;
+}
+func run_len_param() {
+    float[] p = [1.0, 2.0, 3.0];
+    float[] q = array_fill(3, 0.0);
+    assert_close(ic_len(p, q, 3), 36.0, 0.000001);   // (1+2+3) * (1+2+3)
+    float[] r = array_fill(3, 0.0);
+    assert_close(ic_len(p, r, 0), 0.0, 0.000001);    // dis dongu hic kosmaz
+}
+
+// ---- 4) sinir disi: ic UB dizi boyunu asiyor -> genel yol + HATA ---------
+func run_sinir_disi_ub() {
+    float[] a = array_fill(5, 1.0);
+    bool yakalandi = false;
+    int[] tur = [0];
+    try {
+        for (int i = 0; i < 2; i = i + 1) {
+            for (int j = 0; j < 6; j = j + 1) { a[j] = a[j] + 1.0; tur[0] = 0; }
+        }
+    } catch (e) { yakalandi = true; }
+    assert(yakalandi, "a[5] hata vermeli");
+    assert_close(a[0], 2.0, 0.000001);   // ilk tur 5 eleman yazildi, sonra hata
+}
+
+// ---- 5) J0 = i - 1: i = 0'da j = -1 -> genel yol + HATA -------------------
+func run_negatif_baslangic() {
+    float[] a = array_fill(5, 1.0);
+    bool yakalandi = false;
+    try {
+        for (int i = 0; i < 3; i = i + 1) {
+            for (int j = i - 1; j < 3; j = j + 1) { a[j] = a[j] * 2.0; }
+        }
+    } catch (e) { yakalandi = true; }
+    assert(yakalandi, "a[-1] hata vermeli");
+}
+
+// ---- 6) j'siz taban i + 1 son turda tasiyor -> genel yol + HATA ----------
+func run_tasan_taban() {
+    float[] a = array_fill(4, 1.0);
+    float[] b = array_fill(4, 0.0);
+    bool yakalandi = false;
+    try {
+        for (int i = 0; i < 4; i = i + 1) {
+            for (int j = 0; j < 2; j = j + 1) { b[j] = b[j] + a[i + 1]; }
+        }
+    } catch (e) { yakalandi = true; }
+    assert(yakalandi, "a[4] hata vermeli");
+    assert_close(b[0] + b[1], 6.0, 0.000001);   // i = 0,1,2 tamam (3 tur x 2)
+}
+
+// ---- 7) float OLMAYAN degismez + kutulu dizi: genel yol, ayni sonuc -------
+func run_genel_yol() {
+    float[] a = array_fill(4, 1.0);
+    var k = 3;                       // int: FLOAT etiket sinavi tutmaz
+    for (int i = 0; i < 2; i = i + 1) {
+        for (int j = 0; j < 4; j = j + 1) { a[j] = a[j] * k; }
+    }
+    assert_close(a[0] + a[3], 18.0, 0.000001);
+    float[] c = array_fill(3, 1.0);
+    c[1] = 7;                        // int yazildi: dizi kutuya cevrildi
+    float t = 0.0;
+    for (int i = 0; i < 2; i = i + 1) {
+        for (int j = 0; j < 3; j = j + 1) { t = t + c[j]; }
+    }
+    assert_close(t, 18.0, 0.000001);
+}
+
+print("=== float dizi ic ice surum ===");
+test("nbody bicimi (J0 = i + 1)", "run_nbody_bicimi");
+test("iki ic dongu + dizisiz deyim, adim 2, <=", "run_iki_ic");
+test("len() siniri, parametre dizileri, bos dis dongu", "run_len_param");
+test("sinir disi ic UB -> hata", "run_sinir_disi_ub");
+test("J0 = i - 1 negatif -> hata", "run_negatif_baslangic");
+test("j'siz taban i + 1 tasiyor -> hata", "run_tasan_taban");
+test("float olmayan degismez / kutulu dizi -> genel yol", "run_genel_yol");
+test_summary();

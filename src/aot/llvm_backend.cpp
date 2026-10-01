@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -5434,6 +5435,17 @@ struct FvRun {
   LLVMBasicBlockRef deopt_bb = nullptr;
 };
 static FvRun *g_fv = nullptr;
+
+// IC ICE SURUM (fvn_try_version): dis dongunun hizli govdesi uretilirken
+// DOLU. Plandaki ic donguler sinavsiz uretilir; dizilerin double deposu dis
+// dongu basinda BIR KEZ okundu (data[]).
+struct FvNestRun {
+  const TulparFloatNestPlan *np;
+  const char *arr[TULPAR_FV_MAX_ARR];
+  LLVMValueRef data[TULPAR_FV_MAX_ARR];
+  int n_arr;
+};
+static FvNestRun *g_fvn = nullptr;
 // codegen_for_body'nin en son actigi kosul blogu (int dizi surumunun deopt
 // hedefi: genel govdenin kosulu).
 static LLVMBasicBlockRef g_last_for_cond = nullptr;
@@ -7436,12 +7448,20 @@ static bool iav_plan(LLVMBackend *backend, ASTNode_C *node, TulparFloatLoopPlan 
 // Plan + sinav + iki govde. true: dongu uretildi (cagiran kapsami kapatir).
 // false: hicbir kod uretilmedi, cagiran normal yola devam eder. Float plani
 // tutmazsa (ya da dizileri `float[]` ipuclu degilse) int plani denenir.
-static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node) {
+// `float_only`: AST_FOR once yalniz FLOAT kipini dener (int sekil onbellegi
+// henuz kurulmadan — float kipinde onbellek yalniz genel govdede kuruluyor),
+// sonra onbellegi kurup INT kipini (iav; deopt genel govdenin kosuluna
+// atliyor, onbellek iki govdeye de baskin olmali).
+static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node, bool float_only) {
   if (!fv_enabled() || g_fv || iv_cold()) return false;
   TulparFloatLoopPlan plan;
   bool is_int = false;
   if (!tulpar_float_loop_plan(node->init, node->condition, node->body, node->increment,
                               shape_pure_call, backend, &plan)) {
+    if (float_only) {
+      // INT kipi ikinci cagrida (int sekil onbellegi kurulduktan sonra).
+      return false;
+    }
     if (getenv("TULPAR_DBG_VER") && node->init && node->init->name) {
       // Yalniz float[] gezen dongude soyle (int dongulerinde gurultu olmasin).
       const char *names[8];
@@ -7463,6 +7483,7 @@ static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node) {
     for (int k = 0; k < plan.n_arr; k++)
       if (!fv_hint_names().count(plan.arr[k])) hinted = false;
     if (!hinted) {
+      if (float_only) return false;
       if (!iav_plan(backend, node, &plan)) return false;
       is_int = true;
     }
@@ -7490,6 +7511,43 @@ static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node) {
       if (nat && get_local_type(backend, nm) != (is_int ? INFERRED_INT : INFERRED_FLOAT))
         return false;
       if (!nat && !get_local(backend, nm)) return false;
+    }
+  }
+
+  // IC ICE SURUMUN HIZLI DIS GOVDESI: bu dongunun butun sinavlari dis dongu
+  // basinda yapildi (fvn_try_version) — yalniz hizli govde, genel kopya YOK.
+  // Dizi dis plandaysa deposu oradan; degilse (olmamali) normal yola duser.
+  if (g_fvn && !is_int) {
+    bool in_nest = false;
+    for (int m = 0; m < g_fvn->np->n_inner; m++)
+      if (g_fvn->np->inner[m] == node) in_nest = true;
+    LLVMValueRef nd[TULPAR_FV_MAX_ARR];
+    for (int k = 0; in_nest && k < plan.n_arr; k++) {
+      nd[k] = nullptr;
+      for (int a = 0; a < g_fvn->n_arr; a++)
+        if (strcmp(g_fvn->arr[a], plan.arr[k]) == 0) nd[k] = g_fvn->data[a];
+      if (!nd[k]) in_nest = false;
+    }
+    if (in_nest) {
+      FvRun run;
+      run.plan = &plan;
+      run.is_int = false;
+      run.cond = node->condition;
+      LLVMValueRef unused = nullptr;   // etiketler dis dongu basinda sinandi
+      run.ub = fv_entry_int(backend, plan.ub, &unused);
+      for (int k = 0; k < plan.n_arr; k++) run.data[k] = nd[k];
+      for (int k = 0; k < plan.n_acc; k++)
+        run.base[k] = plan.acc_base[k] ? fv_entry_int(backend, plan.acc_base[k], &unused)
+                                       : nullptr;
+      if (getenv("TULPAR_DBG_VER"))
+        fprintf(stderr, "[fvn-ic] %s: sinavsiz\n", plan.ivar);
+      LLVMBasicBlockRef b_done =
+          append_bb(backend, backend->current_function, "fvn_ic_done");
+      g_fv = &run;
+      codegen_for_body(backend, node, b_done);
+      g_fv = nullptr;
+      LLVMPositionBuilderAtEnd(backend->builder, b_done);
+      return true;
     }
   }
 
@@ -7576,7 +7634,12 @@ static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node) {
     codegen_for_body(backend, node, b_done);
     g_fv = nullptr;
     LLVMPositionBuilderAtEnd(backend->builder, b_gen);
-    codegen_for_body(backend, node, b_done);
+    {
+      // Int sekil onbellegi yalniz genel govdede (bkz. AST_FOR notu).
+      int ss = emit_shape_cache_for_loop(backend, node->condition, node->body, node->increment);
+      codegen_for_body(backend, node, b_done);
+      backend->shape_count = ss;
+    }
     LLVMPositionBuilderAtEnd(backend->builder, b_done);
     return true;
   }
@@ -7840,6 +7903,196 @@ static bool iv_try_version(LLVMBackend *backend, ASTNode_C *node) {
 
   LLVMPositionBuilderAtEnd(backend->builder, b_done);
   delete plan;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// FLOAT DIZI IC ICE SURUM — dis dongu basindaki sinav (2026-10-01).
+//
+// Plan: llvm_array_shape.cpp tulpar_float_nest_plan. En ic dongu surumu
+// (fv_try_version) sinavini HER ic dongu girisinde yapiyor; nbody'de ic dongu
+// 0-4 tur ve sinav (yedi dizinin deposu + ~20 erisimin araligi) turdan
+// pahali; genel kopya da dis dongunun icinde kaldigi icin (cagrili) LLVM
+// dizi basliklarini dis dongunun disina tasiyamiyor. Burada ayni sinav dis
+// dongu O'nun basinda BIR KEZ, i'nin [I0, UBo) araliginin UC NOKTALARIYLA
+// yapiliyor (J0 = i + c ve j'siz taban i + c i'de artan; j'li tabanlar ve
+// ic UB O'da degismez):
+//   * i, UBo int ve i32'ye sigar; dizilerin hepsi double depoda;
+//   * her ic dongu: UB int, i32'ye sigar; j'nin baslangici en kucuk (i = I0)
+//     ve en buyuk (i = UBo - 1) degerinde i32'ye sigar;
+//   * j'li erisim: 0 <= B + J0(I0) ve B + UB' <= count;
+//   * j'siz `i + c` erisim: 0 <= I0 + c ve UBo - 1 + c < count; degismez
+//     tabanli: 0 <= B < count;
+//   * degismez float adlarin etiketi FLOAT.
+// Tutarsa HIZLI dis govde: ic donguler sinavsiz ve genel kopyasiz (g_fvn);
+// tutmazsa GENEL dis govde — ic donguler bugunku gibi kendi sinavlariyla
+// surumlenir, sinir disi erisim orada hala hata verir. Sinav muhafazakar:
+// bos dis dongu ya da hic kosmayan ic dongu da uc nokta sinavindan gecmek
+// zorunda (gecemezse yalniz genel yola duser, anlam ayni).
+// TULPAR_NO_FVNEST=1 kapatir (olcum / pozitif kontrol).
+// ---------------------------------------------------------------------------
+static bool fvn_enabled() {
+  static int e = -1;
+  if (e < 0) {
+    const char *v = getenv("TULPAR_NO_FVNEST");
+    e = (v && *v && *v != '0') ? 0 : 1;
+  }
+  return e == 1;
+}
+
+static bool fvn_try_version(LLVMBackend *backend, ASTNode_C *node) {
+  if (!fv_enabled() || !fvn_enabled() || g_fv || g_fvn || iv_cold()) return false;
+  std::unique_ptr<TulparFloatNestPlan> npp(new TulparFloatNestPlan());
+  TulparFloatNestPlan &np = *npp;
+  if (!tulpar_float_nest_plan(node->init, node->condition, node->body, node->increment,
+                              shape_pure_call, backend, &np)) {
+    if (getenv("TULPAR_DBG_VER") && node->init && node->init->name && np.why &&
+        strcmp(np.why, "ic dongu yok") != 0 && strcmp(np.why, "ic dongu planlanamiyor") != 0)
+      fprintf(stderr, "[fvn-yok] %s: %s\n", node->init->name, np.why);
+    return false;
+  }
+  // Ipucu + codegen uygunlugu — KOD URETMEDEN ONCE (Tuzaklar 6q).
+  FvNestRun run;
+  run.np = &np;
+  run.n_arr = 0;
+  {
+    LocalVar *iv = get_local_var(backend, np.ivar);
+    if (iv && iv->is_captured == 1) return false;
+    if (!get_local(backend, np.ivar) &&
+        !(get_local_type(backend, np.ivar) == INFERRED_INT &&
+          get_local_native(backend, np.ivar)))
+      return false;
+  }
+  for (int m = 0; m < np.n_inner; m++) {
+    const TulparFloatLoopPlan &p = np.plan[m];
+    for (int k = 0; k < p.n_arr; k++) {
+      if (!fv_hint_names().count(p.arr[k])) return false;
+      LocalVar *av = get_local_var(backend, p.arr[k]);
+      if ((av && av->is_captured == 1) || !get_local(backend, p.arr[k]) ||
+          get_local_struct_array_elem(backend, p.arr[k]))
+        return false;
+      bool seen = false;
+      for (int a = 0; a < run.n_arr; a++)
+        if (strcmp(run.arr[a], p.arr[k]) == 0) seen = true;
+      if (!seen) {
+        if (run.n_arr >= TULPAR_FV_MAX_ARR) return false;
+        run.arr[run.n_arr++] = p.arr[k];
+      }
+    }
+    for (int k = 0; k < p.n_inv; k++) {
+      const char *nm = p.inv_float[k];
+      LocalVar *v = get_local_var(backend, nm);
+      if (v && v->is_captured == 1) return false;
+      LLVMValueRef nat = get_local_native(backend, nm);
+      if (nat && get_local_type(backend, nm) != INFERRED_FLOAT) return false;
+      if (!nat && !get_local(backend, nm)) return false;
+    }
+  }
+
+  // ---- Dis dongu basi sinavi (buradan sonra geri donus YOK) ----
+  LLVMValueRef ok = nullptr;
+  LLVMValueRef one = LLVMConstInt(backend->int_type, 1, 0);
+  LLVMValueRef zero = LLVMConstInt(backend->int_type, 0, 0);
+  LLVMValueRef iv = load_loop_int(backend, np.ivar, &ok);
+  LLVMValueRef ubo = fv_entry_int(backend, np.ub, &ok);
+  fv_and(backend, &ok, emit_fits_i32(backend, iv));
+  fv_and(backend, &ok, emit_fits_i32(backend, ubo));
+  LLVMValueRef ihi = np.incl ? ubo : LLVMBuildSub(backend->builder, ubo, one, "fvn.ihi");
+  LLVMValueRef cnt[TULPAR_FV_MAX_ARR];
+  LLVMValueRef probe = get_f64_probe_fn(backend);
+  for (int a = 0; a < run.n_arr; a++) {
+    LLVMValueRef out = llvm_build_alloca_at_entry(backend, backend->ptr_type, "fvn.data.slot");
+    LLVMValueRef args[] = {get_local(backend, run.arr[a]), out};
+    cnt[a] = LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(probe), probe, args, 2,
+                            "fvn.cnt");
+    run.data[a] = LLVMBuildLoad2(backend->builder, backend->ptr_type, out, "fvn.data");
+    fv_and(backend, &ok, LLVMBuildICmp(backend->builder, LLVMIntSGE, cnt[a], zero, "fvn.isf64"));
+  }
+  auto cnt_of = [&](const char *nm) -> LLVMValueRef {
+    for (int a = 0; a < run.n_arr; a++)
+      if (strcmp(run.arr[a], nm) == 0) return cnt[a];
+    return zero;   // olmaz (yukarida toplandi)
+  };
+  for (int m = 0; m < np.n_inner; m++) {
+    const TulparFloatLoopPlan &p = np.plan[m];
+    ASTNode_C *in = np.inner[m];
+    LLVMValueRef ubi = fv_entry_int(backend, p.ub, &ok);
+    fv_and(backend, &ok, emit_fits_i32(backend, ubi));
+    LLVMValueRef ubx = p.incl ? LLVMBuildAdd(backend->builder, ubi, one, "fvn.ubx") : ubi;
+    LLVMValueRef jlo, jhi;
+    if (np.j0_dep[m]) {
+      LLVMValueRef c = LLVMConstInt(backend->int_type, (unsigned long long)np.j0_c[m], 1);
+      jlo = LLVMBuildAdd(backend->builder, iv, c, "fvn.jlo");
+      jhi = LLVMBuildAdd(backend->builder, ihi, c, "fvn.jhi");
+    } else {
+      jlo = jhi = fv_entry_int(backend, in->init->right, &ok);
+    }
+    fv_and(backend, &ok, emit_fits_i32(backend, jlo));
+    fv_and(backend, &ok, emit_fits_i32(backend, jhi));
+    for (int k = 0; k < p.n_inv; k++) {
+      const char *nm = p.inv_float[k];
+      if (get_local_native(backend, nm)) continue;   // statik FLOAT
+      LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
+                                      get_local(backend, nm), nm);
+      llvm_tbaa_tag(backend, v, 0);
+      fv_and(backend, &ok,
+             LLVMBuildICmp(backend->builder, LLVMIntEQ,
+                           LLVMBuildExtractValue(backend->builder, v, 0, "fvn.itag"),
+                           LLVMConstInt(backend->int32_type, 1 /* VM_VAL_FLOAT */, 0),
+                           "fvn.isflt"));
+    }
+    for (int k = 0; k < p.n_acc; k++) {
+      LLVMValueRef cn = cnt_of(p.arr[p.acc_arr[k]]);
+      if (p.acc_has_j[k]) {
+        LLVMValueRef b = zero;
+        if (p.acc_base[k]) {
+          b = fv_entry_int(backend, p.acc_base[k], &ok);
+          fv_and(backend, &ok, emit_fits_i32(backend, b));
+        }
+        fv_and(backend, &ok,
+               LLVMBuildICmp(backend->builder, LLVMIntSGE,
+                             LLVMBuildAdd(backend->builder, b, jlo, "fvn.lo"), zero, "fvn.lo0"));
+        fv_and(backend, &ok,
+               LLVMBuildICmp(backend->builder, LLVMIntSLE,
+                             LLVMBuildAdd(backend->builder, b, ubx, "fvn.hi"), cn, "fvn.hic"));
+      } else if (np.b_dep[m][k]) {
+        LLVMValueRef c = LLVMConstInt(backend->int_type, (unsigned long long)np.b_c[m][k], 1);
+        fv_and(backend, &ok,
+               LLVMBuildICmp(backend->builder, LLVMIntSGE,
+                             LLVMBuildAdd(backend->builder, iv, c, "fvn.blo"), zero, "fvn.blo0"));
+        fv_and(backend, &ok,
+               LLVMBuildICmp(backend->builder, LLVMIntSLT,
+                             LLVMBuildAdd(backend->builder, ihi, c, "fvn.bhi"), cn, "fvn.bhic"));
+      } else {
+        LLVMValueRef b = fv_entry_int(backend, p.acc_base[k], &ok);
+        fv_and(backend, &ok, emit_fits_i32(backend, b));
+        fv_and(backend, &ok, LLVMBuildICmp(backend->builder, LLVMIntSGE, b, zero, "fvn.b0"));
+        fv_and(backend, &ok, LLVMBuildICmp(backend->builder, LLVMIntSLT, b, cn, "fvn.bc"));
+      }
+    }
+  }
+  if (getenv("TULPAR_DBG_VER"))
+    fprintf(stderr, "[fvn] %s: %d ic dongu, %d dizi\n", np.ivar, np.n_inner, run.n_arr);
+
+  LLVMBasicBlockRef b_fast = append_bb(backend, backend->current_function, "fvn_fast");
+  LLVMBasicBlockRef b_gen = append_bb(backend, backend->current_function, "fvn_gen");
+  LLVMBasicBlockRef b_done = append_bb(backend, backend->current_function, "fvn_done");
+  set_branch_weights(backend, LLVMBuildCondBr(backend->builder, ok, b_fast, b_gen), 2000, 1);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_fast);
+  g_fvn = &run;
+  codegen_for_body(backend, node, b_done);
+  g_fvn = nullptr;
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_gen);
+  {
+    // Int sekil onbellegi yalniz genel govdede (bkz. AST_FOR notu).
+    int ss = emit_shape_cache_for_loop(backend, node->condition, node->body, node->increment);
+    codegen_for_body(backend, node, b_done);
+    backend->shape_count = ss;
+  }
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_done);
   return true;
 }
 
@@ -14318,6 +14571,25 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (node->init)
       codegen_statement(backend, node->init);
 
+    // FLOAT DIZI DONGU SURUMU (2026-10-01): en icteki dongu, HER derinlikte
+    // (tamsayi surumlemesinin aksine yalniz en dis seviye degil — matmul'un
+    // sicak dongusu ucuncu seviyede). Bkz. fv_try_version.
+    // Asagidaki int sekil onbellegi (emit_shape_cache_for_loop) float
+    // surumunde YALNIZ genel govdenin basinda kuruluyor: hizli govde onu hic
+    // okumuyor (butun erisimler planda) ve dongu basinda doldurmak her
+    // giriste dizi basliklarini bir kez daha okutuyordu (nbody: tur basina
+    // 4+4 baslik, olculdu ~15 ms).
+    if (fv_try_version(backend, node, /*float_only=*/true)) {
+      exit_scope(backend);
+      return nullptr;
+    }
+    // ...ya da bu dongu, en ic float donguleri tasiyan dis dongu: ic
+    // donguleri sinavi burada bir kez (bkz. fvn_try_version).
+    if (fvn_try_version(backend, node)) {
+      exit_scope(backend);
+      return nullptr;
+    }
+
     // Dongu-degismezi dizi sekli — `while` ile ayni; ARTIM da kanita dahil
     // (`i = i + 1` orada duruyor ve sekli degistiren bir sey icerebilirdi).
     // init'ten SONRA cagriliyor: dongu degiskeni artik kapsamda.
@@ -14325,10 +14597,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                                                 node->body, node->increment);
     SarrCacheScope sarr_cache(backend, node->condition, node->body, node->increment);
 
-    // FLOAT DIZI DONGU SURUMU (2026-10-01): en icteki dongu, HER derinlikte
-    // (tamsayi surumlemesinin aksine yalniz en dis seviye degil — matmul'un
-    // sicak dongusu ucuncu seviyede). Bkz. fv_try_version.
-    if (fv_try_version(backend, node)) {
+    // INT DIZI DONGU SURUMU (iav): sekil onbellegi kurulduktan SONRA (deopt
+    // genel govdenin kosuluna atliyor; onbellek iki govdeye de baskin).
+    if (fv_try_version(backend, node, /*float_only=*/false)) {
       backend->shape_count = shape_saved;
       exit_scope(backend);
       return nullptr;

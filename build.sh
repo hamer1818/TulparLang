@@ -1393,6 +1393,14 @@ TPREOF
         exit 1
     fi
 
+    # FLOAT DIZI IC ICE SURUM (2026-10-01): en ic dongulerin sinavi dis dongu
+    # basinda bir kez (nbody), int sekil onbellegi yalniz genel govdede;
+    # TULPAR_NO_FVNEST=1 pozitif kontrol. Anlam: tests/float_ic_ice.test.tpr.
+    if ! bash tests/float_ic_ice.sh ./tulpar; then
+        echo -e "${RED}float dizi ic ice surum bozuk!${NC}"
+        exit 1
+    fi
+
     # KUTULU FONKSİYONLARIN DEĞER ABI'si duruyor mu?
     #
     # Kutulu gövde `t_<ad>.f` içinde yaşıyor ve VMValue'yu DEĞER olarak

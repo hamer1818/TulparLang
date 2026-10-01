@@ -136,6 +136,32 @@ extern "C" int tulpar_int_loop_plan(ASTNode_C *init, ASTNode_C *cond,
                                     ASTNode_C *body, ASTNode_C *incr,
                                     TulparPureCallFn pure, void *ctx,
                                     TulparFloatLoopPlan *p);
+// FLOAT DIZI IC ICE SURUM (2026-10-01): dis dongu O'nun govdesi yalniz
+// (planlanabilir) en ic `for` dongulerinden ve dizi erisimi icermeyen
+// deyimlerden olusuyorsa, ic dongulerin dongu basi sinavlari O'nun girisine
+// TASINABILIR: O'nun degiskeni i [I0, UBo) icinde, ic dongunun baslangici
+// J0 = i + c (ya da O'da degismez), j'siz erisimin tabani i + c (ya da
+// degismez). Sinav O basinda BIR KEZ; hizli O govdesinde ic donguler
+// sinavsiz/genel kopyasiz uretilir (bkz. llvm_backend.cpp fvn_try_version).
+#define TULPAR_FVN_MAX_INNER 4
+struct TulparFloatNestPlan {
+  const char *ivar;                                  // dis dongu degiskeni i
+  ASTNode_C *ub;                                     // UBo (O'da degismez int)
+  int incl;                                          // `i <= UBo`
+  int n_inner;
+  ASTNode_C *inner[TULPAR_FVN_MAX_INNER];            // ic AST_FOR dugumleri
+  TulparFloatLoopPlan plan[TULPAR_FVN_MAX_INNER];    // her birinin plani
+  int j0_dep[TULPAR_FVN_MAX_INNER];                  // J0 = i + j0_c mi
+  long long j0_c[TULPAR_FVN_MAX_INNER];
+  int b_dep[TULPAR_FVN_MAX_INNER][TULPAR_FV_MAX_ACC];        // taban = i + b_c mi
+  long long b_c[TULPAR_FVN_MAX_INNER][TULPAR_FV_MAX_ACC];
+  const char *why;
+};
+extern "C" int tulpar_float_nest_plan(ASTNode_C *init, ASTNode_C *cond,
+                                      ASTNode_C *body, ASTNode_C *incr,
+                                      TulparPureCallFn pure, void *ctx,
+                                      TulparFloatNestPlan *np);
+
 // Programdaki `float[]` bildirim/parametre adlari (surum karari icin ipucu).
 extern "C" void tulpar_collect_float_array_decls(ASTNode_C *root,
                                                  void (*cb)(const char *, void *),

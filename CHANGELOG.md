@@ -12,6 +12,24 @@ tag still works;
 
 ## [Unreleased]
 
+### Performans — nbody C ile aynı: iç döngü sınavı dış döngü başına (187,5 → 115,3 ms, C 114,8)
+
+- `advance`'te i döngüsü içindeki 0–4 turluk j döngüsü, en iç float döngü
+  sürümünün sınavını (yedi dizinin double deposu + ~20 erişimin aralığı) HER
+  girişte yapıyordu ve genel kopya dış döngünün içinde kaldığı için LLVM
+  başlık okumalarını dışarı taşıyamıyordu.
+- **İç içe sürüm:** dış döngünün gövdesi yalnız sürümlenebilir en iç
+  döngülerden (ve dizisiz deyimlerden) oluşuyorsa sınav dış döngü başında
+  bir kez, i aralığının uç noktalarıyla yapılıyor; hızlı dış gövdede iç
+  döngüler sınavsız. Tutmazsa eski yol — sınır dışı erişim hâlâ hata.
+  `TULPAR_NO_FVNEST=1` kapatır.
+- **Int şekil önbelleği** float sürümlü döngüde artık yalnız genel gövdede
+  kuruluyor (hızlı gövde onu hiç okumuyordu; her girişte dört başlık
+  okuması boşa gidiyordu).
+- Ölçüldü (Ryzen 7 9800X3D, 2026-10-01, `taskset -c 10,11`): nbody 187,5 →
+  115,3 ms (aynı düzenekte gcc -O2 C 114,8); yalnız önbellek düzeltmesi
+  172,4. On üç kıyastan yalnız matmul/nbody ikilisi değişti, matmul 37,2 →
+  37,1. Kapılar: `tests/float_ic_ice.sh`, `tests/float_ic_ice.test.tpr`.
 ### Performans — `ObjString` 56 → 48 bayt: yazılıp hiç okunmayan `capacity` alanı kaldırıldı (parse 412 → 374 MB)
 
 - **Kök neden:** `parse` çekirdeğinin 5M canlı `split` parçası parça başına

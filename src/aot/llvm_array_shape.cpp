@@ -1511,6 +1511,160 @@ extern "C" int tulpar_int_loop_plan(ASTNode_C *init, ASTNode_C *cond,
   return fv_plan(init, cond, body, incr, pure, ctx, p, true);
 }
 
+// ---------------------------------------------------------------------------
+// FLOAT DIZI IC ICE SURUM — cozumleme (2026-10-01).
+//
+// Neden: nbody'nin `advance`'i 5 cisimde i dongusu icinde 0-4 turluk bir j
+// dongusu kosuyor. En ic dongu surumu (yukarida) HER j-dongusu girisinde yedi
+// dizinin deposunu/sinirini ve ~20 erisimin araligini sinar; bu sinav turdan
+// pahali ve genel kopya (cagrili) i dongusunun icinde kaldigi icin LLVM
+// basliklari i dongusunun disina tasiyamiyor. Olculdu (Ryzen 7 9800X3D,
+// 2026-10-01): sinav sabit `true`ya cekilince 187 -> 115 ms (C 115).
+//
+// Kanit: O = `for (int i = I0; i < UBo; i++ | i = i + K)`, i govdede
+// atanmiyor, O sekil-kararli, kosul/artimda dizi erisimi yok; govdenin UST
+// SEVIYE deyimleri ya tulpar_float_loop_plan'in kabul ettigi bir `for`
+// (en icteki) ya da hicbir dizi erisimi/dongu icermeyen deyim. Her ic dongu
+// icin: J0 = `i`, `i + c`, `c + i`, `i - c` (c int sabiti) ya da O'da
+// degismez int ifadesi; UB O'da degismez; j'li erisimin tabani O'da
+// degismez; j'siz erisimin tabani `i + c` bicimi ya da O'da degismez; dizi
+// adlari ve degismez float adlari O'da yeniden baglanmiyor. Sayisal kisim
+// (i ve j araliklarinin uc noktalari) codegen'de O basinda sinanir.
+// ---------------------------------------------------------------------------
+namespace {
+// `i`, `i + c`, `c + i`, `i - c` -> true ve *c.
+static bool fvn_i_plus_c(ASTNode_C *n, const char *ivar, long long *c) {
+  auto is_i = [&](ASTNode_C *x) {
+    return x && x->type == AST_IDENTIFIER && x->name && strcmp(x->name, ivar) == 0;
+  };
+  auto is_lit = [](ASTNode_C *x) { return x && x->type == AST_INT_LITERAL; };
+  if (is_i(n)) { *c = 0; return true; }
+  if (!n || n->type != AST_BINARY_OP) return false;
+  if (n->op == TOKEN_PLUS && is_i(n->left) && is_lit(n->right)) {
+    *c = n->right->value.int_value; return true;
+  }
+  if (n->op == TOKEN_PLUS && is_lit(n->left) && is_i(n->right)) {
+    *c = n->left->value.int_value; return true;
+  }
+  if (n->op == TOKEN_MINUS && is_i(n->left) && is_lit(n->right)) {
+    *c = -n->right->value.int_value; return true;
+  }
+  return false;
+}
+static bool fvn_has_loop_or_access(ASTNode_C *n, void *p) {
+  if (n->type == AST_ARRAY_ACCESS || n->type == AST_FOR || n->type == AST_WHILE ||
+      n->type == AST_FOR_IN) {
+    *(bool *)p = true;
+    return false;
+  }
+  return true;
+}
+}  // namespace
+
+extern "C" int tulpar_float_nest_plan(ASTNode_C *init, ASTNode_C *cond,
+                                      ASTNode_C *body, ASTNode_C *incr,
+                                      TulparPureCallFn pure, void *ctx,
+                                      TulparFloatNestPlan *np) {
+  if (!np) return 0;
+  memset(np, 0, sizeof(*np));
+  np->why = "bicim";
+  if (!init || !cond || !incr || !body) return 0;
+  if (init->type != AST_VARIABLE_DECL || !init->name || !init->right) {
+    np->why = "init `int i = ...` degil";
+    return 0;
+  }
+  const char *ivar = init->name;
+  TulparFloatLoopPlan scratch;
+  memset(&scratch, 0, sizeof(scratch));
+  FvCtx co{cond, body, incr, ivar, &scratch, {}, 0, false};   // O kapsami
+  if (cond->type != AST_BINARY_OP ||
+      (cond->op != TOKEN_LESS && cond->op != TOKEN_LESS_EQUAL) ||
+      !fv_is_ivar(&co, cond->left) || !fv_inv_int(&co, cond->right, true)) {
+    np->why = "dis kosul `i < UB` (UB degismez) degil";
+    return 0;
+  }
+  bool incr_ok = false;
+  if (incr->type == AST_INCREMENT && incr->name && !incr->left &&
+      strcmp(incr->name, ivar) == 0) {
+    incr_ok = true;
+  } else if (incr->type == AST_ASSIGNMENT && incr->name && !incr->left &&
+             strcmp(incr->name, ivar) == 0 && incr->right &&
+             incr->right->type == AST_BINARY_OP && incr->right->op == TOKEN_PLUS &&
+             fv_is_ivar(&co, incr->right->left) && incr->right->right &&
+             incr->right->right->type == AST_INT_LITERAL &&
+             incr->right->right->value.int_value > 0 &&
+             incr->right->right->value.int_value <= 2147483648LL) {
+    incr_ok = true;
+  }
+  if (!incr_ok) { np->why = "dis artim `i++` / `i = i + K` degil"; return 0; }
+  if (fv_assign_count(nullptr, body, nullptr, ivar) != 0) {
+    np->why = "dis dongu degiskeni govdede ataniyor";
+    return 0;
+  }
+  bool acc_ci = false;
+  walk_all(cond, fv_has_access, &acc_ci);
+  walk_all(incr, fv_has_access, &acc_ci);
+  if (acc_ci) { np->why = "dis kosulda/artimda dizi erisimi"; return 0; }
+  if (!tulpar_loop_shape_stable(cond, body, incr, pure, ctx)) {
+    np->why = "dis govde dizi seklini degistirebilir";
+    return 0;
+  }
+  ASTNode_C *one[1] = {body};
+  ASTNode_C **stmts = one;
+  int ns = 1;
+  if (body->type == AST_BLOCK) { stmts = body->statements; ns = body->statement_count; }
+  for (int k = 0; k < ns; k++) {
+    ASTNode_C *s = stmts ? stmts[k] : nullptr;
+    if (!s) continue;
+    if (s->type == AST_FOR) {
+      if (np->n_inner >= TULPAR_FVN_MAX_INNER) { np->why = "ic dongu tavani"; return 0; }
+      int m = np->n_inner;
+      TulparFloatLoopPlan *p = &np->plan[m];
+      if (!tulpar_float_loop_plan(s->init, s->condition, s->body, s->increment, pure, ctx, p)) {
+        np->why = "ic dongu planlanamiyor";
+        return 0;
+      }
+      // J0
+      long long c = 0;
+      if (fvn_i_plus_c(s->init->right, ivar, &c)) {
+        np->j0_dep[m] = 1;
+        np->j0_c[m] = c;
+      } else if (!fv_inv_int(&co, s->init->right, false)) {
+        np->why = "ic baslangic i + c ya da degismez degil";
+        return 0;
+      }
+      if (!fv_inv_int(&co, p->ub, true)) { np->why = "ic ust sinir dista degismez degil"; return 0; }
+      for (int a = 0; a < p->n_arr; a++)
+        if (!fv_invariant(&co, p->arr[a])) { np->why = "dizi dista yeniden baglaniyor"; return 0; }
+      for (int a = 0; a < p->n_inv; a++)
+        if (!fv_invariant(&co, p->inv_float[a])) { np->why = "degismez float dista ataniyor"; return 0; }
+      for (int a = 0; a < p->n_acc; a++) {
+        ASTNode_C *b = p->acc_base[a];
+        if (!b) continue;
+        if (!p->acc_has_j[a] && fvn_i_plus_c(b, ivar, &c)) {
+          np->b_dep[m][a] = 1;
+          np->b_c[m][a] = c;
+        } else if (!fv_inv_int(&co, b, false)) {
+          np->why = "erisim tabani dista degismez / i + c degil";
+          return 0;
+        }
+      }
+      np->inner[m] = s;
+      np->n_inner++;
+    } else {
+      bool bad = false;
+      walk_all(s, fvn_has_loop_or_access, &bad);
+      if (bad) { np->why = "dis govdede ic dongu disinda dizi erisimi/dongu"; return 0; }
+    }
+  }
+  if (np->n_inner == 0) { np->why = "ic dongu yok"; return 0; }
+  np->ivar = ivar;
+  np->ub = cond->right;
+  np->incl = cond->op == TOKEN_LESS_EQUAL ? 1 : 0;
+  np->why = nullptr;
+  return 1;
+}
+
 // Programdaki `float[]` bildirimlerinin adlari (parametreler dahil). Surum
 // karari icin yalniz IPUCU: dogruluk dongu basindaki calisma zamani
 // sinavindan gelir. Ipucu sart, cunku float OLMAYAN dizilerde bir govde
