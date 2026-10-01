@@ -1,0 +1,195 @@
+// split() TOPLU YOL + toInt() duz ondalik hizli yol — anlambilim bekcisi.
+//
+// 2026-10-01: split() parca basina ayirmadan (strstr + gecici malloc/strncpy/
+// free + ayri arena ayirmasi + buyuyen diziye push) iki gecisli toplu yola
+// gecti: parcalar sayilir, eleman deposu TAM boyda bir kez, butun parca
+// nesneleri TEK bir arena ayirmasinda bitisik kurulur. toInt(dizgi) ise
+// `[+-]?[0-9]{1,18}` bicimindeki dizgiyi atoll'a gitmeden cozer.
+//
+// Bu paket iki seyi bekliyor:
+//   1. SONUC eski yolla bayt bayt ayni (kenar durumlar: bos parca, bastaki/
+//      sondaki ayirici, cok karakterli ve kendisiyle cakisan ayirici, bos
+//      ayirici, bos girdi). Beklenen degerler ESKI derleyicide (27ba2221)
+//      bu paketin kendisi kosturularak dogrulandi — paket iki derleyicide de
+//      yesil.
+//   2. OMUR: bitisik kurulan parcalar ayri ayri saklaninca (global diziye,
+//      global json'a, kalici diziye push, checkpoint icinden global'e) ve
+//      arena coplaninca yasamaya devam ediyor.
+// Toplu yolun DEVREDE oldugunun pozitif kontrolu ayri: tests/split_toplu.sh.
+//
+// Calistir: ./tulpar tests/split_toplu.test.tpr
+import "test";
+
+func _birlestir(array a): str {
+    str s = "";
+    for (int i = 0; i < len(a); i = i + 1) {
+        if (i > 0) { s = s + "|"; }
+        s = s + "<" + a[i] + ">";
+    }
+    return s;
+}
+
+func run_temel() {
+    assert_eq_str(_birlestir(split("a,b,c", ",")), "<a>|<b>|<c>");
+    assert_eq_int(len(split("a,b,c", ",")), 3);
+    // Bos parcalar korunur.
+    assert_eq_str(_birlestir(split(",a,,b,", ",")), "<>|<a>|<>|<b>|<>");
+    assert_eq_str(_birlestir(split(",", ",")), "<>|<>");
+    // Ayirici yoksa tek parca.
+    assert_eq_str(_birlestir(split("abc", ";")), "<abc>");
+    // Ayirici girdiden uzun.
+    assert_eq_str(_birlestir(split("ab", "abc")), "<ab>");
+    // Girdinin tamami ayirici.
+    assert_eq_str(_birlestir(split("abc", "abc")), "<>|<>");
+}
+
+func run_cok_karakterli_ayirici() {
+    assert_eq_str(_birlestir(split("a::b::::c", "::")), "<a>|<b>|<>|<c>");
+    // Kendisiyle cakisan ayirici: soldan, cakismadan (strstr ile ayni).
+    assert_eq_str(_birlestir(split("aaa", "aa")), "<>|<a>");
+    assert_eq_str(_birlestir(split("aaaa", "aa")), "<>|<>|<>");
+    // Ilk baytı eslesip devami eslesmeyen aday atlanir.
+    assert_eq_str(_birlestir(split("x-y--z-", "--")), "<x-y>|<z->");
+    assert_eq_str(_birlestir(split("anahtar=deger; ad=tulpar", "; ")),
+                  "<anahtar=deger>|<ad=tulpar>");
+}
+
+func run_bos_girdi_ve_bos_ayirici() {
+    // Bos girdi BOS DIZI verir (Python'un [""]'inden farkli; eski davranis).
+    assert_eq_int(len(split("", ",")), 0);
+    assert_eq_int(len(split("", "")), 0);
+    // Bos ayirici: her bayt bir parca.
+    assert_eq_str(_birlestir(split("abc", "")), "<a>|<b>|<c>");
+    assert_eq_int(len(split("x", "")), 1);
+}
+
+func run_uzunluklar() {
+    // Parca uzunluklari 8 bayt hizalamasinin iki yanina dussun: bitisik
+    // kurulumda bir sonraki parcanin basligi bir oncekinin NUL'unu ezmemeli.
+    str s = "";
+    int i = 0;
+    while (i < 40) {
+        if (i > 0) { s = s + ","; }
+        s = s + repeat("q", i);
+        i = i + 1;
+    }
+    array p = split(s, ",");
+    assert_eq_int(len(p), 40);
+    int k = 0;
+    int bozuk = 0;
+    while (k < 40) {
+        if (len(p[k]) != k) { bozuk = bozuk + 1; }
+        if (p[k] != repeat("q", k)) { bozuk = bozuk + 1; }
+        k = k + 1;
+    }
+    assert_eq_int(bozuk, 0);
+}
+
+func run_buyuk_split_toplam() {
+    var sb = StringBuilder(64);
+    int n = 100000;
+    int beklenen = 0;
+    for (int i = 0; i < n; i = i + 1) {
+        if (i > 0) { sb_append(sb, ","); }
+        sb_append(sb, (i * 7919) % 100000);
+        beklenen = beklenen + (i * 7919) % 100000;
+    }
+    str s = sb_tostring(sb);
+    sb_free(sb);
+    array parts = split(s, ",");
+    assert_eq_int(len(parts), n);
+    int t = 0;
+    for (int i = 0; i < len(parts); i = i + 1) { t = t + toInt(parts[i]); }
+    assert_eq_int(t, beklenen);
+}
+
+// --- omur ------------------------------------------------------------------
+
+array g_parcalar = [];
+json g_sozluk = {};
+array g_tek = [];
+str g_kare_parca = "";
+
+func _cople() {
+    int k = 0;
+    while (k < 3000) {
+        str cop = "COPCOPCOPCOPCOP-" + toString(k) + "-COPCOPCOP";
+        array c = split(cop, "-");
+        json o = {"a": cop, "b": c};
+        k = k + 1;
+    }
+}
+
+func run_global_diziye_atanan_parcalar_yasar() {
+    g_parcalar = split("bir,iki,uc,dort", ",");
+    _cople();
+    assert_eq_str(_birlestir(g_parcalar), "<bir>|<iki>|<uc>|<dort>");
+}
+
+func run_tek_tek_saklanan_parcalar_yasar() {
+    array p = split("k1=v1;k2=v2;k3=v3", ";");
+    int i = 0;
+    while (i < len(p)) {
+        array kv = split(p[i], "=");
+        g_sozluk[kv[0]] = kv[1];
+        push(g_tek, kv[1]);
+        i = i + 1;
+    }
+    _cople();
+    assert_eq_str(g_sozluk["k1"], "v1");
+    assert_eq_str(g_sozluk["k3"], "v3");
+    assert_eq_str(_birlestir(g_tek), "<v1>|<v2>|<v3>");
+}
+
+func _kare_govdesi() {
+    array p = split("x,KALICI,y", ",");
+    g_kare_parca = p[1];
+}
+
+func run_checkpoint_icinden_globale() {
+    int wm = arena_save();
+    _kare_govdesi();
+    arena_drop(wm);
+    _cople();
+    assert_eq_str(g_kare_parca, "KALICI");
+}
+
+// --- toInt -------------------------------------------------------------------
+
+func run_toint_hizli_yol() {
+    assert_eq_int(toInt("0"), 0);
+    assert_eq_int(toInt("7"), 7);
+    assert_eq_int(toInt("-42"), -42);
+    assert_eq_int(toInt("+42"), 42);
+    assert_eq_int(toInt("-0"), 0);
+    assert_eq_int(toInt("000123"), 123);
+    assert_eq_int(toInt("123456789012345678"), 123456789012345678);   // 18 hane
+    assert_eq_int(toInt("-123456789012345678"), -123456789012345678);
+}
+
+func run_toint_atoll_yolu() {
+    // Hizli yolun KABUL ETMEDIGI bicimler eskisi gibi atoll'a gider.
+    assert_eq_int(toInt("1234567890123456789"), 1234567890123456789); // 19 hane
+    assert_eq_int(toInt("  12"), 12);       // bastaki bosluk
+    assert_eq_int(toInt("12abc"), 12);      // kuyruk
+    assert_eq_int(toInt("12 "), 12);
+    assert_eq_int(toInt(""), 0);
+    assert_eq_int(toInt("-"), 0);
+    assert_eq_int(toInt("+"), 0);
+    assert_eq_int(toInt("+-1"), 0);
+    assert_eq_int(toInt("abc"), 0);
+    assert_eq_int(toInt("3.9"), 3);
+}
+
+print("=== split toplu yol + toInt ===");
+test("temel ayirma", "run_temel");
+test("cok karakterli ayirici", "run_cok_karakterli_ayirici");
+test("bos girdi / bos ayirici", "run_bos_girdi_ve_bos_ayirici");
+test("hizalama sinirindaki parca uzunluklari", "run_uzunluklar");
+test("100k parca toplami", "run_buyuk_split_toplam");
+test("global diziye atanan parcalar yasar", "run_global_diziye_atanan_parcalar_yasar");
+test("tek tek saklanan parcalar yasar", "run_tek_tek_saklanan_parcalar_yasar");
+test("checkpoint icinden global'e", "run_checkpoint_icinden_globale");
+test("toInt hizli yol", "run_toint_hizli_yol");
+test("toInt atoll yolu", "run_toint_atoll_yolu");
+test_summary();

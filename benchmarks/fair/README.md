@@ -281,7 +281,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `mandelbrot` | 158,4 | 158,7 | 1,00× | 3. |
 | `qsort` | 121,2 | 57,4 | 2,1× | 8. |
 | `callfn` | 298,6 | 91,1 | 3,3× | 8. |
-| `parse` | 196,3 | 56,7 | 3,5× | 6. |
+| `parse` | 196,3 → **126,2** (2026-10-01) | 56,7 | 2,2× | 6. → **4.** |
 | `particles` | 329,6 | 42,2 | 7,8× | 8. |
 | `nbody` | 1304,8 | 114,5 | 11,4× | 8. |
 | `matmul` | 821,3 | 31,1 | 26,4× | 8. |
@@ -300,7 +300,11 @@ Bulgular, sırayla ele alınması önerilen:
 3. **`particles`** (oyun döngüsü) C'nin 7,8 katı. Aynı kod bir fonksiyonun
    içine alınınca 185 ms (4,4×): üst düzey değişkenler global ve her erişim
    bellekten geçiyor; kalan fark struct dizisi alan erişiminde.
-4. **`parse`** hızda Java'yla başa baş ama tepe bellek 443 MB (C 32 MB):
-   `split` beş milyon ayrı dizgi nesnesi kuruyor.
+4. **`parse`** — **hız kapandı (2026-10-01):** `split` parçaları tek arena
+   ayırmasında bitişik kuruyor (parça başına geçici malloc + ayrı ayırma +
+   büyüyen dizi yerine), `toInt` düz ondalık dizgide `atoll`a gitmiyor:
+   200 → **126 ms** (Go 116, Rust 77, C 57). Tepe bellek AYNI (440 MB, C
+   32): parçalar canlı ve her biri 56 baytlık `ObjString` başlığı taşıyor —
+   geri alınmayan çöp değil, temsil maliyeti (`docs/mindmap/Performance.md`).
 5. **Başlatma 0,25 ms, derleme ortancası 61 ms, ikili 1,4 MB**; belleğin çoğu
    çekirdekte C ile aynı (`arrayiter`'de 32 bitlik dizi sayesinde yarısı).

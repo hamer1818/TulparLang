@@ -664,6 +664,18 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # SPLIT TOPLU YOL (2026-10-01): split() parcalari TEK arena ayirmasinda
+    # bitisik kurar (parse cekirdegi 200 -> 126 ms). Anlambilim
+    # tests/split_toplu.test.tpr'de; bu kapi mekanizmayi (tek ayirma, beklenen
+    # bayt boyu) olcer — parca basina ayirmaya donus baska hicbir yerde
+    # kirmizi vermez, yalniz yavaslar.
+    if [ -x tests/split_toplu.sh ]; then
+        if ! bash tests/split_toplu.sh ./tulpar; then
+            echo -e "${RED}split toplu yol kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # PERFORMANS IPUCU (K167): TULPAR_PERF_HINTS=1 kanitli erisim kurulamayan
     # dongunun nedenini soyler; kanitli donguye ipucu basmaz, varsayilan kapali.
     if [ -x tests/perf_ipucu.sh ]; then
