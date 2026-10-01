@@ -1383,6 +1383,16 @@ TPREOF
         exit 1
     fi
 
+    # INT YEREL GOLGE SURUMU + INT DIZI DONGU SURUMU (2026-10-01): fonksiyon
+    # icindeki kutulu `int` yereller dongude native golgeye iniyor mu, ic ice
+    # dongunun en icteki `for`u 32-bit int depoya iniyor mu, kurulmamasi
+    # gereken yerde kurulmuyor mu, sinir disi hala yakalaniyor mu, ve uc kip
+    # (varsayilan / TULPAR_NO_IVER / TULPAR_NO_IAVER) ayni ciktiyi veriyor mu.
+    if ! bash tests/int_golge.sh ./tulpar; then
+        echo -e "${RED}int yerel golge / int dizi dongu surumu bozuk!${NC}"
+        exit 1
+    fi
+
     # KUTULU FONKSİYONLARIN DEĞER ABI'si duruyor mu?
     #
     # Kutulu gövde `t_<ad>.f` içinde yaşıyor ve VMValue'yu DEĞER olarak

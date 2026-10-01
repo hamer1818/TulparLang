@@ -279,7 +279,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `strcat` | 14,1 | 37,8 | 0,37× | 1. |
 | `arrayiter` | 1,2 | 2,3 | 0,52× | 1. |
 | `mandelbrot` | 158,4 | 158,7 | 1,00× | 3. |
-| `qsort` | 121,2 | 57,4 | 2,1× | 8. |
+| `qsort` | 121,2 → **70,0** (2026-10-01) | 57,4 | 2,1× → **1,2×** | 8. → **5.** |
 | `callfn` | 298,6 → 209,6 → **65,5** (2026-10-01) | 91,1 | 2,3× → **0,7×** | 8. → ~3.* |
 | `parse` | 196,3 → **126,2** (2026-10-01) | 56,7 | 2,2× | 6. → **4.** |
 | `particles` | 329,6 → **54,8** (2026-10-01) | 42,2 | 7,8× → 1,3× | 8. → **4.** |
@@ -345,5 +345,13 @@ Bulgular, sırayla ele alınması önerilen:
    öteki dillerle (Rust 58,5, Go 64,9, Java 76,2) yan yana konunca ~3. Kalan: `acc` üst düzey `int`
    → global, tur başına bir saklama (main yereli olunca 63,5 ms; `int`
    kuralı elek yüzünden global, bkz. `main_local_declare`).
-6. **Başlatma 0,25 ms, derleme ortancası 61 ms, ikili 1,4 MB**; belleğin çoğu
+6. **`qsort`** — **büyük ölçüde kapandı (2026-10-01):** maliyet dizide değil
+   tamsayı değişkenlerdeydi — fonksiyon içindeki `int i` kutulu bir yuva ve
+   her `i + 1` / `a[i] < p` etiket dallanması + geri düşüş çağrısı ödüyordu
+   (aynı bölme döngüsü üst düzeyde, main yerelleriyle 85 ms). Döngü başında
+   bir kez etiket + `int[]` depo sınavıyla native gölgeye iniyor: 122,7 →
+   **70,0 ms** (C 57,4; dokuz dil arasında 8. → 5., Go 58,9'un hemen
+   arkasında). Kalan fark büyük olasılıkla çağrı başına (863 bin özyinelemeli
+   çağrı, kutulu ABI). Ayrıntı: `docs/mindmap/Performance.md`.
+7. **Başlatma 0,25 ms, derleme ortancası 61 ms, ikili 1,4 MB**; belleğin çoğu
    çekirdekte C ile aynı (`arrayiter`'de 32 bitlik dizi sayesinde yarısı).

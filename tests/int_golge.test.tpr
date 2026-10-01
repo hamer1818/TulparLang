@@ -1,0 +1,321 @@
+import "test";
+
+// INT YEREL GOLGE SURUMU + INT DIZI DONGU SURUMU (2026-10-01).
+//
+// Fonksiyon icindeki `int` yereller kutulu VMValue yuvalari; en dis uygun
+// dongu, dongu basinda adlarin INT etiketi ve okunan `int[]` dizilerin kutusuz
+// int deposu sinanarak SURUMLENIYOR: hizli kopyada adlar native i64 golgede
+// (cikista kutulu yuvaya geri yaziliyor), tutmazsa bugunku kod. Ic ice dongunun
+// en icteki `for`u ayrica `X[B + j]` erisimleriyle 32-bit depoya dogrudan
+// iniyor (float surumunun int ikizi); i32'ye sigmayan yazma genel surume
+// geciyor (deopt) ve dizi genisliyor.
+//
+// Bu paket ANLAMIN degismedigini kilitliyor: her senaryo ayni islemi surume
+// girmeyen bir ikizle (`array` + tipsiz `var`) karsilastiriyor ya da surumun
+// SOGUK yolunu (sinav tutmuyor) bugunku sonuca gore sabitliyor. Karar, IR
+// pozitif kontrolu ve sinir disi erisim tests/int_golge.sh'de.
+
+// ⚠ `assert_eq_str` DIZIDE HICBIR SEY OLCMUYOR: `toString(<dizi>)` her dizi
+// icin "<object>" donuyor (olculdu 2026-10-01: `int[]`, `array`, `json`,
+// `float[]` hepsi), yani iki dizi her zaman "esit". Bu paketin ilk hali
+// deopt'u sabote edilmis bir derleyiciyle YESIL kaldi. Diziler eleman eleman
+// karsilastiriliyor; karsilastirici tipsiz (ipucu yok -> kendisi surume girmez).
+func ayni_dizi(p, q) {
+    if (len(p) != len(q)) {
+        _test_set_fail("uzunluk farkli: " + toString(len(p)) + " / " + toString(len(q)));
+        return;
+    }
+    for (var t = 0; t < len(p); t = t + 1) {
+        if (p[t] != q[t]) {
+            _test_set_fail("eleman " + toString(t) + ": " + toString(p[t]) + " / " +
+                           toString(q[t]));
+            return;
+        }
+    }
+}
+
+// ---- ikizler: tipsiz degiskenler, `array` (ipucu yok) -> surum yok ----------
+func ikiz_dizi(src, n): array {
+    array k = [];
+    for (var i = 0; i < n; i = i + 1) { push(k, src[i]); }
+    return k;
+}
+
+func ikiz_sirala(k, n) {
+    var i = 1;
+    while (i < n) {
+        var v = k[i];
+        var j = i - 1;
+        while (j >= 0 && k[j] > v) { k[j + 1] = k[j]; j = j - 1; }
+        k[j + 1] = v;
+        i = i + 1;
+    }
+}
+
+// ---- qsort (benchmarks/fair/qsort.tpr ile ayni govde) ----------------------
+func qs(int[] a, int lo, int hi) {
+    int i = lo;
+    int j = hi;
+    int p = a[(lo + hi) / 2];
+    while (i <= j) {
+        while (a[i] < p) { i = i + 1; }
+        while (a[j] > p) { j = j - 1; }
+        if (i <= j) {
+            int t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+    if (lo < j) { qs(a, lo, j); }
+    if (i < hi) { qs(a, i, hi); }
+}
+
+func run_qsort() {
+    int n = 3001;
+    int[] a = array_fill(n, 0);
+    int seed = 7;
+    for (int i = 0; i < n; i = i + 1) {
+        seed = (seed * 48271) % 2147483647;
+        a[i] = seed % 1000 - 500;
+    }
+    array k = ikiz_dizi(a, n);
+    qs(a, 0, n - 1);
+    ikiz_sirala(k, n);
+    ayni_dizi(a, k);
+}
+
+// ---- int matmul: golge + ic dongude int dizi surumu ------------------------
+func carp(int[] a, int[] b, int[] c, int n) {
+    for (int i = 0; i < n; i = i + 1) {
+        for (int k = 0; k < n; k = k + 1) {
+            int av = a[i * n + k];
+            for (int j = 0; j < n; j = j + 1) { c[i * n + j] = c[i * n + j] + av * b[k * n + j]; }
+        }
+    }
+}
+
+// Ikizin dizi adlari BILEREK farkli: `int[]` ipucu ada bagli (programda bir
+// yerde `int[] a` bildirilmisse her `a` aday) — ayni adlar ikizi de surume
+// sokardi ve bozuk bir surum iki tarafta ayni yanlisi uretirdi (sabotajla
+// olculdu 2026-10-01: deopt kaldirildiginda bu paket yesil kaliyordu).
+func ikiz_carp(x, y, z, m) {
+    for (var i = 0; i < m; i = i + 1) {
+        for (var k = 0; k < m; k = k + 1) {
+            var xv = x[i * m + k];
+            for (var j = 0; j < m; j = j + 1) { z[i * m + j] = z[i * m + j] + xv * y[k * m + j]; }
+        }
+    }
+}
+
+func matmul_sina(int n, int carpan) {
+    int[] a = array_fill(n * n, 0);
+    int[] b = array_fill(n * n, 0);
+    int[] c = array_fill(n * n, 0);
+    for (int i = 0; i < n * n; i = i + 1) {
+        a[i] = mod(i * 7, 11) * carpan;
+        b[i] = mod(i * 3, 13) * carpan - 5;
+    }
+    array ka = ikiz_dizi(a, n * n);
+    array kb = ikiz_dizi(b, n * n);
+    array kc = ikiz_dizi(c, n * n);
+    carp(a, b, c, n);
+    ikiz_carp(ka, kb, kc, n);
+    ayni_dizi(c, kc);
+}
+
+func run_matmul() { matmul_sina(23, 1); }
+
+// Carpimlar i32'yi asiyor: hizli govdedeki yazma SIGMIYOR -> genel surume
+// gecis (deopt), dizi 64-bit'e genisliyor, tur orada bastan kosuyor. Gecis
+// yanlis yere atlarsa ya da yazmayi iki kez yaparsa sonuc ikizden ayrilir.
+func run_matmul_tasma() { matmul_sina(9, 100000); }
+
+// ---- soguk yol: `int` bildirimi degeri ZORLAMIYOR --------------------------
+// `int k` bir dizgi tutabilir (bugunku anlam); dongu basindaki etiket sinavi
+// tutmuyor, soguk kopya bugunku kodu kosuyor. (Donguler bir `int[]` okuyor:
+// kesin-INT okumasi olmayan dongu surume hic girmez.)
+func dizgi_int(json d, int[] z): str {
+    int k = d["x"];
+    for (int j = 0; j < 3; j++) { k = k + z[j]; }
+    return toString(k);
+}
+func run_dizgi_int() {
+    int[] z = array_fill(3, 1);
+    json d = {"x": "abc"};
+    assert_eq_str(dizgi_int(d, z), "abc111");
+    json e = {"x": 2.5};
+    assert_eq_str(dizgi_int(e, z), "5");
+}
+
+// `int` parametreye dizgi gelirse de ayni.
+func param_dizgi(int lo, int[] z): str {
+    int i = lo;
+    int s = 0;
+    while (s < 2) { i = i + z[s]; s = s + 1; }
+    return toString(i);
+}
+func run_param_dizgi() {
+    int[] z = array_fill(2, 1);
+    json g = {"x": "7"};
+    assert_eq_str(param_dizgi(g["x"], z), "711");
+    assert_eq_str(param_dizgi(5, z), "7");
+}
+
+// `int[]` ama double depo: depo sinavi tutmuyor -> soguk yol; t'ye her turda
+// `t + 1.5` kirpilarak yaziliyor (bugunku anlam: 4).
+func run_float_depo() {
+    int[] a = array_fill(4, 1.5);
+    int t = 0;
+    for (int j = 0; j < 4; j++) { t = t + a[j]; }
+    assert_eq_int(t, 4);
+}
+
+// ---- cikis yollari: break / continue / return golgeyi geri yaziyor ----------
+func bul(int[] a, int x): int {
+    int i = 0;
+    while (i < len(a)) {
+        if (a[i] == x) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+func kir(int[] a): int {
+    int i = 0;
+    int s = 0;
+    while (true) {
+        if (i >= 5) { break; }
+        i = i + 1;
+        if (i == 2) { continue; }
+        s = s + a[i];
+    }
+    return s * 100 + i;
+}
+func run_cikislar() {
+    int[] a = array_fill(8, 0);
+    for (int i = 0; i < 8; i++) { a[i] = i * 3; }
+    assert_eq_int(bul(a, 12), 4);
+    assert_eq_int(bul(a, 13), -1);
+    // i: 1..5, 2 atlaniyor -> a[1]+a[3]+a[4]+a[5] = 3+9+12+15 = 39
+    assert_eq_int(kir(a), 3905);
+}
+
+// ---- takma ad: baska bir ad diziye dizgi yaziyor -> dizi kaniti duser -------
+func takma(int[] a): str {
+    json o = a;
+    int t = 0;
+    for (int j = 0; j < 3; j++) { o[0] = "s"; t = t + a[1]; }
+    return toString(t) + toString(a[0]);
+}
+func run_takma_ad() {
+    int[] b = array_fill(5, 3);
+    assert_eq_str(takma(b), "9s");
+}
+
+// ---- tamsayi tasmasi: golgede de i64 sarmasi --------------------------------
+func sar(int[] z): int {
+    int x = 9223372036854775807;
+    for (int j = 0; j < 3; j++) { x = x + z[j]; }
+    return x;
+}
+func run_sarma() {
+    int[] z = array_fill(3, 1);
+    assert_eq_str(toString(sar(z)), "-9223372036854775806");
+}
+
+// ---- kesin INT olmayan atama adi plandan dusuruyor --------------------------
+func bilesik(int[] a): int {
+    int s = 0;
+    for (int j = 0; j < 3; j++) { s += 1.5; s = s + a[j]; }
+    return s;
+}
+func run_bilesik() {
+    int[] a = array_fill(3, 2);
+    // s: 0 -> 1 (1,5 kirpilir) -> 3 -> 4 -> 6 -> 7 -> 9
+    assert_eq_int(bilesik(a), 9);
+}
+
+// ---- ayni adli bildirim iki ardisik dongude --------------------------------
+func iki_dongu(int[] a): int {
+    int i = 0;
+    int s = 0;
+    while (i < 3) { int t = a[i] * 2; s = s + t; i = i + 1; }
+    while (i < 6) { int t = a[i] + 1; s = s + t; i = i + 1; }
+    return s;
+}
+func run_iki_dongu() {
+    int[] a = array_fill(6, 0);
+    for (int i = 0; i < 6; i++) { a[i] = i; }
+    // 2*(0+1+2) + (3+1)+(4+1)+(5+1) = 6 + 15
+    assert_eq_int(iki_dongu(a), 21);
+}
+
+// ---- yerinde ters cevirme (takas) ------------------------------------------
+func ters(int[] a) {
+    int i = 0;
+    int j = len(a) - 1;
+    while (i < j) {
+        int t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i++;
+        j--;
+    }
+}
+func run_ters() {
+    int[] a = array_fill(7, 0);
+    for (int i = 0; i < 7; i++) { a[i] = i * i - 10; }
+    ters(a);
+    array k = [26, 15, 6, -1, -6, -9, -10];
+    ayni_dizi(a, k);
+}
+
+// ---- dongude cagrilan fonksiyon ust duzey `int` global'i degistiriyor -------
+// (#431'den beri ust duzey ad main'in yereline terfi ediyor; burada bir
+// fonksiyon da kullandigi icin GERCEK global kaliyor.)
+int sayac = 0;
+func artir() { sayac = sayac + 1; }
+func sayaclı_dongu(int[] a): int {
+    int s = 0;
+    for (int j = 0; j < 4; j++) { artir(); s = s + sayac * a[j]; }
+    return s;
+}
+func run_global() {
+    int[] a = array_fill(4, 10);
+    sayac = 0;
+    // sayac 1..4 -> 10 * (1+2+3+4)
+    assert_eq_int(sayaclı_dongu(a), 100);
+    assert_eq_int(sayac, 4);
+}
+
+// ---- int dizi surumu: ofsetli erisim tam sinirda, sabit indeksli okuma -------
+func kaydir(int[] a, int[] b, int n, int m) {
+    for (int r = 0; r < m; r++) {
+        for (int j = 0; j < n; j++) { b[r * n + j] = a[r * n + j] + a[0]; }
+    }
+}
+func run_kaydir() {
+    int[] a = array_fill(12, 0);
+    int[] b = array_fill(12, 0);
+    for (int i = 0; i < 12; i++) { a[i] = i + 1; }
+    kaydir(a, b, 4, 3);
+    array k = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+    ayni_dizi(b, k);
+}
+
+test("qsort fonksiyonda: golge surumu = ekleme siralamasi ikizi", "run_qsort");
+test("int matmul: golge + ic dongude int dizi surumu = ikiz", "run_matmul");
+test("int matmul i32 tasmasi: deopt + genisleme = ikiz", "run_matmul_tasma");
+test("int yerel dizgi tutuyor: soguk yol", "run_dizgi_int");
+test("int parametreye dizgi: soguk yol", "run_param_dizgi");
+test("int[] ama double depo: soguk yol", "run_float_depo");
+test("break / continue / return golgeyi geri yaziyor", "run_cikislar");
+test("takma ad dizgi yaziyor: dizi kaniti duser", "run_takma_ad");
+test("i64 sarmasi golgede de ayni", "run_sarma");
+test("kesin INT olmayan atama adi plandan dusurur", "run_bilesik");
+test("ayni adli bildirim iki ardisik dongude", "run_iki_dongu");
+test("yerinde ters cevirme", "run_ters");
+test("dongude cagri global int'i degistiriyor", "run_global");
+test("int dizi surumu: ofsetli erisim tam sinirda", "run_kaydir");
+test_summary();

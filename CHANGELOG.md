@@ -111,6 +111,59 @@ tag still works;
   `arena_kalicilik`, tutulan anahtarda da geri bırakılınca ekle/oku testi ve
   `shared_json_read` kırmızı.
 
+### Performans — fonksiyon içi `int` yereller döngüde native gölge + `int[]` iç içe döngü sürümü (qsort 2,1× → 1,2× C)
+
+- **Kök neden (ölçüldü, IR + zamanlama):** fonksiyon içindeki `int i = lo;`
+  kutulu bir VMValue yuvası. `int` bildirimi değeri zorlamıyor (`int k =
+  d["x"]` bir dizgi tutabilir — bugünkü anlam, değişmedi), o yüzden her
+  `i + 1`, `a[i] < p`, `i <= j` iki etiket okuması + tür dallanması +
+  `vm_binary_op` geri düşüş çağrısı üretiyordu. Aynı bölme döngüsü üst
+  düzeyde (main yerelleri native) 85 ms, fonksiyon içinde 125 ms.
+- **Int yerel gölge sürümü:** en dış uygun `while`/`for` döngüsünde, adın
+  döngüdeki her bağlanmasının kesin INT olduğu (int sabiti, kanıtlı ad,
+  native int, `+ - *`, tekli eksi, kanıtlı `int[]` okuması) kanıtlanınca
+  döngü başında adların etiketi INT ve okunan `int[]` dizilerin deposu
+  kutusuz int diye BİR KEZ sınanıyor; tutarsa adlar döngü boyunca native i64
+  gölgede (çıkışta kutulu yuvaya geri yazılır), tutmazsa bugünkü kod. `int[]`
+  okuması ancak döngü şekil-kararlıysa ve HER eleman yazması kesin INT ise
+  kanıtlı (takma ad). Kapanış/try/match/await/for-in içeren, kesin-INT dizi
+  okuması olmayan ya da 1500 düğümden büyük döngü kopyalanmaz.
+  `TULPAR_NO_IVER=1` kapatır.
+- **Int dizi döngü sürümü:** float dizi sürümünün `int[]` ikizi — iç içe
+  döngünün en içteki `for`u `X[B + j]` erişimleri ve kesin INT tek eleman
+  yazmasıyla, döngü başında sınır + 32-bit int depo + değişmez adların INT
+  etiketi sınanarak sürümleniyor; hızlı gövdede erişim tek GEP + i32
+  load/store. i32'ye sığmayan yazma YAPILMADAN genel sürümün koşuluna
+  geçilir (tur orada baştan, dizi genişler). **Sınır dışı erişim hâlâ hata
+  verir; int taşma/genişlik davranışı aynı.** En dış seviyedeki tek döngüler
+  `for` sürümlemesinde (K201/K215) kalıyor. `TULPAR_NO_IAVER=1` kapatır.
+- **Ölçüm** (Ryzen 7 9800X3D, `taskset -c 2,3`, taban `d6ad680f` ile
+  dönüşümlü A/B, ikisi de repo dışında kendi runtime arşiviyle, en iyi,
+  2026-10-01): `qsort` (1M, 21 tur) **122,7 → 70,0 ms** (C 57,4: 2,14× →
+  1,22×; dokuz dil arasında 8. → 5.), `int[]` matmul fonksiyonda (N=640)
+  **585,6 → 120,5 ms**. Gerileme denetimi (13 çekirdek, 7 tur): 11'inin
+  ikilisi tabanla **bayt bayt aynı** (`intloop`, `fib`, `sieve`, `strcat`,
+  `mandelbrot`, `matmul`, `nbody`, `hashmap`, `particles`, `callfn`,
+  `parse`); değişen `arrayiter` 1,37 → 1,33 (50M'de 16,29 → 15,55).
+- Testler: `tests/int_golge.test.tpr` (14 senaryo: qsort ve int matmul
+  ikizle eleman eleman, i32 taşmasında deopt + genişleme, `int` yerel /
+  parametre dizgi tutuyor, `int[]` ama double depo, break/continue/return
+  geri yazma, takma ad, i64 sarması, kesin olmayan atama, ardışık döngüler,
+  ters çevirme, döngüde global değiştiren çağrı, ofsetli tam sınır) ve
+  `tests/int_golge.sh` kapısı (`build.sh suites`, 19 denetim): karar (iki
+  yön), gölge kopyasında ve int dizi sürümünde sınır dışı hâlâ yakalanıyor,
+  yumuşak kipte çıktı sürümsüz derlemeyle aynı, IR'de `iver_fast` / `iav.el`
+  var ve `TULPAR_NO_IVER=1` / `TULPAR_NO_IAVER=1` iken yok, üç kip aynı
+  çıktı. Pozitif kontroller (sabotaj): gölge sınavındaki etiket denetimi
+  kaldırılınca dizgi tutan `int` iki senaryoda kırmızı (dizgi işaretçisi
+  sayı diye okunuyor); deopt kaldırılınca taşma senaryosu ve kapının üç kip
+  karşılaştırması kırmızı.
+- **Bulgu (Tuzaklar 7j):** `assert_eq_str(dizi, dizi)` hiçbir şey ölçmüyor —
+  `toString(<dizi>)` her dizi için `<object>`. Bu paketin ilk hali deopt'u
+  sabote edilmiş derleyiciyle yeşil kaldı; diziler artık eleman eleman
+  karşılaştırılıyor. `tests/float_dizi.test.tpr`'deki dizi karşılaştırmaları
+  aynı sebeple bir şey ölçmüyor (bu PR'da dokunulmadı).
+
 ### Performans — float dizisi: kutusuz double depo + iç içe döngüde kanıtlı erişim (matmul 26× → 1,2× C)
 
 - **Kök neden (ölçüldü, IR + zamanlama):** `float[]` her elemanı 16 baytlık

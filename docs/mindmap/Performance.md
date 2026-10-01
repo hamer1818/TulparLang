@@ -1240,8 +1240,9 @@ yavaşlatabiliyor (yukarıdaki "İç içe döngü sürümlemesi").
 - nbody 1,6×: beş cisimde iç döngü 0–4 tur dönüyor ve HER girişte yedi
   global dizinin deposu yeniden sınanıyor (çağrı başına altı giriş). Sınavı
   dış döngüye taşımak (dış döngüyü de sürümlemek) bir sonraki adım.
-- Tamsayı dizisinde iç içe/afin kanıt yok (`matmul_int` 530 ms): aynı plan
-  int için yazılabilir ama 32/64 genişlik ve yazma sığma kanıtı (K215) ayrı iş.
+- ~~Tamsayı dizisinde iç içe/afin kanıt yok (`matmul_int` 530 ms).~~
+  **Kapandı (2026-10-01):** aşağıdaki "Fonksiyon içi `int` yereller" bölümü
+  (`matmul_int` 586 → 121 ms).
 - `X[j - 1]` biçimi (`-` ile ofset) plana girmiyor; `X[j + -1]` giriyor.
 - `a[i] += x` (bileşik eleman yazması) float sürümünde reddediliyor.
 
@@ -1420,3 +1421,86 @@ tazelenmeli (Tuzaklar 8aq). Kazanç %10–20, risk iki paralel işle
 çakışmak; sıradaki adım `capacity`'yi tek başına kaldırmak.
 
 Test: `tests/gecici_dizgi.test.tpr` + `tests/gecici_dizgi.sh` (bkz. CHANGELOG).
+
+## Fonksiyon içi `int` yereller: döngüde native gölge + `int[]` iç içe döngü sürümü — qsort 122 → 70 ms (2026-10-01)
+
+Hız karnesinde `qsort` C'nin 2,1 katıydı (122,8 ms / 57,4; dokuz dil arasında
+8.), aynı kod `int[]` ile matmul yazılınca fonksiyon içinde 586 ms. Önce
+ölçüldü (Ryzen 7 9800X3D, `taskset -c 2,3`, 5 tekrarın en iyisi):
+
+| | ms |
+|---|--:|
+| qsort (kıyasın kendisi: `qs` fonksiyonu) | 122,7 |
+| aynı bölme, özyinelemesiz, ana programda — değişkenler blok içinde | 127,0 |
+| aynı, değişkenler ÜST DÜZEYDE (main yereli → native, #431) | 84,9 |
+| C (`gcc -O2`) | 57,4 |
+
+Yani maliyetin büyüğü dizide değil **tamsayı değişkenlerde**. IR
+(`TULPAR_AOT_EMIT_LL=1`) nedenini gösterdi: fonksiyon içindeki `int i = lo;`
+kutulu bir VMValue yuvası. `int` bildirimi değeri ZORLAMIYOR — `int k =
+d["x"]` bir dizgi tutabilir, `k + 1` `"abc1"` verir (ölçüldü; bugünkü anlam,
+değişmedi) — o yüzden codegen her `i + 1`, `a[i] < p`, `i <= j` için iki
+etiket okuması + tür dallanması + `vm_binary_op` geri düşüş çağrısı üretiyor.
+SROA etiketleri phi'ye çeviriyor ama geri düşüş yolunun dinamik etiketi her
+phi'ye karışıyor, katlanamıyor.
+
+**Int yerel gölge sürümü** (`llvm_array_shape.cpp` `tulpar_int_local_plan`,
+codegen `iv_try_version`): en dış uygun `while`/`for` döngüsü için kanıt —
+adın döngüdeki HER bağlanması kesin INT (int sabiti, kanıtlı ad, native int,
+`+ - *`, tekli eksi, kanıtlı `int[]` okuması), `int[]` okuması ancak dizi
+`int[]` ipuçlu, döngüde yeniden bağlanmıyor, döngü şekil-kararlı ve HER eleman
+yazması kesin INT ise kanıtlı (takma ad: başka bir ad aynı diziyi
+gösterebilir). Sayısal kısım döngü başında bir kez: adların etiketi INT,
+okunan dizilerin deposu kutusuz int (`tulpar.int_probe`). Tutarsa hızlı kopya
+(adlar native i64 gölgede; `LocalVar` geçici olarak native'e çevriliyor,
+çıkışta kutulu yuvaya geri yazılıyor), tutmazsa bugünkü kod. Reddedilen:
+kapanış/try/match/await/for-in içeren döngü; döngüde bildirilen ad bir `for`
+kapsamında değilse fonksiyonda döngü dışında geçmemeli (`while` kapsam
+açmıyor).
+
+**Int dizi döngü sürümü** (float planının int kipi, `tulpar_int_loop_plan`):
+iç içe döngünün en içteki `for`u, `X[B + j]` erişimleri ve kesin INT TEK
+eleman yazmasıyla; döngü başında sınır + 32-bit int depo (`tulpar.i32_probe`)
++ değişmez adların INT etiketi. Hızlı gövdede erişim tek GEP + i32
+load/store. i32'ye sığmayan yazma YAPILMADAN genel gövdenin koşuluna
+atlanıyor (tur orada baştan, dizi genişliyor) — bu yalnız yazma gövdenin ilk
+bildirim-dışı deyimiyse doğru (K201'in kuralı).
+
+Ölçülüp atılanlar:
+- **Genişlik dalını kaldırmak** (hızlı kopyayı 32-bit varsayımıyla dalsız
+  üretmek, `shape_want32 = 1`): qsort 70,0 / 70,6 ms — kazanç yok, dal iyi
+  tahmin ediliyor. Gönderilmedi.
+- **Kesin-INT dizi okuması olmayan döngüyü de kopyalamak:** kazanç tur
+  başına bir etiket sınavı; bedel kod. `scene3d_editor` derlemesi 10,4 →
+  11,6 s, ikili %2,4 büyüdü. Plan artık en az bir kanıtlı okuma istiyor:
+  derleme 10,42 s (taban 10,48), ikili tabanla aynı boyutta. Ayrıca
+  1500 düğümden büyük döngü kopyalanmıyor (qsort'un bölme döngüsü 56,
+  int matmul'ün dış döngüsü 66 düğüm).
+
+Sonuç (dönüşümlü A/B, taban `d6ad680f`, ikisi de repo DIŞINDA kendi runtime
+arşiviyle, `taskset -c 2,3`, en iyi):
+
+| | önce | sonra | C |
+|---|--:|--:|--:|
+| `qsort` (1M, 21 tur) | 122,7 | **70,0** | 57,4 (2,14× → 1,22×) |
+| `int[]` matmul fonksiyonda (N=640, 21 tur) | 585,6 | **120,5** | 69 (int64) · 41 (int32) |
+
+Gerileme denetimi, 13 çekirdek, 7 tur: **11'inin ikilisi tabanla bayt bayt
+aynı** (`cmp`) — `intloop` 135,00/135,01 · `fib` 0,65/0,60 · `sieve`
+8,06/8,24 · `strcat` 13,52/13,62 · `mandelbrot` 158,48/158,41 · `matmul`
+37,03/37,31 · `nbody` 187,26/187,46 · `hashmap` 198,12/188,60 ·
+`particles` 52,82/52,67 · `callfn` 170,39/169,11 · `parse` 125,13/124,52;
+bu satırlardaki ±%2–5 aynı ikilinin gürültüsü (elekteki %2,2 dahil — bkz.
+[[Tuzaklar]] 7i). Değişen ikisi: `qsort` ve `arrayiter` (1,37 → 1,33; 41
+turda 1,28/1,30 — 5M'de süreç başlatma baskın; 50M'de 16,29 → 15,55).
+
+Kalan:
+- qsort 1,22× C. Bölme döngüleri C'ninkine yakın (sınır `i <u count` +
+  genişlik dalı + yükleme); fark büyük olasılıkla çağrı başına: 863 199
+  özyinelemeli çağrının her biri kutulu ABI, 1,2 KB'lık yığın çerçevesi,
+  `a[(lo + hi) / 2]` genel okuma, şekil doldurma ve gölge sınavı ödüyor
+  (ölçülmedi — perf bu makinede yok).
+- int matmul 1,7× C (int64): iç döngü i32 sığma sınavı (deopt) yüzünden
+  VEKTÖRLEŞMİYOR. Sınavı döngü dışına almak (aralık kanıtı) ayrı iş.
+- `int[]` ipucu ADA bağlı (float sürümüyle aynı): programda bir yerde
+  `int[] a` varsa her `a` aday; doğruluk depo sınavından geliyor.

@@ -2087,6 +2087,28 @@ kaynağa zararsız bir önek koyup hizalamayı kaydır. Kod aynı ve fark hizala
 gelip gidiyorsa ölçülen şey derleyici değil yerleşimdir — ve ters yönde de
 geçerli: hizalama şansıyla gelen %2 "kazanç" da kazanç değildir.
 
+## 7j. `assert_eq_str(dizi, dizi)` hiçbir şey ölçmüyor — `toString(<dizi>)` hep `<object>`
+
+`lib/test.tpr`'deki `assert_eq_str` iki tarafı `toString` ile dizgiye çevirip
+karşılaştırıyor. Dizide bu çeviri İÇERİK üretmiyor: `int[]`, `float[]`,
+`array` ve `json` dizisi için `toString` **`<object>`** döndürüyor (`print`
+de `<array>` basıyor; ölçüldü 2026-10-01). Yani iki dizi — içerikleri ne
+olursa olsun — her zaman "eşit".
+
+Nasıl görüldü: int dizi döngü sürümünün testi (`tests/int_golge.test.tpr`)
+matmul'ü bir ikizle `assert_eq_str(c, kc)` ile karşılaştırıyordu. Deopt
+(i32'ye sığmayan yazmada genel sürüme geçiş) **sabote edilmiş** derleyiciyle
+paket YEŞİL kaldı; aynı programın çıktısını süreç dışından karşılaştıran
+`tests/int_golge.sh` ise kırmızıydı. `print(c[80])` ile `print(kc[80])`
+farklı, `toString(c) == toString(kc)` `true`.
+
+Etki: dizi karşılaştırması bu yardımcıyla yapılan her test bir şey ölçmüyor
+— `tests/float_dizi.test.tpr` dahil (matmul, push/remove_at, nbody biçimi,
+takma ad senaryolarının dizi karşılaştırmaları). **Kural:** diziyi eleman
+eleman karşılaştır (`int_golge.test.tpr`'deki `ayni_dizi`); bir eşitlik
+yardımcısı yazınca bir kez bilerek FARKLI iki girdiyle kırmızıya döndüğünü
+gör (Tuzaklar 7a'nın aynısı: testin kendisi yanlışsa güvenle yanlış sonuç).
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 
