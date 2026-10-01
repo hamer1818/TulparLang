@@ -583,6 +583,7 @@ static void free_object(Obj *obj) {
       free(o->keys);
     if (o->values)
       free(o->values);
+    obj_index_release(o);
     if (!from_arena)
       free(o);
     break;
@@ -890,6 +891,7 @@ ObjObject *vm_allocate_object(VM *vm) {
   obj->capacity = 0;
   obj->keys = nullptr;
   obj->values = nullptr;
+  obj->index = nullptr;
   return obj;
 }
 

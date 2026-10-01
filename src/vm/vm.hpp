@@ -269,13 +269,26 @@ static inline VMValue *arr_items(ObjArray *a) {
 }
 
 // Object (Map/Dictionary) Object (Requires VMValue)
+//
+// `index`: anahtar sayisi kObjIndexMin'i (16) gecince YAZMA yollarinda kurulan
+// hash indeksi (runtime_bindings.cpp, "json nesnesi hash indeksi"). Okuma
+// yollari onu yalniz OKUR — paylasilan json'u eszamanli okuma sozlesmesi
+// (FINDINGS T7) korunur. null = indeks yok, dogrusal tarama. Nesneyi alan alan
+// kopyalayan kod indeksi PAYLASABILIR; indeks sahibini (`owner`) tasidigi icin
+// kopya onu yok sayar ve gerekirse kendi indeksini kurar.
+struct ObjIndex;
 typedef struct {
   Obj obj;
   int count;
   int capacity;
   ObjString **keys;
   VMValue *values;
+  struct ObjIndex *index;
 } ObjObject;
+
+// Indeks sahibinin (malloc'lu) indeksini birakir; nesne serbest birakilirken
+// keys/values ile birlikte cagrilir. Arena indeksi arena ile gider.
+extern "C" void obj_index_release(ObjObject *o);
 
 // Promise Object — the value an async function produces and `await` consumes.
 // Settled by the event-loop scheduler in runtime/tulpar_async.cpp. `value`

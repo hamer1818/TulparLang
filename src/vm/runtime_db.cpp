@@ -398,6 +398,7 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     row->obj.next = nullptr;
     row->capacity = col_count;
     row->count = 0;
+    row->index = nullptr;
     row->keys = (ObjString **)aot_arena_alloc(sizeof(ObjString *) * col_count);
     row->values = (VMValue *)aot_arena_alloc(sizeof(VMValue) * col_count);
 
@@ -569,6 +570,7 @@ VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
     row->obj.next = nullptr;
     row->capacity = col_count;
     row->count = 0;
+    row->index = nullptr;
     row->keys = (ObjString **)aot_arena_alloc(sizeof(ObjString *) * col_count);
     row->values = (VMValue *)aot_arena_alloc(sizeof(VMValue) * col_count);
     for (int i = 0; i < col_count; i++) {
