@@ -1104,3 +1104,43 @@ ekleme başına `toString` + birleştirme (2 × 64 B), `vm_object_set` anahtarı
 önce arenaya sonra kalıcıya kopyalıyor (64 B fazladan), arama başına yine
 2 × 64 B geçici anahtar; hiçbiri geri alınmıyor. Yalnız çift kopyayı kaldıran
 bir deneme 439 → 378 MB, 190 → 155 ms ölçtü (gönderilmedi; ayrı iş).
+
+## `call(f, ...)`: ayırmasız fonksiyon referansı + satır içi havuz çağrısı (2026-10-01)
+
+Hız karnesinin `callfn` çekirdeği (iki fonksiyonluk tablodan, verinin seçtiği
+girişe dolaylı çağrı): Tulpar 299 ms, C 91 ms — çağrı başına ~15 ns. IR'den
+okunan yol: fonksiyon referansı bir DİZGİ (`"f"`), ve
+
+1. **her değerlendirmede ayırma**: bare `f` → `vm_alloc_string_aot` → 64
+   baytlık arena dizgisi, hiç geri alınmıyor. Tablo bir kez kurulduğu için
+   `callfn`'de görünmüyor, ama `acc = call(f, acc)` döngüsü 20M turda
+   **1,26 GB** tepe bellek ve 401 ms ölçtü (çağrı başına 64 B).
+2. **her çağrıda ad araması**: `aot_call_dynamic_1` → FNV hash → atomik
+   önbellek yoklaması + `memcmp` → kutulu giriş noktası (`tb_f`) → `f`.
+
+Düzeltme iki katlı:
+- **Referans havuzu** (runtime): bare `f` artık site başına bir kez
+  `aot_fn_ref` ile çözülüyor (dizgi sabitlerinin `tulpar_strlit_N` kalıbı) ve
+  statik bir havuzdaki kalıcı `ObjString`'i döndürüyor; kaydın yanında giriş
+  noktası + arite var. Değer her yerde yine dizgi. `call()` adresin havuz
+  aralığında olduğunu görünce ad aramasını atlıyor. Havuz yalnız ekleniyor,
+  kayıtlar ölümsüz — okuyan thread'ler kilitsiz (FINDINGS T7'nin okuma
+  saflığı korunuyor: okuma yolu hiçbir şey yazmıyor).
+- **Satır içi yol** (codegen): `call(x, a1..an)` (n ≤ 8, web hariç) önce
+  `x`in havuzda ve aritesinin n olduğunu denetliyor, öyleyse giriş noktasını
+  doğrudan çağırıyor; değilse eski runtime çağrısı. Kayıt düzeni (fp @56,
+  arite @64, 72 bayt × 1024) runtime'da `static_assert` ile kilitli.
+
+| | önce | havuz (runtime) | + satır içi |
+|---|---:|---:|---:|
+| `callfn` (tablodan) | 298,6 ms | 231,5 ms | **209,6 ms** |
+| `call(f, acc)` 20M (doğrudan) | 401 ms / 1,26 GB | 160 ms / 2,5 MB | **145 ms / 2,7 MB** |
+
+Kalan fark (10,5 ns vs C 4,5 ns): `tb_f` sarmalayıcısı `f`'i bilerek satır
+içine almıyor (ikili boyutu; K092 notu), sonuç bellek yuvasından geçiyor ve
+verinin seçtiği hedef dolaylı dal tahminini bozuyor (C de aynı cezayı ödüyor).
+`acc` üst düzey global olduğu için her tur belleğe yazılıyor (üst düzey global
+maliyeti ayrı iş).
+
+Yan ürün: `call()` kapanış da alıyor (`aot_call_closure`'a, `cl(a)` ile aynı
+sözleşme). Eskiden "call() string bekler".

@@ -676,6 +676,19 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # call() FONKSIYON REFERANSI HAVUZU (2026-10-01): `call(f, x)` dongude
+    # artik ayirmiyor (eskiden degerlendirme basina 64 B arena dizgisi —
+    # 20M cagri 1,26 GB) ve havuzdaki referansi ad aramasiz cagiriyor
+    # (callfn 299 -> 210 ms). Ayirmasizlik, satir ici yolun uretilmesi ve
+    # runtime havuz yolu ayri ayri olculur; anlambilim
+    # tests/call_fnref.test.tpr'de.
+    if [ -x tests/call_fnref.sh ]; then
+        if ! bash tests/call_fnref.sh ./tulpar; then
+            echo -e "${RED}call() fonksiyon referansi kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # PERFORMANS IPUCU (K167): TULPAR_PERF_HINTS=1 kanitli erisim kurulamayan
     # dongunun nedenini soyler; kanitli donguye ipucu basmaz, varsayilan kapali.
     if [ -x tests/perf_ipucu.sh ]; then
