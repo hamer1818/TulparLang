@@ -5044,6 +5044,115 @@ static bool shape_access_proven(const LLVMBackend::ArrShapeEntry *shp,
 static LLVMBackend::ArrShapeEntry *shape_lookup(LLVMBackend *backend,
                                                 const char *name);
 
+// ---------------------------------------------------------------------------
+// FLOAT DIZI DONGU SURUMU — hizli surumun codegen durumu (2026-10-01).
+//
+// Plan (llvm_array_shape.cpp tulpar_float_loop_plan) ve dongu basindaki
+// sinav AST_FOR'da kuruluyor; hizli govde uretilirken g_fv DOLU. O surede
+// plandaki her `X[E]` erisimi tek GEP + double load/store'a iniyor:
+//   indeks = B (dongu basinda bir kez hesaplandi) + j
+// Sinir, double depo ve degismez adlarin FLOAT etiketi dongu basinda
+// sinandi; o yuzden burada hicbir denetim YOK — kanit gevsetilecekse plan
+// ve sinav gevsetilir, burasi degil (shape_access_proven ile ayni kural).
+// ---------------------------------------------------------------------------
+#include "llvm_array_shape.hpp"
+struct FvRun {
+  const TulparFloatLoopPlan *plan;
+  LLVMValueRef data[TULPAR_FV_MAX_ARR];   // double* (dongu basinda okundu)
+  LLVMValueRef base[TULPAR_FV_MAX_ACC];   // i64 B ya da NULL (B = 0)
+  ASTNode_C *cond;                        // `j < UB` dugumu
+  LLVMValueRef ub;                        // UB'nin dongu basindaki degeri (i64)
+};
+static FvRun *g_fv = nullptr;
+
+static int fv_find_access(ASTNode_C *acc) {
+  if (!g_fv || !acc) return -1;
+  for (int k = 0; k < g_fv->plan->n_acc; k++)
+    if (g_fv->plan->acc[k] == acc) return k;
+  return -1;
+}
+
+static bool fv_is_inv_float(const char *name) {
+  if (!g_fv || !name) return false;
+  for (int k = 0; k < g_fv->plan->n_inv; k++)
+    if (strcmp(g_fv->plan->inv_float[k], name) == 0) return true;
+  return false;
+}
+
+// Dongu degiskeninin o anki int degeri. Hizli surumde etiketi INT (dongu
+// basinda sinandi, artim int sabiti ekliyor) — yeniden sinamaya gerek yok.
+static LLVMValueRef fv_load_ivar(LLVMBackend *backend, const char *name) {
+  if (get_local_type(backend, name) == INFERRED_INT) {
+    LLVMValueRef nat = get_local_native(backend, name);
+    if (nat) {
+      LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->int_type, nat, name);
+      llvm_tbaa_tag(backend, v, 0);
+      return v;
+    }
+  }
+  LLVMValueRef slot = get_local(backend, name);
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot, name);
+  llvm_tbaa_tag(backend, v, 0);
+  return llvm_extract_vm_val_int(backend, v);
+}
+
+// Plandaki k. erisimin eleman adresi (double*).
+static LLVMValueRef fv_elem_ptr(LLVMBackend *backend, int k) {
+  const TulparFloatLoopPlan *p = g_fv->plan;
+  LLVMValueRef idx = g_fv->base[k];
+  if (p->acc_has_j[k]) {
+    LLVMValueRef j = fv_load_ivar(backend, p->ivar);
+    // nsw: 0 <= B + j < count <= INT32_MAX dongu basinda sinandi.
+    idx = idx ? LLVMBuildNSWAdd(backend->builder, idx, j, "fv.ix") : j;
+  }
+  if (!idx) idx = LLVMConstInt(backend->int_type, 0, 0);
+  return LLVMBuildInBoundsGEP2(backend->builder, backend->float_type,
+                               g_fv->data[p->acc_arr[k]], &idx, 1, "fv.ep");
+}
+
+static LLVMValueRef fv_load_elem(LLVMBackend *backend, int k) {
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->float_type,
+                                  fv_elem_ptr(backend, k), "fv.el");
+  llvm_tbaa_tag(backend, v, 1);
+  return v;
+}
+
+// Dongu-degismezi FLOAT ad (etiketi dongu basinda sinandi): ham double.
+static LLVMValueRef fv_load_inv_float(LLVMBackend *backend, const char *name) {
+  if (get_local_type(backend, name) == INFERRED_FLOAT) {
+    LLVMValueRef nat = get_local_native(backend, name);
+    if (nat) return LLVMBuildLoad2(backend->builder, backend->float_type, nat, name);
+  }
+  LLVMValueRef slot = get_local(backend, name);
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot, name);
+  llvm_tbaa_tag(backend, v, 0);
+  return LLVMBuildBitCast(backend->builder, llvm_extract_vm_val_int(backend, v),
+                          backend->float_type, "fv.inv");
+}
+
+// `sqrt` — runtime'daki aot_math_sqrt ile AYNI kural, satir ici:
+// int ise (double)x, degilse yuvadaki bit deseni double; sonuc FLOAT.
+// llvm.sqrt libm sqrt ile ayni sonucu verir (IEEE dogru yuvarlamali; negatif
+// -> NaN), errno'suz. Eskiden her `sqrt` yigina yazilan bir VMValue ve
+// runtime cagrisiydi — nbody'nin ic dongusunde tur basina bir cagri.
+static LLVMValueRef emit_sqrt_f64(LLVMBackend *backend, LLVMValueRef d) {
+  LLVMValueRef fn = LLVMGetNamedFunction(backend->module, "llvm.sqrt.f64");
+  LLVMTypeRef fty = LLVMFunctionType(backend->float_type, &backend->float_type, 1, 0);
+  if (!fn) fn = LLVMAddFunction(backend->module, "llvm.sqrt.f64", fty);
+  return LLVMBuildCall2(backend->builder, fty, fn, &d, 1, "sqrt");
+}
+static LLVMValueRef emit_sqrt_of_boxed(LLVMBackend *backend, LLVMValueRef v) {
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, v, 0, "sq.tag");
+  LLVMValueRef bits = llvm_extract_vm_val_int(backend, v);
+  LLVMValueRef isint = LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                     LLVMConstInt(backend->int32_type, 0, 0), "sq.isint");
+  LLVMValueRef d = LLVMBuildSelect(
+      backend->builder, isint,
+      LLVMBuildSIToFP(backend->builder, bits, backend->float_type, "sq.i2f"),
+      LLVMBuildBitCast(backend->builder, bits, backend->float_type, "sq.f"), "sq.in");
+  return emit_sqrt_f64(backend, d);
+}
+
 // Kutulu ikili islem uretimi — operandlar HAZIR gelir.
 //
 // Ayri fonksiyon olmasinin sebebi bir DOGRULUK HATASI: codegen_typed_expr'in
@@ -5552,6 +5661,13 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     return result;
 
   case AST_IDENTIFIER: {
+    // Float dongu surumunun hizli govdesi: dongu-degismezi ad, etiketi dongu
+    // basinda FLOAT sinandi -> ham double (tur dallanmasi yok).
+    if (g_fv && fv_is_inv_float(node->name)) {
+      result.value = fv_load_inv_float(backend, node->name);
+      result.type = INFERRED_FLOAT;
+      return result;
+    }
     // Captured closure variable: read it out of the heap env array. The
     // typed fast path below can't see it (get_local_native is null for
     // captured vars and get_local's value pointer is null), so without
@@ -5611,6 +5727,16 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     // sinirlar icinde ve diziyi kutusuz kanitlamis olmali. Kanitsiz erisimin
     // sonucu calisma zamaninda kutulu olabilir (float eleman, kutulu dizi),
     // yani statik olarak int diyemeyiz.
+    //
+    // Float dongu surumunun hizli govdesi: plandaki erisim ham double.
+    {
+      int fk = fv_find_access(node);
+      if (fk >= 0) {
+        result.value = fv_load_elem(backend, fk);
+        result.type = INFERRED_FLOAT;
+        return result;
+      }
+    }
     LLVMBackend::ArrShapeEntry *tshp =
         shape_lookup(backend, array_base_name(node));
     if (tshp && shape_access_proven(tshp, node->index)) {
@@ -5639,6 +5765,28 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     // cop deger (olculdu: 4238593, beklenen 11). Yontem (`q.area()`) de
     // buradan `Rect.area(q)`ya cozulur.
     if (node->receiver) resolve_call_receiver(backend, node);
+    // `sqrt` (kullanici golgelemediyse): satir ici, sonuc ham double. Kutulu
+    // yol (codegen_expression) ayni yardimciyi kullaniyor; kural aot_math_sqrt.
+    if (node->name && !node->receiver && strcmp(node->name, "sqrt") == 0 &&
+        node->argument_count >= 1 && node->arguments && node->arguments[0]) {
+      bool user = false;
+      for (int i = 0; i < backend->function_count && !user; i++)
+        user = backend->functions[i].name && strcmp(backend->functions[i].name, "sqrt") == 0;
+      if (!user) {
+        TypedValue a = codegen_typed_expr(backend, node->arguments[0]);
+        LLVMValueRef d = nullptr;
+        if (a.type == INFERRED_FLOAT && a.value && !a.boxed)
+          d = emit_sqrt_f64(backend, a.value);
+        else if (a.type == INFERRED_INT && a.value && !a.boxed)   // bool: kutulu kural
+          d = emit_sqrt_f64(backend, LLVMBuildSIToFP(backend->builder, a.value,
+                                                     backend->float_type, "sq.i2f"));
+        else
+          d = emit_sqrt_of_boxed(backend, box_typed_value(backend, a));
+        result.value = d;
+        result.type = INFERRED_FLOAT;
+        return result;
+      }
+    }
     // Look up the function
     LLVMValueRef func = LLVMGetNamedFunction(backend->module, node->name);
     if (func) {
@@ -5789,6 +5937,27 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
+    // Iki operand da STATIK float (float sabiti, float dongu surumunun ham
+    // double okumasi, sqrt...): + - * / dogrudan double islemi. Kutulu
+    // yolun op_float blogu ile AYNI komutlar (fadd/fsub/fmul/fdiv, sifira
+    // bolme denetimi yok) — yalniz etiket kutusu ve tur dallanmasi gitti.
+    if (L.type == INFERRED_FLOAT && R.type == INFERRED_FLOAT && L.value && R.value &&
+        !L.boxed && !R.boxed) {
+      LLVMValueRef fr = nullptr;
+      switch (node->op) {
+      case TOKEN_PLUS: fr = LLVMBuildFAdd(backend->builder, L.value, R.value, "fadd"); break;
+      case TOKEN_MINUS: fr = LLVMBuildFSub(backend->builder, L.value, R.value, "fsub"); break;
+      case TOKEN_MULTIPLY: fr = LLVMBuildFMul(backend->builder, L.value, R.value, "fmul"); break;
+      case TOKEN_DIVIDE: fr = LLVMBuildFDiv(backend->builder, L.value, R.value, "fdiv"); break;
+      default: break;
+      }
+      if (fr) {
+        result.value = fr;
+        result.type = INFERRED_FLOAT;
+        return result;
+      }
+    }
+
     // Geri dusus: operandlar YUKARIDA URETILDI, yeniden uretme. Eskiden burada
     // `codegen_expression(node)` cagriliyordu ve o iki operandi BIR DAHA
     // uretiyordu — yan etkili operand iki kez calisiyordu.
@@ -5813,6 +5982,12 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
 // Dongu-degismezi dizi sekli onbellegi (bkz. src/aot/llvm_array_shape.cpp)
 // ---------------------------------------------------------------------------
 #include "llvm_array_shape.hpp"
+
+// ObjArray::elem_bits'in KUTUSUZ DOUBLE degeri — runtime'daki ARR_ELEM_F64
+// (vm.hpp) ile AYNI olmak zorunda; runtime_bindings.cpp static_assert ile
+// sabitliyor. "idata dolu = tamsayi" varsayimi bu degerle gecersiz: idata'ya
+// bakan her codegen yolu elem_bits'i de sinar.
+static const int kArrElemF64 = -64;
 
 // Bu ad, hicbir dizinin count/idata alanini degistiremez mi?
 //
@@ -5999,7 +6174,18 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
   llvm_tbaa_tag(backend, eb, 0);
   LLVMValueRef is32 = LLVMBuildICmp(backend->builder, LLVMIntEQ, eb,
                                     LLVMConstInt(i32t, 32, 0), "shape.is32");
+  // Double depo (ARR_ELEM_F64) TAMSAYI sekline girmez: count=0 -> bekcili
+  // genel yol (orasi elem_bits'e bakiyor). "idata dolu = tamsayi" artik
+  // gecersiz; bkz. vm.hpp ObjArray notu.
+  // (want == 1: is32 zaten double'i disliyor — sinav eklenmez, uretilen kod
+  // tamsayi dongulerinde bugunkuyle ayni kalir.)
   LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "shape.ubox");
+  if (want != 1)
+    ok = LLVMBuildAnd(backend->builder, ok,
+                      LLVMBuildICmp(backend->builder, LLVMIntNE, eb,
+                                    LLVMConstInt(i32t, (unsigned long long)(long long)kArrElemF64, 1),
+                                    "shape.isint"),
+                      "shape.uint");
   if (want == 1)
     ok = LLVMBuildAnd(backend->builder, ok, is32, "shape.ok32");
   else if (want == 0)
@@ -6114,10 +6300,10 @@ static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager,
                                          backend->obj_array_type, objp, 2, "cnp");
   LLVMValueRef cn = LLVMBuildLoad2(backend->builder, i32t, cnp, "cn");
   LLVMValueRef cn64 = LLVMBuildSExt(backend->builder, cn, backend->int_type, "cn64");
-  LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "ubox");
   LLVMValueRef ebp = LLVMBuildStructGEP2(backend->builder,
                                          backend->obj_array_type, objp, 6, "ebp");
   LLVMValueRef eb = LLVMBuildLoad2(backend->builder, i32t, ebp, "eb");
+  LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "ubox");
   LLVMValueRef is32 = LLVMBuildICmp(backend->builder, LLVMIntEQ, eb,
                                     LLVMConstInt(i32t, 32, 0), "is32");
   LLVMBuildStore(backend->builder,
@@ -6125,6 +6311,14 @@ static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager,
                                LLVMBuildAnd(backend->builder, ok, is32, "u32"),
                                i32t, "u32z"),
                  p_w);
+  // emit_shape_fill ile AYNI: double depo tamsayi sekline girmez (want == 1
+  // iken is32 zaten disliyor).
+  if (want != 1)
+    ok = LLVMBuildAnd(backend->builder, ok,
+                      LLVMBuildICmp(backend->builder, LLVMIntNE, eb,
+                                    LLVMConstInt(i32t, (unsigned long long)(long long)kArrElemF64, 1),
+                                    "isint"),
+                      "uint");
   // Genislik VARSAYIMI tutmuyorsa count=0: bu surumun uzmanlastirilmis
   // erisimleri devre disi kalir ve bekcili yola dusulur. Genisletme (widen)
   // sonrasi dogrulugu saglayan sey tam olarak bu.
@@ -6415,6 +6609,256 @@ static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
     backend->shape_count++;
   }
   return saved;
+}
+
+// ---------------------------------------------------------------------------
+// FLOAT DIZI DONGU SURUMU — dongu basindaki sinav ve iki govde (2026-10-01).
+// Kanitin bicim kismi: llvm_array_shape.cpp tulpar_float_loop_plan. Burada
+// SAYISAL kisim dongu basinda BIR KEZ sinaniyor:
+//   * j int ve i32'ye sigar; UB int ve i32'ye sigar;
+//   * plandaki her dizi KUTUSUZ DOUBLE depoda (ARR_ELEM_F64) — count okunur;
+//   * her erisimin B'si int, i32'ye sigar ve 0 <= B + j  ile  B + UB' <= count
+//     (UB' = UB, `<=` ise UB + 1; j artmayan bir sayac olmadigi icin govdede
+//     j hep [j0, UB') icinde) — j'siz erisimde 0 <= B < count;
+//   * dongu-degismezi float adlarin etiketi FLOAT.
+// Hepsi tutarsa HIZLI govde (g_fv dolu: erisimler GEP+load/store), tutmazsa
+// GENEL govde — bugunku bekcili yol; sinir disi erisim orada hata verir.
+// ---------------------------------------------------------------------------
+static void codegen_for_body(LLVMBackend *backend, ASTNode_C *node,
+                             LLVMBasicBlockRef after);
+
+static std::unordered_set<std::string> &fv_hint_names() {
+  static std::unordered_set<std::string> s;
+  return s;
+}
+static void fv_hint_add(const char *name, void *) { fv_hint_names().insert(name); }
+
+static bool fv_enabled() {
+  static int e = -1;
+  if (e < 0) {
+    const char *v = getenv("TULPAR_NO_FVER");
+    e = (v && *v && *v != '0') ? 0 : 1;
+  }
+  return e == 1;
+}
+
+// i64 @tulpar.f64_probe(ptr VMValue*, ptr out_data): dizi KUTUSUZ DOUBLE
+// depodaysa eleman sayisi (ve *out_data = idata), degilse -1. Modul basina
+// bir kez uretilir; kucuk ve internal, LLVM satir ici alir.
+static LLVMValueRef get_f64_probe_fn(LLVMBackend *backend) {
+  LLVMValueRef fn = LLVMGetNamedFunction(backend->module, "tulpar.f64_probe");
+  if (fn) return fn;
+  LLVMBasicBlockRef save_bb = LLVMGetInsertBlock(backend->builder);
+  LLVMMetadataRef prev_loc = LLVMGetCurrentDebugLocation2(backend->builder);
+  LLVMSetCurrentDebugLocation2(backend->builder, nullptr);
+  LLVMTypeRef i32t = backend->int32_type;
+  LLVMTypeRef params[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef fty = LLVMFunctionType(backend->int_type, params, 2, 0);
+  fn = LLVMAddFunction(backend->module, "tulpar.f64_probe", fty);
+  LLVMSetLinkage(fn, LLVMInternalLinkage);
+  LLVMValueRef p_v = LLVMGetParam(fn, 0);
+  LLVMValueRef p_out = LLVMGetParam(fn, 1);
+  LLVMBasicBlockRef b_entry = append_bb(backend, fn, "entry");
+  LLVMBasicBlockRef b_ty = append_bb(backend, fn, "ty");
+  LLVMBasicBlockRef b_ld = append_bb(backend, fn, "ld");
+  LLVMBasicBlockRef b_no = append_bb(backend, fn, "no");
+  LLVMValueRef minus1 = LLVMConstInt(backend->int_type, (unsigned long long)-1, 1);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_entry);
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, p_v, "v");
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, v, 0, "tag");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                LLVMConstInt(i32t, 4, 0), "isobj"),
+                  b_ty, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ty);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
+  LLVMValueRef ot = LLVMBuildLoad2(
+      backend->builder, i32t,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_array_type, objp, 0, "otp"), "ot");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                LLVMConstInt(i32t, 1, 0), "isarr"),
+                  b_ld, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ld);
+  LLVMValueRef id = LLVMBuildLoad2(
+      backend->builder, backend->ptr_type,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_array_type, objp, 5, "idp"), "id");
+  LLVMValueRef eb = LLVMBuildLoad2(
+      backend->builder, i32t,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_array_type, objp, 6, "ebp"), "eb");
+  LLVMValueRef cn = LLVMBuildLoad2(
+      backend->builder, i32t,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_array_type, objp, 2, "cnp"), "cn");
+  LLVMValueRef isf = LLVMBuildAnd(
+      backend->builder, LLVMBuildIsNotNull(backend->builder, id, "ubox"),
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, eb,
+                    LLVMConstInt(i32t, (unsigned long long)(long long)kArrElemF64, 1), "isf"),
+      "f64");
+  LLVMBuildStore(backend->builder, id, p_out);
+  LLVMBuildRet(backend->builder,
+               LLVMBuildSelect(backend->builder, isf,
+                               LLVMBuildSExt(backend->builder, cn, backend->int_type, "cn64"),
+                               minus1, "r"));
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_no);
+  LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), p_out);
+  LLVMBuildRet(backend->builder, minus1);
+
+  if (save_bb) LLVMPositionBuilderAtEnd(backend->builder, save_bb);
+  LLVMSetCurrentDebugLocation2(backend->builder, prev_loc);
+  return fn;
+}
+
+// Dongu basinda: deger int mi ve i32'ye sigar mi -> *ok; ham i64 doner.
+static LLVMValueRef fv_entry_int(LLVMBackend *backend, ASTNode_C *e, LLVMValueRef *ok) {
+  if (e->type == AST_INT_LITERAL)
+    return LLVMConstInt(backend->int_type, (unsigned long long)e->value.int_value, 1);
+  LLVMValueRef v = codegen_expression(backend, e);
+  if (!v) v = llvm_vm_val_int(backend, 0);
+  LLVMValueRef isint = LLVMBuildICmp(
+      backend->builder, LLVMIntEQ, LLVMBuildExtractValue(backend->builder, v, 0, "fv.tag"),
+      LLVMConstInt(backend->int32_type, 0, 0), "fv.isint");
+  *ok = *ok ? LLVMBuildAnd(backend->builder, *ok, isint, "fv.ok") : isint;
+  return llvm_extract_vm_val_int(backend, v);
+}
+
+static void fv_and(LLVMBackend *backend, LLVMValueRef *ok, LLVMValueRef c) {
+  *ok = *ok ? LLVMBuildAnd(backend->builder, *ok, c, "fv.ok") : c;
+}
+
+// Plan + sinav + iki govde. true: dongu uretildi (cagiran kapsami kapatir).
+// false: hicbir kod uretilmedi, cagiran normal yola devam eder.
+static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node) {
+  if (!fv_enabled() || g_fv) return false;
+  TulparFloatLoopPlan plan;
+  if (!tulpar_float_loop_plan(node->init, node->condition, node->body, node->increment,
+                              shape_pure_call, backend, &plan)) {
+    if (getenv("TULPAR_DBG_VER") && node->init && node->init->name) {
+      // Yalniz float[] gezen dongude soyle (int dongulerinde gurultu olmasin).
+      const char *names[8];
+      int nn = tulpar_collect_indexed_names(node->condition, node->body, names, 8);
+      for (int i = 0; i < nn; i++)
+        if (fv_hint_names().count(names[i])) {
+          fprintf(stderr, "[fver-yok] %s: %s\n", node->init->name,
+                  plan.why ? plan.why : "?");
+          break;
+        }
+    }
+    return false;
+  }
+  // IPUCU: plandaki her dizi programda bir yerde `float[]` bildirilmis olmali.
+  for (int k = 0; k < plan.n_arr; k++)
+    if (!fv_hint_names().count(plan.arr[k])) return false;
+  // Codegen uygunlugu — KOD URETMEDEN ONCE (Tuzaklar 6q: yarim kalan surum
+  // sonlandiricisiz blok birakir).
+  {
+    LocalVar *iv = get_local_var(backend, plan.ivar);
+    if (iv && iv->is_captured == 1) return false;
+    if (!get_local(backend, plan.ivar) &&
+        !(get_local_type(backend, plan.ivar) == INFERRED_INT &&
+          get_local_native(backend, plan.ivar)))
+      return false;
+    for (int k = 0; k < plan.n_arr; k++) {
+      LocalVar *av = get_local_var(backend, plan.arr[k]);
+      if ((av && av->is_captured == 1) || !get_local(backend, plan.arr[k]) ||
+          get_local_struct_array_elem(backend, plan.arr[k]))
+        return false;
+    }
+    for (int k = 0; k < plan.n_inv; k++) {
+      const char *nm = plan.inv_float[k];
+      LocalVar *v = get_local_var(backend, nm);
+      if (v && v->is_captured == 1) return false;
+      LLVMValueRef nat = get_local_native(backend, nm);
+      if (nat && get_local_type(backend, nm) != INFERRED_FLOAT) return false;
+      if (!nat && !get_local(backend, nm)) return false;
+    }
+  }
+
+  // ---- Dongu basi sinavi (buradan sonra geri donus YOK) ----
+  LLVMValueRef ok = nullptr;
+  LLVMValueRef jv = load_loop_int(backend, plan.ivar, &ok);
+  LLVMValueRef ubv = fv_entry_int(backend, plan.ub, &ok);
+  fv_and(backend, &ok, emit_fits_i32(backend, jv));
+  fv_and(backend, &ok, emit_fits_i32(backend, ubv));
+  LLVMValueRef ubx = plan.incl
+      ? LLVMBuildAdd(backend->builder, ubv, LLVMConstInt(backend->int_type, 1, 0), "fv.ubx")
+      : ubv;
+  FvRun run;   // yalniz asagidaki hizli govde boyunca (g_fv) kullaniliyor
+  run.plan = &plan;
+  // Hizli govdenin kosulu `j < UB` dongu basindaki UB ile: UB degismez
+  // (plan), yani deger ayni — ama bir global (`n`) her turda bellekten
+  // okunursa (eleman yazmasiyla takma ad olabilir sanilir) LLVM tur sayisini
+  // bilemiyor ve donguyu VEKTORLESTIRMIYOR. Olculdu: matmul ic dongusu
+  // `load @tpr_g_n` yuzunden skaler kaliyordu.
+  run.cond = node->condition;
+  run.ub = ubv;
+  LLVMValueRef cnt[TULPAR_FV_MAX_ARR];
+  LLVMValueRef probe = get_f64_probe_fn(backend);
+  for (int k = 0; k < plan.n_arr; k++) {
+    LLVMValueRef out = llvm_build_alloca_at_entry(backend, backend->ptr_type, "fv.data.slot");
+    LLVMValueRef args[] = {get_local(backend, plan.arr[k]), out};
+    cnt[k] = LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(probe), probe, args, 2,
+                            "fv.cnt");
+    run.data[k] = LLVMBuildLoad2(backend->builder, backend->ptr_type, out, "fv.data");
+    fv_and(backend, &ok,
+           LLVMBuildICmp(backend->builder, LLVMIntSGE, cnt[k],
+                         LLVMConstInt(backend->int_type, 0, 0), "fv.isf64"));
+  }
+  LLVMValueRef zero = LLVMConstInt(backend->int_type, 0, 0);
+  for (int k = 0; k < plan.n_acc; k++) {
+    LLVMValueRef b = nullptr;
+    if (plan.acc_base[k]) {
+      b = fv_entry_int(backend, plan.acc_base[k], &ok);
+      fv_and(backend, &ok, emit_fits_i32(backend, b));
+    }
+    run.base[k] = b;
+    LLVMValueRef bb = b ? b : zero;
+    LLVMValueRef cn = cnt[plan.acc_arr[k]];
+    if (plan.acc_has_j[k]) {
+      fv_and(backend, &ok,
+             LLVMBuildICmp(backend->builder, LLVMIntSGE,
+                           LLVMBuildAdd(backend->builder, bb, jv, "fv.lo"), zero, "fv.lo0"));
+      fv_and(backend, &ok,
+             LLVMBuildICmp(backend->builder, LLVMIntSLE,
+                           LLVMBuildAdd(backend->builder, bb, ubx, "fv.hi"), cn, "fv.hic"));
+    } else {
+      fv_and(backend, &ok, LLVMBuildICmp(backend->builder, LLVMIntSGE, bb, zero, "fv.b0"));
+      fv_and(backend, &ok, LLVMBuildICmp(backend->builder, LLVMIntSLT, bb, cn, "fv.bc"));
+    }
+  }
+  for (int k = 0; k < plan.n_inv; k++) {
+    const char *nm = plan.inv_float[k];
+    if (get_local_native(backend, nm)) continue;   // statik FLOAT (yukarida sinandi)
+    LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
+                                    get_local(backend, nm), nm);
+    llvm_tbaa_tag(backend, v, 0);
+    fv_and(backend, &ok,
+           LLVMBuildICmp(backend->builder, LLVMIntEQ,
+                         LLVMBuildExtractValue(backend->builder, v, 0, "fv.itag"),
+                         LLVMConstInt(backend->int32_type, 1 /* VM_VAL_FLOAT */, 0),
+                         "fv.isflt"));
+  }
+  if (getenv("TULPAR_DBG_VER"))
+    fprintf(stderr, "[fver] %s: %d dizi, %d erisim\n", plan.ivar, plan.n_arr, plan.n_acc);
+
+  LLVMBasicBlockRef b_fast = append_bb(backend, backend->current_function, "fver_fast");
+  LLVMBasicBlockRef b_gen = append_bb(backend, backend->current_function, "fver_gen");
+  LLVMBasicBlockRef b_done = append_bb(backend, backend->current_function, "fver_done");
+  set_branch_weights(backend, LLVMBuildCondBr(backend->builder, ok, b_fast, b_gen), 2000, 1);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_fast);
+  g_fv = &run;
+  codegen_for_body(backend, node, b_done);
+  g_fv = nullptr;
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_gen);
+  codegen_for_body(backend, node, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_done);
+  return true;
 }
 
 
@@ -6922,6 +7366,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_ARRAY_ACCESS: {
+    // Float dongu surumunun hizli govdesi: plandaki erisim tek GEP + double
+    // load, sabit FLOAT etiketli. Indeks ifadesi URETILMIYOR — afin ve saf
+    // (plan: yalniz ad/sabit/+ - *), degeri B + j olarak elde.
+    {
+      int fk = fv_find_access(node);
+      if (fk >= 0) return llvm_build_vm_val_float(backend, fv_load_elem(backend, fk));
+    }
     // TIPLI STRUCT DIZISI (P1.1): `d[i].x` -> eleman isaretcisi + alan yuku;
     // `d[i]` (alan yok) -> elemani VM_OBJECT olarak kutula (genel rvalue:
     // print, cagri argumani, kutulu diziye push, `var e = d[i]`).
@@ -7191,12 +7642,32 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                         ebp2, "arr.eb");
       llvm_tbaa_tag(backend, eb2, 0);
       LLVMBasicBlockRef bb_u32 = append_bb(backend, fn, "arr.u32");
+      LLVMBasicBlockRef bb_w = append_bb(backend, fn, "arr.uw");
       LLVMBasicBlockRef bb_u64 = append_bb(backend, fn, "arr.u64");
+      LLVMBasicBlockRef bb_f64 = append_bb(backend, fn, "arr.f64");
       LLVMBuildCondBr(backend->builder,
                       LLVMBuildICmp(backend->builder, LLVMIntEQ, eb2,
                                     LLVMConstInt(backend->int32_type, 32, 0),
                                     "arr.is32"),
-                      bb_u32, bb_u64);
+                      bb_u32, bb_w);
+      // Kutusuz DOUBLE depo (ARR_ELEM_F64): ham bit deseni FLOAT etiketiyle
+      // doner — kutulu depodaki VMValue'nun aynisi, yalniz 8 bayt.
+      LLVMPositionBuilderAtEnd(backend->builder, bb_w);
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildICmp(backend->builder, LLVMIntEQ, eb2,
+                                    LLVMConstInt(backend->int32_type,
+                                                 (unsigned long long)(long long)kArrElemF64, 1),
+                                    "arr.isf64"),
+                      bb_f64, bb_u64);
+      LLVMPositionBuilderAtEnd(backend->builder, bb_f64);
+      LLVMValueRef fep = LLVMBuildGEP2(backend->builder, backend->float_type, idata,
+                                       &idx64, 1, "arr.felem.ptr");
+      LLVMValueRef fraw = LLVMBuildLoad2(backend->builder, backend->float_type, fep,
+                                         "arr.felem");
+      llvm_tbaa_tag(backend, fraw, 1);
+      LLVMValueRef f64_val = llvm_build_vm_val_float(backend, fraw);
+      LLVMBasicBlockRef f64_end = LLVMGetInsertBlock(backend->builder);
+      LLVMBuildBr(backend->builder, bb_done);
 
       LLVMPositionBuilderAtEnd(backend->builder, bb_u32);
       LLVMValueRef ep32 = LLVMBuildGEP2(backend->builder, backend->int32_type,
@@ -7253,10 +7724,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMPositionBuilderAtEnd(backend->builder, bb_done);
       LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type,
                                       "arr.res");
-      LLVMValueRef inc[] = {v32, ubox_val, fast_val, slow_val, cached_val};
-      LLVMBasicBlockRef inb[] = {u32_end, ubox_end, boxed_end, slow_end,
+      LLVMValueRef inc[] = {v32, ubox_val, f64_val, fast_val, slow_val, cached_val};
+      LLVMBasicBlockRef inb[] = {u32_end, ubox_end, f64_end, boxed_end, slow_end,
                                  cached_end};
-      LLVMAddIncoming(phi, inc, inb, cached_end ? 5 : 4);
+      LLVMAddIncoming(phi, inc, inb, cached_end ? 6 : 5);
       return phi;
     }
   }
@@ -7484,6 +7955,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_IDENTIFIER: {
+    // Float dongu surumu: etiketi dongu basinda FLOAT sinanmis degismez ad —
+    // SABIT etiketli VMValue (sonraki tur dallanmasi katlanir).
+    if (g_fv && fv_is_inv_float(node->name))
+      return llvm_build_vm_val_float(backend, fv_load_inv_float(backend, node->name));
     LocalVar *var = get_local_var(backend, node->name);
     if (var && var->is_captured == 1) {
       LLVMValueRef env = find_env_for_decl(backend, var->declaring_function);
@@ -7618,6 +8093,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // yapiyor ve degilse emit_boxed_binary_op'a dusuyor; yani burada tek
     // yapilacak sey ona sormak ve sonucu kutulamak. Operandlar TEK KEZ
     // uretiliyor (bkz. Tuzaklar 6x).
+    //
+    // Float dongu surumunun hizli govdesinde dongu kosulu `j < UB`: UB'nin
+    // dongu basindaki degeri (degismez — plan) ile dogrudan karsilastirma.
+    if (g_fv && node == g_fv->cond) {
+      LLVMValueRef jv = fv_load_ivar(backend, g_fv->plan->ivar);
+      LLVMValueRef c = LLVMBuildICmp(backend->builder,
+                                     g_fv->plan->incl ? LLVMIntSLE : LLVMIntSLT, jv,
+                                     g_fv->ub, "fv.cond");
+      return llvm_vm_val_bool_val(backend, c);
+    }
     TypedValue tv = codegen_typed_expr(backend, node);
     LLVMValueRef boxed = box_typed_value(backend, tv);
     return boxed ? boxed : llvm_vm_val_int(backend, 0);
@@ -9557,7 +10042,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                             "abs_res");
     }
 
-    MATH1_FUNC("sqrt", func_aot_math_sqrt)
+    // sqrt SATIR ICI (2026-10-01): kural aot_math_sqrt'un aynisi (int ise
+    // (double)x, degilse yuvadaki bit deseni), sonuc FLOAT. Cagri + yigin
+    // VMValue'su gitti; nbody'nin ic dongusunde tur basina bir cagriydi.
+    if (strcmp(bi_name, "sqrt") == 0 && node->argument_count >= 1) {
+      LLVMValueRef sa = codegen_expression(backend, node->arguments[0]);
+      if (!sa) sa = llvm_vm_val_int(backend, 0);
+      return llvm_build_vm_val_float(backend, emit_sqrt_of_boxed(backend, sa));
+    }
     MATH1_FUNC("floor", func_aot_math_floor)
     MATH1_FUNC("ceil", func_aot_math_ceil)
     MATH1_FUNC("round", func_aot_math_round)
@@ -11802,6 +12294,26 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // call's zero placeholder and reads afterwards fail. Scoped to an
     // element-target LHS (AST_ARRAY_ACCESS); a `struct.field = <int>` write
     // returns nullptr here and keeps its unboxed fast path below.
+    // Float dongu surumunun hizli govdesi: `X[E] = v`. Plan v'nin KESIN float
+    // oldugunu kanitladi (bkz. tulpar_float_loop_plan), dizi double depoda ve
+    // E sinir icinde (dongu basinda sinandi): tek double store. Kutulu
+    // degerse etiketi FLOAT — bit deseni dogrudan yaziliyor.
+    if (node->left && node->left->type == AST_ARRAY_ACCESS) {
+      int fk = fv_find_access(node->left);
+      if (fk >= 0) {
+        TypedValue fv = codegen_typed_expr(backend, node->right);
+        LLVMValueRef d;
+        if (fv.type == INFERRED_FLOAT && fv.value && !fv.boxed)
+          d = fv.value;
+        else
+          d = LLVMBuildBitCast(backend->builder,
+                               llvm_extract_vm_val_int(backend, box_typed_value(backend, fv)),
+                               backend->float_type, "fv.vb");
+        LLVMValueRef st = LLVMBuildStore(backend->builder, d, fv_elem_ptr(backend, fk));
+        llvm_tbaa_tag(backend, st, 1);
+        return llvm_build_vm_val_float(backend, d);
+      }
+    }
     LLVMValueRef val = nullptr;
     if (node->left && node->left->type == AST_ARRAY_ACCESS) {
       val = codegen_struct_expr_as_object(backend, node->right);
@@ -12069,13 +12581,38 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                                             LLVMConstInt(si32, 32, 0),
                                             "set.is32");
         LLVMValueRef s_vi = llvm_extract_vm_val_int(backend, val);
+        // Kutusuz DOUBLE depo (ARR_ELEM_F64): yalniz FLOAT deger dogrudan
+        // yazilir (bit deseni). INT dahil baska her deger yavas yola gider;
+        // orada arr_items() diziyi kutuya cevirir ve eleman turu korunur —
+        // int'i double depoya ham yazmak bit desenini float sanardi.
+        LLVMValueRef s_isf64 = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_eb,
+            LLVMConstInt(si32, (unsigned long long)(long long)kArrElemF64, 1), "set.isf64");
         LLVMValueRef s_wok = LLVMBuildAnd(
-            backend->builder, s_visint,
+            backend->builder,
+            LLVMBuildAnd(backend->builder, s_visint,
+                         LLVMBuildNot(backend->builder, s_isf64, "set.notf64"),
+                         "set.wint"),
             LLVMBuildOr(backend->builder,
                         LLVMBuildNot(backend->builder, s_is32, "set.not32"),
                         emit_fits_i32(backend, s_vi), "set.w2"),
             "set.wok");
-        LLVMBuildCondBr(backend->builder, s_wok, sb_ubox, sb_slow);
+        LLVMBasicBlockRef sb_fchk = append_bb(backend, fn2, "set.fchk");
+        LLVMBasicBlockRef sb_f64 = append_bb(backend, fn2, "set.f64");
+        LLVMBuildCondBr(backend->builder, s_wok, sb_ubox, sb_fchk);
+        LLVMPositionBuilderAtEnd(backend->builder, sb_fchk);
+        LLVMValueRef s_visflt = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_vtag,
+            LLVMConstInt(si32, 1 /* VM_VAL_FLOAT */, 0), "set.visflt");
+        LLVMBuildCondBr(backend->builder,
+                        LLVMBuildAnd(backend->builder, s_isf64, s_visflt, "set.fok"),
+                        sb_f64, sb_slow);
+        LLVMPositionBuilderAtEnd(backend->builder, sb_f64);
+        LLVMValueRef s_fep = LLVMBuildGEP2(backend->builder, backend->int_type, s_idata,
+                                           &s_idx, 1, "set.felem.ptr");
+        LLVMValueRef s_fst = LLVMBuildStore(backend->builder, s_vi, s_fep);
+        llvm_tbaa_tag(backend, s_fst, 1);
+        LLVMBuildBr(backend->builder, sb_done);
 
         LLVMPositionBuilderAtEnd(backend->builder, sb_ubox);
         LLVMBasicBlockRef sb_u32 = append_bb(backend, fn2, "set.u32");
@@ -12403,6 +12940,15 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // init'ten SONRA cagriliyor: dongu degiskeni artik kapsamda.
     int shape_saved = emit_shape_cache_for_loop(backend, node->condition,
                                                 node->body, node->increment);
+
+    // FLOAT DIZI DONGU SURUMU (2026-10-01): en icteki dongu, HER derinlikte
+    // (tamsayi surumlemesinin aksine yalniz en dis seviye degil — matmul'un
+    // sicak dongusu ucuncu seviyede). Bkz. fv_try_version.
+    if (fv_try_version(backend, node)) {
+      backend->shape_count = shape_saved;
+      exit_scope(backend);
+      return nullptr;
+    }
 
     // DONGU SURUMLEME. `for (int i = C; i < len(a); i += K)` bicimindeki
     // dongude `a[i]` sinir denetimi KANITLA gereksiz — ama yalniz dizi
@@ -14917,6 +15463,9 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
 
   method_rewritten_calls().clear();
   analyze_module_captures(backend, node, 0, node);
+  // Float dizi dongu surumunun ipucu: `float[]` bildirilmis adlar.
+  fv_hint_names().clear();
+  tulpar_collect_float_array_decls(node, fv_hint_add, nullptr);
 
   // MAIN FUNCTION: int main() -> returns raw i32 (OS exit code)
   // We must create it FIRST so that imports (Pass 0) can emit init code into

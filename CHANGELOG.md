@@ -12,6 +12,53 @@ tag still works;
 
 ## [Unreleased]
 
+### Performans — float dizisi: kutusuz double depo + iç içe döngüde kanıtlı erişim (matmul 26× → 1,2× C)
+
+- **Kök neden (ölçüldü, IR + zamanlama):** `float[]` her elemanı 16 baytlık
+  `VMValue` olarak tutuyordu ve dizi şekil önbelleği / kanıtlı erişim yalnız
+  TAMSAYI dizide ve yalnız EN DIŞ döngüde vardı. matmul'ün sıcak döngüsü
+  üçüncü seviyede; her `c[i*n+j]` / `b[k*n+j]` erişimi etiket + nesne türü +
+  sınır + kutu denetimi ve 16 baytlık yükleme ödüyordu, sonuç dinamik etiketli
+  olduğu için her `+`/`*` bir tür dallanması üretiyordu. nbody'de buna her
+  turda bir `sqrt` runtime çağrısı ekleniyordu.
+- **Depo:** `array_fill(n, <float>)` artık ham double tutuyor
+  (`ObjArray::elem_bits == ARR_ELEM_F64`, eleman başına 8 bayt). Bu yalnız bir
+  depolama ayrıntısı: float OLMAYAN bir değer yazılınca dizi kutuya çevrilir
+  ve eleman kendi türünü korur (`a[1] = 5` sonrası `a[1]` yine int 5).
+  `TULPAR_NO_F64=1` kapatır (A/B ve pozitif kontrol).
+- **Float dizi döngü sürümü:** EN İÇTEKİ `for` döngüsü — hangi derinlikte
+  olursa olsun — `X[B + j]` biçimli erişimler (B döngü-değişmezi int ifadesi)
+  ve her eleman yazmasının KESİN float olduğu kanıtlanınca sürümleniyor:
+  sınır, double depo ve değişmez adların etiketi döngü başında BİR KEZ
+  sınanıyor; hızlı gövdede erişim tek GEP + double load/store, döngü koşulu
+  döngü başındaki üst sınırla (LLVM döngüyü vektörleştirebiliyor). Sınav
+  tutmazsa bugünkü bekçili genel gövde koşar — **sınır dışı erişim hâlâ
+  hata verir**. Tamsayı dizilerine dokunulmadı (sürüm yalnız `float[]`
+  bildirilmiş adlarda denenir). `TULPAR_NO_FVER=1` kapatır.
+- `sqrt` satır içi (`llvm.sqrt`, kural runtime'ın `aot_math_sqrt`'u ile
+  aynı); tipli yolda iki float operandlı `+ - * /` doğrudan double işlemi.
+- **Ölçüm** (Ryzen 7 9800X3D, `taskset -c 2,3`, taban `27ba2221` ile
+  dönüşümlü A/B, en iyi, 2026-10-01): `matmul` (N=640) **819,8 → 37,1 ms**
+  (C 31,3: 26× → 1,19×; tepe bellek 22,1 → 12,3 MB, C 11,8), `nbody` (3M
+  adım) **1301,1 → 187,3 ms** (C 115,4: 11,3× → 1,62×). Gerileme denetimi,
+  taban/yeni: `intloop` 134,73/134,76 · `fib` 0,58/0,57 · `strcat`
+  13,24/13,16 · `arrayiter` 1,33/1,33 (80 tur) · `mandelbrot`
+  158,45/158,42 · `particles` 329,07/328,77 · `qsort` 121,37/121,62 ·
+  `callfn` 298,03/298,64 · `parse` 196,98/196,02 · `hashmap` 171,16/171,38
+  (25 tur). `intloop`/`fib`/`strcat`/`mandelbrot`/`particles`'ın IR'si
+  birebir aynı. `sieve` 7,57 → 7,72: sıcak döngü iki ikilide bayt bayt aynı,
+  fark iç döngünün 64 baytlık çizgideki hizalaması — kaynağa bir satır önek
+  eklenince yeni derleyici 7,57 (taban 7,60); bkz. Tuzaklar 7i.
+- Testler: `tests/float_dizi.test.tpr` (12 senaryo, her biri kutulu ikiziyle
+  karşılaştırmalı: matmul, int yazma, push/remove_at, -0.0, nbody biçimi,
+  değişmez adın INT çıkması, takma ad, tam sınır, boş dizi, sqrt) ve
+  `tests/float_dizi.sh` kapısı (`build.sh suites`): 10 karar senaryosu (iki
+  yön), hızlı sürümü OLAN döngüde 5+1 sınır dışı senaryo (iç içe üçüncü
+  seviye dahil) hata ile yakalanıyor, IR'de hızlı yükleme var ve
+  `TULPAR_NO_FVER=1` iken yok. Pozitif kontroller: üst sınır sınavı
+  kaldırılınca kapı 3 senaryoda kırmızı (sessiz çöp okuma); double depo
+  sınavı kaldırılınca `float[]`-ama-int-depo testi kırmızı.
+
 ### Performans — `call(f, ...)` ayırmasız ve ad aramasız: `callfn` 299 → 210 ms; `call()` kapanış da alıyor
 
 - Fonksiyon adı DEĞER olarak kullanılınca (`call(f, x)`, `var t = [f, g]`,

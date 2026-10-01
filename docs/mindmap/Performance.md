@@ -1144,3 +1144,67 @@ maliyeti ayrı iş).
 
 Yan ürün: `call()` kapanış da alıyor (`aot_call_closure`'a, `cl(a)` ile aynı
 sözleşme). Eskiden "call() string bekler".
+
+## Float dizisi: double depo + iç içe döngüde kanıtlı erişim (2026-10-01)
+
+Hız karnesinde `matmul` C'nin 26, `nbody` 11 katıydı (2026-09-29); dizisiz
+`mandelbrot` 1,00× olduğu için aritmetik suçlu değildi. Önce ölçüldü
+(Ryzen 7 9800X3D, `taskset -c 2,3`, 5 tekrarın en iyisi):
+
+| | ms |
+|---|--:|
+| matmul üst düzey (kıyasın kendisi) | 821,6 |
+| aynı kod fonksiyon içinde | 852,4 |
+| aynı kod `int[]` ile, fonksiyon içinde | 530,2 |
+| C (`gcc -O2`) | 31,3 |
+
+Yani global maliyeti değil (fonksiyon içinde de aynı), ve tamsayı dizisinde
+bile 17× — iki ayrı açık. IR (`TULPAR_AOT_EMIT_LL=1`) ikisini de gösterdi:
+
+1. **Kanıtlı erişim yalnız en dış döngüde, yalnız `a[i]` biçiminde.**
+   matmul'ün sıcak döngüsü üçüncü seviyede ve indeksi `i * n + j`; her erişim
+   şekil önbelleğinden sınır denetimi + genişlik dalı ödüyor.
+2. **Float dizi şekil önbelleğine hiç girmiyor.** 16 baytlık kutulu depo
+   (count=0) → her erişim tam genel yol: etiket, nesne türü, sınır, kutu
+   denetimi, 16 baytlık yükleme; sonuç dinamik etiketli → her `+`/`*` için
+   `both_int / both_float / vm_binary_op` dallanması.
+
+Önce yalnız depoyu değiştirmek (ham double, `ARR_ELEM_F64`) **ölçüldü ve
+yetmedi**: matmul 821 → 863 ms (genel okuma yoluna bir genişlik dalı daha
+eklendi, 9,8 MB'lik veri zaten 96 MB önbelleğe sığıyordu). Kaldıraç döngü
+sürümüydü:
+
+- **Plan** (`llvm_array_shape.cpp`, `tulpar_float_loop_plan`): en içteki
+  `for` (gövdede döngü yok — iç içe sürüm katlanarak büyümesin), her erişim
+  `X[j]` / `X[B]` / `X[B + j]` (B: değişmez ad, sabit, `+ - *`), her eleman
+  yazması KESİN float (float sabiti/okuması, gövdede `float` bildirilip tek
+  kez atanan yerel, değişmez ad, `+ - * /`, tekli eksi, `sqrt`).
+- **Sınav** (`fv_try_version`): döngü başında bir kez — j ve UB int ve
+  i32'ye sığar, her dizi double depoda (`tulpar.f64_probe`), her erişimde
+  `0 <= B + j0` ve `B + UB' <= count`, değişmez adların etiketi FLOAT.
+- **Hızlı gövde:** erişim tek GEP + double load/store; döngü koşulu döngü
+  başındaki UB ile. Bu son madde ölçümle geldi: ilk sürüm 98,7 ms'de kaldı,
+  çünkü koşuldaki global `n` her turda bellekten okunuyordu (eleman yazmasıyla
+  takma ad sanılıyor) ve LLVM tur sayısını bilmediği için vektörleştirmiyordu.
+  Değişmez UB ile **37,4 ms** ve `<2 x double>` döngü.
+- `sqrt` satır içi `llvm.sqrt` (runtime ile aynı kural: int ise `(double)x`,
+  değilse bit deseni); iki float operandlı `+ - * /` tipli yolda doğrudan.
+
+Sonuç (dönüşümlü A/B, 11 tur, en iyi): matmul **819,8 → 37,1 ms** (1,19× C; tepe bellek 22,1 → 12,3 MB, C
+11,8), nbody **1301,1 → 187,3 ms** (1,62× C). Tamsayı dizilerine dokunulmadı:
+sürüm yalnız programda `float[]` bildirilmiş adlarda deneniyor (ipucu;
+doğruluk çalışma zamanı sınavından), çünkü koşmayan kopya bile dış döngüyü
+yavaşlatabiliyor (yukarıdaki "İç içe döngü sürümlemesi").
+
+**Gerileme denetimi** ve `sieve`'deki %2'nin hizalama olduğu: CHANGELOG ve
+[[Tuzaklar]] 7i.
+
+**Kalan:**
+- nbody 1,6×: beş cisimde iç döngü 0–4 tur dönüyor ve HER girişte yedi
+  global dizinin deposu yeniden sınanıyor (çağrı başına altı giriş). Sınavı
+  dış döngüye taşımak (dış döngüyü de sürümlemek) bir sonraki adım.
+- Tamsayı dizisinde iç içe/afin kanıt yok (`matmul_int` 530 ms): aynı plan
+  int için yazılabilir ama 32/64 genişlik ve yazma sığma kanıtı (K215) ayrı iş.
+- `X[j - 1]` biçimi (`-` ile ofset) plana girmiyor; `X[j + -1]` giriyor.
+- `a[i] += x` (bileşik eleman yazması) float sürümünde reddediliyor.
+

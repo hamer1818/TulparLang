@@ -255,8 +255,20 @@ typedef struct ObjArray {
   // Dilin `int`i 64-bit KALIYOR. Dizi 32-bit baslar ve i32'ye sigmayan bir
   // deger yazilinca 64'e GENISLETILIR (aot_arr_widen) — kutulanmaz. Yani
   // genislik bir DEPOLAMA ayrintisi, tip degil.
+  //
+  // ARR_ELEM_F64 (2026-10-01): `idata` ham DOUBLE tutar (eleman basina 8
+  // bayt, bit deseni `long long` yuvasinda). Bu da yalniz bir depolama
+  // ayrintisi: dizinin BUTUN elemanlari float iken gecerli; float OLMAYAN
+  // bir deger yazilinca dizi kutuya cevrilir (arr_debox) ve eleman kendi
+  // turunu korur — `float[] a; a[0] = 1;` sonrasi a[0] yine int 1 basar.
+  // ⚠ "idata dolu = tamsayi" VARSAYIMI ARTIK GECERSIZ: idata okuyan her yer
+  // elem_bits'e bakmak ZORUNDA (32 / 64 tamsayi, ARR_ELEM_F64 double).
   int elem_bits;
 } ObjArray;
+
+// Kutusuz DOUBLE depo isareti (elem_bits). Negatif: hicbir tamsayi
+// genisligiyle karisamaz; codegen ayni sabiti kullanir (llvm_backend.cpp).
+#define ARR_ELEM_F64 (-64)
 
 // Diziyi kutulu bicime cevirir. Kutuluysa hicbir sey yapmaz.
 extern "C" void arr_debox(ObjArray *a);

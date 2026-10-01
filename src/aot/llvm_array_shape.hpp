@@ -101,4 +101,35 @@ extern "C" int tulpar_body_indexes_by(ASTNode_C *body, const char *array_name,
 extern "C" int tulpar_struct_var_escapes(ASTNode_C *fn, ASTNode_C *decl,
                                          const char *const *fields, int nfields);
 
+// FLOAT DIZI DONGU SURUMU (2026-10-01): en icteki `for` dongusunde float
+// dizi erisimlerinin afin indeks + kesin float yazma kaniti (bkz. .cpp).
+// Plan yalniz BICIMI dogrular; sayisal kisim (B + j araligi, double depo,
+// degismez adlarin FLOAT etiketi) codegen'de dongu basinda sinanir.
+#define TULPAR_FV_MAX_ACC 64
+#define TULPAR_FV_MAX_ARR 16
+#define TULPAR_FV_MAX_INV 16
+struct TulparFloatLoopPlan {
+  const char *ivar;                          // dongu degiskeni j
+  ASTNode_C *ub;                             // ust sinir (dongu-degismezi int)
+  int incl;                                  // `j <= UB`
+  const char *arr[TULPAR_FV_MAX_ARR];        // erisilen dizi adlari
+  int n_arr;
+  ASTNode_C *acc[TULPAR_FV_MAX_ACC];         // AST_ARRAY_ACCESS dugumleri
+  ASTNode_C *acc_base[TULPAR_FV_MAX_ACC];    // indeksin degismez kismi (NULL = 0)
+  int acc_has_j[TULPAR_FV_MAX_ACC];          // indeks j iceriyor mu
+  int acc_arr[TULPAR_FV_MAX_ACC];            // arr[] icindeki sira
+  const char *inv_float[TULPAR_FV_MAX_INV];  // dongu basinda FLOAT sinanacak adlar
+  int n_acc;
+  int n_inv;
+  const char *why;                           // reddedildiyse sebep (teshis)
+};
+extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
+                                      ASTNode_C *body, ASTNode_C *incr,
+                                      TulparPureCallFn pure, void *ctx,
+                                      TulparFloatLoopPlan *p);
+// Programdaki `float[]` bildirim/parametre adlari (surum karari icin ipucu).
+extern "C" void tulpar_collect_float_array_decls(ASTNode_C *root,
+                                                 void (*cb)(const char *, void *),
+                                                 void *ctx);
+
 #endif
