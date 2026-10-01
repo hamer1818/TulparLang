@@ -1047,3 +1047,60 @@ Sonuç (Ryzen 7 9800X3D): `hashmap` >60 s → 170 ms (2.; C 73). 24 anahtarlı
 nesne okuma 184 → 60 ms. 5 anahtarlı nesne kur/oku 612 → 544 ms (esik altı,
 gerileme yok). Kalan: tepe bellek 450 MB (C 66 MB).
 
+
+## `split` tek ayırmada, `toInt` atoll'suz — `parse` 200 → 126 ms (2026-10-01)
+
+Hız karnesinin `parse` çekirdeği (5M sayıyı virgülle birleştir, böl,
+`toInt`, topla): Tulpar 196 ms, C 57 ms, tepe bellek 443 MB (C 32 MB).
+Hipotez "split parçaları döngü boyunca geri alınmıyor" idi. Önce ölçüldü
+(Ryzen 7 9800X3D, `taskset -c 10,11`, en iyi 5; programı aşama aşama kesip):
+
+| aşama | süre | tepe RSS |
+|---|---:|---:|
+| metni kur (`sb_append` ×5M + `sb_tostring`) | 48 ms | 89 MB |
+| `split` | +112 ms | +363 MB |
+| `toInt(parts[i])` döngüsü | +39 ms | +0 |
+
+Hipotez **çürüdü**: döngü hiç ayırmıyor; bellek split'in CANLI parçaları —
+`parts` hepsini tutuyor. Parça başına 64 bayt arena (56 baytlık `ObjString`
+başlığı + ortalama 4,9 karakter + NUL, 8'e yuvarlı) + 16 baytlık `VMValue`
+eleman: 5M × 80 = 400 MB. Go aynı işi 16 baytlık dilim başlıklarıyla yapıyor
+(118 MB). Başlık temsili değişmeden bu taban inmez.
+
+Süre ise düştü. Split parça başına: `strstr`, geçici `malloc` + `strncpy` +
+`free` (yalnız NUL için — `aot_allocate_string` zaten uzunlukla kopyalıyor),
+ayrı arena ayırması, büyüyen diziye `push`. Yeni yol iki geçiş: say + boyu
+topla, sonra eleman deposunu tam boyda bir kez ve parçaları TEK arena
+ayırmasında bitişik kur. Beklenmeyen kazanç sayfa hatasında: 1 MB'lik arena
+blokları THP'ye hiç uymuyordu; tek 320 MB'lik blok 2 MB sayfalarla doluyor.
+
+| | önce | sonra |
+|---|---:|---:|
+| split | 112 ms | 57 ms |
+| küçük sayfa hatası (bütün program) | 85 251 | 4 618 |
+| çekirdek zamanı | 59 ms | 22 ms |
+| `toInt` döngüsü (düz ondalık hızlı yol) | 37 ms | 22 ms |
+| **`parse` toplam** | **200,5 ms** | **126,2 ms** |
+| tepe RSS | 442 MB | 440 MB |
+
+`toInt`: `[+-]?[0-9]{1,18}` biçimindeki dizgi `atoll`a (strtoll: yerel ayar,
+taban, taşma denetimi) gitmeden çözülüyor; 18 hane int64'e taşmadan sığıyor,
+yani sonuç bayt bayt aynı. Başka her biçim `atoll`.
+
+Kalanlar:
+- **Bellek tabanı**: `Obj` başlığı 32 bayt (`next` işaretçisinin iki yanında
+  dolgu); alanları yeniden sıralamak onu 24'e, `ObjString`'i 48'e indirir —
+  `parse`'ta −40 MB. ABI değişikliği (codegen GEP'leri, `obj_header_pad`,
+  wasm32 düzeni), ayrı iş.
+- Üst düzeyde `str s = sb_tostring(sb)` 29 MB'lık metni İKİ kez tutuyor:
+  arena kopyası + global bariyerinin kalıcı kopyası. Arena kopyası artık çöp
+  ama geri alınmıyor.
+- Linux dağıtımlarının çoğunda THP varsayılanı `madvise`: orada büyük arena
+  bloğu `madvise(MADV_HUGEPAGE)` istemeden 2 MB sayfa almaz (bu makine
+  `always`). Sayfa hatası kazancı o sistemlerde ölçülmedi.
+
+`hashmap` belleği (450 MB, C 66) **aynı kök neden değil** — orada çöp gerçek:
+ekleme başına `toString` + birleştirme (2 × 64 B), `vm_object_set` anahtarı
+önce arenaya sonra kalıcıya kopyalıyor (64 B fazladan), arama başına yine
+2 × 64 B geçici anahtar; hiçbiri geri alınmıyor. Yalnız çift kopyayı kaldıran
+bir deneme 439 → 378 MB, 190 → 155 ms ölçtü (gönderilmedi; ayrı iş).

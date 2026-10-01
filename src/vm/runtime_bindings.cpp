@@ -2654,6 +2654,27 @@ VMValue aot_to_string_ptr(VMValue *value_ptr) {
   return aot_to_string(*value_ptr);
 }
 
+// Duz ondalik dizgi hizli yolu: TAMAMI `[+-]?[0-9]{1,18}` olan dizgi. Bu
+// bicimde atoll ile bayt bayt AYNI sonuc (18 hane int64'e tasmadan sigar);
+// bosluk, kuyruk, 19+ hane, bos dizgi gibi her baska bicim atoll'a duser.
+// Niye: atoll -> strtoll yerel ayar/taban/tasma denetimi yapiyor; CSV/log
+// ayristirmanin (benchmarks/fair/parse, 5M `toInt(parca)`) sicak yolu.
+static inline bool to_int_plain_dec(const ObjString *s, int64_t *out) {
+  const char *p = s->chars;
+  int n = s->length;
+  bool neg = false;
+  if (n > 0 && (*p == '-' || *p == '+')) { neg = (*p == '-'); p++; n--; }
+  if (n < 1 || n > 18) return false;
+  int64_t v = 0;
+  for (int i = 0; i < n; i++) {
+    unsigned d = (unsigned)(unsigned char)p[i] - '0';
+    if (d > 9) return false;
+    v = v * 10 + (int64_t)d;
+  }
+  *out = neg ? -v : v;
+  return true;
+}
+
 // toInt(VMValue) -> int64
 int64_t aot_to_int(VMValue value) {
   switch (value.type) {
@@ -2665,6 +2686,8 @@ int64_t aot_to_int(VMValue value) {
     return AS_BOOL(value) ? 1 : 0;
   case VM_VAL_OBJ:
     if (IS_STRING(value)) {
+      int64_t v;
+      if (to_int_plain_dec(AS_STRING(value), &v)) return v;
       return atoll(AS_STRING(value)->chars);
     }
     return 0;
@@ -4654,47 +4677,139 @@ VMValue aot_replace_ptr(VMValue *str_ptr, VMValue *old_ptr, VMValue *new_ptr) {
 }
 
 // AOT Split
-VMValue aot_split(VMValue strVal, VMValue delVal) {
-  if (!IS_STRING(strVal) || !IS_STRING(delVal)) {
-    ObjArray *arr = vm_allocate_array_aot_wrapper(nullptr);
-    return VM_OBJ((Obj *)arr);
+//
+// IKI GECIS, TEK AYIRMA (2026-10-01). Eski yol parca basina: strstr, gecici
+// bir malloc + strncpy + free (yalniz NUL sonlandirmak icin — aot_allocate_
+// string zaten uzunlukla kopyalayip NUL koyuyor), ayri bir arena ayirmasi ve
+// buyuyen diziye push (kapasite 8, 16, ... ikiye katlanarak realloc).
+// Olculdu (benchmarks/fair/parse, 5M parca, Ryzen 7 9800X3D): split tek
+// basina 112 ms, parca basina ~22 ns.
+//
+// Simdi: 1. gecis parcalari SAYAR ve hepsinin arena boyutunu toplar;
+// 2. gecis eleman deposunu TAM boyda bir kez, butun parca nesnelerini TEK bir
+// arena ayirmasinda kurar. Buyuk bir split'te o ayirma kendi arena blogunu
+// aliyor (aot_arena_new_block) — 1 MB'lik bloklara bolunmus degil, tek
+// surekli bolge; Linux'ta THP onu 2 MB sayfalarla doldurabiliyor ve sayfa
+// hatasi sayisi duser. Her parca yine ayri, tam bir ObjString (baslik + NUL
+// sonlu karakterler, 8 bayt hizali) — okuyan, saklayan, kalicilastiran hicbir
+// yol farki goremez; yalniz komsulari bitisik.
+//
+// Bayt uzunlugu anlambilimi: arama s->length / d->length uzerinden. Eski
+// strstr yolu ilk NUL'da duruyordu (gomulu NUL'lu dizgi kirpiliyordu, NUL ile
+// baslayan ayirici ise sonsuz donguye girip tamponun disina yuruyordu); NUL
+// icermeyen dizgilerde iki yol bayt bayt ayni sonucu verir.
+static inline const char *split_find(const char *p, const char *end,
+                                     const char *d, int dlen) {
+  if (dlen == 1)
+    return (const char *)memchr(p, (unsigned char)d[0], (size_t)(end - p));
+  while (end - p >= dlen) {
+    const char *q = (const char *)memchr(p, (unsigned char)d[0],
+                                         (size_t)(end - p - dlen + 1));
+    if (!q) return nullptr;
+    if (memcmp(q + 1, d + 1, (size_t)(dlen - 1)) == 0) return q;
+    p = q + 1;
   }
+  return nullptr;
+}
+
+static inline size_t split_piece_bytes(size_t len) {
+  return (sizeof(ObjString) + len + 1 + AOT_ARENA_ALIGNMENT - 1) &
+         ~(size_t)(AOT_ARENA_ALIGNMENT - 1);
+}
+
+static inline ObjString *split_emit(char *at, const char *src, int len) {
+  ObjString *str = (ObjString *)at;
+  str->obj.type = OBJ_STRING;
+  str->obj.arena_allocated = 1;
+  str->obj.next = nullptr;
+  str->obj.ref_count = 1;
+  str->obj.is_moved = 0;
+  str->length = len;
+  str->capacity = len + 1;
+  str->chars = at + sizeof(ObjString);
+  if (len > 0) memcpy(str->chars, src, (size_t)len);
+  str->chars[len] = '\0';
+  str->hash = 0;
+  return str;
+}
+
+VMValue aot_split(VMValue strVal, VMValue delVal) {
+  ObjArray *arr = vm_allocate_array_aot_wrapper(nullptr);
+  if (!IS_STRING(strVal) || !IS_STRING(delVal))
+    return VM_OBJ((Obj *)arr);
 
   ObjString *s = AS_STRING(strVal);
   ObjString *d = AS_STRING(delVal);
-
-  ObjArray *arr = vm_allocate_array_aot_wrapper(nullptr);
-
-  if (s->length == 0)
+  if (s->length <= 0)
     return VM_OBJ((Obj *)arr);
 
-  if (d->length == 0) {
-    for (int i = 0; i < s->length; i++) {
-      char single[2] = {s->chars[i], '\0'};
-      ObjString *seg = aot_allocate_string(single, 1);
-      vm_array_push_aot_wrapper(nullptr, arr, VM_OBJ((Obj *)seg));
-    }
+  const char *base = s->chars;
+  const char *end = base + s->length;
+  const int dlen = d->length;
+
+  // 1. gecis: parca sayisi + arena boyutu.
+  size_t count = 0, bytes = 0;
+  if (dlen <= 0) {
+    count = (size_t)s->length;               // her bayt bir parca
+    bytes = count * split_piece_bytes(1);
   } else {
-    const char *start = s->chars;
-    const char *p;
-    while ((p = strstr(start, d->chars)) != nullptr) {
-      int len = (int)(p - start);
-      char *sub = static_cast<char*>(malloc(len + 1));
-      strncpy(sub, start, len);
-      sub[len] = '\0';
-
-      ObjString *seg = aot_allocate_string(sub, len);
-      vm_array_push_aot_wrapper(nullptr, arr, VM_OBJ((Obj *)seg));
-      free(sub);
-
-      start = p + d->length;
+    const char *p = base, *q;
+    while ((q = split_find(p, end, d->chars, dlen)) != nullptr) {
+      bytes += split_piece_bytes((size_t)(q - p));
+      count++;
+      p = q + dlen;
     }
-    ObjString *seg = aot_allocate_string(start, strlen(start));
-    vm_array_push_aot_wrapper(nullptr, arr, VM_OBJ((Obj *)seg));
+    bytes += split_piece_bytes((size_t)(end - p));
+    count++;
   }
 
+  VMValue *items = (VMValue *)malloc(sizeof(VMValue) * count);
+  char *block = items ? (char *)aot_arena_alloc(bytes) : nullptr;
+  if (!items || !block) {
+    free(items);
+    return VM_OBJ((Obj *)arr); // bellek yok: bos dizi (eski yol da cokerdi)
+  }
+  // POZITIF KONTROL (tests/split_toplu.sh): TULPAR_SPLIT_TANI=1 iken her
+  // cagri, parca sayisini ve TEK arena ayirmasinin bayt boyunu stderr'e
+  // basar. Kapi bu boyu kendisi hesaplayip karsilastiriyor — toplu yol
+  // devreden cikarsa (parca basina ayirmaya donulurse) satir kaybolur ya da
+  // boy tutmaz ve kapi kirmiziya doner.
+  static std::atomic<int> tani{-1};
+  int t = tani.load(std::memory_order_relaxed);
+  if (t < 0) {
+    const char *e = getenv("TULPAR_SPLIT_TANI");
+    t = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+    tani.store(t, std::memory_order_relaxed);
+  }
+  if (t)
+    std::fprintf(stderr, "split-tani: %zu parca, tek arena ayirmasi %zu bayt\n",
+                 count, bytes);
+
+  // 2. gecis: parcalari bitisik kur.
+  size_t n = 0;
+  if (dlen <= 0) {
+    for (const char *p = base; p < end; p++) {
+      items[n++] = VM_OBJ((Obj *)split_emit(block, p, 1));
+      block += split_piece_bytes(1);
+    }
+  } else {
+    const char *p = base, *q;
+    while ((q = split_find(p, end, d->chars, dlen)) != nullptr) {
+      int len = (int)(q - p);
+      items[n++] = VM_OBJ((Obj *)split_emit(block, p, len));
+      block += split_piece_bytes((size_t)len);
+      p = q + dlen;
+    }
+    int len = (int)(end - p);
+    items[n++] = VM_OBJ((Obj *)split_emit(block, p, len));
+  }
+
+  arr->items_ = items;
+  arr->capacity = (int)count;
+  arr->count = (int)n;
   return VM_OBJ((Obj *)arr);
 }
+
 
 // array_fill(n, deger) -> n elemanli, hepsi `deger` olan dizi.
 //

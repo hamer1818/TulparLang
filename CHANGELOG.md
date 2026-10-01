@@ -12,6 +12,35 @@ tag still works;
 
 ## [Unreleased]
 
+### Performans — `split` tek ayırmada, `toInt` düz ondalıkta atoll'suz: `parse` 200 → 126 ms
+
+- `split()` parça başına `strstr` + geçici `malloc`/`strncpy`/`free` + ayrı
+  arena ayırması + ikiye katlanarak büyüyen diziye `push` yapıyordu. Artık iki
+  geçiş: parçalar sayılıyor, eleman deposu TAM boyda bir kez, bütün parça
+  nesneleri TEK bir arena ayırmasında bitişik kuruluyor. Büyük bir split o
+  ayırma için kendi sürekli bloğunu alıyor; Linux'ta THP onu 2 MB sayfalarla
+  dolduruyor — `parse`'ta küçük sayfa hatası 85 251 → 4 618, çekirdek zamanı
+  59 → 22 ms. Split tek başına 112 → 57 ms.
+- `toInt(dizgi)`: tamamı `[+-]?[0-9]{1,18}` olan dizgi `atoll`a gitmeden
+  çözülüyor (aynı sonuç); boşluk, kuyruk, 19+ hane gibi her başka biçim
+  eskisi gibi `atoll`. `parse` döngüsü 37 → 22 ms.
+- Ölçüm (Ryzen 7 9800X3D, 2026-10-01, `taskset -c 10,11`, en iyi 5):
+  `benchmarks/fair/parse` **200,5 → 126,2 ms** (C 56,7). Tepe bellek
+  DEĞİŞMEDİ (442 → 440 MB): "parçalar döngü boyunca geri alınmıyor"
+  hipotezi ölçümle çürüdü — parçalar `parts` dizisinde CANLI; bellek
+  5M × 64 bayt (56 baytlık `ObjString` başlığı + ~6 bayt karakter) + 80 MB
+  eleman deposu. Tabanı düşürmek nesne temsili değişikliği istiyor (bkz.
+  `docs/mindmap/Performance.md`).
+- Bayt uzunluğu anlambilimi: arama artık `strstr` değil uzunlukla yapılıyor.
+  NUL içermeyen dizgilerde sonuç bayt bayt aynı; eski yol gömülü NUL'da
+  kırpıyordu, NUL ile başlayan ayırıcıda tamponun dışına yürüyordu.
+- Test: `tests/split_toplu.test.tpr` (kenar durumlar, hizalama sınırındaki
+  parça uzunlukları, global'e / json'a / checkpoint içinden saklanan
+  parçaların çöplemeden sonra yaşaması, toInt'in iki yolu) — eski
+  derleyicide de yeşil. Pozitif kontrol: `tests/split_toplu.sh`
+  (`TULPAR_SPLIT_TANI=1` tek ayırmanın bayt boyunu basar, kapı kendisi
+  hesaplayıp karşılaştırır); eski (parça başına) yolda kırmızı.
+
 ### Değişti — `json` nesnesi artık hash indeksli: 1M anahtar >60 s → 0,17 s
 
 - `json` nesnesi her eklemede ve aramada anahtarları baştan sona `strcmp` ile
