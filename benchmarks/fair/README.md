@@ -280,7 +280,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `arrayiter` | 1,2 | 2,3 | 0,52× | 1. |
 | `mandelbrot` | 158,4 | 158,7 | 1,00× | 3. |
 | `qsort` | 121,2 | 57,4 | 2,1× | 8. |
-| `callfn` | 298,6 → **209,6** (2026-10-01) | 91,1 | 2,3× | 8. |
+| `callfn` | 298,6 → 209,6 → **65,5** (2026-10-01) | 91,1 | 2,3× → **0,7×** | 8. → ~3.* |
 | `parse` | 196,3 → **126,2** (2026-10-01) | 56,7 | 2,2× | 6. → **4.** |
 | `particles` | 329,6 → **54,8** (2026-10-01) | 42,2 | 7,8× → 1,3× | 8. → **4.** |
 | `nbody` | 1304,8 → **187,3** (2026-10-01) | 114,5 | 11,4× → **1,6×** | 8. → **7.** |
@@ -325,7 +325,16 @@ Bulgular, sırayla ele alınması önerilen:
    değerlendirmede yeni bir arena dizgisiydi (döngüde `call(f, x)` 20M kez →
    1,26 GB) ve `call()` her çağrıda adı hash'leyip önbelleği yokluyordu.
    Referans artık site başına bir kez çözülen havuz dizgisi; `call()` onu
-   satır içinde, doğrudan işaretçiyle çağırıyor: 299 → **210 ms** (C 91).
-   Kalan: kutulu sarmalayıcı + üst düzey global `acc`.
+   satır içinde, doğrudan işaretçiyle çağırıyor: 299 → 210 ms (C 91).
+   **İkinci adım (2026-10-01):** hedef tümü-int ise (`func f(int x): int`)
+   havuz kaydı çıplak `i64 f(i64)` giriş noktasını da taşıyor ve argümanlar
+   INT ise satır içi yol kutulu sarmalayıcıyı (`tb_f`: argüman belleğe
+   yazılıp okunuyor, iki `fptosi`/`select`, ikinci çağrı, sonuç yuvası)
+   atlıyor: 174 → **65,5 ms** (aynı düzenekte gcc -O2 C 91,4, clang -O2 C
+   58,2; Tulpar ikilisi düzenine duyarlı, koşumlar arasında 65–76 ms).
+   *Sıra resmî koşumda (`run.py`) yeniden ölçülmedi: `results.json`'daki
+   öteki dillerle (Rust 58,5, Go 64,9, Java 76,2) yan yana konunca ~3. Kalan: `acc` üst düzey `int`
+   → global, tur başına bir saklama (main yereli olunca 63,5 ms; `int`
+   kuralı elek yüzünden global, bkz. `main_local_declare`).
 6. **Başlatma 0,25 ms, derleme ortancası 61 ms, ikili 1,4 MB**; belleğin çoğu
    çekirdekte C ile aynı (`arrayiter`'de 32 bitlik dizi sayesinde yarısı).

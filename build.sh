@@ -688,6 +688,15 @@ if [ "$ACTION" = "suites" ]; then
             exit 1
         fi
     fi
+    # call(f, ...) YEREL INT YOLU (2026-10-01): tumu-int hedef ciplak giris
+    # noktasindan cagriliyor mu (IR + runtime tanisi, iki ayak);
+    # TULPAR_NO_CALL_NATIVE=1 pozitif kontrol.
+    if [ -x tests/call_yerel_int.sh ]; then
+        if ! bash tests/call_yerel_int.sh ./tulpar; then
+            echo -e "${RED}call() yerel int yolu kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
 
     # PERFORMANS IPUCU (K167): TULPAR_PERF_HINTS=1 kanitli erisim kurulamayan
     # dongunun nedenini soyler; kanitli donguye ipucu basmaz, varsayilan kapali.

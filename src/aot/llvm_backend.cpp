@@ -505,6 +505,13 @@ static LLVMValueRef emit_boxed_fn_return(LLVMBackend *backend,
 static bool boxed_value_abi_eligible(LLVMBackend *backend, ASTNode_C *node);
 static void boxed_fast_name(const char *name, char *out, size_t n);
 static int  selfrec_begin(LLVMBackend *backend, ASTNode_C *fn);
+// call(f, ...) yerel int yolu acik mi (TULPAR_NO_CALL_NATIVE=1 kapatir;
+// web'de satir ici call() yolu zaten yok).
+static bool call_native_enabled(LLVMBackend *backend) {
+  if (backend->target_web) return false;
+  const char *off = getenv("TULPAR_NO_CALL_NATIVE");
+  return !(off && *off && *off != '0');
+}
 static void selfrec_finish(LLVMBackend *backend, ASTNode_C *fn, int depth);
 static void selfrec_predeclare(LLVMBackend *backend, ASTNode_C *fn);
 static void report_codegen_error(LLVMBackend *backend, int line,
@@ -8722,9 +8729,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef off = LLVMBuildSub(backend->builder, payload,
                                       LLVMBuildPtrToInt(backend->builder, pool, i64t, "fnref.base"),
                                       "fnref.off");
-      // 1024 kayit x 72 bayt (ObjString 56 + fp 8 + arite 4 + dolgu 4).
+      // 1024 kayit x 80 bayt (ObjString 56 + fp 8 + arite 4 + dolgu 4 + nfp 8).
       LLVMValueRef inpool = LLVMBuildICmp(backend->builder, LLVMIntULT, off,
-                                          LLVMConstInt(i64t, 1024ull * 72ull, 0), "fnref.in");
+                                          LLVMConstInt(i64t, 1024ull * 80ull, 0), "fnref.in");
       LLVMBuildCondBr(backend->builder,
                       LLVMBuildAnd(backend->builder, isobj, inpool, "fnref.ok"),
                       chk_bb, slow_bb);
@@ -8739,7 +8746,56 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                         LLVMConstInt(backend->int32_type, actual, 0), "fnref.areq");
       LLVMBuildCondBr(backend->builder, areq, call_bb, slow_bb);
 
-      LLVMPositionBuilderAtEnd(backend->builder, call_bb);
+      // YEREL INT YOLU (2026-10-01): hedef tumu-int yerel ABI'liysa
+      // (kaydin `nfp`si dolu) ve argumanlarin HEPSI calisma zamaninda INT
+      // ise ciplak `i64 f(i64, ...)` dogrudan cagrilir; sonuc INT olarak
+      // kutulanir. Atlanan: tb_<ad> sarmalayicisinin arguman yuklemesi +
+      // float kirpma secimi, ikinci cagri ve sonuc yuvasindan gecis (callfn'in
+      // bagimlilik zincirinde iki saklama->yukleme ve iki fptosi/select).
+      // Anlam sarmalayicinin aynisi: INT olmayan arguman (float -> kirpma,
+      // bool, ...) kutulu yola gider. Statik INT argumanin etiket sinavini
+      // LLVM katliyor. TULPAR_NO_CALL_NATIVE=1 kapatir.
+      LLVMBasicBlockRef nat_bb = nullptr;
+      LLVMValueRef nat_res = nullptr;
+      LLVMBasicBlockRef nat_end = nullptr;
+      if (call_native_enabled(backend)) {
+        LLVMBasicBlockRef nchk_bb = append_bb(backend, fn, "fnref.nchk");
+        nat_bb = append_bb(backend, fn, "fnref.native");
+        LLVMBasicBlockRef boxed_bb = append_bb(backend, fn, "fnref.boxed");
+        LLVMPositionBuilderAtEnd(backend->builder, call_bb);
+        LLVMValueRef nfo[] = {LLVMConstInt(i64t, 72, 0)};
+        LLVMValueRef nfpp = LLVMBuildGEP2(backend->builder, LLVMInt8TypeInContext(backend->context),
+                                          ep, nfo, 1, "fnref.nfpp");
+        LLVMValueRef nfp = LLVMBuildLoad2(backend->builder, backend->ptr_type, nfpp, "fnref.nfp");
+        LLVMValueRef has = LLVMBuildICmp(backend->builder, LLVMIntNE, nfp,
+                                         LLVMConstNull(backend->ptr_type), "fnref.hasn");
+        LLVMBuildCondBr(backend->builder, has, nchk_bb, boxed_bb);
+        LLVMPositionBuilderAtEnd(backend->builder, nchk_bb);
+        LLVMValueRef all_int = LLVMConstInt(LLVMInt1TypeInContext(backend->context), 1, 0);
+        for (int i = 0; i < actual; i++) {
+          LLVMValueRef t = LLVMBuildExtractValue(backend->builder, argv_v[i], 0, "fnref.at");
+          LLVMValueRef isint = LLVMBuildICmp(backend->builder, LLVMIntEQ, t,
+                                             LLVMConstInt(backend->int32_type, 0, 0), "fnref.ai");
+          all_int = LLVMBuildAnd(backend->builder, all_int, isint, "fnref.allint");
+        }
+        LLVMBuildCondBr(backend->builder, all_int, nat_bb, boxed_bb);
+        LLVMPositionBuilderAtEnd(backend->builder, nat_bb);
+        LLVMTypeRef nptys[8];
+        LLVMValueRef nargs[8];
+        for (int i = 0; i < actual; i++) {
+          nptys[i] = backend->int_type;
+          nargs[i] = LLVMBuildExtractValue(backend->builder, argv_v[i], 2, "fnref.ap");
+        }
+        LLVMTypeRef nfty = LLVMFunctionType(backend->int_type, nptys, (unsigned)actual, 0);
+        LLVMValueRef r = LLVMBuildCall2(backend->builder, nfty, nfp,
+                                        actual ? nargs : nullptr, (unsigned)actual, "fnref.nr");
+        nat_res = llvm_vm_val_int_val(backend, r);
+        LLVMBuildBr(backend->builder, merge_bb);
+        nat_end = LLVMGetInsertBlock(backend->builder);
+        LLVMPositionBuilderAtEnd(backend->builder, boxed_bb);
+      } else {
+        LLVMPositionBuilderAtEnd(backend->builder, call_bb);
+      }
       LLVMValueRef fpo[] = {LLVMConstInt(i64t, 56, 0)};
       LLVMValueRef fpp = LLVMBuildGEP2(backend->builder, LLVMInt8TypeInContext(backend->context),
                                        ep, fpo, 1, "fnref.fpp");
@@ -8797,9 +8853,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
       LLVMPositionBuilderAtEnd(backend->builder, merge_bb);
       LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type, "call_res");
-      LLVMValueRef pv[] = {fast_res, slow_res};
-      LLVMBasicBlockRef pb[] = {fast_end, slow_end};
-      LLVMAddIncoming(phi, pv, pb, 2);
+      LLVMValueRef pv[] = {fast_res, slow_res, nat_res};
+      LLVMBasicBlockRef pb[] = {fast_end, slow_end, nat_end};
+      LLVMAddIncoming(phi, pv, pb, nat_res ? 3 : 2);
       return phi;
     }
 
@@ -16264,8 +16320,11 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
       // onu onbellege kaydediyoruz: call() / aot_func_lookup ad aramasinda
       // once onbellege baktigi icin ciplak ada hic inmiyor. Dogrudan cagrilar
       // (`f(7)`) sarmalayiciyi GORMEZ — yerel yol ayni kalir.
-      if (!target) target = native_boxed_wrapper(backend, fname);
-      else if (LLVMValueRef w = struct_abi_call_wrapper(backend, fname, target))
+      bool native_target = false;
+      if (!target) {
+        target = native_boxed_wrapper(backend, fname);
+        native_target = target != nullptr;
+      } else if (LLVMValueRef w = struct_abi_call_wrapper(backend, fname, target))
         target = w;  // kutusuz struct parametre/donus: tc_<ad>
       if (!target) continue; // not emitted; not a call() target
       // Arity = user param count: the boxed signature is
@@ -16281,6 +16340,20 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
       LLVMBuildCall2(backend->builder,
                      LLVMGlobalGetValueType(backend->func_aot_register_func),
                      backend->func_aot_register_func, reg_args, 3, "");
+      // Tumu-int hedef: ciplak giris noktasini da kaydet — call() satir ici
+      // yolu argumanlar INT ise sarmalayiciyi atlayip onu cagirir (bkz.
+      // "call(f, ...) SATIR ICI HIZLI YOL"). Yol 8 argumana kadar.
+      if (native_target && arity <= 8 && call_native_enabled(backend)) {
+        LLVMValueRef bare = LLVMGetNamedFunction(backend->module, fname);
+        LLVMValueRef rn = LLVMGetNamedFunction(backend->module, "aot_register_func_native");
+        if (!rn) {
+          LLVMTypeRef rp[] = {backend->ptr_type, backend->ptr_type};
+          rn = LLVMAddFunction(backend->module, "aot_register_func_native",
+                               LLVMFunctionType(backend->void_type, rp, 2, 0));
+        }
+        LLVMValueRef rargs[] = {target, bare};
+        LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rn), rn, rargs, 2, "");
+      }
     }
 
     // Pass 1b: Emit function bodies

@@ -12,6 +12,23 @@ tag still works;
 
 ## [Unreleased]
 
+### Performans — `call(f, ...)` tümü-int hedefte sarmalayıcısız: `callfn` 174 → 65,5 ms (gcc C 91)
+
+- Tümü-int `func f(int x): int` yerel (i64) ABI'li; `call()` onu kutulu
+  sarmalayıcı `tb_f` üzerinden çağırıyordu: argüman belleğe yazılıp geri
+  okunuyor, INT/FLOAT çevirisi (`fptosi` + `select`) iki kez bağımlılık
+  zincirinde, ikinci bir çağrı ve sonuç yuvasından geçiş.
+- Fonksiyon referansı havuz kaydı artık çıplak giriş noktasını da taşıyor
+  (`aot_register_func_native`); satır içi `call()` yolu argümanların hepsi
+  INT ise onu doğrudan çağırıyor. INT olmayan argüman eskisi gibi
+  sarmalayıcıdan (float kırpılır, bool 0/1) — anlam aynı.
+- Ölçüldü (Ryzen 7 9800X3D, 2026-10-01, `taskset -c 10,11`): `callfn`
+  174 → **65,5 ms** (aynı düzenekte gcc -O2 C 91,4, clang -O2 C 58,2),
+  doğrudan `call(f, acc)` 20M 145,5 → 58,2 ms. On iki kıyasta fark yok
+  (hashmap'in ±%5'lik gürültüsü bayt bayt aynı iki ikilide de görülüyor).
+- Kapılar: `tests/call_yerel_int.sh` (IR + `TULPAR_CALL_TANI` `yerel=N`;
+  `TULPAR_NO_CALL_NATIVE=1` pozitif kontrol), `tests/call_yerel_int.test.tpr`.
+  `call-tani` satırına `yerel=N` eklendi.
 ### Düzeltildi — `try` gövdesinde değişip fırlatılan yerel `catch`'ten sonra eski değerine dönüyordu
 
 - `func f(): int { int k = 0; try { k = 5; throw "x"; } catch (e) {} return k; }`
