@@ -160,7 +160,9 @@ print("sonra");
 TPREOF
 out=$(derle sinir)
 if echo "$out" | grep -qE '^\[iver\] satir 4: [0-9]+ golge, 0 bildirim, 1 okuma'; then
+    # Windows ciktisi CRLF: satir sonu karsilastirmadan once ayiklaniyor.
     r=$(cd "$TMP" && IG_K=5 ./sinir.out 2>&1); rc=$?
+    r=$(printf '%s' "$r" | tr -d '\r')
     if [ "$rc" -eq 0 ] && [ "$r" = "$(printf '12\nsonra')" ]; then gecti "sinir: tam sinirda calisti (12)"
     else dustu "sinir: IG_K=5 rc=$rc cikti='$r' (beklenen 12)"; fi
     r=$(cd "$TMP" && IG_K=6 ./sinir.out 2>&1); rc=$?
@@ -192,7 +194,10 @@ ir_var() {   # ir_var <kaynak> <cikti> <desen> <ek ortam> -> 0: desen IR'de var
     rm -f "$TMP/$2.ll" "$TMP/$2.pre.ll"
     (cd "$TMP" && env $4 TULPAR_AOT_NOCACHE=1 TULPAR_AOT_EMIT_LL=1 TULPAR_AOT_EMIT_LL_PRE=1 \
         "$TUL" build "$1.tpr" "$2" >/dev/null 2>&1)
-    cat "$TMP/$2.ll" "$TMP/$2.pre.ll" 2>/dev/null | grep -qE "$3"
+    # Boru YOK: `cat a b | grep -q` pipefail altinda, grep erken cikip cat
+    # SIGPIPE (141) alinca eslesme varken de basarisiz donuyordu — CI'da
+    # uc platformda da (yerelde zamanlama sansiyla yesil).
+    grep -qE "$3" "$TMP/$2.ll" "$TMP/$2.pre.ll" 2>/dev/null
 }
 if ir_var qs qs_yok.out 'iver_fast' "TULPAR_NO_IVER=1"; then
     dustu "pozitif kontrol: TULPAR_NO_IVER=1 iken de iver_fast var — kapi bir sey olcmuyor"
