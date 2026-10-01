@@ -1045,8 +1045,50 @@ static inline bool obj_is_transient(Obj *o) {
 // acmayi birakti ve gecici diziye push 5.2 -> 7.5 ns, kare olcusu 182 -> 285
 // ns oldu (olculdu 2026-09-27, Ryzen 7 9800X3D). Deger denetimi yalniz KALICI
 // kaba yazarken kosuyor.
+// YERLESMIS ARENA DIZGISI (2026-10-01). Arena bellegi YALNIZ checkpoint geri
+// sarmasiyla geri aliniyor: aot_arena_reset / aot_arena_destroy'un cagiran
+// hicbir yeri yok (thread'in arenasi da thread bitince serbest kalmiyor).
+// Geri sarma da yalniz bir arena_save'in kaydettigi UCA kadar gidiyor. Demek
+// ki bu thread'de ACIK checkpoint YOKKEN arenanin canli kisminda (ucun
+// altinda) duran bir nesne artik hicbir zaman geri alinamaz: ileride
+// alinacak her checkpoint onun USTUNDE olacak.
+//
+// Yazma bariyeri bunu bilmiyordu: arena = gecici sayip kalici kaba yazilan
+// her dizgiyi malloc'a KOPYALIYORDU. Olculen iki bedel (Ryzen 7 9800X3D):
+//   * hashmap: 1M yeni anahtarin her biri once arenaya sonra malloc'a.
+//   * parse: ust duzey `str s = sb_tostring(sb)` 29 MB'lik metni ikinci kez.
+// Yalniz DIZGI icin: dizgi degismez ve cocugu yok, paylasim gozlemlenemez.
+// Dizi/json'un "atamada derin kopya" anlambilimi (aot_persist_global) ayri
+// bir sozlesme, ona dokunulmuyor.
+//
+// Neden "ucun altinda" da soruluyor, yalniz `top == 0` degil: checkpoint
+// icinde ayrilip arena_drop ile birakilmis (OLU) bir dizgi, uzerine yazilana
+// kadar dogru okunuyor; eski bariyer onu kopyalayip "kurtariyordu". O dizgi
+// simdi ucun USTUNDE (bos bolgede) duruyor -> yerlesmis sayilmaz, kopya
+// eskisi gibi alinir. Baska thread'in arenasindaki dizgi burada bulunmaz ->
+// kopya (eski davranis). Blok yuruyusu 64 adimla sinirli; asilirsa yine
+// kopya (dogru, eskisi kadar pahali).
+//
+// ⚠ Biri ileride aot_arena_reset'i (butun arenayi kesen) bir yerden
+// cagirirsa bu varsayim YIKILIR: o gun bu fonksiyon `false` dondurmeli.
+static inline bool arena_str_settled(const Obj *o) {
+  if (g_arena_checkpoint_top != 0 || !o || o->type != OBJ_STRING ||
+      !o->arena_allocated)
+    return false;
+  const AOTArena *a = g_aot_string_arena;
+  if (!a || !a->current) return false;
+  const char *p = (const char *)o;
+  const AOTArenaBlock *cur = a->current;
+  if (p >= cur->memory && p < cur->memory + cur->used) return true;
+  int steps = 0;
+  for (const AOTArenaBlock *b = a->head; b && b != cur && steps < 64;
+       b = b->next, steps++)
+    if (p >= b->memory && p < b->memory + b->used) return true;
+  return false;
+}
+
 static inline bool value_is_transient(Obj *o) {
-  if (obj_is_transient(o)) return true;
+  if (obj_is_transient(o)) return !arena_str_settled(o);
   if (!o || o->type != OBJ_CLOSURE) return false;
   Obj *env = (Obj *)((ObjClosure *)o)->env;
   return env && g_region_set.count(env) != 0;
@@ -1160,6 +1202,51 @@ VMValue aot_arena_drop(VMValue idxVal) {
   aot_arena_rewind_to(idx);
   g_arena_checkpoint_top = idx; // release this checkpoint, not just rewind it
   return VM_INT(0);
+}
+
+// ---------------------------------------------------------------------------
+// GECICI ANAHTAR IFADESI ICIN ARENA ISARETI (codegen'in ic yardimcisi,
+// 2026-10-01). `m["k" + toString(i)]` her degerlendirmede anahtar dizgisini
+// arenaya ayiriyor ve arena bu dizgiyi HICBIR ZAMAN geri almiyordu: 1M
+// aramalik bir dongu 64 MB birikti (benchmarks/fair hashmap). Codegen yalniz
+// SAF anahtar ifadesinde (literal, degisken, aritmetik, birlestirme,
+// toString — kullanici cagrisi, atama, dizi erisimi YOK; bkz.
+// llvm_backend.cpp key_expr_is_pure) anahtardan ONCE isaret alir, erisimden
+// SONRA geri birakir. Aradaki her ayirma yalniz o ifadenin ara/son
+// dizgileri; hicbiri bir yere yazilmadi (saf ifade yazamaz), erisim de onlari
+// tutmadi (cagiran yardimci bunu denetliyor: aot_get_element_tmpkey /
+// aot_set_element_tmpkey).
+//
+// Checkpoint degil: g_region'a ve yigina dokunmuyor, yalniz arena ucunu
+// geri cekiyor. Isaretten sonra yeni bloga gecildiyse aradaki bloklarin
+// `used`'u sifirlanir — aot_arena_rewind_to ile ayni degismez (ucun
+// sonrasindaki bloklar bos).
+void *aot_arena_mark(long long *used_out) {
+  if (!g_aot_string_arena) aot_arena_init();
+  AOTArenaBlock *b = g_aot_string_arena ? g_aot_string_arena->current : nullptr;
+  if (used_out) *used_out = b ? (long long)b->used : 0;
+  return b;
+}
+
+void aot_arena_release(void *blk, long long used_ll) {
+  AOTArena *a = g_aot_string_arena;
+  AOTArenaBlock *b = (AOTArenaBlock *)blk;
+  if (!a || !b || used_ll < 0) return;
+  size_t used = (size_t)used_ll;
+  if (used > b->used) return;
+  if (b != a->current) {
+    // Once b'nin ucun ONUNDE oldugunu dogrula, sonra sifirla (olmamali, ama
+    // yarim sifirlanmis bir zincir birakmaktansa hic dokunmamak).
+    AOTArenaBlock *x = b->next;
+    while (x && x != a->current) x = x->next;
+    if (!x) return;
+    for (x = b->next; x; x = x->next) {
+      x->used = 0;
+      if (x == a->current) break;
+    }
+  }
+  b->used = used;
+  a->current = b;
 }
 
 // Free all arena memory
@@ -1717,21 +1804,28 @@ void aot_print_value(VMValue *v) { vm_print_value(*v); }
 // concat path can coerce a non-string operand to its string form.
 VMValue aot_to_string(VMValue value);
 
+// Dizgi olmayan bir degerin toString metni, AYIRMADAN (asagida, aot_to_string
+// ile ayni dallar). Donus: uzunluk; metin `buf`ta.
+static int aot_value_text(VMValue value, char *buf, size_t n);
+
 VMValue aot_string_concat_fast(VMValue a, VMValue b) {
-  // `+` with a string on either side is concatenation: coerce the other
-  // operand via toString so `"n = " + 5` yields "n = 5" instead of a
-  // silently-wrong 0. (string+string skips coercion — the common fast path.)
-  VMValue sa = IS_STRING(a) ? a : aot_to_string(a);
-  VMValue sb = IS_STRING(b) ? b : aot_to_string(b);
-  if (!IS_STRING(sa) || !IS_STRING(sb)) {
-    return VM_INT(0); // defensive: aot_to_string always returns a string
-  }
+  // `+` with a string on either side is concatenation: the other operand is
+  // coerced with toString semantics so `"n = " + 5` yields "n = 5" instead of
+  // a silently-wrong 0. (string+string skips coercion — the common fast path.)
+  //
+  // Zorlama ARA DIZGI AYIRMIYOR (2026-10-01): eskiden aot_to_string ile
+  // arenaya bir dizgi kurulup hemen kopyalaniyordu — `"k" + i` iki ayirma
+  // idi. Codegen ayrica `S + toString(x)` kalibini `S + x` olarak buraya
+  // getiriyor (llvm_backend.cpp tostring_concat_arg), yani o kalip da tek
+  // ayirma. Metin aot_to_string'inkiyle bayt bayt ayni (ayni fonksiyon).
+  char ta[64], tb[64];
+  const char *pa, *pb;
+  int len1, len2;
+  if (IS_STRING(a)) { pa = AS_STRING(a)->chars; len1 = AS_STRING(a)->length; }
+  else { len1 = aot_value_text(a, ta, sizeof ta); pa = ta; }
+  if (IS_STRING(b)) { pb = AS_STRING(b)->chars; len2 = AS_STRING(b)->length; }
+  else { len2 = aot_value_text(b, tb, sizeof tb); pb = tb; }
 
-  ObjString *s1 = AS_STRING(sa);
-  ObjString *s2 = AS_STRING(sb);
-
-  int len1 = s1->length;
-  int len2 = s2->length;
   int total_len = len1 + len2;
 
   // Single AOT ARENA allocation for both struct and chars
@@ -1751,8 +1845,8 @@ VMValue aot_string_concat_fast(VMValue a, VMValue b) {
   result->chars = block + sizeof(ObjString);
 
   // Direct memory copy
-  memcpy(result->chars, s1->chars, len1);
-  memcpy(result->chars + len1, s2->chars, len2);
+  memcpy(result->chars, pa, len1);
+  memcpy(result->chars + len1, pb, len2);
   result->chars[total_len] = '\0';
 
   // Lazy hash
@@ -2541,39 +2635,48 @@ static int obj_find(const ObjObject *o, const char *key) {
 }
 
 // Object Wrappers
-void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
-  if (!obj || !key)
-    return;
+//
+// ANAHTAR KOPYASI (2026-10-01). Eskiden her `vm_object_set` anahtari ONCE
+// arenaya kopyaliyor, kap kaliciysa bir de malloc'a — ve bunu anahtar ZATEN
+// VARKEN de yapiyordu (arama kopyadan SONRA). 1M ekleme + 1M arama yapan
+// hashmap kiyasinda (benchmarks/fair) ekleme basina iki, mevcut anahtara
+// yazma basina bir bosa kopya. Simdi:
+//   * once ARA: anahtar varsa yalniz deger yazilir, hicbir sey ayrilmaz;
+//   * yoksa TEK kopya, kabin omrune gore yerinde: gecici kap -> arena;
+//     kalici kap + acik checkpoint yok -> arena (arena_str_settled: o dizgi
+//     artik geri alinamaz); kalici kap + checkpoint icinde -> dogrudan malloc
+//     (eskiden arena + malloc);
+//   * dizgi NESNESI anahtar olarak verildiyse (vm_object_set_key) ve
+//     paylasilabilirse kopya HIC yok — asagiya bak.
+// Yazma bariyerinin degismezi ayni: kalici kap yalniz geri alinamayacak
+// anahtar tutar.
 
-  // Write barrier: a transient value stored into a persistent object must be
-  // deep-copied so it survives the per-request arena_restore.
-  value = wb_persist_escape((Obj *)obj, value);
+// Karakterlerden kalici (malloc) dizgi — aot_persist_string_obj'un govdesi.
+static ObjString *persist_string_chars(const char *chars, int length) {
+  ObjString *p = (ObjString *)malloc(sizeof(ObjString) + (size_t)length + 1);
+  if (!p) return nullptr;
+  p->obj.type = OBJ_STRING;
+  p->obj.arena_allocated = 0;
+  p->obj.next = nullptr;
+  p->obj.ref_count = 1;
+  p->obj.is_moved = 0;
+  p->length = length;
+  p->capacity = length + 1;
+  p->chars = (char *)(p + 1);
+  memcpy(p->chars, chars, (size_t)length);
+  p->chars[length] = '\0';
+  p->hash = 0;
+  return p;
+}
 
-  // Create string object for key
-  int len = strlen(key);
-  ObjString *keyObj =
-      vm ? vm_alloc_string(vm, key, len) : aot_allocate_string(key, len);
+static ObjString *obj_key_alloc(ObjObject *obj, const char *key, int len) {
+  if (obj_is_transient((Obj *)obj) || g_arena_checkpoint_top == 0)
+    return aot_allocate_string(key, len);
+  ObjString *p = persist_string_chars(key, len);
+  return p ? p : aot_allocate_string(key, len);
+}
 
-  // Write barrier for the KEY (mirrors the value barrier above): storing into a
-  // persistent container with a transient key string would leave a dangling key
-  // pointer once the per-request arena is rewound by arena_restore. The value
-  // survives via wb_persist_escape, but without this the key name does not —
-  // the global reads back with a corrupted/garbage key on the next request
-  // (e.g. a global session/token dict `_t[token] = uid` loses its keys). Only
-  // copy when the container is persistent and the key is actually transient, so
-  // the hot path (transient response objects) stays free.
-  if (!obj_is_transient((Obj *)obj) && obj_is_transient((Obj *)keyObj)) {
-    keyObj = aot_persist_string_obj(keyObj);
-  }
-
-  // Check if key exists (16+ anahtarda hash indeksi; bkz. yukarisi)
-  int at = obj_find(obj, key);
-  if (at >= 0) {
-    obj->values[at] = value;
-    return;
-  }
-
-  // Resize if needed
+static void obj_append(ObjObject *obj, ObjString *keyObj, VMValue value) {
   if (obj->count >= obj->capacity) {
     int old_capacity = obj->capacity;
     obj->capacity = old_capacity < 8 ? 8 : old_capacity * 2;
@@ -2598,6 +2701,68 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   obj->values[obj->count] = value;
   obj->count++;
   obj_index_note(obj);
+}
+
+void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
+  if (!obj || !key)
+    return;
+
+  // Write barrier: a transient value stored into a persistent object must be
+  // deep-copied so it survives the per-request arena_restore.
+  value = wb_persist_escape((Obj *)obj, value);
+
+  // Anahtar varsa yalniz deger (16+ anahtarda hash indeksi; bkz. yukarisi).
+  int at = obj_find(obj, key);
+  if (at >= 0) {
+    obj->values[at] = value;
+    return;
+  }
+
+  int len = strlen(key);
+  ObjString *keyObj;
+  if (vm) {
+    keyObj = vm_alloc_string(vm, key, len);
+    // Write barrier for the KEY (mirrors the value barrier above): storing a
+    // transient key into a persistent container would leave a dangling key
+    // pointer once the per-request arena is rewound by arena_restore (a
+    // global session/token dict `_t[token] = uid` lost its keys).
+    if (!obj_is_transient((Obj *)obj) && obj_is_transient((Obj *)keyObj))
+      keyObj = aot_persist_string_obj(keyObj);
+  } else {
+    keyObj = obj_key_alloc(obj, key, len);
+  }
+  obj_append(obj, keyObj, value);
+}
+
+// Dizgi NESNESIYLE yazma (vm_set_element ve codegen'in gecici anahtar yolu).
+// Anahtar yeniyse ve PAYLASILABILIRSE nesnenin kendisi anahtar olur, kopya
+// yok. Paylasilabilir = ARC'nin hic serbest birakmayacagi bir dizgi: arena
+// dizgisi (arc_release arena'yi atlar) ya da olumsuz kalici (interned literal,
+// fonksiyon referansi: ref_count sentinel). Siradan malloc dizgisi (ref_count
+// 1, ornegin persist kopyasi) kopyalanir: async'in arc_free_object'i
+// anahtarlari birakiyor, paylasilan bir anahtar orada serbest kalirdi.
+// Gomulu NUL'lu dizgi de kopyalanir: eski yol strlen ile KIRPIYORDU, anahtarin
+// uzunlugu degismesin.
+//
+// Donus: anahtar dizisine YENI yazilan dizgi; anahtar zaten varsa nullptr.
+// Cagiran (aot_set_element_tmpkey) arena isaretini buna gore geri birakir.
+ObjString *vm_object_set_key(ObjObject *obj, ObjString *key, VMValue value) {
+  if (!obj || !key)
+    return nullptr;
+  value = wb_persist_escape((Obj *)obj, value);
+  int at = obj_find(obj, key->chars);
+  if (at >= 0) {
+    obj->values[at] = value;
+    return nullptr;
+  }
+  bool shareable = (key->obj.arena_allocated || key->obj.ref_count >= (1 << 28)) &&
+                   (int)strlen(key->chars) == key->length;
+  ObjString *k = (shareable && (obj_is_transient((Obj *)obj) ||
+                                !value_is_transient((Obj *)key)))
+                     ? key
+                     : obj_key_alloc(obj, key->chars, (int)strlen(key->chars));
+  obj_append(obj, k, value);
+  return k;
 }
 
 // ⚠ GUVENLIK SOZLESMESI (FINDINGS T7 / P15, 2026-09-10): BU SAF BIR OKUMA
@@ -2715,13 +2880,52 @@ void vm_set_element(VM *vm, VMValue target, VMValue index, VMValue value) {
     }
   } else if (IS_OBJECT(target)) {
     if (IS_STRING(index)) {
-      vm_object_set(vm, AS_OBJECT(target), AS_STRING(index)->chars, value);
+      if (vm)
+        vm_object_set(vm, AS_OBJECT(target), AS_STRING(index)->chars, value);
+      else
+        vm_object_set_key(AS_OBJECT(target), AS_STRING(index), value);
       return;
     }
   }
   aot_runtime_error(tulpar::i18n::tr_en(
       "Calisma Zamani Hatasi: set islemi icin gecersiz hedef veya indeks",
       "Runtime Error: Invalid index or target for set access"));
+}
+
+// GECICI ANAHTARLI ERISIM (codegen'in ic yardimcilari, 2026-10-01; bkz.
+// aot_arena_mark). Codegen bunlari yalniz anahtar ifadesi SAF ve statik
+// olarak DIZGI iken uretir; `blk/used` anahtar ifadesinden HEMEN ONCE alinan
+// arena isareti. Erisimin anlami vm_get_element / vm_set_element ile AYNI;
+// tek fark isaretin geri birakilmasi — o da yalniz erisim isaretten sonraki
+// hicbir ayirmayi TUTMADIYSA:
+//   * okuma: json/dizi dizgi anahtarla okunurken hicbir sey ayrilmiyor
+//     (deger kaptan geliyor). Diger hedefler (hata yolu) birakmaz.
+//   * yazma: anahtar zaten varsa hicbir sey ayrilmadi -> birak. Yeni anahtar
+//     anahtar NESNESININ kendisiyse (paylasildi) ya da arenaya kopyalandiysa
+//     ya da kap arenadaysa (anahtar/deger dizileri, indeks arenadan) TUTULUR
+//     -> birakma. Kalici kabin malloc kopyasi -> birak.
+VMValue aot_get_element_tmpkey(VMValue *target, VMValue *index, void *blk,
+                               long long used) {
+  if (!target || !index)
+    return VM_INT(0);
+  VMValue r = vm_get_element(*target, *index);
+  if (IS_STRING(*index) && (IS_OBJECT(*target) || IS_ARRAY(*target)))
+    aot_arena_release(blk, used);
+  return r;
+}
+
+void aot_set_element_tmpkey(VMValue *target, VMValue *index, VMValue *value,
+                            void *blk, long long used) {
+  if (!target || !index || !value)
+    return;
+  if (IS_OBJECT(*target) && IS_STRING(*index)) {
+    ObjObject *o = AS_OBJECT(*target);
+    ObjString *k = vm_object_set_key(o, AS_STRING(*index), *value);
+    if (!k || (!k->obj.arena_allocated && !o->obj.arena_allocated))
+      aot_arena_release(blk, used);
+    return;
+  }
+  vm_set_element(nullptr, *target, *index, *value);
 }
 
 // Print a VMValue (used by OP_PRINT in VM)
@@ -2823,34 +3027,33 @@ void print_newline(void) {
 // spurious 404. Per-thread storage makes toString() race-free.
 static thread_local char aot_string_buffer[1024];
 
-VMValue aot_to_string(VMValue value) {
-  int len;
+// toString metni (dizgi DISI deger). aot_to_string ve dizgi birlestirmenin
+// zorlamasi AYNI fonksiyonu kullanir: ikisi asla ayrismaz. `n` en az 64:
+// int64 en fazla 20 hane + isaret, aot_format_float en fazla ~24 karakter.
+static int aot_value_text(VMValue value, char *buf, size_t n) {
   switch (value.type) {
   case VM_VAL_INT:
-    len = aot_itoa(AS_INT(value), aot_string_buffer);
-    break;
+    return aot_itoa(AS_INT(value), buf);
   case VM_VAL_FLOAT:
-    aot_format_float(aot_string_buffer, sizeof(aot_string_buffer),
-                     AS_FLOAT(value));
-    len = (int)strlen(aot_string_buffer);
-    break;
+    aot_format_float(buf, n, AS_FLOAT(value));
+    return (int)strlen(buf);
   case VM_VAL_BOOL:
-    if (AS_BOOL(value)) { memcpy(aot_string_buffer, "true", 5); len = 4; }
-    else { memcpy(aot_string_buffer, "false", 6); len = 5; }
-    break;
+    if (AS_BOOL(value)) { memcpy(buf, "true", 5); return 4; }
+    memcpy(buf, "false", 6);
+    return 5;
   case VM_VAL_OBJ:
-    if (IS_STRING(value)) {
-      return value;
-    }
-    memcpy(aot_string_buffer, "<object>", 9);
-    len = 8;
-    break;
+    memcpy(buf, "<object>", 9);
+    return 8;
   default:
-    memcpy(aot_string_buffer, "nullptr", 8);
-    len = 7;
-    break;
+    memcpy(buf, "nullptr", 8);
+    return 7;
   }
+}
 
+VMValue aot_to_string(VMValue value) {
+  if (IS_STRING(value))
+    return value;
+  int len = aot_value_text(value, aot_string_buffer, sizeof(aot_string_buffer));
   ObjString *str = aot_allocate_string(aot_string_buffer, len);
   return VM_OBJ((Obj *)str);
 }

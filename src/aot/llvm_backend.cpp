@@ -5994,6 +5994,128 @@ static LLVMValueRef emit_boxed_binary_op(LLVMBackend *backend, ASTNode_C *node,
 
   return phi;
 }
+
+// ---------------------------------------------------------------------------
+// GECICI DIZGILER (2026-10-01, benchmarks/fair hashmap: 439 MB tepe bellek).
+//
+// 1) `S + toString(x)` / `toString(x) + S` -> aot_string_concat_fast(S, x).
+//    Birlestirme dizgi olmayan tarafi ZATEN toString kuraliyla (ayni
+//    aot_value_text) metne ceviriyor; artik ara dizgi AYIRMADAN. Esitlik
+//    her S icin gecerli, S'nin dizgi olmasi bile gerekmiyor: toString(x)
+//    bir dizgi oldugundan `+` her zaman birlestirme (vm_binary_op'un
+//    dizgi kolu ve str_concat hizli yolu ikisi de aot_string_concat_fast),
+//    o da iki tarafi ayni kuralla zorluyor. Kutusuz struct (toString'in
+//    `Ad { ... }` bicimi) ve kullanici tanimli `toString` HARIC.
+//
+// 2) Sozluk erisiminde gecici anahtar: `m[<saf dizgi ifadesi>]`. Anahtar
+//    dizgisi arenaya ayriliyor ve arena onu hic geri almiyordu (1M arama =
+//    64 MB). Anahtar ifadesi SAF ise (key_expr_is_pure) codegen ondan once
+//    arena isareti alir, erisimden sonra runtime yardimcisi geri birakir —
+//    erisim anahtari TUTMADIYSA (runtime_bindings.cpp aot_*_element_tmpkey).
+// ---------------------------------------------------------------------------
+
+// `toString(x)` YERLESIK cagrisi ise x, degilse nullptr. Kosullar toString
+// codegen'iyle ayni: kullanici ayni adi tanimlamadi (yerlesik golgelenir),
+// alici/callee yok, tam bir arguman, arguman kutusuz struct degil.
+static ASTNode_C *tostring_concat_arg(LLVMBackend *backend, ASTNode_C *n) {
+  if (!n || n->type != AST_FUNCTION_CALL || !n->name || n->receiver ||
+      n->callee || n->argument_count != 1 || !n->arguments ||
+      !n->arguments[0] || strcmp(n->name, "toString") != 0)
+    return nullptr;
+  if (n->argument_names && n->argument_names[0]) return nullptr;
+  for (int i = 0; i < backend->function_count; i++)
+    if (backend->functions[i].name &&
+        strcmp(backend->functions[i].name, "toString") == 0)
+      return nullptr;
+  if (struct_expr_type(backend, n->arguments[0])) return nullptr;
+  return n->arguments[0];
+}
+
+// Ifadenin sonucu her zaman dizgi mi (statik)? Dizgi literali, toString,
+// ya da bir tarafi boyle olan `+` (dizgi + herhangi = birlestirme).
+static bool expr_is_static_string(LLVMBackend *backend, ASTNode_C *n, int depth = 0) {
+  if (!n || depth > 64) return false;
+  if (n->type == AST_STRING_LITERAL) return true;
+  if (tostring_concat_arg(backend, n)) return true;
+  if (n->type == AST_BINARY_OP && n->op == TOKEN_PLUS)
+    return expr_is_static_string(backend, n->left, depth + 1) ||
+           expr_is_static_string(backend, n->right, depth + 1);
+  return false;
+}
+
+// Anahtar ifadesi SAF mi: degerlendirmesi var olan hicbir nesneye yazmaz,
+// ayirdigi hicbir seyi bir yere koymaz. Izinli: literal, degisken okuma,
+// + - * / % ve tekli eksi (vm_binary_op yalniz yeni deger uretir), toString.
+// Yasak: kullanici/diger yerlesik cagrilari (yazabilir), dizi/sozluk erisimi
+// (arr_debox okuma yolunda dizi basligina yazabiliyor), atama, lambda...
+static bool key_expr_is_pure(LLVMBackend *backend, ASTNode_C *n, int depth = 0) {
+  if (!n || depth > 64) return false;
+  switch (n->type) {
+  case AST_STRING_LITERAL:
+  case AST_INT_LITERAL:
+  case AST_FLOAT_LITERAL:
+  case AST_BOOL_LITERAL:
+    return true;
+  case AST_IDENTIFIER:
+    return n->name != nullptr;
+  case AST_BINARY_OP:
+    if (n->op != TOKEN_PLUS && n->op != TOKEN_MINUS && n->op != TOKEN_MULTIPLY &&
+        n->op != TOKEN_DIVIDE && n->op != TOKEN_MODULO)
+      return false;
+    return key_expr_is_pure(backend, n->left, depth + 1) &&
+           key_expr_is_pure(backend, n->right, depth + 1);
+  case AST_UNARY_OP:
+    return n->op == TOKEN_MINUS && key_expr_is_pure(backend, n->left, depth + 1);
+  case AST_FUNCTION_CALL: {
+    ASTNode_C *a = tostring_concat_arg(backend, n);
+    return a && key_expr_is_pure(backend, a, depth + 1);
+  }
+  default:
+    return false;
+  }
+}
+
+// Gecici anahtar yolu bu indeks icin uygun mu? Literal anahtar zaten
+// interned (ayirma yok) — dokunulmaz.
+static bool tmpkey_index_eligible(LLVMBackend *backend, ASTNode_C *index) {
+  if (!index || index->type == AST_STRING_LITERAL) return false;
+  if (getenv("TULPAR_NO_TMPKEY")) return false; // olcum/A-B anahtari
+  return expr_is_static_string(backend, index) && key_expr_is_pure(backend, index);
+}
+
+// Adlar LLVMAddFunction'a LITERAL olarak yaziliyor: tests/dist_archive_audit.py
+// codegen'in bildirdigi runtime sembollerini bu kaliptan okuyup web/Android
+// arsivlerinde ariyor — degiskenle verilen ad denetimin kor noktasi olurdu.
+static LLVMValueRef tmpkey_runtime_fn(LLVMBackend *backend, const char *name) {
+  LLVMValueRef f = LLVMGetNamedFunction(backend->module, name);
+  if (f) return f;
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(backend->context);
+  LLVMTypeRef p = backend->ptr_type;
+  if (strcmp(name, "aot_arena_mark") == 0) {
+    LLVMTypeRef ps[] = {p};
+    return LLVMAddFunction(backend->module, "aot_arena_mark",
+                           LLVMFunctionType(p, ps, 1, 0));
+  }
+  if (strcmp(name, "aot_get_element_tmpkey") == 0) {
+    LLVMTypeRef ps[] = {p, p, p, i64};
+    return LLVMAddFunction(backend->module, "aot_get_element_tmpkey",
+                           llvm_make_vmvalue_func_type(backend, ps, 4, 0));
+  }
+  LLVMTypeRef ps[] = {p, p, p, p, i64};
+  return LLVMAddFunction(backend->module, "aot_set_element_tmpkey",
+                         LLVMFunctionType(backend->void_type, ps, 5, 0));
+}
+
+// Arena isareti: blok isaretcisi doner, `used` girisin yigin yuvasina.
+static LLVMValueRef emit_arena_mark(LLVMBackend *backend, LLVMValueRef *used_slot) {
+  *used_slot = llvm_build_alloca_at_entry(
+      backend, LLVMInt64TypeInContext(backend->context), "tk.used");
+  LLVMValueRef fn = tmpkey_runtime_fn(backend, "aot_arena_mark");
+  LLVMValueRef args[] = {*used_slot};
+  return LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(fn), fn, args, 1,
+                        "tk.blk");
+}
+
 // Typed expression codegen - returns native values when possible
 TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
   TypedValue result = {nullptr, INFERRED_UNKNOWN, nullptr};
@@ -6202,6 +6324,34 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
       TypedValue sc = {nullptr, INFERRED_BOOL, nullptr};
       sc.value = emit_logical_shortcircuit_i64(backend, node);
       return sc;
+    }
+    // `S + toString(x)` -> birlestirme x'i ara dizgisiz zorlar (bkz. yukarida
+    // "GECICI DIZGILER" 1). Her operand ORIJINAL yolundaki gibi uretilir:
+    // toString argumani toString codegen'i gibi codegen_expression ile, oteki
+    // taraf genel `+` yolu gibi codegen_typed_expr + kutulama ile. Sira
+    // korunur (sol, sonra sag).
+    if (node->op == TOKEN_PLUS && !getenv("TULPAR_NO_TOSTR_FUSE")) {
+      ASTNode_C *la = tostring_concat_arg(backend, node->left);
+      ASTNode_C *ra = tostring_concat_arg(backend, node->right);
+      if (la || ra) {
+        LLVMValueRef lb = la ? codegen_expression(backend, la)
+                             : box_typed_value(backend, codegen_typed_expr(backend, node->left));
+        LLVMValueRef rb = ra ? codegen_expression(backend, ra)
+                             : box_typed_value(backend, codegen_typed_expr(backend, node->right));
+        if (!lb) lb = llvm_vm_val_int(backend, 0);
+        if (!rb) rb = llvm_vm_val_int(backend, 0);
+        LLVMValueRef lp =
+            llvm_build_alloca_at_entry(backend, backend->vm_value_type, "tsc.l");
+        LLVMBuildStore(backend->builder, lb, lp);
+        LLVMValueRef rp =
+            llvm_build_alloca_at_entry(backend, backend->vm_value_type, "tsc.r");
+        LLVMBuildStore(backend->builder, rb, rp);
+        LLVMValueRef cargs[] = {lp, rp};
+        result.boxed = llvm_call_vmvalue_func(
+            backend, backend->func_aot_string_concat_fast, cargs, 2, "tsc.res");
+        result.value = result.boxed;
+        return result;
+      }
     }
     TypedValue L = codegen_typed_expr(backend, node->left);
     TypedValue R = codegen_typed_expr(backend, node->right);
@@ -7915,6 +8065,25 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     } else if (node->left) {
       // Nested access uses node->left
       left_val = codegen_expression(backend, node->left);
+    }
+
+    // Gecici anahtarli okuma (bkz. "GECICI DIZGILER" 2): hedef ONCE
+    // uretildi, isaret anahtardan hemen once, birakma erisimden sonra.
+    if (left_val && tmpkey_index_eligible(backend, node->index)) {
+      LLVMValueRef used_slot = nullptr;
+      LLVMValueRef blk = emit_arena_mark(backend, &used_slot);
+      LLVMValueRef kv = codegen_expression(backend, node->index);
+      if (!kv) kv = llvm_vm_val_int(backend, 0);
+      LLVMValueRef tp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "tk.t");
+      LLVMBuildStore(backend->builder, left_val, tp);
+      LLVMValueRef ip = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "tk.i");
+      LLVMBuildStore(backend->builder, kv, ip);
+      LLVMValueRef used = LLVMBuildLoad2(
+          backend->builder, LLVMInt64TypeInContext(backend->context), used_slot, "tk.u");
+      LLVMValueRef gargs[] = {tp, ip, blk, used};
+      return llvm_call_vmvalue_func(
+          backend, tmpkey_runtime_fn(backend, "aot_get_element_tmpkey"), gargs, 4,
+          "tk.get");
     }
 
     LLVMValueRef idx_val = codegen_expression(backend, node->index);
@@ -13091,6 +13260,29 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       } else if (access->left) {
         // Nested access: evaluate left expression
         target = codegen_expression(backend, access->left);
+      }
+
+      // Gecici anahtarli yazma (bkz. "GECICI DIZGILER" 2). Deger (`val`) ve
+      // hedef isaretten ONCE uretildi; aradaki tek ayirma anahtar ifadesi.
+      // Yeni anahtar tutulursa runtime isareti birakmaz.
+      if (target && tmpkey_index_eligible(backend, access->index)) {
+        LLVMValueRef used_slot = nullptr;
+        LLVMValueRef blk = emit_arena_mark(backend, &used_slot);
+        LLVMValueRef kv = codegen_expression(backend, access->index);
+        if (!kv) kv = llvm_vm_val_int(backend, 0);
+        LLVMValueRef tp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "tk.st");
+        LLVMBuildStore(backend->builder, target, tp);
+        LLVMValueRef ip = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "tk.si");
+        LLVMBuildStore(backend->builder, kv, ip);
+        LLVMValueRef vp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "tk.sv");
+        LLVMBuildStore(backend->builder, val, vp);
+        LLVMValueRef used = LLVMBuildLoad2(
+            backend->builder, LLVMInt64TypeInContext(backend->context), used_slot, "tk.su");
+        LLVMValueRef sargs[] = {tp, ip, vp, blk, used};
+        LLVMValueRef sfn = tmpkey_runtime_fn(backend, "aot_set_element_tmpkey");
+        LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(sfn), sfn, sargs, 5, "");
+        if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+        return val;
       }
 
       LLVMValueRef index = codegen_expression(backend, access->index);

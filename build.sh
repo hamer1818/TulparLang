@@ -676,6 +676,19 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # GECICI DIZGILER (2026-10-01): sozluk anahtari ifadesi (`m["k" +
+    # toString(i)]`) ve toString birlestirmesi bellek biriktirmiyor, kalici
+    # json'a yeni anahtar tek kopya, ust duzey sb_tostring metni tek kopya
+    # (hashmap 439 -> 118 MB). Tepe RSS farki esikleri + IR + kendi pozitif
+    # kontrolu (mekanizmalar kapali derlenince esik asilmali); anlambilim
+    # tests/gecici_dizgi.test.tpr'de.
+    if [ -x tests/gecici_dizgi.sh ]; then
+        if ! bash tests/gecici_dizgi.sh ./tulpar; then
+            echo -e "${RED}gecici dizgi kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # call() FONKSIYON REFERANSI HAVUZU (2026-10-01): `call(f, x)` dongude
     # artik ayirmiyor (eskiden degerlendirme basina 64 B arena dizgisi —
     # 20M cagri 1,26 GB) ve havuzdaki referansi ad aramasiz cagiriyor
