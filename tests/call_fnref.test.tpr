@@ -1,0 +1,166 @@
+// call() + FONKSIYON REFERANSI HAVUZU — anlambilim bekcisi (2026-10-01).
+//
+// Fonksiyon adi deger olarak kullanilinca (`var t = [f, g]`, `call(f, x)`)
+// codegen eskiden HER degerlendirmede yeni bir arena dizgisi kuruyordu ve
+// call() her cagrida adi hash'leyip onbellegi yokluyordu. Artik referans
+// runtime havuzunda kalici bir dizgi (site basina bir kez cozulur); call()
+// havuz kaydini tanirsa kutulu giris noktasini dogrudan cagirir. Arite
+// verilen arguman sayisina esit degilse (VOID doldurma / fazlayi dusurme)
+// ya da ilk arguman duz bir dizgi adsa yol eskisiyle ayni.
+//
+// Yeni: call() artik KAPANIS (lambda, yakalayan ic fonksiyon) da kabul ediyor
+// — `cl(a)` ile ayni sozlesme, parametre sayisi tutmazsa hata. Eskiden
+// "call() string bekler" ile dusuyordu.
+//
+// Ayirmasizligin ve hizli yolun DEVREDE oldugunun pozitif kontrolu ayri:
+// tests/call_fnref.sh.
+//
+// Calistir: ./tulpar tests/call_fnref.test.tpr
+import "test";
+
+func f(int x): int { return x + 1; }
+func ikili(a, b) { return a * 10 + b; }
+func uclu(a, b, c) { return a * 100 + b * 10 + c; }
+func sifir() { return 42; }
+func dizgi_al(str s) { return s + "!"; }
+func bos_don(x) { int y = x; }
+
+func run_dogrudan_referans() {
+    assert_eq_int(call(f, 1), 2);
+    assert_eq_int(call(ikili, 3, 4), 34);
+    assert_eq_int(call(uclu, 1, 2, 3), 123);
+    assert_eq_int(call(sifir), 42);
+    assert_eq_str(call(dizgi_al, "a"), "a!");
+}
+
+func run_dizgi_adla_cagri_ayni() {
+    assert_eq_int(call("f", 2), 3);
+    assert_eq_int(call("ikili", 1, 2), 12);
+    str ad = "f" + "";                 // havuz disinda kurulan duz dizgi
+    assert_eq_int(call(ad, 5), 6);
+}
+
+func run_tablodan_dolayli() {
+    var tab = [f, ikili, sifir];
+    int acc = 0;
+    for (int i = 0; i < 1000; i = i + 1) { acc = call(tab[0], acc); }
+    assert_eq_int(acc, 1000);
+    assert_eq_int(call(tab[1], 7, 8), 78);
+    assert_eq_int(call(tab[2]), 42);
+}
+
+func _uygula(fn, int x) { return call(fn, x); }
+
+func run_parametre_ve_json_icinde() {
+    assert_eq_int(_uygula(f, 9), 10);
+    json kancalar = {"bir": f, "iki": ikili};
+    assert_eq_int(call(kancalar["bir"], 1), 2);
+    assert_eq_int(call(kancalar["iki"], 2, 3), 23);
+}
+
+var g_tab = [];
+func run_globale_atanan_referans() {
+    g_tab = [f, ikili];                // global atama derin kopya yolundan gecer
+    assert_eq_int(call(g_tab[0], 10), 11);
+    assert_eq_int(call(g_tab[1], 1, 1), 11);
+}
+
+func run_arite_farki_eskisi_gibi() {
+    // Eksik parametre VOID, fazlasi duser (eski derleyiciyle ayni degerler:
+    // tipli `int x`e VOID 0 olarak gelir; tipsiz aritmetikte VOID sonucu 0
+    // yapar).
+    assert_eq_int(call(f), 1);
+    assert_eq_int(call(f, 1, 2), 2);
+    assert_eq_int(call(ikili, 1), 0);
+    assert_eq_int(call(uclu, 1, 2), 0);
+    assert_eq_int(call(sifir, 5), 42);
+    assert_eq_int(call("ikili", 1), 0);     // duz dizgi adla AYNI sonuc
+}
+
+func run_deger_hala_dizgi() {
+    var r = f;
+    assert_eq_str(typeof(r), "string");
+    assert_eq_bool(r == "f", true);
+    assert_eq_str(toString(r), "f");
+    assert_eq_int(len(r), 1);
+    assert_eq_str("ad=" + r, "ad=f");
+    var t = [f];
+    assert_eq_bool(t[0] == "f", true);
+}
+
+func run_donussuz_fonksiyon() {
+    // Donus degeri olmayan fonksiyon: havuz yolu ile ad yolu ayni seyi verir.
+    assert_eq_bool(call(bos_don, 3) == call("bos_don", 3), true);
+}
+
+// --- kapanis / lambda --------------------------------------------------------
+
+var g_lam = (x) => x * 2;
+func _yapici(int taban) { return (x) => x + taban; }
+
+func run_lambda_ve_kapanis() {
+    assert_eq_int(call(g_lam, 7), 14);
+    var cl = _yapici(100);
+    assert_eq_int(call(cl, 1), 101);
+    var iki = (a, b) => a - b;
+    assert_eq_int(call(iki, 10, 3), 7);
+    var hic = () => 5;
+    assert_eq_int(call(hic), 5);
+    var kl = [g_lam, cl];
+    assert_eq_int(call(kl[1], 2), 102);
+}
+
+// Kapanis sozlesmesi: parametre sayisi tutmazsa calisma zamani hatasi —
+// `cl(a, b)` dogrudan cagrisiyla ayni yol (aot_call_closure).
+var g_bir = (x) => x + 1;
+func _kapanis_fazla() { call(g_bir, 1, 2); }
+func _kapanis_eksik() { call(g_bir); }
+func run_kapanis_yanlis_arguman_sayisi() {
+    assert_throws("_kapanis_fazla", "parametre sayisi");
+    assert_throws("_kapanis_eksik", "parametre sayisi");
+}
+
+// --- thread'ler ayni tabloyu okur -------------------------------------------
+
+var g_paylasilan = [f, ikili];
+int g_hatali = 0;
+int g_biten = 0;
+var g_kilit = mutex_create();
+
+func _okuyucu(int id) {
+    int i = 0;
+    int bozuk = 0;
+    while (i < 20000) {
+        if (call(g_paylasilan[0], i) != i + 1) { bozuk = bozuk + 1; }
+        if (call(g_paylasilan[1], 1, id) != 10 + id) { bozuk = bozuk + 1; }
+        i = i + 1;
+    }
+    mutex_lock(g_kilit);
+    g_hatali = g_hatali + bozuk;
+    g_biten = g_biten + 1;
+    mutex_unlock(g_kilit);
+    return 0;
+}
+
+func run_eszamanli_okuma() {
+    int t = 0;
+    while (t < 4) { thread_create(_okuyucu, t); t = t + 1; }
+    int tur = 0;
+    while (g_biten < 4 && tur < 200) { sleep(25); tur = tur + 1; }
+    assert_eq_int(g_biten, 4);
+    assert_eq_int(g_hatali, 0);
+}
+
+print("=== call() + fonksiyon referansi havuzu ===");
+test("dogrudan referans", "run_dogrudan_referans");
+test("dizgi adla cagri ayni", "run_dizgi_adla_cagri_ayni");
+test("tablodan dolayli", "run_tablodan_dolayli");
+test("parametre ve json icinde", "run_parametre_ve_json_icinde");
+test("global'e atanan referans", "run_globale_atanan_referans");
+test("arite farki eskisi gibi", "run_arite_farki_eskisi_gibi");
+test("deger hala dizgi", "run_deger_hala_dizgi");
+test("donussuz fonksiyon", "run_donussuz_fonksiyon");
+test("lambda ve kapanis", "run_lambda_ve_kapanis");
+test("kapanis yanlis arguman sayisi", "run_kapanis_yanlis_arguman_sayisi");
+test("thread'ler ayni tabloyu okur", "run_eszamanli_okuma");
+test_summary();

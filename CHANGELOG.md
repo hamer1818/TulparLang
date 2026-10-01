@@ -12,6 +12,36 @@ tag still works;
 
 ## [Unreleased]
 
+### Performans — `call(f, ...)` ayırmasız ve ad aramasız: `callfn` 299 → 210 ms; `call()` kapanış da alıyor
+
+- Fonksiyon adı DEĞER olarak kullanılınca (`call(f, x)`, `var t = [f, g]`,
+  `thread_create(f, ..)`) codegen her değerlendirmede yeni bir arena dizgisi
+  kuruyordu ve hiç geri alınmıyordu: döngüde `acc = call(f, acc)` 20M kez →
+  **1,26 GB** tepe bellek, 401 ms. Artık site başına bir kez çözülen kalıcı
+  bir dizgi (dizgi sabitleriyle aynı kalıp): aynı döngü **2,7 MB, 145 ms**.
+- Referans runtime'ın fonksiyon referansı havuzunda; yanında kutulu giriş
+  noktası ve aritesi duruyor. `call()` ilk argümanın havuzda olduğunu iki
+  karşılaştırmayla görüyor: arite argüman sayısına eşitse giriş noktası
+  **satır içinde, doğrudan işaretçiyle** çağrılıyor (runtime çerçevesi, ad
+  hash'i, önbellek yoklaması yok); eşit değilse runtime'da yine ad aramasız
+  (VOID doldurma / fazlayı düşürme eskisi gibi). Değer hâlâ bir dizgi
+  (`print(f)` → `f`, `typeof` → `string`, `f == "f"`); havuz dışına kopyalanan
+  referans düz dizgidir ve eskisi gibi adla çözülür. Web (wasm32) satır içi
+  yolu kullanmıyor, runtime havuz yolunu kullanıyor.
+- **Eklendi:** `call()` artık kapanış (lambda, yakalayan iç fonksiyon) da
+  kabul ediyor — `cl(a)` ile aynı sözleşme, parametre sayısı tutmazsa hata.
+  Eskiden "call() string bekler" ile düşüyordu.
+- Ölçüm (Ryzen 7 9800X3D, 2026-10-01, `taskset -c 10,11`, en iyi 5):
+  `benchmarks/fair/callfn` **298,6 → 209,6 ms** (15 → 10,5 ns/çağrı; C 91).
+  Yalnız runtime havuz yolu 231 ms ölçtü, satır içi yol kalan 21 ms'yi verdi.
+- Test: `tests/call_fnref.test.tpr` (doğrudan/tablodan/json'dan/parametreden
+  referans, global'e derin kopya, arite farkı, değerin dizgi kalması,
+  lambda/kapanış ve yanlış argüman sayısı hatası, 4 thread'in aynı tabloyu
+  eşzamanlı çağırması). Pozitif kontrol: `tests/call_fnref.sh` — 2,9M ek
+  turda tepe RSS farkı < 16 MB (eski derleyici 177 MB), IR'de satır içi havuz
+  çağrısı, `TULPAR_CALL_TANI=1` ile runtime havuz yolu sayacı (düz dizgi ad
+  sayılmıyor); eski derleyicide üç ayak da kırmızı.
+
 ### Performans — `split` tek ayırmada, `toInt` düz ondalıkta atoll'suz: `parse` 200 → 126 ms
 
 - `split()` parça başına `strstr` + geçici `malloc`/`strncpy`/`free` + ayrı

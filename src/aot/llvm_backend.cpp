@@ -7535,19 +7535,54 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // by name via call() — while keeping typo detection: an unknown name is
     // neither a variable nor a function and still errors below. Function
     // *calls* (`foo()`) are a different AST node, so this never affects them.
+    //
+    // SITE BASINA BIR KEZ (2026-10-01). Eskiden her DEGERLENDIRME
+    // `vm_alloc_string_aot` ile yeni bir arena dizgisi kuruyordu: dongude
+    // `call(f, x)` 20M kez -> 1,26 GB tepe bellek (olculdu, Ryzen 7 9800X3D).
+    // Artik dizgi sabitleriyle ayni kalip — modul global'i + ilk kullanimda
+    // `aot_fn_ref` — ve donen dizgi runtime'in fonksiyon referansi havuzunda:
+    // call() onu ad aramasiz, dogrudan kutulu giris noktasiyla cagirir.
+    // Deger yine bir dizgi ("f"); bkz. runtime_bindings.cpp AOTFnRef.
     for (int i = 0; i < backend->function_count; i++) {
       if (backend->functions[i].name &&
           strcmp(backend->functions[i].name, node->name) == 0) {
         LLVMValueRef const_str =
             LLVMBuildGlobalStringPtr(backend->builder, node->name, "fn_ref");
         int len = (int)strlen(node->name);
-        LLVMValueRef args[] = {LLVMConstNull(backend->ptr_type), const_str,
-                               LLVMConstInt(backend->int32_type, len, 0)};
-        LLVMValueRef str_obj = LLVMBuildCall2(
-            backend->builder,
-            LLVMGlobalGetValueType(backend->func_vm_alloc_string),
-            backend->func_vm_alloc_string, args, 3, "fn_ref_str");
-        return llvm_build_vm_val_obj(backend, str_obj);
+        LLVMValueRef fnref_fn = LLVMGetNamedFunction(backend->module, "aot_fn_ref");
+        if (!fnref_fn)
+          fnref_fn = LLVMAddFunction(
+              backend->module, "aot_fn_ref",
+              LLVMGlobalGetValueType(backend->func_aot_intern_string));
+        LLVMTypeRef strp_type = LLVMPointerType(backend->obj_string_type, 0);
+        char gname[64];
+        snprintf(gname, sizeof(gname), "tulpar_fnref_%d",
+                 backend->str_lit_cache_n++);
+        LLVMValueRef cache = LLVMAddGlobal(backend->module, strp_type, gname);
+        LLVMSetInitializer(cache, LLVMConstNull(strp_type));
+        LLVMSetLinkage(cache, LLVMInternalLinkage);
+        LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+        LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(backend->builder);
+        LLVMBasicBlockRef init_bb = append_bb(backend, fn, "fnref.init");
+        LLVMBasicBlockRef done_bb = append_bb(backend, fn, "fnref.done");
+        LLVMValueRef cached =
+            LLVMBuildLoad2(backend->builder, strp_type, cache, "fnref.cached");
+        LLVMValueRef is_null = LLVMBuildICmp(backend->builder, LLVMIntEQ, cached,
+                                             LLVMConstNull(strp_type), "fnref.isnull");
+        LLVMBuildCondBr(backend->builder, is_null, init_bb, done_bb);
+        LLVMPositionBuilderAtEnd(backend->builder, init_bb);
+        LLVMValueRef args[] = {const_str, LLVMConstInt(backend->int32_type, len, 0)};
+        LLVMValueRef fresh = LLVMBuildCall2(backend->builder,
+                                            LLVMGlobalGetValueType(fnref_fn),
+                                            fnref_fn, args, 2, "fnref.new");
+        LLVMBuildStore(backend->builder, fresh, cache);
+        LLVMBuildBr(backend->builder, done_bb);
+        LLVMPositionBuilderAtEnd(backend->builder, done_bb);
+        LLVMValueRef phi = LLVMBuildPhi(backend->builder, strp_type, "fn_ref_str");
+        LLVMValueRef inc[] = {cached, fresh};
+        LLVMBasicBlockRef inb[] = {entry_bb, init_bb};
+        LLVMAddIncoming(phi, inc, inb, 2);
+        return llvm_build_vm_val_obj(backend, phi);
       }
     }
 
@@ -7721,6 +7756,124 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           break;
         }
       }
+    }
+
+    // call(f, ...) SATIR ICI HIZLI YOL (2026-10-01). Ilk arguman runtime'in
+    // fonksiyon referansi havuzundaysa (aot_fn_ref'in dondurdugu kalici
+    // dizgi; bkz. runtime_bindings.cpp AOTFnRef) ve kayitli aritesi verilen
+    // arguman sayisina ESITSE kutulu giris noktasi BURADA, dogrudan
+    // isaretciyle cagrilir — aot_call_dynamic_* cercevesi, ad hash'i ve
+    // onbellek yoklamasi yok. Aksi her durum (duz dizgi ad, kapanis, arite
+    // farki -> VOID doldurma / fazlayi dusurme, hata) eskisi gibi runtime'a
+    // gider; yani anlam runtime'inkiyle AYNI, yalniz en sik sekil kisalir.
+    // Duzen sabitleri 64-bit icin runtime'da static_assert ile kilitli; web
+    // (wasm32, farkli isaretci boyu) bu yolu kullanmaz.
+    if (node->name && strcmp(bi_name, "call") == 0 &&
+        node->argument_count >= 1 && node->argument_count - 1 <= 8 &&
+        !backend->target_web) {
+      int actual = node->argument_count - 1;
+      LLVMValueRef fnv = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef argv_v[8];
+      for (int i = 0; i < actual; i++)
+        argv_v[i] = codegen_expression(backend, node->arguments[i + 1]);
+      LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+      LLVMBasicBlockRef chk_bb = append_bb(backend, fn, "fnref.chk");
+      LLVMBasicBlockRef call_bb = append_bb(backend, fn, "fnref.call");
+      LLVMBasicBlockRef slow_bb = append_bb(backend, fn, "fnref.slow");
+      LLVMBasicBlockRef merge_bb = append_bb(backend, fn, "fnref.merge");
+      LLVMTypeRef i64t = LLVMInt64TypeInContext(backend->context);
+      LLVMValueRef pool = LLVMGetNamedGlobal(backend->module, "aot_fnref_pool");
+      if (!pool) {
+        pool = LLVMAddGlobal(backend->module, LLVMInt8TypeInContext(backend->context),
+                             "aot_fnref_pool");
+        LLVMSetLinkage(pool, LLVMExternalLinkage);
+      }
+      LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, fnv, 0, "fnref.tag");
+      LLVMValueRef payload = LLVMBuildExtractValue(backend->builder, fnv, 2, "fnref.p");
+      LLVMValueRef isobj = LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                         LLVMConstInt(backend->int32_type, 4, 0), "fnref.isobj");
+      LLVMValueRef off = LLVMBuildSub(backend->builder, payload,
+                                      LLVMBuildPtrToInt(backend->builder, pool, i64t, "fnref.base"),
+                                      "fnref.off");
+      // 1024 kayit x 72 bayt (ObjString 56 + fp 8 + arite 4 + dolgu 4).
+      LLVMValueRef inpool = LLVMBuildICmp(backend->builder, LLVMIntULT, off,
+                                          LLVMConstInt(i64t, 1024ull * 72ull, 0), "fnref.in");
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildAnd(backend->builder, isobj, inpool, "fnref.ok"),
+                      chk_bb, slow_bb);
+
+      LLVMPositionBuilderAtEnd(backend->builder, chk_bb);
+      LLVMValueRef ep = LLVMBuildIntToPtr(backend->builder, payload, backend->ptr_type, "fnref.e");
+      LLVMValueRef i8t_one[] = {LLVMConstInt(i64t, 64, 0)};
+      LLVMValueRef arp = LLVMBuildGEP2(backend->builder, LLVMInt8TypeInContext(backend->context),
+                                       ep, i8t_one, 1, "fnref.arp");
+      LLVMValueRef ar = LLVMBuildLoad2(backend->builder, backend->int32_type, arp, "fnref.ar");
+      LLVMValueRef areq = LLVMBuildICmp(backend->builder, LLVMIntEQ, ar,
+                                        LLVMConstInt(backend->int32_type, actual, 0), "fnref.areq");
+      LLVMBuildCondBr(backend->builder, areq, call_bb, slow_bb);
+
+      LLVMPositionBuilderAtEnd(backend->builder, call_bb);
+      LLVMValueRef fpo[] = {LLVMConstInt(i64t, 56, 0)};
+      LLVMValueRef fpp = LLVMBuildGEP2(backend->builder, LLVMInt8TypeInContext(backend->context),
+                                       ep, fpo, 1, "fnref.fpp");
+      LLVMValueRef fptr = LLVMBuildLoad2(backend->builder, backend->ptr_type, fpp, "fnref.fp");
+      LLVMValueRef res_slot =
+          llvm_build_alloca_at_entry(backend, backend->vm_value_type, "fnref.res");
+      LLVMBuildStore(backend->builder, llvm_vm_val_void(backend), res_slot);
+      LLVMTypeRef ptys[9];
+      LLVMValueRef cargs[9];
+      ptys[0] = backend->ptr_type;
+      cargs[0] = res_slot;
+      for (int i = 0; i < actual; i++) {
+        LLVMValueRef slot =
+            llvm_build_alloca_at_entry(backend, backend->vm_value_type, "fnref.arg");
+        LLVMBuildStore(backend->builder, argv_v[i], slot);
+        ptys[i + 1] = backend->ptr_type;
+        cargs[i + 1] = slot;
+      }
+      LLVMTypeRef fty = LLVMFunctionType(LLVMVoidTypeInContext(backend->context), ptys,
+                                         (unsigned)actual + 1, 0);
+      LLVMBuildCall2(backend->builder, fty, fptr, cargs, (unsigned)actual + 1, "");
+      LLVMValueRef fast_res =
+          LLVMBuildLoad2(backend->builder, backend->vm_value_type, res_slot, "fnref.r");
+      LLVMBuildBr(backend->builder, merge_bb);
+      LLVMBasicBlockRef fast_end = LLVMGetInsertBlock(backend->builder);
+
+      LLVMPositionBuilderAtEnd(backend->builder, slow_bb);
+      LLVMValueRef slow_res;
+      if (actual >= 2) {
+        LLVMTypeRef arr_ty = LLVMArrayType(backend->vm_value_type, actual);
+        LLVMValueRef arr = llvm_build_alloca_at_entry(backend, arr_ty, "call_args");
+        LLVMValueRef zero = LLVMConstInt(backend->int32_type, 0, 0);
+        for (int i = 0; i < actual; i++) {
+          LLVMValueRef idx[] = {zero, LLVMConstInt(backend->int32_type, i, 0)};
+          LLVMValueRef aep = LLVMBuildGEP2(backend->builder, arr_ty, arr, idx, 2, "call_arg_ep");
+          LLVMBuildStore(backend->builder, argv_v[i], aep);
+        }
+        LLVMValueRef zidx[] = {zero, zero};
+        LLVMValueRef args_ptr = LLVMBuildGEP2(backend->builder, arr_ty, arr, zidx, 2,
+                                              "call_args_ptr");
+        LLVMValueRef nargs[] = {fnv, args_ptr, LLVMConstInt(backend->int32_type, actual, 0)};
+        slow_res = llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic_n,
+                                          nargs, 3, "calln_res");
+      } else if (actual == 1) {
+        LLVMValueRef a1[] = {fnv, argv_v[0]};
+        slow_res = llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic_1,
+                                          a1, 2, "call1_res");
+      } else {
+        LLVMValueRef a0[] = {fnv};
+        slow_res = llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic,
+                                          a0, 1, "call_res");
+      }
+      LLVMBuildBr(backend->builder, merge_bb);
+      LLVMBasicBlockRef slow_end = LLVMGetInsertBlock(backend->builder);
+
+      LLVMPositionBuilderAtEnd(backend->builder, merge_bb);
+      LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type, "call_res");
+      LLVMValueRef pv[] = {fast_res, slow_res};
+      LLVMBasicBlockRef pb[] = {fast_end, slow_end};
+      LLVMAddIncoming(phi, pv, pb, 2);
+      return phi;
     }
 
     // call(func_name) -> dynamic dispatch

@@ -378,8 +378,130 @@ static inline VMValue aot_invoke_boxed(void (*fp)(VMValue *), int arity,
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// FONKSIYON REFERANSI HAVUZU (2026-10-01)
+//
+// Bir fonksiyonun adi DEGER olarak kullanildiginda (`var t = [f, g]`,
+// `call(f, x)`, `thread_create(f, ..)`) codegen eskiden HER DEGERLENDIRMEDE
+// `vm_alloc_string_aot` ile yeni bir arena dizgisi kuruyordu ve call() her
+// cagrida o adi hash'leyip cagri onbellegini yokluyordu. Olculdu (Ryzen 7
+// 9800X3D, 2026-10-01): dongude `acc = call(f, acc)` 20M kez -> 1,26 GB tepe
+// bellek (cagri basina 64 bayt arena, hic geri alinmiyor), 400 ms;
+// benchmarks/fair/callfn (tablodan dolayli cagri) 15 ns/cagri, C'nin 3,3 kati.
+//
+// Artik referans, bu statik havuzdaki KALICI bir ObjString: site basina bir
+// kez (aot_fn_ref) cozulur ve yaninda kutulu giris noktasi + aritesi durur.
+// Dizgi olarak HER YERDE ayni davranir (print "f", typeof "string",
+// `== "f"`, dizgi alan her yerlesik) — yalniz call() adresinin havuzda
+// oldugunu iki karsilastirmayla gorup ad aramasini atlar. Havuz disina
+// kopyalanan bir referans (birlestirme, thread kopyasi...) duz dizgidir ve
+// eskisi gibi adla cozulur: yavas ama dogru.
+//
+// Kayitlar YALNIZ eklenir ve olumsuzdur (ref_count sentinel, arena degil):
+// adresi yasadigi surece gecerli, okuyan thread'ler kilitsiz okur.
+// ---------------------------------------------------------------------------
+typedef struct AOTFnRef {
+  ObjString str;            // ILK alan: &kayit == &kayit.str
+  void (*fp)(VMValue *);    // kutulu giris noktasi
+  int arity;                // kullanici parametre sayisi
+} AOTFnRef;
+
+#define AOT_FNREF_MAX 1024  // codegen fonksiyon tavani 512 (kMaxFunctions)
+// Ad C bagli ve DISA ACIK: codegen'in satir ici call() hizli yolu havuzun
+// adres araligini ve kaydin fp/arite ofsetlerini SABIT olarak gomuyor
+// (llvm_backend.cpp "call(f, ...) SATIR ICI HIZLI YOL"). Asagidaki kilitler
+// o sabitleri tutar; biri degisirse derleme kirilir, uretilen kod sessizce
+// yanlis ofsetten okumaz.
+AOTFnRef aot_fnref_pool[AOT_FNREF_MAX];
+#define g_fnref_pool aot_fnref_pool
+#if UINTPTR_MAX > 0xFFFFFFFFu
+static_assert(sizeof(ObjString) == 56, "ObjString 56 bayt (call() hizli yolu)");
+static_assert(offsetof(AOTFnRef, fp) == 56, "AOTFnRef::fp @56 (call() hizli yolu)");
+static_assert(offsetof(AOTFnRef, arity) == 64, "AOTFnRef::arity @64 (call() hizli yolu)");
+static_assert(sizeof(AOTFnRef) == 72 && AOT_FNREF_MAX == 1024,
+              "havuz 1024 x 72 bayt (call() hizli yolu)");
+#endif
+static int g_fnref_count = 0;              // g_call_cache_mu altinda yazilir
+static std::atomic<long long> g_fnref_fast_calls{0};
+
+static inline AOTFnRef *fnref_of(const Obj *o) {
+  uintptr_t d = (uintptr_t)o - (uintptr_t)g_fnref_pool;
+  return d < sizeof(g_fnref_pool) ? (AOTFnRef *)o : nullptr;
+}
+
+// Codegen'in ic yardimcisi: `name` adli fonksiyonun referans dizgisi. Kayitli
+// (aot_register_func) bir kutulu fonksiyonsa havuz kaydi; degilse olumsuz
+// duz bir dizgi (aot_intern_string) — call() onu eskisi gibi adla cozer.
+// main'in girisinde aot_register_func'lar bittikten SONRA cagrilir (ilk
+// degerlendirmede), sonucu site global'inde onbelleklenir.
+extern "C" ObjString *aot_intern_string(const char *chars, int length);
+extern "C" ObjString *aot_fn_ref(const char *name, int len) {
+  if (!name || len < 0) return aot_intern_string("", 0);
+  uint32_t h = aot_call_hash(name, (size_t)len);
+  int arity = -1;
+  void (*fp)(VMValue *) = aot_call_cache_lookup(name, (size_t)len, h, &arity);
+  if (!fp || arity < 0) return aot_intern_string(name, len);
+  std::lock_guard<std::mutex> guard(g_call_cache_mu);
+  for (int i = 0; i < g_fnref_count; i++) {
+    AOTFnRef *e = &g_fnref_pool[i];
+    if (e->fp == fp && e->str.length == len &&
+        memcmp(e->str.chars, name, (size_t)len) == 0)
+      return &e->str;
+  }
+  if (g_fnref_count >= AOT_FNREF_MAX) return aot_intern_string(name, len);
+  char *chars = (char *)malloc((size_t)len + 1);
+  if (!chars) return aot_intern_string(name, len);
+  memcpy(chars, name, (size_t)len);
+  chars[len] = '\0';
+  AOTFnRef *e = &g_fnref_pool[g_fnref_count++];
+  e->str.obj.type = OBJ_STRING;
+  e->str.obj.arena_allocated = 0;     // KALICI: bariyer kopyalamaz
+  e->str.obj.next = nullptr;
+  e->str.obj.ref_count = 1 << 28;     // olumsuz (aot_intern_string ile ayni)
+  e->str.obj.is_moved = 0;
+  e->str.length = len;
+  e->str.capacity = len + 1;
+  e->str.chars = chars;
+  e->str.hash = 0;
+  e->fp = fp;
+  e->arity = arity;
+  return &e->str;
+}
+
+// Tani: havuz uzerinden (ad aramasiz) kac call() kostu. Pozitif kontrol icin
+// TULPAR_CALL_TANI=1 ile surec sonunda stderr'e basilir (tests/call_fnref.sh).
+static void fnref_tani_bas(void) {
+  std::fprintf(stderr, "call-tani: havuz=%d hizli=%lld\n", g_fnref_count,
+               g_fnref_fast_calls.load(std::memory_order_relaxed));
+}
+static inline void fnref_count_fast(void) {
+  static std::atomic<int> tani{-1};
+  int t = tani.load(std::memory_order_relaxed);
+  if (UNLIKELY(t < 0)) {
+    const char *e = getenv("TULPAR_CALL_TANI");
+    t = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+    int beklenen = -1;
+    if (tani.compare_exchange_strong(beklenen, t) && t) atexit(fnref_tani_bas);
+  }
+  if (UNLIKELY(t)) g_fnref_fast_calls.fetch_add(1, std::memory_order_relaxed);
+}
+
+// call()'in ilk argumani dizgi degilse: kapanis (lambda / yakalayan ic
+// fonksiyon) dogrudan cagrilir — aot_call_closure, yani `cl(a, b)` ile AYNI
+// sozlesme (parametre sayisi tutmazsa hata). Eskiden "call() string bekler".
+extern "C" VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc);
+
 // AOT Dynamic Call Support
 VMValue aot_call_dynamic(VMValue func_name) {
+  if (IS_OBJ(func_name) && AS_OBJ(func_name)) {
+    if (AOTFnRef *e = fnref_of(AS_OBJ(func_name))) {
+      fnref_count_fast();
+      VMValue none = VM_VOID();
+      return aot_invoke_boxed(e->fp, e->arity, &none);
+    }
+    if (AS_OBJ(func_name)->type == OBJ_CLOSURE)
+      return aot_call_closure(AS_CLOSURE(func_name), nullptr, 0);
+  }
   if (!IS_STRING(func_name)) {
     aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
@@ -448,6 +570,14 @@ VMValue aot_call_dynamic(VMValue func_name) {
 // the request object and 0-arg handlers just don't read it — you can write
 // `func list_users()` or `func get_user(req)`.
 VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
+  if (IS_OBJ(func_name) && AS_OBJ(func_name)) {
+    if (AOTFnRef *e = fnref_of(AS_OBJ(func_name))) {
+      fnref_count_fast();
+      return aot_invoke_boxed(e->fp, e->arity, &arg);
+    }
+    if (AS_OBJ(func_name)->type == OBJ_CLOSURE)
+      return aot_call_closure(AS_CLOSURE(func_name), &arg, 1);
+  }
   if (!IS_STRING(func_name)) {
     aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
@@ -502,6 +632,14 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
 // so a `func on_hit(a, b)` collision handler can finally be call()'d with its
 // two context args instead of smuggling them through globals.
 VMValue aot_call_dynamic_n(VMValue func_name, VMValue *args, int argc) {
+  if (IS_OBJ(func_name) && AS_OBJ(func_name)) {
+    if (AOTFnRef *e = fnref_of(AS_OBJ(func_name))) {
+      fnref_count_fast();
+      return aot_invoke_boxed_n(e->fp, e->arity, args, argc);
+    }
+    if (AS_OBJ(func_name)->type == OBJ_CLOSURE)
+      return aot_call_closure(AS_CLOSURE(func_name), args, argc);
+  }
   if (!IS_STRING(func_name)) {
     aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
@@ -1312,6 +1450,9 @@ VMValue aot_persist(VMValue v) {
   // isaretciyi izliyor; bir ortam genel dizi yolundan kopyalanirsa bu SEGV'di.
   if (IS_OBJ(v) && !AS_OBJ(v)) return v;
   if (IS_STRING(v)) {
+    // Fonksiyon referansi (havuz kaydi) olumsuz ve degismez: kopyalamak
+    // yalniz havuz kimligini kaybettirir (call() yeniden adla cozmeye duser).
+    if (fnref_of(AS_OBJ(v))) return v;
     return VM_OBJ((Obj *)aot_persist_string_obj(AS_STRING(v)));
   }
   if (IS_ARRAY(v)) {
