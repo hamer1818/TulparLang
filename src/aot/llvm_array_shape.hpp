@@ -122,15 +122,63 @@ struct TulparFloatLoopPlan {
   int n_acc;
   int n_inv;
   const char *why;                           // reddedildiyse sebep (teshis)
+  // INT kipi (tulpar_int_loop_plan): inv_float adlari INT sinanir; tek eleman
+  // yazmasi (varsa) deopt_write — govdenin ilk bildirim-disi deyimi.
+  int is_int;
+  ASTNode_C *deopt_write;
 };
 extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
                                       ASTNode_C *body, ASTNode_C *incr,
                                       TulparPureCallFn pure, void *ctx,
                                       TulparFloatLoopPlan *p);
+// INT DIZI DONGU SURUMU: ayni plan `int[]` icin (bkz. .cpp).
+extern "C" int tulpar_int_loop_plan(ASTNode_C *init, ASTNode_C *cond,
+                                    ASTNode_C *body, ASTNode_C *incr,
+                                    TulparPureCallFn pure, void *ctx,
+                                    TulparFloatLoopPlan *p);
 // Programdaki `float[]` bildirim/parametre adlari (surum karari icin ipucu).
 extern "C" void tulpar_collect_float_array_decls(ASTNode_C *root,
                                                  void (*cb)(const char *, void *),
                                                  void *ctx);
+
+// INT YEREL GOLGE SURUMU (2026-10-01): fonksiyon icindeki kutulu `int`
+// yerellerin dongu boyunca native i64 golgesi (bkz. .cpp). Plan yalniz BICIMI
+// dogrular; dis adlarin INT etiketi ve dizilerin kutusuz int deposu codegen'de
+// dongu basinda sinanir.
+#define TULPAR_IV_MAX_NAMES 32
+#define TULPAR_IV_MAX_ARR 8
+#define TULPAR_IV_MAX_NODES 256
+#define TULPAR_IV_MAX_LOOP_NODES 1500   // daha buyuk dongu kopyalanmaz
+enum TulparIvClass {
+  TIV_NONE = 0,   // dongu basinda gorunmuyor
+  TIV_NATIVE,     // native int yuvasi (her zaman INT)
+  TIV_CAND,       // bu fonksiyonun kutulu `int` yereli/parametresi (golge adayi)
+  TIV_ARR,        // `int[]` ipuclu kutulu degisken (depo sinavi adayi)
+  TIV_BOXED,      // baska kutulu deger (bir diziye takma ad olabilir)
+  TIV_STRUCT,     // tipli struct / struct dizisi / native float: takma ad olamaz
+};
+typedef int (*TulparIvClassFn)(const char *name, void *ctx);
+struct TulparIntLocalPlan {
+  const char *cand[TULPAR_IV_MAX_NAMES];   // dongu basinda golgelenecek adlar
+  int n_cand;
+  const char *arr[TULPAR_IV_MAX_ARR];      // deposu sinanacak diziler
+  int n_arr;
+  ASTNode_C *acc[TULPAR_IV_MAX_NODES];     // kesin-INT okumalar
+  int n_acc;
+  ASTNode_C *decl[TULPAR_IV_MAX_NODES];    // native yuvaya inecek bildirimler
+  int n_decl;
+  ASTNode_C *ewr[TULPAR_IV_MAX_NODES];     // sag tarafi kesin INT eleman yazmalari
+  int n_ewr;
+  int n_nodes;                             // dongunun dugum sayisi (teshis)
+  const char *why;                         // reddedildiyse sebep (teshis)
+};
+extern "C" int tulpar_int_local_plan(ASTNode_C *loop, ASTNode_C *fn_body,
+                                     TulparPureCallFn pure, TulparIvClassFn cls,
+                                     void *ctx, TulparIntLocalPlan *p);
+// Programdaki `int[]` bildirim/parametre adlari (V icin ipucu).
+extern "C" void tulpar_collect_int_array_decls(ASTNode_C *root,
+                                               void (*cb)(const char *, void *),
+                                               void *ctx);
 
 // Butun cocuk alanlarini (walk_all ile AYNI liste) on-sirayla gezer; `visit`
 // 0 dondururse gezinti durur ve 0 doner.

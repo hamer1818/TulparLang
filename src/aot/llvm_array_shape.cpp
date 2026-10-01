@@ -1167,9 +1167,13 @@ struct FvCtx {
   ASTNode_C *cond, *body, *incr;
   const char *ivar;
   TulparFloatLoopPlan *p;
-  const char *flocal[TULPAR_FV_MAX_INV];   // govdede float bildirilmis yereller
+  const char *flocal[TULPAR_FV_MAX_INV];   // govdede float (int kipinde: int) yereller
   int n_flocal;
   bool bad;
+  // INT kipi (tulpar_int_loop_plan): eleman yazmalari kesin INT, en fazla
+  // BIR tane ve govdenin ilk bildirim-disi deyimi (bkz. o fonksiyonun notu).
+  bool int_mode;
+  int n_writes;
 };
 
 static bool fv_reject(FvCtx *c, const char *why) {
@@ -1301,6 +1305,38 @@ static bool fv_float_expr(FvCtx *c, ASTNode_C *n) {
   }
 }
 
+// KESIN INT ifade mi? (int kipi.) fv_float_expr'in ikizi: int sabiti, govdede
+// `int` bildirilmis yerel, dongu-degismezi ad (codegen etiketini dongu
+// basinda INT diye sinar), plandaki dizi okumasi (32-bit int depo — dongu
+// basinda sinanir), tekli eksi, `+ - *`. Bolme YOK (sifira bolme hatasi).
+static bool fv_int_expr(FvCtx *c, ASTNode_C *n) {
+  if (!n) return false;
+  switch (n->type) {
+  case AST_INT_LITERAL:
+    return true;
+  case AST_IDENTIFIER: {
+    if (!n->name) return false;
+    if (fv_flocal(c, n->name)) return true;
+    if (!fv_invariant(c, n->name)) return false;
+    TulparFloatLoopPlan *p = c->p;
+    for (int k = 0; k < p->n_inv; k++)
+      if (strcmp(p->inv_float[k], n->name) == 0) return true;
+    if (p->n_inv >= TULPAR_FV_MAX_INV) return false;
+    p->inv_float[p->n_inv++] = n->name;
+    return true;
+  }
+  case AST_ARRAY_ACCESS:
+    return fv_add_access(c, n);
+  case AST_UNARY_OP:
+    return n->op == TOKEN_MINUS && fv_int_expr(c, n->left);
+  case AST_BINARY_OP:
+    if (n->op != TOKEN_PLUS && n->op != TOKEN_MINUS && n->op != TOKEN_MULTIPLY) return false;
+    return fv_int_expr(c, n->left) && fv_int_expr(c, n->right);
+  default:
+    return false;
+  }
+}
+
 static bool fv_visit(ASTNode_C *n, void *p) {
   FvCtx *c = (FvCtx *)p;
   if (c->bad) return false;
@@ -1314,8 +1350,13 @@ static bool fv_visit(ASTNode_C *n, void *p) {
   case AST_ASSIGNMENT:
     if (n->left && n->left->type == AST_ARRAY_ACCESS) {
       if (!fv_add_access(c, n->left)) return false;
-      if (!fv_float_expr(c, n->right))
+      if (c->int_mode) {
+        c->n_writes++;
+        if (!fv_int_expr(c, n->right))
+          return fv_reject(c, "eleman yazmasi kesin int degil");
+      } else if (!fv_float_expr(c, n->right)) {
         return fv_reject(c, "eleman yazmasi kesin float degil");
+      }
     }
     return true;
   case AST_COMPOUND_ASSIGN:
@@ -1336,12 +1377,11 @@ static bool fv_has_access(ASTNode_C *n, void *p) {
 
 }  // namespace
 
-extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
-                                      ASTNode_C *body, ASTNode_C *incr,
-                                      TulparPureCallFn pure, void *ctx,
-                                      TulparFloatLoopPlan *p) {
+static int fv_plan(ASTNode_C *init, ASTNode_C *cond, ASTNode_C *body, ASTNode_C *incr,
+                   TulparPureCallFn pure, void *ctx, TulparFloatLoopPlan *p, bool int_mode) {
   if (!p) return 0;
   memset(p, 0, sizeof(*p));
+  p->is_int = int_mode ? 1 : 0;
   p->why = "bicim";
   if (!init || !cond || !incr || !body) return 0;
   // init: `int j = <ifade>` — degeri codegen dongu basinda OKUR (C).
@@ -1350,7 +1390,7 @@ extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
     return 0;
   }
   const char *ivar = init->name;
-  FvCtx c{cond, body, incr, ivar, p, {}, 0, false};
+  FvCtx c{cond, body, incr, ivar, p, {}, 0, false, int_mode, 0};
   // cond: `j < UB` / `j <= UB`
   if (cond->type != AST_BINARY_OP ||
       (cond->op != TOKEN_LESS && cond->op != TOKEN_LESS_EQUAL) ||
@@ -1401,12 +1441,20 @@ extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
   ASTNode_C **stmts = one;
   int ns = 1;
   if (body->type == AST_BLOCK) { stmts = body->statements; ns = body->statement_count; }
+  bool past_decls = false;   // int kipi: bildirim-disi bir deyim goruldu mu
   for (int k = 0; k < ns && !c.bad; k++) {
     ASTNode_C *s = stmts ? stmts[k] : nullptr;
     if (!s) continue;
     walk_all(s, fv_visit, &c);
     if (c.bad) break;
-    if (s->type == AST_VARIABLE_DECL && s->name && s->data_type == TYPE_FLOAT &&
+    if (int_mode && s->type != AST_VARIABLE_DECL) {
+      if (!past_decls && s->type == AST_ASSIGNMENT && s->left &&
+          s->left->type == AST_ARRAY_ACCESS)
+        p->deopt_write = s;
+      past_decls = true;
+    }
+    if (s->type == AST_VARIABLE_DECL && s->name &&
+        s->data_type == (int_mode ? TYPE_INT : TYPE_FLOAT) &&
         s->right && strcmp(s->name, ivar) != 0 &&
         fv_assign_count(cond, body, incr, s->name) == 1 &&
         c.n_flocal < TULPAR_FV_MAX_INV) {
@@ -1417,7 +1465,8 @@ extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
       // ekleyebilir; basarisiz denemenin eklediklerini geri al. (Erisimler
       // fv_visit'te zaten kaydedildi.)
       int saved_inv = p->n_inv;
-      if (!u1.used && !u2.used && fv_float_expr(&c, s->right))
+      if (!u1.used && !u2.used &&
+          (int_mode ? fv_int_expr(&c, s->right) : fv_float_expr(&c, s->right)))
         c.flocal[c.n_flocal++] = s->name;
       else
         p->n_inv = saved_inv;
@@ -1425,11 +1474,41 @@ extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
   }
   if (c.bad) return 0;
   if (p->n_acc == 0) { p->why = "dizi erisimi yok"; return 0; }
+  if (int_mode && c.n_writes > 1) { p->why = "birden cok eleman yazmasi"; return 0; }
+  if (int_mode && c.n_writes == 1 && !p->deopt_write) {
+    p->why = "eleman yazmasi govdenin ilk bildirim-disi deyimi degil";
+    return 0;
+  }
   p->ivar = ivar;
   p->ub = cond->right;
   p->incl = cond->op == TOKEN_LESS_EQUAL ? 1 : 0;
   p->why = nullptr;
   return 1;
+}
+
+extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
+                                      ASTNode_C *body, ASTNode_C *incr,
+                                      TulparPureCallFn pure, void *ctx,
+                                      TulparFloatLoopPlan *p) {
+  return fv_plan(init, cond, body, incr, pure, ctx, p, false);
+}
+
+// INT DIZI DONGU SURUMU (2026-10-01): float planinin `int[]` ikizi. Bicim
+// ayni (en icteki `for`, `X[j]` / `X[B]` / `X[B + j]`); farklar:
+//   * eleman yazmasi KESIN INT (fv_int_expr) — hizli govde 32-bit depoya ham
+//     i32 yaziyor;
+//   * en fazla BIR eleman yazmasi ve govdenin ILK bildirim-disi deyimi.
+//     Sebep: deger i32'ye sigmazsa (dizi genislemeli) hizli govde yazmayi
+//     YAPMADAN genel surumun kosuluna atliyor ve tur orada BASTAN kosuyor.
+//     Bu yalniz yazmadan once yan etkisiz deyim (bildirim, saf okuma) varsa
+//     dogru — K201'in "ilk deyim" kurali.
+// Sayisal kisim (sinir, 32-bit int depo, degismez adlarin INT etiketi)
+// codegen'de dongu basinda sinanir.
+extern "C" int tulpar_int_loop_plan(ASTNode_C *init, ASTNode_C *cond,
+                                    ASTNode_C *body, ASTNode_C *incr,
+                                    TulparPureCallFn pure, void *ctx,
+                                    TulparFloatLoopPlan *p) {
+  return fv_plan(init, cond, body, incr, pure, ctx, p, true);
 }
 
 // Programdaki `float[]` bildirimlerinin adlari (parametreler dahil). Surum
@@ -1473,4 +1552,408 @@ extern "C" int tulpar_ast_walk(ASTNode_C *n, int (*visit)(ASTNode_C *, void *),
                                void *ctx) {
   WalkAdapt w{visit, ctx};
   return walk_all(n, walk_adapt, &w) ? 1 : 0;
+}
+
+// ===========================================================================
+// INT YEREL GOLGE SURUMU (2026-10-01) — kanitin BICIM kismi.
+//
+// Neden: bir fonksiyonun ICINDE `int i = lo;` kutulu bir VMValue yuvasidir
+// (etiket + yuk). `int` bildirimi degeri ZORLAMIYOR: dizgi gelirse dizgi kalir
+// (`int k = d["x"]` -> "abc", `k + 1` -> "abc1"; olculdu) — yani tip bilgisi
+// statik bir garanti degil. Sonuc: dongudeki her `i + 1`, `a[i] < p`, `i <= j`
+// iki etiket okumasi + tur dallanmasi + `vm_binary_op` geri dusus cagrisi
+// uretiyor ve cagrinin VARLIGI LLVM'in degerleri yazmacta tutmasini
+// engelliyor. Ayni qsort ust duzeyde (main yerelleri native) 85 ms, fonksiyon
+// icinde 125 ms (2026-10-01, Ryzen 7 9800X3D).
+//
+// Kanit (EN DIS uygun dongu icin, bir kez):
+//   * Aday adlar (P): dongu basinda TIV_CAND (bu fonksiyonun kutulu `int`
+//     yereli/parametresi) ya da dongude YENI bildirilen `int` yereller.
+//   * P'deki bir adin dongudeki HER baglanmasi kesin INT uretir: bildirim
+//     `int x = E` / `int x;`, atama `x = E`, `x += E` / `-=` / `*=`, `x++`.
+//     E "kesin INT" (iv_int_closed): int sabiti, P'deki ad, native int ad,
+//     tekli eksi, `+ - *`, ve V'deki bir dizinin kesin-INT indeksli okumasi.
+//   * V: `int[]` bildirilmis, dongude yeniden baglanmayan diziler — dongu
+//     sekil-kararliysa (kullanici cagrisi yok) VE dongudeki her eleman
+//     yazmasi kesin INT ise (takma ad: baska bir ad ayni diziyi gosterebilir,
+//     o yuzden YALNIZ V'ye degil butun yazmalara bakiliyor). O zaman dongu
+//     basinda kutusuz int depodaki bir dizi dongu boyunca oyle kalir ve her
+//     okumasi INT'tir (sinir disi: istisna; yumusak kipte VM_INT(0)).
+// Sabit nokta: bir adin kaniti duserse ona dayanan digerleri de yeniden
+// sinanir; bir eleman yazmasi duserse V bosalir.
+//
+// Sayisal kisim calisma zamaninda: codegen dongu basinda P'nin dis adlarinin
+// etiketini INT, okunan V dizilerinin deposunu kutusuz int diye sinar; tutarsa
+// HIZLI kopya (adlar native i64 golgede, cikista kutulu yuvaya geri yazilir),
+// tutmazsa bugunku kod (SOGUK kopya). Kanit muhafazakar: taninmayan dugum
+// (kapanis, try, match, await, for-in) butun donguyu reddeder.
+//
+// KAPSAM TUZAGI: `while`/blok kapsam ACMAZ (yalniz fonksiyon, `for`, main) —
+// dongu govdesindeki `int t` donguden SONRA da gorunur. Hizli kopyada t native
+// bir yuvada yasiyor, soguk kopyada kutulu; donguden sonraki bir okuma hangisini
+// gorecegini bilemez. O yuzden dongude bildirilen ad ya bir `for` kapsaminin
+// icinde olmali ya da fonksiyonda dongu disinda HIC gecmemeli.
+// ===========================================================================
+namespace {
+
+struct IvCtx {
+  TulparIvClassFn cls;
+  void *ctx;
+  TulparIntLocalPlan *p;
+  ASTNode_C *loop;
+  ASTNode_C *fn_body;
+  const char *nm[TULPAR_IV_MAX_NAMES];
+  int ncls[TULPAR_IV_MAX_NAMES];
+  bool declared[TULPAR_IV_MAX_NAMES];
+  bool bound[TULPAR_IV_MAX_NAMES];
+  bool in_p[TULPAR_IV_MAX_NAMES];
+  signed char outside[TULPAR_IV_MAX_NAMES];   // iv_used_outside onbellegi (-1 bilinmiyor)
+  int n;
+  bool v_on;
+  bool changed;
+  bool bad;
+  // `for` kapsaminda kalan bildirimler (donguyle birlikte olur).
+  ASTNode_C *scoped[TULPAR_IV_MAX_NODES];
+  int n_scoped;
+};
+
+static bool iv_reject(IvCtx *c, const char *why) {
+  if (!c->bad) { c->bad = true; c->p->why = why; }
+  return false;
+}
+
+static int iv_find(IvCtx *c, const char *name) {
+  if (!name) return -1;
+  for (int i = 0; i < c->n; i++)
+    if (strcmp(c->nm[i], name) == 0) return i;
+  return -1;
+}
+
+static int iv_add(IvCtx *c, const char *name) {
+  int k = iv_find(c, name);
+  if (k >= 0 || !name) return k;
+  if (c->n >= TULPAR_IV_MAX_NAMES) { iv_reject(c, "ad tavani"); return -1; }
+  c->nm[c->n] = name;
+  c->ncls[c->n] = TIV_NONE;
+  c->declared[c->n] = c->bound[c->n] = c->in_p[c->n] = false;
+  c->outside[c->n] = -1;
+  return c->n++;
+}
+
+static const char *iv_base(ASTNode_C *acc) {
+  if (!acc || acc->type != AST_ARRAY_ACCESS) return nullptr;
+  if (acc->name) return acc->name;
+  if (acc->left && acc->left->type == AST_IDENTIFIER) return acc->left->name;
+  return nullptr;
+}
+
+// Atamanin hedef ADI (eleman yazmasi degilse). Parser adi ya dugumun kendisine
+// ya da sol cocuga (AST_IDENTIFIER) koyuyor.
+static const char *iv_target_name(ASTNode_C *n) {
+  if (n->left && n->left->type == AST_ARRAY_ACCESS) return nullptr;
+  if (n->name) return n->name;
+  if (n->left && n->left->type == AST_IDENTIFIER) return n->left->name;
+  return nullptr;
+}
+
+static bool iv_is_elem_write(ASTNode_C *n) {
+  return (n->type == AST_ASSIGNMENT || n->type == AST_COMPOUND_ASSIGN ||
+          n->type == AST_INCREMENT || n->type == AST_DECREMENT) &&
+         n->left && n->left->type == AST_ARRAY_ACCESS;
+}
+
+static bool iv_collect(ASTNode_C *n, void *pv) {
+  IvCtx *c = (IvCtx *)pv;
+  switch (n->type) {
+  case AST_LAMBDA:
+  case AST_TRY_CATCH:
+  case AST_MATCH:
+  case AST_AWAIT:
+  case AST_FOR_IN:
+  case AST_FUNCTION_DECL:
+  case AST_TYPE_DECL:
+  case AST_IMPORT:
+    return iv_reject(c, "desteklenmeyen dugum (kapanis/try/match/await/for-in)");
+  case AST_IDENTIFIER:
+    iv_add(c, n->name);
+    break;
+  case AST_VARIABLE_DECL: {
+    int k = iv_add(c, n->name);
+    if (k >= 0) c->declared[k] = c->bound[k] = true;
+    break;
+  }
+  case AST_ASSIGNMENT:
+  case AST_COMPOUND_ASSIGN:
+  case AST_INCREMENT:
+  case AST_DECREMENT: {
+    int k = iv_add(c, iv_target_name(n));
+    if (k >= 0) c->bound[k] = true;
+    break;
+  }
+  case AST_ARRAY_ACCESS:
+    iv_add(c, iv_base(n));
+    break;
+  default:
+    break;
+  }
+  return !c->bad;
+}
+
+// `for` dugumunun altindaki bildirimler o `for`un kapsaminda kalir.
+static bool iv_mark_scoped(ASTNode_C *n, void *pv) {
+  IvCtx *c = (IvCtx *)pv;
+  if (n->type == AST_VARIABLE_DECL) {
+    for (int i = 0; i < c->n_scoped; i++)
+      if (c->scoped[i] == n) return true;
+    if (c->n_scoped >= TULPAR_IV_MAX_NODES) return iv_reject(c, "bildirim tavani");
+    c->scoped[c->n_scoped++] = n;
+  }
+  return true;
+}
+static bool iv_find_fors(ASTNode_C *n, void *pv) {
+  IvCtx *c = (IvCtx *)pv;
+  if (n->type == AST_FOR) {
+    walk_all(n->init, iv_mark_scoped, c);
+    walk_all(n->condition, iv_mark_scoped, c);
+    walk_all(n->increment, iv_mark_scoped, c);
+    walk_all(n->body, iv_mark_scoped, c);
+  }
+  return !c->bad;
+}
+static bool iv_is_scoped(IvCtx *c, ASTNode_C *decl) {
+  for (int i = 0; i < c->n_scoped; i++)
+    if (c->scoped[i] == decl) return true;
+  return false;
+}
+
+struct IvCount {
+  const char *name;
+  int count;
+};
+static bool iv_count_name(ASTNode_C *n, void *pv) {
+  IvCount *c = (IvCount *)pv;
+  if (n->name && strcmp(n->name, c->name) == 0) c->count++;
+  return true;
+}
+// Ad fonksiyonda dongu DISINDA geciyor mu? (toplam - dongu ici; fonksiyon
+// govdesi bilinmiyorsa "evet" — muhafazakar.)
+static bool iv_used_outside(IvCtx *c, const char *name) {
+  if (!c->fn_body) return true;
+  int k = iv_find(c, name);
+  if (k >= 0 && c->outside[k] >= 0) return c->outside[k] != 0;
+  IvCount all{name, 0}, in{name, 0};
+  walk_all(c->fn_body, iv_count_name, &all);
+  walk_all(c->loop, iv_count_name, &in);
+  bool out = all.count != in.count;
+  if (k >= 0) c->outside[k] = out ? 1 : 0;
+  return out;
+}
+
+// Dongunun dugum sayisi (kod buyumesi siniri icin).
+static bool iv_count_node(ASTNode_C *, void *pv) {
+  ++*(int *)pv;
+  return true;
+}
+
+static bool iv_int_closed(IvCtx *c, ASTNode_C *e);
+
+// V'deki bir dizinin kesin-INT indeksli okumasi.
+static bool iv_acc_closed(IvCtx *c, ASTNode_C *e) {
+  if (!c->v_on || !e || e->type != AST_ARRAY_ACCESS) return false;
+  if (!e->index || e->index->type == AST_STRING_LITERAL) return false;
+  // `a[i][j]`: taban bir ad degil.
+  if (e->left && e->left->type != AST_IDENTIFIER) return false;
+  int k = iv_find(c, iv_base(e));
+  if (k < 0 || c->ncls[k] != TIV_ARR || c->bound[k]) return false;
+  return iv_int_closed(c, e->index);
+}
+
+static bool iv_int_closed(IvCtx *c, ASTNode_C *e) {
+  if (!e) return false;
+  switch (e->type) {
+  case AST_INT_LITERAL:
+    return true;
+  case AST_IDENTIFIER: {
+    int k = iv_find(c, e->name);
+    if (k < 0) return false;
+    if (c->in_p[k]) return true;
+    return c->ncls[k] == TIV_NATIVE && !c->declared[k];
+  }
+  case AST_UNARY_OP:
+    return e->op == TOKEN_MINUS && iv_int_closed(c, e->left);
+  case AST_BINARY_OP:
+    return (e->op == TOKEN_PLUS || e->op == TOKEN_MINUS || e->op == TOKEN_MULTIPLY) &&
+           iv_int_closed(c, e->left) && iv_int_closed(c, e->right);
+  case AST_ARRAY_ACCESS:
+    return iv_acc_closed(c, e);
+  default:
+    return false;
+  }
+}
+
+static bool iv_compound_ok(int op) {
+  return op == TOKEN_PLUS_EQUAL || op == TOKEN_MINUS_EQUAL || op == TOKEN_MULTIPLY_EQUAL;
+}
+
+static void iv_drop(IvCtx *c, int k) {
+  if (k >= 0 && c->in_p[k]) { c->in_p[k] = false; c->changed = true; }
+}
+
+// Sabit nokta adimi: P'deki adlarin baglanmalari ve eleman yazmalari.
+static bool iv_check(ASTNode_C *n, void *pv) {
+  IvCtx *c = (IvCtx *)pv;
+  if (iv_is_elem_write(n)) {
+    if (!c->v_on) return true;
+    ASTNode_C *t = n->left;
+    if (t->index && t->index->type == AST_STRING_LITERAL) return true;   // dizide hata
+    int k = (t->left && t->left->type != AST_IDENTIFIER) ? -1 : iv_find(c, iv_base(t));
+    if (k >= 0 && (c->ncls[k] == TIV_STRUCT || c->ncls[k] == TIV_NATIVE)) return true;
+    bool ok = n->type == AST_INCREMENT || n->type == AST_DECREMENT ||
+              (n->type == AST_ASSIGNMENT && iv_int_closed(c, n->right)) ||
+              (n->type == AST_COMPOUND_ASSIGN && iv_compound_ok(n->op) &&
+               iv_int_closed(c, n->right));
+    if (!ok) { c->v_on = false; c->changed = true; }
+    return true;
+  }
+  switch (n->type) {
+  case AST_VARIABLE_DECL: {
+    int k = iv_find(c, n->name);
+    if (k < 0 || !c->in_p[k]) return true;
+    bool ok = n->data_type == TYPE_INT && (!n->right || iv_int_closed(c, n->right)) &&
+              (iv_is_scoped(c, n) || !iv_used_outside(c, n->name));
+    if (!ok) iv_drop(c, k);
+    return true;
+  }
+  case AST_ASSIGNMENT: {
+    int k = iv_find(c, iv_target_name(n));
+    if (k >= 0 && c->in_p[k] && !iv_int_closed(c, n->right)) iv_drop(c, k);
+    return true;
+  }
+  case AST_COMPOUND_ASSIGN: {
+    int k = iv_find(c, iv_target_name(n));
+    if (k >= 0 && c->in_p[k] && !(iv_compound_ok(n->op) && iv_int_closed(c, n->right)))
+      iv_drop(c, k);
+    return true;
+  }
+  default:
+    return true;
+  }
+}
+
+static bool iv_record(ASTNode_C *n, void *pv) {
+  IvCtx *c = (IvCtx *)pv;
+  TulparIntLocalPlan *p = c->p;
+  if (n->type == AST_ARRAY_ACCESS && iv_acc_closed(c, n)) {
+    if (p->n_acc >= TULPAR_IV_MAX_NODES) return iv_reject(c, "okuma tavani");
+    p->acc[p->n_acc++] = n;
+    const char *b = iv_base(n);
+    bool have = false;
+    for (int i = 0; i < p->n_arr; i++) have = have || strcmp(p->arr[i], b) == 0;
+    if (!have) {
+      if (p->n_arr >= TULPAR_IV_MAX_ARR) return iv_reject(c, "dizi tavani");
+      p->arr[p->n_arr++] = b;
+    }
+  } else if (n->type == AST_VARIABLE_DECL) {
+    int k = iv_find(c, n->name);
+    if (k >= 0 && c->in_p[k]) {
+      if (p->n_decl >= TULPAR_IV_MAX_NODES) return iv_reject(c, "bildirim tavani");
+      p->decl[p->n_decl++] = n;
+    }
+  } else if (n->type == AST_ASSIGNMENT && iv_is_elem_write(n) &&
+             iv_int_closed(c, n->right)) {
+    if (p->n_ewr >= TULPAR_IV_MAX_NODES) return iv_reject(c, "yazma tavani");
+    p->ewr[p->n_ewr++] = n;
+  }
+  return !c->bad;
+}
+
+}  // namespace
+
+extern "C" int tulpar_int_local_plan(ASTNode_C *loop, ASTNode_C *fn_body,
+                                     TulparPureCallFn pure, TulparIvClassFn cls,
+                                     void *ctx, TulparIntLocalPlan *p) {
+  if (!p) return 0;
+  memset(p, 0, sizeof(*p));
+  p->why = "bicim";
+  if (!loop || !cls || (loop->type != AST_WHILE && loop->type != AST_FOR)) return 0;
+  IvCtx *c = new IvCtx();
+  c->cls = cls;
+  c->ctx = ctx;
+  c->p = p;
+  c->loop = loop;
+  c->fn_body = fn_body;
+  int ok = 0;
+  ASTNode_C *init = loop->type == AST_FOR ? loop->init : nullptr;
+  ASTNode_C *incr = loop->type == AST_FOR ? loop->increment : nullptr;
+  ASTNode_C *parts[] = {init, loop->condition, incr, loop->body};
+  // KOD BUYUMESI SINIRI: surum donguyu IKI kez uretiyor (hizli + soguk).
+  // Buyuk bir oyun dongusunu kopyalamak derleme suresini ve ikiliyi
+  // buyutur; sicak tamsayi dongulerinin hepsi bu sinirin cok altinda
+  // (qsort'un bolme dongusu 56, int matmul'un dis dongusu 66 dugum).
+  int nodes = 0;
+  walk_all(loop, iv_count_node, &nodes);
+  p->n_nodes = nodes;
+  if (nodes > TULPAR_IV_MAX_LOOP_NODES) iv_reject(c, "dongu cok buyuk (kod buyumesi siniri)");
+  for (ASTNode_C *part : parts) walk_all(part, iv_collect, c);
+  if (!c->bad) {
+    if (loop->type == AST_FOR) iv_find_fors(loop, c);
+    for (ASTNode_C *part : parts) walk_all(part, iv_find_fors, c);
+  }
+  if (!c->bad) {
+    for (int k = 0; k < c->n; k++) {
+      c->ncls[k] = cls(c->nm[k], ctx);
+      c->in_p[k] = (c->ncls[k] == TIV_CAND && !c->declared[k]) ||
+                   (c->ncls[k] == TIV_NONE && c->declared[k]);
+    }
+    // V yalniz sekil-kararli dongude (kullanici cagrisi diziye yazabilir).
+    c->v_on = tulpar_loop_shape_stable(init, nullptr, nullptr, pure, ctx) &&
+              tulpar_loop_shape_stable(loop->condition, loop->body, incr, pure, ctx);
+    do {
+      c->changed = false;
+      for (ASTNode_C *part : parts) walk_all(part, iv_check, c);
+    } while (c->changed);
+    for (ASTNode_C *part : parts) walk_all(part, iv_record, c);
+  }
+  if (!c->bad) {
+    for (int k = 0; k < c->n; k++) {
+      if (!c->in_p[k] || c->ncls[k] != TIV_CAND) continue;
+      if (p->n_cand >= TULPAR_IV_MAX_NAMES) { iv_reject(c, "aday tavani"); break; }
+      p->cand[p->n_cand++] = c->nm[k];
+    }
+  }
+  if (!c->bad) {
+    if (p->n_cand + p->n_decl == 0) {
+      p->why = "golgelenecek int yerel yok";
+    } else if (p->n_acc == 0) {
+      // Kesin-INT dizi okumasi olmayan dongu (sayac + cagri, float dongusu):
+      // kazanc tur basina bir etiket sinavi, bedeli donguyu ikiye katlamak.
+      // Olculdu (2026-10-01): bu kosul yokken scene3d_editor'un derlemesi
+      // 10,4 -> 11,6 s ve ikilisi %2,4 buyudu.
+      p->why = "kesin-INT dizi okumasi yok (kopya kazanc getirmez)";
+    } else {
+      p->why = nullptr;
+      ok = 1;
+    }
+  }
+  delete c;
+  return ok;
+}
+
+// `int[]` bildirim/parametre adlari (V icin ipucu; dogruluk depo sinavindan).
+struct IvHintCtx {
+  void (*cb)(const char *, void *);
+  void *ctx;
+};
+static bool iv_visit_hint(ASTNode_C *n, void *p) {
+  IvHintCtx *h = (IvHintCtx *)p;
+  if (n->name && n->data_type == TYPE_ARRAY_INT &&
+      n->type != AST_FUNCTION_DECL && n->type != AST_FUNCTION_CALL)
+    h->cb(n->name, h->ctx);
+  return true;
+}
+extern "C" void tulpar_collect_int_array_decls(ASTNode_C *root,
+                                               void (*cb)(const char *, void *),
+                                               void *ctx) {
+  IvHintCtx h{cb, ctx};
+  walk_all(root, iv_visit_hint, &h);
 }
