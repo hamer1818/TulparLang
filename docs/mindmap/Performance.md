@@ -1240,10 +1240,12 @@ Yapılanlar ve pay (taskset -c 6,7, 7 koşu en iyi, aynı turda):
 
 - **Main yereline terfi** (`main_local_declare`): adı hiçbir fonksiyonda /
   lambdada / modülde geçmeyen üst düzey bildirim alloca. Muhafazakâr tarama:
-  adın GEÇMESİ yeter (okuma, yazma, gölgeleyen yerel, çağrı adı). Ayrıca üst
-  düzey `try` gövdesindeki adlar global kalıyor — setjmp/longjmp arasında
-  değişen yerel eski değerine dönüyor ([[Tuzaklar]] 7i, fonksiyonlarda AÇIK
-  hata). Güvenlik ağı: terfi edilmiş yuvaya main dışından erişilirse derleme
+  adın GEÇMESİ yeter (okuma, yazma, gölgeleyen yerel, çağrı adı). Üst düzey
+  `try` gövdesindeki adlar ilk sürümde global kalıyordu (setjmp/longjmp
+  arasında değişen yerel eski değerine dönüyordu, [[Tuzaklar]] 7i); hata
+  2026-10-01'de düzeldi (`try_volatile_finalize`) ve kısıt kalktı: adım
+  döngüsü üst düzey `try`a sarılmış particles (N=200k) 35,7 → 10,9 ms
+  (try'sız 11,3). Güvenlik ağı: terfi edilmiş yuvaya main dışından erişilirse derleme
   "iç hata" ile durur (geçersiz IR üretilmez — doğrulama hatası emit'i
   durdurmuyor).
 - **`int` ve dizi global kalıyor — ölçüldü.** İlk sürüm hepsini terfi
@@ -1272,3 +1274,32 @@ son karenin PPM özeti eski derleyiciyle birebir; `engine_bridge.test.tpr`
 Kalan açık: `particles` C'nin 1,3 katı. İç döngüde tur başına bir `i <u
 count` sınavı kalıyor (sınır `n`, `len(ps)` değil — struct dizisi için
 kanıtlı erişim yok); kalan farkın nerede olduğu ölçülmedi.
+
+## `try` doğruluğu: volatile yerel — maliyet ölçüldü (2026-10-01)
+
+[[Tuzaklar]] 7i'nin düzeltmesi (`try_volatile_finalize`) try gövdesinde
+yazılıp dışarıda okunan yerelin bütün erişimlerini `volatile` yapıyor. Bu
+tasarım gereği bellek trafiği ekler; try kullanan kod yavaşlıyor mu diye dört
+mikro ölçüm (Ryzen 7 9800X3D, `taskset -c 10,11`, en iyi 5, eski ve yeni
+derleyici kendi izole dizinlerinde):
+
+| ölçüm | ne | eski | yeni |
+|---|---|---:|---:|
+| `tloop` | fonksiyonda try içinde 100M turluk float toplama, akümülatör try DIŞINDA bildirilmiş (volatile) | 230,6 | 207,2 |
+| `tdizi` | try içinde 200×500k `a[i] = a[i] + 1.0; acc = acc + a[i]` | 331,7 | 274,8 |
+| `tcall` | 20M kez try'lı küçük fonksiyon, her 1000'de throw | 898,1 *(yanlış sonuç)* | 906,8 |
+| `ttop` | `tloop` üst düzeyde (akümülatör artık main yereli) | 225,1 | 212,8 |
+
+`tcall`'da eski derleyici YANLIŞ toplam veriyor (catch, try'da yazılan
+`r`'yi eski değeriyle görüyor). `tloop`/`tdizi`'de volatile sürüm daha
+hızlı çıktı; bu bir kazanç iddiası DEĞİL (kutulu yerelin SROA'lı hâli ile
+volatile hâlinin makine kodu farklı, sebep incelenmedi) — iddia yalnız
+"gerileme yok". Try'ın kendisi pahalı: `tcall`'da çağrı başına ~45 ns
+(`aot_try_push` + `setjmp`); sıcak döngüde try açıp kapatmak hâlâ önerilmez.
+
+Değerlendirilip bırakılan: alloca'yı bir kez kaçırmak (adresi bir
+global'e). Bütün çağrılar bariyer olur, çağrısız döngüde değer yazmaçta
+kalabilir — teoride daha ucuz; ölçüldü: `tloop` 244,4, `tdizi` 311,1 ms
+(volatile'dan yavaş: kaçan alloca her bilinmeyen saklamayla örtüşebilir
+sayılıyor). On üç adil kıyasın ikilisi düzeltmeden önce ve sonra bayt bayt
+AYNI (hiçbiri try kullanmıyor).

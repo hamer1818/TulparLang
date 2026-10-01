@@ -12,6 +12,27 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `try` gövdesinde değişip fırlatılan yerel `catch`'ten sonra eski değerine dönüyordu
+
+- `func f(): int { int k = 0; try { k = 5; throw "x"; } catch (e) {} return k; }`
+  **0** döndürüyordu (5 olmalı); döngü sayacı, `finally`, iç içe `try`,
+  float/str/bool/struct/dizi yerelleri ve lambda gövdeleri de aynıydı. Eski
+  derleyicide de vardı. Sebep: `try` setjmp, `throw` longjmp; LLVM yereli
+  yazmaca alıyor, `throw`dan önceki saklamayı (yolu `unreachable`a çıkıyor)
+  ölü sayıp siliyordu — C'nin "setjmp/longjmp arasında değişen volatile
+  olmayan yerel belirsizdir" kuralı, harfiyen.
+- Düzeltme: try gövdesinde yazılıp gövdenin DIŞINDA da kullanılan yerellerin
+  erişimleri `volatile` (yalnız onlar; gövdede doğup ölen yerel, örneğin try
+  içindeki döngü sayacı, yazmaçta kalıyor). Try kullanan kodda gerileme yok
+  (dört mikro ölçüm, `docs/mindmap/Performance.md`); on üç adil kıyasın ikilisi
+  bayt bayt aynı. `TULPAR_NO_TRY_VOLATILE=1` kapatır (pozitif kontrol).
+- Bunun sayesinde #431'in "üst düzey `try` gövdesindeki adlar global kalır"
+  kısıtı kalktı: oyun döngüsünü üst düzey `try`a saran program artık hızlı
+  yoldan çıkmıyor (particles adım döngüsü `try` içinde: 35,7 → 10,9 ms).
+- Kapılar: `tests/try_yerel.test.tpr` (13 test; eski derleyiciyle 0/13),
+  `tests/try_yerel.sh` (IR kararı + pozitif kontrol), `tests/main_yerel.sh`
+  (üst düzey yol). Bkz. `docs/mindmap/Tuzaklar.md` 7i.
+
 ### Performans — float dizisi: kutusuz double depo + iç içe döngüde kanıtlı erişim (matmul 26× → 1,2× C)
 
 - **Kök neden (ölçüldü, IR + zamanlama):** `float[]` her elemanı 16 baytlık
@@ -126,7 +147,8 @@ tag still works;
   global'iydi: sıcak döngüde her erişim bellekten iki etiket okuyor, etiket
   makinesi + `vm_binary_op` geri düşüşü üretiyor, araya giren her saklama
   global'i yeniden okutuyordu. Fonksiyondan / lambdadan / modülden görülen ad,
-  üst düzey `try` gövdesinde geçen ad (setjmp — bkz. aşağıdaki açık hata),
+  üst düzey `try` gövdesinde geçen ad (setjmp — bkz. aşağıdaki hata;
+  düzeltildi ve bu kısıt kalktı, yukarıdaki "Düzeltildi" girdisi),
   `atomic_*` argümanı, `@thread_local` ve hata ayıklama derlemesi eskisi gibi
   global. `int` ve struct olmayan dizi bildirimleri de bilerek global kalıyor:
   ölçüldü, terfi edilince LLVM'in LSR'ı elek'in iç döngüsüne soğuk yolun adres
@@ -159,7 +181,7 @@ tag still works;
 - `build.sh suites`'in kutulu `%` / persist bekçisi kapısı programını
   güncelledi: değişkenleri bir fonksiyon okuyor, yoksa terfi edilip tipli yola
   iniyorlardı ve kapı ölçtüğü şeyi görmüyordu.
-- **Bulunan açık hata (düzeltilmedi):** `try` gövdesinde değişip fırlatılan
+- **Bulunan hata (sonra düzeltildi, yukarıda):** `try` gövdesinde değişip fırlatılan
   fonksiyon YERELİ `catch`'ten sonra eski değerini görüyor (setjmp/longjmp,
   eski derleyicide de). Bkz. `docs/mindmap/Tuzaklar.md` 7i.
 
