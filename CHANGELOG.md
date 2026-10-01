@@ -118,6 +118,51 @@ tag still works;
   (`TULPAR_SPLIT_TANI=1` tek ayırmanın bayt boyunu basar, kapı kendisi
   hesaplayıp karşılaştırır); eski (parça başına) yolda kırmızı.
 
+### Değişti — üst düzey oyun döngüsü 6× hızlı: üst düzey değişken main'in yereli, struct dizisi başlığı döngü başına bir kez
+
+- **Üst düzey değişken artık (çoğunlukla) global değil.** Adı hiçbir
+  fonksiyonda, lambdada ve import edilen modülde geçmeyen üst düzey bildirim
+  main'in yereli olur. Eskiden her üst düzey `float dt` kutulu bir LLVM
+  global'iydi: sıcak döngüde her erişim bellekten iki etiket okuyor, etiket
+  makinesi + `vm_binary_op` geri düşüşü üretiyor, araya giren her saklama
+  global'i yeniden okutuyordu. Fonksiyondan / lambdadan / modülden görülen ad,
+  üst düzey `try` gövdesinde geçen ad (setjmp — bkz. aşağıdaki açık hata),
+  `atomic_*` argümanı, `@thread_local` ve hata ayıklama derlemesi eskisi gibi
+  global. `int` ve struct olmayan dizi bildirimleri de bilerek global kalıyor:
+  ölçüldü, terfi edilince LLVM'in LSR'ı elek'in iç döngüsüne soğuk yolun adres
+  sayaçlarını taşıyor (7,6 → 9,4 ms; aynı elek fonksiyon içinde eski
+  derleyicide de 9,7). Depolama bariyeri (checkpoint/arena) terfi edilmiş
+  yuvada aynen uygulanıyor. `TULPAR_NO_MAIN_LOCALS=1` kapatır,
+  `TULPAR_MAIN_LOCALS_ALL=1` int/dizileri de terfi ettirir (ölçüm için).
+- **Struct dizisi alan erişimi:** `ps[i].x` alan yükleme/saklamaları TBAA
+  "elem" etiketi alıyor (eleman deposu hiçbir başlıkla örtüşmez), yavaş yolun
+  16 baytlık spill'i yalnız yavaş yolda; ve sekli değişmeyen döngüde (çağrı /
+  push yok, ad yeniden bağlanmıyor — ObjArray önbelleğiyle aynı kanıt) dizinin
+  başlığı (tür, count, data) döngü başında BİR KEZ okunuyor, her erişim tek bir
+  `i <u count` sınavı. Sınır dışı erişim hâlâ çalışma zamanı hatası (yumuşak
+  kipte tanı + devam). `TULPAR_NO_SARR_CACHE=1` önbelleği kapatır.
+- Ölçüm (`benchmarks/fair/particles`, 1M parçacık × 50 adım, Ryzen 7 9800X3D,
+  `taskset -c 6,7`, 7 koşu en iyi, 2026-10-01): üst düzey **336 → 55 ms**,
+  aynı döngü fonksiyon içinde **193 → 55 ms**; C (gcc -O2) 42,7 → C'nin
+  7,9×'inden 1,3×'ine, dokuz dil arasında 8.'den 4.'ye (Rust 36, C++ 42 önde;
+  Go 60, C# 60 geride). Pay: yalnız TBAA + spill 295, + terfi 120, + önbellek
+  (terfisiz) 178, hepsi 55. Kalan 12 çekirdekte gerileme yok (aynı turda
+  eski/yeni, en iyi oranı 0,98–1,03; `hashmap` gürültülü, 21 koşuda eşit).
+- Kapılar: `tests/main_yerel.test.tpr` (anlam: döngüde çağrılan fonksiyonun
+  değiştirdiği global güncel görülüyor, lambda/try/gölgeleme, struct
+  dizisinde push eden çağrı / yeniden bağlama / takma ad / iç içe döngü /
+  sınır dışı hata) ve `tests/main_yerel.sh` (kararlar ön-optimizasyon IR'dan:
+  global yok/var, `sarrc.` blokları, `!tbaa`; iki pozitif kontrol; eski
+  derleyiciyle 12/17). Enjeksiyon: tarama lambdayı atlayınca güvenlik ağı
+  derlemeyi "iç hata" ile durdurdu (geçersiz IR yerine); önbellekten yeniden
+  bağlama denetimi kaldırılınca anlam testi kırmızı (19 yerine 3).
+- `build.sh suites`'in kutulu `%` / persist bekçisi kapısı programını
+  güncelledi: değişkenleri bir fonksiyon okuyor, yoksa terfi edilip tipli yola
+  iniyorlardı ve kapı ölçtüğü şeyi görmüyordu.
+- **Bulunan açık hata (düzeltilmedi):** `try` gövdesinde değişip fırlatılan
+  fonksiyon YERELİ `catch`'ten sonra eski değerini görüyor (setjmp/longjmp,
+  eski derleyicide de). Bkz. `docs/mindmap/Tuzaklar.md` 7i.
+
 ### Değişti — `json` nesnesi artık hash indeksli: 1M anahtar >60 s → 0,17 s
 
 - `json` nesnesi her eklemede ve aramada anahtarları baştan sona `strcmp` ile

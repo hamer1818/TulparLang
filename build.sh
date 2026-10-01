@@ -1262,6 +1262,14 @@ TPREOF
     #
     # Değerler ortamdan okunuyor: sabit olsaydı LLVM katlar, `srem` hiç
     # üretilmezdi ve denetim kendi kendini yanlış kırardı.
+    #
+    # `a`, `b`, `g`yi bir FONKSİYON okuyor (`oku`): yalnız main'de görülen
+    # üst düzey değişken 2026-10-01'den beri global değil main'in yereli
+    # (llvm_backend.cpp main_local_declare). O zaman etiketler SROA ile
+    # sabite katlanıyor, `%` tipli yola iniyor ve bu kapı ne kutulu `%`ü ne
+    # GLOBAL atamasını görüyordu (ilk koşumda tam bu yüzden kırmızı verdi).
+    # Fonksiyon referansı üçünü de gerçek global tutuyor; ölçülen şey yine
+    # kutulu `%` ve kutulu global ataması.
     BX_TMP=$(mktemp -d)
     cat > "$BX_TMP/bx.tpr" <<'TPREOF'
 var a = toInt(env("BX_A"));
@@ -1269,8 +1277,9 @@ if (a <= 0) { a = 17; }
 var b = toInt(env("BX_B"));
 if (b <= 0) { b = 5; }
 var g = 0;
+func oku() { if (a < 0 || b < 0) { return 0; } return g; }
 g = a % b;
-print(g);
+print(oku());
 TPREOF
     TULPAR_AOT_EMIT_LL=1 ./tulpar build "$BX_TMP/bx.tpr" "$BX_TMP/bx" >/dev/null 2>&1
     BX_LL=$(ls "$BX_TMP"/*.ll 2>/dev/null | head -1)
@@ -1395,6 +1404,15 @@ TPREOF
     # kacan kutulu; analiz kapaliyken ayirma gorulmeli (pozitif kontrol).
     if ! bash tests/struct_kacis.sh ./tulpar; then
         echo -e "${RED}struct var kacis analizi bozuk!${NC}"
+        exit 1
+    fi
+
+    # UST DUZEY MAIN-YERELI + STRUCT DIZISI SEKIL ONBELLEGI (2026-10-01):
+    # yalniz main'de gorulen ad global degil; fonksiyon/lambda/try adlari
+    # global; sekli degismeyen dongude baslik bir kez okunuyor (iki pozitif
+    # kontrol, sinir disi hala hata).
+    if ! bash tests/main_yerel.sh ./tulpar; then
+        echo -e "${RED}ust duzey main-yereli / struct dizisi onbellegi bozuk!${NC}"
         exit 1
     fi
 

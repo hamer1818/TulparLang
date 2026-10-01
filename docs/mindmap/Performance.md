@@ -1208,3 +1208,67 @@ yavaşlatabiliyor (yukarıdaki "İç içe döngü sürümlemesi").
 - `X[j - 1]` biçimi (`-` ile ofset) plana girmiyor; `X[j + -1]` giriyor.
 - `a[i] += x` (bileşik eleman yazması) float sürümünde reddediliyor.
 
+## particles: üst düzey global + struct dizisi başlığı — 336 → 55 ms (2026-10-01)
+
+Hız karnesinin oyun döngüsü çekirdeği (`benchmarks/fair/particles`, 1M
+parçacık × 50 adım, `P[] ps` üzerinde `ps[i].vy = ps[i].vy - g * dt` …) C'nin
+7,8 katıydı; aynı kod bir fonksiyona alınınca 4,4 katı. İki ayrı maliyet,
+ikisi de IR'dan okundu (`TULPAR_AOT_EMIT_LL=1`):
+
+1. **Üst düzey değişkenler LLVM global'iydi.** `float dt/g/w/sum` kutulu
+   VMValue global'i: döngüde `g * dt` her turda iki etiket okuyor, etiket
+   makinesi (int/float/geri düşüş) ve `vm_binary_op` çağrısı üretiyordu; `ps`
+   global'i her erişimde yeniden yükleniyordu. Fonksiyonda aynı değişkenler
+   alloca → SROA etiketi sabite katlıyor (`g * dt` → `-9.81e-2` sabiti).
+2. **Struct dizisi erişimi başlığı her seferinde okuyordu** (tür, count,
+   data): alan saklaması `store double` etiketsizdi, yani LLVM için başlığı
+   da yazabilirdi; üstelik döngüdeki yavaş yol çağrısı (`aot_sarr_elem_ptr`)
+   başlık yüklemelerinin döngü dışına çıkmasını engelliyordu. Her erişim
+   ayrıca dizi tutamacını 16 baytlık bir yuvaya yazıyordu (yalnız yavaş yol
+   kullanıyor).
+
+Yapılanlar ve pay (taskset -c 6,7, 7 koşu en iyi, aynı turda):
+
+| | üst düzey | fonksiyon içi |
+|---|--:|--:|
+| eski | 336,2 | 193,1 |
+| TBAA "elem" + spill yalnız yavaş yolda | 294,8 | — |
+| + önbellek (terfi yok) | 178,3 | — |
+| + terfi (önbellek yok) | 119,7 | 121,3 |
+| **hepsi** | **54,8** | **54,8** |
+| C (gcc -O2) | 42,7 | |
+
+- **Main yereline terfi** (`main_local_declare`): adı hiçbir fonksiyonda /
+  lambdada / modülde geçmeyen üst düzey bildirim alloca. Muhafazakâr tarama:
+  adın GEÇMESİ yeter (okuma, yazma, gölgeleyen yerel, çağrı adı). Ayrıca üst
+  düzey `try` gövdesindeki adlar global kalıyor — setjmp/longjmp arasında
+  değişen yerel eski değerine dönüyor ([[Tuzaklar]] 7i, fonksiyonlarda AÇIK
+  hata). Güvenlik ağı: terfi edilmiş yuvaya main dışından erişilirse derleme
+  "iç hata" ile durur (geçersiz IR üretilmez — doğrulama hatası emit'i
+  durdurmuyor).
+- **`int` ve dizi global kalıyor — ölçüldü.** İlk sürüm hepsini terfi
+  ediyordu ve elek 7,6 → 9,4 ms geriledi. Yalnız int'leri global tutmak 9,5,
+  yalnız dizileri 9,6, ikisini birden 7,6. Sebep LSR: dış döngü sayacı, sınır
+  ve dizi tutamacı yazmaca girince soğuk yolun (kutulu / 64-bit eleman) adres
+  hesapları sıcak iç döngüye ayrı sayaç olarak taşınıyor (iç döngü 4 → 8
+  komut). Aynı elek fonksiyon içinde ESKİ derleyicide de 9,7 ms — yani elek'in
+  üst düzeyde hızlı olması global'in bellek trafiğinin LSR'ı durdurmasından
+  geliyordu, açık dizi erişim yolunda. `TULPAR_MAIN_LOCALS_ALL=1` o işi
+  ölçmek için hepsini terfi ettirir. Float dizisi (#432) ve `call()` (#430)
+  birleştikten sonra yeniden ölçüldü: hepsini terfi etmek elek 8,0 → 9,6,
+  `callfn` 173 → 188 ms; kuralla ikisi de kapalı derlemeyle eşit.
+- **Struct dizisi şekil önbelleği** (`SarrCacheScope`): ObjArray
+  önbelleğinin kanıtı aynen (`tulpar_loop_shape_stable` + ad yeniden
+  bağlanmıyor); başlık döngü başında okunur, struct dizisi değilse count 0 —
+  her erişim yavaş yola, aynı tanıya gider. Ayrı yığın; ObjArray
+  önbelleğinin 4 girdisine ve sürümleme kanıtına karışmıyor.
+
+Kalan 12 çekirdekte gerileme yok (en iyi oranı yeni/eski 0,98–1,03; `hashmap`
+21 koşuda gürültü içinde eşit). Motor deposunun yedi örnek oyunu, köprüyü
+geri bağlayan derleyiciyle penceresiz 30 kare: çıkış kodu, kapanış raporu ve
+son karenin PPM özeti eski derleyiciyle birebir; `engine_bridge.test.tpr`
+27/27.
+
+Kalan açık: `particles` C'nin 1,3 katı. İç döngüde tur başına bir `i <u
+count` sınavı kalıyor (sınır `n`, `len(ps)` değil — struct dizisi için
+kanıtlı erişim yok); kalan farkın nerede olduğu ölçülmedi.

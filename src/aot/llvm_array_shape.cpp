@@ -1454,3 +1454,23 @@ extern "C" void tulpar_collect_float_array_decls(ASTNode_C *root,
   FvHintCtx h{cb, ctx};
   walk_all(root, fv_visit_hint, &h);
 }
+
+// Genel gezici (ust duzey degiskenlerin main-yereline terfisi, 2026-10-01).
+// walk_all'in kendisi: cocuk alan listesi TEK yerde kalsin, denetim
+// (tests/ast_child_fields_audit.py) onu sinamaya devam etsin.
+namespace {
+struct WalkAdapt {
+  int (*visit)(ASTNode_C *, void *);
+  void *ctx;
+};
+bool walk_adapt(ASTNode_C *n, void *p) {
+  WalkAdapt *w = (WalkAdapt *)p;
+  return w->visit(n, w->ctx) != 0;
+}
+}  // namespace
+
+extern "C" int tulpar_ast_walk(ASTNode_C *n, int (*visit)(ASTNode_C *, void *),
+                               void *ctx) {
+  WalkAdapt w{visit, ctx};
+  return walk_all(n, walk_adapt, &w) ? 1 : 0;
+}

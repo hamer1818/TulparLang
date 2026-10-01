@@ -1,0 +1,236 @@
+// UST DUZEY DEGISKENIN MAIN-YERELINE TERFISI + STRUCT DIZISI SEKIL
+// ONBELLEGI — anlam paketi (2026-10-01).
+//
+// Optimizasyon (src/aot/llvm_backend.cpp, main_local_declare /
+// SarrCacheScope): ust duzey bir degisken hicbir fonksiyonda / lambdada /
+// import edilen modulde gecmiyorsa LLVM global'i degil main'in yereli olur;
+// sekli degismeyen dongude `P[] ps` dizisinin basligi dongu basinda bir kez
+// okunur. Kararin GERCEKTEN verildigi tests/main_yerel.sh'de (IR kapisi);
+// burasi ANLAMIN degismedigini sinar.
+//
+// ⚠ Bu dosyanin ust duzey kodu BILEREK test fonksiyonlarinin disinda: terfi
+// yalniz main'in kendi govdesinde olur. Test fonksiyonu terfi edilen adi
+// okursa ad terfiden duser (fonksiyon referansi) ve test optimizasyonu hic
+// gormez. O yuzden sonuclar `s_*` adli ARACI global'lere kopyalanip oradan
+// sinaniyor. Adlar `ml_` onekli: lib/test.tpr'de gecen bir ad (o da
+// engelliyor) secilmesin.
+//
+// Enjeksiyonla dogrulandi (2026-10-01) — hangi test neyi yakaliyor: bkz.
+// tests/main_yerel.sh basligi.
+import "test";
+
+struct MlP { float x; float y; float vx; float vy; }
+
+// ---- 1) yalniz main'de gorulen float: terfi edilir, deger dogru ----------
+float ml_adim = 0.5;
+float ml_top = 0.0;
+for (int ml_i = 0; ml_i < 1000; ml_i = ml_i + 1) { ml_top = ml_top + ml_adim; }
+float s_top = ml_top;
+
+// ---- 2) dongude CAGRILAN fonksiyon global'i degistiriyor ------------------
+// ml_sayac fonksiyonda geciyor -> global kalmali; main'in dongusu her turda
+// GUNCEL degeri gormeli (yerele alinip bayatlarsa toplam 100*1 olur).
+int ml_sayac = 0;
+float ml_hiz = 1.0;
+func ml_artir() { ml_sayac = ml_sayac + 1; ml_hiz = ml_hiz * 0.5; }
+int ml_gor = 0;
+float ml_hiz_top = 0.0;
+for (int ml_k = 0; ml_k < 100; ml_k = ml_k + 1) {
+    ml_artir();
+    ml_gor = ml_gor + ml_sayac;
+    if (ml_k < 3) { ml_hiz_top = ml_hiz_top + ml_hiz; }
+}
+int s_gor = ml_gor;
+float s_hiz_top = ml_hiz_top;
+
+// ---- 3) lambda ust duzey degiskeni yaziyor --------------------------------
+int ml_lsay = 0;
+var ml_lam = (int d) => { ml_lsay = ml_lsay + d; return ml_lsay; };
+int ml_lgor = 0;
+for (int ml_j = 1; ml_j <= 4; ml_j = ml_j + 1) { ml_lgor = ml_lgor + ml_lam(ml_j); }
+int s_lsay = ml_lsay;
+int s_lgor = ml_lgor;
+
+// ---- 4) try govdesinde degisip firlatilan: catch GUNCEL degeri gormeli -----
+int ml_tv = 1;
+float ml_tf = 0.0;
+int ml_tdongu = 0;
+try {
+    for (int ml_q = 0; ml_q < 10; ml_q = ml_q + 1) {
+        ml_tdongu = ml_tdongu + 1;
+        ml_tf = ml_tf + 0.25;
+        if (ml_q == 6) { throw "kes"; }
+    }
+    ml_tv = 99;
+} catch (e) {
+    ml_tv = ml_tv + ml_tdongu;
+}
+int s_tv = ml_tv;
+float s_tf = ml_tf;
+
+// ---- 5) golgeleme: fonksiyonun ayni adli yereli ust duzeyi ezmez ----------
+int ml_golge = 7;
+func ml_golgele(): int { int ml_golge = 1000; return ml_golge + 1; }
+int ml_golge_sonuc = ml_golgele();
+int s_golge = ml_golge;
+int s_golge_f = ml_golge_sonuc;
+
+// ---- 6) ust duzey struct dizisi: sekil onbellekli dongu --------------------
+MlP[] ml_ps = [];
+for (int ml_i = 0; ml_i < 64; ml_i = ml_i + 1) {
+    push(ml_ps, { x: toFloat(ml_i), y: 0.0, vx: 1.0, vy: toFloat(ml_i % 3) });
+}
+for (int ml_s = 0; ml_s < 10; ml_s = ml_s + 1) {
+    for (int ml_i = 0; ml_i < 64; ml_i = ml_i + 1) {
+        ml_ps[ml_i].x = ml_ps[ml_i].x + ml_ps[ml_i].vx;
+        ml_ps[ml_i].y = ml_ps[ml_i].y + ml_ps[ml_i].vy;
+        if (ml_ps[ml_i].x > 60.0) { ml_ps[ml_i].vx = 0.0 - ml_ps[ml_i].vx; }
+    }
+}
+float ml_psum = 0.0;
+for (int ml_i = 0; ml_i < len(ml_ps); ml_i = ml_i + 1) { ml_psum = ml_psum + ml_ps[ml_i].x + ml_ps[ml_i].y; }
+float s_psum = ml_psum;
+
+// ---- 7) dongu govdesi FONKSIYON cagiriyor ve fonksiyon diziyi buyutuyor ----
+// Onbellek alinmamali (cagri sekli degistirebilir); alinirsa bayat count ile
+// yeni elemanlar "sinir disi" sayilir ya da realloc sonrasi eski data okunur.
+MlP[] ml_g = [{ x: 1.0, y: 0.0, vx: 0.0, vy: 0.0 }];
+func ml_ekle() { push(ml_g, { x: 2.0, y: 0.0, vx: 0.0, vy: 0.0 }); }
+float ml_gtop = 0.0;
+for (int ml_i = 0; ml_i < 200; ml_i = ml_i + 1) {
+    ml_ekle();
+    ml_g[ml_i + 1].y = toFloat(ml_i);
+    ml_gtop = ml_gtop + ml_g[ml_i + 1].x + ml_g[ml_i + 1].y;
+}
+float s_gtop = ml_gtop;
+
+// ---- 8) dizi dongude YENIDEN BAGLANIYOR -----------------------------------
+MlP[] ml_a = [{ x: 1.0, y: 0.0, vx: 0.0, vy: 0.0 }, { x: 1.0, y: 0.0, vx: 0.0, vy: 0.0 },
+              { x: 1.0, y: 0.0, vx: 0.0, vy: 0.0 }];
+MlP[] ml_b = [{ x: 9.0, y: 0.0, vx: 0.0, vy: 0.0 }, { x: 9.0, y: 0.0, vx: 0.0, vy: 0.0 },
+              { x: 9.0, y: 0.0, vx: 0.0, vy: 0.0 }];
+float ml_rtop = 0.0;
+for (int ml_i = 0; ml_i < 3; ml_i = ml_i + 1) {
+    if (ml_i == 1) { ml_a = ml_b; }
+    ml_rtop = ml_rtop + ml_a[ml_i].x;
+}
+float s_rtop = ml_rtop;
+
+// ---- 9) takma ad: iki ad ayni dizi; yazma oteki addan gorulmeli -----------
+MlP[] ml_c = [{ x: 0.0, y: 0.0, vx: 0.0, vy: 0.0 }, { x: 0.0, y: 0.0, vx: 0.0, vy: 0.0 }];
+MlP[] ml_d = ml_c;
+float ml_ctop = 0.0;
+for (int ml_i = 0; ml_i < 2; ml_i = ml_i + 1) {
+    ml_d[ml_i].x = 5.0;
+    ml_ctop = ml_ctop + ml_c[ml_i].x;
+    ml_c[ml_i].y = ml_d[ml_i].x + 1.0;
+    ml_ctop = ml_ctop + ml_d[ml_i].y;
+}
+float s_ctop = ml_ctop;
+
+// ---- 10) ic ice dongu + while ---------------------------------------------
+MlP[] ml_m = [];
+for (int ml_i = 0; ml_i < 8; ml_i = ml_i + 1) { push(ml_m, { x: 0.0, y: 0.0, vx: 0.0, vy: 0.0 }); }
+int ml_w = 0;
+while (ml_w < 5) {
+    for (int ml_j = 0; ml_j < 8; ml_j = ml_j + 1) { ml_m[ml_j].x = ml_m[ml_j].x + toFloat(ml_w); }
+    ml_w = ml_w + 1;
+}
+float ml_mtop = 0.0;
+int ml_mi = 0;
+while (ml_mi < 8) { ml_mtop = ml_mtop + ml_m[ml_mi].x; ml_mi = ml_mi + 1; }
+float s_mtop = ml_mtop;
+
+func run_terfi_float() { assert_close(s_top, 500.0, 0.000001); }
+func run_fonksiyon_global() {
+    assert_eq_int(s_gor, 5050);            // 1+2+...+100: her tur guncel deger
+    assert_eq_int(ml_sayac, 100);
+    assert_close(s_hiz_top, 0.875, 0.000001);   // 0.5 + 0.25 + 0.125
+}
+func run_lambda() {
+    assert_eq_int(s_lsay, 10);
+    assert_eq_int(s_lgor, 20);             // 1 + 3 + 6 + 10
+}
+func run_try() {
+    assert_eq_int(s_tv, 8);                // 1 + 7 tur (firlatmadan once)
+    assert_close(s_tf, 1.75, 0.000001);
+}
+func run_golge() {
+    assert_eq_int(s_golge, 7);
+    assert_eq_int(s_golge_f, 1001);
+}
+func run_struct_dizisi() {
+    // Her eleman: x 10 adimda vx=1 ile ilerler, 60'i gecince yon degistirir;
+    // y = 10 * (i % 3). Beklenen toplam ayni kurallarla elle hesaplanir.
+    float bek = 0.0;
+    for (int i = 0; i < 64; i = i + 1) {
+        float x = toFloat(i);
+        float vx = 1.0;
+        for (int s = 0; s < 10; s = s + 1) {
+            x = x + vx;
+            if (x > 60.0) { vx = 0.0 - vx; }
+        }
+        bek = bek + x + 10.0 * toFloat(i % 3);
+    }
+    assert_close(s_psum, bek, 0.000001);
+}
+func run_cagri_buyutur() {
+    assert_eq_int(len(ml_g), 201);
+    assert_close(s_gtop, 200.0 * 2.0 + 19900.0, 0.000001);
+}
+func run_yeniden_baglama() { assert_close(s_rtop, 19.0, 0.000001); }
+func run_takma_ad() { assert_close(s_ctop, 22.0, 0.000001); }   // (5+6)*2
+func run_ic_ice() { assert_close(s_mtop, 80.0, 0.000001); }     // 8 * (0+1+2+3+4)
+
+// ---- 11) sinir disi: onbellekli dongude de calisma zamani HATASI ----------
+// Dongu `i <= len(a)`: son turda a[len] — onbellekli yol yavas yola dusup
+// hatayi firlatmali (sessiz 0 / cop yok). Yazilan tur sayisi YEREL bir
+// sayacta DEGIL dizide tutuluyor: try govdesinde degisip firlatilan yerel
+// setjmp/longjmp yuzunden eski degerine donuyor (onceden var olan hata,
+// docs/mindmap/Tuzaklar.md 7i) — o hata bu testin konusu degil.
+func run_sinir_disi() {
+    MlP[] a = [{ x: 0.0, y: 0.0, vx: 0.0, vy: 0.0 }, { x: 0.0, y: 0.0, vx: 0.0, vy: 0.0 }];
+    bool yakalandi = false;
+    int[] yazilan = [0];
+    try {
+        for (int i = 0; i <= len(a); i = i + 1) {
+            a[i].x = 3.0;
+            yazilan[0] = yazilan[0] + 1;
+        }
+    } catch (e) {
+        yakalandi = true;
+    }
+    assert(yakalandi, "a[len] onbellekli dongude hata vermeli");
+    assert_eq_int(yazilan[0], 2);
+    assert_close(a[0].x + a[1].x, 6.0, 0.000001);
+}
+
+// ---- 12) fonksiyon parametresi struct dizisi + while ----------------------
+func ml_ilerle(MlP[] ps, int n) {
+    int i = 0;
+    while (i < n) { ps[i].x = ps[i].x + ps[i].vx; i = i + 1; }
+}
+func run_parametre() {
+    MlP[] a = [];
+    for (int i = 0; i < 5; i = i + 1) { push(a, { x: 0.0, y: 0.0, vx: toFloat(i), vy: 0.0 }); }
+    ml_ilerle(a, 5);
+    ml_ilerle(a, 5);
+    float t = 0.0;
+    for (int i = 0; i < 5; i = i + 1) { t = t + a[i].x; }
+    assert_close(t, 20.0, 0.000001);
+}
+
+print("=== ust duzey main-yereli + struct dizisi onbellegi ===");
+test("yalniz main'de gorulen float terfi edilir", "run_terfi_float");
+test("dongude cagrilan fonksiyon global'i degistirir", "run_fonksiyon_global");
+test("lambda ust duzey degiskeni yazar", "run_lambda");
+test("try govdesinde degisip firlatilan", "run_try");
+test("golgeleyen yerel ust duzeyi ezmez", "run_golge");
+test("ust duzey struct dizisi (onbellekli dongu)", "run_struct_dizisi");
+test("cagri diziyi buyutur: onbellek yok", "run_cagri_buyutur");
+test("dizi dongude yeniden baglanir", "run_yeniden_baglama");
+test("takma ad: ayni dizi iki ad", "run_takma_ad");
+test("ic ice dongu + while", "run_ic_ice");
+test("sinir disi onbellekli dongude hata", "run_sinir_disi");
+test("parametre struct dizisi + while", "run_parametre");
+test_summary();
