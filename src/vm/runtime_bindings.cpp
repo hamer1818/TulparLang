@@ -404,6 +404,12 @@ typedef struct AOTFnRef {
   ObjString str;            // ILK alan: &kayit == &kayit.str
   void (*fp)(VMValue *);    // kutulu giris noktasi
   int arity;                // kullanici parametre sayisi
+  // Tumu-int yerel ABI'li hedefin CIPLAK giris noktasi (`i64 f(i64, ...)`),
+  // yoksa nullptr. call() satir ici yolu argumanlarin hepsi INT ise kutulu
+  // sarmalayiciyi (`tb_<ad>`: arguman yuklemesi + float kirpma + ikinci
+  // cagri + sonuc yuvasi) atlayip bunu dogrudan cagirir (2026-10-01,
+  // benchmarks/fair/callfn). aot_register_func_native ile kaydedilir.
+  void *nfp;
 } AOTFnRef;
 
 #define AOT_FNREF_MAX 1024  // codegen fonksiyon tavani 512 (kMaxFunctions)
@@ -418,10 +424,25 @@ AOTFnRef aot_fnref_pool[AOT_FNREF_MAX];
 static_assert(sizeof(ObjString) == 56, "ObjString 56 bayt (call() hizli yolu)");
 static_assert(offsetof(AOTFnRef, fp) == 56, "AOTFnRef::fp @56 (call() hizli yolu)");
 static_assert(offsetof(AOTFnRef, arity) == 64, "AOTFnRef::arity @64 (call() hizli yolu)");
-static_assert(sizeof(AOTFnRef) == 72 && AOT_FNREF_MAX == 1024,
-              "havuz 1024 x 72 bayt (call() hizli yolu)");
+static_assert(offsetof(AOTFnRef, nfp) == 72, "AOTFnRef::nfp @72 (call() yerel int yolu)");
+static_assert(sizeof(AOTFnRef) == 80 && AOT_FNREF_MAX == 1024,
+              "havuz 1024 x 80 bayt (call() hizli yolu)");
 #endif
 static int g_fnref_count = 0;              // g_call_cache_mu altinda yazilir
+
+// Kutulu giris noktasi -> ciplak yerel int giris noktasi (aot_register_func_native).
+// main'in girisinde, aot_fn_ref'ten ONCE doldurulur; aot_fn_ref havuz kaydini
+// kurarken buradan okur. Kayit yalniz eklenir.
+#define AOT_NATIVE_MAX 1024
+static void *g_native_boxed[AOT_NATIVE_MAX];
+static void *g_native_bare[AOT_NATIVE_MAX];
+static int g_native_count = 0;             // g_call_cache_mu altinda yazilir
+
+static void *native_of_boxed_locked(void *boxed) {
+  for (int i = 0; i < g_native_count; i++)
+    if (g_native_boxed[i] == boxed) return g_native_bare[i];
+  return nullptr;
+}
 static std::atomic<long long> g_fnref_fast_calls{0};
 
 static inline AOTFnRef *fnref_of(const Obj *o) {
@@ -435,7 +456,9 @@ static inline AOTFnRef *fnref_of(const Obj *o) {
 // main'in girisinde aot_register_func'lar bittikten SONRA cagrilir (ilk
 // degerlendirmede), sonucu site global'inde onbelleklenir.
 extern "C" ObjString *aot_intern_string(const char *chars, int length);
+static inline int fnref_tani_acik(void);
 extern "C" ObjString *aot_fn_ref(const char *name, int len) {
+  (void)fnref_tani_acik();
   if (!name || len < 0) return aot_intern_string("", 0);
   uint32_t h = aot_call_hash(name, (size_t)len);
   int arity = -1;
@@ -465,16 +488,27 @@ extern "C" ObjString *aot_fn_ref(const char *name, int len) {
   e->str.hash = 0;
   e->fp = fp;
   e->arity = arity;
+  e->nfp = native_of_boxed_locked((void *)fp);
   return &e->str;
 }
 
 // Tani: havuz uzerinden (ad aramasiz) kac call() kostu. Pozitif kontrol icin
 // TULPAR_CALL_TANI=1 ile surec sonunda stderr'e basilir (tests/call_fnref.sh).
+// `yerel=N`: ciplak yerel int giris noktasi (nfp) tasiyan havuz kaydi sayisi —
+// codegen'in satir ici yerel int yolunun kullanabilecegi hedefler
+// (tests/call_yerel_int.sh). Satir ici cagrilar sayilmaz (runtime'a hic
+// ugramiyorlar); yerel=0 iken satir ici yol hep kutulu sarmalayiciya duser.
 static void fnref_tani_bas(void) {
-  std::fprintf(stderr, "call-tani: havuz=%d hizli=%lld\n", g_fnref_count,
-               g_fnref_fast_calls.load(std::memory_order_relaxed));
+  int yerel = 0;
+  for (int i = 0; i < g_fnref_count; i++)
+    if (g_fnref_pool[i].nfp) yerel++;
+  std::fprintf(stderr, "call-tani: havuz=%d hizli=%lld yerel=%d\n", g_fnref_count,
+               g_fnref_fast_calls.load(std::memory_order_relaxed), yerel);
 }
-static inline void fnref_count_fast(void) {
+// TULPAR_CALL_TANI acik mi; ilk sorguda atexit kaydi. Hem havuz kaydi
+// kurulurken hem runtime havuz cagrisinda sorulur — yalniz satir ici
+// cagrilan program da tani basar.
+static inline int fnref_tani_acik(void) {
   static std::atomic<int> tani{-1};
   int t = tani.load(std::memory_order_relaxed);
   if (UNLIKELY(t < 0)) {
@@ -483,7 +517,10 @@ static inline void fnref_count_fast(void) {
     int beklenen = -1;
     if (tani.compare_exchange_strong(beklenen, t) && t) atexit(fnref_tani_bas);
   }
-  if (UNLIKELY(t)) g_fnref_fast_calls.fetch_add(1, std::memory_order_relaxed);
+  return t;
+}
+static inline void fnref_count_fast(void) {
+  if (UNLIKELY(fnref_tani_acik())) g_fnref_fast_calls.fetch_add(1, std::memory_order_relaxed);
 }
 
 // call()'in ilk argumani dizgi degilse: kapanis (lambda / yakalayan ic
@@ -701,6 +738,21 @@ extern "C" void aot_register_func(const char *name, void *ptr, int arity) {
   size_t len = strlen(name);
   uint32_t hash = aot_call_hash(name, len);
   aot_call_cache_insert(name, len, hash, (void (*)(VMValue *))ptr, arity);
+}
+
+// Tumu-int yerel ABI'li fonksiyonun kutulu sarmalayicisi (`tb_<ad>`) ile
+// ciplak giris noktasini (`i64 <ad>(i64, ...)`) eslestirir. Codegen bunu
+// aot_register_func'in hemen ardindan yayar; havuz kaydinin `nfp` alani
+// buradan dolar. Tavan (1024) codegen'in fonksiyon tavanindan (512) buyuk;
+// yine de dolarsa kayit yapilmaz ve call() kutulu yoldan (dogru) gider.
+extern "C" void aot_register_func_native(void *boxed, void *bare) {
+  if (!boxed || !bare) return;
+  std::lock_guard<std::mutex> guard(g_call_cache_mu);
+  if (native_of_boxed_locked(boxed)) return;
+  if (g_native_count >= AOT_NATIVE_MAX) return;
+  g_native_boxed[g_native_count] = boxed;
+  g_native_bare[g_native_count] = bare;
+  g_native_count++;
 }
 
 // Bir Tulpar fonksiyonunu ADIYLA coz — CAGIRMADAN ve AYIRMADAN. Gomen (embedder)

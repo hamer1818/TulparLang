@@ -1,0 +1,97 @@
+// call(f, ...) YEREL INT YOLU — anlam paketi (2026-10-01).
+//
+// Tumu-int `func f(int x): int` yerel (i64) ABI'li. call() satir ici yolu
+// hedefin ciplak giris noktasi kayitliysa ve argumanlarin HEPSI calisma
+// zamaninda INT ise kutulu sarmalayiciyi (tb_<ad>) atlayip `i64 f(i64)`yi
+// dogrudan cagiriyor (src/aot/llvm_backend.cpp "YEREL INT YOLU"). Sarmalayici
+// INT olmayan argumani kendi kurallariyla ceviriyor (float kirpilir, bool
+// 0/1); o argumanlar kutulu yola gitmeli ve sonuc ESKISIYLE ayni kalmali.
+// Yolun gercekten kullanildigini tests/call_yerel_int.sh sinar (IR + tani);
+// burasi ANLAMIN degismedigini sinar. TULPAR_NO_CALL_NATIVE=1 ile de ayni
+// paket yesil olmali (iki yol ayni sonucu vermeli).
+import "test";
+
+func ci_bir(int x): int { return (x * 31 + 7) % 1000003; }
+func ci_iki(int x): int { return (x * 17 + 3) % 1000003; }
+func ci_sifir(): int { return 42; }
+func ci_topla(int a, int b): int { return a - b; }
+func ci_sekiz(int a, int b, int c, int d, int e, int f, int g, int h): int {
+    return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h;
+}
+func ci_fakt(int n): int {
+    if (n <= 1) { return 1; }
+    return n * call(ci_fakt, n - 1);
+}
+func ci_firlat(int x): int {
+    if (x > 5) { throw "buyuk"; }
+    return x * 10;
+}
+func ci_tipsiz(a, b) { return a + b; }
+
+func run_tablo() {
+    var tab = [ci_bir, ci_iki];
+    int acc = 1;
+    for (int i = 0; i < 1000; i = i + 1) { acc = call(tab[acc & 1], acc); }
+    // Ayni zincir dogrudan cagrilarla:
+    int bek = 1;
+    for (int i = 0; i < 1000; i = i + 1) {
+        if ((bek & 1) == 0) { bek = ci_bir(bek); } else { bek = ci_iki(bek); }
+    }
+    assert_eq_int(acc, bek);
+}
+
+func run_arite() {
+    assert_eq_int(call(ci_sifir), 42);
+    assert_eq_int(call(ci_topla, 10, 3), 7);
+    assert_eq_int(call(ci_topla, -5, 8), -13);
+    assert_eq_int(call(ci_sekiz, 1, 2, 3, 4, 5, 6, 7, 8), 204);
+}
+
+func run_int_olmayan() {
+    // float argumani: sarmalayici kirpar (2.9 -> 2) — yerel yola GITMEMELI.
+    assert_eq_int(call(ci_bir, 2.9), ci_bir(2));
+    assert_eq_int(call(ci_topla, 7.5, 2), 5);
+    // bool argumani: sarmalayicinin cevirisi (true -> 1).
+    assert_eq_int(call(ci_bir, true), ci_bir(1));
+}
+
+func run_arite_farki() {
+    // Eksik arguman: runtime yolu VOID doldurur (0 gibi davranir).
+    assert_eq_int(call(ci_topla, 10), 10);
+}
+
+func run_ozyineleme() { assert_eq_int(call(ci_fakt, 10), 3628800); }
+
+func run_firlatma() {
+    assert_eq_int(call(ci_firlat, 3), 30);
+    string yakalanan = "";
+    try { call(ci_firlat, 9); } catch (e) { yakalanan = e; }
+    assert_eq_str(yakalanan, "buyuk");
+}
+
+func run_buyuk_sayi() {
+    assert_eq_int(call(ci_topla, 9000000000000000000, -1), 9000000000000000001);
+}
+
+func run_tipsiz_hedef() {
+    // Yerel ABI'li olmayan hedef: kutulu yol, dizgi birlestirme dahil.
+    assert_eq_int(call(ci_tipsiz, 2, 3), 5);
+    assert_eq_str(call(ci_tipsiz, "a", "b"), "ab");
+}
+
+func run_sonuc_float_baglamda() {
+    float f = call(ci_topla, 7, 2) * 0.5;   // (7 - 2) * 0.5
+    assert_close(f, 2.5, 0.000001);
+}
+
+print("=== call(f, ...) yerel int yolu ===");
+test("tablodan dolayli cagri zinciri", "run_tablo");
+test("arite 0, 2, 8", "run_arite");
+test("int olmayan arguman (float kirpma, bool)", "run_int_olmayan");
+test("arite farki VOID doldurma", "run_arite_farki");
+test("call ile oz-yineleme", "run_ozyineleme");
+test("yerel yoldan throw", "run_firlatma");
+test("buyuk int", "run_buyuk_sayi");
+test("tipsiz hedef kutulu yolda", "run_tipsiz_hedef");
+test("sonuc float baglamda", "run_sonuc_float_baglamda");
+test_summary();

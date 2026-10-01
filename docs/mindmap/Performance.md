@@ -1145,6 +1145,41 @@ maliyeti ayrı iş).
 Yan ürün: `call()` kapanış da alıyor (`aot_call_closure`'a, `cl(a)` ile aynı
 sözleşme). Eskiden "call() string bekler".
 
+### İkinci adım: tümü-int hedefte sarmalayıcısız yol — 174 → 65,5 ms (2026-10-01)
+
+Kalan farkı IR'den okuyunca (callfn döngüsü, LLVM 23 -O3): `acc` zaten
+döngüde yazmaçta (phi; tur başına yalnız global'e bir saklama), yani "üst
+düzey global" kalan farkın küçük parçası. Asıl bağımlılık zinciri
+`tb_f`'te: argüman yuvaya yazılıp sarmalayıcıda geri okunuyor
+(saklama→yükleme iletimi), INT/FLOAT çevirisi `fptosi` + `select` olarak
+zincirde, ikinci çağrı (`tb_f` → `f`, `noinline`), sonuç yine yuvaya yazılıp
+okunuyor ve çağıranda ikinci `fptosi`/`select`. C'de zincir `and → yükle →
+çağır → f`.
+
+Düzeltme: havuz kaydına (`AOTFnRef`) çıplak giriş noktası `nfp` (@72, kayıt
+80 bayt) eklendi; main'in girişi tümü-int her hedef için
+`aot_register_func_native(tb_f, f)` çağırıyor. Satır içi yol arite
+tuttuğunda `nfp` doluysa ve argümanların HEPSİ çalışma zamanında INT ise
+`i64 f(i64)`yi doğrudan çağırıyor, sonucu INT olarak kutuluyor; LLVM
+statik INT argümanın etiket sınavını katlıyor ve sonuç tarafında
+jump-threading ile `fptosi`/`select`i yalnız kutulu yola bırakıyor. INT
+olmayan argüman (float → kırpma, bool) sarmalayıcıya gidiyor: anlam aynı.
+
+| (Ryzen 7 9800X3D, `taskset -c 10,11`, en iyi 7–11) | önce | sonra |
+|---|---:|---:|
+| `callfn` (tablodan) | 174,0 | **65,5** (koşuma göre 65–76) |
+| `call(f, acc)` 20M (doğrudan) | 145,5 | **58,2** |
+| aynı düzenekte C: gcc -O2 / clang -O2 | 91,4 / 58,2 | |
+
+Tulpar'ın gcc C'sinden hızlı çıkması bir dil iddiası değil: iki C
+derleyicisinin döngüsü komut komut aynı (`and`, `call *(%r12,%rax,8)`),
+fark `f`/`g` gövdelerinde ve yerleşimde; hedefi veriye bağlı dolaylı çağrı
+dal tahminine duyarlı. İddia "C sınıfında". Kalan: `acc` main yereli olunca
+63,5 ms (`TULPAR_MAIN_LOCALS_ALL=1`), ama `int` kuralı elek yüzünden global.
+Kapılar: `tests/call_yerel_int.sh` (IR + runtime tanısı `yerel=N`, iki
+bağımsız ayak; `TULPAR_NO_CALL_NATIVE=1` pozitif kontrol; iki sabotajla
+kırmızı) ve `tests/call_yerel_int.test.tpr` (iki yol aynı sonuç).
+
 ## Float dizisi: double depo + iç içe döngüde kanıtlı erişim (2026-10-01)
 
 Hız karnesinde `matmul` C'nin 26, `nbody` 11 katıydı (2026-09-29); dizisiz

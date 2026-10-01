@@ -19,7 +19,8 @@
 #      site basina tek `aot_fn_ref` var, referans icin `vm_alloc_string_aot`
 #      YOK.
 #   3. RUNTIME HAVUZ YOLU SAYILIYOR: TULPAR_CALL_TANI=1 surec sonunda
-#      `call-tani: havuz=H hizli=K` basar. Sonda arite FARKLI (VOID doldurma)
+#      `call-tani: havuz=H hizli=K yerel=Y` basar (Y: yerel int giris
+#      noktasi tasiyan kayit; buradaki `h` tipsiz, Y = 0). Sonda arite FARKLI (VOID doldurma)
 #      havuz cagrisini tam 1000 kez yapar -> K = 1000; duz dizgi adla yapilan
 #      1000 cagri SAYILMAMALI (sayac ayirt ediyor mu — kapinin kendi kontrolu).
 set -u
@@ -104,8 +105,8 @@ fi
 SOUT=$(TULPAR_CALL_TANI=1 "$TMP/sayac" 2>"$TMP/s.err" | tr -d '\r')
 TANI=$(tr -d '\r' < "$TMP/s.err")
 [ "$SOUT" = "2000" ] || { echo "  sayac sondasi ciktisi '$SOUT' (beklenen 2000)"; HATA=1; }
-if ! echo "$TANI" | grep -qE "^call-tani: havuz=[1-9][0-9]* hizli=1000$"; then
-  echo "  beklenen 'call-tani: havuz=H hizli=1000' yok; gelen: '$TANI'"; HATA=1
+if ! echo "$TANI" | grep -qE "^call-tani: havuz=[1-9][0-9]* hizli=1000 yerel=0$"; then
+  echo "  beklenen 'call-tani: havuz=H hizli=1000 yerel=0' yok; gelen: '$TANI'"; HATA=1
 fi
 SESSIZ=$("$TMP/sayac" 2>&1 >/dev/null | grep -c "call-tani" || true)
 [ "$SESSIZ" -eq 0 ] || { echo "  anahtar KAPALIYKEN tani basildi"; HATA=1; }
