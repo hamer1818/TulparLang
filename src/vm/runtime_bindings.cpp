@@ -1244,6 +1244,9 @@ static_assert(offsetof(ObjArray, items_) == 28, "ObjArray::items_ @28 olmali (32
 static_assert(offsetof(ObjArray, idata) == 32, "ObjArray::idata @32 olmali (32-bit)");
 static_assert(offsetof(ObjArray, elem_bits) == 36, "ObjArray::elem_bits @36 olmali (32-bit)");
 #endif
+// Codegen ayni sabiti kullanir (llvm_backend.cpp kArrElemF64).
+static_assert(ARR_ELEM_F64 == -64, "ARR_ELEM_F64 codegen'deki kArrElemF64 ile ayni olmali");
+static_assert(sizeof(double) == sizeof(long long), "double depo idata yuvasina sigmali");
 // P1.1 tipli struct dizisi: eleman erisimi SATIR ICI (llvm_backend.cpp
 // sarr_elem_ptr) — `count` ve `data` alanlarini GEP ile okuyor. Ayni
 // gerekce, ayni iki duzen.
@@ -1336,6 +1339,9 @@ void arr_debox(ObjArray *a) {
   if (a->elem_bits == 32) {
     const int32_t *src = (const int32_t *)a->idata;
     for (int i = 0; i < n; i++) boxed[i] = VM_INT((long long)src[i]);
+  } else if (a->elem_bits == ARR_ELEM_F64) {
+    const double *src = (const double *)a->idata;
+    for (int i = 0; i < n; i++) boxed[i] = VM_FLOAT(src[i]);
   } else {
     for (int i = 0; i < n; i++) boxed[i] = VM_INT(a->idata[i]);
   }
@@ -2207,6 +2213,8 @@ VMValue vm_array_get(ObjArray *array, int index) {
   if (array && array->idata && index >= 0 && index < array->count) {
     if (array->elem_bits == 32)
       return VM_INT((long long)((const int32_t *)array->idata)[index]);
+    if (array->elem_bits == ARR_ELEM_F64)
+      return VM_FLOAT(((const double *)array->idata)[index]);
     return VM_INT(array->idata[index]);
   }
   if (!array || index < 0 || index >= array->count) {
@@ -2222,7 +2230,14 @@ void vm_array_set(ObjArray *array, int index, VMValue value) {
     value = wb_persist_escape((Obj *)array, value);
   // Kutusuz diziye TAMSAYI yazmak da kutulamayi gerektirmiyor. i32 depoya
   // sigmayan deger once GENISLETIYOR (kutulamiyor).
-  if (array && array->idata && IS_INT(value) && index >= 0 &&
+  // Double depoya FLOAT yazmak da kutulamiyor; baska her tur asagidaki
+  // arr_items() ile diziyi kutuya cevirir (eleman turu korunur).
+  if (array && array->idata && array->elem_bits == ARR_ELEM_F64) {
+    if (IS_FLOAT(value) && index >= 0 && index < array->count) {
+      ((double *)array->idata)[index] = AS_FLOAT(value);
+      return;
+    }
+  } else if (array && array->idata && IS_INT(value) && index >= 0 &&
       index < array->count) {
     long long iv = AS_INT(value);
     if (array->elem_bits == 32 && (long long)(int32_t)iv != iv)
@@ -2906,8 +2921,31 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
     // Write barrier: a transient item pushed into a persistent array is
     // deep-copied so it outlives the per-request arena_restore.
     item = wb_persist_escape((Obj *)arr, item);
+    // Kutusuz double dizi + float deger: kutuya donmeden ekle (int dizinin
+    // 64-bit yolu ile ayni buyume; eleman 8 bayt).
+    if (arr->idata && arr->elem_bits == ARR_ELEM_F64 && IS_FLOAT(item)) {
+      if (arr->count >= arr->capacity) {
+        int new_cap = arr->capacity < 8 ? 8 : arr->capacity * 2;
+        if (new_cap <= arr->count) new_cap = arr->count + 1;
+        size_t nb = sizeof(double) * (size_t)new_cap;
+        long long *ni;
+        if (arr->obj.arena_allocated) {
+          ni = (long long *)aot_arena_alloc(nb);
+          if (ni && arr->count > 0)
+            memcpy(ni, arr->idata, sizeof(double) * (size_t)arr->count);
+        } else {
+          ni = (long long *)realloc(arr->idata, nb);
+        }
+        if (!ni) { arr_debox(arr); }   // buyutulemedi: kutulu yola dus
+        else { arr->idata = ni; arr->capacity = new_cap; }
+      }
+      if (arr->idata) {
+        ((double *)arr->idata)[arr->count++] = AS_FLOAT(item);
+        return;
+      }
+    }
     // Kutulanmamis dizi + int deger: kutuya donmeden ekle.
-    if (arr->idata && IS_INT(item)) {
+    if (arr->idata && arr->elem_bits != ARR_ELEM_F64 && IS_INT(item)) {
       long long iv = AS_INT(item);
       if (arr->elem_bits == 32 && (long long)(int32_t)iv != iv)
         aot_arr_widen(arr);
@@ -3297,6 +3335,13 @@ extern "C" VMValue aot_array_remove_at(VMValue arr, VMValue index) {
       int32_t *d = reinterpret_cast<int32_t *>(a->idata);
       VMValue out = VM_INT((long long)d[idx]);
       if (tail) memmove(d + idx, d + idx + 1, tail * sizeof(int32_t));
+      a->count--;
+      return out;
+    }
+    if (a->elem_bits == ARR_ELEM_F64) {
+      double *d = reinterpret_cast<double *>(a->idata);
+      VMValue out = VM_FLOAT(d[idx]);
+      if (tail) memmove(d + idx, d + idx + 1, tail * sizeof(double));
       a->count--;
       return out;
     }
@@ -5018,6 +5063,42 @@ VMValue aot_array_fill_ptr(VMValue *n_ptr, VMValue *val_ptr) {
         arr->elem_bits = bits;
         arr->idata = id;
         arr->items_ = nullptr;   // kutulu depo YOK: kacirilan her yol gurultuyle patlar
+        arr->capacity = (int)n;
+        arr->count = (int)n;
+        return VM_OBJ((Obj *)arr);
+      }
+    }
+    // KUTUSUZ DOUBLE DEPO (2026-10-01): float dolgu, eleman basina 16 yerine
+    // 8 bayt ham double (ARR_ELEM_F64). matmul/nbody'nin depolama yarisi;
+    // codegen'in float dongu surumu (llvm_backend.cpp, "FLOAT DIZI DONGU
+    // SURUMU") bu depoyu sinar. Kapatma anahtari TULPAR_NO_F64=1 (A/B
+    // olcumu ve pozitif kontrol: kapaliyken dizi kutulu kalir, surum hic
+    // acilmaz — tests/float_dizi.sh iki yonu de olcer).
+    if (IS_FLOAT(item)) {
+      static int no_f64 = -1;
+      if (no_f64 < 0) {
+        const char *e = getenv("TULPAR_NO_F64");
+        no_f64 = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+      }
+      double fv = AS_FLOAT(item);
+      size_t fbytes = sizeof(double) * (size_t)n;
+      // +0.0 dolgusu bit deseni sifir: calloc yeter (int yolundaki not).
+      // -0.0 bit deseni sifir DEGIL; o yuzden deger degil BIT sinaniyor.
+      long long fbits;
+      memcpy(&fbits, &fv, sizeof fbits);
+      bool zero_fill = (fbits == 0 && !arr->obj.arena_allocated);
+      double *fd = nullptr;
+      if (!no_f64)
+        fd = arr->obj.arena_allocated
+                 ? (double *)aot_arena_alloc(fbytes)
+                 : (zero_fill ? (double *)calloc((size_t)n, sizeof(double))
+                              : (double *)malloc(fbytes));
+      if (fd) {
+        if (!zero_fill)
+          for (long long i = 0; i < n; i++) fd[i] = fv;
+        arr->elem_bits = ARR_ELEM_F64;
+        arr->idata = (long long *)fd;
+        arr->items_ = nullptr;
         arr->capacity = (int)n;
         arr->count = (int)n;
         return VM_OBJ((Obj *)arr);

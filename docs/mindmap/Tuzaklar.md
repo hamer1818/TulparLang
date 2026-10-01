@@ -2016,6 +2016,32 @@ Nöbetçi: `benchmarks/fair/shapes.py` — dört erişim şekli, C tabanıyla,
 çıktı mutabakatlı; "en pahalı şekil oku-yaz" sıralamasını kilitliyor
 (S11 kararının dayanağı).
 
+## 7i. Sıcak döngü bayt bayt aynı, program %2 yavaş — hizalama, kod değil
+
+Float dizi PR'ı (2026-10-01) elekte (`sieve`, 5M) tutarlı bir gerileme
+gösterdi: 40 tur dönüşümlü A/B, taban **7,56** → yeni **7,69** ms (en iyi),
+ortanca 7,69 → 7,86. Değişiklik eleğin döngüsüne dokunmuyordu; `objdump` iki
+ikilinin iç ve dış döngüsünü **komut komut aynı** gösterdi, yalnız adresler
+16 bayt kaymıştı (soğuk yazma yolundaki yeni dal). Ayrıştırma:
+
+| ikili | iç döngü adresi (mod 64) | ms (en iyi) |
+|---|---|---|
+| taban | 0x10 | 7,54–7,61 |
+| taban + 2 satır önek | 0x00 | 7,48 |
+| yeni | **0x20** | 7,69–7,76 |
+| yeni + 2 satır önek | **0x20** | 7,65 |
+| yeni + 1 satır önek | 0x30 | 7,57 (taban 7,60) |
+| yeni + farklı önek | 0x10 | 7,53 (taban 7,56) |
+| taban derleyici + YENİ runtime arşivi | 0x10 | 7,58 (taban 7,54) |
+
+Yani "gerileme" iç döngünün 64 baytlık çizgide 0x20'ye düşmesi; aynı derleyici
+kaynağın önüne bir satır eklenince farkı sıfırlıyor, runtime değişikliği
+tek başına etkisiz. **Kural:** %1–3'lük bir farkı "gerileme" diye yazmadan önce
+(1) sıcak döngünün makine kodunu iki ikilide karşılaştır, (2) aynı derleyiciyle
+kaynağa zararsız bir önek koyup hizalamayı kaydır. Kod aynı ve fark hizalamayla
+gelip gidiyorsa ölçülen şey derleyici değil yerleşimdir — ve ters yönde de
+geçerli: hizalama şansıyla gelen %2 "kazanç" da kazanç değildir.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

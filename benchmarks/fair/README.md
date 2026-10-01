@@ -283,8 +283,8 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `callfn` | 298,6 → **209,6** (2026-10-01) | 91,1 | 2,3× | 8. |
 | `parse` | 196,3 → **126,2** (2026-10-01) | 56,7 | 2,2× | 6. → **4.** |
 | `particles` | 329,6 | 42,2 | 7,8× | 8. |
-| `nbody` | 1304,8 | 114,5 | 11,4× | 8. |
-| `matmul` | 821,3 | 31,1 | 26,4× | 8. |
+| `nbody` | 1304,8 → **187,3** (2026-10-01) | 114,5 | 11,4× → **1,6×** | 8. → **7.** |
+| `matmul` | 821,3 → **37,1** (2026-10-01) | 31,1 | 26,4× → **1,2×** | 8. → **4.** |
 | `hashmap` | > 60 s → **170,3** (2026-10-01) | 72,7 | 2,3× | 9. → **2.** |
 
 Bulgular, sırayla ele alınması önerilen:
@@ -294,9 +294,19 @@ Bulgular, sırayla ele alınması önerilen:
    (12 500 anahtar 0,25 s, 50 000 3,8 s, 1M zaman aşımı). 16+ anahtarlı
    nesneye yazma yollarında kurulan hash indeksi eklendi: 1M anahtar
    **170 ms**, dokuz dil arasında 2. Tepe bellek hâlâ yüksek (450 MB, C 66).
-2. **Float dizileri** (`matmul`, `nbody`) 11 Eylül'den beri yerinde sayıyor;
-   dizisiz `mandelbrot` C ile başa baş, yani sorun aritmetik değil depolama ve
-   iç içe döngüde kanıtlı erişim. `matmul`'ün belleği de C'nin iki katı.
+2. ~~**Float dizileri** (`matmul`, `nbody`) 11 Eylül'den beri yerinde
+   sayıyor.~~ **Kapandı (2026-10-01):** sorun aritmetik değil depolama ve iç
+   içe döngüde kanıtlı erişimdi — `float[]` 16 baytlık VMValue tutuyordu ve
+   kanıtlı erişim yalnız tamsayı dizide, yalnız en dış döngüde vardı
+   (matmul'ün sıcak döngüsü üçüncü seviyede). Artık `array_fill(n, 0.0)`
+   ham double tutuyor ve en içteki döngü, hangi derinlikte olursa olsun,
+   `X[B + j]` erişimleri için döngü başında bir kez sınanıp sürümleniyor;
+   `sqrt` satır içi. `matmul` 820 → **37,1 ms** (1,2× C, iç döngü
+   vektörleşiyor; tepe bellek 22,1 → 12,3 MB, C 11,8), `nbody` 1301 →
+   **187,3 ms** (1,6× C). Sıralar 2026-09-29 tablosunun öteki dillerine
+   göre. Kalan nbody farkı döngü girişi: beş cisimde iç döngü 0–4 tur
+   dönüyor ve her girişte yedi dizinin deposu yeniden sınanıyor (bkz.
+   Performance.md).
 3. **`particles`** (oyun döngüsü) C'nin 7,8 katı. Aynı kod bir fonksiyonun
    içine alınınca 185 ms (4,4×): üst düzey değişkenler global ve her erişim
    bellekten geçiyor; kalan fark struct dizisi alan erişiminde.

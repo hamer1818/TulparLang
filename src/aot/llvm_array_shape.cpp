@@ -1093,3 +1093,364 @@ extern "C" int tulpar_struct_var_escapes(ASTNode_C *fn, ASTNode_C *decl,
   esc_children(fn, c, 0);
   return c.esc ? 1 : 0;
 }
+
+// ===========================================================================
+// FLOAT DIZI DONGU SURUMU (2026-10-01) — cozumleme tarafi.
+//
+// Neden: `matmul` C'nin 26, `nbody` 11 kati yavasti (2026-09-29). Sebep
+// olculdu: kanitli erisim yalniz TAMSAYI dizide ve yalniz EN DIS dongude
+// vardi; float dizi her erisimde genel yoldan geciyordu (etiket + nesne turu
+// + sinir + kutu denetimi, 16 baytlik VMValue yuklemesi) ve sonuc dinamik
+// etiketli oldugu icin her aritmetik islem tur dallanmasi uretiyordu.
+//
+// Bu plan EN ICTEKI `for` dongusu icin (govdesinde baska dongu YOK — ic ice
+// surum katlanarak buyumesin; bkz. Performance.md "Ic ice dongu
+// surumlemesi") su kaniti kurar:
+//
+//   * govdedeki HER `X[E]` erisiminde E afin: `j`, `B`, `B + j`, `j + B`
+//     (j dongu degiskeni, B dongu-degismezi int ifadesi: tamsayi sabiti,
+//     dongude yeniden baglanmayan ad, ve bunlarin + - * bilesimi — bolme
+//     YOK, yani B hata uretemez);
+//   * HER eleman yazmasi (`X[E] = v`) KESIN FLOAT: v float sabiti, float
+//     dizi okumasi, govdede `float` bildirilmis ve yalniz float alan yerel,
+//     dongu-degismezi ad (etiketi codegen dongu BASINDA sinar), ya da
+//     bunlarin + - * / bilesimi / tekli eksi / sqrt(...).
+//
+// Sayisal kisim (0 <= B + j < count, dizilerin double depoda olmasi,
+// degismez adlarin etiketi) DERLEME ZAMANINDA bilinemez: codegen onu dongu
+// basinda BIR KEZ sinar ve donguyu surumler. Hizli surumde erisim tek
+// GEP+load/store; genel surum bugunku bekcili yol — sinir disi erisim orada
+// hala HATA verir (tests/float_dizi.sh).
+//
+// KANIT MUHAFAZAKAR: taninmayan her dugum "hayir". Kosul ve artimda dizi
+// erisimi de reddediliyor: son kosul sinavi j == UB ile kosar ve kanit
+// yalniz govdedeki j icin [C, UB) araligini veriyor.
+// ===========================================================================
+namespace {
+
+// Dongude `name` adina (eleman degil, adin KENDISINE) yazan dugum sayisi.
+// tulpar_loop_rebinds_name'den GENIS: `n++` / `n--` de sayiliyor.
+struct FvAssignCtx {
+  const char *name;
+  int count;
+};
+static bool fv_visit_assign(ASTNode_C *n, void *p) {
+  FvAssignCtx *c = (FvAssignCtx *)p;
+  if ((n->type == AST_ASSIGNMENT || n->type == AST_COMPOUND_ASSIGN ||
+       n->type == AST_VARIABLE_DECL || n->type == AST_INCREMENT ||
+       n->type == AST_DECREMENT) &&
+      n->name && strcmp(n->name, c->name) == 0 &&
+      !(n->left && n->left->type == AST_ARRAY_ACCESS))
+    c->count++;
+  return true;
+}
+static int fv_assign_count(ASTNode_C *cond, ASTNode_C *body, ASTNode_C *incr,
+                           const char *name) {
+  FvAssignCtx c{name, 0};
+  walk_all(cond, fv_visit_assign, &c);
+  walk_all(body, fv_visit_assign, &c);
+  walk_all(incr, fv_visit_assign, &c);
+  return c.count;
+}
+
+struct FvNameUse {
+  const char *name;
+  bool used;
+};
+static bool fv_visit_use(ASTNode_C *n, void *p) {
+  FvNameUse *c = (FvNameUse *)p;
+  if (n->name && strcmp(n->name, c->name) == 0) { c->used = true; return false; }
+  return true;
+}
+
+struct FvCtx {
+  ASTNode_C *cond, *body, *incr;
+  const char *ivar;
+  TulparFloatLoopPlan *p;
+  const char *flocal[TULPAR_FV_MAX_INV];   // govdede float bildirilmis yereller
+  int n_flocal;
+  bool bad;
+};
+
+static bool fv_reject(FvCtx *c, const char *why) {
+  if (!c->bad) { c->bad = true; c->p->why = why; }
+  return false;
+}
+
+static bool fv_invariant(FvCtx *c, const char *name) {
+  return name && strcmp(name, c->ivar) != 0 &&
+         fv_assign_count(c->cond, c->body, c->incr, name) == 0;
+}
+
+// Dongu-degismezi INT ifadesi (B / UB): sabit, degismez ad, + - * — bolme ve
+// cagri YOK (B hicbir kosulda hata uretmemeli). `len_ok`: UB icin `len(X)`.
+static bool fv_inv_int(FvCtx *c, ASTNode_C *n, bool len_ok) {
+  if (!n) return false;
+  switch (n->type) {
+  case AST_INT_LITERAL:
+    return true;
+  case AST_IDENTIFIER:
+    return fv_invariant(c, n->name);
+  case AST_UNARY_OP:
+    return n->op == TOKEN_MINUS && fv_inv_int(c, n->left, false);
+  case AST_BINARY_OP:
+    if (n->op != TOKEN_PLUS && n->op != TOKEN_MINUS && n->op != TOKEN_MULTIPLY) return false;
+    return fv_inv_int(c, n->left, false) && fv_inv_int(c, n->right, false);
+  case AST_FUNCTION_CALL:
+    return len_ok && n->name && !n->receiver &&
+           (strcmp(n->name, "len") == 0 || strcmp(n->name, "length") == 0) &&
+           n->argument_count == 1 && n->arguments && n->arguments[0] &&
+           n->arguments[0]->type == AST_IDENTIFIER && fv_invariant(c, n->arguments[0]->name);
+  default:
+    return false;
+  }
+}
+
+static const char *fv_base(ASTNode_C *acc) {
+  if (acc->name) return acc->name;
+  if (acc->left && acc->left->type == AST_IDENTIFIER) return acc->left->name;
+  return nullptr;
+}
+
+static bool fv_is_ivar(FvCtx *c, ASTNode_C *n) {
+  return n && n->type == AST_IDENTIFIER && n->name && strcmp(n->name, c->ivar) == 0;
+}
+
+// Erisimi plana yaz (ya da reddet).
+static bool fv_add_access(FvCtx *c, ASTNode_C *acc) {
+  TulparFloatLoopPlan *p = c->p;
+  for (int k = 0; k < p->n_acc; k++)
+    if (p->acc[k] == acc) return true;
+  const char *base = fv_base(acc);
+  if (!base) return fv_reject(c, "dizi tabani bir ad degil");
+  if (!fv_invariant(c, base)) return fv_reject(c, "dizi dongude yeniden baglaniyor");
+  ASTNode_C *ix = acc->index;
+  ASTNode_C *b = nullptr;
+  int has_j = 0;
+  if (fv_is_ivar(c, ix)) {
+    has_j = 1;
+  } else if (ix && ix->type == AST_BINARY_OP && ix->op == TOKEN_PLUS &&
+             (fv_is_ivar(c, ix->left) || fv_is_ivar(c, ix->right))) {
+    has_j = 1;
+    b = fv_is_ivar(c, ix->left) ? ix->right : ix->left;
+    if (!fv_inv_int(c, b, false)) return fv_reject(c, "indeks afin degil");
+  } else if (fv_inv_int(c, ix, false)) {
+    b = ix;
+  } else {
+    return fv_reject(c, "indeks afin degil");
+  }
+  int ai = -1;
+  for (int k = 0; k < p->n_arr; k++)
+    if (strcmp(p->arr[k], base) == 0) ai = k;
+  if (ai < 0) {
+    if (p->n_arr >= TULPAR_FV_MAX_ARR) return fv_reject(c, "dizi sayisi tavani");
+    ai = p->n_arr;
+    p->arr[p->n_arr++] = base;
+  }
+  if (p->n_acc >= TULPAR_FV_MAX_ACC) return fv_reject(c, "erisim sayisi tavani");
+  p->acc[p->n_acc] = acc;
+  p->acc_base[p->n_acc] = b;
+  p->acc_has_j[p->n_acc] = has_j;
+  p->acc_arr[p->n_acc] = ai;
+  p->n_acc++;
+  return true;
+}
+
+static bool fv_flocal(FvCtx *c, const char *name) {
+  for (int k = 0; k < c->n_flocal; k++)
+    if (strcmp(c->flocal[k], name) == 0) return true;
+  return false;
+}
+
+// KESIN FLOAT ifade mi? (Bkz. ust not.) Degismez ad listeye eklenir; codegen
+// etiketini dongu basinda sinar.
+static bool fv_float_expr(FvCtx *c, ASTNode_C *n) {
+  if (!n) return false;
+  switch (n->type) {
+  case AST_FLOAT_LITERAL:
+    return true;
+  case AST_IDENTIFIER: {
+    if (!n->name) return false;
+    if (fv_flocal(c, n->name)) return true;
+    if (!fv_invariant(c, n->name)) return false;
+    TulparFloatLoopPlan *p = c->p;
+    for (int k = 0; k < p->n_inv; k++)
+      if (strcmp(p->inv_float[k], n->name) == 0) return true;
+    if (p->n_inv >= TULPAR_FV_MAX_INV) return false;
+    p->inv_float[p->n_inv++] = n->name;
+    return true;
+  }
+  case AST_ARRAY_ACCESS:
+    // Plandaki her dizi hizli surumde double depoda: elemani KESIN float.
+    return fv_add_access(c, n);
+  case AST_UNARY_OP:
+    return n->op == TOKEN_MINUS && fv_float_expr(c, n->left);
+  case AST_BINARY_OP:
+    if (n->op != TOKEN_PLUS && n->op != TOKEN_MINUS && n->op != TOKEN_MULTIPLY &&
+        n->op != TOKEN_DIVIDE)
+      return false;
+    return fv_float_expr(c, n->left) && fv_float_expr(c, n->right);
+  case AST_FUNCTION_CALL:
+    // sqrt her zaman FLOAT dondurur (runtime aot_math_sqrt; codegen'in satir
+    // ici hali ayni kurali uyguluyor). Kullanici `sqrt` tanimladiysa dongu
+    // zaten sekil-kararli sayilmaz (shape_pure_call).
+    return n->name && !n->receiver && strcmp(n->name, "sqrt") == 0 &&
+           n->argument_count == 1 && n->arguments && fv_float_expr(c, n->arguments[0]);
+  default:
+    return false;
+  }
+}
+
+static bool fv_visit(ASTNode_C *n, void *p) {
+  FvCtx *c = (FvCtx *)p;
+  if (c->bad) return false;
+  switch (n->type) {
+  case AST_FOR:
+  case AST_WHILE:
+  case AST_FOR_IN:
+    return fv_reject(c, "ic ice dongu (yalniz en icteki dongu surumlenir)");
+  case AST_ARRAY_ACCESS:
+    return fv_add_access(c, n);
+  case AST_ASSIGNMENT:
+    if (n->left && n->left->type == AST_ARRAY_ACCESS) {
+      if (!fv_add_access(c, n->left)) return false;
+      if (!fv_float_expr(c, n->right))
+        return fv_reject(c, "eleman yazmasi kesin float degil");
+    }
+    return true;
+  case AST_COMPOUND_ASSIGN:
+  case AST_INCREMENT:
+  case AST_DECREMENT:
+    if (n->left && n->left->type == AST_ARRAY_ACCESS)
+      return fv_reject(c, "bilesik eleman yazmasi");
+    return true;
+  default:
+    return true;
+  }
+}
+
+static bool fv_has_access(ASTNode_C *n, void *p) {
+  if (n->type == AST_ARRAY_ACCESS) { *(bool *)p = true; return false; }
+  return true;
+}
+
+}  // namespace
+
+extern "C" int tulpar_float_loop_plan(ASTNode_C *init, ASTNode_C *cond,
+                                      ASTNode_C *body, ASTNode_C *incr,
+                                      TulparPureCallFn pure, void *ctx,
+                                      TulparFloatLoopPlan *p) {
+  if (!p) return 0;
+  memset(p, 0, sizeof(*p));
+  p->why = "bicim";
+  if (!init || !cond || !incr || !body) return 0;
+  // init: `int j = <ifade>` — degeri codegen dongu basinda OKUR (C).
+  if (init->type != AST_VARIABLE_DECL || !init->name || !init->right) {
+    p->why = "init `int j = ...` degil";
+    return 0;
+  }
+  const char *ivar = init->name;
+  FvCtx c{cond, body, incr, ivar, p, {}, 0, false};
+  // cond: `j < UB` / `j <= UB`
+  if (cond->type != AST_BINARY_OP ||
+      (cond->op != TOKEN_LESS && cond->op != TOKEN_LESS_EQUAL) ||
+      !fv_is_ivar(&c, cond->left)) {
+    p->why = "kosul `j < UB` degil";
+    return 0;
+  }
+  if (!fv_inv_int(&c, cond->right, true)) {
+    p->why = "ust sinir dongu-degismezi int degil";
+    return 0;
+  }
+  // incr: `j++` / `j = j + K` (0 < K <= 2^31: j + K i64'te tasamaz)
+  bool incr_ok = false;
+  if (incr->type == AST_INCREMENT && incr->name && !incr->left &&
+      strcmp(incr->name, ivar) == 0) {
+    incr_ok = true;
+  } else if (incr->type == AST_ASSIGNMENT && incr->name && !incr->left &&
+             strcmp(incr->name, ivar) == 0 && incr->right &&
+             incr->right->type == AST_BINARY_OP && incr->right->op == TOKEN_PLUS &&
+             fv_is_ivar(&c, incr->right->left) && incr->right->right &&
+             incr->right->right->type == AST_INT_LITERAL &&
+             incr->right->right->value.int_value > 0 &&
+             incr->right->right->value.int_value <= 2147483648LL) {
+    incr_ok = true;
+  }
+  if (!incr_ok) { p->why = "artim `j++` / `j = j + K` degil"; return 0; }
+  // j yalniz artimda degisir.
+  if (fv_assign_count(nullptr, body, nullptr, ivar) != 0) {
+    p->why = "dongu degiskeni govdede ataniyor";
+    return 0;
+  }
+  // Kosul/artimda dizi erisimi yok (son kosul sinavi j == UB ile kosar).
+  bool acc_ci = false;
+  walk_all(cond, fv_has_access, &acc_ci);
+  walk_all(incr, fv_has_access, &acc_ci);
+  if (acc_ci) { p->why = "kosulda/artimda dizi erisimi"; return 0; }
+  // Govde sekli degistiremez (push/pop/kullanici cagrisi yok).
+  if (!tulpar_loop_shape_stable(cond, body, incr, pure, ctx)) {
+    p->why = "govde dizi seklini degistirebilir (cagri/desteklenmeyen dugum)";
+    return 0;
+  }
+  // Govde deyimleri SIRAYLA: ust seviyedeki `float x = <kesin float>`
+  // bildirimi, SONRAKI deyimlerde x'i kesin float yapar — x dongude baska
+  // hicbir yerde atanmiyor/bildirilmiyor ve kosulda/artimda gecmiyorsa.
+  // (Bildirimden ONCEKI bir `x` dis kapsamdakidir; o zaman x dongude
+  // yeniden baglandigi icin degismez de sayilmaz -> kesin float degil.)
+  ASTNode_C *one[1] = {body};
+  ASTNode_C **stmts = one;
+  int ns = 1;
+  if (body->type == AST_BLOCK) { stmts = body->statements; ns = body->statement_count; }
+  for (int k = 0; k < ns && !c.bad; k++) {
+    ASTNode_C *s = stmts ? stmts[k] : nullptr;
+    if (!s) continue;
+    walk_all(s, fv_visit, &c);
+    if (c.bad) break;
+    if (s->type == AST_VARIABLE_DECL && s->name && s->data_type == TYPE_FLOAT &&
+        s->right && strcmp(s->name, ivar) != 0 &&
+        fv_assign_count(cond, body, incr, s->name) == 1 &&
+        c.n_flocal < TULPAR_FV_MAX_INV) {
+      FvNameUse u1{s->name, false}, u2{s->name, false};
+      walk_all(cond, fv_visit_use, &u1);
+      walk_all(incr, fv_visit_use, &u2);
+      // Baslatici kesin float mi? fv_float_expr degismez adlari listeye
+      // ekleyebilir; basarisiz denemenin eklediklerini geri al. (Erisimler
+      // fv_visit'te zaten kaydedildi.)
+      int saved_inv = p->n_inv;
+      if (!u1.used && !u2.used && fv_float_expr(&c, s->right))
+        c.flocal[c.n_flocal++] = s->name;
+      else
+        p->n_inv = saved_inv;
+    }
+  }
+  if (c.bad) return 0;
+  if (p->n_acc == 0) { p->why = "dizi erisimi yok"; return 0; }
+  p->ivar = ivar;
+  p->ub = cond->right;
+  p->incl = cond->op == TOKEN_LESS_EQUAL ? 1 : 0;
+  p->why = nullptr;
+  return 1;
+}
+
+// Programdaki `float[]` bildirimlerinin adlari (parametreler dahil). Surum
+// karari icin yalniz IPUCU: dogruluk dongu basindaki calisma zamani
+// sinavindan gelir. Ipucu sart, cunku float OLMAYAN dizilerde bir govde
+// kopyasi daha yalniz kod buyutur (Performance.md: kosmayan kopya bile dis
+// donguyu yavaslatabiliyor) — int dongulerine dokunmamak icin.
+struct FvHintCtx {
+  void (*cb)(const char *, void *);
+  void *ctx;
+};
+static bool fv_visit_hint(ASTNode_C *n, void *p) {
+  FvHintCtx *h = (FvHintCtx *)p;
+  if (n->name && n->data_type == TYPE_ARRAY_FLOAT &&
+      n->type != AST_FUNCTION_DECL && n->type != AST_FUNCTION_CALL)
+    h->cb(n->name, h->ctx);
+  return true;
+}
+extern "C" void tulpar_collect_float_array_decls(ASTNode_C *root,
+                                                 void (*cb)(const char *, void *),
+                                                 void *ctx) {
+  FvHintCtx h{cb, ctx};
+  walk_all(root, fv_visit_hint, &h);
+}

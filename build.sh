@@ -1343,6 +1343,15 @@ TPREOF
         exit 1
     fi
 
+    # FLOAT DIZI DONGU SURUMU (2026-10-01): en icteki dongu (her derinlikte)
+    # double depolu float dizide surumleniyor mu, kurulmamasi gereken yerde
+    # kurulmuyor mu, ve hizli surumu olan dongude sinir disi erisim hala
+    # yakalaniyor mu. IR pozitif kontrolu (TULPAR_NO_FVER=1) betikte.
+    if ! bash tests/float_dizi.sh ./tulpar; then
+        echo -e "${RED}float dizi dongu surumu bozuk!${NC}"
+        exit 1
+    fi
+
     # KUTULU FONKSİYONLARIN DEĞER ABI'si duruyor mu?
     #
     # Kutulu gövde `t_<ad>.f` içinde yaşıyor ve VMValue'yu DEĞER olarak

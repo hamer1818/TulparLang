@@ -1,0 +1,224 @@
+import "test";
+
+// FLOAT DIZI: KUTUSUZ DOUBLE DEPO + IC ICE DONGUDE KANITLI ERISIM (2026-10-01).
+//
+// `array_fill(n, <float>)` artik eleman basina 16 baytlik VMValue yerine ham
+// double tutuyor (ARR_ELEM_F64) ve EN ICTEKI `for` dongusu — hangi derinlikte
+// olursa olsun — `X[B + j]` erisimleri icin surumleniyor: dongu basinda
+// sinir/depo/etiket bir kez sinaniyor, hizli govdede erisim tek GEP+load.
+//
+// Bu paket ANLAMIN degismedigini kilitliyor: her senaryo ayni islemi KUTULU
+// bir ikizle (dizi sabitinden kurulan dizi double depoya girmez, hizli surum
+// orada hic acilmaz) karsilastiriyor. Karar (surum acildi mi) ve sinir disi
+// erisimin hala yakalandigi tests/float_dizi.sh'de.
+
+// Kutulu ikiz: dizi SABITI her zaman VMValue deposunda baslar.
+func kutulu(int n, float v): array {
+    array a = [];
+    for (int i = 0; i < n; i++) { push(a, v); }
+    return a;
+}
+
+// matmul cekirdegi: sicak dongu UCUNCU seviyede, indeks `i * n + j`.
+func carp(float[] a, float[] b, float[] c, int n) {
+    for (int i = 0; i < n; i = i + 1) {
+        for (int k = 0; k < n; k = k + 1) {
+            float av = a[i * n + k];
+            for (int j = 0; j < n; j = j + 1) { c[i * n + j] = c[i * n + j] + av * b[k * n + j]; }
+        }
+    }
+}
+
+func doldur(a, b, int n) {
+    for (int i = 0; i < n; i = i + 1) {
+        for (int j = 0; j < n; j = j + 1) {
+            a[i * n + j] = toFloat(mod(i + j, 10)) + 0.5;
+            b[i * n + j] = toFloat(mod(i * j, 7)) - 0.25;
+        }
+    }
+}
+
+func toplam(x, int m): float {
+    float t = 0.0;
+    for (int i = 0; i < m; i = i + 1) { t = t + x[i]; }
+    return t;
+}
+
+func run_matmul() {
+    int n = 23;
+    float[] a = array_fill(n * n, 0.0);
+    float[] b = array_fill(n * n, 0.0);
+    float[] c = array_fill(n * n, 0.0);
+    array ka = kutulu(n * n, 0.0);
+    array kb = kutulu(n * n, 0.0);
+    array kc = kutulu(n * n, 0.0);
+    doldur(a, b, n);
+    doldur(ka, kb, n);
+    carp(a, b, c, n);
+    carp(ka, kb, kc, n);
+    assert_eq_str(c, kc);
+    assert_close(toplam(c, n * n), toplam(kc, n * n), 0.0000001);
+}
+
+// Double depoya INT yazmak diziyi kutuya cevirir ve eleman INT kalir —
+// kutulu dizideki davranisin aynisi (bit deseni float sanilmaz).
+func run_int_yazma() {
+    float[] a = array_fill(3, 1.5);
+    array k = [1.5, 1.5, 1.5];
+    var bes = 5;
+    a[1] = bes;
+    k[1] = bes;
+    assert_eq_str(a, k);
+    assert_eq_str(toString(a[1] + 1), "6");
+    // Kutuya donmus dizide hizli surum ACILMAMALI (dongu basindaki double
+    // depo sinavi); genel surum int elemani da dogru toplar.
+    float s = 0.0;
+    for (int j = 0; j < 3; j++) { s = s + a[j]; }
+    assert_close(s, 8.0, 0.0000001);
+}
+
+// `float[]` bildirilmis ama TAMSAYI depoda (int dolgu): ipucu surumu uretir,
+// dongu basindaki double depo sinavi (elem_bits) onu ACMAMALI. Sinav
+// kaldirilinca 32-bit tamsayi deseni double okunuyor ve toplam cop cikiyor
+// (sabotajla olculdu 2026-10-01).
+func run_int_depo() {
+    float[] q = array_fill(4, 2);
+    float t = 0.0;
+    for (int j = 0; j < 4; j++) { t = t + q[j]; }
+    assert_close(t, 8.0, 0.0000001);
+}
+
+func run_push_remove() {
+    array a = array_fill(2, 0.25);
+    array k = [0.25, 0.25];
+    push(a, 3.5);
+    push(k, 3.5);
+    assert_eq_str(a, k);
+    assert_eq_int(len(a), 3);
+    float r = remove_at(a, 0);
+    float rk = remove_at(k, 0);
+    assert_close(r, rk, 0.0);
+    assert_eq_str(a, k);
+    push(a, 7);          // int: kutuya cevirir, eleman int kalir
+    push(k, 7);
+    assert_eq_str(a, k);
+}
+
+// Eksi sifir dolgusu: bit deseni sifir DEGIL (calloc kisayolu yalniz +0.0).
+func run_eksi_sifir() {
+    float[] a = array_fill(4, -0.0);
+    float t = 1.0 / a[2];
+    assert(t < 0.0, "1 / -0.0 negatif sonsuz olmali");
+}
+
+// `<=` siniri, sifir olmayan baslangic (`j = i + 1`) ve j'siz erisim (`x[i]`).
+func run_nbody_bicimi() {
+    float[] x = array_fill(6, 0.0);
+    float[] v = array_fill(6, 0.0);
+    array kx = kutulu(6, 0.0);
+    array kv = kutulu(6, 0.0);
+    for (int i = 0; i <= 5; i++) { x[i] = toFloat(i) * 1.25; kx[i] = toFloat(i) * 1.25; }
+    for (int i = 0; i < 6; i = i + 1) {
+        for (int j = i + 1; j <= 5; j = j + 1) {
+            float d = x[i] - x[j];
+            float m = d * d + 0.5;
+            v[i] = v[i] - d / sqrt(m);
+            v[j] = v[j] + d / sqrt(m);
+        }
+    }
+    for (int i = 0; i < 6; i = i + 1) {
+        for (int j = i + 1; j <= 5; j = j + 1) {
+            float d = kx[i] - kx[j];
+            float m = d * d + 0.5;
+            kv[i] = kv[i] - d / sqrt(m);
+            kv[j] = kv[j] + d / sqrt(m);
+        }
+    }
+    assert_eq_str(v, kv);
+}
+
+// Degismez ad calisma zamaninda INT: kanit "kesin float" diyemez -> dongu
+// basindaki etiket sinavi genel surume duser; sonuc kutulu ikizle ayni.
+func run_degismez_int() {
+    var s = 2;
+    float[] a = array_fill(5, 1.0);
+    array k = kutulu(5, 1.0);
+    for (int j = 0; j < 5; j++) { a[j] = s * a[j]; }
+    for (int j = 0; j < 5; j++) { k[j] = s * k[j]; }
+    assert_eq_str(a, k);
+}
+
+// Takma ad: iki ad ayni diziyi gosteriyor; yazma okunana yansimali.
+func run_takma_ad() {
+    float[] a = array_fill(8, 1.0);
+    float[] b = a;
+    for (int j = 1; j < 8; j++) { a[j] = b[j + -1] + 1.0; }
+    assert_close(a[7], 8.0, 0.0);
+    assert_close(b[7], 8.0, 0.0);
+}
+
+// Ofsetli erisim tam sinira kadar (B + UB == count): hata yok.
+func run_tam_sinir() {
+    int n = 4;
+    float[] a = array_fill(n * 3, 2.0);
+    float t = 0.0;
+    for (int r = 0; r < 3; r++) {
+        int ofs = r * n;
+        for (int j = 0; j < n; j++) { t = t + a[ofs + j]; }
+    }
+    assert_close(t, 24.0, 0.0);
+}
+
+// Hic donmeyen dongu (j0 >= UB) ve bos dizi.
+func run_bos() {
+    float[] a = array_fill(0, 0.0);
+    float t = 0.0;
+    for (int j = 0; j < len(a); j++) { t = t + a[j]; }
+    for (int j = 5; j < 3; j++) { t = t + a[j]; }
+    assert_close(t, 0.0, 0.0);
+}
+
+// sqrt satir ici: kural runtime'in aot_math_sqrt'u ile ayni.
+func run_sqrt() {
+    assert_close(sqrt(2.25), 1.5, 0.0);
+    assert_close(sqrt(16), 4.0, 0.0);
+    var iv = 9;
+    assert_close(sqrt(iv), 3.0, 0.0);
+    // NaN: hicbir karsilastirma tutmaz (Tulpar'da `q != q` de false —
+    // ham runtime cagrisinda da oyleydi, olculdu 2026-10-01).
+    float q = sqrt(0.0 - 1.0);
+    assert(!(q >= 0.0) && !(q < 0.0), "sqrt(-1) NaN olmali");
+    assert_eq_str(toString(sqrt(4)), toString(2.0));
+}
+
+// Govdede ayni ad iki kez bildiriliyor / sonradan ataniyor: kanit o adi
+// "kesin float" saymamali; sonuc yine dogru.
+func run_yerel_atama() {
+    float[] a = array_fill(4, 3.0);
+    array k = kutulu(4, 3.0);
+    for (int j = 0; j < 4; j++) {
+        float t = a[j] * 2.0;
+        if (j == 2) { t = 1.0; }
+        a[j] = t;
+    }
+    for (int j = 0; j < 4; j++) {
+        float t = k[j] * 2.0;
+        if (j == 2) { t = 1.0; }
+        k[j] = t;
+    }
+    assert_eq_str(a, k);
+}
+
+test("matmul: double depo + ic ice kanitli erisim = kutulu ikiz", "run_matmul");
+test("double depoya int yazma kutuya cevirir, eleman int kalir", "run_int_yazma");
+test("float[] ama tamsayi depo: hizli surum acilmaz", "run_int_depo");
+test("push/remove_at double depoda", "run_push_remove");
+test("-0.0 dolgusu korunuyor", "run_eksi_sifir");
+test("nbody bicimi: <=, j = i + 1, x[i]", "run_nbody_bicimi");
+test("degismez ad INT ise genel surum", "run_degismez_int");
+test("takma ad", "run_takma_ad");
+test("ofsetli erisim tam sinirda", "run_tam_sinir");
+test("donmeyen dongu ve bos dizi", "run_bos");
+test("sqrt satir ici", "run_sqrt");
+test("govde yereli yeniden ataniyor", "run_yerel_atama");
+test_summary();
