@@ -12,6 +12,27 @@ import "test";
 // orada hic acilmaz) karsilastiriyor. Karar (surum acildi mi) ve sinir disi
 // erisimin hala yakalandigi tests/float_dizi.sh'de.
 
+// ⚠ DIZILER ELEMAN ELEMAN KARSILASTIRILIYOR (2026-10-01, Tuzaklar 7j).
+// Bu paketin ilk hali `assert_eq_str(dizi, ikiz)` kullaniyordu; `toString`
+// her dizi icin "<object>" dondugu icin iki dizi HER ZAMAN esit cikiyordu —
+// yani hizli surumun ikizle ayni sonucu verdigi hic sinanmiyordu. Karsilastirici
+// tipsiz (float[] ipucu yok -> kendisi surume girmez); eleman TURU de
+// karsilastiriliyor (double depoya int yazilinca eleman int kalmali).
+// Hizli ve kutulu yol ayni islemleri ayni sirayla yapiyor: esitlik TAM.
+func ayni_dizi(p, q) {
+    if (len(p) != len(q)) {
+        _test_set_fail("uzunluk farkli: " + toString(len(p)) + " / " + toString(len(q)));
+        return;
+    }
+    for (var t = 0; t < len(p); t = t + 1) {
+        if (typeof(p[t]) != typeof(q[t]) || p[t] != q[t]) {
+            _test_set_fail("eleman " + toString(t) + ": " + toString(p[t]) + " (" +
+                           typeof(p[t]) + ") / " + toString(q[t]) + " (" + typeof(q[t]) + ")");
+            return;
+        }
+    }
+}
+
 // Kutulu ikiz: dizi SABITI her zaman VMValue deposunda baslar.
 func kutulu(int n, float v): array {
     array a = [];
@@ -56,7 +77,7 @@ func run_matmul() {
     doldur(ka, kb, n);
     carp(a, b, c, n);
     carp(ka, kb, kc, n);
-    assert_eq_str(c, kc);
+    ayni_dizi(c, kc);
     assert_close(toplam(c, n * n), toplam(kc, n * n), 0.0000001);
 }
 
@@ -68,7 +89,7 @@ func run_int_yazma() {
     var bes = 5;
     a[1] = bes;
     k[1] = bes;
-    assert_eq_str(a, k);
+    ayni_dizi(a, k);
     assert_eq_str(toString(a[1] + 1), "6");
     // Kutuya donmus dizide hizli surum ACILMAMALI (dongu basindaki double
     // depo sinavi); genel surum int elemani da dogru toplar.
@@ -93,15 +114,15 @@ func run_push_remove() {
     array k = [0.25, 0.25];
     push(a, 3.5);
     push(k, 3.5);
-    assert_eq_str(a, k);
+    ayni_dizi(a, k);
     assert_eq_int(len(a), 3);
     float r = remove_at(a, 0);
     float rk = remove_at(k, 0);
     assert_close(r, rk, 0.0);
-    assert_eq_str(a, k);
+    ayni_dizi(a, k);
     push(a, 7);          // int: kutuya cevirir, eleman int kalir
     push(k, 7);
-    assert_eq_str(a, k);
+    ayni_dizi(a, k);
 }
 
 // Eksi sifir dolgusu: bit deseni sifir DEGIL (calloc kisayolu yalniz +0.0).
@@ -134,7 +155,7 @@ func run_nbody_bicimi() {
             kv[j] = kv[j] + d / sqrt(m);
         }
     }
-    assert_eq_str(v, kv);
+    ayni_dizi(v, kv);
 }
 
 // Degismez ad calisma zamaninda INT: kanit "kesin float" diyemez -> dongu
@@ -145,7 +166,7 @@ func run_degismez_int() {
     array k = kutulu(5, 1.0);
     for (int j = 0; j < 5; j++) { a[j] = s * a[j]; }
     for (int j = 0; j < 5; j++) { k[j] = s * k[j]; }
-    assert_eq_str(a, k);
+    ayni_dizi(a, k);
 }
 
 // Takma ad: iki ad ayni diziyi gosteriyor; yazma okunana yansimali.
@@ -206,7 +227,7 @@ func run_yerel_atama() {
         if (j == 2) { t = 1.0; }
         k[j] = t;
     }
-    assert_eq_str(a, k);
+    ayni_dizi(a, k);
 }
 
 test("matmul: double depo + ic ice kanitli erisim = kutulu ikiz", "run_matmul");
