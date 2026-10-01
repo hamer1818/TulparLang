@@ -282,7 +282,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `qsort` | 121,2 | 57,4 | 2,1× | 8. |
 | `callfn` | 298,6 → **209,6** (2026-10-01) | 91,1 | 2,3× | 8. |
 | `parse` | 196,3 → **126,2** (2026-10-01) | 56,7 | 2,2× | 6. → **4.** |
-| `particles` | 329,6 | 42,2 | 7,8× | 8. |
+| `particles` | 329,6 → **54,8** (2026-10-01) | 42,2 | 7,8× → 1,3× | 8. → **4.** |
 | `nbody` | 1304,8 → **187,3** (2026-10-01) | 114,5 | 11,4× → **1,6×** | 8. → **7.** |
 | `matmul` | 821,3 → **37,1** (2026-10-01) | 31,1 | 26,4× → **1,2×** | 8. → **4.** |
 | `hashmap` | > 60 s → **170,3** (2026-10-01) | 72,7 | 2,3× | 9. → **2.** |
@@ -307,9 +307,14 @@ Bulgular, sırayla ele alınması önerilen:
    göre. Kalan nbody farkı döngü girişi: beş cisimde iç döngü 0–4 tur
    dönüyor ve her girişte yedi dizinin deposu yeniden sınanıyor (bkz.
    Performance.md).
-3. **`particles`** (oyun döngüsü) C'nin 7,8 katı. Aynı kod bir fonksiyonun
-   içine alınınca 185 ms (4,4×): üst düzey değişkenler global ve her erişim
-   bellekten geçiyor; kalan fark struct dizisi alan erişiminde.
+3. ~~**`particles`** (oyun döngüsü) C'nin 7,8 katı.~~ **Kapandı
+   (2026-10-01):** iki ayrı maliyet vardı. (a) Üst düzey değişkenler kutulu
+   LLVM global'iydi — yalnız main'de görülenler artık main'in yereli; (b)
+   struct dizisi alan erişimi her seferinde başlığı (tür, count, data)
+   yeniden okuyordu — alanlar TBAA etiketli ve sekli değişmeyen döngüde başlık
+   bir kez okunuyor. Üst düzey 336 → 55 ms, fonksiyon içi 193 → 55 ms (C 42,7,
+   Rust 36; dokuz dil arasında 4.). Ayrıntı ve pay:
+   `docs/mindmap/Performance.md` "particles" bölümü.
 4. **`parse`** — **hız kapandı (2026-10-01):** `split` parçaları tek arena
    ayırmasında bitişik kuruyor (parça başına geçici malloc + ayrı ayırma +
    büyüyen dizi yerine), `toInt` düz ondalık dizgide `atoll`a gitmiyor:

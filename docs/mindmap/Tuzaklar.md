@@ -1986,6 +1986,33 @@ yıkıcılı `thread_local` NESNE yok; thread başına durum `SchedState`'te,
 her yeni kap oraya girer. (Tek istisna `StackPool`: yalnız zamanlayıcı
 bağlamında — `resume()` — dokunuluyor ve Windows fiber yolunda hiç derlenmiyor.)
 
+## 7i. `try` gövdesinde değişip fırlatılan YEREL eski değerine döner (setjmp)
+
+**AÇIK HATA, düzeltilmedi** (bulundu 2026-10-01, üst düzey main-yereli
+işinde). `try` → `setjmp`, `throw` → `longjmp`. C'deki gibi: `setjmp` ile
+`longjmp` arasında değişen yerel (alloca → SROA → yazmaç) `longjmp`'tan sonra
+**belirsiz**; pratikte `setjmp` anındaki değer:
+
+```tulpar
+func f(): int {
+    int k = 0;
+    try { k = 5; throw "x"; } catch (e) { }
+    return k;          // 0 döndürüyor, 5 değil (eski ve yeni derleyici)
+}
+```
+
+Döngüdeki sayaç da aynı (`for` içinde `k = k + 1; if (...) throw` → 0).
+Global'de (bellekte) sorun yok — o yüzden üst düzey değişkeni main'in yereline
+terfi eden optimizasyon (`main_local_declare`) **üst düzey `try` gövdesinde
+geçen adları global bırakıyor**; yoksa bu hata üst düzey koda da yayılırdı.
+`tests/main_yerel.test.tpr` "try govdesinde degisip firlatilan" bunu sınıyor.
+
+**Sinsi tarafı:** derleme uyarısı yok, sonuç "makul" bir sayı (başlangıç
+değeri). `catch` içinde YAZILAN yerel doğru (longjmp'tan sonra yazılıyor).
+Düzeltme yolu (yapılmadı): `try` içeren fonksiyonda, `try` gövdesinde yazılan
+yerellerin yükleme/saklamalarını `volatile` yapmak (clang'ın C'de istediği
+şey) — SROA onları yazmaca almaz.
+
 ## 6ş. Döngü sınırı `n` mi `len(a)` mı — aynı iş, 3,5 kat fark
 
 40M elemanlık lineer okuma:

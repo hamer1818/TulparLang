@@ -3101,6 +3101,29 @@ static LLVMTypeRef struct_field_llvm_type(LLVMBackend *backend,
   return small ? backend->int32_type : backend->int_type;
 }
 
+// STRUCT DIZISI ELEMAN ISARETCILERI (sarr_elem_ptr_iv'in urettigi phi'ler).
+// Bu isaretcilerden yapilan alan yukleme/saklamalari TBAA "elem" etiketi
+// alir: eleman deposu (ObjStructArray::data, ayri malloc; yavas yolda
+// runtime'in karalama alani) hicbir nesne basligiyla ya da VMValue yuvasiyla
+// ortusmez. Etiketsiz bir `store double` LLVM icin HER SEYI yazabilir:
+// dongudeki her `ps[i].x = ...` dizinin basligini (otype, count, data)
+// yeniden okutuyordu (olculdu, asagida sarr_elem_ptr_iv notu). Etiket yalniz
+// bu isaretcilere konur; yerel struct alloca'si ve tipli struct global'i
+// eskisi gibi etiketsiz. Isaret, phi'nin KENDISINDE bir metaveri (bir
+// isaretci kumesi degil): silinen bir degerin adresi yeniden kullanilirsa
+// kume bayat kalip ilgisiz bir erisimi etiketleyebilirdi.
+static unsigned sarr_ep_kind(LLVMBackend *backend) {
+  return LLVMGetMDKindIDInContext(backend->context, "tulpar.sarr.ep", 14);
+}
+static void mark_sarr_elem_ptr(LLVMBackend *backend, LLVMValueRef phi) {
+  LLVMSetMetadata(phi, sarr_ep_kind(backend),
+                  LLVMMetadataAsValue(backend->context,
+                                      LLVMMDNodeInContext2(backend->context, nullptr, 0)));
+}
+static bool is_sarr_elem_ptr(LLVMBackend *backend, LLVMValueRef v) {
+  return v && LLVMIsAPHINode(v) && LLVMGetMetadata(v, sarr_ep_kind(backend)) != nullptr;
+}
+
 // Alanin DEGERI (dildeki tip): int/bool -> i64, float -> double. f32
 // genisletilir (fpext, kayipsiz), i32 isaretli genisletilir.
 static LLVMValueRef struct_field_load_value(LLVMBackend *backend, StructTypeEntry *st,
@@ -3109,6 +3132,7 @@ static LLVMValueRef struct_field_load_value(LLVMBackend *backend, StructTypeEntr
                                         (unsigned)idx, tag);
   LLVMValueRef fv =
       LLVMBuildLoad2(backend->builder, struct_field_llvm_type(backend, st, idx), fp, tag);
+  if (is_sarr_elem_ptr(backend, base)) llvm_tbaa_tag(backend, fv, 1);
   if (struct_field_bits(st, idx) == 32) {
     if (st->field_types[idx] == TYPE_FLOAT)
       return LLVMBuildFPExt(backend->builder, fv, backend->float_type, tag);
@@ -3140,7 +3164,8 @@ static void struct_field_store_value(LLVMBackend *backend, StructTypeEntry *st,
   }
   LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type, base,
                                         (unsigned)idx, tag);
-  LLVMBuildStore(backend->builder, v, fp);
+  LLVMValueRef sv = LLVMBuildStore(backend->builder, v, fp);
+  if (is_sarr_elem_ptr(backend, base)) llvm_tbaa_tag(backend, sv, 1);
 }
 
 // GEP + alan tipinde yuk + kutula (int -> VM_INT, bool -> VM_BOOL,
@@ -3481,6 +3506,27 @@ static void sarr_push(LLVMBackend *backend, LLVMValueRef arr_val, LLVMValueRef s
 // genel yola dusmeli.
 static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
                                      LLVMValueRef iv, const char *tag);
+
+// Dongu-degismezi STRUCT DIZISI sekli (SarrCacheScope doldurur). `var_slot`:
+// onbellege alinan degiskenin yuvasi — ayni ad baska bir yuvaya cozulurse
+// (golgeleme) onbellek kullanilmaz.
+struct SarrLoopCache {
+  const char *name;
+  LLVMValueRef var_slot;
+  LLVMValueRef data_slot;  // ptr: ObjStructArray::data (struct dizisi degilse null)
+  LLVMValueRef cnt_slot;   // i64: count (struct dizisi degilse 0)
+};
+static std::vector<SarrLoopCache> &sarr_loop_cache() {
+  static std::vector<SarrLoopCache> v;
+  return v;
+}
+static const SarrLoopCache *sarr_loop_cache_lookup(const char *name, LLVMValueRef slot) {
+  auto &v = sarr_loop_cache();
+  for (size_t i = v.size(); i-- > 0;)
+    if (strcmp(v[i].name, name) == 0) return v[i].var_slot == slot ? &v[i] : nullptr;
+  return nullptr;
+}
+
 static LLVMValueRef sarr_elem_ptr(LLVMBackend *backend, const char *arr_name,
                                   ASTNode_C *idx_node, const char *tag) {
   if (!idx_node || !get_local(backend, arr_name)) return nullptr;
@@ -3500,48 +3546,66 @@ static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
   if (!est) return nullptr;
 
   LLVMValueRef arr = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot, tag);
+  // Yavas yolun VMValue* argumani icin yuva. Saklama YAVAS YOLDA: eskiden
+  // her erisimde (hizli yolda da) 16 bayt yaziliyordu.
   LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, tag);
-  LLVMBuildStore(backend->builder, arr, tmp);
   LLVMValueRef idx = llvm_vm_val_to_int_payload(backend, iv);
 
   LLVMTypeRef i32t = backend->int32_type;
   LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
-  LLVMBasicBlockRef bb_chk = append_bb(backend, fn, "sarr.chk");
+  // Dongu basinda onbellege alinmis sekil (SarrCacheScope): baslik dongu
+  // boyunca DEGISMEZ (kanit orada), erisim tek bir `idx <u count` sinavi.
+  // Dizi struct dizisi degilse onbellekteki count 0: her erisim yavas yola,
+  // yani ayni hata tanisina gider.
+  const SarrLoopCache *lc = sarr_loop_cache_lookup(arr_name, slot);
+  LLVMValueRef data = nullptr;
+  LLVMBasicBlockRef bb_chk = nullptr;
+  if (!lc) bb_chk = append_bb(backend, fn, "sarr.chk");
   LLVMBasicBlockRef bb_fast = append_bb(backend, fn, "sarr.fast");
   LLVMBasicBlockRef bb_slow = append_bb(backend, fn, "sarr.slow");
   LLVMBasicBlockRef bb_done = append_bb(backend, fn, "sarr.done");
 
-  // Etiket VM_VAL_OBJ mi? (degilse nesne isaretcisini hic cozme)
-  LLVMValueRef vtag = LLVMBuildExtractValue(backend->builder, arr, 0, "sarr.tag");
-  LLVMValueRef is_obj = LLVMBuildICmp(backend->builder, LLVMIntEQ, vtag,
-                                      LLVMConstInt(i32t, 4 /* VM_VAL_OBJ */, 0), "sarr.isobj");
-  LLVMBuildCondBr(backend->builder, is_obj, bb_chk, bb_slow);
+  if (lc) {
+    LLVMValueRef ccnt = LLVMBuildLoad2(backend->builder, backend->int_type, lc->cnt_slot,
+                                       "sarr.lc.cnt");
+    data = LLVMBuildLoad2(backend->builder, backend->ptr_type, lc->data_slot, "sarr.lc.data");
+    LLVMBuildCondBr(backend->builder,
+                    LLVMBuildICmp(backend->builder, LLVMIntULT, idx, ccnt, "sarr.lc.inr"),
+                    bb_fast, bb_slow);
+    LLVMPositionBuilderAtEnd(backend->builder, bb_fast);
+  } else {
+    // Etiket VM_VAL_OBJ mi? (degilse nesne isaretcisini hic cozme)
+    LLVMValueRef vtag = LLVMBuildExtractValue(backend->builder, arr, 0, "sarr.tag");
+    LLVMValueRef is_obj = LLVMBuildICmp(backend->builder, LLVMIntEQ, vtag,
+                                        LLVMConstInt(i32t, 4 /* VM_VAL_OBJ */, 0), "sarr.isobj");
+    LLVMBuildCondBr(backend->builder, is_obj, bb_chk, bb_slow);
 
-  LLVMPositionBuilderAtEnd(backend->builder, bb_chk);
-  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, arr);
-  LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
-                                         objp, 0, "sarr.otp");
-  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "sarr.ot");
-  llvm_tbaa_tag(backend, ot, 0);
-  LLVMValueRef is_sarr = LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                       LLVMConstInt(i32t, 7 /* OBJ_STRUCT_ARRAY */, 0),
-                                       "sarr.issarr");
-  LLVMValueRef cntp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
-                                          objp, 6, "sarr.cntp");
-  LLVMValueRef cnt = LLVMBuildLoad2(backend->builder, i32t, cntp, "sarr.cnt");
-  llvm_tbaa_tag(backend, cnt, 0);
-  LLVMValueRef cnt64 = LLVMBuildSExt(backend->builder, cnt, backend->int_type, "sarr.cnt64");
-  // Isaretsiz karsilastirma negatif indeksi de yakalar (tek dal).
-  LLVMValueRef in_rng = LLVMBuildICmp(backend->builder, LLVMIntULT, idx, cnt64, "sarr.inr");
-  LLVMBuildCondBr(backend->builder,
-                  LLVMBuildAnd(backend->builder, is_sarr, in_rng, "sarr.ok"),
-                  bb_fast, bb_slow);
+    LLVMPositionBuilderAtEnd(backend->builder, bb_chk);
+    LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, arr);
+    LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
+                                           objp, 0, "sarr.otp");
+    LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "sarr.ot");
+    llvm_tbaa_tag(backend, ot, 0);
+    LLVMValueRef is_sarr = LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                         LLVMConstInt(i32t, 7 /* OBJ_STRUCT_ARRAY */, 0),
+                                         "sarr.issarr");
+    LLVMValueRef cntp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
+                                            objp, 6, "sarr.cntp");
+    LLVMValueRef cnt = LLVMBuildLoad2(backend->builder, i32t, cntp, "sarr.cnt");
+    llvm_tbaa_tag(backend, cnt, 0);
+    LLVMValueRef cnt64 = LLVMBuildSExt(backend->builder, cnt, backend->int_type, "sarr.cnt64");
+    // Isaretsiz karsilastirma negatif indeksi de yakalar (tek dal).
+    LLVMValueRef in_rng = LLVMBuildICmp(backend->builder, LLVMIntULT, idx, cnt64, "sarr.inr");
+    LLVMBuildCondBr(backend->builder,
+                    LLVMBuildAnd(backend->builder, is_sarr, in_rng, "sarr.ok"),
+                    bb_fast, bb_slow);
 
-  LLVMPositionBuilderAtEnd(backend->builder, bb_fast);
-  LLVMValueRef datap = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
-                                           objp, 9, "sarr.datap");
-  LLVMValueRef data = LLVMBuildLoad2(backend->builder, backend->ptr_type, datap, "sarr.data");
-  llvm_tbaa_tag(backend, data, 0);
+    LLVMPositionBuilderAtEnd(backend->builder, bb_fast);
+    LLVMValueRef datap = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
+                                             objp, 9, "sarr.datap");
+    data = LLVMBuildLoad2(backend->builder, backend->ptr_type, datap, "sarr.data");
+    llvm_tbaa_tag(backend, data, 0);
+  }
   LLVMValueRef ep_fast;
   if (est->compact) {
     // Kucuk alanli struct (K037/K035): adim C'nin sizeof(T)'si — GEP T.
@@ -3557,6 +3621,7 @@ static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
   // Yavas yol: runtime hatayi bildirir (sinir disi / yanlis tur) ve sifirlanmis
   // karalama alani doner.
   LLVMPositionBuilderAtEnd(backend->builder, bb_slow);
+  LLVMBuildStore(backend->builder, arr, tmp);
   LLVMValueRef sargs[] = {tmp, idx};
   LLVMValueRef ep_slow = LLVMBuildCall2(backend->builder,
                                         LLVMGlobalGetValueType(backend->func_aot_sarr_elem),
@@ -3568,6 +3633,7 @@ static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
   LLVMValueRef inc[] = {ep_fast, ep_slow};
   LLVMBasicBlockRef inb[] = {bb_fast, bb_slow};
   LLVMAddIncoming(phi, inc, inb, 2);
+  mark_sarr_elem_ptr(backend, phi);  // alan erisimleri TBAA "elem" alir
   return phi;
 }
 
@@ -4439,6 +4505,268 @@ static void predeclare_top_level_global(LLVMBackend *backend, ASTNode_C *decl,
   }
 }
 
+// ---- UST DUZEY DEGISKENIN MAIN-YERELINE TERFISI (2026-10-01) ---------------
+//
+// Ust duzey `float dt = 0.01;` bir LLVM global'iydi (kutulu VMValue; int ise
+// i64). Sicak dongude her erisim BELLEKTEN geciyor: `g * dt` her turda iki
+// etiket okuyor, etiket makinesi + vm_binary_op geri dususu uretiyor; dongu
+// icindeki herhangi bir saklama/cagri global'i yeniden okutuyor, cunku LLVM
+// global'in baska bir yerden yazilmadigini bilemiyor. Ayni kod bir fonksiyonun
+// icinde yerel alloca'dir: SROA etiketi sabite katlar, deger yazmacta kalir.
+// Olculdu (benchmarks/fair/particles, Ryzen 7 9800X3D, 2026-10-01): ust
+// duzey 342 ms, ayni dongu fonksiyonda 197 ms.
+//
+// Kural: ust duzey bir bildirim, adi ana programin hicbir FONKSIYONUNDA /
+// LAMBDASINDA ve import edilen hicbir modulde GECMIYORSA main'in yereli olur.
+// Boyle bir ad yalniz main'in kendi govdesinden gorulebilir; yani global
+// olmasi hicbir gozlemciye hizmet etmiyordu. Ad bir kez bile geciyorsa (okuma,
+// yazma, golgeleyen yerel, cagri adi — ayrim yapilmiyor, MUHAFAZAKAR) global
+// kalir. Ayrica global kalanlar:
+//   * ust duzey `try` govdesinde gecen adlar: setjmp/longjmp arasinda
+//     degisen yerel (C'deki gibi) yazmacta kalip eski degerle geri donebilir;
+//     global'de bu sorun yok.
+//   * atomic_* cagrisinda gecen adlar (ilk arguman bir GLOBAL olmali),
+//     @thread_local / TLS adlari, wings sayac listesi.
+//   * hata ayiklama bilgisi uretiliyorsa hicbiri (hata ayiklayici global'leri
+//     ad ile gosteriyor).
+//   * `int` ve struct olmayan DIZI bildirimleri (olcum ve sebep
+//     main_local_declare'de: elek %22 geriliyordu).
+// Depolama bariyeri (emit_global_store_barrier) terfi edilmis kutulu yuvada
+// AYNEN uygulanir: checkpoint/arena geri sarmasi anlambilimi degismez.
+// TULPAR_NO_MAIN_LOCALS=1 terfiyi kapatir (olcum / pozitif kontrol).
+namespace {
+enum MainLocalKind { ML_BOXED, ML_INT, ML_STRUCT, ML_SARR };
+struct MainLocal {
+  LLVMValueRef slot = nullptr;
+  MainLocalKind kind = ML_BOXED;
+  const char *struct_name = nullptr;  // ML_STRUCT: tip, ML_SARR: eleman tipi
+};
+struct MainLocals {
+  LLVMValueRef main_fn = nullptr;
+  std::unordered_set<std::string> blocked;
+  std::unordered_map<std::string, MainLocal> by_name;
+  std::vector<std::string> order;  // kayit sirasi (belirlenimli)
+  std::unordered_set<LLVMValueRef> slots;
+};
+}  // namespace
+
+static MainLocals &main_locals() {
+  static MainLocals m;
+  return m;
+}
+
+static int ml_collect_name(ASTNode_C *n, void *p) {
+  auto *set = static_cast<std::unordered_set<std::string> *>(p);
+  if (n->name) set->insert(n->name);
+  if (n->catch_var) set->insert(n->catch_var);
+  return 1;
+}
+
+struct MlScanCtx {
+  std::unordered_set<std::string> *blocked;
+  std::vector<ASTNode_C *> *imports;
+};
+
+// Ana programin bir deyimi: fonksiyon/lambda govdelerindeki, `try`
+// govdelerindeki ve atomic_* cagrilarindaki BUTUN adlar engellenir. Ic ice
+// (deyim olmayan) import dugumleri de toplanir.
+static int ml_scan_main(ASTNode_C *n, void *p) {
+  MlScanCtx *c = static_cast<MlScanCtx *>(p);
+  switch (n->type) {
+  case AST_FUNCTION_DECL:
+  case AST_LAMBDA:
+    tulpar_ast_walk(n, ml_collect_name, c->blocked);
+    break;
+  case AST_TRY_CATCH:
+    tulpar_ast_walk(n->try_block, ml_collect_name, c->blocked);
+    break;
+  case AST_FUNCTION_CALL:
+    if (n->name && strncmp(n->name, "atomic_", 7) == 0)
+      tulpar_ast_walk(n, ml_collect_name, c->blocked);
+    break;
+  case AST_IMPORT:
+    c->imports->push_back(n);
+    break;
+  default:
+    break;
+  }
+  return 1;
+}
+
+static int ml_find_imports(ASTNode_C *n, void *p) {
+  if (n->type == AST_IMPORT)
+    static_cast<std::vector<ASTNode_C *> *>(p)->push_back(n);
+  return 1;
+}
+
+// Import agaci: modulun TAMAMINDAKI adlar engellenir (modulun fonksiyonlari
+// ve ust duzey deyimleri ana programin global'ini adiyla gorebilir; ayni adli
+// modul global'i ayni LLVM global'ini paylasir).
+static void ml_scan_imports(LLVMBackend *backend, std::vector<ASTNode_C *> &imports,
+                            int depth, std::unordered_set<std::string> &visited,
+                            std::unordered_set<std::string> &blocked) {
+  if (depth > 8) return;
+  for (ASTNode_C *imp : imports) {
+    if (!imp || !imp->value.string_value) continue;
+    std::string key = std::string(backend->current_import_dir) + '\x1f' +
+                      imp->value.string_value;
+    if (!visited.insert(key).second) continue;
+    ImportedModule *m = import_load_module(backend, imp);
+    if (!m || !m->ast) continue;
+    tulpar_ast_walk(m->ast, ml_collect_name, &blocked);
+    std::vector<ASTNode_C *> sub;
+    tulpar_ast_walk(m->ast, ml_find_imports, &sub);
+    char saved_dir[256];
+    snprintf(saved_dir, sizeof(saved_dir), "%s", backend->current_import_dir);
+    snprintf(backend->current_import_dir, sizeof(backend->current_import_dir),
+             "%s", m->resolved_dir.c_str());
+    ml_scan_imports(backend, sub, depth + 1, visited, blocked);
+    snprintf(backend->current_import_dir, sizeof(backend->current_import_dir),
+             "%s", saved_dir);
+  }
+}
+
+static bool main_locals_disabled(LLVMBackend *backend) {
+  if (backend->di_builder) return true;
+  const char *off = getenv("TULPAR_NO_MAIN_LOCALS");
+  return off && *off && *off != '0';
+}
+
+// Pass 0.1'den ONCE: engellenen adlar kumesi.
+static void main_locals_analyze(LLVMBackend *backend, ASTNode_C *program) {
+  MainLocals &ml = main_locals();
+  ml = MainLocals();
+  ml.main_fn = backend->current_function;
+  if (main_locals_disabled(backend) || !program) return;
+  std::vector<ASTNode_C *> imports;
+  MlScanCtx c{&ml.blocked, &imports};
+  for (int i = 0; i < program->statement_count; i++)
+    tulpar_ast_walk(program->statements[i], ml_scan_main, &c);
+  std::unordered_set<std::string> visited;
+  ml_scan_imports(backend, imports, 0, visited, ml.blocked);
+}
+
+// Pass 0.1: bu ust duzey bildirim main'in yereli mi olacak? Oyleyse yuvayi
+// (main'in giris blogunda alloca + global'in sifir baslangici) acar; kapsama
+// kayit main_locals_register'da, fonksiyon govdeleri uretildikten SONRA —
+// gozden kacan bir fonksiyon referansi gecersiz IR degil, "tanimsiz" hatasi
+// versin diye.
+static bool main_local_declare(LLVMBackend *backend, ASTNode_C *decl) {
+  MainLocals &ml = main_locals();
+  if (main_locals_disabled(backend) || !decl || !decl->name) return false;
+  if (ml.by_name.count(decl->name)) return true;
+  if (ml.blocked.count(decl->name) || decl->is_thread_local ||
+      global_needs_tls(decl->name) || global_needs_atomic_rmw(decl->name))
+    return false;
+  if (LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) return false;
+  // `int` ve (struct olmayan) DIZI bildirimleri global KALIR — olculdu
+  // (elek, Ryzen 7 9800X3D, 2026-10-01, 9 tur en iyi): hepsi terfi 9,4 ms,
+  // yalniz int'ler global 9,5, yalniz diziler global 9,6, ikisi de global
+  // 7,6 (= eski). Sebep LLVM'in LSR'i: dis dongu sayaci, sinir ve dizi
+  // tutamaci yazmaca girince soguk yoldaki (kutulu / 64-bit eleman)
+  // adres hesaplarini da sicak ic donguye AYRI SAYACLAR olarak tasiyor
+  // (ic dongu 4 komuttan 8'e). Global'de bellekten gelen deger bunu
+  // engelliyordu. Ayni elek bir FONKSIYONUN icinde eski derleyicide de 9,7:
+  // yani bu terfinin degil, dizi erisim yolunun acigi — orada kapanmali.
+  // #430/#432 sonrasi yeniden olculdu: hepsi terfi edilince elek yine
+  // 8,0 -> 9,6, callfn 173 -> 188 ms; kuralla ikisi de degismiyor.
+  // int global'i zaten kutusuz i64 (etiket makinesi yok); kazancin buyugu
+  // kutulu skalerde (float/bool/str/var), tipli struct'ta ve struct dizisinde.
+  // TULPAR_MAIN_LOCALS_ALL=1 hepsini terfi ettirir (LSR isi icin olcum).
+  const char *all = getenv("TULPAR_MAIN_LOCALS_ALL");
+  if (!(all && *all && *all != '0')) {
+    const DataType dt = decl->data_type;
+    if (dt == TYPE_INT) return false;
+    if ((dt == TYPE_ARRAY || dt == TYPE_ARRAY_INT || dt == TYPE_ARRAY_FLOAT ||
+         dt == TYPE_ARRAY_STR || dt == TYPE_ARRAY_BOOL || dt == TYPE_ARRAY_JSON) &&
+        !decl->elem_custom_type)
+      return false;
+  }
+  MainLocal e;
+  LLVMTypeRef ty = backend->vm_value_type;
+  if (backend->use_static_typing && decl->data_type == TYPE_INT) {
+    e.kind = ML_INT;
+    ty = backend->int_type;
+  } else if (decl->data_type == TYPE_CUSTOM) {
+    const char *sname = decl->return_custom_type;
+    if (!sname && decl->field_custom_types && decl->field_count > 0)
+      sname = decl->field_custom_types[0];
+    StructTypeEntry *st = find_struct_type(backend, sname);
+    if (st && struct_is_trivially_unboxable(st)) {
+      e.kind = ML_STRUCT;
+      e.struct_name = st->name;
+      ty = st->llvm_type;
+    }
+  } else if (decl->data_type == TYPE_ARRAY && decl->elem_custom_type) {
+    StructTypeEntry *est = find_struct_type(backend, decl->elem_custom_type);
+    if (est && struct_is_trivially_unboxable(est)) {
+      e.kind = ML_SARR;
+      e.struct_name = est->name;
+    }
+  }
+  e.slot = llvm_build_alloca_at_entry(backend, ty, decl->name);
+  LLVMBuildStore(backend->builder, LLVMConstNull(ty), e.slot);
+  ml.slots.insert(e.slot);
+  ml.order.push_back(decl->name);
+  ml.by_name[decl->name] = e;
+  return true;
+}
+
+// Pass 2'den hemen once: terfi edilen adlar KOK kapsama, global'in Pass 0.1
+// kaydiyla AYNI bicimde yazilir.
+static void main_locals_register(LLVMBackend *backend) {
+  MainLocals &ml = main_locals();
+  for (const std::string &name : ml.order) {
+    const MainLocal &e = ml.by_name[name];
+    switch (e.kind) {
+    case ML_INT:
+      add_local_typed(backend, name.c_str(), nullptr, INFERRED_INT, e.slot);
+      break;
+    case ML_STRUCT:
+      add_local_struct(backend, name.c_str(), e.slot, e.struct_name);
+      break;
+    case ML_SARR:
+      add_local_struct_array(backend, name.c_str(), e.slot, e.struct_name);
+      break;
+    default:
+      add_local(backend, name.c_str(), e.slot);
+      break;
+    }
+  }
+}
+
+static bool is_main_local_slot(LLVMValueRef v) {
+  return v && main_locals().slots.count(v) != 0;
+}
+
+// Yuvanin tuttugu tip (global ya da alloca).
+static LLVMTypeRef slot_value_type(LLVMValueRef slot) {
+  if (!slot) return nullptr;
+  if (LLVMIsAGlobalValue(slot)) return LLVMGlobalGetValueType(slot);
+  if (LLVMIsAAllocaInst(slot)) return LLVMGetAllocatedType(slot);
+  return nullptr;
+}
+
+// GUVENLIK AGI: kok kapsamda bulunan terfi edilmis bir yuva main DISINDAN
+// (lambda govdesi) istenirse bu bir derleyici hatasidir — baska fonksiyonun
+// alloca'sina erisim gecersiz IR olurdu ve dogrulama hatasi emit'i durdurmuyor.
+// Tarama bunu engelliyor; buraya dusulurse yuksek sesle bildir.
+static bool main_local_foreign_use(LLVMBackend *backend, LLVMValueRef slot,
+                                   const char *name) {
+  MainLocals &ml = main_locals();
+  if (!is_main_local_slot(slot) || backend->current_function == ml.main_fn)
+    return false;
+  char msg[320];
+  snprintf(msg, sizeof(msg),
+           "ic hata: ust duzey '%s' main yereline terfi edildi ama baska bir "
+           "fonksiyondan erisiliyor / internal error: top-level '%s' was "
+           "promoted to a main local but is used from another function",
+           name ? name : "?", name ? name : "?");
+  report_codegen_error(backend, 0, "hata", msg, name,
+                       "TULPAR_NO_MAIN_LOCALS=1 ile derleyip hatayi bildirin");
+  return true;
+}
+
 LLVMValueRef find_env_for_decl(LLVMBackend *backend, ASTNode_C *decl_node) {
   CaptureData *cd = (CaptureData*)backend->capture_data;
   ASTNode_C *curr = backend->current_function_node;
@@ -4546,12 +4874,25 @@ static bool at_top_level_scope(LLVMBackend *backend) {
   return backend->current_scope && backend->current_scope->parent == nullptr;
 }
 
+// Ust duzey bildirimin depolamasi: Pass 0.1'in actigi global YA DA main'in
+// yereline terfi edilmis yuva (main_local_declare). Fonksiyon icindeki ayni
+// ad yeni bir yereldir: nullptr.
+static LLVMValueRef top_level_decl_slot(LLVMBackend *backend, const char *name) {
+  if (!name || !at_top_level_scope(backend)) return nullptr;
+  if (LLVMValueRef g = LLVMGetNamedGlobal(backend->module, gsym(name).c_str()))
+    return g;
+  auto it = main_locals().by_name.find(name);
+  return it != main_locals().by_name.end() ? it->second.slot : nullptr;
+}
+
 LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
   Scope *s = backend->current_scope;
   while (s) {
     for (int i = 0; i < s->count; i++) {
-      if (strcmp(s->vars[i].name, name) == 0)
+      if (strcmp(s->vars[i].name, name) == 0) {
+        if (main_local_foreign_use(backend, s->vars[i].value, name)) return nullptr;
         return s->vars[i].value;
+      }
     }
     s = s->parent;
   }
@@ -4598,9 +4939,11 @@ static bool is_global_var(LLVMBackend *backend, const char *name) {
         // GLOBAL'i ve kutulu VMValue ise global'dir. int global'inin yuvasi
         // native_value'da (value null), tipli struct'inki struct tipinde —
         // ikisi de skaler/deger tipi, bariyere ihtiyaclari yok.
+        // Main yereline terfi edilmis ust duzey yuva da (main_local_declare)
+        // global sayilir: terfi bariyer anlambilimini DEGISTIRMEMELI.
         LLVMValueRef slot = s->vars[i].value;
-        return slot && LLVMIsAGlobalVariable(slot) &&
-               LLVMGlobalGetValueType(slot) == backend->vm_value_type;
+        return slot && (LLVMIsAGlobalVariable(slot) || is_main_local_slot(slot)) &&
+               slot_value_type(slot) == backend->vm_value_type;
       }
     }
   }
@@ -4729,8 +5072,10 @@ LLVMValueRef get_local_native(LLVMBackend *backend, const char *name) {
   Scope *s = backend->current_scope;
   while (s) {
     for (int i = 0; i < s->count; i++) {
-      if (strcmp(s->vars[i].name, name) == 0)
+      if (strcmp(s->vars[i].name, name) == 0) {
+        if (main_local_foreign_use(backend, s->vars[i].native_value, name)) return nullptr;
         return s->vars[i].native_value;
+      }
     }
     s = s->parent;
   }
@@ -6860,6 +7205,98 @@ static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node) {
   LLVMPositionBuilderAtEnd(backend->builder, b_done);
   return true;
 }
+
+// STRUCT DIZISI SEKIL ONBELLEGI (2026-10-01). Yukaridaki ObjArray
+// onbelleginin `P[] ps` karsiligi: dongu govdesi sekli degistiremiyorsa
+// (ayni kanit: tulpar_loop_shape_stable + ad yeniden baglanmiyor) dizinin
+// basligi (otype, count, data) dongu basinda BIR KEZ okunur; her `ps[i].x`
+// erisimi tek bir `i <u count` sinavina iner.
+//
+// Neden gerekti: erisim basina baslik okumasini LLVM dongu disina
+// tasiyamiyor — govdedeki yavas yol cagrisi (aot_sarr_elem_ptr) her seyi
+// yazabilir sayiliyor. TBAA (alan erisimleri "elem") tur ICINDEKI tekrarlari
+// kaldirdi ama her turun ilk erisimi basligi yine okuyordu; olcumler
+// docs/mindmap/Performance.md "particles" bolumunde.
+//
+// Struct dizisi olmayan deger (yanlis tur): count 0, data null — her erisim
+// yavas yola gider ve runtime ayni tanıyı verir. Ayri bir sinif (yigin
+// yuvalari) kullaniliyor, ObjArray onbellegine (4 girdi, surumleme kaniti
+// ona bagli) karismiyor. TULPAR_NO_SARR_CACHE=1 kapatir (pozitif kontrol).
+static void emit_sarr_cache_fill(LLVMBackend *backend, LLVMValueRef var_slot,
+                                 LLVMValueRef data_slot, LLVMValueRef cnt_slot) {
+  LLVMTypeRef i32t = backend->int32_type;
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, var_slot,
+                                  "sarrc.v");
+  LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), data_slot);
+  LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), cnt_slot);
+  LLVMBasicBlockRef b_ty = append_bb(backend, fn, "sarrc.ty");
+  LLVMBasicBlockRef b_ld = append_bb(backend, fn, "sarrc.ld");
+  LLVMBasicBlockRef b_done = append_bb(backend, fn, "sarrc.done");
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, v, 0, "sarrc.tag");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                LLVMConstInt(i32t, 4 /* VM_VAL_OBJ */, 0), "sarrc.isobj"),
+                  b_ty, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ty);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
+  LLVMValueRef ot = LLVMBuildLoad2(
+      backend->builder, i32t,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 0, "sarrc.otp"),
+      "sarrc.ot");
+  llvm_tbaa_tag(backend, ot, 0);
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                LLVMConstInt(i32t, 7 /* OBJ_STRUCT_ARRAY */, 0), "sarrc.issarr"),
+                  b_ld, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ld);
+  LLVMValueRef cn = LLVMBuildLoad2(
+      backend->builder, i32t,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 6, "sarrc.cntp"),
+      "sarrc.cnt");
+  llvm_tbaa_tag(backend, cn, 0);
+  LLVMValueRef dp = LLVMBuildLoad2(
+      backend->builder, backend->ptr_type,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 9, "sarrc.datap"),
+      "sarrc.data");
+  llvm_tbaa_tag(backend, dp, 0);
+  LLVMBuildStore(backend->builder, LLVMBuildSExt(backend->builder, cn, backend->int_type,
+                                                 "sarrc.cnt64"),
+                 cnt_slot);
+  LLVMBuildStore(backend->builder, dp, data_slot);
+  LLVMBuildBr(backend->builder, b_done);
+  LLVMPositionBuilderAtEnd(backend->builder, b_done);
+}
+
+// Dongu kapsami boyunca gecerli onbellek girdileri; yikicida (dongunun HER
+// cikis yolunda — case blogunda birden cok `return` var) geri alinir.
+struct SarrCacheScope {
+  size_t saved;
+  SarrCacheScope(LLVMBackend *backend, ASTNode_C *cond, ASTNode_C *body,
+                 ASTNode_C *incr)
+      : saved(sarr_loop_cache().size()) {
+    const char *off = getenv("TULPAR_NO_SARR_CACHE");
+    if (off && *off && *off != '0') return;
+    if (!tulpar_loop_shape_stable(cond, body, incr, shape_pure_call, backend)) return;
+    const char *names[8];
+    int n = tulpar_collect_indexed_names(cond, body, names, 8);
+    for (int i = 0; i < n; i++) {
+      const char *nm = names[i];
+      if (!get_local_struct_array_elem(backend, nm)) continue;
+      if (tulpar_loop_rebinds_name(cond, body, incr, nm)) continue;
+      LLVMValueRef vs = get_local(backend, nm);
+      if (!vs || slot_value_type(vs) != backend->vm_value_type) continue;
+      if (sarr_loop_cache_lookup(nm, vs)) continue;  // dis dongu zaten aldi
+      LLVMValueRef ds = llvm_build_alloca_at_entry(backend, backend->ptr_type, "sarrc.data.slot");
+      LLVMValueRef cs = llvm_build_alloca_at_entry(backend, backend->int_type, "sarrc.cnt.slot");
+      emit_sarr_cache_fill(backend, vs, ds, cs);
+      sarr_loop_cache().push_back(SarrLoopCache{nm, vs, ds, cs});
+    }
+  }
+  ~SarrCacheScope() { sarr_loop_cache().resize(saved); }
+};
 
 
 // `+=` -> `+` esleme. Bilesik atamanin hem skaler hem eleman yolu bunu
@@ -11653,12 +12090,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // Native typed-int global (registered in Pass 0.1 for `int x = ...;`)?
     // Only when this declaration IS the top-level one — inside a function the
     // same name is a fresh local that must shadow, not overwrite, the global.
-    LLVMValueRef existing_global =
-        at_top_level_scope(backend)
-            ? LLVMGetNamedGlobal(backend->module, gsym(node->name).c_str())
-            : nullptr;
+    // Terfi edilmis main yereli de burada: global'le AYNI yollar (tipli int
+    // saklama, struct dizisi tutamaci, bariyerli kutulu saklama).
+    LLVMValueRef existing_global = top_level_decl_slot(backend, node->name);
     if (existing_global &&
-        LLVMGlobalGetValueType(existing_global) == backend->int_type) {
+        slot_value_type(existing_global) == backend->int_type) {
       LLVMValueRef int_init;
       if (node->right) {
         TypedValue tv = codegen_typed_expr(backend, node->right);
@@ -11874,9 +12310,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // yeni bir yereldir: golgeler, global'i ezmez.
         LLVMValueRef typed_alloca = nullptr;
         if (at_top_level_scope(backend)) {
-          LLVMValueRef sg =
-              LLVMGetNamedGlobal(backend->module, gsym(node->name).c_str());
-          if (sg && LLVMGlobalGetValueType(sg) == st->llvm_type)
+          LLVMValueRef sg = top_level_decl_slot(backend, node->name);
+          if (sg && slot_value_type(sg) == st->llvm_type)
             typed_alloca = sg;
         }
         if (!typed_alloca) {
@@ -12769,6 +13204,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // yerelden kullan. Kanitlanamiyorsa hicbir sey degismez.
     int shape_saved = emit_shape_cache_for_loop(backend, node->condition,
                                                 node->body, nullptr);
+    SarrCacheScope sarr_cache(backend, node->condition, node->body, nullptr);
 
     // DONGU SURUMLEME — `while` bicimi. Bkz. tulpar_while_index_proven:
     // `while (v <= UB) { ...a[v]...; v = v + STEP; }`. `for` kanitindan
@@ -12940,6 +13376,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // init'ten SONRA cagriliyor: dongu degiskeni artik kapsamda.
     int shape_saved = emit_shape_cache_for_loop(backend, node->condition,
                                                 node->body, node->increment);
+    SarrCacheScope sarr_cache(backend, node->condition, node->body, node->increment);
 
     // FLOAT DIZI DONGU SURUMU (2026-10-01): en icteki dongu, HER derinlikte
     // (tamsayi surumlemesinin aksine yalniz en dis seviye degil — matmul'un
@@ -15573,8 +16010,12 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
 
     // Pass 0.1: Pre-scan for Global Variables (Forward Declaration)
     // (predeclare_top_level_global — imported modules use the same rule).
+    // Yalniz main'in kendi govdesinden gorulen adlar global DEGIL, main'in
+    // yereli olur (main_local_declare; kural ve olcum orada).
+    main_locals_analyze(backend, node);
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type == AST_VARIABLE_DECL) {
+        if (main_local_declare(backend, node->statements[i])) continue;
         predeclare_top_level_global(backend, node->statements[i],
                                     /*is_import=*/false);
       }
@@ -15666,6 +16107,9 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   if (node->statements) {
+    // Terfi edilen ust duzey adlar kok kapsama SIMDI yaziliyor: fonksiyon
+    // govdeleri (Pass 1b) ve import edilen modullerin kodu onlari gormemeli.
+    main_locals_register(backend);
     // Pass 2: Main loop logic (Execute Statements)
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type != AST_FUNCTION_DECL &&

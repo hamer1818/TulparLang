@@ -132,4 +132,9 @@ extern "C" void tulpar_collect_float_array_decls(ASTNode_C *root,
                                                  void (*cb)(const char *, void *),
                                                  void *ctx);
 
+// Butun cocuk alanlarini (walk_all ile AYNI liste) on-sirayla gezer; `visit`
+// 0 dondururse gezinti durur ve 0 doner.
+extern "C" int tulpar_ast_walk(ASTNode_C *n, int (*visit)(ASTNode_C *, void *),
+                               void *ctx);
+
 #endif
