@@ -1416,6 +1416,14 @@ TPREOF
         exit 1
     fi
 
+    # TRY GOVDESINDE YAZILAN YEREL (Tuzaklar 7i, 2026-10-01): catch'te okunan
+    # yerel volatile, govdede dogup olen yerel DEGIL; TULPAR_NO_TRY_VOLATILE=1
+    # ile hata geri gelmeli (pozitif kontrol). Anlam: tests/try_yerel.test.tpr.
+    if ! bash tests/try_yerel.sh ./tulpar; then
+        echo -e "${RED}try govdesi yerel volatile karari bozuk!${NC}"
+        exit 1
+    fi
+
     # f32 / i32 STRUCT ALANLARI (K037/K035): tanilar + struct dizisi deposunun
     # C dizisiyle bayt bayt ayni oldugu (C++ sondasi, iki yon, pozitif kontrol).
     if ! bash tests/f32_yerlesim.sh ./tulpar; then

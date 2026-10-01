@@ -6,9 +6,12 @@
 # optimizasyon ONCESI IR'dan okuyor — ikisi de yalniz hiz degistirir, sonucu
 # degil; bozulduklarinda anlam paketi YESIL kalir:
 #   1) yalniz main'de gorulen ust duzey ad LLVM global'i OLMAMALI
-#      (`@tpr_g_<ad>` yok); fonksiyonda / lambdada / try govdesinde gecen
-#      ad global KALMALI. `int` olculmus kuralla global kalir (elek LSR
-#      gerilemesi), TULPAR_MAIN_LOCALS_ALL=1 onu da terfi ettirir.
+#      (`@tpr_g_<ad>` yok); fonksiyonda / lambdada gecen ad global KALMALI.
+#      `int` olculmus kuralla global kalir (elek LSR gerilemesi),
+#      TULPAR_MAIN_LOCALS_ALL=1 onu da terfi ettirir. Ust duzey `try`
+#      govdesinde YAZILIP firlatilan ad 2026-10-01'den beri main yereli
+#      (Tuzaklar 7i duzeldi: try_volatile_finalize); deger guncel kalmali,
+#      TULPAR_NO_TRY_VOLATILE=1 ile eski degere donmeli (pozitif kontrol).
 #   2) sekli degismeyen dongude struct dizisi basligi dongu basinda okunmali
 #      (`sarrc.` bloklari); govdesi push eden dongude OKUNMAMALI.
 #   3) struct dizisi alan saklamasi TBAA etiketli olmali.
@@ -28,6 +31,8 @@
 # Eski derleyiciyle (iki optimizasyon da yok): 12/17 — 1), 2) ve 3)'un
 # olumlu yonu (ve TULPAR_MAIN_LOCALS_ALL) dusuyor, pozitif kontroller ve
 # anlam satirlari geciyor.
+# #431 derleyicisiyle (try kisiti varken, 2026-10-01): 16/18 — try_f global
+# kaliyor ve TULPAR_NO_TRY_VOLATILE onu etkilemiyor (global'de hata yoktu).
 set -u
 cd "$(dirname "$0")/.."
 TULPAR="${1:-./tulpar}"
@@ -48,6 +53,7 @@ int yalniz_int = 2;
 float paylasilan = 1.0;
 int lam_ad = 0;
 int try_ad = 0;
+float try_f = 0.5;
 P[] ps = [];
 func oku(): float { return paylasilan; }
 func buyut(int n): float {
@@ -58,6 +64,7 @@ func buyut(int n): float {
 }
 var f = () => lam_ad + 1;
 try { try_ad = 1; } catch (e) { }
+try { try_f = 2.5; throw "x"; } catch (e) { }
 for (int i = 0; i < 100; i = i + 1) { push(ps, { x: toFloat(i), vx: 1.0 }); }
 for (int s = 0; s < 4; s = s + 1) {
     for (int i = 0; i < len(ps); i = i + 1) { ps[i].x = ps[i].x + ps[i].vx * yalniz; }
@@ -65,7 +72,7 @@ for (int s = 0; s < 4; s = s + 1) {
 float t = 0.0;
 for (int i = 0; i < len(ps); i = i + 1) { t = t + ps[i].x; }
 for (int i = 0; i < 3; i = i + 1) { yalniz_int = yalniz_int + i; }
-print(toInt(t), toInt(oku()), f(), try_ad, toInt(buyut(5)), yalniz_int);
+print(toInt(t), toInt(oku()), f(), try_ad, toInt(buyut(5)), yalniz_int, toInt(try_f * 2.0));
 EOF
 
 derle() {  # derle <cikti_adi> [ortam...]
@@ -85,8 +92,8 @@ if ! derle yeni; then
   echo "main yerel kapisi DUSTU: program derlenemedi"; sed -n '1,15p' "$TMP/yeni.log"; exit 1
 fi
 out=$("$TMP/yeni")
-[ "$out" = "5150 1 1 1 9 5" ] && ok "program dogru sonuc veriyor (5150 1 1 1 9 5)" \
-  || bad "program sonucu: '$out' (5150 1 1 1 9 5 bekleniyordu)"
+[ "$out" = "5150 1 1 1 9 5 5" ] && ok "program dogru sonuc veriyor (5150 1 1 1 9 5 5)" \
+  || bad "program sonucu: '$out' (5150 1 1 1 9 5 5 bekleniyordu)"
 LL="$TMP/yeni.pre.ll"
 
 # 1) terfi karari
@@ -101,7 +108,7 @@ has_global "$LL" yalniz_int && ok "int ust duzey global kaliyor (olculmus kural)
 if derle hepsi TULPAR_MAIN_LOCALS_ALL=1; then
   has_global "$TMP/hepsi.pre.ll" yalniz_int && bad "TULPAR_MAIN_LOCALS_ALL=1 ile de int global" \
     || ok "TULPAR_MAIN_LOCALS_ALL=1: int de terfi ediliyor"
-  [ "$("$TMP/hepsi")" = "5150 1 1 1 9 5" ] && ok "TULPAR_MAIN_LOCALS_ALL=1 ayni sonuc" \
+  [ "$("$TMP/hepsi")" = "5150 1 1 1 9 5 5" ] && ok "TULPAR_MAIN_LOCALS_ALL=1 ayni sonuc" \
     || bad "TULPAR_MAIN_LOCALS_ALL=1 farkli sonuc: '$("$TMP/hepsi")'"
 else
   bad "TULPAR_MAIN_LOCALS_ALL=1 derlemesi basarisiz"
@@ -110,8 +117,15 @@ has_global "$LL" paylasilan && ok "fonksiyonda okunan ad global kaliyor" \
   || bad "fonksiyonda okunan 'paylasilan' global DEGIL (fonksiyon neyi okuyor?)"
 has_global "$LL" lam_ad && ok "lambda adi global kaliyor" \
   || bad "lambdada okunan 'lam_ad' global DEGIL"
-has_global "$LL" try_ad && ok "try govdesindeki ad global kaliyor (setjmp)" \
-  || bad "try govdesinde yazilan 'try_ad' global DEGIL — longjmp sonrasi bayat deger riski"
+has_global "$LL" try_f && bad "ust duzey try govdesinde yazilan float 'try_f' hala global" \
+  || ok "ust duzey try govdesinde yazilan float main yereli (Tuzaklar 7i duzeldi)"
+if derle tv TULPAR_NO_TRY_VOLATILE=1; then
+  tvo=$("$TMP/tv")
+  [ "$tvo" = "5150 1 1 1 9 5 1" ] && ok "pozitif kontrol: TULPAR_NO_TRY_VOLATILE=1 ile try_f eski degerinde (1)" \
+    || bad "pozitif kontrol: TULPAR_NO_TRY_VOLATILE=1 sonucu '$tvo' (son alan 1 bekleniyordu)"
+else
+  bad "TULPAR_NO_TRY_VOLATILE=1 derlemesi basarisiz"
+fi
 
 # 2) struct dizisi sekil onbellegi
 n_main=$(fn_body "$LL" main | grep -c '^sarrc\.ty')

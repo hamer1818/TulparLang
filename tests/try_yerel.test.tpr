@@ -1,0 +1,219 @@
+// TRY GOVDESINDE YAZILAN YEREL — anlam paketi (2026-10-01, Tuzaklar 7i).
+//
+// `try` setjmp, `throw` longjmp. Duzeltmeden once try govdesinde degisip
+// firlatilan YEREL catch/finally/sonrasinda setjmp anindaki eski degerine
+// donuyordu: SROA yereli yazmaca aliyor, firlatmadan onceki saklama (yolu
+// `unreachable`a cikan) olu sayilip siliniyordu. Duzeltme
+// (src/aot/llvm_backend.cpp, try_volatile_finalize): govdede yazilip
+// govdenin disinda da kullanilan yerellerin erisimleri volatile.
+//
+// Eski derleyiciyle (ve TULPAR_NO_TRY_VOLATILE=1 ile) bu paketin cogu
+// KIRMIZI — olculdu 2026-10-01, sayi tests/try_yerel.sh basliginda.
+// Kararin IR'da verildigini (ve yalniz gerekli yerellerin etkilendigini)
+// tests/try_yerel.sh sinar.
+import "test";
+
+struct TyP { float x; float y; }
+
+func ty_yap(float v): TyP { return { x: v, y: v + 1.0 }; }
+func ty_patla(string m) { throw m; }
+
+// ---- 1) cekirdek ornek ----------------------------------------------------
+func ty_int(): int {
+    int k = 0;
+    try { k = 5; throw "x"; } catch (e) { }
+    return k;
+}
+func run_int() { assert_eq_int(ty_int(), 5); }
+
+// ---- 2) dongude sayac, firlatma ortada -------------------------------------
+func ty_dongu(): int {
+    int k = 0;
+    try {
+        for (int i = 0; i < 100; i = i + 1) {
+            k = k + 1;
+            if (k == 7) { throw "yedi"; }
+        }
+    } catch (e) { }
+    return k;
+}
+func run_dongu() { assert_eq_int(ty_dongu(), 7); }
+
+// ---- 3) dongu ICINDE try: onceki turun longjmp'i sonraki turu bozmamali ----
+func ty_dongude_try(): int {
+    int t = 0;
+    int yakalanan = 0;
+    for (int i = 1; i <= 20; i = i + 1) {
+        try {
+            t = t + i;
+            if (i % 3 == 0) { throw "uc"; }
+        } catch (e) {
+            yakalanan = yakalanan + 1;
+        }
+    }
+    return t * 100 + yakalanan;   // 210 * 100 + 6
+}
+func run_dongude_try() { assert_eq_int(ty_dongude_try(), 21006); }
+
+// ---- 4) ic ice try: ic govdede yazilan, dis catch'te okunan ---------------
+func ty_ic_ice(): int {
+    int a = 0;
+    int b = 0;
+    try {
+        a = 1;
+        try {
+            b = 2;
+            a = 10;
+            throw "ic";
+        } catch (e) {
+            b = b + 20;          // 22: ic catch guncel b'yi gormeli
+            a = a + 100;         // 110
+            throw "yeniden";
+        }
+    } catch (e2) {
+        a = a + 1000;            // 1110
+    }
+    return a * 1000 + b;         // 1110022
+}
+func run_ic_ice() { assert_eq_int(ty_ic_ice(), 1110022); }
+
+// ---- 5) float / str / bool -------------------------------------------------
+func ty_float(): float {
+    float f = 0.5;
+    try { f = f * 3.0; throw "f"; } catch (e) { }
+    return f;
+}
+func ty_str(): string {
+    string s = "eski";
+    try { s = "yeni"; throw "s"; } catch (e) { }
+    return s;
+}
+func ty_bool(): bool {
+    bool b = false;
+    try { b = true; throw "b"; } catch (e) { }
+    return b;
+}
+func run_tipler() {
+    assert_close(ty_float(), 1.5, 0.000001);
+    assert_eq_str(ty_str(), "yeni");
+    assert(ty_bool(), "bool yerel try sonrasi true olmali");
+}
+
+// ---- 6) struct: alan yazmasi ve cagri sonucu (satir ici acilan) ------------
+func ty_struct_alan(): float {
+    TyP p = { x: 1.0, y: 2.0 };
+    try { p.x = 5.0; p.y = p.y + 4.0; throw "p"; } catch (e) { }
+    return p.x * 10.0 + p.y;     // 56
+}
+func ty_struct_cagri(): float {
+    TyP p = { x: 1.0, y: 2.0 };
+    try { p = ty_yap(7.0); throw "q"; } catch (e) { }
+    return p.x * 10.0 + p.y;     // 78
+}
+func run_struct() {
+    assert_close(ty_struct_alan(), 56.0, 0.000001);
+    assert_close(ty_struct_cagri(), 78.0, 0.000001);
+}
+
+// ---- 7) dizi yeniden baglama -----------------------------------------------
+func ty_dizi(): int {
+    int[] a = [1];
+    try { a = [1, 2, 3]; throw "a"; } catch (e) { }
+    return len(a);
+}
+func run_dizi() { assert_eq_int(ty_dizi(), 3); }
+
+// ---- 8) finally guncel degeri gormeli --------------------------------------
+func ty_finally(): int {
+    int k = 0;
+    int f = 0;
+    try { k = 9; throw "x"; } catch (e) { k = k + 1; } finally { f = k; }
+    return f;                    // 10
+}
+func ty_finally_yakalamasiz(): int {
+    int k = 0;
+    int f = 0;
+    try { k = 4; } catch (e) { k = 99; } finally { f = k * 2; }
+    return f;                    // 8
+}
+func run_finally() {
+    assert_eq_int(ty_finally(), 10);
+    assert_eq_int(ty_finally_yakalamasiz(), 8);
+}
+
+// ---- 9) firlatma CAGRILAN fonksiyonda -------------------------------------
+func ty_uzak(): int {
+    int k = 0;
+    try { k = 3; ty_patla("uzak"); k = 999; } catch (e) { k = k * 10; }
+    return k;                    // 30
+}
+func run_uzak() { assert_eq_int(ty_uzak(), 30); }
+
+// ---- 10) tumu-int imza (yerel ABI) ve oz-yinelemeli fonksiyon -------------
+func ty_ham(int n): int {
+    int k = 0;
+    try { k = n + 1; throw "h"; } catch (e) { }
+    return k;
+}
+func ty_ozyineleme(int n): int {
+    if (n <= 0) { return 0; }
+    int k = 0;
+    try { k = n; throw "o"; } catch (e) { }
+    return k + ty_ozyineleme(n - 1);
+}
+func run_ham() {
+    assert_eq_int(ty_ham(41), 42);
+    assert_eq_int(ty_ozyineleme(10), 55);
+}
+
+// ---- 11) lambda govdesinde try ---------------------------------------------
+func run_lambda() {
+    var f = (int n) => {
+        int k = 0;
+        try { k = n * 2; throw "l"; } catch (e) { }
+        return k;
+    };
+    assert_eq_int(f(21), 42);
+}
+
+// ---- 12) catch'te yazilip dis try'a yeniden firlatilan ---------------------
+func ty_catchte_yazilan(): int {
+    int k = 0;
+    try {
+        try { throw "a"; } catch (e) { k = 77; throw "b"; }
+    } catch (e2) { }
+    return k;
+}
+func run_catchte_yazilan() { assert_eq_int(ty_catchte_yazilan(), 77); }
+
+// ---- 13) govdede bildirilen yerel her giriste yeniden kurulur --------------
+// (Bu yerel volatile YAPILMIYOR — anlam yine dogru olmali.)
+func ty_govde_yereli(): int {
+    int t = 0;
+    for (int r = 0; r < 5; r = r + 1) {
+        try {
+            int j = r;
+            for (int i = 0; i < 10; i = i + 1) { j = j + 1; }
+            t = t + j;
+            if (r == 2) { throw "r"; }
+        } catch (e) { t = t + 1000; }
+    }
+    return t;                    // (10+11+12+13+14) + 1000 = 1060
+}
+func run_govde_yereli() { assert_eq_int(ty_govde_yereli(), 1060); }
+
+print("=== try govdesinde yazilan yerel (setjmp/longjmp) ===");
+test("int yerel throw sonrasi guncel", "run_int");
+test("dongude sayac, firlatma ortada", "run_dongu");
+test("dongu icinde try (onceki tur bozmaz)", "run_dongude_try");
+test("ic ice try + yeniden firlatma", "run_ic_ice");
+test("float / str / bool yereller", "run_tipler");
+test("struct alani ve satir ici cagri sonucu", "run_struct");
+test("dizi yeniden baglama", "run_dizi");
+test("finally guncel degeri gorur", "run_finally");
+test("firlatma cagrilan fonksiyonda", "run_uzak");
+test("tumu-int imza ve oz-yineleme", "run_ham");
+test("lambda govdesinde try", "run_lambda");
+test("catch'te yazilip dis try'a firlatilan", "run_catchte_yazilan");
+test("govdede bildirilen yerel", "run_govde_yereli");
+test_summary();

@@ -186,8 +186,9 @@ func run_ic_ice() { assert_close(s_mtop, 80.0, 0.000001); }     // 8 * (0+1+2+3+
 // Dongu `i <= len(a)`: son turda a[len] — onbellekli yol yavas yola dusup
 // hatayi firlatmali (sessiz 0 / cop yok). Yazilan tur sayisi YEREL bir
 // sayacta DEGIL dizide tutuluyor: try govdesinde degisip firlatilan yerel
-// setjmp/longjmp yuzunden eski degerine donuyor (onceden var olan hata,
-// docs/mindmap/Tuzaklar.md 7i) — o hata bu testin konusu degil.
+// setjmp/longjmp yuzunden eski degerine donuyordu (docs/mindmap/Tuzaklar.md
+// 7i; 2026-10-01'de duzeldi, kendi paketi tests/try_yerel.test.tpr) — o hata
+// bu testin konusu degil.
 func run_sinir_disi() {
     MlP[] a = [{ x: 0.0, y: 0.0, vx: 0.0, vy: 0.0 }, { x: 0.0, y: 0.0, vx: 0.0, vy: 0.0 }];
     bool yakalandi = false;

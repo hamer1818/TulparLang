@@ -4522,9 +4522,13 @@ static void predeclare_top_level_global(LLVMBackend *backend, ASTNode_C *decl,
 // olmasi hicbir gozlemciye hizmet etmiyordu. Ad bir kez bile geciyorsa (okuma,
 // yazma, golgeleyen yerel, cagri adi — ayrim yapilmiyor, MUHAFAZAKAR) global
 // kalir. Ayrica global kalanlar:
-//   * ust duzey `try` govdesinde gecen adlar: setjmp/longjmp arasinda
-//     degisen yerel (C'deki gibi) yazmacta kalip eski degerle geri donebilir;
-//     global'de bu sorun yok.
+//   * (2026-10-01'e kadar) ust duzey `try` govdesinde gecen adlar da global
+//     kaliyordu: setjmp/longjmp arasinda degisen yerel eski degerine
+//     donuyordu (Tuzaklar 7i). O hata try_volatile_finalize ile duzeldi ve
+//     kisit kalkti. Olculdu (Ryzen 7 9800X3D, 2026-10-01, en iyi 5,
+//     taskset 10,11): particles'in adim dongusu ust duzey `try`a sarilinca
+//     35,7 -> 10,9 ms (try'siz hali 11,3); try icinde sicak dongude YAZILAN
+//     ust duzey float (artik volatile main yereli) 221 -> 212 ms, gerileme yok.
 //   * atomic_* cagrisinda gecen adlar (ilk arguman bir GLOBAL olmali),
 //     @thread_local / TLS adlari, wings sayac listesi.
 //   * hata ayiklama bilgisi uretiliyorsa hicbiri (hata ayiklayici global'leri
@@ -4567,8 +4571,8 @@ struct MlScanCtx {
   std::vector<ASTNode_C *> *imports;
 };
 
-// Ana programin bir deyimi: fonksiyon/lambda govdelerindeki, `try`
-// govdelerindeki ve atomic_* cagrilarindaki BUTUN adlar engellenir. Ic ice
+// Ana programin bir deyimi: fonksiyon/lambda govdelerindeki ve atomic_*
+// cagrilarindaki BUTUN adlar engellenir. Ic ice
 // (deyim olmayan) import dugumleri de toplanir.
 static int ml_scan_main(ASTNode_C *n, void *p) {
   MlScanCtx *c = static_cast<MlScanCtx *>(p);
@@ -4577,9 +4581,10 @@ static int ml_scan_main(ASTNode_C *n, void *p) {
   case AST_LAMBDA:
     tulpar_ast_walk(n, ml_collect_name, c->blocked);
     break;
-  case AST_TRY_CATCH:
-    tulpar_ast_walk(n->try_block, ml_collect_name, c->blocked);
-    break;
+  // `try` govdesindeki adlar ARTIK engellenmiyor (2026-10-01): govdede
+  // yazilip disarida okunan yerel try_volatile_finalize ile volatile oluyor,
+  // yani main'in yereli de longjmp'tan sonra guncel. Butun programi `try`a
+  // saran ust duzey kod boylece hizli yoldan cikmiyor (olcum yukarida).
   case AST_FUNCTION_CALL:
     if (n->name && strncmp(n->name, "atomic_", 7) == 0)
       tulpar_ast_walk(n, ml_collect_name, c->blocked);
@@ -12033,6 +12038,177 @@ static void emit_try_pops(LLVMBackend *backend, int count) {
   }
 }
 
+// ---- TRY GOVDESINDE YAZILAN YEREL: VOLATILE (Tuzaklar 7i, 2026-10-01) ----
+//
+// `try` -> setjmp, `throw` -> longjmp. C'deki kural: setjmp ile longjmp
+// arasinda degisen volatile OLMAYAN yerel longjmp'tan sonra BELIRSIZ. LLVM
+// bunu harfiyen uyguluyor: setjmp bildirimi `returns_twice` tasiyor ama bu
+// yalniz birkac makine duzeyi geciside fren; SROA/mem2reg alloca'yi yine
+// yazmaca aliyor, `throw`dan once yapilan saklama (yolu `unreachable`a
+// cikan) olu saklama sayilip siliniyor ve catch tarafi setjmp anindaki eski
+// degeri goruyor. Olculdu (2026-10-01, LLVM 23.1):
+//   func f(): int { int k = 0; try { k = 5; throw "x"; } catch (e) {} return k; }
+// -> 0 (5 olmali). Eski derleyici de ayni.
+//
+// Duzeltme clang'in C programcisindan istedigi seyin aynisi: ilgili
+// yerellerin BUTUN yukleme/saklamalari `volatile`. Yalniz GEREKLI yereller:
+// alloca'si (GEP zinciri uzerinden) try GOVDESI bloklarinda yazilan VE
+// govdenin DISINDA da kullanilan (bildirim/catch/finally/sonrasi/dongunun
+// onceki turu). Govdede bildirilip yalniz govdede kullanilan yerel (ornegin
+// try icindeki `for (int i ...)` sayaci) her giriste yeniden kuruldugu icin
+// etkilenmez — sicak dongu yazmacta kalir.
+//
+// Govde bloklari kodlama aninda kaydediliyor (try_volatile_regions);
+// isaretleme fonksiyon BITTIKTEN sonra yapilabilir, cunku catch/sonrasindaki
+// yuklemeler govde uretilirken henuz yok. Bu yuzden butun modul icin
+// llvm_backend_compile sonunda TEK gecis (try_volatile_finalize).
+//
+// Yerele isaretci alan cagri (struct sonuc yuvasi, `aot_*_into(&k)`):
+// cagri yerine `noinline` konuyor — aksi halde satir ici acilan cagrinin
+// saklamasi volatile OLMAZ ve ayni hata geri gelirdi. memcpy/memset
+// ozunde (struct kopyasi) volatile bayragi aciliyor.
+//
+// TULPAR_NO_TRY_VOLATILE=1 kapatir (pozitif kontrol: hata geri gelir,
+// tests/try_yerel.sh).
+namespace {
+struct TryVolatileRegion {
+  LLVMValueRef fn;
+  std::vector<LLVMBasicBlockRef> blocks;
+};
+}  // namespace
+
+static std::vector<TryVolatileRegion> &try_volatile_regions() {
+  static std::vector<TryVolatileRegion> r;
+  return r;
+}
+
+static int try_volatile_disabled() {
+  const char *e = getenv("TULPAR_NO_TRY_VOLATILE");
+  return e && *e && *e != '0';
+}
+
+// GEP/bitcast zincirinin kokundeki alloca (yoksa nullptr).
+static LLVMValueRef tv_base_alloca(LLVMValueRef p) {
+  for (int guard = 0; p && guard < 64; guard++) {
+    if (LLVMIsAAllocaInst(p)) return p;
+    if (LLVMIsAGetElementPtrInst(p) || LLVMIsABitCastInst(p) ||
+        LLVMIsAAddrSpaceCastInst(p)) {
+      p = LLVMGetOperand(p, 0);
+      continue;
+    }
+    return nullptr;
+  }
+  return nullptr;
+}
+
+static int tv_is_memintrinsic(LLVMValueRef call) {
+  LLVMValueRef callee = LLVMGetCalledValue(call);
+  if (!callee || !LLVMIsAFunction(callee)) return 0;
+  size_t len = 0;
+  const char *nm = LLVMGetValueName2(callee, &len);
+  return nm && (strncmp(nm, "llvm.memcpy", 11) == 0 ||
+                strncmp(nm, "llvm.memmove", 12) == 0 ||
+                strncmp(nm, "llvm.memset", 11) == 0);
+}
+
+static int tv_is_ignorable_intrinsic(LLVMValueRef call) {
+  LLVMValueRef callee = LLVMGetCalledValue(call);
+  if (!callee || !LLVMIsAFunction(callee)) return 0;
+  size_t len = 0;
+  const char *nm = LLVMGetValueName2(callee, &len);
+  return nm && (strncmp(nm, "llvm.lifetime", 13) == 0 ||
+                strncmp(nm, "llvm.dbg", 8) == 0);
+}
+
+// `v`nin (alloca veya ondan turetilmis GEP/bitcast) kullanicilarini gezer.
+template <typename F>
+static void tv_walk_uses(LLVMValueRef v, F &&fn, int depth = 0) {
+  if (depth > 64) return;
+  for (LLVMUseRef u = LLVMGetFirstUse(v); u; u = LLVMGetNextUse(u)) {
+    LLVMValueRef user = LLVMGetUser(u);
+    if (LLVMIsAGetElementPtrInst(user) || LLVMIsABitCastInst(user) ||
+        LLVMIsAAddrSpaceCastInst(user)) {
+      // Yalniz isaretci islenen olarak (GEP'in indeksi olamaz: alloca isaretci)
+      fn(user, v);
+      tv_walk_uses(user, fn, depth + 1);
+      continue;
+    }
+    fn(user, v);
+  }
+}
+
+static void try_volatile_finalize(LLVMBackend *backend) {
+  auto &regions = try_volatile_regions();
+  if (regions.empty()) return;
+  if (try_volatile_disabled()) {
+    regions.clear();
+    return;
+  }
+  LLVMAttributeRef noinline_attr = LLVMCreateEnumAttribute(
+      backend->context, LLVMGetEnumAttributeKindForName("noinline", 8), 0);
+  std::unordered_set<LLVMValueRef> marked;
+  std::vector<LLVMValueRef> order;  // belirlenimli sira
+  for (const TryVolatileRegion &r : regions) {
+    std::unordered_set<LLVMBasicBlockRef> in_body(r.blocks.begin(), r.blocks.end());
+    // 1) Govdede YAZILAN alloca'lar: saklama hedefi, mem* hedefi ya da
+    //    isaretcisini alan cagri (yazabilir — muhafazakar).
+    std::vector<LLVMValueRef> written;
+    std::unordered_set<LLVMValueRef> seen;
+    for (LLVMBasicBlockRef bb : r.blocks) {
+      for (LLVMValueRef ins = LLVMGetFirstInstruction(bb); ins;
+           ins = LLVMGetNextInstruction(ins)) {
+        LLVMValueRef base = nullptr;
+        if (LLVMIsAStoreInst(ins)) {
+          base = tv_base_alloca(LLVMGetOperand(ins, 1));
+          if (base && seen.insert(base).second) written.push_back(base);
+        } else if (LLVMIsACallInst(ins) && !tv_is_ignorable_intrinsic(ins)) {
+          unsigned n = LLVMGetNumArgOperands(ins);
+          for (unsigned a = 0; a < n; a++) {
+            base = tv_base_alloca(LLVMGetOperand(ins, a));
+            if (base && seen.insert(base).second) written.push_back(base);
+          }
+        }
+      }
+    }
+    // 2) Govde DISINDA da kullanilanlar isaretlenir (govdede dogup govdede
+    //    olen gecici/yerel her giriste yeniden kuruluyor).
+    for (LLVMValueRef a : written) {
+      if (marked.count(a)) continue;
+      bool outside = false;
+      tv_walk_uses(a, [&](LLVMValueRef user, LLVMValueRef) {
+        if (outside || !LLVMIsAInstruction(user)) return;
+        if (LLVMIsAGetElementPtrInst(user) || LLVMIsABitCastInst(user)) return;
+        if (LLVMIsACallInst(user) && tv_is_ignorable_intrinsic(user)) return;
+        if (!in_body.count(LLVMGetInstructionParent(user))) outside = true;
+      });
+      if (outside) {
+        marked.insert(a);
+        order.push_back(a);
+      }
+    }
+  }
+  // 3) Isaretli alloca'nin BUTUN erisimleri volatile.
+  for (LLVMValueRef a : order) {
+    tv_walk_uses(a, [&](LLVMValueRef user, LLVMValueRef ptr) {
+      if (LLVMIsALoadInst(user)) {
+        LLVMSetVolatile(user, 1);
+      } else if (LLVMIsAStoreInst(user)) {
+        // Yalniz isaretci islenen (adresin kendisini saklamak bir kacis).
+        if (LLVMGetOperand(user, 1) == ptr) LLVMSetVolatile(user, 1);
+      } else if (LLVMIsACallInst(user)) {
+        if (tv_is_ignorable_intrinsic(user)) return;
+        if (tv_is_memintrinsic(user)) {
+          // memcpy/memmove/memset(dst, src|val, len, i1 isvolatile)
+          LLVMSetOperand(user, 3, LLVMConstInt(LLVMInt1TypeInContext(backend->context), 1, 0));
+        } else {
+          LLVMAddCallSiteAttribute(user, LLVMAttributeFunctionIndex, noinline_attr);
+        }
+      }
+    });
+  }
+  regions.clear();
+}
+
 // `for` dongusunun cond/body/incr ucusunu uretir ve `after`a baglar.
 // Iki kez cagriliyor: SURUMLEME'de once bekcisiz (hizli), sonra bekcili
 // (genel) govde. Dongu degiskeni init'te BIR KEZ bildirildigi ve bellekte
@@ -13789,9 +13965,22 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // way out (see emit_try_pops). Catch/finally run with the handler
     // already off the stack (aot_throw pops it), so they use the outer depth.
     LLVMPositionBuilderAtEnd(backend->builder, tryB);
+    // Govde bloklari: tryB + govde uretilirken fonksiyonun SONUNA eklenenler
+    // (append_bb hep sona ekler; endB su an son blok). try_volatile_finalize.
+    LLVMValueRef tv_fn = backend->current_function;
+    LLVMBasicBlockRef tv_mark = LLVMGetLastBasicBlock(tv_fn);
     backend->try_depth++;
     codegen_statement(backend, node->try_block);
     backend->try_depth--;
+    {
+      TryVolatileRegion reg;
+      reg.fn = tv_fn;
+      reg.blocks.push_back(tryB);
+      for (LLVMBasicBlockRef bb = LLVMGetNextBasicBlock(tv_mark); bb;
+           bb = LLVMGetNextBasicBlock(bb))
+        reg.blocks.push_back(bb);
+      try_volatile_regions().push_back(std::move(reg));
+    }
 
     // Pop handler on normal exit ONLY if not terminated
     if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder))) {
@@ -15899,6 +16088,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   backend->main_program = node;
 
   method_rewritten_calls().clear();
+  try_volatile_regions().clear();
   analyze_module_captures(backend, node, 0, node);
   // Float dizi dongu surumunun ipucu: `float[]` bildirilmis adlar.
   fv_hint_names().clear();
@@ -16132,6 +16322,9 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
     LLVMBuildRet(backend->builder, LLVMConstInt(backend->int32_type, 0, 0));
 
   exit_scope(backend);
+  // Butun fonksiyonlar bitti: try govdesinde yazilip disarida okunan
+  // yereller volatile (Tuzaklar 7i).
+  try_volatile_finalize(backend);
 }
 
 // Emitting IR file

@@ -1988,30 +1988,48 @@ bağlamında — `resume()` — dokunuluyor ve Windows fiber yolunda hiç derlen
 
 ## 7i. `try` gövdesinde değişip fırlatılan YEREL eski değerine döner (setjmp)
 
-**AÇIK HATA, düzeltilmedi** (bulundu 2026-10-01, üst düzey main-yereli
-işinde). `try` → `setjmp`, `throw` → `longjmp`. C'deki gibi: `setjmp` ile
-`longjmp` arasında değişen yerel (alloca → SROA → yazmaç) `longjmp`'tan sonra
-**belirsiz**; pratikte `setjmp` anındaki değer:
+**DÜZELTİLDİ 2026-10-01** (bulundu aynı gün, üst düzey main-yereli işinde).
+`try` → `setjmp`, `throw` → `longjmp`. C'deki gibi: `setjmp` ile `longjmp`
+arasında değişen volatile OLMAYAN yerel `longjmp`'tan sonra **belirsiz**;
+pratikte `setjmp` anındaki değer:
 
 ```tulpar
 func f(): int {
     int k = 0;
     try { k = 5; throw "x"; } catch (e) { }
-    return k;          // 0 döndürüyor, 5 değil (eski ve yeni derleyici)
+    return k;          // 0 döndürüyordu, 5 değil (eski ve yeni derleyici)
 }
 ```
 
-Döngüdeki sayaç da aynı (`for` içinde `k = k + 1; if (...) throw` → 0).
-Global'de (bellekte) sorun yok — o yüzden üst düzey değişkeni main'in yereline
-terfi eden optimizasyon (`main_local_declare`) **üst düzey `try` gövdesinde
-geçen adları global bırakıyor**; yoksa bu hata üst düzey koda da yayılırdı.
-`tests/main_yerel.test.tpr` "try govdesinde degisip firlatilan" bunu sınıyor.
+Döngüdeki sayaç da aynıydı (`for` içinde `k = k + 1; if (...) throw` → 0).
+**Mekanizma (IR'da görüldü):** `setjmp` bildirimi `returns_twice` taşıyor —
+ama bu yalnız birkaç makine düzeyi geçişi frenliyor. SROA/mem2reg alloca'yı
+yine yazmaca alıyor; `throw`dan önceki saklamanın yolu `unreachable`a çıktığı
+için ölü saklama sayılıp siliniyor, `catch` tarafı `setjmp` anındaki değeri
+görüyor. Fonksiyonun tamamı sabite katlanabiliyor (`f` → `ret 0`).
 
 **Sinsi tarafı:** derleme uyarısı yok, sonuç "makul" bir sayı (başlangıç
-değeri). `catch` içinde YAZILAN yerel doğru (longjmp'tan sonra yazılıyor).
-Düzeltme yolu (yapılmadı): `try` içeren fonksiyonda, `try` gövdesinde yazılan
-yerellerin yükleme/saklamalarını `volatile` yapmak (clang'ın C'de istediği
-şey) — SROA onları yazmaca almaz.
+değeri). `catch` içinde YAZILAN yerel doğruydu (longjmp'tan sonra yazılıyor).
+Global'de (bellekte) sorun yoktu — o yüzden #431'in main-yereli terfisi üst
+düzey `try` adlarını global bırakıyordu (kısıt düzeltmeyle kalktı).
+
+**Düzeltme** (`llvm_backend.cpp`, `try_volatile_finalize`): clang'ın C
+programcısından istediği şeyin aynısı, derleyici tarafından. Try gövdesi
+blokları kodlama anında kaydediliyor; modül bitince gövdede YAZILIP gövdenin
+DIŞINDA da kullanılan alloca'ların bütün yükleme/saklamaları `volatile`,
+mem* özleri volatile bayraklı, alloca'yı alan çağrı `noinline` (satır içi
+açılan çağrının saklaması volatile olmazdı — struct sonuç yuvası). Gövdede
+doğup gövdede ölen yerel (try içindeki `for` sayacı) etkilenmiyor.
+Değerlendirilen alternatif — alloca'yı bir kez kaçırmak (adresini bir
+global'e yazmak; bütün çağrılar bariyer olur, çağrısız döngüde yazmaç serbest)
+— ölçüldü ve daha yavaştı (try mikro ölçümleri 207/272 ms yerine 244/311 ms).
+
+**Kapılar:** `tests/try_yerel.test.tpr` (13 anlam testi: iç içe, döngüde
+try, int/float/str/bool/struct/dizi, finally, çağrılan fonksiyonda throw,
+tümü-int imza, öz-yineleme, lambda; eski derleyiciyle 0/13) ve
+`tests/try_yerel.sh` (IR: yalnız gerekli yerel volatile; pozitif kontrol
+`TULPAR_NO_TRY_VOLATILE=1` → hata geri geliyor). `tests/main_yerel.sh` üst
+düzey yolu sınıyor.
 
 ## 6ş. Döngü sınırı `n` mi `len(a)` mı — aynı iş, 3,5 kat fark
 
