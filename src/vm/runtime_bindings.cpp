@@ -865,6 +865,8 @@ static inline bool value_is_transient(Obj *o) {
 // Free a tracked malloc container plus its own malloc'd backing buffers. Does
 // NOT recurse: nested containers are tracked separately, and element strings
 // are arena-owned (reclaimed by the arena rewind).
+static void obj_index_note(ObjObject *o); // json nesnesi hash indeksi (asagida)
+
 static inline void region_free_one(Obj *o) {
   if (!o || o->arena_allocated)
     return;
@@ -872,6 +874,7 @@ static inline void region_free_one(Obj *o) {
     ObjObject *x = (ObjObject *)o;
     free(x->keys);
     free(x->values);
+    obj_index_release(x);
   } else if (o->type == OBJ_ARRAY) {
     free(((ObjArray *)o)->items_);
     free(((ObjArray *)o)->idata);
@@ -1334,6 +1337,7 @@ VMValue aot_persist(VMValue v) {
     ObjObject *src = AS_OBJECT(v);
     ObjObject *dst = (ObjObject *)malloc(sizeof(ObjObject));
     if (!dst) return v;
+    dst->index = nullptr;
     dst->obj.type = OBJ_OBJECT;
     dst->obj.arena_allocated = 0;
     dst->obj.next = nullptr;
@@ -1354,6 +1358,7 @@ VMValue aot_persist(VMValue v) {
       dst->keys = nullptr;
       dst->values = nullptr;
     }
+    obj_index_note(dst); // kopya yeni nesne: buyukse kendi indeksini kursun
     return VM_OBJ((Obj *)dst);
   }
   // TIPLI STRUCT DIZISI (`P[] d`). Eskiden bu tur asagidaki "skaler ve
@@ -2211,6 +2216,122 @@ void aot_array_set_raw_fast(ObjArray *arr, int64_t index, VMValue value) {
   arr_items(arr)[index] = wb_persist_escape((Obj *)arr, value);
 }
 
+// --- json nesnesi hash indeksi (2026-10-01) ------------------------------
+//
+// NEDEN: `json` nesnesi her eklemede ve aramada anahtarlari bastan sona strcmp
+// ile tariyordu, yani N anahtarli bir sozluk kurmak O(N^2) idi. Olculdu
+// (hiz karnesi, benchmarks/fair/hashmap, Ryzen 7 9800X3D, 2026-09-29):
+// 12 500 anahtar 0,25 s, 25 000 0,95 s, 50 000 3,8 s — iki kat anahtar, dort
+// kat sure; 1M anahtar 60 s'lik sinirda bitmedi (oteki diller 0,07–0,41 s).
+//
+// TASARIM:
+//   * Acik adresleme, FNV-1a; yuva = (hash, konum). Konum keys[] icindeki
+//     indis — keys/values dizileri buyuyup tasinsa da gecerli kalir. Nesneden
+//     anahtar SILINMIYOR (boyle bir yol yok), konumlar kararli.
+//   * Yalniz count >= kObjIndexMin iken: kucuk nesneler (Wings istek/yanit,
+//     kayit satirlari) eskisi gibi dogrusal tarar, ek bellek ve ek is yok.
+//   * Indeks YALNIZ YAZMA yollarinda kurulur ve guncellenir (obj_index_note).
+//     Okuma (obj_find) indeksi yalniz okur: paylasilan json'u thread'lerin
+//     eszamanli okumasi guvenli kalir (FINDINGS T7, vm_object_get'teki not).
+//   * Indeksin kapsamadigi kuyruk (covered..count) okumada dogrusal taranir:
+//     indeksi guncellemeyen bir ekleme yolu kalsa bile sonuc YANLIS olmaz,
+//     yalniz yavas olur.
+//   * Ayni anahtar iki kez eklenmisse (JSON metninde yinelenen anahtar)
+//     indeks ILKINI tutar — dogrusal taramanin ilk eslesmeyi dondurmesiyle ayni.
+//   * Sahiplik: indeks `owner` tasir; nesneyi alan alan kopyalayan bir yol
+//     isaretciyi paylasirsa kopya onu yok sayar, yalniz sahibi degistirir ve
+//     birakir. Arena nesnesinin indeksi arenadan (arena ile gider), digerleri
+//     malloc'tan (obj_index_release).
+struct ObjIndex {
+  const ObjObject *owner;
+  int32_t cap;      // 2'nin kuvveti
+  int32_t covered;  // keys[0..covered) indekste
+  uint8_t heap;     // 1: malloc, 0: arena
+  struct Slot {
+    uint32_t hash;
+    int32_t pos;    // -1: bos
+  } slots[1];
+};
+static const int kObjIndexMin = 16;
+
+static inline uint32_t obj_key_hash(const char *s) {
+  uint32_t h = 2166136261u;
+  for (; *s; s++) { h ^= (unsigned char)*s; h *= 16777619u; }
+  return h;
+}
+
+void obj_index_release(ObjObject *o) {
+  if (!o || !o->index) return;
+  ObjIndex *ix = o->index;
+  o->index = nullptr;
+  if (ix->owner == o && ix->heap) free(ix);
+}
+
+static ObjIndex *obj_index_alloc(ObjObject *o, int32_t cap) {
+  size_t bytes = sizeof(ObjIndex) + sizeof(ObjIndex::Slot) * (size_t)(cap - 1);
+  ObjIndex *ix;
+  uint8_t heap;
+  if (o->obj.arena_allocated) { ix = (ObjIndex *)aot_arena_alloc(bytes); heap = 0; }
+  else { ix = (ObjIndex *)malloc(bytes); heap = 1; }
+  if (!ix) return nullptr;
+  ix->owner = o;
+  ix->cap = cap;
+  ix->covered = 0;
+  ix->heap = heap;
+  for (int32_t i = 0; i < cap; i++) ix->slots[i].pos = -1;
+  return ix;
+}
+
+static void obj_index_insert(ObjIndex *ix, const ObjObject *o, int32_t pos) {
+  ObjString *k = o->keys[pos];
+  if (!k) return;
+  uint32_t h = obj_key_hash(k->chars);
+  uint32_t m = (uint32_t)ix->cap - 1;
+  for (uint32_t i = h & m;; i = (i + 1) & m) {
+    ObjIndex::Slot &sl = ix->slots[i];
+    if (sl.pos < 0) { sl.hash = h; sl.pos = pos; return; }
+    if (sl.hash == h && strcmp(o->keys[sl.pos]->chars, k->chars) == 0) return; // ilki kalir
+  }
+}
+
+// YAZMA yolu: nesneye anahtar eklendikten sonra cagrilir. Esigin altinda bir
+// sey yapmaz; esik asilinca indeksi kurar, sonra yeni eklenenleri isler.
+static void obj_index_note(ObjObject *o) {
+  if (!o || o->count < kObjIndexMin) return;
+  ObjIndex *ix = o->index;
+  bool own = ix && ix->owner == o && ix->covered <= o->count;
+  if (!own || (int64_t)o->count * 2 > ix->cap) {
+    int32_t cap = 32;
+    while (cap < o->count * 4) cap <<= 1;
+    ObjIndex *nx = obj_index_alloc(o, cap);
+    if (!nx) return; // bellek yok: dogrusal taramaya dus (dogru, yavas)
+    if (o->index && o->index->owner == o) obj_index_release(o);
+    o->index = nx;
+    ix = nx;
+  }
+  for (int32_t p = ix->covered; p < o->count; p++) obj_index_insert(ix, o, p);
+  ix->covered = o->count;
+}
+
+// OKUMA yolu: hicbir sey yazmaz. -1 = yok.
+static int obj_find(const ObjObject *o, const char *key) {
+  const ObjIndex *ix = o->index;
+  int start = 0;
+  if (ix && ix->owner == o && ix->covered <= o->count) {
+    uint32_t h = obj_key_hash(key);
+    uint32_t m = (uint32_t)ix->cap - 1;
+    for (uint32_t i = h & m;; i = (i + 1) & m) {
+      const ObjIndex::Slot &sl = ix->slots[i];
+      if (sl.pos < 0) break;
+      if (sl.hash == h && strcmp(o->keys[sl.pos]->chars, key) == 0) return sl.pos;
+    }
+    start = ix->covered; // indeksin gormedigi kuyruk
+  }
+  for (int i = start; i < o->count; i++)
+    if (o->keys[i] && strcmp(o->keys[i]->chars, key) == 0) return i;
+  return -1;
+}
+
 // Object Wrappers
 void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   if (!obj || !key)
@@ -2237,12 +2358,11 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
     keyObj = aot_persist_string_obj(keyObj);
   }
 
-  // Check if key exists
-  for (int i = 0; i < obj->count; i++) {
-    if (strcmp(obj->keys[i]->chars, key) == 0) {
-      obj->values[i] = value;
-      return;
-    }
+  // Check if key exists (16+ anahtarda hash indeksi; bkz. yukarisi)
+  int at = obj_find(obj, key);
+  if (at >= 0) {
+    obj->values[at] = value;
+    return;
   }
 
   // Resize if needed
@@ -2269,6 +2389,7 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   obj->keys[obj->count] = keyObj;
   obj->values[obj->count] = value;
   obj->count++;
+  obj_index_note(obj);
 }
 
 // ⚠ GUVENLIK SOZLESMESI (FINDINGS T7 / P15, 2026-09-10): BU SAF BIR OKUMA
@@ -2285,16 +2406,15 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
 // eszamanlilik sozlesmesinin degismesi demektir: T7 ve derin kopya tasarimi
 // yeniden degerlendirilmelidir (S6). Kalicilik fikstur ile de gozleniyor:
 // tests/shared_json_read.test.tpr.
+//
+// Hash indeksi (2026-10-01) bu sozlesmeye UYAR: indeks yalniz YAZMA
+// yollarinda (vm_object_set, kopya ve ayristirma) kurulur; burada obj_find onu
+// yalniz OKUR, hicbir alan yazilmaz.
 VMValue vm_object_get(ObjObject *obj, char *key) {
   if (!obj || !key)
     return VM_INT(0);
-
-  for (int i = 0; i < obj->count; i++) {
-    if (strcmp(obj->keys[i]->chars, key) == 0) {
-      return obj->values[i];
-    }
-  }
-  return VM_INT(0); // Undefined property
+  int at = obj_find(obj, key);
+  return at >= 0 ? obj->values[at] : VM_INT(0); // Undefined property
 }
 
 // Forward declarations
@@ -3625,6 +3745,7 @@ ObjObject *vm_allocate_object_aot_wrapper(void *vm) {
   obj->capacity = 0;
   obj->keys = nullptr;
   obj->values = nullptr;
+  obj->index = nullptr;
   region_track((Obj *)obj); // request-local literal → freed at arena_restore
   return obj;
 }
@@ -3692,6 +3813,7 @@ void vm_object_set_aot_wrapper(void *vm, ObjObject *obj, char *key,
   obj->keys[obj->count] = aot_allocate_string(key, strlen(key));
   obj->values[obj->count] = value;
   obj->count++;
+  obj_index_note(obj);
 }
 
 void vm_object_set_aot_ptr_wrapper(void *vm, ObjObject *obj, char *key,
@@ -4311,6 +4433,7 @@ VMValue aot_object_clone(VMValue val) {
   if (!IS_OBJECT(val)) return val;
   ObjObject *src = (ObjObject *)AS_OBJECT(val);
   ObjObject *dst = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
+  dst->index = nullptr;
   dst->obj.type = OBJ_OBJECT;
   dst->obj.arena_allocated = 1;
   dst->obj.next = nullptr;
@@ -4330,6 +4453,7 @@ VMValue aot_object_clone(VMValue val) {
     dst->keys = nullptr;
     dst->values = nullptr;
   }
+  obj_index_note(dst);
   return VM_OBJ((Obj *)dst);
 }
 
@@ -6443,6 +6567,7 @@ ObjObject *aot_http_make_obj(int initial_capacity) {
   o->obj.next = nullptr;
   o->capacity = initial_capacity > 0 ? initial_capacity : 4;
   o->count = 0;
+  o->index = nullptr;
   o->keys = (ObjString **)aot_arena_alloc(sizeof(ObjString *) * o->capacity);
   o->values = (VMValue *)aot_arena_alloc(sizeof(VMValue) * o->capacity);
   return o;
@@ -6467,6 +6592,7 @@ void aot_http_obj_set(ObjObject *o, const char *key, int key_len,
   o->keys[o->count] = aot_allocate_string(key, key_len);
   o->values[o->count] = val;
   o->count++;
+  obj_index_note(o);
 }
 
 void aot_http_obj_set_str(ObjObject *o, const char *key, int klen,
@@ -9245,6 +9371,7 @@ static VMValue parse_json_object(const char **p, const char *end) {
   obj->obj.next = nullptr;
   obj->capacity = 8;
   obj->count = 0;
+  obj->index = nullptr;
   obj->keys =
       (ObjString **)aot_arena_alloc(sizeof(ObjString *) * obj->capacity);
   obj->values = (VMValue *)aot_arena_alloc(sizeof(VMValue) * obj->capacity);
@@ -9281,6 +9408,7 @@ static VMValue parse_json_object(const char **p, const char *end) {
     obj->keys[obj->count] = AS_STRING(key_val);
     obj->values[obj->count] = val;
     obj->count++;
+    obj_index_note(obj);
 
     skip_whitespace(p, end);
     if (*p < end && **p == ',') {

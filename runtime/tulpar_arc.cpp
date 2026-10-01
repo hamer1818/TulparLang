@@ -134,6 +134,7 @@ void arc_free_object(Obj *obj) {
       free(object->keys);
     }
   }
+  obj_index_release(object);
   
   if (!obj->arena_allocated) {
     free(object);

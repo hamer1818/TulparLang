@@ -1,0 +1,102 @@
+// json nesnesi hash indeksi (2026-10-01).
+//
+// Neden var: `json` nesnesi her eklemede ve aramada anahtarlari bastan sona
+// strcmp ile tariyordu; N anahtarli sozluk kurmak O(N^2) idi (hiz karnesi,
+// benchmarks/fair/hashmap: 50 000 anahtar 3,8 s, 1M anahtar 60 s'de bitmedi).
+// Artik 16+ anahtarli nesnede YAZMA yollarinda bir hash indeksi kuruluyor ve
+// okuma onu yalniz okuyor. Bu dosya indeksin DAVRANISI degistirmedigini
+// sinar: esik gecisi, ustune yazma, ekleme sirasi, JSON'daki yinelenen anahtar
+// (ilki kazanir — dogrusal tarama boyleydi), global'e kalicilastirma
+// kopyasi, ic ice nesneler. Eszamanli okuma ayrica
+// tests/shared_json_read.test.tpr'de.
+// Calistir: ./tulpar tests/json_hash_indeksi.test.tpr
+import "test";
+
+func run_esik_gecisi() {
+    // 15, 16, 17 anahtar: indeks 16'da kuruluyor; her boyda hepsi okunmali.
+    int boy = 15;
+    while (boy <= 17) {
+        json m = {};
+        for (int i = 0; i < boy; i = i + 1) { m["a" + toString(i)] = i * 10; }
+        int t = 0;
+        for (int i = 0; i < boy; i = i + 1) { t = t + m["a" + toString(i)]; }
+        assert_eq_int(t, 10 * boy * (boy - 1) / 2);
+        assert_eq_int(len(m), boy);
+        boy = boy + 1;
+    }
+}
+
+func run_buyuk_sozluk_ve_ustune_yazma() {
+    json m = {};
+    int n = 5000;
+    for (int i = 0; i < n; i = i + 1) { m["k" + toString(i)] = i; }
+    assert_eq_int(len(m), n);
+    // ustune yazma: yeni anahtar EKLEMEMELI
+    for (int i = 0; i < n; i = i + 2) { m["k" + toString(i)] = 0 - i; }
+    assert_eq_int(len(m), n);
+    int t = 0;
+    for (int i = 0; i < n; i = i + 1) { t = t + m["k" + toString(i)]; }
+    // tekler +i, ciftler -i: toplam = (1+3+...+4999) - (0+2+...+4998) = 2500
+    assert_eq_int(t, 2500);
+}
+
+func run_ekleme_sirasi_korunur() {
+    json m = {};
+    for (int i = 0; i < 40; i = i + 1) { m["s" + toString(39 - i)] = i; }
+    array ks = keys(m);
+    assert_eq_int(len(ks), 40);
+    assert_eq_str(ks[0], "s39");
+    assert_eq_str(ks[39], "s0");
+}
+
+func run_json_yinelenen_anahtar_ilki() {
+    // 20 farkli anahtar + sonda "a" tekrar: dogrusal tarama ILK eslesmeyi
+    // donduruyordu; indeksli arama da ilkini dondurmeli.
+    str s = "{\"a\": 1";
+    for (int i = 0; i < 20; i = i + 1) { s = s + ", \"b" + toString(i) + "\": " + toString(i); }
+    s = s + ", \"a\": 2}";
+    json m = fromJson(s);
+    assert_eq_int(m["a"], 1);
+    assert_eq_int(m["b19"], 19);
+}
+
+json kalici = {};
+
+func doldur_yerel_ve_globale_ata() {
+    json yerel = {};
+    for (int i = 0; i < 300; i = i + 1) { yerel["g" + toString(i)] = i; }
+    kalici = yerel;
+}
+
+func run_global_kalicilastirma() {
+    doldur_yerel_ve_globale_ata();
+    int t = 0;
+    for (int i = 0; i < 300; i = i + 1) { t = t + kalici["g" + toString(i)]; }
+    assert_eq_int(t, 44850);
+    // kopya uzerine yazma ve ekleme indeksle tutarli
+    kalici["g7"] = 1000;
+    kalici["yeni"] = 5;
+    assert_eq_int(kalici["g7"], 1000);
+    assert_eq_int(kalici["yeni"], 5);
+    assert_eq_int(len(kalici), 301);
+}
+
+func run_ic_ice() {
+    json dis = {};
+    for (int i = 0; i < 20; i = i + 1) {
+        json ic = {};
+        for (int j = 0; j < 20; j = j + 1) { ic["x" + toString(j)] = i * j; }
+        dis["d" + toString(i)] = ic;
+    }
+    assert_eq_int(dis["d7"]["x9"], 63);
+    assert_eq_int(dis["d19"]["x19"], 361);
+}
+
+print("=== json hash indeksi ===");
+test("esik gecisi 15/16/17 anahtar", "run_esik_gecisi");
+test("5000 anahtar + ustune yazma", "run_buyuk_sozluk_ve_ustune_yazma");
+test("ekleme sirasi korunur", "run_ekleme_sirasi_korunur");
+test("JSON'da yinelenen anahtar: ilki", "run_json_yinelenen_anahtar_ilki");
+test("global'e kalicilastirma kopyasi", "run_global_kalicilastirma");
+test("ic ice nesneler", "run_ic_ice");
+test_summary();

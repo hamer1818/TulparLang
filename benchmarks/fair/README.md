@@ -285,15 +285,15 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `particles` | 329,6 | 42,2 | 7,8× | 8. |
 | `nbody` | 1304,8 | 114,5 | 11,4× | 8. |
 | `matmul` | 821,3 | 31,1 | 26,4× | 8. |
-| `hashmap` | > 60 s | 72,7 | — | 9. (zaman aşımı) |
+| `hashmap` | > 60 s → **170,3** (2026-10-01) | 72,7 | 2,3× | 9. → **2.** |
 
 Bulgular, sırayla ele alınması önerilen:
 
-1. **`hashmap` karesel.** `json` nesnesi her eklemede ve aramada anahtarları
-   baştan sona `strcmp` ile tarıyor (`src/vm/runtime_bindings.cpp`,
-   `vm_object_set`). 12 500 anahtar 0,25 s, 25 000 0,95 s, 50 000 3,8 s:
-   anahtar ikiye katlanınca süre dörde katlanıyor. Öteki diller 1M anahtarı
-   0,07–0,41 s'de bitiriyor. Nesneye hash indeksi gerekiyor.
+1. ~~**`hashmap` karesel.**~~ **Kapandı (2026-10-01):** `json` nesnesi her
+   eklemede ve aramada anahtarları baştan sona `strcmp` ile tarıyordu
+   (12 500 anahtar 0,25 s, 50 000 3,8 s, 1M zaman aşımı). 16+ anahtarlı
+   nesneye yazma yollarında kurulan hash indeksi eklendi: 1M anahtar
+   **170 ms**, dokuz dil arasında 2. Tepe bellek hâlâ yüksek (450 MB, C 66).
 2. **Float dizileri** (`matmul`, `nbody`) 11 Eylül'den beri yerinde sayıyor;
    dizisiz `mandelbrot` C ile başa baş, yani sorun aritmetik değil depolama ve
    iç içe döngüde kanıtlı erişim. `matmul`'ün belleği de C'nin iki katı.

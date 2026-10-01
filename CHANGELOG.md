@@ -12,6 +12,29 @@ tag still works;
 
 ## [Unreleased]
 
+### Değişti — `json` nesnesi artık hash indeksli: 1M anahtar >60 s → 0,17 s
+
+- `json` nesnesi her eklemede ve aramada anahtarları baştan sona `strcmp` ile
+  tarıyordu; N anahtarlı sözlük kurmak O(N²) idi. Hız karnesi bunu yakaladı
+  (`benchmarks/fair/hashmap`, 2026-09-29): 12 500 anahtar 0,25 s, 50 000
+  anahtar 3,8 s, 1 milyon anahtar 60 s sınırında bitmedi.
+- 16 ve üstü anahtarlı nesnede YAZMA yollarında (atama, `fromJson`, nesne
+  kopyası) açık adreslemeli bir hash indeksi kuruluyor; okuma onu yalnız
+  okuyor, yani paylaşılan `json`'un thread'lerden eşzamanlı okunması güvenli
+  kalıyor (FINDINGS T7). Küçük nesneler eskisi gibi doğrusal tarıyor, ek
+  bellek yok. Yinelenen anahtarda ilki kazanır (doğrusal taramayla aynı).
+- Ölçüm (Ryzen 7 9800X3D, 2026-10-01): `hashmap` 1M ekleme + 1M arama
+  >60 s → **170 ms** (C 73, Go 175, Java 179, C++ 237, Python 414) — dokuz
+  dil arasında 9.'den 2.'ye. 24 anahtarlı nesneyi okumak 184 → 60 ms; 5
+  anahtarlı nesne kurup okumak 612 → 544 ms (gerileme yok).
+- Bilinen sınır: `hashmap`'te tepe bellek 450 MB (C 66, Python 118):
+  her anahtar ayrı bir dizgi nesnesi ve arama için kurulan geçici anahtarlar
+  üst düzeyde geri alınmıyor.
+- Test: `tests/json_hash_indeksi.test.tpr` (eşik 15/16/17, 5000 anahtar +
+  üstüne yazma, ekleme sırası, `fromJson`'da yinelenen anahtar, global'e
+  kalıcılaştırma kopyası, iç içe). Pozitif kontrol: indeks yinelenen anahtarda
+  SONUNCUYU tutacak şekilde bozulunca yinelenen anahtar testi kırmızı.
+
 ### Eklendi — `tulpar debug`: async coroutine'ler ayrı thread, askıdakinin await zinciri
 
 - Hata ayıklayıcıda (DAP) her canlı coroutine artık ayrı bir thread:

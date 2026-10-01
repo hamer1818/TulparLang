@@ -1023,3 +1023,27 @@ Makine kaydı o gün yazılmamış; sayı STATUS.md "Küçük cila turu (2026-06
 kaydından. Roadmap'teki "TLS yük altında test edildi → [[Performance]]"
 bağlantısı bu bölüme bakar (2026-09-28'e dek bu belgede TLS ölçümü yoktu).
 Düz HTTP tavanı ve Node kıyası için `benchmarks/WINGS_STRESS.md`.
+
+## `json` nesnesi O(N²) idi — hash indeksi (2026-10-01)
+
+Hız karnesinin `hashmap` çekirdeği (1M dizgi anahtar, ekleme + arama) Tulpar'da
+60 s sınırında bitmedi. Sebep tek döngü: `vm_object_set` ve `vm_object_get`
+anahtarları baştan sona `strcmp` ile tarıyordu. Ölçüm: 12 500 anahtar 0,25 s,
+25 000 0,95 s, 50 000 3,8 s — iki kat anahtar, dört kat süre.
+
+Çözüm ve sınırları:
+- 16+ anahtarda açık adreslemeli FNV-1a indeksi, yuva = (hash, keys[] indisi).
+  Anahtar silme yolu yok, indisler kararlı.
+- Indeks **yalnız yazma yollarında** kurulur (vm_object_set, AOT nesne
+  kurucusu, HTTP nesnesi, `fromJson`, iki kopya yolu). `vm_object_get`'in
+  "okuma saf kalmalı" sözleşmesi (FINDINGS T7: paylaşılan json eşzamanlı
+  okunuyor) korunur: okuma indeksi yalnız okur.
+- Indeksin görmediği kuyruk okumada doğrusal taranır: indeksi güncellemeyen
+  bir ekleme yolu kalsa bile sonuç yanlış olmaz, yalnız yavaş olur.
+- Alan alan kopyalanan nesne indeks işaretçisini paylaşabilir; indeks
+  `owner` taşır, kopya onu yok sayar.
+
+Sonuç (Ryzen 7 9800X3D): `hashmap` >60 s → 170 ms (2.; C 73). 24 anahtarlı
+nesne okuma 184 → 60 ms. 5 anahtarlı nesne kur/oku 612 → 544 ms (esik altı,
+gerileme yok). Kalan: tepe bellek 450 MB (C 66 MB).
+
