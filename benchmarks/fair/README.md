@@ -328,8 +328,9 @@ Bulgular, sırayla ele alınması önerilen:
    32): parçalar canlı ve her biri 56 baytlık `ObjString` başlığı taşıyor —
    geri alınmayan çöp değil, temsil maliyeti (`docs/mindmap/Performance.md`).
    2026-10-01: üst düzey `str s = sb_tostring(sb)` metni artık tek kopya
-   (yazma bariyeri yerleşmiş arena dizgisini kopyalamıyor): **440 → 412 MB**.
-   Kalanı başlık temsili; neden bu turda yapılmadığı Performance.md'de.
+   (yazma bariyeri yerleşmiş arena dizgisini kopyalamıyor): **440 → 412 MB**;
+   aynı gün `ObjString` 56 → 48 bayt (okunmayan `capacity` alanı): **412 →
+   374 MB**. Kalan: `Obj` başlığının dolgusu (Performance.md).
 5. **`callfn`** — **kısmen kapandı (2026-10-01):** fonksiyon referansı her
    değerlendirmede yeni bir arena dizgisiydi (döngüde `call(f, x)` 20M kez →
    1,26 GB) ve `call()` her çağrıda adı hash'leyip önbelleği yokluyordu.

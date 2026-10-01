@@ -12,6 +12,38 @@ tag still works;
 
 ## [Unreleased]
 
+### Performans — `ObjString` 56 → 48 bayt: yazılıp hiç okunmayan `capacity` alanı kaldırıldı (parse 412 → 374 MB)
+
+- **Kök neden:** `parse` çekirdeğinin 5M canlı `split` parçası parça başına
+  64 B tutuyor (56 B başlık + ~6 karakter). `ObjString::capacity` yalnız
+  yazılıyordu: dizgiler değişmez, alan silinmiş VM'in yerinde ekleme
+  yolundan kalma; alan kaldırılıp derlenince çıkan hataların hepsi atamaydı.
+- **Değişiklik:** alan kaldırıldı, `hash` dolgu boşluğuna kaydı: 64-bit 56 →
+  48 B, wasm32 36 → 32 B. İç ABI (derleyici ve runtime birlikte gelir);
+  boyun gömülü olduğu tek yer `AOTFnRef` (`call()` satır içi yolu: `fp`@48,
+  `arity`@56, `nfp`@64, kayıt 72 B; önce 56/64/72, 80 B) — iki genişlikte static_assert ile kilitli.
+  Web/Android arşivleri yeniden derlenmeli (CI zaten her koşumda kuruyor).
+- **Kör nokta kapandı — ofsetler tek kaynakta (`src/vm/fnref_layout.h`):**
+  sayılar codegen'de ve runtime'da ayrı ayrı yazılıydı; runtime kilidi yalnız
+  kendi tarafını görüyordu. #435 üstüne yeniden temellendirirken codegen'in
+  `nfp` ofseti eski 72'de kaldı ve HİÇBİR kapı kırmızı olmadı: 72 bir sonraki
+  kaydın başına (tip alanı 0) düşüyor, `nfp` null okunuyor, yerel int yolu
+  sessizce hiç tutmuyor (doğru ama yavaş; `call_yerel_int.sh` yalnız havuzda
+  `nfp` dolu kayıt sayıyor). Artık iki taraf da aynı başlığı okuyor; başlıkta
+  bir sayı yanlışsa runtime'ın static_assert'i derlemeyi kırıyor (denendi).
+- **Ölçüm** (Ryzen 7 9800X3D, `taskset -c 6,7`, taban `e3c601f1` ile
+  dönüşümlü A/B, izole dizin, 2026-10-01, en iyi 5): `parse` **412,3 → 374,1
+  MB**, 124,7 → 122,5 ms; `hashmap` 118,3 → 111,1 MB. Gerileme yok (taban/yeni
+  ms): `intloop` 136,3/136,3 · `fib` 0,6/0,6 · `sieve` 7,9/7,7 · `strcat`
+  14,0/13,9 · `arrayiter` 1,4/1,4 · `mandelbrot` 160,2/160,2 · `matmul`
+  37,5/37,5 · `nbody` 190,0/190,1 · `qsort` 123,7/123,9 · `particles`
+  54,1/53,9 · `callfn` 15 tur ×2 ortanca 81,7·81,6 / 81,4·81,9.
+- Testler: `tests/split_toplu.sh` beklenen parça boyunu 48'den hesaplıyor
+  (eski düzende kırmızı). Pozitif kontrol: codegen'in `fp` ofseti eski 56'da
+  bırakılınca `call_fnref.test.tpr` özete varmadan çöküyor. wasm32 düzeni
+  emsdk ile `-fsyntax-only` derlenip doğrulandı (36 iddiası kırmızı, 32
+  yeşil).
+
 ### Performans — `call(f, ...)` tümü-int hedefte sarmalayıcısız: `callfn` 174 → 65,5 ms (gcc C 91)
 
 - Tümü-int `func f(int x): int` yerel (i64) ABI'li; `call()` onu kutulu

@@ -11,6 +11,7 @@
 #include "llvm_types.hpp"
 #include "llvm_values.hpp"
 #include "llvm_array_shape.hpp"   // TLW_* (perf ipucu, K167); asagida da dahil
+#include "../vm/fnref_layout.h"   // AOTFnRef ofsetleri (call() satir ici yolu)
 #include <llvm-c/Analysis.h>
 #include <llvm-c/IRReader.h>
 #include <llvm-c/Target.h>
@@ -9376,16 +9377,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef off = LLVMBuildSub(backend->builder, payload,
                                       LLVMBuildPtrToInt(backend->builder, pool, i64t, "fnref.base"),
                                       "fnref.off");
-      // 1024 kayit x 80 bayt (ObjString 56 + fp 8 + arite 4 + dolgu 4 + nfp 8).
+      // Kayit duzeni src/vm/fnref_layout.h (runtime static_assert ile ayni sayilar).
       LLVMValueRef inpool = LLVMBuildICmp(backend->builder, LLVMIntULT, off,
-                                          LLVMConstInt(i64t, 1024ull * 80ull, 0), "fnref.in");
+                                          LLVMConstInt(i64t, (unsigned long long)AOT_FNREF_COUNT * AOT_FNREF_SIZE, 0), "fnref.in");
       LLVMBuildCondBr(backend->builder,
                       LLVMBuildAnd(backend->builder, isobj, inpool, "fnref.ok"),
                       chk_bb, slow_bb);
 
       LLVMPositionBuilderAtEnd(backend->builder, chk_bb);
       LLVMValueRef ep = LLVMBuildIntToPtr(backend->builder, payload, backend->ptr_type, "fnref.e");
-      LLVMValueRef i8t_one[] = {LLVMConstInt(i64t, 64, 0)};
+      LLVMValueRef i8t_one[] = {LLVMConstInt(i64t, AOT_FNREF_ARITY_OFF, 0)};
       LLVMValueRef arp = LLVMBuildGEP2(backend->builder, LLVMInt8TypeInContext(backend->context),
                                        ep, i8t_one, 1, "fnref.arp");
       LLVMValueRef ar = LLVMBuildLoad2(backend->builder, backend->int32_type, arp, "fnref.ar");
@@ -9410,7 +9411,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         nat_bb = append_bb(backend, fn, "fnref.native");
         LLVMBasicBlockRef boxed_bb = append_bb(backend, fn, "fnref.boxed");
         LLVMPositionBuilderAtEnd(backend->builder, call_bb);
-        LLVMValueRef nfo[] = {LLVMConstInt(i64t, 72, 0)};
+        LLVMValueRef nfo[] = {LLVMConstInt(i64t, AOT_FNREF_NFP_OFF, 0)};
         LLVMValueRef nfpp = LLVMBuildGEP2(backend->builder, LLVMInt8TypeInContext(backend->context),
                                           ep, nfo, 1, "fnref.nfpp");
         LLVMValueRef nfp = LLVMBuildLoad2(backend->builder, backend->ptr_type, nfpp, "fnref.nfp");
@@ -9443,7 +9444,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       } else {
         LLVMPositionBuilderAtEnd(backend->builder, call_bb);
       }
-      LLVMValueRef fpo[] = {LLVMConstInt(i64t, 56, 0)};
+      LLVMValueRef fpo[] = {LLVMConstInt(i64t, AOT_FNREF_FP_OFF, 0)};
       LLVMValueRef fpp = LLVMBuildGEP2(backend->builder, LLVMInt8TypeInContext(backend->context),
                                        ep, fpo, 1, "fnref.fpp");
       LLVMValueRef fptr = LLVMBuildLoad2(backend->builder, backend->ptr_type, fpp, "fnref.fp");

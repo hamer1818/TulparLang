@@ -176,10 +176,8 @@ void llvm_init_types(LLVMBackend *backend) {
   LLVMTypeRef str_elements[] = {
       backend->obj_type,           // obj header
       LLVMInt32TypeInContext(ctx), // length
-      LLVMInt32TypeInContext(ctx), // capacity
-      backend->ptr_type,           // chars static_cast<char*>
       LLVMInt32TypeInContext(ctx), // hash
-      LLVMArrayType(LLVMInt8TypeInContext(ctx), 4)
+      backend->ptr_type,           // chars
   };
-  LLVMStructSetBody(backend->obj_string_type, str_elements, 6, 0);
+  LLVMStructSetBody(backend->obj_string_type, str_elements, 4, 0);
 }

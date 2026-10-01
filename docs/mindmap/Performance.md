@@ -1407,18 +1407,34 @@ eklenince taban 195,5, yeni 173,8 ms; 0–5 ek fonksiyonla iki derleyici de
 173–213 aralığında geziyor. `call()` döngüsü kod yerleşimine bu kadar
 duyarlı — `callfn` sayısını tek koşumdan okumayın (Tuzaklar 7i ailesi).
 
-**Yapılmadı — başlık küçültme (`parse`'ın kalan 412 MB'ı).** Hesap: parça
-başına 64 B (56 B `ObjString` + ~6 karakter, 8'e yuvarlı). `ObjString`'in
-`capacity` alanı yalnız YAZILIYOR (okuyan yok) — kaldırmak başlığı 48'e,
-parçayı 56'ya indirir: 5M × 8 B = −40 MB (~%10). `Obj`'u yeniden sıralamak
-(32 → 24) bir −40 MB daha. Bu turda yapılmadı, çünkü: (a) `AOTFnRef`
-düzeni (`fp`@56, `arity`@64, 72 B) `call()` satır içi yolunun codegen
-sabitleri — o yol aynı gün başka bir işte değişiyordu; (b) `Obj` sırası
-`ObjArray`/`ObjStructArray` ofsetlerini (codegen `obj_header_pad` 28/16,
-satır içi dizi yolları) ve wasm32 düzenini değiştiriyor, o yollar da aynı
-gün başka işteydi; (c) web/Android arşivleri aynı değişiklikte
-tazelenmeli (Tuzaklar 8aq). Kazanç %10–20, risk iki paralel işle
-çakışmak; sıradaki adım `capacity`'yi tek başına kaldırmak.
+**Başlık küçültme — yarısı yapıldı (aynı gün, ayrı PR).** `parse`'ın kalan
+412 MB'ı temsil: parça başına 64 B (56 B `ObjString` + ~6 karakter, 8'e
+yuvarlı). `ObjString::capacity` yalnız YAZILIYORDU (dizgiler değişmez; okuyan
+tek satır yok — alan silinip derlenince çıkan hataların hepsi atamaydı).
+Kaldırıldı, `hash` dolgu boşluğuna kaydı: 56 → 48 B (wasm32 36 → 32). Boy
+codegen'e gömülü tek yerde, `AOTFnRef` (`call()` satır içi yolu: `fp`@48,
+`arity`@56, `nfp`@64, 72 B; #435 sonrası düzen @56/@64/@72, 80 B idi) — static_assert'ler iki genişlikte de kilitli,
+`tests/split_toplu.sh` beklenen parça boyunu 48'den hesaplıyor (kapı boyu
+ölçüyor). Pozitif kontrol: codegen'in `fp` ofseti eski 56'da bırakılınca
+`call_fnref.test.tpr` özete varmadan çöküyor. Ama `nfp` ofseti eski 72'de
+bırakılınca (#435 üstüne yeniden temellendirirken tam bu oldu) HİÇBİR kapı
+kırmızı olmadı: 72 bir sonraki kaydın tip alanına (0) düşüyor, `nfp` null,
+yerel int yolu sessizce tutmuyor — doğru ama yavaş. Kök neden sayıların iki
+dosyada ayrı yazılması; runtime kilidi yalnız kendi tarafını görüyordu.
+Artık ikisi de `src/vm/fnref_layout.h`'yi okuyor (başlıkta yanlış sayı →
+runtime static_assert derlemeyi kırıyor, denendi).
+
+| (taban `e3c601f1`, dönüşümlü, en iyi 5) | 56 B | 48 B |
+|---|---:|---:|
+| `parse` tepe bellek | 412,3 MB | 374,1 MB |
+| `parse` | 124,7 ms | 122,5 ms |
+| `hashmap` tepe bellek | 118,3 MB | 111,1 MB |
+| `callfn` ortanca (15 tur ×2) | 81,7 · 81,6 ms | 81,4 · 81,9 ms |
+
+Yapılmayan yarı: `Obj`'u yeniden sıralamak (32 → 24, `next`'in iki yanındaki
+dolgu) bir −40 MB daha verir ama `ObjArray`/`ObjStructArray` ofsetlerini
+(codegen `obj_header_pad` 28/16, satır içi dizi yolları, wasm32 düzeni)
+değiştiriyor; o yollar aynı gün paralel bir dizi işinde değişiyordu.
 
 Test: `tests/gecici_dizgi.test.tpr` + `tests/gecici_dizgi.sh` (bkz. CHANGELOG).
 
