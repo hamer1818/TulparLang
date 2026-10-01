@@ -35,9 +35,10 @@ if ! "$TULPAR" build "$TMP/prog.tpr" "$TMP/prog" >"$TMP/derle.log" 2>&1; then
   echo "split toplu kapisi DUSTU: sonda derlenmedi"; cat "$TMP/derle.log"; exit 1
 fi
 
-# sizeof(ObjString): 64-bit'te 56. Kapi 64-bit hedeflerde kosuyor (CI: Linux
-# x86_64, macOS arm64, Windows x86_64); baska bir genislikte boy farkli olur.
-S=56
+# sizeof(ObjString): 64-bit'te 48 (2026-10-01'e kadar 56 — `capacity` alani
+# kaldirildi). Kapi 64-bit hedeflerde kosuyor (CI: Linux x86_64, macOS arm64,
+# Windows x86_64); baska bir genislikte boy farkli olur.
+S=48
 hiz() { echo $(( (S + $1 + 1 + 7) / 8 * 8 )); }
 BEK_A=$(( $(hiz 1) + $(hiz 2) + $(hiz 3) + $(hiz 0) + $(hiz 4) ))
 BEK_B=$(( $(hiz 16) + $(hiz 1) ))

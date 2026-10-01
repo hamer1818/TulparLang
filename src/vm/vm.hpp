@@ -115,12 +115,18 @@ typedef struct Obj {
 } Obj;
 
 // String object
+//
+// 2026-10-01: `int capacity` alani KALDIRILDI. Hicbir yer okumuyordu (dizgiler
+// degismez; silinmis VM'in yerinde ekleme yolundan kalmaydi) ama her dizgi
+// 8 bayt tasiyordu: 64-bit'te 56 -> 48, wasm32'de 36 -> 32. benchmarks/fair
+// parse'in 5M canli parcasinda 412 -> 374 MB. `hash` dolgu boslugunu
+// dolduruyor. Boy codegen'e de gomulu (AOTFnRef / call() satir ici yolu:
+// runtime_bindings.cpp static_assert'leri, split_toplu.sh beklenen boy).
 typedef struct {
   Obj obj;
   int length;
-  int capacity;
-  char *chars;
   uint32_t hash;
+  char *chars;
 } ObjString;
 
 // Function object

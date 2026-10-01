@@ -309,16 +309,17 @@ ObjString *vm_alloc_string(VM *vm, const char *chars, int length) {
 
   // OPTIMIZATION: Pre-allocate capacity for string concatenation
   // Empty strings and small strings get extra capacity for future appends
+  int cap;
   if (length == 0) {
-    str->capacity = 256; // Empty string gets 256 bytes (common in loops!)
+    cap = 256; // Empty string gets 256 bytes (common in loops!)
   } else if (length < 64) {
-    str->capacity = 128; // Small strings get 128 bytes
+    cap = 128; // Small strings get 128 bytes
   } else {
-    str->capacity = length * 2; // Larger strings: 2x growth strategy
+    cap = length * 2; // Larger strings: 2x growth strategy
   }
 
   str->obj.ref_count = 1; // Start with 1 reference (The caller/stack)
-  str->chars = static_cast<char*>(malloc(str->capacity + 1));
+  str->chars = static_cast<char*>(malloc(cap + 1));
   memcpy(str->chars, chars, length);
   str->chars[length] = '\0';
   str->hash = hash;
@@ -353,7 +354,6 @@ ObjString *vm_take_string(VM *vm, char *chars, int length) {
   ObjString *str =
       (ObjString *)allocate_object(vm, sizeof(ObjString), OBJ_STRING);
   str->length = length;
-  str->capacity = length;
   str->obj.ref_count = 1;
   str->chars = chars; // Take ownership directly!
   str->chars[length] = '\0';
@@ -452,7 +452,6 @@ ObjString *vm_alloc_string_buffer(VM *vm, int length, int capacity) {
   ObjString *str =
       (ObjString *)allocate_object(vm, sizeof(ObjString), OBJ_STRING);
   str->length = length;
-  str->capacity = capacity;
   str->obj.ref_count = 1;
   str->chars = static_cast<char*>(malloc(capacity + 1));
   str->chars[length] = '\0';

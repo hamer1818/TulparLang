@@ -400,6 +400,7 @@ static inline VMValue aot_invoke_boxed(void (*fp)(VMValue *), int arity,
 // Kayitlar YALNIZ eklenir ve olumsuzdur (ref_count sentinel, arena degil):
 // adresi yasadigi surece gecerli, okuyan thread'ler kilitsiz okur.
 // ---------------------------------------------------------------------------
+#include "fnref_layout.h"
 typedef struct AOTFnRef {
   ObjString str;            // ILK alan: &kayit == &kayit.str
   void (*fp)(VMValue *);    // kutulu giris noktasi
@@ -417,16 +418,19 @@ typedef struct AOTFnRef {
 // adres araligini ve kaydin fp/arite ofsetlerini SABIT olarak gomuyor
 // (llvm_backend.cpp "call(f, ...) SATIR ICI HIZLI YOL"). Asagidaki kilitler
 // o sabitleri tutar; biri degisirse derleme kirilir, uretilen kod sessizce
-// yanlis ofsetten okumaz.
+// yanlis ofsetten okumaz. Sayilar src/vm/fnref_layout.h'de — codegen ayni
+// basligi okuyor (eskiden iki dosyada ayri yaziliydi; bkz. o baslik).
 AOTFnRef aot_fnref_pool[AOT_FNREF_MAX];
 #define g_fnref_pool aot_fnref_pool
 #if UINTPTR_MAX > 0xFFFFFFFFu
-static_assert(sizeof(ObjString) == 56, "ObjString 56 bayt (call() hizli yolu)");
-static_assert(offsetof(AOTFnRef, fp) == 56, "AOTFnRef::fp @56 (call() hizli yolu)");
-static_assert(offsetof(AOTFnRef, arity) == 64, "AOTFnRef::arity @64 (call() hizli yolu)");
-static_assert(offsetof(AOTFnRef, nfp) == 72, "AOTFnRef::nfp @72 (call() yerel int yolu)");
-static_assert(sizeof(AOTFnRef) == 80 && AOT_FNREF_MAX == 1024,
-              "havuz 1024 x 80 bayt (call() hizli yolu)");
+static_assert(sizeof(ObjString) == 48, "ObjString 48 bayt (call() hizli yolu)");
+static_assert(offsetof(AOTFnRef, fp) == AOT_FNREF_FP_OFF, "AOTFnRef::fp (fnref_layout.h)");
+static_assert(offsetof(AOTFnRef, arity) == AOT_FNREF_ARITY_OFF, "AOTFnRef::arity (fnref_layout.h)");
+static_assert(offsetof(AOTFnRef, nfp) == AOT_FNREF_NFP_OFF, "AOTFnRef::nfp (fnref_layout.h)");
+static_assert(sizeof(AOTFnRef) == AOT_FNREF_SIZE && AOT_FNREF_MAX == AOT_FNREF_COUNT,
+              "AOTFnRef boyu / havuz kayit sayisi (fnref_layout.h)");
+#else
+static_assert(sizeof(ObjString) == 32, "ObjString 32 bayt (wasm32)");
 #endif
 static int g_fnref_count = 0;              // g_call_cache_mu altinda yazilir
 
@@ -483,7 +487,6 @@ extern "C" ObjString *aot_fn_ref(const char *name, int len) {
   e->str.obj.ref_count = 1 << 28;     // olumsuz (aot_intern_string ile ayni)
   e->str.obj.is_moved = 0;
   e->str.length = len;
-  e->str.capacity = len + 1;
   e->str.chars = chars;
   e->str.hash = 0;
   e->fp = fp;
@@ -1284,7 +1287,6 @@ ObjString *aot_allocate_string(const char *chars, int length) {
   str->obj.ref_count = 1;
   str->obj.is_moved = 0;
   str->length = length;
-  str->capacity = length + 1;
 
   // Chars immediately follow struct
   str->chars = block + sizeof(ObjString);
@@ -1324,7 +1326,6 @@ VMValue aot_string_pin(VMValue strVal) {
   pinned->obj.ref_count = 1;
   pinned->obj.is_moved = 0;
   pinned->length = src->length;
-  pinned->capacity = src->length + 1;
   pinned->chars = (char *)(pinned + 1);
   memcpy(pinned->chars, src->chars, src->length);
   pinned->chars[src->length] = '\0';
@@ -1550,7 +1551,6 @@ ObjString *aot_intern_string(const char *chars, int length) {
   str->obj.ref_count = 1 << 28;   // ölümsüz (yukarıdaki ÖMÜR notu)
   str->obj.is_moved = 0;
   str->length = length;
-  str->capacity = length + 1;
   str->chars = block + sizeof(ObjString);
   memcpy(str->chars, chars, (size_t)length);
   str->chars[length] = '\0';
@@ -1581,7 +1581,6 @@ static ObjString *aot_persist_string_obj(ObjString *src) {
   p->obj.ref_count = 1;
   p->obj.is_moved = 0;
   p->length = src->length;
-  p->capacity = src->length + 1;
   p->chars = (char *)(p + 1);
   memcpy(p->chars, src->chars, src->length);
   p->chars[src->length] = '\0';
@@ -1841,7 +1840,6 @@ VMValue aot_string_concat_fast(VMValue a, VMValue b) {
   result->obj.ref_count = 1;
   result->obj.is_moved = 0;
   result->length = total_len;
-  result->capacity = total_len + 1;
   result->chars = block + sizeof(ObjString);
 
   // Direct memory copy
@@ -2661,7 +2659,6 @@ static ObjString *persist_string_chars(const char *chars, int length) {
   p->obj.ref_count = 1;
   p->obj.is_moved = 0;
   p->length = length;
-  p->capacity = length + 1;
   p->chars = (char *)(p + 1);
   memcpy(p->chars, chars, (size_t)length);
   p->chars[length] = '\0';
@@ -5166,7 +5163,6 @@ static inline ObjString *split_emit(char *at, const char *src, int len) {
   str->obj.ref_count = 1;
   str->obj.is_moved = 0;
   str->length = len;
-  str->capacity = len + 1;
   str->chars = at + sizeof(ObjString);
   if (len > 0) memcpy(str->chars, src, (size_t)len);
   str->chars[len] = '\0';
@@ -8754,7 +8750,6 @@ VMValue aot_http_create_response_keepalive(VMValue statusVal,
   *w = '\0';
 
   str->length = (int)(w - str->chars);
-  str->capacity = str->length + 1;
   return VM_OBJ((Obj *)str);
 }
 
