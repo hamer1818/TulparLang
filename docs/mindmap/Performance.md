@@ -1908,3 +1908,79 @@ Kalan: kurulum 4,7 ms (Rust 3,5) — büyüyen dizi (`realloc` + yarısı 4 KB
 sayfada: THP kapsaması Tulpar 14 MB, Rust/C 30 MB), Rust'ın `collect`'i tek
 ayırma. `int` üst düzey değişkenleri terfi etmek bu çekirdekte de geriletiyor
 (36 → 43 ms; iç döngü yine aynı makine kodu) — `int` kuralı global kalıyor.
+
+## Soğuk yol indeksi: LSR'in soğuk adresler için kurduğu sayaçlar — fonksiyon içi elek 10,0 → 8,0 ms, üst düzey diziler main yereli (2026-10-02)
+
+#431 üst düzey `int` ve dizi bildirimlerini global bırakmıştı: hepsi terfi
+edilince elek 7,6 → 9,4 ms geriliyordu ve aynı elek bir FONKSİYONUN içinde
+eski derleyicide de 9,7 ms'ydi ("dizi erişim yolunun açığı"). Kök neden
+ölçüldü (Ryzen 7 9800X3D, `taskset -c 10,11`; perf yok, sayaçlar
+`perf_event_open` ile kullanıcı alanından):
+
+- Şekil önbellekli erişimin GENEL yolu (dizi döngüde tür / genişlik
+  değiştirirse ya da sınır dışıysa) adresleri `items + 16*k`, `idata + 8*k`,
+  `idata + 4*k` olarak hesaplıyor. `k` bir döngü sayacıysa bunlar onun afin
+  fonksiyonu ve **LSR** (llc içinde; `TULPAR_AOT_EMIT_LL` çıktısında
+  görünmez, `objdump` ile okundu) her biri için sıcak döngüye ayrı sayaç
+  koyuyor. Elekte iç döngü `k = k + i` — adım değişken, yani her sayacın
+  adımı bir yazmaç; yetmeyince yığına taşıyor: iç döngü 4 sayaç, ikisinin
+  adımı `add 0x30(%rsp)` gibi bellekten.
+- Üst düzey elekte `n` ve `i` global olduğu için iç döngü onları her turda
+  bellekten okuyordu; bellekten gelen değer SCEV'i durduruyor, LSR hiçbir
+  şey yapamıyordu. Global'in "hızı" buydu.
+
+Çözüm (`cold_index_opaque`): genel yolun 8/16 bayt adımlı adresleri
+indeksi `volatile` bir yığın yuvasından (fonksiyon başına tek yuva)
+geçiriyor; SCEV onu çözemiyor, LSR o adresler için sayaç kurmuyor. 4 bayt
+adımlı (u32) adres ve sınır sınavı ham indeksle kalıyor — sıcak yolla aynı
+sayacı paylaşıyorlar; ilk sürüm onları da gizliyordu ve qsort'ta sıcak
+döngüye komut ekledi (+%4 komut, sayaçla ölçüldü). Maliyet yalnız soğuk
+yolda. Ek olarak önbellekli dalın iki koluna ağırlık (2000:1): ağırlıksız
+yerleşim soğuk blokları sıcak döngünün arasına koyuyordu.
+
+Ölçüm (en iyi, 15 koşu):
+
+| | önce | sonra | clang -O2 C | gcc -O2 C |
+|---|--:|--:|--:|--:|
+| elek, fonksiyon içi | 10,0 | **8,0** | 8,3 | 7,4 |
+| elek, üst düzey (diziler artık main yereli; 31 koşu) | 7,6 | 7,5 | | |
+| üst düzey `int[]` + döngüde kullanıcı çağrısı (`oyun.tpr`, 1M × 20) | 43,5 | **37,7** | | |
+
+`TULPAR_NO_COLD_IX=1` fonksiyon içi eleği 11,1'e döndürüyor;
+`TULPAR_NO_ML_ARR=1` `oyun.tpr`'yi 43,9'a. Son satırın programı:
+`int[] a, b` üst düzey, `for (...) { a[i] = adim(a[i] + b[i]); }` — çağrı
+global'i ezebilir sayıldığı için global dizi tutamacı (ve başlığı) her turda
+yeniden okunuyordu; main yereli yazmaçta kalıyor.
+
+**Dizi bildirimleri artık main yereli** (yalnız main'de görülenler; kural
+#431 ile aynı, güvenlik ağı aynı). **`int` global kalıyor — yeniden
+ölçüldü:** yalnız `int`leri terfi etmek elek 7,7 → 8,2–8,8 (dış döngüde
+`i * i` için LSR'in kurduğu karesel sayaçlar dış döngünün HER turunda — 5M
+tur — ilerliyor; aynı C kaynağını clang -O2 de birebir böyle derliyor, 8,4)
+ve `particles` 36 → 43 (iç döngü komut komut aynı; arka uç, sebep
+bulunamadı). `callfn`'de beklenen kazanç da yok: `acc` zaten phi'de, global
+saklama turda bir `store`; terfi edilince 83,4 / global 80,2 (README'deki
+"63,5" bugünkü kodla tekrarlanmadı).
+
+qsort uyarısı (Tuzaklar 7i): IR farklı, resmî kaynakta 70,0 → 71,3
+göründü. Kaynağa zararsız önek (1–3 satır) ile dört yerleşimde: önce 69,7 /
+70,3 / 72,6 / 72,5, sonra 71,2 / 70,0 / 70,4 / 69,9 — ortalama 71,3 → 70,4.
+Sayaçlar: komut −%6, dal −%16 (atlama azaldı), döngü ±%1, fark ön-uç
+beklemesinde. Yerleşim, kod değil.
+
+Gerileme denetimi (13 çekirdek, dönüşümlü A/B, 9 tur, en iyi; taban bu
+dalın altındaki struct dizisi PR'ı): IR'ı değişen sieve 7,7/7,7, arrayiter
+1,4/1,4 (31 tur), matmul 36,6/36,6, nbody 119,6/119,2, qsort (yukarıda),
+parse 74,9/73,8 (11 tur; 9 turluk koşuda gürültü 73,9/78,2). Kalan altısının
+IR'ı aynı. Derleme: `scene3d_editor` 9,25 → 9,21 s, ikili +48 bayt.
+
+Kapı: `tests/soguk_indeks.sh` (13; IR'da `load volatile` var /
+`TULPAR_NO_COLD_IX=1` ile yok, yalnız main'deki `int[]`/`float[]`/`array`
+global değil / fonksiyonda geçen global / `TULPAR_NO_ML_ARR=1` ile global,
+`int` global, dört derlemenin çıktısı aynı, sınır dışı yakalanıyor) +
+`tests/soguk_indeks.test.tpr` (soğuk yolu GERÇEKTEN koşturan geçişler:
+32 → 64 bit genişleme, int depoya float yazma → kutulu, double depoya int
+yazma; fonksiyonda ve üst düzeyde, beklenen değerle). Sabotaj: gizlenen
+indekse +1 eklenince paket kırmızı (`expected 5000000000 got 1`,
+`malloc(): invalid next size`) — soğuk yol testte gerçekten koşuyor. LSR'in
+kaç sayaç kurduğu IR'da görünmediği için ETKİ kapıda değil, bu bölümde.
