@@ -97,7 +97,17 @@ else()
 endif()
 
 include_directories(${LLVM_INCLUDE_DIRS})
-link_directories(${LLVM_LIBRARY_DIRS})
+# macOS'ta LLVM kitaplik dizini GENEL bir -L olmamali: AppleClang'in ortuk
+# `-lc++`'si once orada aranir ve Homebrew llvm@18'in lib/ dizinindeki libc++
+# libunwind'i yeniden disa aktariyor — ikili boylece
+# /opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib'e baglaniyordu (CI, 2026-10-02:
+# "ld: warning: reexported library with install name '.../libunwind.1.dylib'
+# ... will be linked directly"). Statik bilesenler mutlak yolla linklenir,
+# -L'ye ihtiyaclari yok; paylasimli dylib yolunda -L asagida yalniz tulpar'a
+# verilir.
+if(NOT (APPLE AND TULPAR_MACOS_TASINABILIR))
+    link_directories(${LLVM_LIBRARY_DIRS})
+endif()
 if(LLVM_DEFINITIONS)
     # LLVM_DEFINITIONS is a single SPACE-SEPARATED STRING, not a CMake list.
     # Passing it straight to add_definitions() collapses every flag after the
@@ -414,6 +424,9 @@ find_library(TULPAR_LLVM_STATIC_PROBE
 
 if(NOT TULPAR_LLVM_STATIC_PROBE)
     set(llvm_libs LLVM)
+    if(APPLE AND TULPAR_MACOS_TASINABILIR)
+        target_link_directories(tulpar PRIVATE ${LLVM_LIBRARY_DIRS})
+    endif()
     message(STATUS "LLVM: statik bilesenler yok — paylasimli dylib ile linkleniyor")
 else()
     llvm_map_components_to_libnames(llvm_libs
