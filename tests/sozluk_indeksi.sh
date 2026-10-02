@@ -22,10 +22,11 @@
 #      Eski derleyicide satir YOK -> kirmizi.
 #   2. BELLEK (Linux'ta iddia; macOS'ta yalniz basilir — malloc/realloc
 #      davranisi platform verisi): 100k ile 1M anahtar arasindaki tepe RSS
-#      farki anahtar basina < 80 B. Hesap: dizgi 32 B (24 baslik + "k123456"
-#      + NUL, 8'e yuvarli) + keys/values dizisi ~24,5 B (kapasite 131072 ->
-#      1048576, 8 + 16 B) + indeks (2M - 256k yuva) * 8 B / 900k ~ 16 B =
-#      ~72 B. Eski kural indekste ~33 B -> ~89 B.
+#      farki anahtar basina < 73 B. Hesap: dizgi 24 B (16 baslik + "k123456"
+#      + NUL; karakterler nesnenin icinde, #454) + keys/values dizisi ~24,5 B
+#      (kapasite 131072 -> 1048576, 8 + 16 B) + indeks (2M - 256k yuva) * 8 B
+#      / 900k ~ 16 B = ~64 B (olculen 64). Eski kural indekste ~33 B -> ~82 B
+#      (#454'ten once, 24 B dizgi basligiyla 90 B). Esik ikisinin ortasinda.
 #   3. POZITIF KONTROL: ayni sondalar TULPAR_OBJ_INDEKS_X4=1 ile (eski x4
 #      buyume) Y = 4 194 304 basmali ve Linux'ta bellek esigini ASMALI —
 #      asmiyorsa kapi bir sey olcmuyor demektir.
@@ -120,11 +121,11 @@ case "$(uname -s)" in
     done
     AB=$(( (A2 - A1) * 1024 / 900000 ))
     KB=$(( (K2 - K1) * 1024 / 900000 ))
-    echo "  bellek: N=100k ${A1} KB, N=1M ${A2} KB, anahtar basina ${AB} B (esik 80)"
+    echo "  bellek: N=100k ${A1} KB, N=1M ${A2} KB, anahtar basina ${AB} B (esik 73)"
     echo "  pozitif kontrol (x4): anahtar basina ${KB} B (esigi ASMALI)"
     if [ "$(uname -s)" = "Linux" ]; then
-      [ "$AB" -lt 80 ] || { echo "  INDEKS anahtar basina ${AB} B"; HATA=1; }
-      [ "$KB" -ge 80 ] || { echo "  POZITIF KONTROL: x4 kuralinda da ${KB} B — kapi olcmuyor"; HATA=1; }
+      [ "$AB" -lt 73 ] || { echo "  INDEKS anahtar basina ${AB} B"; HATA=1; }
+      [ "$KB" -ge 73 ] || { echo "  POZITIF KONTROL: x4 kuralinda da ${KB} B — kapi olcmuyor"; HATA=1; }
     else
       echo "  [bellek esigi yalniz Linux'ta iddia; burada basildi]"
     fi ;;

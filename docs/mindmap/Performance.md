@@ -1750,12 +1750,18 @@ Kapı `tests/sozluk_indeksi.sh` (build.sh suites): `TULPAR_OBJ_TANI=1`
 büyüme başına taşınan yuva / yeniden hash'lenen anahtar / en büyük indeks
 boyunu basıyor (yalnız yeniden kurmada sayılır — sıcak eklemeye maliyeti
 yok). 1M anahtarda 2 097 152 yuva + yeniden hash 16 (ilk kuruluş) ve 300k'de
-1 048 576 iddia ediliyor; RSS ayağı anahtar başına 72 B (eşik 80, Linux).
-Pozitif kontrol aynı sondayı `TULPAR_OBJ_INDEKS_X4=1` (eski kural) ile
-koşuyor: 4 194 304 yuva, 90 B. Taban derleyicide kırmızı (tanı yok, 90 B);
+1 048 576 iddia ediliyor; RSS ayağı anahtar başına 72 B (#454 satır içi
+dizgi karakteriyle birlikte 64 B; eşik 73, Linux). Pozitif kontrol aynı
+sondayı `TULPAR_OBJ_INDEKS_X4=1` (eski kural) ile koşuyor: 4 194 304 yuva,
+90 B (#454 ile 82 B — eşik ikisinin ortasına bu yüzden çekildi). Taban derleyicide kırmızı (tanı yok, 90 B);
 `kObjIndexBig = 1 << 30` sabotajında kırmızı (4 194 304, 90 B).
 `tests/gecici_dizgi.sh`'nin ekleme ayağı da (iki tur yazma) 89 → 71 B
 gösteriyor; eşiği (192) bu PR'da sıkılaştırılmadı, kendi kapısı var.
+
+#454 (satır içi dizgi karakteri, önce birleşti) üstüne yeniden
+temellendirildikten sonra (aynı gün, dönüşümlü 15 tur, makine paylaşımlı):
+main cde985df 101,1 ms / 81,0 MB → bu dal **94,9 ms / 65,1 MB** — tepe
+bellek C ile aynı (64,5 MB).
 
 Kalan: aramanın yarısı hâlâ yuva ıskası + anahtar dizgisi ıskası — C ile
 aynı yapı (C de `keys[h]` → dizgi). Anahtar kurma (`aot_itoa` + arena

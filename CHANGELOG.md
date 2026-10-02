@@ -36,15 +36,17 @@ tag still works;
   karıştırması ortak önekli anahtarları (`k12340`..`k12349`) yakın yuvalara
   koyuyor, sıralı erişimde önbellek/TLB yerelliği veriyor. FNV kaldı.
 - **Sonuç** (`taskset -c 6,7`, izole dizin, dönüşümlü, 9 tur): 1M en iyi
-  103,8 → **88,9 ms**, tepe bellek 88,6 → **72,6 MB** (C 66,6 ms / 64,5 MB);
+  103,8 → **88,9 ms**, tepe bellek 88,6 → **72,6 MB** (C 66,6 ms / 64,5 MB;
+  satır içi dizgi karakteriyle (#454) birlikte **81,0 → 65,1 MB**, 15 tur
+  dönüşümlü en iyi 101,1 → 94,9 ms — makine o saatte paylaşımlıydı);
   3M 613 → 510 ms, 309 → 245 MB; 300k 25,3 / 25,5 ms ve 100k 8,7 / 9,0 ms
   (aynı indeks boyu — fark gürültü/yerleşim). 13 çekirdekte gerileme yok
   (tablo: `docs/mindmap/Performance.md` "hashmap ... 2026-10-02").
 - Kapı: `tests/sozluk_indeksi.sh` — `TULPAR_OBJ_TANI=1` tanısı (1M anahtarda
   indeks 2 097 152 yuva, büyümede yeniden hash < 64, 300k'de 1 048 576) +
-  tepe RSS (anahtar başına < 80 B, Linux'ta iddia; ölçülen 72) + kendi
+  tepe RSS (anahtar başına < 73 B, Linux'ta iddia; ölçülen 64) + kendi
   pozitif kontrolü (`TULPAR_OBJ_INDEKS_X4=1` eski x4 kuralı: 4 194 304 yuva,
-  90 B → kırmızı olmalı). Taban derleyicide kırmızı (tanı satırı yok, 90 B);
+  82 B → kırmızı olmalı). Taban derleyicide kırmızı (tanı satırı yok, 90 B);
   `kObjIndexBig` 1<<30'a sabote edilince kırmızı. Anlambilim:
   `tests/json_hash_indeksi.test.tpr`'ye 600k anahtar (x2 rejimi, üstüne
   yazma, olmayan anahtar), 4 thread eşzamanlı okuma, ayrıştırılan (arena)
