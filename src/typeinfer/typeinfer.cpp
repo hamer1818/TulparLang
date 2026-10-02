@@ -602,6 +602,71 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       break;
     }
 
+    // STRUCT ARITMETIGI (2026-10-02). Dilde struct icin islec yok; ama
+    // codegen'in iki yolu iki FARKLI sessiz sonuc veriyordu (olculdu):
+    //   `p + 5`, `p * 2`, `p - v`   -> 0
+    //   `p + v` (var/json), `p + q` -> "P { x: 1, y: 2 }5" dizgisi (#451'den
+    //                                  beri; once o da 0)
+    // ve typecheck tek kelime etmiyordu. Kural: bilinen bir struct, `+`'nin
+    // obur tarafi DIZGI degilse ya da baska bir aritmetik islecin
+    // operandiysa tani. Dizgi birlestirmesi (`"p=" + p`, `p + "!"`) serbest
+    // — degerin metni tek kurala bagli (#451, Tuzaklar 7j). Tipi dinamik
+    // (var/json/bilinmeyen) obur taraf ayri cumleyle: deger calisma
+    // zamaninda dizgiyse birlestirme dogru olabilir, niyet acik yazilsin.
+    if (bin->op == TOKEN_PLUS || bin->op == TOKEN_MINUS || bin->op == TOKEN_MULTIPLY ||
+        bin->op == TOKEN_DIVIDE || bin->op == TOKEN_MODULO) {
+      const std::string ln =
+          left_type == TYPE_CUSTOM ? custom_name_of(ctx, bin->left.get()) : std::string();
+      const std::string rn =
+          right_type == TYPE_CUSTOM ? custom_name_of(ctx, bin->right.get()) : std::string();
+      const bool ls = known_struct(ctx, left_type, ln);
+      const bool rs = known_struct(ctx, right_type, rn);
+      if (ls || rs) {
+        const char *sp = bin->op == TOKEN_PLUS       ? "+"
+                         : bin->op == TOKEN_MINUS    ? "-"
+                         : bin->op == TOKEN_MULTIPLY ? "*"
+                         : bin->op == TOKEN_DIVIDE   ? "/"
+                                                     : "%";
+        const DataType ot = ls ? right_type : left_type;
+        const std::string &sname = ls ? ln : rn;
+        const bool other_struct = ls && rs;
+        const bool other_dynamic =
+            !other_struct && (ot == TYPE_UNKNOWN || ot == TYPE_JSON || ot == TYPE_UNSPECIFIED ||
+                              ot == TYPE_CUSTOM);
+        if (bin->op == TOKEN_PLUS && ot == TYPE_STRING) {
+          // dizgi birlestirmesi — serbest
+        } else if (other_dynamic) {
+          report_error(
+              ctx,
+              tulpar::i18n::tr_en(
+                  "struct '%s' ile tipi dinamik ('%s') bir deger arasinda '%s' - "
+                  "struct'ta islec yok: deger dizgi degilse sonuc ya 0 ya da "
+                  "struct'in metniyle birlesmis bir dizgi olur; birlestirme "
+                  "isteniyorsa `toString(...) + ...`, alan islemi isteniyorsa "
+                  "alani yazin (`p.x %s ...`) - satir %d",
+                  "struct '%s' and a dynamically typed ('%s') value under '%s' "
+                  "- structs have no operators: unless the value is a string the "
+                  "result is either 0 or a string joined with the struct's text; "
+                  "write `toString(...) + ...` to concatenate, or name the field "
+                  "(`p.x %s ...`) - at line %d"),
+              sname.c_str(), datatype_to_string(ot), sp, sp, bin->loc.line);
+        } else {
+          report_error(
+              ctx,
+              tulpar::i18n::tr_en(
+                  "struct '%s' ile '%s' arasinda '%s' tanimli degil - struct'ta "
+                  "islec yok, sonuc sessizce 0 ya da bir dizgi olurdu; alani "
+                  "yazin (`p.x %s ...`) - satir %d",
+                  "struct '%s' and '%s' have no '%s' operator - structs have no "
+                  "operators, the result would silently be 0 or a string; name "
+                  "the field (`p.x %s ...`) - at line %d"),
+              sname.c_str(),
+              other_struct ? rn.c_str() : datatype_to_string(ot), sp, sp,
+              bin->loc.line);
+        }
+      }
+    }
+
     if (bin->op == TOKEN_PLUS &&
         (left_type == TYPE_STRING || right_type == TYPE_STRING)) {
       return TYPE_STRING;

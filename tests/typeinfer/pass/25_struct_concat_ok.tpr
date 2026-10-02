@@ -1,0 +1,15 @@
+// Struct'in DIZGI ile birlestirmesi tanisiz gecmeli (2026-10-02): degerin
+// metni tek kurala bagli (#451, Tuzaklar 7j) ve `"p=" + p` korpusta yaygin.
+// Ikizi: fail/32_struct_arithmetic.tpr (dizgi olmayan obur taraf).
+struct P { int x; int y; }
+
+P p = { x: 1, y: 2 };
+str s = "!";
+var v = 5;
+print("p=" + p);
+print(p + "!");
+print(p + s);
+print("a" + p + v);          // ("a" + p) dizgi, sonra + v
+print(toString(p) + v);      // acik birlestirme
+print(p.x + v);              // alan islemi
+print(p.x * 2 + p.y);
