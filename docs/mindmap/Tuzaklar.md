@@ -2137,9 +2137,21 @@ geçerli: hizalama şansıyla gelen %2 "kazanç" da kazanç değildir.
 > - **JSON ayrı sözleşme:** `toJson` NaN/sonsuzu `null` yazar (RFC 8259'da
 >   yoklar; JS'nin `JSON.stringify`ı gibi). Eskiden `[-nan,inf]` — geçersiz
 >   JSON. Bool zaten `true/false`, float aynı en kısa gösterim.
-> - **Kutulu struct (dinamik dizideki `[p]`, `str` alanlı struct) json
->   nesnesi gibi yazılır** (`{"x": 1}`): kutulanınca tip adı taşınmıyor.
->   Bilinçli fark; `tests/deger_metni.sh` `kutulu_struct` satırı kilitliyor.
+> - **Kutulu struct (dinamik dizideki `[p]`, `str` alanlı struct) de
+>   `P { x: 1 }` yazılır** (2026-10-02, üçüncü tur; ilk iki turda `{"x": 1}`
+>   idi — kutulanınca tip adı taşınmıyordu). Ad, `Obj` başlığının
+>   kullanılmayan dolgu baytında (`Obj::struct_tag`, 1..255 → runtime
+>   tablosu): nesne başına **0 bayt**. Ölçülen alternatif (ObjObject'e
+>   `const char *` alan): 2M kutulu struct'ta RSS 707 → 739 MB (+%4,4;
+>   malloc 48 → 64 B'lik parça), bu yüzden seçilmedi. Etiket yalnız TAZE
+>   nesneye yazılır (kutulama, `S s = {...}`, `S s;`, `return {...}`) —
+>   `S t = j;` paylaşılan json'u yeniden adlandırmaz. JSON (`toJson`) adı
+>   taşımaz. **Tuzak:** o bayt eskiden hiç yazılmıyordu ve arena geri
+>   sarmadan sonra SIFIR DEĞİL — ObjObject kuran her yol onu sıfırlamalı
+>   (kopyalayan taşır). `tests/kutulu_struct_adi.test.tpr` "arena artığı"
+>   testi arenayı 0x01 ile doldurup `fromJson` ile nesne kurduruyor;
+>   `parse_json_object`'teki sıfırlama silinince `{"b": P { c: 2 }}` basıp
+>   kırmızı (ölçüldü).
 > - Hata ayıklayıcı (`tools/gdb/tulpar_printers.py`, DAP) aynı kuralı Python'da
 >   tekrarlıyor (`fmt_float`, `aot_format_float`'ın birebir kopyası): eskiden
 >   `f = 1.0` (program `1`), `null` için `void`, kutusuz `float[]` için bit

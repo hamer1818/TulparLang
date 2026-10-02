@@ -3313,14 +3313,54 @@ static void struct_slots_to_native(LLVMBackend *backend, StructTypeEntry *st,
 // int/bool/float structs behave identically in arrays. `alloca` points at the
 // native `{i64|double,...}` aggregate; `st` supplies the ordered field
 // names/types (a float field boxes as VM_FLOAT — P0.3).
+// KUTULU STRUCT ETIKETI (2026-10-02, vm.hpp Obj::struct_tag): kutulanan
+// struct'in nesnesi tip adini Obj basligindaki bir baytta tasir, metni
+// `print(p)` ile ayni (`P { x: 1 }`) olur. Struct adi icin modulde TEK sabit:
+// runtime kimligi once isaretci esitligiyle bulur (aot_struct_tag_of).
+static LLVMValueRef struct_name_const(LLVMBackend *backend, const char *name) {
+  std::string gname = std::string("__tulpar_stn.") + name;
+  LLVMValueRef g = LLVMGetNamedGlobal(backend->module, gname.c_str());
+  if (!g) {
+    LLVMValueRef str =
+        LLVMConstStringInContext(backend->context, name, (unsigned)strlen(name), 0);
+    g = LLVMAddGlobal(backend->module, LLVMTypeOf(str), gname.c_str());
+    LLVMSetInitializer(g, str);
+    LLVMSetGlobalConstant(g, 1);
+    LLVMSetLinkage(g, LLVMPrivateLinkage);
+  }
+  return g;
+}
+
+static LLVMValueRef struct_tag_fn(LLVMBackend *backend, const char *fname) {
+  LLVMValueRef fn = LLVMGetNamedFunction(backend->module, fname);
+  if (fn) return fn;
+  LLVMTypeRef pt[] = {backend->ptr_type, backend->ptr_type};
+  const bool is_new = strcmp(fname, "aot_struct_obj_new") == 0;
+  LLVMTypeRef fty = is_new ? LLVMFunctionType(backend->ptr_type, pt, 1, 0)
+                           : LLVMFunctionType(LLVMVoidTypeInContext(backend->context), pt, 2, 0);
+  return LLVMAddFunction(backend->module, fname, fty);
+}
+
+// Var olan kutulu struct degerine (VMValue) ad etiketi: `str` alanli struct'in
+// literali tipli bir yuvaya yazildiginda. Nesne degilse runtime dokunmaz.
+static void emit_struct_obj_tag(LLVMBackend *backend, LLVMValueRef boxed, const char *name) {
+  if (!boxed || !name) return;
+  LLVMValueRef slot = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "st.tag.v");
+  LLVMBuildStore(backend->builder, boxed, slot);
+  LLVMValueRef fn = struct_tag_fn(backend, "aot_struct_obj_tag");
+  LLVMValueRef args[] = {slot, struct_name_const(backend, name)};
+  LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(fn), fn, args, 2, "");
+}
+
 static LLVMValueRef box_native_struct_as_object(LLVMBackend *backend,
                                                 LLVMValueRef alloca,
                                                 StructTypeEntry *st) {
-  LLVMValueRef obj_args[] = {LLVMConstPointerNull(backend->ptr_type)};
-  LLVMValueRef obj = LLVMBuildCall2(
-      backend->builder,
-      LLVMGlobalGetValueType(backend->func_vm_allocate_object),
-      backend->func_vm_allocate_object, obj_args, 1, "struct.box.obj");
+  // Bos json nesnesi yerine ADI ETIKETLI nesne (Obj::struct_tag) — ayni
+  // ayirma, ayni boy; yalniz basligin dolgu bayti yaziliyor.
+  LLVMValueRef new_fn = struct_tag_fn(backend, "aot_struct_obj_new");
+  LLVMValueRef obj_args[] = {struct_name_const(backend, st->name)};
+  LLVMValueRef obj = LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(new_fn), new_fn,
+                                    obj_args, 1, "struct.box.obj");
   for (int i = 0; i < st->field_count; i++) {
     LLVMValueRef boxed =
         struct_field_load_boxed(backend, st, alloca, i, "struct.box.fv");
@@ -14391,6 +14431,19 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       init = llvm_vm_val_int(backend, 0);
     }
 
+    // Kutulu struct (tipli yola girmeyen: `str` alanli ya da ic ice struct)
+    // literali / bos bildirimi: nesneye tip adi (Obj::struct_tag). Yalniz
+    // TAZE nesne (literal ya da `S s;`) — `S s = j;` paylasilan bir json'u
+    // yeniden adlandirmasin.
+    if (node->data_type == TYPE_CUSTOM && init &&
+        (!node->right || node->right->type == AST_OBJECT_LITERAL)) {
+      const char *sn = node->return_custom_type;
+      if (!sn && node->field_custom_types && node->field_count > 0)
+        sn = node->field_custom_types[0];
+      if (StructTypeEntry *tst = find_struct_type(backend, sn))
+        emit_struct_obj_tag(backend, init, tst->name);
+    }
+
     // Check if it's already a (boxed) global (from pre-scan).
     if (existing_global) {
       // UST DUZEY BILDIRIM DE BIR GLOBAL YAZMASI (Tuzaklar 7f). Eskiden
@@ -15754,6 +15807,13 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         node->return_value
             ? codegen_expression(backend, node->return_value)
             : llvm_vm_val_int(backend, 0); // Return 0/Void if no value
+    // `return { ... };` kutulu struct donduren fonksiyonda: tip adi.
+    if (backend->current_function_returns_struct && node->return_value &&
+        node->return_value->type == AST_OBJECT_LITERAL) {
+      if (StructTypeEntry *tst =
+              find_struct_type(backend, backend->current_function_returns_struct))
+        emit_struct_obj_tag(backend, ret, tst->name);
+    }
 
     // Pops go AFTER evaluating the return expression: `return f();` inside a
     // try must still route f's throw to this try's handler.

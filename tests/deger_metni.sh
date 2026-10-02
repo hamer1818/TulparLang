@@ -54,7 +54,13 @@ struct_eleman|ps[1]|P { x: 3, y: 4, b: true }
 struct|q|P { x: 3, y: 4, b: true }
 tuple_yerel|t|(3, 1.5)
 tuple_cagri|iki()|(3, 1.5)
-kutulu_struct|kb|{"name": "ali", "n": 2}
+kutulu_struct|kb|S { name: "ali", n: 2 }
+kutulu_struct_dizi|kq|[P { x: 3, y: 4, b: true }]
+kutulu_struct_json|kj|{"k": P { x: 3, y: 4, b: true }}
+kutulu_struct_bos|ke|S {}
+kutulu_struct_donus|kf()|S { name: "f", n: 1 }
+kutulu_struct_birlestirme|"kb=" + kb|kb=S { name: "ali", n: 2 }
+kutulu_struct_tojson|toJson(kq)|[{"x":3,"y":4,"b":true}]
 kendini_iceren|kd|[1, [...]]
 struct_alan_float|pf|P { x: 1, y: 0.30000000000000004, b: true }
 tekil_alan_float|pf.y|0.30000000000000004
@@ -84,6 +90,7 @@ type S { str name; int n; }
 type Tepe { f32 x; i32 renk; }
 func iki(): (int, float) { return 3, 1.5; }
 func uc(): (int, bool, float) { return 7, true, 0.25; }
+func kf(): S { return { name: "f", n: 1 }; }
 int[] ia = [1, 2, 3];
 int[] wa = [1, -2];
 wa[0] = 5000000000;
@@ -99,6 +106,9 @@ P q = { x: 3, y: 4.0, b: true };
 push(ps, q);
 var t = iki();
 S kb = { name: "ali", n: 2 };
+var kq = [q];
+json kj = {"k": q};
+S ke;
 array kd = [1];
 push(kd, kd);
 P pf = { x: 1, y: 0.1 + 0.2, b: true };

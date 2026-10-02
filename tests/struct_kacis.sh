@@ -4,7 +4,8 @@
 # Anlam testleri tests/struct_kacis.test.tpr'de (kacan her bicim kutulu
 # kaliyor mu). Bu betik KARARIN kendisini olcuyor: kacmayan `var q = mk(..)`
 # icin uretilen kodda (optimizasyon ONCESI IR) nesne ayirmasi
-# (`vm_allocate_object`, box_native_struct_as_object'in cagrisi) OLMAMALI;
+# (`aot_struct_obj_new` — box_native_struct_as_object'in cagrisi, 2026-10-02'ye
+# kadar `vm_allocate_object`; ikisi de sayiliyor) OLMAMALI;
 # kacan `var` icin OLMALI. Olcum icin her kontrol ayri bir fonksiyon.
 #
 # POZITIF KONTROL: TULPAR_NO_STRUCT_ESCAPE=1 analizi kapatir; o derlemede
@@ -66,8 +67,8 @@ fi
 out=$("$TMP/yeni")
 [ "$out" = "100 45" ] && ok "program dogru sonuc veriyor (100 45)" || bad "program sonucu: '$out' (100 45 bekleniyordu)"
 
-n_kacmaz=$(fn_body "$TMP/yeni.pre.ll" kacmaz | grep -c 'vm_allocate_object')
-n_kacar=$(fn_body "$TMP/yeni.pre.ll" kacar | grep -c 'vm_allocate_object')
+n_kacmaz=$(fn_body "$TMP/yeni.pre.ll" kacmaz | grep -cE 'vm_allocate_object|aot_struct_obj_new')
+n_kacar=$(fn_body "$TMP/yeni.pre.ll" kacar | grep -cE 'vm_allocate_object|aot_struct_obj_new')
 [ "$n_kacmaz" -eq 0 ] && ok "kacmayan var: nesne ayirmasi yok (tipli yerel)" \
   || bad "kacmayan var: $n_kacmaz nesne ayirmasi (0 bekleniyordu)"
 [ "$n_kacar" -gt 0 ] && ok "kacan var (takma ad): kutulu kaliyor ($n_kacar ayirma)" \
@@ -75,7 +76,7 @@ n_kacar=$(fn_body "$TMP/yeni.pre.ll" kacar | grep -c 'vm_allocate_object')
 
 # Pozitif kontrol: analiz kapaliyken kacmayan da ayirmali.
 if derle kapali TULPAR_NO_STRUCT_ESCAPE=1; then
-  n_kapali=$(fn_body "$TMP/kapali.pre.ll" kacmaz | grep -c 'vm_allocate_object')
+  n_kapali=$(fn_body "$TMP/kapali.pre.ll" kacmaz | grep -cE 'vm_allocate_object|aot_struct_obj_new')
   [ "$n_kapali" -gt 0 ] && ok "pozitif kontrol: analiz kapaliyken kacmayan da kutulu ($n_kapali ayirma)" \
     || bad "pozitif kontrol: analiz kapaliyken de ayirma gorulmedi — denetim kor"
 else

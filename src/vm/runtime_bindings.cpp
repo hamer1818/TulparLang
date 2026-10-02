@@ -1720,6 +1720,7 @@ VMValue aot_persist(VMValue v) {
     dst->index = nullptr;
     dst->obj.type = OBJ_OBJECT;
     dst->obj.arena_allocated = 0;
+    dst->obj.struct_tag = src->obj.struct_tag;  // kutulu struct adi tasinir
     dst->obj.ref_count = 1;
     dst->obj.is_moved = 0;
     int n = src->count;
@@ -3388,6 +3389,25 @@ static void repr_value(ReprOut &out, VMValue v, ReprCtx &cx, bool nested) {
   }
   case OBJ_OBJECT: {
     const ObjObject *ob = (const ObjObject *)o;
+    // Kutulu struct (Obj::struct_tag): `print(p)` ile ayni bicim —
+    // `P { x: 1, ad: "z" }`. Alan degeri ic deger kuraliyla (dizgi tirnakli).
+    if (const char *tn = o->struct_tag ? aot_struct_tag_name(o->struct_tag) : nullptr) {
+      if (ob->count == 0) {  // `S s;` — alan yazilmamis: `S {}`
+        out.put(tn);
+        out.put(" {}");
+        break;
+      }
+      repr_struct_open(out, tn);
+      int f = 0;
+      for (int i = 0; i < ob->count; i++) {
+        const ObjString *k = ob->keys[i];
+        if (!k) continue;
+        repr_struct_field_head(out, tn, f++, k->chars);
+        repr_value(out, ob->values[i], cx, true);
+      }
+      repr_struct_close(out, tn);
+      break;
+    }
     out.put('{');
     bool first = true;
     for (int i = 0; i < ob->count; i++) {
@@ -4738,6 +4758,7 @@ ObjObject *vm_allocate_object_aot_wrapper(void *vm) {
   ObjObject *obj = static_cast<ObjObject*>(malloc(sizeof(ObjObject)));
   obj->obj.type = OBJ_OBJECT;
   obj->obj.arena_allocated = 0;
+  obj->obj.struct_tag = 0;
   obj->obj.ref_count = 1;
   obj->obj.is_moved = 0;
   obj->count = 0;
@@ -4747,6 +4768,65 @@ ObjObject *vm_allocate_object_aot_wrapper(void *vm) {
   obj->index = nullptr;
   region_track((Obj *)obj); // request-local literal → freed at arena_restore
   return obj;
+}
+
+// ---- KUTULU STRUCT ETIKETI (2026-10-02) -------------------------------------
+// Kutulanan struct (dinamik dizideki `[p]`, `str` alanli struct) bir json
+// nesnesine (OBJ_OBJECT, alan adlari anahtar) donusuyor ve tip adi orada
+// kayboluyordu: `print([p])` `[{"x": 1}]` basiyordu, `print(p)` ise
+// `P { x: 1 }`. Ad, Obj basligindaki kullanilmayan dolgu baytina
+// (`Obj::struct_tag`) 1..255 kimligi olarak yaziliyor — nesne basina 0 bayt.
+// Alternatif ObjObject'e `const char *type_name` eklemekti: her json
+// nesnesine +8 B (40 -> 48), #449/#454'un baslik kazanimini geri alirdi.
+//
+// Tablo yalniz BUYUR (bir struct adi bir kez kaydolur, kimligi sabit). Okuma
+// kilitsiz (sayac acquire ile; kayit yuvayi yazip SONRA sayaci artirir),
+// yazma kilitli. Ayni ad farkli isaretciyle gelirse (baska modul sabiti)
+// strcmp ile ayni kimlige baglanir. 255'ten fazla struct tipi kutulanirsa
+// fazlasi 0 alir: o nesneler eski bicimde (json gibi) yazilir — ad kaybolur,
+// deger kaybolmaz.
+static const char *g_struct_tag_names[256];
+static std::atomic<int> g_struct_tag_count{0};
+static std::mutex g_struct_tag_mu;
+
+extern "C" uint8_t aot_struct_tag_of(const char *type_name) {
+  if (!type_name || !*type_name) return 0;
+  int n = g_struct_tag_count.load(std::memory_order_acquire);
+  // Hizli yol: codegen her struct adi icin TEK modul sabiti kullanir, yani
+  // isaretci esitligi neredeyse her zaman tutar.
+  for (int i = 1; i <= n; i++)
+    if (g_struct_tag_names[i] == type_name) return (uint8_t)i;
+  for (int i = 1; i <= n; i++)
+    if (strcmp(g_struct_tag_names[i], type_name) == 0) return (uint8_t)i;
+  std::lock_guard<std::mutex> guard(g_struct_tag_mu);
+  n = g_struct_tag_count.load(std::memory_order_relaxed);
+  for (int i = 1; i <= n; i++)
+    if (strcmp(g_struct_tag_names[i], type_name) == 0) return (uint8_t)i;
+  if (n >= 255) return 0;
+  g_struct_tag_names[n + 1] = type_name;
+  g_struct_tag_count.store(n + 1, std::memory_order_release);
+  return (uint8_t)(n + 1);
+}
+
+extern "C" const char *aot_struct_tag_name(uint8_t tag) {
+  if (tag == 0 || (int)tag > g_struct_tag_count.load(std::memory_order_acquire))
+    return nullptr;
+  return g_struct_tag_names[tag];
+}
+
+// Kutulu struct nesnesi: vm_allocate_object_aot_wrapper + ad etiketi. Codegen
+// (box_native_struct_as_object) bos nesne yerine bunu cagirir.
+extern "C" ObjObject *aot_struct_obj_new(const char *type_name) {
+  ObjObject *obj = vm_allocate_object_aot_wrapper(nullptr);
+  if (obj) obj->obj.struct_tag = aot_struct_tag_of(type_name);
+  return obj;
+}
+
+// Var olan bir nesneye ad etiketi (str alanli struct'in literali tipli bir
+// yuvaya yazilinca). Nesne degilse dokunmaz.
+extern "C" void aot_struct_obj_tag(VMValue *vp, const char *type_name) {
+  if (!vp || !IS_OBJECT(*vp)) return;
+  AS_OBJ(*vp)->struct_tag = aot_struct_tag_of(type_name);
 }
 
 void vm_array_push_aot_wrapper(void *vm, ObjArray *array, VMValue value) {
@@ -5424,6 +5504,7 @@ VMValue aot_object_clone(VMValue val) {
   dst->index = nullptr;
   dst->obj.type = OBJ_OBJECT;
   dst->obj.arena_allocated = 1;
+  dst->obj.struct_tag = src->obj.struct_tag;  // kutulu struct adi tasinir
   dst->obj.ref_count = 1;
   dst->obj.is_moved = 0;
   int n = src->count;
@@ -7745,6 +7826,7 @@ ObjObject *aot_http_make_obj(int initial_capacity) {
   ObjObject *o = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
   o->obj.type = OBJ_OBJECT;
   o->obj.arena_allocated = 1;
+  o->obj.struct_tag = 0;
   o->capacity = initial_capacity > 0 ? initial_capacity : 4;
   o->count = 0;
   o->index = nullptr;
@@ -10544,6 +10626,7 @@ static VMValue parse_json_object(const char **p, const char *end) {
   ObjObject *obj = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
   obj->obj.type = OBJ_OBJECT;
   obj->obj.arena_allocated = 1;
+  obj->obj.struct_tag = 0;
   obj->capacity = 8;
   obj->count = 0;
   obj->index = nullptr;

@@ -55,10 +55,11 @@ func run_arguman() {
 // Kacar: print/toString — kutulu nesnenin bicimi degismesin.
 func run_bicim() {
     var q = mk(3);
-    // Kutulu nesne json bicimiyle yazilir; tipli yerel olsaydi `P { x: 3, y: 4 }`
-    // olurdu — yani bu satir q'nun KUTULU kaldigini hala ayirt ediyor.
-    // (2026-10-02 oncesi "<object>" idi: icerik hic gorunmuyordu, Tuzaklar 7j.)
-    assert_eq_str(toString(q), "{\"x\": 3, \"y\": 4}");
+    // Kutulu nesne de tipli yerelle AYNI metni verir (2026-10-02: kutulu
+    // struct adini Obj::struct_tag'de tasiyor; once json bicimiydi, daha once
+    // "<object>" — Tuzaklar 7j). Yani metin artik q'nun kutulu kaldigini
+    // AYIRT ETMIYOR; o yapisal soru tests/struct_kacis.sh'in (IR) isi.
+    assert_eq_str(toString(q), "P { x: 3, y: 4 }");
     assert_eq_str(toJson(q), "{\"x\":3,\"y\":4}");
 }
 

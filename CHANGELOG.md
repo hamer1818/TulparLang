@@ -45,6 +45,33 @@ tag still works;
   Derlem taraması (examples/, examples/en/, lib/, tests/, benchmarks/fair/):
   yeni tanı hiçbir dosyada çıkmıyor.
 
+### Değişti — kutulu struct da adıyla yazılıyor: `print([p])` → `[P { x: 1 }]` (eskiden `[{"x": 1}]`)
+
+- Dinamik diziye/json'a giren struct ve `str` alanlı struct bir json
+  nesnesine kutulanıyor, tip adı orada kayboluyordu: `print(p)` `P { x: 1 }`
+  derken `print([p])` `[{"x": 1}]`, `print(s)` (`str` alanlı) `{"ad": "z"}`
+  basıyordu (#451'in bilinçli bıraktığı fark). Artık `[P { x: 1 }]`,
+  `S { ad: "z", n: 3 }`, `"s=" + s` de aynı. `toJson` değişmedi (ad yok).
+- Ad **0 bayt** maliyetle taşınıyor: `Obj` başlığının kullanılmayan dolgu
+  baytı (`Obj::struct_tag`, 1..255 → runtime tablosu). Ölçülen alternatif —
+  ObjObject'e `const char *type_name` — 2M kutulu struct'ta RSS 707 → 739 MB
+  (+%4,4) ve +%3,8 süre; seçilen yol RSS'i değiştirmiyor, kutulama +%1,4
+  (2M push 188 → 191 ms; Ryzen 7 9800X3D, `taskset -c 10,11`, en iyi 5).
+  benchmarks/fair 13 çekirdekte IR ve `.o` bayt bayt aynı; süre farkları
+  link yerleşimi (callfn −%13, iki koşumda tekrarlandı; Tuzaklar 7i).
+- Etiket yalnız taze nesneye: kutulama (`push(d, p)`, `[p]`), `S s = {...}`,
+  `S s;`, kutulu struct döndüren fonksiyonun `return {...}`'ı. `S t = j;`
+  paylaşılan json'u yeniden adlandırmaz. 255'ten fazla struct tipi
+  kutulanırsa fazlası eski biçimde (json gibi) yazılır.
+- Kapılar: `tests/deger_metni.sh` 7 yeni `kutulu_struct_*` satırı (taban
+  derleyicide 6'sı kırmızı; `toJson` satırı iki derleyicide yeşil — JSON
+  sözleşmesinin bekçisi), `tests/kutulu_struct_adi.test.tpr` (arena artığı
+  pozitif kontrolü: sıfırlama silinince kırmızı).
+- `match` öznesinin heap struct'ı (OBJ_STRUCT) hâlâ konumsal (`Q { 1, 1 }`)
+  yazılır; ama hiçbir Tulpar ifadesi onu değer olarak dışarı vermiyor
+  (`var w = match q { _ => q }` kutulu json nesnesi döndürüyor; yıkımlı
+  kollarda bool alan `true` bağlanıyor — ölçüldü), yani kullanıcıya görünmez.
+
 ### Eklendi — yerel eklentiler (`--ext`): C kitaplığını derleyiciyi yeniden derlemeden bağlama
 
 - **`tulpar --ext <dizin> oyun.tpr`** (K303): eklenti dizinindeki
