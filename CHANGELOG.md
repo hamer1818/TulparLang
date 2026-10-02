@@ -89,7 +89,12 @@ tag still works;
   `eng_camera` 3.5–3.8 → 1.35 ns, dizgi argümanlı `eng_key_down` 2.9–3.1 →
   1.9 ns (eski yol: ters yamalı derleyicinin `aot_eng_*_ptr` sarmalayıcısı).
   Gerileyen tek kalıp: çağrıyı aşan float birikimci (`f = f + c()`) 2.30 →
-  4.02 ns — SysV'de xmm yazmacı çağrıda korunmaz (bkz. mindmap Eklentiler).
+  4.02 ns. Kök neden (yeniden üretildi 2026-10-02, motorsuz minik eklentiyle):
+  LLVM'in greedy yazmaç ayırıcısı çağrıyı aşan `f` için her turda İKİ yığın
+  gidiş-dönüşü üretiyor; elle yazılmış asm'de tek gidiş-dönüş 2,30 ns, çift
+  4,09 ns. Eşdeğer C'de clang 23 aynısını üretiyor (gcc üretmiyor); eski
+  köprüde `f` kutulu VMValue'nun `i64` yükü olarak çağrıdan korunan GPR'de
+  kalıyordu. Kodgen'den düzeltilemedi (bkz. mindmap Eklentiler).
 - **Typeinfer ve LSP** eklenti imzalarını görür (tip denetimi, hover,
   tamamlama, imza yardımı; LSP eklentiyi belgenin dizininden yukarı
   `tulpar.toml`'dan bulur). Yerleşik adını taşıyan eklenti fonksiyonu

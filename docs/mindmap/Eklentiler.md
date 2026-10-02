@@ -141,10 +141,52 @@ derleyici, `aot_eng_*_ptr` VMValue sarmalayıcısı) → eklenti:
 | `eng_key_down("W")` (dizgi arg) | 2.9–3.1 ns | 1.92 ns |
 | `f = f + eng_camera_x()` (float birikimci) | 2.30 ns | **4.02 ns** |
 
-Son satır köprü değil: `f` gerçek bir C çağrısını aşan bir xmm değeri; SysV'de
-xmm yazmaçları çağrıda korunmaz, LLVM her turda yığına yazıp geri okuyor ve
-`addsd`'ye zincirliyor (IR'da çağrı + fadd dışında bir şey yok). Eski yolda
-dönüş `{i64,i64}` tamsayı yazmaçlarındaydı.
+Son satır köprü değil, **LLVM'in yazmaç ayırıcısı** (yeniden üretildi ve
+kök nedeni ölçüldü 2026-10-02, aynı makine, LLVM 23.1, `taskset -c 10,11`):
+
+- Motor gerekmeden yeniden üretildi: `teng_camera_x`'in aynısı
+  (`g ? g->x : 0`) dönen minik bir eklenti, 20M çağrı: `kam_frame()` 0,77 ns,
+  `kam_x() > 1.0` 0,77 ns, `f = f + kam_x()` **4,02 ns**. Eski ters yamalı
+  derleyicinin ikilisi (gerçek `teng_camera_x`) aynı oturumda 1,92 ns.
+- IR'da döngü yalnız `call double @kam_x()` + `fadd` + sayaç — köprüye ait
+  hiçbir şey yok. Fark üretilen asm'de: `f` çağrıyı aşıyor (SysV'de hiçbir
+  xmm yazmacı çağrıda korunmaz) ve LLVM'in greedy ayırıcısı her turda
+  **iki** yığın gidiş-dönüşü üretiyor:
+  ```
+  movsd %xmm0,-0x30(%rbp)   ; dökme
+  call  kam_x
+  movsd -0x30(%rbp),%xmm1   ; geri yükle
+  addsd %xmm0,%xmm1
+  movsd %xmm1,-0x30(%rbp)   ; GEREKSIZ dökme
+  movsd -0x30(%rbp),%xmm0   ; GEREKSIZ geri yükleme (phi xmm0'da)
+  ```
+  Döngü taşıyan bağımlılık iki kez depodan-yüke iletimden geçiyor.
+- Aynı `kamera.o` ile üç yerleşim elle yazılmış asm'de (yalnız yazmaç
+  yerleşimi farklı): bu çift dökme **4,09 ns**; tek dökme (gcc -O2'nin
+  ürettiği: dök, çağır, yükle, topla) **2,30 ns**; birikimci çağrıdan
+  korunan bir GPR'de (eski köprünün yerleşimi) **2,30 ns**. Yani gerilemenin
+  tamamı ikinci gidiş-dönüş.
+- **Eski yol neden hızlıydı:** `f` orada kutulu bir VMValue'ydu (dinamik tür
+  dalı); yükünün phi'si `i64` olduğu için LLVM onu çağrıdan korunan `r14`'te
+  tuttu ve her turda `movq r14→xmm, addsd, movq xmm→r14` yaptı — bellekten
+  hiç geçmedi. "Dönüş `{i64,i64}` tamsayı yazmaçlarındaydı" açıklaması
+  yetmiyor: aynı döngüde yalnız dönüşü `{i64,i64}` yapan IR (`bitcast` ile
+  fadd) LLVM 23'te AYNI çift dökmeyi üretiyor (ölçüldü).
+- **Bizim kodgen'imizin dışında:** eşdeğer C (`for (...) f += kam_x();`)
+  clang 23 -O2 ile birebir aynı çift dökmeyi üretiyor; gcc -O2 tek dökme.
+  `fadd` işlenen sırasını çevirmek (LLVM kanonikleştiriyor),
+  `-regalloc=pbqp`/`basic`, `-split-spill-mode`, `-enable-misched=false`,
+  `-exhaustive-register-search`, blok yerleşimi kapatmak: hiçbiri değiştirmedi
+  (llc 23.1 ile denendi). Çağrı öznitelikleri (`nounwind`, `willreturn`,
+  `memory(...)`) çağrının yazmaç bozduğunu değiştirmez; bildirime `pure`
+  alanı eklemek yalnız çağrıyı döngüden DIŞARI çıkarabilirdi (argümansız,
+  yazmasız döngüde) — bu ölçüyü sıfırlar ama gerçek bir düzeltme değildir ve
+  yanlış bildirilince yanlış kod üretir; bu yüzden eklenmedi.
+- Windows x64'te xmm6–15 çağrıdan korunur: bu kalıp orada beklenmez
+  (ölçülmedi).
+
+Sonuç: düzeltilmedi; kapsamı dar (çağrı sonucunu sıcak döngüde float
+birikimciye toplamak) ve öteki bütün çağrı kalıpları 2–3× hızlandı.
 
 Olay kancası (motor → Tulpar, `tools/kanca_olcumu.py`, 200 boş kanca, 2000
 kare, aynı oturumda sırayla): eklenti yolu 5.5–6.0 ns, eski üretilmiş VMValue
