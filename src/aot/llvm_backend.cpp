@@ -866,9 +866,11 @@ static void emit_perf_hint(LLVMBackend *backend, int line, const char *arr, cons
     break;
   case TLW_INCR:
     snprintf(why_msg, sizeof why_msg,
-             tulpar::i18n::tr_en("artim `%s++` ya da `%s = %s + <pozitif sabit>` degil",
-                                 "the increment is not `%s++` or `%s = %s + <positive constant>`"),
-             v, v, v);
+             tulpar::i18n::tr_en("artim `%s++`, `%s += <pozitif sabit>` ya da "
+                                 "`%s = %s + <pozitif sabit>` degil",
+                                 "the increment is not `%s++`, `%s += <positive constant>` "
+                                 "or `%s = %s + <positive constant>`"),
+             v, v, v, v);
     snprintf(fix, sizeof fix, "%s",
              tulpar::i18n::tr_en("sayaci sabit, pozitif bir adimla artirin",
                                  "advance the counter by a constant positive step"));

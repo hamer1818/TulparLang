@@ -1846,7 +1846,8 @@ Yapılanlar:
 
 - **Struct dizisi döngü sürümü** (`tulpar_sarr_loop_plan` + `sv_try_version`,
   float sürümünün struct karşılığı). Biçim: `for (i = E; i < UB; i = i + K)`
-  (ya da `<=`, `i++`; K > 0 sabit), UB sabit / döngüde atanmayan ad /
+  (ya da `<=`, `i++`, `i += K` — parser 2026-10-02'den beri onu `i = i + K`'ye
+  açıyor, tüm döngü planları bu yüzden aynı biçimi görüyor; K > 0 sabit), UB sabit / döngüde atanmayan ad /
   `len(X)`, `i` gövdede hiç atanmıyor / artırılmıyor (`tulpar_loop_rebinds_name`
   yalnız atama / bildirime bakıyor; burada `++` / `--` da sayılıyor), gövde
   şekli değiştiremiyor (`tulpar_loop_shape_stable`).
