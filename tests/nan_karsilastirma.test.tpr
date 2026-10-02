@@ -1,0 +1,108 @@
+// NaN KARSILASTIRMASI (2026-10-02).
+//
+// IEEE 754: NaN hicbir seye (kendisi dahil) esit DEGIL; `<`, `>`, `<=`, `>=`
+// NaN'li her karsilastirmada false, `!=` ise `==`in tam tersi — true.
+//
+// Hata: codegen'in float `!=`i `fcmp one` ("sirali VE esit degil") idi; NaN
+// sirasiz oldugu icin `n != n` ve `n != 1.0` FALSE donuyordu. Tipli float,
+// `var`, json, dizi elemani, tipsiz parametre — hepsi ayni satir ici float
+// kolundan geciyor (emit_boxed_binary_op), yani hepsi yanlisti. Runtime'in
+// kutulu yolu (vm_binary_op, karisik int/float) `!(a == b)` ile zaten
+// dogruydu: ayni ifade operand tipine gore farkli sonuc veriyordu.
+// Calistir: ./tulpar tests/nan_karsilastirma.test.tpr
+import "test";
+
+func nan(): float {
+    float z = 0.0;
+    return z / z;
+}
+
+// Tipsiz parametre: deger kutulu gelir, karsilastirma kutulu koldan.
+func esit_degil(a, b) { return a != b; }
+func esit(a, b) { return a == b; }
+func kucuk(a, b) { return a < b; }
+func buyuk_esit(a, b) { return a >= b; }
+
+func run_tipli_float() {
+    float n = nan();
+    assert(n != n, "n != n true olmali");
+    assert(!(n == n), "n == n false olmali");
+    assert(n != 1.0, "n != 1.0 true olmali");
+    assert(1.0 != n, "1.0 != n true olmali");
+    assert(!(n == 1.0), "n == 1.0 false olmali");
+    assert(!(n < 1.0), "n < 1.0 false olmali");
+    assert(!(n > 1.0), "n > 1.0 false olmali");
+    assert(!(n <= 1.0), "n <= 1.0 false olmali");
+    assert(!(n >= 1.0), "n >= 1.0 false olmali");
+    assert(!(1.0 < n), "1.0 < n false olmali");
+    assert(!(n <= n), "n <= n false olmali");
+    assert(!(n >= n), "n >= n false olmali");
+}
+
+// Kosul olarak (dal): `if (n != n)` deger uretmeden dallaniyor.
+func run_kosul() {
+    float n = nan();
+    int k = 0;
+    if (n != n) { k = k + 1; }
+    if (n == n) { k = k + 10; }
+    if (n < 0.0 || n >= 0.0) { k = k + 100; }
+    assert_eq_int(k, 1);
+    // `x != x` NaN sinamasinin deyimsel yazimi: dongude NaN'i bul.
+    float[] d = [1.0, 2.0, 3.0];
+    d[1] = nan();
+    int bulunan = -1;
+    for (int i = 0; i < len(d); i++) {
+        if (d[i] != d[i]) { bulunan = i; }
+    }
+    assert_eq_int(bulunan, 1);
+}
+
+func run_kutulu() {
+    var v = nan();
+    assert(v != v, "var: v != v true olmali");
+    assert(!(v == v), "var: v == v false olmali");
+    assert(!(v < 1.0), "var: v < 1.0 false olmali");
+    assert(!(v >= 1.0), "var: v >= 1.0 false olmali");
+    json j = nan();
+    assert(j != j, "json: j != j true olmali");
+    assert(!(j == j), "json: j == j false olmali");
+    array a = [nan()];
+    assert(a[0] != a[0], "dizi elemani != true olmali");
+    assert(!(a[0] == a[0]), "dizi elemani == false olmali");
+    assert(!(a[0] <= 1.0), "dizi elemani <= false olmali");
+    assert_eq_bool(esit_degil(nan(), nan()), true);
+    assert_eq_bool(esit(nan(), nan()), false);
+    assert_eq_bool(kucuk(nan(), 1.0), false);
+    assert_eq_bool(buyuk_esit(nan(), 1.0), false);
+}
+
+// Karisik int/float: runtime yolu (vm_binary_op) — zaten dogruydu, kilitli.
+func run_karisik_int() {
+    float n = nan();
+    assert(n != 1, "n != 1 true olmali");
+    assert(!(n == 1), "n == 1 false olmali");
+    assert(!(n < 1), "n < 1 false olmali");
+    assert(!(1 >= n), "1 >= n false olmali");
+}
+
+// NaN OLMAYAN degerlerde `!=` degismedi (une ile one yalniz NaN'da ayrisir).
+func run_siradan() {
+    float a = 1.5;
+    float b = 1.5;
+    float c = 2.5;
+    assert(!(a != b), "1.5 != 1.5 false olmali");
+    assert(a != c, "1.5 != 2.5 true olmali");
+    float z = 0.0;
+    float inf = 1.0 / z;
+    assert(!(inf != inf), "inf != inf false olmali");
+    assert(inf != -inf, "inf != -inf true olmali");
+    assert(!(z != -z), "0.0 != -0.0 false olmali");
+}
+
+print("=== NaN karsilastirmasi (IEEE 754) ===");
+test("tipli float: != true, digerleri false", "run_tipli_float");
+test("kosul ve dongude x != x", "run_kosul");
+test("kutulu: var, json, dizi, tipsiz parametre", "run_kutulu");
+test("karisik int/float (runtime yolu)", "run_karisik_int");
+test("NaN olmayan != degismedi", "run_siradan");
+test_summary();

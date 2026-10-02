@@ -5876,8 +5876,14 @@ static LLVMValueRef emit_boxed_binary_op(LLVMBackend *backend, ASTNode_C *node,
     float_is_bool = 1;
     break;
   case TOKEN_NOT_EQUAL:
+    // UNE, ONE DEGIL: IEEE 754'te `!=`, `==`in tam tersidir — NaN her seye
+    // (kendisi dahil) "esit degil". ONE ("sirali VE esit degil") NaN'da
+    // false veriyordu: `n != n` false, `n != 1.0` false (2026-10-02'ye
+    // kadar). Kutulu yol (vm_binary_op, `!(a == b)`) zaten dogruydu, yani
+    // ayni ifade tipli ve kutulu yolda farkli sonuc veriyordu. Diger
+    // karsilastirmalar (OEQ/OLT/OGT/OLE/OGE) NaN'da false — dogru.
     float_res =
-        LLVMBuildFCmp(backend->builder, LLVMRealONE, l_float, r_float, "fne");
+        LLVMBuildFCmp(backend->builder, LLVMRealUNE, l_float, r_float, "fne");
     float_is_bool = 1;
     break;
   default:
