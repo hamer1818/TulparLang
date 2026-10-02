@@ -1,0 +1,79 @@
+// YAKALANAN KAPANISI CAGIRAN LAMBDA (2026-10-02).
+//
+// `var f = yap(10); var g = (y) => f(y) * 2;` — `f(y)` bir CAGRI, tanimlayici
+// degil; yakalama analizi (collect_free_variables) yalniz tanimlayicilara
+// bakiyordu, `f` yakalanmiyordu. Ic lambdanin kapsam zinciri dis fonksiyonun
+// kapsamina uzandigi icin codegen BASKA bir fonksiyonun alloca'sini okuyordu:
+// sonuc SIGSEGV ya da "Hatali parametre sayisi. Beklenen: <cop>". Ust duzeyde
+// (`f` gercek global) sorun yoktu; yalniz fonksiyon icinde patliyordu.
+// Calistir (depo kokunden): ./tulpar tests/kapanis_cagri_yakalama.test.tpr
+import "test";
+
+func yap(int k) {
+    return (x) => x + k;
+}
+
+func kur(var f) {
+    return (y) => f(y) * 3;
+}
+
+func run_yerel_kapanis() {
+    var f = yap(10);
+    var g = (y) => f(y) * 2;
+    assert_eq_int(g(1), 22);
+    assert_eq_int(g(5), 30);
+}
+
+func run_iki_yakalanan() {
+    var f = yap(10);
+    var inc = (a) => a + 1;
+    var h = (y) => inc(y) + f(y);
+    assert_eq_int(h(5), 21);
+}
+
+func run_parametre_kapanis() {
+    var z = kur(yap(1));
+    assert_eq_int(z(2), 9);
+    var u = kur((q) => q * q);
+    assert_eq_int(u(4), 48);
+}
+
+func run_ic_ice_lambda() {
+    var f = yap(5);
+    var dis = (a) => {
+        var ic = (b) => f(b) + a;
+        return ic(1);
+    };
+    assert_eq_int(dis(1000), 1006);
+    // Yakalama paylasimli: f sonradan degisince lambda yenisini gorur.
+    f = yap(7);
+    assert_eq_int(dis(1000), 1008);
+}
+
+func _sayac() {
+    int n = 0;
+    var art = () => { n = n + 1; return n; };
+    return () => art() + art();
+}
+
+func run_kapanisi_cagiran_kapanis_dondurulur() {
+    var s = _sayac();
+    assert_eq_int(s(), 3);    // 1 + 2
+    assert_eq_int(s(), 7);    // 3 + 4
+}
+
+var compose = (f, g) => (x) => f(g(x));
+
+func run_compose() {
+    var h = compose(yap(1), yap(10));
+    assert_eq_int(h(100), 111);
+}
+
+print("=== yakalanan kapanisi cagiran lambda ===");
+test("yerel kapanis lambda icinde cagriliyor", "run_yerel_kapanis");
+test("iki yakalanan kapanis ayni lambdada", "run_iki_yakalanan");
+test("parametre olarak gelen kapanis", "run_parametre_kapanis");
+test("ic ice lambda + paylasimli yakalama", "run_ic_ice_lambda");
+test("kapanisi cagiran kapanis donduruluyor", "run_kapanisi_cagiran_kapanis_dondurulur");
+test("compose (ust duzey lambda parametreleri)", "run_compose");
+test_summary();

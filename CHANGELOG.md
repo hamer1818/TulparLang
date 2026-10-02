@@ -12,6 +12,23 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — yakalanan kapanışı çağıran lambda çöküyordu ("Hatalı parametre sayısı <çöp>")
+
+- **Belirti:** fonksiyon içinde `var f = yap(10); var g = (y) => f(y) * 2;
+  g(1)` SIGSEGV ya da `Hatali parametre sayisi. Beklenen: <çöp>` veriyordu.
+  Üst düzeyde (`f` global) sorun yoktu.
+- **Kök neden:** yakalama analizi (`collect_free_variables`) serbest adları
+  yalnız tanımlayıcılardan topluyordu; `f(y)` adı çağrı düğümünde taşıyor.
+  `f` yakalanmadı, çağrı kodgeni ise lambdanın dış fonksiyona uzanan kapsam
+  zincirinde dış fonksiyonun alloca'sını buldu — koşarken çöp (Tuzaklar 7k).
+- **Düzeltme:** alıcısız, dolaysız çağrının adı da serbest ad sayılıyor;
+  yalnız dış fonksiyonda bildirilmiş bir yerelse yakalanıyor (üst düzey
+  fonksiyon ve yerleşik adları etkilenmiyor). 13 adil kıyas çekirdeğinin
+  IR'ı eski derleyicininkiyle birebir aynı.
+- Kapı: `tests/kapanis_cagri_yakalama.test.tpr` (6 senaryo: yerel, iki
+  yakalanan, parametre, iç içe + paylaşımlı yakalama, kapanışı çağıran
+  kapanış döndürülüyor, compose; eski derleyicide süreç çöküyor).
+
 ### Düzeltildi — web hedefinde try/catch linkte düşüyordu (`undefined symbol: setjmp`)
 
 - **Belirti:** `tulpar build --target=web` try/catch içeren — ve
