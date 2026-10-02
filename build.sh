@@ -709,6 +709,20 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # SOZLUK INDEKSI (2026-10-02): json hash indeksi buyuk tabloda iki kat
+    # buyuyor (1M anahtarda 32 -> 16 MB) ve buyumede yuvalari tasiyor,
+    # anahtarlari yeniden hash'lemiyor (hashmap 106 -> ~89 ms, 88 -> 73 MB;
+    # satir ici dizgi karakteriyle birlikte 65 MB).
+    # TULPAR_OBJ_TANI tanisi + tepe RSS + kendi pozitif kontrolu (eski x4
+    # kurali TULPAR_OBJ_INDEKS_X4=1 ile esigi asmali); anlambilim
+    # tests/json_hash_indeksi.test.tpr'de.
+    if [ -x tests/sozluk_indeksi.sh ]; then
+        if ! bash tests/sozluk_indeksi.sh ./tulpar; then
+            echo -e "${RED}sozluk indeksi kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # call() FONKSIYON REFERANSI HAVUZU (2026-10-01): `call(f, x)` dongude
     # artik ayirmiyor (eskiden degerlendirme basina 64 B arena dizgisi —
     # 20M cagri 1,26 GB) ve havuzdaki referansi ad aramasiz cagiriyor

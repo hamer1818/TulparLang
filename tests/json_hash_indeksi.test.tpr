@@ -92,6 +92,96 @@ func run_ic_ice() {
     assert_eq_int(dis["d19"]["x19"], 361);
 }
 
+// --- 2026-10-02: buyuk tabloda x2 buyume + yuva tasima ----------------------
+// Indeks 1M yuvanin (kObjIndexBig) ustunde iki katina buyuyor ve buyumede eski
+// yuvalar hash'leriyle TASINIYOR (anahtarlar yeniden hash'lenmiyor). 600 000
+// anahtar 524 288'i gecip x2 buyume rejimine giriyor.
+json buyuk = {};
+int buyuk_n = 600000;
+
+func run_buyuk_x2_buyume() {
+    for (int i = 0; i < buyuk_n; i = i + 1) { buyuk["k" + toString(i)] = i; }
+    assert_eq_int(len(buyuk), buyuk_n);
+    int t = 0;
+    for (int i = 0; i < buyuk_n; i = i + 1) { t = t + buyuk["k" + toString(i)]; }
+    assert_eq_int(t, 179999700000); // 0 + 1 + ... + 599999
+    // ustune yazma yeni anahtar EKLEMEMELI, buyumeden sonra da
+    for (int i = 0; i < buyuk_n; i = i + 3) { buyuk["k" + toString(i)] = 1; }
+    assert_eq_int(len(buyuk), buyuk_n);
+    assert_eq_int(buyuk["k3"], 1);
+    assert_eq_int(buyuk["k4"], 4);
+    assert_eq_int(buyuk["k599999"], 599999);
+    // olmayan anahtar 0 (eskisi gibi)
+    assert_eq_int(buyuk["yok"], 0);
+    assert_eq_int(buyuk["k600000"], 0);
+}
+
+// Eszamanli okuma, buyuk tabloda: 4 thread ayni indeksi okur (T7 — okuma
+// yolu indekse YAZMAZ). Her thread kendi dilimini toplar.
+func _buyuk_okuyucu(int dilim) {
+    int t = 0;
+    int bas = dilim * 150000;
+    for (int i = bas; i < bas + 150000; i = i + 1) { t = t + buyuk["k" + toString(i)]; }
+    return t;
+}
+
+func run_buyuk_eszamanli_okuma() {
+    int[] th = [];
+    for (int k = 0; k < 4; k++) { push(th, thread_create(_buyuk_okuyucu, k)); }
+    int t = 0;
+    for (int k = 0; k < 4; k++) { t = t + thread_join(th[k]); }
+    int beklenen = 0;
+    for (int i = 0; i < buyuk_n; i = i + 1) { beklenen = beklenen + buyuk["k" + toString(i)]; }
+    assert_eq_int(t, beklenen);
+}
+
+// Ayristirilan (arena) nesnede indeks arenadan: buyuk JSON metni + sonradan
+// ekleme (arena indeksinin buyumesi) + yinelenen anahtar.
+func run_ayristirilan_buyuk_nesne() {
+    var sb = StringBuilder(1024);
+    sb_append(sb, "{");
+    for (int i = 0; i < 3000; i = i + 1) {
+        if (i > 0) { sb_append(sb, ","); }
+        sb_append(sb, "\"a" + toString(i) + "\": " + toString(i));
+    }
+    sb_append(sb, ", \"a7\": 99}");
+    json m = fromJson(sb_tostring(sb));
+    sb_free(sb);
+    assert_eq_int(m["a7"], 7);       // yinelenen: ilki
+    assert_eq_int(m["a2999"], 2999);
+    for (int i = 3000; i < 9000; i = i + 1) { m["a" + toString(i)] = i; }
+    int t = 0;
+    for (int i = 0; i < 9000; i = i + 1) { t = t + m["a" + toString(i)]; }
+    assert_eq_int(t, 40495500);
+}
+
+// Checkpoint: kalici (global) sozluge checkpoint ICINDE anahtar eklenir —
+// indeks bu sirada buyur — sonra geri sarilir, arena coplanir, okunur.
+json kare_sozluk = {};
+
+func _kare_govde() {
+    for (int i = 0; i < 5000; i = i + 1) { kare_sozluk["c" + toString(i)] = i; }
+}
+
+func _cople_arena() {
+    for (int k = 0; k < 3000; k = k + 1) {
+        str cop = "COPCOPCOPCOP-" + toString(k) + "-COPCOPCOPCOP";
+        json o = {"a": cop, "b": [k, k]};
+    }
+}
+
+func run_checkpoint_sonrasi_indeks() {
+    int wm = arena_save();
+    _kare_govde();
+    arena_drop(wm);
+    _cople_arena();
+    assert_eq_int(len(kare_sozluk), 5000);
+    int t = 0;
+    for (int i = 0; i < 5000; i = i + 1) { t = t + kare_sozluk["c" + toString(i)]; }
+    assert_eq_int(t, 12497500);
+    assert_eq_str(keys(kare_sozluk)[4999], "c4999");
+}
+
 print("=== json hash indeksi ===");
 test("esik gecisi 15/16/17 anahtar", "run_esik_gecisi");
 test("5000 anahtar + ustune yazma", "run_buyuk_sozluk_ve_ustune_yazma");
@@ -99,4 +189,8 @@ test("ekleme sirasi korunur", "run_ekleme_sirasi_korunur");
 test("JSON'da yinelenen anahtar: ilki", "run_json_yinelenen_anahtar_ilki");
 test("global'e kalicilastirma kopyasi", "run_global_kalicilastirma");
 test("ic ice nesneler", "run_ic_ice");
+test("600k anahtar: x2 buyume, yuva tasima, ustune yazma", "run_buyuk_x2_buyume");
+test("buyuk tablo: 4 thread eszamanli okuma", "run_buyuk_eszamanli_okuma");
+test("ayristirilan buyuk nesne + arena indeksi buyumesi", "run_ayristirilan_buyuk_nesne");
+test("checkpoint icinde buyuyen indeks geri sarmadan sonra", "run_checkpoint_sonrasi_indeks");
 test_summary();

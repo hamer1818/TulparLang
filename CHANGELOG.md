@@ -13,6 +13,46 @@ tag still works;
 
 ## [Unreleased]
 
+### Performans — `json` hash indeksi büyük tabloda iki kat büyüyor, büyümede anahtarları yeniden hash'lemiyor: hashmap 104 → 89 ms, 88,6 → 72,6 MB
+
+- **Ölçüm (perf yok; `ITIMER_PROF` örnekleyicisi, Ryzen 7 9800X3D):**
+  `benchmarks/fair/hashmap`'in 1M araması sürenin ~%57'si (ekleme 45 ms,
+  arama ~59 ms). Aramanın %65'i `obj_find`, onun da büyük kısmı TEK komut:
+  indeks yuvasının yüklemesi (önbellek ıskası; indeks 32 MB). %21'i
+  `strcmp`'in ilk yüklemesi (anahtar dizgisinin ıskası). Hash (FNV) ~%7.
+- **Kök neden:** indeks her büyümede kapasiteyi anahtar sayısının DÖRT
+  katına çıkarıyordu (1M anahtarda 4M yuva = 32 MB, doluluk 0,24) ve bütün
+  anahtarları baştan hash'liyordu (anahtar başına `keys[p]` → `ObjString` →
+  `chars` işaretçi kovalaması).
+- **Düzeltme:** kapasite anahtarın en az 2 katı (C kıyasındaki tabloyla
+  aynı doluluk ≤ 0,5); 1M yuvanın (8 MB) altında eskisi gibi 4 kat — x2
+  büyüme orada 300k anahtarlı eklemeyi %26 yavaşlattı (iki kat yeniden kurma
+  + taze sayfa). Büyümede eski yuvalar hash'leriyle taşınıyor (anahtar
+  dizgisine dokunulmuyor). Eklemede `obj_find`'ın hesapladığı hash indekse
+  yerleştirmede yeniden kullanılıyor. Boş yuva = 0 (`calloc`). Okuma yolu
+  yine yalnız OKUYOR (FINDINGS T7): hash çağıranın yığınında.
+- **Denenip geri alınan:** FNV yerine 8 baytlık sözcüklerle karıştıran hash
+  (fmix64) hashmap'i 94,8 → 106,6 ms YAVAŞLATTI: FNV-1a'nın zayıf
+  karıştırması ortak önekli anahtarları (`k12340`..`k12349`) yakın yuvalara
+  koyuyor, sıralı erişimde önbellek/TLB yerelliği veriyor. FNV kaldı.
+- **Sonuç** (`taskset -c 6,7`, izole dizin, dönüşümlü, 9 tur): 1M en iyi
+  103,8 → **88,9 ms**, tepe bellek 88,6 → **72,6 MB** (C 66,6 ms / 64,5 MB;
+  satır içi dizgi karakteriyle (#454) birlikte **81,0 → 65,1 MB**, 15 tur
+  dönüşümlü en iyi 101,1 → 94,9 ms — makine o saatte paylaşımlıydı);
+  3M 613 → 510 ms, 309 → 245 MB; 300k 25,3 / 25,5 ms ve 100k 8,7 / 9,0 ms
+  (aynı indeks boyu — fark gürültü/yerleşim). 13 çekirdekte gerileme yok
+  (tablo: `docs/mindmap/Performance.md` "hashmap ... 2026-10-02").
+- Kapı: `tests/sozluk_indeksi.sh` — `TULPAR_OBJ_TANI=1` tanısı (1M anahtarda
+  indeks 2 097 152 yuva, büyümede yeniden hash < 64, 300k'de 1 048 576) +
+  tepe RSS (anahtar başına < 73 B, Linux'ta iddia; ölçülen 64) + kendi
+  pozitif kontrolü (`TULPAR_OBJ_INDEKS_X4=1` eski x4 kuralı: 4 194 304 yuva,
+  82 B → kırmızı olmalı). Taban derleyicide kırmızı (tanı satırı yok, 90 B);
+  `kObjIndexBig` 1<<30'a sabote edilince kırmızı. Anlambilim:
+  `tests/json_hash_indeksi.test.tpr`'ye 600k anahtar (x2 rejimi, üstüne
+  yazma, olmayan anahtar), 4 thread eşzamanlı okuma, ayrıştırılan (arena)
+  nesnede indeks büyümesi + yinelenen anahtar, checkpoint içinde büyüyen
+  indeks + geri sarma + çöpleme eklendi.
+
 ### Performans — `ObjString` karakterleri nesnenin içinde: dizgi başına −8 B, parse 261,7 → 223,4 MB, 76,0 → 72,5 ms
 
 - **Eskiden:** `ObjString { Obj; int length; uint32 hash; char *chars }` (24 B).
