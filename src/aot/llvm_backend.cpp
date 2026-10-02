@@ -4018,6 +4018,58 @@ static StructTypeEntry *struct_expr_type(LLVMBackend *backend, ASTNode_C *arg) {
   return (st && struct_is_trivially_unboxable(st)) ? st : nullptr;
 }
 
+// ---- Kutusuz struct'in METNI (2026-10-02, Tuzaklar 7j) ----------------------
+// print(p), toString(p), `"..." + p`, t"{p}" ve sb_append(sb, p) AYNI runtime
+// bicimleyicisine (repr_struct_slots: aot_struct_format / aot_struct_print)
+// iner; alan metni tekil degerin kurali (float en kisa geri donen, bool
+// true/false). Eskiden print alan basina kendi printf'ini uretiyordu (float
+// `%g`, bool 0/1), birlestirme ve sb_append ise struct'i kutulayip
+// `{"x": 1, ...}` yaziyordu — ayni deger icin uc ayri metin.
+//
+// Arguman dizisi (tip adi, alan sayisi, ad tablosu, tip tablosu, yuva
+// isaretcisi) `a`ya yazilir. Ifade kutusuz struct degilse false — hicbir
+// IR uretilmez, cagiran genel yoluna devam eder.
+static bool codegen_struct_text_args(LLVMBackend *backend, ASTNode_C *arg,
+                                     LLVMValueRef a[5]) {
+  StructTypeEntry *st = struct_expr_type(backend, arg);
+  if (!st) return false;
+  LLVMValueRef sp = codegen_struct_expr_ptr(backend, arg, st);
+  if (!sp) return false;
+  LLVMValueRef np, tp;
+  struct_meta_tables(backend, st, &np, &tp);
+  a[0] = LLVMBuildGlobalStringPtr(backend->builder, st->name, "st.tn");
+  a[1] = LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0);
+  a[2] = np;
+  a[3] = tp;
+  a[4] = struct_native_to_slots(backend, st, sp);  // f32/i32: yuva bicimi
+  return true;
+}
+
+// Struct'in metni yeni bir dizgi (VMValue) olarak; struct degilse nullptr.
+static LLVMValueRef codegen_struct_text(LLVMBackend *backend, ASTNode_C *arg) {
+  LLVMValueRef a[5];
+  if (!codegen_struct_text_args(backend, arg, a)) return nullptr;
+  return llvm_call_vmvalue_func(backend, backend->func_aot_struct_format, a, 5,
+                                "struct_to_str");
+}
+
+// print(<struct>): ayni metin dogrudan stdout'a, ayirmasiz. Struct degilse
+// false.
+static bool codegen_struct_print(LLVMBackend *backend, ASTNode_C *arg) {
+  LLVMValueRef a[5];
+  if (!codegen_struct_text_args(backend, arg, a)) return false;
+  LLVMValueRef fn = LLVMGetNamedFunction(backend->module, "aot_struct_print");
+  if (!fn) {
+    LLVMTypeRef ps[] = {backend->ptr_type, backend->int32_type, backend->ptr_type,
+                        backend->ptr_type, backend->ptr_type};
+    fn = LLVMAddFunction(backend->module, "aot_struct_print",
+                         LLVMFunctionType(LLVMVoidTypeInContext(backend->context),
+                                          ps, 5, 0));
+  }
+  LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(fn), fn, a, 5, "");
+  return true;
+}
+
 // Butun yapiyi `src`den `dst`ye kopyala (ikisi de st yerlesimli isaretci).
 static void sarr_copy_struct(LLVMBackend *backend, StructTypeEntry *st,
                              LLVMValueRef src, LLVMValueRef dst) {
@@ -6152,6 +6204,26 @@ static bool expr_is_static_string(LLVMBackend *backend, ASTNode_C *n, int depth 
   return false;
 }
 
+// `+`in bir tarafi kutusuz struct iken oteki taraf STATIK OLARAK sayi/bool
+// mu (literal ya da tipi bilinen int/float/bool yerel)? Oyleyse `+`
+// birlestirme degil — struct metne cevrilmez, eski yol kalir.
+static bool plus_operand_is_static_number(LLVMBackend *backend, ASTNode_C *n) {
+  if (!n) return false;
+  switch (n->type) {
+  case AST_INT_LITERAL:
+  case AST_FLOAT_LITERAL:
+  case AST_BOOL_LITERAL:
+    return true;
+  case AST_IDENTIFIER: {
+    if (!n->name) return false;
+    const InferredType t = get_local_type(backend, n->name);
+    return t == INFERRED_INT || t == INFERRED_FLOAT || t == INFERRED_BOOL;
+  }
+  default:
+    return false;
+  }
+}
+
 // Anahtar ifadesi SAF mi: degerlendirmesi var olan hicbir nesneye yazmaz,
 // ayirdigi hicbir seyi bir yere koymaz. Izinli: literal, degisken okuma,
 // + - * / % ve tekli eksi (vm_binary_op yalniz yeni deger uretir), toString.
@@ -6449,6 +6521,38 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
       TypedValue sc = {nullptr, INFERRED_BOOL, nullptr};
       sc.value = emit_logical_shortcircuit_i64(backend, node);
       return sc;
+    }
+    // `"..." + p` / `s + p` / t"{p}" / `p + p` (kutusuz struct operandli
+    // `+`): struct tarafi toString(p) metnine cevrilir, sonra birlestirilir —
+    // print(p) ile ayni metin (2026-10-02, Tuzaklar 7j). Eskiden struct
+    // kutulanip json nesnesi gibi `{"x": 1, ...}` yaziliyordu.
+    //
+    // Struct'in aritmetigi YOK: `+` bir struct operandla zaten yalniz
+    // birlestirme yapiyordu (`p + p` iki json metnini ekliyordu, `p + 1`
+    // sessizce 0 veriyordu). Oteki taraf statik sayi/bool ise eski yol
+    // kalir; dinamik (`var v`) taraf birlestirme kuralina (toString) duser.
+    // Operandlar BIR KEZ ve sirayla (sol, sonra sag) uretilir.
+    if (node->op == TOKEN_PLUS) {
+      const bool ls = struct_expr_type(backend, node->left) != nullptr;
+      const bool rs = struct_expr_type(backend, node->right) != nullptr;
+      if ((ls || rs) && !plus_operand_is_static_number(backend, node->left) &&
+          !plus_operand_is_static_number(backend, node->right)) {
+        LLVMValueRef lb = ls ? codegen_struct_text(backend, node->left) : nullptr;
+        if (!lb) lb = box_typed_value(backend, codegen_typed_expr(backend, node->left));
+        LLVMValueRef rb = rs ? codegen_struct_text(backend, node->right) : nullptr;
+        if (!rb) rb = box_typed_value(backend, codegen_typed_expr(backend, node->right));
+        LLVMValueRef lp =
+            llvm_build_alloca_at_entry(backend, backend->vm_value_type, "stc.l");
+        LLVMBuildStore(backend->builder, lb, lp);
+        LLVMValueRef rp =
+            llvm_build_alloca_at_entry(backend, backend->vm_value_type, "stc.r");
+        LLVMBuildStore(backend->builder, rb, rp);
+        LLVMValueRef cargs[] = {lp, rp};
+        result.boxed = llvm_call_vmvalue_func(
+            backend, backend->func_aot_string_concat_fast, cargs, 2, "stc.res");
+        result.value = result.boxed;
+        return result;
+      }
     }
     // `S + toString(x)` -> birlestirme x'i ara dizgisiz zorlar (bkz. yukarida
     // "GECICI DIZGILER" 1). Her operand ORIJINAL yolundaki gibi uretilir:
@@ -9872,77 +9976,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           LLVMBuildCall2(backend->builder,
                          LLVMGlobalGetValueType(backend->func_printf),
                          backend->func_printf, printf_args, 2, "");
-        } else if (StructTypeEntry *pst = struct_expr_type(backend, arg)) {
-          // Typed-struct print: emit `Name { f1: <int>, f2: <int>, ... }`
-          // directly via printf calls, GEP-loading each field's payload.
-          // Avoids feeding a raw struct alloca through the VMValue print
-          // pipeline (which would mis-read the bytes). bool prints as 0/1.
-          //
-          // Kaynak isaretci codegen_struct_expr_ptr'den: tipli yerelin
-          // alloca'si (ayirma yok), struct donduren cagri icin ipucuna
-          // baglanmis gecici, struct dizisi elemani / `pop(d)` (K198 —
-          // eskiden `print(d[0])` "<object>" basiyordu).
-          StructTypeEntry *st = pst;
-          LLVMValueRef alloca = codegen_struct_expr_ptr(backend, arg, st);
-          if (st && alloca) {
-            // Coklu donusun sentezlenmis struct'i (`__tup_int_float`): ic ad
-            // ve `_0:` etiketleri yerine degerler `(3, 1.5)` — toString'in
-            // runtime bicimleyicisiyle (repr_struct_*) ayni. 2026-10-02'ye
-            // kadar `__tup_int_float { _0: 3, _1: 1.5 }` basiyordu.
-            const bool is_tup = st->name && strncmp(st->name, "__tup_", 6) == 0;
-            char hdr[256];
-            snprintf(hdr, sizeof(hdr), is_tup ? "(" : "%s { ", st->name);
-            LLVMValueRef hdr_str =
-                LLVMBuildGlobalStringPtr(backend->builder, hdr,
-                                          "struct.print.hdr");
-            LLVMValueRef hdr_args[] = {hdr_str};
-            LLVMBuildCall2(backend->builder,
-                           LLVMGlobalGetValueType(backend->func_printf),
-                           backend->func_printf, hdr_args, 1, "");
-            LLVMValueRef sep_fmt = LLVMBuildGlobalStringPtr(
-                backend->builder, ", ", "struct.print.sep");
-            for (int f = 0; f < st->field_count; f++) {
-              if (f > 0) {
-                LLVMValueRef sep_args[] = {sep_fmt};
-                LLVMBuildCall2(
-                    backend->builder,
-                    LLVMGlobalGetValueType(backend->func_printf),
-                    backend->func_printf, sep_args, 1, "");
-              }
-              // Alan tipine gore bicim: int/bool `%lld`, float `%g` (P0.3;
-              // `print(1.5)`in en-kisa gosterimiyle 6 anlamli haneye kadar
-              // ayni, otesinde `%g` yuvarlar).
-              const bool fld_is_float = st->field_types[f] == TYPE_FLOAT;
-              char fname_lit[256];
-              if (is_tup)
-                snprintf(fname_lit, sizeof(fname_lit), "%s",
-                         fld_is_float ? "%g" : "%lld");
-              else
-                snprintf(fname_lit, sizeof(fname_lit),
-                         fld_is_float ? "%s: %%g" : "%s: %%lld",
-                         st->field_names[f]);
-              LLVMValueRef fname_fmt = LLVMBuildGlobalStringPtr(
-                  backend->builder, fname_lit, "struct.print.field");
-              // Deger (f32 double'a, i32 i64'e genisletilmis) — printf'in
-              // %g/%lld'si 8 baytlik arguman bekliyor.
-              LLVMValueRef field_val = struct_field_load_value(
-                  backend, st, alloca, f, "struct.print.fld");
-              LLVMValueRef pf_args[] = {fname_fmt, field_val};
-              LLVMBuildCall2(backend->builder,
-                             LLVMGlobalGetValueType(backend->func_printf),
-                             backend->func_printf, pf_args, 2, "");
-            }
-            LLVMValueRef tail_str = LLVMBuildGlobalStringPtr(
-                backend->builder, is_tup ? ")" : " }", "struct.print.tail");
-            LLVMValueRef tail_args[] = {tail_str};
-            LLVMBuildCall2(backend->builder,
-                           LLVMGlobalGetValueType(backend->func_printf),
-                           backend->func_printf, tail_args, 1, "");
-            continue;
-          }
-          // Fall through to the generic VMValue path if for any reason
-          // the struct entry wasn't resolvable (defensive — well-typed
-          // code shouldn't hit this).
+        } else if (struct_expr_type(backend, arg)) {
+          // Kutusuz struct (tipli yerel, struct donduren cagri, struct dizisi
+          // elemani, `pop(d)`, tuple): ham alloca VMValue yoluna verilmez
+          // (baytlari yanlis okurdu). Metin runtime'in TEK bicimleyicisinden
+          // (aot_struct_print = toString(p)in aot_struct_format'i, stdout'a,
+          // ayirmasiz). 2026-10-02'ye kadar burada alan basina printf vardi —
+          // float `%g`, bool 0/1 — yani `print(p)` "y: 0.3", `print(p.y)`
+          // 0.30000000000000004 basiyordu (Tuzaklar 7j).
+          if (codegen_struct_print(backend, arg)) continue;
+          // Cozulemedi (savunma — iyi tipli kod buraya dusmez): genel yol.
         }
         if (arg->type != AST_STRING_LITERAL) {
           // Other types: use print_value_inline(VMValue*) - no newline
@@ -9975,18 +10018,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (node->name && strcmp(bi_name, "toString") == 0 &&
         node->argument_count >= 1) {
       // Kutusuz struct: print ile ayni `Ad { ... }` bicimi (K198).
-      if (StructTypeEntry *tst = struct_expr_type(backend, node->arguments[0])) {
-        if (LLVMValueRef sp = codegen_struct_expr_ptr(backend, node->arguments[0], tst)) {
-          LLVMValueRef np, tp;
-          struct_meta_tables(backend, tst, &np, &tp);
-          sp = struct_native_to_slots(backend, tst, sp);  // f32/i32: yuva bicimi
-          LLVMValueRef fargs[] = {
-              LLVMBuildGlobalStringPtr(backend->builder, tst->name, "st.tn"),
-              LLVMConstInt(backend->int32_type, (unsigned)tst->field_count, 0), np, tp, sp};
-          return llvm_call_vmvalue_func(backend, backend->func_aot_struct_format, fargs, 5,
-                                        "struct_to_str");
-        }
-      }
+      if (LLVMValueRef sv = codegen_struct_text(backend, node->arguments[0]))
+        return sv;
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "to_str_arg");
@@ -11909,7 +11942,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                        backend->func_aot_stringbuilder_append, largs, 3, "");
         return llvm_vm_val_int(backend, 0);
       }
-      LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
+      // Kutusuz struct: print(p) / toString(p) ile ayni metin (2026-10-02;
+      // eskiden kutulanip `{"x": 1, ...}` ekleniyordu). Struct degilse IR
+      // uretilmez — asagidaki yol bayt bayt ayni.
+      LLVMValueRef val = codegen_struct_text(backend, node->arguments[1]);
+      if (!val) val = codegen_expression(backend, node->arguments[1]);
       // Extract pointer from VMValue (stored as int64)
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,

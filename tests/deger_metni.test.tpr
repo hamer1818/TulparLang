@@ -10,8 +10,11 @@
 // Bicim (print ile AYNI — o taraf tests/deger_metni.sh'de, surec disindan):
 //   dizi          [1, 2.5, "a", true, null, [3]]   kap icindeki dizgi tirnakli
 //   json nesnesi  {"ad": "x", "n": 2}
-//   struct dizisi [P { x: 1, y: 2.5 }]             print(<struct>) bicimi
+//   struct dizisi [P { x: 1, y: 2.5, b: true }]    print(<struct>) bicimi
 //   tuple         (3, 1.5)
+// Sayi/bool HER YERDE tekil degerin metni: struct alani ve tuple elemani dahil
+// (2026-10-02 ikinci tur; once alan `%g` ve bool 0/1 idi). NaN "nan",
+// sonsuz "inf"/"-inf" (platformdan bagimsiz), JSON'da null.
 // Calistir: ./tulpar tests/deger_metni.test.tpr
 import "test";
 
@@ -87,8 +90,9 @@ func run_struct_dizisi() {
     push(ps, { x: 1, y: 2.5, b: false });
     P q = { x: 3, y: 4.0, b: true };
     push(ps, q);
-    // Eleman print(<struct>) / toString(<struct>) ile ayni bicimde.
-    assert_eq_str(toString(ps), "[P { x: 1, y: 2.5, b: 0 }, P { x: 3, y: 4, b: 1 }]");
+    // Eleman print(<struct>) / toString(<struct>) ile ayni bicimde; bool alan
+    // true/false (2026-10-02'ye kadar 0/1 — Tuzaklar 7j).
+    assert_eq_str(toString(ps), "[P { x: 1, y: 2.5, b: false }, P { x: 3, y: 4, b: true }]");
     assert_eq_str(toString(ps), "[" + toString(ps[0]) + ", " + toString(ps[1]) + "]");
     P[] bos = [];
     assert_eq_str(toString(bos), "[]");
@@ -102,8 +106,10 @@ func run_tuple() {
     var t = iki();
     assert_eq_str(toString(t), "(3, 1.5)");
     assert_eq_str(toString(iki()), "(3, 1.5)");
-    // Tuple elemani struct alani kurali: bool 0/1.
-    assert_eq_str(toString(uc()), "(7, 1, 0.25)");
+    // Tuple elemani tekil degerin kurali: bool true/false (2026-10-02'ye
+    // kadar 0/1 idi — `var (a, b, c) = uc(); print(b)` "true" derken tuple
+    // metni "1" diyordu).
+    assert_eq_str(toString(uc()), "(7, true, 0.25)");
 }
 
 func run_birlestirme() {
@@ -126,6 +132,77 @@ func run_kendini_iceren() {
     assert_eq_str(toString(o), "{\"n\": 1, \"ben\": {...}}");
 }
 
+// ---- TEK KURAL: struct alani = tekil deger (2026-10-02, Tuzaklar 7j) --------
+// Struct alani `print(p.alan)` neyse o yazilir. Eskiden alan `%g` (6 anlamli
+// hane) ve bool 0/1 idi: print(p) "y: 0.3" derken print(p.y)
+// 0.30000000000000004 basiyordu.
+func run_struct_alani_tekil_deger() {
+    P p = { x: 1, y: 0.1 + 0.2, b: true };
+    assert_eq_str(toString(p), "P { x: 1, y: 0.30000000000000004, b: true }");
+    assert_eq_str(toString(p), "P { x: " + toString(p.x) + ", y: " + toString(p.y) +
+                               ", b: " + toString(p.b) + " }");
+    // f32 alan OKUNDUGU double ile yazilir: Tulpar'da f32 skaler yok, t.x
+    // 0.10000000149011612 ve `t.x == 0.1` false — metin onu gizlemesin.
+    Tepe t = { x: 0.1, renk: -3 };
+    assert_eq_str(toString(t), "Tepe { x: 0.10000000149011612, renk: -3 }");
+    assert_eq_str(toString(t), "Tepe { x: " + toString(t.x) + ", renk: -3 }");
+    Tepe[] ts = [t];
+    assert_eq_str(toString(ts), "[" + toString(t) + "]");
+    // 6 haneyi asan float alan: %g burada 1e+06 / 3.14159 derdi.
+    P q = { x: -2, y: 1000000.5, b: false };
+    assert_eq_str(toString(q), "P { x: -2, y: 1000000.5, b: false }");
+    P r = { x: 0, y: 3.14159265, b: false };
+    assert_eq_str(toString(r), "P { x: 0, y: 3.14159265, b: false }");
+}
+
+// `"..." + p`, t"{p}" ve sb_append(sb, p): print(p) ile ayni metin. Eskiden
+// struct kutulanip json nesnesi gibi `{"x": 1, ...}` yaziliyordu.
+func run_struct_birlestirme() {
+    P p = { x: 1, y: 2.5, b: true };
+    str beklenen = "P { x: 1, y: 2.5, b: true }";
+    assert_eq_str("p=" + p, "p=" + beklenen);
+    assert_eq_str(p + "!", beklenen + "!");
+    assert_eq_str(t"<{p}>", "<" + beklenen + ">");
+    str on = "on:";
+    assert_eq_str(on + p, "on:" + beklenen);
+    int sb = StringBuilder(16);
+    sb_append(sb, p);
+    assert_eq_str(sb_tostring(sb), beklenen);
+    sb_free(sb);
+    assert_eq_str("t=" + uc(), "t=(7, true, 0.25)");
+}
+
+// NaN / sonsuz: platformdan bagimsiz sabit metin. NaN CALISMA ANINDA
+// uretiliyor — x86_64'te 0/0 ISARET BITLI NaN verir (glibc "-nan"),
+// AArch64'te isaretsiz; eski derleyici Linux'ta "-nan", macOS'ta "nan"
+// basiyordu. clock_ms() * 0.0 katlanamaz (NaN/inf/-0 yuzunden).
+func run_nan_inf() {
+    float z = clock_ms() * 0.0;
+    float n = z / z;
+    assert_eq_str(toString(n), "nan");
+    assert_eq_str(toString(-n), "nan");
+    assert_eq_str(toString(1.0 / z), "inf");
+    assert_eq_str(toString(-1.0 / z), "-inf");
+    assert_eq_str(toString(z * -1.0), "-0");
+    assert_eq_str("n=" + n, "n=nan");
+    float[] fa = [n, 1.0 / z, -n];
+    assert_eq_str(toString(fa), "[nan, inf, nan]");
+    // JSON'da NaN/sonsuz yok (RFC 8259): JSON.stringify gibi null.
+    assert_eq_str(toJson(fa), "[null,null,null]");
+    assert_eq_str(toJson([n, 1.5, -1.0 / z]), "[null,1.5,null]");
+}
+
+// Float literali tasma / alt normal: std::stod ERANGE'de atiyordu ve parser
+// 0.0 yaziyordu (`1e400` -> 0, `5e-324` -> 0).
+func run_literal_aralik() {
+    float buyuk = 1e400;
+    assert_eq_str(toString(buyuk), "inf");
+    float kucuk = 5e-324;
+    assert(kucuk > 0.0, "5e-324 sifir okundu");
+    assert_eq_str(toString(kucuk), "5e-324");
+    assert_eq_str(toString(-1e400), "-inf");
+}
+
 func run_sb_append() {
     int sb = StringBuilder(16);
     int[] a = [4, 5];
@@ -146,4 +223,8 @@ test("tuple (a, b)", "run_tuple");
 test("dizgi birlestirme ve null", "run_birlestirme");
 test("kendini iceren kap", "run_kendini_iceren");
 test("sb_append dizi", "run_sb_append");
+test("struct alani = tekil deger (float, bool, f32)", "run_struct_alani_tekil_deger");
+test("struct birlestirme / t-dizgi / sb_append", "run_struct_birlestirme");
+test("nan / inf / -0 sabit metin, JSON'da null", "run_nan_inf");
+test("float literali tasma / alt normal", "run_literal_aralik");
 test_summary();

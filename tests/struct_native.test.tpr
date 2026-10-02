@@ -201,9 +201,11 @@ func struct_tostring_same_as_print() {
     assert_eq_str(toString(p), "Point { x: 1, y: 2 }");
     assert_eq_str("p=" + toString(p), "p=Point { x: 1, y: 2 }");
     assert_eq_str(toString(_make_point(5, 6)), "Point { x: 5, y: 6 }");
-    assert_eq_str(toString(_olcu()), "Olcu { n: 3, k: 2.5, b: 1 }");  // bool 0/1: print gibi
+    // bool alan true/false: print(o.b) ile ayni (2026-10-02, Tuzaklar 7j;
+    // eskiden struct metni 0/1 diyordu).
+    assert_eq_str(toString(_olcu()), "Olcu { n: 3, k: 2.5, b: true }");
     Olcu[] os = [_olcu()];
-    assert_eq_str(toString(os[0]), "Olcu { n: 3, k: 2.5, b: 1 }");
+    assert_eq_str(toString(os[0]), "Olcu { n: 3, k: 2.5, b: true }");
 }
 
 func struct_call_in_generic_context() {

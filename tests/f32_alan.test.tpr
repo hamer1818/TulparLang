@@ -52,7 +52,9 @@ func run_i32_sarma() {
 
 func run_bicim() {
     Karma k = { a: -7, b: 0.25, c: 1.5, d: 9, e: false };
-    assert_eq_str(toString(k), "Karma { a: -7, b: 0.25, c: 1.5, d: 9, e: 0 }");
+    // bool alan true/false (2026-10-02, Tuzaklar 7j): alan metni tekil
+    // degerin kurali — print(k.e) "false" basiyor, struct metni de oyle.
+    assert_eq_str(toString(k), "Karma { a: -7, b: 0.25, c: 1.5, d: 9, e: false }");
     assert_eq_str(toJson(k), "{\"a\":-7,\"b\":0.25,\"c\":1.5,\"d\":9,\"e\":false}");
     var kutulu = k;                               // genel baglam: kutulu nesne
     assert_eq_int(kutulu.a, -7);

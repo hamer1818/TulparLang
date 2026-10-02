@@ -18,6 +18,13 @@
 // EXTERN "C" BLOCK - Native Runtime (called from LLVM compiled code)
 // ============================================================================
 
+// Ortak float bicimleyici (src/vm/runtime_bindings.cpp; bu dosyayla AYNI iki
+// hedefe — tulpar ve tulpar_runtime — giriyor). Asagidaki float yazicilari
+// `%g` idi (6 anlamli hane, platforma gore "-nan"/"1.#INF"): print ile
+// ayrisan bir yol daha (Tuzaklar 7j). Bugun codegen bunlari bildirip hic
+// cagirmiyor, ama cagirilirsa print ile ayni metni versinler.
+extern "C" int aot_format_float(char *buf, size_t n, double value);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -31,7 +38,9 @@ void tulpar_print_int(TulparInt val) {
 }
 
 void tulpar_print_float(TulparFloat val) {
-  printf("%g", val);
+  char buf[64];
+  aot_format_float(buf, sizeof(buf), val);
+  fputs(buf, stdout);
 }
 
 void tulpar_print_bool(TulparBool val) {
@@ -51,7 +60,8 @@ void tulpar_println_int(TulparInt val) {
 }
 
 void tulpar_println_float(TulparFloat val) {
-  printf("%g\n", val);
+  tulpar_print_float(val);
+  fputc('\n', stdout);
 }
 
 void tulpar_println_bool(TulparBool val) {
@@ -263,7 +273,7 @@ TulparString tulpar_int_to_string(TulparInt val) {
 
 TulparString tulpar_float_to_string(TulparFloat val) {
   char buf[64];
-  snprintf(buf, sizeof(buf), "%g", val);
+  aot_format_float(buf, sizeof(buf), val);
   return tulpar_string_new(buf);
 }
 

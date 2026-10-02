@@ -63,7 +63,9 @@ func run_cagri() {
     Bayrak u = j;
     assert_eq_bool(u.b, true);
     assert_close(u.x, 3.25, 0.0);
-    assert_eq_str(toString(u), "Bayrak { a: 0, x: 3.25, b: 1, n: 11 }");
+    // @repr(C) 1 baytlik bool alan da true/false (2026-10-02, Tuzaklar 7j;
+    // eskiden 0/1 — print(u.a) ise "false" basiyordu).
+    assert_eq_str(toString(u), "Bayrak { a: false, x: 3.25, b: true, n: 11 }");
 }
 
 print("=== @repr(C) ===");

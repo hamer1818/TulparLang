@@ -1,7 +1,8 @@
 // Plan 04 PR6 hedef ornek: print(struct).
 // Typed-struct local'i print()'e verilince `Name { f1: v, f2: v, ... }`
-// formatinda yazdiriliyor — codegen GEP-load ile her alani tek tek
-// alip printf cagirisi yapiyor; runtime helper yok.
+// formatinda yazdiriliyor — runtime'in toString(p) ile ORTAK bicimleyicisi
+// (aot_struct_print); alan metni print(p.alan) ile ayni (float en kisa
+// geri donen gosterim, bool true/false).
 
 struct Point {
     int x;

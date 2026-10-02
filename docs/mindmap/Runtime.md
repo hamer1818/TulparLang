@@ -15,6 +15,17 @@ tags: [component, runtime]
 ## Kaldırıldı (geri getirme!)
 - `src/vm/compiler.cpp` (AST→bytecode), `vm_run` (interpreter loop), `run_repl`. → [[Decisions]]
 
+## Değerin metni — TEK kural (2026-10-02)
+`print`, `toString`, `"..." + x`, `t"{x}"`, `sb_append` aynı biçimleyiciden
+geçer (`aot_value_repr` / `repr_value`; struct için `repr_struct_slots` →
+`aot_struct_print` / `aot_struct_format`). Sayı/bool her yerde tekil
+`print(<sayı>)` metni: float `aot_format_float` (en kısa geri dönen; `nan`,
+`inf`, `-inf` platformdan bağımsız), bool `true/false` — struct alanı, tuple
+elemanı ve kap elemanı dahil; f32 alan okunduğu double ile. `toJson` ayrı
+sözleşme (NaN/sonsuz → `null`). gdb/DAP printer'ı (`tools/gdb/tulpar_printers.py`)
+aynı kuralı Python'da tekrarlar. Kapı: `tests/deger_metni.{sh,test.tpr}`.
+→ [[Tuzaklar]] 7j
+
 ## Per-thread durum
 Arena, checkpoint stack, region — hepsi `thread_local` (thread_create / pool worker'lar için). → [[Memory Model]]
 
