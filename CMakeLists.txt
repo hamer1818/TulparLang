@@ -4,12 +4,13 @@
 # Minimum CMake version
 cmake_minimum_required(VERSION 3.14)
 
-# Project name and version - Now using modern C++17
-# This is the NEXT (unreleased) version; dev builds report "<version>-dev".
-# Keep it >= the latest git tag (currently v3.10.0) so `tulpar --version` and
-# `tulpar update --check` never report a dev build as older than the last
-# release. Bump here when cutting a release; CI overrides via -DTULPAR_VERSION.
-project(TulparLang VERSION 3.13.1 LANGUAGES C CXX)
+# Project name - Now using modern C++17
+# SURUM NUMARASI BURADA YOK (2026-10-02). `tulpar --version` dizgisi her
+# derlemede git etiketinden uretiliyor: cmake/TulparVersion.cmake +
+# asagidaki `tulpar_surum` hedefi. Eskiden burada `VERSION 3.13.1` yaziyordu
+# ve elle yukseltilmesi gerekiyordu; otomatik surum her birlesmede etiket
+# kesmeye baslayinca (v3.37.x) dal/yerel derlemeler hala "3.13.1-dev" diyordu.
+project(TulparLang LANGUAGES C CXX)
 
 # C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
 set(CMAKE_CXX_STANDARD 17)
@@ -314,22 +315,48 @@ add_executable(tulpar ${ALL_SOURCES})
 # Always enable AOT
 target_compile_definitions(tulpar PRIVATE TULPAR_AOT_ENABLED)
 
-# Embedded version string. Defaults to "<project_version>-dev" for local
-# builds; release CI overrides with `-DTULPAR_VERSION=v3.1.0` (the tag
-# name) so `tulpar --version` matches the GitHub release tag. Only tag
-# pushes create releases; main/PR builds use this default.
+# GOMULU SURUM DIZGISI — git etiketinden, HER DERLEMEDE (2026-10-02).
 #
-# ⚠️ ÖNBELLEKLİ. `project(VERSION ...)` yükseltilip AYNI build dizininde
-# yeniden derlenirse bu değer ESKİ kalır ve `tulpar version` yanlış sürüm
-# söyler — sessizce. Ölçüldü (2026-09-02, v3.13.1 keserken): 3.13.1'e
-# yükseltildikten sonra ikili hâlâ "3.13.0-dev" diyordu. CI'da görünmüyor
-# (her koşum temiz dizin, üstelik etiket -DTULPAR_VERSION ile eziyor).
-# Sürüm yükselttikten sonra YA build dizinini sil YA da
-# `cmake -S . -B <dir> -DTULPAR_VERSION=<yeni>-dev` ile ez.
-set(TULPAR_VERSION "${PROJECT_VERSION}-dev"
-    CACHE STRING "Embedded version string surfaced via tulpar --version")
-target_compile_definitions(tulpar
-    PRIVATE TULPAR_VERSION_STRING="${TULPAR_VERSION}")
+# `TULPAR_VERSION` bos (varsayilan) ise dizgi `git describe --tags --match
+# 'v[0-9]*' --dirty`: etiketin ustunde `v3.37.16`, sonrasinda
+# `v3.37.16-4-gabc1234[-dirty]`; etiket/git yoksa sayi uydurmadan
+# `0.0.0-dev[+g<sha>]`. Etiket derlemesinde yayin CI'i
+# `-DTULPAR_VERSION=<etiket>` gecer ve o aynen kullanilir (tulpar update
+# --check yayin etiketiyle birebir karsilastirir). Ayrintilar
+# cmake/TulparVersion.cmake'te; CI tools/surum_denetle.sh ile olcer.
+#
+# Neden yapilandirmada degil DERLEMEDE: eski deger bir CACHE degiskeniydi ve
+# ayni build dizininde ESKI kaliyordu (olculdu 2026-09-02: 3.13.1'e
+# yukseltildikten sonra ikili "3.13.0-dev" diyordu). `tulpar_surum` her
+# `cmake --build`ta kosar; dizgi degismediyse basliga dokunmaz, yani sik
+# derlemede yeniden derleme yok, commit/etiket degisince yalniz surumu
+# okuyan birimler derlenir.
+set(TULPAR_VERSION "" CACHE STRING
+    "Gomulu surum (bos = git describe; etiket derlemesinde etiket)")
+# Eski build dizinleri onbellekte eski varsayilani ("3.13.1-dev") tasiyor;
+# o bir override DEGIL — yoksa sayilmaz ve git'ten hesaplanir.
+if(TULPAR_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+-dev$")
+  message(STATUS "TULPAR_VERSION=${TULPAR_VERSION} eski onbellek varsayilani — yok sayildi (git describe)")
+  set(TULPAR_VERSION "" CACHE STRING
+      "Gomulu surum (bos = git describe; etiket derlemesinde etiket)" FORCE)
+endif()
+set(TULPAR_VERSION_HEADER "${CMAKE_BINARY_DIR}/generated/tulpar_version.h")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
+set(_tulpar_surum_args
+    -DTULPAR_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+    -DTULPAR_VERSION_OUT=${TULPAR_VERSION_HEADER}
+    -DTULPAR_VERSION_OVERRIDE=${TULPAR_VERSION}
+    -P ${CMAKE_SOURCE_DIR}/cmake/TulparVersion.cmake)
+# Yapilandirmada bir kez (baslik ilk derlemeden once var olsun + durum satiri).
+execute_process(COMMAND ${CMAKE_COMMAND} ${_tulpar_surum_args})
+add_custom_target(tulpar_surum
+    COMMAND ${CMAKE_COMMAND} ${_tulpar_surum_args}
+    BYPRODUCTS ${TULPAR_VERSION_HEADER}
+    COMMENT "Surum dizgisi (git describe)"
+    VERBATIM)
+add_dependencies(tulpar tulpar_surum)
+target_include_directories(tulpar PRIVATE "${CMAKE_BINARY_DIR}/generated")
+target_compile_definitions(tulpar PRIVATE TULPAR_HAVE_VERSION_HEADER=1)
 
 # LLVM Linking - Cross-platform support (x86_64 + AArch64)
 # WebAssembly components ride along on every arch: `tulpar build
@@ -601,7 +628,8 @@ install(FILES
 # ============================================
 message(STATUS "")
 message(STATUS "=== TulparLang Build Configuration ===")
-message(STATUS "Version: ${PROJECT_VERSION}")
+file(STRINGS "${TULPAR_VERSION_HEADER}" _tulpar_surum_satiri REGEX "TULPAR_VERSION_STRING")
+message(STATUS "Version: ${_tulpar_surum_satiri}")
 # Tulpar Engine (oyun motoru) 2026-09-20'de AYRI DEPOYA tasindi:
 # https://github.com/hamer1818/tulpar-engine
 # Bu depo yalniz dili derler; motor ne alt dizin ne hedef olarak burada degil.

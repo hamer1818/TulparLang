@@ -39,12 +39,13 @@
 #     kez etiketleme;
 #   * hesaplanan etiket zaten var -> KIRMIZI (sessizce uzerine yazmak yerine).
 #
-# BILINEN SINIR: `CMakeLists.txt`'teki `project(... VERSION x.y.z)` bu is
-# tarafindan YUKSELTILMEZ (CI'dan main'e commit itmek, her surumde bir tam
-# derleme daha tetikler). O deger yalnizca YEREL gelistirme derlemelerinin
-# `<surum>-dev` etiketini besler; yayinlanan ikili her zaman etiketi tasir
-# (build.yml `-DTULPAR_VERSION`). Bir MINOR/MAJOR kesildiginde CMakeLists'i
-# elle yukseltmek hala dogru is (bkz. RELEASING.md).
+# SURUM DIZGISI: elle yukseltilecek bir sayi YOK (2026-10-02). Eskiden
+# CMakeLists'teki `project(... VERSION x.y.z)` dal/yerel derlemelerin
+# etiketini besliyordu ve bu is onu yukseltmedigi icin v3.37.x cikmisken
+# "3.13.1-dev" kaliyordu. Artik dizgi her derlemede bu isin ittigi etiketten
+# uretiliyor (cmake/TulparVersion.cmake: `git describe`); yayinlanan ikili
+# etiketi aynen tasir (build.yml `-DTULPAR_VERSION`), tools/surum_denetle.sh
+# ikisini de CI'da olcer.
 # ===========================================================================
 name: Otomatik surum
 

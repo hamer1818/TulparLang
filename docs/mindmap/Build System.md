@@ -51,16 +51,24 @@ atlanmıyor (üretilen şey `output_name`'in kendisi değil).
 > AYNI sırayla çözüp özyinelemeli tarıyor. Gömülü stdlib adları diskte çözülmez; onları
 > sürücünün mtime'ı kapsıyor. → [[Tuzaklar]] §2
 
-## ⚠️ Sürüm numarası ÖNBELLEKLİ
-`TULPAR_VERSION` bir CMake **cache** değişkeni (`set(... CACHE STRING ...)`).
-`project(VERSION ...)` yükseltilip **aynı build dizininde** yeniden derlenirse
-eski değer kalır ve `tulpar version` yanlış sürümü söyler — sessizce. Ölçüldü
-(2026-09-02, v3.13.1 keserken): 3.13.1'e yükseltildikten sonra ikili hâlâ
-`3.13.0-dev` diyordu. CI'da görünmez (her koşum temiz dizin; etiket koşumu
-ayrıca `-DTULPAR_VERSION` ile eziyor), yani yalnız yereli yanıltır.
+## Sürüm dizgisi git etiketinden, her derlemede (2026-10-02)
+Eskiden `project(TulparLang VERSION 3.13.1)` + CMake **cache** değişkeni:
+(1) elle yükseltilmesi gerekiyordu ve otomatik sürüm (her birleşmede etiket)
+başladıktan sonra yükselten olmadı — dal/yerel derlemeler v3.37.x çıkmışken
+`3.13.1-dev` diyordu; (2) önbellekliydi, yükseltilse bile aynı build
+dizininde eski kalıyordu (ölçüldü 2026-09-02: 3.13.1'e yükseltildikten sonra
+ikili `3.13.0-dev`).
 
-**Sürüm yükselttikten sonra:** ya build dizinini sil, ya da
-`cmake -S . -B build-linux -DTULPAR_VERSION=<yeni>-dev` ile ez.
+Şimdi sayı **yok**: `cmake/TulparVersion.cmake` her `cmake --build`'de
+(`tulpar_surum` hedefi) `git describe --tags --match 'v[0-9]*' --dirty`
+üretir (`v3.37.16`, `v3.37.16-4-gabc1234[-dirty]`); etiket derlemesinde
+`-DTULPAR_VERSION=<etiket>` aynen; git/etiket yoksa `0.0.0-dev[+g<sha>]` —
+bilinmeyeni uydurmaz. Değişmeyen dizgi başlığa dokunmaz (yeniden derleme
+yok). Eski build dizinlerinin önbelleğindeki `x.y.z-dev` değeri override
+sayılmaz. CI checkout'u tam geçmişle (`fetch-depth: 0`, blobsuz) ve
+`tools/surum_denetle.sh` üç işte derlemenin hemen ardından ikiliyi
+etiketle/describe ile karşılaştırır (öz-denetimli). MSYS2'ye `git` paketi
+bunun için eklendi (minimal PATH'te Windows git'i yok).
 
 ## Gömülü lib: `cmake --build` yeter (2026-09-27'den beri)
 `lib/*.tpr` → `embedded_libs.h` (`EmbedLibraries.cmake`, `configure_file`). İçerik
