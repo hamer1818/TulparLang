@@ -2111,3 +2111,157 @@ extern "C" void tulpar_collect_int_array_decls(ASTNode_C *root,
   IvHintCtx h{cb, ctx};
   walk_all(root, iv_visit_hint, &h);
 }
+
+// ===========================================================================
+// STRUCT DIZISI DONGU SURUMU (2026-10-02) — kanitin BICIM kismi.
+//
+// Neden: `ps[i].x` erisimi SarrCacheScope sayesinde basligi dongu basinda bir
+// kez okuyor ama HER erisimde `i <u count` sinavi ve yavas yol (runtime
+// cagrisi, hata tanisi) kopyasi kaliyor. particles'in ic dongusunde tur basina
+// 10 alan erisimi; LLVM sinavlarin cogunu birlestiriyor ama 3 dal ve dongu
+// sinirinin (`n` global) her turda bellekten okunmasi kaliyor — yavas yoldaki
+// cagri her seyi yazabilir sayiliyor.
+//
+// Kanit: `for (<i> = E; i < UB; i = i + K)` (ya da `<=`, `i++`, `i += K`;
+// K > 0 int sabiti) ve
+//   * i govdede HIC atanmiyor / artirilmiyor / yeniden bildirilmiyor;
+//   * UB bir int sabiti, dongude atanmayan bir AD ya da `len(X)` (X dongude
+//     yeniden baglanmiyor);
+//   * dongu sekli degistiremiyor (tulpar_loop_shape_stable — cagri yalniz
+//     elle dogrulanmis yerlesik; push/pop/kullanici fonksiyonu yok).
+// O zaman govdede i, [i0, UB') araliginda (UB' = `<=` ise UB + 1): i0 >= 0 ve
+// UB' <= count(A) dongu basinda sinanirsa her `A[i]` sinir icinde. Sayisal
+// kisim codegen'de (sv_try_version). Plan yalniz `A[i]` (indeks CIPLAK i)
+// erisimlerinin dizi adlarini toplar; struct dizisi olup olmadiklarina codegen
+// karar verir (sekil onbellegi).
+struct SvCtx {
+  const char *ivar;
+  TulparSarrLoopPlan *p;
+  int nodes;
+};
+
+// Sert yeniden baglama denetimi: tulpar_loop_rebinds_name `x++`/`x--`i
+// saymiyor; burada sayiyoruz (bir atama bicimi kacarsa kanit delinir).
+struct SvRebindCtx {
+  const char *name;
+  bool hit;
+};
+static bool sv_visit_rebind(ASTNode_C *n, void *p) {
+  SvRebindCtx *c = (SvRebindCtx *)p;
+  if ((n->type == AST_ASSIGNMENT || n->type == AST_COMPOUND_ASSIGN ||
+       n->type == AST_VARIABLE_DECL || n->type == AST_INCREMENT ||
+       n->type == AST_DECREMENT) &&
+      n->name && strcmp(n->name, c->name) == 0) {
+    c->hit = true;
+    return false;
+  }
+  return true;
+}
+static bool sv_rebinds(ASTNode_C *n, const char *name) {
+  SvRebindCtx c{name, false};
+  walk_all(n, sv_visit_rebind, &c);
+  return c.hit;
+}
+
+static bool sv_visit_acc(ASTNode_C *n, void *p) {
+  SvCtx *c = (SvCtx *)p;
+  c->nodes++;
+  if (n->type == AST_ARRAY_ACCESS && n->index && n->index->type == AST_IDENTIFIER &&
+      n->index->name && strcmp(n->index->name, c->ivar) == 0) {
+    const char *base = nullptr;
+    if (n->name) base = n->name;
+    else if (n->left && n->left->type == AST_IDENTIFIER) base = n->left->name;
+    if (base) {
+      TulparSarrLoopPlan *pl = c->p;
+      bool seen = false;
+      for (int k = 0; k < pl->n_arr; k++)
+        if (strcmp(pl->arr[k], base) == 0) seen = true;
+      if (!seen && pl->n_arr < TULPAR_SV_MAX_ARR) pl->arr[pl->n_arr++] = base;
+      pl->n_acc++;
+    }
+  }
+  return true;
+}
+
+extern "C" int tulpar_sarr_loop_plan(ASTNode_C *init, ASTNode_C *cond,
+                                     ASTNode_C *body, ASTNode_C *incr,
+                                     TulparPureCallFn pure, void *ctx,
+                                     TulparSarrLoopPlan *p) {
+  memset(p, 0, sizeof(*p));
+  p->why = "bicim";
+  if (!init || !cond || !incr || !body) return 0;
+  // init: `int i = E` ya da `i = E` (E dongu basinda bir kez; codegen i'nin
+  // INT ve >= 0 oldugunu sinar).
+  if ((init->type != AST_VARIABLE_DECL && init->type != AST_ASSIGNMENT) || !init->name ||
+      init->left)
+    return 0;
+  const char *ivar = init->name;
+  if (cond->type != AST_BINARY_OP || (cond->op != TOKEN_LESS && cond->op != TOKEN_LESS_EQUAL))
+    return 0;
+  ASTNode_C *lhs = cond->left, *rhs = cond->right;
+  if (!lhs || lhs->type != AST_IDENTIFIER || !lhs->name || strcmp(lhs->name, ivar) != 0 || !rhs)
+    return 0;
+  if (rhs->type == AST_INT_LITERAL) {
+    // sabit sinir
+  } else if (rhs->type == AST_IDENTIFIER && rhs->name && strcmp(rhs->name, ivar) != 0) {
+    if (sv_rebinds(body, rhs->name) || sv_rebinds(incr, rhs->name)) {
+      p->why = "sinir adi dongude ataniyor";
+      return 0;
+    }
+  } else if (rhs->type == AST_FUNCTION_CALL && rhs->name && !rhs->receiver &&
+             (strcmp(rhs->name, "len") == 0 || strcmp(rhs->name, "length") == 0) &&
+             rhs->argument_count == 1 && rhs->arguments && rhs->arguments[0] &&
+             rhs->arguments[0]->type == AST_IDENTIFIER && rhs->arguments[0]->name &&
+             pure && pure(rhs->name, ctx)) {
+    if (sv_rebinds(body, rhs->arguments[0]->name) || sv_rebinds(incr, rhs->arguments[0]->name)) {
+      p->why = "sinir dizisi dongude yeniden baglaniyor";
+      return 0;
+    }
+  } else {
+    p->why = "sinir sabit / ad / len(X) degil";
+    return 0;
+  }
+  // incr: `i++`, `i = i + K`, `i += K` (K > 0 int sabiti)
+  bool incr_ok = false;
+  if (incr->type == AST_INCREMENT && incr->name && !incr->left && strcmp(incr->name, ivar) == 0) {
+    incr_ok = true;
+  } else if (incr->type == AST_ASSIGNMENT && incr->name && !incr->left &&
+             strcmp(incr->name, ivar) == 0 && incr->right &&
+             incr->right->type == AST_BINARY_OP && incr->right->op == TOKEN_PLUS) {
+    ASTNode_C *a = incr->right->left, *b = incr->right->right;
+    incr_ok = a && b && a->type == AST_IDENTIFIER && a->name && strcmp(a->name, ivar) == 0 &&
+              b->type == AST_INT_LITERAL && b->value.int_value > 0;
+  } else if (incr->type == AST_COMPOUND_ASSIGN && incr->name && !incr->left &&
+             strcmp(incr->name, ivar) == 0 && incr->op == TOKEN_PLUS_EQUAL && incr->right &&
+             incr->right->type == AST_INT_LITERAL && incr->right->value.int_value > 0) {
+    incr_ok = true;
+  }
+  if (!incr_ok) {
+    p->why = "artim i++ / i = i + K / i += K degil";
+    return 0;
+  }
+  if (sv_rebinds(body, ivar)) {
+    p->why = "dongu degiskeni govdede ataniyor";
+    return 0;
+  }
+  if (!tulpar_loop_shape_stable(cond, body, incr, pure, ctx)) {
+    p->why = "govde sekli degistirebilir (cagri / yeni kap)";
+    return 0;
+  }
+  SvCtx c{ivar, p, 0};
+  walk_all(body, sv_visit_acc, &c);
+  p->n_nodes = c.nodes;
+  if (p->n_arr == 0) {
+    p->why = "govdede `X[i]` erisimi yok";
+    return 0;
+  }
+  if (c.nodes > TULPAR_IV_MAX_LOOP_NODES) {
+    p->why = "dongu cok buyuk (kod buyumesi siniri)";
+    return 0;
+  }
+  p->ivar = ivar;
+  p->ub = rhs;
+  p->incl = cond->op == TOKEN_LESS_EQUAL ? 1 : 0;
+  p->why = nullptr;
+  return 1;
+}

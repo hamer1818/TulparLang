@@ -1,0 +1,228 @@
+import "test";
+
+// STRUCT DIZISI DONGU SURUMU + SATIR ICI push/toFloat (2026-10-02).
+//
+// `for (i = E; i < UB; i += K)` govdesindeki `A[i]` (A tipli struct dizisi)
+// erisimleri dongu basinda TEK sinavla kanitlaniyor (i >= 0, UB' <= count);
+// hizli govdede erisim tek GEP, kosul dongu basindaki UB ile. Ayrica
+// `push(d, e)` yer varsa satir ici kopya, `toFloat` INT/FLOAT'ta satir ici.
+//
+// Bu paket ANLAMIN degismedigini kilitliyor: her senaryo ayni islemi BEKCILI
+// bir ikizle karsilastiriyor. Ikizde indeks dongu degiskeninin KENDISI degil,
+// govdede bildirilen bir kopyasi (`int k = i; d[k]`) — plan `A[i]` bicimi
+// aramadigi icin ikiz hizli surume hic girmez. Karar (surum acildi mi), sinir
+// disi erisimin hala yakalandigi ve IR pozitif kontrolu tests/struct_dizi_surum.sh.
+//
+// ⚠ Diziler ELEMAN ELEMAN, alan alan karsilastiriliyor (Tuzaklar 7j): toString
+// karsilastirmasi bir gun yine "<object>" donerse kapi korlesmesin.
+
+struct P { float x; float y; float vx; float vy; }
+struct K { int id; f32 a; i32 b; bool c; }
+
+func ayni_p(P[] p, P[] q) {
+    if (len(p) != len(q)) {
+        _test_set_fail("uzunluk farkli: " + toString(len(p)) + " / " + toString(len(q)));
+        return;
+    }
+    for (int t = 0; t < len(p); t = t + 1) {
+        if (p[t].x != q[t].x || p[t].y != q[t].y || p[t].vx != q[t].vx || p[t].vy != q[t].vy) {
+            _test_set_fail("eleman " + toString(t) + ": (" + toString(p[t].x) + ", " + toString(p[t].y) +
+                           ") / (" + toString(q[t].x) + ", " + toString(q[t].y) + ")");
+            return;
+        }
+    }
+}
+
+func kur(int n): P[] {
+    P[] ps = [];
+    for (int i = 0; i < n; i = i + 1) {
+        push(ps, { x: toFloat(i % 100) * 0.5, y: toFloat(i % 77) * 0.25,
+                   vx: toFloat((i % 13) - 6) * 0.1, vy: toFloat((i % 7) - 3) * 0.2 });
+    }
+    return ps;
+}
+
+// particles cekirdegi: hizli surum (ps[i]) ve bekcili ikiz (ps[k]).
+func adim_hizli(P[] ps, int n, int adim) {
+    float dt = 0.01;
+    float g = 9.81;
+    float w = 50.0;
+    for (int s = 0; s < adim; s = s + 1) {
+        for (int i = 0; i < n; i = i + 1) {
+            ps[i].vy = ps[i].vy - g * dt;
+            ps[i].x = ps[i].x + ps[i].vx * dt;
+            ps[i].y = ps[i].y + ps[i].vy * dt;
+            if (ps[i].x < 0.0 || ps[i].x > w) { ps[i].vx = 0.0 - ps[i].vx; }
+            if (ps[i].y < 0.0) { ps[i].y = 0.0 - ps[i].y; ps[i].vy = (0.0 - ps[i].vy) * 0.9; }
+        }
+    }
+}
+func adim_ikiz(P[] ps, int n, int adim) {
+    float dt = 0.01;
+    float g = 9.81;
+    float w = 50.0;
+    for (int s = 0; s < adim; s = s + 1) {
+        for (int i = 0; i < n; i = i + 1) {
+            int k = i;
+            ps[k].vy = ps[k].vy - g * dt;
+            ps[k].x = ps[k].x + ps[k].vx * dt;
+            ps[k].y = ps[k].y + ps[k].vy * dt;
+            if (ps[k].x < 0.0 || ps[k].x > w) { ps[k].vx = 0.0 - ps[k].vx; }
+            if (ps[k].y < 0.0) { ps[k].y = 0.0 - ps[k].y; ps[k].vy = (0.0 - ps[k].vy) * 0.9; }
+        }
+    }
+}
+
+func run_particles() {
+    P[] a = kur(1000);
+    P[] b = kur(1000);
+    ayni_p(a, b);
+    adim_hizli(a, len(a), 40);
+    adim_ikiz(b, len(b), 40);
+    ayni_p(a, b);
+}
+
+// Ust duzey (main yereli / global) dizi ve `n` siniri — benchmark bicimi.
+P[] g_ps = kur(300);
+P[] g_ik = kur(300);
+int g_n = 300;
+func run_ust_duzey() {
+    for (int i = 0; i < g_n; i = i + 1) { g_ps[i].x = g_ps[i].x + g_ps[i].vx; }
+    for (int i = 0; i < g_n; i = i + 1) { int k = i; g_ik[k].x = g_ik[k].x + g_ik[k].vx; }
+    ayni_p(g_ps, g_ik);
+}
+
+// `<=`, len(X) siniri, adim > 1, sifirdan farkli baslangic, `i++`.
+func run_bicimler() {
+    P[] a = kur(50);
+    P[] b = kur(50);
+    for (int i = 3; i <= 40; i = i + 3) { a[i].x = a[i].x * 2.0 + toFloat(i); }
+    for (int i = 3; i <= 40; i = i + 3) { int k = i; b[k].x = b[k].x * 2.0 + toFloat(k); }
+    for (int i = 0; i < len(a); i++) { a[i].y = a[i].y - a[i].x; }
+    for (int i = 0; i < len(b); i++) { int k = i; b[k].y = b[k].y - b[k].x; }
+    for (int i = 1; i < 49; i = i + 2) { a[i].vy = a[i].vx + a[i].vy; }
+    for (int i = 1; i < 49; i = i + 2) { int k = i; b[k].vy = b[k].vx + b[k].vy; }
+    ayni_p(a, b);
+}
+
+// break / continue: kosul atlanirsa da sinir kaniti gecerli.
+func run_break_continue() {
+    P[] a = kur(64);
+    P[] b = kur(64);
+    for (int i = 0; i < 64; i = i + 1) {
+        if (i % 5 == 0) { continue; }
+        a[i].x = a[i].x + 1.0;
+        if (a[i].y > 15.0) { break; }
+    }
+    for (int i = 0; i < 64; i = i + 1) {
+        int k = i;
+        if (k % 5 == 0) { continue; }
+        b[k].x = b[k].x + 1.0;
+        if (b[k].y > 15.0) { break; }
+    }
+    ayni_p(a, b);
+}
+
+// Ic ice: dis dongu i ile `a[i]`, ic dongu j ile `b[j]` (iki ayri surum);
+// ic govdedeki `a[i]` dis kanitla kanitli.
+func run_ic_ice() {
+    P[] a = kur(30);
+    P[] b = kur(20);
+    P[] a2 = kur(30);
+    P[] b2 = kur(20);
+    for (int i = 0; i < 30; i = i + 1) {
+        for (int j = 0; j < 20; j = j + 1) {
+            a[i].x = a[i].x + b[j].vx * 0.5;
+            b[j].y = b[j].y + a[i].vy;
+        }
+    }
+    for (int i = 0; i < 30; i = i + 1) {
+        int ii = i;
+        for (int j = 0; j < 20; j = j + 1) {
+            int jj = j;
+            a2[ii].x = a2[ii].x + b2[jj].vx * 0.5;
+            b2[jj].y = b2[jj].y + a2[ii].vy;
+        }
+    }
+    ayni_p(a, a2);
+    ayni_p(b, b2);
+}
+
+// Bilesik atama ve eleman kopyasi hizli govdede.
+func run_bilesik() {
+    P[] a = kur(40);
+    P[] b = kur(40);
+    for (int i = 0; i < 40; i = i + 1) {
+        a[i].x += 1.5;
+        a[i].y *= 2.0;
+        P t = a[i];
+        a[i].vx = t.x - t.y;
+    }
+    for (int i = 0; i < 40; i = i + 1) {
+        int k = i;
+        b[k].x += 1.5;
+        b[k].y *= 2.0;
+        P t = b[k];
+        b[k].vx = t.x - t.y;
+    }
+    ayni_p(a, b);
+}
+
+// Dongu hic donmuyor / bos dizi / sinir sayidan kucuk.
+func run_bos() {
+    P[] e = [];
+    for (int i = 0; i < len(e); i = i + 1) { e[i].x = 1.0; }
+    assert_eq_int(len(e), 0);
+    P[] a = kur(10);
+    int m = 0;
+    for (int i = 0; i < m; i = i + 1) { a[i].x = 99.0; }
+    for (int i = 0; i < 4; i = i + 1) { a[i].x = 7.0; }
+    assert_close(a[3].x, 7.0, 0.0);
+    assert_close(a[4].x, 2.0, 0.0);
+}
+
+// push satir ici: kapasite sinirlarini (8, 16, 32, ...) gecen buyume, kucuk
+// alanli (compact: f32 / i32 / bool) struct ve araya giren okuma.
+func run_push() {
+    K[] d = [];
+    for (int i = 0; i < 100; i = i + 1) {
+        push(d, { id: i, a: toFloat(i) * 0.5, b: i * 3 - 7, c: i % 2 == 0 });
+        if (i == 8 || i == 16 || i == 33) { assert_eq_int(d[i].id, i); }
+    }
+    assert_eq_int(len(d), 100);
+    for (int i = 0; i < 100; i = i + 1) {
+        if (d[i].id != i || d[i].b != i * 3 - 7 || d[i].a != toFloat(i) * 0.5 || d[i].c != (i % 2 == 0)) {
+            _test_set_fail("K eleman " + toString(i));
+            return;
+        }
+    }
+    P[] p = kur(70);
+    assert_eq_int(len(p), 70);
+    assert_close(p[69].x, 34.5, 0.0);
+    assert_close(p[69].vy, 0.6, 0.0000001);
+}
+
+// toFloat satir ici: INT ve FLOAT yerinde, digerleri runtime kurali.
+func run_tofloat() {
+    assert_close(toFloat(7), 7.0, 0.0);
+    assert_close(toFloat(-3), -3.0, 0.0);
+    assert_close(toFloat(2.25), 2.25, 0.0);
+    assert_close(toFloat(9007199254740993), 9007199254740992.0, 0.0);
+    assert_close(toFloat("3.5"), 3.5, 0.0);
+    assert_close(toFloat(true), 1.0, 0.0);
+    var v = 4;
+    var f = 1.5;
+    assert_close(toFloat(v) + toFloat(f), 5.5, 0.0);
+    assert_eq_str(typeof(toFloat(v)), "float");
+}
+
+test("particles: hizli surum = bekcili ikiz", "run_particles");
+test("ust duzey dizi ve n siniri", "run_ust_duzey");
+test("<=, len, adim, baslangic bicimleri", "run_bicimler");
+test("break / continue", "run_break_continue");
+test("ic ice iki surum", "run_ic_ice");
+test("bilesik atama ve eleman kopyasi", "run_bilesik");
+test("bos dizi / donmeyen dongu", "run_bos");
+test("push satir ici (buyume, compact)", "run_push");
+test("toFloat satir ici", "run_tofloat");
+test_summary();

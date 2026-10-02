@@ -206,6 +206,26 @@ extern "C" void tulpar_collect_int_array_decls(ASTNode_C *root,
                                                void (*cb)(const char *, void *),
                                                void *ctx);
 
+// STRUCT DIZISI DONGU SURUMU (2026-10-02): `for (i = E; i < UB; i += K)`
+// govdesindeki `A[i]` erisimleri dongu basinda tek sinavla kanitlanir (bkz.
+// .cpp). Plan yalniz BICIMI dogrular; i >= 0, UB' <= count(A) ve A'nin struct
+// dizisi oldugu codegen'de dongu basinda sinanir (sv_try_version).
+#define TULPAR_SV_MAX_ARR 8
+struct TulparSarrLoopPlan {
+  const char *ivar;                      // dongu degiskeni i
+  ASTNode_C *ub;                         // ust sinir dugumu (sabit / ad / len(X))
+  int incl;                              // `i <= UB`
+  const char *arr[TULPAR_SV_MAX_ARR];    // `A[i]` bicimde erisilen adlar
+  int n_arr;
+  int n_acc;                             // `A[i]` erisim sayisi (teshis)
+  int n_nodes;                           // govdenin dugum sayisi (teshis)
+  const char *why;                       // reddedildiyse sebep (teshis)
+};
+extern "C" int tulpar_sarr_loop_plan(ASTNode_C *init, ASTNode_C *cond,
+                                     ASTNode_C *body, ASTNode_C *incr,
+                                     TulparPureCallFn pure, void *ctx,
+                                     TulparSarrLoopPlan *p);
+
 // Butun cocuk alanlarini (walk_all ile AYNI liste) on-sirayla gezer; `visit`
 // 0 dondururse gezinti durur ve 0 doner.
 extern "C" int tulpar_ast_walk(ASTNode_C *n, int (*visit)(ASTNode_C *, void *),
