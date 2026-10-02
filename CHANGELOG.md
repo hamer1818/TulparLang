@@ -13,6 +13,24 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — NaN: `n != n` ve `n != 1.0` `false` dönüyordu (float `!=` IEEE 754'e aykırıydı)
+
+- **Kök neden:** codegen float `!=`'yi `fcmp one` ("sıralı VE eşit değil")
+  ile üretiyordu. NaN sırasız olduğu için `one` NaN'lı her karşılaştırmada
+  false — IEEE'de `!=`, `==`'in tam tersi ve NaN için **true**. Tipli float,
+  `var`, `json`, dizi elemanı, tipsiz parametre: hepsi aynı satır içi float
+  kolundan (`emit_boxed_binary_op`) geçtiği için hepsi yanlıştı. Runtime'ın
+  kutulu yolu (`vm_binary_op`, karışık int/float) `!(a == b)` ile zaten
+  doğruydu — yani aynı ifade operand tipine göre farklı sonuç veriyordu
+  (`n != 1.0` false, `n != 1` true).
+- **Düzeltme:** `fcmp une`. `==` (`oeq`) ve `<`, `>`, `<=`, `>=`
+  (`olt/ogt/ole/oge`) NaN'da false — zaten doğruydu, testle kilitlendi.
+  NaN olmayan değerlerde `une` ile `one` aynı sonucu verir; 13 kıyas
+  çekirdeğinin hiçbiri float `!=` kullanmıyor (IR bayt bayt aynı).
+- Kapı: `tests/nan_karsilastirma.test.tpr` — 9dddaf38 derleyicisinde 5
+  testin 3'ü kırmızı (karışık int/float ve NaN'sız `!=` testleri eskide de
+  yeşil: o yollar doğruydu); `une` → `one` sabotajında aynı 3'ü kırmızı.
+
 ### Değişti — `print` / `toString` dizi, json nesnesi, struct dizisi ve tuple'ı içeriğiyle yazıyor
 
 - **Eskiden:** `print(dizi)` `<array>`, `print(json nesnesi)` `<object>`,
