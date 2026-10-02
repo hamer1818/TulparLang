@@ -1675,3 +1675,55 @@ Kalan (yapılmadı):
   deposu (−8 B/eleman; okuma yollarının hepsi `arr_items`'tan geçiyor ve
   deboxing'e döner) — ikisi de geniş ABI işi.
 - `toInt` döngüsü 20 ms, büyük ölçüde 240 MB'ı baştan sona okumak.
+
+
+## `ObjString` karakterleri nesnenin içinde — parse 261,7 → 223,4 MB, 76,0 → 72,5 ms (2026-10-02)
+
+#449'un "kalan" listesindeki iki temsil adımı kıyaslandı (parse'ta parça =
+24 B nesne + ~6 B karakter → 32 B, + 16 B dizi elemanı):
+
+| | (a) satır içi karakter | (b) dizgi dizisi için 8 B işaretçi deposu |
+|---|---|---|
+| kazanç | her dizgi −8 B (parse −38 MB **ölçüldü**; hashmap −8 MB) | yalnız dizi elemanı −8 B (parse −40 MB, hesap) |
+| değişen sözleşme | 8 atama + ölü VM + ARC + `AOTFnRef` + LLVM tip gövdesi | `idata`'ya dördüncü eleman türü |
+| sessiz bozulma riski | düşük: `chars`'a ATAYAN her yer derleme hatası verdi (esnek diziye atanamaz); okuyanlar değişmedi | yüksek: `idata`'ya dokunan 76 runtime + 57 codegen sitesi `elem_bits`'e bakmak zorunda (F64'te "idata = tamsayı" varsayımı bir kez kırıldı); her genel okuma (`arr_items`) diziyi kutuya çevirir — geçişte iki depo birden canlı |
+| codegen | dizgi karakterine dokunmuyor (yalnız `call()` havuz ofsetleri) | parça okuması için yeni hızlı yol gerekir |
+
+(a) seçildi. Codegen dizginin içine hiç bakmıyor: `struct.ObjString` yalnız
+işaretçi tipi; karakterlerin ofsetini kullanan tek gömülü sayı `AOTFnRef`'in
+(`call()` satır içi yolu) ofsetleri. Esnek dizili struct başka bir struct'ın
+ortasında duramadığı için kayıt başlığı alan alan taşıyor + adın 88 baytı +
+giriş noktaları (`fp`@104, `arity`@112, `nfp`@120, 128 B); sayılar
+`fnref_layout.h`'de, runtime static_assert'leri başlık ofsetlerini
+`ObjString`'le kilitliyor. 88+ karakterlik ad havuza girmiyor (yavaş ama
+doğru yol, testli).
+
+Aşama aşama ölçüm gerekmedi — tek mekanizma. Dönüşümlü A/B (taban
+6d0dc633, 7 tur, en iyi): `parse` 76,0 → 72,5 ms, 261,7 → 223,4 MB; kaynağa
+0/1/2 önek satırıyla 76,6/73,4 · 76,7/73,0 · 77,5/73,6 — kazanç yerleşimden
+bağımsız (split'te 5M × 8 B daha az yazma). `hashmap` bellek 88,4 → 80,7 MB
+(`"k123456"` anahtarı 32 → 24 B). Öteki çekirdekler (intloop 137,0/136,5 ·
+fib 1,0/1,0 · sieve 8,1/8,2 · strcat 10,3/10,4 · arrayiter 1,7/1,8 ·
+mandelbrot 160,5/160,6 · matmul 37,7/37,6 · nbody 118,3/118,3 · qsort
+71,1/71,3 · particles 55,8/55,3) aynı; kullanıcı `.o`'ları callfn dışında
+bayt bayt aynı. **callfn 80,4 → 66,8 bir kazanç DEĞİL:** `.o` yalnız havuz
+ofsetlerinde farklı; 0–7 önek satırıyla taban {81,4 64,5 75,8 75,6 65,5 66,8
+119,4 65,5}, yeni {67,3 119,4 64,9 65,3 66,6 81,6 65,4 76,2} — aynı dört
+düzey, ikisinde de 119'luk kötü yerleşim var ([[Tuzaklar]] 7i; callfn'in
+yerleşim duyarlılığı "Geçici dizgiler" bölümünde de ölçülmüştü).
+
+Kapılar: `tests/split_toplu.sh` (S = 16, 5 baytlık parça 40 B < 45; taban
+derleyicide 48 B + tanı boyları tutmuyor → kırmızı; parça boyuna +8 B
+sabotajında kırmızı), `tests/dap_audit.py` (eski printer'la `ad`/`j`
+okunamıyor → kırmızı; yeni printer karakterleri ofsetten okuyor). wasm32:
+`clang++ --target=wasm32-unknown-unknown -ffreestanding -fsyntax-only` ile
+(`cstdint`/`cstdlib` şimi) `sizeof(ObjString) == 16`, `chars` @16, hizalama
+4; eski `20` iddiası kırmızı.
+
+Yan bulgu: `arc_free_string` malloc'lu dizgide `free(str->chars)` da
+çağırıyordu; persist / `string_pin` / anahtar kopyası karakterleri `p + 1`'e
+koyduğu için bu bir iç işaretçiyi serbest bırakmaktı. Kod okumasıyla
+bulundu; tetikleyen program ölçülmedi. Artık tek blok, tek `free`.
+
+Kalan: (b) — dizgi dizisi işaretçi deposu, parse'ta −40 MB daha; yukarıdaki
+risk sütunu yüzünden ayrı iş.

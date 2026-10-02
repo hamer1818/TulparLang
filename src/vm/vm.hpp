@@ -140,11 +140,23 @@ typedef struct Obj {
 //
 // 2026-10-02: Obj basligi 32 -> 8 bayt (yukarida) — ObjString 64-bit'te
 // 48 -> 24, wasm32'de 32 -> 20.
+//
+// 2026-10-02 (ikinci adim): KARAKTERLER NESNENIN ICINDE — `chars` artik
+// isaretci degil, basligin hemen arkasindaki esnek dizi. Her ayirma yolu
+// zaten tek blokta `[baslik][karakterler][NUL]` kuruyordu; isaretci yalniz
+// 8 bayt ve her okumada bir bagimli yukleme ekliyordu. Baslik 24 -> 16 bayt
+// (her hedefte; wasm32'de de 16). `s->chars` okuyan kod degismedi (dizi
+// isaretciye donusur); ATAYAN kod derlenmez — dis bir tampona isaret eden
+// dizgi artik yok, karakterler her zaman `sizeof(ObjString)` ofsetinde.
+// Bir dizgiyi KOPYALAMAK icin `*a = *b` kullanmayin (yalniz baslik kopyalanir).
+// benchmarks/fair/parse'in 5M canli parcasi: parca basina 32 -> 24 B.
+// ⚠ Motor (tulpar-engine) koprusu bu basligi derleme zamaninda okuyor: eski
+// duzenle derlenmis bir motor arsivi `chars`i isaretci sanir — yeniden kur.
 typedef struct {
   Obj obj;
   int length;
   uint32_t hash;
-  char *chars;
+  char chars[]; // @16; sizeof(ObjString) == 16 (esnek dizi: GNU/Clang uzantisi)
 } ObjString;
 
 // Function object

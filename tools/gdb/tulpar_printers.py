@@ -16,7 +16,8 @@
 # DÜZEN VARSAYIMI (src/vm/vm.hpp, LP64, küçük-sonlu — x86_64 ve AArch64):
 #   VMValue   { uint32 type @0; <pad>; union as @8 (8 bayt) }        16 bayt
 #   Obj       { uint8 type @0; arena @1; moved @2; pad @3; int32 ref @4 }  8 bayt
-#   ObjString { Obj; int length @8; uint32 hash @12; char *chars @16 }
+#   ObjString { Obj; int length @8; uint32 hash @12; char chars[] @16 }
+#             (karakterler nesnenin ICINDE, isaretci degil — 2026-10-02)
 #   ObjArray  { Obj; int count @8; int cap @12; VMValue *items_ @16;
 #               int64 *idata @24; int elem_bits @32 }
 #   ObjObject { Obj; int count @8; int cap @12; ObjString **keys @16;
@@ -71,8 +72,8 @@ def _quote(s):
 
 def _string(obj):
     n = _i32(obj + OBJ_HDR)
-    chars = _u64(obj + OBJ_HDR + 8)
-    if n < 0 or not chars:
+    chars = obj + OBJ_HDR + 8  # satir ici dizi: adres, yuklenen isaretci degil
+    if n <= 0:
         return '""'
     raw = _mem(chars, min(n, MAX_STR))
     txt = raw.decode("utf-8", "replace")

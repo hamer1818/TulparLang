@@ -13,6 +13,52 @@ tag still works;
 
 ## [Unreleased]
 
+### Performans — `ObjString` karakterleri nesnenin içinde: dizgi başına −8 B, parse 261,7 → 223,4 MB, 76,0 → 72,5 ms
+
+- **Eskiden:** `ObjString { Obj; int length; uint32 hash; char *chars }` (24 B).
+  Her ayırma yolu zaten `[başlık][karakterler][NUL]`'u tek blokta kuruyordu;
+  `chars` yalnız bloğun kendi içini gösteren 8 baytlık işaretçiydi ve her
+  okumada bir bağımlı yükleme ekliyordu.
+- **Şimdi:** `char chars[]` esnek dizi, başlık **16 B, her hedefte** (wasm32
+  dahil; eskiden 24 / 20). `s->chars` okuyan kod değişmedi; atayan kod artık
+  derlenmez (dış tampona işaret eden dizgi yok). Değişen yerler: 8 ayırma
+  yolundaki atama, ölü VM'in (`vm.cpp`) üç dizgi kurucusu (karakterler aynı
+  blokta), `arc_free_string` (eskiden `free(str->chars)` da çağırıyordu —
+  malloc'lu her dizgide `p + 1` gibi bir İÇ işaretçiyi serbest bırakmaktı;
+  kod okumasıyla bulundu, tetikleyen program ölçülmedi), LLVM `struct.ObjString`
+  gövdesi, gdb/DAP pretty-printer'ı.
+- **`call()` havuz kaydı (`AOTFnRef`):** esnek dizili struct başka bir
+  struct'ın ortasında duramaz; kayıt başlığı alan alan taşıyor, ardından adın
+  baytları (88, NUL dahil), sonra giriş noktaları: `fp`@104, `arity`@112,
+  `nfp`@120, 128 B (`src/vm/fnref_layout.h` tek kaynak, static_assert'ler
+  başlık ofsetlerini ObjString'le kilitliyor). 88+ karakterlik ad havuza
+  girmez: referans düz interned dizgi, `call()` adla çözer (doğru, yavaş).
+- **Sonuç** (Ryzen 7 9800X3D, `taskset -c 6,7`, izole dizin, dönüşümlü A/B,
+  7 tur, en iyi): `parse` 76,0 → **72,5 ms**, 261,7 → **223,4 MB** (kaynağa
+  0–2 önek satırıyla da −3,4…−3,9 ms: yerleşim değil); `hashmap` bellek
+  88,4 → 80,7 MB. Öteki 11 çekirdek aynı; `callfn` 80,4 → 66,8 YERLEŞİM:
+  0–7 önek satırıyla iki derleyici de aynı {65, 76, 82, 119} kümesinde
+  geziyor (Tuzaklar 7i).
+- **Kapılar:** `tests/split_toplu.sh` parça boyunu `sizeof(ObjString) = 16`
+  ile hesaplıyor ve 5 baytlık parça başına < 45 B iddia ediyor (ölçülen 40;
+  taban derleyicide 48 B ve tanı boyları tutmuyor → kırmızı; parça boyuna 8 B
+  ekleyen sabotajda kırmızı). `tests/dap_audit.py` "okunur değerler" eski
+  printer'la kırmızı (`ad`, `j` okunamıyor), yenisiyle yeşil.
+  `tests/call_fnref.test.tpr`'ye havuza sığan (87) ve sığmayan (100
+  karakter) ad testi. wasm32 düzeni `clang++ --target=wasm32-unknown-unknown
+  -ffreestanding -fsyntax-only` + static_assert (16 / @16; eski 20 iddiası
+  kırmızı).
+- ⚠ **Motor (tulpar-engine) yeniden kurulmalı:** köprü `vm.hpp`'yi derleme
+  zamanında okuyor (`AS_STRING(v)->chars`); eski düzenle derlenmiş arşiv
+  karakter baytlarını işaretçi diye okur.
+- **Yapılmayan:** dizgi dizisi için 8 baytlık işaretçi deposu (eleman başına
+  −8 B, parse'ta bir −40 MB daha). `idata`'ya dördüncü bir eleman türü
+  demek: `idata`'ya dokunan 76 runtime + 57 codegen sitesinin her biri
+  `elem_bits`'e bakmalı (F64'te "idata = tamsayı" varsayımı bir kez kırıldı),
+  `arr_items` her genel okumada diziyi kutuya çeviriyor (16 B'ye geri döner,
+  geçişte ikisi birden canlı) ve kalıcılaştırma/ARC/bölge yolları eleman
+  başına dizgi kopyası istiyor. Ayrı, geniş bir iş.
+
 ### Değişti — değerin metni tek kurala bağlandı: struct alanı, tuple, NaN/sonsuz, `"..." + struct`
 
 - **Kural:** bir değer, nerede görünürse görünsün, `print(<o değer>)`in

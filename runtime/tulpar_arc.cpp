@@ -66,9 +66,10 @@ int arc_get_live_count(void) {
 void arc_free_string(Obj *obj) {
   if (!obj) return;
   ObjString *str = (ObjString *)obj;
-  if (str->chars && !obj->arena_allocated) {
-    free(str->chars);
-  }
+  // Karakterler nesnenin icinde (vm.hpp ObjString, 2026-10-02): tek blok.
+  // Eskiden `free(str->chars)` da cagriliyordu — malloc'lu her dizgide
+  // (persist / string_pin / anahtar kopyasi: karakterler `p + 1`te) bu bir
+  // IC isaretciyi serbest birakmakti.
   if (!obj->arena_allocated) {
     free(str);
 #ifdef TULPAR_DEBUG

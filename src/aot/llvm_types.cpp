@@ -177,13 +177,14 @@ void llvm_init_types(LLVMBackend *backend) {
   //   Obj obj;          // 8
   //   int length;       // @8
   //   uint32_t hash;    // @12
-  //   char *chars;      // @16 (wasm32 @16, sizeof 20)
-  // }                   // 64-bit sizeof 24
+  //   char chars[];     // @16 — nesnenin ICINDE (2026-10-02), isaretci degil
+  // }                   // sizeof 16, her hedefte
+  // Codegen dizginin karakterlerine dogrudan dokunmuyor (tip yalniz isaretci
+  // olarak kullaniliyor); boy runtime static_assert'leriyle kilitli.
   LLVMTypeRef str_elements[] = {
       backend->obj_type,           // obj header
       LLVMInt32TypeInContext(ctx), // length
       LLVMInt32TypeInContext(ctx), // hash
-      backend->ptr_type,           // chars
   };
-  LLVMStructSetBody(backend->obj_string_type, str_elements, 4, 0);
+  LLVMStructSetBody(backend->obj_string_type, str_elements, 3, 0);
 }

@@ -26,10 +26,11 @@
 #      seferde kurulur (arena, serbest birakilmaz): StringBuilder'in buyuyen
 #      ve birakilan tamponu macOS'ta split'e yeniden verilip olcumu
 #      bozuyordu (ilk surum: 5 bayt 61 B, 13 bayt 69 B — fark 8, beklenen 16).
-#      Esik 60 B: 5 baytlik parca yeni duzende 48 B (32 nesne + 16), eski
-#      duzende (Obj 32 B, ObjString 48 B) 72 B — eski derleyicide KIRMIZI.
+#      Esik 45 B: 5 baytlik parca 40 B (24 nesne + 16; 2026-10-02 ikinci
+#      adim — karakterler nesnenin icinde, ObjString 24 -> 16 B), onceki
+#      duzende 48 B (32 + 16), daha oncesinde 72 B — ikisi de KIRMIZI.
 #      Pozitif kontrol: 21 baytlik parca nesneyi 16 B buyutur (8'e
-#      yuvarlanmis 24+22 = 48); olculen fark >= 10 B olmali — olmazsa kapi
+#      yuvarlanmis 16+22 = 40); olculen fark >= 10 B olmali — olmazsa kapi
 #      parca boyunu olcmuyordur.
 #
 # Kapinin kendi kontrolu: anahtar KAPALIYKEN hicbir satir basilmamali (anahtar
@@ -53,10 +54,10 @@ if ! "$TULPAR" build "$TMP/prog.tpr" "$TMP/prog" >"$TMP/derle.log" 2>&1; then
   echo "split toplu kapisi DUSTU: sonda derlenmedi"; cat "$TMP/derle.log"; exit 1
 fi
 
-# sizeof(ObjString): 64-bit'te 24 (2026-10-02'ye kadar 48 — Obj basligi 32 ->
-# 8; 2026-10-01'e kadar 56 — `capacity` alani). Kapi 64-bit hedeflerde
-# kosuyor (CI: Linux x86_64, macOS arm64, Windows x86_64); wasm32'de 20.
-S=24
+# sizeof(ObjString): 16, her hedefte (2026-10-02 ikinci adim: karakterler
+# nesnenin icinde, `chars` isaretcisi yok; ondan once 24 — Obj basligi 32 ->
+# 8; 2026-10-02'ye kadar 48; 2026-10-01'e kadar 56 — `capacity` alani).
+S=16
 hiz() { echo $(( (S + $1 + 1 + 7) / 8 * 8 )); }
 BEK_A=$(( $(hiz 1) + $(hiz 2) + $(hiz 3) + $(hiz 0) + $(hiz 4) ))
 BEK_B=$(( $(hiz 16) + $(hiz 1) ))
@@ -140,9 +141,9 @@ case "$(uname -s)" in
     [ "$UC" = "1000001 21000000" ] || { echo "  bellek sondasi (uzun) ciktisi '$UC'"; HATA=1; }
     KB=$(( (K1 - K0) * 1024 / 1000000 ))
     UB=$(( (U1 - U0) * 1024 / 1000000 ))
-    echo "  bellek: 5 baytlik parca basina ${KB} B (esik 60; split'siz ${K0} KB, split'li ${K1} KB)"
+    echo "  bellek: 5 baytlik parca basina ${KB} B (esik 45; split'siz ${K0} KB, split'li ${K1} KB)"
     echo "  pozitif kontrol: 21 baytlik parca basina ${UB} B (fark $((UB - KB)) B, en az 10 olmali)"
-    [ "$KB" -lt 60 ] || { echo "  PARCA BASINA ${KB} B — temsil buyumus (esik 60)"; HATA=1; }
+    [ "$KB" -lt 45 ] || { echo "  PARCA BASINA ${KB} B — temsil buyumus (esik 45)"; HATA=1; }
     [ $((UB - KB)) -ge 10 ] || { echo "  POZITIF KONTROL: uzun parca farki $((UB - KB)) B — kapi parca boyunu olcmuyor"; HATA=1; } ;;
 esac
 

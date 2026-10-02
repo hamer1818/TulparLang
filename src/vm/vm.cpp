@@ -305,24 +305,13 @@ ObjString *vm_alloc_string(VM *vm, const char *chars, int length) {
     }
   }
 
-  // Allocate new string
-  ObjString *str =
-      (ObjString *)allocate_object(vm, sizeof(ObjString), OBJ_STRING);
+  // Allocate new string — karakterler basligin arkasinda (vm.hpp ObjString).
+  // Eskiden ayri malloc'lu tampon + "ekleme icin" fazladan kapasite vardi;
+  // dizgiler degismez, o kapasiteyi kullanan yol yoktu.
+  ObjString *str = (ObjString *)allocate_object(
+      vm, sizeof(ObjString) + (size_t)length + 1, OBJ_STRING);
   str->length = length;
-
-  // OPTIMIZATION: Pre-allocate capacity for string concatenation
-  // Empty strings and small strings get extra capacity for future appends
-  int cap;
-  if (length == 0) {
-    cap = 256; // Empty string gets 256 bytes (common in loops!)
-  } else if (length < 64) {
-    cap = 128; // Small strings get 128 bytes
-  } else {
-    cap = length * 2; // Larger strings: 2x growth strategy
-  }
-
   str->obj.ref_count = 1; // Start with 1 reference (The caller/stack)
-  str->chars = static_cast<char*>(malloc(cap + 1));
   memcpy(str->chars, chars, length);
   str->chars[length] = '\0';
   str->hash = hash;
@@ -353,12 +342,13 @@ ObjString *vm_take_string(VM *vm, char *chars, int length) {
     }
   }
 
-  // Allocate new string object wrapper
-  ObjString *str =
-      (ObjString *)allocate_object(vm, sizeof(ObjString), OBJ_STRING);
+  // Karakterler nesnenin icinde: tampon kopyalanip birakilir.
+  ObjString *str = (ObjString *)allocate_object(
+      vm, sizeof(ObjString) + (size_t)length + 1, OBJ_STRING);
   str->length = length;
   str->obj.ref_count = 1;
-  str->chars = chars; // Take ownership directly!
+  memcpy(str->chars, chars, (size_t)length);
+  free(chars);
   str->chars[length] = '\0';
   str->hash = hash;
 
@@ -452,11 +442,10 @@ ObjString *vm_copy_string(VM *vm, const char *chars, int length) {
 }
 
 ObjString *vm_alloc_string_buffer(VM *vm, int length, int capacity) {
-  ObjString *str =
-      (ObjString *)allocate_object(vm, sizeof(ObjString), OBJ_STRING);
+  ObjString *str = (ObjString *)allocate_object(
+      vm, sizeof(ObjString) + (size_t)capacity + 1, OBJ_STRING);
   str->length = length;
   str->obj.ref_count = 1;
-  str->chars = static_cast<char*>(malloc(capacity + 1));
   str->chars[length] = '\0';
   str->hash = 0; // Not hashed yet
   return str;
@@ -535,9 +524,8 @@ VM *vm_create() {
   switch (obj->type) {
   case OBJ_STRING: {
     ObjString *str = (ObjString *)obj;
-    // chars is always malloc'd, free it
-    if (str->chars)
-      free(str->chars);
+    // Karakterler nesnenin icinde (vm.hpp ObjString): ayri serbest birakma yok.
+    (void)str;
     // Only free the struct if not from arena
     if (!from_arena)
       free(str);
