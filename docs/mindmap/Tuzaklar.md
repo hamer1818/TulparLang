@@ -2111,10 +2111,46 @@ geçerli: hizalama şansıyla gelen %2 "kazanç" da kazanç değildir.
 > yine geçerli: bir eşitlik yardımcısını bir kez bilerek FARKLI girdiyle
 > kırmızıya çevir.
 >
-> Kalan: struct ALANI hâlâ `print(<struct>)`in eski biçimiyle yazılıyor —
-> float `%g` (6 anlamlı hane), bool `0/1` — yani `print(p)` ile `print(p.y)`
-> aynı float'ı farklı yazabilir (`0.3` / `0.30000000000000004`). Bilinçli
-> olarak bu turda değiştirilmedi (5 test o biçimi kilitliyor).
+> **İkinci tur (2026-10-02): TEK KURAL.** Bir değerin metni, onu nerede
+> görürsen gör, `print(<o değer>)`in metni. Struct ALANI, tuple elemanı,
+> kap elemanı dahil: float en kısa geri dönen gösterim
+> (`aot_format_float`), bool `true/false`, int ondalık. İlk turda struct
+> alanı eski biçimde kalmıştı — float `%g` (6 anlamlı hane), bool `0/1` —
+> ve `print(p)` "y: 0.3" derken `print(p.y)` `0.30000000000000004`
+> basıyordu; struct, tuttuğundan BAŞKA bir sayı gösteriyordu (tekil float'ın
+> 2026-09-05'te düzeltilen hatasının aynısı). Kuralın ayrıntıları:
+> - **f32 alan okunduğu double ile** yazılır: `f32 a = 0.1` →
+>   `0.10000000149011612`. Tulpar'da f32 skaler yok; `q.a` okununca zaten
+>   bu double ve `q.a == 0.1` false. Struct metni "0.1" deseydi program
+>   gördüğünden başka bir şey gösterirdi.
+> - **Üç struct metin yolu tek fonksiyona indi** (`repr_struct_slots`):
+>   `print(p)` (eskiden codegen alan başına `printf` üretiyordu —
+>   `aot_struct_print`), `toString(p)` (`aot_struct_format`), struct dizisi
+>   elemanı. `"..." + p`, `t"{p}"` ve `sb_append(sb, p)` struct'ı
+>   kutulayıp json nesnesi gibi `{"x": 1, ...}` yazıyordu — artık
+>   `toString(p)` metni.
+> - **NaN / sonsuz platformdan bağımsız:** `nan` (işaretsiz), `inf`,
+>   `-inf`. Eskiden `printf`e kalıyordu: x86_64'te çalışma anında `0.0/0.0`
+>   İŞARET BİTLİ NaN üretir (glibc `-nan`), AArch64'te işaretsiz (`nan`),
+>   MSVCRT `-nan(ind)` / `1.#INF` — aynı program Linux'ta `-nan`, macOS'ta
+>   `nan` basıyordu. `-0.0` `-0` kalır (işaret bir bilgi).
+> - **JSON ayrı sözleşme:** `toJson` NaN/sonsuzu `null` yazar (RFC 8259'da
+>   yoklar; JS'nin `JSON.stringify`ı gibi). Eskiden `[-nan,inf]` — geçersiz
+>   JSON. Bool zaten `true/false`, float aynı en kısa gösterim.
+> - **Kutulu struct (dinamik dizideki `[p]`, `str` alanlı struct) json
+>   nesnesi gibi yazılır** (`{"x": 1}`): kutulanınca tip adı taşınmıyor.
+>   Bilinçli fark; `tests/deger_metni.sh` `kutulu_struct` satırı kilitliyor.
+> - Hata ayıklayıcı (`tools/gdb/tulpar_printers.py`, DAP) aynı kuralı Python'da
+>   tekrarlıyor (`fmt_float`, `aot_format_float`'ın birebir kopyası): eskiden
+>   `f = 1.0` (program `1`), `null` için `void`, kutusuz `float[]` için bit
+>   deseni int gösteriyordu.
+> Yan bulgu (aynı turda): parser float literalini `std::stod` ile okuyordu;
+> stod ERANGE'de atıyor, yakalayıcı 0.0 yazıyordu — `1e400` ve `5e-324`
+> SIFIR'dı. Artık `strtod` (`inf` / alt normal). Kapılar genişledi:
+> `tests/deger_metni.sh` 37 madde (6d0dc633 derleyicisinde 17'si kırmızı,
+> Linux x86_64'te `-nan` dahil), `tests/deger_metni.test.tpr` 14 test (6'sı
+> kırmızı). Bu turda değişen eski testler: `f32_alan`, `repr_c`,
+> `struct_native`, `deger_metni` (bool alan `0/1` → `true/false`).
 
 `lib/test.tpr`'deki `assert_eq_str` iki tarafı `toString` ile dizgiye çevirip
 karşılaştırıyor. Dizide bu çeviri İÇERİK üretmiyordu: `int[]`, `float[]`,

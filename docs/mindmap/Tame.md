@@ -37,7 +37,7 @@ tags: [component, stdlib, game, tame]
 - ⚠️ **v1 web sınırı — `call()`/`run()` çalışmaz:** `call(name)` dlsym'e dayanır; statik wasm'da dinamik sembol araması yok (Emscripten dlsym MAIN_MODULE ister). `run(update, draw)` ve wings-tarzı fonksiyon-ref dispatch web'de v1'de desteklenmez — **manuel döngü kullan** (`examples/tame_web_mini.tpr`). Kalıcı çözüm adayı (roadmap): codegen tüm kullanıcı fonksiyonlarını bildiğinden statik isim→işaretçi tablosu emit edip `aot_call_function`'ın önce ona bakması — native'de -rdynamic ihtiyacını da kaldırır.
 - **ASYNCIFY stack:** varsayılan 4KB, Tulpar main'inin hoisted VMValue local'leriyle taşar ("Aborted(Asyncify stack overflow)") → link `-sASYNCIFY_STACK_SIZE=131072` kullanır.
 - **emsdk:** vendored (`wasm/emsdk`, 5.0.0). Tuzak: repo kopyalanınca `upstream/bin` symlink'leri (clang→clang-23, wasm-ld→lld) kaybolabilir — "clang executable not found" = symlink'leri yeniden kur. Kullanım: `source wasm/emsdk/emsdk_env.sh`.
-- Eski `wasm/CMakeLists.txt` playground'u ölü (silinmiş VM dosyalarına referans) — Tame web yolundan bağımsız, diriltilmeyecek.
+- Eski `wasm/CMakeLists.txt` playground'u (silinmiş VM dosyalarına referans) 2026-10-02'de silindi — Tame web yolundan bağımsızdı, diriltilmeyecek.
 
 ## 3B ve preset katmanları
 Tame bağlama katmanıdır; oyun yazarken genelde doğrudan kullanılmaz:

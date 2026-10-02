@@ -37,6 +37,7 @@ VM_VAL_INT, VM_VAL_FLOAT, VM_VAL_BOOL, VM_VAL_VOID, VM_VAL_OBJ = range(5)
 OBJ_NAMES = ["string", "array", "object", "function", "struct", "closure",
              "promise", "struct_array"]
 
+ARR_ELEM_F64 = -64  # ObjArray::elem_bits, kutusuz double depo (vm.hpp)
 OBJ_HDR = 8        # sizeof(Obj) — src/vm/obj_layout.h TULPAR_OBJ_HEADER_SIZE
 
 MAX_ITEMS = 16     # dizi/nesne başına gösterilen eleman
@@ -78,16 +79,44 @@ def _string(obj):
     return _quote(txt) + ("..." if n > MAX_STR else "")
 
 
+def fmt_float(d):
+    """print(<float>) ile AYNI metin — src/vm/runtime_bindings.cpp
+    aot_format_float'in birebir kopyası (Python'un `%g`si C'ninkiyle aynı):
+    en kısa geri dönen `%.<p>g`, bilimsel gösterim yalnız |x| < 1e-4 ya da
+    >= 1e16'da, NaN işaretsiz "nan", sonsuz "inf"/"-inf". 2026-10-02'ye kadar
+    burada düz repr vardı: hata ayıklayıcı `f = 1.0`, program `1` diyordu
+    (Tuzaklar 7j). repr'e yaslanmak YETMEZ: 1e16 <= |x| < 1e17 aralığında
+    17 haneli sayılarda repr bilimsel, C'nin %.17g'si sabit yazıyor (3000
+    rastgele değerde 41 fark, ölçüldü 2026-10-02)."""
+    if d != d:
+        return "nan"
+    if d in (float("inf"), float("-inf")):
+        return "inf" if d > 0 else "-inf"
+    for prec in range(1, 18):
+        s = "%.*g" % (prec, d)
+        if float(s) != d:
+            continue
+        if "e" not in s:
+            return s
+        a = abs(d)
+        if a < 1e-4 or a >= 1e16:
+            return s
+        f = "%.0f" % d
+        return f if float(f) == d else s
+    return "%.17g" % d
+
+
 def decode_raw(tag, payload, depth=0):
-    """(etiket, 64-bit yük) -> okunur metin."""
+    """(etiket, 64-bit yük) -> okunur metin — print(x) ile aynı kural."""
     if tag == VM_VAL_INT:
         return str(struct.unpack("<q", struct.pack("<Q", payload))[0])
     if tag == VM_VAL_FLOAT:
-        return repr(struct.unpack("<d", struct.pack("<Q", payload))[0])
+        return fmt_float(struct.unpack("<d", struct.pack("<Q", payload))[0])
     if tag == VM_VAL_BOOL:
         return "true" if payload & 0xFFFFFFFF else "false"
     if tag == VM_VAL_VOID:
-        return "void"
+        # print(null) "null" basar; "void" Tulpar'da görünen bir değer değil.
+        return "null"
     if tag != VM_VAL_OBJ:
         return "<VMValue etiket=%d yuk=0x%x>" % (tag, payload)
     obj = payload
@@ -113,6 +142,10 @@ def decode_raw(tag, payload, depth=0):
                 elif idata:
                     if bits == 32:
                         shown.append(str(struct.unpack("<i", _mem(idata + 4 * i, 4))[0]))
+                    elif bits == ARR_ELEM_F64:
+                        # Kutusuz float[] (double depo): eskiden bit deseni
+                        # int diye gösteriliyordu.
+                        shown.append(fmt_float(struct.unpack("<d", _mem(idata + 8 * i, 8))[0]))
                     else:
                         shown.append(str(struct.unpack("<q", _mem(idata + 8 * i, 8))[0]))
             more = ", ... (%d)" % count if count > MAX_ITEMS else ""

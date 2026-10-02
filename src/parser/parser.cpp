@@ -7,6 +7,7 @@
 #include <climits>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
@@ -2404,13 +2405,18 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
     }
 
     if (check(TOKEN_FLOAT_LITERAL)) {
+        // strtod, std::stod DEGIL (2026-10-02): stod sonuc ERANGE oldugunda
+        // out_of_range atiyor ve buradaki yakalayici 0.0 yaziyordu — yani
+        // `1e400` (tasma) SIFIR, `5e-324` (alt normal, gecerli bir double)
+        // SIFIR oluyordu. Sessiz yanlis deger: `print(1e400)` "0" basiyordu.
+        // strtod ayni sayiyi dogru yuvarlanmis dondurur: tasmada inf (C,
+        // Python, JS'nin `1e400`u), alt normalde en yakin alt normal.
         double value = 0.0;
-        try {
-            value = std::stod(current().value());
-        } catch (const std::out_of_range&) {
-            value = 0.0;
-        } catch (const std::invalid_argument&) {
-            error("Invalid float literal");
+        {
+            const std::string &lit = current().value();
+            char *end = nullptr;
+            value = std::strtod(lit.c_str(), &end);
+            if (end == lit.c_str()) error("Invalid float literal");
         }
         advance();
         return std::make_unique<ASTNode>(FloatLiteral(value, loc));

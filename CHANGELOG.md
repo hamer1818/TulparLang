@@ -13,6 +13,96 @@ tag still works;
 
 ## [Unreleased]
 
+### Değişti — değerin metni tek kurala bağlandı: struct alanı, tuple, NaN/sonsuz, `"..." + struct`
+
+- **Kural:** bir değer, nerede görünürse görünsün, `print(<o değer>)`in
+  metniyle yazılır. Esas alınan tekil `print(<float>)`: en kısa geri dönen
+  gösterim (`aot_format_float`; kullanıcının en çok gördüğü, 2026-09-05'ten
+  beri). Bool `true/false`, int ondalık. Bu artık struct ALANI, tuple
+  elemanı ve kap elemanı için de geçerli (Tuzaklar 7j, ikinci tur).
+
+  | ifade | önce | sonra |
+  |---|---|---|
+  | `P p = {x: 1, y: 0.1 + 0.2, b: true}; print(p)` | `P { x: 1, y: 0.3, b: 1 }` | `P { x: 1, y: 0.30000000000000004, b: true }` |
+  | `print(p.y)` (değişmedi) | `0.30000000000000004` | `0.30000000000000004` |
+  | `print(uc())` → `(int, bool, float)` | `(7, 1, 0.25)` | `(7, true, 0.25)` |
+  | `Tepe { f32 x }`, `x: 0.1` | `Tepe { x: 0.1 }` | `Tepe { x: 0.10000000149011612 }` |
+  | `"p=" + p`, `t"{p}"`, `sb_append(sb, p)` | `p={"x": 1, "y": 0.3…, "b": true}` | `p=P { x: 1, y: 0.3…, b: true }` |
+  | `print(z / z)` (çalışma anında NaN) | Linux x86_64 `-nan`, macOS arm64 `nan` | her yerde `nan` |
+  | `print(-(z / z))` | Linux `nan`, macOS `-nan` | `nan` |
+  | `toJson([z / z, 1.0 / z])` | `[-nan,inf]` (geçersiz JSON) | `[null,null]` |
+  | `print(1e400)` / `print(5e-324)` | `0` / `0` | `inf` / `5e-324` |
+
+- **f32 alan okunduğu double ile** yazılır (`0.10000000149011612`, `0.1`
+  değil). Bilerek: Tulpar'da f32 skaler tip yok, `q.a` okununca bu double ve
+  `q.a == 0.1` false — struct metni "0.1" deseydi program gördüğünden başka
+  bir şey gösterirdi. 0.5, 1.5 gibi tam temsil edilen değerler değişmez.
+- **Üç struct metin yolu bire indi:** `print(p)` codegen'de alan başına
+  `printf` üretiyordu (float `%g`, bool `0/1`); artık runtime'ın
+  `aot_struct_print`ini çağırıyor — `toString(p)`in `aot_struct_format`ı ile
+  aynı `repr_struct_slots`, stdout'a, heap'e dokunmadan. `"..." + p`,
+  `t"{p}"`, `sb_append(sb, p)` struct'ı kutulayıp json nesnesi gibi
+  yazıyordu; artık `toString(p)` metnini birleştiriyor. Struct'ın
+  aritmetiği olmadığı için `+` bir struct operandla zaten yalnız birleştirme
+  yapıyordu (`p + p` iki json metnini ekliyordu); öteki taraf statik
+  sayı/bool ise (`p + 1`, eskiden sessizce `0`) eski yol kalıyor.
+- **NaN / sonsuz platformdan bağımsız:** `nan` (işaretsiz — Python ve Go da
+  yazmaz), `inf`, `-inf`; `-0.0` `-0` kalır. Eskiden `printf`e kalıyordu:
+  x86_64'te çalışma anında `0/0` işaret bitli NaN üretir (glibc `-nan`),
+  AArch64'te işaretsiz; MSVCRT `-nan(ind)` / `1.#INF` yazar.
+- **JSON ayrı sözleşme:** `toJson` NaN/sonsuzu `null` yazar (RFC 8259'da
+  yoklar; JS `JSON.stringify` ile aynı). Bool `true/false` ve float'ın en kısa
+  gösterimi zaten aynıydı.
+- **Bilinçli fark:** kutulu struct (dinamik dizideki `[p]`, `str` alanlı
+  struct) json nesnesi gibi `{"x": 1}` yazılır — kutulanınca tip adı
+  taşınmıyor.
+- **Hata ayıklayıcı:** `tools/gdb/tulpar_printers.py` (DAP + `--gdb-script`)
+  aynı kuralı Python'da tekrarlıyor (`fmt_float`, `aot_format_float`'ın
+  birebir kopyası; 3019 rastgele değerde çıktıyla aynı). Eskiden `f = 1.0`
+  (program `1`), `null` için `void` ve kutusuz `float[]` için double'ın bit
+  desenini int diye gösteriyordu.
+- `runtime/tulpar_native.cpp`'deki `tulpar_print_float` /
+  `tulpar_float_to_string` (bildiriliyor, codegen çağırmıyor) `%g` idi; ortak
+  biçimleyiciye bağlandı.
+- **Yan düzeltme — float literali:** parser `std::stod` kullanıyordu; stod
+  ERANGE'de atıyor ve yakalayıcı `0.0` yazıyordu: `1e400` (taşma) ve
+  `5e-324` (geçerli alt normal) SIFIR'dı. Artık `strtod` (`inf` / en yakın
+  alt normal — C, Python, JS ile aynı).
+- **Değiştirilen eski testler** (hepsi bool alanın `0/1` metnini
+  kilitliyordu; yeni kuralda `true/false`): `f32_alan.test.tpr`
+  (`Karma { … e: 0 }`), `repr_c.test.tpr` (`Bayrak { a: 0, … b: 1 … }`),
+  `struct_native.test.tpr` (`Olcu { … b: 1 }`), `deger_metni.test.tpr`
+  (struct dizisi `b: 0/1`, tuple `(7, 1, 0.25)`), `deger_metni.sh` (üç
+  struct satırı).
+- **Kapılar:** `tests/deger_metni.sh` 37 madde (6d0dc633 derleyicisinde 17'si
+  kırmızı — Linux x86_64'te `-nan` dahil; üç CI platformunda `build.sh
+  suites` ile koşuyor, NaN çalışma anında üretiliyor), `tests/deger_metni.test.tpr`
+  14 test (eski derleyicide 6'sı kırmızı), `tests/dap_audit.py` değerler
+  senaryosu `g = 1`, `fa = [0.25, 0.25]`, `yok = null` (eski printer'la
+  kırmızı). Sabotaj: `aot_format_float`'ın NaN dalı kapatılıp struct bool'u
+  `0/1`e çevrilince `.sh` 11, `.test.tpr` 5 maddede kırmızı. Web: deger_metni
+  programı node altında masaüstüyle bayt bayt aynı (71 satır); Android iki
+  ABI'de (arm64-v8a, x86_64) derlendi.
+- **Performans:** 13 kıyas çekirdeğinin hepsinde LLVM IR taban ile bayt bayt
+  aynı; fark yalnız runtime arşivinde (`aot_format_float`'a bir dal, yeni
+  soğuk fonksiyonlar). A/B (Ryzen 7 9800X3D, `taskset -c 2,3`, izole dizin,
+  dönüşümlü, en iyi ms, taban/yeni, 2026-10-02): `intloop` 135,6/135,4 ·
+  `fib` 1,0/1,0 · `sieve` 8,1/8,1 · `strcat` 10,3/10,5 · `arrayiter` 1,9/1,9
+  · `mandelbrot` 159,2/159,1 · `matmul` 3,4/3,4 · `nbody` 39,2/39,2 ·
+  `hashmap` 199,5/206,2 · `qsort` 70,1/69,9 · `particles` 11,8/11,8 ·
+  `callfn` 81,7/81,5 · `parse` 15,9/15,9. `hashmap` üç turda +11,4 / −8,3 /
+  +3,4 % — gürültü (makine yüklüyken tur içi 136–180 ms): `main` ve sıcak
+  runtime fonksiyonları (`aot_string_concat_fast`, `vm_object_set/get`,
+  `aot_*_element_tmpkey`, `aot_intern_string`) iki ikilide komut komut aynı,
+  yalnız adresler kaydı (Tuzaklar 7i).
+- **Silindi — ölü web playground'u:** `wasm/runtime_bindings_wasm.c`,
+  `wasm/tulpar_wasm_api.c/h`, `wasm/CMakeLists.txt`, `wasm/build_wasm.sh`.
+  Var olmayan `src/vm/vm.h`, `lexer.c`, `compiler.c`'yi ve artık olmayan
+  `arr->items` alanını kullanıyordu (`cc -fsyntax-only` ilk satırda
+  düşüyor); ana CMake, `wasm/build_tame_web.sh`, Android betikleri ve CI
+  hiçbirini derlemiyordu. Web runtime'ı masaüstüyle aynı
+  `src/vm/runtime_bindings.cpp`.
+
 ### Düzeltildi — NaN: `n != n` ve `n != 1.0` `false` dönüyordu (float `!=` IEEE 754'e aykırıydı)
 
 - **Kök neden:** codegen float `!=`'yi `fcmp one` ("sıralı VE eşit değil")
@@ -67,9 +157,10 @@ tag still works;
   bütün paketlerde geçici bir sayaçla sayıldı; yeni testler dışında hepsi
   `toJson` dizgisiydi (kör karşılaştırmalar daha önce eleman eleman
   karşılaştırmaya çevrilmişti).
-- **Bilinçli olarak değişmeyen:** struct ALANI `print(<struct>)`in eski
-  biçiminde kalıyor (float `%g`, bool `0/1`; 5 test kilitliyor) — struct
-  dizisi ve tuple da onu kullanıyor.
+- ~~**Bilinçli olarak değişmeyen:** struct ALANI `print(<struct>)`in eski
+  biçiminde kalıyor (float `%g`, bool `0/1`).~~ Aynı gün ikinci turda
+  değişti — yukarıdaki "değerin metni tek kurala bağlandı" maddesi (tablodaki
+  `b: 0` artık `b: false`).
 - `print(dizi)` heap'e dokunmuyor: metin yığındaki 256 baytlık tampondan
   doğrudan stdout'a (motorun kare içi ayırma sayacı bir `print(dizi)`
   yüzünden kızarmasın). `toString` zaten yeni dizgi ayırıyor.

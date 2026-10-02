@@ -129,8 +129,8 @@ jobs:
         run: echo "Docs-only change detected; build steps will be skipped (job reports success)."
 
       # Skip the vendored Emscripten SDK at clone time — it's ~400 MB
-      # and the main CMake build doesn't reference it (wasm builds run
-      # locally via wasm/build_wasm.sh, never in CI). Saves ~20-40s of
+      # and the main CMake build doesn't reference it (the web archives are
+      # built locally via wasm/build_tame_web.sh, never in CI). Saves ~20-40s of
       # checkout time on every job. cone-mode must be off because we
       # want to *exclude* a path while keeping everything else.
       - uses: actions/checkout@v6

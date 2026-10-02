@@ -129,9 +129,11 @@ test_results.txt
 /tulpar_api_demo
 /utils
 
-# ==== WASM build dir ====
-# wasm/build_wasm.sh writes Emscripten outputs here. Underscored name slips
-# past the `build-*/` glob above, so cover it explicitly.
+# ==== WASM build dirs ====
+# wasm/build_tame_web.sh writes its archives into wasm/dist/ (rebuilt on
+# demand, never committed). wasm/build_wasm/ was the output of the legacy
+# playground script (deleted 2026-10-02); kept so a stale local copy stays
+# ignored.
 wasm/build_wasm/
 
 # ==== Claude Code per-project state ====
@@ -143,7 +145,7 @@ wasm/build_wasm/
 # examples/*.tpr - Example files
 # cmake/*.cmake - CMake modules
 # src/embedded_libs.h.in - Template file
-# wasm/emsdk is a local Emscripten SDK install pulled by wasm/build_wasm.sh
+# wasm/emsdk is a local Emscripten SDK install (source wasm/emsdk/emsdk_env.sh)
 # (formerly tracked as a stray submodule pointer with no .gitmodules — broke CI checkout cleanup)
 wasm/emsdk/
 git/

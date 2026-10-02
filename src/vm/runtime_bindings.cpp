@@ -1917,7 +1917,21 @@ void aot_stringbuilder_append(StringBuilder *sb, const char *str, int len) {
 // Bu ayni zamanda parser'daki gercek kirpma hatasini (ASTNode_C.value
 // .float_value `float` idi) GIZLIYORDU — ikisi birlikte olculdu 2026-09-05.
 // Regresyon: tests/float_precision.test.tpr
+//
+// NaN / sonsuz (2026-10-02, Tuzaklar 7j): PLATFORMDAN BAGIMSIZ sabit metin —
+// "nan", "inf", "-inf". NaN'in isareti YAZILMAZ. Eskiden printf'e
+// birakiliyordu ve ayni program farkli seyler basiyordu: glibc isaret bitli
+// NaN'a "-nan" der ve x86'da calisma aninda 0.0/0.0 ISARET BITLI NaN uretir
+// (AArch64'te isaretsiz) — yani `print(z/z)` Linux x86_64'te "-nan", macOS
+// arm64'te "nan"; MSVCRT ise "-nan(ind)" / "1.#INF" yazar. NaN'da strtod
+// geri donusu hic tutmadigi icin dongu 17 haneye kadar bosuna donuyordu.
+// Isaretsiz "nan": Python ve Go da NaN'in isaretini basmaz. -0.0 ise "-0"
+// kalir (geri donen en kisa gosterim; isaret bir bilgi).
 int aot_format_float(char *buf, size_t n, double value) {
+  if (__builtin_expect(!__builtin_isfinite(value), 0)) {
+    const char *t = value != value ? "nan" : (value < 0 ? "-inf" : "inf");
+    return snprintf(buf, n, "%s", t);
+  }
   for (int prec = 1; prec <= 17; prec++) {  // 17 sig-fig herhangi bir double'i geri dondurur
     int len = snprintf(buf, n, "%.*g", prec, value);
     if (strtod(buf, nullptr) != value) continue;
@@ -2998,9 +3012,10 @@ void aot_set_element_tmpkey(VMValue *target, VMValue *index, VMValue *value,
 //   tuple         (3, 1.5)
 // Ust duzeydeki dizgi CIPLAK basilir (`print("a")` -> a); KAP ICINDEKI dizgi
 // tirnakli ve kacisli — `["a, b"]` ile `["a", "b"]` ayrissin. Sayi/bool
-// metni print(<sayi>) ile ayni (aot_format_float / true / false); struct
-// ALANI ise print(<struct>)in kendi bicimiyle (%g, bool 0/1) — iki struct
-// yolu (codegen'in satir ici printf'i, aot_struct_format) da bunu kullaniyor.
+// metni HER YERDE print(<sayi>) ile ayni (aot_format_float / true / false):
+// kap elemani, struct ALANI ve tuple elemani dahil (2026-10-02'ye kadar
+// struct alani `%g` ve bool 0/1 idi). print(<struct>) (aot_struct_print) ve
+// toString(<struct>) (aot_struct_format) da buradan geciyor.
 //
 // Kutusuz dizi (idata: i32/i64/double) OKUNURKEN KUTUYA CEVRILMEZ —
 // arr_items() burada kullanilmaz: print(dizi) diziyi 8'den 16 bayta cikarip
@@ -3067,18 +3082,30 @@ static void repr_quoted(ReprOut &out, const char *s, int n) {
   out.put('"');
 }
 
-// Struct ALANININ metni: print(<struct>)in codegen'deki printf bicimi (float
-// `%g`, bool 0/1, int `%lld`). Struct dizisi, tuple ve aot_struct_format bunu
-// paylasir; boylece print(d) ile print(d[0]) ayni elemani ayni yazar.
+// Struct ALANININ metni: TEKIL DEGERIN KURALI — alan `print(p.alan)` neyse o
+// yazilir (int ondalik, float aot_format_float'in en kisa geri donen
+// gosterimi, bool true/false). Struct dizisi, tuple, aot_struct_format ve
+// print(<struct>) (aot_struct_print) bunu paylasir.
+//
+// 2026-10-02'ye kadar alan kendi bicimindeydi: float `%g` (6 anlamli hane),
+// bool 0/1. Yani `print(p)` "y: 0.3" derken `print(p.y)` 0.30000000000000004
+// basiyordu — struct, tuttugundan BASKA bir sayi gosteriyordu (tekil float'in
+// 2026-09-05'te duzeltilen hatasinin aynisi) ve `b: 1` bir bool'u int gibi
+// gosteriyordu (Tuzaklar 7j).
+//
+// f32 alan double'a genisletilmis haliyle yazilir: `f32 a = 0.1` ->
+// 0.10000000149011612. Bilerek: Tulpar'da f32 skaler tip yok, `q.a` OKUNUNCA
+// zaten bu double ve `q.a == 0.1` false — struct metni "0.1" deseydi program
+// gordugunden baska bir sey gosterirdi. Kural tek: alan, okundugu degerin
+// metniyle yazilir.
 static void repr_struct_field(ReprOut &out, VMValue fv) {
   char num[64];
   if (IS_FLOAT(fv))
-    snprintf(num, sizeof num, "%g", AS_FLOAT(fv));
+    out.put(num, (size_t)aot_format_float(num, sizeof num, AS_FLOAT(fv)));
   else if (IS_BOOL(fv))
-    snprintf(num, sizeof num, "%d", AS_BOOL(fv) ? 1 : 0);
+    out.put(AS_BOOL(fv) ? "true" : "false");
   else
-    snprintf(num, sizeof num, "%lld", (long long)AS_INT(fv));
-  out.put(num);
+    out.put(num, (size_t)aot_itoa((long long)AS_INT(fv), num));
 }
 
 // Coklu donusun sentezlenmis struct'i (parser: `__tup_<tip>_<tip>`). Ic adi
@@ -3892,20 +3919,14 @@ extern "C" VMValue aot_array_remove_at(VMValue arr, VMValue index) {
   return out;
 }
 
-// toString(<kutusuz struct>) (K198, 2026-09-27): print(<struct>) ile AYNI
-// bicim — `Ad { a: 1, b: 2.5 }`; int/bool `%lld`, float `%g` (codegen'in
-// satir ici printf yolu). Eskiden toString tipli struct'i genel kutulu yoldan
-// geciriyordu: yerel "<object>", struct donduren cagri "0" (Eylul 22
-// ikilisinde "1e-323") — sessiz yanlis sonuc. `data` yerlesim isaretcisi
-// (field_count adet 8 baytlik yuva), `types` 0 int / 1 float / 2 bool.
-// Alan metni ve tuple bicimi (`(3, 1.5)`, 2026-10-02) ortak bicimleyiciden
-// (repr_struct_*): struct dizisinin elemani da ayni yazilir.
-extern "C" VMValue aot_struct_format(const char *type_name, int field_count,
-                                     const char *const *names, const int *types,
-                                     const int64_t *data) {
-  std::string s;
-  {
-  ReprOut o(&s);
+// Kutusuz struct'in YUVA bicimindeki metni (`Ad { a: 1, b: 2.5, c: true }`,
+// tuple `(3, 1.5)`). `data` field_count adet 8 baytlik yuva (compact / f32 /
+// i32 struct'i codegen once struct_native_to_slots ile yuvaya acar), `types`
+// 0 int / 1 float / 2 bool. Alan metni repr_struct_field: tekil degerin
+// kurali.
+static void repr_struct_slots(ReprOut &o, const char *type_name, int field_count,
+                              const char *const *names, const int *types,
+                              const int64_t *data) {
   repr_struct_open(o, type_name);
   for (int f = 0; f < field_count; f++) {
     repr_struct_field_head(o, type_name, f, names ? names[f] : nullptr);
@@ -3915,14 +3936,43 @@ extern "C" VMValue aot_struct_format(const char *type_name, int field_count,
       double d;
       memcpy(&d, &data[f], sizeof d);
       fv = VM_FLOAT(d);
+    } else if (t == 2) {
+      fv = VM_BOOL(data[f] != 0);
     } else {
-      fv = VM_INT((long long)data[f]);   // bool yuvasi 0/1: %lld ile ayni
+      fv = VM_INT((long long)data[f]);
     }
     repr_struct_field(o, fv);
   }
   repr_struct_close(o, type_name);
+}
+
+// toString(<kutusuz struct>) (K198, 2026-09-27): print(<struct>) ile AYNI
+// metin. Eskiden toString tipli struct'i genel kutulu yoldan geciriyordu:
+// yerel "<object>", struct donduren cagri "0" (Eylul 22 ikilisinde
+// "1e-323") — sessiz yanlis sonuc. `"..." + p`, t"{p}" ve sb_append(sb, p)
+// de buraya iner (2026-10-02; once struct'i kutulayip `{"x": 1}` diye
+// yaziyorlardi).
+extern "C" VMValue aot_struct_format(const char *type_name, int field_count,
+                                     const char *const *names, const int *types,
+                                     const int64_t *data) {
+  std::string s;
+  {
+    ReprOut o(&s);
+    repr_struct_slots(o, type_name, field_count, names, types, data);
   }
   return VM_OBJ((Obj *)aot_allocate_string(s.c_str(), (int)s.size()));
+}
+
+// print(<kutusuz struct>) (2026-10-02): aot_struct_format'in AYNI metni,
+// dogrudan stdout'a ve HEAP'E DOKUNMADAN (yigindaki tampon). Eskiden codegen
+// alan basina bir printf uretiyordu — kendi bicimiyle (float `%g`, bool 0/1),
+// yani toString / struct dizisi / tekil alan ile ayrisabilen ucuncu bir yol.
+// Artik tek cagri, tek kural.
+extern "C" void aot_struct_print(const char *type_name, int field_count,
+                                 const char *const *names, const int *types,
+                                 const int64_t *data) {
+  ReprOut o(stdout);
+  repr_struct_slots(o, type_name, field_count, names, types, data);
 }
 
 // P0.3 (2026-09-21): aot_struct_unpack_named'in ALAN TIPLI hali. `types[i]`
@@ -4327,8 +4377,17 @@ static void js_serialize(JSBuilder *b, VMValue v, int depth) {
     int len = js_int_to_str(tmp, AS_INT(v));
     js_append_n(b, tmp, len);
   } else if (IS_FLOAT(v)) {
+    // JSON'da NaN / sonsuz YOK (RFC 8259 §6). print'in "nan" / "inf"i buraya
+    // yazilirsa cikti JSON olmaktan cikar: fromJson(toJson(x)) duser, bir
+    // tarayici JSON.parse'i reddeder. 2026-10-02'ye kadar tam bu oluyordu
+    // (`[nan,inf]`). JS'nin JSON.stringify'i gibi null (Tuzaklar 7j).
+    double d = AS_FLOAT(v);
+    if (!__builtin_isfinite(d)) {
+      js_append_n(b, "null", 4);
+      return;
+    }
     char tmp[64];
-    int len = aot_format_float(tmp, sizeof(tmp), AS_FLOAT(v));
+    int len = aot_format_float(tmp, sizeof(tmp), d);
     js_append_n(b, tmp, len);
   } else if (IS_BOOL(v)) {
     if (AS_BOOL(v)) {
