@@ -132,6 +132,17 @@ Deneme PR'ı yalnız-belge seçildi ki `detect-docs-only` derlemeleri atlasın.
 test`, `./build.sh suites`, typeinfer, DLL kapısı, kurulumcu. Hiçbiri `continue-on-error`
 **değil**: bir test hatası CI'yı kırmızıya çeviriyor.
 
+**Dinamik bağ kapısı (2026-10-02):** `tools/dinamik_bag_denetle.sh`, Linux ve macOS işlerinde
+"Prepare artifact"tan hemen sonra. macOS: `otool -L`'deki her bağımlılık `/usr/lib` ya da
+`/System` altında; `DYLD_PRINT_LIBRARIES` ile `--version` koşarken `/opt/homebrew` ya da
+`/usr/local`'dan hiçbir şey yüklenmiyor; Homebrew LLVM Cellar'ı taşınmış ve `PATH` yalnız sistem
+dizinleriyken `--version` + `tests/aot_smoke.sh` geçiyor. Linux: `NEEDED` listesi glibc,
+libstdc++/libgcc_s, zlib, zstd, tinfo, OpenSSL 3 ile sınırlı (v3.38.0'da ölçülen durum; LLVM
+statik, 68 MB), `/usr`/`/lib` dışı `RUNPATH` yok. Pozitif kontrol `--oz-sinama`: geçici dizindeki
+bir dylib/.so'ya bağlı program kırmızı, sade program yeşil. Yerelde Arch/CachyOS derlemesi
+(paylaşımlı `libLLVM.so`) bu kapıdan **bilerek** geçmez — kapı yayın ikilisi içindir.
+Tetikleyen: v3.38.0 macOS ikilisi dört Homebrew dylib'ine bağlıydı ([[Cross-platform]]).
+
 **Zaman aşımları (2026-10-02):** üç iş akışında her işin iş düzeyi, her adımın adım düzeyi
 `timeout-minutes`'ı var (varsayılan 360 dk'ydı). Tetikleyen: Windows "Ornekler" adımı
 2026-09-29'da iki kez 46–47 dk asılı kaldı — adımın 30 dk sınırı **işlemedi**, çünkü runner

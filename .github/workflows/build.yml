@@ -462,6 +462,19 @@ jobs:
           cp build/tulpar dist/tulpar-linux-x64
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-linux-x64.a
 
+      # DİNAMİK BAĞ KAPISI — yayınlanan ikili yalnız dağıtımın temel
+      # kitaplıklarına mı bağlı (glibc, libstdc++/libgcc_s, zlib, zstd, tinfo,
+      # OpenSSL 3)? LLVM statik (68 MB); bir libLLVM*.so ya da /usr, /lib
+      # dışı bir RUNPATH gelirse KIRMIZI. v3.38.0'da ölçülen durum kilitli —
+      # liste ve gerekçe tools/dinamik_bag_denetle.sh başlığında. Önce kapının
+      # kendi pozitif kontrolü (geçici dizindeki .so'ya bağlı ikili KIRMIZI).
+      - name: Dinamik bag kapisi
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          bash tools/dinamik_bag_denetle.sh --oz-sinama
+          bash tools/dinamik_bag_denetle.sh dist/tulpar-linux-x64
+        timeout-minutes: 2
+
       # UÇTAN UCA AOT DUMANI. "tulpar ikilisi oluştu" ile "tulpar çalışıyor"
       # ayrı iddialar ve macOS'ta ikincisi UZUN SÜRE hiç ölçülmedi: o iş yalnız
       # derleyip artefakt yüklüyordu. Sonuç, 2026-09-02'de ölçüldü — yayınlanan
@@ -1072,6 +1085,59 @@ jobs:
           mkdir -p dist
           cp build/tulpar dist/tulpar-macos-universal
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
+          ls -l dist/
+
+      # DİNAMİK BAĞ KAPISI — macOS ikilisi Homebrew'suz açılıyor mu?
+      #
+      # Ölçüldü 2026-10-02: yayınlanmış v3.38.0 `tulpar-macos-universal`
+      # DÖRT Homebrew dylib'ine bağlıydı (llvm@18 libunwind, zstd, openssl@3
+      # ssl+crypto); biri eksik makinede dyld açılışta abort ediyordu (motor
+      # CI'ı `brew install llvm@18` ile örttü). Bu iş onu göremedi çünkü
+      # koşucuda dördü de kurulu. Çözüm cmake/MacOSTasinabilir.cmake +
+      # OPENSSL_USE_STATIC_LIBS (CMakeLists).
+      #
+      # Üç ayak:
+      #   1. otool -L: her bağımlılık /usr/lib ya da /System altında
+      #      (kapının pozitif kontrolü önce: geçici dizindeki dylib'e bağlı
+      #      ikili KIRMIZI, sade ikili YEŞİL).
+      #   2. DYLD_PRINT_LIBRARIES: `--version` koşarken dyld'nin GERÇEKTEN
+      #      yüklediği görüntülerde /opt/homebrew ya da /usr/local yok.
+      #   3. Homebrew LLVM GİZLİ (Cellar dizini geçici olarak taşınır, PATH
+      #      yalnız sistem dizinleri): `--version` + AOT dumanı (küçük
+      #      program derle → linkle → çalıştır). Gizlemenin kendisi de
+      #      ölçülür: libunwind.1.dylib erişilemez ve llvm-config PATH'te yok.
+      #      Kullanıcı programlarının linki hâlâ Homebrew openssl@3'ü
+      #      (TULPAR_OPENSSL_LIBDIR) kullanıyor — o ayrı bir konu, gizlenmiyor.
+      - name: Dinamik bag kapisi (Homebrew'suz acilis)
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          set -uo pipefail
+          T=dist/tulpar-macos-universal
+          bash tools/dinamik_bag_denetle.sh --oz-sinama
+          otool -L "$T"
+          bash tools/dinamik_bag_denetle.sh "$T"
+
+          DYLD_PRINT_LIBRARIES=1 "$T" --version > dyld.log 2>&1 || { cat dyld.log; exit 1; }
+          if grep -E '/opt/homebrew|/usr/local' dyld.log; then
+            echo "::error::tulpar --version calisirken Homebrew'dan dylib yukledi (yukarida)"; exit 1
+          fi
+          # Olcumun kendisi: dyld listesi gercekten basildi mi (libSystem her
+          # surecte yuklenir). Yoksa "Homebrew yok" hicbir sey olcmemis olurdu.
+          grep -q 'libSystem' dyld.log || { echo "::error::DYLD_PRINT_LIBRARIES hicbir sey basmadi — olcum yok"; cat dyld.log; exit 1; }
+          echo "dyld'nin yukledigi sistem goruntusu: $(grep -cE '/usr/lib|/System' dyld.log)"
+
+          LLVM_OPT="$(brew --prefix llvm@18)"
+          LLVM_GERCEK="$(cd "$LLVM_OPT" && pwd -P)"
+          mv "$LLVM_GERCEK" "$LLVM_GERCEK.gizli"
+          geri_koy() { mv "$LLVM_GERCEK.gizli" "$LLVM_GERCEK"; }
+          trap geri_koy EXIT
+          SIS_PATH=/usr/bin:/bin:/usr/sbin:/sbin
+          if [ -e "$LLVM_OPT/lib/libunwind.1.dylib" ] || PATH=$SIS_PATH command -v llvm-config >/dev/null; then
+            echo "::error::Homebrew LLVM gizlenemedi — olcum gecersiz"; exit 1
+          fi
+          env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH PATH=$SIS_PATH "$T" --version
+          env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH PATH=$SIS_PATH bash tests/aot_smoke.sh "$T"
+        timeout-minutes: 5
 
       # UÇTAN UCA AOT DUMANI. "tulpar ikilisi oluştu" ile "tulpar çalışıyor"
       # ayrı iddialar ve macOS'ta ikincisi UZUN SÜRE hiç ölçülmedi: o iş yalnız

@@ -68,6 +68,31 @@ ama `tulpar version`/`fmt`/`pkg` eklentiyi hiç yüklemez (bozuk bir
 alt süreç ortamıyla verir, CLI kullanıcısı bayrakla, proje bir kez
 `tulpar.toml`'a yazar ve `tulpar oyun.tpr` doğrudan çalışır.
 
+## Çalışma anında eklenti dizini (`TULPAR_EXT_PATH` çocuk süreçte)
+
+Bir eklentinin C tarafı kendi kaynaklarını (font, doku, veri) **çalışma
+anında** bulmalıysa bakacağı yer `TULPAR_EXT_PATH`'tir (örnek: motor köprüsü
+HUD fontunu oradaki girdilerde arar — tulpar-engine Tuzaklar 8cp).
+
+- **`tulpar <dosya>` / `tulpar debug`:** sürücü programı başlatmadan önce
+  çözülmüş yolları çocuk sürecin `TULPAR_EXT_PATH`'ine yazar
+  (`ext::export_child_env`). Sıra yükleme önceliğiyle aynı: `--ext`
+  girdileri, kullanıcının mevcut `TULPAR_EXT_PATH`'i (ham, aynen), sonra
+  `tulpar.toml [ext]` girdileri; tekrarlar atılır, ayırıcı platformunki.
+  Girdiler **mutlak** (program dizin değiştirse de geçerli); dizin verildiyse
+  dizin, adı `tulpar-ext.json` olmayan bir bildirim verildiyse bildirimin
+  kendisi (iç içe bir `tulpar` girdiyi yine yükleyebilsin). Eklenti yoksa
+  ortama dokunulmaz. v3.38.0'a kadar yalnız ortamla verilen yol görünüyordu:
+  `tulpar --ext <dizin> oyun.tpr` ile font bulunamıyordu.
+- **`tulpar build` ile üretilen bağımsız ikili:** derleyici o an yok, kimse
+  bir şey yazmaz — ikili `TULPAR_EXT_PATH`'i **yalnız kullanıcının
+  ortamından** görür (boş olabilir). Dağıtılan bir oyun kaynaklarını ya
+  ikilinin yanına koyup oradan (ya da çalışma dizininden) okumalı ya da
+  başlatıcısı `TULPAR_EXT_PATH`'i kendisi kurmalı; eklenti C tarafı bunu
+  bir **ilk tercih**, yedekli bir arama yolu olarak kullanmalı. Yolları
+  ikiliye gömmek bilinçli olarak yapılmıyor: derleme makinesinin yolları
+  kullanıcının makinesinde anlamsız.
+
 ## Derleyicide nerede
 
 - `src/ext/extensions.{hpp,cpp}` — bulma, bildirim ayrıştırma (cJSON),
@@ -123,6 +148,11 @@ parametre tipi (typecheck yakalar), ABI kilidi, bozuk JSON (satırıyla),
 olmayan dizin, yerleşik ad, eksik link bölümü, fazla argüman. Ek: eklentiyi
 kullanmayan program ona bağlanmaz; `--ext` ortamdakini ezer; kullanıcı
 fonksiyonu gölgeler; LSP (python3 varsa) hover/tamamlama/imza yardımı.
+Çalışan programın `TULPAR_EXT_PATH`'i (`ornek_ext_yolu()` = C `getenv`): üç
+kanalın her biriyle eklenti dizinini görür, `--ext` + ortamda `--ext` önde ve
+mevcut değer korunur; build ikilisi yalnız kullanıcı ortamını görür. Pozitif
+kontrol: düzeltmeden önceki sürücüyle `--ext`, toml ve sıra ayakları kırmızı
+(ölçüldü 2026-10-02).
 
 Motor tarafı uçtan uca: tulpar-engine `tools/tulpar_dogrula.sh --tam`
 (dalga/aksiyon kapı satırları bayt bayt, köprü testi, 6 örnek, 4 dil sondası).

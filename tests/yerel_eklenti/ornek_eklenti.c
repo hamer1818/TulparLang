@@ -61,6 +61,12 @@ double ornek_geri_cagir(const char *fn, double x) {
   return tulpar_ext_eval_f64(p, arity, &x, 1);
 }
 
+/* Calisan programin gordugu TULPAR_EXT_PATH (yoksa NULL -> Tulpar'da "").
+ * Bir eklentinin kendi kaynaklarini (font, doku) calisma aninda nasil
+ * buldugunun kalibi: `tulpar <dosya>` eklenti dizinlerini oraya yazar. */
+#include <stdlib.h>
+const char *ornek_ext_yolu(void) { return getenv("TULPAR_EXT_PATH"); }
+
 /* ---- ABI_KILIDI: bildirimdeki imzalar (tulpar-ext.json ile AYNI) ---- */
 #ifndef ORNEK_ABI_BOZ
 typedef int64_t (*abi_topla)(int64_t, int64_t);
@@ -81,6 +87,7 @@ static int64_t (*const k_sayac)(void) = ornek_sayac;
 static double (*const k_on)(int64_t, double, int64_t, double, int32_t, double, int64_t, double,
                             int32_t, double) = ornek_on;
 static double (*const k_geri)(const char *, double) = ornek_geri_cagir;
+static const char *(*const k_ext_yolu)(void) = ornek_ext_yolu;
 /* Kullanilmayan-degisken uyarisi olmasin diye tek bir tutucu. */
 const void *ornek_abi_kilidi[] = {(const void *)&k_topla, (const void *)&k_kare32,
                                    (const void *)&k_orta, (const void *)&k_yarim,
@@ -88,4 +95,4 @@ const void *ornek_abi_kilidi[] = {(const void *)&k_topla, (const void *)&k_kare3
                                    (const void *)&k_selam, (const void *)&k_uzunluk,
                                    (const void *)&k_bos, (const void *)&k_artir,
                                    (const void *)&k_sayac, (const void *)&k_on,
-                                   (const void *)&k_geri};
+                                   (const void *)&k_geri, (const void *)&k_ext_yolu};

@@ -415,6 +415,7 @@ int main(int argc, char **argv) {
   // REPL output — same constraint `--lsp` carries.
   if (argc >= 2 && std::strcmp(argv[1], "debug") == 0) {
     if (!ensure_extensions_loaded()) return 2;
+    tulpar::ext::export_child_env();  // gdb + program eklenti dizinlerini gorsun
     return tulpar::debug_cmd_main(argc, argv);
   }
 
@@ -868,6 +869,13 @@ int main(int argc, char **argv) {
       }
       aot_set_run_args(q.c_str());
     }
+    // Calisan program eklenti dizinlerini TULPAR_EXT_PATH'te gorur: yol
+    // `--ext` ya da tulpar.toml [ext] ile verildiyse de (yalniz ortamla
+    // verilince gorunuyordu — bir motor koprusu HUD fontunu bulamadi,
+    // v3.38.0'da olculdu). Eklentiler yukaridaki ensure_extensions_loaded'da
+    // BIR KEZ yuklendi; ortami simdi degistirmek derleyicinin gordugunu
+    // degistirmez, yalniz cocuk surecler (system()) bu degeri miras alir.
+    tulpar::ext::export_child_env();
     AOTResult aot_result = aot_compile_and_run_silent_with_filename(
         source, argv[arg_offset]);
     free(source);

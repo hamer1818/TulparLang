@@ -84,7 +84,7 @@ Every release ships:
 | Asset                                  | What it is                                |
 | -------------------------------------- | ----------------------------------------- |
 | `tulpar-linux-x64`                     | Linux x86_64 driver binary.               |
-| `tulpar-macos-universal`               | macOS Apple Silicon + Intel binary.       |
+| `tulpar-macos-universal`               | macOS driver binary. Despite the name it is **arm64 only** (built on `macos-latest`, Apple Silicon); there is no Intel slice. |
 | `libtulpar_runtime-<platform>.a`       | Per-platform runtime archive (linked into AOT-compiled user binaries). |
 | `TameEngine-<platform>.tar.gz`         | The 3D scene editor as a standalone bundle — binary + texture/sound/model palettes + sample scenes. Does **not** require the compiler to run. |
 | `SHA256SUMS.txt`                       | `sha256sum -b` manifest. `tulpar update` verifies every download against this. |
@@ -94,6 +94,39 @@ Every release ships:
 > `tulpar-windows-x64.exe`, the Inno Setup installer and the bundled MinGW
 > DLLs are gone, along with the `build-windows` job and its `objdump -p`
 > DLL-bundling guard. Windows users run the Linux build inside WSL.
+
+### Driver binaries open without Homebrew (dynamic-link gate)
+
+Measured 2026-10-02: the published v3.38.0 `tulpar-macos-universal` was
+dynamically linked to **four Homebrew dylibs** —
+`/opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib`,
+`/opt/homebrew/opt/zstd/lib/libzstd.1.dylib` and openssl@3's
+`libssl.3.dylib` / `libcrypto.3.dylib`. On a Mac missing any of them dyld
+aborted at launch. The build job never noticed because the runner has all
+four installed.
+
+- **Fix:** on macOS `CMakeLists.txt` asks FindOpenSSL for the static
+  archives (`OPENSSL_USE_STATIC_LIBS`), and `cmake/MacOSTasinabilir.cmake`
+  walks the LLVM components' link interface: a non-system `.dylib` with a
+  static twin (`lib<name>.a`, e.g. zstd) is swapped for it. libunwind came
+  from elsewhere: the global `-L<llvm>/lib` made AppleClang's implicit
+  `-lc++` find Homebrew's libc++, which re-exports libunwind — on macOS that
+  `-L` is gone (static components link by absolute path). Opt-out for local work:
+  `-DTULPAR_MACOS_TASINABILIR=OFF`.
+- **Gate:** `tools/dinamik_bag_denetle.sh` (both build jobs). macOS: every
+  `otool -L` entry must live under `/usr/lib` or `/System`; then
+  `DYLD_PRINT_LIBRARIES` must show nothing loaded from `/opt/homebrew` or
+  `/usr/local`; then, with Homebrew's LLVM Cellar moved away and `PATH`
+  reduced to system dirs, `--version` and `tests/aot_smoke.sh` must pass.
+  Linux: the `NEEDED` list must stay within glibc, libstdc++/libgcc_s, zlib,
+  zstd, tinfo and OpenSSL 3 (the state measured on v3.38.0 — LLVM is static),
+  and no `RUNPATH` may point outside `/usr` or `/lib`. The gate's positive
+  control (`--oz-sinama`) links a program against a dylib/.so in a temp dir
+  and must see it red, and a plain program green. Windows has its own DLL
+  gate in `build-windows`.
+- **Not covered:** user programs compiled on macOS still link the runtime's
+  TLS code against Homebrew openssl@3 (`-L` from `TULPAR_OPENSSL_LIBDIR`), so
+  `tulpar build` on a Mac without openssl@3 fails at link time.
 
 ### Why TameEngine ships as a bundle, not a bare binary
 

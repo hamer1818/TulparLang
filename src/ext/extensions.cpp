@@ -39,6 +39,14 @@ std::vector<Function> g_funcs;
 std::set<std::string> g_seen_manifests;  // mutlak bildirim yollari
 std::set<std::string> g_seen_tomls;
 bool g_default_loaded = false;
+// Calisan programa (TULPAR_EXT_PATH) aktarilacak, cozulmus girdiler: --ext
+// ve tulpar.toml yollari, verildikleri sirayla. Ortamdan gelenler burada
+// DEGIL — ortam degiskeninin kendi ham degeri aynen korunur.
+struct ChildEntry {
+  std::string path;
+  bool from_cli;
+};
+std::vector<ChildEntry> g_child_entries;
 
 const char *kManifestName = "tulpar-ext.json";
 
@@ -569,6 +577,15 @@ bool load_path(const std::string &path, const char *origin, std::string &err) {
     return false;
   }
   mpath = canonical(mpath);
+  // Calisan program icin girdi: dizin verildiyse dizin (eklentiler kaynak
+  // dosyalarini dizinin altinda arar), dogrudan bir bildirim verildiyse
+  // ad `tulpar-ext.json` degilse bildirimin kendisi — ic ice bir `tulpar`
+  // o girdiyi yine yukleyebilsin diye.
+  if (strcmp(origin, "--ext") == 0 || strcmp(origin, "tulpar.toml") == 0) {
+    const std::string d = dirname_of(mpath);
+    const std::string e = (is_dir(path) || mpath == join(d, kManifestName)) ? d : mpath;
+    g_child_entries.push_back({e, strcmp(origin, "--ext") == 0});
+  }
   if (!g_seen_manifests.insert(mpath).second) return true;
   return parse_manifest(mpath, origin, err);
 }
@@ -595,6 +612,46 @@ bool load_for_document_dir(const std::string &dir, std::string &err) {
     d = up;
   }
   return true;
+}
+
+std::string child_ext_path() {
+#if PLATFORM_WINDOWS
+  const char sep = ';';
+#else
+  const char sep = ':';
+#endif
+  std::vector<std::string> parts;
+  std::set<std::string> seen;
+  auto add = [&](const std::string &p) {
+    if (!p.empty() && seen.insert(p).second) parts.push_back(p);
+  };
+  for (const auto &e : g_child_entries)
+    if (e.from_cli) add(e.path);
+  if (const char *env = getenv("TULPAR_EXT_PATH"); env && *env) {
+    std::vector<std::string> ps;
+    split_path_list(env, ps);
+    for (const auto &p : ps) add(p);
+  }
+  for (const auto &e : g_child_entries)
+    if (!e.from_cli) add(e.path);
+  std::string out;
+  for (const auto &p : parts) {
+    if (!out.empty()) out += sep;
+    out += p;
+  }
+  return out;
+}
+
+void export_child_env() {
+  const std::string v = child_ext_path();
+  if (v.empty()) return;
+  const char *cur = getenv("TULPAR_EXT_PATH");
+  if (cur && v == cur) return;
+#if PLATFORM_WINDOWS
+  _putenv_s("TULPAR_EXT_PATH", v.c_str());
+#else
+  setenv("TULPAR_EXT_PATH", v.c_str(), 1);
+#endif
 }
 
 const std::vector<Extension> &extensions() { return g_exts; }

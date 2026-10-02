@@ -67,6 +67,17 @@ add_compile_definitions(TULPAR_LLVM_MAJOR=${LLVM_VERSION_MAJOR})
 #           — build.bat passes -DOPENSSL_ROOT_DIR=C:/msys64/mingw64
 #             so the auto-detect Just Works on the standard MSYS2 path.
 #             Override with -DOPENSSL_ROOT_DIR=... for non-default installs.
+#
+# macOS: yayin ikilisi Homebrew'un OpenSSL dylib'ine BAGLANMAMALI (v3.38.0'da
+# libssl.3.dylib / libcrypto.3.dylib'e bagliydi — cmake/MacOSTasinabilir.cmake
+# basligindaki olcum). Homebrew openssl@3 statik arsivleri de gonderiyor;
+# FindOpenSSL'e onlari sectir. Yalniz `tulpar` surucusunu etkiler —
+# kullanici programlarinin link satiri (aot_pipeline.cpp) ayri bir konu.
+option(TULPAR_MACOS_TASINABILIR
+       "macOS: tulpar yalniz sistem kitapliklarina baglansin (Homebrew dylib'i yok)" ON)
+if(APPLE AND TULPAR_MACOS_TASINABILIR)
+    set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
     message(STATUS "OpenSSL: ${OPENSSL_VERSION} (TLS enabled)")
@@ -86,7 +97,17 @@ else()
 endif()
 
 include_directories(${LLVM_INCLUDE_DIRS})
-link_directories(${LLVM_LIBRARY_DIRS})
+# macOS'ta LLVM kitaplik dizini GENEL bir -L olmamali: AppleClang'in ortuk
+# `-lc++`'si once orada aranir ve Homebrew llvm@18'in lib/ dizinindeki libc++
+# libunwind'i yeniden disa aktariyor — ikili boylece
+# /opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib'e baglaniyordu (CI, 2026-10-02:
+# "ld: warning: reexported library with install name '.../libunwind.1.dylib'
+# ... will be linked directly"). Statik bilesenler mutlak yolla linklenir,
+# -L'ye ihtiyaclari yok; paylasimli dylib yolunda -L asagida yalniz tulpar'a
+# verilir.
+if(NOT (APPLE AND TULPAR_MACOS_TASINABILIR))
+    link_directories(${LLVM_LIBRARY_DIRS})
+endif()
 if(LLVM_DEFINITIONS)
     # LLVM_DEFINITIONS is a single SPACE-SEPARATED STRING, not a CMake list.
     # Passing it straight to add_definitions() collapses every flag after the
@@ -403,6 +424,9 @@ find_library(TULPAR_LLVM_STATIC_PROBE
 
 if(NOT TULPAR_LLVM_STATIC_PROBE)
     set(llvm_libs LLVM)
+    if(APPLE AND TULPAR_MACOS_TASINABILIR)
+        target_link_directories(tulpar PRIVATE ${LLVM_LIBRARY_DIRS})
+    endif()
     message(STATUS "LLVM: statik bilesenler yok — paylasimli dylib ile linkleniyor")
 else()
     llvm_map_components_to_libnames(llvm_libs
@@ -631,6 +655,15 @@ install(FILES
     docs/PLATFORM_SUPPORT.md
     DESTINATION share/doc/tulpar
 )
+
+# macOS: LLVM bilesenlerinin link zincirindeki Homebrew dylib'leri (zstd,
+# libunwind) statige/libSystem'e cevir. Butun target_link_libraries'ten
+# SONRA kosmali. Gerekce ve olcum cmake/MacOSTasinabilir.cmake basliginda;
+# kapi tools/dinamik_bag_denetle.sh (CI macOS isi).
+if(APPLE AND TULPAR_MACOS_TASINABILIR)
+    include(${CMAKE_SOURCE_DIR}/cmake/MacOSTasinabilir.cmake)
+    tulpar_macos_tasinabilir(tulpar)
+endif()
 
 # ============================================
 # Build Info

@@ -100,6 +100,22 @@ bool load_for_document_dir(const std::string &dir, std::string &err);
 // Yalniz testler/araclar: bir yolu dogrudan yukle.
 bool load_path(const std::string &path, const char *origin, std::string &err);
 
+// ---- Calisan programa aktarim ----------------------------------------------
+
+// `tulpar <dosya>` ve `tulpar debug` programi baslatmadan once cagirir:
+// cozulmus eklenti yollarini cocuk surecin TULPAR_EXT_PATH'ine yazar ki
+// program (ornegin bir motor koprusu font/doku ararken) eklenti dizinlerini
+// gorebilsin — kullanici yolu `--ext` ya da tulpar.toml ile verse bile.
+// Sira: --ext girdileri, mevcut TULPAR_EXT_PATH (ham, aynen), tulpar.toml
+// girdileri; tekrarlar atilir, ayirici platformunki (POSIX ':' / Windows
+// ';'). Hicbir yol yoksa ortama dokunmaz. Girdiler mutlaktir (program
+// calisma dizinini degistirse de gecerli). load_default'tan SONRA cagrilir.
+// `tulpar build` ile uretilen bagimsiz ikili bunu GORMEZ: derleyici o an
+// yoktur — bkz. docs/mindmap/Eklentiler.md "Calisma aninda eklenti dizini".
+void export_child_env();
+// export_child_env'in yazacagi deger (test/teshis icin).
+std::string child_ext_path();
+
 // ---- Sorgu -----------------------------------------------------------------
 
 const std::vector<Extension> &extensions();
