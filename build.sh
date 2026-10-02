@@ -1426,6 +1426,16 @@ TPREOF
         exit 1
     fi
 
+    # STRUCT DIZISI DONGU SURUMU (2026-10-02): `for` govdesindeki `A[i]`
+    # struct dizisi erisimi dongu basinda tek sinavla kanitli mi, kurulmamasi
+    # gereken yerde kurulmuyor mu, sinir disi hala yakalaniyor mu; satir ici
+    # push / toFloat. IR pozitif kontrolu (TULPAR_NO_SVER=1,
+    # TULPAR_NO_SPUSH_INLINE=1) betikte. Anlam: tests/struct_dizi_surum.test.tpr.
+    if ! bash tests/struct_dizi_surum.sh ./tulpar; then
+        echo -e "${RED}struct dizisi dongu surumu bozuk!${NC}"
+        exit 1
+    fi
+
     # INT YEREL GOLGE SURUMU + INT DIZI DONGU SURUMU (2026-10-01): fonksiyon
     # icindeki kutulu `int` yereller dongude native golgeye iniyor mu, ic ice
     # dongunun en icteki `for`u 32-bit int depoya iniyor mu, kurulmamasi

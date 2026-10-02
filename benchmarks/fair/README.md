@@ -278,11 +278,11 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `sieve` | 7,7 | 8,0 | 0,96× | 1. |
 | `strcat` | 14,1 | 37,8 | 0,37× | 1. |
 | `arrayiter` | 1,2 | 2,3 | 0,52× | 1. |
-| `mandelbrot` | 158,4 | 158,7 | 1,00× | 3. |
+| `mandelbrot` | 158,4 → **154,4** (2026-10-02) | 158,7 | 1,00× → **0,97×** | 3. → ~1.* |
 | `qsort` | 121,2 → **70,0** (2026-10-01) | 57,4 | 2,1× → **1,2×** | 8. → **5.** |
 | `callfn` | 298,6 → 209,6 → **65,5** (2026-10-01) | 91,1 | 2,3× → **0,7×** | 8. → ~3.* |
 | `parse` | 196,3 → 126,2 (2026-10-01) → 75,2 (2026-10-02) → **72,5** (2026-10-02, satır içi dizgi karakteri; bellek 261,7 → 223,4 MB) | 56,7 | 2,2× → **1,3×** | 6. → 4. → ~3.* |
-| `particles` | 329,6 → **54,8** (2026-10-01) | 42,2 | 7,8× → 1,3× | 8. → **4.** |
+| `particles` | 329,6 → 54,8 (2026-10-01) → **37,3** (2026-10-02) | 42,2 | 7,8× → 1,3× → **0,9×** | 8. → 4. → ~2.* |
 | `nbody` | 1304,8 → 187,3 → **115,3** (2026-10-01) | 114,5 | 11,4× → 1,6× → **1,0×** | 8. → 7. → ~2.* |
 | `matmul` | 821,3 → **37,1** (2026-10-01) | 31,1 | 26,4× → **1,2×** | 8. → **4.** |
 | `hashmap` | > 60 s → **170,3** (2026-10-01; bellek 439 → 119 MB ve A/B'de −38 % aynı gün) → 106,1 (resmî, 2026-10-02) → **88,9** (2026-10-02; bellek 88,6 → 72,6 MB, aynı düzenekte C 66,6 / 64,5) | 72,7 | 2,3× → **1,3×** | 9. → **2.** |
@@ -325,7 +325,17 @@ Bulgular, sırayla ele alınması önerilen:
    yeniden okuyordu — alanlar TBAA etiketli ve sekli değişmeyen döngüde başlık
    bir kez okunuyor. Üst düzey 336 → 55 ms, fonksiyon içi 193 → 55 ms (C 42,7,
    Rust 36; dokuz dil arasında 4.). Ayrıntı ve pay:
-   `docs/mindmap/Performance.md` "particles" bölümü.
+   `docs/mindmap/Performance.md` "particles" bölümü. **2026-10-02:** kalan
+   fark iç döngüde her `ps[i]`'nin `i <u count` sınavı + yavaş yol kopyası
+   (sınır `n` global'i bu yüzden her turda bellekten okunuyordu) ve
+   kurulumda eleman başına beş opak çağrıydı (dört `toFloat`, bir `push`).
+   `for` döngüsü artık `ps[i]` için döngü başında tek sınavla sürümleniyor
+   (hızlı gövdede erişim tek GEP), `push` ve `toFloat` satır içi: 53,4 →
+   **37,3 ms** (aynı düzenekte Rust 36,0, C 41,9). *Sıra resmî koşumda
+   ölçülmedi; `results.json`'daki öteki dillerle yan yana ~2. (Rust 36,9).*
+   Aynı `toFloat` `mandelbrot`'u 158,7 → 154,4 ms yaptı (yan yana ~1.:
+   Rust 155,2, Go 155,3). Ayrıntı: Performance.md "particles: struct dizisi
+   döngü sürümü".
 4. **`parse`** — **hız kapandı (2026-10-01):** `split` parçaları tek arena
    ayırmasında bitişik kuruyor (parça başına geçici malloc + ayrı ayırma +
    büyüyen dizi yerine), `toInt` düz ondalık dizgide `atoll`a gitmiyor:

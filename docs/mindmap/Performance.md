@@ -1817,3 +1817,94 @@ bulundu; tetikleyen program ölçülmedi. Artık tek blok, tek `free`.
 
 Kalan: (b) — dizgi dizisi işaretçi deposu, parse'ta −40 MB daha; yukarıdaki
 risk sütunu yüzünden ayrı iş.
+
+## particles: struct dizisi döngü sürümü + satır içi `push` / `toFloat` — 53,4 → 37,3 ms, Rust ile aynı (2026-10-02)
+
+`particles` Rust'ın (36,9) ve C'nin (42,1) gerisindeydi (53,4 ms). Önce maliyet
+ikiye ayrıldı: aynı program `s < 0` ile (yalnız kurulum) ve `s < 150` ile
+(adım başına eğim) — Ryzen 7 9800X3D, `taskset -c 10,11`, en iyi:
+
+| | kurulum (1M `push`) | 50 adım | toplam |
+|---|--:|--:|--:|
+| Tulpar (önce) | 9,1 | ~44 | 53,4 |
+| C (gcc -O2) | 3,3 | ~39 | 42,1 |
+| Rust | 3,3 | ~33 | 36,1 |
+
+İki ayrı açık, ikisi de IR'dan okundu (`TULPAR_AOT_EMIT_LL=1`):
+
+1. **İç döngüde kanıtsız struct dizisi erişimi.** `SarrCacheScope` başlığı
+   döngü başında bir kez okuyordu ama her `ps[i]` yine `i <u count` sınavı +
+   yavaş yol (`aot_sarr_elem_ptr` çağrısı) kopyası taşıyordu. LLVM sınavların
+   çoğunu birleştiriyor ama turda üç dal ve döngü sınırı `n`'in (üst düzey
+   `int` → global) her turda bellekten okunması kalıyordu: yavaş yoldaki çağrı
+   her şeyi yazabilir sayılıyor.
+2. **Kurulumda opak çağrılar.** Eleman başına dört `aot_to_float_ptr`
+   (`toFloat(i % 1000)` — argüman kesin INT, ama çağrı runtime'a) ve bir
+   `aot_sarr_push_ptr`.
+
+Yapılanlar:
+
+- **Struct dizisi döngü sürümü** (`tulpar_sarr_loop_plan` + `sv_try_version`,
+  float sürümünün struct karşılığı). Biçim: `for (i = E; i < UB; i = i + K)`
+  (ya da `<=`, `i++`; K > 0 sabit), UB sabit / döngüde atanmayan ad /
+  `len(X)`, `i` gövdede hiç atanmıyor / artırılmıyor (`tulpar_loop_rebinds_name`
+  yalnız atama / bildirime bakıyor; burada `++` / `--` da sayılıyor), gövde
+  şekli değiştiremiyor (`tulpar_loop_shape_stable`).
+  Döngü başında bir kez: `i` INT ve `>= 0`, UB INT ve i32'ye sığar, her A
+  için `UB' <= count(A)` (önbellekteki count; struct dizisi değilse 0 → sınav
+  ancak gövde hiç dönmezken tutar). Tutarsa HIZLI gövde: `A[i]` (indeks ÇIPLAK
+  `i`, AYNI yuva — gölge değil) tek `inbounds` GEP, sınav da yavaş yol da yok;
+  koşul döngü başındaki UB ile (global `n` her turda okunmuyor). Tutmazsa
+  GENEL gövde — bugünkü bekçili yol, sınır dışı hata orada. İç içe en fazla
+  iki kat; genel gövdede iç içe sürüm yok; 1500 düğüm sınırı (#438 ile aynı).
+- **`push(d, e)` satır içi:** yer varsa (`count < capacity`, eleman boyu ve
+  alan sayısı derleme zamanındakiyle aynı) `memcpy` + `count++`; yoksa
+  (büyüme, yanlış tür) eski çağrı.
+- **`toFloat` satır içi:** INT → `sitofp`, FLOAT → olduğu gibi, gerisi
+  (bool, dizgi) runtime kuralı. Etiket derleme zamanında biliniyorsa LLVM
+  dalları katlıyor.
+
+Pay (ardışık turlar, her biri 7 koşu en iyi; kurulum `s < 0` ile):
+
+| | kurulum | toplam |
+|---|--:|--:|
+| önce | 8,6 | 52,6 |
+| + struct dizisi sürümü | 8,6 | 47,5 |
+| + `toFloat` satır içi | 7,1 | 45,4 |
+| + `push` satır içi | 4,7 | **36,2** |
+| Rust / C | 3,5 / 3,4 | 36,0 / 41,9 |
+
+İç döngünün makine kodu sürümden sonra Rust'ınkiyle aynı biçimde (iki
+`movupd` yükleme, `addpd`/`mulpd`, iki `ucomisd`, seyrek yollarda skaler
+saklama; sınav yok). ⚠ **Son satırdaki 9 ms'nin yalnız ~2,4'ü kurulum**:
+`push` satır içi olunca 50 adımlık döngü de hızlandı (adım başına 0,76 →
+0,63 ms; L2'de kalan N=10k'da da %7), oysa iki ikilinin iç döngüsü komut
+komut aynı, veri adresleri (`realloc` dizisi) aynı. Sayaçlar (perf yok;
+`perf_event_open` ile kullanıcı alanı): yavaş ikili daha AZ komutla daha çok
+döngü harcıyor, dal kaçırma / L1 kaçırma / ön-uç beklemesi aynı — yani
+arka uç; sebep bulunamadı. Üç ayrı kod hizalamasında (kaynağa önek) satır
+içi `push` 36,1 / 40,9 / 36,9, çağrılı 45,9 / 45,9 / 45,6 — sonuç tutarlı,
+ama "kurulum 6 ms kazandırdı" diye okunmamalı.
+
+Pozitif kontroller (`tests/struct_dizi_surum.sh`, 23 kapı): karar iki yönde
+(11 biçim; `push`, kullanıcı fonksiyonu, `i = i + 1`, `i++`, sınır ataması,
+`a[k]` kopya indeks, `a[i + 1]` → sürüm YOK), sınır dışı hızlı sürümlü
+döngüde hâlâ yakalanıyor (üst / `<=` / negatif başlangıç / üst düzey global
+sınır), IR'da `sv.ep` / `spush.fast` / `tof.i2f` var ve `TULPAR_NO_SVER=1` /
+`TULPAR_NO_SPUSH_INLINE=1` ile yok, üç derlemenin çıktısı aynı. Sabotaj:
+`UB' <= count` sınavı kaldırılınca kapı kırmızı (`malloc(): invalid size` —
+sınır dışı yazma yığını bozuyor). Anlam: `tests/struct_dizi_surum.test.tpr`
+(9 test; her senaryo bekçili ikiziyle ALAN ALAN karşılaştırılıyor).
+
+Gerileme denetimi (13 çekirdek, dönüşümlü A/B, 9 tur, en iyi; taban
+`6d0dc633`, ikisi de repo dışında kendi runtime arşiviyle): IR'ı DEĞİŞEN
+yalnız üç çekirdek — **particles 53,4 → 37,3**, **mandelbrot 158,7 → 154,4**
+(piksel başına iki `toFloat`), **matmul 37,2 → 36,8** (kurulumdaki
+`toFloat`). Kalan on çekirdeğin IR'ı bayt bayt aynı (intloop 135,2/135,0 ·
+sieve 7,7/7,8 · qsort 69,8/70,0 · callfn 80,5/80,2 · parse 73,9/74,0 …).
+Derleme: `scene3d_editor` 9,16 → 9,22 s (3 koşu en iyi), ikili bayt bayt aynı boyutta (6 153 688 B).
+
+Kalan: kurulum 4,7 ms (Rust 3,5) — büyüyen dizi (`realloc` + yarısı 4 KB
+sayfada: THP kapsaması Tulpar 14 MB, Rust/C 30 MB), Rust'ın `collect`'i tek
+ayırma. `int` üst düzey değişkenleri terfi etmek bu çekirdekte de geriletiyor
+(36 → 43 ms; iç döngü yine aynı makine kodu) — `int` kuralı global kalıyor.

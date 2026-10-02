@@ -3161,7 +3161,8 @@ static void mark_sarr_elem_ptr(LLVMBackend *backend, LLVMValueRef phi) {
                                       LLVMMDNodeInContext2(backend->context, nullptr, 0)));
 }
 static bool is_sarr_elem_ptr(LLVMBackend *backend, LLVMValueRef v) {
-  return v && LLVMIsAPHINode(v) && LLVMGetMetadata(v, sarr_ep_kind(backend)) != nullptr;
+  // phi (bekcili yol) ya da GEP (struct dizisi surumunun kanitli yolu).
+  return v && LLVMIsAInstruction(v) && LLVMGetMetadata(v, sarr_ep_kind(backend)) != nullptr;
 }
 
 // Alanin DEGERI (dildeki tip): int/bool -> i64, float -> double. f32
@@ -3532,6 +3533,102 @@ static void sarr_push(LLVMBackend *backend, LLVMValueRef arr_val, LLVMValueRef s
                  backend->func_aot_sarr_push, args, 2, "");
 }
 
+// `push(d, e)` — SATIR ICI hizli yol (2026-10-02): yer varsa (count <
+// capacity) eleman dogrudan kopyalanir, count artar; yoksa (buyume, yanlis
+// tur, beklenmeyen eleman boyu) aot_sarr_push_ptr — runtime ile AYNI is
+// (memcpy + count++), buyume ve hata tanisi orada. Olculdu (2026-10-02,
+// Ryzen 7 9800X3D): particles kurulumu 1M push, cagri basina ~2 ns.
+// TULPAR_NO_SPUSH_INLINE=1 eski cagriya dondurur.
+static void sarr_push_inline(LLVMBackend *backend, LLVMValueRef arr_val, LLVMValueRef src_ptr,
+                             StructTypeEntry *st) {
+  static int off = -1;
+  if (off < 0) {
+    const char *v = getenv("TULPAR_NO_SPUSH_INLINE");
+    off = (v && *v && *v != '0') ? 1 : 0;
+  }
+  if (off || !st) {
+    sarr_push(backend, arr_val, src_ptr);
+    return;
+  }
+  LLVMTypeRef i32t = backend->int32_type;
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef b_ty = append_bb(backend, fn, "spush.ty");
+  LLVMBasicBlockRef b_cap = append_bb(backend, fn, "spush.cap");
+  LLVMBasicBlockRef b_fast = append_bb(backend, fn, "spush.fast");
+  LLVMBasicBlockRef b_slow = append_bb(backend, fn, "spush.slow");
+  LLVMBasicBlockRef b_done = append_bb(backend, fn, "spush.done");
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, arr_val, 0, "spush.tag");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                LLVMConstInt(i32t, 4 /* VM_VAL_OBJ */, 0), "spush.isobj"),
+                  b_ty, b_slow);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ty);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, arr_val);
+  LLVMValueRef ot = llvm_load_obj_type(
+      backend, LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 0, "spush.otp"),
+      "spush.ot");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                llvm_obj_type_const(backend, 7 /* OBJ_STRUCT_ARRAY */),
+                                "spush.issarr"),
+                  b_cap, b_slow);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_cap);
+  LLVMValueRef cntp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 6, "spush.cntp");
+  LLVMValueRef cnt = LLVMBuildLoad2(backend->builder, i32t, cntp, "spush.cnt");
+  LLVMValueRef cap = LLVMBuildLoad2(
+      backend->builder, i32t,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 7, "spush.capp"),
+      "spush.cap");
+  LLVMValueRef esz = LLVMBuildLoad2(
+      backend->builder, i32t,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 8, "spush.eszp"),
+      "spush.esz");
+  // Runtime'in sarr_esz'si: elem_size > 0 ise o, degilse field_count * 8.
+  // Derleme zamanindaki boyla AYNI olmali (degilse runtime'a birak).
+  LLVMValueRef want_esz = st->compact
+      ? struct_const_sizeof(backend, st)
+      : LLVMConstInt(i32t, (unsigned long long)st->field_count * 8, 0);
+  LLVMValueRef want_raw = st->compact ? want_esz : LLVMConstInt(i32t, 0, 0);
+  LLVMValueRef fc = LLVMBuildLoad2(
+      backend->builder, i32t,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 5, "spush.fcp"),
+      "spush.fc");
+  LLVMValueRef ok = LLVMBuildAnd(
+      backend->builder,
+      LLVMBuildICmp(backend->builder, LLVMIntSLT, cnt, cap, "spush.room"),
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, esz, want_raw, "spush.eszok"), "spush.ok");
+  ok = LLVMBuildAnd(backend->builder, ok,
+                    LLVMBuildICmp(backend->builder, LLVMIntEQ, fc,
+                                  LLVMConstInt(i32t, (unsigned long long)st->field_count, 0),
+                                  "spush.fcok"),
+                    "spush.ok2");
+  LLVMBuildCondBr(backend->builder, ok, b_fast, b_slow);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_fast);
+  LLVMValueRef data = LLVMBuildLoad2(
+      backend->builder, backend->ptr_type,
+      LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 9, "spush.datap"),
+      "spush.data");
+  LLVMValueRef boff = LLVMBuildNUWMul(
+      backend->builder, LLVMBuildZExt(backend->builder, cnt, backend->int_type, "spush.cnt64"),
+      LLVMBuildZExt(backend->builder, want_esz, backend->int_type, "spush.esz64"), "spush.off");
+  LLVMValueRef dst = LLVMBuildInBoundsGEP2(backend->builder, LLVMInt8TypeInContext(backend->context),
+                                           data, &boff, 1, "spush.dst");
+  LLVMBuildMemCpy(backend->builder, dst, 8, src_ptr, 8, want_esz);
+  LLVMBuildStore(backend->builder,
+                 LLVMBuildNSWAdd(backend->builder, cnt, LLVMConstInt(i32t, 1, 0), "spush.cnt1"),
+                 cntp);
+  LLVMBuildBr(backend->builder, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_slow);
+  sarr_push(backend, arr_val, src_ptr);
+  LLVMBuildBr(backend->builder, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_done);
+}
+
 // `d[idx]` icin eleman isaretcisi. SATIR ICI hizli yol: etiket + nesne turu
 // + sinir denetimi dogrudan yuklerle, sonra `data + idx*field_count`. Yavas
 // yol (yanlis tur ya da sinir disi) runtime'a gider; o da hatayi bildirir ve
@@ -3545,7 +3642,49 @@ static void sarr_push(LLVMBackend *backend, LLVMValueRef arr_val, LLVMValueRef s
 // nullptr = yerel bulunamadi (yakalanmis kapanis degiskeni vb.) — cagiran
 // genel yola dusmeli.
 static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
-                                     LLVMValueRef iv, const char *tag);
+                                     LLVMValueRef iv, const char *tag,
+                                     ASTNode_C *idx_node);
+
+// STRUCT DIZISI DONGU SURUMU — hizli govdenin codegen durumu (2026-10-02).
+// Plan: llvm_array_shape.cpp tulpar_sarr_loop_plan; sinav ve iki govde:
+// sv_try_version. Hizli govde uretilirken g_sv DOLU: plandaki dizilerin
+// `A[i]` erisimi (i bu dongunun degiskeni, AYNI yuva — golgeleme degil)
+// sinavsiz tek GEP'e iniyor; kosul `i < UB` dongu basindaki UB ile. Ic ice
+// surumler zincir (outer) — ic dongunun hizli govdesinde dis dongunun
+// degiskeniyle yapilan erisim de kanitli (dis kanit orada da gecerli).
+struct SvRun {
+  const char *ivar;
+  LLVMValueRef ivar_slot;     // get_local (golgeleme denetimi)
+  LLVMValueRef ivar_native;   // get_local_native
+  ASTNode_C *cond;
+  LLVMValueRef ub;            // UB'nin dongu basindaki degeri (i64)
+  int incl;
+  const char *arr[TULPAR_SV_MAX_ARR];
+  LLVMValueRef arr_slot[TULPAR_SV_MAX_ARR];
+  int n_arr;
+  SvRun *outer;
+};
+static SvRun *g_sv = nullptr;
+LLVMValueRef get_local_native(LLVMBackend *backend, const char *name);
+// Genel (soguk) govde uretilirken > 0: orada ic ice surum acilmiyor (kod
+// buyumesi; sinav tutmayan nadir yol).
+static int g_sv_cold = 0;
+
+// `A[<idx_node>]` erisimi aktif bir struct dizisi surumunde kanitli mi?
+static bool sv_access_proven(LLVMBackend *backend, const char *arr_name, ASTNode_C *idx_node,
+                             LLVMValueRef arr_slot) {
+  if (!g_sv || !idx_node || idx_node->type != AST_IDENTIFIER || !idx_node->name || !arr_name)
+    return false;
+  for (SvRun *r = g_sv; r; r = r->outer) {
+    if (strcmp(r->ivar, idx_node->name) != 0) continue;
+    if (get_local(backend, r->ivar) != r->ivar_slot ||
+        get_local_native(backend, r->ivar) != r->ivar_native)
+      continue;   // ayni ad baska bir yuvaya cozuluyor (golge)
+    for (int k = 0; k < r->n_arr; k++)
+      if (strcmp(r->arr[k], arr_name) == 0 && r->arr_slot[k] == arr_slot) return true;
+  }
+  return false;
+}
 
 // Dongu-degismezi STRUCT DIZISI sekli (SarrCacheScope doldurur). `var_slot`:
 // onbellege alinan degiskenin yuvasi — ayni ad baska bir yuvaya cozulurse
@@ -3572,18 +3711,45 @@ static LLVMValueRef sarr_elem_ptr(LLVMBackend *backend, const char *arr_name,
   if (!idx_node || !get_local(backend, arr_name)) return nullptr;
   LLVMValueRef iv = codegen_expression(backend, idx_node);
   if (!iv) return nullptr;
-  return sarr_elem_ptr_iv(backend, arr_name, iv, tag);
+  return sarr_elem_ptr_iv(backend, arr_name, iv, tag, idx_node);
 }
 // Ayni yol, indeks ZATEN degerlendirilmis (VMValue). Bilesik atama ve ++/--
 // indeksi bir kez hesaplayip eleman isaretcisini iki kez (okuma, yazma) alir:
 // sag taraf diziye push edip veriyi tasiyabilir, eski isaretci sarkardi.
+// `idx_node`: indeksin AST'si (struct dizisi surumunun kanit karari icin;
+// NULL olabilir — o zaman her zaman bekcili yol).
 static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
-                                     LLVMValueRef iv, const char *tag) {
+                                     LLVMValueRef iv, const char *tag,
+                                     ASTNode_C *idx_node) {
   LLVMValueRef slot = get_local(backend, arr_name);
   if (!slot || !iv) return nullptr;
   const char *en = get_local_struct_array_elem(backend, arr_name);
   StructTypeEntry *est = en ? find_struct_type(backend, en) : nullptr;
   if (!est) return nullptr;
+
+  // STRUCT DIZISI DONGU SURUMU: erisim dongu basinda kanitlandi (i INT,
+  // 0 <= i < UB' <= count, dizi struct dizisi — sv_try_version). Sinav da
+  // yavas yol da YOK: tek GEP. Kanit gevsetilecekse plan ve sinav gevsetilir,
+  // burasi degil.
+  if (sv_access_proven(backend, arr_name, idx_node, slot)) {
+    const SarrLoopCache *plc = sarr_loop_cache_lookup(arr_name, slot);
+    if (plc) {
+      LLVMValueRef pdata =
+          LLVMBuildLoad2(backend->builder, backend->ptr_type, plc->data_slot, "sv.data");
+      LLVMValueRef pidx = llvm_extract_vm_val_int(backend, iv);
+      LLVMValueRef ep;
+      if (est->compact) {
+        ep = LLVMBuildInBoundsGEP2(backend->builder, est->llvm_type, pdata, &pidx, 1, "sv.ep");
+      } else {
+        LLVMValueRef off = LLVMBuildNSWMul(
+            backend->builder, pidx,
+            LLVMConstInt(backend->int_type, (unsigned long long)est->field_count, 0), "sv.off");
+        ep = LLVMBuildInBoundsGEP2(backend->builder, backend->int_type, pdata, &off, 1, "sv.ep");
+      }
+      mark_sarr_elem_ptr(backend, ep);  // alan erisimleri TBAA "elem" alir
+      return ep;
+    }
+  }
 
   LLVMValueRef arr = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot, tag);
   // Yavas yolun VMValue* argumani icin yuva. Saklama YAVAS YOLDA: eskiden
@@ -7809,6 +7975,124 @@ static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node, bool float_onl
 }
 
 // ---------------------------------------------------------------------------
+// STRUCT DIZISI DONGU SURUMU — dongu basindaki sinav ve iki govde (2026-10-02).
+// Kanitin bicim kismi: llvm_array_shape.cpp tulpar_sarr_loop_plan. Burada
+// SAYISAL kisim dongu basinda BIR KEZ (init'ten SONRA, SarrCacheScope'un
+// doldurdugu basliktan) sinaniyor:
+//   * i INT ve i >= 0;
+//   * UB INT ve i32'ye sigar (UB + 1 tasmasin); UB' = `<=` ise UB + 1;
+//   * plandaki her A icin UB' <= count(A). Onbellekteki count A struct dizisi
+//     degilse 0 — o zaman sinav ancak UB' <= 0 iken tutar ve i >= 0 oldugu
+//     icin govde hic kosmaz.
+// Hepsi tutarsa HIZLI govde (g_sv dolu: `A[i]` sinavsiz GEP, kosul dongu
+// basindaki UB ile), tutmazsa GENEL govde — bugunku bekcili yol; sinir disi
+// erisim orada hata verir.
+// TULPAR_NO_SVER=1 kapatir (olcum / pozitif kontrol).
+static bool sv_enabled() {
+  static int e = -1;
+  if (e < 0) {
+    const char *v = getenv("TULPAR_NO_SVER");
+    e = (v && *v && *v != '0') ? 0 : 1;
+  }
+  return e == 1;
+}
+
+static bool sv_try_version(LLVMBackend *backend, ASTNode_C *node) {
+  if (!sv_enabled() || g_fv || g_sv_cold || iv_cold()) return false;
+  int depth = 0;
+  for (SvRun *r = g_sv; r; r = r->outer) depth++;
+  if (depth >= 2) return false;   // kopya sayisi 2^derinlik; ucuncu kat yok
+  TulparSarrLoopPlan plan;
+  if (!tulpar_sarr_loop_plan(node->init, node->condition, node->body, node->increment,
+                             shape_pure_call, backend, &plan)) {
+    if (getenv("TULPAR_DBG_VER") && node->init && node->init->name) {
+      const char *names[8];
+      int nn = tulpar_collect_indexed_names(node->condition, node->body, names, 8);
+      for (int i = 0; i < nn; i++)
+        if (get_local_struct_array_elem(backend, names[i])) {
+          fprintf(stderr, "[sver-yok] %s: %s\n", node->init->name,
+                  plan.why ? plan.why : "?");
+          break;
+        }
+    }
+    return false;
+  }
+  SvRun run;
+  run.ivar = plan.ivar;
+  run.cond = node->condition;
+  run.incl = plan.incl;
+  run.outer = g_sv;
+  run.n_arr = 0;
+  // Codegen uygunlugu — KOD URETMEDEN ONCE (Tuzaklar 6q).
+  {
+    LocalVar *iv = get_local_var(backend, plan.ivar);
+    if (iv && iv->is_captured == 1) return false;
+    run.ivar_slot = get_local(backend, plan.ivar);
+    run.ivar_native = get_local_native(backend, plan.ivar);
+    if (!run.ivar_slot &&
+        !(get_local_type(backend, plan.ivar) == INFERRED_INT && run.ivar_native))
+      return false;
+    if (plan.ub->type == AST_IDENTIFIER) {
+      LocalVar *uv = get_local_var(backend, plan.ub->name);
+      if (uv && uv->is_captured == 1) return false;
+      if (!get_local(backend, plan.ub->name) && !get_local_native(backend, plan.ub->name))
+        return false;
+    }
+    for (int k = 0; k < plan.n_arr; k++) {
+      LLVMValueRef s = get_local(backend, plan.arr[k]);
+      if (!s || !get_local_struct_array_elem(backend, plan.arr[k])) continue;
+      if (!sarr_loop_cache_lookup(plan.arr[k], s)) continue;   // onbellek yok
+      run.arr[run.n_arr] = plan.arr[k];
+      run.arr_slot[run.n_arr] = s;
+      run.n_arr++;
+    }
+    if (run.n_arr == 0) {
+      if (getenv("TULPAR_DBG_VER") && node->init && node->init->name)
+        fprintf(stderr, "[sver-yok] %s: struct dizisi onbellekte degil\n", node->init->name);
+      return false;
+    }
+  }
+
+  // ---- Dongu basi sinavi (buradan sonra geri donus YOK) ----
+  LLVMValueRef ok = nullptr;
+  LLVMValueRef zero = LLVMConstInt(backend->int_type, 0, 0);
+  LLVMValueRef jv = load_loop_int(backend, plan.ivar, &ok);
+  fv_and(backend, &ok, LLVMBuildICmp(backend->builder, LLVMIntSGE, jv, zero, "sv.i0"));
+  LLVMValueRef ubv = fv_entry_int(backend, plan.ub, &ok);
+  fv_and(backend, &ok, emit_fits_i32(backend, ubv));
+  LLVMValueRef ubx = plan.incl
+      ? LLVMBuildAdd(backend->builder, ubv, LLVMConstInt(backend->int_type, 1, 0), "sv.ubx")
+      : ubv;
+  for (int k = 0; k < run.n_arr; k++) {
+    const SarrLoopCache *lc = sarr_loop_cache_lookup(run.arr[k], run.arr_slot[k]);
+    LLVMValueRef cn = LLVMBuildLoad2(backend->builder, backend->int_type, lc->cnt_slot, "sv.cnt");
+    fv_and(backend, &ok, LLVMBuildICmp(backend->builder, LLVMIntSLE, ubx, cn, "sv.hic"));
+  }
+  run.ub = ubv;
+  if (getenv("TULPAR_DBG_VER"))
+    fprintf(stderr, "[sver] %s: %d struct dizisi, %d erisim\n", plan.ivar, run.n_arr,
+            plan.n_acc);
+
+  LLVMBasicBlockRef b_fast = append_bb(backend, backend->current_function, "sver_fast");
+  LLVMBasicBlockRef b_gen = append_bb(backend, backend->current_function, "sver_gen");
+  LLVMBasicBlockRef b_done = append_bb(backend, backend->current_function, "sver_done");
+  set_branch_weights(backend, LLVMBuildCondBr(backend->builder, ok, b_fast, b_gen), 2000, 1);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_fast);
+  g_sv = &run;
+  codegen_for_body(backend, node, b_done);
+  g_sv = run.outer;
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_gen);
+  g_sv_cold++;
+  codegen_for_body(backend, node, b_done);
+  g_sv_cold--;
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_done);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // INT YEREL GOLGE SURUMU — dongu basindaki sinav ve iki kopya (2026-10-01).
 // Kanitin bicim kismi: llvm_array_shape.cpp tulpar_int_local_plan. Burada
 // SAYISAL kisim dongu basinda BIR KEZ sinaniyor:
@@ -8365,6 +8649,7 @@ struct SfTarget {
   int fi = -1;
   const char *arr = nullptr;    // tipli struct dizisi: dizinin adi
   LLVMValueRef iv = nullptr;    //   ... ve bir kez degerlendirilmis indeks
+  ASTNode_C *idx_node = nullptr; //   ... ve indeksin AST'si (struct dizisi surumu)
   LLVMValueRef local = nullptr; // tipli yerel struct: alloca'si
 };
 // true: hedef bir struct alani (fi < 0 ise alan yok: hata bildirildi).
@@ -8384,6 +8669,7 @@ static bool sf_target_resolve(LLVMBackend *backend, ASTNode_C *acc, int line, Sf
     t->st = est;
     t->arr = base->left->name;
     t->iv = codegen_expression(backend, base->index);
+    t->idx_node = base->index;
   } else {
     // s.x — alici ya sol dugumde ya da dugumun adinda (AST_ASSIGNMENT ile ayni)
     const char *recv = (base && base->type == AST_IDENTIFIER && base->name) ? base->name : acc->name;
@@ -8405,7 +8691,7 @@ static bool sf_target_resolve(LLVMBackend *backend, ASTNode_C *acc, int line, Sf
   return true;
 }
 static LLVMValueRef sf_target_ptr(LLVMBackend *backend, SfTarget &t, const char *tag) {
-  return t.local ? t.local : sarr_elem_ptr_iv(backend, t.arr, t.iv, tag);
+  return t.local ? t.local : sarr_elem_ptr_iv(backend, t.arr, t.iv, tag, t.idx_node);
 }
 // Kutulu iki degerle genel ikili islem (int/float/dizgi; sifira bolme korumasi
 // vm_binary_op'ta). Eleman yolu ile ayni cagri.
@@ -9586,6 +9872,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                      g_fv->ub, "fv.cond");
       return llvm_vm_val_bool_val(backend, c);
     }
+    // Struct dizisi surumunun hizli govdesi: ayni kural (UB dongu basinda,
+    // degismez — plan; global `n` her turda bellekten okunmasin).
+    for (SvRun *r = g_sv; r; r = r->outer)
+      if (node == r->cond) {
+        LLVMValueRef jv = fv_load_ivar(backend, r->ivar);
+        LLVMValueRef c = LLVMBuildICmp(backend->builder, r->incl ? LLVMIntSLE : LLVMIntSLT,
+                                       jv, r->ub, "sv.cond");
+        return llvm_vm_val_bool_val(backend, c);
+      }
     TypedValue tv = codegen_typed_expr(backend, node);
     LLVMValueRef boxed = box_typed_value(backend, tv);
     return boxed ? boxed : llvm_vm_val_int(backend, 0);
@@ -10068,15 +10363,53 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (node->name && strcmp(bi_name, "toFloat") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      // INT ve FLOAT satir ici (aot_to_float ile AYNI kural: (double)int,
+      // float oldugu gibi); digerleri (bool, dizgi, ...) runtime'a. Etiket
+      // derleme zamaninda biliniyorsa LLVM dallari katliyor. Olculdu
+      // (2026-10-02, Ryzen 7 9800X3D): particles kurulumundaki 4M cagri
+      // (`toFloat(i % 1000)` — arguman kesin INT ama cagri opak) ~2,5 ms.
+      LLVMValueRef tf_fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+      LLVMBasicBlockRef tf_int = append_bb(backend, tf_fn, "tof.int");
+      LLVMBasicBlockRef tf_chk = append_bb(backend, tf_fn, "tof.chk");
+      LLVMBasicBlockRef tf_flt = append_bb(backend, tf_fn, "tof.flt");
+      LLVMBasicBlockRef tf_slow = append_bb(backend, tf_fn, "tof.slow");
+      LLVMBasicBlockRef tf_done = append_bb(backend, tf_fn, "tof.done");
+      LLVMValueRef tf_tag = LLVMBuildExtractValue(backend->builder, arg, 0, "tof.tag");
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildICmp(backend->builder, LLVMIntEQ, tf_tag,
+                                    LLVMConstInt(backend->int32_type, 0 /* VM_VAL_INT */, 0),
+                                    "tof.isint"),
+                      tf_int, tf_chk);
+      LLVMPositionBuilderAtEnd(backend->builder, tf_int);
+      LLVMValueRef r_int = LLVMBuildSIToFP(backend->builder, llvm_extract_vm_val_int(backend, arg),
+                                           backend->float_type, "tof.i2f");
+      LLVMBuildBr(backend->builder, tf_done);
+      LLVMPositionBuilderAtEnd(backend->builder, tf_chk);
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildICmp(backend->builder, LLVMIntEQ, tf_tag,
+                                    LLVMConstInt(backend->int32_type, 1 /* VM_VAL_FLOAT */, 0),
+                                    "tof.isflt"),
+                      tf_flt, tf_slow);
+      LLVMPositionBuilderAtEnd(backend->builder, tf_flt);
+      LLVMValueRef r_flt = LLVMBuildBitCast(backend->builder, llvm_extract_vm_val_int(backend, arg),
+                                            backend->float_type, "tof.f");
+      LLVMBuildBr(backend->builder, tf_done);
+      LLVMPositionBuilderAtEnd(backend->builder, tf_slow);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "to_float_arg");
       LLVMBuildStore(backend->builder, arg, arg_ptr);
       LLVMValueRef arg_void = LLVMBuildBitCast(
           backend->builder, arg_ptr, backend->ptr_type, "to_float_arg_ptr");
       LLVMValueRef args[] = {arg_void};
-      LLVMValueRef result = LLVMBuildCall2(
+      LLVMValueRef r_slow = LLVMBuildCall2(
           backend->builder, LLVMGlobalGetValueType(backend->func_aot_to_float),
           backend->func_aot_to_float, args, 1, "to_float");
+      LLVMBuildBr(backend->builder, tf_done);
+      LLVMPositionBuilderAtEnd(backend->builder, tf_done);
+      LLVMValueRef result = LLVMBuildPhi(backend->builder, backend->float_type, "to_float");
+      LLVMValueRef tf_inc[] = {r_int, r_flt, r_slow};
+      LLVMBasicBlockRef tf_inb[] = {tf_int, tf_flt, tf_slow};
+      LLVMAddIncoming(result, tf_inc, tf_inb, 3);
       return llvm_build_vm_val_float(backend, result);
     }
 
@@ -10201,7 +10534,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
             return llvm_vm_val_int(backend, 0);
           }
           LLVMValueRef sarr = codegen_expression(backend, node->arguments[0]);
-          if (sarr) sarr_push(backend, sarr, src);
+          if (sarr) sarr_push_inline(backend, sarr, src, est);
           return llvm_vm_val_int(backend, 0);
         }
       }
@@ -14843,6 +15176,15 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       backend->shape_want32 = v_saved_want;
 
       LLVMPositionBuilderAtEnd(backend->builder, vb_done);
+      backend->shape_count = shape_saved;
+      exit_scope(backend);
+      return nullptr;
+    }
+
+    // STRUCT DIZISI DONGU SURUMU (2026-10-02): `A[i]` erisimleri dongu
+    // basinda tek sinavla kanitli (bkz. sv_try_version). Struct dizisi
+    // onbellegi (SarrCacheScope) yukarida kuruldu; iki govde de onu goruyor.
+    if (sv_try_version(backend, node)) {
       backend->shape_count = shape_saved;
       exit_scope(backend);
       return nullptr;

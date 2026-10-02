@@ -13,6 +13,32 @@ tag still works;
 
 ## [Unreleased]
 
+### Hızlandı — struct dizisi döngüsü sınavsız, `push` ve `toFloat` satır içi: `particles` 53,4 → 37,3 ms (Rust 36,9)
+
+- **Struct dizisi döngü sürümü.** `for (i = E; i < UB; i = i + 1)` (ya da
+  `<=`, `i++`, adım > 1 sabit) gövdesindeki `ps[i]` erişimleri artık döngü
+  başında TEK sınavla kanıtlanıyor: `i` INT ve `>= 0`, `UB' <= count(ps)`.
+  Hızlı gövdede `ps[i].x` tek GEP + tipli yükleme/saklama — sınır sınavı da
+  runtime yavaş yolu da yok; koşul döngü başındaki `UB` ile (üst düzey `n`
+  her turda bellekten okunmuyor). Sınav tutmazsa bugünkü bekçili gövde
+  koşuyor, yani sınır dışı erişim hâlâ hata. Kapsam dışı (bekçili kalır):
+  `i` gövdede atanıyor / artırılıyor, sınır döngüde değişiyor, gövdede
+  `push`/kullanıcı fonksiyonu, `ps[i + 1]` gibi kaydırılmış indeks.
+  `TULPAR_NO_SVER=1` kapatır.
+- **`push(d, e)` (struct dizisi) satır içi:** yer varsa eleman doğrudan
+  kopyalanıyor; büyüme ve hata yolu eski çağrı. `TULPAR_NO_SPUSH_INLINE=1`.
+- **`toFloat` satır içi:** INT ve FLOAT argüman çağrısız (runtime ile aynı
+  kural); `mandelbrot` 158,7 → 154,4 ms (piksel başına iki `toFloat`).
+- Ölçüm (Ryzen 7 9800X3D, `taskset -c 10,11`, 9 tur en iyi, taban
+  `6d0dc633`): 13 çekirdekten IR'ı değişen yalnız `particles`, `mandelbrot`,
+  `matmul` (37,2 → 36,8); kalan onunun IR'ı bayt bayt aynı. `scene3d_editor`
+  derlemesi 9,16 → 9,22 s. Ayrıntı ve pay: `docs/mindmap/Performance.md`
+  "particles: struct dizisi döngü sürümü".
+- Kapı: `tests/struct_dizi_surum.sh` (karar iki yönde, hızlı sürümlü
+  döngüde sınır dışı yakalanıyor, IR pozitif kontrolü iki anahtarla;
+  `UB' <= count` sınavını kaldıran sabotajda kırmızı) +
+  `tests/struct_dizi_surum.test.tpr` (bekçili ikizle alan alan).
+
 ### Performans — `json` hash indeksi büyük tabloda iki kat büyüyor, büyümede anahtarları yeniden hash'lemiyor: hashmap 104 → 89 ms, 88,6 → 72,6 MB
 
 - **Ölçüm (perf yok; `ITIMER_PROF` örnekleyicisi, Ryzen 7 9800X3D):**
