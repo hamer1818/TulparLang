@@ -63,6 +63,10 @@ concurrency:
 
 jobs:
   enable-auto-merge:
+    # Is duzeyi sinir: adim sinirlarinin YAKALAYAMADIGI asilmalar icin
+    # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
+    # suresinin birkac kati.
+    timeout-minutes: 5
     # Skip drafts (still WIP) AND skip PRs from forks. GitHub strips
     # secrets — including AUTOMERGE_PAT — from any workflow triggered
     # by a fork's pull_request, so this job would fail with "no token
@@ -75,6 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Enable auto-merge (squash)
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
           PR_URL: ${{ github.event.pull_request.html_url }}

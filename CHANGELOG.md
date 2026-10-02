@@ -12,6 +12,16 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — CI: her iş ve adımın zaman aşımı var (Windows "Ornekler" 46 dk asılı kaldı)
+
+- Windows "Ornekler" adımı 2026-09-29'da iki kez 46–47 dk asılı kaldı. Adımın
+  30 dk sınırı işlemedi: runner "lost communication with the server" ile düştü
+  (kaynak açlığı), adım `in_progress` kaldı ve işi sunucu kalp atışı zaman
+  aşımında bitirdi.
+- Üç iş akışındaki 7 işe iş düzeyi, sınırsız 46 adıma adım düzeyi
+  `timeout-minutes` eklendi (önceki varsayılan 360 dk). Windows Ornekler 30 → 10,
+  Suitler 25 → 12 dk (son 40 başarılı koşumda en çok 65 / 200 sn).
+
 ### Düzeltildi — `typeof(x)` her çağrıda yeni dizgi ayırıyordu
 
 - **Kök neden:** `aot_typeof` tip adını her çağrıda `aot_allocate_string` ile

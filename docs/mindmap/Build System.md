@@ -124,5 +124,13 @@ Deneme PR'ı yalnız-belge seçildi ki `detect-docs-only` derlemeleri atlasın.
 test`, `./build.sh suites`, typeinfer, DLL kapısı, kurulumcu. Hiçbiri `continue-on-error`
 **değil**: bir test hatası CI'yı kırmızıya çeviriyor.
 
+**Zaman aşımları (2026-10-02):** üç iş akışında her işin iş düzeyi, her adımın adım düzeyi
+`timeout-minutes`'ı var (varsayılan 360 dk'ydı). Tetikleyen: Windows "Ornekler" adımı
+2026-09-29'da iki kez 46–47 dk asılı kaldı — adımın 30 dk sınırı **işlemedi**, çünkü runner
+"lost communication with the server" ile düştü (kaynak açlığı); adım `in_progress` kaldı ve işi
+sunucu kalp atışı zaman aşımında bitirdi. Adım sınırı yalnız runner sağlamken işe yarar; Windows
+Ornekler/Suitler ölçülen sürelere göre (son 40 başarılı koşum: en çok 65 / 200 sn) 10 / 12 dk'ya
+indirildi. Runner kaybını sınırlar önleyemez — tekrarlarsa `TULPAR_TEST_JOBS` düşürülmeli.
+
 ## İlgili
 [[Standard Library]] · [[Runtime]] · [[Cross-platform]] · [[AOT Backend]] · [[Testing]] · [[Tuzaklar]]

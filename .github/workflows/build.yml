@@ -40,11 +40,16 @@ jobs:
   # checks satisfy branch protection, so the bench PR still auto-merges
   # without manual intervention.
   detect-docs-only:
+    # Is duzeyi sinir: adim sinirlarinin YAKALAYAMADIGI asilmalar icin
+    # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
+    # suresinin birkac kati.
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.detect.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v6
+        timeout-minutes: 5
         with:
           fetch-depth: 2
           sparse-checkout: |
@@ -52,6 +57,7 @@ jobs:
             !wasm/emsdk
           sparse-checkout-cone-mode: false
       - name: Compute docs_only flag
+        timeout-minutes: 2
         id: detect
         shell: bash
         run: |
@@ -95,6 +101,10 @@ jobs:
   # taniyor. Yani depo Windows'u derleyebiliyordu, YALNIZCA CI onu hic
   # olcmuyordu; yayinlanan surumlerde de Windows ikilisi yoktu.
   build-linux:
+    # Is duzeyi sinir: adim sinirlarinin YAKALAYAMADIGI asilmalar icin
+    # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
+    # suresinin birkac kati.
+    timeout-minutes: 60
     # Branch protection on this repo lists `build-linux` / `build-macos`
     # as *required* status checks, by name. A job-level
     # `if:` that evaluates to false makes the job "skipped" — which is
@@ -114,6 +124,7 @@ jobs:
       # status check appears as green to branch protection) but every
       # subsequent step gates on the docs-only flag below.
       - name: Docs-only skip notice
+        timeout-minutes: 2
         if: needs.detect-docs-only.outputs.docs_only == 'true'
         run: echo "Docs-only change detected; build steps will be skipped (job reports success)."
 
@@ -123,6 +134,7 @@ jobs:
       # checkout time on every job. cone-mode must be off because we
       # want to *exclude* a path while keeping everything else.
       - uses: actions/checkout@v6
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
           sparse-checkout: |
@@ -138,6 +150,7 @@ jobs:
       # change in the worst case). pull_request and tag pushes always
       # build from source — they don't have a prior PR to reuse.
       - name: Try to reuse PR's build artifacts
+        timeout-minutes: 10
         id: reuse
         if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -218,6 +231,7 @@ jobs:
       # what actually changed. The action handles cache key / restore
       # / save and exposes `ccache gcc` / `ccache g++` via PATH wrappers.
       - name: Setup ccache
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
@@ -242,6 +256,7 @@ jobs:
       # runtime, so this is a build-time-only header dep — it does not
       # reduce the output binary's portability.
       - name: Cache apt packages
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: awalsh128/cache-apt-pkgs-action@v1.4.3
         with:
@@ -255,6 +270,7 @@ jobs:
           version: 1.4
 
       - name: Verify apt packages installed
+        timeout-minutes: 15
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           # The cache action installs the packages on cache miss + restore
@@ -350,6 +366,7 @@ jobs:
       # Emscripten sürümü yerelde vendored olanla aynı (5.0.0); NDK
       # runner'da hazır ($ANDROID_NDK_LATEST_HOME).
       - name: Emscripten (web dist arsivi icin)
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: mymindstorm/setup-emsdk@v14
         with:
@@ -412,6 +429,7 @@ jobs:
       # vectors. Cheap (~1s) and orthogonal to the main `tulpar` binary
       # so a regression in this isolated unit fails fast.
       - name: SHA-256 helper test
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           g++ -std=c++17 tests/sha256_smoke.cpp src/pkg/sha256.cpp \
@@ -419,6 +437,7 @@ jobs:
           ./sha256_smoke
 
       - name: Prepare artifact
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           mkdir -p dist
@@ -464,6 +483,7 @@ jobs:
         timeout-minutes: 15
 
       - name: Upload TameEngine bundle
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -474,6 +494,7 @@ jobs:
       # placed there either by the reuse step (downloaded from PR run)
       # or by Prepare artifact (copied from build/).
       - name: Upload artifact
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -481,6 +502,7 @@ jobs:
           path: dist/tulpar-linux-x64
 
       - name: Upload runtime library
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -503,6 +525,10 @@ jobs:
   # python cekmek paket listesini ve sureyi bosuna buyuturdu.
   # ---------------------------------------------------------------------
   build-windows:
+    # Is duzeyi sinir: adim sinirlarinin YAKALAYAMADIGI asilmalar icin
+    # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
+    # suresinin birkac kati.
+    timeout-minutes: 45
     # `build-linux`'taki ayni gerekce: is KOSAR, adimlar bayraga gore atlanir.
     needs: detect-docs-only
     runs-on: windows-latest
@@ -511,11 +537,13 @@ jobs:
         shell: msys2 {0}
     steps:
       - name: Docs-only skip notice
+        timeout-minutes: 2
         if: needs.detect-docs-only.outputs.docs_only == 'true'
         shell: pwsh
         run: Write-Host "Docs-only change detected; build steps will be skipped (job reports success)."
 
       - uses: actions/checkout@v6
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
           sparse-checkout: |
@@ -541,6 +569,7 @@ jobs:
       # butun ornekler `[AOT] Error: Linking failed (code 1)` ile dustu:
       # derleyici uretiliyor ama HICBIR PROGRAM derleyemiyordu.
       - name: MSYS2 (MINGW64)
+        timeout-minutes: 15
         id: msys2
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: msys2/setup-msys2@v2
@@ -573,6 +602,7 @@ jobs:
       # ccache yolu is alanina gore: `~` msys2 ile pwsh arasinda FARKLI
       # cozuluyor ve onbellek gidis-donusu tutmuyordu.
       - name: Restore ccache
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/cache@v5
         with:
@@ -604,6 +634,7 @@ jobs:
         timeout-minutes: 25
 
       - name: ccache stats
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         env:
           CCACHE_DIR: ${{ runner.temp }}/ccache
@@ -613,6 +644,7 @@ jobs:
       # ikilinin acilmamasi (eksik DLL, yanlis alt sistem) Windows'ta en sik
       # ariza; `--version` bunu bir saniyede olcer.
       - name: Duman (tulpar.exe --version)
+        timeout-minutes: 2
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: ./build-windows/tulpar.exe version
 
@@ -620,6 +652,7 @@ jobs:
       # satirla duser ("Linking failed (code 1)") ve 23 kirmizi satirin
       # ardindaki tek sebep gorunmez olur. Burada TEK satirda soyluyoruz.
       - name: AOT linkleyicisi yerinde mi (clang++)
+        timeout-minutes: 2
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: |
           if ! command -v clang++ >/dev/null 2>&1; then
@@ -637,6 +670,7 @@ jobs:
       # cagrisi `tulpar.exe`e cozuluyor; harness'lar da zaten `.exe` yedegi
       # tutuyor (tests/typeinfer/run.sh).
       - name: Ikiliyi koke koy
+        timeout-minutes: 2
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: |
           cp build-windows/tulpar.exe tulpar.exe
@@ -647,15 +681,28 @@ jobs:
       # linkleyicisi MSYS2'nin clang++/gcc'sini kullaniyor, yani bu adim
       # ayni zamanda "uretilen ikili KENDI BASINA program derleyebiliyor mu"
       # sorusunu da yanitliyor — DLL kapisinin olcemedigi tek sey buydu.
+      #
+      # ZAMAN ASIMI (2026-10-02): bu adim iki kez (2026-09-29, kosum
+      # 36541971703 ve 36558977958) 46-47 dk asili kaldi. Adim 30 dk
+      # sinirliydi ve sinir ISLEMEDI: adim "in_progress" kaldi, is
+      # "The hosted runner lost communication with the server" ile dustu —
+      # runner kaynak acligindan (CPU/bellek) sunucuyla baglantiyi kaybetti
+      # ve isi sunucu ancak kalp atisi zaman asiminda bitirdi. Yani adim
+      # siniri runner'in kendisi saglamken ise yarar; o durum icin artik
+      # olculmus surelere gore sikilastirildi (son 40 basarili kosum,
+      # 2026-10-02: Ornekler ortanca 56 sn / en cok 65 sn, Suitler 178 /
+      # 200 sn), ve her isin bir is duzeyi siniri var. Runner kaybini
+      # sinirlar onleyemez; tekrarlarsa build.sh test'in paralelligi
+      # (TULPAR_TEST_JOBS, varsayilan nproc) buradan dusurulmeli.
       - name: Ornekler (build.sh test)
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: ./build.sh test
-        timeout-minutes: 30
+        timeout-minutes: 10
 
       - name: Suitler (build.sh suites)
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: ./build.sh suites
-        timeout-minutes: 25
+        timeout-minutes: 12
 
       - name: Typeinfer kapisi
         if: needs.detect-docs-only.outputs.docs_only != 'true'
@@ -680,6 +727,7 @@ jobs:
         timeout-minutes: 8
 
       - name: Paketle + DLL kapisi
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         shell: pwsh
         run: |
@@ -736,6 +784,7 @@ jobs:
       # ISCC runner imajinda hazir gelir; gelmezse adim ACIKCA duser (sessizce
       # kurulumcusuz surum yayinlamak yerine).
       - name: GUI kurulumcu (Inno Setup)
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         shell: pwsh
         env:
@@ -772,6 +821,7 @@ jobs:
           Write-Host "Kurulumcu uretildi: tulpar-setup-windows-x64.exe ($sz MB, surum $appVersion / dosya $viVersion)"
 
       - name: Upload artifact
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -786,6 +836,7 @@ jobs:
       # kaliyor; ayni dosyalar SHA256SUMS'a girip ayrica yayinlaniyor.
       # Kapi: tests/surum_varliklari.py (update listesi <-> yayin listesi).
       - name: Upload loose Windows files (update / install.ps1)
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -795,6 +846,7 @@ jobs:
             dist/*.dll
 
       - name: Upload installer
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -802,6 +854,7 @@ jobs:
           path: dist/tulpar-setup-windows-x64.exe
 
       - name: Upload runtime library
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -809,16 +862,22 @@ jobs:
           path: dist/libtulpar_runtime-windows-x64.a
 
   build-macos:
+    # Is duzeyi sinir: adim sinirlarinin YAKALAYAMADIGI asilmalar icin
+    # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
+    # suresinin birkac kati.
+    timeout-minutes: 40
     # See `build-linux` for why this is unconditional + gated per-step
     # instead of skipped at the job level.
     needs: detect-docs-only
     runs-on: macos-latest
     steps:
       - name: Docs-only skip notice
+        timeout-minutes: 2
         if: needs.detect-docs-only.outputs.docs_only == 'true'
         run: echo "Docs-only change detected; build steps will be skipped (job reports success)."
 
       - uses: actions/checkout@v6
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
           sparse-checkout: |
@@ -829,6 +888,7 @@ jobs:
       # Same reuse-on-push:main pattern as build-linux. See the Linux
       # job's reuse step for the rationale and fallback behavior.
       - name: Try to reuse PR's build artifacts
+        timeout-minutes: 10
         id: reuse
         if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -885,6 +945,7 @@ jobs:
           echo "reused=true" >> "$GITHUB_OUTPUT"
 
       - name: Setup ccache
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
@@ -905,6 +966,7 @@ jobs:
       # cmake is already in the GitHub Actions macos-* runner image,
       # so we only cache the LLVM tree.
       - name: Cache brew LLVM
+        timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         id: brew-llvm-cache
         uses: actions/cache@v4
@@ -915,6 +977,7 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-brew-llvm18-v1
 
       - name: Install dependencies
+        timeout-minutes: 15
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           brew list --versions cmake >/dev/null 2>&1 || brew install cmake
@@ -957,6 +1020,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Prepare artifact
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           mkdir -p dist
@@ -1032,6 +1096,7 @@ jobs:
         timeout-minutes: 15
 
       - name: Upload TameEngine bundle
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -1039,6 +1104,7 @@ jobs:
           path: dist/TameEngine-macos-universal.tar.gz
 
       - name: Upload artifact
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -1046,6 +1112,7 @@ jobs:
           path: dist/tulpar-macos-universal
 
       - name: Upload runtime library
+        timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -1054,6 +1121,10 @@ jobs:
 
   
   create-release:
+    # Is duzeyi sinir: adim sinirlarinin YAKALAYAMADIGI asilmalar icin
+    # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
+    # suresinin birkac kati.
+    timeout-minutes: 20
     needs: [detect-docs-only, build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     # Stable-only versioning: releases are created ONLY when a `v*` tag
@@ -1071,12 +1142,14 @@ jobs:
     # seeing new versions while the build itself reported green.
     steps:
       - name: Download all artifacts
+        timeout-minutes: 10
         uses: actions/download-artifact@v8
         with:
           pattern: '{tulpar-*,libtulpar_runtime-*,TameEngine-*}'  # Windows zip/lib de bu kalibda
           merge-multiple: true
 
       - name: Compute release tag
+        timeout-minutes: 5
         id: ver
         shell: bash
         run: |
@@ -1095,6 +1168,7 @@ jobs:
       # matches GNU coreutils `sha256sum -b` output (`<hex>  <name>`)
       # so a user can also verify manually with `sha256sum -c`.
       - name: Generate SHA256SUMS.txt
+        timeout-minutes: 5
         shell: bash
         run: |
           # Hash the actual files we're about to upload, not the
@@ -1137,6 +1211,7 @@ jobs:
       # SHA256SUMS.txt itself still ships, and install scripts treat the
       # `.asc` as opt-in.
       - name: Sign SHA256SUMS.txt (GPG, opt-in via secret)
+        timeout-minutes: 5
         shell: bash
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -1163,6 +1238,7 @@ jobs:
           cat SHA256SUMS.txt.asc
 
       - name: Create Release
+        timeout-minutes: 10
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}

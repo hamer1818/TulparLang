@@ -64,6 +64,10 @@ concurrency:
 
 jobs:
   etiket:
+    # Is duzeyi sinir: adim sinirlarinin YAKALAYAMADIGI asilmalar icin
+    # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
+    # suresinin birkac kati.
+    timeout-minutes: 10
     name: Sonraki surumu hesapla ve etiketle
     runs-on: ubuntu-latest
     steps:
@@ -79,11 +83,13 @@ jobs:
       # "surum cikti sandim, cikmamis" hatasinin tam olarak bu bicimi
       # yasandi. Kimligi BURADA PAT yapmak tek dogru yer.
       - uses: actions/checkout@v6
+        timeout-minutes: 5
         with:
           fetch-depth: 0
           token: ${{ secrets.AUTOMERGE_PAT }}
 
       - name: Karar + etiket
+        timeout-minutes: 5
         env:
           # PAT yoksa is ACIKCA kirmizi olur: "surum cikmadi" sessiz kalmasin.
           GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
