@@ -3686,6 +3686,51 @@ static bool sv_access_proven(LLVMBackend *backend, const char *arr_name, ASTNode
   return false;
 }
 
+// SOGUK YOL INDEKSI (2026-10-02). Sekil onbellegi olan erisimde genel
+// (onbelleksiz) yol SOGUK: dizi dongu basinda kutusuz bulundu, buraya yalniz
+// sinir disi / tur ya da genislik degisimi dusurur. Ama oradaki adres
+// hesaplari (`items + 16*k`, `idata + 8*k`) dongu sayacinin AFIN fonksiyonu
+// ve LLVM'in LSR'i (llc'de, IR ciktisinda gorunmez) her biri icin SICAK
+// donguye ayri bir sayac koyuyor; adimi degisken olan sayaclar (`k = k + i`)
+// yazmac yetmeyince yigina tasiyor. Olculdu (2026-10-02, Ryzen 7 9800X3D):
+// elek bir FONKSIYONUN icinde 10,4 ms, ic dongu 4 sayac (2'sinin adimi
+// yigindan); bu yolla 8,3 ms (clang -O2 C 8,3). Ust duzey elek global
+// `n`/`i` sayesinde bu sorunu hic yasamiyordu (bellekten gelen deger SCEV'i
+// durduruyordu) — #431'in `int` / dizi global kurali bu yuzdendi.
+// Cozum: soguk yolun 8/16 bayt adimli adresleri indeksi volatile bir yigin
+// yuvasindan gecirir; SCEV onu cozemez, LSR onlar icin sayac kurmaz. 4 bayt
+// adimli (u32) adres ve sinir sinavi ham indeksle kalir: sicak yolla ayni
+// sayaci paylasiyorlar. Maliyet yalniz soguk yolda (bir saklama + bir
+// yukleme). TULPAR_NO_COLD_IX=1 kapatir (olcum / pozitif kontrol).
+static LLVMValueRef cold_index_opaque(LLVMBackend *backend, LLVMValueRef idx64) {
+  static int off = -1;
+  if (off < 0) {
+    const char *v = getenv("TULPAR_NO_COLD_IX");
+    off = (v && *v && *v != '0') ? 1 : 0;
+  }
+  if (off || !idx64) return idx64;
+  // Fonksiyon basina TEK yuva (giris blogunda adla bulunur): erisim basina
+  // yuva ozyinelemeli fonksiyonun cercevesini gereksiz buyuturdu.
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMValueRef slot = nullptr;
+  for (LLVMValueRef in = LLVMGetFirstInstruction(LLVMGetEntryBasicBlock(fn)); in;
+       in = LLVMGetNextInstruction(in)) {
+    if (!LLVMIsAAllocaInst(in)) continue;
+    size_t len = 0;
+    const char *nm = LLVMGetValueName2(in, &len);
+    if (len == 12 && memcmp(nm, "cold.ix.slot", 12) == 0) {
+      slot = in;
+      break;
+    }
+  }
+  if (!slot) slot = llvm_build_alloca_at_entry(backend, backend->int_type, "cold.ix.slot");
+  LLVMValueRef st = LLVMBuildStore(backend->builder, idx64, slot);
+  LLVMSetVolatile(st, 1);
+  LLVMValueRef ld = LLVMBuildLoad2(backend->builder, backend->int_type, slot, "cold.ix");
+  LLVMSetVolatile(ld, 1);
+  return ld;
+}
+
 // Dongu-degismezi STRUCT DIZISI sekli (SarrCacheScope doldurur). `var_slot`:
 // onbellege alinan degiskenin yuvasi — ayni ad baska bir yuvaya cozulurse
 // (golgeleme) onbellek kullanilmaz.
@@ -4922,7 +4967,7 @@ static bool main_local_declare(LLVMBackend *backend, ASTNode_C *decl) {
       global_needs_tls(decl->name) || global_needs_atomic_rmw(decl->name))
     return false;
   if (LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) return false;
-  // `int` ve (struct olmayan) DIZI bildirimleri global KALIR — olculdu
+  // `int` (ve 2026-10-02'ye kadar struct olmayan DIZI) bildirimleri global KALIR — olculdu
   // (elek, Ryzen 7 9800X3D, 2026-10-01, 9 tur en iyi): hepsi terfi 9,4 ms,
   // yalniz int'ler global 9,5, yalniz diziler global 9,6, ikisi de global
   // 7,6 (= eski). Sebep LLVM'in LSR'i: dis dongu sayaci, sinir ve dizi
@@ -4940,7 +4985,16 @@ static bool main_local_declare(LLVMBackend *backend, ASTNode_C *decl) {
   if (!(all && *all && *all != '0')) {
     const DataType dt = decl->data_type;
     if (dt == TYPE_INT) return false;
-    if ((dt == TYPE_ARRAY || dt == TYPE_ARRAY_INT || dt == TYPE_ARRAY_FLOAT ||
+    // DIZI bildirimleri (2026-10-02) artik terfi ediliyor: ustteki elek
+    // gerilemesinin dizi payi soguk yol indeksinden geliyordu ve kapandi
+    // (cold_index_opaque). Olculdu (Ryzen 7 9800X3D, 2026-10-02): yalniz
+    // diziler terfi elek 7,6 / taban 7,7 ms, matmul 36,6 / 37,2; `int`
+    // terfisi elek 8,2-8,8 (LSR, dis dongude `i * i` icin karesel sayac —
+    // clang -O2 C ile ayni kod, 8,4), particles 36 -> 43. TULPAR_NO_ML_ARR=1
+    // diziyi yine global tutar (olcum).
+    const char *na = getenv("TULPAR_NO_ML_ARR");
+    if ((na && *na && *na != '0') &&
+        (dt == TYPE_ARRAY || dt == TYPE_ARRAY_INT || dt == TYPE_ARRAY_FLOAT ||
          dt == TYPE_ARRAY_STR || dt == TYPE_ARRAY_BOOL || dt == TYPE_ARRAY_JSON) &&
         !decl->elem_custom_type)
       return false;
@@ -9339,9 +9393,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         LLVMValueRef ix0 = llvm_extract_vm_val_int(backend, idx_val);
         LLVMValueRef ir0 = LLVMBuildICmp(backend->builder, LLVMIntULT, ix0, ccnt,
                                          "arr.cinr");
-        LLVMBuildCondBr(backend->builder,
-                        LLVMBuildAnd(backend->builder, ii0, ir0, "arr.cok"),
-                        bb_cached, bb_gen);
+        LLVMValueRef cbr = LLVMBuildCondBr(backend->builder,
+                                           LLVMBuildAnd(backend->builder, ii0, ir0, "arr.cok"),
+                                           bb_cached, bb_gen);
+        // Onbellek yolu SICAK, genel yol SOGUK: agirliksiz blok yerlesimi
+        // soguk bloklari sicak dongunun arasina koyuyordu (olculdu,
+        // 2026-10-02, qsort: on uc hizalamasinda 70,6/72,4/72,6 ->
+        // 70,1/71,0/69,9 ms; komut sayisi ayni, on-uc beklemesi az).
+        set_branch_weights(backend, cbr, 2000, 1);
         LLVMPositionBuilderAtEnd(backend->builder, bb_cached);
         LLVMValueRef craw = emit_shape_elem_load(backend, cid, shp->is32_slot,
                                                  ix0, "arr.cep");
@@ -9373,6 +9432,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, LLVMIntEQ, otype,
           llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "arr.isarr");
       LLVMValueRef idx64 = llvm_extract_vm_val_int(backend, idx_val);
+      // Onbellekli erisimde bu yol soguk: 8/16 bayt adimli adresleri LSR'den
+      // gizle (4 bayt adimli olan sicak yolla ayni sayaci paylasiyor).
+      LLVMValueRef idxw = shp ? cold_index_opaque(backend, idx64) : idx64;
       LLVMValueRef cnt_ptr = LLVMBuildStructGEP2(
           backend->builder, backend->obj_array_type, objp, 2, "arr.cnt.ptr");
       LLVMValueRef cnt =
@@ -9428,7 +9490,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                       bb_f64, bb_u64);
       LLVMPositionBuilderAtEnd(backend->builder, bb_f64);
       LLVMValueRef fep = LLVMBuildGEP2(backend->builder, backend->float_type, idata,
-                                       &idx64, 1, "arr.felem.ptr");
+                                       &idxw, 1, "arr.felem.ptr");
       LLVMValueRef fraw = LLVMBuildLoad2(backend->builder, backend->float_type, fep,
                                          "arr.felem");
       llvm_tbaa_tag(backend, fraw, 1);
@@ -9450,7 +9512,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
       LLVMPositionBuilderAtEnd(backend->builder, bb_u64);
       LLVMValueRef ielem_ptr = LLVMBuildGEP2(
-          backend->builder, backend->int_type, idata, &idx64, 1, "arr.ielem.ptr");
+          backend->builder, backend->int_type, idata, &idxw, 1, "arr.ielem.ptr");
       LLVMValueRef iraw = LLVMBuildLoad2(backend->builder, backend->int_type,
                                          ielem_ptr, "arr.ielem");
       llvm_tbaa_tag(backend, iraw, 1);
@@ -9465,7 +9527,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                           it_ptr, "arr.items");
       llvm_tbaa_tag(backend, items, 0);
       LLVMValueRef elem_ptr = LLVMBuildGEP2(
-          backend->builder, backend->vm_value_type, items, &idx64, 1,
+          backend->builder, backend->vm_value_type, items, &idxw, 1,
           "arr.elem.ptr");
       LLVMValueRef fast_val = LLVMBuildLoad2(
           backend->builder, backend->vm_value_type, elem_ptr, "arr.elem");
@@ -14556,7 +14618,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           if (backend->shape_want32 != 0)
             sok = LLVMBuildAnd(backend->builder, sok,
                                emit_fits_i32(backend, svl), "set.cok");
-          LLVMBuildCondBr(backend->builder, sok, sb_cached, sb_gen);
+          LLVMValueRef scbr = LLVMBuildCondBr(backend->builder, sok, sb_cached, sb_gen);
+          set_branch_weights(backend, scbr, 2000, 1);   // okuma tarafindaki not
           LLVMPositionBuilderAtEnd(backend->builder, sb_cached);
           emit_shape_elem_store(backend, scid, s_shp->is32_slot, six, svl,
                                 "set.cep");
@@ -14596,6 +14659,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
             backend->builder, LLVMIntEQ, s_otype,
             llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "set.isarr");
         LLVMValueRef s_idx = llvm_extract_vm_val_int(backend, index);
+        // Onbellekli yazmada bu yol soguk: 8/16 bayt adimli adresleri LSR'den
+        // gizle (4 bayt adimli olan sicak yolla ayni sayaci paylasiyor).
+        LLVMValueRef s_idxw = s_shp ? cold_index_opaque(backend, s_idx) : s_idx;
         LLVMValueRef s_cnt_ptr = LLVMBuildStructGEP2(
             backend->builder, backend->obj_array_type, s_objp, 2,
             "set.cnt.ptr");
@@ -14672,7 +14738,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                         sb_f64, sb_slow);
         LLVMPositionBuilderAtEnd(backend->builder, sb_f64);
         LLVMValueRef s_fep = LLVMBuildGEP2(backend->builder, backend->int_type, s_idata,
-                                           &s_idx, 1, "set.felem.ptr");
+                                           &s_idxw, 1, "set.felem.ptr");
         LLVMValueRef s_fst = LLVMBuildStore(backend->builder, s_vi, s_fep);
         llvm_tbaa_tag(backend, s_fst, 1);
         LLVMBuildBr(backend->builder, sb_done);
@@ -14695,7 +14761,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
         LLVMPositionBuilderAtEnd(backend->builder, sb_u64);
         LLVMValueRef s_iep = LLVMBuildGEP2(
-            backend->builder, backend->int_type, s_idata, &s_idx, 1,
+            backend->builder, backend->int_type, s_idata, &s_idxw, 1,
             "set.ielem.ptr");
         LLVMValueRef s_ist = LLVMBuildStore(backend->builder, s_vi, s_iep);
         llvm_tbaa_tag(backend, s_ist, 1);
@@ -14710,7 +14776,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         llvm_tbaa_tag(backend, s_items, 0);
       llvm_tbaa_tag(backend, s_items, 0);
         LLVMValueRef s_ep = LLVMBuildGEP2(
-            backend->builder, backend->vm_value_type, s_items, &s_idx, 1,
+            backend->builder, backend->vm_value_type, s_items, &s_idxw, 1,
             "set.elem.ptr");
         LLVMValueRef s_st1 = LLVMBuildStore(backend->builder, val, s_ep);
         llvm_tbaa_tag(backend, s_st1, 1);

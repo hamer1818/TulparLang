@@ -366,7 +366,12 @@ Bulgular, sırayla ele alınması önerilen:
    *Sıra resmî koşumda (`run.py`) yeniden ölçülmedi: `results.json`'daki
    öteki dillerle (Rust 58,5, Go 64,9, Java 76,2) yan yana konunca ~3. Kalan: `acc` üst düzey `int`
    → global, tur başına bir saklama (main yereli olunca 63,5 ms; `int`
-   kuralı elek yüzünden global, bkz. `main_local_declare`).
+   kuralı elek yüzünden global, bkz. `main_local_declare`). **2026-10-02
+   yeniden ölçüldü:** bugünkü kodla `acc` main yereli 83,4 / global 80,2 ms
+   — terfinin kazancı yok (`acc` zaten phi'de). Kalan farkın büyük
+   olasılıkla kaynağı (IR'dan okundu, ölçülmedi) dolaylı çağrı hedefine
+   giden zincir: dizi elemanı → fonksiyon referansı → yerel işaretçi, Rust'ın
+   tek yüklemesine karşı iki bağımlı yükleme.
 6. **`qsort`** — **büyük ölçüde kapandı (2026-10-01):** maliyet dizide değil
    tamsayı değişkenlerdeydi — fonksiyon içindeki `int i` kutulu bir yuva ve
    her `i + 1` / `a[i] < p` etiket dallanması + geri düşüş çağrısı ödüyordu

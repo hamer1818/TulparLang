@@ -1,0 +1,110 @@
+import "test";
+
+// SOGUK YOL INDEKSI + DIZI MAIN YERELI (2026-10-02).
+//
+// Sekil onbellekli dongude dizi erisiminin GENEL (onbelleksiz) yolu artik
+// 8/16 bayt adimli adresleri volatile bir yuvadan gecen indeksle hesapliyor
+// (LLVM'in LSR'i o adresler icin sicak donguye sayac koymasin diye —
+// llvm_backend.cpp cold_index_opaque). O yol yalniz dizi dongude tur ya da
+// genislik degistirince kosuyor; bu paket TAM o gecisleri koşturup sonucu
+// eleman eleman, beklenen degerle karsilastiriyor:
+//   * 32-bit int depo -> i32'ye sigmayan yazma -> 64-bit depo (u64 yolu);
+//   * int depo -> float yazma -> kutulu depo (16 baytlik eleman yolu);
+//   * double depo -> int yazma -> kutulu depo;
+//   * okuma tarafi: ayni gecislerden sonra kalan elemanlar.
+// Her senaryo hem fonksiyon icinde hem ust duzeyde (dizi artik main yereli).
+
+func esit_int(a, b) {
+    if (len(a) != len(b)) {
+        _test_set_fail("uzunluk farkli: " + toString(len(a)) + " / " + toString(len(b)));
+        return;
+    }
+    for (var t = 0; t < len(a); t = t + 1) {
+        if (typeof(a[t]) != typeof(b[t]) || a[t] != b[t]) {
+            _test_set_fail("eleman " + toString(t) + ": " + toString(a[t]) + " (" + typeof(a[t]) +
+                           ") / " + toString(b[t]) + " (" + typeof(b[t]) + ")");
+            return;
+        }
+    }
+}
+
+// Elek bicimi (k = k + i, degisken adim): ortada bir eleman 64-bit'e tasiyor.
+func elek_genisle(int n): array {
+    int[] f = array_fill(n + 1, 0);
+    int i = 2;
+    while (i <= n) {
+        if (f[i] == 0) {
+            int k = i * i;
+            while (k <= n) {
+                f[k] = 1;
+                if (k == 36) { f[k] = 5000000000; }
+                k = k + i;
+            }
+        }
+        i = i + 1;
+    }
+    return f;
+}
+
+func run_elek_genisle() {
+    array f = elek_genisle(60);
+    // 2..60 arasi bilesik sayilar 42 tane. 36'ya i = 2 ve i = 3 adimlarinda
+    // yaziliyor, ikisinde de son yazma 5e9 (i = 6 bilesik, atlaniyor).
+    assert_eq_int(f[36], 5000000000);
+    int bilesik = 0;
+    for (int j = 2; j <= 60; j = j + 1) { if (f[j] != 0) { bilesik = bilesik + 1; } }
+    assert_eq_int(bilesik, 42);
+    assert_eq_int(f[59], 0);
+    assert_eq_int(f[49], 1);
+}
+
+// int depo -> float yazma -> kutulu: dongunun geri kalani genel yolda.
+func kutuya_don(int n): array {
+    int[] a = array_fill(n, 0);
+    for (int i = 0; i < n; i = i + 1) {
+        a[i] = i * 3;
+        if (i == 4) { a[2] = 2.5; }
+    }
+    return a;
+}
+
+func run_kutuya_don() {
+    array a = kutuya_don(9);
+    array b = [0, 3, 2.5, 9, 12, 15, 18, 21, 24];
+    esit_int(a, b);
+}
+
+// double depo -> int yazma -> kutulu; okuma tarafi gecisten sonra.
+func double_int(int n): float {
+    float[] d = array_fill(n, 0.5);
+    float t = 0.0;
+    for (int i = 0; i < n; i = i + 1) {
+        if (i == 3) { d[5] = 7; }
+        t = t + d[i];
+    }
+    return t;
+}
+
+func run_double_int() {
+    // 0.5 * 9 + 7 (d[5] int) = 11.5
+    assert_close(double_int(10), 11.5, 0.0);
+}
+
+// Ust duzey: ayni gecisler, dizi main yereli (yalniz main'de gorunuyor).
+int[] g_dizi = array_fill(12, 0);
+for (int i = 0; i < 12; i = i + 1) {
+    g_dizi[i] = i;
+    if (i == 6) { g_dizi[1] = 9000000000; }
+}
+int g_top = 0;
+for (int i = 0; i < 12; i = i + 1) { g_top = g_top + g_dizi[i]; }
+func run_ust_duzey() {
+    // 0+2+...+11 = 65, eksi 1, arti 9e9
+    assert_eq_int(g_top, 9000000065);
+}
+
+test("elek bicimi: 32 -> 64 bit gecis (u64 soguk yolu)", "run_elek_genisle");
+test("int depo -> float yazma -> kutulu (16 B soguk yolu)", "run_kutuya_don");
+test("double depo -> int yazma -> kutulu, okuma", "run_double_int");
+test("ust duzey dizi (main yereli) 64-bit gecis", "run_ust_duzey");
+test_summary();

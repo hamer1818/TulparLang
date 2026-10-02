@@ -1436,6 +1436,16 @@ TPREOF
         exit 1
     fi
 
+    # SOGUK YOL INDEKSI + DIZI MAIN YERELI (2026-10-02): onbellekli dizi
+    # erisiminin genel yolundaki 8/16 bayt adimli adresler LSR'den gizli mi
+    # (IR'da volatile; TULPAR_NO_COLD_IX=1 pozitif kontrol), yalniz main'de
+    # gorulen ust duzey diziler main yereli mi (TULPAR_NO_ML_ARR=1), sonuc
+    # dort derlemede ayni mi. Anlam: tests/soguk_indeks.test.tpr.
+    if ! bash tests/soguk_indeks.sh ./tulpar; then
+        echo -e "${RED}soguk yol indeksi / dizi main yereli bozuk!${NC}"
+        exit 1
+    fi
+
     # INT YEREL GOLGE SURUMU + INT DIZI DONGU SURUMU (2026-10-01): fonksiyon
     # icindeki kutulu `int` yereller dongude native golgeye iniyor mu, ic ice
     # dongunun en icteki `for`u 32-bit int depoya iniyor mu, kurulmamasi

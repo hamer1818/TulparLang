@@ -13,6 +13,33 @@ tag still works;
 
 ## [Unreleased]
 
+### Hızlandı — dizi erişiminin soğuk yolu LSR'den gizlendi: fonksiyon içi elek 10,0 → 8,0 ms; üst düzey diziler main yereli
+
+- **Kök neden:** şekil önbellekli dizi erişiminin genel (soğuk) yolundaki
+  adresler (`items + 16*k`, `idata + 8*k`) döngü sayacının afin fonksiyonu;
+  LLVM'in LSR'i her biri için sıcak döngüye ayrı sayaç koyuyor, adımı
+  değişken sayaçlar (`k = k + i`) yığına taşıyordu. Elek bir fonksiyonun
+  içinde bu yüzden 10 ms'ydi; üst düzeyde global `n`/`i` SCEV'i tesadüfen
+  durdurduğu için 7,6. #431'in "`int` ve dizi global kalır" kuralı bundandı.
+- **Düzeltme:** soğuk yolun 8/16 bayt adımlı adresleri indeksi volatile bir
+  yığın yuvasından geçiriyor (yalnız soğuk yolda bir saklama + bir yükleme);
+  önbellekli dalın iki koluna ağırlık. `TULPAR_NO_COLD_IX=1` kapatır.
+- **Terfi kuralı değişti:** yalnız main'de görülen üst düzey DİZİ
+  bildirimleri (`int[]`, `float[]`, `array`, ...) artık main'in yereli (struct
+  dışı diziler 2026-10-01'den beri global kalıyordu). Üst düzey dizi +
+  döngüde kullanıcı çağrısı kalıbı 43,5 → 37,7 ms. `int` global KALIYOR:
+  terfisi eleği 7,7 → 8,2–8,8 geriletiyor (dış döngüde `i * i` için karesel
+  LSR sayaçları; clang -O2 C de aynı, 8,4). `TULPAR_NO_ML_ARR=1` dizileri
+  yine global tutar.
+- Ölçüm (Ryzen 7 9800X3D, `taskset -c 10,11`): 13 çekirdekte gerileme yok
+  (qsort'un resmî kaynakta görünen +1,3 ms'i yerleşim: dört hizalamada
+  ortalama 71,3 → 70,4); `scene3d_editor` derlemesi aynı. Ayrıntı:
+  `docs/mindmap/Performance.md` "Soğuk yol indeksi".
+- Kapı: `tests/soguk_indeks.sh` (IR kararı iki anahtarla iki yönde, terfi
+  kararı, dört derlemede aynı sonuç, sınır dışı) + `tests/soguk_indeks.test.tpr`
+  (soğuk yolu koşturan genişleme / kutulama geçişleri; indeksi bozan
+  sabotajda kırmızı).
+
 ### Hızlandı — struct dizisi döngüsü sınavsız, `push` ve `toFloat` satır içi: `particles` 53,4 → 37,3 ms (Rust 36,9)
 
 - **Struct dizisi döngü sürümü.** `for (i = E; i < UB; i = i + 1)` (ya da
