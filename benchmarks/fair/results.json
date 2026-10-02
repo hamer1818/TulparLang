@@ -5,49 +5,49 @@
       "desc": "tamsay\u0131 aritmeti\u011fi (zincirleme ba\u011f\u0131ml\u0131l\u0131k)",
       "rows": {
         "c": {
-          "best": 134.4,
+          "best": 134.6,
           "median": 134.6,
-          "rss_kb": 2308
+          "rss_kb": 2216
         },
         "cpp": {
-          "best": 134.9,
-          "median": 135.8,
-          "rss_kb": 4348
+          "best": 134.8,
+          "median": 135.0,
+          "rss_kb": 4264
         },
         "rust": {
           "best": 144.1,
-          "median": 144.2,
-          "rss_kb": 2512
+          "median": 144.1,
+          "rss_kb": 2564
         },
         "go": {
           "best": 134.7,
-          "median": 134.7,
-          "rss_kb": 5668
+          "median": 135.0,
+          "rss_kb": 5704
         },
         "csharp": {
-          "best": 149.0,
-          "median": 149.9,
-          "rss_kb": 24876
+          "best": 149.1,
+          "median": 149.8,
+          "rss_kb": 25000
         },
         "java": {
-          "best": 145.3,
-          "median": 145.6,
-          "rss_kb": 44048
+          "best": 143.7,
+          "median": 144.5,
+          "rss_kb": 43528
         },
         "node": {
-          "best": 707.5,
-          "median": 710.5,
-          "rss_kb": 51544
+          "best": 708.0,
+          "median": 709.0,
+          "rss_kb": 51732
         },
         "python": {
-          "best": 3159.7,
-          "median": 3268.1,
+          "best": 3204.6,
+          "median": 3206.9,
           "rss_kb": 9684
         },
         "tulpar": {
-          "best": 134.6,
-          "median": 135.2,
-          "rss_kb": 2652
+          "best": 134.5,
+          "median": 136.3,
+          "rss_kb": 2788
         }
       },
       "output": "723378784",
@@ -55,27 +55,27 @@
       "build": {
         "c": {
           "kb": 15.7,
-          "ms": 24.4
+          "ms": 26.7
         },
         "rust": {
           "kb": 3727.8,
-          "ms": 796.7
+          "ms": 76.5
         },
         "cpp": {
           "kb": 15.7,
-          "ms": 36.1
+          "ms": 42.8
         },
         "csharp": {
           "kb": 4.5,
-          "ms": 1871.8
+          "ms": 1579.6
         },
         "go": {
           "kb": 2365.6,
-          "ms": 139.8
+          "ms": 14.0
         },
         "java": {
           "kb": 0.7,
-          "ms": 272.7
+          "ms": 174.8
         },
         "node": {
           "kb": null,
@@ -86,8 +86,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1412.9,
-          "ms": 59.0
+          "kb": 1417.3,
+          "ms": 56.3
         }
       }
     },
@@ -98,47 +98,47 @@
         "c": {
           "best": 1.6,
           "median": 1.7,
-          "rss_kb": 2236
+          "rss_kb": 2200
         },
         "cpp": {
           "best": 1.9,
-          "median": 2.0,
-          "rss_kb": 4384
+          "median": 1.9,
+          "rss_kb": 4332
         },
         "rust": {
           "best": 3.7,
           "median": 3.8,
-          "rss_kb": 2444
+          "rss_kb": 2448
         },
         "go": {
-          "best": 6.7,
-          "median": 6.8,
-          "rss_kb": 5664
+          "best": 6.6,
+          "median": 6.7,
+          "rss_kb": 3560
         },
         "csharp": {
-          "best": 20.7,
-          "median": 20.7,
-          "rss_kb": 24080
+          "best": 20.4,
+          "median": 20.6,
+          "rss_kb": 24352
         },
         "java": {
-          "best": 13.0,
-          "median": 13.3,
-          "rss_kb": 43652
+          "best": 12.4,
+          "median": 12.5,
+          "rss_kb": 43668
         },
         "node": {
-          "best": 25.2,
-          "median": 25.7,
-          "rss_kb": 48580
+          "best": 24.7,
+          "median": 25.5,
+          "rss_kb": 48556
         },
         "python": {
           "best": 142.7,
-          "median": 146.2,
-          "rss_kb": 9532
+          "median": 145.1,
+          "rss_kb": 9548
         },
         "tulpar": {
-          "best": 0.5,
-          "median": 0.5,
-          "rss_kb": 2756
+          "best": 0.4,
+          "median": 0.4,
+          "rss_kb": 2716
         }
       },
       "output": "2178309",
@@ -146,27 +146,27 @@
       "build": {
         "c": {
           "kb": 15.7,
-          "ms": 36.1
+          "ms": 37.5
         },
         "rust": {
           "kb": 3727.8,
-          "ms": 64.0
+          "ms": 64.6
         },
         "cpp": {
           "kb": 15.7,
-          "ms": 50.3
+          "ms": 49.1
         },
         "csharp": {
           "kb": 4.5,
-          "ms": 671.5
+          "ms": 652.5
         },
         "go": {
           "kb": 2365.8,
-          "ms": 15.3
+          "ms": 13.2
         },
         "java": {
           "kb": 0.7,
-          "ms": 183.7
+          "ms": 169.8
         },
         "node": {
           "kb": null,
@@ -177,8 +177,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1413.0,
-          "ms": 54.9
+          "kb": 1417.4,
+          "ms": 52.9
         }
       }
     },
@@ -187,49 +187,49 @@
       "desc": "dizi/bellek eri\u015fimi",
       "rows": {
         "c": {
-          "best": 8.1,
-          "median": 8.1,
-          "rss_kb": 21560
+          "best": 7.5,
+          "median": 7.7,
+          "rss_kb": 21596
         },
         "cpp": {
           "best": 7.9,
-          "median": 8.4,
-          "rss_kb": 23524
+          "median": 8.2,
+          "rss_kb": 23568
         },
         "rust": {
-          "best": 8.8,
-          "median": 9.1,
-          "rss_kb": 22008
+          "best": 8.4,
+          "median": 8.5,
+          "rss_kb": 22012
         },
         "go": {
-          "best": 8.8,
-          "median": 8.9,
-          "rss_kb": 26292
+          "best": 8.3,
+          "median": 8.5,
+          "rss_kb": 26324
         },
         "csharp": {
-          "best": 21.7,
-          "median": 22.7,
-          "rss_kb": 44096
+          "best": 21.0,
+          "median": 21.5,
+          "rss_kb": 44612
         },
         "java": {
-          "best": 21.9,
-          "median": 22.5,
-          "rss_kb": 68036
+          "best": 19.8,
+          "median": 22.8,
+          "rss_kb": 68128
         },
         "node": {
-          "best": 29.1,
-          "median": 29.9,
-          "rss_kb": 70492
+          "best": 27.3,
+          "median": 28.8,
+          "rss_kb": 71228
         },
         "python": {
-          "best": 463.2,
-          "median": 468.3,
-          "rss_kb": 48496
+          "best": 452.2,
+          "median": 457.9,
+          "rss_kb": 48708
         },
         "tulpar": {
-          "best": 7.6,
-          "median": 7.7,
-          "rss_kb": 22468
+          "best": 7.8,
+          "median": 7.9,
+          "rss_kb": 22388
         }
       },
       "output": "348513",
@@ -237,27 +237,27 @@
       "build": {
         "c": {
           "kb": 15.8,
-          "ms": 23.4
+          "ms": 23.5
         },
         "rust": {
           "kb": 3727.8,
-          "ms": 74.8
+          "ms": 70.4
         },
         "cpp": {
           "kb": 16.2,
-          "ms": 75.7
+          "ms": 73.0
         },
         "csharp": {
           "kb": 4.5,
-          "ms": 668.7
+          "ms": 645.4
         },
         "go": {
           "kb": 2367.0,
-          "ms": 14.7
+          "ms": 13.6
         },
         "java": {
           "kb": 0.7,
-          "ms": 179.6
+          "ms": 169.1
         },
         "node": {
           "kb": null,
@@ -268,8 +268,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1413.0,
-          "ms": 66.6
+          "kb": 1421.3,
+          "ms": 63.0
         }
       }
     },
@@ -278,49 +278,49 @@
       "desc": "dizgi kurma + tarama",
       "rows": {
         "c": {
-          "best": 37.7,
+          "best": 37.8,
           "median": 38.2,
-          "rss_kb": 10024
+          "rss_kb": 10012
         },
         "cpp": {
-          "best": 14.7,
-          "median": 14.9,
-          "rss_kb": 11968
+          "best": 14.8,
+          "median": 15.1,
+          "rss_kb": 11984
         },
         "rust": {
-          "best": 18.6,
-          "median": 18.9,
-          "rss_kb": 10172
+          "best": 19.0,
+          "median": 19.3,
+          "rss_kb": 10632
         },
         "go": {
-          "best": 24.5,
+          "best": 24.4,
           "median": 24.9,
-          "rss_kb": 26752
+          "rss_kb": 29052
         },
         "csharp": {
-          "best": 30.6,
-          "median": 31.4,
-          "rss_kb": 57600
+          "best": 29.3,
+          "median": 30.9,
+          "rss_kb": 57944
         },
         "java": {
-          "best": 35.2,
-          "median": 36.1,
-          "rss_kb": 72932
+          "best": 32.5,
+          "median": 33.0,
+          "rss_kb": 73444
         },
         "node": {
-          "best": 108.0,
-          "median": 110.6,
-          "rss_kb": 169208
+          "best": 104.9,
+          "median": 107.4,
+          "rss_kb": 169000
         },
         "python": {
-          "best": 200.8,
-          "median": 204.2,
-          "rss_kb": 142572
+          "best": 201.1,
+          "median": 206.3,
+          "rss_kb": 144112
         },
         "tulpar": {
-          "best": 10.0,
-          "median": 10.6,
-          "rss_kb": 17784
+          "best": 9.5,
+          "median": 10.1,
+          "rss_kb": 17916
         }
       },
       "output": "7780000 2000000",
@@ -328,27 +328,27 @@
       "build": {
         "c": {
           "kb": 15.9,
-          "ms": 31.0
+          "ms": 30.9
         },
         "rust": {
           "kb": 3731.9,
-          "ms": 85.2
+          "ms": 81.3
         },
         "cpp": {
           "kb": 16.6,
-          "ms": 100.9
+          "ms": 101.1
         },
         "csharp": {
           "kb": 5.0,
-          "ms": 623.8
+          "ms": 620.3
         },
         "go": {
           "kb": 2380.0,
-          "ms": 16.0
+          "ms": 13.5
         },
         "java": {
           "kb": 1.5,
-          "ms": 189.3
+          "ms": 179.7
         },
         "node": {
           "kb": null,
@@ -359,8 +359,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1413.0,
-          "ms": 57.0
+          "kb": 1417.5,
+          "ms": 55.4
         }
       }
     },
@@ -369,49 +369,49 @@
       "desc": "dizi yineleme (deyimsel uzunlukla)",
       "rows": {
         "c": {
-          "best": 2.2,
-          "median": 2.9,
-          "rss_kb": 40964
+          "best": 2.6,
+          "median": 3.3,
+          "rss_kb": 41104
         },
         "cpp": {
-          "best": 3.6,
-          "median": 4.1,
-          "rss_kb": 43100
+          "best": 2.6,
+          "median": 3.7,
+          "rss_kb": 43020
         },
         "rust": {
-          "best": 1.8,
-          "median": 2.7,
-          "rss_kb": 41508
+          "best": 2.2,
+          "median": 2.8,
+          "rss_kb": 41576
         },
         "go": {
-          "best": 4.1,
+          "best": 3.6,
           "median": 4.3,
-          "rss_kb": 46780
+          "rss_kb": 46784
         },
         "csharp": {
-          "best": 18.3,
-          "median": 18.8,
-          "rss_kb": 64180
+          "best": 18.1,
+          "median": 18.5,
+          "rss_kb": 64000
         },
         "java": {
-          "best": 18.5,
-          "median": 22.2,
-          "rss_kb": 90164
+          "best": 19.6,
+          "median": 22.0,
+          "rss_kb": 90244
         },
         "node": {
-          "best": 18.6,
-          "median": 19.2,
-          "rss_kb": 90060
+          "best": 19.2,
+          "median": 20.5,
+          "rss_kb": 90476
         },
         "python": {
-          "best": 409.0,
-          "median": 420.8,
-          "rss_kb": 205512
+          "best": 412.6,
+          "median": 426.2,
+          "rss_kb": 205452
         },
         "tulpar": {
-          "best": 1.2,
-          "median": 1.3,
-          "rss_kb": 22432
+          "best": 1.3,
+          "median": 1.7,
+          "rss_kb": 22504
         }
       },
       "output": "12499997500000",
@@ -419,27 +419,27 @@
       "build": {
         "c": {
           "kb": 15.8,
-          "ms": 23.9
+          "ms": 22.8
         },
         "rust": {
           "kb": 3731.8,
-          "ms": 76.5
+          "ms": 73.8
         },
         "cpp": {
           "kb": 16.2,
-          "ms": 81.9
+          "ms": 74.4
         },
         "csharp": {
           "kb": 4.5,
-          "ms": 636.6
+          "ms": 617.9
         },
         "go": {
           "kb": 2365.6,
-          "ms": 15.7
+          "ms": 13.8
         },
         "java": {
           "kb": 0.7,
-          "ms": 179.3
+          "ms": 169.6
         },
         "node": {
           "kb": null,
@@ -450,8 +450,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1417.0,
-          "ms": 73.6
+          "kb": 1421.4,
+          "ms": 70.2
         }
       }
     },
@@ -461,48 +461,48 @@
       "rows": {
         "c": {
           "best": 158.5,
-          "median": 158.5,
-          "rss_kb": 2304
+          "median": 158.8,
+          "rss_kb": 2228
         },
         "cpp": {
           "best": 158.9,
-          "median": 158.9,
+          "median": 159.2,
           "rss_kb": 4376
         },
         "rust": {
-          "best": 155.2,
-          "median": 155.3,
-          "rss_kb": 2504
+          "best": 155.3,
+          "median": 155.6,
+          "rss_kb": 2508
         },
         "go": {
-          "best": 155.3,
-          "median": 155.4,
-          "rss_kb": 5628
+          "best": 155.4,
+          "median": 155.5,
+          "rss_kb": 5696
         },
         "csharp": {
-          "best": 168.6,
-          "median": 170.1,
-          "rss_kb": 24296
+          "best": 169.1,
+          "median": 169.7,
+          "rss_kb": 24512
         },
         "java": {
-          "best": 170.8,
-          "median": 171.4,
-          "rss_kb": 44392
+          "best": 165.5,
+          "median": 170.7,
+          "rss_kb": 43848
         },
         "node": {
-          "best": 172.5,
-          "median": 174.5,
-          "rss_kb": 52724
+          "best": 169.3,
+          "median": 173.5,
+          "rss_kb": 52768
         },
         "python": {
-          "best": 15531.8,
-          "median": 15678.0,
-          "rss_kb": 9656
+          "best": 16159.9,
+          "median": 17048.6,
+          "rss_kb": 9776
         },
         "tulpar": {
-          "best": 158.0,
-          "median": 158.5,
-          "rss_kb": 2588
+          "best": 154.1,
+          "median": 154.7,
+          "rss_kb": 2724
         }
       },
       "output": "97631088",
@@ -510,27 +510,27 @@
       "build": {
         "c": {
           "kb": 15.7,
-          "ms": 24.3
+          "ms": 25.1
         },
         "rust": {
           "kb": 3727.8,
-          "ms": 76.0
+          "ms": 65.8
         },
         "cpp": {
           "kb": 15.7,
-          "ms": 37.8
+          "ms": 37.2
         },
         "csharp": {
           "kb": 5.0,
-          "ms": 629.6
+          "ms": 618.2
         },
         "go": {
           "kb": 2365.5,
-          "ms": 14.8
+          "ms": 13.7
         },
         "java": {
           "kb": 1.0,
-          "ms": 180.2
+          "ms": 175.4
         },
         "node": {
           "kb": null,
@@ -541,8 +541,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1412.9,
-          "ms": 55.7
+          "kb": 1417.4,
+          "ms": 55.4
         }
       }
     },
@@ -552,48 +552,48 @@
       "rows": {
         "c": {
           "best": 30.8,
-          "median": 31.7,
-          "rss_kb": 11904
+          "median": 31.2,
+          "rss_kb": 12048
         },
         "cpp": {
-          "best": 30.5,
-          "median": 30.6,
-          "rss_kb": 13620
+          "best": 30.7,
+          "median": 31.3,
+          "rss_kb": 13528
         },
         "rust": {
-          "best": 35.8,
-          "median": 35.9,
-          "rss_kb": 11932
+          "best": 35.7,
+          "median": 36.0,
+          "rss_kb": 12052
         },
         "go": {
-          "best": 82.3,
-          "median": 85.1,
-          "rss_kb": 16140
+          "best": 83.0,
+          "median": 85.8,
+          "rss_kb": 18068
         },
         "csharp": {
-          "best": 104.7,
-          "median": 104.9,
-          "rss_kb": 34952
+          "best": 104.0,
+          "median": 104.3,
+          "rss_kb": 34764
         },
         "java": {
-          "best": 73.5,
-          "median": 73.8,
-          "rss_kb": 61224
+          "best": 72.4,
+          "median": 72.8,
+          "rss_kb": 60780
         },
         "node": {
-          "best": 168.0,
-          "median": 173.0,
-          "rss_kb": 63204
+          "best": 168.5,
+          "median": 169.3,
+          "rss_kb": 63528
         },
         "python": {
-          "best": 18854.0,
-          "median": 19315.5,
-          "rss_kb": 57688
+          "best": 19117.7,
+          "median": 19236.5,
+          "rss_kb": 57660
         },
         "tulpar": {
-          "best": 36.7,
-          "median": 37.3,
-          "rss_kb": 12224
+          "best": 36.1,
+          "median": 36.4,
+          "rss_kb": 12512
         }
       },
       "output": "3027049920",
@@ -601,27 +601,27 @@
       "build": {
         "c": {
           "kb": 15.8,
-          "ms": 38.3
+          "ms": 38.5
         },
         "rust": {
           "kb": 3731.8,
-          "ms": 84.6
+          "ms": 83.2
         },
         "cpp": {
           "kb": 16.3,
-          "ms": 96.1
+          "ms": 94.3
         },
         "csharp": {
           "kb": 5.0,
-          "ms": 625.0
+          "ms": 627.3
         },
         "go": {
           "kb": 2371.7,
-          "ms": 14.5
+          "ms": 13.4
         },
         "java": {
           "kb": 1.0,
-          "ms": 178.8
+          "ms": 174.8
         },
         "node": {
           "kb": null,
@@ -632,8 +632,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1421.0,
-          "ms": 91.1
+          "kb": 1425.3,
+          "ms": 91.3
         }
       }
     },
@@ -643,48 +643,48 @@
       "rows": {
         "c": {
           "best": 114.5,
-          "median": 114.6,
-          "rss_kb": 2344
+          "median": 114.8,
+          "rss_kb": 2220
         },
         "cpp": {
-          "best": 114.9,
-          "median": 115.0,
-          "rss_kb": 4360
+          "best": 114.8,
+          "median": 115.1,
+          "rss_kb": 4204
         },
         "rust": {
-          "best": 114.5,
-          "median": 115.0,
-          "rss_kb": 2512
+          "best": 114.4,
+          "median": 114.8,
+          "rss_kb": 2580
         },
         "go": {
-          "best": 151.5,
-          "median": 151.5,
-          "rss_kb": 3564
+          "best": 151.1,
+          "median": 151.4,
+          "rss_kb": 5620
         },
         "csharp": {
-          "best": 281.6,
-          "median": 282.1,
-          "rss_kb": 25564
+          "best": 280.5,
+          "median": 281.1,
+          "rss_kb": 25172
         },
         "java": {
-          "best": 121.0,
+          "best": 120.4,
           "median": 121.4,
-          "rss_kb": 45304
+          "rss_kb": 45208
         },
         "node": {
-          "best": 184.8,
-          "median": 185.6,
-          "rss_kb": 53604
+          "best": 182.1,
+          "median": 184.0,
+          "rss_kb": 53832
         },
         "python": {
-          "best": 11801.2,
-          "median": 11842.6,
-          "rss_kb": 10048
+          "best": 11589.2,
+          "median": 11805.3,
+          "rss_kb": 10180
         },
         "tulpar": {
-          "best": 114.7,
-          "median": 115.1,
-          "rss_kb": 3052
+          "best": 114.8,
+          "median": 118.0,
+          "rss_kb": 3036
         }
       },
       "output": "-169019082",
@@ -692,15 +692,15 @@
       "build": {
         "c": {
           "kb": 16.1,
-          "ms": 47.0
+          "ms": 46.4
         },
         "rust": {
           "kb": 3736.2,
-          "ms": 82.2
+          "ms": 80.8
         },
         "cpp": {
           "kb": 16.1,
-          "ms": 94.9
+          "ms": 94.1
         },
         "csharp": {
           "kb": 7.0,
@@ -708,11 +708,11 @@
         },
         "go": {
           "kb": 2372.5,
-          "ms": 14.5
+          "ms": 14.1
         },
         "java": {
           "kb": 2.5,
-          "ms": 190.8
+          "ms": 183.5
         },
         "node": {
           "kb": null,
@@ -723,8 +723,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1481.2,
-          "ms": 415.0
+          "kb": 1489.6,
+          "ms": 408.8
         }
       }
     },
@@ -733,49 +733,49 @@
       "desc": "dizgi anahtarli sozluk: N ekleme + N arama",
       "rows": {
         "c": {
-          "best": 64.3,
-          "median": 85.0,
-          "rss_kb": 66304
+          "best": 59.8,
+          "median": 70.8,
+          "rss_kb": 66128
         },
         "cpp": {
-          "best": 250.5,
-          "median": 257.5,
-          "rss_kb": 77664
+          "best": 196.4,
+          "median": 212.9,
+          "rss_kb": 77812
         },
         "rust": {
-          "best": 322.5,
-          "median": 354.0,
-          "rss_kb": 132640
+          "best": 290.5,
+          "median": 310.0,
+          "rss_kb": 132436
         },
         "go": {
-          "best": 177.4,
-          "median": 191.5,
-          "rss_kb": 101348
+          "best": 148.9,
+          "median": 151.8,
+          "rss_kb": 101368
         },
         "csharp": {
-          "best": 248.2,
-          "median": 254.4,
-          "rss_kb": 190588
+          "best": 226.8,
+          "median": 230.4,
+          "rss_kb": 190940
         },
         "java": {
-          "best": 171.2,
-          "median": 183.6,
-          "rss_kb": 215444
+          "best": 167.3,
+          "median": 170.7,
+          "rss_kb": 222576
         },
         "node": {
-          "best": 296.9,
-          "median": 390.2,
-          "rss_kb": 136468
+          "best": 268.6,
+          "median": 283.8,
+          "rss_kb": 137248
         },
         "python": {
-          "best": 395.8,
-          "median": 416.0,
-          "rss_kb": 118100
+          "best": 376.4,
+          "median": 397.1,
+          "rss_kb": 118312
         },
         "tulpar": {
-          "best": 106.1,
-          "median": 109.1,
-          "rss_kb": 90436
+          "best": 77.8,
+          "median": 78.3,
+          "rss_kb": 66192
         }
       },
       "output": "1000000 499999500000",
@@ -783,27 +783,27 @@
       "build": {
         "c": {
           "kb": 15.9,
-          "ms": 39.6
+          "ms": 39.8
         },
         "rust": {
           "kb": 3758.4,
-          "ms": 110.0
+          "ms": 107.8
         },
         "cpp": {
           "kb": 17.2,
-          "ms": 154.3
+          "ms": 154.7
         },
         "csharp": {
           "kb": 5.0,
-          "ms": 626.0
+          "ms": 622.7
         },
         "go": {
           "kb": 2365.5,
-          "ms": 15.3
+          "ms": 13.9
         },
         "java": {
           "kb": 1.6,
-          "ms": 204.5
+          "ms": 194.0
         },
         "node": {
           "kb": null,
@@ -814,8 +814,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1413.0,
-          "ms": 57.2
+          "kb": 1421.4,
+          "ms": 56.5
         }
       }
     },
@@ -824,49 +824,49 @@
       "desc": "elle hizli siralama (rastgele erisim + ozyineleme)",
       "rows": {
         "c": {
-          "best": 60.2,
-          "median": 61.0,
-          "rss_kb": 6308
+          "best": 57.3,
+          "median": 57.4,
+          "rss_kb": 6340
         },
         "cpp": {
-          "best": 58.8,
-          "median": 62.2,
-          "rss_kb": 7908
+          "best": 57.9,
+          "median": 58.3,
+          "rss_kb": 7948
         },
         "rust": {
-          "best": 57.4,
-          "median": 58.7,
-          "rss_kb": 6364
+          "best": 56.8,
+          "median": 57.0,
+          "rss_kb": 6472
         },
         "go": {
-          "best": 59.3,
-          "median": 61.4,
-          "rss_kb": 9848
+          "best": 58.7,
+          "median": 59.2,
+          "rss_kb": 9984
         },
         "csharp": {
-          "best": 117.2,
-          "median": 121.7,
-          "rss_kb": 30156
+          "best": 118.0,
+          "median": 118.6,
+          "rss_kb": 30200
         },
         "java": {
-          "best": 90.2,
-          "median": 90.5,
-          "rss_kb": 55712
+          "best": 87.4,
+          "median": 89.0,
+          "rss_kb": 53252
         },
         "node": {
-          "best": 103.8,
-          "median": 104.7,
-          "rss_kb": 57016
+          "best": 104.6,
+          "median": 105.5,
+          "rss_kb": 57048
         },
         "python": {
-          "best": 1085.5,
-          "median": 1128.9,
-          "rss_kb": 48868
+          "best": 1075.3,
+          "median": 1107.0,
+          "rss_kb": 48640
         },
         "tulpar": {
-          "best": 69.6,
-          "median": 70.0,
-          "rss_kb": 6760
+          "best": 70.8,
+          "median": 71.0,
+          "rss_kb": 6808
         }
       },
       "output": "0 500621 999999 735541235 0",
@@ -874,27 +874,27 @@
       "build": {
         "c": {
           "kb": 15.8,
-          "ms": 33.9
+          "ms": 32.9
         },
         "rust": {
           "kb": 3731.9,
-          "ms": 86.9
+          "ms": 82.7
         },
         "cpp": {
           "kb": 16.3,
-          "ms": 88.0
+          "ms": 85.4
         },
         "csharp": {
           "kb": 5.0,
-          "ms": 634.0
+          "ms": 618.8
         },
         "go": {
           "kb": 2370.3,
-          "ms": 14.8
+          "ms": 13.9
         },
         "java": {
           "kb": 1.5,
-          "ms": 189.5
+          "ms": 185.3
         },
         "node": {
           "kb": null,
@@ -905,8 +905,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1425.2,
-          "ms": 130.6
+          "kb": 1433.6,
+          "ms": 125.7
         }
       }
     },
@@ -915,49 +915,49 @@
       "desc": "struct dizisi uzerinde fizik adimi (50 adim)",
       "rows": {
         "c": {
-          "best": 42.1,
-          "median": 44.0,
-          "rss_kb": 33580
+          "best": 41.9,
+          "median": 42.6,
+          "rss_kb": 33564
         },
         "cpp": {
-          "best": 43.1,
-          "median": 48.5,
-          "rss_kb": 35364
+          "best": 42.9,
+          "median": 44.0,
+          "rss_kb": 35420
         },
         "rust": {
-          "best": 36.9,
-          "median": 37.4,
-          "rss_kb": 33816
+          "best": 36.2,
+          "median": 36.9,
+          "rss_kb": 33828
         },
         "go": {
-          "best": 59.4,
-          "median": 59.7,
-          "rss_kb": 38696
+          "best": 58.9,
+          "median": 59.9,
+          "rss_kb": 38656
         },
         "csharp": {
-          "best": 60.3,
-          "median": 61.2,
-          "rss_kb": 56372
+          "best": 60.5,
+          "median": 61.1,
+          "rss_kb": 56988
         },
         "java": {
-          "best": 85.6,
-          "median": 86.3,
-          "rss_kb": 113604
+          "best": 84.1,
+          "median": 85.3,
+          "rss_kb": 113096
         },
         "node": {
-          "best": 291.7,
-          "median": 295.3,
-          "rss_kb": 199784
+          "best": 276.1,
+          "median": 300.1,
+          "rss_kb": 201408
         },
         "python": {
-          "best": 7236.9,
-          "median": 7342.9,
-          "rss_kb": 206120
+          "best": 7012.2,
+          "median": 7184.1,
+          "rss_kb": 206144
         },
         "tulpar": {
-          "best": 52.7,
-          "median": 53.3,
-          "rss_kb": 35440
+          "best": 36.3,
+          "median": 37.1,
+          "rss_kb": 34436
         }
       },
       "output": "345506039590",
@@ -965,27 +965,27 @@
       "build": {
         "c": {
           "kb": 15.8,
-          "ms": 33.0
+          "ms": 32.5
         },
         "rust": {
           "kb": 3736.2,
-          "ms": 86.8
+          "ms": 84.8
         },
         "cpp": {
           "kb": 16.2,
-          "ms": 108.2
+          "ms": 107.9
         },
         "csharp": {
           "kb": 5.0,
-          "ms": 626.8
+          "ms": 628.2
         },
         "go": {
           "kb": 2367.8,
-          "ms": 15.1
+          "ms": 13.8
         },
         "java": {
           "kb": 1.4,
-          "ms": 193.6
+          "ms": 196.4
         },
         "node": {
           "kb": null,
@@ -996,8 +996,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1416.9,
-          "ms": 77.2
+          "kb": 1421.3,
+          "ms": 73.1
         }
       }
     },
@@ -1006,49 +1006,49 @@
       "desc": "fonksiyon degeri tablosundan dolayli cagri",
       "rows": {
         "c": {
-          "best": 91.8,
-          "median": 92.8,
-          "rss_kb": 2264
+          "best": 91.3,
+          "median": 92.4,
+          "rss_kb": 2252
         },
         "cpp": {
-          "best": 92.1,
+          "best": 91.5,
           "median": 93.7,
-          "rss_kb": 4148
+          "rss_kb": 4340
         },
         "rust": {
-          "best": 59.1,
-          "median": 59.2,
-          "rss_kb": 2704
+          "best": 59.2,
+          "median": 59.4,
+          "rss_kb": 2560
         },
         "go": {
-          "best": 64.1,
-          "median": 65.0,
-          "rss_kb": 5480
+          "best": 65.3,
+          "median": 67.4,
+          "rss_kb": 3560
         },
         "csharp": {
-          "best": 167.1,
-          "median": 168.6,
-          "rss_kb": 25272
+          "best": 166.5,
+          "median": 167.0,
+          "rss_kb": 25540
         },
         "java": {
-          "best": 75.0,
-          "median": 76.8,
-          "rss_kb": 44232
+          "best": 74.9,
+          "median": 76.3,
+          "rss_kb": 44572
         },
         "node": {
-          "best": 130.5,
-          "median": 131.6,
-          "rss_kb": 50272
+          "best": 128.3,
+          "median": 131.3,
+          "rss_kb": 50232
         },
         "python": {
-          "best": 1597.4,
-          "median": 1624.8,
-          "rss_kb": 9428
+          "best": 1571.8,
+          "median": 1607.5,
+          "rss_kb": 9300
         },
         "tulpar": {
-          "best": 78.4,
-          "median": 81.0,
-          "rss_kb": 2868
+          "best": 81.4,
+          "median": 91.7,
+          "rss_kb": 2836
         }
       },
       "output": "336713",
@@ -1056,11 +1056,11 @@
       "build": {
         "c": {
           "kb": 15.8,
-          "ms": 24.7
+          "ms": 23.1
         },
         "rust": {
           "kb": 3727.9,
-          "ms": 67.5
+          "ms": 65.6
         },
         "cpp": {
           "kb": 15.8,
@@ -1068,15 +1068,15 @@
         },
         "csharp": {
           "kb": 5.0,
-          "ms": 641.9
+          "ms": 643.4
         },
         "go": {
           "kb": 2365.8,
-          "ms": 14.8
+          "ms": 13.4
         },
         "java": {
           "kb": 1.5,
-          "ms": 207.2
+          "ms": 184.8
         },
         "node": {
           "kb": null,
@@ -1087,8 +1087,8 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1413.1,
-          "ms": 60.1
+          "kb": 1421.5,
+          "ms": 56.7
         }
       }
     },
@@ -1097,49 +1097,49 @@
       "desc": "metin kur + bol + tamsayiya cevir",
       "rows": {
         "c": {
-          "best": 56.6,
-          "median": 57.8,
-          "rss_kb": 32208
+          "best": 56.4,
+          "median": 57.4,
+          "rss_kb": 32180
         },
         "cpp": {
-          "best": 60.5,
-          "median": 61.2,
-          "rss_kb": 35780
+          "best": 60.2,
+          "median": 61.5,
+          "rss_kb": 35244
         },
         "rust": {
-          "best": 77.8,
-          "median": 77.9,
-          "rss_kb": 32940
+          "best": 77.0,
+          "median": 77.2,
+          "rss_kb": 32184
         },
         "go": {
-          "best": 117.3,
-          "median": 118.0,
-          "rss_kb": 124492
+          "best": 118.2,
+          "median": 119.2,
+          "rss_kb": 146656
         },
         "csharp": {
-          "best": 252.6,
-          "median": 254.3,
-          "rss_kb": 336860
+          "best": 248.2,
+          "median": 250.9,
+          "rss_kb": 337116
         },
         "java": {
-          "best": 186.8,
-          "median": 191.2,
-          "rss_kb": 494800
+          "best": 185.7,
+          "median": 188.3,
+          "rss_kb": 490668
         },
         "node": {
-          "best": 694.1,
-          "median": 740.2,
+          "best": 698.6,
+          "median": 737.0,
           "rss_kb": 576204
         },
         "python": {
-          "best": 854.0,
-          "median": 860.0,
-          "rss_kb": 314536
+          "best": 872.4,
+          "median": 879.7,
+          "rss_kb": 314100
         },
         "tulpar": {
-          "best": 75.3,
-          "median": 76.0,
-          "rss_kb": 266880
+          "best": 70.7,
+          "median": 71.3,
+          "rss_kb": 227540
         }
       },
       "output": "5000000 249997500000",
@@ -1147,27 +1147,27 @@
       "build": {
         "c": {
           "kb": 15.9,
-          "ms": 30.8
+          "ms": 30.7
         },
         "rust": {
           "kb": 3732.4,
-          "ms": 95.4
+          "ms": 98.2
         },
         "cpp": {
           "kb": 16.7,
-          "ms": 122.2
+          "ms": 121.9
         },
         "csharp": {
           "kb": 5.0,
-          "ms": 628.1
+          "ms": 643.8
         },
         "go": {
           "kb": 2385.6,
-          "ms": 15.8
+          "ms": 15.0
         },
         "java": {
           "kb": 1.6,
-          "ms": 189.6
+          "ms": 186.6
         },
         "node": {
           "kb": null,
@@ -1178,29 +1178,29 @@
           "ms": null
         },
         "tulpar": {
-          "kb": 1413.1,
-          "ms": 61.1
+          "kb": 1421.4,
+          "ms": 63.1
         }
       }
     }
   },
   "baseline": {
-    "c": 0.1469630005885847,
-    "python": 5.792793001091923,
-    "node": 10.817495000083,
-    "cpp": 0.43734300015785266,
-    "csharp": 8.32935100152099,
-    "tulpar": 0.21636699966620654,
-    "rust": 0.2192029987782007,
-    "go": 0.32272099997499026,
-    "java": 7.769783000185271
+    "c": 0.16961700021056458,
+    "python": 5.764599998656195,
+    "node": 11.005572003341513,
+    "cpp": 0.40686399734113365,
+    "csharp": 8.26150300053996,
+    "tulpar": 0.21176799782551825,
+    "rust": 0.2153450004698243,
+    "go": 0.36845000067842193,
+    "java": 7.5694799998018425
   },
   "baseline_size_kb": {
     "c": 15.4,
     "cpp": 15.4,
     "rust": 3721.9,
     "go": 1905.6,
-    "tulpar": 1412.8
+    "tulpar": 1413.2
   },
   "repeats": 5,
   "timeout_s": 60.0
