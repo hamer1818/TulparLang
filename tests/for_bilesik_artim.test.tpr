@@ -1,0 +1,89 @@
+import "test";
+
+// FOR BASLIGINDA BILESIK ARTIM (2026-10-02).
+//
+// `for (...; ...; i += 3)` 2026-10-02'ye kadar AYRISTIRMA HATASIYDI
+// ("for ifadelerinden sonra ')' bekleniyordu"): artim parse_expression()'a
+// gidiyordu ve `+=` orada bir islec degil. Deyim olarak `i += 3;` gecerliydi.
+// Bu paket anlami olcer; dongu planlarinin bu bicimi TANIDIGI (surum
+// kuruluyor mu) tests/for_bilesik_artim.sh'de.
+
+func run_arti() {
+    int s = 0;
+    int n = 0;
+    for (int i = 0; i < 10; i += 3) { s = s + i; n = n + 1; }
+    assert_eq_int(s, 18);      // 0+3+6+9
+    assert_eq_int(n, 4);
+}
+
+func run_eksi_dis_degisken() {
+    int j = 0;
+    int s = 0;
+    for (j = 10; j > 0; j -= 4) { s = s + j; }
+    assert_eq_int(s, 18);      // 10+6+2
+    assert_eq_int(j, -2);      // cikista j
+}
+
+func run_carpi_bolu() {
+    int s = 0;
+    for (int i = 1; i < 100; i *= 3) { s = s + i; }
+    assert_eq_int(s, 121);     // 1+3+9+27+81
+    int t = 0;
+    for (int i = 64; i > 0; i /= 2) { t = t + 1; }
+    assert_eq_int(t, 7);       // 64..1
+    int u = 0;
+    for (int i = 9; i > 4; i %= 5) { u = u + 1; }
+    assert_eq_int(u, 1);       // 9 -> 4
+}
+
+func run_bit_bicimleri() {
+    int t = 0;
+    for (int i = 1; i < 1000; i <<= 2) { t = t + 1; }
+    assert_eq_int(t, 5);       // 1,4,16,64,256
+    int u = 0;
+    for (int i = 255; i > 0; i >>= 1) { u = u + 1; }
+    assert_eq_int(u, 8);
+    int v = 0;
+    for (int i = 7; i != 0; i &= i - 1) { v = v + 1; }
+    assert_eq_int(v, 3);       // popcount(7)
+}
+
+func run_float_sayac() {
+    float x = 0.0;
+    int n = 0;
+    for (float f = 0.0; f < 1.0; f += 0.25) { x = x + f; n = n + 1; }
+    assert_eq_int(n, 4);
+    assert_eq_float(x, 1.5);   // 0+0.25+0.5+0.75
+}
+
+func run_eleman_hedefi() {
+    int[] a = [0];
+    int n = 0;
+    for (int i = 0; a[0] < 5; a[0] += 1) { n = n + 1; }
+    assert_eq_int(n, 5);
+    assert_eq_int(a[0], 5);
+}
+
+func run_atlamali_okuma() {
+    int[] a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    int s = 0;
+    for (int i = 0; i < len(a); i += 2) { s = s + a[i]; }
+    assert_eq_int(s, 25);      // 1+3+5+7+9
+}
+
+func run_float_dizi_yazma() {
+    float[] xs = [1.0, 2.0, 3.0];
+    float t = 0.0;
+    for (int i = 0; i < len(xs); i += 1) { xs[i] = xs[i] * 2.0; t = t + xs[i]; }
+    assert_eq_float(t, 12.0);
+}
+
+test("+= adimi", "run_arti");
+test("-= adimi, dis degisken", "run_eksi_dis_degisken");
+test("*= /= %= adimi", "run_carpi_bolu");
+test("bit bicimleri", "run_bit_bicimleri");
+test("float sayac", "run_float_sayac");
+test("eleman hedefi a[0] += 1", "run_eleman_hedefi");
+test("atlamali dizi okuma", "run_atlamali_okuma");
+test("float dizi yazma", "run_float_dizi_yazma");
+test_summary();

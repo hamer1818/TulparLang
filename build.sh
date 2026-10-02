@@ -1449,6 +1449,16 @@ TPREOF
         exit 1
     fi
 
+    # FOR BASLIGINDA BILESIK ARTIM (2026-10-02): `for (...; i += K)` ayristirma
+    # hatasiydi; artik `i = i + K`'ye seker aciliyor. Kapi, `+= 1` yazan
+    # donguye struct/float/int dizi surumlerinin `= i + 1` yazanla AYNI
+    # kuruldugunu (ve `+= -1`'e kurulmadigini) olcer. Anlam:
+    # tests/for_bilesik_artim.test.tpr.
+    if ! bash tests/for_bilesik_artim.sh ./tulpar; then
+        echo -e "${RED}for basliginda bilesik artim bozuk!${NC}"
+        exit 1
+    fi
+
     # SOGUK YOL INDEKSI + DIZI MAIN YERELI (2026-10-02): onbellekli dizi
     # erisiminin genel yolundaki 8/16 bayt adimli adresler LSR'den gizli mi
     # (IR'da volatile; TULPAR_NO_COLD_IX=1 pozitif kontrol), yalniz main'de

@@ -13,6 +13,22 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `for` başlığında bileşik artım (`i += 3`, `j -= 4`, `k <<= 1`) ayrıştırma hatasıydı
+
+- Deyim olarak geçerli olan `i += 3;` `for (...; ...; i += 3)` başlığında
+  "for ifadelerinden sonra ')' bekleniyordu" ile reddediliyordu: artım
+  `parse_expression()`'a gidiyor, `+=` orada bir işleç değil. Artık ad
+  hedefinde `i op= e` → `i = i op e` şeker açılıyor (deyim yolundaki bit
+  biçimleriyle aynı; hedef bir ad, çift değerlendirme yok) ve `a[k] += e`
+  eleman hedefi deyim yolundaki gibi `CompoundAssign` (kap/indis bir kez).
+- Şeker açma bilinçli: döngü planları (struct dizisi sürümü #453, float
+  #432 / int #438 dizi sürümleri, sınır sınavı) artımı `i = i + K` olarak
+  tanıyor. `CompoundAssign` bırakılsaydı `i += 1` yazan döngü float/int
+  sürümünden sessizce düşerdi — sabotajla ölçüldü (`tests/for_bilesik_artim.sh`
+  `[fver]`/`[iaver]` kırmızı). Kapı `i = i + 1` (pozitif), `i += 1` ve
+  `i += -1` (negatif: sürüm kurulmamalı) biçimlerini karşılaştırır; anlam
+  `tests/for_bilesik_artim.test.tpr`'de.
+
 ### Eklendi — yerel eklentiler (`--ext`): C kitaplığını derleyiciyi yeniden derlemeden bağlama
 
 - **`tulpar --ext <dizin> oyun.tpr`** (K303): eklenti dizinindeki

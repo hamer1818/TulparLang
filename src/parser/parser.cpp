@@ -1731,21 +1731,70 @@ std::unique_ptr<ASTNode> Parser::parse_for_loop() {
     auto condition = parse_expression();
     expect(TOKEN_SEMICOLON, "Expected ';' after condition");
 
-    // Increment may be either an expression (i++ / i+=1 are postfix/compound)
-    // OR an assignment statement (i = i + 1) — accept both.
+    // Artim bir ifade (i++), bir atama (i = i + 1) ya da bilesik atama
+    // (i += 3, i -= 2, i <<= 1, a[k] += 1) olabilir.
+    //
+    // Bilesik bicim 2026-10-02'ye kadar burada HIC tanınmıyordu: artim
+    // parse_expression()'a gidiyor, `+=` bir ikili islec olmadigi icin orada
+    // duruyor ve "for ifadelerinden sonra ')' bekleniyordu" hatasi veriyordu
+    // — deyim olarak (`i += 3;`) gecerli olan yazim for basliginda reddediliyordu.
+    //
+    // Ad hedefinde `i op= e` -> `i = i op e` seker acmasi yapiliyor (deyim
+    // yolundaki bit bicimleriyle ayni): hedef bir ad, iki kez degerlendirme
+    // yok; ve dongu planlari (int/float surumu #432/#438, struct dizisi
+    // surumu #453, sinir sinavi) artimi `i = i + K` biciminde taniyor — seker
+    // acilmasa `i += K` yazan dongu her birinden sessizce dusup genel yola
+    // kalirdi. Kutulu/dizgi anlamlari ayni: `+=` codegen'i de islemi
+    // vm_binary_op'a ya da ayni yerel tamsayi islemine yaptiriyor.
     std::unique_ptr<ASTNode> increment;
-    if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_ASSIGN) {
+    auto is_compound_tok = [](TulparTokenType t) {
+        return t == TOKEN_PLUS_EQUAL || t == TOKEN_MINUS_EQUAL ||
+               t == TOKEN_MULTIPLY_EQUAL || t == TOKEN_DIVIDE_EQUAL ||
+               t == TOKEN_MODULO_EQUAL || is_bitwise_compound(t);
+    };
+    if (check(TOKEN_IDENTIFIER) &&
+        (peek().type() == TOKEN_ASSIGN || is_compound_tok(peek().type()))) {
         SourceLocation iloc(current().line(), current().column());
         Token name_tok = current();
+        const TulparTokenType op = peek().type();
         reject_const_write(name_tok);
         advance(); // identifier
-        advance(); // '='
+        advance(); // '=' / '+=' / ...
         auto value = parse_expression();
+        if (op != TOKEN_ASSIGN) {
+            const TulparTokenType base =
+                is_bitwise_compound(op) ? bitwise_compound_base(op)
+                : op == TOKEN_PLUS_EQUAL     ? TOKEN_PLUS
+                : op == TOKEN_MINUS_EQUAL    ? TOKEN_MINUS
+                : op == TOKEN_MULTIPLY_EQUAL ? TOKEN_MULTIPLY
+                : op == TOKEN_DIVIDE_EQUAL   ? TOKEN_DIVIDE
+                                             : TOKEN_MODULO;
+            auto lhs = std::make_unique<ASTNode>(
+                Identifier(name_tok.value(), iloc));
+            value = std::make_unique<ASTNode>(
+                BinaryOp(std::move(lhs), std::move(value), base, iloc));
+        }
         increment = std::make_unique<ASTNode>(
             Assignment(name_tok.value(), std::move(value), iloc)
         );
     } else {
         increment = parse_expression();
+        // `a[k] = e` / `a[k] += e`: deyim yolundaki karmasik-lvalue dalinin
+        // aynisi — kap/indis BIR KEZ degerlendirilsin diye seker acilmiyor.
+        const TulparTokenType t = current().type();
+        if (increment && (t == TOKEN_ASSIGN || is_compound_tok(t)) &&
+            std::holds_alternative<ArrayAccess>(increment->value)) {
+            SourceLocation iloc(current().line(), current().column());
+            advance(); // '=' / '+=' / ...
+            auto value = parse_expression();
+            if (t == TOKEN_ASSIGN) {
+                increment = std::make_unique<ASTNode>(
+                    Assignment(std::move(increment), std::move(value), iloc));
+            } else {
+                increment = std::make_unique<ASTNode>(
+                    CompoundAssign(std::move(increment), t, std::move(value), iloc));
+            }
+        }
     }
 
     expect(TOKEN_RPAREN, "Expected ')' after for clauses");
