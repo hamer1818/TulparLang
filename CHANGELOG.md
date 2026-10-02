@@ -13,6 +13,75 @@ tag still works;
 
 ## [Unreleased]
 
+### Değişti — `print` / `toString` dizi, json nesnesi, struct dizisi ve tuple'ı içeriğiyle yazıyor
+
+- **Eskiden:** `print(dizi)` `<array>`, `print(json nesnesi)` `<object>`,
+  `print(struct dizisi)` `<obj>`, `print(tuple)` iç adı
+  (`__tup_int_float { _0: 3, _1: 1.5 }`) basıyordu; `toString(<herhangi bir
+  dizi ya da nesne>)` ise her zaman `<object>` döndürüyordu, `"x" + dizi` de
+  `x<object>`. **Sessiz sonuç:** `lib/test.tpr`'deki `assert_eq_str` iki
+  tarafı `toString` ile karşılaştırdığı için iki diziyi içerikten bağımsız
+  HER ZAMAN eşit sayıyordu — dizi karşılaştıran testler hiçbir şey
+  ölçmüyordu (Tuzaklar 7j).
+- **Şimdi** `print`, `toString`, `"..." + x` birleştirmesi ve `sb_append`
+  TEK bir biçimleyiciden geçiyor (`runtime_bindings.cpp`, `aot_value_repr`),
+  yani biri diğerinden ayrışamıyor:
+
+  | değer | metin |
+  |---|---|
+  | `int[] a = [1, 2, 3]` | `[1, 2, 3]` |
+  | `float[] f = [1.5, 2.0]` | `[1.5, 2]` (eleman `print(<float>)` gibi) |
+  | `[1, "a", [2, 3], true, null]` | `[1, "a", [2, 3], true, null]` |
+  | `{"k": [1, 2], "s": "v"}` | `{"k": [1, 2], "s": "v"}` |
+  | `P[]` (struct dizisi) | `[P { x: 1, y: 2.5, b: 0 }]` (`print(<struct>)` biçimi) |
+  | `iki()` → `(int, float)` | `(3, 1.5)` |
+  | kendini içeren dizi | `[1, [...]]` |
+  | `toString(null)` | `null` (eskiden `nullptr`; `print` zaten `null` basıyordu) |
+
+  Üst düzeydeki dizgi yine çıplak (`print("a")` → `a`); KAP İÇİNDEKİ dizgi
+  tırnaklı ve kaçışlı — `["a, b"]` ile `["a", "b"]` ayrışsın diye.
+  Python / Rust / JS'nin ortak kalıbı. Kutusuz dizi (`int[]` i32/i64,
+  `float[]` double depo) okunurken kutuya çevrilmiyor.
+- **Kırıcı mı:** `<object>` / `<array>` metnine dayanan kod olası değil;
+  yine de çıktı değişti. Depoda iki test eski metni kilitliyordu
+  (`gecici_dizgi`, `struct_kacis`), yeni metne çevrildi.
+- **Kırmızıya dönen eski test yok:** `assert_eq_str`e kap giren çağrılar
+  bütün paketlerde geçici bir sayaçla sayıldı; yeni testler dışında hepsi
+  `toJson` dizgisiydi (kör karşılaştırmalar daha önce eleman eleman
+  karşılaştırmaya çevrilmişti).
+- **Bilinçli olarak değişmeyen:** struct ALANI `print(<struct>)`in eski
+  biçiminde kalıyor (float `%g`, bool `0/1`; 5 test kilitliyor) — struct
+  dizisi ve tuple da onu kullanıyor.
+- `print(dizi)` heap'e dokunmuyor: metin yığındaki 256 baytlık tampondan
+  doğrudan stdout'a (motorun kare içi ayırma sayacı bir `print(dizi)`
+  yüzünden kızarmasın). `toString` zaten yeni dizgi ayırıyor.
+- Web (wasm) ve Android runtime aynı kaynaktan: web'de node altında aynı
+  57 satırlık çıktı masaüstüyle bayt bayt aynı (2026-10-02); Android iki
+  ABI'de derlendi ve `--no-undefined` ile bağlandı.
+- **Performans:** sıcak yollar `toString(int)`, `"k" + i` birleştirmesi ve
+  `sb_append` — nesne kolu ayrı `noinline, cold` fonksiyonlarda (ilk
+  denemede biçimleyici satır içi açılınca `sb_append`'in int yolunun
+  çerçevesi 0x98 → 0x2c8 bayta çıkmıştı; objdump ile görüldü, geri alındı).
+  13 çekirdeğin hepsinde taban ile LLVM IR bayt bayt aynı (fark yalnız
+  runtime arşivinde). A/B (Ryzen 7 9800X3D, `taskset -c 6,7`, izole dizin,
+  12 dönüşümlü tur, en iyi ms, taban/yeni): `intloop` 136,4/136,4 · `fib`
+  0,6/0,6 · `sieve` 7,7/7,9 · `strcat` 13,7/13,7 · `arrayiter` 1,3/1,4 ·
+  `mandelbrot` 160,4/160,5 · `matmul` 37,4/37,3 · `nbody` 116,7/116,8 ·
+  `hashmap` 120,4/115,7 · `qsort` 71,0/71,1 · `particles` 54,3/55,2 ·
+  `callfn` 76,2/75,7 · `parse` 125,3/124,9. `sieve`/`arrayiter`'deki %2–3
+  ve `particles`'taki ~%1 yerleşim (Tuzaklar 7i): `main` ve sıcak yolda
+  çağrılan her runtime fonksiyonu (`aot_sarr_elem_ptr`, `aot_sarr_push_ptr`,
+  `aot_to_float_ptr`) iki ikilide komut komut aynı, yalnız adresler kaydı
+  (`main` mod 64'te 0x10 → 0x30); kaynağa zararsız 1–2 satır önek eklenince
+  fark işaret değiştiriyor (30 tur: `sieve` +3,0 → +0,1 → −2,4 %,
+  `arrayiter` +1,0 → −1,3 → −1,6 %, `particles` ortanca +1,1 → +0,5 →
+  −0,5 %).
+- Kapılar: `tests/deger_metni.test.tpr` (toString; 9dddaf38 derleyicisinde
+  10/10 kırmızı) ve `tests/deger_metni.sh` (print süreç dışından, print ==
+  toString, 300 elemanlı dizi dahil; eski derleyicide 17 maddenin 15'i
+  kırmızı). Sabotaj: kap içi dizgi tırnağı kapatılınca ikisi de kırmızı
+  (3 + 4 madde).
+
 ### Düzeltildi — `tulpar --version` "3.13.1-dev" diyordu (yayınlanan v3.37.x) — sürüm artık git etiketinden
 
 - **Kök neden:** dal ve yerel derlemelerin sürümü `CMakeLists.txt`'teki elle

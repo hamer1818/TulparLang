@@ -2063,6 +2063,11 @@ Nöbetçi: `benchmarks/fair/shapes.py` — dört erişim şekli, C tabanıyla,
 
 ## 7i. Sıcak döngü bayt bayt aynı, program %2 yavaş — hizalama, kod değil
 
+> **Not:** bu, iki ayrı "7i"nin İKİNCİSİ (ilki yukarıda: `try` gövdesinde
+> değişen yerel, setjmp). Numara değiştirilmedi — commit ve kaynak
+> yorumlarındaki "Tuzaklar 7i" atıfları kırılmasın. Atıfta hangisi
+> kastedildiği başlıktan anlaşılır: "hizalama" ya da "setjmp".
+
 Float dizi PR'ı (2026-10-01) elekte (`sieve`, 5M) tutarlı bir gerileme
 gösterdi: 40 tur dönüşümlü A/B, taban **7,56** → yeni **7,69** ms (en iyi),
 ortanca 7,69 → 7,86. Değişiklik eleğin döngüsüne dokunmuyordu; `objdump` iki
@@ -2087,13 +2092,35 @@ kaynağa zararsız bir önek koyup hizalamayı kaydır. Kod aynı ve fark hizala
 gelip gidiyorsa ölçülen şey derleyici değil yerleşimdir — ve ters yönde de
 geçerli: hizalama şansıyla gelen %2 "kazanç" da kazanç değildir.
 
-## 7j. `assert_eq_str(dizi, dizi)` hiçbir şey ölçmüyor — `toString(<dizi>)` hep `<object>`
+## 7j. `assert_eq_str(dizi, dizi)` hiçbir şey ölçmüyordu — `toString(<dizi>)` hep `<object>`
+
+> **Düzeltildi (2026-10-02).** `toString`, `print` ve `"..." + x`
+> birleştirmesi artık TEK bir biçimleyiciden geçiyor
+> (`runtime_bindings.cpp`, `aot_value_repr`) ve kabın İÇERİĞİNİ yazıyor:
+> dizi `[1, 2.5, "a", true, null]` (kap içindeki dizgi tırnaklı ve kaçışlı,
+> sayı `print(<sayı>)` ile aynı), json nesnesi `{"k": [1, 2]}`, struct
+> dizisi `[P { x: 1, y: 2.5 }]` (`print(<struct>)` biçimi), tuple
+> `(3, 1.5)`, kendini içeren kap `[1, [...]]`. Yani `assert_eq_str(a, b)`
+> iki diziyi artık gerçekten karşılaştırıyor. Kırmızıya dönen eski test
+> çıkmadı: `assert_eq_str`e kap giren çağrılar sayıldı (2026-10-02, bütün
+> paketler, geçici sayaçla) ve yeni testler dışında hepsi `toJson` dizgisiydi
+> — kör karşılaştırmalar (`int_golge`, `float_dizi`) zaten eleman eleman
+> karşılaştırmaya çevrilmişti. Kapılar: `tests/deger_metni.test.tpr` (toString,
+> taban derleyicide 10/10 kırmızı) ve `tests/deger_metni.sh` (print, süreç
+> dışından; taban derleyicide 17 maddenin 15'i kırmızı). Aşağıdaki kural
+> yine geçerli: bir eşitlik yardımcısını bir kez bilerek FARKLI girdiyle
+> kırmızıya çevir.
+>
+> Kalan: struct ALANI hâlâ `print(<struct>)`in eski biçimiyle yazılıyor —
+> float `%g` (6 anlamlı hane), bool `0/1` — yani `print(p)` ile `print(p.y)`
+> aynı float'ı farklı yazabilir (`0.3` / `0.30000000000000004`). Bilinçli
+> olarak bu turda değiştirilmedi (5 test o biçimi kilitliyor).
 
 `lib/test.tpr`'deki `assert_eq_str` iki tarafı `toString` ile dizgiye çevirip
-karşılaştırıyor. Dizide bu çeviri İÇERİK üretmiyor: `int[]`, `float[]`,
-`array` ve `json` dizisi için `toString` **`<object>`** döndürüyor (`print`
-de `<array>` basıyor; ölçüldü 2026-10-01). Yani iki dizi — içerikleri ne
-olursa olsun — her zaman "eşit".
+karşılaştırıyor. Dizide bu çeviri İÇERİK üretmiyordu: `int[]`, `float[]`,
+`array` ve `json` dizisi için `toString` **`<object>`** döndürüyordu (`print`
+de `<array>` basıyordu; ölçüldü 2026-10-01). Yani iki dizi — içerikleri ne
+olursa olsun — her zaman "eşit"ti.
 
 Nasıl görüldü: int dizi döngü sürümünün testi (`tests/int_golge.test.tpr`)
 matmul'ü bir ikizle `assert_eq_str(c, kc)` ile karşılaştırıyordu. Deopt

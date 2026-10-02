@@ -38,6 +38,8 @@ extern "C" void print_vm_value(VMValue value);
 // `print("" + x)` -> "1000000.5"): print veri kaybediyordu. Olculdu
 // 2026-09-05. Regresyon: tests/float_precision.test.tpr
 extern "C" int aot_format_float(char *buf, size_t n, double value);
+// Dizgi disi nesnenin okunabilir metni (print / toString ortak bicimleyici).
+extern "C" void aot_repr_print(VMValue value);
 
 // Shared AOT runtime entry points. Defined in runtime_bindings.cpp inside
 // its `extern "C" {` block — match that linkage here so the VM opcodes
@@ -697,36 +699,12 @@ void vm_print_value(VMValue value) {
   case VM_VAL_OBJ:
     if (IS_STRING(value)) {
       printf("%s", AS_STRING(value)->chars);
-    } else if (IS_FUNCTION(value)) {
-      ObjFunction *func = AS_FUNCTION(value);
-      if (func->name) {
-        printf("<fn %s>", func->name->chars);
-      } else {
-        printf("<script>");
-      }
-    } else if (IS_ARRAY(value)) {
-      // Avoid infinite recursion for now, simple type print
-      printf("<array>");
-    } else if (IS_CLOSURE(value)) {
-      printf("<closure>");
-    } else if (IS_OBJECT(value)) {
-      printf("<object>");
-    } else if (IS_STRUCT(value)) {
-      // Heap-promoted typed struct (Plan 04 v2). Phase 1: trivially-
-      // unboxable only — every field is i64 (int/bool). We don't have
-      // field names on the heap struct itself; the runtime schema
-      // registry isn't wired up yet, so we print `Type { 1, 2, 3 }`
-      // by-position. AOT-side print path knows the schema and uses
-      // named fields for stack-typed locals (`Type { x: 1, y: 2 }`).
-      ObjStruct *s = AS_STRUCT(value);
-      printf("%s { ", s->type_name ? s->type_name : "struct");
-      for (int i = 0; i < s->field_count; i++) {
-        if (i > 0) printf(", ");
-        printf("%lld", (long long)s->fields[i]);
-      }
-      printf(" }");
     } else {
-      printf("<obj>");
+      // Dizi, json nesnesi, struct dizisi, heap struct, fonksiyon...: toString
+      // ile AYNI bicimleyici (runtime_bindings.cpp, aot_value_repr). Eskiden
+      // burada dizi "<array>", nesne "<object>", struct dizisi "<obj>"
+      // basiliyordu ve toString baska bir sey donduruyordu (Tuzaklar 7j).
+      aot_repr_print(value);
     }
     break;
   }

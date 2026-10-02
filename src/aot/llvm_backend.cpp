@@ -9879,8 +9879,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           StructTypeEntry *st = pst;
           LLVMValueRef alloca = codegen_struct_expr_ptr(backend, arg, st);
           if (st && alloca) {
+            // Coklu donusun sentezlenmis struct'i (`__tup_int_float`): ic ad
+            // ve `_0:` etiketleri yerine degerler `(3, 1.5)` — toString'in
+            // runtime bicimleyicisiyle (repr_struct_*) ayni. 2026-10-02'ye
+            // kadar `__tup_int_float { _0: 3, _1: 1.5 }` basiyordu.
+            const bool is_tup = st->name && strncmp(st->name, "__tup_", 6) == 0;
             char hdr[256];
-            snprintf(hdr, sizeof(hdr), "%s { ", st->name);
+            snprintf(hdr, sizeof(hdr), is_tup ? "(" : "%s { ", st->name);
             LLVMValueRef hdr_str =
                 LLVMBuildGlobalStringPtr(backend->builder, hdr,
                                           "struct.print.hdr");
@@ -9903,9 +9908,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
               // ayni, otesinde `%g` yuvarlar).
               const bool fld_is_float = st->field_types[f] == TYPE_FLOAT;
               char fname_lit[256];
-              snprintf(fname_lit, sizeof(fname_lit),
-                       fld_is_float ? "%s: %%g" : "%s: %%lld",
-                       st->field_names[f]);
+              if (is_tup)
+                snprintf(fname_lit, sizeof(fname_lit), "%s",
+                         fld_is_float ? "%g" : "%lld");
+              else
+                snprintf(fname_lit, sizeof(fname_lit),
+                         fld_is_float ? "%s: %%g" : "%s: %%lld",
+                         st->field_names[f]);
               LLVMValueRef fname_fmt = LLVMBuildGlobalStringPtr(
                   backend->builder, fname_lit, "struct.print.field");
               // Deger (f32 double'a, i32 i64'e genisletilmis) — printf'in
@@ -9918,7 +9927,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                              backend->func_printf, pf_args, 2, "");
             }
             LLVMValueRef tail_str = LLVMBuildGlobalStringPtr(
-                backend->builder, " }", "struct.print.tail");
+                backend->builder, is_tup ? ")" : " }", "struct.print.tail");
             LLVMValueRef tail_args[] = {tail_str};
             LLVMBuildCall2(backend->builder,
                            LLVMGlobalGetValueType(backend->func_printf),
