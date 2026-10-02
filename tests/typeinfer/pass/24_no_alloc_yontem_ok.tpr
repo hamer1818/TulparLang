@@ -1,0 +1,24 @@
+// `@no_alloc` icinde yontem cagrisi (2026-10-02): `r.area()`, `self.area()`,
+// acik bicim `Rect.area(r)`, global struct alicisi ve serbest fonksiyonun
+// yontem gibi cagrilmasi (`r.perim()`) — hicbiri ayirmiyor, tani vermemeli.
+// Eski derleyici alicinin tipine gore `Rect.area`yi cozmuyordu: hedef ciplak
+// `area` kaliyor ve "built-in 'area' may allocate" diye reddediliyordu; ayrica
+// `r.area() + 1.0` "`+` dizgi birlestirmesi olabilir" sayiliyordu.
+
+type Rect { float w; float h; }
+
+func Rect.area(): float { return self.w * self.h; }
+func Rect.grow(float k): float { return self.area() * k; }
+func perim(Rect r): float { return 2.0 * (r.w + r.h); }
+
+Rect g = { w: 1.0, h: 2.0 };
+
+@no_alloc
+func toplam(Rect r): float {
+    float a = r.area();
+    float b = r.grow(2.0);
+    return a + b + r.area() + r.perim() + Rect.area(r) + g.area();
+}
+
+Rect r = { w: 3.0, h: 4.0 };
+print(toplam(r));
