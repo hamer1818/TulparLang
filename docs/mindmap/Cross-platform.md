@@ -8,7 +8,7 @@ Platform detection **şim'ler üzerinden**: `src/common/platform.h`, `platform_s
 
 - CMake tanımlar: `PLATFORM_WINDOWS`, `PLATFORM_LINUX`, `PLATFORM_MACOS`.
 - Async coroutine'leri platform-spesifik: macOS ucontext, Windows fiber. → [[Async Runtime]]
-- WASM: `wasm/` ayrı Emscripten build'i (`wasm/build_wasm.sh`); `wasm/emsdk/` vendored, **read-only / indexleme**.
+- WASM: web arşivleri `wasm/build_tame_web.sh` ile (runtime + raylib + tame, `wasm/dist/`); kaynak masaüstüyle AYNI (`src/vm/runtime_bindings.cpp` dahil). `wasm/emsdk/` vendored, **read-only / indexleme**. Eski playground (`wasm/CMakeLists.txt`, `build_wasm.sh`, `runtime_bindings_wasm.c`, `tulpar_wasm_api.c/h`) silinmiş VM dosyalarını (`lexer.c`, `compiler.c`, `vm.h`) ve artık olmayan `arr->items` alanını kullanıyordu, hiçbir derlemeye girmiyordu — 2026-10-02'de silindi.
 - **Web'de try/catch (setjmp, 2026-10-02):** try modülde doğrudan `setjmp`e iner; wasm'da gerçek
   `setjmp` yok. emcc bunu kendi clang'ında `-mllvm -enable-emscripten-sjlj` ile alçaltır — biz
   wasm objesini kendi LLVM'imizle ürettiğimiz için sürücü aynı seçeneği `LLVMParseCommandLineOptions`
