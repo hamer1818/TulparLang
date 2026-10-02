@@ -12,6 +12,24 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `@no_alloc` içinde yöntem çağrısı "yerleşik ayırabilir" diye reddediliyordu
+
+- **Kök neden:** `@no_alloc` denetimi çağrı hedefini yalnız takma adlı modül
+  (`m__f`) için çözüyordu. `r.area()` yöntemi (K003, adı `Rect.area`) için
+  hedef çıplak `area` kalıyor, kullanıcı fonksiyonu olarak bulunamıyor ve
+  "built-in 'area' may allocate (not on the allowlist)" diye
+  reddediliyordu — yöntem hiç ayırmasa da. Aynı sebeple `r.area() + 1.0`
+  "`+` dizgi birleştirmesi olabilir" sayılıyordu (dönüş tipi okunamıyordu).
+- **Düzeltme:** hedef kodgenle aynı sırayla çözülüyor: `Rect.area(r)` açık
+  biçim → takma adlı modül → alıcının statik struct tipine göre `Tip.ad`
+  (yerel, parametre, `self`, global) → serbest fonksiyon. Yöntem gerçekten
+  ayırıyorsa hata yöntemin adını ve ayırdığı satırı söylüyor; alıcının tipi
+  statik bilinmiyorsa ve bu adda bir yöntem varsa "hangi gövdenin koşacağı
+  denetlenemiyor" deniyor (yerleşik sanılmıyor).
+- Kapılar: `tests/typeinfer/pass/24_no_alloc_yontem_ok.tpr`,
+  `tests/typeinfer/fail/31_no_alloc_yontem.tpr` (eski derleyicide ikisi de
+  kırmızı; struct tipine göre çözüm satırı silinince ikisi de kırmızı).
+
 ### Performans — nbody C ile aynı: iç döngü sınavı dış döngü başına (187,5 → 115,3 ms, C 114,8)
 
 - `advance`'te i döngüsü içindeki 0–4 turluk j döngüsü, en iç float döngü

@@ -1,0 +1,28 @@
+// Beklenen: `@no_alloc` icindeki yontem cagrisi GERCEKTEN ayiriyorsa hata
+// yontemin adiyla ve ayirdigi yerle verilir; alicinin struct tipi statik
+// bilinmiyorsa (hangi govdenin kosacagi belirsiz) bu da adiyla soylenir.
+// Eskiden ikisi de "built-in 'etiket' may allocate (not on the allowlist)"
+// diyordu — yontem bir yerlesik sanilarak (2026-10-02).
+
+// EXPECT: [typecheck]
+// EXPECT: 'ad_yaz' is @no_alloc but allocates: call to 'Kutu.etiket' allocates [`+` may be a string concatenation
+// EXPECT: 'belirsiz' is @no_alloc but allocates: method call '.alan()': the receiver's struct type is not statically known
+
+type Kutu { int n; }
+
+func Kutu.etiket(): str { return "k" + toString(self.n); }
+func Kutu.alan(): int { return self.n * self.n; }
+
+@no_alloc
+func ad_yaz(Kutu k): int {
+    str s = k.etiket();
+    return k.n;
+}
+
+@no_alloc
+func belirsiz(int x): int {
+    return x.alan();
+}
+
+Kutu k = { n: 3 };
+print(ad_yaz(k));

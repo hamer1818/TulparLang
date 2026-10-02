@@ -2812,9 +2812,49 @@ struct NoAllocWalk {
   std::string struct_of(const ASTNode *e) const {
     if (const auto *id = as_node<Identifier>(e)) {
       auto it = custom.find(id->name);
-      return it == custom.end() ? "" : it->second;
+      if (it != custom.end()) return it->second;
+      if (types.count(id->name)) return "";   // yerel, struct degil (globali golgeler)
+      auto g = st->ctx->symbols.find(id->name);
+      if (g != st->ctx->symbols.end() && g->second.type == TYPE_CUSTOM &&
+          g->second.custom_type_name)
+        return *g->second.custom_type_name;
     }
     return "";
+  }
+
+  // Cagrinin HEDEFI — kodgenin `resolve_qualified_call` + yontem (K003)
+  // secimiyle ayni sira: `Rect.area(r)` acik bicim -> takma adli modul
+  // (`m__f`) -> alicinin statik struct tipine gore `Tip.ad` -> serbest
+  // fonksiyon. Eskiden yalniz takma ad bakiliyordu; `r.area()` hedefi ciplak
+  // `area` kaliyor, `Rect.area` kullanici fonksiyonu olarak bulunamiyor ve
+  // "'area' yerlesigi ayirabilir" diye REDDEDILIYORDU (yontem hic ayirmasa
+  // da). `*walk_receiver` alicinin deger olarak gezilip gezilmeyecegi;
+  // `*ambiguous` alicinin tipi bilinmiyor ama bu adda bir yontem var.
+  std::string call_target(const FunctionCall *c, bool *walk_receiver, bool *ambiguous) const {
+    *walk_receiver = false;
+    *ambiguous = false;
+    if (!c->receiver) return c->name;
+    const auto *rid = as_node<Identifier>(c->receiver.get());
+    if (rid && !types.count(rid->name) && !st->ctx->symbols.count(rid->name) &&
+        st->ctx->struct_types.count(rid->name) && st->ctx->fn_decls.count(rid->name + "." + c->name))
+      return rid->name + "." + c->name;   // `Rect.area(r)`: alici tip adi, deger degil
+    if (rid && st->ctx->fn_decls.count(rid->name + "__" + c->name))
+      return rid->name + "__" + c->name;   // takma adli modul
+    *walk_receiver = true;
+    const std::string s = struct_of(c->receiver.get());
+    if (!s.empty() && st->ctx->fn_decls.count(s + "." + c->name)) return s + "." + c->name;
+    if (s.empty()) {
+      const std::string suffix = "." + c->name;
+      for (const auto &kv : st->ctx->fn_decls) {
+        const std::string &n = kv.first;
+        if (n.size() > suffix.size() &&
+            n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0) {
+          *ambiguous = true;
+          break;
+        }
+      }
+    }
+    return c->name;
   }
   bool numeric(const ASTNode *e) const {
     if (!e) return false;
@@ -2836,7 +2876,10 @@ struct NoAllocWalk {
       return numeric(t->then_branch.get()) && numeric(t->else_branch.get());
     if (const auto *c = as_node<FunctionCall>(e)) {
       if (c->callee) return false;
-      auto it = st->ctx->functions.find(c->name);
+      bool walk = false, ambiguous = false;
+      const std::string target = call_target(c, &walk, &ambiguous);
+      if (ambiguous) return false;
+      auto it = st->ctx->functions.find(target);
       return it != st->ctx->functions.end() && scalar_type(it->second.return_type);
     }
     if (const auto *a = as_node<ArrayAccess>(e)) {
@@ -2904,15 +2947,22 @@ struct NoAllocWalk {
     if (const auto *c = std::get_if<FunctionCall>(&v)) {
       if (c->callee)
         return fail(c->loc.line, tulpar::i18n::tr_en("dolayli cagri", "indirect call"));
-      std::string target = c->name;
-      if (c->receiver) {
-        if (const auto *rid = as_node<Identifier>(c->receiver.get())) {
-          if (st->ctx->fn_decls.count(rid->name + "__" + c->name))
-            target = rid->name + "__" + c->name;   // takma adli modul
-          else if (!expr(c->receiver.get())) return false;
-        } else if (!expr(c->receiver.get())) {
-          return false;
-        }
+      bool walk_receiver = false, ambiguous = false;
+      const std::string target = call_target(c, &walk_receiver, &ambiguous);
+      if (walk_receiver && !expr(c->receiver.get())) return false;
+      if (ambiguous) {
+        char b[320];
+        snprintf(b, sizeof b,
+                 tulpar::i18n::tr_en("yontem cagrisi '.%s()': alicinin struct tipi statik "
+                                     "bilinmiyor, hangi govdenin kosacagi (ve ayirip "
+                                     "ayirmadigi) denetlenemiyor — aliciyi tipli bir "
+                                     "degiskene al",
+                                     "method call '.%s()': the receiver's struct type is not "
+                                     "statically known, so which body runs (and whether it "
+                                     "allocates) cannot be checked — bind the receiver to a "
+                                     "typed variable"),
+                 c->name.c_str());
+        return fail(c->loc.line, b);
       }
       for (const auto &arg : c->arguments)
         if (!expr(arg.get())) return false;
