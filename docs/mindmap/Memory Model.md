@@ -9,6 +9,12 @@ AOT'ta GC yok. Bellek üç mekanizmayla yönetilir (`src/vm/runtime_bindings.cpp
 ## 1) Arena (string'ler)
 Per-thread blok allocator. `arena_save()` → checkpoint handle; `arena_restore(wm)` → o noktadan sonrasını geri sarar (blokları free etmez, `used=0` yapar → O(1) reuse). Wings her istek sonrası restore ile belleği sabit tutar.
 
+**Ölümsüz dizgiler arenada değil:** dizgi sabitleri ve (2026-10-02'den beri) `typeof()`
+sonuçları `aot_intern_string` ile malloc'lu, `arena_allocated = 0`, `ref_count = 1<<28`.
+Bariyer onları kopyalamaz, restore/drop onlara dokunmaz. `typeof` eskiden her çağrıda arenaya
+kopyalıyordu: 20M çağrılık döngü 335 ms / 1,07 GB RSS → 77 ms / 2,9 MB (Ryzen 7 9800X3D,
+`taskset -c 10,11`, 2026-10-02). Kapılar `tests/typeof_sabit.{sh,test.tpr}`.
+
 ## 2) Per-request malloc region (obje/dizi)
 AOT'ta her obje/dizi literali `malloc`'lanır (`arena_allocated=0`); GC sweep yok → eskiden **istek-başına sızıntı**. Çözüm: literaller `g_region` (thread_local) + `g_region_set`'e izlenir, arena_save/restore bunları bracket'ler. Yalnız arena scope içinde (`g_arena_checkpoint_top > 0`) allocate edilenler izlenir; top-level global'ler ve `persist()`/`string_pin` kopyaları izlenmez (kalıcı). → [[Memory Leak Fixes]]
 

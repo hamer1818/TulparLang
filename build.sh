@@ -749,6 +749,15 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # typeof() olumsuz dizgi: ayni isaretci, kalici, arena_drop sonrasi
+    # saglam (pozitif kontrol: arenadan dizgi ayni duzenekte EZILMELI).
+    if [ -x tests/typeof_sabit.sh ]; then
+        if ! bash tests/typeof_sabit.sh ./tulpar; then
+            echo -e "${RED}typeof sabit dizgi kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # `@frame` / `@no_alloc` nitelikleri (K038/K041): ayristirma hatalari ve
     # kare arenasinin tepe RSS'i gercekten geri sardigi (pozitif kontrollu).
     if [ -x tests/frame_hatalari.sh ]; then
