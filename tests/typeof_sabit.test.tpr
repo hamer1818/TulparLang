@@ -1,0 +1,90 @@
+// typeof() SONUCU OLUMSUZ, PAYLASILAN DIZGI (2026-10-02) — ANLAM.
+//
+// typeof eskiden her cagrida adi string arenasina kopyaliyordu; artik tip
+// adlari bir kez olusturulan kalici dizgiler (mekanizma ve isaretci kimligi:
+// tests/typeof_sabit.sh). Paylasilan dizginin kalicilik kurallariyla
+// uyumunu bu paket olcuyor: global'e atama, json'a koyma, persist,
+// arena_save/arena_drop sonrasi (copla-sonra-oku kalibi,
+// tests/arena_kalicilik.test.tpr gibi), birlestirme ve karsilastirma.
+// Calistir (depo kokunden): ./tulpar tests/typeof_sabit.test.tpr
+import "test";
+
+str g_tip = "";
+json g_kutu = {};
+array g_liste = [];
+
+func _cople() {
+    int k = 0;
+    while (k < 1500) {
+        str cop = "COPCOPCOPCOPCOP-" + toString(k) + "-COPCOPCOPCOPCOPCOP";
+        json o = {"a": cop, "b": [k, k, k]};
+        k = k + 1;
+    }
+}
+
+func run_adlar() {
+    array a = [1, 2];
+    json o = {"x": 1};
+    assert_eq_str(typeof(1), "int");
+    assert_eq_str(typeof(1.5), "float");
+    assert_eq_str(typeof(true), "bool");
+    assert_eq_str(typeof("s"), "string");
+    assert_eq_str(typeof(a), "array");
+    assert_eq_str(typeof(o), "object");
+    assert_eq_str(typeof(null), "null");
+    assert_eq_int(len(typeof(1.5)), 5);
+}
+
+func run_karsilastirma_ve_birlestirme() {
+    var x = 42;
+    assert_eq_bool(typeof(x) == "int", true);
+    assert_eq_bool(typeof(x) != "float", true);
+    assert_eq_bool(typeof(x) == typeof(7), true);
+    str s = typeof(x) + "/" + typeof(2.0);
+    assert_eq_str(s, "int/float");
+    str t = typeof(x);
+    t = t + "!";                       // paylasilan dizgi DEGISMEMELI
+    assert_eq_str(t, "int!");
+    assert_eq_str(typeof(1), "int");
+}
+
+func run_global_ve_json_drop_sonrasi() {
+    var wm = arena_save();
+    g_tip = typeof(3.0);
+    g_kutu["tip"] = typeof("a");
+    push(g_liste, typeof([1]));
+    arena_drop(wm);
+    _cople();
+    assert_eq_str(g_tip, "float");
+    assert_eq_str(g_kutu["tip"], "string");
+    assert_eq_str(g_liste[0], "array");
+}
+
+func run_yerel_drop_sonrasi() {
+    str once = typeof(true);          // checkpoint DISINDA alinan
+    var wm = arena_save();
+    str ic = typeof(1);               // checkpoint ICINDE alinan
+    assert_eq_str(ic, "int");
+    arena_drop(wm);
+    _cople();
+    assert_eq_str(once, "bool");
+    assert_eq_str(typeof(1), "int");  // onbellek drop'tan etkilenmedi
+}
+
+func run_persist_ve_dongu() {
+    json p = persist({"t": typeof(1)});
+    assert_eq_str(p["t"], "int");
+    int n = 0;
+    for (int i = 0; i < 200000; i++) {
+        if (typeof(i) == "int") { n = n + 1; }
+    }
+    assert_eq_int(n, 200000);
+}
+
+print("=== typeof sabit dizgi ===");
+test("yedi tip adi", "run_adlar");
+test("karsilastirma + birlestirme (paylasilan dizgi degismiyor)", "run_karsilastirma_ve_birlestirme");
+test("global / json / dizi: arena_drop + copla sonrasi", "run_global_ve_json_drop_sonrasi");
+test("yerel: checkpoint ici/disi, drop + copla sonrasi", "run_yerel_drop_sonrasi");
+test("persist + sicak dongu", "run_persist_ve_dongu");
+test_summary();

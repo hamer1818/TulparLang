@@ -12,6 +12,25 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `typeof(x)` her çağrıda yeni dizgi ayırıyordu
+
+- **Kök neden:** `aot_typeof` tip adını her çağrıda `aot_allocate_string` ile
+  string arenasına kopyalıyordu; checkpoint'siz arena hiç geri sarılmadığı
+  için `if (typeof(x) == "int")` gibi bir sınama döngüde belleği sınırsız
+  büyütüyordu.
+- **Düzeltme:** yedi tip adı (`int` `float` `bool` `string` `array` `object`
+  `null`) ilk kullanımda bir kez `aot_intern_string` ile — dizgi sabitleriyle
+  aynı ölümsüzlükte (malloc, `arena_allocated = 0`) — oluşturulup paylaşılıyor.
+  Yazma bariyeri kopyalamıyor, `arena_restore`/`arena_drop` dokunmuyor.
+- Ölçüldü (Ryzen 7 9800X3D, `taskset -c 10,11`, 2026-10-02, izole dizin):
+  20M çağrılık `typeof(i) == "int"` döngüsü 335 ms / 1,07 GB tepe RSS →
+  77 ms / 2,9 MB.
+- Kapılar: `tests/typeof_sabit.sh` (C++ sondası: aynı işaretçi, kalıcı, adlar
+  doğru, `arena_drop` + yeni ayırma sonrası sağlam; pozitif kontrol arenadan
+  ayrılan dizginin aynı düzenekte ezildiğini görmek zorunda — eski runtime'da
+  kapı 3 hatayla kırmızı) ve `tests/typeof_sabit.test.tpr` (global, json,
+  persist, checkpoint içi/dışı + çöpleme sonrası okuma).
+
 ### Düzeltildi — yakalanan kapanışı çağıran lambda çöküyordu ("Hatalı parametre sayısı <çöp>")
 
 - **Belirti:** fonksiyon içinde `var f = yap(10); var g = (y) => f(y) * 2;

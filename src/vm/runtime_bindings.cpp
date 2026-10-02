@@ -10137,44 +10137,60 @@ VMValue aot_range(VMValue endVal) {
 // Type Checking Functions (AOT)
 // ============================================================================
 
-VMValue aot_typeof(VMValue v) {
-  const char *type_name;
-  int len;
+// typeof(x) — tip adi OLUMSUZ, paylasilan bir dizgi (2026-10-02).
+//
+// Eskiden her cagri adi aot_allocate_string ile string arenasina YENIDEN
+// kopyaliyordu: `if (typeof(x) == "int")` gibi bir sinamada cagri basina
+// 48 + ad bayti, ve string arenasi (checkpoint yoksa) hic geri sarilmiyor.
+// Tip adlari sabit: her biri ilk kullanimda BIR KEZ aot_intern_string ile
+// (malloc, arena_allocated = 0, ref_count 1<<28 — dizgi sabitleriyle ayni
+// olumsuzluk) olusturulup onbellekte tutuluyor.
+// Kalicilik kurallariyla uyum: arena_allocated = 0 oldugu icin yazma bariyeri
+// global'e / kalici kaba konunca KOPYALAMAZ; arena_restore/arena_drop ona
+// dokunmaz (bolge kumesinde degil). Dizgiler degismez (ObjString::chars'i
+// yerinde yazan yer yok), yani paylasmak guvenli. Kapilar:
+// tests/typeof_sabit.sh (isaretci kimligi + drop sonrasi saglamlik, pozitif
+// kontrollu) ve tests/typeof_sabit.test.tpr (anlam).
+//
+// Thread guvenligi: iki thread ayni adi ilk kez ayni anda isterse ikisi de
+// olusturur, CAS'i kaybeden kendi kopyasini birakir — kazanan herkese doner.
+static ObjString *typeof_name_obj(int k) {
+  static const char *const names[] = {"int", "float", "bool", "string",
+                                      "array", "object", "null"};
+  static std::atomic<ObjString *> cache[7];
+  ObjString *s = cache[k].load(std::memory_order_acquire);
+  if (s) return s;
+  ObjString *made = aot_intern_string(names[k], (int)strlen(names[k]));
+  ObjString *expected = nullptr;
+  if (!cache[k].compare_exchange_strong(expected, made, std::memory_order_acq_rel,
+                                        std::memory_order_acquire)) {
+    free(made);
+    return expected;
+  }
+  return made;
+}
 
+VMValue aot_typeof(VMValue v) {
+  int k;
   switch (v.type) {
   case VM_VAL_INT:
-    type_name = "int";
-    len = 3;
+    k = 0;
     break;
   case VM_VAL_FLOAT:
-    type_name = "float";
-    len = 5;
+    k = 1;
     break;
   case VM_VAL_BOOL:
-    type_name = "bool";
-    len = 4;
+    k = 2;
     break;
   case VM_VAL_OBJ:
-    if (IS_STRING(v)) {
-      type_name = "string";
-      len = 6;
-    } else if (IS_ARRAY(v)) {
-      type_name = "array";
-      len = 5;
-    } else if (IS_OBJECT(v)) {
-      type_name = "object";
-      len = 6;
-    } else {
-      type_name = "object";
-      len = 6;
-    }
+    if (IS_STRING(v)) k = 3;
+    else if (IS_ARRAY(v)) k = 4;
+    else k = 5;   // object (ve diger nesne turleri)
     break;
   default:
-    type_name = "nullptr";
-    len = 4;
+    k = 6;        // eskiden "nullptr"in ilk 4 harfi: "null"
   }
-
-  return VM_OBJ((Obj *)aot_allocate_string(type_name, len));
+  return VM_OBJ((Obj *)typeof_name_obj(k));
 }
 
 VMValue aot_is_int(VMValue v) { return VM_BOOL(IS_INT(v)); }
