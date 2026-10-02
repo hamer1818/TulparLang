@@ -274,8 +274,9 @@ static Obj *allocate_object(VM *vm, size_t size, ObjType type) {
 
   obj->type = type;
   obj->arena_allocated = from_arena;
-  obj->next = vm->objects;
-  vm->objects = obj;
+  // `Obj::next` (VM'in nesne listesi) 2026-10-02'de kaldirildi: vm_create
+  // hicbir yerde cagrilmiyor, yani bu yol olu; liste yalniz her nesneye 8
+  // bayt (dolguyla 16) ekliyordu. Bkz. vm.hpp `Obj`.
   vm->bytes_allocated += size;
   return obj;
 }
@@ -513,7 +514,6 @@ VM *vm_create() {
     vm->global_cache[i] = -1; // Invalid index
   }
 
-  vm->objects = nullptr;
   vm->bytes_allocated = 0;
   vm->next_gc = 1024 * 1024; // First GC at 1MB
 
@@ -527,7 +527,7 @@ VM *vm_create() {
   return vm;
 }
 
-static void free_object(Obj *obj) {
+[[maybe_unused]] static void free_object(Obj *obj) {
   int from_arena = obj->arena_allocated;
 
   switch (obj->type) {
@@ -621,16 +621,8 @@ void vm_free(VM *vm) {
   if (!vm)
     return;
 
-  // Free all objects (only those allocated with malloc, not arena)
-  // Note: Arena objects are freed when arena is destroyed
-  Obj *obj = vm->objects;
-  while (obj) {
-    Obj *next = obj->next;
-    // Only free if it's a large object (allocated with malloc)
-    // For now we still free all - arena handles its own memory
-    free_object(obj);
-    obj = next;
-  }
+  // Nesne listesi yok (Obj::next kaldirildi, bkz. allocate_object): VM
+  // yolu olu (vm_create cagrilmiyor). Arena nesneleri arena ile gider.
 
   // Free arena allocator
   if (vm->arena) {

@@ -352,7 +352,6 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     arr->obj.type = OBJ_ARRAY;
     arr->idata = nullptr;
     arr->obj.arena_allocated = 1;
-    arr->obj.next = nullptr;
     arr->capacity = 0;
     arr->count = 0;
     arr->items_ = nullptr;
@@ -367,7 +366,6 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
   result->obj.type = OBJ_ARRAY;
   result->idata = nullptr;
   result->obj.arena_allocated = 1;
-  result->obj.next = nullptr;
   result->capacity = 16;
   result->count = 0;
   result->items_ =
@@ -395,7 +393,6 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     ObjObject *row = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
     row->obj.type = OBJ_OBJECT;
     row->obj.arena_allocated = 1;
-    row->obj.next = nullptr;
     row->capacity = col_count;
     row->count = 0;
     row->index = nullptr;
@@ -540,7 +537,6 @@ VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
   result->obj.type = OBJ_ARRAY;
   result->idata = nullptr;
   result->obj.arena_allocated = 1;
-  result->obj.next = nullptr;
   result->capacity = 16;
   result->count = 0;
   result->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * result->capacity);
@@ -567,7 +563,6 @@ VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
     ObjObject *row = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
     row->obj.type = OBJ_OBJECT;
     row->obj.arena_allocated = 1;
-    row->obj.next = nullptr;
     row->capacity = col_count;
     row->count = 0;
     row->index = nullptr;

@@ -962,7 +962,6 @@ extern "C" {
 ObjPromise *aot_promise_new(void) {
   ObjPromise *p = (ObjPromise *)malloc(sizeof(ObjPromise));
   p->obj.type = OBJ_PROMISE;
-  p->obj.next = nullptr;
   p->obj.arena_allocated = 1; // ARC must not reclaim while the loop holds it
   p->obj.ref_count = 1;
   p->obj.is_moved = 0;

@@ -14,10 +14,12 @@
 #ifndef TULPAR_FNREF_LAYOUT_H
 #define TULPAR_FNREF_LAYOUT_H
 
-#define AOT_FNREF_FP_OFF 48     // void (*fp)(VMValue *)  — kutulu giris
-#define AOT_FNREF_ARITY_OFF 56  // int arity
-#define AOT_FNREF_NFP_OFF 64    // void *nfp               — ciplak yerel int giris
-#define AOT_FNREF_SIZE 72       // kayit boyu
+// 2026-10-02: Obj basligi 32 -> 8 bayt (obj_layout.h), ObjString 48 -> 24;
+// kayit 72 -> 48 bayt.
+#define AOT_FNREF_FP_OFF 24     // void (*fp)(VMValue *)  — kutulu giris
+#define AOT_FNREF_ARITY_OFF 32  // int arity
+#define AOT_FNREF_NFP_OFF 40    // void *nfp               — ciplak yerel int giris
+#define AOT_FNREF_SIZE 48       // kayit boyu
 #define AOT_FNREF_COUNT 1024    // havuz kayit sayisi
 
 #endif

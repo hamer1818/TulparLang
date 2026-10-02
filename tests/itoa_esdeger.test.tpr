@@ -1,0 +1,111 @@
+// TAMSAYI -> METIN esdegerligi (aot_itoa, 2026-10-02).
+//
+// aot_itoa iki haneyi birden, hedefe sondan basa yazacak sekilde yeniden
+// yazildi (once hane sayisi, sonra `% 100` + "00".."99" tablosu). toString(int),
+// sb_append(sb, int) ve dizgi birlestirmesi ("x" + i) ayni fonksiyondan
+// geciyor. Bu paket ciktiyi, aot_itoa'dan BAGIMSIZ bir basvuru ile (Tulpar'da
+// `% 10` ile hane hane kurulan dizgi) karsilastirir: hane sayisi sinirlari
+// (9/10, 99/100, ... 10^18), iki haneli tablonun tek/cift hane kuyrugu,
+// isaret, INT64 uclari ve genis bir sozde rastgele tarama. Beklenen degerler
+// ESKI derleyicide (9dddaf38) bu paket kosturularak dogrulandi.
+//
+// Calistir: ./tulpar tests/itoa_esdeger.test.tpr
+import "test";
+
+// Basvuru aot_itoa'ya hic dokunmaz: rakam bir tablodan (substring) alinir —
+// toString(rakam) kullanmak basvuruyu test edilen fonksiyona baglardi.
+str RAKAM = "0123456789";
+func _basvuru_saf(int v): str {
+    if (v == 0) { return "0"; }
+    if (v == -9223372036854775807 - 1) { return "-9223372036854775808"; }
+    bool neg = v < 0;
+    int u = v;
+    if (neg) { u = 0 - v; }
+    str s = "";
+    while (u > 0) {
+        int d = u % 10;
+        s = substring(RAKAM, d, d + 1) + s;
+        u = u / 10;
+    }
+    if (neg) { s = "-" + s; }
+    return s;
+}
+
+int g_bozuk = 0;
+func _dene(int v) {
+    str b = _basvuru_saf(v);
+    if (toString(v) != b) { g_bozuk = g_bozuk + 1; print("toString(" + b + ") -> " + toString(v)); }
+    if ("x" + v != "x" + b) { g_bozuk = g_bozuk + 1; print("birlestirme " + b); }
+    var sb = StringBuilder(16);
+    sb_append(sb, v);
+    sb_append(sb, "|");
+    str t = sb_tostring(sb);
+    sb_free(sb);
+    if (t != b + "|") { g_bozuk = g_bozuk + 1; print("sb_append " + b + " -> " + t); }
+}
+
+func run_basvuru_kendisi() {
+    // Basvurunun kendisi dogru mu (aot_itoa'dan bagimsiz sabitlerle).
+    assert_eq_str(_basvuru_saf(0), "0");
+    assert_eq_str(_basvuru_saf(7), "7");
+    assert_eq_str(_basvuru_saf(-7), "-7");
+    assert_eq_str(_basvuru_saf(1234567), "1234567");
+    assert_eq_str(_basvuru_saf(9223372036854775807), "9223372036854775807");
+}
+
+func run_hane_sinirlari() {
+    g_bozuk = 0;
+    int p = 1;
+    int k = 0;
+    while (k < 19) {
+        _dene(p - 1); _dene(p); _dene(p + 1);
+        _dene(0 - p + 1); _dene(0 - p); _dene(0 - p - 1);
+        if (k < 18) { p = p * 10; }
+        k = k + 1;
+    }
+    assert_eq_int(g_bozuk, 0);
+}
+
+func run_uclar() {
+    g_bozuk = 0;
+    _dene(0);
+    _dene(9223372036854775807);
+    _dene(9223372036854775806);
+    _dene(-9223372036854775807);
+    _dene(-9223372036854775807 - 1);
+    assert_eq_int(g_bozuk, 0);
+    assert_eq_str(toString(-9223372036854775807 - 1), "-9223372036854775808");
+}
+
+func run_ilk_onbin() {
+    g_bozuk = 0;
+    int i = -10000;
+    while (i <= 10000) { _dene(i); i = i + 1; }
+    assert_eq_int(g_bozuk, 0);
+}
+
+func run_sozde_rastgele() {
+    g_bozuk = 0;
+    int x = 88172645463325252;
+    int i = 0;
+    while (i < 20000) {
+        // xorshift benzeri, tasma Tulpar int'inde sarar (64 bit).
+        x = x * 6364136223846793005 + 1442695040888963407;
+        int v = x;
+        // Buyukluk dagilimi: kaydirmayla farkli hane sayilari.
+        int kay = i % 63;
+        int k = 0;
+        while (k < kay) { v = v / 2; k = k + 1; }
+        _dene(v);
+        i = i + 1;
+    }
+    assert_eq_int(g_bozuk, 0);
+}
+
+print("=== tamsayi -> metin esdegerligi ===");
+test("basvuru dogru", "run_basvuru_kendisi");
+test("hane sinirlari (10^k +- 1, iki isaret)", "run_hane_sinirlari");
+test("INT64 uclari", "run_uclar");
+test("-10000..10000", "run_ilk_onbin");
+test("20000 sozde rastgele deger", "run_sozde_rastgele");
+test_summary();

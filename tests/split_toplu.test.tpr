@@ -103,6 +103,105 @@ func run_buyuk_split_toplam() {
     assert_eq_int(t, beklenen);
 }
 
+// --- tek baytlik ayirici: SWAR + memchr yolu, ust sinir + kuyruk iadesi ------
+// (2026-10-02) Tek baytlik ayiricida ilk 32 bayt 8'er baytlik kelimelerle
+// taranir, uzun parcada kalan memchr'a gider; ayirma ust sinirla yapilip
+// artan iade edilir. Uzunluklar kelime/32 bayt sinirlarinin iki yanina dussun.
+
+func run_tek_bayt_uzun_parcalar() {
+    str s = "";
+    int i = 0;
+    while (i < 90) {
+        if (i > 0) { s = s + ";"; }
+        s = s + repeat("w", i);
+        i = i + 1;
+    }
+    array p = split(s, ";");
+    assert_eq_int(len(p), 90);
+    int bozuk = 0;
+    int k = 0;
+    while (k < 90) {
+        if (len(p[k]) != k) { bozuk = bozuk + 1; }
+        if (p[k] != repeat("w", k)) { bozuk = bozuk + 1; }
+        k = k + 1;
+    }
+    assert_eq_int(bozuk, 0);
+    // Ayirici metnin son baytinda / girdinin kuyrugu 8'den kisa.
+    assert_eq_str(_birlestir(split("abcdefghijk,", ",")), "<abcdefghijk>|<>");
+    assert_eq_str(_birlestir(split("abcdefghijklmnop,q", ",")), "<abcdefghijklmnop>|<q>");
+    assert_eq_str(_birlestir(split("12345678", "8")), "<1234567>|<>");
+    // Cok baytli UTF-8 karakter ('ş' = C5 9F) tek baytlik ayiriciyla
+    // karismaz; kelime taramasi 0x80 ustu baytlarda yanlis esleme vermez.
+    assert_eq_str(_birlestir(split("kuş|kurt|ışık", "|")), "<kuş>|<kurt>|<ışık>");
+    // Ayiricinin kendisi cok baytli: cok karakterli yol.
+    assert_eq_str(_birlestir(split("aşbşc", "ş")), "<a>|<b>|<c>");
+}
+
+func run_kuyruk_iadesi_komsulari_ezmez() {
+    // Split'ten hemen sonra ayrilan dizgiler iade edilen kuyruga duser;
+    // parcalarin hicbiri ezilmemeli.
+    array p = split("aa,bbbbbbbbbbbbbbbbbbbbbbbb,c,,dddddddd", ",");
+    str x1 = "SONRAKI-" + toString(len(p));
+    array q = split("1,22,333", ",");
+    str x2 = repeat("Z", 100);
+    assert_eq_str(_birlestir(p), "<aa>|<bbbbbbbbbbbbbbbbbbbbbbbb>|<c>|<>|<dddddddd>");
+    assert_eq_str(_birlestir(q), "<1>|<22>|<333>");
+    assert_eq_str(x1, "SONRAKI-5");
+    assert_eq_int(len(x2), 100);
+    // Iki split ust uste, ikincisi birincinin kuyruguna kurulur.
+    int t = 0;
+    int r = 0;
+    while (r < 200) {
+        array a = split("7,8,9", ",");
+        array b = split("10,20", ",");
+        t = t + toInt(a[0]) + toInt(a[2]) + toInt(b[1]);
+        r = r + 1;
+    }
+    assert_eq_int(t, 200 * 36);
+}
+
+// --- thread: paylasilan parcalari eszamanli okuma (FINDINGS T7) -------------
+array g_ortak = [];
+
+func _parca_okuyucu(int id) {
+    int t = 0;
+    int r = 0;
+    while (r < 20) {
+        int i = 0;
+        while (i < len(g_ortak)) { t = t + toInt(g_ortak[i]) + len(g_ortak[i]); i = i + 1; }
+        // Her thread kendi split'ini de yapar (thread_local arena).
+        array kendi = split("5,6,7", ",");
+        t = t + toInt(kendi[0]) + toInt(kendi[1]) + toInt(kendi[2]);
+        r = r + 1;
+    }
+    return t;
+}
+
+func run_thread_parcalari_eszamanli_okur() {
+    var sb = StringBuilder(64);
+    int n = 5000;
+    int beklenen = 0;
+    for (int i = 0; i < n; i = i + 1) {
+        if (i > 0) { sb_append(sb, ","); }
+        sb_append(sb, 10000 + i);
+        beklenen = beklenen + 10000 + i + 5;
+    }
+    g_ortak = split(sb_tostring(sb), ",");
+    sb_free(sb);
+    int t1 = thread_create(_parca_okuyucu, 1);
+    int t2 = thread_create(_parca_okuyucu, 2);
+    int t3 = thread_create(_parca_okuyucu, 3);
+    int t4 = thread_create(_parca_okuyucu, 4);
+    int tur = 20 * (beklenen + 18);
+    assert_eq_int(thread_join(t1), tur);
+    assert_eq_int(thread_join(t2), tur);
+    assert_eq_int(thread_join(t3), tur);
+    assert_eq_int(thread_join(t4), tur);
+    // Thread'ler okudu; ana thread'in gordugu de degismedi.
+    assert_eq_str(g_ortak[0], "10000");
+    assert_eq_str(g_ortak[n - 1], toString(10000 + n - 1));
+}
+
 // --- omur ------------------------------------------------------------------
 
 array g_parcalar = [];
@@ -187,6 +286,9 @@ test("cok karakterli ayirici", "run_cok_karakterli_ayirici");
 test("bos girdi / bos ayirici", "run_bos_girdi_ve_bos_ayirici");
 test("hizalama sinirindaki parca uzunluklari", "run_uzunluklar");
 test("100k parca toplami", "run_buyuk_split_toplam");
+test("tek baytlik ayirici: uzun parcalar / kuyruk", "run_tek_bayt_uzun_parcalar");
+test("kuyruk iadesi komsulari ezmez", "run_kuyruk_iadesi_komsulari_ezmez");
+test("4 thread paylasilan parcalari okur", "run_thread_parcalari_eszamanli_okur");
 test("global diziye atanan parcalar yasar", "run_global_diziye_atanan_parcalar_yasar");
 test("tek tek saklanan parcalar yasar", "run_tek_tek_saklanan_parcalar_yasar");
 test("checkpoint icinden global'e", "run_checkpoint_icinden_globale");

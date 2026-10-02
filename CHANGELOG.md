@@ -98,6 +98,38 @@ tag still works;
   `tests/typeinfer/fail/31_no_alloc_yontem.tpr` (eski derleyicide ikisi de
   kırmızı; struct tipine göre çözüm satırı silinince ikisi de kırmızı).
 
+### Performans — `parse` 121 → 75 ms, 374 → 261 MB: `Obj` başlığı 32 → 8 bayt, tek geçişli `split`, iki haneli `itoa`
+
+- **`Obj` başlığı 8 bayt, her hedefte** (64-bit'te 32, wasm32'de 20 idi):
+  yalnız `nullptr` yazılan `next` alanı (çağrılmayan VM'in nesne listesi)
+  kaldırıldı, tür tek bayt (`ObjType : uint8_t`), küçük alanlar yan yana.
+  `ObjString` 48 → 24 B (wasm32 32 → 20), `ObjArray` 64 → 40,
+  `ObjStructArray` 80 → 56. 5 haneli `split` parçası 72 → 48 B (eleman
+  dahil). İç ABI (derleyici ve runtime birlikte gelir; eski wasm/android
+  arşivleri yeniden üretilmeli). Düzen `src/vm/obj_layout.h`'de tek kaynak:
+  codegen dolguyu ve tür yüklemesinin genişliğini oradan okuyor, runtime
+  `static_assert`'leri struct'ı kilitliyor (yanlış sayı derlemeyi kırıyor —
+  sabotajla denendi). `AOTFnRef` kaydı 72 → 48 B. gdb/DAP pretty-printer'ı
+  yeni düzene geçti.
+- **`split` tek baytlık ayırıcıda parça başına tek arama:** 1. geçiş yalnız
+  sayıyor, ayırma üst sınırla yapılıp artan kuyruk arenaya iade ediliyor;
+  arama ilk 32 bayt için kelime kelime (SWAR), sonrası `memchr`. split
+  55 → 25 ms.
+- **`aot_itoa` iki hane birden, sondan başa** (önce hane sayısı, `% 100` +
+  "00".."99" tablosu): 5M `sb_append(sb, int)` 30 → 17 ms; `toString(int)` ve
+  `"x" + i` aynı yoldan. `sb_append(sb, "<literal>")` doğrudan bayt ekliyor.
+- Ölçüldü (Ryzen 7 9800X3D, 2026-10-02, `taskset -c 2,3`, izole A/B, en iyi
+  5): `parse` 121,4 → **75,2 ms** (C 57,0), tepe **374,1 → 260,6 MB**;
+  `strcat` 13,5 → 9,9 ms; `hashmap` 111 → 88 MB; öteki çekirdeklerde
+  gerileme yok (`sieve`/`qsort`'taki %2'lik fark önekle kayboluyor —
+  yerleşim, Tuzaklar 7i).
+- Kapılar: `tests/split_toplu.sh` (parça boyu formülü 24 B'den, kuyruk iadesi,
+  YENİ bellek ayağı: parça başına < 64 B — eski derleyicide 78 B kırmızı —
+  ve kendi pozitif kontrolü), YENİ `tests/obj_baslik.sh` (IR'deki bütün tür
+  yüklemeleri `i8`; eski derleyicide kırmızı), YENİ
+  `tests/itoa_esdeger.test.tpr`, `tests/split_toplu.test.tpr`'ye uzun
+  parça / kuyruk / 4 thread okuma senaryoları.
+
 ### Performans — nbody C ile aynı: iç döngü sınavı dış döngü başına (187,5 → 115,3 ms, C 114,8)
 
 - `advance`'te i döngüsü içindeki 0–4 turluk j döngüsü, en iç float döngü

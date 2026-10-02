@@ -15,15 +15,18 @@
 #
 # DÜZEN VARSAYIMI (src/vm/vm.hpp, LP64, küçük-sonlu — x86_64 ve AArch64):
 #   VMValue   { uint32 type @0; <pad>; union as @8 (8 bayt) }        16 bayt
-#   Obj       { uint32 type @0; next @8; arena @16; ref @20; moved @24 }  32 bayt
-#   ObjString { Obj; int length @32; int capacity @36; char *chars @40 }
-#   ObjArray  { Obj; int count @32; int cap @36; VMValue *items_ @40;
-#               int64 *idata @48; int elem_bits @56 }
-#   ObjObject { Obj; int count @32; int cap @36; ObjString **keys @40;
-#               VMValue *values @48 }
-# Kullanıcı ikilisi `libtulpar_runtime.a`'yı hata ayıklama bilgisiz linkliyor;
-# yani bu düzen DWARF'tan okunamıyor, burada yazılı. Değişirse
-# tests/dap_audit.py'nin "okunur değerler" senaryosu kızarır (kapı bu).
+#   Obj       { uint8 type @0; arena @1; moved @2; pad @3; int32 ref @4 }  8 bayt
+#   ObjString { Obj; int length @8; uint32 hash @12; char *chars @16 }
+#   ObjArray  { Obj; int count @8; int cap @12; VMValue *items_ @16;
+#               int64 *idata @24; int elem_bits @32 }
+#   ObjObject { Obj; int count @8; int cap @12; ObjString **keys @16;
+#               VMValue *values @24 }
+# Obj başlığı 2026-10-02'de 32 -> 8 bayt (src/vm/obj_layout.h); tür TEK
+# bayt — 4 bayt okumak komşu alanları (ve kullanılmayan dolgu baytını) da
+# okur. Kullanıcı ikilisi `libtulpar_runtime.a`'yı hata ayıklama bilgisiz
+# linkliyor; yani bu düzen DWARF'tan okunamıyor, burada yazılı. Değişirse
+# tests/dap_audit.py'nin "okunur değerler" senaryosu kızarır (kapı bu —
+# 2026-10-02'de başlık küçülünce gerçekten kızardı).
 import struct
 
 import gdb
@@ -33,6 +36,8 @@ VM_VAL_INT, VM_VAL_FLOAT, VM_VAL_BOOL, VM_VAL_VOID, VM_VAL_OBJ = range(5)
  OBJ_PROMISE, OBJ_STRUCT_ARRAY) = range(8)
 OBJ_NAMES = ["string", "array", "object", "function", "struct", "closure",
              "promise", "struct_array"]
+
+OBJ_HDR = 8        # sizeof(Obj) — src/vm/obj_layout.h TULPAR_OBJ_HEADER_SIZE
 
 MAX_ITEMS = 16     # dizi/nesne başına gösterilen eleman
 MAX_STR = 200      # gösterilen dizgi baytı
@@ -55,13 +60,17 @@ def _u64(addr):
     return struct.unpack("<Q", _mem(addr, 8))[0]
 
 
+def _u8(addr):
+    return _mem(addr, 1)[0]
+
+
 def _quote(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
 
 
 def _string(obj):
-    n = _i32(obj + 32)
-    chars = _u64(obj + 40)
+    n = _i32(obj + OBJ_HDR)
+    chars = _u64(obj + OBJ_HDR + 8)
     if n < 0 or not chars:
         return '""'
     raw = _mem(chars, min(n, MAX_STR))
@@ -85,16 +94,16 @@ def decode_raw(tag, payload, depth=0):
     if not obj:
         return "null"
     try:
-        otype = _u32(obj)
+        otype = _u8(obj)
         if otype == OBJ_STRING:
             return _string(obj)
         if depth >= MAX_DEPTH:
             return "<%s>" % (OBJ_NAMES[otype] if otype < len(OBJ_NAMES) else otype)
         if otype == OBJ_ARRAY:
-            count = _i32(obj + 32)
-            items = _u64(obj + 40)
-            idata = _u64(obj + 48)
-            bits = _i32(obj + 56)
+            count = _i32(obj + OBJ_HDR)
+            items = _u64(obj + OBJ_HDR + 8)
+            idata = _u64(obj + OBJ_HDR + 16)
+            bits = _i32(obj + OBJ_HDR + 24)
             shown = []
             for i in range(min(count, MAX_ITEMS)):
                 if items:
@@ -109,9 +118,9 @@ def decode_raw(tag, payload, depth=0):
             more = ", ... (%d)" % count if count > MAX_ITEMS else ""
             return "[" + ", ".join(shown) + more + "]"
         if otype == OBJ_OBJECT:
-            count = _i32(obj + 32)
-            keys = _u64(obj + 40)
-            vals = _u64(obj + 48)
+            count = _i32(obj + OBJ_HDR)
+            keys = _u64(obj + OBJ_HDR + 8)
+            vals = _u64(obj + OBJ_HDR + 16)
             shown = []
             for i in range(min(count, MAX_ITEMS)):
                 k = _u64(keys + 8 * i)
