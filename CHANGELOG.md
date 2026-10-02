@@ -21,9 +21,11 @@ tag still works;
   `libcrypto.3.dylib`. Biri eksik makinede dyld açılışta abort ediyordu
   (motor CI'ı `brew install llvm@18` ile örtmüştü). Artık macOS'ta OpenSSL
   statik bağlanıyor, LLVM bileşenlerinin link zincirindeki sistem dışı
-  dylib'ler statik ikizine çevriliyor ve libunwind düşüyor (libSystem
-  sağlıyor) — `cmake/MacOSTasinabilir.cmake`; kapatma
-  `-DTULPAR_MACOS_TASINABILIR=OFF`.
+  dylib'ler (zstd) statik ikizine çevriliyor — `cmake/MacOSTasinabilir.cmake`;
+  kapatma `-DTULPAR_MACOS_TASINABILIR=OFF`. libunwind'in kaynağı ayrıydı:
+  genel `-L<llvm>/lib` AppleClang'in örtük `-lc++`'sini Homebrew libc++'ya
+  yönlendiriyordu, o da libunwind'i yeniden dışa aktarıyor (ld uyarısı CI'da
+  görüldü); macOS'ta o `-L` kaldırıldı.
 - Kapı: `tools/dinamik_bag_denetle.sh` (Linux + macOS CI). macOS'ta `otool -L`
   yalnız `/usr/lib` + `/System`, `DYLD_PRINT_LIBRARIES` ile gerçekten
   yüklenenlerde Homebrew yok, Homebrew LLVM gizliyken `--version` + AOT dumanı.

@@ -10,10 +10,14 @@
 # llvm@18 kurmadan ikiliyi calistiramadi). CI koscusunda dordu de kurulu
 # oldugu icin derleme isinde hicbir sey bunu gormedi.
 #
-# Kaynaklar: OpenSSL `find_package(OpenSSL)`'in dylib secmesinden (CMakeLists
-# bunu OPENSSL_USE_STATIC_LIBS ile cozuyor); zstd ve libunwind ise Homebrew
+# Kaynaklar (CI'da olculdu 2026-10-02): OpenSSL `find_package(OpenSSL)`'in
+# dylib secmesinden (CMakeLists: OPENSSL_USE_STATIC_LIBS); zstd Homebrew
 # LLVM'inin disa aktardigi LLVM bilesen hedeflerinin INTERFACE_LINK_LIBRARIES
-# zincirinden geliyor. Bu modul o zinciri yuruyup:
+# zincirinden (/opt/homebrew/lib/libzstd.1.5.7.dylib); libunwind ise
+# `link_directories(LLVM_LIBRARY_DIRS)`in herkese verdigi
+# -L/opt/homebrew/opt/llvm@18/lib'den — AppleClang'in ortuk -lc++'si orada
+# Homebrew libc++'yi buluyor ve o libunwind'i yeniden disa aktariyor
+# (CMakeLists macOS'ta o -L'yi kaldiriyor). Bu modul arayuz zincirini yuruyup:
 #   * sistem disi bir .dylib'in yaninda statik ikizi (lib<ad>.a) varsa onu koyar;
 #   * libunwind'i duser — libSystem onu zaten yeniden disa aktariyor
 #     (/usr/lib/system/libunwind.dylib), ayri bir kopyaya gerek yok;

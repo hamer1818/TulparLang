@@ -108,8 +108,10 @@ four installed.
 - **Fix:** on macOS `CMakeLists.txt` asks FindOpenSSL for the static
   archives (`OPENSSL_USE_STATIC_LIBS`), and `cmake/MacOSTasinabilir.cmake`
   walks the LLVM components' link interface: a non-system `.dylib` with a
-  static twin (`lib<name>.a`, e.g. zstd) is swapped for it, libunwind is
-  dropped (libSystem re-exports it). Opt-out for local work:
+  static twin (`lib<name>.a`, e.g. zstd) is swapped for it. libunwind came
+  from elsewhere: the global `-L<llvm>/lib` made AppleClang's implicit
+  `-lc++` find Homebrew's libc++, which re-exports libunwind — on macOS that
+  `-L` is gone (static components link by absolute path). Opt-out for local work:
   `-DTULPAR_MACOS_TASINABILIR=OFF`.
 - **Gate:** `tools/dinamik_bag_denetle.sh` (both build jobs). macOS: every
   `otool -L` entry must live under `/usr/lib` or `/System`; then
