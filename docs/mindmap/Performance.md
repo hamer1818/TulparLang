@@ -1641,11 +1641,16 @@ Aşama aşama (aynı düzenek, `parse` en iyi 5):
 | + iki haneli itoa + literal ekleme | **75,2 ms** | **260,5 MB** | 25 ms | 27 ms |
 | C (gcc -O2) | 57,0 ms | 31,7 MB | | 27 ms |
 
-Bellek kapısı (`tests/split_toplu.sh`, rsswrap ile 100k / 1M parçanın tepe
-RSS farkı): 5 baytlık parça başına **54 B** (6 metin + 32 nesne + 16 eleman;
-eşik 64), eski derleyicide **78 B** (kırmızı). Kapının pozitif kontrolü:
-13 baytlık parça +16 B ölçülüyor (en az 12 beklenir) — kapı gerçekten parça
-boyunu ölçüyor.
+Bellek kapısı (`tests/split_toplu.sh`, rsswrap ile aynı 1M parçalık metnin
+split'li ve split'siz tepe RSS farkı): 5 baytlık parça başına **49 B** (32
+nesne + 16 eleman; eşik 60), eski derleyicide **71 B** (kırmızı). Kapının
+pozitif kontrolü: 21 baytlık parça +15 B ölçülüyor (nesne 32 → 48; en az 10
+beklenir) — kapı gerçekten parça boyunu ölçüyor. İlk sürüm metni
+`StringBuilder` ile kurup 100k / 1M farkına bakıyordu; Linux'ta doğru
+(54 B / +16) ama macOS CI'da 61 B / +8 ölçtü — bırakılan büyüyen tampon
+split'e yeniden veriliyor ve fark ölçümü bozuluyordu. Metin artık `repeat`
+ile tek seferde, serbest bırakılmadan kuruluyor ve iki koşum yalnız split'te
+ayrışıyor.
 
 Gerileme denetimi (13 çekirdek, dönüşümlü A/B, en iyi 5, aynı gün): intloop
 134,7/134,8 · fib 0,6/0,6 · mandelbrot 158,4/158,5 · matmul 37,0/37,2 ·

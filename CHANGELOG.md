@@ -124,7 +124,8 @@ tag still works;
   gerileme yok (`sieve`/`qsort`'taki %2'lik fark önekle kayboluyor —
   yerleşim, Tuzaklar 7i).
 - Kapılar: `tests/split_toplu.sh` (parça boyu formülü 24 B'den, kuyruk iadesi,
-  YENİ bellek ayağı: parça başına < 64 B — eski derleyicide 78 B kırmızı —
+  YENİ bellek ayağı: split'in parça başına maliyeti < 60 B — yeni 49 B, eski
+  derleyicide 71 B kırmızı —
   ve kendi pozitif kontrolü), YENİ `tests/obj_baslik.sh` (IR'deki bütün tür
   yüklemeleri `i8`; eski derleyicide kırmızı), YENİ
   `tests/itoa_esdeger.test.tpr`, `tests/split_toplu.test.tpr`'ye uzun

@@ -20,13 +20,17 @@
 #      (parca basina 8'e yuvarlanmis sizeof(ObjString) + uzunluk + NUL) ve
 #      karsilastirir. Parca basina ayirmaya donulurse satir kaybolur ya da boy
 #      tutmaz; iade bozulursa "kuyruk iade hayir" -> KIRMIZI.
-#   2. BELLEK: 100k ve 1M parcali split'in tepe RSS farkindan parca basina bayt
-#      (metin + parca nesnesi + 16 B dizi elemani). Esik 64 B: 5 haneli parca
-#      yeni duzende ~54 B (6 metin + 32 nesne + 16 eleman), eski duzende
-#      (Obj 32 B, ObjString 48 B) ~78 B — eski derleyicide KIRMIZI.
-#      Pozitif kontrol: 13 baytlik parcalar 8 bayt daha uzun metin + 8 bayt
-#      daha buyuk nesne demek; olculen parca basina fark >= 12 B olmali —
-#      olmazsa kapi parca boyunu olcmuyordur.
+#   2. BELLEK: ayni 1M parcalik metin, split'li ve split'siz iki kosum; tepe
+#      RSS farki / parca = split'in parca basina maliyeti (nesne + 16 B dizi
+#      elemani; metin iki kosumda ortak ve duser). Metin `repeat` ile TEK
+#      seferde kurulur (arena, serbest birakilmaz): StringBuilder'in buyuyen
+#      ve birakilan tamponu macOS'ta split'e yeniden verilip olcumu
+#      bozuyordu (ilk surum: 5 bayt 61 B, 13 bayt 69 B — fark 8, beklenen 16).
+#      Esik 60 B: 5 baytlik parca yeni duzende 48 B (32 nesne + 16), eski
+#      duzende (Obj 32 B, ObjString 48 B) 72 B — eski derleyicide KIRMIZI.
+#      Pozitif kontrol: 21 baytlik parca nesneyi 16 B buyutur (8'e
+#      yuvarlanmis 24+22 = 48); olculen fark >= 10 B olmali — olmazsa kapi
+#      parca boyunu olcmuyordur.
 #
 # Kapinin kendi kontrolu: anahtar KAPALIYKEN hicbir satir basilmamali (anahtar
 # gercekten okunuyor, tani varsayilan olarak ciktiyi kirletmiyor).
@@ -89,18 +93,18 @@ SESSIZ=$("$TMP/prog" 2>&1 >/dev/null | grep -c "split-tani" || true)
 cat > "$TMP/bellek.tpr" <<'TPREOF'
 int n = toInt(env("SB_N"));
 int uzun = toInt(env("SB_UZUN"));
-var sb = StringBuilder(1024);
-for (int i = 0; i < n; i = i + 1) {
-    if (i > 0) { sb_append(sb, ","); }
-    if (uzun > 0) { sb_append(sb, "ABCDEFGH"); }
-    sb_append(sb, 10000 + i % 90000);
+int bol = toInt(env("SB_BOL"));
+str birim = "12345,";
+if (uzun > 0) { birim = "ABCDEFGHIJKLMNOP12345,"; }
+str s = repeat(birim, n);
+if (bol > 0) {
+    array parts = split(s, ",");
+    int t = 0;
+    for (int i = 0; i < len(parts); i = i + 1) { t = t + len(parts[i]); }
+    print(toString(len(parts)) + " " + toString(t));
+} else {
+    print(len(s));
 }
-str s = sb_tostring(sb);
-sb_free(sb);
-array parts = split(s, ",");
-int t = 0;
-for (int i = 0; i < len(parts); i = i + 1) { t = t + len(parts[i]); }
-print(toString(len(parts)) + " " + toString(t));
 TPREOF
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
@@ -119,26 +123,27 @@ case "$(uname -s)" in
     # KB; macOS ru_maxrss BAYT.
     rss() {
       local v
-      v=$(SB_N=$1 SB_UZUN=$2 "$TMP/rsswrap" "$TMP/bellek" 2>&1 >/dev/null | tr -d '\r' | sed -n 's/^RSS_KB=//p')
+      v=$(SB_N=1000000 SB_UZUN=$1 SB_BOL=$2 "$TMP/rsswrap" "$TMP/bellek" 2>&1 >/dev/null | tr -d '\r' | sed -n 's/^RSS_KB=//p')
       [ "$(uname -s)" = "Darwin" ] && [ -n "$v" ] && v=$((v / 1024))
       echo "$v"
     }
-    K1=$(rss 100000 0); K2=$(rss 1000000 0)
-    U1=$(rss 100000 1); U2=$(rss 1000000 1)
-    for v in "$K1" "$K2" "$U1" "$U2"; do
+    K0=$(rss 0 0); K1=$(rss 0 1)
+    U0=$(rss 1 0); U1=$(rss 1 1)
+    for v in "$K0" "$K1" "$U0" "$U1"; do
       [ -n "$v" ] || { echo "  RSS okunamadi"; echo "split toplu kapisi DUSTU"; exit 1; }
     done
-    # Cikti dogrulamasi (kapi yanlis programi olcmesin).
-    KC=$(SB_N=1000000 SB_UZUN=0 "$TMP/bellek" | tr -d '\r')
-    UC=$(SB_N=1000000 SB_UZUN=1 "$TMP/bellek" | tr -d '\r')
-    [ "$KC" = "1000000 5000000" ] || { echo "  bellek sondasi ciktisi '$KC'"; HATA=1; }
-    [ "$UC" = "1000000 13000000" ] || { echo "  bellek sondasi (uzun) ciktisi '$UC'"; HATA=1; }
-    KB=$(( (K2 - K1) * 1024 / 900000 ))
-    UB=$(( (U2 - U1) * 1024 / 900000 ))
-    echo "  bellek: 5 baytlik parca basina ${KB} B (esik 64; 100k ${K1} KB, 1M ${K2} KB)"
-    echo "  pozitif kontrol: 13 baytlik parca basina ${UB} B (fark $((UB - KB)) B, en az 12 olmali)"
-    [ "$KB" -lt 64 ] || { echo "  PARCA BASINA ${KB} B — temsil buyumus (esik 64)"; HATA=1; }
-    [ $((UB - KB)) -ge 12 ] || { echo "  POZITIF KONTROL: uzun parca farki $((UB - KB)) B — kapi parca boyunu olcmuyor"; HATA=1; } ;;
+    # Cikti dogrulamasi (kapi yanlis programi olcmesin). Sondaki ayirici
+    # bos bir son parca verir: 1M + 1 parca.
+    KC=$(SB_N=1000000 SB_UZUN=0 SB_BOL=1 "$TMP/bellek" | tr -d '\r')
+    UC=$(SB_N=1000000 SB_UZUN=1 SB_BOL=1 "$TMP/bellek" | tr -d '\r')
+    [ "$KC" = "1000001 5000000" ] || { echo "  bellek sondasi ciktisi '$KC'"; HATA=1; }
+    [ "$UC" = "1000001 21000000" ] || { echo "  bellek sondasi (uzun) ciktisi '$UC'"; HATA=1; }
+    KB=$(( (K1 - K0) * 1024 / 1000000 ))
+    UB=$(( (U1 - U0) * 1024 / 1000000 ))
+    echo "  bellek: 5 baytlik parca basina ${KB} B (esik 60; split'siz ${K0} KB, split'li ${K1} KB)"
+    echo "  pozitif kontrol: 21 baytlik parca basina ${UB} B (fark $((UB - KB)) B, en az 10 olmali)"
+    [ "$KB" -lt 60 ] || { echo "  PARCA BASINA ${KB} B — temsil buyumus (esik 60)"; HATA=1; }
+    [ $((UB - KB)) -ge 10 ] || { echo "  POZITIF KONTROL: uzun parca farki $((UB - KB)) B — kapi parca boyunu olcmuyor"; HATA=1; } ;;
 esac
 
 if [ "$HATA" -ne 0 ]; then
