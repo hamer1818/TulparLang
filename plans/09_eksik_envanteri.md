@@ -239,7 +239,7 @@ Tek oturumda bitmeyecek kadar büyük (XL), kullanıcı kararı gerektiren ya da
 | K117 | AOT'ta değer başına geri kazanım (arc_release, M2, LEAK 3, ~80 B global) | XL ve performans riski yüksek: referans sayımı ya da takma ad izlemesi bütün codegen'e retain/release yayar; 'performans düşmesin' hedefiyle çatışabileceği için ayrı tasarım ve ölçüm turu ister. |
 | K145 | Strict'in varsayılan olması kararı | Kullanıcı kararı: typeinfer strict'in varsayılan olması (plan 'zorla flip etme' diyor). Önkoşulları Kol B (K058/K082) ve Kol C (K144) hazırlıyor. |
 | K154 | gdb'siz kendi debugger'ı (B2) | XL: ptrace/Win32 Debug API üstünde kendi debugger'ı; plan B1'i (gdb) önermiş, B2 'v1.0+'. |
-| K197 | Motor CI'ında .tpr oyun/köprü testleri | K303 kararına bağlı: kalıcı eklenti noktası olmadan CI'da ters yama her derleyici değişikliğinde kırılır; önce kullanıcının K303 kararı gerekir. |
+| K197 | Motor CI'ında .tpr oyun/köprü testleri | K303 bitti (#457): engel kalktı — motor CI'ı yayınlanmış `tulpar` + eklenti paketiyle koşabilir (motor deposunun işi). |
 | K200 | _grid_near3 her çağrıda dizi ayırıyor | Dondurulmuş hat: scene3d 2026-09-14/22 kullanıcı kararıyla donduruldu ve test paketi silindi; değişiklik kapısız kalır, kazanç yalnız >800 varlıkta. OBSOLETE sayılması için kullanıcı onayı yeterli. |
 | K202 | Float-dizi unboxing (kendi kapısıyla) | XL: float[] için kutusuz f64 depolama (~117 değinme, #21 fikstür paketi, kendi kapısı). Oyun için değerli ama tek oturumluk değil; K201'in kök nedeni önce adlandırılmalı. |
 | K207 | Kıyas hedefi: C'yi her alanda geçmek | XL ve kullanıcı kararı: 'C'yi her alanda geçmek' K201/K202'ye bağlı ve gerçekçi bir kapı olarak yeniden tanımlanmalı (ör. C'nin ≤1,5× içinde). |
@@ -248,7 +248,7 @@ Tek oturumda bitmeyecek kadar büyük (XL), kullanıcı kararı gerektiren ya da
 | K234 | 2026-09-15 öncesi emülatör (x86_64) çıktılarının yeniden üretimi | Kullanıcı kararı: depo kökündeki izlenmeyen eski APK'lar (arcade hattı, CI dışı) yeniden mi üretilsin yoksa silinsin mi; silme kullanıcı onayı ister. |
 | K237 | macOS'ta -dead_strip ile açılış kazancı | Gerçek macOS donanımında ölçüm gerekir; bu makinede yapılamaz. |
 | K238 | macOS x86_64 ve Linux ARM64 desteği/CI iddiası | Kullanıcı kararı: Linux ARM64 ve macOS x86_64 için CI + sürüm varlığı eklemek mi, yoksa PLATFORM_SUPPORT iddialarını geri çekmek mi (ilgili doc_fixes bu karara göre uygulanır). |
-| K242 | Motor derleyicisinin (köprü bağlama) Windows desteği | motor_derleyici.sh K303 kararına kadar geçici bir araç; MSYS2 ortamı bu makinede yok. |
+| K242 | Motor derleyicisinin (köprü bağlama) Windows desteği | K303 (#457) ile ayrı motor derleyicisi gereksiz: eklenti mekanizması Windows'ta derlenir ve `tests/yerel_eklenti.sh` Windows CI'da koşar. Kalan: motor bildiriminde `link.windows` bölümü (motor Windows linki ölçülmedi — motor deposu, K228). |
 | K253 | Registry: özel depo yayını | Kullanıcı kararı + canlı sistem: OAuth kapsamı, jeton saklama ve özel paket görünürlük politikası tulpar-be'de; canlı deploy onay ister. |
 | K254 | Registry: paket imzalama | Kullanıcı kararı: güven modeli (TOFU/anahtar sabitleme) ve imza şeması seçilmeli; L. |
 | K255 | Sunucu tarafı /v1/search | Planın kendi koşulu gerçekleşmedi: /v1/search N>50 paket için, canlı katalogda 3 paket var. |
@@ -262,9 +262,9 @@ Tek oturumda bitmeyecek kadar büyük (XL), kullanıcı kararı gerektiren ya da
 | K294 | ORM ilişkileri (has_many) | Kullanıcı ertelemesi: WINGS_DX.md 'Kapsam dışı (bilinçli erteleme) — talep görürse konuşulur'. |
 | K295 | ORM migration sistemi | Kullanıcı ertelemesi: ORM migration 'talep görürse'. |
 | K296 | Tipli query-builder | Kullanıcı ertelemesi: tipli query-builder 'talep görürse'. |
-| K303 | Derleyicide motor eklenti noktası (ters yamanın yerine) | Kullanıcı kararı (memory motor-gecici-baglama: 'kalıcı çözüm kullanıcının kararı'): derleyicide motor eklenti noktasının biçimi (--ext, tulpar.toml, harici builtin .inc). |
-| K304 | Struct geçişli C ABI (köprüde Vec3) | XL ve K303'e bağlı: FFI sınırında struct değer ABI'si (register/sret) + SPEC üreticisi. |
-| K305 | Callback FFI | K303 ve K304'e bağlı: fonksiyon değerini C'ye geçirmek köprünün bağlanma biçimine bağlı. |
+| K303 | ~~Derleyicide motor eklenti noktası (ters yamanın yerine)~~ | **YAPILDI (#457)** — kullanıcı onayı 2026-10-02. Genel yerel eklenti noktası: `--ext` / `TULPAR_EXT_PATH` / `tulpar.toml [ext]`, `tulpar-ext.json` bildirimi, doğrudan C çağrısı, typeinfer + LSP; derleyicide motora özgü ad yok. Kapı `tests/yerel_eklenti.sh`; bkz. docs/mindmap/Eklentiler.md. |
+| K304 | Struct geçişli C ABI (köprüde Vec3) | XL. K303 (#457) bağlanma biçimini verdi: bildirimin tip kümesine `@repr(C)` struct (register/sret) eklenmesi gerekir. |
+| K305 | Callback FFI | K304'e bağlı. K303 (#457) ad tabanlı geri çağrıyı genelleştirdi (`tulpar_ext_func_lookup` / `tulpar_ext_call_f64`); fonksiyon DEĞERİNİ (funcref) bildirimde bir tip olarak geçirmek yok. |
 | K306 | Motor L1 (core) katmanının Tulpar'a taşınması | XL: motor L1'in Tulpar'a taşınması işaretçi/unsafe/atomik/C ABI önkoşullarını (K039, K040, K304) bekliyor. |
 | K360 | Arcade global skor sunucusunun deploy'u | Kullanıcı kararı: hosting/credential ve dondurulmuş arcade hattı için 'deploy et ya da bırak' kararı. |
 | K361 | Generics PR8: belgeler + örnekler | Generics (XL) uygulanmadan belge ve örnek yazılamaz. |
