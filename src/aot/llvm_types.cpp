@@ -1,6 +1,21 @@
 #include "llvm_types.hpp"
+#include "../vm/obj_layout.h"   // Obj basligi boyu / tur genisligi (tek kaynak)
 #include <llvm-c/Core.h>
 #include <cstring>
+
+LLVMTypeRef llvm_obj_type_ty(LLVMBackend *backend) {
+  return LLVMIntTypeInContext(backend->context, 8 * TULPAR_OBJ_TYPE_SIZE);
+}
+
+LLVMValueRef llvm_load_obj_type(LLVMBackend *backend, LLVMValueRef objp,
+                                const char *name) {
+  // Tur alani @0: GEP gerekmez, isaretcinin kendisinden yuklenir.
+  return LLVMBuildLoad2(backend->builder, llvm_obj_type_ty(backend), objp, name);
+}
+
+LLVMValueRef llvm_obj_type_const(LLVMBackend *backend, unsigned kind) {
+  return LLVMConstInt(llvm_obj_type_ty(backend), kind, 0);
+}
 
 static LLVMMetadataRef tbaa_str(LLVMContextRef c, const char *s) {
   return LLVMMDStringInContext2(c, s, strlen(s));
@@ -56,19 +71,18 @@ void llvm_init_types(LLVMBackend *backend) {
   backend->obj_string_type = LLVMStructCreateNamed(ctx, "struct.ObjString");
 
   // struct ObjArray — dizi erisiminin SATIR ICI hizli yolu bu tip uzerinden
-  // GEP yapiyor. C tarafindaki duzen ISARETCI BOYUTUNA BAGLI (olculdu):
-  //   64-bit: Obj basligi 32 bayt -> count@32 capacity@36 items_@40 idata@48
-  //           elem_bits@56, sizeof 64
-  //   wasm32: Obj basligi 20 bayt -> count@20 capacity@24 items_@28 idata@32
-  //           elem_bits@36, sizeof 40
-  // Basligi opak dolgu + basindaki i32 (obj.type) olarak modelliyoruz:
-  // OBJ_ARRAY denetimi icin yalnizca o alan lazim. Dolgunun BOYUTU hedefe
-  // gore secilir; sabit 28 yazmak wasm32'de GEP'i yanlis ofsete goturuyordu
-  // (ve runtime'in static_assert'leri web derlemesini kiriyordu).
-  const unsigned obj_header_pad = backend->target_web ? 16 : 28;
+  // GEP yapiyor. Obj basligi 2026-10-02'den beri her hedefte 8 bayt
+  // (src/vm/obj_layout.h); alanlarin geri kalani isaretci boyuna bagli:
+  //   64-bit: count@8 capacity@12 items_@16 idata@24 elem_bits@32, sizeof 40
+  //   wasm32: count@8 capacity@12 items_@16 idata@20 elem_bits@24, sizeof 28
+  // (Eskiden baslik 64-bit'te 32, wasm32'de 20 bayttı ve dolgu hedefe gore
+  // secilen elle yazilmis bir sayiydi — 28 / 16.) Basligi basindaki tur
+  // alani + opak dolgu olarak modelliyoruz: OBJ_ARRAY denetimi icin yalnizca
+  // o alan lazim. Ofset kilidi runtime_bindings.cpp static_assert'lerinde.
+  const unsigned obj_header_pad = TULPAR_OBJ_HEADER_SIZE - TULPAR_OBJ_TYPE_SIZE;
   backend->obj_array_type = LLVMStructCreateNamed(ctx, "struct.ObjArray");
   LLVMTypeRef obj_arr_elements[] = {
-      LLVMInt32TypeInContext(ctx),                              // obj.type   @0
+      llvm_obj_type_ty(backend),                                // obj.type   @0
       LLVMArrayType(LLVMInt8TypeInContext(ctx), obj_header_pad), // baslik kalani
       LLVMInt32TypeInContext(ctx),                              // count
       LLVMInt32TypeInContext(ctx),                              // capacity
@@ -84,7 +98,7 @@ void llvm_init_types(LLVMBackend *backend) {
   // static_assert'lerde.
   backend->obj_sarr_type = LLVMStructCreateNamed(ctx, "struct.ObjStructArray");
   LLVMTypeRef obj_sarr_elements[] = {
-      LLVMInt32TypeInContext(ctx),                               // obj.type    @0
+      llvm_obj_type_ty(backend),                                 // obj.type    @0
       LLVMArrayType(LLVMInt8TypeInContext(ctx), obj_header_pad),  // baslik kalani
       LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),             // type_name
       LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),             // field_names
@@ -142,37 +156,29 @@ void llvm_init_types(LLVMBackend *backend) {
   backend->ret_pair_type = LLVMStructTypeInContext(ctx, ret_pair_elements, 2, 0);
 
   // --- Define Obj Body ---
-  // struct Obj {
-  //   ObjType type;             // offset 0 (i32)
-  //   padding 4 bytes           // offset 4
-  //   struct Obj *next;         // offset 8 (ptr)
-  //   uint8_t arena_allocated;  // offset 16
-  //   padding 3 bytes           // offset 17
-  //   int32_t ref_count;        // offset 20
-  //   uint8_t is_moved;         // offset 24
-  //   padding 7 bytes           // offset 25
+  // struct Obj {                (src/vm/obj_layout.h, 2026-10-02: 8 bayt)
+  //   ObjType type;             // offset 0 (uint8_t)
+  //   uint8_t arena_allocated;  // offset 1
+  //   uint8_t is_moved;         // offset 2
+  //   uint8_t pad_;             // offset 3
+  //   int32_t ref_count;        // offset 4
   // }
   LLVMTypeRef obj_elements[] = {
-      LLVMInt32TypeInContext(ctx),           // type (enum)
-      LLVMArrayType(LLVMInt8TypeInContext(ctx), 4),
-      LLVMPointerType(backend->obj_type, 0), // next
+      llvm_obj_type_ty(backend),             // type (enum, i8)
       LLVMInt8TypeInContext(ctx),            // arena_allocated
-      LLVMArrayType(LLVMInt8TypeInContext(ctx), 3),
-      LLVMInt32TypeInContext(ctx),           // ref_count
       LLVMInt8TypeInContext(ctx),            // is_moved
-      LLVMArrayType(LLVMInt8TypeInContext(ctx), 7)
+      LLVMInt8TypeInContext(ctx),            // pad_
+      LLVMInt32TypeInContext(ctx),           // ref_count
   };
-  LLVMStructSetBody(backend->obj_type, obj_elements, 8, 0);
+  LLVMStructSetBody(backend->obj_type, obj_elements, 5, 0);
 
   // --- Define ObjString Body ---
   // struct ObjString {
-  //   Obj obj;
-  //   int length;
-  //   int capacity;
-  //   char *chars;
-  //   uint32_t hash;
-  //   padding 4 bytes
-  // }
+  //   Obj obj;          // 8
+  //   int length;       // @8
+  //   uint32_t hash;    // @12
+  //   char *chars;      // @16 (wasm32 @16, sizeof 20)
+  // }                   // 64-bit sizeof 24
   LLVMTypeRef str_elements[] = {
       backend->obj_type,           // obj header
       LLVMInt32TypeInContext(ctx), // length

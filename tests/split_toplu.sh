@@ -1,5 +1,6 @@
 #!/bin/bash
-# split() TOPLU YOL KAPISI — parcalar gercekten TEK arena ayirmasinda mi?
+# split() TOPLU YOL KAPISI — parcalar gercekten TEK arena ayirmasinda mi, ve
+# parca basina ne kadar bellek tutuyor?
 #
 # 2026-10-01: split() parca basina ayirmadan (strstr + gecici malloc/strncpy/
 # free + parca basina arena ayirmasi + ikiye katlanarak buyuyen dizi) iki
@@ -7,12 +8,29 @@
 # 9800X3D): split 112 -> 57 ms; kucuk sayfa hatasi 85 251 -> 4 618 (tek
 # surekli bolge, THP 2 MB sayfalarla dolduruyor).
 #
-# Anlambilim tests/split_toplu.test.tpr'de; bu kapi yalniz MEKANIZMAYI olcer:
-# TULPAR_SPLIT_TANI=1 iken runtime her split icin parca sayisini ve tek arena
-# ayirmasinin boyunu stderr'e basar. Kapi beklenen boyu KENDISI hesaplar
-# (parca basina 8'e yuvarlanmis sizeof(ObjString) + uzunluk + NUL) ve
-# karsilastirir. Parca basina ayirmaya donulurse satir kaybolur ya da boy
-# tutmaz -> KIRMIZI.
+# 2026-10-02: Obj basligi 32 -> 8 bayt (ObjString 48 -> 24) ve tek baytlik
+# ayiricida parca boylari toplanmadan UST SINIRLA ayrilip artan kuyruk iade
+# ediliyor (aot_arena_trim_last). parse 374 -> 260 MB.
+#
+# Anlambilim tests/split_toplu.test.tpr'de; bu kapi MEKANIZMAYI ve BELLEGI
+# olcer:
+#   1. TULPAR_SPLIT_TANI=1 iken runtime her split icin parca sayisini, tek
+#      arena ayirmasinin (iadeden sonraki) boyunu ve kuyrugun gercekten iade
+#      edilip edilmedigini stderr'e basar. Kapi beklenen boyu KENDISI hesaplar
+#      (parca basina 8'e yuvarlanmis sizeof(ObjString) + uzunluk + NUL) ve
+#      karsilastirir. Parca basina ayirmaya donulurse satir kaybolur ya da boy
+#      tutmaz; iade bozulursa "kuyruk iade hayir" -> KIRMIZI.
+#   2. BELLEK: ayni 1M parcalik metin, split'li ve split'siz iki kosum; tepe
+#      RSS farki / parca = split'in parca basina maliyeti (nesne + 16 B dizi
+#      elemani; metin iki kosumda ortak ve duser). Metin `repeat` ile TEK
+#      seferde kurulur (arena, serbest birakilmaz): StringBuilder'in buyuyen
+#      ve birakilan tamponu macOS'ta split'e yeniden verilip olcumu
+#      bozuyordu (ilk surum: 5 bayt 61 B, 13 bayt 69 B — fark 8, beklenen 16).
+#      Esik 60 B: 5 baytlik parca yeni duzende 48 B (32 nesne + 16), eski
+#      duzende (Obj 32 B, ObjString 48 B) 72 B — eski derleyicide KIRMIZI.
+#      Pozitif kontrol: 21 baytlik parca nesneyi 16 B buyutur (8'e
+#      yuvarlanmis 24+22 = 48); olculen fark >= 10 B olmali — olmazsa kapi
+#      parca boyunu olcmuyordur.
 #
 # Kapinin kendi kontrolu: anahtar KAPALIYKEN hicbir satir basilmamali (anahtar
 # gercekten okunuyor, tani varsayilan olarak ciktiyi kirletmiyor).
@@ -35,10 +53,10 @@ if ! "$TULPAR" build "$TMP/prog.tpr" "$TMP/prog" >"$TMP/derle.log" 2>&1; then
   echo "split toplu kapisi DUSTU: sonda derlenmedi"; cat "$TMP/derle.log"; exit 1
 fi
 
-# sizeof(ObjString): 64-bit'te 48 (2026-10-01'e kadar 56 — `capacity` alani
-# kaldirildi). Kapi 64-bit hedeflerde kosuyor (CI: Linux x86_64, macOS arm64,
-# Windows x86_64); baska bir genislikte boy farkli olur.
-S=48
+# sizeof(ObjString): 64-bit'te 24 (2026-10-02'ye kadar 48 — Obj basligi 32 ->
+# 8; 2026-10-01'e kadar 56 — `capacity` alani). Kapi 64-bit hedeflerde
+# kosuyor (CI: Linux x86_64, macOS arm64, Windows x86_64); wasm32'de 20.
+S=24
 hiz() { echo $(( (S + $1 + 1 + 7) / 8 * 8 )); }
 BEK_A=$(( $(hiz 1) + $(hiz 2) + $(hiz 3) + $(hiz 0) + $(hiz 4) ))
 BEK_B=$(( $(hiz 16) + $(hiz 1) ))
@@ -59,13 +77,77 @@ for BEK in "5 parca, tek arena ayirmasi $BEK_A bayt" \
 done
 N=$(echo "$TANI" | grep -c "^split-tani:")
 [ "$N" -eq 3 ] || { echo "  3 tani satiri bekleniyordu, $N geldi"; HATA=1; }
+# Kuyruk iadesi: tek baytlik ayiricili split (a) ust sinirla ayirdi; artan
+# geri verilmis olmali. Oteki ikisi tam boyla ayiriyor (yine "evet").
+NI=$(echo "$TANI" | grep -c "kuyruk iade evet")
+[ "$NI" -eq 3 ] || { echo "  kuyruk iadesi: 3 'evet' bekleniyordu, $NI geldi"; HATA=1; }
+# Ust sinir gercekten kullaniliyor mu (a'nin satirinda ust sinir > boy).
+UA=$(echo "$TANI" | sed -n "s/^split-tani: 5 parca, tek arena ayirmasi $BEK_A bayt (ust sinir \([0-9]*\),.*/\1/p")
+[ -n "$UA" ] && [ "$UA" -gt "$BEK_A" ] || { echo "  tek baytlik ayiricida ust sinir ($UA) kullanilmamis"; HATA=1; }
 
 # Kontrol: anahtar kapaliyken sessiz.
 SESSIZ=$("$TMP/prog" 2>&1 >/dev/null | grep -c "split-tani" || true)
 [ "$SESSIZ" -eq 0 ] || { echo "  anahtar KAPALIYKEN $SESSIZ tani satiri basildi"; HATA=1; }
 
+# --- 2. BELLEK -------------------------------------------------------------
+cat > "$TMP/bellek.tpr" <<'TPREOF'
+int n = toInt(env("SB_N"));
+int uzun = toInt(env("SB_UZUN"));
+int bol = toInt(env("SB_BOL"));
+str birim = "12345,";
+if (uzun > 0) { birim = "ABCDEFGHIJKLMNOP12345,"; }
+str s = repeat(birim, n);
+if (bol > 0) {
+    array parts = split(s, ",");
+    int t = 0;
+    for (int i = 0; i < len(parts); i = i + 1) { t = t + len(parts[i]); }
+    print(toString(len(parts)) + " " + toString(t));
+} else {
+    print(len(s));
+}
+TPREOF
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo "  [bellek ayagi ATLANDI: Windows'ta fork/wait4 yok — rsswrap kosamiyor]" ;;
+  *)
+    CC_BIN="${CC:-}"
+    if [ -z "$CC_BIN" ]; then
+      for c in cc gcc clang; do command -v "$c" >/dev/null 2>&1 && { CC_BIN="$c"; break; }; done
+    fi
+    if [ -z "$CC_BIN" ] || ! "$CC_BIN" -O2 benchmarks/fair/rsswrap.c -o "$TMP/rsswrap" 2>/dev/null; then
+      echo "split toplu kapisi DUSTU: rsswrap derlenemedi (C derleyicisi?)"; exit 1
+    fi
+    if ! "$TULPAR" build "$TMP/bellek.tpr" "$TMP/bellek" >"$TMP/derle2.log" 2>&1; then
+      echo "split toplu kapisi DUSTU: bellek sondasi derlenmedi"; cat "$TMP/derle2.log"; exit 1
+    fi
+    # KB; macOS ru_maxrss BAYT.
+    rss() {
+      local v
+      v=$(SB_N=1000000 SB_UZUN=$1 SB_BOL=$2 "$TMP/rsswrap" "$TMP/bellek" 2>&1 >/dev/null | tr -d '\r' | sed -n 's/^RSS_KB=//p')
+      [ "$(uname -s)" = "Darwin" ] && [ -n "$v" ] && v=$((v / 1024))
+      echo "$v"
+    }
+    K0=$(rss 0 0); K1=$(rss 0 1)
+    U0=$(rss 1 0); U1=$(rss 1 1)
+    for v in "$K0" "$K1" "$U0" "$U1"; do
+      [ -n "$v" ] || { echo "  RSS okunamadi"; echo "split toplu kapisi DUSTU"; exit 1; }
+    done
+    # Cikti dogrulamasi (kapi yanlis programi olcmesin). Sondaki ayirici
+    # bos bir son parca verir: 1M + 1 parca.
+    KC=$(SB_N=1000000 SB_UZUN=0 SB_BOL=1 "$TMP/bellek" | tr -d '\r')
+    UC=$(SB_N=1000000 SB_UZUN=1 SB_BOL=1 "$TMP/bellek" | tr -d '\r')
+    [ "$KC" = "1000001 5000000" ] || { echo "  bellek sondasi ciktisi '$KC'"; HATA=1; }
+    [ "$UC" = "1000001 21000000" ] || { echo "  bellek sondasi (uzun) ciktisi '$UC'"; HATA=1; }
+    KB=$(( (K1 - K0) * 1024 / 1000000 ))
+    UB=$(( (U1 - U0) * 1024 / 1000000 ))
+    echo "  bellek: 5 baytlik parca basina ${KB} B (esik 60; split'siz ${K0} KB, split'li ${K1} KB)"
+    echo "  pozitif kontrol: 21 baytlik parca basina ${UB} B (fark $((UB - KB)) B, en az 10 olmali)"
+    [ "$KB" -lt 60 ] || { echo "  PARCA BASINA ${KB} B — temsil buyumus (esik 60)"; HATA=1; }
+    [ $((UB - KB)) -ge 10 ] || { echo "  POZITIF KONTROL: uzun parca farki $((UB - KB)) B — kapi parca boyunu olcmuyor"; HATA=1; } ;;
+esac
+
 if [ "$HATA" -ne 0 ]; then
   echo "split toplu kapisi DUSTU — gelen tani:"; echo "$TANI" | sed 's/^/    /'
   exit 1
 fi
-echo "split toplu kapisi: GECTI (3 split, her biri tek arena ayirmasi: $BEK_A/$BEK_B/$BEK_C bayt; anahtar kapaliyken sessiz)"
+echo "split toplu kapisi: GECTI (3 split, her biri tek arena ayirmasi: $BEK_A/$BEK_B/$BEK_C bayt, kuyruk iade; anahtar kapaliyken sessiz)"

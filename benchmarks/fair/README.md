@@ -281,7 +281,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `mandelbrot` | 158,4 | 158,7 | 1,00× | 3. |
 | `qsort` | 121,2 → **70,0** (2026-10-01) | 57,4 | 2,1× → **1,2×** | 8. → **5.** |
 | `callfn` | 298,6 → 209,6 → **65,5** (2026-10-01) | 91,1 | 2,3× → **0,7×** | 8. → ~3.* |
-| `parse` | 196,3 → **126,2** (2026-10-01) | 56,7 | 2,2× | 6. → **4.** |
+| `parse` | 196,3 → 126,2 (2026-10-01) → **75,2** (2026-10-02) | 56,7 | 2,2× → **1,3×** | 6. → 4. → ~3.* |
 | `particles` | 329,6 → **54,8** (2026-10-01) | 42,2 | 7,8× → 1,3× | 8. → **4.** |
 | `nbody` | 1304,8 → 187,3 → **115,3** (2026-10-01) | 114,5 | 11,4× → 1,6× → **1,0×** | 8. → 7. → ~2.* |
 | `matmul` | 821,3 → **37,1** (2026-10-01) | 31,1 | 26,4× → **1,2×** | 8. → **4.** |
@@ -335,7 +335,13 @@ Bulgular, sırayla ele alınması önerilen:
    2026-10-01: üst düzey `str s = sb_tostring(sb)` metni artık tek kopya
    (yazma bariyeri yerleşmiş arena dizgisini kopyalamıyor): **440 → 412 MB**;
    aynı gün `ObjString` 56 → 48 bayt (okunmayan `capacity` alanı): **412 →
-   374 MB**. Kalan: `Obj` başlığının dolgusu (Performance.md).
+   374 MB**. **2026-10-02:** `Obj` başlığı 32 → 8 bayt (`ObjString` 24),
+   tek baytlık ayırıcıda `split` parça başına tek arama (üst sınırla ayır,
+   kuyruğu iade et), iki haneli `itoa`: **121 → 75 ms, 374 → 261 MB**
+   (aynı düzenekte C 57,0 ms / 31,7 MB). *Sıra resmî koşumda ölçülmedi;
+   `results.json`'daki öteki dillerle (C++ 60,6, Rust 76,6, Go 117,0) yan
+   yana ~3.; bellekte ~5. (Go 118, Python 308).* Kalan: parça hâlâ 32 B
+   nesne + 16 B eleman (Performance.md "parse ... 2026-10-02").
 5. **`callfn`** — **kısmen kapandı (2026-10-01):** fonksiyon referansı her
    değerlendirmede yeni bir arena dizgisiydi (döngüde `call(f, x)` 20M kez →
    1,26 GB) ve `call()` her çağrıda adı hash'leyip önbelleği yokluyordu.

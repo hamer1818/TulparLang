@@ -8,6 +8,7 @@
 #include "../pkg/sha256.hpp"
 #include "../../runtime/tulpar_gzip.h"
 #include "vm.hpp"
+#include "obj_layout.h"   // Obj basligi duzeni — codegen ile tek kaynak
 #include "runtime_http_obj.hpp"
 #include "boxed_call.hpp"
 
@@ -423,14 +424,14 @@ typedef struct AOTFnRef {
 AOTFnRef aot_fnref_pool[AOT_FNREF_MAX];
 #define g_fnref_pool aot_fnref_pool
 #if UINTPTR_MAX > 0xFFFFFFFFu
-static_assert(sizeof(ObjString) == 48, "ObjString 48 bayt (call() hizli yolu)");
+static_assert(sizeof(ObjString) == 24, "ObjString 24 bayt (call() hizli yolu)");
 static_assert(offsetof(AOTFnRef, fp) == AOT_FNREF_FP_OFF, "AOTFnRef::fp (fnref_layout.h)");
 static_assert(offsetof(AOTFnRef, arity) == AOT_FNREF_ARITY_OFF, "AOTFnRef::arity (fnref_layout.h)");
 static_assert(offsetof(AOTFnRef, nfp) == AOT_FNREF_NFP_OFF, "AOTFnRef::nfp (fnref_layout.h)");
 static_assert(sizeof(AOTFnRef) == AOT_FNREF_SIZE && AOT_FNREF_MAX == AOT_FNREF_COUNT,
               "AOTFnRef boyu / havuz kayit sayisi (fnref_layout.h)");
 #else
-static_assert(sizeof(ObjString) == 32, "ObjString 32 bayt (wasm32)");
+static_assert(sizeof(ObjString) == 20, "ObjString 20 bayt (wasm32)");
 #endif
 static int g_fnref_count = 0;              // g_call_cache_mu altinda yazilir
 
@@ -483,7 +484,6 @@ extern "C" ObjString *aot_fn_ref(const char *name, int len) {
   AOTFnRef *e = &g_fnref_pool[g_fnref_count++];
   e->str.obj.type = OBJ_STRING;
   e->str.obj.arena_allocated = 0;     // KALICI: bariyer kopyalamaz
-  e->str.obj.next = nullptr;
   e->str.obj.ref_count = 1 << 28;     // olumsuz (aot_intern_string ile ayni)
   e->str.obj.is_moved = 0;
   e->str.length = len;
@@ -1283,7 +1283,6 @@ ObjString *aot_allocate_string(const char *chars, int length) {
   ObjString *str = (ObjString *)block;
   str->obj.type = OBJ_STRING;
   str->obj.arena_allocated = 1; // Mark as arena allocated
-  str->obj.next = nullptr;
   str->obj.ref_count = 1;
   str->obj.is_moved = 0;
   str->length = length;
@@ -1322,7 +1321,6 @@ VMValue aot_string_pin(VMValue strVal) {
 
   pinned->obj.type = OBJ_STRING;
   pinned->obj.arena_allocated = 0; // permanent — not part of arena
-  pinned->obj.next = nullptr;
   pinned->obj.ref_count = 1;
   pinned->obj.is_moved = 0;
   pinned->length = src->length;
@@ -1365,24 +1363,32 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
 // alternatifi, uretilen kodun sessizce yanlis adrese yazmasiydi.
 static_assert(sizeof(VMValue) == 16, "VMValue 16 bayt olmali (codegen varsayimi)");
 static_assert(offsetof(VMValue, as) == 8, "VMValue::as @8 olmali");
-// Ofsetler ISARETCI BOYUTUNA bagli: 64-bit'te Obj basligi 32 bayt, wasm32'de
-// 20. Codegen (llvm_types.cpp) dolguyu hedefe gore seciyor; buradaki kilit de
-// iki duzeni de ayri ayri sabitler. Tek bir 64-bit iddiasi yazmak web runtime
-// derlemesini KIRIYORDU (ve wasm/dist tazelenemiyordu).
+// Obj BASLIGI (2026-10-02): her hedefte 8 bayt, tur tek bayt @0. Codegen
+// (llvm_types.cpp) ayni sayilari src/vm/obj_layout.h'den okuyor — basligi
+// `{ i8 type, [7 x i8] }` diye modelleyip tur sinavlarinda i8 yukluyor.
+// Iki taraf ayni basligi okudugu icin biri degisip oteki kalamaz: sayi ile
+// struct ayrisirsa ASAGIDAKI kilit derlemeyi kirar.
+static_assert(sizeof(Obj) == TULPAR_OBJ_HEADER_SIZE, "Obj basligi boyu (obj_layout.h)");
+static_assert(sizeof(((Obj *)nullptr)->type) == TULPAR_OBJ_TYPE_SIZE,
+              "Obj::type genisligi (obj_layout.h; codegen bu genislikte yukler)");
+static_assert(offsetof(Obj, ref_count) == 4, "Obj::ref_count @4");
+// Basligin ardindaki ofsetler ISARETCI BOYUTUNA bagli; kilit iki duzeni de
+// ayri ayri sabitler. Tek bir 64-bit iddiasi yazmak web runtime derlemesini
+// KIRIYORDU (ve wasm/dist tazelenemiyordu).
 #if UINTPTR_MAX > 0xFFFFFFFFu
-static_assert(sizeof(ObjArray) == 64, "ObjArray 64 bayt olmali (codegen varsayimi, 64-bit)");
-static_assert(offsetof(ObjArray, count) == 32, "ObjArray::count @32 olmali");
-static_assert(offsetof(ObjArray, capacity) == 36, "ObjArray::capacity @36 olmali");
-static_assert(offsetof(ObjArray, items_) == 40, "ObjArray::items_ @40 olmali");
-static_assert(offsetof(ObjArray, idata) == 48, "ObjArray::idata @48 olmali");
-static_assert(offsetof(ObjArray, elem_bits) == 56, "ObjArray::elem_bits @56 olmali");
+static_assert(sizeof(ObjArray) == 40, "ObjArray 40 bayt olmali (codegen varsayimi, 64-bit)");
+static_assert(offsetof(ObjArray, count) == 8, "ObjArray::count @8 olmali");
+static_assert(offsetof(ObjArray, capacity) == 12, "ObjArray::capacity @12 olmali");
+static_assert(offsetof(ObjArray, items_) == 16, "ObjArray::items_ @16 olmali");
+static_assert(offsetof(ObjArray, idata) == 24, "ObjArray::idata @24 olmali");
+static_assert(offsetof(ObjArray, elem_bits) == 32, "ObjArray::elem_bits @32 olmali");
 #else
-static_assert(sizeof(ObjArray) == 40, "ObjArray 40 bayt olmali (codegen varsayimi, 32-bit)");
-static_assert(offsetof(ObjArray, count) == 20, "ObjArray::count @20 olmali (32-bit)");
-static_assert(offsetof(ObjArray, capacity) == 24, "ObjArray::capacity @24 olmali (32-bit)");
-static_assert(offsetof(ObjArray, items_) == 28, "ObjArray::items_ @28 olmali (32-bit)");
-static_assert(offsetof(ObjArray, idata) == 32, "ObjArray::idata @32 olmali (32-bit)");
-static_assert(offsetof(ObjArray, elem_bits) == 36, "ObjArray::elem_bits @36 olmali (32-bit)");
+static_assert(sizeof(ObjArray) == 28, "ObjArray 28 bayt olmali (codegen varsayimi, 32-bit)");
+static_assert(offsetof(ObjArray, count) == 8, "ObjArray::count @8 olmali (32-bit)");
+static_assert(offsetof(ObjArray, capacity) == 12, "ObjArray::capacity @12 olmali (32-bit)");
+static_assert(offsetof(ObjArray, items_) == 16, "ObjArray::items_ @16 olmali (32-bit)");
+static_assert(offsetof(ObjArray, idata) == 20, "ObjArray::idata @20 olmali (32-bit)");
+static_assert(offsetof(ObjArray, elem_bits) == 24, "ObjArray::elem_bits @24 olmali (32-bit)");
 #endif
 // Codegen ayni sabiti kullanir (llvm_backend.cpp kArrElemF64).
 static_assert(ARR_ELEM_F64 == -64, "ARR_ELEM_F64 codegen'deki kArrElemF64 ile ayni olmali");
@@ -1391,21 +1397,21 @@ static_assert(sizeof(double) == sizeof(long long), "double depo idata yuvasina s
 // sarr_elem_ptr) — `count` ve `data` alanlarini GEP ile okuyor. Ayni
 // gerekce, ayni iki duzen.
 #if UINTPTR_MAX > 0xFFFFFFFFu
-static_assert(sizeof(ObjStructArray) == 80, "ObjStructArray 80 bayt olmali (codegen varsayimi, 64-bit)");
-static_assert(offsetof(ObjStructArray, type_name) == 32, "ObjStructArray::type_name @32 olmali");
-static_assert(offsetof(ObjStructArray, field_count) == 56, "ObjStructArray::field_count @56 olmali");
-static_assert(offsetof(ObjStructArray, count) == 60, "ObjStructArray::count @60 olmali");
-static_assert(offsetof(ObjStructArray, capacity) == 64, "ObjStructArray::capacity @64 olmali");
-static_assert(offsetof(ObjStructArray, elem_size) == 68, "ObjStructArray::elem_size @68 olmali (dolgu boslugu)");
-static_assert(offsetof(ObjStructArray, data) == 72, "ObjStructArray::data @72 olmali");
+static_assert(sizeof(ObjStructArray) == 56, "ObjStructArray 56 bayt olmali (codegen varsayimi, 64-bit)");
+static_assert(offsetof(ObjStructArray, type_name) == 8, "ObjStructArray::type_name @8 olmali");
+static_assert(offsetof(ObjStructArray, field_count) == 32, "ObjStructArray::field_count @32 olmali");
+static_assert(offsetof(ObjStructArray, count) == 36, "ObjStructArray::count @36 olmali");
+static_assert(offsetof(ObjStructArray, capacity) == 40, "ObjStructArray::capacity @40 olmali");
+static_assert(offsetof(ObjStructArray, elem_size) == 44, "ObjStructArray::elem_size @44 olmali (dolgu boslugu)");
+static_assert(offsetof(ObjStructArray, data) == 48, "ObjStructArray::data @48 olmali");
 #else
-static_assert(sizeof(ObjStructArray) == 52, "ObjStructArray 52 bayt olmali (codegen varsayimi, 32-bit)");
-static_assert(offsetof(ObjStructArray, type_name) == 20, "ObjStructArray::type_name @20 olmali (32-bit)");
-static_assert(offsetof(ObjStructArray, field_count) == 32, "ObjStructArray::field_count @32 olmali (32-bit)");
-static_assert(offsetof(ObjStructArray, count) == 36, "ObjStructArray::count @36 olmali (32-bit)");
-static_assert(offsetof(ObjStructArray, capacity) == 40, "ObjStructArray::capacity @40 olmali (32-bit)");
-static_assert(offsetof(ObjStructArray, elem_size) == 44, "ObjStructArray::elem_size @44 olmali (32-bit)");
-static_assert(offsetof(ObjStructArray, data) == 48, "ObjStructArray::data @48 olmali (32-bit)");
+static_assert(sizeof(ObjStructArray) == 40, "ObjStructArray 40 bayt olmali (codegen varsayimi, 32-bit)");
+static_assert(offsetof(ObjStructArray, type_name) == 8, "ObjStructArray::type_name @8 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, field_count) == 20, "ObjStructArray::field_count @20 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, count) == 24, "ObjStructArray::count @24 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, capacity) == 28, "ObjStructArray::capacity @28 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, elem_size) == 32, "ObjStructArray::elem_size @32 olmali (32-bit)");
+static_assert(offsetof(ObjStructArray, data) == 36, "ObjStructArray::data @36 olmali (32-bit)");
 #endif
 
 // ---- Struct dizisi eleman erisimi (K037/K035, 2026-09-29) ------------------
@@ -1547,7 +1553,6 @@ ObjString *aot_intern_string(const char *chars, int length) {
   ObjString *str = (ObjString *)block;
   str->obj.type = OBJ_STRING;
   str->obj.arena_allocated = 0;   // KALICI: bariyer bunu kopyalamaz
-  str->obj.next = nullptr;
   str->obj.ref_count = 1 << 28;   // ölümsüz (yukarıdaki ÖMÜR notu)
   str->obj.is_moved = 0;
   str->length = length;
@@ -1577,7 +1582,6 @@ static ObjString *aot_persist_string_obj(ObjString *src) {
   if (!p) return src;
   p->obj.type = OBJ_STRING;
   p->obj.arena_allocated = 0;
-  p->obj.next = nullptr;
   p->obj.ref_count = 1;
   p->obj.is_moved = 0;
   p->length = src->length;
@@ -1606,7 +1610,6 @@ VMValue aot_persist(VMValue v) {
     dst->obj.type = OBJ_ARRAY;
     dst->idata = nullptr;
     dst->obj.arena_allocated = 0;
-    dst->obj.next = nullptr;
     dst->obj.ref_count = 1;
     dst->obj.is_moved = 0;
     int n = src->count;
@@ -1625,7 +1628,6 @@ VMValue aot_persist(VMValue v) {
     dst->index = nullptr;
     dst->obj.type = OBJ_OBJECT;
     dst->obj.arena_allocated = 0;
-    dst->obj.next = nullptr;
     dst->obj.ref_count = 1;
     dst->obj.is_moved = 0;
     int n = src->count;
@@ -1665,7 +1667,6 @@ VMValue aot_persist(VMValue v) {
     if (!dst) return v;
     *dst = *src;
     dst->obj.arena_allocated = 0;
-    dst->obj.next = nullptr;
     dst->obj.ref_count = 1;
     dst->obj.is_moved = 0;
     dst->capacity = src->count;
@@ -1694,7 +1695,6 @@ VMValue aot_persist(VMValue v) {
     if (!dst) return v;
     memcpy(dst, src, sizeof(ObjStruct) + extra);
     dst->obj.arena_allocated = 0;
-    dst->obj.next = nullptr;
     dst->obj.ref_count = 1;
     dst->obj.is_moved = 0;
     return VM_OBJ((Obj *)dst);
@@ -1836,7 +1836,6 @@ VMValue aot_string_concat_fast(VMValue a, VMValue b) {
   ObjString *result = (ObjString *)block;
   result->obj.type = OBJ_STRING;
   result->obj.arena_allocated = 1;
-  result->obj.next = nullptr;
   result->obj.ref_count = 1;
   result->obj.is_moved = 0;
   result->length = total_len;
@@ -1957,18 +1956,54 @@ int aot_format_float(char *buf, size_t n, double value) {
 //
 // LLONG_MIN guvenli: negatifi dogrudan negatiflemek tasar, o yuzden
 // isaretsize (-(v+1))+1 ile geciliyor.
+//
+// IKI HANE BIRDEN, SONDAN BASA (2026-10-02). Eski yol her haneyi bir
+// `% 10` / `/ 10` ile gecici tampona tersten yazip sonra ters kopyaliyordu.
+// Simdi once hane SAYISI bulunur (karsilastirmayla), hedefe dogrudan sondan
+// basa yazilir ve her adim `% 100` ile iki hane uretip "00".."99" tablosundan
+// kopyalar: bolme sayisi yariya, ara tampon ve ters kopya yok. Cikti bayt
+// bayt ayni (tests/itoa_esdeger.test.tpr, aot_itoa'dan bagimsiz bir Tulpar
+// basvurusuyla karsilastirir). Olculdu (Ryzen 7 9800X3D, 2026-10-02, 5M bes
+// haneli sb_append(int)): 30 -> 17 ms; benchmarks/fair/parse metin kurma
+// 41 -> 27 ms (C 27).
+static const char kItoaDigits2[201] =
+    "0001020304050607080910111213141516171819"
+    "2021222324252627282930313233343536373839"
+    "4041424344454647484950515253545556575859"
+    "6061626364656667686970717273747576777879"
+    "8081828384858687888990919293949596979899";
+static inline int aot_itoa_ndigits(unsigned long long u) {
+  int n = 1;
+  for (;;) {
+    if (u < 10ULL) return n;
+    if (u < 100ULL) return n + 1;
+    if (u < 1000ULL) return n + 2;
+    if (u < 10000ULL) return n + 3;
+    u /= 10000ULL;
+    n += 4;
+  }
+}
 static inline int aot_itoa(long long v, char *out) {
-  if (v == 0) { out[0] = '0'; out[1] = '\0'; return 1; }
-  char tmp[24];
-  int n = 0;
-  unsigned long long u = (v < 0) ? (unsigned long long)(-(v + 1)) + 1ULL
-                                 : (unsigned long long)v;
-  while (u) { tmp[n++] = (char)('0' + (int)(u % 10ULL)); u /= 10ULL; }
-  int len = 0;
-  if (v < 0) out[len++] = '-';
-  while (n > 0) out[len++] = tmp[--n];
-  out[len] = '\0';
-  return len;
+  const bool neg = v < 0;
+  unsigned long long u = neg ? (unsigned long long)(-(v + 1)) + 1ULL
+                             : (unsigned long long)v;
+  if (neg) *out++ = '-';
+  const int n = aot_itoa_ndigits(u);
+  char *p = out + n;
+  *p = '\0';
+  while (u >= 100ULL) {
+    const unsigned r = (unsigned)(u % 100ULL);
+    u /= 100ULL;
+    p -= 2;
+    memcpy(p, kItoaDigits2 + 2 * r, 2);
+  }
+  if (u >= 10ULL) {
+    p -= 2;
+    memcpy(p, kItoaDigits2 + 2 * u, 2);
+  } else {
+    *--p = (char)('0' + (int)u);
+  }
+  return n + (neg ? 1 : 0);
 }
 
 // TAMSAYI icin ozel giris noktasi: VMValue kurmadan, dogrudan i64.
@@ -2655,7 +2690,6 @@ static ObjString *persist_string_chars(const char *chars, int length) {
   if (!p) return nullptr;
   p->obj.type = OBJ_STRING;
   p->obj.arena_allocated = 0;
-  p->obj.next = nullptr;
   p->obj.ref_count = 1;
   p->obj.is_moved = 0;
   p->length = length;
@@ -3299,7 +3333,6 @@ extern "C" VMValue aot_struct_alloc(const char *type_name, int field_count) {
   ObjStruct *s = static_cast<ObjStruct *>(aot_arena_alloc(sizeof(ObjStruct) + extra));
   if (!s) return VM_INT(0);
   s->obj.type = OBJ_STRUCT;
-  s->obj.next = nullptr;
   s->obj.arena_allocated = 1;
   s->obj.ref_count = 1;
   s->obj.is_moved = 0;
@@ -3397,7 +3430,6 @@ extern "C" VMValue aot_sarr_new(const char *type_name, int field_count,
   if (!a) return VM_INT(0);
   a->obj.type = OBJ_STRUCT_ARRAY;
   a->obj.arena_allocated = 0;
-  a->obj.next = nullptr;
   a->obj.ref_count = 1;
   a->obj.is_moved = 0;
   a->count = 0;
@@ -4183,7 +4215,6 @@ ObjArray *vm_allocate_array_aot_wrapper(void *vm) {
   arr->obj.type = OBJ_ARRAY;
   arr->idata = nullptr;
   arr->obj.arena_allocated = 0;
-  arr->obj.next = nullptr;
   arr->obj.ref_count = 1;
   arr->obj.is_moved = 0;
   arr->count = 0;
@@ -4199,7 +4230,6 @@ ObjObject *vm_allocate_object_aot_wrapper(void *vm) {
   ObjObject *obj = static_cast<ObjObject*>(malloc(sizeof(ObjObject)));
   obj->obj.type = OBJ_OBJECT;
   obj->obj.arena_allocated = 0;
-  obj->obj.next = nullptr;
   obj->obj.ref_count = 1;
   obj->obj.is_moved = 0;
   obj->count = 0;
@@ -4372,7 +4402,6 @@ VMValue aot_regex_capture(VMValue patVal, VMValue strVal) {
         a->obj.type = OBJ_ARRAY;
         a->idata = nullptr;
         a->obj.arena_allocated = 1;
-        a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
@@ -4397,7 +4426,6 @@ VMValue aot_regex_capture(VMValue patVal, VMValue strVal) {
     a->obj.type = OBJ_ARRAY;
     a->idata = nullptr;
     a->obj.arena_allocated = 1;
-    a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     a->capacity = n;
@@ -4540,7 +4568,6 @@ VMValue aot_file_glob(VMValue patVal) {
         a->obj.type = OBJ_ARRAY;
         a->idata = nullptr;
         a->obj.arena_allocated = 1;
-        a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
@@ -4591,7 +4618,6 @@ VMValue aot_file_glob(VMValue patVal) {
     a->obj.type = OBJ_ARRAY;
     a->idata = nullptr;
     a->obj.arena_allocated = 1;
-    a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     int n = (int)matches.size();
@@ -4620,7 +4646,6 @@ VMValue aot_csv_parse(VMValue strVal) {
         a->obj.type = OBJ_ARRAY;
         a->idata = nullptr;
         a->obj.arena_allocated = 1;
-        a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
@@ -4682,7 +4707,6 @@ VMValue aot_csv_parse(VMValue strVal) {
     outer->obj.type = OBJ_ARRAY;
     outer->idata = nullptr;
     outer->obj.arena_allocated = 1;
-    outer->obj.next = nullptr;
     outer->obj.ref_count = 1;
     outer->obj.is_moved = 0;
     outer->capacity = rn;
@@ -4694,7 +4718,6 @@ VMValue aot_csv_parse(VMValue strVal) {
         inner->obj.type = OBJ_ARRAY;
         inner->idata = nullptr;
         inner->obj.arena_allocated = 1;
-        inner->obj.next = nullptr;
         inner->obj.ref_count = 1;
         inner->obj.is_moved = 0;
         inner->capacity = cn;
@@ -4776,7 +4799,6 @@ extern "C" VMValue aot_args(void) {
   a->obj.type = OBJ_ARRAY;
   a->idata = nullptr;
   a->obj.arena_allocated = 1;
-  a->obj.next = nullptr;
   a->obj.ref_count = 1;
   a->obj.is_moved = 0;
   a->capacity = n;
@@ -4800,7 +4822,6 @@ VMValue aot_values(VMValue objVal) {
     a->obj.type = OBJ_ARRAY;
     a->idata = nullptr;
     a->obj.arena_allocated = 1;
-    a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     if (!IS_OBJECT(objVal)) {
@@ -4845,7 +4866,6 @@ VMValue aot_keys(VMValue objVal) {
         a->obj.type = OBJ_ARRAY;
         a->idata = nullptr;
         a->obj.arena_allocated = 1;
-        a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
@@ -4860,7 +4880,6 @@ VMValue aot_keys(VMValue objVal) {
     a->obj.type = OBJ_ARRAY;
     a->idata = nullptr;
     a->obj.arena_allocated = 1;
-    a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     a->capacity = n;
@@ -4897,7 +4916,6 @@ VMValue aot_object_clone(VMValue val) {
   dst->index = nullptr;
   dst->obj.type = OBJ_OBJECT;
   dst->obj.arena_allocated = 1;
-  dst->obj.next = nullptr;
   dst->obj.ref_count = 1;
   dst->obj.is_moved = 0;
   int n = src->count;
@@ -5150,16 +5168,59 @@ static inline const char *split_find(const char *p, const char *end,
   return nullptr;
 }
 
+// TEK BAYTLIK AYIRICI (2026-10-02): kisa parcada memchr cagrisi isin kendisinden
+// pahali. benchmarks/fair/parse'in 5M parcasi ~6 bayt; iki gecis x 5M memchr
+// cagrisi split'in ~25 ms'siydi (izole C duzenegi, Ryzen 7 9800X3D: 50 -> 26
+// ms, cogu artik sayfa sifirlama + 240 MB yazma). Ilk 32 bayt 8'er baytlik
+// kelimelerle (SWAR) taranir, parca daha uzunsa kalan memchr'a gider — uzun
+// satirli CSV'de vektorlu memchr'in hizi korunur.
+//
+// SWAR: x = w ^ (d x 8); (x - 0x01..) & ~x & 0x80.. EN DUSUK isaretli bayt
+// her zaman gercek esleme (ust baytlarda borc yuzunden yanlis pozitif
+// olabilir, ama ctz en dusugu aliyor). Little-endian varsayimi: butun
+// hedeflerimiz (x86_64, AArch64, wasm32) LE; degilse duz memchr.
+static inline const char *split_find1(const char *p, const char *end, char d) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  const uint64_t ones = 0x0101010101010101ull;
+  const uint64_t pat = ones * (uint8_t)d;
+  for (int k = 0; k < 4 && end - p >= 8; k++, p += 8) {
+    uint64_t w;
+    memcpy(&w, p, 8);
+    const uint64_t x = w ^ pat;
+    const uint64_t m = (x - ones) & ~x & 0x8080808080808080ull;
+    if (m) return p + (__builtin_ctzll(m) >> 3);
+  }
+#endif
+  return (const char *)memchr(p, (unsigned char)d, (size_t)(end - p));
+}
+
 static inline size_t split_piece_bytes(size_t len) {
   return (sizeof(ObjString) + len + 1 + AOT_ARENA_ALIGNMENT - 1) &
          ~(size_t)(AOT_ARENA_ALIGNMENT - 1);
+}
+
+// Son arena ayirmasinin kullanilmayan kuyrugunu geri ver. Tek baytlik
+// ayiricili split parca sayisini sayar ama parca boylarini toplamaz (o, parca
+// basina bir arama daha demek); ayirmayi UST SINIRLA yapar
+// (sayi * (sizeof(ObjString) + 8) + karakterler) ve kurduktan sonra artani
+// burada iade eder. Arena thread_local; ayirma blogun SON ayirmasiysa (araya
+// baska ayirma girmediyse) `used` geri cekilir, degilse hicbir sey yapilmaz
+// (artan bayt ayirma omru boyunca bos kalir — dogru, yalniz israf).
+static void aot_arena_trim_last(void *ptr, size_t reserved, size_t used) {
+  AOTArena *a = g_aot_string_arena;
+  if (!a || !a->current || !ptr || used > reserved) return;
+  reserved = (reserved + AOT_ARENA_ALIGNMENT - 1) & ~(size_t)(AOT_ARENA_ALIGNMENT - 1);
+  used = (used + AOT_ARENA_ALIGNMENT - 1) & ~(size_t)(AOT_ARENA_ALIGNMENT - 1);
+  AOTArenaBlock *b = a->current;
+  if (b->used < reserved || b->memory + (b->used - reserved) != (char *)ptr) return;
+  b->used -= reserved - used;
+  a->total_allocated -= reserved - used;
 }
 
 static inline ObjString *split_emit(char *at, const char *src, int len) {
   ObjString *str = (ObjString *)at;
   str->obj.type = OBJ_STRING;
   str->obj.arena_allocated = 1;
-  str->obj.next = nullptr;
   str->obj.ref_count = 1;
   str->obj.is_moved = 0;
   str->length = len;
@@ -5184,11 +5245,23 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
   const char *end = base + s->length;
   const int dlen = d->length;
 
-  // 1. gecis: parca sayisi + arena boyutu.
+  // 1. gecis: parca sayisi + arena boyutu. Tek baytlik ayiricida yalniz
+  // SAYILIR (dallanmasiz, derleyici vektorlestiriyor) ve boy ust sinirla
+  // ayrilir; artan kuyruk 2. gecisten sonra iade edilir (aot_arena_trim_last).
+  // Sonuc: ayirma yine TEK ve TAM boyda, parca basina arama bire indi.
   size_t count = 0, bytes = 0;
+  const bool tek = (dlen == 1);
   if (dlen <= 0) {
     count = (size_t)s->length;               // her bayt bir parca
     bytes = count * split_piece_bytes(1);
+  } else if (tek) {
+    const char dc = d->chars[0];
+    size_t delims = 0;
+    for (const char *p = base; p < end; p++) delims += (*p == dc);
+    count = delims + 1;
+    // Her parca icin split_piece_bytes(len) <= sizeof(ObjString) + len + 8.
+    bytes = count * (sizeof(ObjString) + AOT_ARENA_ALIGNMENT) +
+            ((size_t)s->length - delims);
   } else {
     const char *p = base, *q;
     while ((q = split_find(p, end, d->chars, dlen)) != nullptr) {
@@ -5201,26 +5274,12 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
   }
 
   VMValue *items = (VMValue *)malloc(sizeof(VMValue) * count);
-  char *block = items ? (char *)aot_arena_alloc(bytes) : nullptr;
-  if (!items || !block) {
+  char *const block0 = items ? (char *)aot_arena_alloc(bytes) : nullptr;
+  if (!items || !block0) {
     free(items);
     return VM_OBJ((Obj *)arr); // bellek yok: bos dizi (eski yol da cokerdi)
   }
-  // POZITIF KONTROL (tests/split_toplu.sh): TULPAR_SPLIT_TANI=1 iken her
-  // cagri, parca sayisini ve TEK arena ayirmasinin bayt boyunu stderr'e
-  // basar. Kapi bu boyu kendisi hesaplayip karsilastiriyor — toplu yol
-  // devreden cikarsa (parca basina ayirmaya donulurse) satir kaybolur ya da
-  // boy tutmaz ve kapi kirmiziya doner.
-  static std::atomic<int> tani{-1};
-  int t = tani.load(std::memory_order_relaxed);
-  if (t < 0) {
-    const char *e = getenv("TULPAR_SPLIT_TANI");
-    t = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
-    tani.store(t, std::memory_order_relaxed);
-  }
-  if (t)
-    std::fprintf(stderr, "split-tani: %zu parca, tek arena ayirmasi %zu bayt\n",
-                 count, bytes);
+  char *block = block0;
 
   // 2. gecis: parcalari bitisik kur.
   size_t n = 0;
@@ -5231,7 +5290,8 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
     }
   } else {
     const char *p = base, *q;
-    while ((q = split_find(p, end, d->chars, dlen)) != nullptr) {
+    while ((q = tek ? split_find1(p, end, d->chars[0])
+                    : split_find(p, end, d->chars, dlen)) != nullptr) {
       int len = (int)(q - p);
       items[n++] = VM_OBJ((Obj *)split_emit(block, p, len));
       block += split_piece_bytes((size_t)len);
@@ -5239,6 +5299,33 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
     }
     int len = (int)(end - p);
     items[n++] = VM_OBJ((Obj *)split_emit(block, p, len));
+    block += split_piece_bytes((size_t)len);
+  }
+  const size_t used = (size_t)(block - block0);
+  if (used < bytes) aot_arena_trim_last(block0, bytes, used);
+
+  // POZITIF KONTROL (tests/split_toplu.sh): TULPAR_SPLIT_TANI=1 iken her
+  // cagri, parca sayisini ve TEK arena ayirmasinin (iadeden sonraki) bayt
+  // boyunu stderr'e basar. Kapi bu boyu kendisi hesaplayip karsilastiriyor —
+  // toplu yol devreden cikarsa (parca basina ayirmaya donulurse) satir
+  // kaybolur ya da boy tutmaz ve kapi kirmiziya doner. `kuyruk iade`: ust
+  // sinirla ayrilan blogun artani gercekten geri verildi mi — bir sonraki
+  // arena ayirmasi tam parcalarin bittigi yere dusmeli. Iade tutmazsa
+  // (aot_arena_trim_last devre disi / bozuk) "hayir" basilir. (Sonda
+  // ayirmasi yalniz tani acikken yapilir; 8 bayt.)
+  static std::atomic<int> tani{-1};
+  int t = tani.load(std::memory_order_relaxed);
+  if (t < 0) {
+    const char *e = getenv("TULPAR_SPLIT_TANI");
+    t = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+    tani.store(t, std::memory_order_relaxed);
+  }
+  if (t) {
+    char *probe = (char *)aot_arena_alloc(8);
+    std::fprintf(stderr,
+                 "split-tani: %zu parca, tek arena ayirmasi %zu bayt "
+                 "(ust sinir %zu, kuyruk iade %s)\n",
+                 count, used, bytes, probe == block0 + used ? "evet" : "hayir");
   }
 
   arr->items_ = items;
@@ -6817,7 +6904,6 @@ VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
     a->obj.type = OBJ_ARRAY;
     a->idata = nullptr;
     a->obj.arena_allocated = 1;
-    a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     a->capacity = n;
@@ -7152,7 +7238,6 @@ ObjObject *aot_http_make_obj(int initial_capacity) {
   ObjObject *o = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
   o->obj.type = OBJ_OBJECT;
   o->obj.arena_allocated = 1;
-  o->obj.next = nullptr;
   o->capacity = initial_capacity > 0 ? initial_capacity : 4;
   o->count = 0;
   o->index = nullptr;
@@ -8701,7 +8786,6 @@ VMValue aot_http_create_response_keepalive(VMValue statusVal,
   ObjString *str = (ObjString *)block;
   str->obj.type = OBJ_STRING;
   str->obj.arena_allocated = 1;
-  str->obj.next = nullptr;
   str->obj.ref_count = 1;
   str->obj.is_moved = 0;
   str->chars = block + sizeof(ObjString);
@@ -9913,7 +9997,6 @@ static VMValue parse_json_array(const char **p, const char *end) {
   arr->obj.type = OBJ_ARRAY;
   arr->idata = nullptr;
   arr->obj.arena_allocated = 1;
-  arr->obj.next = nullptr;
   arr->capacity = 8;
   arr->count = 0;
   arr->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * arr->capacity);
@@ -9955,7 +10038,6 @@ static VMValue parse_json_object(const char **p, const char *end) {
   ObjObject *obj = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
   obj->obj.type = OBJ_OBJECT;
   obj->obj.arena_allocated = 1;
-  obj->obj.next = nullptr;
   obj->capacity = 8;
   obj->count = 0;
   obj->index = nullptr;
@@ -10107,7 +10189,6 @@ VMValue aot_range(VMValue endVal) {
     arr->obj.type = OBJ_ARRAY;
     arr->idata = nullptr;
     arr->obj.arena_allocated = 1;
-    arr->obj.next = nullptr;
     arr->capacity = 0;
     arr->count = 0;
     arr->items_ = nullptr;
@@ -10118,7 +10199,6 @@ VMValue aot_range(VMValue endVal) {
   arr->obj.type = OBJ_ARRAY;
   arr->idata = nullptr;
   arr->obj.arena_allocated = 1;
-  arr->obj.next = nullptr;
   arr->capacity = (int)end;
   arr->count = (int)end;
   arr->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * end);

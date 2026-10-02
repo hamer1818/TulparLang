@@ -2203,6 +2203,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_stringbuilder_append_int = LLVMAddFunction(
       backend->module, "aot_stringbuilder_append_int", sb_apint_type);
 
+  // aot_stringbuilder_append(ptr, char*, i32) -> void
+  // Dizgi LITERALI icin: ham bayt + uzunluk, dizgi nesnesi yok (bkz. sb_append).
+  LLVMTypeRef sb_aplit_params[] = {backend->ptr_type, backend->ptr_type,
+                                   backend->int32_type};
+  LLVMTypeRef sb_aplit_type =
+      LLVMFunctionType(LLVMVoidTypeInContext(backend->context),
+                       sb_aplit_params, 3, 0);
+  backend->func_aot_stringbuilder_append = LLVMAddFunction(
+      backend->module, "aot_stringbuilder_append", sb_aplit_type);
+
   // aot_stringbuilder_append_vmvalue_ptr(ptr, VMValue*) -> void
   // Pointer-ABI (aot_*_ptr pattern): passing the raw vm_value_type aggregate
   // by value hits the SysV lowering trap documented at
@@ -3614,10 +3624,10 @@ static LLVMValueRef sarr_elem_ptr_iv(LLVMBackend *backend, const char *arr_name,
     LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, arr);
     LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
                                            objp, 0, "sarr.otp");
-    LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "sarr.ot");
+    LLVMValueRef ot = llvm_load_obj_type(backend, otp, "sarr.ot");
     llvm_tbaa_tag(backend, ot, 0);
     LLVMValueRef is_sarr = LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                         LLVMConstInt(i32t, 7 /* OBJ_STRUCT_ARRAY */, 0),
+                                         llvm_obj_type_const(backend, 7 /* OBJ_STRUCT_ARRAY */),
                                          "sarr.issarr");
     LLVMValueRef cntp = LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type,
                                             objp, 6, "sarr.cntp");
@@ -3851,9 +3861,9 @@ static LLVMValueRef emit_field_closure_call(LLVMBackend *backend, ASTNode_C *nod
   LLVMBuildCondBr(backend->builder, is_obj, bb_chk, bb_err);
   LLVMPositionBuilderAtEnd(backend->builder, bb_chk);
   LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, fv);
-  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, backend->int32_type, objp, "fcl.ot");
+  LLVMValueRef ot = llvm_load_obj_type(backend, objp, "fcl.ot");
   LLVMValueRef is_cls = LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                      LLVMConstInt(backend->int32_type, 5 /* OBJ_CLOSURE */, 0),
+                                      llvm_obj_type_const(backend, 5 /* OBJ_CLOSURE */),
                                       "fcl.iscls");
   LLVMBuildCondBr(backend->builder, is_cls, bb_call, bb_err);
 
@@ -6765,11 +6775,11 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
   LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
   LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder, backend->obj_array_type,
                                          objp, 0, "shape.otp");
-  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "shape.ot");
+  LLVMValueRef ot = llvm_load_obj_type(backend, otp, "shape.ot");
   llvm_tbaa_tag(backend, ot, 0);
   LLVMBuildCondBr(backend->builder,
                   LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                LLVMConstInt(i32t, 1, 0), "shape.isarr"),
+                                llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "shape.isarr"),
                   b_ld, b_no);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ld);
@@ -6902,10 +6912,10 @@ static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager,
   LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
   LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder,
                                          backend->obj_array_type, objp, 0, "otp");
-  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "ot");
+  LLVMValueRef ot = llvm_load_obj_type(backend, otp, "ot");
   LLVMBuildCondBr(backend->builder,
                   LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                LLVMConstInt(i32t, 1, 0), "isarr"),
+                                llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "isarr"),
                   b_ld, b_no);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ld);
@@ -7296,12 +7306,12 @@ static LLVMValueRef get_f64_probe_fn(LLVMBackend *backend) {
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ty);
   LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
-  LLVMValueRef ot = LLVMBuildLoad2(
-      backend->builder, i32t,
+  LLVMValueRef ot = llvm_load_obj_type(
+      backend,
       LLVMBuildStructGEP2(backend->builder, backend->obj_array_type, objp, 0, "otp"), "ot");
   LLVMBuildCondBr(backend->builder,
                   LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                LLVMConstInt(i32t, 1, 0), "isarr"),
+                                llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "isarr"),
                   b_ld, b_no);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ld);
@@ -7366,12 +7376,12 @@ static LLVMValueRef get_i32_probe_fn(LLVMBackend *backend) {
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ty);
   LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
-  LLVMValueRef ot = LLVMBuildLoad2(
-      backend->builder, i32t,
+  LLVMValueRef ot = llvm_load_obj_type(
+      backend,
       LLVMBuildStructGEP2(backend->builder, backend->obj_array_type, objp, 0, "otp"), "ot");
   LLVMBuildCondBr(backend->builder,
                   LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                LLVMConstInt(i32t, 1, 0), "isarr"),
+                                llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "isarr"),
                   b_ld, b_no);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ld);
@@ -7770,12 +7780,12 @@ static LLVMValueRef get_int_probe_fn(LLVMBackend *backend) {
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ty);
   LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
-  LLVMValueRef ot = LLVMBuildLoad2(
-      backend->builder, i32t,
+  LLVMValueRef ot = llvm_load_obj_type(
+      backend,
       LLVMBuildStructGEP2(backend->builder, backend->obj_array_type, objp, 0, "otp"), "ot");
   LLVMBuildCondBr(backend->builder,
                   LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                LLVMConstInt(i32t, 1, 0), "isarr"),
+                                llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "isarr"),
                   b_ld, b_no);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ld);
@@ -8145,14 +8155,14 @@ static void emit_sarr_cache_fill(LLVMBackend *backend, LLVMValueRef var_slot,
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ty);
   LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
-  LLVMValueRef ot = LLVMBuildLoad2(
-      backend->builder, i32t,
+  LLVMValueRef ot = llvm_load_obj_type(
+      backend,
       LLVMBuildStructGEP2(backend->builder, backend->obj_sarr_type, objp, 0, "sarrc.otp"),
       "sarrc.ot");
   llvm_tbaa_tag(backend, ot, 0);
   LLVMBuildCondBr(backend->builder,
                   LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
-                                LLVMConstInt(i32t, 7 /* OBJ_STRUCT_ARRAY */, 0), "sarrc.issarr"),
+                                llvm_obj_type_const(backend, 7 /* OBJ_STRUCT_ARRAY */), "sarrc.issarr"),
                   b_ld, b_done);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_ld);
@@ -8962,11 +8972,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, left_val);
       LLVMValueRef ot_ptr = LLVMBuildStructGEP2(
           backend->builder, backend->obj_array_type, objp, 0, "arr.otype.ptr");
-      LLVMValueRef otype =
-          LLVMBuildLoad2(backend->builder, i32t, ot_ptr, "arr.otype");
+      LLVMValueRef otype = llvm_load_obj_type(backend, ot_ptr, "arr.otype");
       LLVMValueRef is_arr = LLVMBuildICmp(
           backend->builder, LLVMIntEQ, otype,
-          LLVMConstInt(i32t, 1 /* OBJ_ARRAY */, 0), "arr.isarr");
+          llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "arr.isarr");
       LLVMValueRef idx64 = llvm_extract_vm_val_int(backend, idx_val);
       LLVMValueRef cnt_ptr = LLVMBuildStructGEP2(
           backend->builder, backend->obj_array_type, objp, 2, "arr.cnt.ptr");
@@ -11859,6 +11868,32 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // sb_append(sb, value) -> void
     if (strcmp(bi_name, "sb_append") == 0 && node->argument_count >= 2) {
       LLVMValueRef sb_val = codegen_expression(backend, node->arguments[0]);
+      // DIZGI LITERALI (2026-10-02): `sb_append(sb, ",")`. Genel yol literali
+      // havuz dizgisi olarak cozup (site global'i + bos mu dali) VMValue'yu
+      // yigina yaziyor, runtime'da etiketi ve nesne turunu sinayip baytlari
+      // ekliyordu. Literalin baytlari derleme aninda belli: dogrudan
+      // aot_stringbuilder_append(sb, baytlar, uzunluk). Anlam ayni — genel
+      // yol da sonunda ayni fonksiyona ayni bayt/uzunlukla iniyor (bos
+      // literal orada da no-op, gecersiz tutamac orada da yok sayiliyor).
+      // Olculdu (Ryzen 7 9800X3D, 2026-10-02): 5M `sb_append(sb, ",")`
+      // 13-15 -> 10-11 ms (bkz. Performance.md "parse").
+      if (node->arguments[1] &&
+          node->arguments[1]->type == AST_STRING_LITERAL &&
+          node->arguments[1]->value.string_value) {
+        const char *lit = node->arguments[1]->value.string_value;
+        LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
+        LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
+                                                backend->ptr_type, "sb_ptr");
+        LLVMValueRef bytes =
+            LLVMBuildGlobalStringPtr(backend->builder, lit, "sb_lit");
+        LLVMValueRef largs[] = {
+            sb_ptr, bytes,
+            LLVMConstInt(backend->int32_type, (unsigned long long)strlen(lit), 0)};
+        LLVMBuildCall2(backend->builder,
+                       LLVMGlobalGetValueType(backend->func_aot_stringbuilder_append),
+                       backend->func_aot_stringbuilder_append, largs, 3, "");
+        return llvm_vm_val_int(backend, 0);
+      }
       LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
       // Extract pointer from VMValue (stored as int64)
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
@@ -14170,12 +14205,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMValueRef s_ot_ptr = LLVMBuildStructGEP2(
             backend->builder, backend->obj_array_type, s_objp, 0,
             "set.otype.ptr");
-        LLVMValueRef s_otype =
-            LLVMBuildLoad2(backend->builder, si32, s_ot_ptr, "set.otype");
+        LLVMValueRef s_otype = llvm_load_obj_type(backend, s_ot_ptr, "set.otype");
         llvm_tbaa_tag(backend, s_otype, 0);
         LLVMValueRef s_isarr = LLVMBuildICmp(
             backend->builder, LLVMIntEQ, s_otype,
-            LLVMConstInt(si32, 1 /* OBJ_ARRAY */, 0), "set.isarr");
+            llvm_obj_type_const(backend, 1 /* OBJ_ARRAY */), "set.isarr");
         LLVMValueRef s_idx = llvm_extract_vm_val_int(backend, index);
         LLVMValueRef s_cnt_ptr = LLVMBuildStructGEP2(
             backend->builder, backend->obj_array_type, s_objp, 2,

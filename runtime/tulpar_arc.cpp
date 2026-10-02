@@ -256,7 +256,6 @@ ObjClosure* aot_create_closure(void *func_ptr, ObjArray *env, int arity) {
   closure->obj.arena_allocated = 0;
   closure->obj.ref_count = 1;
   closure->obj.is_moved = 0;
-  closure->obj.next = nullptr;
   closure->func_ptr = func_ptr;
   closure->env = env;
   if (env) {

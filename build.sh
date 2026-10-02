@@ -685,6 +685,17 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # OBJ BASLIGI (2026-10-02): Obj 32 -> 8 bayt, tur alani tek bayt
+    # (src/vm/obj_layout.h). Codegen'in satir ici dizi yollari turu runtime'in
+    # genisliginde yuklemezse sinav sessizce tutmaz (dogru ama yavas) —
+    # hicbir anlambilim testi gormez; kapi uretilen IR'ye bakar.
+    if [ -x tests/obj_baslik.sh ]; then
+        if ! bash tests/obj_baslik.sh ./tulpar; then
+            echo -e "${RED}obj baslik kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # GECICI DIZGILER (2026-10-01): sozluk anahtari ifadesi (`m["k" +
     # toString(i)]`) ve toString birlestirmesi bellek biriktirmiyor, kalici
     # json'a yeni anahtar tek kopya, ust duzey sb_tostring metni tek kopya

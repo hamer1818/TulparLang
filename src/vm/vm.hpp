@@ -103,15 +103,30 @@ typedef enum {
 // urettigi IR'de sabit olarak duruyor (`1 /* OBJ_ARRAY */` karsilastirmalari)
 // ve onceden derlenmis wasm/android arsivlerine siziyor — ortadan eklemek
 // eski arsivlerle sessiz uyusmazlik demek.
-typedef enum { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION, OBJ_STRUCT, OBJ_CLOSURE, OBJ_PROMISE, OBJ_STRUCT_ARRAY } ObjType;
+//
+// Alttaki tur uint8_t (2026-10-02): `Obj::type` tek bayt — bkz. asagidaki Obj.
+typedef enum : uint8_t { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION, OBJ_STRUCT, OBJ_CLOSURE, OBJ_PROMISE, OBJ_STRUCT_ARRAY } ObjType;
 
 // Base object header - ARC enabled
+//
+// 8 BAYT, HER HEDEFTE (2026-10-02; eskiden 64-bit'te 32, wasm32'de 20).
+// Eski duzen `ObjType type` (4) + dolgu (4) + `Obj *next` (8) + uc kucuk alan
+// ve dolgulari idi. `next` silinmis VM'in nesne listesiydi: AOT'ta yalniz
+// `nullptr` yaziliyordu, okuyan tek yer vm.cpp'deki olu VM'di (vm_create
+// hicbir yerde cagrilmiyor). Tur tek bayt, uc bayt alan yan yana: dolgu yok.
+// benchmarks/fair parse'in 5M canli split parcasinda parca basina 16 bayt
+// (ObjString 48 -> 24 ve 8'e yuvarlama) — olcum vm.hpp ObjString notunda.
+//
+// ⚠ Boy codegen'e gomulu: ObjArray/ObjStructArray tipleri basligi
+// `{ i8 type, [7 x i8] }` diye modelliyor ve tur sinavlari i8 yukluyor.
+// Sayilar src/vm/obj_layout.h'de TEK KAYNAK; runtime_bindings.cpp
+// static_assert'leri iki tarafin ayni sayiyi gordugunu kilitler.
 typedef struct Obj {
-  ObjType type;
-  struct Obj *next;        // For GC linked list
-  uint8_t arena_allocated; // 1 if allocated from arena, 0 if malloc
-  int32_t ref_count;       // ARC reference count
-  uint8_t is_moved;        // Move semantics: 1 if ownership transferred
+  ObjType type;            // @0 (1 bayt; codegen i8 yukler)
+  uint8_t arena_allocated; // @1  1 if allocated from arena, 0 if malloc
+  uint8_t is_moved;        // @2  Move semantics: 1 if ownership transferred
+  uint8_t pad_;            // @3  (kullanilmiyor)
+  int32_t ref_count;       // @4  ARC reference count
 } Obj;
 
 // String object
@@ -122,6 +137,9 @@ typedef struct Obj {
 // parse'in 5M canli parcasinda 412 -> 374 MB. `hash` dolgu boslugunu
 // dolduruyor. Boy codegen'e de gomulu (AOTFnRef / call() satir ici yolu:
 // runtime_bindings.cpp static_assert'leri, split_toplu.sh beklenen boy).
+//
+// 2026-10-02: Obj basligi 32 -> 8 bayt (yukarida) — ObjString 64-bit'te
+// 48 -> 24, wasm32'de 32 -> 20.
 typedef struct {
   Obj obj;
   int length;
@@ -477,7 +495,6 @@ typedef struct VM {
   int global_cache_count;
 
   // Object allocation tracking (for GC)
-  Obj *objects;
   size_t bytes_allocated;
   size_t next_gc;
 

@@ -1564,3 +1564,114 @@ Kalan:
   VEKTÖRLEŞMİYOR. Sınavı döngü dışına almak (aralık kanıtı) ayrı iş.
 - `int[]` ipucu ADA bağlı (float sürümüyle aynı): programda bir yerde
   `int[] a` varsa her `a` aday; doğruluk depo sınavından geliyor.
+
+## `parse`: `Obj` başlığı 32 → 8 B, tek geçişli `split`, iki haneli `itoa` — 121 → 75 ms, 374 → 261 MB (2026-10-02)
+
+Karnenin en büyük kalan açığı `parse` idi: C'nin 2,14 katı, tepe bellek
+374 MB (C 32). Önce aşama aşama ölçüldü (Ryzen 7 9800X3D, `taskset -c 2,3`,
+programın içinde `time_ms()` ile; taban 9dddaf38):
+
+| aşama | taban | C (aynı iş) |
+|---|---:|---:|
+| metni kur (`sb_append` ×10M) | 41 ms | 27 ms |
+| `sb_tostring` | 2 ms | — |
+| `split` (5M parça) | 55 ms | — |
+| `toInt(parts[i])` döngüsü | 21 ms | 29 ms (`strtol` yürüyüşü) |
+
+Üç ayrı maliyet, üç ayrı düzeltme:
+
+**1. Bellek: `Obj` başlığı 32 → 8 bayt.** Eski düzen `ObjType type` (4) +
+dolgu (4) + `Obj *next` (8) + `arena_allocated` / `ref_count` / `is_moved`
+ve dolguları idi. `next` silinmiş VM'in nesne listesiydi: AOT'ta yalnız
+`nullptr` yazılıyordu, okuyan tek yer `vm_create`'i hiç çağrılmayan VM.
+Kaldırıldı; tür tek bayt (`enum : uint8_t`), üç bayt alan yan yana, `ref_count`
+@4. Başlık **her hedefte** 8 bayt (wasm32'de de; eskiden 20). `ObjString`
+48 → 24 B (wasm32 32 → 20), `ObjArray` 64 → 40, `ObjStructArray` 80 → 56.
+5 haneli bir `split` parçası 56 + 16 → 32 + 16 bayt.
+
+Başlık boyu codegen'e gömülü (ObjArray/ObjStructArray GEP'leri ve satır içi
+tür sınavları). `src/vm/obj_layout.h` tek kaynak (fnref_layout.h dersiyle):
+codegen dolguyu (`HEADER - TYPE`) ve tür yüklemesinin genişliğini oradan
+okuyor, runtime `static_assert`'leri struct'la sayının aynı olduğunu
+kilitliyor. Sabotajla denendi: başlığı 16 ya da tür genişliğini 4 yazmak
+derlemeyi kırıyor. Tür sınavı yapan 10 site tek yardımcıdan geçiyor
+(`llvm_load_obj_type`); biri hâlâ `load i32` yapsaydı komşu baytları
+(arena, is_moved, ilklenmemiş dolgu) da okur ve satır içi yol SESSİZCE
+kapanırdı — `tests/obj_baslik.sh` üretilen IR'de bütün tür yüklemelerinin
+`i8` olduğunu ve IR tiplerinin `{ i8, [7 x i8], ... }` olduğunu denetliyor
+(eski derleyicide kırmızı: 14 yüklemenin 14'ü `i32`). Yan bulgu: gdb
+pretty-printer'ı (`tools/gdb/tulpar_printers.py`, `tulpar debug`'a gömülü)
+düzeni elle yazılı tutuyordu; DAP denetimi değerleri `<4143972352 @0x…>`
+diye okuyunca kırmızıya döndü (kapı işini yaptı), düzeltildi.
+
+**2. `split`: tek baytlık ayırıcıda parça başına bir arama.** Eski iki
+geçiş parça başına iki `memchr` çağrısı yapıyordu (ilki boyu toplamak için).
+~6 baytlık parçada çağrı işin kendisinden pahalı. Yeni: 1. geçiş yalnız
+ayırıcıyı SAYAR (dallanmasız, derleyici vektörleştiriyor), ayırma ÜST
+SINIRLA yapılır (`sayı × (sizeof(ObjString) + 8) + karakterler`), 2. geçiş
+parçaları kurar ve artan kuyruk arenaya iade edilir (`aot_arena_trim_last`;
+arena thread_local, ayırma son ayırmaysa `used` geri çekilir). Ayırıcı
+araması ilk 32 bayt için 8'er baytlık kelimeyle (SWAR), sonrası `memchr` —
+uzun satırlı CSV'de vektörlü `memchr` korunur. Tanı satırı iade sonrası boyu
+basıyor; `tests/split_toplu.sh` beklenen boyu kendisi hesaplıyor ve kuyruğun
+iade edildiğini sınıyor (iade kapatılınca "kuyruk iade hayır" → kırmızı;
+sabotajla denendi). İade RSS'i değiştirmiyor — dokunulmayan kuyruk zaten
+yerleşik değil — arenanın sonraki ayırmaları için boşluğu geri veriyor.
+
+**3. Metni kurma: iki haneli `itoa`.** Aynı kodun izole C düzeneğinde 17 ms,
+runtime'da 30 ms sürdüğü sanıldı; ölçüm hatasıydı (düzenek yanlış dalı
+koşuyordu) ve asıl fark algoritmadaydı: eski `aot_itoa` her haneyi bir
+`% 10` / `/ 10` ile geçici tampona tersten yazıp ters kopyalıyordu. Yeni:
+önce hane sayısı (karşılaştırmayla), sonra hedefe sondan başa, her adımda
+`% 100` ve "00".."99" tablosu. 5M beş haneli `sb_append(sb, int)`: 30 →
+17 ms. `toString(int)` ve `"x" + i` aynı fonksiyondan geçiyor
+(`tests/itoa_esdeger.test.tpr`: aot_itoa'dan bağımsız Tulpar başvurusuyla
+~40 bin değer × üç yol; bir tablo hücresini bozan sabotaj kırmızı). Ayrıca
+`sb_append(sb, "<literal>")` artık havuz dizgisi + VMValue + tür sınavı
+yerine doğrudan `aot_stringbuilder_append(sb, baytlar, uzunluk)`: 5M `","`
+ekleme 13–15 → 10–11 ms.
+
+Aşama aşama (aynı düzenek, `parse` en iyi 5):
+
+| adım | `parse` | tepe RSS | split | metin kur |
+|---|---:|---:|---:|---:|
+| taban (9dddaf38) | 120,6 ms | 374,3 MB | 55 ms | 41 ms |
+| + `Obj` 8 B | 114,7 ms | 259,6 MB | 50 ms | 41 ms |
+| + tek geçişli split | 90,7 ms | 260,4 MB | 26 ms | 41 ms |
+| + iki haneli itoa + literal ekleme | **75,2 ms** | **260,5 MB** | 25 ms | 27 ms |
+| C (gcc -O2) | 57,0 ms | 31,7 MB | | 27 ms |
+
+Bellek kapısı (`tests/split_toplu.sh`, rsswrap ile aynı 1M parçalık metnin
+split'li ve split'siz tepe RSS farkı): 5 baytlık parça başına **49 B** (32
+nesne + 16 eleman; eşik 60), eski derleyicide **71 B** (kırmızı). Kapının
+pozitif kontrolü: 21 baytlık parça +15 B ölçülüyor (nesne 32 → 48; en az 10
+beklenir) — kapı gerçekten parça boyunu ölçüyor. İlk sürüm metni
+`StringBuilder` ile kurup 100k / 1M farkına bakıyordu; Linux'ta doğru
+(54 B / +16) ama macOS CI'da 61 B / +8 ölçtü — bırakılan büyüyen tampon
+split'e yeniden veriliyor ve fark ölçümü bozuluyordu. Metin artık `repeat`
+ile tek seferde, serbest bırakılmadan kuruluyor ve iki koşum yalnız split'te
+ayrışıyor.
+
+Gerileme denetimi (13 çekirdek, dönüşümlü A/B, en iyi 5, aynı gün): intloop
+134,7/134,8 · fib 0,6/0,6 · mandelbrot 158,4/158,5 · matmul 37,0/37,2 ·
+nbody 114,9/115,1 · particles 52,8/52,7 · arrayiter 1,3/1,3 (15 tur) —
+aynı. Değişenler: **strcat 13,5 → 9,9** (itoa), **callfn 79,9 → 74,9**,
+**hashmap bellek 111 → 88 MB** (süre 130,4/130,1, 15 tur). `sieve` 7,6 →
+7,8 ve `qsort` 70,0 → 71,5 göründü; makine kodu yalnız `cmpl`→`cmpb` ve alan
+ofsetlerinde farklı, kaynağa zararsız önek konunca fark kayboluyor ya da
+tersine dönüyor (qsort önekli: 68,9/70,3 · 70,1/69,6 · 70,1/69,1; sieve
+önekli: 7,6/7,7 · 7,6/7,5 · 7,6/7,6) — [[Tuzaklar]] 7i, yerleşim, kod değil.
+
+wasm32 düzeni: emsdk bu makinede yok; `vm.hpp` `clang++
+--target=wasm32-unknown-unknown -ffreestanding -fsyntax-only` ile (en az
+`cstdint`/`cstdlib` şimiyle) derlenip `ObjString` 20 / `ObjArray` 28 /
+`ObjStructArray` 40 ve bütün alan ofsetleri `static_assert`'le doğrulandı;
+eski 32 iddiası kırmızı.
+
+Kalan (yapılmadı):
+- Parça hâlâ 32 B nesne + 16 B eleman. Sonraki adımlar temsil değişikliği:
+  karakterleri nesnenin içine alan (işaretçisiz) `ObjString` (−8 B, ama
+  `chars`'a dokunan her yer), ya da dizgi dizisi için 8 baytlık işaretçi
+  deposu (−8 B/eleman; okuma yollarının hepsi `arr_items`'tan geçiyor ve
+  deboxing'e döner) — ikisi de geniş ABI işi.
+- `toInt` döngüsü 20 ms, büyük ölçüde 240 MB'ı baştan sona okumak.
