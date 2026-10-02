@@ -15,11 +15,13 @@ import "test";
 // SOGUK yolunu (sinav tutmuyor) bugunku sonuca gore sabitliyor. Karar, IR
 // pozitif kontrolu ve sinir disi erisim tests/int_golge.sh'de.
 
-// ⚠ `assert_eq_str` DIZIDE HICBIR SEY OLCMUYOR: `toString(<dizi>)` her dizi
-// icin "<object>" donuyor (olculdu 2026-10-01: `int[]`, `array`, `json`,
-// `float[]` hepsi), yani iki dizi her zaman "esit". Bu paketin ilk hali
-// deopt'u sabote edilmis bir derleyiciyle YESIL kaldi. Diziler eleman eleman
-// karsilastiriliyor; karsilastirici tipsiz (ipucu yok -> kendisi surume girmez).
+// ⚠ `assert_eq_str` 2026-10-02'ye kadar DIZIDE HICBIR SEY OLCMUYORDU:
+// `toString(<dizi>)` her dizi icin "<object>" donuyordu (olculdu 2026-10-01:
+// `int[]`, `array`, `json`, `float[]` hepsi), yani iki dizi her zaman "esit".
+// Bu paketin ilk hali deopt'u sabote edilmis bir derleyiciyle YESIL kaldi.
+// (Artik toString dizinin metnini veriyor — Tuzaklar 7j.) Diziler yine de
+// eleman eleman karsilastiriliyor: hata mesaji farkli elemani gosteriyor;
+// karsilastirici tipsiz (ipucu yok -> kendisi surume girmez).
 func ayni_dizi(p, q) {
     if (len(p) != len(q)) {
         _test_set_fail("uzunluk farkli: " + toString(len(p)) + " / " + toString(len(q)));

@@ -1422,6 +1422,14 @@ TPREOF
         exit 1
     fi
 
+    # DEGERIN METNI (2026-10-02, Tuzaklar 7j): print(dizi / json / struct
+    # dizisi / tuple) beklenen metni basiyor mu ve toString ile AYNI mi.
+    # print yalniz surec disindan okunabildigi icin .test.tpr'nin ikizi.
+    if ! bash tests/deger_metni.sh ./tulpar; then
+        echo -e "${RED}print / toString deger metni bozuk!${NC}"
+        exit 1
+    fi
+
     # FLOAT DIZI IC ICE SURUM (2026-10-01): en ic dongulerin sinavi dis dongu
     # basinda bir kez (nbody), int sekil onbellegi yalniz genel govdede;
     # TULPAR_NO_FVNEST=1 pozitif kontrol. Anlam: tests/float_ic_ice.test.tpr.

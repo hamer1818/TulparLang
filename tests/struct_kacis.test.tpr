@@ -55,7 +55,10 @@ func run_arguman() {
 // Kacar: print/toString — kutulu nesnenin bicimi degismesin.
 func run_bicim() {
     var q = mk(3);
-    assert_eq_str(toString(q), "<object>");
+    // Kutulu nesne json bicimiyle yazilir; tipli yerel olsaydi `P { x: 3, y: 4 }`
+    // olurdu — yani bu satir q'nun KUTULU kaldigini hala ayirt ediyor.
+    // (2026-10-02 oncesi "<object>" idi: icerik hic gorunmuyordu, Tuzaklar 7j.)
+    assert_eq_str(toString(q), "{\"x\": 3, \"y\": 4}");
     assert_eq_str(toJson(q), "{\"x\":3,\"y\":4}");
 }
 

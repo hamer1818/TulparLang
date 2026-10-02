@@ -1806,6 +1806,10 @@ VMValue aot_to_string(VMValue value);
 // Dizgi olmayan bir degerin toString metni, AYIRMADAN (asagida, aot_to_string
 // ile ayni dallar). Donus: uzunluk; metin `buf`ta.
 static int aot_value_text(VMValue value, char *buf, size_t n);
+// Nesne operandli birlestirme (soguk kol) ve ortak metin bicimleyici —
+// ikisi de asagida, toString'in yaninda.
+static VMValue aot_concat_obj(VMValue a, VMValue b);
+static void aot_value_repr(std::string &out, VMValue v);
 
 VMValue aot_string_concat_fast(VMValue a, VMValue b) {
   // `+` with a string on either side is concatenation: the other operand is
@@ -1817,12 +1821,17 @@ VMValue aot_string_concat_fast(VMValue a, VMValue b) {
   // idi. Codegen ayrica `S + toString(x)` kalibini `S + x` olarak buraya
   // getiriyor (llvm_backend.cpp tostring_concat_arg), yani o kalip da tek
   // ayirma. Metin aot_to_string'inkiyle bayt bayt ayni (ayni fonksiyon).
+  //
+  // Nesne operand (`"x" + dizi`) soguk kola gider: metni sinirsiz uzun, 64
+  // baytlik yigin tamponuna sigmaz (aot_concat_obj, toString ile ayni metin).
   char ta[64], tb[64];
   const char *pa, *pb;
   int len1, len2;
   if (IS_STRING(a)) { pa = AS_STRING(a)->chars; len1 = AS_STRING(a)->length; }
+  else if (__builtin_expect(IS_OBJ(a), 0)) return aot_concat_obj(a, b);
   else { len1 = aot_value_text(a, ta, sizeof ta); pa = ta; }
   if (IS_STRING(b)) { pb = AS_STRING(b)->chars; len2 = AS_STRING(b)->length; }
+  else if (__builtin_expect(IS_OBJ(b), 0)) return aot_concat_obj(a, b);
   else { len2 = aot_value_text(b, tb, sizeof tb); pb = tb; }
 
   int total_len = len1 + len2;
@@ -2031,6 +2040,12 @@ void aot_stringbuilder_append_int(StringBuilder *sb, long long v) {
   sb->length += aot_itoa(v, sb->buffer + sb->length);   // itoa NUL'u da yaziyor
 }
 
+static void __attribute__((noinline, cold)) aot_sb_append_obj(StringBuilder *sb, VMValue val) {
+  std::string s;
+  aot_value_repr(s, val);
+  aot_stringbuilder_append(sb, s.data(), (int)s.size());
+}
+
 void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
   if (!sb) return;
   if (IS_STRING(val)) {
@@ -2051,6 +2066,11 @@ void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
   } else if (IS_BOOL(val)) {
     const char *s = AS_BOOL(val) ? "true" : "false";
     aot_stringbuilder_append(sb, s, strlen(s));
+  } else if (IS_OBJ(val)) {
+    // Dizi / json / struct dizisi: toString ile ayni metin (eskiden HICBIR
+    // sey eklenmiyordu — sessizce kayboluyordu). Soguk kol ayri fonksiyonda:
+    // std::string'in yikicisi sicak int/dizgi yolunun cercevesine girmesin.
+    aot_sb_append_obj(sb, val);
   }
 }
 
@@ -2959,68 +2979,276 @@ void aot_set_element_tmpkey(VMValue *target, VMValue *index, VMValue *value,
   vm_set_element(nullptr, *target, *index, *value);
 }
 
-// Print a VMValue (used by OP_PRINT in VM)
-void print_vm_value(VMValue value) {
-  switch (value.type) {
-  case VM_VAL_VOID:
-    // The `null` literal and a value-less (void) result share this tag;
-    // "null" reads better than "void" now that `null` is user-facing.
-    printf("null");
-    break;
-  case VM_VAL_BOOL:
-    printf("%s", AS_BOOL(value) ? "true" : "false");
-    break;
-  case VM_VAL_INT:
-    printf("%lld", AS_INT(value));
-    break;
-  case VM_VAL_FLOAT: {
-    char fbuf[64];
-    aot_format_float(fbuf, sizeof(fbuf), AS_FLOAT(value));
-    printf("%s", fbuf);
-    break;
+// ============================================================================
+// DEGERIN OKUNABILIR METNI — print, toString ve dizgi birlestirme ORTAK
+// ============================================================================
+//
+// 2026-10-02'ye kadar yollar ayri seyler yaziyordu ve dizi/nesne icin
+// HICBIRI icerik vermiyordu: `print(dizi)` "<array>", `print(struct dizisi)`
+// "<obj>", `print(json nesnesi)` "<object>", `toString(<herhangi dizi>)`
+// "<object>". Sessiz sonuc: `assert_eq_str(dizi, dizi)` (lib/test.tpr, iki
+// tarafi toString ile karsilastirir) iki diziyi icerikten bagimsiz HER ZAMAN
+// esit sayiyordu (Tuzaklar 7j). Simdi tek bicimleyici var, print, toString ve
+// `"..." + x` birlestirmesi onu cagiriyor — biri digerinden ayrisamaz.
+//
+// Bicim (Python/Rust/JS'nin ortak kalibi):
+//   dizi          [1, 2.5, "a", true, null, [3]]
+//   json nesnesi  {"ad": "x", "n": 2}            (anahtar sirasi ekleme sirasi)
+//   struct dizisi [P { x: 1, y: 2.5 }, ...]      (print(<struct>) ile ayni)
+//   tuple         (3, 1.5)
+// Ust duzeydeki dizgi CIPLAK basilir (`print("a")` -> a); KAP ICINDEKI dizgi
+// tirnakli ve kacisli — `["a, b"]` ile `["a", "b"]` ayrissin. Sayi/bool
+// metni print(<sayi>) ile ayni (aot_format_float / true / false); struct
+// ALANI ise print(<struct>)in kendi bicimiyle (%g, bool 0/1) — iki struct
+// yolu (codegen'in satir ici printf'i, aot_struct_format) da bunu kullaniyor.
+//
+// Kutusuz dizi (idata: i32/i64/double) OKUNURKEN KUTUYA CEVRILMEZ —
+// arr_items() burada kullanilmaz: print(dizi) diziyi 8'den 16 bayta cikarip
+// hizli yolu kalici olarak kapatirdi.
+//
+// Dongu: kendini iceren kap (`push(a, a)`) "[...]" / "{...}" yazar; derinlik
+// kReprMaxDepth'te kesilir.
+
+// Cikti hedefi: toString / sb_append icin std::string, print icin dogrudan
+// stdout (yigindaki 256 baytlik tamponla, HEAP AYIRMADAN — motorun kare
+// ici ayirma sayaci print(dizi) yuzunden kirmizi olmasin).
+struct ReprOut {
+  std::string *s;
+  FILE *f;
+  size_t n;
+  char buf[256];
+  explicit ReprOut(std::string *str) : s(str), f(nullptr), n(0) {}
+  explicit ReprOut(FILE *fp) : s(nullptr), f(fp), n(0) {}
+  ~ReprOut() { flush(); }
+  void flush() {
+    if (f && n) fwrite(buf, 1, n, f);
+    n = 0;
   }
-  case VM_VAL_OBJ:
-    if (IS_STRING(value)) {
-      printf("%s", AS_STRING(value)->chars);
-    } else if (IS_ARRAY(value)) {
-      ObjArray *arr = AS_ARRAY(value);
-      printf("[");
-      for (int i = 0; i < arr->count; i++) {
-        if (i > 0)
-          printf(", ");
-        print_vm_value(arr_items(arr)[i]);
-      }
-      printf("]");
-    } else if (IS_STRUCT_ARRAY(value)) {
-      // P1.1: `[Ad { x: 1.5, y: 2 }, ...]` — alan adlari/tipleri codegen'in
-      // sabit tablosundan; float alan %g (print(struct) ile ayni).
-      ObjStructArray *a = AS_STRUCT_ARRAY(value);
-      printf("[");
-      for (int i = 0; i < a->count; i++) {
-        if (i > 0) printf(", ");
-        printf("%s { ", a->type_name ? a->type_name : "struct");
-        const char *e = sarr_elem_at(a, i);
-        for (int f = 0; f < a->field_count; f++) {
-          if (f > 0) printf(", ");
-          printf("%s: ", (a->field_names && a->field_names[f]) ? a->field_names[f] : "_");
-          // bool 0/1 basilir (print(struct) ile ayni bicim).
-          const VMValue fv = sarr_field_value(a, e, f);
-          if (IS_FLOAT(fv)) printf("%g", AS_FLOAT(fv));
-          else if (IS_BOOL(fv)) printf("%d", AS_BOOL(fv) ? 1 : 0);
-          else printf("%lld", (long long)AS_INT(fv));
-        }
-        printf(" }");
-      }
-      printf("]");
-    } else {
-      printf("<object>");
+  void put(const char *p, size_t k) {
+    if (s) { s->append(p, k); return; }
+    while (k) {
+      size_t c = sizeof buf - n;
+      if (c > k) c = k;
+      memcpy(buf + n, p, c);
+      n += c; p += c; k -= c;
+      if (n == sizeof buf) flush();
     }
+  }
+  void put(const char *z) { put(z, strlen(z)); }
+  void put(char c) { put(&c, 1); }
+};
+
+static const int kReprMaxDepth = 64;
+struct ReprCtx {
+  const Obj *stack[kReprMaxDepth];
+  int depth;
+};
+
+static void repr_quoted(ReprOut &out, const char *s, int n) {
+  out.put('"');
+  for (int i = 0; i < n; i++) {
+    const unsigned char c = (unsigned char)s[i];
+    switch (c) {
+    case '"': out.put("\\\""); break;
+    case '\\': out.put("\\\\"); break;
+    case '\n': out.put("\\n"); break;
+    case '\r': out.put("\\r"); break;
+    case '\t': out.put("\\t"); break;
+    default:
+      if (c < 0x20) {
+        char b[8];
+        snprintf(b, sizeof b, "\\u%04x", (unsigned)c);
+        out.put(b);
+      } else {
+        out.put((char)c);
+      }
+    }
+  }
+  out.put('"');
+}
+
+// Struct ALANININ metni: print(<struct>)in codegen'deki printf bicimi (float
+// `%g`, bool 0/1, int `%lld`). Struct dizisi, tuple ve aot_struct_format bunu
+// paylasir; boylece print(d) ile print(d[0]) ayni elemani ayni yazar.
+static void repr_struct_field(ReprOut &out, VMValue fv) {
+  char num[64];
+  if (IS_FLOAT(fv))
+    snprintf(num, sizeof num, "%g", AS_FLOAT(fv));
+  else if (IS_BOOL(fv))
+    snprintf(num, sizeof num, "%d", AS_BOOL(fv) ? 1 : 0);
+  else
+    snprintf(num, sizeof num, "%lld", (long long)AS_INT(fv));
+  out.put(num);
+}
+
+// Coklu donusun sentezlenmis struct'i (parser: `__tup_<tip>_<tip>`). Ic adi
+// kullaniciya gostermek yerine degerler `(a, b)` diye yazilir.
+static inline bool repr_is_tuple(const char *type_name) {
+  return type_name && strncmp(type_name, "__tup_", 6) == 0;
+}
+static void repr_struct_open(ReprOut &out, const char *type_name) {
+  if (repr_is_tuple(type_name)) { out.put('('); return; }
+  out.put(type_name ? type_name : "struct");
+  out.put(" { ");
+}
+static void repr_struct_field_head(ReprOut &out, const char *type_name, int f,
+                                   const char *name) {
+  if (f > 0) out.put(", ");
+  if (repr_is_tuple(type_name)) return;
+  out.put(name ? name : "_");
+  out.put(": ");
+}
+static void repr_struct_close(ReprOut &out, const char *type_name) {
+  out.put(repr_is_tuple(type_name) ? ")" : " }");
+}
+
+static void repr_value(ReprOut &out, VMValue v, ReprCtx &cx, bool nested) {
+  char num[64];
+  switch (v.type) {
+  case VM_VAL_INT:
+    out.put(num, (size_t)aot_itoa(AS_INT(v), num));
+    return;
+  case VM_VAL_FLOAT:
+    out.put(num, (size_t)aot_format_float(num, sizeof num, AS_FLOAT(v)));
+    return;
+  case VM_VAL_BOOL:
+    out.put(AS_BOOL(v) ? "true" : "false");
+    return;
+  case VM_VAL_VOID:
+    out.put("null");
+    return;
+  case VM_VAL_OBJ:
     break;
   default:
-    printf("<unknown>");
+    out.put("<unknown>");
+    return;
+  }
+  const Obj *o = AS_OBJ(v);
+  if (!o) { out.put("null"); return; }
+  if (o->type == OBJ_STRING) {
+    const ObjString *s = (const ObjString *)o;
+    if (nested) repr_quoted(out, s->chars, s->length);
+    else out.put(s->chars, (size_t)s->length);
+    return;
+  }
+  const bool container = o->type == OBJ_ARRAY || o->type == OBJ_OBJECT ||
+                         o->type == OBJ_STRUCT_ARRAY;
+  if (container) {
+    bool cyc = cx.depth >= kReprMaxDepth;
+    for (int i = 0; !cyc && i < cx.depth; i++) cyc = cx.stack[i] == o;
+    if (cyc) {
+      out.put(o->type == OBJ_OBJECT ? "{...}" : "[...]");
+      return;
+    }
+    cx.stack[cx.depth++] = o;
+  }
+  switch (o->type) {
+  case OBJ_ARRAY: {
+    const ObjArray *a = (const ObjArray *)o;
+    out.put('[');
+    for (int i = 0; i < a->count; i++) {
+      if (i > 0) out.put(", ");
+      VMValue e;
+      if (a->idata) {
+        if (a->elem_bits == 32)
+          e = VM_INT((long long)((const int32_t *)a->idata)[i]);
+        else if (a->elem_bits == ARR_ELEM_F64)
+          e = VM_FLOAT(((const double *)a->idata)[i]);
+        else
+          e = VM_INT(a->idata[i]);
+      } else {
+        e = a->items_[i];
+      }
+      repr_value(out, e, cx, true);
+    }
+    out.put(']');
     break;
   }
+  case OBJ_OBJECT: {
+    const ObjObject *ob = (const ObjObject *)o;
+    out.put('{');
+    bool first = true;
+    for (int i = 0; i < ob->count; i++) {
+      const ObjString *k = ob->keys[i];
+      if (!k) continue;
+      if (!first) out.put(", ");
+      first = false;
+      repr_quoted(out, k->chars, k->length);
+      out.put(": ");
+      repr_value(out, ob->values[i], cx, true);
+    }
+    out.put('}');
+    break;
+  }
+  case OBJ_STRUCT_ARRAY: {
+    const ObjStructArray *a = (const ObjStructArray *)o;
+    out.put('[');
+    for (int i = 0; i < a->count; i++) {
+      if (i > 0) out.put(", ");
+      repr_struct_open(out, a->type_name);
+      const char *e = sarr_elem_at(a, i);
+      for (int f = 0; f < a->field_count; f++) {
+        repr_struct_field_head(out, a->type_name, f,
+                               a->field_names ? a->field_names[f] : nullptr);
+        repr_struct_field(out, sarr_field_value(a, e, f));
+      }
+      repr_struct_close(out, a->type_name);
+    }
+    out.put(']');
+    break;
+  }
+  case OBJ_STRUCT: {
+    // Heap'e cikmis struct alan ADLARINI tasimiyor (yalniz tip adi): konuma
+    // gore yazilir. Yuvalar int/bool (Plan 04 v2 faz 1).
+    const ObjStruct *s = (const ObjStruct *)o;
+    repr_struct_open(out, s->type_name);
+    for (int i = 0; i < s->field_count; i++) {
+      if (i > 0) out.put(", ");
+      out.put(num, (size_t)aot_itoa((long long)s->fields[i], num));
+    }
+    repr_struct_close(out, s->type_name);
+    break;
+  }
+  case OBJ_FUNCTION: {
+    const ObjFunction *fn = (const ObjFunction *)o;
+    if (fn->name) {
+      out.put("<fn ");
+      out.put(fn->name->chars, (size_t)fn->name->length);
+      out.put('>');
+    } else {
+      out.put("<script>");
+    }
+    break;
+  }
+  case OBJ_CLOSURE: out.put("<closure>"); break;
+  case OBJ_PROMISE: out.put("<promise>"); break;
+  default: out.put("<object>"); break;
+  }
+  if (container) cx.depth--;
 }
+
+// Ust duzey metin (dizgi ciplak). print / toString / birlestirme buradan.
+// noinline: ReprCtx (512 B yigin) cagiranin cercevesine GIRMESIN. Satir ici
+// acildiginda sb_append'in sicak int yolunun cercevesi 0x98'den 0x2c8 bayta
+// cikiyordu (objdump, 2026-10-02) — strcat'in her eklemesi o cerceveyle.
+static void __attribute__((noinline)) aot_value_repr(std::string &out, VMValue v) {
+  ReprCtx cx;
+  cx.depth = 0;
+  ReprOut o(&out);
+  repr_value(o, v, cx, false);
+}
+
+// vm.cpp'deki vm_print_value dizgi DISI nesneyi buraya verir (print).
+void aot_repr_print(VMValue value) {
+  ReprCtx cx;
+  cx.depth = 0;
+  ReprOut o(stdout);
+  repr_value(o, value, cx, false);
+}
+
+// Eski ad (silinmis VM'in OP_PRINT'inden kalma, artik cagirani yok); print
+// ile AYNI seyi yazsin diye vm_print_value'ya devreder.
+void print_vm_value(VMValue value) { vm_print_value(value); }
 
 // Alias for LLVM AOT - prints with newline (takes pointer for ABI
 // compatibility)
@@ -3058,9 +3286,15 @@ void print_newline(void) {
 // spurious 404. Per-thread storage makes toString() race-free.
 static thread_local char aot_string_buffer[1024];
 
-// toString metni (dizgi DISI deger). aot_to_string ve dizgi birlestirmenin
-// zorlamasi AYNI fonksiyonu kullanir: ikisi asla ayrismaz. `n` en az 64:
-// int64 en fazla 20 hane + isaret, aot_format_float en fazla ~24 karakter.
+// toString metni (SKALER deger: int/float/bool/null). aot_to_string ve dizgi
+// birlestirmenin zorlamasi AYNI fonksiyonu kullanir: ikisi asla ayrismaz. `n`
+// en az 64: int64 en fazla 20 hane + isaret, aot_format_float en fazla ~24
+// karakter. NESNE (dizi, json, struct dizisi...) buraya GELMEZ: iki cagiran da
+// onu aot_value_repr'e (print'in bicimleyicisi) yonlendiriyor — metni sinirsiz
+// uzun olabilir. Gelirse (yeni bir cagiran) "<object>" yazar.
+//
+// null: print "null" basarken toString "nullptr" donduruyordu (2026-10-02'ye
+// kadar) — iki yol ayni degeri farkli yaziyordu.
 static int aot_value_text(VMValue value, char *buf, size_t n) {
   switch (value.type) {
   case VM_VAL_INT:
@@ -3076,14 +3310,31 @@ static int aot_value_text(VMValue value, char *buf, size_t n) {
     memcpy(buf, "<object>", 9);
     return 8;
   default:
-    memcpy(buf, "nullptr", 8);
-    return 7;
+    memcpy(buf, "null", 5);
+    return 4;
   }
+}
+
+// Nesnenin toString'i: print ile ayni metin, arenada yeni dizgi.
+static VMValue __attribute__((noinline, cold)) aot_obj_to_string(VMValue value) {
+  std::string s;
+  aot_value_repr(s, value);
+  return VM_OBJ((Obj *)aot_allocate_string(s.data(), (int)s.size()));
+}
+
+// Birlestirmenin nesne kolu (soguk): nesne operandi once toString'e
+// cevrilir, sonra dizgi + dizgi olarak hizli yola geri doner.
+static VMValue __attribute__((noinline, cold)) aot_concat_obj(VMValue a, VMValue b) {
+  if (IS_OBJ(a) && !IS_STRING(a)) a = aot_obj_to_string(a);
+  if (IS_OBJ(b) && !IS_STRING(b)) b = aot_obj_to_string(b);
+  return aot_string_concat_fast(a, b);
 }
 
 VMValue aot_to_string(VMValue value) {
   if (IS_STRING(value))
     return value;
+  if (IS_OBJ(value))
+    return aot_obj_to_string(value);
   int len = aot_value_text(value, aot_string_buffer, sizeof(aot_string_buffer));
   ObjString *str = aot_allocate_string(aot_string_buffer, len);
   return VM_OBJ((Obj *)str);
@@ -3647,27 +3898,30 @@ extern "C" VMValue aot_array_remove_at(VMValue arr, VMValue index) {
 // geciriyordu: yerel "<object>", struct donduren cagri "0" (Eylul 22
 // ikilisinde "1e-323") — sessiz yanlis sonuc. `data` yerlesim isaretcisi
 // (field_count adet 8 baytlik yuva), `types` 0 int / 1 float / 2 bool.
+// Alan metni ve tuple bicimi (`(3, 1.5)`, 2026-10-02) ortak bicimleyiciden
+// (repr_struct_*): struct dizisinin elemani da ayni yazilir.
 extern "C" VMValue aot_struct_format(const char *type_name, int field_count,
                                      const char *const *names, const int *types,
                                      const int64_t *data) {
-  std::string s = type_name ? type_name : "?";
-  s += " { ";
-  char num[64];
+  std::string s;
+  {
+  ReprOut o(&s);
+  repr_struct_open(o, type_name);
   for (int f = 0; f < field_count; f++) {
-    if (f > 0) s += ", ";
-    s += (names && names[f]) ? names[f] : "_";
-    s += ": ";
+    repr_struct_field_head(o, type_name, f, names ? names[f] : nullptr);
     const int t = types ? types[f] : 0;
+    VMValue fv;
     if (t == 1) {
       double d;
       memcpy(&d, &data[f], sizeof d);
-      snprintf(num, sizeof num, "%g", d);
+      fv = VM_FLOAT(d);
     } else {
-      snprintf(num, sizeof num, "%lld", (long long)data[f]);
+      fv = VM_INT((long long)data[f]);   // bool yuvasi 0/1: %lld ile ayni
     }
-    s += num;
+    repr_struct_field(o, fv);
   }
-  s += " }";
+  repr_struct_close(o, type_name);
+  }
   return VM_OBJ((Obj *)aot_allocate_string(s.c_str(), (int)s.size()));
 }
 

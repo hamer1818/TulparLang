@@ -46,7 +46,8 @@ func run_tostring_birlestirme_metni() {
     assert_eq_str("g=" + toString(0.1 + 0.2), "g=0.30000000000000004");
     assert_eq_str("b=" + toString(b), "b=true");
     assert_eq_str("c=" + toString(1 < 2), "c=true");
-    assert_eq_str("x" + toString(arr), "x<object>");
+    // Dizi artik icerigiyle yazilir (2026-10-02 oncesi "x<object>"; Tuzaklar 7j).
+    assert_eq_str("x" + toString(arr), "x[1, 2]");
     assert_eq_str(toString("abc") + 1, "abc1");
     assert_eq_str(toString(-9223372036854775807 - 1) + "", "-9223372036854775808");
 }

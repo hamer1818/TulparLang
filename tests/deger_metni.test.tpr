@@ -1,0 +1,149 @@
+// DEGERIN METNI: toString / dizgi birlestirme (2026-10-02, Tuzaklar 7j).
+//
+// 2026-10-02'ye kadar `toString(<dizi>)` HER dizi icin "<object>" donuyordu
+// (`int[]`, `float[]`, `array`, `json` nesnesi, struct dizisi). lib/test.tpr'deki
+// `assert_eq_str` iki tarafi toString ile karsilastirdigi icin iki dizi
+// icerikten bagimsiz HER ZAMAN "esit"ti — dizi karsilastiran testler hicbir sey
+// olcmuyordu. Ayni anda print dizide "<array>", struct dizisinde "<obj>",
+// tuple'da ic adi (`__tup_int_float { _0: .. }`) basiyordu.
+//
+// Bicim (print ile AYNI — o taraf tests/deger_metni.sh'de, surec disindan):
+//   dizi          [1, 2.5, "a", true, null, [3]]   kap icindeki dizgi tirnakli
+//   json nesnesi  {"ad": "x", "n": 2}
+//   struct dizisi [P { x: 1, y: 2.5 }]             print(<struct>) bicimi
+//   tuple         (3, 1.5)
+// Calistir: ./tulpar tests/deger_metni.test.tpr
+import "test";
+
+type P { int x; float y; bool b; }
+type Tepe { f32 x; i32 renk; }
+
+func iki(): (int, float) { return 3, 1.5; }
+func uc(): (int, bool, float) { return 7, true, 0.25; }
+
+// ---- ASIL HATA: assert_eq_str iki farkli diziyi ayirt etmeli -----------------
+// Bu, Tuzaklar 7j'nin pozitif kontrolu: eski derleyicide iki satir da "esit".
+func run_farkli_diziler_farkli() {
+    int[] a = [1, 2, 3];
+    int[] b = [1, 2, 4];
+    assert(toString(a) != toString(b), "farkli int[] ayni metni verdi");
+    float[] f = [1.5, 2.5];
+    float[] g = [1.5, 2.25];
+    assert(toString(f) != toString(g), "farkli float[] ayni metni verdi");
+    array m = ["a", "b"];
+    array n = ["a, b"];
+    assert(toString(m) != toString(n), "[\"a\", \"b\"] ile [\"a, b\"] ayni metni verdi");
+    json o = {"k": 1};
+    json p = {"k": 2};
+    assert(toString(o) != toString(p), "farkli json nesneleri ayni metni verdi");
+}
+
+func run_int_dizi() {
+    int[] a = [1, 2, 3];
+    assert_eq_str(toString(a), "[1, 2, 3]");
+    int[] e = [];
+    assert_eq_str(toString(e), "[]");
+    // i32 depoya sigmayan yazma diziyi 64 bite genisletir — metin ayni kural.
+    int[] w = [1, -2];
+    w[0] = 5000000000;
+    assert_eq_str(toString(w), "[5000000000, -2]");
+    int[] d = array_fill(3, 7);
+    assert_eq_str(toString(d), "[7, 7, 7]");
+    push(d, -1);
+    assert_eq_str(toString(d), "[7, 7, 7, -1]");
+}
+
+func run_float_dizi() {
+    float[] f = [1.5, 2.0, 0.1];
+    // Eleman metni print(<float>) ile ayni (en kisa geri donen gosterim).
+    assert_eq_str(toString(f), "[1.5, 2, 0.1]");
+    float[] d = array_fill(2, 0.25);
+    assert_eq_str(toString(d), "[0.25, 0.25]");
+    d[1] = 0.1 + 0.2;
+    assert_eq_str(toString(d), "[0.25, 0.30000000000000004]");
+}
+
+func run_karisik_ve_ic_ice() {
+    var m = [1, "a", [2, 3], 4.5, true, null];
+    assert_eq_str(toString(m), "[1, \"a\", [2, 3], 4.5, true, null]");
+    str[] s = ["x", "y"];
+    assert_eq_str(toString(s), "[\"x\", \"y\"]");
+    // Kap icindeki dizgi kacisli: tirnak, ters bolu, satir sonu.
+    array k = ["a\"b", "c\\d", "e\nf"];
+    assert_eq_str(toString(k), "[\"a\\\"b\", \"c\\\\d\", \"e\\nf\"]");
+}
+
+func run_json_nesnesi() {
+    json j = {"k": [1, 2], "s": "v", "n": null};
+    assert_eq_str(toString(j), "{\"k\": [1, 2], \"s\": \"v\", \"n\": null}");
+    json bos = {};
+    assert_eq_str(toString(bos), "{}");
+    json ic = {"a": {"b": {"c": 1}}};
+    assert_eq_str(toString(ic), "{\"a\": {\"b\": {\"c\": 1}}}");
+}
+
+func run_struct_dizisi() {
+    P[] ps = [];
+    push(ps, { x: 1, y: 2.5, b: false });
+    P q = { x: 3, y: 4.0, b: true };
+    push(ps, q);
+    // Eleman print(<struct>) / toString(<struct>) ile ayni bicimde.
+    assert_eq_str(toString(ps), "[P { x: 1, y: 2.5, b: 0 }, P { x: 3, y: 4, b: 1 }]");
+    assert_eq_str(toString(ps), "[" + toString(ps[0]) + ", " + toString(ps[1]) + "]");
+    P[] bos = [];
+    assert_eq_str(toString(bos), "[]");
+    // f32/i32 alanli (C yerlesimli) struct dizisi.
+    Tepe[] t = [];
+    push(t, { x: 0.5, renk: -3 });
+    assert_eq_str(toString(t), "[Tepe { x: 0.5, renk: -3 }]");
+}
+
+func run_tuple() {
+    var t = iki();
+    assert_eq_str(toString(t), "(3, 1.5)");
+    assert_eq_str(toString(iki()), "(3, 1.5)");
+    // Tuple elemani struct alani kurali: bool 0/1.
+    assert_eq_str(toString(uc()), "(7, 1, 0.25)");
+}
+
+func run_birlestirme() {
+    int[] a = [1, 2];
+    // `S + toString(x)` codegen'de `S + x` olur — ayni metin.
+    assert_eq_str("a=" + toString(a), "a=[1, 2]");
+    assert_eq_str(toString(a) + "!", "[1, 2]!");
+    assert_eq_str(toString(a) + toString(a), "[1, 2][1, 2]");
+    json o = {"k": 1};
+    assert_eq_str("o=" + toString(o), "o={\"k\": 1}");
+    assert_eq_str(toString(null), "null");
+}
+
+func run_kendini_iceren() {
+    array a = [1];
+    push(a, a);
+    assert_eq_str(toString(a), "[1, [...]]");
+    json o = {"n": 1};
+    o["ben"] = o;
+    assert_eq_str(toString(o), "{\"n\": 1, \"ben\": {...}}");
+}
+
+func run_sb_append() {
+    int sb = StringBuilder(16);
+    int[] a = [4, 5];
+    sb_append(sb, "a=");
+    sb_append(sb, a);
+    assert_eq_str(sb_tostring(sb), "a=[4, 5]");
+    sb_free(sb);
+}
+
+print("=== deger metni: toString / birlestirme (dizi, json, struct dizisi, tuple) ===");
+test("farkli diziler farkli metin (assert_eq_str olcuyor)", "run_farkli_diziler_farkli");
+test("int[]: i32 / i64 / array_fill / push", "run_int_dizi");
+test("float[]: eleman print(<float>) gibi", "run_float_dizi");
+test("karisik ve ic ice dizi, dizgi kacisi", "run_karisik_ve_ic_ice");
+test("json nesnesi", "run_json_nesnesi");
+test("struct dizisi (f32/i32 dahil)", "run_struct_dizisi");
+test("tuple (a, b)", "run_tuple");
+test("dizgi birlestirme ve null", "run_birlestirme");
+test("kendini iceren kap", "run_kendini_iceren");
+test("sb_append dizi", "run_sb_append");
+test_summary();
