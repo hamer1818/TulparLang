@@ -160,14 +160,14 @@ void llvm_init_types(LLVMBackend *backend) {
   //   ObjType type;             // offset 0 (uint8_t)
   //   uint8_t arena_allocated;  // offset 1
   //   uint8_t is_moved;         // offset 2
-  //   uint8_t pad_;             // offset 3
+  //   uint8_t struct_tag;       // offset 3 (OBJ_OBJECT: kutulu struct adi)
   //   int32_t ref_count;        // offset 4
   // }
   LLVMTypeRef obj_elements[] = {
       llvm_obj_type_ty(backend),             // type (enum, i8)
       LLVMInt8TypeInContext(ctx),            // arena_allocated
       LLVMInt8TypeInContext(ctx),            // is_moved
-      LLVMInt8TypeInContext(ctx),            // pad_
+      LLVMInt8TypeInContext(ctx),            // struct_tag
       LLVMInt32TypeInContext(ctx),           // ref_count
   };
   LLVMStructSetBody(backend->obj_type, obj_elements, 5, 0);

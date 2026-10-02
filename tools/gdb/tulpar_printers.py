@@ -15,7 +15,9 @@
 #
 # DÜZEN VARSAYIMI (src/vm/vm.hpp, LP64, küçük-sonlu — x86_64 ve AArch64):
 #   VMValue   { uint32 type @0; <pad>; union as @8 (8 bayt) }        16 bayt
-#   Obj       { uint8 type @0; arena @1; moved @2; pad @3; int32 ref @4 }  8 bayt
+#   Obj       { uint8 type @0; arena @1; moved @2; struct_tag @3; int32 ref @4 }  8 bayt
+#             (struct_tag: kutulu struct adi, runtime tablosunda — bu betik
+#             okumuyor, nesneyi `{k: v}` gosterir; 2026-10-02)
 #   ObjString { Obj; int length @8; uint32 hash @12; char chars[] @16 }
 #             (karakterler nesnenin ICINDE, isaretci degil — 2026-10-02)
 #   ObjArray  { Obj; int count @8; int cap @12; VMValue *items_ @16;

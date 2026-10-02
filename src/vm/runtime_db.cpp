@@ -392,6 +392,7 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     // Create object for this row
     ObjObject *row = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
     row->obj.type = OBJ_OBJECT;
+    row->obj.struct_tag = 0;
     row->obj.arena_allocated = 1;
     row->capacity = col_count;
     row->count = 0;
@@ -562,6 +563,7 @@ VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
   while ((step_rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     ObjObject *row = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
     row->obj.type = OBJ_OBJECT;
+    row->obj.struct_tag = 0;
     row->obj.arena_allocated = 1;
     row->capacity = col_count;
     row->count = 0;

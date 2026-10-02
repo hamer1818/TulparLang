@@ -276,6 +276,7 @@ static Obj *allocate_object(VM *vm, size_t size, ObjType type) {
 
   obj->type = type;
   obj->arena_allocated = from_arena;
+  obj->struct_tag = 0;  // arena geri sarmadan sonra sifir degil (vm.hpp Obj)
   // `Obj::next` (VM'in nesne listesi) 2026-10-02'de kaldirildi: vm_create
   // hicbir yerde cagrilmiyor, yani bu yol olu; liste yalniz her nesneye 8
   // bayt (dolguyla 16) ekliyordu. Bkz. vm.hpp `Obj`.

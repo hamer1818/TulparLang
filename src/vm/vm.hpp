@@ -125,7 +125,13 @@ typedef struct Obj {
   ObjType type;            // @0 (1 bayt; codegen i8 yukler)
   uint8_t arena_allocated; // @1  1 if allocated from arena, 0 if malloc
   uint8_t is_moved;        // @2  Move semantics: 1 if ownership transferred
-  uint8_t pad_;            // @3  (kullanilmiyor)
+  // @3  KUTULU STRUCT'IN TIP ETIKETI (2026-10-02; eskiden kullanilmayan
+  //      dolgu). Yalniz OBJ_OBJECT okur: 0 = duz json nesnesi, 1..255 =
+  //      aot_struct_tag_name() tablosundaki struct adi. Kutulu struct
+  //      (`[p]`, str alanli struct) boylece `P { x: 1 }` yazilir —
+  //      basliga 0 bayt. ObjObject KURAN her yer bunu SIFIRLAMALI (arena
+  //      bellegi geri sarmadan sonra sifir degil); kopyalayan tasir.
+  uint8_t struct_tag;
   int32_t ref_count;       // @4  ARC reference count
 } Obj;
 
@@ -337,6 +343,11 @@ typedef struct {
 // Indeks sahibinin (malloc'lu) indeksini birakir; nesne serbest birakilirken
 // keys/values ile birlikte cagrilir. Arena indeksi arena ile gider.
 extern "C" void obj_index_release(ObjObject *o);
+
+// KUTULU STRUCT ETIKETI (Obj::struct_tag). Ad -> 1..255 kimligi; tablo
+// dolunca 0 (nesne json gibi yazilir — sessiz bozulma degil, eski bicim).
+extern "C" uint8_t aot_struct_tag_of(const char *type_name);
+extern "C" const char *aot_struct_tag_name(uint8_t tag);
 
 // Promise Object — the value an async function produces and `await` consumes.
 // Settled by the event-loop scheduler in runtime/tulpar_async.cpp. `value`

@@ -1,0 +1,73 @@
+import "test";
+
+// KUTULU STRUCT ADI (2026-10-02).
+//
+// Kutulanan struct (dinamik dizideki `[p]`, `str` alanli struct) bir json
+// nesnesine donusuyor ve tip adi kayboluyordu: `toString([p])`
+// `[{"x": 1}]` iken `toString(p)` `P { x: 1 }`. Ad artik Obj basligindaki
+// kullanilmayan dolgu baytinda (Obj::struct_tag) — nesne basina 0 bayt.
+// print tarafi tests/deger_metni.sh'de (kutulu_struct_* satirlari).
+//
+// Tehlikeli yan: o bayt eskiden HIC yazilmiyordu. Arena bellegi geri
+// sarmadan (arena_drop) sonra SIFIRLANMIYOR; ObjObject kuran bir yol baytı
+// sifirlamayi unutursa onceki icerigin artigi bir struct kimligi gibi
+// okunur ve duz bir json nesnesi `P { ... }` diye yazilir. Asagidaki
+// "arena artigi" testi tam bunu kurar: arenayi 0x01 baytlariyla doldurur,
+// geri sarar, ayni bellege fromJson ile nesne kurdurur.
+// Pozitif kontrol (olculdu 2026-10-02): parse_json_object'teki
+// `obj->obj.struct_tag = 0;` satiri silinince bu test KIRMIZI.
+
+struct P { int x; float y; bool b; }
+struct S { str ad; int n; }
+
+func mk(str a): S { return { ad: a, n: 7 }; }
+
+func run_dinamik_dizi() {
+    P p = { x: 1, y: 2.5, b: true };
+    var d = [p];
+    assert_eq_str(toString(d), "[P { x: 1, y: 2.5, b: true }]");
+    assert_eq_str(toString(d[0]), "P { x: 1, y: 2.5, b: true }");
+    // Alan erisimi ve geri acma degismedi.
+    assert_eq_int(d[0].x, 1);
+    P geri = d[0];
+    assert_eq_float(geri.y, 2.5);
+    // JSON ayri sozlesme: ad YOK.
+    assert_eq_str(toJson(d), "[{\"x\":1,\"y\":2.5,\"b\":true}]");
+}
+
+func run_str_alanli() {
+    S s = { ad: "z", n: 3 };
+    assert_eq_str(toString(s), "S { ad: \"z\", n: 3 }");
+    assert_eq_str("s=" + s, "s=S { ad: \"z\", n: 3 }");
+    assert_eq_str(toString(mk("q")), "S { ad: \"q\", n: 7 }");
+    assert_eq_str(toJson(s), "{\"ad\":\"z\",\"n\":3}");
+}
+
+func run_paylasilan_json_adlanmaz() {
+    // `S t = j;` taze nesne degil: paylasilan json YENIDEN ADLANDIRILMAZ.
+    json j = { ad: "j", n: 1 };
+    S t = j;
+    assert_eq_str(toString(j), "{\"ad\": \"j\", \"n\": 1}");
+}
+
+func run_arena_artigi() {
+    P p = { x: 1, y: 2.0, b: false };
+    var d = [p];                 // P kimligi kayitli (1)
+    assert_eq_str(toString(d[0]), "P { x: 1, y: 2, b: false }");
+    var wm = arena_save();
+    str bir = chr(1);
+    int k = 0;
+    while (k < 2000) {
+        str dolgu = repeat(bir, 64);   // arenayi 0x01 ile doldur
+        k = k + 1;
+    }
+    arena_drop(wm);
+    json o = fromJson("{\"a\": 1, \"b\": {\"c\": 2}}");
+    assert_eq_str(toString(o), "{\"a\": 1, \"b\": {\"c\": 2}}");
+}
+
+test("dinamik dizideki struct adini tasir", "run_dinamik_dizi");
+test("str alanli struct adini tasir", "run_str_alanli");
+test("paylasilan json adlandirilmaz", "run_paylasilan_json_adlanmaz");
+test("arena artigi struct adi sanilmaz", "run_arena_artigi");
+test_summary();
