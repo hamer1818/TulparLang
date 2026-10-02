@@ -151,6 +151,29 @@ func run_eszamanli_okuma() {
     assert_eq_int(g_hatali, 0);
 }
 
+// --- uzun ad (2026-10-02) ----------------------------------------------------
+// Havuz kaydi adi kendi icinde tasiyor (AOT_FNREF_NAME_CAP = 88, NUL dahil;
+// ObjString karakterleri artik nesnenin icinde). 87 karakterlik ad havuza
+// sigar; 100 karakterlik ad sigmaz ve referans duz interned dizgi olur —
+// call() onu adla cozer. Iki yolda da anlam ayni olmali.
+func sinir_tam_sigan_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx(int x): int { return x * 3; }
+func sinir_asan_uzun_ad_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy(int x): int { return x * 5; }
+
+func run_uzun_ad_sinirlari() {
+    var a = sinir_tam_sigan_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx;
+    var b = sinir_asan_uzun_ad_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy;
+    assert_eq_int(call(a, 2), 6);
+    assert_eq_int(call(b, 2), 10);
+    int acc = 0;
+    for (int i = 0; i < 100; i = i + 1) { acc = call(a, 1) + call(b, 1) + acc; }
+    assert_eq_int(acc, 800);
+    assert_eq_int(len(a), 87);
+    assert_eq_int(len(b), 100);
+    assert_eq_bool(a == "sinir_tam_sigan_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", true);
+    assert_eq_bool(b == "sinir_asan_uzun_ad_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", true);
+    assert_eq_str(typeof(b), "string");
+}
+
 print("=== call() + fonksiyon referansi havuzu ===");
 test("dogrudan referans", "run_dogrudan_referans");
 test("dizgi adla cagri ayni", "run_dizgi_adla_cagri_ayni");
@@ -163,4 +186,5 @@ test("donussuz fonksiyon", "run_donussuz_fonksiyon");
 test("lambda ve kapanis", "run_lambda_ve_kapanis");
 test("kapanis yanlis arguman sayisi", "run_kapanis_yanlis_arguman_sayisi");
 test("thread'ler ayni tabloyu okur", "run_eszamanli_okuma");
+test("uzun ad: havuza sigan ve sigmayan", "run_uzun_ad_sinirlari");
 test_summary();
