@@ -15,5 +15,9 @@
 
 #define TULPAR_OBJ_HEADER_SIZE 8  // sizeof(Obj) — 64-bit ve wasm32
 #define TULPAR_OBJ_TYPE_SIZE 1    // sizeof(Obj::type) — codegen bu genislikte yukler
+// offsetof(ObjString, chars) == sizeof(ObjString): karakterler basligin hemen
+// arkasinda (vm.hpp). Yerel eklenti cagrisi (K303) `str` parametresini bu
+// ofsetle KOPYASIZ gecirir; runtime_bindings.cpp static_assert ile kilitli.
+#define TULPAR_OBJSTRING_CHARS_OFFSET 16
 
 #endif

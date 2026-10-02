@@ -1,0 +1,22 @@
+// Ornek eklentinin Tulpar modulu: `import "ornek"` bunu eklenti dizininden
+// cozer (diskteki ornek.tpr'ye bakmadan). Eklenti fonksiyonlarini sarar ve
+// eklentinin modulunun kendi struct'ini/global'ini tasiyabildigini gosterir.
+struct Nokta { float x; float y; }
+
+int ornek_cagri_sayisi = 0;
+
+func nokta(float x, float y): Nokta {
+    Nokta n;
+    n.x = x;
+    n.y = y;
+    return n;
+}
+
+func orta_nokta(Nokta a, Nokta b): Nokta {
+    ornek_cagri_sayisi = ornek_cagri_sayisi + 1;
+    return nokta(ornek_orta(a.x, b.x), ornek_orta(a.y, b.y));
+}
+
+func selamla(str ad): str {
+    return ornek_selam(ad);
+}

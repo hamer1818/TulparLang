@@ -32,7 +32,7 @@ Statically-typed, **AOT-derlenen** dil. C++17 + **LLVM 18–22** backend. Kaynak
 [[Lexer]] · [[Parser]] · [[Type Inference]] · [[AOT Backend]] · [[Runtime]] · [[Memory Model]] · [[Async Runtime]] · [[SQLite and DB]]
 
 ## Yardımcı altsistemler
-[[LSP]] · [[Tooling]] (fmt/typecheck/doc/pkg/update) · [[Imports and Modules]] · [[Cross-platform]] · [[Android]]
+[[LSP]] · [[Tooling]] (fmt/typecheck/doc/pkg/update) · [[Imports and Modules]] · [[Eklentiler]] (yerel eklenti, `--ext`) · [[Cross-platform]] · [[Android]]
 
 ## Çalıştırma
 `tulpar script.tpr` → AOT derler + çalıştırır (**tek yürütme yolu**; AOT hatası = hard error). `tulpar build` standalone binary üretir. CLI dispatch: `src/main.cpp`.

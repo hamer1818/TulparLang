@@ -1,0 +1,47 @@
+// tests/yerel_eklenti.sh: ornek eklentinin her tip ailesini uctan uca sinar.
+// Beklenen cikti kullan.beklenen'de (bayt bayt karsilastirilir).
+import "ornek";
+
+func ikiye_kat(float x): float { return x * 2; }
+
+func main() {
+    // i64: tipli (ham deger, kutusuz) ve dinamik (kutulu, float -> kirpma)
+    int a = 40;
+    print("topla " + toString(ornek_topla(a, 2)));
+    var v = 2.9;
+    print("topla_dinamik " + toString(ornek_topla(v, 1)));
+    // i32 / f64 (int argumani float'a) / f32
+    print("kare32 " + toString(ornek_kare32(12)));
+    print("orta " + toString(ornek_orta(1, 2)));
+    print("yarim " + toString(ornek_yarim(5.0)));
+    // bool donus (kosulda) ve bool parametre (bool ya da int)
+    if (ornek_pozitif_mi(-1.5)) { print("pozitif YANLIS"); } else { print("pozitif degil"); }
+    bool p = ornek_pozitif_mi(3.25);
+    print("pozitif " + toString(p));
+    print("bayrak " + toString(ornek_bayrak(true)) + " " + toString(ornek_bayrak(false)) + " " + toString(ornek_bayrak(0)));
+    // str: donus HEMEN kopyalanir (ikinci cagri statik tamponu ezer)
+    str s1 = ornek_selam("Ada");
+    str s2 = ornek_selam("Bey");
+    print(s1 + " / " + s2);
+    print("uzunluk " + toString(ornek_uzunluk("çay")));
+    str b = ornek_bos();
+    print("bos " + toString(len(b)));
+    // void + durum
+    ornek_sayac_artir();
+    ornek_sayac_artir();
+    ornek_sayac_artir();
+    print("sayac " + toString(ornek_sayac()));
+    // 10 parametre (yazmaclar tukenir, yigina tasar)
+    print("on " + toString(ornek_on(1, 2.0, 3, 4.0, 5, 6.0, 7, 8.0, 9, 10.0)));
+    // Tulpar'i geri cagirma (tulpar_ext_func_lookup + tulpar_ext_call_f64)
+    print("geri " + toString(ornek_geri("ikiye_kat", 21)) + " " + toString(ornek_geri("boyle_bir_sey_yok", 1)));
+    // dongude tipli yol
+    int t = 0;
+    for (int i = 0; i < 1000; i++) { t = ornek_topla(t, i); }
+    print("dongu " + toString(t));
+    // eklentinin modulu: struct + global + sarmalayici
+    Nokta m = orta_nokta(nokta(0.0, 0.0), nokta(2.0, 4.0));
+    print("nokta " + toString(m.x) + " " + toString(m.y) + " cagri " + toString(ornek_cagri_sayisi));
+    print(selamla("Tulpar"));
+}
+main();

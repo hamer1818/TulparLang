@@ -13,6 +13,41 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — yerel eklentiler (`--ext`): C kitaplığını derleyiciyi yeniden derlemeden bağlama
+
+- **`tulpar --ext <dizin> oyun.tpr`** (K303): eklenti dizinindeki
+  `tulpar-ext.json` bildirimi fonksiyon adını, C sembolünü, parametre/dönüş
+  tiplerini (`i32 i64 f32 f64 bool str void`), Tulpar modüllerini
+  (`import "<ad>"` onları eklenti dizininden çözer) ve platforma göre link
+  kitaplıklarını (linux/macos/windows/android/web) verir. Kurulu/yayınlanmış
+  `tulpar` ek derleme olmadan kullanır; derleyicide hiçbir eklentiye özgü ad
+  yok. Bulunma: `--ext` (tekrarlanabilir) → `TULPAR_EXT_PATH` →
+  `tulpar.toml` `[ext] paths = [...]`; aynı adlı eklentide önce gelen kazanır.
+- **Çağrı doğrudan C:** derleyici her çağrıyı bildirilen C tipleriyle
+  sembole indirir — VMValue sarmalayıcısı yok, tipli argüman ham geçer,
+  sonuç ham tipli döner. Tulpar Engine (ilk tüketici) ölçüldü (2026-10-02,
+  Ryzen 7 9800X3D): `eng_frame()` 2.32 → 0.8–1.0 ns, 6 float argümanlı
+  `eng_camera` 3.5–3.8 → 1.35 ns, dizgi argümanlı `eng_key_down` 2.9–3.1 →
+  1.9 ns (eski yol: ters yamalı derleyicinin `aot_eng_*_ptr` sarmalayıcısı).
+  Gerileyen tek kalıp: çağrıyı aşan float birikimci (`f = f + c()`) 2.30 →
+  4.02 ns — SysV'de xmm yazmacı çağrıda korunmaz (bkz. mindmap Eklentiler).
+- **Typeinfer ve LSP** eklenti imzalarını görür (tip denetimi, hover,
+  tamamlama, imza yardımı; LSP eklentiyi belgenin dizininden yukarı
+  `tulpar.toml`'dan bulur). Yerleşik adını taşıyan eklenti fonksiyonu
+  reddedilir; kullanıcının aynı adlı fonksiyonu eklentiyi gölgeler.
+- **Eklentinin Tulpar'ı geri çağırması** için düz C yüzü (VMValue görmeden):
+  `tulpar_ext_func_lookup`, `tulpar_ext_call_f64`, `tulpar_ext_eval_f64`.
+  Motorun olay kancası bununla 5.5–6.0 ns (eski üretilmiş bağlama 5.6–6.2 ns).
+- Hatalar adıyla: eklenti bulunamadı / bildirim bozuk (dosya + satır) /
+  bilinmeyen tip / kullanılan eklentinin bu hedef için link bölümü yok /
+  bildirimdeki sembol arşivde yok (çalıştır yolunda da linker çıktısı
+  basılır) / fazla argüman. Eklentisiz `import "<ad>"` `--ext` ipucunu verir.
+- Nöbetçi: `tests/yerel_eklenti.sh` (`build.sh suites`, üç CI ayağı) — örnek
+  C eklentisi (`tests/yerel_eklenti/`) her tip ailesini üç bulunma yoluyla
+  uçtan uca, çıktı bayt bayt; pozitif kontroller (eklentisiz import, bozuk
+  sembol, bozuk imza tipi, eklentinin ABI kilidi, bozuk JSON, …), LSP sondası.
+- Eklenti kullanmayan programın IR'ı ve link satırı değişmedi.
+
 ### Hızlandı — dizi erişiminin soğuk yolu LSR'den gizlendi: fonksiyon içi elek 10,0 → 8,0 ms; üst düzey diziler main yereli
 
 - **Kök neden:** şekil önbellekli dizi erişiminin genel (soğuk) yolundaki

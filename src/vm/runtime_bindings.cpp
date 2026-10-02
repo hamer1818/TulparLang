@@ -1347,6 +1347,90 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
   return aot_allocate_string(chars, length);
 }
 
+// ---- YEREL EKLENTI ABI'si (K303, 2026-10-02) --------------------------------
+//
+// Derleyici bir eklenti fonksiyonunu dogrudan C sembolu olarak cagiriyor
+// (llvm_backend.cpp emit_ext_call). `str` parametresi kopyasiz gecer:
+// karakterler nesnenin icinde, bu ofsette — codegen ayni sayiyi gomuyor.
+static_assert(offsetof(ObjString, chars) == TULPAR_OBJSTRING_CHARS_OFFSET,
+              "ObjString::chars ofseti obj_layout.h ile ayni olmali (eklenti str argumani)");
+
+// `str` donusu: C'nin dondurdugu dizgi HEMEN kopyalanir (C tamponu statik
+// olabilir, bir sonraki cagrida degisir). NULL -> "".
+extern "C" Obj *aot_ext_cstr_to_obj(const char *s) {
+  if (!s) s = "";
+  return (Obj *)vm_alloc_string_aot(nullptr, s, (int)strlen(s));
+}
+
+// Eklentinin TULPAR'I geri cagirmasi icin DUZ C yuzu — VMValue/ObjString
+// gormeden. Bir eklenti (ornegin betik kancasi cagiran bir motor) Tulpar
+// fonksiyonunu YUKLEMEDE bir kez adiyla cozer, sonra isaretciyle cagirir.
+// Bildirimleri tests/yerel_eklenti/ornek_eklenti.c'de ve
+// docs/mindmap/Eklentiler.md'de; tulpar_ext.h yok bilerek: iki satirlik
+// sozlesme icin kurulan ikinci bir baslik dosyasi, surumu kayan ikinci bir
+// hakikat kaynagi olurdu.
+//
+// tulpar_ext_func_lookup: aot_func_lookup ile ayni (cagri onbellegi, sonra
+// kutulu `t_<ad>`; ayirma yok). Bulunamazsa NULL, *arity -1.
+extern "C" void *tulpar_ext_func_lookup(const char *name, int *arity) {
+  return aot_func_lookup(name, arity);
+}
+
+// Cozulmus fonksiyonu SAYISAL argumanlarla cagir: her arguman Tulpar'a float
+// olarak gider (tipli `int` parametresi kendi prologunda cevirir). call() ile
+// AYNI dagitim: tam `arity` arguman, eksikler VOID, fazlasi duser (arity -1:
+// argc'ye guvenilir). Donus: 1 cagrildi, 0 cagrilmadi (fn NULL ya da tavan
+// asildi). Sonuc atilir — olay kancasinin sicak yolu; imza bilerek
+// `int (*)(void *, int, const double *, int)`: bir gomen bunu ARADA katman
+// olmadan kendi geri cagri tablosuna koyabilir (tulpar-engine TengScriptVm
+// .invoke). Arada bir sarmalayici, olculdu (2026-10-02, Ryzen 7 9800X3D,
+// 200 bos kanca), kanca basina ~1.5 ns ekliyordu.
+// Tek gecis: tam `n` yuva (eksik VOID) dogrudan kurulur. Olay kancalarinin
+// tipik aritesi (0..4) SATIR ICI cagrilir; ustu paylasilan dagitima
+// (boxed_call.hpp) gider. Neden ayri kollar: derleyici tulpar_boxed_call'i
+// (33 kol) bir yardimciya disari aliyor ve kanca basina iki fazladan cagri
+// katmani olusuyordu — olculdu (2026-10-02, Ryzen 7 9800X3D, tulpar-engine
+// tools/kanca_olcumu.py, 200 bos kanca): katmanli 6.4-7.7 ns, tek
+// fonksiyonda motorun eski uretilmis baglamasi 5.2-5.8 ns.
+__attribute__((always_inline)) static inline VMValue tulpar_ext_invoke_f64(void *fn, int arity,
+                                                                          const double *args,
+                                                                          int argc) {
+  const int n = arity >= 0 ? arity : argc;
+  VMValue a[TULPAR_CALL_MAX_ARGS];
+  for (int i = 0; i < n; i++) a[i] = i < argc ? VM_FLOAT(args[i]) : VM_VOID();
+  VMValue r = VM_VOID();
+  typedef VMValue *P;
+  switch (n) {
+  case 0: ((void (*)(P))fn)(&r); break;
+  case 1: ((void (*)(P, P))fn)(&r, &a[0]); break;
+  case 2: ((void (*)(P, P, P))fn)(&r, &a[0], &a[1]); break;
+  case 3: ((void (*)(P, P, P, P))fn)(&r, &a[0], &a[1], &a[2]); break;
+  case 4: ((void (*)(P, P, P, P, P))fn)(&r, &a[0], &a[1], &a[2], &a[3]); break;
+  default: tulpar_boxed_call(fn, &r, a, n); break;
+  }
+  return r;
+}
+extern "C" int tulpar_ext_call_f64(void *fn, int arity, const double *args, int argc) {
+  if (!fn) return 0;
+  if (argc < 0 || !args) argc = 0;
+  if (argc > TULPAR_CALL_MAX_ARGS || arity > TULPAR_CALL_MAX_ARGS) return 0;
+  (void)tulpar_ext_invoke_f64(fn, arity, args, argc);
+  return 1;
+}
+
+// tulpar_ext_call_f64'un SONUCLU esi: donus sayi/bool ise double olarak
+// (bool 1/0), degilse — ya da cagrilamadiysa — 0.
+extern "C" double tulpar_ext_eval_f64(void *fn, int arity, const double *args, int argc) {
+  if (!fn) return 0.0;
+  if (argc < 0 || !args) argc = 0;
+  if (argc > TULPAR_CALL_MAX_ARGS || arity > TULPAR_CALL_MAX_ARGS) return 0.0;
+  const VMValue r = tulpar_ext_invoke_f64(fn, arity, args, argc);
+  if (IS_INT(r)) return (double)AS_INT(r);
+  if (IS_FLOAT(r)) return AS_FLOAT(r);
+  if (IS_BOOL(r)) return AS_BOOL(r) ? 1.0 : 0.0;
+  return 0.0;
+}
+
 // DİZGİ SABİTİNİ BİR KEZ AYIR (interning).
 //
 // Eskiden her `AST_STRING_LITERAL` DEĞERLENDİRMESİ yeni bir ObjString

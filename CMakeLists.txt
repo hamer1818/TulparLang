@@ -278,6 +278,14 @@ set(CLI_SOURCES
     src/cli/debug_cmd.hpp
 )
 
+# Yerel eklentiler (K303): `--ext` / TULPAR_EXT_PATH / tulpar.toml [ext]
+# ile bulunan tulpar-ext.json bildirimleri. Yalniz derleyicide; runtime'in
+# eklentiye dair tek parcasi runtime_bindings.cpp'deki tulpar_ext_* ABI'si.
+set(EXT_SOURCES
+    src/ext/extensions.cpp
+    src/ext/extensions.hpp
+)
+
 set(SQLITE_SOURCES
     lib/sqlite3/sqlite3.c
 )
@@ -306,6 +314,7 @@ set(ALL_SOURCES
     ${FMT_SOURCES}
     ${PKG_SOURCES}
     ${CLI_SOURCES}
+    ${EXT_SOURCES}
     ${MAIN_SOURCES}
     ${SQLITE_SOURCES}
 )

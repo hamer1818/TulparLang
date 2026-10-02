@@ -30,6 +30,8 @@
 #include "cli/analyze_cmd.hpp"
 #include "cli/update_cmd.hpp"
 #include "typeinfer/typeinfer_warn.hpp"
+#include "typeinfer/typeinfer.hpp"
+#include "ext/extensions.hpp"
 #include "common/version.hpp"
 #include <ctime>
 #include <set>
@@ -232,6 +234,12 @@ static void print_help() {
                   "leading-comment docstring'leri)",
                   "- Emit a markdown reference from function + global "
                   "leading-comment docstrings"));
+  std::printf("  --ext <dizin>                     %s\n",
+              tulpar::i18n::tr_en(
+                  "- Yerel eklenti yukle (tulpar-ext.json; tekrarlanabilir). "
+                  "Ayrica TULPAR_EXT_PATH ve tulpar.toml [ext] paths",
+                  "- Load a native extension (tulpar-ext.json; repeatable). "
+                  "Also TULPAR_EXT_PATH and tulpar.toml [ext] paths"));
   std::printf("  --no-typecheck                   %s\n",
               tulpar::i18n::tr_en(
                   "- run/build oncesi tip uyarilarini kapat",
@@ -281,6 +289,33 @@ static void print_help() {
                   "More info: https://tulparlang.dev"));
 }
 
+// Yerel eklentileri (K303) yukle: --ext, TULPAR_EXT_PATH, ./tulpar.toml [ext].
+// Yalniz DERLEYEN komutlar cagirir (calistir/build/typecheck/analyze/doc/
+// debug) — `tulpar version` bozuk bir TULPAR_EXT_PATH yuzunden dusmemeli.
+// Verilen bir eklenti bulunamaz/bozuksa ya da bir fonksiyonu yerlesik adini
+// tasiyorsa derleme BASLAMAZ: sessizce atlanan bir eklenti, programin
+// eklenti fonksiyonlarini "bulunamadi" diye yanlis yere baktirirdi.
+static bool ensure_extensions_loaded() {
+  std::string err;
+  if (!tulpar::ext::load_default(err)) {
+    std::fprintf(stderr, "%s%s\n", tulpar::i18n::tr_en("Hata: ", "Error: "), err.c_str());
+    return false;
+  }
+  for (const auto &f : tulpar::ext::functions()) {
+    if (typeinfer_is_builtin_name(f.name.c_str())) {
+      const auto &e = tulpar::ext::extensions()[f.ext_index];
+      std::fprintf(stderr, "%s%s: '%s' %s\n", tulpar::i18n::tr_en("Hata: ", "Error: "),
+                   e.manifest_path.c_str(), f.name.c_str(),
+                   tulpar::i18n::tr_en("yerlesik bir fonksiyonun adi; eklenti onu golgeleyemez "
+                                       "(fonksiyona onek verin)",
+                                       "is a built-in function name; an extension cannot "
+                                       "shadow it (prefix the function)"));
+      return false;
+    }
+  }
+  return true;
+}
+
 int main(int argc, char **argv) {
   // Locale setup
   setlocale(LC_ALL, ".UTF8");
@@ -292,6 +327,12 @@ int main(int argc, char **argv) {
   SetConsoleOutputCP(CP_UTF8);
   SetConsoleCP(CP_UTF8);
 #endif
+
+  // `--ext <dizin>` (K303) her komuttan ONCE ayiklanir: argv'de kalsaydi
+  // her alt komutun bayrak dongusu onu tanimayip "bilinmeyen bayrak" derdi.
+  // Calistirilan betikten sonraki argumanlar programa aittir (dokunulmaz).
+  argc = tulpar::ext::take_cli_args(argc, argv);
+  if (argc < 0) return 2;
 
   // LSP mode short-circuits everything else: it owns stdin/stdout for
   // the JSON-RPC transport and must not be polluted by any startup
@@ -319,12 +360,14 @@ int main(int argc, char **argv) {
   // reports issues. Build/run pipelines do not invoke it yet; surfacing
   // it as a tool so authors and CI can opt in while we shape the rules.
   if (argc >= 2 && std::strcmp(argv[1], "typecheck") == 0) {
+    if (!ensure_extensions_loaded()) return 2;
     return tulpar::typecheck_cmd_main(argc, argv);
   }
 
   // `tulpar analyze <file>` (K157): ayirma raporu (@no_alloc kurali, her
   // fonksiyon) + hizli yol ipuclari (TULPAR_PERF_HINTS) tek komutta.
   if (argc >= 2 && std::strcmp(argv[1], "analyze") == 0) {
+    if (!ensure_extensions_loaded()) return 2;
     return tulpar::analyze_cmd_main(argc, argv);
   }
 
@@ -333,6 +376,7 @@ int main(int argc, char **argv) {
   // file. Same content the LSP `hover` surfaces in the editor —
   // routed through `aot_check_and_index` so the two stay in lockstep.
   if (argc >= 2 && std::strcmp(argv[1], "doc") == 0) {
+    if (!ensure_extensions_loaded()) return 2;
     return tulpar::doc_cmd_main(argc, argv);
   }
 
@@ -370,6 +414,7 @@ int main(int argc, char **argv) {
   // line goes to stderr), so it must dispatch before any banner /
   // REPL output — same constraint `--lsp` carries.
   if (argc >= 2 && std::strcmp(argv[1], "debug") == 0) {
+    if (!ensure_extensions_loaded()) return 2;
     return tulpar::debug_cmd_main(argc, argv);
   }
 
@@ -506,6 +551,8 @@ int main(int argc, char **argv) {
   }
 
 #ifdef TULPAR_AOT_ENABLED
+  // Derleyecek bir sey varsa (build ya da betik) eklentiler simdi yuklenir.
+  if ((build_mode || argc > arg_offset) && !ensure_extensions_loaded()) return 2;
   // Build mode: save native binary (tulpar build file.tpr [output])
   if (web_target && !build_mode) {
     fprintf(stderr, "%s\n",
@@ -720,6 +767,10 @@ int main(int argc, char **argv) {
           // diskte çözülmüyor — onları sürücünün mtime'ı zaten kapsıyor.
           std::set<std::string> seen;
           time_t imp_mtime = newest_local_import_mtime(source, src_arg, seen, 0);
+          // Yerel eklentinin bildirimi, modulleri ve arsivleri de girdidir
+          // (K303): motor arsivi yeniden derlenince eski ikili "guncel" kalmasin.
+          if ((time_t)tulpar::ext::newest_mtime() > imp_mtime)
+            imp_mtime = (time_t)tulpar::ext::newest_mtime();
           if (exe_st.st_mtime >= src_st.st_mtime &&
               exe_st.st_mtime >= imp_mtime &&
               (!driver_ok || exe_st.st_mtime >= drv_st.st_mtime) &&

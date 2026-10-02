@@ -12,6 +12,8 @@
 #include "llvm_values.hpp"
 #include "llvm_array_shape.hpp"   // TLW_* (perf ipucu, K167); asagida da dahil
 #include "../vm/fnref_layout.h"   // AOTFnRef ofsetleri (call() satir ici yolu)
+#include "../vm/obj_layout.h"     // ObjString karakter ofseti (eklenti dizgi argumani)
+#include "../ext/extensions.hpp"  // yerel eklentiler (K303)
 #include <llvm-c/Analysis.h>
 #include <llvm-c/IRReader.h>
 #include <llvm-c/Support.h>   // LLVMParseCommandLineOptions (web SjLj)
@@ -4415,8 +4417,18 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   // stdlib icin `<gomulu:ad>`.
   std::string diag_file = std::string("<gomulu:") + rel_path + ">";
   const char *embedded_code = get_embedded_lib(rel_path);
+  std::string ext_src, ext_path, ext_dir;
+  int ext_idx = -1;
   if (embedded_code) {
     source = strdup(embedded_code);
+  } else if (tulpar::ext::read_module(rel_path, ext_src, ext_path, ext_dir, &ext_idx)) {
+    // Yerel eklentinin modulu (K303): gomulu stdlib'den SONRA, diskteki
+    // dosyalardan ONCE — eklentiyi veren kisi `import "<ad>"`in onu
+    // kastetmesini istiyor. Ic import'lar eklenti dizininden cozulur.
+    source = strdup(ext_src.c_str());
+    diag_file = ext_path;
+    snprintf(resolved_dir, sizeof(resolved_dir), "%s", ext_dir.c_str());
+    tulpar::ext::mark_used(ext_idx);
   } else {
     FILE *f = nullptr;
     char resolved_path[512] = "";
@@ -5694,6 +5706,281 @@ LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// YEREL EKLENTI CAGRISI (K303, 2026-10-02) — bkz. src/ext/extensions.hpp.
+//
+// Bildirimdeki C sembolu DOGRUDAN, bildirilen C tipleriyle cagrilir: arada
+// ne VMValue sarmalayicisi (eski motor koprusunun `aot_eng_*_ptr`'i: her
+// arguman yigina, isaretciyle ayri bir TU'ya, orada etiket sinavi) ne de
+// kutulama var. Tipli ifade (`float x`, `int n`, sabit) ham degerle gecer;
+// yalniz tipi derleme zamaninda belli olmayan (kutulu) arguman burada satir
+// ici cevrilir. Cevrim kurallari eski koprunun calisma zamani kurallariyla
+// AYNI (tm_num / tm_int / tm_str): int<->float donusur, bool 0/1, dizgi
+// disi bir deger dizgi parametresine "" olarak gider, sayi disi bir deger
+// sayi parametresine 0.
+//
+// Float -> tamsayi DOYURARAK (llvm.fptosi.sat): duz fptosi NaN/tasmada
+// poison uretir ve C'ye tanimsiz bir deger gecerdi.
+// ---------------------------------------------------------------------------
+static LLVMTypeRef ext_llvm_type(LLVMBackend *backend, tulpar::ext::CType t) {
+  using tulpar::ext::CType;
+  switch (t) {
+  case CType::I32:
+  case CType::Bool:
+    return backend->int32_type;
+  case CType::I64:
+    return backend->int_type;
+  case CType::F32:
+    return LLVMFloatTypeInContext(backend->context);
+  case CType::F64:
+    return backend->float_type;
+  case CType::Str:
+    return backend->ptr_type;
+  case CType::Void:
+    break;
+  }
+  return LLVMVoidTypeInContext(backend->context);
+}
+
+static LLVMValueRef ext_fptosi_sat(LLVMBackend *backend, LLVMValueRef d) {
+  LLVMTypeRef fty = LLVMFunctionType(backend->int_type, &backend->float_type, 1, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(backend->module, "llvm.fptosi.sat.i64.f64");
+  if (!fn) fn = LLVMAddFunction(backend->module, "llvm.fptosi.sat.i64.f64", fty);
+  return LLVMBuildCall2(backend->builder, fty, fn, &d, 1, "ext.f2i");
+}
+
+// Kutulu deger -> i64 (int/bool: yuk; float: doyurarak kirp; digeri: 0).
+// Dallanmasiz: hicbir kol bellek okumuyor, secilmeyen kolda poison yok.
+static LLVMValueRef ext_boxed_to_i64(LLVMBackend *backend, LLVMValueRef v) {
+  LLVMBuilderRef b = backend->builder;
+  LLVMValueRef tag = LLVMBuildExtractValue(b, v, 0, "ext.tag");
+  LLVMValueRef pay = llvm_extract_vm_val_int(backend, v);
+  LLVMValueRef is_flt = LLVMBuildICmp(b, LLVMIntEQ, tag,
+                                      LLVMConstInt(backend->int32_type, 1, 0), "ext.isflt");
+  LLVMValueRef is_num = LLVMBuildOr(
+      b, LLVMBuildICmp(b, LLVMIntEQ, tag, LLVMConstInt(backend->int32_type, 0, 0), "ext.isint"),
+      LLVMBuildICmp(b, LLVMIntEQ, tag, LLVMConstInt(backend->int32_type, 2, 0), "ext.isbool"),
+      "ext.isnum");
+  LLVMValueRef fi =
+      ext_fptosi_sat(backend, LLVMBuildBitCast(b, pay, backend->float_type, "ext.asdbl"));
+  LLVMValueRef zero = LLVMConstInt(backend->int_type, 0, 0);
+  return LLVMBuildSelect(b, is_flt, fi, LLVMBuildSelect(b, is_num, pay, zero, "ext.i"), "ext.i64");
+}
+
+// Kutulu deger -> double (int/bool: donustur; float: bitler; digeri: 0.0).
+static LLVMValueRef ext_boxed_to_f64(LLVMBackend *backend, LLVMValueRef v) {
+  LLVMBuilderRef b = backend->builder;
+  LLVMValueRef tag = LLVMBuildExtractValue(b, v, 0, "ext.tag");
+  LLVMValueRef pay = llvm_extract_vm_val_int(backend, v);
+  LLVMValueRef is_flt = LLVMBuildICmp(b, LLVMIntEQ, tag,
+                                      LLVMConstInt(backend->int32_type, 1, 0), "ext.isflt");
+  LLVMValueRef is_num = LLVMBuildOr(
+      b, LLVMBuildICmp(b, LLVMIntEQ, tag, LLVMConstInt(backend->int32_type, 0, 0), "ext.isint"),
+      LLVMBuildICmp(b, LLVMIntEQ, tag, LLVMConstInt(backend->int32_type, 2, 0), "ext.isbool"),
+      "ext.isnum");
+  LLVMValueRef as_d = LLVMBuildBitCast(b, pay, backend->float_type, "ext.asdbl");
+  LLVMValueRef from_i = LLVMBuildSIToFP(b, pay, backend->float_type, "ext.i2f");
+  LLVMValueRef zero = LLVMConstReal(backend->float_type, 0.0);
+  return LLVMBuildSelect(b, is_flt, as_d, LLVMBuildSelect(b, is_num, from_i, zero, "ext.d"),
+                         "ext.f64");
+}
+
+static LLVMValueRef ext_empty_cstr(LLVMBackend *backend) {
+  LLVMValueRef g = LLVMGetNamedGlobal(backend->module, "tulpar.ext.empty");
+  if (!g) {
+    LLVMTypeRef aty = LLVMArrayType(LLVMInt8TypeInContext(backend->context), 1);
+    g = LLVMAddGlobal(backend->module, aty, "tulpar.ext.empty");
+    LLVMSetInitializer(g, LLVMConstNull(aty));
+    LLVMSetGlobalConstant(g, 1);
+    LLVMSetLinkage(g, LLVMPrivateLinkage);
+    LLVMSetUnnamedAddress(g, LLVMGlobalUnnamedAddr);
+  }
+  return g;
+}
+
+// Kutulu deger -> `const char *`. Dizgiyse karakterleri NESNENIN ICINDE
+// (vm.hpp ObjString: baslik + esnek dizi; ofset obj_layout.h'de, runtime
+// static_assert ile kilitli) — kopya yok, isaretci cagri suresince gecerli.
+// Dizgi degilse "". Nesne basligi ancak etiket OBJ iken okunur (dallanma).
+static LLVMValueRef ext_boxed_to_cstr(LLVMBackend *backend, LLVMValueRef v) {
+  LLVMBuilderRef b = backend->builder;
+  LLVMValueRef empty = ext_empty_cstr(backend);
+  LLVMValueRef tag = LLVMBuildExtractValue(b, v, 0, "ext.tag");
+  LLVMValueRef is_obj = LLVMBuildICmp(b, LLVMIntEQ, tag,
+                                      LLVMConstInt(backend->int32_type, 4, 0), "ext.isobj");
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(b));
+  LLVMBasicBlockRef bb_from = LLVMGetInsertBlock(b);
+  LLVMBasicBlockRef bb_obj = LLVMAppendBasicBlockInContext(backend->context, fn, "ext.str.obj");
+  LLVMBasicBlockRef bb_done = LLVMAppendBasicBlockInContext(backend->context, fn, "ext.str.done");
+  LLVMBuildCondBr(b, is_obj, bb_obj, bb_done);
+  LLVMPositionBuilderAtEnd(b, bb_obj);
+  LLVMTypeRef i8 = LLVMInt8TypeInContext(backend->context);
+  LLVMValueRef p = llvm_extract_vm_val_ptr(backend, v);
+  LLVMValueRef ot = LLVMBuildLoad2(b, i8, p, "ext.objtype");
+  LLVMValueRef is_str =
+      LLVMBuildICmp(b, LLVMIntEQ, ot, LLVMConstInt(i8, /*OBJ_STRING=*/0, 0), "ext.isstr");
+  LLVMValueRef off = LLVMConstInt(backend->int_type, TULPAR_OBJSTRING_CHARS_OFFSET, 0);
+  LLVMValueRef chars = LLVMBuildGEP2(b, i8, p, &off, 1, "ext.chars");
+  LLVMValueRef sel = LLVMBuildSelect(b, is_str, chars, empty, "ext.cstr.sel");
+  LLVMBasicBlockRef bb_obj_end = LLVMGetInsertBlock(b);
+  LLVMBuildBr(b, bb_done);
+  LLVMPositionBuilderAtEnd(b, bb_done);
+  LLVMValueRef phi = LLVMBuildPhi(b, backend->ptr_type, "ext.cstr");
+  LLVMValueRef inc[] = {empty, sel};
+  LLVMBasicBlockRef inb[] = {bb_from, bb_obj_end};
+  LLVMAddIncoming(phi, inc, inb, 2);
+  return phi;
+}
+
+// Tek arguman: tipli yol once; tipi belirsizse kutulu cevrim.
+static LLVMValueRef ext_arg_value(LLVMBackend *backend, ASTNode_C *arg,
+                                  tulpar::ext::CType t) {
+  using tulpar::ext::CType;
+  LLVMBuilderRef b = backend->builder;
+  if (!arg) {
+    if (t == CType::Str) return ext_empty_cstr(backend);
+    return LLVMConstNull(ext_llvm_type(backend, t));
+  }
+  TypedValue tv = codegen_typed_expr(backend, arg);
+  const bool raw_int = (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) && tv.value &&
+                       LLVMTypeOf(tv.value) == backend->int_type;
+  const bool raw_flt = tv.type == INFERRED_FLOAT && tv.value &&
+                       LLVMTypeOf(tv.value) == backend->float_type;
+  switch (t) {
+  case CType::I32:
+  case CType::I64:
+  case CType::Bool: {
+    LLVMValueRef i = raw_int   ? tv.value
+                     : raw_flt ? ext_fptosi_sat(backend, tv.value)
+                               : ext_boxed_to_i64(backend, box_typed_value(backend, tv));
+    if (t == CType::I64) return i;
+    if (t == CType::Bool)
+      return LLVMBuildZExt(
+          b, LLVMBuildICmp(b, LLVMIntNE, i, LLVMConstInt(backend->int_type, 0, 0), "ext.b"),
+          backend->int32_type, "ext.bool");
+    return LLVMBuildTrunc(b, i, backend->int32_type, "ext.i32");
+  }
+  case CType::F32:
+  case CType::F64: {
+    LLVMValueRef d = raw_flt   ? tv.value
+                     : raw_int ? LLVMBuildSIToFP(b, tv.value, backend->float_type, "ext.i2f")
+                               : ext_boxed_to_f64(backend, box_typed_value(backend, tv));
+    if (t == CType::F64) return d;
+    return LLVMBuildFPTrunc(b, d, LLVMFloatTypeInContext(backend->context), "ext.f32");
+  }
+  case CType::Str:
+    return ext_boxed_to_cstr(backend, box_typed_value(backend, tv));
+  case CType::Void:
+    break;
+  }
+  return LLVMConstNull(backend->int_type);
+}
+
+// Kullanici ayni adli bir fonksiyon tanimladiysa o kazanir (yerlesikler gibi).
+static const tulpar::ext::Function *ext_call_target(LLVMBackend *backend,
+                                                    ASTNode_C *node) {
+  if (!node || !node->name || tulpar::ext::functions().empty()) return nullptr;
+  const tulpar::ext::Function *f = tulpar::ext::find_function(node->name);
+  if (!f) return nullptr;
+  for (int i = 0; i < backend->function_count; i++)
+    if (backend->functions[i].name && strcmp(backend->functions[i].name, node->name) == 0)
+      return nullptr;
+  return f;
+}
+
+static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
+                                const tulpar::ext::Function *f) {
+  using tulpar::ext::CType;
+  TypedValue result = {nullptr, INFERRED_UNKNOWN, nullptr};
+  LLVMBuilderRef b = backend->builder;
+  const int np = (int)f->params.size();
+  if (node->argument_count > np) {
+    char msg[512];
+    snprintf(msg, sizeof msg,
+             "%s: %d arguman verildi, eklenti bildirimi %d bekliyor / %d arguments given, the "
+             "extension manifest declares %d",
+             f->name.c_str(), node->argument_count, np, node->argument_count, np);
+    char hint[512];
+    snprintf(hint, sizeof hint, "imza: %s", f->signature().c_str());
+    report_codegen_error(backend, node->line, "hata", msg, f->name.c_str(), hint);
+    result.boxed = llvm_vm_val_void(backend);
+    result.value = result.boxed;
+    return result;
+  }
+  tulpar::ext::mark_used(f->ext_index);
+
+  LLVMTypeRef ptys[16];
+  for (int i = 0; i < np; i++) ptys[i] = ext_llvm_type(backend, f->params[i]);
+  LLVMTypeRef fty = LLVMFunctionType(ext_llvm_type(backend, f->ret), ptys, (unsigned)np, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(backend->module, f->symbol.c_str());
+  if (fn && LLVMGlobalGetValueType(fn) != fty) {
+    // Ayni sembol baska bir imzayla zaten var: ya iki eklenti fonksiyonu ayni
+    // C sembolunu farkli tiplerle bildiriyor ya da programin bir fonksiyonu
+    // o adi tasiyor. Ikisi de sessizce yanlis ABI demek.
+    char msg[512];
+    snprintf(msg, sizeof msg,
+             "eklenti sembolu '%s' modulde baska bir imzayla zaten tanimli / extension symbol "
+             "'%s' already exists in the module with a different signature",
+             f->symbol.c_str(), f->symbol.c_str());
+    report_codegen_error(backend, node->line, "hata", msg, f->name.c_str(),
+                         "ayni C sembolunu iki bildirim ya da ayni adli bir Tulpar fonksiyonu "
+                         "kullaniyor olabilir");
+    result.boxed = llvm_vm_val_void(backend);
+    result.value = result.boxed;
+    return result;
+  }
+  if (!fn) fn = LLVMAddFunction(backend->module, f->symbol.c_str(), fty);
+
+  // Argumanlar SOLDAN SAGA ve bir kez uretilir (yan etki sirasi korunur).
+  LLVMValueRef args[16];
+  for (int i = 0; i < np; i++)
+    args[i] = ext_arg_value(backend, i < node->argument_count ? node->arguments[i] : nullptr,
+                            f->params[i]);
+  LLVMValueRef r = LLVMBuildCall2(b, fty, fn, args, (unsigned)np,
+                                  f->ret == CType::Void ? "" : "ext.ret");
+  switch (f->ret) {
+  case CType::Void:
+    result.boxed = llvm_vm_val_void(backend);
+    result.value = result.boxed;
+    break;
+  case CType::I32:
+    result.type = INFERRED_INT;
+    result.value = LLVMBuildSExt(b, r, backend->int_type, "ext.r64");
+    break;
+  case CType::I64:
+    result.type = INFERRED_INT;
+    result.value = r;
+    break;
+  case CType::Bool:
+    result.type = INFERRED_BOOL;
+    result.value = LLVMBuildZExt(
+        b, LLVMBuildICmp(b, LLVMIntNE, r, LLVMConstInt(backend->int32_type, 0, 0), "ext.rb"),
+        backend->int_type, "ext.rbool");
+    break;
+  case CType::F32:
+    result.type = INFERRED_FLOAT;
+    result.value = LLVMBuildFPExt(b, r, backend->float_type, "ext.rf64");
+    break;
+  case CType::F64:
+    result.type = INFERRED_FLOAT;
+    result.value = r;
+    break;
+  case CType::Str: {
+    // Donen dizgi HEMEN kopyalanir: C tarafinin tamponu bir sonraki cagrida
+    // degisebilir (teng_last_error gibi statik tampon). NULL -> "".
+    LLVMTypeRef cty = LLVMFunctionType(backend->ptr_type, &backend->ptr_type, 1, 0);
+    LLVMValueRef cfn = LLVMGetNamedFunction(backend->module, "aot_ext_cstr_to_obj");
+    if (!cfn) cfn = LLVMAddFunction(backend->module, "aot_ext_cstr_to_obj", cty);
+    LLVMValueRef obj = LLVMBuildCall2(b, cty, cfn, &r, 1, "ext.rstr");
+    result.type = INFERRED_STRING;
+    result.boxed = llvm_build_vm_val_obj(backend, obj);
+    result.value = result.boxed;
+    break;
+  }
+  }
+  return result;
+}
+
 // Sekil onbellegi yardimcilari — tanimlari asagida; codegen_typed_expr'in
 // AST_ARRAY_ACCESS dali bunlari daha once kullaniyor.
 static LLVMValueRef emit_shape_elem_load(LLVMBackend *backend,
@@ -6661,6 +6948,10 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     // cop deger (olculdu: 4238593, beklenen 11). Yontem (`q.area()`) de
     // buradan `Rect.area(q)`ya cozulur.
     if (node->receiver) resolve_call_receiver(backend, node);
+    // Yerel eklenti fonksiyonu (K303): C sembolu dogrudan, sonuc HAM tipli
+    // (kutulama yok). Kullanici ayni adi tanimladiysa o kazanir.
+    if (const tulpar::ext::Function *xf = ext_call_target(backend, node))
+      return emit_ext_call(backend, node, xf);
     // `sqrt` (kullanici golgelemediyse): satir ici, sonuc ham double. Kutulu
     // yol (codegen_expression) ayni yardimciyi kullaniyor; kural aot_math_sqrt.
     if (node->name && !node->receiver && strcmp(node->name, "sqrt") == 0 &&
@@ -10082,6 +10373,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         }
       }
     }
+
+    // Yerel eklenti fonksiyonu (K303) — tipli yolla ayni uretim, sonuc
+    // kutulanir. Ad bir yerlesigi golgeleyemez (yukleme aninda reddedilir),
+    // kullanici fonksiyonu ise onu golgeler (ext_call_target).
+    if (*bi_name)
+      if (const tulpar::ext::Function *xf = ext_call_target(backend, node))
+        return box_typed_value(backend, emit_ext_call(backend, node, xf));
 
     // call(f, ...) SATIR ICI HIZLI YOL (2026-10-01). Ilk arguman runtime'in
     // fonksiyon referansi havuzundaysa (aot_fn_ref'in dondurdugu kalici
@@ -15647,6 +15945,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     ImportedModule *imod = import_load_module(backend, node);
     if (!imod || !imod->found) {
       fprintf(stderr, tulpar::i18n::tr_for_en("Error: Could not import file '%s'\n"), rel_path);
+      // Yol gibi gorunmeyen ad (`import "x"`, `.tpr`/`/` yok) bir eklenti
+      // modulu olabilir: nereden verilecegini soyle (K303).
+      if (rel_path && !strchr(rel_path, '/') && !strchr(rel_path, '\\') &&
+          !strstr(rel_path, ".tpr"))
+        fprintf(stderr, "%s\n", tulpar::ext::unresolved_import_hint(rel_path).c_str());
       return nullptr;
     }
     ASTNode_C *module_ast = imod->ast;

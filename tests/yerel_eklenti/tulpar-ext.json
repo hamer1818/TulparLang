@@ -1,0 +1,29 @@
+{
+  "tulpar_ext": 1,
+  "name": "ornek",
+  "version": "1.0.0",
+  "description": "K303 ornek yerel eklentisi — tests/yerel_eklenti.sh",
+  "modules": {
+    "ornek": "ornek.tpr"
+  },
+  "functions": [
+    {"name": "ornek_topla", "params": ["a: i64", "b: i64"], "returns": "i64", "doc": "Iki tamsayiyi toplar."},
+    {"name": "ornek_kare32", "params": ["x: i32"], "returns": "i32", "doc": "32 bit kare."},
+    {"name": "ornek_orta", "params": ["a: f64", "b: f64"], "returns": "f64", "doc": "Iki sayinin ortalamasi."},
+    {"name": "ornek_yarim", "params": ["x: f32"], "returns": "f32", "doc": "Yarisi (float32)."},
+    {"name": "ornek_pozitif_mi", "params": ["x: f64"], "returns": "bool", "doc": "x > 0 mi."},
+    {"name": "ornek_bayrak", "params": ["b: bool"], "returns": "i32", "doc": "Bayrak acik ise 7, degilse 3."},
+    {"name": "ornek_selam", "params": ["ad: str"], "returns": "str", "doc": "Statik tampona selam yazar."},
+    {"name": "ornek_uzunluk", "params": ["s: str"], "returns": "i64", "doc": "Dizginin bayt uzunlugu."},
+    {"name": "ornek_bos", "returns": "str", "doc": "NULL dondurur (Tulpar'da bos dizgi)."},
+    {"name": "ornek_sayac_artir", "doc": "Sayaci bir arttirir."},
+    {"name": "ornek_sayac", "returns": "i64", "doc": "Sayacin degeri."},
+    {"name": "ornek_on", "params": ["a: i64", "b: f64", "c: i64", "d: f64", "e: i32", "f: f64", "g: i64", "h: f64", "i: i32", "j: f64"], "returns": "f64", "doc": "On parametre (yigina tasan karisik ABI)."},
+    {"name": "ornek_geri", "symbol": "ornek_geri_cagir", "params": ["fn: str", "x: f64"], "returns": "f64", "doc": "Tulpar fonksiyonunu adiyla cozup cagirir."}
+  ],
+  "link": {
+    "linux":   {"lib_dirs": ["lib"], "libs": ["ornek"]},
+    "macos":   {"lib_dirs": ["lib"], "libs": ["ornek"]},
+    "windows": {"lib_dirs": ["lib"], "libs": ["ornek"]}
+  }
+}

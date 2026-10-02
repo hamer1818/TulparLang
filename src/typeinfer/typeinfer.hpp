@@ -148,6 +148,10 @@ void typeinfer_register_function(TypeInferContext *ctx, const char *name,
                                   DataType return_type, DataType *param_types, int param_count);
 DataType typeinfer_get_function_return_type(TypeInferContext *ctx, const char *name);
 
+// Ad, typeinfer'in yerlesik katalogunda mi (K303: bir yerel eklenti
+// fonksiyonu yerlesik adini tasiyamaz — yukleme aninda reddedilir).
+bool typeinfer_is_builtin_name(const char *name);
+
 // `tulpar analyze` (K157): bu dosyanin UST DUZEY her fonksiyonu icin
 // `@no_alloc` kuraliyla (ayni gecisli, beyaz listeli denetim) ayirma raporu.
 // `typeinfer_program`dan SONRA cagrilir. Kaynak sirasiyla; neden bos ise

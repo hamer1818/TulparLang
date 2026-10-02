@@ -14,6 +14,7 @@
 #include "../common/localization.hpp"
 #include "../aot/aot_pipeline.hpp"
 #include "builtins.hpp"
+#include "../ext/extensions.hpp"
 #include "document_index.hpp"
 #include "../../runtime/cJSON.h"
 
@@ -248,6 +249,19 @@ void publish_diagnostics(const std::string &uri,
 void check_and_publish(const std::string &uri, DocumentEntry &entry) {
     std::string path = uri_to_path(uri);
     const char *source_filename = path.empty() ? nullptr : path.c_str();
+
+    // Yerel eklentiler (K303): `tulpar --lsp --ext <dizin>`, TULPAR_EXT_PATH
+    // ve belgenin dizininden yukari ilk tulpar.toml'un [ext] paths'i. LSP'nin
+    // anlamli bir calisma dizini yok, o yuzden proje dosyasi belgeden aranir.
+    // Hata sunucuyu durdurmaz (stderr = istemcinin cikti paneli).
+    {
+        std::string dir = ".";
+        const size_t slash = path.find_last_of("/\\");
+        if (slash != std::string::npos) dir = path.substr(0, slash);
+        std::string err;
+        if (!tulpar::ext::load_for_document_dir(dir, err))
+            std::fprintf(stderr, "[tulpar-lsp] %s\n", err.c_str());
+    }
 
     DocumentIndex fresh_index;
     diag_sink_enable();
@@ -679,7 +693,14 @@ cJSON *build_hover_for_builtin(const BuiltinEntry *b) {
         md += "\n\n";
         md += b->doc;
     }
-    md += "\n\n*(builtin)*";
+    if (b->extension) {
+        md += "\n\n*(";
+        md += tulpar::i18n::tr_en("yerel eklenti: ", "native extension: ");
+        md += b->extension;
+        md += ")*";
+    } else {
+        md += "\n\n*(builtin)*";
+    }
     cJSON_AddStringToObject(contents, "value", md.c_str());
     return result;
 }
@@ -810,6 +831,22 @@ void handle_completion(DocumentStore &docs, cJSON *id, cJSON *params) {
             cJSON *doc = cJSON_AddObjectToObject(item, "documentation");
             cJSON_AddStringToObject(doc, "kind", "markdown");
             cJSON_AddStringToObject(doc, "value", table[i].doc);
+        }
+        cJSON_AddItemToArray(items, item);
+    }
+
+    // 2b) Yerel eklenti fonksiyonlari (K303).
+    size_t xn = 0;
+    const BuiltinEntry *xt = extension_entries(&xn);
+    for (size_t i = 0; i < xn; i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "label", xt[i].name);
+        cJSON_AddNumberToObject(item, "kind", 3);  // Function
+        cJSON_AddStringToObject(item, "detail", xt[i].signature);
+        if (xt[i].doc && *xt[i].doc) {
+            cJSON *doc = cJSON_AddObjectToObject(item, "documentation");
+            cJSON_AddStringToObject(doc, "kind", "markdown");
+            cJSON_AddStringToObject(doc, "value", xt[i].doc);
         }
         cJSON_AddItemToArray(items, item);
     }

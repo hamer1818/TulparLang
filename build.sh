@@ -673,6 +673,19 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # YEREL EKLENTI (K303): `--ext` / TULPAR_EXT_PATH / tulpar.toml [ext]
+    # ile bir C kitapligini derleyici yeniden derlenmeden baglama. Ornek
+    # eklenti (tests/yerel_eklenti/) her tip ailesini uctan uca gecirir;
+    # kapi kendi pozitif kontrollerini kosar (eklentisiz import, bozuk sembol,
+    # bozuk imza tipi, ABI kilidi). Tek dis tuketici tulpar-engine — motor
+    # bu yolla baglaniyor, yani burada kirilan sey motoru da kirar.
+    if [ -x tests/yerel_eklenti.sh ]; then
+        if ! bash tests/yerel_eklenti.sh ./tulpar; then
+            echo -e "${RED}yerel eklenti kapisi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # SPLIT TOPLU YOL (2026-10-01): split() parcalari TEK arena ayirmasinda
     # bitisik kurar (parse cekirdegi 200 -> 126 ms). Anlambilim
     # tests/split_toplu.test.tpr'de; bu kapi mekanizmayi (tek ayirma, beklenen
