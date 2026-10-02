@@ -1,6 +1,11 @@
 #include "builtins.hpp"
 
+#include "../ext/extensions.hpp"
+
 #include <cstring>
+#include <deque>
+#include <string>
+#include <vector>
 
 namespace tulpar {
 
@@ -446,10 +451,42 @@ const BuiltinEntry *builtin_table(size_t *out_count) {
     return kBuiltins;
 }
 
+const BuiltinEntry *extension_entries(size_t *out_count) {
+    // Dizgiler deque'de: push_back mevcut ogelerin adresini korur, yani
+    // BuiltinEntry'nin isaretcileri gecerli kalir.
+    static std::deque<std::string> strings;
+    static std::vector<BuiltinEntry> entries;
+    static size_t built_for = (size_t)-1;
+    const auto &fns = tulpar::ext::functions();
+    if (built_for != fns.size()) {
+        entries.clear();
+        strings.clear();
+        for (const auto &f : fns) {
+            strings.push_back(f.name);
+            const char *n = strings.back().c_str();
+            strings.push_back(f.signature());
+            const char *s = strings.back().c_str();
+            strings.push_back(f.doc);
+            const char *d = strings.back().c_str();
+            strings.push_back(tulpar::ext::extensions()[f.ext_index].name);
+            const char *e = strings.back().c_str();
+            entries.push_back(BuiltinEntry{n, s, d, e});
+        }
+        built_for = fns.size();
+    }
+    if (out_count) *out_count = entries.size();
+    return entries.empty() ? nullptr : entries.data();
+}
+
 const BuiltinEntry *builtin_lookup(const char *name) {
     if (!name) return nullptr;
     for (size_t i = 0; i < kBuiltinCount; i++) {
         if (std::strcmp(kBuiltins[i].name, name) == 0) return &kBuiltins[i];
+    }
+    size_t n = 0;
+    const BuiltinEntry *ext = extension_entries(&n);
+    for (size_t i = 0; i < n; i++) {
+        if (std::strcmp(ext[i].name, name) == 0) return &ext[i];
     }
     return nullptr;
 }

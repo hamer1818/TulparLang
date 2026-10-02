@@ -72,7 +72,7 @@ std::string escape_for_toml(const std::string &s) {
 bool manifest_parse(const std::string &source, Manifest &out,
                     std::string &out_err) {
     out = Manifest{};
-    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID, SEC_BUILD };
+    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID, SEC_BUILD, SEC_EXT };
     Section section = SEC_TOP;
 
     std::istringstream in(source);
@@ -97,6 +97,8 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 section = SEC_ANDROID;
             } else if (name == "build") {
                 section = SEC_BUILD;
+            } else if (name == "ext") {
+                section = SEC_EXT;
             } else {
                 out_err = "line " + std::to_string(lineno) +
                           ": unknown section [" + name + "]";
@@ -135,11 +137,22 @@ bool manifest_parse(const std::string &source, Manifest &out,
             return false;
         }
 
-        // `[registry] mirrors = ["a", "b"]` — the one array-valued key.
-        // Single-line array of quoted strings; anything else is an error
-        // (not silently dropped: a mirror list that parses to nothing would
-        // make the fallback look configured while it never runs).
-        if (section == SEC_REGISTRY && key == "mirrors") {
+        // `[registry] mirrors = ["a", "b"]` and `[ext] paths = ["a"]` — the
+        // array-valued keys. Single-line array of quoted strings; anything
+        // else is an error (not silently dropped: a mirror list that parses
+        // to nothing would make the fallback look configured while it never
+        // runs; an extension path list the same).
+        const bool is_mirrors = section == SEC_REGISTRY && key == "mirrors";
+        const bool is_ext_paths = section == SEC_EXT && key == "paths";
+        if (section == SEC_EXT && !is_ext_paths) {
+            out_err = "line " + std::to_string(lineno) +
+                      ": [ext] key '" + key +
+                      "' is not recognised (only 'paths')";
+            return false;
+        }
+        if (is_mirrors || is_ext_paths) {
+            const std::string what = is_mirrors ? "[registry] mirrors" : "[ext] paths";
+            std::vector<std::string> &dest = is_mirrors ? out.registry_mirrors : out.ext_paths;
             std::string arr = val_part;
             size_t hash = std::string::npos;
             // comment after the closing bracket
@@ -148,8 +161,8 @@ bool manifest_parse(const std::string &source, Manifest &out,
             if (hash != std::string::npos) arr = strip(arr.substr(0, hash));
             if (arr.size() < 2 || arr.front() != '[' || arr.back() != ']') {
                 out_err = "line " + std::to_string(lineno) +
-                          ": [registry] mirrors must be an array of strings, "
-                          "e.g. mirrors = [\"https://a\", \"https://b\"]";
+                          ": " + what + " must be an array of strings, "
+                          "e.g. [\"a\", \"b\"]";
                 return false;
             }
             std::string body = strip(arr.substr(1, arr.size() - 2));
@@ -161,16 +174,16 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 size_t consumed = 0;
                 if (body[pos] != '"' || !parse_quoted_string(body, pos, item, consumed)) {
                     out_err = "line " + std::to_string(lineno) +
-                              ": [registry] mirrors: expected a quoted string";
+                              ": " + what + ": expected a quoted string";
                     return false;
                 }
-                if (!item.empty()) out.registry_mirrors.push_back(item);
+                if (!item.empty()) dest.push_back(item);
                 pos = consumed;
                 while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t')) pos++;
                 if (pos < body.size()) {
                     if (body[pos] != ',') {
                         out_err = "line " + std::to_string(lineno) +
-                                  ": [registry] mirrors: expected ',' between strings";
+                                  ": " + what + ": expected ',' between strings";
                         return false;
                     }
                     pos++;
@@ -388,6 +401,16 @@ std::string Manifest::to_toml() const {
         bkv("target", build_target);
         bkv("entry", build_entry);
         bkv("output", build_output);
+    }
+    if (!ext_paths.empty()) {
+        out += "\n[ext]\npaths = [";
+        for (size_t i = 0; i < ext_paths.size(); i++) {
+            if (i) out += ", ";
+            out += "\"";
+            out += escape_for_toml(ext_paths[i]);
+            out += "\"";
+        }
+        out += "]\n";
     }
     return out;
 }

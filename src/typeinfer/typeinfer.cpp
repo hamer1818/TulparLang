@@ -6,6 +6,7 @@
 #include <cstring>
 #include "../common/localization.hpp"
 #include "../embedded_libs.h"
+#include "../ext/extensions.hpp"  // yerel eklenti imzalari + modulleri (K303)
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include <cstdarg>
@@ -2481,6 +2482,12 @@ static bool load_import_source(const std::string &name, std::string &out,
     out_path = "<gomulu:" + name + ">";
     return true;
   }
+  // Yerel eklenti modulu (K303) — AOT ile ayni sira: gomuluden sonra,
+  // diskten once.
+  {
+    std::string dir;
+    if (tulpar::ext::read_module(name.c_str(), out, out_path, dir)) return true;
+  }
   const std::string candidates[] = {
       name,
       name + ".tpr",
@@ -2510,6 +2517,10 @@ static bool parser_import_loader(const std::string &name, const std::string &fro
   if (const char *embedded = get_embedded_lib(name.c_str())) {
     out_src = embedded;
     return true;
+  }
+  {
+    std::string path;
+    if (tulpar::ext::read_module(name.c_str(), out_src, path, out_dir)) return true;
   }
   std::vector<std::string> candidates;
   if (!from_dir.empty()) candidates.push_back(from_dir + "/" + name + ".tpr");
@@ -3147,6 +3158,53 @@ std::vector<TypeinferAllocRow> typeinfer_alloc_report(TypeInferContext *ctx,
   return rows;
 }
 
+// Bildirim tipi -> typeinfer tipi. `bool` parametresi C'de int: Tulpar'da
+// hem bool hem int kabul eder (TYPE_INT + bool->int cagri kurali); float
+// parametre int kabul eder (types_compatible int<->float). Dizgi parametresine
+// sayi, sayiya dizgi gecmek ise yakalanir.
+static DataType ext_param_type(tulpar::ext::CType t) {
+  using tulpar::ext::CType;
+  switch (t) {
+  case CType::I32: case CType::I64: case CType::Bool: return TYPE_INT;
+  case CType::F32: case CType::F64: return TYPE_FLOAT;
+  case CType::Str: return TYPE_STRING;
+  case CType::Void: break;
+  }
+  return TYPE_UNKNOWN;
+}
+static DataType ext_return_type(tulpar::ext::CType t) {
+  using tulpar::ext::CType;
+  switch (t) {
+  case CType::Void: return TYPE_VOID;
+  case CType::I32: case CType::I64: return TYPE_INT;
+  case CType::F32: case CType::F64: return TYPE_FLOAT;
+  case CType::Bool: return TYPE_BOOL;
+  case CType::Str: return TYPE_STRING;
+  }
+  return TYPE_UNKNOWN;
+}
+static void register_extension_signatures(TypeInferContext *ctx) {
+  for (const auto &f : tulpar::ext::functions()) {
+    std::vector<DataType> ps;
+    for (auto t : f.params) ps.push_back(ext_param_type(t));
+    typeinfer_register_function(ctx, f.name.c_str(), ext_return_type(f.ret),
+                                ps.empty() ? nullptr : ps.data(), (int)ps.size());
+    if (f.ret == tulpar::ext::CType::Void) void_builtin_names().insert(f.name);
+  }
+}
+
+bool typeinfer_is_builtin_name(const char *name) {
+  static const std::set<std::string> names = [] {
+    TypeInferContext *c = typeinfer_create();
+    register_builtin_signatures(c);
+    std::set<std::string> out;
+    for (const auto &kv : c->functions) out.insert(kv.first);
+    typeinfer_destroy(c);
+    return out;
+  }();
+  return name && names.count(name) > 0;
+}
+
 void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   const auto *prog = as_node<Program>(program);
   if (!prog) {
@@ -3164,6 +3222,12 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   // "yerlesik adlari"nin tam listesi.
   std::set<std::string> builtin_names;
   for (const auto &kv : ctx->functions) builtin_names.insert(kv.first);
+
+  // Yerel eklenti fonksiyonlari (K303): yerlesiklerden SONRA, kullanici
+  // tanimlarindan ONCE — yani programin ayni adli fonksiyonu onu golgeler
+  // (kodgenle ayni kural). Yerlesik adini tasiyan eklenti fonksiyonu yukleme
+  // aninda reddediliyor (typeinfer_is_builtin_name), burada catisma yok.
+  register_extension_signatures(ctx);
 
   for (const auto &stmt : prog->statements) {
     if (const auto *func = as_node<FunctionDecl>(stmt.get())) {

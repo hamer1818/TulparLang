@@ -100,6 +100,11 @@ struct Manifest {
     std::string build_entry;
     std::string build_output;
 
+    // [ext] paths = ["../yapi/tulpar-ext", "/opt/x"] — yerel eklenti dizinleri
+    // (K303). Goreli yollar bu tulpar.toml'un dizinine gore. --ext ve
+    // TULPAR_EXT_PATH'ten SONRA yuklenir (ayni adli eklentide onlar kazanir).
+    std::vector<std::string> ext_paths;
+
     // Round-trip serialise this manifest back to the TOML subset we
     // accept on input. Idempotent — reading a manifest, serialising it,
     // and re-reading produces the same struct.

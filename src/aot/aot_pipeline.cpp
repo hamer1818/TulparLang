@@ -5,6 +5,7 @@
 #include "../common/platform.h"
 #include "../pkg/manifest.hpp"  // [android] bölümü: paket adi/ikon/yon/surum
 #include "../lsp/document_index.hpp"
+#include "../ext/extensions.hpp"   // yerel eklentiler (K303): link bayraklari
 #include "llvm_backend.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -1159,6 +1160,62 @@ static const char *tame_link_flags(int uses_tame) {
 #endif
 }
 
+// Yerel eklentilerin (K303) link bayraklari: yalniz BU derlemede bir
+// fonksiyonu ya da modulu kullanilan eklentiler (tame ile ayni ilke —
+// eklentiyi kullanmayan ikili ona baglanmaz). Sira: tame'den sonra,
+// -ltulpar_runtime'dan ONCE (eklenti arsivi runtime'in tulpar_ext_* ABI'sini
+// cagirabilir; GNU ld soldan saga cozer). Kullanilan bir eklentinin bu hedef
+// icin link bolumu yoksa derleme burada ADIYLA durur.
+static bool ext_link_flags_for(tulpar::ext::Platform target, const char *abi,
+                               std::string &out) {
+  std::string err;
+  if (!tulpar::ext::link_flags(target, abi, out, err)) {
+    fprintf(stderr, "[AOT] %s: %s\n", tulpar::i18n::tr_en("Hata", "Error"), err.c_str());
+    return false;
+  }
+  return true;
+}
+
+// Eklenti kullanan bir link dustuyse: linker ciktisindaki tanimsiz sembol
+// eklentinin bildirimi ile arsivleri arasindaki uyusmazligin adidir.
+static void ext_link_failure_hint(const char *log_path) {
+  if (!tulpar::ext::any_used()) return;
+  if (log_path) {
+    if (FILE *f = fopen(log_path, "rb")) {
+      char line[1024];
+      int shown = 0;
+      while (fgets(line, sizeof line, f) && shown < 40) {
+        fputs(line, stderr);
+        shown++;
+      }
+      fclose(f);
+    }
+  }
+  std::string names;
+  for (const auto &e : tulpar::ext::extensions())
+    if (e.used) names += (names.empty() ? "" : ", ") + e.name + " (" + e.manifest_path + ")";
+  fprintf(stderr, "[AOT] %s%s\n",
+          tulpar::i18n::tr_en("Yerel eklenti kullanildi: ", "Native extension used: "),
+          names.c_str());
+  fprintf(stderr, "%s\n",
+          tulpar::i18n::tr_en(
+              "[AOT] 'undefined reference/symbol' satirindaki ad bildirimde (\"symbol\") var "
+              "ama eklentinin arsivlerinde yok: bildirim ile arsiv uyusmuyor ya da "
+              "link.<platform>.libs eksik.",
+              "[AOT] The name on the 'undefined reference/symbol' line is declared in the "
+              "manifest (\"symbol\") but missing from the extension's archives: the manifest "
+              "and the archives disagree, or link.<platform>.libs is incomplete."));
+}
+
+// Android linki icin eklenti bayraklari ({abi} yer tutucusu dolar). Hata
+// basildiysa "" yerine bir isaret donmez — cagiran ext_link_flags_for ile
+// once sinadi (asagida, ABI dongusunden once).
+static std::string android_ext_flags(const char *abi) {
+  std::string out, err;
+  if (!tulpar::ext::link_flags(tulpar::ext::Platform::Android, abi, out, err)) return "";
+  return out + " ";
+}
+
 
 // Parse source code to AST. Caller-provided `source_filename` is
 // optional and only used by parse-time diagnostics for the file path
@@ -1299,6 +1356,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   backend->source_text = source;
   backend->source_filename = source_filename;
   backend->emit_debug_info = emit_debug_info;
+  tulpar::ext::reset_used();
   // Web hedefi declare_runtime_functions'tan ÖNCE set edilmeli — VMValue
   // çağrı tiplerinin şekli (sret+byval vs SysV) buna bağlı.
   backend->target_web = g_target_web;
@@ -1398,6 +1456,20 @@ AOTResult aot_compile_with_filename_debug(const char *source,
 
   // Android hedefi: iki ABI için obje + NDK linki + APK staging, sonra çık.
   if (g_target_android) {
+    // Kullanilan bir eklentinin Android link bolumu yoksa NDK'ya bile
+    // gitmeden ADIYLA dur (K303).
+    {
+      std::string probe;
+      if (!ext_link_flags_for(tulpar::ext::Platform::Android, "arm64-v8a", probe)) {
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+    }
+    // Eklenti kullanan ve tame kullanmayan program (kendi NativeActivity
+    // kabugunu getiren bir eklenti, ornegin bir oyun motoru) tame arsivlerine
+    // ve GLES'e baglanmaz; geri kalan her Android programi eskisi gibi.
+    const bool android_tame = backend->uses_tame || !tulpar::ext::any_used();
     // Arşiv tazeliği NDK aramasından ÖNCE. Sıra önemli: NDK'sız bir makinede
     // sürücü "NDK gerekir" deyip çıkıyordu, yani bayat arşiv uyarısı o yola
     // hiç varmıyordu — üstelik bayatlığı en kolay gözden kaçacağı makine tam
@@ -1474,9 +1546,10 @@ AOTResult aot_compile_with_filename_debug(const char *source,
                         " -Wl,--no-undefined" +
                         " -Wl,-z,max-page-size=16384" + " -o \"" + libdir +
                         "/libtulpargame.so\" \"" + obj + "\" " +
-                        build_android_link_search_dirs(a.abi) +
-                        "-ltulpar_tame_android -ltulpar_runtime_android "
-                        "-landroid -llog -lEGL -lGLESv2 -lOpenSLES -lm -ldl" +
+                        build_android_link_search_dirs(a.abi) + android_ext_flags(a.abi) +
+                        (android_tame ? "-ltulpar_tame_android " : "") +
+                        "-ltulpar_runtime_android -landroid -llog " +
+                        (android_tame ? "-lEGL -lGLESv2 " : "") + "-lOpenSLES -lm -ldl" +
                         extra + " 2>&1";
       {
         std::string dist = std::string("android/dist/") + a.abi;
@@ -1714,7 +1787,18 @@ AOTResult aot_compile_with_filename_debug(const char *source,
                                ? (emit_debug_info ? "-g -fsanitize=address "
                                                   : "-fsanitize=address ")
                                : (emit_debug_info ? "-g " : "");
-  char link_cmd[2048];
+  // 8 KB: eklenti bayraklari (mutlak -L dizinleri + arsiv listesi) eklenince
+  // 2 KB'a yaklasiyordu ve snprintf SESSIZCE keserdi — kesik bir link satiri
+  // "kitaplik bulunamadi" diye yanlis yere baktirirdi.
+  char link_cmd[8192];
+  std::string ext_flags;
+  if (!ext_link_flags_for(g_target_web ? tulpar::ext::Platform::Web
+                                       : tulpar::ext::host_platform(),
+                          nullptr, ext_flags)) {
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_ERROR_LINK;
+  }
   if (g_target_web) {
     // Web hedefi: em++ (Emscripten) linkler → <out>.html + .js + .wasm.
     // - USE_GLFW=3: raylib PLATFORM_WEB, Emscripten'in GLFW JS
@@ -1751,16 +1835,16 @@ AOTResult aot_compile_with_filename_debug(const char *source,
         "-sASYNCIFY_STACK_SIZE=131072 "
         "-sALLOW_MEMORY_GROWTH -sSTACK_SIZE=2097152 "
         "-sEXPORTED_RUNTIME_METHODS=HEAPF32 "
-        "%s-ltulpar_tame_web -ltulpar_runtime_web%s%s 2>&1",
-        obj_filename, exe_filename, web_dirs.c_str(), preload.c_str(),
+        "%s%s -ltulpar_tame_web -ltulpar_runtime_web%s%s 2>&1",
+        obj_filename, exe_filename, web_dirs.c_str(), ext_flags.c_str(), preload.c_str(),
         extra_flags.c_str());
   } else {
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "%s %s%s -o %s%s %s %s%s%s%s 2>&1",
+      "%s %s%s -o %s%s %s %s%s%s%s%s 2>&1",
       aot_link_driver(), debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, search_dirs.c_str(),
-      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
+      tame_link_flags(backend->uses_tame), ext_flags.c_str(), " " AOT_LINK_LIB_FLAGS,
       extra_flags.c_str());
   }
 
@@ -1773,6 +1857,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     fprintf(stderr, tulpar::i18n::tr_for_en(
             "[AOT] Error: Linking failed (code %d). Check clang installation and libraries.\n"),
             link_result);
+    ext_link_failure_hint(nullptr);  // linker ciktisi zaten yukarida
     if (g_target_web) {
       fprintf(stderr, "%s\n",
               tulpar::i18n::tr_en(
@@ -1841,6 +1926,7 @@ static AOTResult aot_compile_silent(const char *source,
   backend->quiet = 1; // Suppress [AOT] messages
   backend->source_text = source;
   backend->source_filename = source_filename;
+  tulpar::ext::reset_used();
 
   llvm_backend_compile(backend, ast);
   if (backend->had_error) {
@@ -1864,26 +1950,35 @@ static AOTResult aot_compile_silent(const char *source,
   // Link silently (suppress output)
   std::string silent_search_dirs = build_link_search_dirs();
   std::string silent_extra_flags = aot_extra_link_flags();
-  char link_cmd[2048];
+  std::string silent_ext_flags;
+  if (!ext_link_flags_for(tulpar::ext::host_platform(), nullptr, silent_ext_flags)) {
+    remove(obj_filename);
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_ERROR_LINK;
+  }
+  // Eklenti kullaniliyorsa linker ciktisi SESSIZCE atilmaz, bir dosyaya
+  // yazilir: dusen bir eklenti linkinde tanimsiz sembolun ADI tek tanidir
+  // ("AOT derleme/baglama basarisiz" tek basina nereye bakilacagini soylemez).
+  const bool ext_used = tulpar::ext::any_used();
+  std::string link_log = std::string(output_name) + ".link.log";
 #if PLATFORM_WINDOWS
-  snprintf(
-      link_cmd, sizeof(link_cmd),
-      "%s %s -o %s%s %s %s%s%s%s 2>NUL",
-      aot_link_driver(), obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
-      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
-      silent_extra_flags.c_str());
+  std::string redirect = ext_used ? (" >\"" + link_log + "\" 2>&1") : std::string(" 2>NUL");
 #else
+  std::string redirect = ext_used ? (" >\"" + link_log + "\" 2>&1") : std::string(" 2>/dev/null");
+#endif
+  char link_cmd[8192];
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "%s %s -o %s%s %s %s%s%s%s 2>/dev/null",
+      "%s %s -o %s%s %s %s%s%s%s%s%s",
       aot_link_driver(), obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
-      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
-      silent_extra_flags.c_str());
-#endif
+      tame_link_flags(backend->uses_tame), silent_ext_flags.c_str(), " " AOT_LINK_LIB_FLAGS,
+      silent_extra_flags.c_str(), redirect.c_str());
 
   int link_result = system(link_cmd);
+  if (link_result != 0 && ext_used) ext_link_failure_hint(link_log.c_str());
+  if (ext_used) remove(link_log.c_str());
 
   // Cleanup object file
   remove(obj_filename);
