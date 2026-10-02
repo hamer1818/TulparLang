@@ -16,7 +16,9 @@
 #   * bildirimde bir parametre tipi bozulunca -> typecheck yakalar
 #   * ornek_eklenti.c'nin ABI kilidi bozulunca -> C derlemesi duser
 #   * bozuk JSON / olmayan dizin / yerlesik ad / eksik link bolumu -> adiyla hata
-# Ayrica: eklentiyi kullanmayan program ona BAGLANMAZ; ayni adli eklentide
+# Ayrica: calisan program eklenti dizinini TULPAR_EXT_PATH'te gorur (uc
+# kanaldan da; build ikilisi yalniz kullanici ortamindan);
+# eklentiyi kullanmayan program ona BAGLANMAZ; ayni adli eklentide
 # --ext, TULPAR_EXT_PATH'i ezer; kullanici fonksiyonu eklentiyi golgeler;
 # LSP (python3 varsa) hover/tamamlama/imza yardiminda eklentiyi gorur.
 #
@@ -116,6 +118,43 @@ printf '{"tulpar_ext":1,"name":"bos_eklenti","functions":[{"name":"bos_f","retur
 printf 'print("sade " + toString(1 + 1));\n' > "$TMP/sade.tpr"
 out=$(cd "$TMP" && "$TUL" --ext kullanilmayan sade.tpr 2>&1 | tail -1)
 [ "$out" = "sade 2" ] && gecti "eklentiyi kullanmayan program ona baglanmaz" || dustu "kullanilmayan eklenti linke girdi: '$out'"
+
+# 8) Calisan program eklenti dizinini TULPAR_EXT_PATH'te gorur — yol hangi
+#    kanaldan verilirse verilsin (--ext / ortam / tulpar.toml). Eklentiler
+#    kaynaklarini (motor koprusunun HUD fontu gibi) boyle bulur. v3.38.0'a
+#    kadar yalniz ortam kanali gorunuyordu: --ext ve toml kollari KIRMIZIydi.
+printf 'print("yol=" + ornek_ext_yolu());\n' > "$TMP/yol.tpr"
+cp "$TMP/yol.tpr" "$TMP/proje/yol.tpr"
+kur "$TMP/ikinci" 2>/dev/null
+yol_gorur() {  # yol_gorur <ad> <cikti> <rc> <desen>
+  if [ "$3" -eq 0 ] && grep -Eq "$4" "$2"; then gecti "$1"
+  else dustu "$1 (rc=$3)"; tail -3 "$2" | sed 's/^/         /'; fi
+}
+# Girdi `.../ext` ile biter, ardindan ayirici (POSIX ':' / Windows ';') ya da son.
+EXT_DESEN='^yol=.*[/\\]ext([;:]|$)'
+(cd "$TMP" && "$TUL" --ext ext yol.tpr) >"$TMP/y1" 2>&1; rc=$?
+yol_gorur "--ext: calisan program dizini TULPAR_EXT_PATH'te gorur" "$TMP/y1" $rc "$EXT_DESEN"
+(cd "$TMP" && TULPAR_EXT_PATH="$TMP/ext" "$TUL" yol.tpr) >"$TMP/y2" 2>&1; rc=$?
+yol_gorur "TULPAR_EXT_PATH: calisan program dizini gorur" "$TMP/y2" $rc "$EXT_DESEN"
+(cd "$TMP/proje" && "$TUL" yol.tpr) >"$TMP/y3" 2>&1; rc=$?
+yol_gorur "tulpar.toml [ext]: calisan program dizini (mutlak) gorur" "$TMP/y3" $rc "$EXT_DESEN"
+# Mevcut deger KORUNUR ve --ext onun ONUNE gelir (yukleme onceligiyle ayni sira).
+(cd "$TMP" && TULPAR_EXT_PATH="$TMP/ikinci" "$TUL" --ext ext yol.tpr) >"$TMP/y4" 2>&1; rc=$?
+yol_gorur "--ext + ortam: --ext once, mevcut TULPAR_EXT_PATH korunur" "$TMP/y4" $rc \
+  '^yol=.*[/\\]ext[;:].*[/\\]ikinci([;:]|$)'
+# `tulpar build` ikilisi derleyicisiz kosar: TULPAR_EXT_PATH'i yalniz kullanicinin
+# ortamindan gorur (belgelenen anlam — Eklentiler.md "Calisma aninda eklenti dizini").
+(cd "$TMP" && "$TUL" build --ext ext yol.tpr yol_ikili) >"$TMP/y5b" 2>&1; rc=$?
+if [ $rc -eq 0 ]; then
+  out=$(cd "$TMP" && ./yol_ikili 2>&1 | tr -d '\r' | tail -1)
+  [ "$out" = "yol=" ] && gecti "build ikilisi: TULPAR_EXT_PATH yalniz kullanici ortamindan (bos)" \
+    || dustu "build ikilisi ortamsiz '$out' basti (beklenen 'yol=')"
+  out=$(cd "$TMP" && TULPAR_EXT_PATH="$TMP/ext" ./yol_ikili 2>&1 | tr -d '\r' | tail -1)
+  case "$out" in yol=*ext) gecti "build ikilisi: kullanicinin TULPAR_EXT_PATH'ini gorur" ;;
+    *) dustu "build ikilisi kullanici ortamini gormedi: '$out'" ;; esac
+else
+  dustu "build --ext yol.tpr basarisiz (rc=$rc)"; tail -6 "$TMP/y5b" | sed 's/^/         /'
+fi
 
 # --- POZITIF KONTROLLER ---------------------------------------------------------
 # P1) Eklenti verilmeden import -> hata + ipucu, cikis != 0

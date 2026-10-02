@@ -13,6 +13,40 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — macOS yayın ikilisi Homebrew'suz açılmıyordu
+
+- Yayınlanmış v3.38.0 `tulpar-macos-universal` dört Homebrew dylib'ine dinamik
+  bağlıydı (ölçüldü 2026-10-02, `otool -L`): `llvm@18/lib/libunwind.1.dylib`,
+  `zstd/lib/libzstd.1.dylib`, `openssl@3/lib/libssl.3.dylib` +
+  `libcrypto.3.dylib`. Biri eksik makinede dyld açılışta abort ediyordu
+  (motor CI'ı `brew install llvm@18` ile örtmüştü). Artık macOS'ta OpenSSL
+  statik bağlanıyor, LLVM bileşenlerinin link zincirindeki sistem dışı
+  dylib'ler statik ikizine çevriliyor ve libunwind düşüyor (libSystem
+  sağlıyor) — `cmake/MacOSTasinabilir.cmake`; kapatma
+  `-DTULPAR_MACOS_TASINABILIR=OFF`.
+- Kapı: `tools/dinamik_bag_denetle.sh` (Linux + macOS CI). macOS'ta `otool -L`
+  yalnız `/usr/lib` + `/System`, `DYLD_PRINT_LIBRARIES` ile gerçekten
+  yüklenenlerde Homebrew yok, Homebrew LLVM gizliyken `--version` + AOT dumanı.
+  Linux'ta `NEEDED` listesi v3.38.0'da ölçülen sistem kümesine kilitli. Pozitif
+  kontrol: geçici dizindeki kitaplığa bağlı program kırmızı; v3.38.0 macOS
+  ikilisi kapıda kırmızı (dört satır).
+- Kalan: macOS'ta derlenen **kullanıcı programları** runtime'ın TLS kodu için
+  hâlâ Homebrew openssl@3'e linkleniyor.
+
+### Düzeltildi — `--ext` / `tulpar.toml` ile verilen eklenti dizini çalışan programa görünmüyordu
+
+- `tulpar --ext <dizin> oyun.tpr` derleme için eklentiyi buluyor ama çalışan
+  program `TULPAR_EXT_PATH`'te o dizini görmüyordu; kaynaklarını oradan arayan
+  eklenti (motor köprüsünün HUD fontu) bulamıyordu (v3.38.0'da ölçüldü). Yalnız
+  ortamla verilen yol görünüyordu. Artık `tulpar <dosya>` ve `tulpar debug`
+  programı başlatmadan çözülmüş yolları çocuk sürecin `TULPAR_EXT_PATH`'ine
+  yazıyor: `--ext` girdileri, mevcut değer (aynen), `tulpar.toml [ext]`
+  girdileri; mutlak, tekrarsız, platform ayırıcısıyla. `tulpar build` ikilisi
+  yalnız kullanıcının ortamını görür (belgelendi: docs/mindmap/Eklentiler.md).
+- Kapı `tests/yerel_eklenti.sh`: örnek eklentiye `ornek_ext_yolu()` (C
+  `getenv`) eklendi; üç kanal, sıra/koruma ve build ikilisi sınanıyor.
+  Pozitif kontrol: eski sürücüyle `--ext`, toml ve sıra ayakları kırmızı.
+
 ### Düzeltildi — `for` başlığında bileşik artım (`i += 3`, `j -= 4`, `k <<= 1`) ayrıştırma hatasıydı
 
 - Deyim olarak geçerli olan `i += 3;` `for (...; ...; i += 3)` başlığında
