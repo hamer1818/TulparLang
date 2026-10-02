@@ -2625,10 +2625,11 @@ struct ObjIndex {
   uint8_t heap;     // 1: malloc, 0: arena
   struct Slot {
     uint32_t hash;
-    int32_t pos;    // -1: bos
+    int32_t pos1;   // konum + 1; 0: bos (sifirli bellek = bos tablo, calloc)
   } slots[1];
 };
 static const int kObjIndexMin = 16;
+static const int32_t kObjIndexBig = 1 << 20; // yuva (8 MB): ustunde x2 buyume
 
 static inline uint32_t obj_key_hash(const char *s) {
   uint32_t h = 2166136261u;
@@ -2647,65 +2648,163 @@ static ObjIndex *obj_index_alloc(ObjObject *o, int32_t cap) {
   size_t bytes = sizeof(ObjIndex) + sizeof(ObjIndex::Slot) * (size_t)(cap - 1);
   ObjIndex *ix;
   uint8_t heap;
-  if (o->obj.arena_allocated) { ix = (ObjIndex *)aot_arena_alloc(bytes); heap = 0; }
-  else { ix = (ObjIndex *)malloc(bytes); heap = 1; }
+  // Bos yuva = sifir: malloc'lu indeks calloc'tan gelir — buyuk tabloda
+  // isletim sisteminin sifir sayfalari, ayrica bir doldurma gecisi yok (eski
+  // `pos = -1` dongusu buyumede butun tabloyu bir kez daha yaziyordu).
+  if (o->obj.arena_allocated) {
+    ix = (ObjIndex *)aot_arena_alloc(bytes);
+    if (ix) memset(ix, 0, bytes);
+    heap = 0;
+  } else {
+    ix = (ObjIndex *)calloc(1, bytes);
+    heap = 1;
+  }
   if (!ix) return nullptr;
   ix->owner = o;
   ix->cap = cap;
   ix->covered = 0;
   ix->heap = heap;
-  for (int32_t i = 0; i < cap; i++) ix->slots[i].pos = -1;
   return ix;
 }
 
-static void obj_index_insert(ObjIndex *ix, const ObjObject *o, int32_t pos) {
-  ObjString *k = o->keys[pos];
-  if (!k) return;
-  uint32_t h = obj_key_hash(k->chars);
+// Yuvaya (hash, konum) yerlestirir. `h` cagiranin hesapladigi hash (anahtar
+// dizgisine yeniden dokunmamak icin, 2026-10-02).
+static void obj_index_insert_h(ObjIndex *ix, const ObjObject *o, int32_t pos,
+                               uint32_t h) {
+  const char *kc = o->keys[pos]->chars;
   uint32_t m = (uint32_t)ix->cap - 1;
   for (uint32_t i = h & m;; i = (i + 1) & m) {
     ObjIndex::Slot &sl = ix->slots[i];
-    if (sl.pos < 0) { sl.hash = h; sl.pos = pos; return; }
-    if (sl.hash == h && strcmp(o->keys[sl.pos]->chars, k->chars) == 0) return; // ilki kalir
+    if (sl.pos1 == 0) { sl.hash = h; sl.pos1 = pos + 1; return; }
+    if (sl.hash == h && strcmp(o->keys[sl.pos1 - 1]->chars, kc) == 0) return; // ilki kalir
   }
 }
 
 // YAZMA yolu: nesneye anahtar eklendikten sonra cagrilir. Esigin altinda bir
 // sey yapmaz; esik asilinca indeksi kurar, sonra yeni eklenenleri isler.
-static void obj_index_note(ObjObject *o) {
+// `last_h`: son eklenen anahtarin (konum count-1) hash'i biliniyorsa
+// (`has_last`) yeniden hesaplanmaz.
+//
+// BUYUME (2026-10-02). Eskiden her buyume (a) kapasiteyi anahtar sayisinin
+// DORT katina cikariyordu — 1M anahtarda 4M yuva = 32 MB, doluluk 0,24 — ve
+// (b) butun anahtarlari BASTAN hash'liyordu: her anahtar icin keys[p] ->
+// ObjString -> chars isaretci kovalamasi + FNV. Simdi:
+//   * kapasite = anahtarin en az 2 kati (doluluk <= 0,5; C kiyasindaki
+//     tabloyla ayni). Kucuk tabloda (kObjIndexBig = 1M yuva = 8 MB altinda)
+//     eskisi gibi 4 kat: orada bellek onemsiz, seyrek buyume onemli —
+//     her buyume taze bellek ister ve 300k anahtarda x2 buyume eklemeyi
+//     %26 YAVASLATTI (olculdu, sayfa hatalari + iki kat yeniden kurma).
+//   * eski indeksin yuvalari (hash'leriyle) yeni tabloya TASINIYOR: anahtar
+//     dizgisine dokunulmuyor, esitlik karsilastirmasi yok (eski indekste her
+//     anahtar zaten tekti, "ilki kalir" kurali korunuyor).
+// 1M anahtarda indeks 32 -> 16 MB. Olcum: docs/mindmap/Performance.md
+// "hashmap ... 2026-10-02". Tani: TULPAR_OBJ_TANI=1 (tests/sozluk_indeksi.sh).
+static std::atomic<int> g_obj_tani{-1};
+static std::atomic<long long> g_obj_tani_buyume{0}, g_obj_tani_tasinan{0},
+    g_obj_tani_hash{0}, g_obj_tani_enbuyuk{0};
+static void obj_tani_bas(void) {
+  std::fprintf(stderr, "obj-tani: buyume=%lld tasinan=%lld yeniden_hash=%lld enbuyuk_yuva=%lld\n",
+               g_obj_tani_buyume.load(), g_obj_tani_tasinan.load(),
+               g_obj_tani_hash.load(), g_obj_tani_enbuyuk.load());
+}
+// Yalniz YENIDEN KURMADA (soguk yol) sorulur; sicak eklemeye maliyeti yok.
+static int obj_tani_acik(void) {
+  int t = g_obj_tani.load(std::memory_order_relaxed);
+  if (UNLIKELY(t < 0)) {
+    const char *e = getenv("TULPAR_OBJ_TANI");
+    t = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+    int beklenen = -1;
+    if (g_obj_tani.compare_exchange_strong(beklenen, t) && t) atexit(obj_tani_bas);
+  }
+  return t;
+}
+// Eski buyume kurali (her boyda x4) — YALNIZ kapinin pozitif kontrolu ve A/B
+// olcumu icin: TULPAR_OBJ_INDEKS_X4=1. Soguk yolda sorulur.
+static int obj_index_x4(void) {
+  static std::atomic<int> x4{-1};
+  int t = x4.load(std::memory_order_relaxed);
+  if (UNLIKELY(t < 0)) {
+    const char *e = getenv("TULPAR_OBJ_INDEKS_X4");
+    t = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+    x4.store(t, std::memory_order_relaxed);
+  }
+  return t;
+}
+static void obj_index_note_h(ObjObject *o, uint32_t last_h, bool has_last) {
   if (!o || o->count < kObjIndexMin) return;
   ObjIndex *ix = o->index;
   bool own = ix && ix->owner == o && ix->covered <= o->count;
   if (!own || (int64_t)o->count * 2 > ix->cap) {
-    int32_t cap = 32;
-    while (cap < o->count * 4) cap <<= 1;
+    int32_t cap = own ? ix->cap : 32;
+    while ((int64_t)cap < (int64_t)o->count * 2) cap <<= 1;
+    if (cap < kObjIndexBig || UNLIKELY(obj_index_x4()))
+      while ((int64_t)cap < (int64_t)o->count * 4) cap <<= 1;
     ObjIndex *nx = obj_index_alloc(o, cap);
     if (!nx) return; // bellek yok: dogrusal taramaya dus (dogru, yavas)
+    long long tasinan = 0;
+    if (own) {
+      uint32_t m = (uint32_t)cap - 1;
+      for (int32_t j = 0; j < ix->cap; j++) {
+        const ObjIndex::Slot &os = ix->slots[j];
+        if (os.pos1 == 0) continue;
+        uint32_t i = os.hash & m;
+        while (nx->slots[i].pos1 != 0) i = (i + 1) & m;
+        nx->slots[i] = os;
+        tasinan++;
+      }
+      nx->covered = ix->covered;
+    }
+    if (UNLIKELY(obj_tani_acik())) {
+      g_obj_tani_buyume.fetch_add(1);
+      g_obj_tani_tasinan.fetch_add(tasinan);
+      long long hs = (long long)(o->count - nx->covered) - (has_last ? 1 : 0);
+      g_obj_tani_hash.fetch_add(hs > 0 ? hs : 0);
+      long long eb = g_obj_tani_enbuyuk.load();
+      while (cap > eb && !g_obj_tani_enbuyuk.compare_exchange_weak(eb, cap)) {
+      }
+    }
     if (o->index && o->index->owner == o) obj_index_release(o);
     o->index = nx;
     ix = nx;
   }
-  for (int32_t p = ix->covered; p < o->count; p++) obj_index_insert(ix, o, p);
+  int32_t last = o->count - 1;
+  for (int32_t p = ix->covered; p < o->count; p++) {
+    ObjString *k = o->keys[p];
+    if (!k) continue;
+    obj_index_insert_h(ix, o, p,
+                       (has_last && p == last) ? last_h : obj_key_hash(k->chars));
+  }
   ix->covered = o->count;
 }
 
-// OKUMA yolu: hicbir sey yazmaz. -1 = yok.
-static int obj_find(const ObjObject *o, const char *key) {
+static void obj_index_note(ObjObject *o) { obj_index_note_h(o, 0, false); }
+
+// OKUMA yolu: hicbir sey yazmaz. -1 = yok. `*h_out` verilirse indeks varken
+// hesaplanan hash oraya yazilir (`*h_ok` = 1) — yazma yolu eklemede onu
+// yeniden kullanir. Ikisi de cagiranin YIGIN degiskeni; nesneye yazilmaz.
+static int obj_find_h(const ObjObject *o, const char *key, uint32_t *h_out,
+                      bool *h_ok) {
   const ObjIndex *ix = o->index;
   int start = 0;
   if (ix && ix->owner == o && ix->covered <= o->count) {
     uint32_t h = obj_key_hash(key);
+    if (h_out) { *h_out = h; *h_ok = true; }
     uint32_t m = (uint32_t)ix->cap - 1;
     for (uint32_t i = h & m;; i = (i + 1) & m) {
       const ObjIndex::Slot &sl = ix->slots[i];
-      if (sl.pos < 0) break;
-      if (sl.hash == h && strcmp(o->keys[sl.pos]->chars, key) == 0) return sl.pos;
+      if (sl.pos1 == 0) break;
+      if (sl.hash == h && strcmp(o->keys[sl.pos1 - 1]->chars, key) == 0)
+        return sl.pos1 - 1;
     }
     start = ix->covered; // indeksin gormedigi kuyruk
   }
   for (int i = start; i < o->count; i++)
     if (o->keys[i] && strcmp(o->keys[i]->chars, key) == 0) return i;
   return -1;
+}
+
+static inline int obj_find(const ObjObject *o, const char *key) {
+  return obj_find_h(o, key, nullptr, nullptr);
 }
 
 // Object Wrappers
@@ -2747,7 +2846,8 @@ static ObjString *obj_key_alloc(ObjObject *obj, const char *key, int len) {
   return p ? p : aot_allocate_string(key, len);
 }
 
-static void obj_append(ObjObject *obj, ObjString *keyObj, VMValue value) {
+static void obj_append(ObjObject *obj, ObjString *keyObj, VMValue value,
+                       uint32_t h = 0, bool has_h = false) {
   if (obj->count >= obj->capacity) {
     int old_capacity = obj->capacity;
     obj->capacity = old_capacity < 8 ? 8 : old_capacity * 2;
@@ -2771,7 +2871,7 @@ static void obj_append(ObjObject *obj, ObjString *keyObj, VMValue value) {
   obj->keys[obj->count] = keyObj;
   obj->values[obj->count] = value;
   obj->count++;
-  obj_index_note(obj);
+  obj_index_note_h(obj, h, has_h);
 }
 
 void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
@@ -2783,7 +2883,9 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   value = wb_persist_escape((Obj *)obj, value);
 
   // Anahtar varsa yalniz deger (16+ anahtarda hash indeksi; bkz. yukarisi).
-  int at = obj_find(obj, key);
+  uint32_t h = 0;
+  bool has_h = false;
+  int at = obj_find_h(obj, key, &h, &has_h);
   if (at >= 0) {
     obj->values[at] = value;
     return;
@@ -2802,7 +2904,7 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   } else {
     keyObj = obj_key_alloc(obj, key, len);
   }
-  obj_append(obj, keyObj, value);
+  obj_append(obj, keyObj, value, h, has_h);
 }
 
 // Dizgi NESNESIYLE yazma (vm_set_element ve codegen'in gecici anahtar yolu).
@@ -2821,18 +2923,21 @@ ObjString *vm_object_set_key(ObjObject *obj, ObjString *key, VMValue value) {
   if (!obj || !key)
     return nullptr;
   value = wb_persist_escape((Obj *)obj, value);
-  int at = obj_find(obj, key->chars);
+  uint32_t h = 0;
+  bool has_h = false;
+  int at = obj_find_h(obj, key->chars, &h, &has_h);
   if (at >= 0) {
     obj->values[at] = value;
     return nullptr;
   }
+  int clen = (int)strlen(key->chars);
   bool shareable = (key->obj.arena_allocated || key->obj.ref_count >= (1 << 28)) &&
-                   (int)strlen(key->chars) == key->length;
+                   clen == key->length;
   ObjString *k = (shareable && (obj_is_transient((Obj *)obj) ||
                                 !value_is_transient((Obj *)key)))
                      ? key
-                     : obj_key_alloc(obj, key->chars, (int)strlen(key->chars));
-  obj_append(obj, k, value);
+                     : obj_key_alloc(obj, key->chars, clen);
+  obj_append(obj, k, value, h, has_h);
   return k;
 }
 

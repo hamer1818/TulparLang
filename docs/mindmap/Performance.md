@@ -1677,6 +1677,90 @@ Kalan (yapılmadı):
 - `toInt` döngüsü 20 ms, büyük ölçüde 240 MB'ı baştan sona okumak.
 
 
+## hashmap: indeks büyük tabloda iki kat, büyümede yuva taşıma — 104 → 89 ms, 88,6 → 72,6 MB (2026-10-02)
+
+Resmî koşum (2026-10-02, main a1d5688f): `hashmap` 106,1 ms / 88 MB, C 64,3 /
+64. Bu makinede `perf` yok ve `ptrace_scope=1` (gdb süreç ekleyemiyor); ölçüm
+`LD_PRELOAD` ile yüklenen `ITIMER_PROF` örnekleyicisiyle (her ~1 ms CPU'da
+RIP, `nm` ile çözüm) ve çekirdeği parçalara bölerek yapıldı (Ryzen 7
+9800X3D, `taskset -c 6,7`, izole dizin, en iyi / 9 tur):
+
+| parça (1M) | taban |
+|---|---:|
+| yalnız anahtar kur (`"k" + toString(i)`, `len`) | 13,9 ms |
+| kur + ekle | 43,6 ms |
+| kur + ekle + ara (tam çekirdek) | 100,5 ms |
+
+Arama eklemeden pahalı. Arama ağırlıklı varyantta (1M ekle + 20M ara)
+örnekler: `obj_find` %65 — bunun 716/1465'i TEK komut, indeks yuvasının
+yüklemesi (`mov 0x18(%rcx,%rax,8)`: 32 MB indekste önbellek ıskası) —,
+libc `strcmp` %21 (157 örnek ilk yüklemede: saklı anahtar dizgisinin ıskası),
+FNV döngüsü ~%7, anahtar kurma (`aot_itoa` + birleştirme) ~%7. Yani süre
+bellek: indeks 4M yuva × 8 B = 32 MB + keys 8 + values 16 + dizgiler 32 = 88 MB
+çalışma kümesi (L3 96 MB).
+
+Kök neden indeksin büyüme kuralı: her büyümede kapasite `>= 4 × anahtar`
+(1M'de 4M yuva, doluluk 0,24) ve her büyümede bütün anahtarlar baştan
+hash'leniyordu (`keys[p]` → `ObjString` → `chars`).
+
+Denenen adımlar (aynı düzenek):
+
+| sürüm | 1M | 1M bellek | 300k | ekleme 300k |
+|---|---:|---:|---:|---:|
+| taban | 103,8 ms | 88,6 MB | 25,3 ms | 13,2 ms |
+| v1: her boyda x2 + yuva taşıma + hash bir kez | 94,8 | 72,9 | 28,2 | 16,3 |
+| v2: v1 + 8 baytlık sözcük hash'i (fmix64) | 106,6 | 72,7 | — | — |
+| v3: v1 + `calloc` (boş yuva = 0) | 96,9 | 72,5 | 28,7 | 16,5 |
+| **v4: v3 + 1M yuvanın altında x4** | **88,9** | **72,6** | **25,5** | **13,1** |
+| C (gcc -O2) | 66,6 | 64,5 | | |
+
+- **v1'in 300k gerilemesi** (+%26 ekleme) yükle ilgili değil: 300k'de iki
+  kural da 1M yuvada bitiyor (benzetim: arama yoklaması ikisinde 1,20). Fark
+  büyüme SAYISI: x2 kuralı iki kat yeniden kurma ve her seferinde taze
+  bellek (sayfa hatası + sıfırlama); örneklemede `obj_index_note` 81 → 149.
+  Küçük tabloda (8 MB altı) x4 korununca kayboldu; büyük tabloda bellek
+  önemli, x2 kaldı.
+- **v2 daha yavaş.** FNV-1a'nın son adımı `(X ^ c) * P`: ortak önekli
+  anahtarlar (`k12340`..`k12349`) birbirine ~403 yuva uzaklıkta, yani
+  sıralı ekleme/arama aynı birkaç sayfada geziyor. İyi karıştıran hash bu
+  yerelliği yok ediyor. C kıyası da FNV-1a kullanıyor; değişmedi.
+- `calloc` tek başına ölçülebilir fark vermedi (v1 → v3); kaldı çünkü büyük
+  tabloda sıfır sayfalarını doldurma geçişini kaldırıyor.
+
+N taraması (taban → v4, en iyi): 100k 8,7 → 9,0 ms (indeks boyu aynı; fark
+yerleşim/gürültü), 300k 25,3 → 25,5, 700k (v1) 61,9 → 65,1 ms ama 75 → 59 MB
+(x2 rejimine yeni girmiş), 1M 103,8 → 88,9, 3M (v1) 613 → 510 ms, 309 → 245
+MB. Arama ağırlıklı varyant: örnek sayısı 1465 → 996 (−%32).
+
+Gerileme denetimi (13 çekirdek, taban 6d0dc633 → v7 [v4 + tanı], dönüşümlü,
+7 tur, en iyi; makine o saatte paralel ölçümlerle paylaşımlıydı, bellek
+yoğun çekirdeklerde mutlak sayılar şişik, oran dönüşümlü koşumdan): intloop
+138,3/138,4 · fib 1,5/1,5 · sieve 8,9/9,0 · strcat 11,0/11,1 · arrayiter
+2,2/2,2 · mandelbrot 162,0/162,1 · matmul 38,5/38,4 · nbody 118,1/118,0 ·
+particles 55,2/55,8 · parse 76,5/76,7 (261,6 MB ikisinde) · **hashmap
+150,9 → 113,5** (88,4 → 72,6 MB). Kullanıcı nesnesi 13'ünde de bayt bayt
+AYNI (`.o` karşılaştırması). İki fark yerleşim: **qsort 71,4 → 73,5** —
+`t_qs.f` makine kodu aynı, yalnız runtime'ın soğuk bölümü büyüdüğü için 32
+bayt kaydı; kaynağa zararsız önek konunca (p2) taban da 73,7 ms, aynı
+adreste (…500) iki derleyici aynı süre: p0 71,5/73,8 · p1 71,3/72,3 · p2
+73,7/71,9 ([[Tuzaklar]] 7i). **callfn 82,6 → 77,0** aynı sebeple
+"kazanç" sayılmıyor.
+
+Kapı `tests/sozluk_indeksi.sh` (build.sh suites): `TULPAR_OBJ_TANI=1`
+büyüme başına taşınan yuva / yeniden hash'lenen anahtar / en büyük indeks
+boyunu basıyor (yalnız yeniden kurmada sayılır — sıcak eklemeye maliyeti
+yok). 1M anahtarda 2 097 152 yuva + yeniden hash 16 (ilk kuruluş) ve 300k'de
+1 048 576 iddia ediliyor; RSS ayağı anahtar başına 72 B (eşik 80, Linux).
+Pozitif kontrol aynı sondayı `TULPAR_OBJ_INDEKS_X4=1` (eski kural) ile
+koşuyor: 4 194 304 yuva, 90 B. Taban derleyicide kırmızı (tanı yok, 90 B);
+`kObjIndexBig = 1 << 30` sabotajında kırmızı (4 194 304, 90 B).
+`tests/gecici_dizgi.sh`'nin ekleme ayağı da (iki tur yazma) 89 → 71 B
+gösteriyor; eşiği (192) bu PR'da sıkılaştırılmadı, kendi kapısı var.
+
+Kalan: aramanın yarısı hâlâ yuva ıskası + anahtar dizgisi ıskası — C ile
+aynı yapı (C de `keys[h]` → dizgi). Anahtar kurma (`aot_itoa` + arena
+birleştirme, ~7 ns) C'nin elle `kfmt`inden pahalı.
+
 ## `ObjString` karakterleri nesnenin içinde — parse 261,7 → 223,4 MB, 76,0 → 72,5 ms (2026-10-02)
 
 #449'un "kalan" listesindeki iki temsil adımı kıyaslandı (parse'ta parça =
