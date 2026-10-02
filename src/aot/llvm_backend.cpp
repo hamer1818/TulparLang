@@ -226,6 +226,19 @@ static void collect_free_variables(ASTNode_C *node,
       free_vars.insert(node->name);
     }
   }
+  // `f(y)` — ad bir CAGRI, tanimlayici degil; ama `f` dis fonksiyonun bir
+  // yereliyse (kapanis tutan `var f = ...`) codegen cagriyi o yerel uzerinden
+  // dolayli yapar (AST_FUNCTION_CALL: get_local_var). Ad burada serbest
+  // sayilmazsa yakalanmiyordu: ic lambdanin kapsam zinciri dis fonksiyonun
+  // kapsamina uzandigi icin get_local_var BASKA bir fonksiyonun alloca'sini
+  // buluyor, okunan cop "kapanis" ya SIGSEGV ya "Hatali parametre sayisi.
+  // Beklenen: <cop>" veriyordu (2026-10-02). Ad yalniz dis fonksiyonda
+  // bildirilmisse yakalanir (NestedVisitor kesisimi), yani ust duzey
+  // fonksiyon / yerlesik adlari etkilenmez.
+  if (node->type == AST_FUNCTION_CALL && node->name && !node->callee && !node->receiver &&
+      declared_inner.find(node->name) == declared_inner.end()) {
+    free_vars.insert(node->name);
+  }
   if (node->type == AST_FUNCTION_DECL || node->type == AST_LAMBDA) {
     for (int i = 0; i < node->param_count; i++) {
       if (node->parameters[i] && node->parameters[i]->name) {

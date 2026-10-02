@@ -2109,6 +2109,26 @@ eleman karşılaştır (`int_golge.test.tpr`'deki `ayni_dizi`); bir eşitlik
 yardımcısı yazınca bir kez bilerek FARKLI iki girdiyle kırmızıya döndüğünü
 gör (Tuzaklar 7a'nın aynısı: testin kendisi yanlışsa güvenle yanlış sonuç).
 
+## 7k. Yakalama analizi yalnız TANIMLAYICIYA bakıyordu — çağrı adı yakalanmadı, kodgen başka fonksiyonun alloca'sını okudu
+
+`func t() { var f = yap(10); var g = (y) => f(y) * 2; print(g(1)); }` →
+SIGSEGV ya da `Hatali parametre sayisi. Beklenen: <çöp>` (ölçüldü
+2026-10-02). `collect_free_variables` (`llvm_backend.cpp`) serbest adları
+yalnız `AST_IDENTIFIER` düğümlerinden topluyordu; `f(y)` ise adı
+`AST_FUNCTION_CALL.name`'de taşıyan bir **çağrı**. `f` yakalanmadı, ama
+çağrı kodgeni `get_local_var("f")` ile yereli aradı — ve lambdanın kapsam
+zinciri dış fonksiyonun kapsamına **uzandığı** için bulduğu şey dış
+fonksiyonun alloca'sıydı. Başka bir LLVM fonksiyonunun yığın yuvası, lambda
+koşarken çoktan çöp.
+
+Üst düzeyde sorun yoktu (`f` gerçek bir global, yakalama gerekmiyor); bu
+yüzden mevcut kapanış testlerinin hepsi yeşildi — hepsi ya tanımlayıcı
+okuyordu ya üst düzeydeydi. **Kural:** ad toplayan bir AST gezgini yazarken
+adın taşındığı **bütün** düğüm türlerini say (`AST_IDENTIFIER`,
+çağrı adı, …); ve kapsam zinciri fonksiyon sınırını aşıyorsa "bulundu"
+"bu fonksiyonda geçerli" demek değil. Kapı:
+`tests/kapanis_cagri_yakalama.test.tpr` (eski derleyicide süreç çöküyor).
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 
