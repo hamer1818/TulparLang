@@ -29,6 +29,22 @@ tag still works;
   `i += -1` (negatif: sürüm kurulmamalı) biçimlerini karşılaştırır; anlam
   `tests/for_bilesik_artim.test.tpr`'de.
 
+### Düzeltildi — struct'ın dizgi olmayan değerle aritmetiği (`p + 5`, `p + v`, `p * 2`) artık `[typecheck]` tanısı
+
+- Dilde struct için işleç yok, ama codegen'in iki yolu iki farklı **sessiz**
+  sonuç veriyordu (ölçüldü 2026-10-02): `p + 5`, `p * 2`, `p - n` → `0`;
+  `p + v` (`var`/`json`) ve `p + q` → `"P { x: 1, y: 2 }5"` dizgisi (#451'den
+  beri; önce o da 0). Typecheck tek kelime etmiyordu.
+- Kural: bilinen bir struct, `+`'nın öbür tarafı dizgi değilse ya da
+  `- * / %` operandıysa tanı (`--strict`'te hata). Dizgi birleştirmesi
+  (`"p=" + p`, `p + "!"`, `"a" + p + v`) serbest. Öbür taraf tipi dinamikse
+  (json/bilinmeyen) ayrı cümle: `toString(p) + v` ya da alan (`p.x + v`).
+- Fikstürler `tests/typeinfer/fail/32_struct_arithmetic.tpr` (eski
+  derleyicide tanısız koşup `0` / `"P {...}3"` basıyor) ve
+  `pass/25_struct_concat_ok.tpr` (dizgi istisnası sabote edilince kırmızı).
+  Derlem taraması (examples/, examples/en/, lib/, tests/, benchmarks/fair/):
+  yeni tanı hiçbir dosyada çıkmıyor.
+
 ### Eklendi — yerel eklentiler (`--ext`): C kitaplığını derleyiciyi yeniden derlemeden bağlama
 
 - **`tulpar --ext <dizin> oyun.tpr`** (K303): eklenti dizinindeki
