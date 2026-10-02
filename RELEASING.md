@@ -26,12 +26,13 @@ the binary is unchanged) and a commit that already carries a `v*` tag
 You can still cut a release by hand — push a `v*` tag as below — and
 the auto-release job will simply see the tag and stand down.
 
-⚠️ `project(TulparLang VERSION ...)` in `CMakeLists.txt` is **not**
-bumped by the automation (a commit from CI back into `main` would
-trigger another full build on every release). It only feeds the
-`<version>-dev` label of local builds; the published binary always
-carries the tag (`-DTULPAR_VERSION`). Bump it by hand when you cut a
-MINOR/MAJOR so local builds don't report a stale base.
+There is **no version number to bump by hand** (since 2026-10-02).
+`CMakeLists.txt` used to carry `project(TulparLang VERSION 3.13.1)` and it
+fed the `<version>-dev` label of every non-release build; the automation
+never bumped it, so branch and local builds said `3.13.1-dev` while
+`v3.37.x` was out. The string is now derived from the git tag on every
+build (`cmake/TulparVersion.cmake`), see *`TULPAR_VERSION` resolution*
+below.
 
 ## Versioning scheme
 
@@ -117,9 +118,24 @@ At build time, the version embedded in the binary (returned by
 `tulpar --version`, compared by `tulpar update --check`) is computed
 as follows:
 
-- **Tag push** (`refs/tags/v*`): the tag name verbatim — `v2.2.0`.
-- **Branch push / PR**: CMake's default `<project_version>-dev` (e.g.
-  `2.1.0-dev`). No release is published for these builds.
+- **Tag push** (`refs/tags/v*`): the tag name verbatim — `v3.37.16`
+  (`-DTULPAR_VERSION=<tag>`).
+- **Everything else** (branch push, PR, local build): `git describe --tags
+  --match 'v[0-9]*' --dirty` — `v3.37.16` on the clean tagged commit,
+  `v3.37.16-4-gabc1234` four commits later, `-dirty` with uncommitted
+  changes. No number is ever written by hand, so it cannot drift.
+- **No git / no reachable tag** (source tarball, shallow clone):
+  `0.0.0-dev` (`0.0.0-dev+g<sha>` when git works but no tag is reachable) —
+  it says "unknown" instead of guessing. CI therefore checks out with full
+  history (`fetch-depth: 0`, blobless).
+
+It is regenerated on **every** `cmake --build` (the `tulpar_surum` target),
+not cached at configure time — the old cached value survived a version bump
+in the same build directory (measured 2026-09-02). An unchanged string
+leaves the generated header untouched, so nothing recompiles.
+`tools/surum_denetle.sh` runs right after the build in all three CI jobs and
+fails when `tulpar version` differs from the tag / `git describe`; it also
+self-checks the script's override, no-git and repo paths.
 
 The tag-push path flows through the `TULPAR_VERSION` env var. If you
 change the formula, update it everywhere it appears in `build.yml`

@@ -8,9 +8,29 @@ fixes. Since 2026-09-21 a release is minted **automatically on every merge to
 `main`** (PATCH by default; write `Surum: minor` / `Surum: major` in the PR to
 ask for a bigger step) — see [RELEASING.md](RELEASING.md); a hand-pushed `v*`
 tag still works;
-`tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
+`tulpar --version` reports the tag at release time and `git describe`
+(e.g. `v3.37.16-4-gabc1234`) otherwise.
 
 ## [Unreleased]
+
+### Düzeltildi — `tulpar --version` "3.13.1-dev" diyordu (yayınlanan v3.37.x) — sürüm artık git etiketinden
+
+- **Kök neden:** dal ve yerel derlemelerin sürümü `CMakeLists.txt`'teki elle
+  yazılmış `project(TulparLang VERSION 3.13.1)`ten geliyordu; otomatik sürüm
+  her birleşmede etiket kesiyor ama o satırı yükseltmiyor (yükseltemez: CI'dan
+  main'e commit her sürümde bir derleme daha tetikler). Üstelik değer bir CMake
+  önbellek değişkeniydi — yükseltilse bile aynı build dizininde eski kalıyordu.
+- **Düzeltme:** sayı kaldırıldı. `cmake/TulparVersion.cmake` her
+  `cmake --build`'de `git describe --tags --match 'v[0-9]*' --dirty` üretiyor
+  (`v3.37.16`, `v3.37.16-4-gabc1234[-dirty]`); etiket derlemesi
+  `-DTULPAR_VERSION=<etiket>` ile etiketi aynen gömüyor (yayın yolu değişmedi);
+  git/etiket yoksa `0.0.0-dev[+g<sha>]`, sayı uydurulmuyor. Dizgi değişmezse
+  başlığa dokunulmuyor (yeniden derleme yok); eski build dizinlerindeki
+  `x.y.z-dev` önbellek değeri yok sayılıyor.
+- **CI:** üç işin checkout'u tam geçmişle (`fetch-depth: 0`, blobsuz);
+  `tools/surum_denetle.sh` derlemenin hemen ardından ikiliyi etiket /
+  `git describe` ile karşılaştırıyor ve betiğin override, git'siz dizin ve depo
+  yollarını öz-denetliyor. MSYS2'ye `git` eklendi.
 
 ### Düzeltildi — CI: her iş ve adımın zaman aşımı var (Windows "Ornekler" 46 dk asılı kaldı)
 

@@ -659,6 +659,8 @@ int update_cmd_main(int argc, char **argv) {
 
     // Up-to-date when the embedded version string matches the release tag
     // exactly. Release CI passes -DTULPAR_VERSION=<tag> so this works
+    // (other builds embed `git describe`, e.g. v3.37.16-4-gabc1234, which
+    // never equals a tag unless it IS that clean tagged commit)
     // for any semver tag (v2.2.0, v3.0.0-rc.1, etc.).
     if (!force && latest == kVersion) {
         std::printf("%s\n",

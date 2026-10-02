@@ -137,6 +137,13 @@ jobs:
         timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
+          # SURUM (2026-10-02): `tulpar --version` git etiketinden uretiliyor
+          # (cmake/TulparVersion.cmake, `git describe`). Sig klonda (varsayilan
+          # fetch-depth 1) etiket ulasilamaz ve dal derlemesi "0.0.0-dev+g<sha>"
+          # derdi. Tam gecmis + blobsuz (filter): commit/agac geliyor, dosya
+          # icerikleri yalniz checkout'un istedikleri.
+          fetch-depth: 0
+          filter: blob:none
           sparse-checkout: |
             /*
             !wasm/emsdk
@@ -292,10 +299,9 @@ jobs:
           # release tag — which is what `tulpar update --check` compares
           # against.
           # Tag-pushed builds embed the tag name verbatim (so
-          # `tulpar --version` shows e.g. `v2.2.0`). Branch builds
-          # (main, PRs) omit the override and get CMake's default
-          # "<project_version>-dev", which is fine for CI validation
-          # — no release is minted for them.
+          # `tulpar --version` shows e.g. `v3.37.16`). Branch builds
+          # (main, PRs) omit the override and get `git describe`
+          # (e.g. `v3.37.16-3-gabc1234`) — cmake/TulparVersion.cmake.
           TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: |
           mkdir -p build
@@ -313,6 +319,18 @@ jobs:
           cmake .. ${cmake_args}
           cmake --build . --config Release -j$(nproc)
         timeout-minutes: 10
+
+      # SURUM TUTARLILIGI: ikilinin `version` dizgisi etiket derlemesinde
+      # etiketin kendisi, digerlerinde `git describe` olmali. Eskiden
+      # CMakeLists'teki elle yazilmis `3.13.1` v3.37.x cikmisken gomuluyordu
+      # ve bunu olcen hicbir sey yoktu. Betik kendi pozitif kontrollerini
+      # (override / git'siz dizin / depo) da kosar.
+      - name: Surum etiketle tutarli mi
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        env:
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: bash tools/surum_denetle.sh build/tulpar
+        timeout-minutes: 2
 
       # Test failures used to be masked with `continue-on-error: true`,
       # which hid a months-long Linux regression where every example
@@ -546,6 +564,13 @@ jobs:
         timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
+          # SURUM (2026-10-02): `tulpar --version` git etiketinden uretiliyor
+          # (cmake/TulparVersion.cmake, `git describe`). Sig klonda (varsayilan
+          # fetch-depth 1) etiket ulasilamaz ve dal derlemesi "0.0.0-dev+g<sha>"
+          # derdi. Tam gecmis + blobsuz (filter): commit/agac geliyor, dosya
+          # icerikleri yalniz checkout'un istedikleri.
+          fetch-depth: 0
+          filter: blob:none
           sparse-checkout: |
             /*
             !wasm/emsdk
@@ -598,6 +623,7 @@ jobs:
             mingw-w64-x86_64-libxml2
             mingw-w64-x86_64-openssl
             diffutils
+            git
 
       # ccache yolu is alanina gore: `~` msys2 ile pwsh arasinda FARKLI
       # cozuluyor ve onbellek gidis-donusu tutmuyordu.
@@ -647,6 +673,13 @@ jobs:
         timeout-minutes: 2
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: ./build-windows/tulpar.exe version
+
+      - name: Surum etiketle tutarli mi
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        env:
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: bash tools/surum_denetle.sh build-windows/tulpar.exe
+        timeout-minutes: 2
 
       # AOT linkleyicisi `clang++` cagiriyor. Yoksa her ornek ayni anlamsiz
       # satirla duser ("Linking failed (code 1)") ve 23 kirmizi satirin
@@ -880,6 +913,13 @@ jobs:
         timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
+          # SURUM (2026-10-02): `tulpar --version` git etiketinden uretiliyor
+          # (cmake/TulparVersion.cmake, `git describe`). Sig klonda (varsayilan
+          # fetch-depth 1) etiket ulasilamaz ve dal derlemesi "0.0.0-dev+g<sha>"
+          # derdi. Tam gecmis + blobsuz (filter): commit/agac geliyor, dosya
+          # icerikleri yalniz checkout'un istedikleri.
+          fetch-depth: 0
+          filter: blob:none
           sparse-checkout: |
             /*
             !wasm/emsdk
@@ -996,8 +1036,7 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
           # Tag-pushed builds embed the tag name verbatim; branch
-          # builds omit the override and use CMake's default dev
-          # version.
+          # builds omit the override and get `git describe`.
           TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: |
           # Use `brew --prefix` instead of hardcoding /opt/homebrew so
@@ -1018,6 +1057,13 @@ jobs:
           cmake .. ${cmake_args}
           cmake --build . --config Release -j$(sysctl -n hw.ncpu)
         timeout-minutes: 10
+
+      - name: Surum etiketle tutarli mi
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        env:
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: bash tools/surum_denetle.sh build/tulpar
+        timeout-minutes: 2
 
       - name: Prepare artifact
         timeout-minutes: 10
