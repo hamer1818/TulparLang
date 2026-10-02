@@ -14,6 +14,7 @@
 #include "../vm/fnref_layout.h"   // AOTFnRef ofsetleri (call() satir ici yolu)
 #include <llvm-c/Analysis.h>
 #include <llvm-c/IRReader.h>
+#include <llvm-c/Support.h>   // LLVMParseCommandLineOptions (web SjLj)
 #include <llvm-c/Target.h>
 #include <llvm-c/Transforms/PassBuilder.h>
 #include <cstdio>
@@ -17430,6 +17431,40 @@ int llvm_backend_emit_ir_file(LLVMBackend *backend, const char *filename) {
 // Belirtinin sinsiligi: ILK ABI (arm64, gercek telefon) DOGRU uretiliyor, yalniz
 // IKINCISI (x86_64, emulator) bozuluyor. Yani gercek cihazda her sey calisirken
 // emulator cokuyor ve insan once emulatorden suphelenip hatayi ariyor.
+// WEB HEDEFINDE try/catch: setjmp ALCALTMASI (2026-10-02).
+//
+// try/catch modulde dogrudan `setjmp` cagrisina iner (yukarida
+// func_setjmp). wasm'da gercek bir `setjmp` sembolu YOK: emcc kendi
+// clang'iyla derlerken LLVM'in WebAssemblyLowerEmscriptenEHSjLj gecisini
+// `-mllvm -enable-emscripten-sjlj` ile acar ve setjmp'i saveSetjmp/invoke_*
+// sarmalayicilarina cevirir. Biz wasm objesini KENDI LLVM'imizle uretiyoruz;
+// bayrak verilmedigi icin gecis kosmuyor ve try iceren her program
+// `wasm-ld: undefined symbol: setjmp` ile linkte dusuyordu (em++'in link
+// satirinda ayni bayragi gormek yaniltici: o yalniz LTO kodgenini etkiler).
+//
+// MOD runtime arsiviyle AYNI olmali: wasm/build_tame_web.sh runtime'i em++'in
+// varsayilaniyla (SUPPORT_LONGJMP=emscripten, JS tabanli) derliyor; aot_throw
+// icindeki longjmp oradan `emscripten_longjmp`e iner. Wasm EH tabanli SjLj
+// (`-wasm-enable-sjlj`) secilseydi iki taraf farkli ABI konusurdu.
+//
+// LLVM <= 18 ayni gecisten ESKI ABI'yi (saveSetjmp/testSetjmp + tablo)
+// uretir, >= 19 yenisini (__wasm_setjmp/__wasm_setjmp_test); Emscripten 5.0
+// yalniz yenisini tasiyor. Eski adlar web runtime arsivinde
+// (runtime/web_sjlj_uyum.c) — CI LLVM 18 ile derliyor.
+//
+// cl::opt surec genelinde; secenek bir kez ayrisitirilir. Yerel hedef bu
+// secenegi okumaz (yalniz WebAssembly hedef makinesi).
+// `TULPAR_WEB_SJLJ=0` gecisi kapatir — yalniz tests/web_try_catch.sh'nin
+// pozitif kontrolu icin (kapali iken link `undefined symbol: setjmp` olmali).
+static void enable_web_sjlj_lowering() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  if (const char *e = getenv("TULPAR_WEB_SJLJ"); e && strcmp(e, "0") == 0) return;
+  const char *args[] = {"tulpar", "-enable-emscripten-sjlj"};
+  LLVMParseCommandLineOptions(2, args, nullptr);
+}
+
 static int emit_object_with_triple(LLVMBackend *backend, const char *filename,
                                    char *triple, LLVMRelocMode reloc,
                                    bool clone_module) {
@@ -17477,6 +17512,7 @@ int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
     LLVMInitializeWebAssemblyTargetMC();
     LLVMInitializeWebAssemblyAsmPrinter();
     LLVMInitializeWebAssemblyAsmParser();
+    enable_web_sjlj_lowering();
     triple = LLVMCreateMessage("wasm32-unknown-emscripten");
   } else {
     // Initialize only native target (X86 on Linux/Windows)
@@ -17548,6 +17584,7 @@ static LLVMTargetMachineRef make_opt_machine(LLVMBackend *backend) {
     LLVMInitializeWebAssemblyTarget();
     LLVMInitializeWebAssemblyTargetMC();
     LLVMInitializeWebAssemblyAsmPrinter();
+    enable_web_sjlj_lowering();
     triple = LLVMCreateMessage("wasm32-unknown-emscripten");
   } else {
     LLVMInitializeNativeTarget();

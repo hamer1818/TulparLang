@@ -302,6 +302,15 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
             exit 1
         fi
+        # WEB'E GERCEKTEN LINK: arsiv denetimi sembol sayar, link etmez.
+        # try/catch (ve `import "test"` eden her program) web'de
+        # `undefined symbol: setjmp` ile dusuyordu ve hicbir kapi gormedi.
+        # em++/arsiv yoksa gorunur atlar; CI Linux'ta (TULPAR_DIST_ZORUNLU=1)
+        # atlama kirmizi. Pozitif kontrollu (gecis kapali -> link dusmeli).
+        if ! bash tests/web_try_catch.sh ./tulpar; then
+            echo -e "${RED}Web try/catch kapisi basarisiz!${NC}"
+            exit 1
+        fi
         # SURUM VARLIKLARI <-> `tulpar update`. Uc liste uc yerde elle
         # tutuluyordu (update_cmd.cpp, build.yml yayin listesi, CI DLL
         # kapisi) ve `tulpar update` Windows'ta surumde OLMAYAN varliklari

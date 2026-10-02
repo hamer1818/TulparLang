@@ -70,6 +70,10 @@ for f in "${RUNTIME_CPP[@]}"; do
 done
 echo "  CC  cJSON.c"
 emcc $CFLAGS -c "$ROOT/runtime/cJSON.c" -o "$OBJ/cJSON.o"
+# try/catch: LLVM <= 18 ile derlenmis surucunun urettigi eski SjLj ABI'si
+# (saveSetjmp/testSetjmp) — Emscripten 5.0 bunu artik tasimiyor.
+echo "  CC  web_sjlj_uyum.c"
+emcc $CFLAGS -c "$ROOT/runtime/web_sjlj_uyum.c" -o "$OBJ/web_sjlj_uyum.o"
 echo "  CC  sqlite3.c"
 emcc -O2 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=0 -Wno-unused-but-set-variable \
     -c "$ROOT/lib/sqlite3/sqlite3.c" -o "$OBJ/sqlite3.o"

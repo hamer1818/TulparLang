@@ -12,6 +12,28 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — web hedefinde try/catch linkte düşüyordu (`undefined symbol: setjmp`)
+
+- **Belirti:** `tulpar build --target=web` try/catch içeren — ve
+  `import "test"` eden — her programda `wasm-ld: undefined symbol: setjmp`
+  ile düşüyordu.
+- **Kök neden:** try modülde doğrudan `setjmp`e iner; wasm'da gerçek bir
+  `setjmp` yok. emcc bunu kendi clang'ında LLVM'in SjLj alçaltma geçişiyle
+  (`-mllvm -enable-emscripten-sjlj`) çözer; wasm objesini kendi LLVM'imizle
+  ürettiğimiz için geçiş hiç koşmuyordu.
+- **Düzeltme:** sürücü web hedefinde geçişi kendisi açıyor (runtime arşiviyle
+  aynı mod: `SUPPORT_LONGJMP=emscripten`). LLVM ≤ 18 ile derlenmiş sürücü eski
+  ABI'yi (`saveSetjmp`/`testSetjmp`) üretiyor, Emscripten 5.0 yalnız yenisini
+  taşıyor — eski adlar `runtime/web_sjlj_uyum.c`de (yalnız web arşivi).
+- Kapı: `tests/web_try_catch.sh` (`build.sh suites`): try/catch'li programı
+  web'e linkleyip node'da koşturuyor (fonksiyondan fırlatma, döngüde yakalama,
+  try içinde değişen yerel, iç içe try); pozitif kontrol `TULPAR_WEB_SJLJ=0`
+  ile link `undefined symbol: setjmp` ile düşmek zorunda. em++ yoksa görünür
+  atlar; CI Linux'ta (emsdk kurulu) atlama kırmızı. Ayrıca `try_catch`,
+  `try_yerel`, `errors`, `frame_istisna`, `main_yerel`, `break`, `methods`,
+  `modulo` paketleri web'e derlenip node'da koşuldu: hepsi yeşil (eskiden
+  hepsi linkte düşüyordu).
+
 ### Düzeltildi — `@no_alloc` içinde yöntem çağrısı "yerleşik ayırabilir" diye reddediliyordu
 
 - **Kök neden:** `@no_alloc` denetimi çağrı hedefini yalnız takma adlı modül
