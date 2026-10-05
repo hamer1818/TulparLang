@@ -92,6 +92,39 @@ if(OpenSSL_FOUND)
         message(STATUS "OpenSSL lib dir: ${TULPAR_OPENSSL_LIBDIR}")
         add_compile_definitions(TULPAR_OPENSSL_LIBDIR="${TULPAR_OPENSSL_LIBDIR}")
     endif()
+    # macOS: KULLANICI PROGRAMLARI da Homebrew'suz linklenmeli. Yukaridaki
+    # OPENSSL_USE_STATIC_LIBS yalniz `tulpar` surucusunu kurtariyordu;
+    # `tulpar build`'in link satiri `-L<openssl@3>/lib -lssl -lcrypto`
+    # tasiyor ve ld64 ayni dizinde .dylib'i .a'ya TERCIH EDIYOR — yani
+    # uretilen her ikili /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib'e
+    # bagliydi, openssl@3 olmayan Mac'te ise link `ld: library 'ssl' not
+    # found` ile dusuyordu (olculdu 2026-10-05, macOS CI, tests/
+    # kullanici_ikili_bag.sh kapisi duzeltmesiz kirmizi). Cozum: OpenSSL'in
+    # statik arsivlerini libtulpar_runtime.a'nin ICINE katmak (libtool
+    # -static, asagida) ve surucunun link satirindan -lssl/-lcrypto ile
+    # OpenSSL -L'lerini dusurmek (TULPAR_TLS_IN_RUNTIME, aot_pipeline.cpp).
+    # Tek arsiv, tek dagitim dosyasi; kullaniciya gorunen bir sey yok.
+    # Secilmeyenler: libssl.a/libcrypto.a'yi pakete ayri eklemek (surucu
+    # exe dizininden bulurdu ama Homebrew'lu makinede -L sirasi yine
+    # dylib'i secebilir; iki dosya daha) ve Security.framework'e gecmek
+    # (TLS kodunun yeniden yazimi — olcmeden girilmez).
+    set(TULPAR_TLS_IN_RUNTIME OFF)
+    if(APPLE AND TULPAR_MACOS_TASINABILIR)
+        if(NOT OPENSSL_SSL_LIBRARY MATCHES "\\.a$" OR NOT OPENSSL_CRYPTO_LIBRARY MATCHES "\\.a$")
+            message(FATAL_ERROR "macOS tasinabilir: OpenSSL statik arsivi yok "
+                "(ssl='${OPENSSL_SSL_LIBRARY}', crypto='${OPENSSL_CRYPTO_LIBRARY}'). "
+                "`brew install openssl@3` statik .a dosyalarini da kurar; "
+                "ya da -DTULPAR_MACOS_TASINABILIR=OFF.")
+        endif()
+        find_program(TULPAR_LIBTOOL NAMES libtool)
+        if(NOT TULPAR_LIBTOOL)
+            message(FATAL_ERROR "macOS tasinabilir: libtool yok (Xcode Command Line Tools kurulu mu?)")
+        endif()
+        set(TULPAR_TLS_IN_RUNTIME ON)
+        add_compile_definitions(TULPAR_TLS_IN_RUNTIME=1)
+        message(STATUS "OpenSSL: statik arsivler libtulpar_runtime.a icine katilacak "
+            "(kullanici link satirinda -lssl/-lcrypto yok)")
+    endif()
 else()
     message(STATUS "OpenSSL: not found (TLS disabled — `https://` URLs will fail at runtime)")
 endif()
@@ -480,6 +513,21 @@ target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_compile_definitions(tulpar_runtime PRIVATE TULPAR_RUNTIME_ONLY)
 if(OpenSSL_FOUND)
     target_link_libraries(tulpar_runtime PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+endif()
+# macOS: OpenSSL statik arsivleri runtime arsivine KATILIYOR — gerekce
+# yukarida (TULPAR_TLS_IN_RUNTIME). Ninja/Make kurali arsivi her bağlamada
+# `rm -f` ile sifirdan kurar, bu adim her seferinde taze arsive uygulanir.
+# Boyut CI'da olculur ve "Prepare artifact" adiminda basilir.
+if(TULPAR_TLS_IN_RUNTIME)
+    add_custom_command(TARGET tulpar_runtime POST_BUILD
+        COMMAND "${TULPAR_LIBTOOL}" -static -no_warning_for_no_symbols
+                -o "$<TARGET_FILE:tulpar_runtime>.birlesik"
+                "$<TARGET_FILE:tulpar_runtime>"
+                "${OPENSSL_SSL_LIBRARY}" "${OPENSSL_CRYPTO_LIBRARY}"
+        COMMAND "${CMAKE_COMMAND}" -E rename
+                "$<TARGET_FILE:tulpar_runtime>.birlesik" "$<TARGET_FILE:tulpar_runtime>"
+        COMMENT "libtulpar_runtime.a: OpenSSL statik arsivleri katiliyor (macOS tasinabilir)"
+        VERBATIM)
 endif()
 
 # Windows-specific settings for runtime (apply to both MSVC and MinGW)

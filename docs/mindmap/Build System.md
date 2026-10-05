@@ -143,6 +143,32 @@ bir dylib/.so'ya bağlı program kırmızı, sade program yeşil. Yerelde Arch/C
 (paylaşımlı `libLLVM.so`) bu kapıdan **bilerek** geçmez — kapı yayın ikilisi içindir.
 Tetikleyen: v3.38.0 macOS ikilisi dört Homebrew dylib'ine bağlıydı ([[Cross-platform]]).
 
+**Kullanıcı ikilisi kapısı (2026-10-05):** `tests/kullanici_ikili_bag.sh` — "sürücü
+taşınabilir" ile "sürücünün ürettiği taşınabilir" ayrı iddialar. `tulpar build` ile
+`tls_init(sertifika, anahtar)` çağıran bir program (ağ yok; sertifika `openssl req` ile
+yerinde) linklenir, koşar (`tls:var` — TLS gerçekten içinde) ve ÇIKTISI
+`dinamik_bag_denetle.sh`ten geçer; pozitif kontrol `TULPAR_AOT_LINK_FLAGS` ile geçici
+dizindeki kitaplığa bağlanan ikilinin kırmızı görülmesi. macOS'ta iki kez: Homebrew
+görünürken (ld64 aynı dizinde `.dylib`i `.a`ya tercih eder — asıl tuzak) ve LLVM **+**
+openssl@3 Cellar'ları gizliyken. Düzeltme: macOS'ta OpenSSL statik arşivleri
+`libtulpar_runtime.a`nın içine `libtool -static` ile katılır (CMake `TULPAR_TLS_IN_RUNTIME`),
+sürücü `-lssl/-lcrypto` ve OpenSSL `-L` yazmaz (`aot_pipeline.cpp`). Düzeltmesiz sürücüyle
+kapı iki ayakta da kırmızıydı (libssl.3.dylib bağı; gizliyken `ld: library 'ssl' not found`).
+Arşiv boyutu "Prepare artifact"ta ölçülüp özete yazılır (v3.38.5: 2,8 MB OpenSSL'siz).
+Aynı kapı Homebrew clang'ın libunwind bağını da yakaladı (PATH'teki `clang++`
+`brew link llvm@18` sonrası Homebrew'unki): macOS'ta varsayılan link sürücüsü
+`/usr/bin/clang++`, `TULPAR_CC` ezer.
+
+**LLVM 18 kilidi (2026-10-05):** Linux işi apt ile `llvm-18-dev` kurar ama
+`find_package(LLVM)` ipucu verilmeyince koşucu görüntüsündeki llvm-17'yi seçiyordu —
+yayınlanan ikilinin RUNPATH'i `/usr/lib/llvm-17/lib` idi (2026-10-02, `llvm-readelf -d`).
+"CI 18 ile derler" belgesi aylarca yanlıştı. `-DLLVM_DIR=$(llvm-config-18 --cmakedir)`.
+
+**Kopya yeni inode'a (2026-10-05):** `build.yml`/`build.sh`teki her `cp build/tulpar tulpar`
+önce hedefi siler. macOS'ta çalıştırılmış ikilinin yerinde üzerine yazılması belirlenimsiz
+`Killed: 9` üretir ([[Tuzaklar]] 7l); macOS işindeki "Yerinde kopya olcumu" adımı
+mekanizmayı `stat -f %i` ile kanıtlar.
+
 **Zaman aşımları (2026-10-02):** üç iş akışında her işin iş düzeyi, her adımın adım düzeyi
 `timeout-minutes`'ı var (varsayılan 360 dk'ydı). Tetikleyen: Windows "Ornekler" adımı
 2026-09-29'da iki kez 46–47 dk asılı kaldı — adımın 30 dk sınırı **işlemedi**, çünkü runner

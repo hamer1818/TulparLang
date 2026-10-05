@@ -116,7 +116,14 @@ struct AOTPhaseTimer {
 // runner started actually invoking `tulpar --aot`. The flag is gated on
 // `TULPAR_HAS_TLS` so a TLS-disabled build (no OpenSSL on the host) still
 // produces a working linker line.
-#if defined(TULPAR_HAS_TLS)
+//
+// `TULPAR_TLS_IN_RUNTIME` (macOS, CMake): OpenSSL'in statik arsivleri
+// libtulpar_runtime.a'nin ICINE katilmis — `-lssl -lcrypto` ve OpenSSL -L'leri
+// link satirina GIRMEZ. Girerse ld64 Homebrew dizinindeki .dylib'i secer ve
+// uretilen ikili /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib'e baglanir
+// (olculdu 2026-10-05, macOS CI); openssl@3 olmayan Mac'te ise link duser.
+// Kapi: tests/kullanici_ikili_bag.sh (Linux + macOS CI).
+#if defined(TULPAR_HAS_TLS) && !defined(TULPAR_TLS_IN_RUNTIME)
   #if PLATFORM_WINDOWS
     // MSYS2's static libcrypto.a pulls in CertFindCertificateInStore,
     // CertCloseStore, CertOpenSystemStoreW (winstore_store provider) +
@@ -370,6 +377,12 @@ static std::string build_link_search_dirs() {
   //      Aynı makinede derlenip kullanılan tulpar için kesin cevap.
   //   2. Dağıtılan ikili BAŞKA bir makinede koşuyor olabilir, o yüzden
   //      standart konumlar da deneniyor.
+  //
+  // TULPAR_TLS_IN_RUNTIME (macOS): OpenSSL runtime arsivinin icinde, link
+  // satirinda -lssl yok — bu -L'ler de yok. Eklenirse ld64 o dizindeki
+  // libssl.3.dylib'i gorur ve `-lssl` olmasa bile baska bir sey degismez,
+  // ama Homebrew yoluna isaret eden bir -L'nin satirda isi yok.
+#if !defined(TULPAR_TLS_IN_RUNTIME)
   {
     auto add_if_dir = [&](const std::string &d) {
       if (d.empty()) return;
@@ -389,6 +402,7 @@ static std::string build_link_search_dirs() {
       add_if_dir(env);
     }
   }
+#endif
 
   return out;
 }
@@ -401,9 +415,21 @@ static std::string build_link_search_dirs() {
 // `clang++-NN` only) could not build a single program. Web (em++) and
 // Android (NDK clang++) keep their own drivers. Gate: tests/aot_smoke.sh
 // (a bogus TULPAR_CC must make the link fail — proves the variable is read).
+//
+// macOS: varsayilan `/usr/bin/clang++` (Apple'in, Xcode CLT), PATH'teki
+// `clang++` DEGIL. `brew link llvm@18` (ya da `brew install llvm` + PATH)
+// olan makinede PATH'teki clang++ Homebrew'unki ve urettigi her ikili
+// /opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib'e baglaniyordu — Homebrew
+// LLVM'i olmayan Mac'te acilmayan program (olculdu 2026-10-05, macOS CI,
+// tests/kullanici_ikili_bag.sh). Apple surucusu SDK'nin kendi libc++/libunwind'ini
+// (libSystem) kullaniyor. Homebrew clang'i isteyen TULPAR_CC ile secer.
 static const char *aot_link_driver() {
   const char *cc = getenv("TULPAR_CC");
-  return (cc && *cc) ? cc : "clang++";
+  if (cc && *cc) return cc;
+#if PLATFORM_MACOS
+  if (access("/usr/bin/clang++", X_OK) == 0) return "/usr/bin/clang++";
+#endif
+  return "clang++";
 }
 
 // --- AddressSanitizer (K166) --------------------------------------------------
