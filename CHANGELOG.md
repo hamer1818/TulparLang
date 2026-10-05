@@ -51,6 +51,17 @@ tag still works;
   OpenSSL soğuk 57 s, önbellekte ~0. Tablo: docs/mindmap/Build System.md.
   Linux ve Windows değişmedi.
 
+### Belge — eski macOS varlık adlarının kaldırılma koşulu
+
+- `*-macos-universal` geçiş kopyaları **şimdi kaldırılmıyor**; koşul
+  RELEASING.md "Old macOS asset names — when they go"da ve
+  `tools/eski_macos_adlari.py` onu ölçüyor (çıkış 0 = kaldırılabilir): en erken
+  2026-12-04 (v3.39.0 + 60 gün), son 30 günde iki adı birden taşıyan
+  sürümlerde eski ada 0 indirme, sitedeki install.sh ve motor CI'ı yeni adda.
+  Eski adı indiren son `tulpar update` v3.38.5; v3.39.0 ilk yeni adlı.
+  Ölçüldü (2026-10-05, `gh api …/releases`): v3.39.0'da eski adlar 9 + 9,
+  yeni adlar 16 + 16 indirme; install.sh hâlâ eski adda, motor yeni adda.
+
 ### Düzeltildi — macOS'ta `tulpar build` çıktısı Homebrew openssl@3'e bağlanıyordu
 
 - #462 sürücüyü Homebrew'suz açılır yaptı ama **kullanıcı programları** değil:

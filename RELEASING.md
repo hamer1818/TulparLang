@@ -85,7 +85,7 @@ Every release ships:
 | -------------------------------------- | ----------------------------------------- |
 | `tulpar-linux-x64`                     | Linux x86_64 driver binary.               |
 | `tulpar-macos-arm64`                   | macOS driver binary, **Apple Silicon only** (built on `macos-latest`); Intel Macs are not built. |
-| `tulpar-macos-universal`, `libtulpar_runtime-macos-universal.a` | **Transition copies** — byte-identical to the `-macos-arm64` files. Until 2026-10-05 the macOS assets carried this name although they were never universal. `tulpar update` from v3.38.5 and earlier, the site's `install.sh` and the engine CI still download it, so the release job copies the files under the old name too ("Eski macOS adlari" step) and lists them in `SHA256SUMS.txt`. Drop once old updaters have moved on and `install.sh` uses the new name. |
+| `tulpar-macos-universal`, `libtulpar_runtime-macos-universal.a` | **Transition copies** — byte-identical to the `-macos-arm64` files. Until 2026-10-05 the macOS assets carried this name although they were never universal. `tulpar update` from v3.38.5 and earlier and the site's `install.sh` still download it (the engine CI moved to the new name on 2026-10-05), so the release job copies the files under the old name too ("Eski macOS adlari" step) and lists them in `SHA256SUMS.txt`. Removal condition and checklist: [Old macOS asset names — when they go](#old-macos-asset-names--when-they-go) (`tools/eski_macos_adlari.py`). |
 | `libtulpar_runtime-<platform>.a`       | Per-platform runtime archive (linked into AOT-compiled user binaries). |
 | `TameEngine-<platform>.tar.gz`         | The 3D scene editor as a standalone bundle — binary + texture/sound/model palettes + sample scenes. Does **not** require the compiler to run. |
 | `SHA256SUMS.txt`                       | `sha256sum -b` manifest. `tulpar update` verifies every download against this. |
@@ -169,6 +169,49 @@ four installed.
   `stat -f %i` (in-place `cp` keeps the inode, `mv` changes it) and records
   the in-place run's exit code in the job summary without asserting it
   (non-deterministic).
+
+### Old macOS asset names — when they go
+
+`tulpar-macos-universal` / `libtulpar_runtime-macos-universal.a` are
+published next to the `-macos-arm64` files as byte-identical copies (build.yml
+"Eski macOS adlari"). **They are not removed yet.** Who still asks for them:
+
+- **`tulpar update` v3.38.5 and earlier** — the last updater that downloads
+  the old name is **v3.38.5** (`src/cli/update_cmd.cpp`, 2026-10-02);
+  **v3.39.0** (2026-10-05) is the first that downloads `-macos-arm64`. Once
+  the old name is gone those updaters fail with a 404 *before* touching
+  anything (download → verify → replace), so the user is told to reinstall
+  with `install.sh` — which is why `install.sh` must move first.
+- **The site's `install.sh`** (tulpar-lang-web, not this repo) — still the
+  old name on 2026-10-05 (`https://tulparlang.dev/install.sh`, line 122).
+- **The engine CI** (tulpar-engine `tools/tulpar_indir.sh`) — moved to the
+  new name on 2026-10-05.
+
+Measured 2026-10-05 (`gh api …/releases`, `assets[].download_count`): v3.39.0,
+the only release carrying both names so far, had the old names downloaded
+9 + 9 times (driver + runtime) against 16 + 16 for the new names; every
+earlier release only had the old name (e.g. v3.38.5: 10 + 9).
+
+**Removal condition — all four, checked by `python3 tools/eski_macos_adlari.py`
+(exit 0 = removable; it measures, it does not guess):**
+
+1. Date ≥ **2026-12-04** (v3.39.0 + 60 days, so a user who updates every
+   month or two has gone through a new-name updater).
+2. Releases published in the **last 30 days that carry both names** show
+   **0** downloads of the old names. Old releases are not counted: their old
+   assets stay forever and removing the copy from new releases does not touch
+   them — what the count measures is someone asking `latest` for the old name.
+3. `https://tulparlang.dev/install.sh` downloads `tulpar-macos-arm64` and no
+   longer mentions `tulpar-macos-universal`.
+4. tulpar-engine `main` `tools/tulpar_indir.sh` downloads the new name.
+
+When it says removable: delete the "Eski macOS adlari" step and the two
+`*-macos-universal` lines from the `SHA256SUMS.txt` loop and the release file
+list in `build.yml`, the table row above, and the notes in
+`docs/PLATFORM_SUPPORT.md` and `docs/mindmap/Cross-platform.md`. The package
+registry's platform id `macos-universal` (`src/pkg/pkg_cli.cpp`,
+`src/pkg/manifest.hpp`) is a **different thing** — a contract in published
+packages' `tulpar.toml` — and stays.
 
 ### Why TameEngine ships as a bundle, not a bare binary
 
