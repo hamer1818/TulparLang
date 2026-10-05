@@ -38,6 +38,30 @@ tag still works;
   kontrol `TULPAR_AOT_STRIP_SINAMA=kok-yok` ile aynı program düşüyor.
   Bulgu: kapı olmadan bütün paketler ve örnekler sabotajda da YEŞİLDİ.
 
+### Hızlandı — `build.sh suites` paralel; sunucu örnekleri sabit `sleep 2` yerine hazır olma yoklaması
+
+- `build.sh suites` her şeyi SERİ koşuyordu (CI'ın en uzun adımı; main
+  37315976494: Linux 240 s, macOS 330 s, Windows 201 s). Yerelde ölçüldü
+  (Ryzen 7 9800X3D): toplam 106 s — 117 paket 36 s, `.sh` kapıları 25 s,
+  `.py` kapıları 25 s. Artık paketler ve 47 bağımsız kapı `xargs -P` ile
+  paralel; ZAMAN / RSS / PORT / AOT önbelleği ölçen 17 kapı (`kapi_seri`)
+  ve satır içi ölçümler (perf_pair, android dumanı) yerinde ve SERİ, paralel
+  kuyruk onların yanında hiç koşmuyor (kuyruk en sonda boşaltılıyor). Her
+  işin çıktısı ayrı dosyada, sırayla basılıyor; sonda en yavaş 10 iş.
+  Yerelde 107 s → 49 s (`TULPAR_TEST_JOBS=1` eski seri davranış).
+  Windows'ta varsayılan 2 işçi (#467'deki temkin).
+- Kapıların hiçbiri gevşemedi: düşen paket ve düşen paralel kapı kırmızı
+  (sabotajla ölçüldü: kasıtlı düşen paket → "Some suites failed!", kasıtlı
+  düşen kapı → "Dusen paralel kapilar" + çıkış 1); işçisi hiç koşmayan iş
+  de düşme sayılıyor.
+- `build.sh test`: probe'u olan sunucu örnekleri 2 s beklemek yerine portu
+  0,1 s aralıkla yokluyor (üst sınır aynı 2 s; süreç ölürse hemen çökme
+  dalı). Port bilinmeyen örneklerde 2 s'lik çökme penceresi aynen duruyor.
+  Her örneğin süresi (ve GNU time varsa tepe RSS'i) basılıyor.
+- Windows: `tools/win_kaynak_izle.sh` örnekler/suitler adımı sırasında 5 s'de
+  bir boş belleği ve en büyük süreçleri yazıyor; `if: always()` adımı basıyor
+  (#467'deki runner kayıplarının kök nedeni ölçülmüyordu).
+
 ### Düzeltildi — `pipefail` altında `echo "$out" | grep -q` eşleşme varken kırmızı dönebiliyordu
 
 - 19 test/araç betiği (39 satır) `set -o pipefail` altında çıktıyı `grep -q`'ya
