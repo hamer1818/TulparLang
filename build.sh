@@ -768,10 +768,7 @@ if [ "$ACTION" = "suites" ]; then
     # program DUSMELI. Olculdu: bu kapi olmadan butun paketler + ornekler
     # sabotajda YESIL kaliyordu (hicbiri gomulu fonksiyonu adla cagirmiyor).
     # `-x` korumasi YOK: dosya calistirilamaz olursa sessizce atlanmasin.
-    if ! bash tests/gomulu_ayiklama.sh ./tulpar; then
-        echo -e "${RED}gomulu ayiklama kapisi basarisiz!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "gomulu ayiklama kapisi basarisiz!" bash tests/gomulu_ayiklama.sh ./tulpar
     # call(f, ...) YEREL INT YOLU (2026-10-01): tumu-int hedef ciplak giris
     # noktasindan cagriliyor mu (IR + runtime tanisi, iki ayak);
     # TULPAR_NO_CALL_NATIVE=1 pozitif kontrol.
