@@ -23,9 +23,10 @@ tag still works;
   CI, kapı düzeltmesiz kırmızı). Artık macOS'ta OpenSSL'in statik arşivleri
   `libtulpar_runtime.a`nın **içine** katılıyor (`libtool -static`, CMake
   `TULPAR_TLS_IN_RUNTIME`) ve sürücü `-lssl`/`-lcrypto` ile OpenSSL `-L`lerini
-  hiç yazmıyor. Tek arşiv, kullanıcıya görünen bir şey yok; boyut macOS işinin
-  "Prepare artifact" adımında ölçülüp özete yazılıyor (v3.38.5: 2,8 MB,
-  OpenSSL dışarıda). Seçilmeyenler: `libssl.a`/`libcrypto.a`yı pakete ayrı
+  hiç yazmıyor. Tek arşiv, kullanıcıya görünen bir şey yok. Ölçüldü (macOS CI, PR #463, 2026-10-05): runtime arşivi 2,7 MB / 19 üye →
+  12 MB / 1139 üye (938'i OpenSSL); TLS programı 450 432 → 5 585 296 bayt —
+  bedel bu: OpenSSL artık her macOS ikilisinin içinde. Linux'ta değişmedi
+  (libssl paylaşımlı, TLS programı 1 323 336 bayt). Seçilmeyenler: `libssl.a`/`libcrypto.a`yı pakete ayrı
   koymak (Homebrew'lu makinede `-L` sırası yine dylib'i seçebilir),
   Security.framework (TLS kodunun yeniden yazımı).
 - İkinci Homebrew bağı aynı ölçümde çıktı: `brew link llvm@18` olan makinede

@@ -74,6 +74,28 @@ else
     dustu "uretilen ikili sistem disi bir kitapliga bagli:"; sed 's/^/         /' "$TMP/bag.log"
 fi
 
+# 3b) BOYUT OLCUMU (iddia degil, basilir): TLS'ye dokunmayan sade programin
+#     boyutu ve baglari. macOS'ta OpenSSL artik statik (runtime arsivinin
+#     icinde); bedeli burada gorunur. Linux'ta libssl paylasimli, --as-needed
+#     sade programdan onu dusurur.
+printf 'print("sade");\n' > "$TMP/sade.tpr"
+if TULPAR_AOT_NOCACHE=1 "$TUL" build "$TMP/sade.tpr" "$TMP/sade" > "$TMP/sade.log" 2>&1 && [ "$("$TMP/sade" 2>&1)" = "sade" ]; then
+    bash "$DENETLE" "$TMP/sade" > "$TMP/sade_bag.log" 2>&1 || dustu "sade program sistem disi bir kitapliga bagli"
+    echo "  olcum  sade program $(wc -c < "$TMP/sade" | tr -d ' ') bayt, TLS programi $(wc -c < "$TMP/tls" | tr -d ' ') bayt"
+    # macOS: ld64 -dead_strip'in kazanci yalniz OLCULUR (link satirina
+    # eklenmedi — aot_pipeline.cpp'deki not: macOS bayragi gercek makinede
+    # olculmeden eklenmez). Calisiyor mu da basilir.
+    if [ "$(uname -s)" = Darwin ]; then
+        if TULPAR_AOT_NOCACHE=1 TULPAR_AOT_LINK_FLAGS=-Wl,-dead_strip "$TUL" build "$TMP/sade.tpr" "$TMP/sade_ds" > /dev/null 2>&1; then
+            echo "  olcum  -dead_strip ile sade program $(wc -c < "$TMP/sade_ds" | tr -d ' ') bayt, cikti: '$("$TMP/sade_ds" 2>&1 | tail -1)'"
+        else
+            echo "  olcum  -dead_strip ile link basarisiz"
+        fi
+    fi
+else
+    dustu "sade program derlenemedi/kosmadi"; tail -5 "$TMP/sade.log" | sed 's/^/         /'
+fi
+
 # 4) POZITIF KONTROL: kapi uretilen ikilinin baglarina gercekten bakiyor mu —
 #    gecici dizindeki paylasimli kitapliga baglanan ikili KIRMIZI olmali.
 cc_bin="${CC:-}"

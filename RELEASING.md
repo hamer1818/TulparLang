@@ -140,8 +140,11 @@ four installed.
   OpenSSL static archives are merged **into** `libtulpar_runtime.a` on macOS
   (`libtool -static`, CMake `TULPAR_TLS_IN_RUNTIME`) and the driver emits no
   `-lssl`/`-lcrypto` and no OpenSSL `-L` at all. One archive, nothing for the
-  user to see; size measured in the macOS job's "Prepare artifact" step (the
-  v3.38.5 archive was 2.8 MB without OpenSSL). Gate:
+  user to see. Measured (macOS CI, PR #463, 2026-10-05): the archive went
+  from 2.7 MB / 19 members to 12 MB / 1139 members (938 from OpenSSL), and a
+  TLS program from 450,432 to 5,585,296 bytes — that is the price, OpenSSL now
+  lives inside every macOS binary. Linux is unchanged (shared libssl, TLS
+  program 1,323,336 bytes). Gate:
   `tests/kullanici_ikili_bag.sh` (both jobs) builds a program that calls
   `tls_init(cert, key)` (no network), runs it (must report TLS present),
   and runs `dinamik_bag_denetle.sh` on the **output**; positive control: a

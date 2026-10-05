@@ -2224,6 +2224,9 @@ sil (`rm -f h && cp k h`) ya da geçici ada yazıp `mv` et — ikisi de yeni ino
 macOS işindeki "Yerinde kopya olcumu" adımı mekanizmayı `stat -f %i` ile
 kanıtlar (yerinde `cp` inode'u korur, `mv` değiştirir; yeni inode'lu kopya
 kesin koşar) ve yerinde kopyanın koşum sonucunu özete yazar — iddia etmez.
+İlk ölçüm (PR #463, 2026-10-05): yerinde `cp` inode 2972936 → 2972936 (aynı),
+o koşumda sonraki exec rc=0 (öldürülmedi — belirlenimsiz olduğu için beklenen);
+`mv` ile 2972936 → 2972938, rc=0.
 `tulpar update`in `atomic_replace`i zaten `rename` kullanıyor; sorun yalnız
 betiklerdeki elle `cp`lerdeydi.
 
