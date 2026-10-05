@@ -1064,6 +1064,35 @@ jobs:
             brew list --versions llvm@18 >/dev/null 2>&1 || brew install llvm@18
           fi
 
+      # KUCUK OPENSSL — kaynaktan, yalniz TLS'nin kullandigi parcalarla
+      # (gerekce, olcum ve guvenlik notu tools/openssl_kucuk_derle.sh
+      # basliginda). Surum her kosumda Homebrew'un openssl@3'unden okunur;
+      # onbellek anahtari surum + betik ozeti, yani yama ya da secenek
+      # degisince yeniden derlenir (soguk 49 s, -j3).
+      - name: OpenSSL surumu (Homebrew openssl@3)
+        id: ossl
+        timeout-minutes: 2
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          V=$(brew list --versions openssl@3 | awk '{print $2}' | sed 's/_[0-9]*$//')
+          [ -n "$V" ] || { echo "::error::openssl@3 surumu okunamadi"; exit 1; }
+          echo "OpenSSL $V"
+          echo "surum=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Cache kucuk OpenSSL
+        id: ossl-cache
+        timeout-minutes: 5
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/openssl-kucuk
+          key: openssl-kucuk-${{ runner.os }}-${{ runner.arch }}-${{ steps.ossl.outputs.surum }}-${{ hashFiles('tools/openssl_kucuk_derle.sh') }}
+
+      - name: Kucuk OpenSSL derle (onbellekte yoksa)
+        timeout-minutes: 10
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true' && steps.ossl-cache.outputs.cache-hit != 'true'
+        run: bash tools/openssl_kucuk_derle.sh "${{ steps.ossl.outputs.surum }}" "$HOME/openssl-kucuk"
+
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
@@ -1080,13 +1109,25 @@ jobs:
           export LLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm"
           mkdir -p build
           cd build
+          # Kucuk OpenSSL (yukarida); Homebrew'unki yalniz yedek degil —
+          # asagida CMake'in GERCEKTEN bunu sectigi denetleniyor.
+          OSSL="$HOME/openssl-kucuk"
           cmake_args="-DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$LLVM_DIR
+            -DOPENSSL_ROOT_DIR=$OSSL
             -DCMAKE_C_COMPILER_LAUNCHER=ccache
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
           if [ -n "${TULPAR_VERSION}" ]; then
             cmake_args="${cmake_args} -DTULPAR_VERSION=${TULPAR_VERSION}"
           fi
           cmake .. ${cmake_args}
+          for v in OPENSSL_SSL_LIBRARY OPENSSL_CRYPTO_LIBRARY OPENSSL_INCLUDE_DIR; do
+            d=$(sed -n "s/^$v:[A-Z]*=//p" CMakeCache.txt)
+            echo "$v=$d"
+            case "$d" in
+              "$OSSL"/*) ;;
+              *) echo "::error::$v kucuk OpenSSL'den degil ($d) — Homebrew'unki secildi"; exit 1 ;;
+            esac
+          done
           cmake --build . --config Release -j$(sysctl -n hw.ncpu)
         timeout-minutes: 10
 
@@ -1200,6 +1241,8 @@ jobs:
       # kaynaktan kucultulmus OpenSSL. Birlesmeden once kalkar.
       - name: TLS boyut olcumu (gecici)
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        env:
+          OLC_OPENSSL: "0"
         run: bash tools/tls_boyut_olc.sh dist/tulpar-macos-arm64 dist/libtulpar_runtime-macos-arm64.a
         timeout-minutes: 15
 

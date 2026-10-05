@@ -58,9 +58,11 @@ namespace {
 SSL_CTX *make_client_tls_ctx(std::string &out_err) {
     static bool g_ssl_inited = false;
     if (!g_ssl_inited) {
-        SSL_library_init();
-        SSL_load_error_strings();
-        OpenSSL_add_all_algorithms();
+        // SSL_library_init / SSL_load_error_strings / OpenSSL_add_all_algorithms
+        // 1.1.0'dan beri bu cagrinin makrolari; `no-deprecated` OpenSSL'de
+        // (macOS yayini, tools/openssl_kucuk_derle.sh) makrolar YOK.
+        OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS,
+                         nullptr);
         g_ssl_inited = true;
     }
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
