@@ -190,7 +190,7 @@ if [ "$ACTION" = "suites" ]; then
     if [ -n "${TULPAR_TEST_JOBS:-}" ]; then
         KAPI_JOBS=$TULPAR_TEST_JOBS
     elif [ "$PLATFORM" = "Windows" ]; then
-        KAPI_JOBS=1
+        KAPI_JOBS=4
     else
         KAPI_JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
     fi
