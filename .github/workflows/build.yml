@@ -1432,9 +1432,10 @@ jobs:
       # (`*-macos-arm64`) yayınlanıyor: "universal" adı yalnız arm64 olan bir
       # ikiliyi Intel + Apple Silicon diye tanıtıyordu. Ama v3.38.5 ve öncesinin
       # `tulpar update`i, sitedeki install.sh ve motor CI'ı ESKİ adı
-      # indiriyor; aynı dosya bir süre iki adla yayınlanır. Kaldırma koşulu:
-      # eski güncelleyiciler yeni sürüme geçmiş olsun (en az birkaç ay) ve
-      # install.sh (tulpar-lang-web) yeni ada geçsin.
+      # indiriyor; aynı dosya bir süre iki adla yayınlanır. Kaldırma koşulu
+      # RELEASING.md "Old macOS asset names — when they go" (en erken
+      # 2026-12-04, son 30 günde eski ad 0 indirme, install.sh + motor yeni
+      # adda); `python3 tools/eski_macos_adlari.py` ölçer, çıkış 0 = kaldır.
       - name: Eski macOS adlari (gecis kopyasi)
         timeout-minutes: 2
         shell: bash
