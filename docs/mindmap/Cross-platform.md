@@ -27,7 +27,22 @@ Platform detection **şim'ler üzerinden**: `src/common/platform.h`, `platform_s
   `link_directories(LLVM_LIBRARY_DIRS)` AppleClang'in örtük `-lc++`'sini Homebrew libc++'ya
   yönlendiriyordu, o da libunwind'i yeniden dışa aktarıyor; macOS'ta o `-L` kaldırıldı.
   Kapı `tools/dinamik_bag_denetle.sh` (Linux + macOS işleri; ayrıntı [[Build System]]).
-  `tulpar-macos-universal` adına rağmen **yalnız arm64**.
+  macOS varlığı **yalnız arm64** — 2026-10-05'ten beri adı da öyle: `tulpar-macos-arm64`
+  (eski `tulpar-macos-universal` adı geçiş için aynı dosyanın kopyası olarak yayınlanıyor;
+  v3.38.5 ve öncesinin `tulpar update`i, install.sh ve motor CI'ı onu indiriyor). Gerçek
+  universal (x86_64 dilimi) değerlendirildi, alınmadı: x86_64 dilimini KOŞTURACAK Intel
+  koşucu yok (ölçülmeyen ikili yayınlanmaz), çapraz derleme için Rosetta altında ikinci bir
+  Homebrew (x86_64 llvm@18 + openssl@3) ağacı ve macOS işinin derleme süresinin ~iki katı.
+- **Kullanıcı programlarının dinamik bağları (2026-10-05):** sürücünün taşınabilir olması
+  ürettiğinin taşınabilir olduğunu söylemez. macOS'ta `tulpar build` çıktısı Homebrew
+  openssl@3'e bağlanıyordu (`-L<openssl@3>/lib -lssl -lcrypto`; ld64 aynı dizinde `.dylib`i
+  `.a`ya tercih eder), openssl@3 yoksa link düşüyordu. Çözüm: OpenSSL statik arşivleri
+  `libtulpar_runtime.a`nın içinde (`libtool -static`, CMake `TULPAR_TLS_IN_RUNTIME`); sürücü
+  macOS'ta `-lssl/-lcrypto` ve OpenSSL `-L` yazmaz. Kapı `tests/kullanici_ikili_bag.sh`
+  (Linux + macOS). Linux'ta kullanıcı ikilisi `libssl.so.3`/`libcrypto.so.3`e dinamik bağlı
+  kalır (dağıtımın temel paketi; `--as-needed` sayesinde yalnız TLS kullanan programda).
+- **Yerinde üzerine yazılan Mach-O (2026-10-05):** çalıştırılmış ikilinin aynı inode'una
+  `cp` → belirlenimsiz `Killed: 9` ([[Tuzaklar]] 7l). Kopya her zaman yeni inode'a.
 
 ## İlgili
 [[Build System]] · [[Async Runtime]] · [[Runtime]]

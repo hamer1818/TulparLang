@@ -360,6 +360,10 @@ bool wants_binary(const Manifest &m, const std::string &name) {
 // Same platform-id convention `tulpar update` already uses
 // (src/cli/update_cmd.cpp `assets_for_platform()`), so a package author
 // publishing binaries only needs to pick names consumers already expect.
+// NOT: 2026-10-05'te dilin KENDI macOS varliklari `*-macos-arm64`e gecti; bu
+// kimlik `macos-universal` KALIYOR — yayinlanmis paketlerin tulpar.toml'undaki
+// `[release.binaries]` anahtari bu ve bir paketin ikilisi gercekten universal
+// olabilir. Kayit sozlesmesi, surum varligi adindan bagimsiz.
 const char *current_platform_id() {
 #if defined(_WIN32)
     return "windows-x64";

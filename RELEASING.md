@@ -84,16 +84,23 @@ Every release ships:
 | Asset                                  | What it is                                |
 | -------------------------------------- | ----------------------------------------- |
 | `tulpar-linux-x64`                     | Linux x86_64 driver binary.               |
-| `tulpar-macos-universal`               | macOS driver binary. Despite the name it is **arm64 only** (built on `macos-latest`, Apple Silicon); there is no Intel slice. |
+| `tulpar-macos-arm64`                   | macOS driver binary, **Apple Silicon only** (built on `macos-latest`); Intel Macs are not built. |
+| `tulpar-macos-universal`, `libtulpar_runtime-macos-universal.a` | **Transition copies** — byte-identical to the `-macos-arm64` files. Until 2026-10-05 the macOS assets carried this name although they were never universal. `tulpar update` from v3.38.5 and earlier, the site's `install.sh` and the engine CI still download it, so the release job copies the files under the old name too ("Eski macOS adlari" step) and lists them in `SHA256SUMS.txt`. Drop once old updaters have moved on and `install.sh` uses the new name. |
 | `libtulpar_runtime-<platform>.a`       | Per-platform runtime archive (linked into AOT-compiled user binaries). |
 | `TameEngine-<platform>.tar.gz`         | The 3D scene editor as a standalone bundle — binary + texture/sound/model palettes + sample scenes. Does **not** require the compiler to run. |
 | `SHA256SUMS.txt`                       | `sha256sum -b` manifest. `tulpar update` verifies every download against this. |
 | `SHA256SUMS.txt.asc`                   | Detached GPG signature over the manifest. Present only when the signing secret is configured (absent on forks). |
 
-> **No Windows assets.** Native Windows support was dropped in 3.13.0 —
-> `tulpar-windows-x64.exe`, the Inno Setup installer and the bundled MinGW
-> DLLs are gone, along with the `build-windows` job and its `objdump -p`
-> DLL-bundling guard. Windows users run the Linux build inside WSL.
+> **Windows assets are back** (since 2026-09-21; this note said "no Windows
+> assets" until 2026-10-05, long after they were being published again).
+> `tulpar-setup-windows-x64.exe` (per-user Inno Setup installer),
+> `tulpar-windows-x64.zip` (portable: `tulpar.exe` + the five MinGW/OpenSSL
+> DLLs it imports), and the same contents as loose assets
+> (`tulpar-windows-x64.exe`, `libwinpthread-1.dll`, `zlib1.dll`,
+> `libzstd.dll`, `libssl-3-x64.dll`, `libcrypto-3-x64.dll`) for `tulpar
+> update` / `install.ps1`, plus `libtulpar_runtime-windows-x64.a`. The
+> `build-windows` job's DLL gate keeps the zip self-contained;
+> `tests/surum_varliklari.py` keeps the updater's list equal to it.
 
 ### Driver binaries open without Homebrew (dynamic-link gate)
 
@@ -124,9 +131,44 @@ four installed.
   control (`--oz-sinama`) links a program against a dylib/.so in a temp dir
   and must see it red, and a plain program green. Windows has its own DLL
   gate in `build-windows`.
-- **Not covered:** user programs compiled on macOS still link the runtime's
-  TLS code against Homebrew openssl@3 (`-L` from `TULPAR_OPENSSL_LIBDIR`), so
-  `tulpar build` on a Mac without openssl@3 fails at link time.
+- **User programs too (since 2026-10-05):** `tulpar build` output used to
+  link the runtime's TLS code against Homebrew openssl@3 — the link line
+  carried `-L<openssl@3>/lib -lssl -lcrypto` and ld64 prefers the `.dylib` in
+  that directory, so every produced binary depended on
+  `/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib`, and on a Mac without
+  openssl@3 the link failed with `ld: library 'ssl' not found`. Now the
+  OpenSSL static archives are merged **into** `libtulpar_runtime.a` on macOS
+  (`libtool -static`, CMake `TULPAR_TLS_IN_RUNTIME`) and the driver emits no
+  `-lssl`/`-lcrypto` and no OpenSSL `-L` at all. One archive, nothing for the
+  user to see. Measured (macOS CI, PR #463, 2026-10-05): the archive went
+  from 2.7 MB / 19 members to 12 MB / 1139 members (938 from OpenSSL), and a
+  TLS program from 450,432 to 5,585,296 bytes. Only programs that touch TLS
+  pay it — ld64 pulls just the referenced archive members, so a plain `print`
+  program is 390,168 bytes (390,120 with `-dead_strip`: no gain, flag not
+  added). Linux is unchanged (shared libssl, TLS program 1,323,336 bytes). Gate:
+  `tests/kullanici_ikili_bag.sh` (both jobs) builds a program that calls
+  `tls_init(cert, key)` (no network), runs it (must report TLS present),
+  and runs `dinamik_bag_denetle.sh` on the **output**; positive control: a
+  binary linked against a temp-dir dylib/.so via `TULPAR_AOT_LINK_FLAGS` must
+  be red. macOS runs it twice — with Homebrew visible (the dylib-preference
+  trap) and with LLVM **and** openssl@3 Cellars hidden. The gate was pushed
+  before the fix once and was red on both legs (2026-10-05, PR #463: the
+  produced binary listed Homebrew `libssl.3`, `libcrypto.3` **and**
+  `llvm@18/lib/libunwind.1.dylib`; hidden, every link failed with
+  `ld: library 'ssl' not found`). The libunwind came from the link *driver*:
+  with `brew link llvm@18`, `clang++` on `PATH` is Homebrew's. On macOS the
+  default driver is now `/usr/bin/clang++` (Apple); `TULPAR_CC` overrides.
+- **Copy to a new inode.** CI's "Package TameEngine" step once died with
+  `Killed: 9` 3 ms into `./tulpar build` and was green on the next run of the
+  same tree (2026-10-02). The step did `cp build/tulpar tulpar` **in place**
+  over a binary the previous step had executed hundreds of times; the macOS
+  kernel caches a Mach-O's signature validity per vnode and SIGKILLs the next
+  exec once the content changes (same class as Go #42684). Every copy in
+  `build.yml` and `build.sh` now removes the target first (new inode); the
+  macOS job's "Yerinde kopya olcumu" step proves the mechanism with
+  `stat -f %i` (in-place `cp` keeps the inode, `mv` changes it) and records
+  the in-place run's exit code in the job summary without asserting it
+  (non-deterministic).
 
 ### Why TameEngine ships as a bundle, not a bare binary
 

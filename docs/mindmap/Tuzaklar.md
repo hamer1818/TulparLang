@@ -2204,6 +2204,58 @@ adın taşındığı **bütün** düğüm türlerini say (`AST_IDENTIFIER`,
 "bu fonksiyonda geçerli" demek değil. Kapı:
 `tests/kapanis_cagri_yakalama.test.tpr` (eski derleyicide süreç çöküyor).
 
+## 7l. macOS: çalıştırılmış ikilinin YERİNDE üzerine yazılması — belirlenimsiz `Killed: 9`
+
+macOS CI "Package TameEngine" adımında `./tulpar build` 3 ms içinde `Killed: 9`
+ile düştü; aynı ağaç yeniden koşturulunca yeşil (2026-10-02). Adım
+`cp build/tulpar tulpar` yapıyordu — hedef vardı, çünkü bir önceki adım
+("Language suites") aynı dosyayı koymuş ve **yüzlerce kez çalıştırmıştı**.
+`cp` var olan hedefi `O_TRUNC` ile açar: **aynı inode**, yeni içerik. macOS
+çekirdeği çalıştırılmış bir Mach-O'nun kod imzası durumunu vnode'da önbellekler;
+içerik değişince imza geçersiz sayılır ve bir sonraki `exec` SIGKILL alır
+(Go #42684 ile aynı sınıf — Go'nun linker'ı da bu yüzden geçici ada yazıp
+`rename` eder). Belirlenimsizliğin kaynağı vnode'un önbellekte kalıp
+kalmaması (bellek basıncı): bir koşumda ölür, ötekinde geçer. Linux'ta aynı
+`cp` zararsızdır, o yüzden Linux'ta geliştirip macOS'ta görmek kolay.
+
+**Kural:** çalıştırılmış/çalıştırılabilecek bir ikiliyi kopyalarken hedefi önce
+sil (`rm -f h && cp k h`) ya da geçici ada yazıp `mv` et — ikisi de yeni inode.
+`build.yml`deki her kopya ve `build.sh`in `cp tulpar ../tulpar`ı böyle.
+macOS işindeki "Yerinde kopya olcumu" adımı mekanizmayı `stat -f %i` ile
+kanıtlar (yerinde `cp` inode'u korur, `mv` değiştirir; yeni inode'lu kopya
+kesin koşar) ve yerinde kopyanın koşum sonucunu özete yazar — iddia etmez.
+İlk ölçüm (PR #463, 2026-10-05): yerinde `cp` inode 2972936 → 2972936 (aynı),
+o koşumda sonraki exec rc=0 (öldürülmedi — belirlenimsiz olduğu için beklenen);
+`mv` ile 2972936 → 2972938, rc=0.
+`tulpar update`in `atomic_replace`i zaten `rename` kullanıyor; sorun yalnız
+betiklerdeki elle `cp`lerdeydi.
+
+## 7m. "Sürücü taşınabilir" ≠ "sürücünün ÜRETTİĞİ taşınabilir"
+
+#462 `tulpar-macos-universal`ı Homebrew'suz açılır yaptı ve
+`tools/dinamik_bag_denetle.sh` ile kilitledi. Ama `tulpar build`in link satırı
+`-L/opt/homebrew/opt/openssl@3/lib -lssl -lcrypto` taşıyordu ve ld64 aynı
+dizinde `.dylib`i `.a`ya **tercih eder**: üretilen her kullanıcı ikilisi
+`libssl.3.dylib`e bağlıydı; openssl@3 olmayan Mac'te ise `-L` eklenmiyor ve
+link `ld: library 'ssl' not found` ile düşüyordu. Sürücü kapısı yeşilken
+kullanıcıya görünen ürün bozuktu, çünkü kapı yalnız sürücüye bakıyordu.
+
+**Kural:** bir derleyicinin taşınabilirliğini ölçerken **çıktısını** da ölç —
+derle, linkle, çalıştır, çıktının bağımlılıklarını denetle; bağımlılık
+sağlayıcısı (Homebrew) **görünürken** de ölç, çünkü tuzak orada (dylib
+tercihi). `tests/kullanici_ikili_bag.sh` bunu yapar; pozitif kontrolü geçici
+dizindeki bir kitaplığa bağlanan ikilinin kırmızı görülmesi. Düzeltme: OpenSSL
+statik arşivleri `libtulpar_runtime.a`nın içinde (`libtool -static`,
+`TULPAR_TLS_IN_RUNTIME`) — link satırında `-lssl` hiç yok, tercih edilecek
+dylib de yok.
+
+Aynı ölçüm İKİNCİ bir bağ gösterdi, kapı yazılmadan kimsenin aklında değildi:
+CI'da `brew link llvm@18` yapıldığı için PATH'teki `clang++` Homebrew'unkiydi
+ve ürettiği ikili `/opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib`e de
+bağlanıyordu. Bağımlılık yalnız kitaplıktan değil **link sürücüsünden** de
+gelir. macOS'ta varsayılan sürücü artık `/usr/bin/clang++` (Apple);
+`TULPAR_CC` ezer.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

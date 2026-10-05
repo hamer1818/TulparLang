@@ -19,7 +19,14 @@
 #                   libzstd.so.1 libtinfo.so.6 libstdc++.so.6 libgcc_s.so.1
 #                   libc.so.6 ld-linux-x86-64.so.2; RUNPATH /usr/lib/llvm-17/lib
 #                   (CMake'in derleme rpath'i; zararsiz, hicbir sey oradan yuklenmiyor).
+#                   2026-10-05'ten beri CI LLVM_DIR'i llvm-18'e kilitliyor (o
+#                   RUNPATH, apt 18 kurarken find_package'in koscudaki 17'yi
+#                   sectigini gosteriyordu) — RUNPATH artik /usr/lib/llvm-18/lib.
 #                   LLVM statik bagli (68 MB) — libLLVM*.so gelirse KIRMIZI.
+#
+#   KULLANICI IKILISI: bu betik verilen HER ikiliye bakar; `tulpar build`
+#                   ciktisi icin tests/kullanici_ikili_bag.sh onu TLS'ye dokunan
+#                   bir programla cagirir (Linux + macOS CI).
 #   PE (Windows):   bu betik bakmaz; build-windows isinin kendi DLL kapisi var.
 #
 # POZITIF KONTROL (--oz-sinama): gecici bir dizine bir paylasimli kitaplik
