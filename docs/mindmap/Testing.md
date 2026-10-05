@@ -104,6 +104,11 @@ Kod üretimi iğnelemesinde üç bozmanın ikisi hiç ölçülmediği hâlde "ya
 göründü ve düzeltilmiş hâl bile kırmızı çıktı. Önbellek düzeltildi
 (`newest_local_import_mtime`), ama **disiplin kalıcı: iğnelemeden önce çıktı
 ikilisini `rm -f` et ve derlemenin gerçekten koştuğunu bir kez gözle gör.**
+Mtime önbelleği 2026-10-05'te bir kez daha yalan söyledi (kodgen ortam
+değişkeni `TULPAR_NO_FVER` anahtarda değildi, [[Tuzaklar#7n]]); anahtar artık
+içerik adresli ve her `TULPAR_*`ı görüyor, kararları `TULPAR_CACHE_RAPOR=1`
+basıyor — iğnelemede `[onbellek] iska` satırını görmek "derleme koştu"nun
+kanıtı. Kuşkudaysan `TULPAR_AOT_NOCACHE=1` ya da `tulpar cache clean`.
 
 **İki koşum aynı ikiliyi çalıştırabiliyordu.** `tulpar dosya.tpr` derlediğini
 sabit `/tmp/.tulpar_run`'a yazıyordu; eşzamanlı iki koşuda **iki farklı kaynak

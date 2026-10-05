@@ -19,6 +19,7 @@
 #include "vm/vm.hpp" // shared runtime types (VMValue, Obj*) — NOT the VM engine
 #ifdef TULPAR_AOT_ENABLED
 #include "aot/aot_pipeline.hpp"
+#include "aot/aot_cache.hpp"
 #endif
 #include "lsp/lsp_server.hpp"
 #include "fmt/formatter.hpp"
@@ -34,7 +35,6 @@
 #include "ext/extensions.hpp"
 #include "common/version.hpp"
 #include <ctime>
-#include <set>
 #include <string>
 #include <cctype>
 
@@ -64,105 +64,6 @@ char *read_file(const char *filename) {
   return buffer;
 }
 
-// Print the top-level command reference. Shared between explicit
-// `tulpar --help` / `-h` / `help` / `?` invocations and the no-args
-// fallback so both stay in sync.
-// Kaynaktaki `import "ad"` bildirimlerinden çözülen YEREL dosyaların en yeni
-// değişiklik zamanı. `tulpar build` önbelleği bunu okuyor: import edilen bir
-// modül ana kaynaktan sonra değiştiyse ikili bayattır.
-//
-// Çözüm sırası AOT arka ucuyla AYNI (llvm_backend.cpp'deki import işleyicisi):
-// düz `ad`, `ad.tpr`, `tulpar_modules/<ad>/<ad>.tpr`, `tulpar_modules/<ad>.tpr`.
-// Gömülü stdlib adları (wings, tame, scene3d, ...) diskte bulunmaz ve
-// atlanır — onları sürücünün kendi mtime'ı kapsıyor.
-//
-// Özyineleme: bulunan dosyanın kendi import'ları da izleniyor (yerel modül
-// yerel modül çağırabiliyor). `seen` hem döngüyü hem tekrarı kesiyor, derinlik
-// de sınırlı — bozuk/dairesel bir ağaçta önbellek denetimi asılmasın.
-static time_t newest_local_import_mtime(const char *src, const char *src_path,
-                                        std::set<std::string> &seen, int depth) {
-  time_t newest = 0;
-  if (!src || depth > 8) return newest;
-
-  // İçe aktaranın dizini: göreli yollar ONA göre değil ÇALIŞMA DİZİNİNE göre
-  // çözülüyor (motor da öyle yapıyor), o yüzden dizin yalnız `seen` anahtarı
-  // için tutuluyor.
-  (void)src_path;
-
-  std::string text(src);
-  size_t pos = 0;
-  while ((pos = text.find("import", pos)) != std::string::npos) {
-    size_t p = pos + 6;
-    // `import` bir tanımlayıcının parçasıysa (ör. `importer`) atla.
-    if (pos > 0 && (isalnum((unsigned char)text[pos - 1]) || text[pos - 1] == '_')) {
-      pos = p;
-      continue;
-    }
-    while (p < text.size() && (text[p] == ' ' || text[p] == '\t')) p++;
-    if (p >= text.size() || text[p] != '"') { pos = p; continue; }
-    size_t q = text.find('"', p + 1);
-    if (q == std::string::npos) break;
-    std::string name = text.substr(p + 1, q - p - 1);
-    pos = q + 1;
-    if (name.empty()) continue;
-
-    const std::string cands[4] = {
-        name, name + ".tpr", "tulpar_modules/" + name + "/" + name + ".tpr",
-        "tulpar_modules/" + name + ".tpr"};
-    for (int i = 0; i < 4; i++) {
-      struct stat st;
-      if (stat(cands[i].c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
-      if (!seen.insert(cands[i]).second) break;   // zaten görüldü
-      if (st.st_mtime > newest) newest = st.st_mtime;
-      // İçeriğini de tara: yerel modül başka bir yerel modülü çağırabilir.
-      FILE *f = fopen(cands[i].c_str(), "rb");
-      if (f) {
-        std::string body;
-        char buf[4096];
-        size_t n;
-        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) body.append(buf, n);
-        fclose(f);
-        time_t deep =
-            newest_local_import_mtime(body.c_str(), cands[i].c_str(), seen, depth + 1);
-        if (deep > newest) newest = deep;
-      }
-      break;   // ilk eşleşen aday kazanır — çözüm sırası budur
-    }
-  }
-  return newest;
-}
-
-// Çıktı ikilisi hata ayıklama bilgisi taşıyor mu? `tulpar build` önbelleği
-// yalnız mtime'a bakıyordu: `--debug` ile derlenmiş (optimizasyonsuz, DWARF'lı)
-// bir ikilinin ardından gelen düz `tulpar build` "Cache hit" alıp YAVAŞ debug
-// ikilisini bırakıyordu (ve tersi: debugsız ikiliden sonra `--debug` DWARF'sız
-// ikili bırakıyordu). Durum dosyası yazmamak için ikilinin kendisine bakılıyor —
-// "herhangi bir DWARF" değil, BİZİM ürettiğimiz DWARF:
-//   ELF / PE-COFF  -> DW_AT_producer dizgisi "Tulpar AOT" (.debug_str)
-//   Mach-O         -> hata ayıklama haritasındaki (N_OSO) nesne yolu
-//                     "<çıktı>.o" — ld64 DWARF'ı ikiliye kopyalamaz, yalnız
-//                     nesneyi işaret eder.
-// ".debug_info" bölüm adına bakmak YANLIŞTI: MinGW'de düz derleme de CRT /
-// libstdc++'dan gelen .debug_info taşıyor — ölçüldü (2026-09-27, Windows CI):
-// önbellek Windows'ta HİÇ isabet etmedi. Kapısı: tests/build_bayraklari.sh
-// (üç platformda; "aynı kipte ikinci derleme isabet eder" pozitif kontrolü
-// tam bunu yakaladı).
-static bool binary_has_debug_info(const char *path, const char *output_name) {
-  FILE *f = fopen(path, "rb");
-  if (!f) return false;
-  std::string data;
-  char buf[1 << 16];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) data.append(buf, n);
-  fclose(f);
-  if (data.find("Tulpar AOT") != std::string::npos) return true;
-  const char *base = strrchr(output_name, '/');
-  base = base ? base + 1 : output_name;
-  std::string oso = std::string("/") + base + ".o";
-  oso.push_back('\0');
-  return data.find(oso) != std::string::npos;
-}
-
 // `--sanitize[=address]` / `--asan` (K166). 1 = tanındı, 0 = bu bayrak
 // değil, -1 = desteklenmeyen tür (hata basıldı). UBSan/TSan kaynak düzeyinde
 // ön uç işi (clang denetimleri AST'den ekler); Tulpar IR'ına sonradan
@@ -182,19 +83,9 @@ static int parse_sanitize_flag(const char *f) {
   return 0;
 }
 
-// ASan'lı bir ikili mi? (`__asan_init` çağrısı modül kurucusundan gelir.)
-// Önbellek, sanitize kipi değişince eski ikiliyi bırakmasın diye.
-static bool binary_is_asan(const char *path) {
-  FILE *f = fopen(path, "rb");
-  if (!f) return false;
-  std::string data;
-  char buf[1 << 16];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) data.append(buf, n);
-  fclose(f);
-  return data.find("__asan_init") != std::string::npos;
-}
-
+// Print the top-level command reference. Shared between explicit
+// `tulpar --help` / `-h` / `help` / `?` invocations and the no-args
+// fallback so both stay in sync.
 static void print_help() {
   std::printf("TulparLang %s (LLVM AOT Backend)\n\n", tulpar::kVersion);
 
@@ -259,6 +150,12 @@ static void print_help() {
   std::printf("  tulpar pkg <komut>               %s\n",
               tulpar::i18n::tr_en("- Paket yoneticisi (init/install/...)",
                                   "- Package manager (init/install/...)"));
+  std::printf("  tulpar cache [info|clean|dir]    %s\n",
+              tulpar::i18n::tr_en(
+                  "- Derleme onbellegi: ayni girdiyle ikinci derleme/calistirma "
+                  "derlemeyi atlar (TULPAR_AOT_NOCACHE=1 kapatir)",
+                  "- Compile cache: a second build/run with identical inputs "
+                  "skips compilation (TULPAR_AOT_NOCACHE=1 disables)"));
   std::printf("  tulpar --lsp                     %s\n",
               tulpar::i18n::tr_en("- LSP sunucusu (editor entegrasyonu)",
                                   "- LSP server (editor integration)"));
@@ -408,6 +305,14 @@ int main(int argc, char **argv) {
   if (argc >= 2 && std::strcmp(argv[1], "update") == 0) {
     return tulpar::update_cmd_main(argc, argv);
   }
+
+#ifdef TULPAR_AOT_ENABLED
+  // `tulpar cache [info|clean|dir]` — derleme onbellegi (src/aot/aot_cache.hpp).
+  // Eklenti yuklemeden once: bozuk bir TULPAR_EXT_PATH temizligi engellemesin.
+  if (argc >= 2 && std::strcmp(argv[1], "cache") == 0) {
+    return tulpar::cache::cache_cmd_main(argc, argv);
+  }
+#endif
 
   // `tulpar debug <file.tpr>` — Plan 07 Part B. Opens a Debug Adapter
   // Protocol server on stdio. Owns stdin/stdout (every diagnostic
@@ -729,67 +634,90 @@ int main(int argc, char **argv) {
       output_name = default_output_name;
     }
 
-    // Cache check: skip the whole AOT pipeline (~400ms link cost on Win)
-    // when the output binary is newer than both the source file and the
-    // compiler driver itself. Disable with TULPAR_AOT_NOCACHE=1 or by
-    // deleting the output file. We only check this for the persistent
-    // `tulpar build` path; the silent run path uses a temp output.
+    // ONBELLEK (icerik adresli anahtar; src/aot/aot_cache.hpp). Eskiden
+    // mtime'a bakiyordu: cikti kaynaktan, yerel import'lardan, eklenti
+    // dosyalarindan ve surucuden yeniyse "Cache hit". Kod uretimini
+    // degistiren ortam degiskenlerini (TULPAR_NO_FVER ...), runtime
+    // arsivini, paket-yerel kardes import'lari ve mtime'i geri alinmis
+    // icerigi GORMUYORDU — olculdu 2026-10-05: TULPAR_NO_FVER=1 ile ikinci
+    // build ESKI (float surumlu) ikiliyi birakti. Artik anahtar butun
+    // girdilerin ozeti; ikili kullanicinin dizininde kalir, anahtar ve
+    // ikilinin KIMLIGI (boyut+mtime(ns)+inode) <kok>/build/ altindaki bir
+    // kayitta durur (ikiliye hicbir sey eklenmez/yazilmaz: macOS imzasi ve
+    // Tuzaklar 7l; kullanici dizini de kirlenmez). Ikili baska bir seyle
+    // degisirse (debug derlemesi, cp, strip) kimlik tutmaz -> iska.
+    //
+    // Onbellek disi: web/android (cikti output_name'in kendisi degil: .html
+    // ucuzu / <out>_apk dizini), --debug (optimizasyonsuz ve hizli; DWARF
+    // mutlak yollar tasir) ve --sanitize (tani amacli, nadir). Bunlar
+    // derlenince eski kayit SILINIR.
     {
-      const char *nocache = getenv("TULPAR_AOT_NOCACHE");
-      // Web ve Android hedeflerinde cache atlanır: ikisinde de üretilen şey
-      // `output_name`in kendisi DEĞİL. Web'de .html/.js/.wasm üçlüsü, Android'de
-      // `<output_name>_apk/` dizini çıkıyor. Buradaki native yolu stat etmek
-      // yanlış pozitif "up-to-date" üretir — Android'de bu özellikle sinsiydi,
-      // çünkü kullanıcının önceden `mkdir`lediği çıktı dizini stat'i geçiyor ve
-      // mtime'ı taze olduğu için derleme tamamen atlanıyordu.
-      // `--debug` önbelleği hiç kullanmıyor: debug derlemesi optimizasyonsuz
-      // ve hızlı, önceki ikilinin hangi kipte üretildiğini tahmin etmekten
-      // ucuz. Tersi yön (debug ikilisinin ardından düz derleme) aşağıda
-      // `binary_has_debug_info` ile yakalanıyor.
-      if (!web_target && !android_target && !emit_debug && !sanitize_address &&
-          !(nocache && *nocache && *nocache != '0')) {
-        char exe_path[512];
 #ifdef _WIN32
-        snprintf(exe_path, sizeof(exe_path), "%s.exe", output_name);
+      const std::string exe_path = std::string(output_name) + ".exe";
 #else
-        snprintf(exe_path, sizeof(exe_path), "%s", output_name);
+      const std::string exe_path = output_name;
 #endif
-        struct stat src_st, exe_st, drv_st;
-        if (stat(exe_path, &exe_st) == 0 &&
-            stat(src_arg, &src_st) == 0) {
-          int driver_ok = (stat(argv[0], &drv_st) == 0);
-          // IMPORT EDİLEN DOSYALAR da hesaba katılıyor. Eskiden yalnız ana
-          // kaynak ve sürücü karşılaştırılıyordu; `import "lib/scene3d"` gibi
-          // YEREL bir modülü düzeltip yeniden derlemek "Cache hit" alıp
-          // SESSİZCE eski ikiliyi bırakıyordu. Belirti çok yanıltıcı:
-          // düzeltmen "işe yaramamış" görünüyor ve yanlış yerde hata arıyorsun
-          // (ölçüldü 2026-09-01: üç ayrı enjeksiyonun üçü de aynı bayat ikiliyi
-          // koşturdu ve hepsi "yakalandı" gibi göründü). Gömülü stdlib adları
-          // diskte çözülmüyor — onları sürücünün mtime'ı zaten kapsıyor.
-          std::set<std::string> seen;
-          time_t imp_mtime = newest_local_import_mtime(source, src_arg, seen, 0);
-          // Yerel eklentinin bildirimi, modulleri ve arsivleri de girdidir
-          // (K303): motor arsivi yeniden derlenince eski ikili "guncel" kalmasin.
-          if ((time_t)tulpar::ext::newest_mtime() > imp_mtime)
-            imp_mtime = (time_t)tulpar::ext::newest_mtime();
-          if (exe_st.st_mtime >= src_st.st_mtime &&
-              exe_st.st_mtime >= imp_mtime &&
-              (!driver_ok || exe_st.st_mtime >= drv_st.st_mtime) &&
-              !binary_has_debug_info(exe_path, output_name) &&
-              !binary_is_asan(exe_path)) {
-            printf("[AOT] Cache hit: %s up-to-date\n", exe_path);
-            free(source);
-            return 0;
-          }
-        }
+      namespace oc = tulpar::cache;
+      oc::Key key;
+      std::string why;
+      if (web_target || android_target) why = "web/android hedefi";
+      else if (emit_debug) why = "--debug";
+      else if (sanitize_address) why = "--sanitize";
+      else if (oc::usable(why)) {
+        key = oc::compute_key(oc::Mode::Build, source, src_arg, output_name);
+        if (!key.ok) why = key.why;
       }
-    }
+      if (key.ok) {
+        oc::report_material(key);
+        std::string diag;
+        if (oc::build_lookup(key, exe_path, diag)) {
+          oc::report("isabet derle %s", key.hex.c_str());
+          if (!diag.empty()) {
+            fwrite(diag.data(), 1, diag.size(), stderr);
+            fflush(stderr);
+          }
+          printf("[AOT] Cache hit: %s up-to-date\n", exe_path.c_str());
+          free(source);
+          return 0;
+        }
+      } else {
+        oc::report("kapali (%s): derleniyor, kayit tutulmuyor", why.c_str());
+      }
 
-    if (sanitize_address) aot_set_sanitize_address(1);
-    AOTResult result = aot_compile_with_filename_debug(
-        source, output_name, src_arg, emit_debug);
-    free(source);
-    return (result == AOT_OK) ? 0 : 1;
+      if (sanitize_address) aot_set_sanitize_address(1);
+      // Ust dizin yakalamadan ONCE: "dizin olusturuldu" satiri isabette
+      // yeniden basilacak bir tani degil.
+      if (!aot_ensure_output_parent_dir(output_name)) {
+        free(source);
+        return 1;
+      }
+      oc::StderrCapture cap;
+      std::string base;
+      bool capturing = false;
+      if (key.ok) {
+        base = oc::run_staging_base();
+        capturing = !base.empty() && cap.begin(base + ".stderr");
+        oc::record_begin();
+      }
+      AOTResult result = aot_compile_with_filename_debug(
+          source, output_name, src_arg, emit_debug);
+      std::vector<std::string> read;
+      if (key.ok) read = oc::record_end();
+      const std::string captured = capturing ? cap.end() : std::string();
+      std::string missing;
+      if (result == AOT_OK && key.ok && capturing && oc::inputs_covered(key, read, missing)) {
+        oc::build_record(key, exe_path, captured);
+        oc::report("iska derle %s: kaydedildi", key.hex.c_str());
+      } else {
+        if (key.ok && result == AOT_OK)
+          oc::report("iska derle %s: kayit YAZILMADI — %s%s", key.hex.c_str(),
+                     !missing.empty() ? "kapsanmayan girdi " : "stderr yakalanamadi",
+                     missing.c_str());
+        oc::build_forget(exe_path);
+      }
+      free(source);
+      return (result == AOT_OK) ? 0 : 1;
+    }
   }
 #endif
 

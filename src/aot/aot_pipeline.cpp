@@ -6,6 +6,7 @@
 #include "../pkg/manifest.hpp"  // [android] bölümü: paket adi/ikon/yon/surum
 #include "../lsp/document_index.hpp"
 #include "../ext/extensions.hpp"   // yerel eklentiler (K303): link bayraklari
+#include "aot_cache.hpp"           // derleme onbellegi (calistirma yolu)
 #include "llvm_backend.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -461,6 +462,11 @@ static const char *aot_link_driver() {
 #endif
   return "clang++";
 }
+
+// Onbellek anahtari bu ikisinden turetiliyor (aot_cache.cpp): link satiri
+// degisirse anahtar da AYNI kaynaktan degisir.
+const char *aot_cache_link_driver(void) { return aot_link_driver(); }
+std::string aot_cache_link_search_dirs(void) { return build_link_search_dirs(); }
 
 // --- AddressSanitizer (K166) --------------------------------------------------
 // `TULPAR_AOT_LINK_FLAGS=-fsanitize=address` yalnız ASan RUNTIME'ını
@@ -1379,6 +1385,10 @@ static bool ensure_output_parent_dir(const char *output_name) {
   return true;
 }
 
+bool aot_ensure_output_parent_dir(const char *output_name) {
+  return ensure_output_parent_dir(output_name);
+}
+
 AOTResult aot_compile_with_filename_debug(const char *source,
                                           const char *output_name,
                                           const char *source_filename,
@@ -2068,8 +2078,142 @@ AOTResult aot_compile_and_run_silent(const char *source) {
   return aot_compile_and_run_silent_with_filename(source, nullptr);
 }
 
+// system() donusunu surucu sonucuna cevir (programin cikis kodu korunur).
+static AOTResult aot_run_status(int run_result) {
+  // The compile + link already succeeded (callers return early otherwise),
+  // so a non-zero status here means the PROGRAM ran and exited non-zero — not
+  // a toolchain failure. Report it as AOT_RAN_NONZERO so the driver propagates
+  // the failure without the misleading "compile/link failed" banner.
+#if !PLATFORM_WINDOWS
+  // Ctrl+C (SIGINT) on a long-running server is a normal stop, not a failure.
+  if (WIFSIGNALED(run_result) && WTERMSIG(run_result) == SIGINT) {
+    g_last_run_exit_code = 0;
+    return AOT_OK;
+  }
+  // Keep the program's own exit code (the driver used to flatten every
+  // non-zero status to 1: `exit(3)` -> 1, measured 2026-09-28). system()
+  // returns a wait status here, not the code; a signal death is reported
+  // the way shells do, 128 + signal (SIGSEGV -> 139).
+  if (WIFEXITED(run_result)) g_last_run_exit_code = WEXITSTATUS(run_result);
+  else if (WIFSIGNALED(run_result)) g_last_run_exit_code = 128 + WTERMSIG(run_result);
+  else g_last_run_exit_code = run_result == 0 ? 0 : 1;
+#else
+  // On Windows system() returns the program's exit code itself.
+  g_last_run_exit_code = run_result;
+#endif
+  return (run_result == 0) ? AOT_OK : AOT_RAN_NONZERO;
+}
+
+// Mutlak yollu bir ikiliyi (onbellek deposu) kabuk uzerinden calistir.
+// POSIX: tek tirnak. Windows: cmd.exe /c komutun ILK ve SON tirnagini soyar
+// (yol + argumanlarda birden cok tirnak varken "eski davranis"); butun komut
+// bir cift tirnak daha sarilir ki yol (%LOCALAPPDATA% altinda bosluk
+// olabilir) tirnakli kalsin. Argumanlar zaten CRT kuraliyla alintili.
+static AOTResult aot_run_binary_at(const std::string &exe) {
+#if PLATFORM_WINDOWS
+  std::string win = exe;
+  for (char &c : win)
+    if (c == '/') c = '\\';
+  std::string cmd = "\"\"" + win + "\"";
+  if (!g_tulpar_run_args.empty()) cmd += " " + g_tulpar_run_args;
+  cmd += "\"";
+#else
+  std::string cmd = "'";
+  for (char c : exe) {
+    if (c == '\'') cmd += "'\\''";
+    else cmd += c;
+  }
+  cmd += "'";
+  if (!g_tulpar_run_args.empty()) cmd += " " + g_tulpar_run_args;
+#endif
+  fflush(stdout);
+  fflush(stderr);
+  return aot_run_status(system(cmd.c_str()));
+}
+
+// CALISTIRMA YOLU ONBELLEGI (2026-10-05). `tulpar dosya.tpr` her kosuda
+// bastan derliyordu: 28 satirlik wings ornegi ~0,56 s, nbody ~0,40 s, bos
+// program ~46 ms (Ryzen 7 9800X3D, v3.39.6). Ikili artik icerik adresli
+// anahtarin adiyla <kok>/run/ altinda duruyor ve isabette DOGRUDAN oradan
+// calisiyor (kopya yok). Yazma: gecici ad -> asla-uzerine-yazmayan yayim
+// (aot_cache.cpp run_publish); N surec ayni programi ayni anda derlerse
+// her biri kendi gecici ikilisini uretir, yarisi kazanan yayimlar, digerleri
+// onunkini kullanir. Derlemenin stderr'i (kodgen uyarilari) yakalanip ikiliyle
+// saklanir ve isabette yeniden basilir; [typecheck] on gecisi zaten her
+// kosuda calisiyor (surucu onu onbellekten once kosturur).
+// false = onbellek bu kosuda kullanilamadi (cagiran eski yola duser).
+static bool aot_run_via_cache(const char *source, const char *source_filename,
+                              AOTResult &out) {
+  namespace oc = tulpar::cache;
+  const auto t0 = std::chrono::steady_clock::now();
+  auto ms_since = [](std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+  };
+  oc::Key key = oc::compute_key(oc::Mode::Run, source, source_filename, nullptr);
+  if (!key.ok) {
+    oc::report("anahtar kurulamadi (%s): onbelleksiz", key.why.c_str());
+    return false;
+  }
+  oc::report_material(key);
+  std::string exe, diag;
+  if (oc::run_lookup(key, exe, diag)) {
+    oc::report("isabet calistir %s (anahtar %.1f ms)", key.hex.c_str(), ms_since(t0));
+    if (!diag.empty()) {
+      fwrite(diag.data(), 1, diag.size(), stderr);
+      fflush(stderr);
+    }
+    out = aot_run_binary_at(exe);
+    return true;
+  }
+  const std::string base = oc::run_staging_base();
+  if (base.empty()) {
+    oc::report("depo dizini kurulamadi: onbelleksiz");
+    return false;
+  }
+  const auto t1 = std::chrono::steady_clock::now();
+  oc::StderrCapture cap;
+  const bool capturing = cap.begin(base + ".stderr");
+  oc::record_begin();
+  AOTResult r = aot_compile_silent(source, base.c_str(), source_filename);
+  const std::vector<std::string> read = oc::record_end();
+  const std::string captured = capturing ? cap.end() : std::string();
+  const std::string built = base + AOT_EXE_SUFFIX;
+  if (r != AOT_OK) {
+    remove(built.c_str());
+    remove((base + ".o").c_str());
+    out = r;
+    return true;
+  }
+  std::string missing, final_exe;
+  const bool covered = oc::inputs_covered(key, read, missing);
+  if (covered && capturing && oc::run_publish(key, built, captured, final_exe)) {
+    oc::report("iska calistir %s: derlendi (%.0f ms), yayimlandi", key.hex.c_str(), ms_since(t1));
+    out = aot_run_binary_at(final_exe);
+    oc::evict();  // program bittikten SONRA: baslangici geciktirmesin
+    return true;
+  }
+  // Yayimlanamadi (kapsanmayan girdi / stderr yakalanamadi / dizin
+  // yazilamiyor): bu kosu icin gecici ikiliyi calistir ve sil — eski davranis.
+  oc::report("iska calistir %s: derlendi (%.0f ms), YAYIMLANMADI — %s%s", key.hex.c_str(),
+             ms_since(t1),
+             !covered ? "kapsanmayan girdi " : (!capturing ? "stderr yakalanamadi" : "yayim basarisiz"),
+             !covered ? missing.c_str() : "");
+  out = aot_run_binary_at(built);
+  remove(built.c_str());
+  return true;
+}
+
 AOTResult aot_compile_and_run_silent_with_filename(const char *source,
                                                    const char *source_filename) {
+  {
+    std::string why;
+    if (tulpar::cache::usable(why)) {
+      AOTResult r;
+      if (aot_run_via_cache(source, source_filename, r)) return r;
+    } else {
+      tulpar::cache::report("kapali (%s): gecici ikiliyle kosuluyor", why.c_str());
+    }
+  }
 #if PLATFORM_WINDOWS
   // SURECE OZGU ad — asagidaki POSIX dalindaki gerekceyle ayni sinif, burada
   // gec yakalandi: sabit `tulpar_run_tmp` iki `tulpar` ayni dizinde ayni anda
@@ -2111,29 +2255,7 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   remove(run_base.c_str());
   remove((run_base + ".ll").c_str());
 #endif
-
-  // The compile + link already succeeded above (we returned early otherwise),
-  // so a non-zero status here means the PROGRAM ran and exited non-zero — not
-  // a toolchain failure. Report it as AOT_RAN_NONZERO so the driver propagates
-  // the failure without the misleading "compile/link failed" banner.
-#if !PLATFORM_WINDOWS
-  // Ctrl+C (SIGINT) on a long-running server is a normal stop, not a failure.
-  if (WIFSIGNALED(run_result) && WTERMSIG(run_result) == SIGINT) {
-    g_last_run_exit_code = 0;
-    return AOT_OK;
-  }
-  // Keep the program's own exit code (the driver used to flatten every
-  // non-zero status to 1: `exit(3)` -> 1, measured 2026-09-28). system()
-  // returns a wait status here, not the code; a signal death is reported
-  // the way shells do, 128 + signal (SIGSEGV -> 139).
-  if (WIFEXITED(run_result)) g_last_run_exit_code = WEXITSTATUS(run_result);
-  else if (WIFSIGNALED(run_result)) g_last_run_exit_code = 128 + WTERMSIG(run_result);
-  else g_last_run_exit_code = run_result == 0 ? 0 : 1;
-#else
-  // On Windows system() returns the program's exit code itself.
-  g_last_run_exit_code = run_result;
-#endif
-  return (run_result == 0) ? AOT_OK : AOT_RAN_NONZERO;
+  return aot_run_status(run_result);
 }
 
 // Check-only pipeline: parse + codegen pass, no optimisation, no object

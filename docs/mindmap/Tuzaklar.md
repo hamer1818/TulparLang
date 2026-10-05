@@ -2280,6 +2280,41 @@ bağlanıyordu. Bağımlılık yalnız kitaplıktan değil **link sürücüsünd
 gelir. macOS'ta varsayılan sürücü artık `/usr/bin/clang++` (Apple);
 `TULPAR_CC` ezer.
 
+## 7n. Önbellek anahtarı bir girdiyi görmüyorsa ölçüm yalan söyler
+
+`tulpar build`in önbelleği mtime'a bakıyordu: çıktı kaynaktan, yerel
+import'lardan, eklenti dosyalarından ve sürücüden yeniyse "Cache hit". Bir
+ajan bir sabotajı ölçerken `TULPAR_NO_FVER=1` açtı, önbellek ESKİ ikiliyi
+döndürdü ve sabotaj "yakalanmadı" yerine **yeşil** göründü (2026-10-05).
+Tekrarlandı: aynı çıktıya `TULPAR_NO_FVER=1` ile ikinci `build` "Cache hit"
+dedi, ikili özeti `fc76f8ac…` iki kipte de; taze `TULPAR_NO_FVER=1` derlemesi
+`24dabaa2…` (IR'de `fv.el` 4 → 0). Paket-yerel kardeş import
+(`tulpar_modules/paket/ic.tpr`) değişince de "Cache hit" ve eski çıktı (100,
+doğrusu 200). Depodaki ~20 A/B kapısı (`tests/*.sh`) bu yüzden
+`TULPAR_AOT_NOCACHE=1`i **hatırlamak zorundaydı**; unutan kapı ölçtüğü
+anahtarın iki kolunda aynı ikiliyi koştururdu — [[Tuzaklar#1]] sınıfı,
+ama kaynağı test değil araç.
+
+Belirti sinsi: bayat isabet hiçbir uyarı basmaz, yeni kod "işe yaramamış"
+görünür ve hata yanlış yerde aranır. Mtime "girdi değişti mi?" sorusunun
+yalnız bir kısmını cevaplar: ortam değişkenini, runtime arşivini, araç
+zincirini, `touch -r` ile geri alınmış içeriği ve çözüm kuralının seçtiği
+dosyanın KENDİSİNİ (hangi aday kazandı) görmez.
+
+**Kural:** önbellek anahtarı çıktıyı belirleyen HER girdinin içerik özeti
+olmalı ve şüphede **güvenli yöne** yanılmalı: fazladan girdi gereksiz ıska
+(ucuz), eksik girdi bayat ikili (pahalı, sessiz). Somut olarak
+(`src/aot/aot_cache.hpp`): derleyicinin görebileceği her `TULPAR_*` anahtarda;
+dışarıda kalan yalnız açıkça listelenmiş sınıflar (`aot_cache_env.inc`) ve
+onlar için bir kapı (`tests/onbellek_anahtari_kapisi.py`: listedeki bir ad
+derleyici tarafında okunursa kırmızı). Çözüm kuralı iki yerde yaşıyorsa
+(kodgen + önbellek tarayıcısı) ikinciye güvenme: kodgen okuduğu her dosyayı
+bildirsin (`note_input`), anahtarda olmayan bir okuma sonucu önbelleğe
+YAZDIRMASIN — kural ayrışırsa bedel bayat ikili değil ıska olur. Ve
+mekanizmanın pozitif kontrolü: tarama kasıtlı atlanınca
+(`TULPAR_CACHE_SINAMA=tarama-yok`) öz denetim gerçekten devreye giriyor mu
+(`tests/onbellek.sh`).
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

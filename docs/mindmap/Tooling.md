@@ -2,9 +2,21 @@
 tags: [subsystem, tooling]
 ---
 
-# Tooling — fmt / pkg / update
+# Tooling — fmt / pkg / update / cache
 
-CLI dispatch `src/main.cpp`'de; `--lsp`, `fmt`, `pkg`, `version`, `--help`, `update` run/build yolundan önce short-circuit eder.
+CLI dispatch `src/main.cpp`'de; `--lsp`, `fmt`, `pkg`, `version`, `--help`, `update`, `cache` run/build yolundan önce short-circuit eder.
+
+## Derleme önbelleği — `tulpar cache`
+`tulpar cache [info|clean|dir]` (`src/aot/aot_cache.cpp` `cache_cmd_main`):
+`info` kök dizini, çalıştırma ikililerinin sayısını/boyutunu, tavanı, `build`
+kayıtlarını ve önbelleğin açık mı (değilse neden) olduğunu yazar; `clean`
+yalnız ÖNBELLEĞİN ADLANDIRDIĞI dosyaları siler (`<anahtar>[.exe]`,
+`<anahtar>.diag`, `tmp-*`, kayıtlar — dizine başka bir şey konmuşsa
+dokunmaz); `dir` kökü basar. Eklentiler yüklenmeden ÖNCE dağıtılır: bozuk bir
+`TULPAR_EXT_PATH` temizliği engellemesin. Kapatma `TULPAR_AOT_NOCACHE=1`;
+kararlar `TULPAR_CACHE_RAPOR=1` (`[onbellek] isabet/iska/kapali ...` stderr'e),
+`=2` anahtarın düz metni (iki koşunun metnini karşılaştırmak ıskanın nedenini
+söyler). Model, anahtar, saklama yeri ve gerekçeleri: [[Build System]].
 
 ## Formatter
 `src/fmt/` — `tulpar fmt script.tpr`. Denetim: `tests/fmt_audit.sh` (`build.sh suites`) —

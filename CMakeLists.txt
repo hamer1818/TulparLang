@@ -251,6 +251,12 @@ set(AOT_SOURCES
     src/aot/llvm_values.hpp
     src/aot/aot_pipeline.cpp
     src/aot/aot_pipeline.hpp
+    # Derleme onbellegi: icerik adresli anahtar + calistirma deposu
+    # (aot_cache_env.inc: anahtar disi ortam degiskenleri, kapisi
+    # tests/onbellek_anahtari_kapisi.py).
+    src/aot/aot_cache.cpp
+    src/aot/aot_cache.hpp
+    src/aot/aot_cache_env.inc
 )
 
 # Type Inference

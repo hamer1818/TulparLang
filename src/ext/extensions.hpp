@@ -149,9 +149,8 @@ bool link_flags(Platform target, const char *abi, std::string &out,
 // Derleyicinin kostugu platform (masaustu hedefi).
 Platform host_platform();
 
-// `tulpar build` onbellegi icin: yuklu eklentilerin bildirim, modul ve
-// link arsivlerinin en yeni mtime'i (yoksa 0).
-long long newest_mtime();
+// (Onbellek artik mtime'a bakmiyor: eklentinin bildirim + modul ICERIGI ve
+// arsiv KIMLIKLERI anahtarda — src/aot/aot_cache.cpp compute_key.)
 
 }  // namespace ext
 }  // namespace tulpar

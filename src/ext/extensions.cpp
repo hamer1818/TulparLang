@@ -58,11 +58,6 @@ bool is_file(const std::string &p) {
   struct stat st;
   return stat(p.c_str(), &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG;
 }
-long long mtime_of(const std::string &p) {
-  struct stat st;
-  if (stat(p.c_str(), &st) != 0) return 0;
-  return (long long)st.st_mtime;
-}
 bool is_abs(const std::string &p) {
   if (p.empty()) return false;
   if (p[0] == '/' || p[0] == '\\') return true;
@@ -752,24 +747,6 @@ bool link_flags(Platform target, const char *abi, std::string &out,
     for (const auto &f : L.flags) out += " " + subst(f);
   }
   return true;
-}
-
-long long newest_mtime() {
-  long long best = 0;
-  auto take = [&](long long t) {
-    if (t > best) best = t;
-  };
-  for (const auto &e : g_exts) {
-    take(mtime_of(e.manifest_path));
-    for (const auto &m : e.modules) take(mtime_of(m.path));
-    const LinkSpec &L = e.link[(int)host_platform()];
-    for (const auto &d : L.lib_dirs)
-      for (const auto &l : L.libs) {
-        take(mtime_of(join(d, "lib" + l + ".a")));
-        take(mtime_of(join(d, l + ".lib")));
-      }
-  }
-  return best;
 }
 
 }  // namespace ext
