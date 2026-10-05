@@ -33,6 +33,9 @@
 #include <dirent.h>
 #include <unistd.h>
 #endif
+#if PLATFORM_WINDOWS
+#include <process.h>  // _getpid (tulpar_run_tmp.<pid>)
+#endif
 #if !PLATFORM_WINDOWS
 #include <csignal>    // SIGINT
 #include <sys/wait.h> // WIFSIGNALED / WTERMSIG — POSIX; MinGW'de YOK
@@ -2068,19 +2071,26 @@ AOTResult aot_compile_and_run_silent(const char *source) {
 AOTResult aot_compile_and_run_silent_with_filename(const char *source,
                                                    const char *source_filename) {
 #if PLATFORM_WINDOWS
-  const char *base = "tulpar_run_tmp";
+  // SURECE OZGU ad — asagidaki POSIX dalindaki gerekceyle ayni sinif, burada
+  // gec yakalandi: sabit `tulpar_run_tmp` iki `tulpar` ayni dizinde ayni anda
+  // kosunca birinin .o/.exe'sini oteki eziyor ya da siliyor. Olculdu
+  // (2026-10-05, Windows CI, PR #469): `build.sh suites` paketleri paralel
+  // kosunca 117 paketin hepsi "AOT compile/link failed" ile dustu.
+  std::string run_base = std::string("tulpar_run_tmp.") +
+                         std::to_string((long)_getpid());
+  const char *base = run_base.c_str();
   AOTResult result = aot_compile_silent(source, base, source_filename);
   if (result != AOT_OK) {
     return result;
   }
   // cmd.exe does not auto-search the current directory unless an explicit
   // path is given, so prefix with .\ to ensure the binary is found.
-  std::string run_cmd = ".\\tulpar_run_tmp.exe";
+  std::string run_cmd = ".\\" + run_base + ".exe";
   if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
   int run_result = system(run_cmd.c_str());
-  remove("tulpar_run_tmp.exe");
-  remove("tulpar_run_tmp.ll");
-  remove("tulpar_run_tmp.o");
+  remove((run_base + ".exe").c_str());
+  remove((run_base + ".ll").c_str());
+  remove((run_base + ".o").c_str());
 #else
   // SÜRECE ÖZGÜ yol. Sabit `/tmp/.tulpar_run` iki `tulpar` aynı anda koşunca
   // yarışıyordu: biri ötekinin ikilisini derlemesiyle EZİYOR, sonra `remove`

@@ -29,6 +29,17 @@ echo -e "${YELLOW}Platform: ${PLATFORM}${NC}"
 # Parse arguments
 ACTION="$1"
 
+# Milisaniye saat (suites/test is sureleri). bash 5'in EPOCHREALTIME'i (yerel
+# ayarda ondalik ayirici virgul olabilir); yoksa (macOS /bin/bash 3.2) saniye.
+simdi_ms() {
+    if [ -n "${EPOCHREALTIME:-}" ]; then
+        local t=${EPOCHREALTIME/[.,]/}
+        echo $((10#$t / 1000))
+    else
+        echo $(( $(date +%s) * 1000 ))
+    fi
+}
+
 # --- Donanım kaynak göstergesi ----------------------------------------------
 # Uzun koşumların NEYE MAL OLDUĞUNU gösterir: RAM zirvesi, CPU frekansı ve
 # sıcaklığı, GPU kullanımı. Sondaların hepsi tools/hwstat.sh içinde ayrı ayrı
@@ -158,6 +169,96 @@ if [ "$ACTION" = "suites" ]; then
     elif command -v gtimeout >/dev/null 2>&1; then
         SUITE_TIMEOUT_CMD="gtimeout 180"
     fi
+    # ZAMAN + PARALELLIK YARDIMCILARI (2026-10-05).
+    #
+    # NIYE: suites adimi CI'in en uzun adimiydi (main 37315976494: Linux
+    # 240 s, macOS 330 s, Windows 201 s) ve her sey SERI kosuyordu — 117
+    # paket + ~70 kapi. Yerelde (Ryzen 7 9800X3D) olculdu: toplam 106 s,
+    # paketler 36 s, .sh kapilari 25 s, .py kapilari 25 s, android dumani
+    # 9,5 s. Bagimsiz isler artik paralel; ZAMAN, RSS, PORT ya da AOT
+    # ONBELLEGI olcen kapilar (asagida kapi_seri) seri ve yerinde kalir,
+    # paralel kuyruk onlarin YANINDA hic kosmaz (kuyruk en sonda bosaltilir).
+    # Her isin suresi KAPI_SURE'ye yazilir; sonda en yavas 10 basilir.
+    #
+    # Isci sayisi: TULPAR_TEST_JOBS, yoksa cekirdek sayisi — Windows dahil.
+    # Windows'ta BILINCLI secildi, olculdu (2026-10-05, PR #469,
+    # windows-latest 4 vCPU, suites adimi; main seri 201 s): 1 isci 304 s,
+    # 2 isci 218 s, 4 isci 154 s. 1 iscinin main'den YAVAS olmasi is basina
+    # `bash -c` kabugundan (MSYS2'de ~0,3 s) — bu yuzden xargs isci basina
+    # birden cok is veriyor. Bos bellek adim boyunca ~13 GB, ornek basina
+    # tepe RSS ~190 MB: 4 isci bellegi zorlamiyor (tools/win_kaynak_izle.sh).
+    if [ -n "${TULPAR_TEST_JOBS:-}" ]; then
+        KAPI_JOBS=$TULPAR_TEST_JOBS
+    else
+        KAPI_JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    fi
+    KAPI_DIR=$(mktemp -d)
+    KAPI_SURE="$KAPI_DIR/sureler.txt"
+    : > "$KAPI_SURE"
+    KAPI_N=0
+    # kapi_kuyruk "<hata mesaji>" komut... — PARALEL kuyruga ekler (sonda kosar).
+    kapi_kuyruk() {
+        local msg=$1; shift
+        KAPI_N=$((KAPI_N + 1))
+        printf '%s\n' "$msg" > "$KAPI_DIR/$KAPI_N.msg"
+        printf '%q ' "$@" > "$KAPI_DIR/$KAPI_N.cmd"
+    }
+    # kapi_kos <no> — kuyruktaki bir kapiyi kosar (xargs iscisi).
+    kapi_kos() {
+        local n=$1 t0 t1 rc
+        t0=$(simdi_ms)
+        ( eval "$(cat "$KAPI_DIR/$n.cmd")" ) > "$KAPI_DIR/$n.out" 2>&1
+        rc=$?
+        t1=$(simdi_ms)
+        echo "$rc" > "$KAPI_DIR/$n.rc"
+        echo "$((t1 - t0)) $(cat "$KAPI_DIR/$n.cmd")" > "$KAPI_DIR/$n.ms"
+    }
+    # kapi_seri "<hata mesaji>" komut... — YERINDE, seri, sureli. Olcen kapilar
+    # (zaman/RSS/port/onbellek) icin: paralel kuyruk o sirada kosmuyor.
+    kapi_seri() {
+        local msg=$1 t0 t1 rc; shift
+        t0=$(simdi_ms)
+        "$@"
+        rc=$?
+        t1=$(simdi_ms)
+        echo "$((t1 - t0)) [seri] $*" >> "$KAPI_SURE"
+        if [ $rc -ne 0 ]; then
+            echo -e "${RED}${msg}${NC}"
+            exit 1
+        fi
+    }
+    # kapi_kuyrugu_bosalt — paralel kosar, ciktilari KUYRUK SIRASIYLA basar.
+    kapi_kuyrugu_bosalt() {
+        [ "$KAPI_N" -gt 0 ] || return 0
+        export -f kapi_kos simdi_ms
+        export KAPI_DIR
+        echo ""
+        echo "Paralel kapilar: $KAPI_N is, $KAPI_JOBS isci"
+        # Isci basina 2 is: her `bash -c` yeni bir kabuk (MSYS2'de ~0,3 s,
+        # olculdu 2026-10-05) — tek is basina kabuk Windows'ta kazanci yiyordu.
+        seq 1 "$KAPI_N" | xargs -P "$KAPI_JOBS" -n 2 bash -c 'for a; do kapi_kos "$a"; done' _
+        local i dus=""
+        for i in $(seq 1 "$KAPI_N"); do
+            [ -f "$KAPI_DIR/$i.out" ] && cat "$KAPI_DIR/$i.out"
+            [ -f "$KAPI_DIR/$i.ms" ] && cat "$KAPI_DIR/$i.ms" >> "$KAPI_SURE"
+            # .rc YOKSA da dusme: isci hic kosmadiysa kapi gecmis sayilmasin.
+            if [ "$(cat "$KAPI_DIR/$i.rc" 2>/dev/null)" != "0" ]; then
+                echo -e "${RED}$(cat "$KAPI_DIR/$i.msg")${NC} (komut: $(cat "$KAPI_DIR/$i.cmd"))"
+                dus="$dus $i"
+            fi
+        done
+        if [ -n "$dus" ]; then
+            echo ""
+            echo -e "${RED}Dusen paralel kapilar:${NC}"
+            for i in $dus; do echo "  - $(cat "$KAPI_DIR/$i.msg") ($(cat "$KAPI_DIR/$i.cmd"))"; done
+            exit 1
+        fi
+    }
+    kapi_sure_ozeti() {
+        echo ""
+        echo "En yavas 10 is (ms; paketler + kapilar; paralel kosanlar kendi duvar saatiyle):"
+        sort -rn "$KAPI_SURE" | awk 'NR<=10 { printf "  %7d  %s\n", $1, substr($0, index($0, " ") + 1) }'
+    }
     # GOMULU STDLIB TAZELIGI — paketlerden ONCE, cunku ONKOSUL.
     # lib/*.tpr derleyiciye gomulu; bayat bir ./tulpar ile kosulan her paket
     # ESKI kutuphaneyi sinar ve bir stdlib duzeltmesi "ise yaramamis" gorunur.
@@ -165,10 +266,7 @@ if [ "$ACTION" = "suites" ]; then
     # (Tuzaklar 7). Kapi iki ayakli (derleme sistemi bagimliligi + ikilideki
     # icerik) ve kendi pozitif kontrolunu her kosumda kosuyor.
     if command -v python3 >/dev/null 2>&1; then
-        if ! python3 tests/gomulu_stdlib_tazelik.py ./tulpar; then
-            echo -e "${RED}Gomulu stdlib bayat — paketler ESKI kutuphaneyi sinardi!${NC}"
-            exit 1
-        fi
+        kapi_seri "Gomulu stdlib bayat — paketler ESKI kutuphaneyi sinardi!" python3 tests/gomulu_stdlib_tazelik.py ./tulpar
     else
         echo -e "${YELLOW}gomulu stdlib tazelik kapisi ATLANDI${NC} — python3 yok"
     fi
@@ -177,10 +275,7 @@ if [ "$ACTION" = "suites" ]; then
     # (grep erken cikar, echo SIGPIPE alir). Belirlenimsiz sahte kirmizi
     # (2026-10-05 yerelde, onceki turlarda CI'da). Tuzaklar 2, altinci bicim.
     # `-x` korumasi YOK: dosya calistirilamaz olursa kapi sessizce atlanmasin.
-    if ! bash tests/pipefail_grep_kapisi.sh; then
-        echo -e "${RED}pipefail altinda erken cikan grep kalibi var!${NC}"
-        exit 1
-    fi
+    kapi_seri "pipefail altinda erken cikan grep kalibi var!" bash tests/pipefail_grep_kapisi.sh
     hw_begin
     SUITE_FAILED=0
     SUITE_N=0
@@ -195,6 +290,76 @@ if [ "$ACTION" = "suites" ]; then
     #
     # Atlama SESSIZ DEGIL: her biri ayri bir satir basiyor ve ozette sayiliyor.
     WINDOWS_SKIP_SUITES=()
+    # PARALEL PAKET KOSUMU (2026-10-05). Paketler birbirinden bagimsiz
+    # (her biri kendi ikilisini derleyip kosar) ve SERI kosuyordu: yerelde
+    # 117 paket 36 s (Ryzen 7 9800X3D), CI'da suites adiminin cogu (Linux
+    # 240 s, macOS 330 s, Windows 201 s; main 37315976494). Her paketin
+    # ciktisi kendi dosyasina gidiyor ve SIRAYLA basiliyor — gunluk eskisiyle
+    # ayni okunur. Isci sayisi TULPAR_TEST_JOBS ya da cekirdek sayisi;
+    # TULPAR_TEST_JOBS=1 eski seri davranis.
+    SUITE_DIR=$(mktemp -d)
+    suite_kos() {
+        local suite=$1 name out code summary fails sig t0 t1
+        name=$(basename "$suite")
+        t0=$(simdi_ms)
+        {
+            out=$(DISPLAY= $SUITE_TIMEOUT_CMD ./tulpar "$suite" 2>&1)
+            code=$?
+            summary=$(echo "$out" | grep -E '^Tests:' | tail -1)
+            if [ $code -ne 0 ]; then
+                printf "%-42s ${RED}FAIL${NC} %s\n" "$name" "$summary"
+                # ONCE gercek test satirlari. Eski hali `grep -E 'FAIL|hata|error'`
+                # idi ve ilk 8 satiri aliyordu: bir kutuphane stderr'e gurultu
+                # basinca (ALSA "ses aygiti yok" satirlari gibi) o gurultu 'error'
+                # ile eslesip FAIL satirlarini DISARI itiyordu. Olculdu
+                # (2026-09-01): CI kirmizi dondu ama HANGI testin dustugu ciktida
+                # hic gorunmedi — bir tur bosa gitti. Genel gurultu artik yalniz
+                # FAIL satiri HIC yoksa (paket cokmusse) yedek olarak basiliyor.
+                #
+                # `head` yerine `awk`: `head` erken cikinca yukaridaki grep SIGPIPE
+                # aliyor ve ciktiya "write error: Broken pipe" satirlari dusuyordu.
+                fails=$(echo "$out" | grep -E '^[[:space:]]*FAIL' | awk 'NR<=10')
+                if [ -n "$fails" ]; then
+                    echo "$fails" | sed 's/^/    /'
+                else
+                    # PAKET COKTU (FAIL satiri YOK). Burada en cok ihtiyac duyulan
+                    # iki sey CIKIS KODU ve ciktinin SONU — ikisi de eskiden
+                    # basilmiyordu ve 2026-09-16'da bir CI turu tam olarak bunun
+                    # yuzunden bosa gitti: macOS'ta bir paket ozetsiz dustu,
+                    # elimizde yalnizca "hata" gecen 8 satir vardi ve onlar da
+                    # kapanis raporunun ortasindan gelmisti, yani teshis icin
+                    # HICBIR SEY soylemiyordu.
+                    #
+                    # Cikis kodu sinifi TEK BASINA belirliyor: 139 = SIGSEGV,
+                    # 134 = abort, 124 = zaman asimi (timeout), 1 = normal hata.
+                    sig=""
+                    case $code in
+                        124) sig=" (ZAMAN ASIMI — $SUITE_TIMEOUT_CMD)";;
+                        134) sig=" (SIGABRT — abort/assert)";;
+                        139) sig=" (SIGSEGV — bellek erisimi)";;
+                        136) sig=" (SIGFPE)";;
+                        *) ;;
+                    esac
+                    echo "    cikis kodu $code$sig; FAIL satiri YOK -> paket ozetine varmadan oldu."
+                    echo "    --- ciktinin son 12 satiri ---"
+                    echo "$out" | tail -12 | sed 's/^/    /'
+                    # Cokme raporlari (crash_*.txt, CWD) paralel kosumda paketlere
+                    # ATANAMAZ; dongu bittikten sonra toplu basiliyor.
+                fi
+                echo 1 > "$SUITE_DIR/$name.rc"
+            elif [ -z "$summary" ]; then
+                printf "%-42s ${RED}FAIL${NC} (test_summary() cagirmiyor — cikis kodu uretmiyor)\n" "$name"
+                echo 1 > "$SUITE_DIR/$name.rc"
+            else
+                printf "%-42s ${GREEN}PASS${NC} %s\n" "$name" "$summary"
+            fi
+        } > "$SUITE_DIR/$name.out" 2>&1
+        t1=$(simdi_ms)
+        echo "$((t1 - t0)) paket:$name" > "$SUITE_DIR/$name.ms"
+    }
+    export -f suite_kos simdi_ms
+    export SUITE_DIR SUITE_TIMEOUT_CMD RED GREEN YELLOW NC
+    SUITE_LISTE=()
     for suite in tests/*.test.tpr; do
         [ -f "$suite" ] || continue
         SUITE_N=$((SUITE_N + 1))
@@ -209,64 +374,26 @@ if [ "$ACTION" = "suites" ]; then
                 continue
             fi
         fi
-        out=$(DISPLAY= $SUITE_TIMEOUT_CMD ./tulpar "$suite" 2>&1)
-        code=$?
-        summary=$(echo "$out" | grep -E '^Tests:' | tail -1)
-        if [ $code -ne 0 ]; then
-            printf "%-42s ${RED}FAIL${NC} %s\n" "$name" "$summary"
-            # ONCE gercek test satirlari. Eski hali `grep -E 'FAIL|hata|error'`
-            # idi ve ilk 8 satiri aliyordu: bir kutuphane stderr'e gurultu
-            # basinca (ALSA "ses aygiti yok" satirlari gibi) o gurultu 'error'
-            # ile eslesip FAIL satirlarini DISARI itiyordu. Olculdu
-            # (2026-09-01): CI kirmizi dondu ama HANGI testin dustugu ciktida
-            # hic gorunmedi — bir tur bosa gitti. Genel gurultu artik yalniz
-            # FAIL satiri HIC yoksa (paket cokmusse) yedek olarak basiliyor.
-            #
-            # `head` yerine `awk`: `head` erken cikinca yukaridaki grep SIGPIPE
-            # aliyor ve ciktiya "write error: Broken pipe" satirlari dusuyordu.
-            fails=$(echo "$out" | grep -E '^[[:space:]]*FAIL' | awk 'NR<=10')
-            if [ -n "$fails" ]; then
-                echo "$fails" | sed 's/^/    /'
-            else
-                # PAKET COKTU (FAIL satiri YOK). Burada en cok ihtiyac duyulan
-                # iki sey CIKIS KODU ve ciktinin SONU — ikisi de eskiden
-                # basilmiyordu ve 2026-09-16'da bir CI turu tam olarak bunun
-                # yuzunden bosa gitti: macOS'ta bir paket ozetsiz dustu,
-                # elimizde yalnizca "hata" gecen 8 satir vardi ve onlar da
-                # kapanis raporunun ortasindan gelmisti, yani teshis icin
-                # HICBIR SEY soylemiyordu.
-                #
-                # Cikis kodu sinifi TEK BASINA belirliyor: 139 = SIGSEGV,
-                # 134 = abort, 124 = zaman asimi (timeout), 1 = normal hata.
-                sig=""
-                case $code in
-                    124) sig=" (ZAMAN ASIMI — $SUITE_TIMEOUT_CMD)";;
-                    134) sig=" (SIGABRT — abort/assert)";;
-                    139) sig=" (SIGSEGV — bellek erisimi)";;
-                    136) sig=" (SIGFPE)";;
-                    *) ;;
-                esac
-                echo "    cikis kodu $code$sig; FAIL satiri YOK -> paket ozetine varmadan oldu."
-                echo "    --- ciktinin son 12 satiri ---"
-                echo "$out" | tail -12 | sed 's/^/    /'
-                # Cokme raporu dosyasi CWD'ye dusebiliyor — onu kimse
-                # basmiyordu, yani saha kosumunda yigin izi uretilip cope
-                # gidiyordu.
-                for cr in crash_*.txt; do
-                    [ -f "$cr" ] || continue
-                    echo "    --- cokme raporu $cr ---"
-                    sed 's/^/    /' "$cr" | awk 'NR<=25'
-                    rm -f "$cr"
-                done
-            fi
-            SUITE_FAILED=1
-        elif [ -z "$summary" ]; then
-            printf "%-42s ${RED}FAIL${NC} (test_summary() cagirmiyor — cikis kodu uretmiyor)\n" "$name"
-            SUITE_FAILED=1
-        else
-            printf "%-42s ${GREEN}PASS${NC} %s\n" "$name" "$summary"
-        fi
+        SUITE_LISTE+=("$suite")
     done
+    # Isci basina 4 paket (kabuk baslatma bedeli, kapi_kuyrugu_bosalt notu).
+    printf '%s\n' "${SUITE_LISTE[@]}" | xargs -P "$KAPI_JOBS" -n 4 bash -c 'for a; do suite_kos "$a"; done' _
+    for suite in "${SUITE_LISTE[@]}"; do
+        name=$(basename "$suite")
+        if [ -f "$SUITE_DIR/$name.out" ]; then cat "$SUITE_DIR/$name.out"
+        else printf "%-42s ${RED}FAIL${NC} (isci ciktisi yok — paket hic kosmadi)\n" "$name"; SUITE_FAILED=1; fi
+        [ -f "$SUITE_DIR/$name.rc" ] && SUITE_FAILED=1
+        [ -f "$SUITE_DIR/$name.ms" ] && cat "$SUITE_DIR/$name.ms" >> "$KAPI_SURE"
+    done
+    if [ $SUITE_FAILED -ne 0 ]; then
+        for cr in crash_*.txt; do
+            [ -f "$cr" ] || continue
+            echo "    --- cokme raporu $cr ---"
+            sed 's/^/    /' "$cr" | awk 'NR<=25'
+            rm -f "$cr"
+        done
+    fi
+    rm -rf "$SUITE_DIR"
     if [ $SUITE_FAILED -ne 0 ]; then
         hw_end "suites"
         echo -e "${RED}Some suites failed!${NC} ($SUITE_N paket)"
@@ -275,10 +402,7 @@ if [ "$ACTION" = "suites" ]; then
     # Builtin tablosu ↔ codegen ↔ LSP tutarlılık denetimi (derleme gerektirmez).
     if command -v python3 >/dev/null 2>&1; then
         echo ""
-        if ! python3 tests/builtin_audit.py; then
-            echo -e "${RED}Builtin denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Builtin denetimi basarisiz!" python3 tests/builtin_audit.py
         # KAPILARIN KENDI SELF-TESTI (kural #10'un kalici hali).
         # Kaynak tarayan kapilar, KAPSAMLARINI kaybettiklerinde temiz bir
         # agacta da "temiz" derler — duyarlilik degil KAPSAM kaybi, ve bu
@@ -287,19 +411,13 @@ if [ "$ACTION" = "suites" ]; then
         # ve gecirMESI gereken mesru bicimlerin tablosunu tasiyor; tablo
         # her kosumda dogrulaniyor. Yeni bir kacis bulundugunda once
         # tabloya eklenir (kirmizi verir), sonra desen duzeltilir.
-        if ! python3 tests/source_gates.py --selftest; then
-            echo -e "${RED}Kapi self-testi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Kapi self-testi basarisiz!" python3 tests/source_gates.py --selftest
         # Kama mesh'i: rampa artık gerçek bir mesh. GÖZLE doğrulamak pencere
         # açmayı gerektirir (depoda yasak) ve ters sarılmış bir üçgen
         # arkayüz ayıklamasıyla sessizce GÖRÜNMEZ olur — yani hata "hata yok"
         # gibi durur. Denetim üçgenleri C kaynağından okuyup sarma yönünü,
         # kapalılığı ve eğimin fizikle aynı tanımda olduğunu ölçüyor.
-        if ! python3 tests/wedge_mesh_check.py; then
-            echo -e "${RED}Kama mesh denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Kama mesh denetimi basarisiz!" python3 tests/wedge_mesh_check.py
         # Önceden derlenmiş web/Android arşivleri ↔ builtin tablosu.
         # Aşağıdaki zaman damgası denetiminin YERİNE geçiyor (o yalnız
         # "kaynak daha yeni" diyebiliyordu); bu, EKSİK SEMBOLLERİ adıyla
@@ -307,27 +425,18 @@ if [ "$ACTION" = "suites" ]; then
         # her web derlemesi link'te patlıyordu ve sarı satırı kimse okumadı.
         # Iki aileyi de sayiyor: tame (aot_tm_*) ve cekirdek runtime.
         # (Motor koprusu ailesi 2026-09-20'de ayri depoya tasindi.)
-        if ! python3 tests/dist_archive_audit.py; then
-            echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Dist arsiv denetimi basarisiz!" python3 tests/dist_archive_audit.py
         # WEB'E GERCEKTEN LINK: arsiv denetimi sembol sayar, link etmez.
         # try/catch (ve `import "test"` eden her program) web'de
         # `undefined symbol: setjmp` ile dusuyordu ve hicbir kapi gormedi.
         # em++/arsiv yoksa gorunur atlar; CI Linux'ta (TULPAR_DIST_ZORUNLU=1)
         # atlama kirmizi. Pozitif kontrollu (gecis kapali -> link dusmeli).
-        if ! bash tests/web_try_catch.sh ./tulpar; then
-            echo -e "${RED}Web try/catch kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Web try/catch kapisi basarisiz!" bash tests/web_try_catch.sh ./tulpar
         # SURUM VARLIKLARI <-> `tulpar update`. Uc liste uc yerde elle
         # tutuluyordu (update_cmd.cpp, build.yml yayin listesi, CI DLL
         # kapisi) ve `tulpar update` Windows'ta surumde OLMAYAN varliklari
         # indirmeye calisiyordu (K226, 2026-09-27). Kaynak denetimi, ag yok.
-        if ! python3 tests/surum_varliklari.py; then
-            echo -e "${RED}Surum varlik denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Surum varlik denetimi basarisiz!" python3 tests/surum_varliklari.py
         # PAKET BOYUTU + SPIR-V TAZELIK + ACILIS SURESI.
         #
         # Ucu de "sessizce bozulan" sinifindan ve hicbiri otomasyonda degildi:
@@ -339,65 +448,44 @@ if [ "$ACTION" = "suites" ]; then
         #
         # Cikis kodu KAPI: 0 disi ise suite duser. Atlamalar (emsdk/NDK/GPU yok)
         # sebebiyle birlikte basiliyor, gorunmez `return` ile degil.
-        if ! python3 tests/paket_boyut_audit.py; then
-            echo -e "${RED}Paket boyutu/SPIR-V/acilis denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Paket boyutu/SPIR-V/acilis denetimi basarisiz!" python3 tests/paket_boyut_audit.py
         # BICIMLENDIRICI denetimi: `tulpar fmt` gecerli kaynagi DERLENMEYEN
         # hale getirebiliyor (olculdu: `1.5e-8` -> `1.5e - 8`, `a <<= 1` ->
         # `a < <= 1`). Idempotans TEK BASINA yetmez — bozuk bir ciktiyi ikinci
         # kez bicimlendirmek ayni bozuk ciktiyi verir, yani "kararli" ile
         # "dogru" karisir. Bu yuzden asil olcut: bicimlenmis metnin ayristirma
         # hatasi sayisi ONCESINE gore ARTMAMALI.
-        if ! python3 tests/fmt_audit.py; then
-            echo -e "${RED}Bicimlendirici denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Bicimlendirici denetimi basarisiz!" python3 tests/fmt_audit.py
         # NOT: CPU-GPU yerlesim denetimi (layout_audit.py) ve Faz 8 shader
         # cevirici denetimi (faz8_shader_audit.py) motorun shader agacini
         # okuyordu; motorla birlikte tulpar-engine deposuna (tools/) tasindilar.
         # Dongu-sekli gezicisi ASTNode_C'nin TUM cocuk alanlarini geziyor mu?
         # Bir dal atlanirsa "govdede cagri yok" kaniti delinir ve atlanan
         # dalda duran bir push bellek bozar — suitler yesil kalarak.
-        if ! python3 tests/ast_child_fields_audit.py; then
-            echo -e "${RED}AST cocuk alani denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "AST cocuk alani denetimi basarisiz!" python3 tests/ast_child_fields_audit.py
         # Sessiz bozulma sondalari: paketler "dogru yazilmis" programlari
         # kosuyor, bu kenar durumlari kosuyor ve ozellikle derleyicinin
         # "basarili" deyip yanlis sonuc urettigi / ikilinin coktugu sinifi
         # ariyor. Iki gercek hatayi boyle bulduk (bkz. dosya basligi).
-        if ! python3 tests/silent_failure_probe.py; then
-            echo -e "${RED}Sessiz hata sondalari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Sessiz hata sondalari basarisiz!" python3 tests/silent_failure_probe.py
         # S4 — AKIS SOZLESMESI (uc faz: akis oncesi / akis ortasi / surec).
         # Bu sozlesme iki tur once KODDA kapandi ama hicbir test onu
         # sinamiyordu; retrofit sayimi (#21) borcu yakaladi. Fikstur ham
         # soket kullanir (#22: yorumlayan arac ihlali gizler — curl P48'de
         # tam bunu yapti) ve kendi kirmiziya-donebilirligini tasiyan bir
         # ihlal rotasi (/raw) icerir.
-        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/stream_contract_smoke.py; then
-            echo -e "${RED}S4 akis sozlesmesi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "S4 akis sozlesmesi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/stream_contract_smoke.py
         # S3 — ARENA SOZLESMESI (restore birakmaz / drop birakir).
         # Ayni #21 borcu: `arena_restore` uc suitte geciyordu ama hepsi
         # sozlesmenin "hayatta kalir" yarisini sinaniyordu; "serbest
         # birakmaz" yarisi hic sinanmamisti.
-        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/arena_contract_smoke.py; then
-            echo -e "${RED}S3 arena sozlesmesi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "S3 arena sozlesmesi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/arena_contract_smoke.py
         # YIGIN SIZINTISI (R11). Dongu govdesine dusen bir `alloca`
         # yinelemede yigin harciyor ve program YETERINCE UZUN dondugunde
         # SIGSEGV veriyor — derleme sessiz, suitler yesil. `AST_ARRAY_LITERAL`
         # tam bunu yapiyordu ve 175 000 yinelemede oluyordu. Sekil basina
         # cikti-mutabakati var: dongu elenirse sekil "olctum" diyemez.
-        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/stack_growth_smoke.py; then
-            echo -e "${RED}Yigin sizintisi taramasi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "Yigin sizintisi taramasi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/stack_growth_smoke.py
         # TypedValue UC ALANI DA ILKLENDIRILIR (#32 sinifi).
         #
         # Desen ve ORNEK TABLOSU artik tests/source_gates.py'de — tek tanim.
@@ -425,10 +513,7 @@ if [ "$ACTION" = "suites" ]; then
         # uzerinde); goremezse "temiz korpus" demek yerine hata veriyor —
         # P23'un taban olcumunun ilk uc surumu tam bu yuzden yanlis "0 tani"
         # demisti.
-        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/typecheck_corpus_scan.py --check; then
-            echo -e "${RED}Korpus tani tabani degisti!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Korpus tani tabani degisti!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/typecheck_corpus_scan.py --check
         # OTOMASYON DISI KALMIS IKI SONDA — artik iceride (DOGRULAMA D.4).
         #
         # Ikisi de gercek soket kullaniyor ve sozlesmenin YAZILI olup
@@ -476,10 +561,7 @@ if [ "$ACTION" = "suites" ]; then
     # *Provider'ı bildiriyorsa o metot gerçekten çağrılıp anlamlı cevap
     # verdiği sınanıyor (~0.03 sn).
     if command -v python3 >/dev/null 2>&1 && [ -f tests/lsp_audit.py ]; then
-        if ! python3 tests/lsp_audit.py; then
-            echo -e "${RED}LSP denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "LSP denetimi basarisiz!" python3 tests/lsp_audit.py
     fi
 
     # HATA AYIKLAYICI (DAP). `tulpar debug` hic denetlenmiyordu ve yorumu
@@ -509,10 +591,7 @@ if [ "$ACTION" = "suites" ]; then
     # DERLENMEYEN kod üretiyordu. ~2 sn.
     if [ -x tests/fmt_audit.sh ]; then
         echo ""
-        if ! bash tests/fmt_audit.sh; then
-            echo -e "${RED}Bicimlendirici denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Bicimlendirici denetimi basarisiz!" bash tests/fmt_audit.sh
     fi
 
     # BELGE ÜRETECİ. `tulpar doc` da denetimsizdi ve üç stdlib modülü HİÇ
@@ -520,30 +599,21 @@ if [ "$ACTION" = "suites" ]; then
     # başlarına derlenmiyorlar; `doc` kodgen hatasında her şeyi atıyordu).
     # ~5 sn.
     if [ -x tests/doc_audit.sh ]; then
-        if ! bash tests/doc_audit.sh; then
-            echo -e "${RED}Belge denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Belge denetimi basarisiz!" bash tests/doc_audit.sh
     fi
 
     # PAKET YÖNETİCİSİ. Kullanıcının proje dizinine yazıyor (`tulpar.toml`,
     # `tulpar_modules/`). Asıl iddia "dosya kopyalandı" değil, vendor edilen
     # paketin GERÇEKTEN import edilebilmesi. ~0.1 sn.
     if [ -x tests/pkg_audit.sh ]; then
-        if ! bash tests/pkg_audit.sh; then
-            echo -e "${RED}Paket denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Paket denetimi basarisiz!" bash tests/pkg_audit.sh
     fi
     # REGISTRY yolu (aralik cozumu, tulpar.lock, sha256, .tpkg, onbellek,
     # --update, registry kapali). pkg_audit.sh yalniz `path:` zincirini
     # siniyordu; bu yol HICBIR testte gecmiyordu ve olculdugunde uc kusur
     # cikti (2026-09-27). Yerel sahte registry, istek gunlugu sayiliyor. ~2 sn.
     if command -v python3 >/dev/null 2>&1 && [ -f tests/pkg_registry_audit.py ]; then
-        if ! python3 tests/pkg_registry_audit.py ./tulpar; then
-            echo -e "${RED}Paket registry denetimi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "Paket registry denetimi basarisiz!" python3 tests/pkg_registry_audit.py ./tulpar
     fi
 
     # UÇTAN UCA AOT DUMANI: derleyici gerçekten program üretebiliyor mu?
@@ -551,80 +621,53 @@ if [ "$ACTION" = "suites" ]; then
     # uzun süre hiç ölçülmedi ve yayınlanan macOS ikilisiyle hiçbir program
     # derlenemediği aylarca fark edilmedi. ~10 sn, grafiksiz.
     if [ -x tests/aot_smoke.sh ]; then
-        if ! bash tests/aot_smoke.sh ./tulpar; then
-            echo -e "${RED}AOT dumani basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "AOT dumani basarisiz!" bash tests/aot_smoke.sh ./tulpar
     fi
 
     # `enum` HATA YOLLARI (P0.2): ayristirma hatalari ne typeinfer fixture'ina
     # (`[typecheck]` ister) ne .test.tpr paketine (derlenemeyen kaynak) sigar;
     # bu harness derleyiciyi disaridan cagirip cikis kodu + mesaj olcuyor.
     if [ -x tests/enum_hatalari.sh ]; then
-        if ! bash tests/enum_hatalari.sh ./tulpar; then
-            echo -e "${RED}enum hata yollari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "enum hata yollari basarisiz!" bash tests/enum_hatalari.sh ./tulpar
     fi
 
     # Ayrilmis sozcuk + import edilen modulde ayristirma hatasi (K056): konum
     # modulun adi, typecheck "ok" demez, tek kopya.
     if [ -x tests/modul_ayristirma_hatalari.sh ]; then
-        if ! bash tests/modul_ayristirma_hatalari.sh ./tulpar; then
-            echo -e "${RED}modul ayristirma hata yollari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "modul ayristirma hata yollari basarisiz!" bash tests/modul_ayristirma_hatalari.sh ./tulpar
     fi
 
     # Coklu donus / tuple HATA YOLLARI (P0.1): ayni gerekce.
     if [ -x tests/tuple_hatalari.sh ]; then
-        if ! bash tests/tuple_hatalari.sh ./tulpar; then
-            echo -e "${RED}tuple hata yollari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "tuple hata yollari basarisiz!" bash tests/tuple_hatalari.sh ./tulpar
     fi
 
     # to_struct(json, "Ad") derleme zamani hata yollari (K133): hedef tip
     # bir dizgi sabiti ve bilinen bir struct olmali.
     if [ -x tests/to_struct_hatalari.sh ]; then
-        if ! bash tests/to_struct_hatalari.sh ./tulpar; then
-            echo -e "${RED}to_struct hata yollari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "to_struct hata yollari basarisiz!" bash tests/to_struct_hatalari.sh ./tulpar
     fi
 
     # Tipli struct dizisi HATA YOLLARI (P1.1): codegen hatalari, `tulpar build`.
     if [ -x tests/struct_dizisi_hatalari.sh ]; then
-        if ! bash tests/struct_dizisi_hatalari.sh ./tulpar; then
-            echo -e "${RED}struct dizisi hata yollari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "struct dizisi hata yollari basarisiz!" bash tests/struct_dizisi_hatalari.sh ./tulpar
     fi
 
     # Import edilen struct'lar: ayni ad + farkli yerlesim derleme hatasi
     # (ana program/modul ve modul/modul), ayni yerlesim tek tip.
     if [ -x tests/struct_import_hatalari.sh ]; then
-        if ! bash tests/struct_import_hatalari.sh ./tulpar; then
-            echo -e "${RED}import struct hata yollari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "import struct hata yollari basarisiz!" bash tests/struct_import_hatalari.sh ./tulpar
     fi
 
     # Modul ad cakismasi uyarilari (K043): iki modul ayni ad / yerel golge.
     if [ -x tests/modul_ad_cakismasi.sh ]; then
-        if ! bash tests/modul_ad_cakismasi.sh ./tulpar; then
-            echo -e "${RED}modul ad cakismasi uyarilari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "modul ad cakismasi uyarilari basarisiz!" bash tests/modul_ad_cakismasi.sh ./tulpar
     fi
 
     # Yontem (`func Tip.ad`) ve yinelenen fonksiyon tanimi hata yollari
     # (K003 + K002): eskiden ikinci tanim sessizce yutuluyordu.
     if [ -x tests/yontem_hatalari.sh ]; then
-        if ! bash tests/yontem_hatalari.sh ./tulpar; then
-            echo -e "${RED}yontem hata yollari basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "yontem hata yollari basarisiz!" bash tests/yontem_hatalari.sh ./tulpar
     fi
 
     # ARGUMAN GECISI. tests/args.test.tpr argv'nin VAR oldugunu olcuyor ama
@@ -632,10 +675,7 @@ if [ "$ACTION" = "suites" ]; then
     # programa yapisik ulastigi hatayi gizledi (2026-09-21). Kapi uretilen
     # ikiliye alti zor degeri gecirip geri okuyor.
     if [ -x tests/args_gecis.sh ]; then
-        if ! bash tests/args_gecis.sh ./tulpar; then
-            echo -e "${RED}arguman gecisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "arguman gecisi basarisiz!" bash tests/args_gecis.sh ./tulpar
     fi
 
     # `tulpar build` BAYRAKLARI. `build`'den SONRA yazilan --strict /
@@ -644,30 +684,21 @@ if [ "$ACTION" = "suites" ]; then
     # 2026-09-27) ve onbellek debug ile duz derlemeyi ayirt etmiyordu.
     # Kapi uc platformda kosuyor ve iki pozitif kontrol tasiyor.
     if [ -x tests/build_bayraklari.sh ]; then
-        if ! bash tests/build_bayraklari.sh ./tulpar; then
-            echo -e "${RED}build bayrak kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "build bayrak kapisi basarisiz!" bash tests/build_bayraklari.sh ./tulpar
     fi
 
     # ASYNC IZ (K156): async gorevde dogan yakalanmayan hata await zincirini
     # basiyor mu, hic await edilmeyen gorevin hatasi yutuluyor mu? Kapi
     # uretilen ikililerin stderr'ini LC_ALL=C ile okuyor.
     if [ -x tests/async_iz.sh ]; then
-        if ! bash tests/async_iz.sh ./tulpar; then
-            echo -e "${RED}async iz kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "async iz kapisi basarisiz!" bash tests/async_iz.sh ./tulpar
     fi
 
     # `tulpar build --sanitize=address` (K166): uretilen IR gercekten
     # enstrumante mi, ASan runtime'i bagli mi, onbellek kipi ayiriyor mu.
     # Windows/MinGW'de gorunur atlar.
     if [ -x tests/sanitize_smoke.sh ]; then
-        if ! bash tests/sanitize_smoke.sh ./tulpar; then
-            echo -e "${RED}sanitize kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "sanitize kapisi basarisiz!" bash tests/sanitize_smoke.sh ./tulpar
     fi
 
     # FONKSIYON ARAMA (aot_func_lookup): bir Tulpar fonksiyonunu adiyla,
@@ -676,10 +707,7 @@ if [ "$ACTION" = "suites" ]; then
     # yani "kullanilmiyor" diye silinmesini ya da sessizce ayirmaya
     # baslamasini ancak bu kapi yakalar. Kapi kendi pozitif kontrolunu kosar.
     if [ -x tests/fonksiyon_arama.sh ]; then
-        if ! bash tests/fonksiyon_arama.sh ./tulpar; then
-            echo -e "${RED}fonksiyon arama kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "fonksiyon arama kapisi basarisiz!" bash tests/fonksiyon_arama.sh ./tulpar
     fi
 
     # YEREL EKLENTI (K303): `--ext` / TULPAR_EXT_PATH / tulpar.toml [ext]
@@ -689,10 +717,7 @@ if [ "$ACTION" = "suites" ]; then
     # bozuk imza tipi, ABI kilidi). Tek dis tuketici tulpar-engine — motor
     # bu yolla baglaniyor, yani burada kirilan sey motoru da kirar.
     if [ -x tests/yerel_eklenti.sh ]; then
-        if ! bash tests/yerel_eklenti.sh ./tulpar; then
-            echo -e "${RED}yerel eklenti kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "yerel eklenti kapisi basarisiz!" bash tests/yerel_eklenti.sh ./tulpar
     fi
 
     # SPLIT TOPLU YOL (2026-10-01): split() parcalari TEK arena ayirmasinda
@@ -701,10 +726,7 @@ if [ "$ACTION" = "suites" ]; then
     # bayt boyu) olcer — parca basina ayirmaya donus baska hicbir yerde
     # kirmizi vermez, yalniz yavaslar.
     if [ -x tests/split_toplu.sh ]; then
-        if ! bash tests/split_toplu.sh ./tulpar; then
-            echo -e "${RED}split toplu yol kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "split toplu yol kapisi basarisiz!" bash tests/split_toplu.sh ./tulpar
     fi
 
     # OBJ BASLIGI (2026-10-02): Obj 32 -> 8 bayt, tur alani tek bayt
@@ -712,10 +734,7 @@ if [ "$ACTION" = "suites" ]; then
     # genisliginde yuklemezse sinav sessizce tutmaz (dogru ama yavas) —
     # hicbir anlambilim testi gormez; kapi uretilen IR'ye bakar.
     if [ -x tests/obj_baslik.sh ]; then
-        if ! bash tests/obj_baslik.sh ./tulpar; then
-            echo -e "${RED}obj baslik kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "obj baslik kapisi basarisiz!" bash tests/obj_baslik.sh ./tulpar
     fi
 
     # GECICI DIZGILER (2026-10-01): sozluk anahtari ifadesi (`m["k" +
@@ -725,10 +744,7 @@ if [ "$ACTION" = "suites" ]; then
     # kontrolu (mekanizmalar kapali derlenince esik asilmali); anlambilim
     # tests/gecici_dizgi.test.tpr'de.
     if [ -x tests/gecici_dizgi.sh ]; then
-        if ! bash tests/gecici_dizgi.sh ./tulpar; then
-            echo -e "${RED}gecici dizgi kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "gecici dizgi kapisi basarisiz!" bash tests/gecici_dizgi.sh ./tulpar
     fi
 
     # SOZLUK INDEKSI (2026-10-02): json hash indeksi buyuk tabloda iki kat
@@ -739,10 +755,7 @@ if [ "$ACTION" = "suites" ]; then
     # kurali TULPAR_OBJ_INDEKS_X4=1 ile esigi asmali); anlambilim
     # tests/json_hash_indeksi.test.tpr'de.
     if [ -x tests/sozluk_indeksi.sh ]; then
-        if ! bash tests/sozluk_indeksi.sh ./tulpar; then
-            echo -e "${RED}sozluk indeksi kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "sozluk indeksi kapisi basarisiz!" bash tests/sozluk_indeksi.sh ./tulpar
     fi
 
     # call() FONKSIYON REFERANSI HAVUZU (2026-10-01): `call(f, x)` dongude
@@ -752,10 +765,7 @@ if [ "$ACTION" = "suites" ]; then
     # runtime havuz yolu ayri ayri olculur; anlambilim
     # tests/call_fnref.test.tpr'de.
     if [ -x tests/call_fnref.sh ]; then
-        if ! bash tests/call_fnref.sh ./tulpar; then
-            echo -e "${RED}call() fonksiyon referansi kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "call() fonksiyon referansi kapisi basarisiz!" bash tests/call_fnref.sh ./tulpar
     fi
     # KULLANILMAYAN GOMULU FONKSIYON AYIKLAMASI (2026-10-05): ayiklama etkin
     # mi, adla (`call("ad")`, kurulan ad) cagrilan kitaplik fonksiyonu
@@ -763,36 +773,24 @@ if [ "$ACTION" = "suites" ]; then
     # program DUSMELI. Olculdu: bu kapi olmadan butun paketler + ornekler
     # sabotajda YESIL kaliyordu (hicbiri gomulu fonksiyonu adla cagirmiyor).
     # `-x` korumasi YOK: dosya calistirilamaz olursa sessizce atlanmasin.
-    if ! bash tests/gomulu_ayiklama.sh ./tulpar; then
-        echo -e "${RED}gomulu ayiklama kapisi basarisiz!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "gomulu ayiklama kapisi basarisiz!" bash tests/gomulu_ayiklama.sh ./tulpar
     # call(f, ...) YEREL INT YOLU (2026-10-01): tumu-int hedef ciplak giris
     # noktasindan cagriliyor mu (IR + runtime tanisi, iki ayak);
     # TULPAR_NO_CALL_NATIVE=1 pozitif kontrol.
     if [ -x tests/call_yerel_int.sh ]; then
-        if ! bash tests/call_yerel_int.sh ./tulpar; then
-            echo -e "${RED}call() yerel int yolu kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "call() yerel int yolu kapisi basarisiz!" bash tests/call_yerel_int.sh ./tulpar
     fi
 
     # PERFORMANS IPUCU (K167): TULPAR_PERF_HINTS=1 kanitli erisim kurulamayan
     # dongunun nedenini soyler; kanitli donguye ipucu basmaz, varsayilan kapali.
     if [ -x tests/perf_ipucu.sh ]; then
-        if ! bash tests/perf_ipucu.sh ./tulpar; then
-            echo -e "${RED}performans ipucu kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "performans ipucu kapisi basarisiz!" bash tests/perf_ipucu.sh ./tulpar
     fi
 
     # `tulpar analyze` (K157): ayirma raporu @no_alloc denetimiyle fonksiyon
     # fonksiyon AYNI mi, hizli yol ipucu + kontrol, cikis kodlari.
     if [ -x tests/analyze_smoke.sh ]; then
-        if ! bash tests/analyze_smoke.sh ./tulpar; then
-            echo -e "${RED}analyze kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "analyze kapisi basarisiz!" bash tests/analyze_smoke.sh ./tulpar
     fi
 
     # arr_debox YARISI (FINDINGS T4): N thread ayni kutusuz int[]'i ayni anda
@@ -800,37 +798,25 @@ if [ "$ACTION" = "suites" ]; then
     # "gereksiz" diye sokulurse baska hicbir sey kirmizi olmaz. Kapi kendi
     # pozitif kontrolunu (kilitsiz kopya cift cevirmek ZORUNDA) kosar.
     if [ -x tests/debox_yaris.sh ]; then
-        if ! bash tests/debox_yaris.sh ./tulpar; then
-            echo -e "${RED}debox yaris kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "debox yaris kapisi basarisiz!" bash tests/debox_yaris.sh ./tulpar
     fi
 
     # typeof() olumsuz dizgi: ayni isaretci, kalici, arena_drop sonrasi
     # saglam (pozitif kontrol: arenadan dizgi ayni duzenekte EZILMELI).
     if [ -x tests/typeof_sabit.sh ]; then
-        if ! bash tests/typeof_sabit.sh ./tulpar; then
-            echo -e "${RED}typeof sabit dizgi kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "typeof sabit dizgi kapisi basarisiz!" bash tests/typeof_sabit.sh ./tulpar
     fi
 
     # `@frame` / `@no_alloc` nitelikleri (K038/K041): ayristirma hatalari ve
     # kare arenasinin tepe RSS'i gercekten geri sardigi (pozitif kontrollu).
     if [ -x tests/frame_hatalari.sh ]; then
-        if ! bash tests/frame_hatalari.sh ./tulpar; then
-            echo -e "${RED}@frame / nitelik kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_seri "@frame / nitelik kapisi basarisiz!" bash tests/frame_hatalari.sh ./tulpar
     fi
 
     # Atomikler ve @thread_local (K040): derleme hatalari + thread_lint ile
     # iliskisi (atomik yazma yazma sayilir, atomik okuma senkronize).
     if [ -x tests/atomik_hatalari.sh ]; then
-        if ! bash tests/atomik_hatalari.sh ./tulpar; then
-            echo -e "${RED}atomik / thread_local kapisi basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "atomik / thread_local kapisi basarisiz!" bash tests/atomik_hatalari.sh ./tulpar
     fi
 
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
@@ -838,10 +824,7 @@ if [ "$ACTION" = "suites" ]; then
     # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan
     # bagimsiz — `tulpar update --test-install=<dizin>`.
     if [ -x tests/update_yerlestirme.sh ]; then
-        if ! bash tests/update_yerlestirme.sh ./tulpar; then
-            echo -e "${RED}guncelleme yerlestirme yolu basarisiz!${NC}"
-            exit 1
-        fi
+        kapi_kuyruk "guncelleme yerlestirme yolu basarisiz!" bash tests/update_yerlestirme.sh ./tulpar
     fi
 
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
@@ -1436,83 +1419,56 @@ TPREOF
     # FOR-IN sayacli dongunun kanitli yolunda mi? (K209) — for-in acilimi
     # kosulda `length` kullaniyordu ve 20M int[]'de 10 kat yavasti. Yapisal
     # kapi, ayrinti ve pozitif kontrol betigin basinda.
-    if ! bash tests/forin_sekil.sh ./tulpar; then
-        echo -e "${RED}for-in sayacli donguyle ayni yoldan gecmiyor!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "for-in sayacli donguyle ayni yoldan gecmiyor!" bash tests/forin_sekil.sh ./tulpar
 
     # KANITLI YAZMA kurallari (K215): i32'ye sigmasi kanitlanamayan yazma
     # hizli (32-bit) surumu ACMAMALI (eskiden kirpiyor / genisletip cop
     # okuyordu); `a[i] = k`, `a[i] = i * 2` acmali. Iki yon de olculuyor.
-    if ! bash tests/kanitli_yazma.sh ./tulpar; then
-        echo -e "${RED}kanitli yazma kurallari bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "kanitli yazma kurallari bozuk!" bash tests/kanitli_yazma.sh ./tulpar
 
     # FLOAT DIZI DONGU SURUMU (2026-10-01): en icteki dongu (her derinlikte)
     # double depolu float dizide surumleniyor mu, kurulmamasi gereken yerde
     # kurulmuyor mu, ve hizli surumu olan dongude sinir disi erisim hala
     # yakalaniyor mu. IR pozitif kontrolu (TULPAR_NO_FVER=1) betikte.
-    if ! bash tests/float_dizi.sh ./tulpar; then
-        echo -e "${RED}float dizi dongu surumu bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "float dizi dongu surumu bozuk!" bash tests/float_dizi.sh ./tulpar
 
     # STRUCT DIZISI DONGU SURUMU (2026-10-02): `for` govdesindeki `A[i]`
     # struct dizisi erisimi dongu basinda tek sinavla kanitli mi, kurulmamasi
     # gereken yerde kurulmuyor mu, sinir disi hala yakalaniyor mu; satir ici
     # push / toFloat. IR pozitif kontrolu (TULPAR_NO_SVER=1,
     # TULPAR_NO_SPUSH_INLINE=1) betikte. Anlam: tests/struct_dizi_surum.test.tpr.
-    if ! bash tests/struct_dizi_surum.sh ./tulpar; then
-        echo -e "${RED}struct dizisi dongu surumu bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "struct dizisi dongu surumu bozuk!" bash tests/struct_dizi_surum.sh ./tulpar
 
     # FOR BASLIGINDA BILESIK ARTIM (2026-10-02): `for (...; i += K)` ayristirma
     # hatasiydi; artik `i = i + K`'ye seker aciliyor. Kapi, `+= 1` yazan
     # donguye struct/float/int dizi surumlerinin `= i + 1` yazanla AYNI
     # kuruldugunu (ve `+= -1`'e kurulmadigini) olcer. Anlam:
     # tests/for_bilesik_artim.test.tpr.
-    if ! bash tests/for_bilesik_artim.sh ./tulpar; then
-        echo -e "${RED}for basliginda bilesik artim bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "for basliginda bilesik artim bozuk!" bash tests/for_bilesik_artim.sh ./tulpar
 
     # SOGUK YOL INDEKSI + DIZI MAIN YERELI (2026-10-02): onbellekli dizi
     # erisiminin genel yolundaki 8/16 bayt adimli adresler LSR'den gizli mi
     # (IR'da volatile; TULPAR_NO_COLD_IX=1 pozitif kontrol), yalniz main'de
     # gorulen ust duzey diziler main yereli mi (TULPAR_NO_ML_ARR=1), sonuc
     # dort derlemede ayni mi. Anlam: tests/soguk_indeks.test.tpr.
-    if ! bash tests/soguk_indeks.sh ./tulpar; then
-        echo -e "${RED}soguk yol indeksi / dizi main yereli bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "soguk yol indeksi / dizi main yereli bozuk!" bash tests/soguk_indeks.sh ./tulpar
 
     # INT YEREL GOLGE SURUMU + INT DIZI DONGU SURUMU (2026-10-01): fonksiyon
     # icindeki kutulu `int` yereller dongude native golgeye iniyor mu, ic ice
     # dongunun en icteki `for`u 32-bit int depoya iniyor mu, kurulmamasi
     # gereken yerde kurulmuyor mu, sinir disi hala yakalaniyor mu, ve uc kip
     # (varsayilan / TULPAR_NO_IVER / TULPAR_NO_IAVER) ayni ciktiyi veriyor mu.
-    if ! bash tests/int_golge.sh ./tulpar; then
-        echo -e "${RED}int yerel golge / int dizi dongu surumu bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "int yerel golge / int dizi dongu surumu bozuk!" bash tests/int_golge.sh ./tulpar
 
     # DEGERIN METNI (2026-10-02, Tuzaklar 7j): print(dizi / json / struct
     # dizisi / tuple) beklenen metni basiyor mu ve toString ile AYNI mi.
     # print yalniz surec disindan okunabildigi icin .test.tpr'nin ikizi.
-    if ! bash tests/deger_metni.sh ./tulpar; then
-        echo -e "${RED}print / toString deger metni bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "print / toString deger metni bozuk!" bash tests/deger_metni.sh ./tulpar
 
     # FLOAT DIZI IC ICE SURUM (2026-10-01): en ic dongulerin sinavi dis dongu
     # basinda bir kez (nbody), int sekil onbellegi yalniz genel govdede;
     # TULPAR_NO_FVNEST=1 pozitif kontrol. Anlam: tests/float_ic_ice.test.tpr.
-    if ! bash tests/float_ic_ice.sh ./tulpar; then
-        echo -e "${RED}float dizi ic ice surum bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "float dizi ic ice surum bozuk!" bash tests/float_ic_ice.sh ./tulpar
 
     # KUTULU FONKSİYONLARIN DEĞER ABI'si duruyor mu?
     #
@@ -1548,48 +1504,30 @@ TPREOF
     # TIPSIZ FONKSIYONUN INT-OZEL KLONU (K216): yapi (klon var/yok), anlam
     # (klonlu == klonsuz cikti), kutulu yol (boxed_value_abi klonlar kapali),
     # hiz. Ayrinti ve pozitif kontrol betigin basinda.
-    if ! bash tests/tipsiz_int.sh ./tulpar; then
-        echo -e "${RED}tipsiz int ozellestirmesi bozuk!${NC}"
-        exit 1
-    fi
+    kapi_seri "tipsiz int ozellestirmesi bozuk!" bash tests/tipsiz_int.sh ./tulpar
 
     # STRUCT `var` KACIS ANALIZI (K064): kacmayan `var q = mk()` ayirmasiz,
     # kacan kutulu; analiz kapaliyken ayirma gorulmeli (pozitif kontrol).
-    if ! bash tests/struct_kacis.sh ./tulpar; then
-        echo -e "${RED}struct var kacis analizi bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "struct var kacis analizi bozuk!" bash tests/struct_kacis.sh ./tulpar
 
     # UST DUZEY MAIN-YERELI + STRUCT DIZISI SEKIL ONBELLEGI (2026-10-01):
     # yalniz main'de gorulen ad global degil; fonksiyon/lambda/try adlari
     # global; sekli degismeyen dongude baslik bir kez okunuyor (iki pozitif
     # kontrol, sinir disi hala hata).
-    if ! bash tests/main_yerel.sh ./tulpar; then
-        echo -e "${RED}ust duzey main-yereli / struct dizisi onbellegi bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "ust duzey main-yereli / struct dizisi onbellegi bozuk!" bash tests/main_yerel.sh ./tulpar
 
     # TRY GOVDESINDE YAZILAN YEREL (Tuzaklar 7i, 2026-10-01): catch'te okunan
     # yerel volatile, govdede dogup olen yerel DEGIL; TULPAR_NO_TRY_VOLATILE=1
     # ile hata geri gelmeli (pozitif kontrol). Anlam: tests/try_yerel.test.tpr.
-    if ! bash tests/try_yerel.sh ./tulpar; then
-        echo -e "${RED}try govdesi yerel volatile karari bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "try govdesi yerel volatile karari bozuk!" bash tests/try_yerel.sh ./tulpar
 
     # f32 / i32 STRUCT ALANLARI (K037/K035): tanilar + struct dizisi deposunun
     # C dizisiyle bayt bayt ayni oldugu (C++ sondasi, iki yon, pozitif kontrol).
-    if ! bash tests/f32_yerlesim.sh ./tulpar; then
-        echo -e "${RED}f32/i32 alan yerlesimi bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "f32/i32 alan yerlesimi bozuk!" bash tests/f32_yerlesim.sh ./tulpar
 
     # `@repr(C)` (K036): tanilar + 1 baytlik bool'lu struct dizisinin C
     # dizisiyle bayt bayt ayni oldugu (C++ sondasi, pozitif kontrol).
-    if ! bash tests/repr_c.sh ./tulpar; then
-        echo -e "${RED}@repr(C) yerlesimi bozuk!${NC}"
-        exit 1
-    fi
+    kapi_kuyruk "@repr(C) yerlesimi bozuk!" bash tests/repr_c.sh ./tulpar
 
     # Kod üretimi DENKLİK denetimi (scene3d_export + sahne JSON'ları) 2026-09-22'de
     # ÇIKARILDI: sahne/arayüz hattı artık tulpar-engine deposunda ölçülüyor.
@@ -1597,6 +1535,9 @@ TPREOF
     # kurduğunu doğruluyordu; örnek ve sahne JSON'ları depoda duruyor, yalnız CI
     # kapısı kalktı. Geri isteyen: git log -- build.sh (bu satırın commit'i).
 
+    kapi_kuyrugu_bosalt
+    kapi_sure_ozeti
+    rm -rf "$KAPI_DIR"
     hw_end "suites ($SUITE_N paket)"
     echo -e "${GREEN}All $SUITE_N suites passed!${NC}"
     exit 0
@@ -1820,7 +1761,27 @@ if [ "$ACTION" = "test" ]; then
                 # and the wings/router examples never used a display.
                 DISPLAY= WAYLAND_DISPLAY= "./$out_path" > "$smoke_log" 2>&1 &
                 local smoke_pid=$!
-                sleep 2
+                # HAZIR OLMA YOKLAMASI (2026-10-05). Eskiden HER sunucu ornegi
+                # sabit `sleep 2` bekliyordu. Probe'u olan ornekte 0,1 s
+                # aralikla port yoklaniyor: yanit gelirse sunucu hazir (ve en
+                # az bir istegi karsilamis); surec olurse hemen asagidaki
+                # "cikti" dalina. UST SINIR AYNI (2 s): hic yanit gelmezse
+                # eskisi gibi 2. saniyede canlilik + 5 s'lik probe. Probe'suz
+                # ornekte (port bilinmiyor) cokme penceresi kisaltilamaz —
+                # 2 s aynen duruyor.
+                local hazir_url
+                hazir_url=$(smoke_probe_for "$(basename "$example")")
+                if [ -n "$hazir_url" ] && command -v curl &> /dev/null; then
+                    local yokla=0 hc
+                    while [ $yokla -lt 20 ] && kill -0 "$smoke_pid" 2>/dev/null; do
+                        hc=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 0.2 --max-time 0.3 -k "$hazir_url" 2>/dev/null)
+                        [ -n "$hc" ] && [ "$hc" != "000" ] && break
+                        sleep 0.1
+                        yokla=$((yokla + 1))
+                    done
+                else
+                    sleep 2
+                fi
                 if kill -0 "$smoke_pid" 2>/dev/null; then
                     # Still alive after startup. If we have an HTTP probe
                     # for this example, hit it now — otherwise the silent
@@ -2082,14 +2043,49 @@ if [ "$ACTION" = "test" ]; then
         # cunku bos bir degiskenle karsilastirma yalnizca "esit degil" der.
         # Buraya yeni bir kosul eklerken sordugu her degiskenin bu satirda
         # oldugundan emin olun.
-        export INPUT_DIR FAIL_DIR GREEN RED NC PLATFORM
-        export -f run_test smoke_probe_for
+        # ORNEK BASINA SURE + TEPE RSS (2026-10-05). Windows isi bu adimda
+        # uc kez runner kaybetti (#467: 10 dk sinirina ragmen 37 dk asili);
+        # hangi ornegin zaman/bellek yedigi hic olculmuyordu. Her ornek
+        # "ms rss_kb ad" satiri yazar (RSS yalniz GNU time varsa — Linux;
+        # yoksa "?"), sonda en yavas ve en buyuk 10 basilir.
+        ORNEK_SURE=$(mktemp)
+        GNU_TIME=""
+        if [ -x /usr/bin/time ] && /usr/bin/time --version 2>&1 | grep -q GNU; then
+            GNU_TIME=/usr/bin/time
+        fi
+        ornek_kos() {
+            local t0 t1 rc rss="?" tf
+            t0=$(simdi_ms)
+            if [ -n "$GNU_TIME" ]; then
+                tf=$(mktemp)
+                "$GNU_TIME" -f %M -o "$tf" bash -c 'run_test "$0" "$1"' "$1" "$2"
+                rc=$?
+                rss=$(tail -n 1 "$tf" 2>/dev/null); rm -f "$tf"
+                case "$rss" in ''|*[!0-9]*) rss="?" ;; esac
+            else
+                run_test "$1" "$2"
+                rc=$?
+            fi
+            t1=$(simdi_ms)
+            echo "$((t1 - t0)) $rss $1" >> "$ORNEK_SURE"
+            return $rc
+        }
+        export INPUT_DIR FAIL_DIR GREEN RED NC PLATFORM ORNEK_SURE GNU_TIME
+        export -f run_test smoke_probe_for ornek_kos simdi_ms
 
         # xargs exits 123 if ANY worker exited non-zero — that is the
         # failure channel (a worker subshell cannot set TEST_FAILED).
         xargs -P "$test_jobs" -n 2 \
-            bash -c 'run_test "$0" "$1"' < "$work_list" || TEST_FAILED=1
+            bash -c 'ornek_kos "$0" "$1"' < "$work_list" || TEST_FAILED=1
         rm -f "$work_list"
+        echo ""
+        echo "En yavas 10 ornek (ms, tepe RSS KB, ad):"
+        sort -rn "$ORNEK_SURE" | awk 'NR<=10 { printf "  %7d  %8s  %s\n", $1, $2, $3 }'
+        if [ -n "$GNU_TIME" ]; then
+            echo "En buyuk tepe RSS 10 ornek (KB, ms, ad):"
+            sort -k2,2rn "$ORNEK_SURE" | awk 'NR<=10 { printf "  %8s  %7d  %s\n", $2, $1, $3 }'
+        fi
+        rm -f "$ORNEK_SURE"
 
     fi
 
