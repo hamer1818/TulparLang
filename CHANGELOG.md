@@ -49,9 +49,10 @@ tag still works;
   kuyruk onların yanında hiç koşmuyor (kuyruk en sonda boşaltılıyor). Her
   işin çıktısı ayrı dosyada, sırayla basılıyor; sonda en yavaş 10 iş.
   Yerelde 107 s → 49 s (`TULPAR_TEST_JOBS=1` eski seri davranış). CI
-  suites adımı (PR #469): Linux 240 → 147 s, macOS 330 → 205 s. Windows'ta
-  varsayılan SERİ: 2 işçiyle 201 → 218 s ölçüldü (paket döngüsü 85 → 74 s,
-  kapılar 114 → 131 s), paralellik orada ödemiyor.
+  suites adımı için tablo PR #469'da. Windows'ta işçi sayısı ölçülerek
+  seçildi (main seri 201 s): 1 işçi 304 s, 2 işçi 218 s, 4 işçi 154 s; tek
+  işçinin yavaşlığı iş başına `bash -c` kabuğundan (MSYS2'de ~0,3 s), bu
+  yüzden xargs işçi başına birden çok iş veriyor.
 - Kapıların hiçbiri gevşemedi: düşen paket ve düşen paralel kapı kırmızı
   (sabotajla ölçüldü: kasıtlı düşen paket → "Some suites failed!", kasıtlı
   düşen kapı → "Dusen paralel kapilar" + çıkış 1); işçisi hiç koşmayan iş

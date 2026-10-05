@@ -180,17 +180,15 @@ if [ "$ACTION" = "suites" ]; then
     # paralel kuyruk onlarin YANINDA hic kosmaz (kuyruk en sonda bosaltilir).
     # Her isin suresi KAPI_SURE'ye yazilir; sonda en yavas 10 basilir.
     #
-    # Isci sayisi: TULPAR_TEST_JOBS, yoksa cekirdek sayisi. Windows'ta
-    # varsayilan 1 (SERI): olculdu (2026-10-05, PR #469, windows-latest 4
-    # vCPU) 2 isciyle paket dongusu 85 -> ~74 s, kapilar 114 -> 131 s, adim
-    # 201 -> 218 s — paralellik orada odemiyor (her yeni .exe icin surec
-    # baslatma/tarama seri gibi davraniyor; bos bellek tum adim boyunca
-    # ~13 GB, tepe RSS ornek basina ~190 MB — bellek degil). Linux 240 ->
-    # 147 s, macOS 330 -> 205 s.
+    # Isci sayisi: TULPAR_TEST_JOBS, yoksa cekirdek sayisi — Windows dahil.
+    # Windows'ta BILINCLI secildi, olculdu (2026-10-05, PR #469,
+    # windows-latest 4 vCPU, suites adimi; main seri 201 s): 1 isci 304 s,
+    # 2 isci 218 s, 4 isci 154 s. 1 iscinin main'den YAVAS olmasi is basina
+    # `bash -c` kabugundan (MSYS2'de ~0,3 s) — bu yuzden xargs isci basina
+    # birden cok is veriyor. Bos bellek adim boyunca ~13 GB, ornek basina
+    # tepe RSS ~190 MB: 4 isci bellegi zorlamiyor (tools/win_kaynak_izle.sh).
     if [ -n "${TULPAR_TEST_JOBS:-}" ]; then
         KAPI_JOBS=$TULPAR_TEST_JOBS
-    elif [ "$PLATFORM" = "Windows" ]; then
-        KAPI_JOBS=4
     else
         KAPI_JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
     fi
@@ -236,7 +234,9 @@ if [ "$ACTION" = "suites" ]; then
         export KAPI_DIR
         echo ""
         echo "Paralel kapilar: $KAPI_N is, $KAPI_JOBS isci"
-        seq 1 "$KAPI_N" | xargs -P "$KAPI_JOBS" -I{} bash -c 'kapi_kos "$1"' _ {}
+        # Isci basina 2 is: her `bash -c` yeni bir kabuk (MSYS2'de ~0,3 s,
+        # olculdu 2026-10-05) — tek is basina kabuk Windows'ta kazanci yiyordu.
+        seq 1 "$KAPI_N" | xargs -P "$KAPI_JOBS" -n 2 bash -c 'for a; do kapi_kos "$a"; done' _
         local i dus=""
         for i in $(seq 1 "$KAPI_N"); do
             [ -f "$KAPI_DIR/$i.out" ] && cat "$KAPI_DIR/$i.out"
@@ -376,7 +376,8 @@ if [ "$ACTION" = "suites" ]; then
         fi
         SUITE_LISTE+=("$suite")
     done
-    printf '%s\n' "${SUITE_LISTE[@]}" | xargs -P "$KAPI_JOBS" -I{} bash -c 'suite_kos "$1"' _ {}
+    # Isci basina 4 paket (kabuk baslatma bedeli, kapi_kuyrugu_bosalt notu).
+    printf '%s\n' "${SUITE_LISTE[@]}" | xargs -P "$KAPI_JOBS" -n 4 bash -c 'for a; do suite_kos "$a"; done' _
     for suite in "${SUITE_LISTE[@]}"; do
         name=$(basename "$suite")
         if [ -f "$SUITE_DIR/$name.out" ]; then cat "$SUITE_DIR/$name.out"
