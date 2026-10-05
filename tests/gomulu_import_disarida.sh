@@ -29,7 +29,12 @@ gecti() { printf "  \033[0;32mgecti\033[0m  %s\n" "$1"; }
 dustu() { printf "  \033[0;31mDUSTU\033[0m  %s\n" "$1"; fail=1; }
 
 # Gomulu ad -> dosya (lib/ altinda), CMake listesinden: tek kaynak.
-mapfile -t GOMULU < <(sed -n 's/^embed_library("\([^"]*\)" "\([^"]*\)".*/\1 \2/p' "$ROOT/cmake/EmbedLibraries.cmake" | tr -d '\r')
+# `mapfile` YOK: macOS'un /bin/bash'i 3.2 (CI'da "mapfile: command not
+# found" ile dustu, 2026-10-05). Duz while-read.
+GOMULU=()
+while IFS= read -r satir; do
+  [ -n "$satir" ] && GOMULU+=("$satir")
+done <<<"$(sed -n 's/^embed_library("\([^"]*\)" "\([^"]*\)".*/\1 \2/p' "$ROOT/cmake/EmbedLibraries.cmake" | tr -d '\r')"
 [ "${#GOMULU[@]}" -ge 10 ] || { dustu "EmbedLibraries.cmake'ten gomulu liste okunamadi (${#GOMULU[@]} satir)"; exit 1; }
 
 # --- 1. STATIK ---------------------------------------------------------------
