@@ -22,7 +22,7 @@ reddedilmeli() {
     if [ "$rc" -ne 2 ]; then
         dustu "$ad: cikis 2 (ayristirma hatasi) bekleniyordu, $rc geldi"
         echo "$out" | sed 's/^/         /'
-    elif ! echo "$out" | grep -qF -- "$bekle"; then
+    elif ! grep -qF -- "$bekle" <<<"$out"; then
         dustu "$ad: reddedildi ama beklenen mesaj yok: '$bekle'"
         echo "$out" | sed 's/^/         /'
     else

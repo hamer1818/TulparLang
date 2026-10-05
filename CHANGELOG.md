@@ -13,6 +13,25 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `pipefail` altında `echo "$out" | grep -q` eşleşme varken kırmızı dönebiliyordu
+
+- 19 test/araç betiği (39 satır) `set -o pipefail` altında çıktıyı `grep -q`'ya
+  boruyla veriyordu. `grep -q` eşleşmeyi bulunca çıkıyor, `echo` hâlâ
+  yazıyorsa SIGPIPE (141) alıyor ve pipefail borunun durumunu 141 yapıyor:
+  eşleşme VARKEN sahte kırmızı, `! echo | grep -q` biçiminde sahte yeşil.
+  Belirlenimsiz — çıktı boyutuna ve pipe tamponuna bağlı. Ölçüldü
+  (2026-10-05, Linux x86_64, bash 5.3, 200 tekrar): 24 KB'ta 0, 39 KB'ta 1,
+  49 KB'ta 12, 64 KB'ta 190, 73 KB+ 200 sahte kırmızı; here-string ve `[[ ]]`
+  biçimleri her boyutta 0. macOS'ta pipe tamponu 16 KB'tan başladığı için
+  eşik orada daha düşük. Hepsi `grep -q … <<<"$out"` biçimine çevrildi (mantık
+  aynen; `-F`/`-E`/`-i`/`-x` bayrakları ve `!` korunuyor).
+- Yeni kapı `tests/pipefail_grep_kapisi.sh` (`./build.sh suites`'in başında):
+  pipefail'li betiklerde ve iş akışı YAML'lerinde `| grep … -q|-m|--quiet`
+  kalıbını kırmızı yapar; kendi pozitif kontrolünü (kasıtlı kalıplı örnek
+  dosya kırmızı, düzeltilmiş/yorum/pipefail'siz örnek yeşil) her koşumda
+  koşar. Düzeltme öncesi ağaçta 19 dosya / 39 satır kırmızı.
+  Ayrıntı: docs/mindmap/Tuzaklar.md §2 "altıncı yalan biçimi".
+
 ### Düzeltildi — macOS'ta `tulpar build` çıktısı Homebrew openssl@3'e bağlanıyordu
 
 - #462 sürücüyü Homebrew'suz açılır yaptı ama **kullanıcı programları** değil:

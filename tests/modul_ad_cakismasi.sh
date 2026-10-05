@@ -27,10 +27,10 @@ printf '%s\n' 'func ortak(): int { return 2; }' 'func yardim(): int { return 7; 
 printf '%s\n' 'import "ma";' 'import "mb";' 'func yardim(): int { return 9; }' 'print(ortak() * 10 + yardim());' > "$TMP/ana.tpr"
 
 out=$(cd "$TMP" && "$TUL" typecheck ana.tpr 2>&1); rc=$?
-if echo "$out" | grep -qF "'ortak' is defined in two imported modules: 'ma' (line 1) and 'mb' (line 1)"; then
+if grep -qF "'ortak' is defined in two imported modules: 'ma' (line 1) and 'mb' (line 1)" <<<"$out"; then
     gecti "iki modul: uyari, iki tanimin yeri"
 else dustu "iki modul uyarisi yok"; echo "$out" | sed 's/^/         /'; fi
-if echo "$out" | grep -qF "'yardim' (line 3) shadows the function of the same name in imported module 'mb' (line 2)"; then
+if grep -qF "'yardim' (line 3) shadows the function of the same name in imported module 'mb' (line 2)" <<<"$out"; then
     gecti "yerel golge: uyari, iki tanimin yeri"
 else dustu "yerel golge uyarisi yok"; echo "$out" | sed 's/^/         /'; fi
 if [ $rc -eq 0 ]; then gecti "uyari SAYILMIYOR (typecheck cikis 0)"
@@ -43,7 +43,7 @@ else dustu "calisma ciktisi '$run' (19 bekleniyordu)"; fi
 printf '%s\n' 'func ortak2(): int { return 2; }' > "$TMP/mb.tpr"
 printf '%s\n' 'import "ma";' 'import "mb";' 'print(ortak() + ortak2());' > "$TMP/ana.tpr"
 out=$(cd "$TMP" && "$TUL" typecheck ana.tpr 2>&1)
-if echo "$out" | grep -qE "two imported modules|shadows the function"; then
+if grep -qE "two imported modules|shadows the function" <<<"$out"; then
     dustu "cakisma yokken uyari basildi"; echo "$out" | sed 's/^/         /'
 else gecti "cakisma yok -> uyari yok (pozitif kontrol)"; fi
 

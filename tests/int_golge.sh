@@ -39,7 +39,7 @@ derle() {   # derle <ad> [ek ortam] -> derleyici cikisi (TULPAR_DBG_VER)
 karar() {
     local ad="$1" desen="$2" bekle="$3" ne="$4" out var=yok
     out=$(derle "$ad")
-    echo "$out" | grep -qE "$desen" && var=var
+    grep -qE "$desen" <<<"$out" && var=var
     if [ "$var" = "$bekle" ]; then gecti "$ad: $ne"
     else dustu "$ad: '$desen' $var, beklenen $bekle — $ne"; echo "$out" | sed 's/^/         /'; fi
 }
@@ -159,14 +159,14 @@ print(topla(a, toInt(env("IG_K"))));
 print("sonra");
 TPREOF
 out=$(derle sinir)
-if echo "$out" | grep -qE '^\[iver\] satir 4: [0-9]+ golge, 0 bildirim, 1 okuma'; then
+if grep -qE '^\[iver\] satir 4: [0-9]+ golge, 0 bildirim, 1 okuma' <<<"$out"; then
     # Windows ciktisi CRLF: satir sonu karsilastirmadan once ayiklaniyor.
     r=$(cd "$TMP" && IG_K=5 ./sinir.out 2>&1); rc=$?
     r=$(printf '%s' "$r" | tr -d '\r')
     if [ "$rc" -eq 0 ] && [ "$r" = "$(printf '12\nsonra')" ]; then gecti "sinir: tam sinirda calisti (12)"
     else dustu "sinir: IG_K=5 rc=$rc cikti='$r' (beklenen 12)"; fi
     r=$(cd "$TMP" && IG_K=6 ./sinir.out 2>&1); rc=$?
-    if [ "$rc" -ne 0 ] && echo "$r" | grep -qi "out of bounds"; then
+    if [ "$rc" -ne 0 ] && grep -qi "out of bounds" <<<"$r"; then
         gecti "sinir: golge kopyasinda sinir disi YAKALANDI (rc=$rc)"
     else dustu "sinir: IG_K=6 rc=$rc cikti='$r' (sinir disi yakalanmadi)"; fi
     # Yumusak kip: tani + 0 ikame + devam — surumsuz derlemeyle AYNI cikti.
@@ -183,7 +183,7 @@ fi
 # Int dizi surumu: c bir eleman KISA -> son satirin son yazmasi sinir disi.
 # Dongu basindaki sinir sinavi tutmuyor, genel surum hatayi veriyor.
 r=$(cd "$TMP" && IG_KISA=1 ./mm.out 2>&1); rc=$?
-if [ "$rc" -ne 0 ] && echo "$r" | grep -qi "out of bounds"; then
+if [ "$rc" -ne 0 ] && grep -qi "out of bounds" <<<"$r"; then
     gecti "int dizi surumu: ic dongude sinir disi YAKALANDI (rc=$rc)"
 else dustu "int dizi surumu: IG_KISA=1 rc=$rc cikti='$r' (sinir disi yakalanmadi)"; fi
 

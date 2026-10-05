@@ -28,7 +28,7 @@ reddedilmeli() {
     if [ "$rc" -ne 2 ]; then
         dustu "$ad: cikis 2 (ayristirma hatasi) bekleniyordu, $rc geldi"
         echo "$out" | sed 's/^/         /'
-    elif ! echo "$out" | grep -qF -- "$bekle"; then
+    elif ! grep -qF -- "$bekle" <<<"$out"; then
         dustu "$ad: reddedildi ama beklenen mesaj yok: '$bekle'"
         echo "$out" | sed 's/^/         /'
     else
@@ -75,7 +75,7 @@ str ad = match r {
 };
 print(ad);' > "$TMP/eksik_match.tpr"
 out=$(cd "$TMP" && LC_ALL=C "$TUL" typecheck eksik_match.tpr 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -qF "enum 'Renk' members not covered: MAVI"; then
+if [ "$rc" -eq 0 ] && grep -qF "enum 'Renk' members not covered: MAVI" <<<"$out"; then
     gecti "eksik match kolu: uyari (MAVI), sayilmiyor"
 else dustu "eksik match kolu uyarisi (rc=$rc)"; echo "$out" | sed 's/^/         /'; fi
 printf '%s\n' 'enum Renk { KIRMIZI, YESIL, MAVI }
@@ -84,7 +84,7 @@ str a = match r { Renk.KIRMIZI => "k", Renk.YESIL => "y", Renk.MAVI => "m" };
 str b = match r { Renk.KIRMIZI => "k", _ => "d" };
 print(a + b);' > "$TMP/tam_match.tpr"
 out=$(cd "$TMP" && LC_ALL=C "$TUL" typecheck tam_match.tpr 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q "not covered"; then
+if [ "$rc" -eq 0 ] && ! grep -q "not covered" <<<"$out"; then
     gecti "tam / \`_\`li match: uyari yok (pozitif kontrol)"
 else dustu "tam match uyari verdi (rc=$rc)"; echo "$out" | sed 's/^/         /'; fi
 

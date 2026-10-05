@@ -172,6 +172,15 @@ if [ "$ACTION" = "suites" ]; then
     else
         echo -e "${YELLOW}gomulu stdlib tazelik kapisi ATLANDI${NC} — python3 yok"
     fi
+    # PIPEFAIL + `| grep -q` KAPISI — asagidaki betik paketlerinden ONCE:
+    # pipefail'li betikte `echo "$out" | grep -q` eslesme VARKEN 141 donebilir
+    # (grep erken cikar, echo SIGPIPE alir). Belirlenimsiz sahte kirmizi
+    # (2026-10-05 yerelde, onceki turlarda CI'da). Tuzaklar 2, altinci bicim.
+    # `-x` korumasi YOK: dosya calistirilamaz olursa kapi sessizce atlanmasin.
+    if ! bash tests/pipefail_grep_kapisi.sh; then
+        echo -e "${RED}pipefail altinda erken cikan grep kalibi var!${NC}"
+        exit 1
+    fi
     hw_begin
     SUITE_FAILED=0
     SUITE_N=0

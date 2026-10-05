@@ -26,7 +26,7 @@ kanit() {
     local out
     out=$(cd "$TMP" && TULPAR_DBG_VER=1 TULPAR_AOT_NOCACHE=1 "$TUL" build "$ad.tpr" "$ad.out" 2>&1)
     local var=hayir
-    echo "$out" | grep -qF '[ver] a[i]' && var=evet
+    grep -qF '[ver] a[i]' <<<"$out" && var=evet
     if [ "$var" = "$bekle" ]; then gecti "$ad: kanit $bekle"
     else dustu "$ad: kanit '$var', beklenen '$bekle' — $govde"; echo "$out" | sed 's/^/         /'; fi
 }
@@ -59,7 +59,7 @@ sinir() {   # sinir <ad> <kosul> <n> <beklenen: evet|hayir> <cikis: 0|hata> [gov
         "$kosul" "$govde" "$n" > "$TMP/$ad.tpr"
     local out rc var=hayir
     out=$(cd "$TMP" && TULPAR_DBG_VER=1 TULPAR_AOT_NOCACHE=1 "$TUL" build "$ad.tpr" "$ad.out" 2>&1)
-    echo "$out" | grep -qF '[ver] a[i]' && var=evet
+    grep -qF '[ver] a[i]' <<<"$out" && var=evet
     if [ "$var" = "$bekle" ]; then gecti "$ad: kanit $bekle"
     else dustu "$ad: kanit '$var', beklenen '$bekle' — $kosul"; fi
     out=$(cd "$TMP" && ./"$ad.out" 2>&1); rc=$?

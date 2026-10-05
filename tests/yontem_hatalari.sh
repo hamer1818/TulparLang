@@ -29,7 +29,7 @@ reddedilmeli() {
     out=$(cd "$TMP" && "$TUL" build "$ad.tpr" "$ad.out" 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
         dustu "$ad: derleme BASARILI oldu, hata bekleniyordu"
-    elif ! echo "$out" | grep -qF -- "$bekle"; then
+    elif ! grep -qF -- "$bekle" <<<"$out"; then
         dustu "$ad: reddedildi ama beklenen mesaj yok: '$bekle'"
         echo "$out" | sed 's/^/         /'
     else
@@ -78,7 +78,7 @@ Rect a = { w: 2, h: 3 };
 Circle c = { r: 2 };
 print(toString(a.area()) + " " + toString(c.area()));' > "$TMP/gecerli.tpr"
 out=$(cd "$TMP" && "$TUL" build gecerli.tpr gecerli.out 2>&1 && ./gecerli.out 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^6 12$"; then gecti "gecerli yontemler derlenir ve tipe gore dagilir (pozitif kontrol)"
+if [ "$rc" -eq 0 ] && grep -q "^6 12$" <<<"$out"; then gecti "gecerli yontemler derlenir ve tipe gore dagilir (pozitif kontrol)"
 else dustu "gecerli yontemler: rc=$rc cikti='$out'"; fi
 
 if [ "$fail" -eq 0 ]; then echo "yontem_hatalari: $n_gecti/$n_gecti"; fi

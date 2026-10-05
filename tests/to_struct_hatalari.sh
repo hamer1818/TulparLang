@@ -23,7 +23,7 @@ reddedilmeli() {
     out=$(cd "$TMP" && "$TUL" build "$ad.tpr" "$ad.out" 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
         dustu "$ad: derleme BASARILI oldu, hata bekleniyordu"
-    elif ! echo "$out" | grep -qF -- "$bekle"; then
+    elif ! grep -qF -- "$bekle" <<<"$out"; then
         dustu "$ad: reddedildi ama beklenen mesaj yok: '$bekle'"
         echo "$out" | sed 's/^/         /'
     else
@@ -54,7 +54,7 @@ printf '%s\n' 'struct Nokta { int x; int y; }
 Nokta p = to_struct(fromJson("{\"x\": 3, \"y\": 4}"), "Nokta");
 print(toString(p.x + p.y));' > "$TMP/gecerli.tpr"
 out=$(cd "$TMP" && "$TUL" build gecerli.tpr gecerli.out 2>&1 && ./gecerli.out 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^7$"; then gecti "gecerli to_struct derlenir ve calisir (pozitif kontrol)"
+if [ "$rc" -eq 0 ] && grep -q "^7$" <<<"$out"; then gecti "gecerli to_struct derlenir ve calisir (pozitif kontrol)"
 else dustu "gecerli to_struct: rc=$rc cikti='$out'"; fi
 
 if [ "$fail" -eq 0 ]; then echo "to_struct_hatalari: $n_gecti/$n_gecti"; fi

@@ -73,12 +73,12 @@ echo "$out" | grep -E "^  sar .*ALLOCATES — call to 'selam' allocates" > /dev/
     && gecti "gecisli neden: sar -> 'selam' cagrisi" || dustu "sar icin gecisli neden yok"
 
 # 3) Hizli yol: `n - 1` ipucu var; `len(a)` ile yok (kontrol).
-echo "$out" | grep -q 'performance hint: `a\[i\]` stays bounds-checked' \
-    && echo "$out" | grep -q '1 fast-path hints' \
+grep -q 'performance hint: `a\[i\]` stays bounds-checked' <<<"$out" \
+    && grep -q '1 fast-path hints' <<<"$out" \
     && gecti "hizli yol: 'n - 1' siniri icin ipucu" || dustu "hizli yol ipucu yok"
 sed 's/i < n - 1; i++/i < len(a); i++/' "$TMP/p.tpr" > "$TMP/kanitli.tpr"
 out2=$("$TUL" analyze "$TMP/kanitli.tpr" 2>&1)
-echo "$out2" | grep -q '0 fast-path hints' && ! echo "$out2" | grep -q 'performance hint' \
+grep -q '0 fast-path hints' <<<"$out2" && ! grep -q 'performance hint' <<<"$out2" \
     && gecti "kontrol: 'len(a)' ile ipucu yok" || dustu "kanitli dongude ipucu cikti"
 
 # 4) Cikis kodlari.

@@ -27,7 +27,7 @@ reddedilmeli() {
     out=$(cd "$TMP/$ad" && LC_ALL=C "$TUL" build ana.tpr ana.out 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
         dustu "$ad: derleme BASARILI oldu, hata bekleniyordu"
-    elif ! echo "$out" | grep -qF -- "$bekle"; then
+    elif ! grep -qF -- "$bekle" <<<"$out"; then
         dustu "$ad: reddedildi ama beklenen mesaj yok: '$bekle'"
         echo "$out" | sed 's/^/         /'
     else
@@ -89,7 +89,7 @@ print(toString(v_uzun2(k)) + " " + toString(vs[0].x) + " " + toString(v_yap(1.0,
 # donusun GENEL baglamdaki sifir yer tutucusuna dayaniyordu; K198 (2026-09-27)
 # o yer tutucuyu gercek degere (kutulu nesne) cevirince "object" oldu.
 out=$(cd "$TMP/gecerli" && "$TUL" build ana.tpr ana.out 2>&1 && ./ana.out 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^25 4 V { x: 1, y: 1 }$"; then
+if [ "$rc" -eq 0 ] && grep -q "^25 4 V { x: 1, y: 1 }$" <<<"$out"; then
     gecti "ayni yerlesim ana program + iki modulde tek tip (pozitif kontrol)"
 else
     dustu "ayni yerlesim: rc=$rc cikti='$out'"
