@@ -759,10 +759,20 @@ jobs:
       # 200 sn), ve her isin bir is duzeyi siniri var. Runner kaybini
       # sinirlar onleyemez; tekrarlarsa build.sh test'in paralelligi
       # (TULPAR_TEST_JOBS, varsayilan nproc) buradan dusurulmeli.
+      #
+      # TEKRARLADI (2026-10-05, kosum 37316074588 / is 111783568321): Ornekler
+      # 10 dk sinirina ragmen 37 dk "in_progress" kaldi, normal iptal bile
+      # islemedi (force-cancel gerekti) — yine runner kaybi. Ucuncu kez oldugu
+      # icin yukaridaki not uygulandi: Ornekler Windows'ta TULPAR_TEST_JOBS=2
+      # ile kosuyor (Suitler zaten seri) (runner 4 vCPU; nproc=4 iken her isci bir LLVM derlemesi
+      # + link + sunucu smoke'u tasiyordu). Bedel: Ornekler ~45 sn -> ~1,5 dk
+      # beklenir; asilan bir is 10-40 dk yakiyordu.
       - name: Ornekler (build.sh test)
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: ./build.sh test
         timeout-minutes: 10
+        env:
+          TULPAR_TEST_JOBS: '2'
 
       - name: Suitler (build.sh suites)
         if: needs.detect-docs-only.outputs.docs_only != 'true'
