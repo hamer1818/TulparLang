@@ -65,6 +65,7 @@ olc v0       tls.tpr  "$A" 0 ""
 olc ds       tls.tpr  "$A" 0 "-Wl,-dead_strip"
 olc dsg      tls.tpr  "$A" 1 "-Wl,-dead_strip"
 olc g        tls.tpr  "$A" 1 ""
+olc dsgx     tls.tpr  "$A" 1 "-Wl,-dead_strip -Wl,-x"
 olc sade_v0  sade.tpr "$A" 0 ""
 olc sade_dsg sade.tpr "$A" 1 "-Wl,-dead_strip"
 
@@ -117,10 +118,11 @@ t1=$(date +%s)
 SECENEK="no-shared no-tests no-docs no-legacy no-deprecated no-engine no-dso no-comp no-zlib
  no-ssl3 no-dtls no-srp no-gost no-idea no-cast no-seed no-rc2 no-rc4 no-rc5 no-md4 no-mdc2
  no-whirlpool no-bf no-camellia no-aria no-sm2 no-sm3 no-sm4 no-siphash no-ocb no-cms no-ts
- no-srtp no-sctp no-ct no-ec2m no-scrypt no-cmp no-crmf no-quic no-async no-uplink no-module
+ no-srtp no-sctp no-ct no-ec2m no-scrypt no-cmp no-quic no-async no-uplink no-module
  no-ui-console"
 # shellcheck disable=SC2086
 if ! ./Configure darwin64-arm64-cc $SECENEK -Os > ../cfg.log 2>&1; then
+    grep -i 'unsupported' ../cfg.log
     echo "Configure dustu:"; tail -15 ../cfg.log; exit 0
 fi
 NJ=$(sysctl -n hw.ncpu)
@@ -141,5 +143,6 @@ libtool -static -no_warning_for_no_symbols -o ozel.a uye/*.o "openssl-$V/libssl.
 ls -l ozel.a "$A"
 olc oz   tls.tpr "$TMP/ozel.a" 0 ""
 olc ozdsg tls.tpr "$TMP/ozel.a" 1 "-Wl,-dead_strip"
+olc ozdsgx tls.tpr "$TMP/ozel.a" 1 "-Wl,-dead_strip -Wl,-x"
 olc oz_sade sade.tpr "$TMP/ozel.a" 1 "-Wl,-dead_strip"
 exit 0
