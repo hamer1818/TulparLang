@@ -14,6 +14,7 @@
 #include "../vm/fnref_layout.h"   // AOTFnRef ofsetleri (call() satir ici yolu)
 #include "../vm/obj_layout.h"     // ObjString karakter ofseti (eklenti dizgi argumani)
 #include "../ext/extensions.hpp"  // yerel eklentiler (K303)
+#include "aot_cache.hpp"          // onbellek oz denetimi (import okumalari)
 #include <llvm-c/Analysis.h>
 #include <llvm-c/IRReader.h>
 #include <llvm-c/Support.h>   // LLVMParseCommandLineOptions (web SjLj)
@@ -4534,6 +4535,7 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
     diag_file = ext_path;
     snprintf(resolved_dir, sizeof(resolved_dir), "%s", ext_dir.c_str());
     tulpar::ext::mark_used(ext_idx);
+    tulpar::cache::note_input(ext_path.c_str());  // onbellek oz denetimi
   } else {
     FILE *f = nullptr;
     char resolved_path[512] = "";
@@ -4570,6 +4572,10 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
     }
     if (!f) return &mod;  // found=false
     diag_file = resolved_path;
+    // Onbellek oz denetimi (aot_cache.hpp): okunan her dosya anahtarda olmali;
+    // degilse sonuc onbellege yazilmaz (cozum kurallari burada degisip
+    // aot_cache.cpp'de unutulursa bedel bayat ikili DEGIL, iska olur).
+    tulpar::cache::note_input(resolved_path);
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);

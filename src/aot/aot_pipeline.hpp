@@ -79,6 +79,17 @@ AOTResult aot_compile_and_run_silent(const char *source);
 AOTResult aot_compile_and_run_silent_with_filename(const char *source,
                                                    const char *source_filename);
 
+// Derleme onbellegi (src/aot/aot_cache.cpp) icin: yerel baglamanin surucusu
+// (TULPAR_CC ya da varsayilan) ve `-L"dizin" ` arama dizinleri — link
+// satirini kuran fonksiyonlarin AYNISI; anahtar ikisinden turetiliyor.
+#include <string>
+const char *aot_cache_link_driver(void);
+std::string aot_cache_link_search_dirs(void);
+// Ciktinin ust dizinini (yoksa) kurar; derlemeden ONCE cagrilabilir —
+// onbellek stderr yakalamasi "dizin olusturuldu" satirini tani diye
+// saklamasin. Basarisizsa yolu adiyla basar ve false doner.
+bool aot_ensure_output_parent_dir(const char *output_name);
+
 // Check-only: parse + codegen the source for diagnostic purposes only,
 // without optimising, emitting an object file, or linking. Intended for
 // LSP / editor integrations that need fast turnaround on syntax + semantic

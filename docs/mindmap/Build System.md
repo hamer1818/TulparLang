@@ -39,17 +39,99 @@ koşuyor. Windows'a özgü üç tuzak [[Tuzaklar]] §3g'de. → [[Cross-platform
 binary'lerin linklediği) · `tulpar_tame` (vendored raylib + `aot_tm_*` bağlamaları,
 yalnız `tame`/`tm_*` kullanan programa linkleniyor). → [[Runtime]] · [[Tame]]
 
-## `tulpar build` önbelleği
-Çıktı ikilisi kaynaktan VE sürücüden yeniyse bütün AOT hattı atlanıyor
-(`[AOT] Cache hit`). `TULPAR_AOT_NOCACHE=1` ile kapanır; web/Android hedeflerinde zaten
-atlanmıyor (üretilen şey `output_name`'in kendisi değil).
+## Derleme önbelleği — içerik adresli anahtar (2026-10-05)
+`tulpar build` VE `tulpar dosya.tpr` aynı girdiyle ikinci kez derlemiyor
+(`src/aot/aot_cache.{hpp,cpp}`). Anahtar, çıktıyı belirleyen her girdinin
+SHA-256 özeti:
 
-> ⚠️ **Import edilen modüller uzun süre hesaba katılmıyordu** (2026-09-01'de düzeltildi).
-> `import "lib/scene3d"` gibi YEREL bir modülü düzeltip yeniden derlemek "Cache hit" alıp
-> **sessizce eski ikiliyi** bırakıyordu — belirti çok yanıltıcı: *düzeltmen işe yaramamış
-> görünüyor*. Artık `newest_local_import_mtime()` (`src/main.cpp`) import'ları arka uçla
-> AYNI sırayla çözüp özyinelemeli tarıyor. Gömülü stdlib adları diskte çözülmez; onları
-> sürücünün mtime'ı kapsıyor. → [[Tuzaklar]] §2
+- sürücü: sürüm dizgisi + ikilinin KİMLİĞİ + yüklü `libLLVM` (dağıtım LLVM'i
+  güncelleyince `tulpar` ikilisi aynı kalır ama kod üretimi değişir);
+- ana kaynağın ve geçişli import'ların İÇERİĞİ — çözüm sırası kodgenle aynı
+  (gömülü → eklenti → paket-yerel kardeş → literal → `.tpr` → `tulpar_modules/`),
+  gömülü bir modülün diskten import ettiği dosya dahil (gömülü `router`
+  `import "lib/http_utils.tpr"` yazıyor ve çalışma dizinine göre çözülüyor);
+- `tulpar.toml`; eklentilerin bildirim + modül içeriği, arşiv kimlikleri;
+- `libtulpar_runtime.a` / `libtulpar_tame.a` (+ OpenSSL `.a`) kimlikleri,
+  link satırının arama dizinlerinin HEPSİNDE; bağlama sürücüsü (`TULPAR_CC`
+  ya da varsayılan, PATH'te çözülmüş) ve `ld`;
+- hedef üçlüsü + CPU, kip (çalıştır / derle + çıktı adı), dil, çalışma dizini;
+- `src/aot/aot_cache_env.inc`'in DIŞLAMADIĞI her `TULPAR_*` ortam değişkeni
+  (+ `LIBRARY_PATH`, `SDKROOT`, `MACOSX_DEPLOYMENT_TARGET` …).
+
+"Kimlik" = boyut + mtime(ns) + ctime(ns) + inode (Windows: yazma zamanı +
+NTFS ChangeTime + dosya kimliği): içerik okumadan değişimi görür; ctime geri
+alınamaz, yani "içeriği değiştirip mtime'ı geri almak" da ıska verir.
+Kaynaklar ve modüller İÇERİKLE özetlenir: `touch` tek başına ıska vermez.
+
+**Ortam değişkenleri — güvenli yön.** Derleyicinin gördüğü her `TULPAR_*`
+anahtarda; dışarıda kalabilen yalnız üç sınıf (`aot_cache_env.inc`):
+ÇALIŞMA_ZAMANI (programın/düzeneğin okudukları: `TULPAR_ENGINE_*`, `*_TANI`,
+`TULPAR_TEST_JOBS`, `TULPAR_NO_F64` …), DENETİM (`TULPAR_AOT_NOCACHE`,
+`TULPAR_CACHE_*`) ve GÖZLEM (`TULPAR_AOT_EMIT_LL`, `TULPAR_AOT_TIME`,
+`TULPAR_DBG_VER` … — biri ayarlıysa önbellek HİÇ kullanılmaz: isabet,
+gözlemlenmek istenen derlemeyi atlardı). Fazla katmak yalnız gereksiz ıska
+üretir; eksik katmak bayat ikili. Kapı `tests/onbellek_anahtari_kapisi.py`:
+ÇALIŞMA_ZAMANI sınıfından bir ad derleyici tarafında (`src/aot`,
+`src/typeinfer`, `src/parser`, `src/lexer`, `src/ext`, `src/main.cpp`) dizgi
+sabiti olarak geçerse kırmızı; pozitif kontrolü (yapay ihlal ağacı) her koşumda.
+
+**Öz denetim.** Kodgenin derleme sırasında GERÇEKTEN okuduğu her dosya
+(`import_load_module` + ayrıştırıcının enum ön taraması, `note_input`)
+anahtarın kapsadıkları arasında olmalı; değilse sonuç önbelleğe YAZILMAZ.
+Çözüm kuralı kodgende değişip önbellekte unutulursa bedel bayat ikili değil,
+ıska. Pozitif kontrol: `TULPAR_CACHE_SINAMA=tarama-yok`.
+
+**Nerede.** Kök: `TULPAR_CACHE_DIR` > `$XDG_CACHE_HOME/tulpar` |
+`~/.cache/tulpar` (macOS `~/Library/Caches/tulpar`, Windows
+`%LOCALAPPDATA%\tulpar\cache`).
+- `run/<anahtar>[.exe]`: `tulpar dosya.tpr` ikilileri; isabette DOĞRUDAN
+  oradan çalışır (kopya yok). Yazma: geçici ad → asla-üzerine-yazmayan yayım
+  (POSIX `link()`, Windows bayraksız `MoveFileEx`) — koşan bir `.exe`nin ya da
+  yarışı kazanan sürecin ikilisinin üstüne yazılmaz; N süreç aynı anda
+  derlerse kazananınki kullanılır. Tavan 512 MB (`TULPAR_CACHE_MAX_MB`), LRU
+  (isabet mtime'ı tazeler; son 60 s içinde kullanılan silinmez).
+- `build/<özet(çıktı yolu)>`: `tulpar build` kaydı — anahtar + çıktı
+  ikilisinin KİMLİĞİ. İkili kullanıcının dizininde kalır ve ona hiçbir şey
+  eklenmez/yazılmaz (kullanıcı dizini kirlenmez; Windows `.exe`; macOS imzası
+  ve [[Tuzaklar#7l]]). İkili başka bir şeyle değişirse (debug derlemesi, `cp`,
+  `strip`) kimlik tutmaz → ıska.
+- Derlemenin stderr'i (kodgen uyarıları) yakalanıp girdiyle saklanır ve
+  isabette AYNEN yeniden basılır; `[typecheck]` ön geçişi her koşuda canlı
+  çalışıyor (~1–4 ms).
+
+**Önbellek dışı:** web/Android (çıktı `output_name`'in kendisi değil: `.html`
+üçlüsü / `<out>_apk` dizini; bugünkü kural korundu), `--debug` (optimizasyonsuz
+ve hızlı, DWARF mutlak yol taşır), `--sanitize` (tanı amaçlı) — bunlar
+derlenince eski kayıt silinir. Kapatma `TULPAR_AOT_NOCACHE=1`; temizlik
+`tulpar cache clean`; durum `tulpar cache info`; kararlar
+`TULPAR_CACHE_RAPOR=1` (`=2` anahtarın düz metni). Davranış kapısı
+`tests/onbellek.sh` (`build.sh suites`).
+
+Ölçüldü (2026-10-05, Ryzen 7 9800X3D, Linux, v3.39.6 tabanı, 7–9 koşu medyanı):
+
+| | önce (her koşu derler) | ilk koşu (ıska) | isabet |
+|---|---|---|---|
+| `tulpar wings_groups_test` (serve'süz) | 576 ms | 575 ms | 6,9 ms |
+| `tulpar nbody.tpr` (programın kendisi 39,2 ms) | 448 ms | 449 ms | 43,9 ms |
+| `tulpar hello.tpr` | 48,2 ms | 48,7 ms | 4,4 ms |
+| `tulpar build wings_groups_test` | 627 ms; eski isabet 8,0 ms (ikiliyi iki kez okuyordu) | 639 ms | 6,8 ms |
+| `tulpar build nbody` | 400 ms | 413 ms | 3,9 ms |
+
+"önce" ve "ilk koşu" sütunları turla eşlenmiş (eski sürücü / yeni sürücü
+boş önbellekle sırayla, [[Tuzaklar#1n]]): ıska yolunun ek maliyeti gürültünün
+içinde. Taban `tulpar --version` 3,6 ms (dinamik `libLLVM` yüklemesi);
+isabetin geri kalanı `[typecheck]` ön geçişi (~1–3 ms) + anahtar (~0,1 ms).
+`benchmarks/fair`'in 13 çekirdeğinde IR ve ikili eski sürücüyle bayt bayt
+AYNI (önbellek yalnız derleme adımını atlıyor). → [[Tuzaklar#7n]]
+
+> ⚠️ **Eski mtime önbelleği (2026-09-01 → 2026-10-05) girdilerin yarısını
+> görmüyordu.** Çıktı kaynaktan, yerel import'lardan, eklenti dosyalarından ve
+> sürücüden yeniyse "Cache hit" diyordu; kodgen ortam değişkenlerini, runtime
+> arşivini, paket-yerel kardeş import'ları (`tulpar_modules/<p>/<ic>.tpr`) ve
+> mtime'ı geri alınmış içeriği görmüyordu. Ölçüldü: `TULPAR_NO_FVER=1` ile
+> ikinci `build` "Cache hit" deyip float sürümlü ESKİ ikiliyi bıraktı (ikili
+> özeti `fc76f8ac…` iki kipte de; taze `TULPAR_NO_FVER=1` derlemesi
+> `24dabaa2…`). Daha önce (2026-09-01'e kadar) import'lar hiç sayılmıyordu.
 
 ## Sürüm dizgisi git etiketinden, her derlemede (2026-10-02)
 Eskiden `project(TulparLang VERSION 3.13.1)` + CMake **cache** değişkeni:

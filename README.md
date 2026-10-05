@@ -543,10 +543,28 @@ tulpar doc <file.tpr>         # Markdown reference generator
 tulpar debug <file.tpr>       # DAP server (VS Code debugger)
 tulpar --lsp                  # Language server (editor integration)
 
+tulpar cache [info|clean|dir] # Compile cache (see below)
+
 tulpar version                # Show installed version
 tulpar update [--check]       # Self-update from tulparlang.dev
 tulpar --help                 # Show command reference
 ```
+
+**Compile cache.** Running or building the same program again with
+identical inputs skips compilation: `tulpar app.tpr` runs the cached binary
+directly (a 28-line wings program 576 → 6.9 ms, hello world 48 → 4.4 ms;
+Ryzen 7 9800X3D, Linux, 2026-10-05). The key is content-addressed — the
+source and every transitively imported module's *content*, `tulpar.toml`,
+extension manifests/modules/archives, the runtime archive, the link driver,
+the compiler binary itself and every `TULPAR_*` variable the compiler could
+read — so `touch` alone never misses and a changed input never hits.
+Binaries live in `~/.cache/tulpar` (`$XDG_CACHE_HOME`; macOS
+`~/Library/Caches/tulpar`; Windows `%LOCALAPPDATA%\tulpar\cache`;
+`TULPAR_CACHE_DIR` overrides), capped at 512 MB with LRU eviction
+(`TULPAR_CACHE_MAX_MB`). `TULPAR_AOT_NOCACHE=1` disables it,
+`tulpar cache clean` empties it, `TULPAR_CACHE_RAPOR=1` prints each
+hit/miss decision. Web/Android targets, `--debug` and `--sanitize` builds
+always compile.
 
 `tulpar debug` is a bridge to **gdb** (MI3), so gdb must be on `PATH`:
 your distro's package on Linux (`apt install gdb`, `pacman -S gdb`),

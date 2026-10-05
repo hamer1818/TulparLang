@@ -403,6 +403,11 @@ if [ "$ACTION" = "suites" ]; then
     if command -v python3 >/dev/null 2>&1; then
         echo ""
         kapi_kuyruk "Builtin denetimi basarisiz!" python3 tests/builtin_audit.py
+        # ONBELLEK ANAHTARI (2026-10-05): anahtar disi birakilan ortam
+        # degiskenlerinden (src/aot/aot_cache_env.inc) biri derleyici tarafinda
+        # okunursa KIRMIZI — okunuyorsa ciktiyi degistirebilir ve anahtarda
+        # olmali. Pozitif kontrolu (yapay ihlal agaci) her kosumda.
+        kapi_kuyruk "Onbellek anahtari kapisi basarisiz!" python3 tests/onbellek_anahtari_kapisi.py
         # KAPILARIN KENDI SELF-TESTI (kural #10'un kalici hali).
         # Kaynak tarayan kapilar, KAPSAMLARINI kaybettiklerinde temiz bir
         # agacta da "temiz" derler — duyarlilik degil KAPSAM kaybi, ve bu
@@ -700,6 +705,15 @@ if [ "$ACTION" = "suites" ]; then
     if [ -x tests/sanitize_smoke.sh ]; then
         kapi_seri "sanitize kapisi basarisiz!" bash tests/sanitize_smoke.sh ./tulpar
     fi
+
+    # DERLEME ONBELLEGI (2026-10-05): icerik adresli anahtar. Isabet hizli mi;
+    # kaynak / yerel ve paket-yerel import / mtime'i geri alinmis icerik /
+    # TULPAR_NO_FVER / eklenti ve runtime arsivi / tulpar.toml degisince ISKA
+    # ve DOGRU yeni cikti mi; derleme uyarisi isabette yeniden basiliyor mu;
+    # 8 paralel surec; tavan/LRU; oz denetim pozitif kontrolu
+    # (TULPAR_CACHE_SINAMA=tarama-yok). Sure olctugu icin seri.
+    # `-x` korumasi YOK: dosya calistirilamaz olursa sessizce atlanmasin.
+    kapi_seri "derleme onbellegi kapisi basarisiz!" bash tests/onbellek.sh ./tulpar
 
     # FONKSIYON ARAMA (aot_func_lookup): bir Tulpar fonksiyonunu adiyla,
     # cagirmadan ve ayirmadan cozen C yuzu. Bu depoda cagiran YOK — tek

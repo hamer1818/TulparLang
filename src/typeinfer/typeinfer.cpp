@@ -7,6 +7,7 @@
 #include "../common/localization.hpp"
 #include "../embedded_libs.h"
 #include "../ext/extensions.hpp"  // yerel eklenti imzalari + modulleri (K303)
+#include "../aot/aot_cache.hpp"   // onbellek oz denetimi (import okumalari)
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include <cstdarg>
@@ -2585,7 +2586,10 @@ static bool parser_import_loader(const std::string &name, const std::string &fro
   }
   {
     std::string path;
-    if (tulpar::ext::read_module(name.c_str(), out_src, path, out_dir)) return true;
+    if (tulpar::ext::read_module(name.c_str(), out_src, path, out_dir)) {
+      tulpar::cache::note_input(path.c_str());  // onbellek oz denetimi
+      return true;
+    }
   }
   std::vector<std::string> candidates;
   if (!from_dir.empty()) candidates.push_back(from_dir + "/" + name + ".tpr");
@@ -2596,6 +2600,9 @@ static bool parser_import_loader(const std::string &name, const std::string &fro
   for (const auto &path : candidates) {
     std::ifstream in(path, std::ios::binary);
     if (!in) continue;
+    // Ayristiricinin on taramasi bu dosyanin enum'larini KODA katiyor:
+    // derleme girdisidir (onbellek oz denetimi, aot_cache.hpp).
+    tulpar::cache::note_input(path.c_str());
     std::stringstream ss;
     ss << in.rdbuf();
     out_src = ss.str();

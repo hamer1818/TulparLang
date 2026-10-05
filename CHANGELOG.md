@@ -13,6 +13,65 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — derleme önbelleği: `tulpar dosya.tpr` aynı girdiyle ikinci kez derlemiyor
+
+- `tulpar dosya.tpr` her koşuda baştan derliyordu. Artık ikili içerik adresli
+  bir anahtarın adıyla önbellekte duruyor (`~/.cache/tulpar/run/`; macOS
+  `~/Library/Caches/tulpar`, Windows `%LOCALAPPDATA%\tulpar\cache`,
+  `TULPAR_CACHE_DIR` ezer) ve isabette DOĞRUDAN oradan çalışıyor — kopya yok.
+  Ölçüldü (2026-10-05, Ryzen 7 9800X3D, medyan): 28 satırlık wings örneği
+  576 → 6,9 ms, `benchmarks/fair/nbody` 448 → 43,9 ms (programın kendisi
+  39,2), boş program 48,2 → 4,4 ms; `tulpar build` isabeti 8,0 → 3,9–6,8 ms.
+  Iska yolunun ek maliyeti turla eşlenmiş ölçümde gürültünün içinde;
+  `benchmarks/fair`'in 13 çekirdeğinde IR ve ikili bayt bayt aynı.
+- Yazma asla üzerine yazmaz: geçici ad → POSIX `link()` / Windows bayraksız
+  `MoveFileEx`; aynı programı N süreç aynı anda derlerse kazananınki
+  kullanılır (koşan `.exe`nin üstüne yazılmaz). Tavan 512 MB
+  (`TULPAR_CACHE_MAX_MB`), LRU. Derlemenin stderr'i (kodgen uyarıları)
+  saklanıp isabette aynen basılıyor; `[typecheck]` ön geçişi her koşuda canlı.
+- `tulpar cache [info|clean|dir]`; `TULPAR_AOT_NOCACHE=1` kapatır;
+  `TULPAR_CACHE_RAPOR=1` her kararı basar (`=2` anahtarın düz metni).
+  Önbellek dışı: web/Android hedefleri, `--debug`, `--sanitize` ve derlemeyi
+  GÖZLEMLEYEN değişkenler (`TULPAR_AOT_EMIT_LL`, `TULPAR_AOT_TIME`,
+  `TULPAR_DBG_VER` …: isabet, gözlemlenmek istenen derlemeyi atlardı).
+- Kapılar (`build.sh suites`): `tests/onbellek.sh` (52 denetim: isabet hızı;
+  kaynak / yerel ve paket-yerel import / mtime'ı geri alınmış içerik /
+  `TULPAR_NO_FVER` / eklenti ve runtime arşivi / `tulpar.toml` / gömülü
+  modülün disk importu değişince ıska ve doğru çıktı; uyarı yeniden basımı;
+  8 paralel süreç; tavan; öz denetimin pozitif kontrolü) ve
+  `tests/onbellek_anahtari_kapisi.py` (anahtar dışı bırakılan bir ortam
+  değişkeni derleyici tarafında okunursa kırmızı; yapay ihlal ağacıyla pozitif
+  kontrol). Bulgu: gömülü `router` `import "lib/http_utils.tpr"` yazıyor ve
+  bu çalışma dizinine göre DİSKTEN çözülüyor — depo kökü dışında
+  `import "router"` derlenmiyor (bu PR'da düzeltilmedi; anahtar o dosyayı
+  görüyor).
+
+### Düzeltildi — `tulpar build` önbelleği girdilerin yarısını görmüyordu (bayat "Cache hit")
+
+- Önbellek mtime'a bakıyordu (çıktı kaynaktan, yerel import'lardan, eklenti
+  dosyalarından ve sürücüden yeni mi). Kod üretimini değiştiren ortam
+  değişkenlerini, runtime arşivini, paket-yerel kardeş import'ları
+  (`tulpar_modules/<p>/<ic>.tpr`), gömülü modülün diskten import ettiği
+  dosyayı ve mtime'ı geri alınmış içeriği görmüyordu. Ölçüldü (v3.39.6):
+  `TULPAR_NO_FVER=1` ile ikinci `build` "Cache hit" deyip float sürümlü ESKİ
+  ikiliyi bıraktı (taze derleme farklı ikili, IR'de `fv.el` 4 → 0); kardeş
+  import değişince eski çıktı (100, doğrusu 200). Bir sabotaj ölçümü bu
+  yüzden yanlışlıkla yeşil çıkmıştı; A/B yapan ~20 kapı
+  `TULPAR_AOT_NOCACHE=1`i hatırlamak zorundaydı.
+- Anahtar artık çıktıyı belirleyen her girdinin SHA-256'sı: sürücü (sürüm +
+  ikili kimliği + yüklü `libLLVM`), kaynak ve geçişli import'ların İÇERİĞİ
+  (çözüm sırası kodgenle aynı), `tulpar.toml`, eklenti bildirim/modül
+  içeriği + arşiv kimlikleri, runtime/tame/OpenSSL arşivleri, bağlama
+  sürücüsü + `ld`, hedef + CPU, kip/çıktı adı, dil ve
+  `src/aot/aot_cache_env.inc`'in dışlamadığı HER `TULPAR_*` (güvenli yön:
+  fazlası gereksiz ıska, eksiği bayat ikili). "Kimlik" = boyut + mtime(ns) +
+  ctime(ns) + inode (Windows: NTFS ChangeTime + dosya kimliği) — ctime geri
+  alınamaz. Kayıt `~/.cache/tulpar/build/` altında; ikiliye hiçbir şey
+  eklenmiyor/yazılmıyor (macOS imzası, Tuzaklar 7l). Kodgenin okuduğu bir
+  dosya anahtarda yoksa (çözüm kuralı ayrıştıysa) sonuç önbelleğe yazılmıyor.
+  Eski `binary_has_debug_info` / `binary_is_asan` taramaları (her isabette
+  ikiliyi iki kez okuyordu) kalktı: ikilinin kimliği tutmazsa ıska.
+
 ### Hızlandı — `import` edilen gömülü kitaplığın KULLANILMAYAN fonksiyonları artık derlenmiyor
 
 - `import "wings"` 28 satırlık bir programa ~160 kitaplık fonksiyonu
