@@ -82,15 +82,15 @@ printf 'print("sade");\n' > "$TMP/sade.tpr"
 if TULPAR_AOT_NOCACHE=1 "$TUL" build "$TMP/sade.tpr" "$TMP/sade" > "$TMP/sade.log" 2>&1 && [ "$("$TMP/sade" 2>&1)" = "sade" ]; then
     bash "$DENETLE" "$TMP/sade" > "$TMP/sade_bag.log" 2>&1 || dustu "sade program sistem disi bir kitapliga bagli"
     echo "  olcum  sade program $(wc -c < "$TMP/sade" | tr -d ' ') bayt, TLS programi $(wc -c < "$TMP/tls" | tr -d ' ') bayt"
-    # macOS: ld64 -dead_strip'in kazanci yalniz OLCULUR (link satirina
-    # eklenmedi — aot_pipeline.cpp'deki not: macOS bayragi gercek makinede
-    # olculmeden eklenmez). Calisiyor mu da basilir.
+    # macOS: link satiri 2026-10-05'ten beri -dead_strip + gizli runtime
+    # arsivi tasiyor (aot_pipeline.cpp, PLATFORM_MACOS dali); olculen kazanc
+    # orada. Buradaki boyutlar o satirin ciktisi. Esik iki olcumun arasinda:
+    # eski satir 390 168, yeni 50 616 bayt (macOS CI, 2026-10-05) — gizleme
+    # ya da dead_strip sessizce duserse sade program 150 KB'i asar.
     if [ "$(uname -s)" = Darwin ]; then
-        if TULPAR_AOT_NOCACHE=1 TULPAR_AOT_LINK_FLAGS=-Wl,-dead_strip "$TUL" build "$TMP/sade.tpr" "$TMP/sade_ds" > /dev/null 2>&1; then
-            echo "  olcum  -dead_strip ile sade program $(wc -c < "$TMP/sade_ds" | tr -d ' ') bayt, cikti: '$("$TMP/sade_ds" 2>&1 | tail -1)'"
-        else
-            echo "  olcum  -dead_strip ile link basarisiz"
-        fi
+        sb=$(wc -c < "$TMP/sade" | tr -d ' ')
+        if [ "$sb" -lt 150000 ]; then gecti "macOS dead_strip + gizli runtime etkin (sade program $sb < 150000 bayt)"
+        else dustu "macOS sade program $sb bayt >= 150000 — link satirindaki -dead_strip/-hidden-l etkisiz"; fi
     fi
 else
     dustu "sade program derlenemedi/kosmadi"; tail -5 "$TMP/sade.log" | sed 's/^/         /'

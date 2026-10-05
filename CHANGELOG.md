@@ -32,6 +32,25 @@ tag still works;
   koşar. Düzeltme öncesi ağaçta 19 dosya / 39 satır kırmızı.
   Ayrıntı: docs/mindmap/Tuzaklar.md §2 "altıncı yalan biçimi".
 
+### Değişti — macOS'ta TLS kullanan `tulpar build` çıktısı 5,6 → 3,2 MB, sade program 390 → 51 KB
+
+- Link satırı `-rdynamic -Wl,-dead_strip -Wl,-hidden-ltulpar_runtime`. `-rdynamic`
+  ld64'te `-export_dynamic` ve her global'i dead-strip kökü yapıyordu; #463'te
+  ölçülen "`-dead_strip` kazanç yok"un sebebi buydu. Runtime arşivi gizli
+  bağlanınca (Linux'taki `--exclude-libs,ALL` karşılığı) onun ve içindeki
+  OpenSSL'in kullanılmayan kısmı atılıyor; kullanıcı sembolleri açık kalıyor
+  (`call()`).
+- Yayın CI'ı OpenSSL'i kaynaktan, yalnız TLS'nin kullandığı parçalarla derliyor
+  (`tools/openssl_kucuk_derle.sh`, `no-legacy no-engine no-deprecated no-quic …`).
+  Sürüm her koşumda Homebrew openssl@3'ten okunur (yama gecikmez), tarball
+  `.sha256` ile doğrulanır, `--openssldir` aynı (sertifika yolu değişmez).
+  `http_fetch.cpp` `OPENSSL_init_ssl`e geçti (`no-deprecated`).
+- Ölçüldü (2026-10-05, macOS CI arm64, OpenSSL 3.6.4): TLS programı
+  5 585 296 → 3 190 480 bayt (-%43; dead_strip+gizleme tek başına -%20, küçük
+  OpenSSL tek başına -%25); sade `print` 390 168 → 50 616. Bedel: küçük
+  OpenSSL soğuk 57 s, önbellekte ~0. Tablo: docs/mindmap/Build System.md.
+  Linux ve Windows değişmedi.
+
 ### Düzeltildi — macOS'ta `tulpar build` çıktısı Homebrew openssl@3'e bağlanıyordu
 
 - #462 sürücüyü Homebrew'suz açılır yaptı ama **kullanıcı programları** değil:
