@@ -711,6 +711,12 @@ typedef struct {
   // KEZ ayristirilir: once struct on taramasi (prescan_import_types), sonra
   // AST_IMPORT kodgeni ayni AST'yi kullanir.
   void *import_state;
+  // BOLUMLU NESNE URETIMI (llvm_bolum.cpp). bolum_kapali: bu derlemede
+  // bolme YASAK (--sanitize: ASan modul kurucusu ve global meta verisi tek
+  // nesne varsayiyor). nesneler: bolumlu uretim yapildiysa link sirasiyla
+  // butun nesnelerin yollari (std::vector<std::string>*); tek nesnede NULL.
+  int bolum_kapali;
+  void *nesneler;
 } LLVMBackend;
 
 LLVMBackend *llvm_backend_create(const char *module_name);
@@ -732,6 +738,14 @@ void llvm_backend_destroy(LLVMBackend *backend);
 void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node);
 void llvm_backend_optimize(LLVMBackend *backend);
 int llvm_backend_emit_object(LLVMBackend *backend, const char *filename);
+// Link satirindaki nesne listesi. Tek nesnede `obj_filename`in KENDISI
+// (eski komut bayt bayt ayni); bolumlu uretimde butun bolumler, sirayla,
+// tirnakli. Donen isaretci bir sonraki cagriya kadar gecerli.
+const char *llvm_backend_link_nesneleri(LLVMBackend *backend,
+                                         const char *obj_filename);
+// Bolumlu uretimin nesnelerini siler; `birak` (NULL olabilir) haric.
+// Tek nesnede bir sey yapmaz.
+void llvm_backend_ek_nesneleri_sil(LLVMBackend *backend, const char *birak);
 int llvm_backend_emit_ir_file(LLVMBackend *backend, const char *filename);
 
 // Plan 07 PR 2: open / close the LLVMDIBuilder bundle. Call init once

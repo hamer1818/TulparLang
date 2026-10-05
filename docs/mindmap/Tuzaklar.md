@@ -2315,6 +2315,43 @@ mekanizmanın pozitif kontrolü: tarama kasıtlı atlanınca
 (`TULPAR_CACHE_SINAMA=tarama-yok`) öz denetim gerçekten devreye giriyor mu
 (`tests/onbellek.sh`).
 
+## 7o. Aynı IR, FARKLI makine kodu — kod üretimini bölmek "zararsız" değil
+
+Bölümlü (paralel) nesne üretimi (`src/aot/llvm_bolum.cpp`, 2026-10-05) "IR'a
+dokunmuyoruz, yalnız nesneyi parçalara ayırıyoruz" fikriyle başladı ve testlerin
+hepsi her adımda YEŞİLDİ. Yine de üç ayrı mekanizma makine kodunu sessizce
+değiştiriyordu; üçünü de yalnız **tek nesne ile bölümlü ikiliyi karşılaştıran**
+kapı (`tests/bolumlu_emit.sh`) gösterdi:
+
+1. **Kullanım listesi (use-list) sırası.** Bitcode'a yazıp okumak IR'ı korur ama
+   değerlerin kullanım SIRASINI korumaz; kod üretiminin bazı kararları o sıraya
+   bakıyor. `ShouldPreserveUseListOrder` olmadan `tests/loop_versioning.test.tpr`
+   ikilisinin `.text`'i 64 bayt kısa çıktı (kayma yüzünden ~52 bin komut satırı
+   farklı); korununca bayt bayt aynı. Bedeli ~4 ms.
+2. **`dso_local`: tanım ile bildirim aynı sınıflandırılmaz** (TargetMachine::
+   shouldAssumeDSOLocal). ELF'te yalnız açık bayrak sayılır — bildirimi elle
+   `dso_local` yapmak erişimi GOTPCREL'den mutlak adrese çevirir (nbody `.text`
+   428 komut KISALDI: "daha hızlı" görünen ama tek nesneyle aynı olmayan kod).
+   Mach-O ve COFF'ta tersi: güçlü tanım yerel, bildirim değil — işaretlenmezse
+   öbür bölümlerden erişim GOT (`adrp+ldr`) / `.refptr` dolaylılığına döner
+   (arm64'te +127, MinGW'de +125 komut). Kural nesne biçimine göre.
+3. **Ölü sabit kullanıcıları.** `setInitializer(nullptr)` eski ilklendirici
+   sabiti yok etmez; sabit bağlamda yaşar ve gösterdiği globali "kullanılıyor"
+   tutar (motor örneği: `@sarr.names` → `@sarr.fn`). `removeDeadConstantUsers()`.
+   Buna yakın: kullanılmayan GİZLİ bildirim bile nesneye `.hidden` yazdırır ve
+   tipsiz (NOTYPE) bir tanımsız sembol bırakır — değişken TLS ise ld.bfd "TLS
+   reference mismatches non-TLS reference" der.
+
+**Kural:** "çalışma hızını değiştirmez" diyen bir derleyici dönüşümü, testlerin
+yeşil olmasıyla değil **son makine kodunun karşılaştırılmasıyla** kanıtlanır:
+her fonksiyon aynı adreste mi, komut akışı aynı mı, veri aynı mı. Yerelde
+kurulamayan hedefler (Mach-O, COFF) için de nesne düzeyinde ölç: aynı `.ll`'i
+`TargetMachine` ile o hedefe tek nesne ve bölümlü yaz, fonksiyon fonksiyon
+karşılaştır (2026-10-05 böyle yapıldı; madde 2'nin Mach-O/COFF yarısını yalnız
+bu ölçüm gösterdi). Kalan tek fark fonksiyonlar arası hizalama DOLGUSU: bölüm
+sınırında NOP'u birleştirici değil linker yazıyor — adresler aynı, yürütülmeyen
+baytlar farklı (Tuzaklar 7i'nin tersi: burada yerleşim aynı, dolgu baytı değil).
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

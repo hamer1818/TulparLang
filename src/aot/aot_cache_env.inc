@@ -85,6 +85,7 @@ ONBELLEK_GOZLEM_AD("TULPAR_AOT_EMIT_LL", "<cikti>.ll: isabette yazilmazdi")
 ONBELLEK_GOZLEM_AD("TULPAR_AOT_EMIT_LL_PRE", "<cikti>.pre.ll: isabette yazilmazdi")
 ONBELLEK_GOZLEM_AD("TULPAR_AOT_VERBOSE", "derleme adimlari (stdout): isabette basilmazdi")
 ONBELLEK_GOZLEM_AD("TULPAR_AOT_STRIP_DEBUG", "ayiklama karar satirlari")
+ONBELLEK_GOZLEM_AD("TULPAR_AOT_BOLUM_KORU", "bolum nesnelerini birakir (llvm_bolum.cpp): isabette nesne yazilmazdi")
 ONBELLEK_GOZLEM_AD("TULPAR_DBG_VER", "dongu surumu karar satirlari")
 ONBELLEK_GOZLEM_AD("TULPAR_PERF_HINTS", "performans ipuclari")
 

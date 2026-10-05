@@ -15,6 +15,7 @@
 #include "../vm/obj_layout.h"     // ObjString karakter ofseti (eklenti dizgi argumani)
 #include "../ext/extensions.hpp"  // yerel eklentiler (K303)
 #include "aot_cache.hpp"          // onbellek oz denetimi (import okumalari)
+#include "llvm_bolum.hpp"         // bolumlu (paralel) nesne uretimi
 #include <llvm-c/Analysis.h>
 #include <llvm-c/IRReader.h>
 #include <llvm-c/Support.h>   // LLVMParseCommandLineOptions (web SjLj)
@@ -2873,6 +2874,10 @@ void llvm_backend_destroy(LLVMBackend *backend) {
   if (backend->import_state) {
     delete static_cast<ImportState *>(backend->import_state);
     backend->import_state = nullptr;
+  }
+  if (backend->nesneler) {
+    delete static_cast<std::vector<std::string> *>(backend->nesneler);
+    backend->nesneler = nullptr;
   }
   free(backend);
 }
@@ -18486,10 +18491,60 @@ int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
     triple = LLVMGetDefaultTargetTriple();
+    // BOLUMLU URETIM (llvm_bolum.cpp): buyuk modulde kod uretimi bitisik
+    // bolumlere ayrilip is parcaciklarinda kosar. --debug'da YOK: DWARF tek
+    // derleme birimi varsayiyor (ve debug derlemesi zaten optimizasyonsuz).
+    if (!backend->emit_debug_info && !backend->bolum_kapali) {
+      int k = tulpar_bolum_sayisi(backend->module);
+      if (k > 1) {
+        std::vector<std::string> nesneler;
+        std::string hata;
+        int r = tulpar_bolumlu_emit(backend->module, triple, LLVMRelocDefault,
+                                    filename, k, nesneler, hata);
+        if (r == 0) {
+          backend->nesneler = new std::vector<std::string>(std::move(nesneler));
+          LLVMDisposeMessage(triple);
+          return 0;
+        }
+        // 2 = bu modul bolunemez (alias/comdat/...): sessizce tek nesne.
+        // 1 = bolumlu yol DUSTU: yuksek sesle soyle, tek nesneye don —
+        // modul hala gecerli (yalniz gorunurlukler degisti).
+        if (r == 1)
+          fprintf(stderr, "%s%s\n",
+                  tulpar::i18n::tr_en(
+                      "[AOT] Uyari: bolumlu nesne uretimi basarisiz, tek nesneye donuluyor: ",
+                      "[AOT] Warning: partitioned object emission failed, falling back to one object: "),
+                  hata.c_str());
+      }
+    }
   }
   // Tek emit: modul bundan sonra kullanilmiyor, kopyaya gerek yok.
   return emit_object_with_triple(backend, filename, triple, LLVMRelocDefault,
                                  /*clone_module=*/false);
+}
+
+const char *llvm_backend_link_nesneleri(LLVMBackend *backend,
+                                         const char *obj_filename) {
+  auto *v = static_cast<std::vector<std::string> *>(backend->nesneler);
+  if (!v || v->empty()) return obj_filename;
+  static std::string satir;
+  satir.clear();
+  for (size_t i = 0; i < v->size(); i++) {
+    if (i) satir += ' ';
+    satir += '"';
+    satir += (*v)[i];
+    satir += '"';
+  }
+  return satir.c_str();
+}
+
+void llvm_backend_ek_nesneleri_sil(LLVMBackend *backend, const char *birak) {
+  auto *v = static_cast<std::vector<std::string> *>(backend->nesneler);
+  if (!v) return;
+  // Teshis: TULPAR_AOT_BOLUM_KORU=1 bolum nesnelerini birakir.
+  if (const char *e = getenv("TULPAR_AOT_BOLUM_KORU"); e && *e && *e != '0') return;
+  for (const std::string &n : *v)
+    if (!birak || n != birak) remove(n.c_str());
 }
 
 // Modulun IR'inin FNV-1a ozeti. Tek amaci: "emit modulu degistirmez"
