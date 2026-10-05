@@ -3,7 +3,10 @@
 // Version 2.0 - Complete with Middleware
 // ============================================
 
-import "lib/http_utils.tpr";
+// Gomulu adla: "lib/http_utils.tpr" calisma dizinine gore DISKTEN cozuluyordu,
+// yani kurulu tulpar ile depo koku disinda `import "router"` derlenmiyordu
+// (olculdu 2026-10-05, v3.39.6; tests/gomulu_import_disarida.sh).
+import "http_utils";
 
 // Global Router State
 array _router_routes = [];
