@@ -601,14 +601,14 @@ if [ "$ACTION" = "suites" ]; then
     # `tulpar_modules/`). Asıl iddia "dosya kopyalandı" değil, vendor edilen
     # paketin GERÇEKTEN import edilebilmesi. ~0.1 sn.
     if [ -x tests/pkg_audit.sh ]; then
-        kapi_seri "Paket denetimi basarisiz!" bash tests/pkg_audit.sh
+        kapi_kuyruk "Paket denetimi basarisiz!" bash tests/pkg_audit.sh
     fi
     # REGISTRY yolu (aralik cozumu, tulpar.lock, sha256, .tpkg, onbellek,
     # --update, registry kapali). pkg_audit.sh yalniz `path:` zincirini
     # siniyordu; bu yol HICBIR testte gecmiyordu ve olculdugunde uc kusur
     # cikti (2026-09-27). Yerel sahte registry, istek gunlugu sayiliyor. ~2 sn.
     if command -v python3 >/dev/null 2>&1 && [ -f tests/pkg_registry_audit.py ]; then
-        kapi_seri "Paket registry denetimi basarisiz!" python3 tests/pkg_registry_audit.py ./tulpar
+        kapi_kuyruk "Paket registry denetimi basarisiz!" python3 tests/pkg_registry_audit.py ./tulpar
     fi
 
     # UÇTAN UCA AOT DUMANI: derleyici gerçekten program üretebiliyor mu?
