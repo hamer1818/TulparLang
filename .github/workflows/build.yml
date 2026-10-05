@@ -1196,6 +1196,13 @@ jobs:
           exit $kirmizi
         timeout-minutes: 6
 
+      # GECICI OLCUM (taslak PR): TLS programi boyutu — dead_strip / gizli arsiv /
+      # kaynaktan kucultulmus OpenSSL. Birlesmeden once kalkar.
+      - name: TLS boyut olcumu (gecici)
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: bash tools/tls_boyut_olc.sh dist/tulpar-macos-arm64 dist/libtulpar_runtime-macos-arm64.a
+        timeout-minutes: 15
+
       # UÇTAN UCA AOT DUMANI. "tulpar ikilisi oluştu" ile "tulpar çalışıyor"
       # ayrı iddialar ve macOS'ta ikincisi UZUN SÜRE hiç ölçülmedi: o iş yalnız
       # derleyip artefakt yüklüyordu. Sonuç, 2026-09-02'de ölçüldü — yayınlanan
