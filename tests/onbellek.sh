@@ -378,19 +378,34 @@ t=$(ls "$TMP/onb_par/run" 2>/dev/null | grep -c '^tmp-')
 export TULPAR_CACHE_DIR="$(yerel "$ONB")"
 
 # ---- 8. TAVAN (LRU) ----------------------------------------------------------------------
+# Gercek ikililerin boyutu platforma bagli (Linux ~1,4 MB; macOS dead_strip ile
+# ~50 KB — macOS CI'da 4 girdi 1 MB'a sigdi, tavan hic asilmadi): tavanin
+# GERCEKTEN asildigi belli olsun diye depoya iki EN ESKI, 700 KB'lik sahte
+# girdi de konuyor (adlari gercek girdi bicimi). Beklenen: sahteler silinir;
+# tavan asildikca eski (korumasiz) girdiler gider; az once derlenen girdi
+# (son 60 s korumasi) kalir.
 export TULPAR_CACHE_DIR="$(yerel "$TMP/onb_tavan")"
+TR="$TMP/onb_tavan/run"
 for i in 1 2 3; do
     printf 'print(%d);\n' "$i" > "$A/t$i.tpr"
     (cd "$A" && "$TUL" "t$i.tpr" >/dev/null 2>&1)
 done
-for f in "$TMP/onb_tavan/run/"*; do touch -t 202001010000 "$f"; done
+for f in "$TR/"*; do touch -t 202001010000 "$f"; done
+for s in aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2; do
+    head -c 716800 /dev/zero > "$TR/$s$EXE"
+    touch -t 201901010000 "$TR/$s$EXE"
+done
 printf 'print(4);\n' > "$A/t4.tpr"
 kos "$A" TULPAR_CACHE_MAX_MB=1 -- t4.tpr
-kalan=$(ls "$TMP/onb_tavan/run" | grep -cE '^[0-9a-f]{32}(\.exe)?$')
-if [ "$OUT" = "4" ] && [ "$kalan" = "1" ] && grep -q 'tavan' <<<"$ERR"; then
-    gecti "tavan (1 MB) asilinca 3 eski girdi silindi, en yenisi kaldi"
+sahte=$(ls "$TR" | grep -c '^aaaaaaaa')
+yeni=$(find "$TR" -type f -mmin -5 | grep -cE '/[0-9a-f]{32}(\.exe)?$')
+eski=$(find "$TR" -type f -mmin +60 | grep -cE '/[0-9a-f]{32}(\.exe)?$')
+toplam=$(cat "$TR"/* 2>/dev/null | wc -c | tr -d ' ')
+if [ "$OUT" = "4" ] && [ "$sahte" = "0" ] && [ "$yeni" -ge 1 ] && grep -q 'tavan' <<<"$ERR" &&
+   { [ "$eski" = "0" ] || [ "$toplam" -le 838861 ]; }; then
+    gecti "tavan (1 MB) asildi: en eski girdiler silindi (kalan eski $eski, toplam $toplam bayt), yeni girdi kaldi"
 else
-    dustu "tavan: $kalan girdi kaldi (beklenen 1), cikti '$OUT'"
+    dustu "tavan: sahte $sahte (beklenen 0), yeni $yeni, eski $eski, toplam $toplam bayt, cikti '$OUT'"
     sed -n '1,4p' <<<"$ERR" | sed 's/^/         /'
 fi
 export TULPAR_CACHE_DIR="$(yerel "$ONB")"
