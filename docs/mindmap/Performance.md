@@ -1985,3 +1985,56 @@ yazma; fonksiyonda ve üst düzeyde, beklenen değerle). Sabotaj: gizlenen
 indekse +1 eklenince paket kırmızı (`expected 5000000000 got 1`,
 `malloc(): invalid next size`) — soğuk yol testte gerçekten koşuyor. LSR'in
 kaç sayaç kurduğu IR'da görünmediği için ETKİ kapıda değil, bu bölümde.
+
+
+## Derleme hızı: kullanılmayan gömülü fonksiyonlar optimizasyondan önce atılıyor (2026-10-05)
+
+**Sorun.** `examples/wings_groups_test.tpr` (28 satır) `TULPAR_AOT_TIME=1` ile:
+codegen 16 ms, optimize 449 ms, emit-obj 380 ms, link 48 ms. İkilide 164 dış görünür
+`t_` fonksiyonu vardı — wings + router + middleware + http_utils'in hepsi. İki sebep
+üst üste: kitaplık fonksiyonları dış görünür, VE `main`'in girişindeki
+`aot_register_func(ad, ptr)` kayıtları (call() önbelleği, Pass 1a.5) her fonksiyona
+bir IR kullanımı veriyor — `default<O3>`'ün kendi GlobalDCE'si hiçbirini atamıyordu.
+
+**Çözüm** (`strip_unused_embedded`, `llvm_backend.cpp`): optimizasyon basamaklarından
+ÖNCE, yalnız gömülü stdlib modüllerinin fonksiyonları için: programın HERHANGİ bir
+yerinde (ana program ya da herhangi bir modül) adı dizgi literali, tanımlayıcı ya da
+nesne anahtarı olarak geçmeyen ve birleştirmeye giren (`"on_" + olay`) 3+ harfli bir
+dizginin önü/sonu olmayan fonksiyonun kaydı çıkarılır, sembolleri `internal` olur,
+`globaldce` koşar, doğrudan çağrıyla canlı kalanlar aynı yerde yeniden kaydedilir
+(`aot_func_name_of` / async iz adları için). Ana programın ve diskten/eklentiden
+gelen modüllerin fonksiyonlarına dokunulmaz. Ön/son kuralı ilk sürümde BÜTÜN dizgi ve
+tanımlayıcılara uygulanıyordu: wings'in 160 adayından 63'ü kök sayılıyordu (`body`
+anahtarı → `_wings_parse_body`); yalnız birleştirmeye giren dizgilerle 20.
+
+**Ölçüm** (Ryzen 7 9800X3D, `tulpar build` tüm süreç, 7 tekrarın medyanı, ms; eski =
+main e272efee):
+
+| program | eski | yeni |
+|---|---|---|
+| examples/wings_groups_test | 876 | 665 |
+| examples/api_wings_crud | 857 | 685 |
+| examples/wings_todo_api | 878 | 695 |
+| tests/accessors.test (`import "test"`) | 111 | 75 |
+| tests/json.test | 119 | 95 |
+| tests/strings.test | 151 | 121 |
+| examples/01_hello_world | 64 | 60 |
+
+wings programında tanımlı fonksiyon 332 → 122; optimize 449 → 372, emit-obj
+380 → 233 ms. `benchmarks/fair`'in 13 çekirdeği gömülü kitaplık import etmiyor:
+`TULPAR_AOT_EMIT_LL` çıktısı eski ve yeni sürücüde bayt bayt aynı, derleme süreleri
+gürültü içinde — çalışma hızı değişmedi.
+
+**Kalan ve denenmeyen.** wings'in kalanı `serve()`'den gerçekten erişilebilir
+(dispatch/check/listen/openapi, her biri 1,5–5 bin IR satırı). Emit-obj'u `llc -O0`
+seviyesine indirmek 0,39 → 0,09 s olurdu ama çalışma hızından öder — yapılmadı.
+Link (~45–50 ms, test paketinde sürenin yarısı) `-fuse-ld=lld` 64 ms, `mold` 46 ms:
+kazanç yok.
+
+**Kapı** `tests/gomulu_ayiklama.sh`: ayıklama etkin (fonksiyon sayısı düşüyor),
+`call("created")` ve kurulan ad çalışıyor, `TULPAR_AOT_STRIP_SINAMA=kok-yok` ile aynı
+program DÜŞÜYOR, `TULPAR_AOT_KEEP_ALL=1` kapatıyor. Bulgu: aynı sabotajla bütün
+`build.sh suites` paketleri ve `build.sh test` örnekleri YEŞİL kaldı — hiçbiri gömülü
+bir fonksiyonu adla çağırmıyor; tek koruma bu kapı. Sabotajı ölçerken
+`TULPAR_AOT_NOCACHE=1` şart: önbellek anahtarı ortam değişkenlerini görmüyor, ilk
+deneme önbellekten eski ikilileri koşturup "yeşil" dedi.

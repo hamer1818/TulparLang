@@ -757,6 +757,16 @@ if [ "$ACTION" = "suites" ]; then
             exit 1
         fi
     fi
+    # KULLANILMAYAN GOMULU FONKSIYON AYIKLAMASI (2026-10-05): ayiklama etkin
+    # mi, adla (`call("ad")`, kurulan ad) cagrilan kitaplik fonksiyonu
+    # korunuyor mu; pozitif kontrol TULPAR_AOT_STRIP_SINAMA=kok-yok ile ayni
+    # program DUSMELI. Olculdu: bu kapi olmadan butun paketler + ornekler
+    # sabotajda YESIL kaliyordu (hicbiri gomulu fonksiyonu adla cagirmiyor).
+    # `-x` korumasi YOK: dosya calistirilamaz olursa sessizce atlanmasin.
+    if ! bash tests/gomulu_ayiklama.sh ./tulpar; then
+        echo -e "${RED}gomulu ayiklama kapisi basarisiz!${NC}"
+        exit 1
+    fi
     # call(f, ...) YEREL INT YOLU (2026-10-01): tumu-int hedef ciplak giris
     # noktasindan cagriliyor mu (IR + runtime tanisi, iki ayak);
     # TULPAR_NO_CALL_NATIVE=1 pozitif kontrol.
