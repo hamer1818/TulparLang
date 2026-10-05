@@ -48,8 +48,10 @@ tag still works;
   ve satır içi ölçümler (perf_pair, android dumanı) yerinde ve SERİ, paralel
   kuyruk onların yanında hiç koşmuyor (kuyruk en sonda boşaltılıyor). Her
   işin çıktısı ayrı dosyada, sırayla basılıyor; sonda en yavaş 10 iş.
-  Yerelde 107 s → 49 s (`TULPAR_TEST_JOBS=1` eski seri davranış).
-  Windows'ta varsayılan 2 işçi (#467'deki temkin).
+  Yerelde 107 s → 49 s (`TULPAR_TEST_JOBS=1` eski seri davranış). CI
+  suites adımı (PR #469): Linux 240 → 147 s, macOS 330 → 205 s. Windows'ta
+  varsayılan SERİ: 2 işçiyle 201 → 218 s ölçüldü (paket döngüsü 85 → 74 s,
+  kapılar 114 → 131 s), paralellik orada ödemiyor.
 - Kapıların hiçbiri gevşemedi: düşen paket ve düşen paralel kapı kırmızı
   (sabotajla ölçüldü: kasıtlı düşen paket → "Some suites failed!", kasıtlı
   düşen kapı → "Dusen paralel kapilar" + çıkış 1); işçisi hiç koşmayan iş
@@ -65,7 +67,10 @@ tag still works;
   failed" ile düştü; ad artık `tulpar_run_tmp.<pid>`.
 - Windows: `tools/win_kaynak_izle.sh` örnekler/suitler adımı sırasında 5 s'de
   bir boş belleği ve en büyük süreçleri yazıyor; `if: always()` adımı basıyor
-  (#467'deki runner kayıplarının kök nedeni ölçülmüyordu).
+  (#467'deki runner kayıplarının kök nedeni ölçülmüyordu). İlk ölçüm
+  (sağlıklı koşum): boş bellek tüm adım boyunca ~13 GB, örnek başına tepe RSS
+  171–191 MB, en yavaş örnek 6,6 s (wings) — bellek tükenmesi YOK; asılma
+  yeniden olursa iz bu adımda kalır.
 
 ### Düzeltildi — `pipefail` altında `echo "$out" | grep -q` eşleşme varken kırmızı dönebiliyordu
 

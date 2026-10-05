@@ -764,7 +764,7 @@ jobs:
       # 10 dk sinirina ragmen 37 dk "in_progress" kaldi, normal iptal bile
       # islemedi (force-cancel gerekti) — yine runner kaybi. Ucuncu kez oldugu
       # icin yukaridaki not uygulandi: Ornekler Windows'ta TULPAR_TEST_JOBS=2
-      # ile kosuyor (Suitler 2026-10-05'ten beri paralel, Windows'ta da 2 isci:
+      # ile kosuyor (Suitler Windows'ta seri: paralellik orada odemedi,
       # build.sh KAPI_JOBS) (runner 4 vCPU; nproc=4 iken her isci bir LLVM derlemesi
       # + link + sunucu smoke'u tasiyordu). Bedel: Ornekler ~45 sn -> ~1,5 dk
       # beklenir; asilan bir is 10-40 dk yakiyordu.

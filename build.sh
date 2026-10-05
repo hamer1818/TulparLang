@@ -181,12 +181,16 @@ if [ "$ACTION" = "suites" ]; then
     # Her isin suresi KAPI_SURE'ye yazilir; sonda en yavas 10 basilir.
     #
     # Isci sayisi: TULPAR_TEST_JOBS, yoksa cekirdek sayisi. Windows'ta
-    # varsayilan 2: ornekler adimi 4 isciyle uc kez runner kaybetti (#467,
-    # 2026-10-05; kok neden olculmedi), aynı makinede ayni temkin.
+    # varsayilan 1 (SERI): olculdu (2026-10-05, PR #469, windows-latest 4
+    # vCPU) 2 isciyle paket dongusu 85 -> ~74 s, kapilar 114 -> 131 s, adim
+    # 201 -> 218 s — paralellik orada odemiyor (her yeni .exe icin surec
+    # baslatma/tarama seri gibi davraniyor; bos bellek tum adim boyunca
+    # ~13 GB, tepe RSS ornek basina ~190 MB — bellek degil). Linux 240 ->
+    # 147 s, macOS 330 -> 205 s.
     if [ -n "${TULPAR_TEST_JOBS:-}" ]; then
         KAPI_JOBS=$TULPAR_TEST_JOBS
     elif [ "$PLATFORM" = "Windows" ]; then
-        KAPI_JOBS=2
+        KAPI_JOBS=1
     else
         KAPI_JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
     fi
