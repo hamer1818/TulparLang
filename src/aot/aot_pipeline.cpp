@@ -247,7 +247,9 @@ struct AOTPhaseTimer {
   // Olculdu (2026-10-05, macOS CI arm64, PR #465, tools/tls_boyut_olc.sh):
   // TLS programi 5 585 296 -> 4 451 776 bayt (-%20), sade `print` programi
   // 390 168 -> 50 616 bayt (-%87); ikisi de calisiyor. Yalniz gizleme
-  // (dead_strip'siz) 5 362 048; yalniz dead_strip 5 585 040.
+  // (dead_strip'siz) 5 362 048; yalniz dead_strip 5 585 040. Yayin CI'inda
+  // OpenSSL ayrica kucuk derleniyor (tools/openssl_kucuk_derle.sh): ikisi
+  // birlikte TLS programi 3 190 480 bayt (-%43).
   // `-Wl,-x` (yerel semboller) 3 886 200'e indiriyordu ama cokme raporunda
   // runtime fonksiyon adlarini siliyor — Linux da sembol silmiyor, eklenmedi.
   #define AOT_LINK_LIB_FLAGS \

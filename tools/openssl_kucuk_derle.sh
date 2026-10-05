@@ -9,8 +9,9 @@
 # tools/tls_boyut_olc.sh), TLS programi, -dead_strip + gizli runtime ile:
 #   Homebrew openssl@3 3.6.4        4 451 776 bayt
 #   bu betik (ayni surum, no-*)    3 190 488 bayt  (-%28; eski satira gore -%43)
-# Bedel: Configure + make build_libs 49 s (-j3, macos-latest), indirme 2 s;
-# CI'da surum+secenek anahtariyla onbelleklenir, sicak koşu ~0.
+# Bedel (macos-latest, -j3): olcum turunda Configure + make build_libs 49 s,
+# bu betikle (install_dev dahil) 55 s; indirme + dogrulama 2 s. CI'da surum +
+# betik ozeti anahtariyla onbelleklenir, sicak kosu ~0.
 #
 # GUVENLIK: surum ELLE SABITLENMEZ — her koşumda Homebrew'un openssl@3
 # surumu okunur (`brew list --versions`), yani yama Homebrew'a dustugu gun

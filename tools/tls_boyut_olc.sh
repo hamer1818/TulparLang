@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# macOS TLS PROGRAMI BOYUT OLCUMU (gecici, taslak PR) — `tulpar build`
-# ciktisi OpenSSL statik oldugundan 0,45 -> 5,6 MB (#463). Secenekler:
-#   v0   bugunku link satiri
-#   ds   + -Wl,-dead_strip
-#   dsg  + -dead_strip, runtime arsivi -load_hidden (Linux'taki
-#        --exclude-libs,ALL karsiligi: -rdynamic = -export_dynamic her
-#        global'i dead-strip koku yapiyor; gizli arsivin sembolleri kok degil)
-#   oz*  ayni, OpenSSL kaynaktan `no-*` ile derlenmis arsivlerle
+# macOS TLS PROGRAMI BOYUT OLCUMU — elle (macOS) kosulur, CI'da kosmaz.
+# Docs: docs/mindmap/Build System.md "macOS TLS programi kucultme" tablosu
+# (2026-10-05, PR #465'te CI'da bu betikle olculdu). Kipler surucuden
+# bagimsizdir (sarici surucunun runtime/dead_strip bayraklarini kendi
+# secimiyle degistirir):
+#   v0   ESKI link satiri (runtime acik, dead_strip yok)
+#   ds   + -Wl,-dead_strip           (yalniz: -rdynamic yuzunden kazanc yok)
+#   g    runtime -load_hidden        (yalniz gizleme)
+#   dsg  dead_strip + gizli runtime  (= bugunku surucu satiri)
+#   dsgx dsg + -Wl,-x
+#   oz*  ayni kipler, OpenSSL kaynaktan `no-*` ile derlenmis arsivlerle
+#        (OLC_OPENSSL=0 ile atlanir; arsiv zaten kucuk OpenSSL'liyse anlamsiz)
 # Her biri: boyut, `strip -x` sonrasi boyut, calisiyor mu (tls:var).
-#   tools/tls_boyut_olc.sh <tulpar> <runtime.a>
+#   tools/tls_boyut_olc.sh <tulpar> <libtulpar_runtime.a>
 set -u
 T=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 A=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")

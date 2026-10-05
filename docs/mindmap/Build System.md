@@ -161,6 +161,34 @@ Aynı kapı Homebrew clang'ın libunwind bağını da yakaladı (PATH'teki `clan
 `brew link llvm@18` sonrası Homebrew'unki): macOS'ta varsayılan link sürücüsü
 `/usr/bin/clang++`, `TULPAR_CC` ezer.
 
+**macOS TLS programı küçültme (2026-10-05, PR #465):** yukarıdaki "`-dead_strip` kazanç yok"
+ölçümünün sebebi `-rdynamic`: ld64'te `-export_dynamic` demek ve çalıştırılabilirde her
+global sembolü dead-strip kökü yapıyor. İki adım birlikte:
+(1) link satırı `-rdynamic -Wl,-dead_strip -Wl,-hidden-ltulpar_runtime` (Linux'taki
+`--exclude-libs,ALL` + `--gc-sections` karşılığı; kullanıcı sembolleri `t_<ad>` açık kalır,
+`call()` yalnız onları dlsym'liyor); (2) OpenSSL macOS yayın CI'ında kaynaktan, `no-*` ile
+(`tools/openssl_kucuk_derle.sh`: legacy/engine/GOST/SM*/QUIC/CMS/… kapalı, sürüm her koşumda
+Homebrew openssl@3'ten okunur, tarball `.sha256` ile doğrulanır, `--openssldir` Homebrew'unkiyle
+aynı). Ölçüm (macOS CI arm64, OpenSSL 3.6.4, `tools/tls_boyut_olc.sh`; bayt):
+
+| kip | TLS programı | `strip -x` | sade `print` |
+|---|---|---|---|
+| eski satır, Homebrew OpenSSL | 5 585 296 | 5 215 784 | 390 168 |
+| + yalnız `-dead_strip` | 5 585 040 | 5 215 784 | — |
+| + yalnız gizli runtime | 5 362 048 | 4 579 552 | — |
+| dead_strip + gizli (1) | 4 451 776 (-%20) | 3 886 232 | 50 616 (-%87) |
+| eski satır, küçük OpenSSL (2) | 4 199 584 (-%25) | 3 878 264 | — |
+| **(1) + (2) — yeni varsayılan** | **3 190 480 (-%43)** | 2 726 360 | 50 616 |
+
+Bedel: küçük OpenSSL soğuk derleme 57 s (indirme+doğrulama 2 s, Configure+make+install 55 s,
+`-j3`, macos-latest); sürüm + betik özeti anahtarıyla önbelleklenir. Bileşim (link haritası,
+eski satır): libcrypto %61, runtime %27, libssl %12. Eklenmeyen: `-Wl,-x` (2,73 MB'a indiriyor
+ama çökme raporunda runtime fonksiyon adlarını siliyor; Linux da sembol silmiyor) ve
+kullanılmayan arşiv üyelerini ayıklamak (ld64 zaten yalnız başvurulan üyeleri çekiyor —
+program boyutuna etkisi sıfır, yalnız arşiv küçülür). Kapı: `kullanici_ikili_bag.sh` macOS'ta
+sade programın 150 KB altında kaldığını denetler (eski satır 390 168); CI, CMake'in küçük
+OpenSSL'i seçtiğini `CMakeCache.txt`ten denetler.
+
 **LLVM 18 kilidi (2026-10-05):** Linux işi apt ile `llvm-18-dev` kurar ama
 `find_package(LLVM)` ipucu verilmeyince koşucu görüntüsündeki llvm-17'yi seçiyordu —
 yayınlanan ikilinin RUNPATH'i `/usr/lib/llvm-17/lib` idi (2026-10-02, `llvm-readelf -d`).
