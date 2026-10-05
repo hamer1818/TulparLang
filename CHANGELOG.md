@@ -24,9 +24,11 @@ tag still works;
   `libtulpar_runtime.a`nın **içine** katılıyor (`libtool -static`, CMake
   `TULPAR_TLS_IN_RUNTIME`) ve sürücü `-lssl`/`-lcrypto` ile OpenSSL `-L`lerini
   hiç yazmıyor. Tek arşiv, kullanıcıya görünen bir şey yok. Ölçüldü (macOS CI, PR #463, 2026-10-05): runtime arşivi 2,7 MB / 19 üye →
-  12 MB / 1139 üye (938'i OpenSSL); TLS programı 450 432 → 5 585 296 bayt —
-  bedel bu: OpenSSL artık her macOS ikilisinin içinde. Linux'ta değişmedi
-  (libssl paylaşımlı, TLS programı 1 323 336 bayt). Seçilmeyenler: `libssl.a`/`libcrypto.a`yı pakete ayrı
+  12 MB / 1139 üye (938'i OpenSSL); TLS programı 450 432 → 5 585 296 bayt.
+  Bedel yalnız TLS'ye dokunan programda: ld64 arşivden yalnız başvurulan
+  üyeleri çeker, sade bir `print` programı 390 168 bayt (`-dead_strip` ile
+  390 120 — kazanç yok, bayrak eklenmedi). Linux'ta değişmedi (libssl
+  paylaşımlı, TLS programı 1 323 336 bayt). Seçilmeyenler: `libssl.a`/`libcrypto.a`yı pakete ayrı
   koymak (Homebrew'lu makinede `-L` sırası yine dylib'i seçebilir),
   Security.framework (TLS kodunun yeniden yazımı).
 - İkinci Homebrew bağı aynı ölçümde çıktı: `brew link llvm@18` olan makinede

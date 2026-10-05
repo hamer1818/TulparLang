@@ -142,9 +142,10 @@ four installed.
   `-lssl`/`-lcrypto` and no OpenSSL `-L` at all. One archive, nothing for the
   user to see. Measured (macOS CI, PR #463, 2026-10-05): the archive went
   from 2.7 MB / 19 members to 12 MB / 1139 members (938 from OpenSSL), and a
-  TLS program from 450,432 to 5,585,296 bytes — that is the price, OpenSSL now
-  lives inside every macOS binary. Linux is unchanged (shared libssl, TLS
-  program 1,323,336 bytes). Gate:
+  TLS program from 450,432 to 5,585,296 bytes. Only programs that touch TLS
+  pay it — ld64 pulls just the referenced archive members, so a plain `print`
+  program is 390,168 bytes (390,120 with `-dead_strip`: no gain, flag not
+  added). Linux is unchanged (shared libssl, TLS program 1,323,336 bytes). Gate:
   `tests/kullanici_ikili_bag.sh` (both jobs) builds a program that calls
   `tls_init(cert, key)` (no network), runs it (must report TLS present),
   and runs `dinamik_bag_denetle.sh` on the **output**; positive control: a

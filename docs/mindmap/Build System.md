@@ -155,7 +155,8 @@ openssl@3 Cellar'ları gizliyken. Düzeltme: macOS'ta OpenSSL statik arşivleri
 sürücü `-lssl/-lcrypto` ve OpenSSL `-L` yazmaz (`aot_pipeline.cpp`). Düzeltmesiz sürücüyle
 kapı iki ayakta da kırmızıydı (libssl.3.dylib bağı; gizliyken `ld: library 'ssl' not found`).
 Bedel (macOS CI, 2026-10-05): arşiv 2,7 → 12 MB (19 → 1139 üye), TLS programı
-450 432 → 5 585 296 bayt; sade programın boyutu ve `-dead_strip` kazancı kapıda basılır.
+450 432 → 5 585 296 bayt — yalnız TLS'ye dokunan programda; sade `print` programı 390 168 bayt
+(`-dead_strip` ile 390 120, kazanç yok). İkisi de kapıda her koşumda basılır.
 Aynı kapı Homebrew clang'ın libunwind bağını da yakaladı (PATH'teki `clang++`
 `brew link llvm@18` sonrası Homebrew'unki): macOS'ta varsayılan link sürücüsü
 `/usr/bin/clang++`, `TULPAR_CC` ezer.
