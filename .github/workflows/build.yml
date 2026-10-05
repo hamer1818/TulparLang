@@ -310,13 +310,23 @@ jobs:
           # through ccache without us having to fiddle with CC/CXX (and
           # without confusing autodetection that sniffs the compiler
           # binary's name).
+          # LLVM SÜRÜMÜ SABİT: apt llvm-18-dev kuruyor ama koşucu görüntüsünde
+          # llvm-17 de var ve `find_package(LLVM)` ipucu verilmeyince ONU
+          # seçiyordu — yayınlanan v3.38.x Linux ikilisinin RUNPATH'i
+          # /usr/lib/llvm-17/lib idi (ölçüldü 2026-10-02, llvm-readelf -d),
+          # yani "CI 18 ile derler" belgesi aylarca doğru değildi ve 120 MB'lık
+          # llvm-18-dev indirmesi boşa gidiyordu. LLVM_DIR kurulu 18'e kilitli;
+          # dinamik bağ kapısı RUNPATH'i /usr altında gördüğü sürece yeşil.
+          LLVM_DIR="$(llvm-config-18 --cmakedir)"
           cmake_args="-DCMAKE_BUILD_TYPE=Release
+            -DLLVM_DIR=${LLVM_DIR}
             -DCMAKE_C_COMPILER_LAUNCHER=ccache
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
           if [ -n "${TULPAR_VERSION}" ]; then
             cmake_args="${cmake_args} -DTULPAR_VERSION=${TULPAR_VERSION}"
           fi
           cmake .. ${cmake_args}
+          grep -E 'LLVM_DIR|Found LLVM' CMakeCache.txt | head -3 || true
           cmake --build . --config Release -j$(nproc)
         timeout-minutes: 10
 
@@ -345,7 +355,10 @@ jobs:
       - name: Run tests
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
-          cp build/tulpar tulpar
+          # Kopya HER ZAMAN yeni inode'a (önce sil): macOS'ta çalıştırılmış bir
+          # Mach-O'nun yerinde üzerine yazılması `Killed: 9` üretiyor (aşağıda
+          # macOS işindeki ölçüm); Linux'ta zararsız ama alışkanlık tek olsun.
+          rm -f tulpar && cp build/tulpar tulpar
           chmod +x tulpar
           chmod +x build.sh
           ./build.sh test
@@ -468,12 +481,18 @@ jobs:
       # dışı bir RUNPATH gelirse KIRMIZI. v3.38.0'da ölçülen durum kilitli —
       # liste ve gerekçe tools/dinamik_bag_denetle.sh başlığında. Önce kapının
       # kendi pozitif kontrolü (geçici dizindeki .so'ya bağlı ikili KIRMIZI).
+      #
+      # KULLANICI İKİLİSİ de ölçülür (tests/kullanici_ikili_bag.sh): `tulpar
+      # build` ile TLS'ye dokunan bir program linklenir, koşar ve ÇIKTISININ
+      # NEEDED listesi aynı kümede kalır (libssl.so.3/libcrypto.so.3 izinli).
+      # Linux'ta bugün zaten böyleydi — kilitleniyor; macOS'ta değildi (orada).
       - name: Dinamik bag kapisi
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           bash tools/dinamik_bag_denetle.sh --oz-sinama
           bash tools/dinamik_bag_denetle.sh dist/tulpar-linux-x64
-        timeout-minutes: 2
+          TULPAR_TLS_ZORUNLU=1 bash tests/kullanici_ikili_bag.sh dist/tulpar-linux-x64
+        timeout-minutes: 3
 
       # UÇTAN UCA AOT DUMANI. "tulpar ikilisi oluştu" ile "tulpar çalışıyor"
       # ayrı iddialar ve macOS'ta ikincisi UZUN SÜRE hiç ölçülmedi: o iş yalnız
@@ -509,7 +528,7 @@ jobs:
       - name: Package TameEngine
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
-          cp build/tulpar tulpar && chmod +x tulpar
+          rm -f tulpar && cp build/tulpar tulpar && chmod +x tulpar
           bash tools/package_tameengine.sh linux-x64 dist
         timeout-minutes: 15
 
@@ -1086,6 +1105,12 @@ jobs:
           cp build/tulpar dist/tulpar-macos-universal
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
           ls -l dist/
+          # Runtime arşivi OpenSSL'i içinde taşıyor (CMakeLists:
+          # TULPAR_TLS_IN_RUNTIME); boyutu ve üye sayısı ölçülüp yazılır —
+          # v3.38.5'te 2,8 MB idi (OpenSSL dışarıda, Homebrew dylib'inden).
+          A=dist/libtulpar_runtime-macos-universal.a
+          echo "runtime arsivi: $(du -h "$A" | cut -f1), $(ar -t "$A" | wc -l | tr -d ' ') uye, OpenSSL uyesi: $(ar -t "$A" | grep -ciE 'ssl|crypto|evp|x509|bio' || true)"
+          echo "libtulpar_runtime-macos-universal.a: $(du -h "$A" | cut -f1) ($(ar -t "$A" | wc -l | tr -d ' ') uye)" >> "$GITHUB_STEP_SUMMARY"
 
       # DİNAMİK BAĞ KAPISI — macOS ikilisi Homebrew'suz açılıyor mu?
       #
@@ -1102,17 +1127,24 @@ jobs:
       #      ikili KIRMIZI, sade ikili YEŞİL).
       #   2. DYLD_PRINT_LIBRARIES: `--version` koşarken dyld'nin GERÇEKTEN
       #      yüklediği görüntülerde /opt/homebrew ya da /usr/local yok.
-      #   3. Homebrew LLVM GİZLİ (Cellar dizini geçici olarak taşınır, PATH
-      #      yalnız sistem dizinleri): `--version` + AOT dumanı (küçük
-      #      program derle → linkle → çalıştır). Gizlemenin kendisi de
-      #      ölçülür: libunwind.1.dylib erişilemez ve llvm-config PATH'te yok.
-      #      Kullanıcı programlarının linki hâlâ Homebrew openssl@3'ü
-      #      (TULPAR_OPENSSL_LIBDIR) kullanıyor — o ayrı bir konu, gizlenmiyor.
+      #   3. KULLANICI İKİLİSİ, Homebrew GÖRÜNÜRKEN (tests/kullanici_ikili_bag.sh):
+      #      `tulpar build` ile TLS'ye dokunan program linklenir, koşar ve
+      #      `otool -L`'si yalnız sistem. ld64 aynı dizinde .dylib'i .a'ya
+      #      tercih ettiği için openssl@3 KURULUYKEN ölçmek şart — düzeltmesiz
+      #      sürücü tam burada libssl.3.dylib'e bağlıyordu (ölçüldü 2026-10-05,
+      #      bu PR'ın ilk koşumu). Önce arşivin OpenSSL'i gerçekten içerdiğine
+      #      bakılır (`nm`: _SSL_CTX_new) — yoksa "temiz" tesadüf olurdu.
+      #   4. Homebrew LLVM VE openssl@3 GİZLİ (Cellar dizinleri geçici olarak
+      #      taşınır, PATH yalnız sistem dizinleri): `--version` + AOT dumanı +
+      #      kullanıcı ikilisi kapısı. Gizlemenin kendisi de ölçülür:
+      #      libunwind.1.dylib ve libssl.a erişilemez, llvm-config PATH'te yok.
+      #      Düzeltmesiz sürücü burada `ld: library 'ssl' not found` ile düşer.
       - name: Dinamik bag kapisi (Homebrew'suz acilis)
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           set -uo pipefail
           T=dist/tulpar-macos-universal
+          A=dist/libtulpar_runtime-macos-universal.a
           bash tools/dinamik_bag_denetle.sh --oz-sinama
           otool -L "$T"
           bash tools/dinamik_bag_denetle.sh "$T"
@@ -1126,18 +1158,43 @@ jobs:
           grep -q 'libSystem' dyld.log || { echo "::error::DYLD_PRINT_LIBRARIES hicbir sey basmadi — olcum yok"; cat dyld.log; exit 1; }
           echo "dyld'nin yukledigi sistem goruntusu: $(grep -cE '/usr/lib|/System' dyld.log)"
 
+          # 3. Kullanici ikilisi, Homebrew gorunurken. Ayaklar KIRMIZIYI
+          # biriktirir (her biri raporlansin), adim sonda duser.
+          # `nm | grep -q` YOK: grep erken cikinca nm SIGPIPE alir ve
+          # pipefail altinda boru "basarisiz" olur — dosyaya yaz, sonra ara.
+          kirmizi=0
+          nm -g "$A" > nm_runtime.txt 2>/dev/null || true
+          if grep -q ' T _SSL_CTX_new$' nm_runtime.txt; then
+            echo "runtime arsivi OpenSSL'i iceriyor (_SSL_CTX_new tanimli)"
+          else
+            echo "::error::$A OpenSSL'i icermiyor (_SSL_CTX_new yok) — kullanici programlari Homebrew'a muhtac kalir"; kirmizi=1
+          fi
+          TULPAR_TLS_ZORUNLU=1 bash tests/kullanici_ikili_bag.sh "$T" || { echo "::error::kullanici ikilisi kapisi (Homebrew gorunur) KIRMIZI"; kirmizi=1; }
+
+          # 4. Homebrew LLVM + openssl@3 gizli.
           LLVM_OPT="$(brew --prefix llvm@18)"
           LLVM_GERCEK="$(cd "$LLVM_OPT" && pwd -P)"
+          SSL_OPT="$(brew --prefix openssl@3)"
+          SSL_GERCEK="$(cd "$SSL_OPT" && pwd -P)"
           mv "$LLVM_GERCEK" "$LLVM_GERCEK.gizli"
-          geri_koy() { mv "$LLVM_GERCEK.gizli" "$LLVM_GERCEK"; }
+          mv "$SSL_GERCEK" "$SSL_GERCEK.gizli"
+          geri_koy() { mv "$LLVM_GERCEK.gizli" "$LLVM_GERCEK"; mv "$SSL_GERCEK.gizli" "$SSL_GERCEK"; }
           trap geri_koy EXIT
           SIS_PATH=/usr/bin:/bin:/usr/sbin:/sbin
           if [ -e "$LLVM_OPT/lib/libunwind.1.dylib" ] || PATH=$SIS_PATH command -v llvm-config >/dev/null; then
             echo "::error::Homebrew LLVM gizlenemedi — olcum gecersiz"; exit 1
           fi
+          if [ -e "$SSL_OPT/lib/libssl.a" ] || [ -e "$SSL_OPT/lib/libssl.3.dylib" ]; then
+            echo "::error::Homebrew openssl@3 gizlenemedi — olcum gecersiz"; exit 1
+          fi
+          echo "gizli: $LLVM_GERCEK, $SSL_GERCEK; PATH=$SIS_PATH"
           env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH PATH=$SIS_PATH "$T" --version
-          env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH PATH=$SIS_PATH bash tests/aot_smoke.sh "$T"
-        timeout-minutes: 5
+          env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH PATH=$SIS_PATH bash tests/aot_smoke.sh "$T" \
+            || { echo "::error::AOT dumani (Homebrew gizli) KIRMIZI"; kirmizi=1; }
+          env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH PATH=$SIS_PATH TULPAR_TLS_ZORUNLU=1 bash tests/kullanici_ikili_bag.sh "$T" \
+            || { echo "::error::kullanici ikilisi kapisi (Homebrew gizli) KIRMIZI"; kirmizi=1; }
+          exit $kirmizi
+        timeout-minutes: 6
 
       # UÇTAN UCA AOT DUMANI. "tulpar ikilisi oluştu" ile "tulpar çalışıyor"
       # ayrı iddialar ve macOS'ta ikincisi UZUN SÜRE hiç ölçülmedi: o iş yalnız
@@ -1193,9 +1250,48 @@ jobs:
           # adımlar arası taşınmıyor — ilk denemede bu adım tam burada
           # "ERROR: LLVM is required." ile düştü. Aynı satırı buraya da koy.
           export PATH="$(brew --prefix llvm@18)/bin:$PATH"
-          cp build/tulpar tulpar && chmod +x tulpar
+          rm -f tulpar && cp build/tulpar tulpar && chmod +x tulpar
           ./build.sh suites
         timeout-minutes: 25
+
+      # YERİNDE KOPYA ÖLÇÜMÜ — `Killed: 9`un mekanizması.
+      #
+      # 2026-10-02'de "Package TameEngine" adımında `./tulpar build` 3 ms içinde
+      # `Killed: 9` ile düştü; aynı ağaç sonraki koşumda yeşildi. Sebep: önceki
+      # adım `./tulpar`ı yüzlerce kez koşturmuştu, bu adım `cp build/tulpar
+      # tulpar` ile AYNI inode'un üzerine yazıyordu. macOS çekirdeği
+      # çalıştırılmış bir Mach-O'nun imza durumunu vnode'da önbellekler; içerik
+      # değişince imza geçersiz sayılır ve bir sonraki exec SIGKILL alır
+      # (Go #42684 ile aynı sınıf). Belirlenimsiz, çünkü vnode'un önbellekte
+      # kalması bellek basıncına bağlı. Çözüm: kopya her zaman YENİ inode'a
+      # (`rm -f` + cp ya da geçici ada yazıp `mv`). Burada mekanizma
+      # kanıtlanır: yerinde cp inode'u KORUR (stat -f %i), mv DEĞİŞTİRİR ve yeni
+      # inode'lu kopya kesin koşar. Yerinde kopyanın koşum sonucu ölçülür ve
+      # özete yazılır — iddia edilmez (belirlenimsiz).
+      - name: Yerinde kopya olcumu (Killed 9 mekanizmasi)
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          set -u
+          K=olcum_kopya
+          rm -f "$K" && cp build/tulpar "$K" && chmod +x "$K"
+          ./"$K" version > /dev/null
+          ino1=$(stat -f %i "$K")
+          cp build/tulpar "$K"                       # YERİNDE: aynı inode
+          ino2=$(stat -f %i "$K")
+          rc_yerinde=0; ./"$K" version > /dev/null 2> yerinde.err || rc_yerinde=$?
+          echo "yerinde cp: inode $ino1 -> $ino2, sonraki kosum rc=$rc_yerinde $(cat yerinde.err | tr '\n' ' ')"
+          cp build/tulpar "$K.yeni" && mv -f "$K.yeni" "$K"   # YENİ inode
+          ino3=$(stat -f %i "$K")
+          rc_yeni=0; ./"$K" version > /dev/null 2>&1 || rc_yeni=$?
+          echo "yeni inode: $ino2 -> $ino3, kosum rc=$rc_yeni"
+          # Varsayim tutmazsa (cp yeni inode uretirse) mekanizma baska demektir:
+          # uyar ve ozete yaz, isi kirma — olcum, iddia degil.
+          [ "$ino1" = "$ino2" ] || echo "::warning::yerinde cp inode'u DEGISTIRDI ($ino1 -> $ino2) — Killed 9 aciklamasi bu makinede tutmuyor"
+          [ "$ino2" != "$ino3" ] || { echo "::error::mv inode'u degistirmedi"; exit 1; }
+          [ "$rc_yeni" = 0 ] || { echo "::error::yeni inode'lu kopya kosmadi (rc=$rc_yeni)"; exit 1; }
+          echo "yerinde kopya olcumu: ayni inode'a cp sonrasi kosum rc=$rc_yerinde (137 = Killed: 9); yeni inode'a mv sonrasi rc=$rc_yeni" >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$K" yerinde.err
+        timeout-minutes: 2
 
       # TameEngine paketi — gerekçe build-linux'taki notta. macOS'ta betik
       # BAŞLATMA DUMANINI atlıyor: orada DISPLAY yok, pencere açma denemesi
@@ -1203,7 +1299,9 @@ jobs:
       - name: Package TameEngine
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
-          cp build/tulpar tulpar && chmod +x tulpar
+          # YENİ inode'a kopya (önce sil) — bir üstteki ölçümün sebebi: yerinde
+          # cp 2026-10-02'de burada `Killed: 9` üretti.
+          rm -f tulpar && cp build/tulpar tulpar && chmod +x tulpar
           bash tools/package_tameengine.sh macos-universal dist
         timeout-minutes: 15
 

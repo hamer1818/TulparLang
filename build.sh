@@ -2123,8 +2123,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Copy executable
+# Copy executable — ONCE SIL, sonra kopyala (yeni inode). macOS'ta
+# calistirilmis bir Mach-O'nun yerinde uzerine yazilmasi (`cp` ayni inode'a
+# O_TRUNC ile yazar) cekirdegin vnode'da onbelleklediği imzayi gecersiz kilar;
+# sonraki `./tulpar` belirlenimsiz bicimde `Killed: 9` alir (CI'da olculdu
+# 2026-10-02, mekanizma build.yml macOS "Yerinde kopya olcumu" adiminda;
+# Tuzaklar 7l). Linux'ta zararsiz; aliskanlik tek olsun.
 hw_end "derleme"
+rm -f ../tulpar
 cp tulpar ../tulpar
 # Copy the runtime archive next to the executable too. The AOT linker
 # probes the directory of the running `tulpar` first, so leaving a stale
