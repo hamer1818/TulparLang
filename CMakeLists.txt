@@ -257,7 +257,17 @@ set(AOT_SOURCES
     src/aot/aot_cache.cpp
     src/aot/aot_cache.hpp
     src/aot/aot_cache_env.inc
+    src/aot/llvm_bolum.cpp
+    src/aot/llvm_bolum.hpp
 )
+# llvm_bolum.cpp LLVM'in C++ API'sini kullaniyor (tembel bitcode okuma, alias).
+# LLVM RTTI'siz derlendiyse (kaynaktan derlemenin varsayilani
+# LLVM_ENABLE_RTTI=OFF; Arch/Homebrew paketleri ON) bu dosya da RTTI'siz
+# derlenmeli; yoksa LLVM sinif sablonlarinin vtable'lari olmayan typeinfo
+# sembollerine baglanir ve link duser.
+if(NOT LLVM_ENABLE_RTTI AND NOT MSVC)
+    set_source_files_properties(src/aot/llvm_bolum.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+endif()
 
 # Type Inference
 set(TYPEINFER_SOURCES
@@ -475,6 +485,7 @@ else()
         webassemblyasmparser webassemblycodegen webassemblydesc webassemblyinfo
         passes asmparser asmprinter
         target mc
+        bitreader bitwriter
     )
     message(STATUS "LLVM: statik bilesenlerle linkleniyor")
 endif()

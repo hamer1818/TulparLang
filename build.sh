@@ -788,6 +788,14 @@ if [ "$ACTION" = "suites" ]; then
     # sabotajda YESIL kaliyordu (hicbiri gomulu fonksiyonu adla cagirmiyor).
     # `-x` korumasi YOK: dosya calistirilamaz olursa sessizce atlanmasin.
     kapi_kuyruk "gomulu ayiklama kapisi basarisiz!" bash tests/gomulu_ayiklama.sh ./tulpar
+    # BOLUMLU (PARALEL) NESNE URETIMI (2026-10-05, src/aot/llvm_bolum.cpp):
+    # buyuk program gercekten bolunuyor mu (bolum sayisi + en buyuk bolumun
+    # komut payi — belirlenimli), tek nesne yoluyla ikili AYNI mi (her
+    # fonksiyon ayni adreste, .text komut akisi + .rodata/.data ayni, cikti
+    # ayni); pozitif kontrol TULPAR_AOT_BOLUM_SINAMA=ters yerlesimi kaydirir
+    # ve karsilastirici YAKALAMALI. Yalniz suresine bakilan bir kapi
+    # "bolunmus ama hizalamasi kaymis" ikiliyi yesil gecirirdi (Tuzaklar 7i).
+    kapi_kuyruk "bolumlu nesne uretimi kapisi basarisiz!" bash tests/bolumlu_emit.sh ./tulpar
     # call(f, ...) YEREL INT YOLU (2026-10-01): tumu-int hedef ciplak giris
     # noktasindan cagriliyor mu (IR + runtime tanisi, iki ayak);
     # TULPAR_NO_CALL_NATIVE=1 pozitif kontrol.

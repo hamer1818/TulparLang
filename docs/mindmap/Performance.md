@@ -2038,3 +2038,80 @@ program DÜŞÜYOR, `TULPAR_AOT_KEEP_ALL=1` kapatıyor. Bulgu: aynı sabotajla b
 bir fonksiyonu adla çağırmıyor; tek koruma bu kapı. Sabotajı ölçerken
 `TULPAR_AOT_NOCACHE=1` şart: önbellek anahtarı ortam değişkenlerini görmüyor, ilk
 deneme önbellekten eski ikilileri koşturup "yeşil" dedi.
+
+## Derleme hızı: bölümlü (paralel) nesne üretimi — wings 627 → 463 ms, ikili aynı (2026-10-05)
+
+**Ölçüm önce.** `TULPAR_AOT_NOCACHE=1 TULPAR_AOT_TIME=1`, Ryzen 7 9800X3D, LLVM 23,
+5 koşunun en iyisi: wings_groups_test optimize 327 + emit-obj 220 ms, loop_versioning
+511 + 300, nbody 157 + 189. `-time-passes` (geçici ölçüm kancası, depoda yok):
+optimize'da InstCombine %18, SROA %8, DSE/Inliner/EarlyCSE/GVN/IPSCCP ~%6'şar — tek
+pahalı geçiş yok, O3'ün olağan dağılımı; emit'te isel %37, greedy RA %14, gerisi
+dağınık. İkisi de fonksiyon başına doğrusal. Komut sayısı (optimize öncesi → sonrası):
+wings 45 890 → 30 280 (122 → 58 fonksiyon), nbody 15 704 → 16 772 (`t_advance.f` tek
+başına 8 688 — döngü sürüm kopyaları), loop_versioning 56 429 → 34 135. Ayrıca
+optimize'ın içinde basamak merdiveni için modül KLONU 15–19 ms + eski modülün
+yıkımı 4 ms ve emit'te ikinci bir tam doğrulama 2 ms var.
+
+**Neden yalnız emit.** O3'ü bölmek satır içi açma / GlobalOpt / MergeFunctions
+kararlarını değiştirir (modül geneli) — kod değişir. Kod üretimi ise fonksiyon
+başına; optimize edilmiş modül bölünürse her fonksiyon aynı makine koduna iner.
+
+**Nasıl** (`src/aot/llvm_bolum.cpp`): O3 bütün modülde koştuktan sonra fonksiyonlar
+MODÜL SIRASIYLA komut sayısına göre dengeli K bitişik aralığa ayrılır (K = komut /
+4000, en çok 8 — makineden bağımsız), globallerin hepsi son bölümde. Modül bir kez
+bitcode'a yazılır (use-list sırası korunarak), her işçi kendi `LLVMContext`'inde
+TEMBEL okur, yalnız kendi gövdelerini açar. Bölümler arası kullanılan yerel
+fonksiyona gizli takma ad (Mach-O'da gizli global), yerel değişkene gizli global
+(Mach-O'da adresi önemsiz sabitler kopyalanır). Nesneler bölüm sırasıyla linklenir,
+yani linker `.text`'i tek nesnedeki sırayla diziyor.
+
+**Sonuç** (aynı makine, 5 koşu en iyi, toplam süreç ms; eski = `TULPAR_AOT_BOLUM=1`):
+
+| program | eski toplam | yeni toplam | emit-obj eski → yeni | bölüm |
+|---|---|---|---|---|
+| examples/wings_groups_test | 627 | 463 | 220 → 54 | 7 |
+| tests/loop_versioning.test | 882 | 650 | 300 → 59 | 8 |
+| tests/wings_features.test | 693 | 508 | 262 → 63 | 8 |
+| tests/array_shape_cache.test | 333 | 292 | 100 → 48 | 3 |
+| benchmarks/fair/nbody | 404 | 336 | 189 → 123 | 3 |
+| tulpar-engine engine_aksiyon (`--ext`) | 970 | 679 | 397 → 88 | 8 |
+| tulpar-engine engine_dalga (`--ext`) | 622 | 468 | 238 → 71 | 6 |
+| benchmarks/fair/qsort, hello world | 123 / 52 | aynı | bölünmüyor | 1 |
+
+nbody'nin sınırı `t_advance.f`: modülün %52'si tek fonksiyon, en uzun bölüm 122 ms.
+4 çekirdekle sınırlanınca (`taskset -c 0-3`, CI benzetimi) wings emit 88 ms;
+`build.sh suites` 4 işçi 57,9 → 57,7 s, `build.sh test` 15,1 → 14,7 s — doymuş
+makinede kazanç yok ama kayıp da yok.
+
+**Çalışma hızı — ikili AYNI.** `tests/bolumlu_emit.sh` tek nesne ve bölümlü ikiliyi
+karşılaştırıyor: her fonksiyon aynı adreste, `.text`'in NOP dolgusu dışındaki komut
+akışı aynı, `.rodata`/`.data` bayt bayt aynı, çıktı aynı (wings'te `.text` dolgu
+dahil BAYT BAYT aynı; nbody / loop_versioning'de yalnız 11–44 bayt fonksiyonlar arası
+dolgu — bölüm sınırında NOP'u birleştirici değil linker yazıyor). Motorun dört
+örneğinde (engine_aksiyon/dalga/arena/karakter) de aynı; engine_aksiyon `[kapi]`
+satırları (kare=3200 … uyari=0, TAMAM) aynı. Mach-O (arm64) ve MinGW COFF yerelde
+linklenemediği için nesne düzeyinde ölçüldü: aynı `.ll` o hedefe tek nesne ve
+bölümlü yazılıp fonksiyon fonksiyon karşılaştırıldı — wings / nbody /
+loop_versioning / wings_features'ta 0 farklı fonksiyon. Pozitif kontroller:
+`TULPAR_AOT_BOLUM_SINAMA=ters` (ters link sırası) kapıyı kırmızıya çeviriyor;
+`dso_local` düzeltmesi geri alınınca nesne karşılaştırması arm64'te GOT (`adrp+ldr`),
+MinGW'de `.refptr` farkını gösteriyor. Bulunan üç sessiz mekanizma: Tuzaklar 7o.
+
+**Link tabanı (~40 ms, her programda): `lld` daha hızlı ama ÇALIŞMA HIZINDAN öder —
+yapılmadı.** Bir önceki bölümdeki "lld 64 ms" ölçümü tutmadı: `TULPAR_CC="clang++
+-fuse-ld=lld"` ile link 40 → 14 ms (mold 15 ms; hello / wings / json.test, 5 koşu en
+iyi). ld.bfd'nin kendisi 31,6 ms, clang++ sürücüsü ~5 ms; `--gc-sections`,
+`--no-keep-memory`, `-O0` bfd'yi hızlandırmıyor. AMA yerleşim değişiyor: kullanıcı
+fonksiyonları 64 baytta aynı hizada kalsa da adresler (bfd 0x40xxxx, lld 0x22xxxx) ve
+runtime arşivinin dizilişi farklı. `benchmarks/fair` A/B (`taskset -c 2,3`, dönüşümlü,
+en iyi 7–9): **callfn +%19–22** (dolaylı çağrı, dal tahmini adres bitlerine bağlı),
+**hashmap +%8** (`-z keep-text-section-prefix` ile eşitleniyor — bfd `.text.unlikely`
+/ `.text.hot`'u grupluyor, lld gruplamıyor); diğer 11 çekirdek ±%1. mold'da callfn
++%22. Kod aynı, yalnız yerleşim — ama kullanıcıya giden ikili yavaşlıyor, yani
+bağlayıcı değişmedi.
+
+**Kalan.** optimize artık derlemenin ~%70'i (wings 328 / 463) ve aynı kodu üreterek
+bölünemez. Merdivenin modül klonu (15–19 ms) bitcode anlık görüntüsüyle
+değiştirilebilir ama klonun kullanım sırası O3'ün girdisi — çıktının aynı kaldığı
+ayrıca kanıtlanmalı. nbody gibi tek dev fonksiyonlu programda sınır o fonksiyonun
+boyu (döngü sürüm kopyaları).

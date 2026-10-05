@@ -1476,6 +1476,8 @@ AOTResult aot_compile_with_filename_debug(const char *source,
       ast_node_free(ast);
       return AOT_ERROR_CODEGEN;
     }
+    // ASan modul kurucusu + global meta verisi tek nesne varsayiyor.
+    backend->bolum_kapali = 1;
   }
 
   // Plan 07 PR 2: close the debug-info graph before any IR consumer
@@ -1861,6 +1863,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   if (!ext_link_flags_for(g_target_web ? tulpar::ext::Platform::Web
                                        : tulpar::ext::host_platform(),
                           nullptr, ext_flags)) {
+    llvm_backend_ek_nesneleri_sil(backend, nullptr);
     llvm_backend_destroy(backend);
     ast_node_free(ast);
     return AOT_ERROR_LINK;
@@ -1908,7 +1911,8 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   snprintf(
       link_cmd, sizeof(link_cmd),
       "%s %s%s -o %s%s %s %s%s%s%s%s 2>&1",
-      aot_link_driver(), debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      aot_link_driver(), debug_flag,
+      llvm_backend_link_nesneleri(backend, obj_filename), exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, search_dirs.c_str(),
       tame_link_flags(backend->uses_tame), ext_flags.c_str(), " " AOT_LINK_LIB_FLAGS,
       extra_flags.c_str());
@@ -1919,6 +1923,11 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     AOTPhaseTimer t("link");
     link_result = system(link_cmd);
   }
+  // Bolumlu uretimin nesneleri linkten sonra siliniyor — `x.o` DAHIL: o
+  // yalniz ilk bolum, tek basina linklenemez; yaniltici bir artik birakmak
+  // yerine hic birakma. Tek nesne yolunda (bolunmeyen program) bu cagri bir
+  // sey yapmaz ve `x.o` eskisi gibi kalir.
+  llvm_backend_ek_nesneleri_sil(backend, nullptr);
   if (link_result != 0) {
     fprintf(stderr, tulpar::i18n::tr_for_en(
             "[AOT] Error: Linking failed (code %d). Check clang installation and libraries.\n"),
@@ -2019,6 +2028,7 @@ static AOTResult aot_compile_silent(const char *source,
   std::string silent_ext_flags;
   if (!ext_link_flags_for(tulpar::ext::host_platform(), nullptr, silent_ext_flags)) {
     remove(obj_filename);
+    llvm_backend_ek_nesneleri_sil(backend, obj_filename);
     llvm_backend_destroy(backend);
     ast_node_free(ast);
     return AOT_ERROR_LINK;
@@ -2037,7 +2047,8 @@ static AOTResult aot_compile_silent(const char *source,
   snprintf(
       link_cmd, sizeof(link_cmd),
       "%s %s -o %s%s %s %s%s%s%s%s%s",
-      aot_link_driver(), obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      aot_link_driver(), llvm_backend_link_nesneleri(backend, obj_filename),
+      exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
       tame_link_flags(backend->uses_tame), silent_ext_flags.c_str(), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str(), redirect.c_str());
@@ -2048,6 +2059,7 @@ static AOTResult aot_compile_silent(const char *source,
 
   // Cleanup object file
   remove(obj_filename);
+  llvm_backend_ek_nesneleri_sil(backend, obj_filename);
 
   llvm_backend_destroy(backend);
   ast_node_free(ast);
