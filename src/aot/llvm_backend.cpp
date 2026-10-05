@@ -27,6 +27,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
+#include <vector>
 
 struct CaptureData {
   std::unordered_map<ASTNode_C*, std::unordered_map<std::string, int>> slots;
@@ -40,6 +41,7 @@ struct ImportedModule {
   bool found = false;          // dosya/gomulu kitaplik bulundu mu
   ASTNode_C *ast = nullptr;    // ayristirma hatasinda nullptr
   std::string resolved_dir;    // ic ice importlar icin (Plan 02 PR3)
+  bool embedded = false;       // gomulu stdlib (lib/*.tpr) — ayiklanabilir
 };
 
 // Modul AST onbellegi + import edilen struct tiplerinin kaydi.
@@ -64,11 +66,71 @@ struct ImportState {
   // Islenmis TYPE_DECL dugumleri: on tarama ve AST_IMPORT kodgeni ayni
   // dugumu gorur; catisma bir kez raporlanir.
   std::unordered_set<ASTNode_C *> seen_type_decls;
+
+  // KULLANILMAYAN GOMULU FONKSIYON AYIKLAMASI (strip_unused_embedded).
+  // gomulu_fn: gomulu stdlib modullerinin tanimladigi fonksiyon adlari
+  // (ana program ayni adi tanimlamadiysa); koru_fn: diskten/eklentiden
+  // gelen modullerin adlari — onlar asla ayiklanmaz (kullanicinin kendi
+  // dosyalari motor kancasi olabilir). kok_ad: programin HERHANGI bir
+  // yerinde dizgi literali / tanimlayici / anahtar olarak gecen adlar —
+  // `call("ad")`, wings route handler'i, `on_start("baslat")` gibi ADLA
+  // cagrilma yollarinin hepsi bir dizgiden geciyor.
+  std::unordered_set<std::string> gomulu_fn;
+  std::unordered_set<std::string> koru_fn;
+  std::unordered_set<std::string> kok_ad;
+  // BIRLESTIRMEYE giren dizgi literalleri (`"on_" + olay`, `s += "_x"`,
+  // `"${...}"` aradegerleri): on/son kurali yalniz bunlara uygulanir. Duz
+  // anahtar dizgileri (`req["body"]`) ve degisken adlari ad KURMAZ;
+  // olculdu: onlara da uygulaninca wings'in 160 adayindan 63'u kok
+  // sayiliyordu (`body` -> `_wings_parse_body`).
+  std::unordered_set<std::string> kok_dizgi;
+  // main'in girisindeki aot_register_func cagrilari (Pass 1a.5): kayit bir
+  // IR kullanimi, yani kayitli her fonksiyon GlobalDCE icin canli.
+  struct FnKayit {
+    std::string ad;           // kaynak ad (call() anahtari)
+    LLVMValueRef cagri;       // aot_register_func cagrisi
+    LLVMValueRef yerel_cagri; // aot_register_func_native cagrisi ya da null
+    std::string hedef;        // kaydedilen giris noktasinin sembol adi
+    std::string ciplak;       // yerel (tumu-int) ciplak sembol ya da ""
+  };
+  std::vector<FnKayit> kayitlar;
+  bool ayiklandi = false;
 };
 
 static ImportState *import_state_of(LLVMBackend *backend) {
   if (!backend->import_state) backend->import_state = new ImportState();
   return static_cast<ImportState *>(backend->import_state);
+}
+
+// Kok adlari topla (strip_unused_embedded): bir fonksiyonu ADIYLA bulabilen
+// her yol bir dizgiden ya da tanimlayicidan geciyor. Bilerek GENIS:
+// dizgi literalleri, tanimlayicilar (fonksiyonu deger olarak gecirmek:
+// `run(guncelle, ciz)`), nesne anahtarlari ve adi olan her dugum —
+// yalniz `func` bildirimi ve alicisiz/callee'siz DOGRUDAN cagri haric (o
+// cagri zaten bir IR kullanimi; adi kok saymak olu koddan cagrilan olu
+// fonksiyonu da canli tutardi). Supheli durumda koru.
+static int kok_ad_ziyaret(ASTNode_C *n, void *p) {
+  ImportState *ist = static_cast<ImportState *>(p);
+  auto *kok = &ist->kok_ad;
+  if ((n->type == AST_BINARY_OP && n->op == TOKEN_PLUS) ||
+      n->type == AST_COMPOUND_ASSIGN) {
+    for (ASTNode_C *c : {n->left, n->right})
+      if (c && c->type == AST_STRING_LITERAL && c->value.string_value)
+        ist->kok_dizgi.insert(c->value.string_value);
+  }
+  if (n->type == AST_STRING_LITERAL) {
+    if (n->value.string_value) kok->insert(n->value.string_value);
+  } else if (n->name && n->type != AST_FUNCTION_DECL &&
+             !(n->type == AST_FUNCTION_CALL && !n->callee && !n->receiver)) {
+    kok->insert(n->name);
+  }
+  if (n->object_keys)
+    for (int i = 0; i < n->object_count; i++)
+      if (n->object_keys[i]) kok->insert(n->object_keys[i]);
+  return 1;
+}
+static void kok_adlari_topla(LLVMBackend *backend, ASTNode_C *ast) {
+  tulpar_ast_walk(ast, kok_ad_ziyaret, import_state_of(backend));
 }
 
 // Kullanici degiskenlerinin LLVM sembol adi.
@@ -4463,6 +4525,7 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   int ext_idx = -1;
   if (embedded_code) {
     source = strdup(embedded_code);
+    mod.embedded = true;
   } else if (tulpar::ext::read_module(rel_path, ext_src, ext_path, ext_dir, &ext_idx)) {
     // Yerel eklentinin modulu (K303): gomulu stdlib'den SONRA, diskteki
     // dosyalardan ONCE — eklentiyi veren kisi `import "<ad>"`in onu
@@ -16107,6 +16170,19 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         snprintf(backend->current_import_dir,
                  sizeof(backend->current_import_dir), "%s", saved_import_dir);
 
+        // Ayiklama icin: modulun fonksiyon adlari (gomulu mu degil mi) ve
+        // modulun icindeki kok adlar (strip_unused_embedded).
+        {
+          ImportState *ist = import_state_of(backend);
+          kok_adlari_topla(backend, module_ast);
+          for (int i = 0; i < module_ast->statement_count; i++) {
+            ASTNode_C *fn = module_ast->statements[i];
+            if (fn->type != AST_FUNCTION_DECL || !fn->name) continue;
+            if (main_fn_decl(backend, fn->name)) continue;
+            (imod->embedded ? ist->gomulu_fn : ist->koru_fn).insert(fn->name);
+          }
+        }
+
         // Pass 1: Compile function definitions from module (bodies)
         // codegen_func_def reuses the pre-declared signature created above.
         for (int i = 0; i < module_ast->statement_count; i++) {
@@ -18114,6 +18190,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
     // kaydedildigi icin tablo sirasi ve ana programin tipleri degismiyor;
     // ayni ad modulde farkli yerlesimle gelirse derleme hatasi.
     import_seed_main_types(backend, node);
+    kok_adlari_topla(backend, node);  // strip_unused_embedded kokleri
     {
       std::unordered_set<std::string> visited;
       prescan_import_types(backend, node, 0, visited, node->line, nullptr);
@@ -18202,9 +18279,14 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef reg_args[] = {
           name_str, target,
           LLVMConstInt(backend->int32_type, (unsigned long long)arity, 0)};
-      LLVMBuildCall2(backend->builder,
+      ImportState::FnKayit kayit;
+      kayit.ad = fname;
+      kayit.cagri = LLVMBuildCall2(backend->builder,
                      LLVMGlobalGetValueType(backend->func_aot_register_func),
                      backend->func_aot_register_func, reg_args, 3, "");
+      kayit.yerel_cagri = nullptr;
+      size_t hl = 0;
+      kayit.hedef = LLVMGetValueName2(target, &hl);
       // Tumu-int hedef: ciplak giris noktasini da kaydet — call() satir ici
       // yolu argumanlar INT ise sarmalayiciyi atlayip onu cagirir (bkz.
       // "call(f, ...) SATIR ICI HIZLI YOL"). Yol 8 argumana kadar.
@@ -18217,8 +18299,14 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
                                LLVMFunctionType(backend->void_type, rp, 2, 0));
         }
         LLVMValueRef rargs[] = {target, bare};
-        LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rn), rn, rargs, 2, "");
+        kayit.yerel_cagri =
+            LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rn), rn, rargs, 2, "");
+        if (bare) {
+          size_t bl = 0;
+          kayit.ciplak = LLVMGetValueName2(bare, &bl);
+        }
       }
+      import_state_of(backend)->kayitlar.push_back(kayit);
     }
 
     // Pass 1b: Emit function bodies
@@ -18501,6 +18589,158 @@ static LLVMTargetMachineRef make_opt_machine(LLVMBackend *backend) {
   return tm;
 }
 
+// KULLANILMAYAN GOMULU FONKSIYONLARI OPTIMIZASYONDAN ONCE AT.
+//
+// NEDEN: `import "wings"` 28 satirlik bir programa wings + router +
+// middleware + http_utils'in ~160 fonksiyonunun HEPSINI getiriyordu ve her
+// biri -O3'ten ve nesne uretiminden geciyordu: derleme ~0,9 s, cogu
+// kullanilmayan kod (olculdu 2026-10-05, Ryzen 7 9800X3D,
+// examples/wings_groups_test.tpr: optimize 449 ms, emit-obj 380 ms).
+// Sebep yalniz "dis gorunur" olmalari degil: main'in girisindeki
+// aot_register_func kayitlari (Pass 1a.5) her fonksiyona bir IR KULLANIMI
+// veriyor — GlobalDCE hicbirini atamiyordu.
+//
+// KURAL (supheli durumda koru):
+//   * Yalniz GOMULU stdlib modullerinin fonksiyonlari aday. Ana programin
+//     ve diskten/eklentiden gelen modullerin fonksiyonlari hic dokunulmaz
+//     (motor kancalari kullanici fonksiyonlarini adla buluyor).
+//   * Ad programin HERHANGI bir yerinde (ana program ya da herhangi bir
+//     modul) dizgi literali, tanimlayici ya da nesne anahtari olarak
+//     geciyorsa kok: `call("ad")`, wings route handler'i, `on_start("f")`,
+//     `run(guncelle, ciz)`. Ayrica 3+ harfli bir dizgi adin onu ya da
+//     sonuysa kok (`call("on_" + olay)` gibi kurulan adlara karsi).
+//   * Kok olmayan adayin kaydi cikarilir, sembolleri `internal` olur,
+//     GlobalDCE kosar; DOGRUDAN cagrilarla canli kalanlar AYNI YERDE yeniden
+//     kaydedilir (aot_func_name_of / async iz adlari bozulmasin).
+//   * TULPAR_AOT_KEEP_ALL=1 ayiklamayi kapatir (olcum ve kacis yolu).
+static void strip_unused_embedded(LLVMBackend *backend) {
+  ImportState *ist = import_state_of(backend);
+  if (ist->ayiklandi) return;
+  ist->ayiklandi = true;
+  const char *keep = getenv("TULPAR_AOT_KEEP_ALL");
+  if (keep && *keep && *keep != '0') return;
+  if (ist->gomulu_fn.empty()) return;
+  // POZITIF KONTROL (tests/gomulu_ayiklama.sh): TULPAR_AOT_STRIP_SINAMA=kok-yok
+  // kok adlarini YOK sayar — adla cagrilan gomulu fonksiyon atilir ve kapi
+  // kirmizi gormeli. Yalniz sinama icin.
+  const char *sin = getenv("TULPAR_AOT_STRIP_SINAMA");
+  const bool kok_yok = sin && strcmp(sin, "kok-yok") == 0;
+  auto kok_mu = [&](const std::string &f) {
+    if (ist->koru_fn.count(f)) return true;
+    if (kok_yok) return false;
+    if (ist->kok_ad.count(f)) return true;
+    for (const auto &k : ist->kok_dizgi) {
+      if (k.size() < 3 || k.size() >= f.size()) continue;
+      if (f.compare(0, k.size(), k) == 0) return true;
+      if (f.compare(f.size() - k.size(), k.size(), k) == 0) return true;
+    }
+    return false;
+  };
+  std::unordered_set<std::string> atilabilir;
+  for (const auto &f : ist->gomulu_fn)
+    if (!kok_mu(f)) atilabilir.insert(f);
+  const char *dbg = getenv("TULPAR_AOT_STRIP_DEBUG");
+  bool dbg_on = dbg && *dbg && *dbg != '0';
+  if (dbg && strcmp(dbg, "2") == 0) {
+    for (const auto &f : ist->gomulu_fn) {
+      if (atilabilir.count(f)) continue;
+      const char *neden = ist->kok_ad.count(f) ? "ad" : ist->koru_fn.count(f) ? "koru" : "on/son";
+      std::string hangi;
+      if (!strcmp(neden, "on/son"))
+        for (const auto &k : ist->kok_dizgi)
+          if (k.size() >= 3 && k.size() < f.size() &&
+              (f.compare(0, k.size(), k) == 0 ||
+               f.compare(f.size() - k.size(), k.size(), k) == 0)) { hangi = k; break; }
+      fprintf(stderr, "[AOT-STRIP] kok %s (%s%s%s)\n", f.c_str(), neden,
+              hangi.empty() ? "" : " ", hangi.c_str());
+    }
+  }
+  if (atilabilir.empty()) return;
+
+  LLVMModuleRef m = backend->module;
+  LLVMTypeRef mt = LLVMFunctionType(backend->void_type, nullptr, 0, 0);
+  LLVMValueRef isaret_fn = LLVMAddFunction(m, "__tulpar_kayit_isareti", mt);
+  LLVMValueRef isaret = nullptr;
+  std::vector<const ImportState::FnKayit *> cikan;
+  for (const auto &k : ist->kayitlar) {
+    if (!atilabilir.count(k.ad)) continue;
+    if (!isaret) {
+      LLVMPositionBuilderBefore(backend->builder, k.cagri);
+      isaret = LLVMBuildCall2(backend->builder, mt, isaret_fn, nullptr, 0, "");
+    }
+    if (k.yerel_cagri) LLVMInstructionEraseFromParent(k.yerel_cagri);
+    LLVMInstructionEraseFromParent(k.cagri);
+    cikan.push_back(&k);
+  }
+  auto ic_yap = [&](const std::string &ad) {
+    if (ad.empty()) return;
+    LLVMValueRef f = LLVMGetNamedFunction(m, ad.c_str());
+    if (f && !LLVMIsDeclaration(f) && LLVMGetLinkage(f) == LLVMExternalLinkage)
+      LLVMSetLinkage(f, LLVMInternalLinkage);
+  };
+  for (const auto &f : atilabilir) {
+    ic_yap("t_" + f);
+    ic_yap(f);
+    ic_yap("tb_" + f);
+    ic_yap("tc_" + f);
+  }
+  for (const auto *k : cikan) {
+    ic_yap(k->hedef);
+    ic_yap(k->ciplak);
+  }
+  int once = 0;
+  for (LLVMValueRef f = LLVMGetFirstFunction(m); f; f = LLVMGetNextFunction(f))
+    if (!LLVMIsDeclaration(f)) once++;
+  LLVMPassBuilderOptionsRef o = LLVMCreatePassBuilderOptions();
+  LLVMErrorRef err = LLVMRunPasses(m, "globaldce", nullptr, o);
+  LLVMDisposePassBuilderOptions(o);
+  if (err) {
+    char *msg = LLVMGetErrorMessage(err);
+    fprintf(stderr, "[AOT] Warning: globaldce failed: %s\n", msg);
+    LLVMDisposeErrorMessage(msg);
+  }
+  // Canli kalanlari yeniden kaydet (isaretin yerine).
+  int yeniden = 0;
+  if (isaret) {
+    LLVMPositionBuilderBefore(backend->builder, isaret);
+    for (const auto *k : cikan) {
+      LLVMValueRef hedef = LLVMGetNamedFunction(m, k->hedef.c_str());
+      if (!hedef || LLVMIsDeclaration(hedef)) continue;
+      int arity = (int)LLVMCountParams(hedef) - 1;
+      if (arity < 0) arity = 0;
+      LLVMValueRef name_str =
+          LLVMBuildGlobalStringPtr(backend->builder, k->ad.c_str(), "fn_reg_name");
+      LLVMValueRef reg_args[] = {
+          name_str, hedef,
+          LLVMConstInt(backend->int32_type, (unsigned long long)arity, 0)};
+      LLVMBuildCall2(backend->builder,
+                     LLVMGlobalGetValueType(backend->func_aot_register_func),
+                     backend->func_aot_register_func, reg_args, 3, "");
+      if (k->yerel_cagri && !k->ciplak.empty()) {
+        LLVMValueRef bare = LLVMGetNamedFunction(m, k->ciplak.c_str());
+        LLVMValueRef rn = LLVMGetNamedFunction(m, "aot_register_func_native");
+        if (bare && rn) {
+          LLVMValueRef rargs[] = {hedef, bare};
+          LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rn), rn, rargs, 2, "");
+        }
+      }
+      yeniden++;
+    }
+    LLVMInstructionEraseFromParent(isaret);
+  }
+  LLVMDeleteFunction(isaret_fn);
+  if (dbg_on) {
+    int sonra = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(m); f; f = LLVMGetNextFunction(f))
+      if (!LLVMIsDeclaration(f)) sonra++;
+    fprintf(stderr,
+            "[AOT-STRIP] gomulu aday %zu, kok %zu, atilabilir %zu; tanimli "
+            "fonksiyon %d -> %d; yeniden kayit %d\n",
+            ist->gomulu_fn.size(), ist->gomulu_fn.size() - atilabilir.size(),
+            atilabilir.size(), once, sonra, yeniden);
+  }
+}
+
 void llvm_backend_optimize(LLVMBackend *backend) {
   // Create pass builder options
   LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
@@ -18566,6 +18806,7 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   // the result type. Instead of dropping straight to unoptimized, try
   // O3 → O2 → O1 on a fresh clone of the codegen IR and keep the first level
   // that verifies clean; only use the unoptimized module if every level fails.
+  strip_unused_embedded(backend);
   LLVMModuleRef codegen_ir = backend->module;
 
   // A "safe" options set with the forced vectorizers / mergefunc / unroll left

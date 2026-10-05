@@ -13,6 +13,31 @@ tag still works;
 
 ## [Unreleased]
 
+### Hızlandı — `import` edilen gömülü kitaplığın KULLANILMAYAN fonksiyonları artık derlenmiyor
+
+- `import "wings"` 28 satırlık bir programa ~160 kitaplık fonksiyonu
+  getiriyordu ve hepsi her derlemede -O3 + nesne üretiminden geçiyordu.
+  Sebep yalnız dış görünürlük değildi: `main`'in girişindeki
+  `aot_register_func` kayıtları (call() önbelleği) her fonksiyona bir IR
+  kullanımı veriyordu, GlobalDCE hiçbirini atamıyordu. Artık optimizasyondan
+  ÖNCE: gömülü stdlib modüllerinin, programın hiçbir yerinde ADI geçmeyen
+  (dizgi literali, tanımlayıcı, nesne anahtarı; birleştirmeye giren 3+
+  harfli dizginin önü/sonu) fonksiyonlarının kaydı çıkarılıyor, sembolleri
+  `internal` oluyor, GlobalDCE koşuyor; doğrudan çağrıyla canlı kalanlar
+  aynı yerde yeniden kaydediliyor. Ana programın ve diskten/eklentiden gelen
+  modüllerin fonksiyonlarına hiç dokunulmuyor (motor kancaları adla buluyor).
+  Kaçış: `TULPAR_AOT_KEEP_ALL=1`; teşhis: `TULPAR_AOT_STRIP_DEBUG=1|2`.
+- Ölçüldü (2026-10-05, Ryzen 7 9800X3D, `tulpar build`, 7 tekrarın
+  medyanı, ms): wings_groups_test 876 → 665, api_wings_crud 857 → 685,
+  wings_todo_api 878 → 695; test paketleri accessors 111 → 75, json
+  119 → 95, strings 151 → 121; wings programında tanımlı fonksiyon
+  332 → 122. `benchmarks/fair`'in 13 çekirdeği gömülü kitaplık import
+  etmiyor: üretilen IR bayt bayt AYNI (çalışma hızı değişmedi).
+- Kapı `tests/gomulu_ayiklama.sh` (`build.sh suites`): ayıklama etkin mi,
+  `call("created")` ve kurulan ad (`"crea" + son`) çalışıyor mu; pozitif
+  kontrol `TULPAR_AOT_STRIP_SINAMA=kok-yok` ile aynı program düşüyor.
+  Bulgu: kapı olmadan bütün paketler ve örnekler sabotajda da YEŞİLDİ.
+
 ### Düzeltildi — `pipefail` altında `echo "$out" | grep -q` eşleşme varken kırmızı dönebiliyordu
 
 - 19 test/araç betiği (39 satır) `set -o pipefail` altında çıktıyı `grep -q`'ya
