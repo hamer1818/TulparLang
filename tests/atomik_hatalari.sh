@@ -27,7 +27,7 @@ reddedilmeli() {
     out=$(cd "$TMP" && "$TUL" build "$ad.tpr" "$ad.out" 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
         dustu "$ad: derleme BASARILI oldu, hata bekleniyordu"
-    elif ! echo "$out" | grep -qF -- "$bekle"; then
+    elif ! grep -qF -- "$bekle" <<<"$out"; then
         dustu "$ad: reddedildi ama beklenen mesaj yok: '$bekle'"
         echo "$out" | sed 's/^/         /'
     else
@@ -81,8 +81,8 @@ lint() {   # lint <ad> <beklenen: var|yok> <kaynak>
     printf '%s\n' "$kaynak" > "$TMP/$ad.tpr"
     local out var=yok
     out=$(cd "$TMP" && "$TUL" typecheck "$ad.tpr" 2>&1)
-    echo "$out" | grep -qF "in thread worker" && var=var
-    echo "$out" | grep -qF "thread iscisi" && var=var
+    grep -qF "in thread worker" <<<"$out" && var=var
+    grep -qF "thread iscisi" <<<"$out" && var=var
     if [ "$var" = "$bekle" ]; then gecti "$ad: lint uyarisi $bekle"
     else dustu "$ad: lint uyarisi '$var', beklenen '$bekle'"; echo "$out" | sed 's/^/         /'; fi
 }
@@ -116,7 +116,7 @@ for (int j = 0; j < 4; j++) { push(th, thread_create(w, 25000)); }
 for (int j = 0; j < 4; j++) { thread_join(th[j]); }
 print(toString(atomic_load(n)));' > "$TMP/gecerli.tpr"
 out=$(cd "$TMP" && "$TUL" build gecerli.tpr gecerli.out 2>&1 && ./gecerli.out 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^100000$"; then gecti "gecerli atomik sayac derlenir ve 100000 sayar (pozitif kontrol)"
+if [ "$rc" -eq 0 ] && grep -q "^100000$" <<<"$out"; then gecti "gecerli atomik sayac derlenir ve 100000 sayar (pozitif kontrol)"
 else dustu "gecerli atomik sayac: rc=$rc cikti='$out'"; fi
 
 if [ "$fail" -eq 0 ]; then echo "atomik_hatalari: $n_gecti/$n_gecti"; fi

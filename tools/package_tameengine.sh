@@ -131,7 +131,7 @@ fi
 if [ "${PLATFORM#linux}" != "$PLATFORM" ]; then
     echo "[paket] baslatma dumani (penceresiz)..."
     out=$(cd "$BUNDLE" && DISPLAY= WAYLAND_DISPLAY= timeout 20 ./TameEngine 2>&1 || true)
-    if echo "$out" | grep -qiE "Pencere acilamadi|could not be opened"; then
+    if grep -qiE "Pencere acilamadi|could not be opened" <<<"$out"; then
         echo "  ikili aciliyor (grafik ortami yok, zarif cikis)"
     else
         echo "HATA: ikili beklenen sekilde baslamadi:" >&2

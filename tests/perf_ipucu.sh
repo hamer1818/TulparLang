@@ -62,7 +62,10 @@ out=$(cd "$TMP" && TULPAR_PERF_HINTS=1 TULPAR_AOT_NOCACHE=1 "$TUL" build ipucu.t
 [ "$rc" -eq 0 ] && gecti "ipucu acikken derleme basarili (ipucu hata degil)" || dustu "derleme rc=$rc: $out"
 
 bekle() {   # bekle <ad> <satir> <metin>
-    if echo "$out" | grep -A1 -F -- "$3" | grep -qF -- "ipucu.tpr:$2"; then gecti "$1"
+    # Iki asamali: `echo | grep -A1 | grep -q` pipefail altinda, son grep
+    # erken cikinca oncekiler SIGPIPE (141) alip eslesme VARKEN kiziyordu.
+    local baglam; baglam=$(grep -A1 -F -- "$3" <<<"$out")
+    if grep -qF -- "ipucu.tpr:$2" <<<"$baglam"; then gecti "$1"
     else dustu "$1: satir $2 icin '$3' yok"; echo "$out" | sed 's/^/         /'; fi
 }
 bekle "sinir ifade (i < n - 1)" 4 'the loop bound is neither a name nor'
@@ -70,16 +73,16 @@ bekle "kosul != " 15 'the condition is not of the form `i < ...`'
 bekle "while siniri len(a)" 21 "the while condition's bound is not a NAME"
 bekle "int olmayan eleman yazmasi" 25 'the body writes a non-int element'
 
-if echo "$out" | grep -qF "ipucu.tpr:9"; then dustu "kanitli dongu (satir 9) icin ipucu basildi"
+if grep -qF "ipucu.tpr:9" <<<"$out"; then dustu "kanitli dongu (satir 9) icin ipucu basildi"
 else gecti "kanitli dongu icin ipucu YOK (pozitif kontrol)"; fi
 
 # `i < n` (dongude degismeyen ad) 2026-09-28'den beri KANITLI: sinir dongu
 # basinda n <= count(g) diye sinaniyor — ipucu basilmamali.
-if echo "$out" | grep -qF "ipucu.tpr:29"; then dustu "i < n kanitli dongu (satir 29) icin ipucu basildi"
+if grep -qF "ipucu.tpr:29" <<<"$out"; then dustu "i < n kanitli dongu (satir 29) icin ipucu basildi"
 else gecti "i < n artik kanitli: ipucu YOK"; fi
 
 sessiz=$(cd "$TMP" && TULPAR_AOT_NOCACHE=1 "$TUL" build ipucu.tpr ipucu2.out 2>&1)
-if echo "$sessiz" | grep -qiF "performance hint"; then dustu "degisken yokken ipucu basildi"
+if grep -qiF "performance hint" <<<"$sessiz"; then dustu "degisken yokken ipucu basildi"
 else gecti "varsayilan kapali: degisken yokken ipucu yok"; fi
 
 sonuc=$(cd "$TMP" && ./ipucu.out 2>&1)

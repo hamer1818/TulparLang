@@ -22,7 +22,7 @@ reddedilmeli() {
     out=$(cd "$TMP" && "$TUL" build "$ad.tpr" "$ad.out" 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
         dustu "$ad: derleme BASARILI oldu, hata bekleniyordu"
-    elif ! echo "$out" | grep -qF -- "$bekle"; then
+    elif ! grep -qF -- "$bekle" <<<"$out"; then
         dustu "$ad: reddedildi ama beklenen mesaj yok: '$bekle'"
         echo "$out" | sed 's/^/         /'
     else
@@ -102,7 +102,7 @@ vs[0].x = vs[0].x + 1.0;
 V k = vs[0];
 print(toString(len(vs)) + " " + toString(k.x));' > "$TMP/gecerli.tpr"
 out=$(cd "$TMP" && "$TUL" build gecerli.tpr gecerli.out 2>&1 && ./gecerli.out 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "^1 2.5$"; then gecti "gecerli struct dizisi derlenir ve calisir (pozitif kontrol)"
+if [ "$rc" -eq 0 ] && grep -q "^1 2.5$" <<<"$out"; then gecti "gecerli struct dizisi derlenir ve calisir (pozitif kontrol)"
 else dustu "gecerli struct dizisi: rc=$rc cikti='$out'"; fi
 
 if [ "$fail" -eq 0 ]; then echo "struct_dizisi_hatalari: $n_gecti/$n_gecti"; fi

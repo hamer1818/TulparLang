@@ -398,6 +398,30 @@ ayrıca yukarıdaki grep'e SIGPIPE attırıp çıktıya "write error: Broken pip
 satırları da ekliyordu. **Düzeltildi:** önce `^\s*FAIL` satırları (awk ile,
 SIGPIPE'sız), genel gürültü yalnız FAIL satırı HİÇ yoksa yedek olarak.
 
+**Altıncı yalan biçimi: `pipefail` + `echo "$out" | grep -q` — eşleşme VARKEN
+kırmızı.** Aynı SIGPIPE, bu sefer kararın kendisinde. `grep -q` eşleşmeyi
+bulunca okumayı bırakıp çıkıyor; `echo` hâlâ yazıyorsa SIGPIPE (141) alıyor ve
+`set -o pipefail` borunun durumunu 141 yapıyor. Sonuç **belirlenimsiz**:
+eşleşme olduğu hâlde koşul yanlış → sahte kırmızı; `! echo | grep -q`
+biçiminde (çıktıda OLMAMASI gereken bir şey) ise sahte **YEŞİL**. Ölçüldü
+(2026-10-05, Linux x86_64, bash 5.3, eşleşme ilk satırda, 200 tekrar): çıktı
+3,9 / 6,4 / 24 KB → 0/200; 39 KB → 1/200; 49 KB → 12/200; 64 KB → 190/200;
+73 KB ve üstü → 200/200. `grep -q … <<<"$out"` ve `[[ $out == *…* ]]` her
+boyutta 0/200. Eşik pipe tamponuna bağlı (Linux 64 KB, macOS 16 KB'tan
+başlıyor) — yani aynı test yerelde yeşil, CI'da ara sıra kırmızı. Yerelde
+2026-10-05'te bir sahte kırmızı görüldü, önceki turlarda CI'da da; `int_golge.sh`
+`cat a b | grep -q` biçimini daha önce tek başına düzeltmişti ama kalıp 19
+dosyada (39 satır) yaşıyordu. Aynı mekanizma `grep -m N` ve `| head` için de
+geçerli (çıkışı erken olan her okuyucu). **Düzeltildi:** 19 dosyada boru
+here-string'e çevrildi (`perf_ipucu.sh`'deki `grep -A1 | grep -q` iki
+aşamaya, `dinamik_bag_denetle.sh`'deki `printf | grep -qxF` `<<<"$(printf …)"`e).
+**Kapı:** `tests/pipefail_grep_kapisi.sh` (`build.sh suites`'in başında):
+`set …o pipefail` içeren her betikte ve iş akışı YAML'lerinde yorum dışı
+`| grep … -q|-m|--quiet` satırını kırmızı yapar; pozitif kontrolü her koşumda
+kasıtlı kalıplı iki örnek dosyayı kırmızı, düzeltilmiş/yorum/pipefail'siz iki
+örneği yeşil görmezse kapının kendisi düşer. Düzeltme öncesi ağaçta kırmızı
+(19 dosya, 39 satır), sonrası temiz.
+
 ## 3. Penceresiz ölçüm boşa çıkıyor
 `text_width()` / `font_width()` **pencere yokken 0 döner** → her yerleşim
 karşılaştırması `0 <= sınır` olur ve **her metin "sığıyor" görünür**.

@@ -27,7 +27,7 @@ reddedilmeli() {
     out=$(cd "$TMP" && "$TUL" build "$ad.tpr" "$ad.out" 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
         dustu "$ad: derleme BASARILI oldu, hata bekleniyordu"
-    elif ! echo "$out" | grep -qF -- "$bekle"; then
+    elif ! grep -qF -- "$bekle" <<<"$out"; then
         dustu "$ad: reddedildi ama beklenen mesaj yok: '$bekle'"
         echo "$out" | sed 's/^/         /'
     else

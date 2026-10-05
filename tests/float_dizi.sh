@@ -43,7 +43,7 @@ karar() {
         "$tip" "$tip" "$govde" "$tip" "$dolgu" "$tip" "$dolgu" > "$TMP/$ad.tpr"
     local out var=hayir
     out=$(derle "$ad")
-    echo "$out" | grep -qF '[fver] j' && var=evet
+    grep -qF '[fver] j' <<<"$out" && var=evet
     if [ "$var" = "$bekle" ]; then gecti "$ad: surum $bekle"
     else dustu "$ad: surum '$var', beklenen '$bekle' — $govde"; echo "$out" | sed 's/^/         /'; fi
 }
@@ -73,12 +73,12 @@ sinir() {
         "$kosul" "$ofs" "$n" > "$TMP/$ad.tpr"
     local out rc var=hayir
     out=$(derle "$ad")
-    echo "$out" | grep -qF '[fver] j' && var=evet
+    grep -qF '[fver] j' <<<"$out" && var=evet
     # Sinir sinavinin anlami ancak hizli surum VARKEN var: once o.
     if [ "$var" != "evet" ]; then dustu "$ad: hizli surum kurulmadi — sinir sinavi olculemez"; return; fi
     out=$(cd "$TMP" && ./"$ad.out" 2>&1); rc=$?
     if [ "$cikis" = "0" ] && [ "$rc" -eq 0 ]; then gecti "$ad: calisti ($out)"
-    elif [ "$cikis" = "hata" ] && [ "$rc" -ne 0 ] && echo "$out" | grep -qi "out of bounds"; then
+    elif [ "$cikis" = "hata" ] && [ "$rc" -ne 0 ] && grep -qi "out of bounds" <<<"$out"; then
         gecti "$ad: sinir disi YAKALANDI (rc=$rc)"
     else dustu "$ad: rc=$rc cikti='$out' (beklenen $cikis)"; fi
 }
@@ -105,9 +105,9 @@ f(c, b, n);
 print(c[0]);
 TPREOF
 out=$(derle icice)
-if echo "$out" | grep -qF '[fver] j'; then
+if grep -qF '[fver] j' <<<"$out"; then
     out=$(cd "$TMP" && ./icice.out 2>&1); rc=$?
-    if [ "$rc" -ne 0 ] && echo "$out" | grep -qi "out of bounds"; then
+    if [ "$rc" -ne 0 ] && grep -qi "out of bounds" <<<"$out"; then
         gecti "icice: ucuncu seviyede sinir disi YAKALANDI (rc=$rc)"
     else dustu "icice: rc=$rc cikti='$out' (sinir disi yakalanmadi)"; fi
 else

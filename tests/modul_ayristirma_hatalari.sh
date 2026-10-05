@@ -24,7 +24,7 @@ fail=0
 n=0
 gecti() { printf "  \033[0;32mgecti\033[0m  %s\n" "$1"; n=$((n + 1)); }
 dustu() { printf "  \033[0;31mDUSTU\033[0m  %s\n" "$1"; fail=1; n=$((n + 1)); }
-icerir() { echo "$1" | grep -qF -- "$2"; }
+icerir() { grep -qF -- "$2" <<<"$1"; }
 
 printf '%s\n' 'func f(): int {' '    int don = 3;' '    return don;' '}' > "$TMP/modul.tpr"
 printf '%s\n' 'import "modul";' 'print(f());' > "$TMP/ana.tpr"

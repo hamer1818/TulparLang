@@ -96,7 +96,9 @@ denetle() {  # denetle <ikili> -> 0 temiz, 1 kirmizi, 2 arac/bicim hatasi
       [ -n "$needed" ] || { echo "HATA: '$ikili' icin NEEDED listesi bos (statik mi, arac mi?)" >&2; return 2; }
       echo "dinamik bag ($ikili, ELF):"
       while IFS= read -r d; do
-        if printf '%s\n' $ELF_IZINLI | grep -qxF -- "$d"; then echo "  izinli   $d"
+        # `printf | grep -q` DEGIL: pipefail altinda grep erken cikinca printf
+        # SIGPIPE alir ve izinli bag "IZINSIZ" gorunur (Tuzaklar pipefail).
+        if grep -qxF -- "$d" <<<"$(printf '%s\n' $ELF_IZINLI)"; then echo "  izinli   $d"
         else echo "  IZINSIZ  $d"; kotu=1; fi
       done <<< "$needed"
       if [ -n "$rp" ]; then

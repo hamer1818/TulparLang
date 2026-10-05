@@ -64,13 +64,13 @@ else dustu "uygun olmayan fonksiyon klonlandi"; fi
 (cd "$TMP" && TULPAR_AOT_NOCACHE=1 TULPAR_NO_INTSPEC=1 "$TUL" build sp.tpr sp_off >/dev/null 2>&1)
 on=$(cd "$TMP" && ./sp_on 2>&1); rc_on=$?
 off=$(cd "$TMP" && ./sp_off 2>&1); rc_off=$?
-if [ "$on" = "$off" ] && [ "$rc_on" = "$rc_off" ] && echo "$on" | grep -q "^6765 9 1$"; then
+if [ "$on" = "$off" ] && [ "$rc_on" = "$rc_off" ] && grep -q "^6765 9 1$" <<<"$on"; then
     gecti "klonlu ve klonsuz cikti birebir ayni (rc=$rc_on, sifira bolme dahil)"
 else dustu "cikti farkli: klonlu rc=$rc_on '$on' / klonsuz rc=$rc_off '$off'"; fi
 
 # 3. kutulu yol, klonlar kapaliyken
 out=$(cd "$ROOT" && TULPAR_AOT_NOCACHE=1 TULPAR_NO_INTSPEC=1 "$TUL" tests/boxed_value_abi.test.tpr 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Fail: 0"; then gecti "boxed_value_abi klonlar kapaliyken geciyor"
+if [ "$rc" -eq 0 ] && grep -q "Fail: 0" <<<"$out"; then gecti "boxed_value_abi klonlar kapaliyken geciyor"
 else dustu "boxed_value_abi (TULPAR_NO_INTSPEC=1) rc=$rc: $(echo "$out" | tail -2)"; fi
 
 # 4. hiz
