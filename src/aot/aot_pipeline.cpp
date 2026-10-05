@@ -231,8 +231,33 @@ struct AOTPhaseTimer {
   #define AOT_LINK_PIE_FLAG "-no-pie"
   #define AOT_EXE_SUFFIX ""
   #define AOT_TMP_RUN_BASE "/tmp/.tulpar_run"
+#elif PLATFORM_MACOS
+  // macOS (ld64): Linux'taki `--exclude-libs,ALL` + `--gc-sections` ciftinin
+  // karsiligi `-hidden-ltulpar_runtime` + `-dead_strip`.
+  //
+  // `-rdynamic` ld64'te `-export_dynamic` demek ve calistirilabilirde HER
+  // global sembolu dead-strip KOKU yapiyor; bu yuzden tek basina
+  // `-dead_strip` hicbir sey atmiyordu (olculdu: TLS programi 5 585 296 ->
+  // 5 585 040 bayt). Runtime arsivi `-hidden-l` ile baglaninca onun (ve
+  // icine katilan OpenSSL'in, TULPAR_TLS_IN_RUNTIME) sembolleri gizli olur,
+  // kok sayilmaz ve kullanilmayanlar atilir. Kullanici nesnesinin sembolleri
+  // (`t_<ad>`) disa acik kalir: `call()` onlari dlsym'liyor ve runtime'in
+  // kendisini hic dlsym'lemiyor — Linux da runtime sembollerini gizliyor.
+  //
+  // Olculdu (2026-10-05, macOS CI arm64, PR #465, tools/tls_boyut_olc.sh):
+  // TLS programi 5 585 296 -> 4 451 776 bayt (-%20), sade `print` programi
+  // 390 168 -> 50 616 bayt (-%87); ikisi de calisiyor. Yalniz gizleme
+  // (dead_strip'siz) 5 362 048; yalniz dead_strip 5 585 040.
+  // `-Wl,-x` (yerel semboller) 3 886 200'e indiriyordu ama cokme raporunda
+  // runtime fonksiyon adlarini siliyor — Linux da sembol silmiyor, eklenmedi.
+  #define AOT_LINK_LIB_FLAGS \
+      "-rdynamic -Wl,-dead_strip " \
+      "-Wl,-hidden-ltulpar_runtime -lm -lpthread -ldl" AOT_TLS_LINK_FLAGS
+  #define AOT_LINK_PIE_FLAG "-no-pie"
+  #define AOT_EXE_SUFFIX ""
+  #define AOT_TMP_RUN_BASE "/tmp/.tulpar_run"
 #else
-  // macOS (ld64) ve diger Unix'ler: GNU'ya ozgu bayraklarin HICBIRI yok.
+  // Diger Unix'ler: GNU'ya ozgu bayraklarin HICBIRI yok.
   // Bu, Linux'un acilis optimizasyonlarindan once de calisan baglanti
   // satirinin ta kendisi; kasitli olarak muhafazakar tutuluyor. macOS'a
   // ayni kazanci getirmek isteyen once ld64 karsiligini (`-dead_strip`,

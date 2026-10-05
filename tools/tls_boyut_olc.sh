@@ -24,14 +24,18 @@ if (ctx != 0) { print("tls:var"); } else { print("tls:yok"); }
 T2
 printf 'print("sade");\n' > sade.tpr
 
-# Surucu sarici: -ltulpar_runtime'i OLC_ARSIV ile (gizli ya da acik)
-# degistirir, OLC_EK bayraklarini ekler, komutu kaydeder.
+# Surucu sarici: runtime arsivini (-ltulpar_runtime ya da
+# -Wl,-hidden-ltulpar_runtime) OLC_ARSIV ile (gizli ya da acik) degistirir,
+# surucunun -dead_strip'ini atar, OLC_EK bayraklarini ekler, komutu kaydeder.
+# Yani v0 her surucude ESKI link satiri; kipler surucuden bagimsiz.
 cat > sarici.sh <<'S'
 #!/bin/bash
 args=()
 for a in "$@"; do
-  if [ "$a" = "-ltulpar_runtime" ] && [ -n "${OLC_ARSIV:-}" ]; then
+  if { [ "$a" = "-ltulpar_runtime" ] || [ "$a" = "-Wl,-hidden-ltulpar_runtime" ]; } && [ -n "${OLC_ARSIV:-}" ]; then
     if [ "${OLC_GIZLI:-0}" = 1 ]; then args+=("-Wl,-load_hidden,$OLC_ARSIV"); else args+=("$OLC_ARSIV"); fi
+  elif [ "$a" = "-Wl,-dead_strip" ]; then
+    :   # surucunun kendi dead_strip'i: kipler OLC_EK ile acikca seciyor
   else
     args+=("$a")
   fi
@@ -68,6 +72,9 @@ olc g        tls.tpr  "$A" 1 ""
 olc dsgx     tls.tpr  "$A" 1 "-Wl,-dead_strip -Wl,-x"
 olc sade_v0  sade.tpr "$A" 0 ""
 olc sade_dsg sade.tpr "$A" 1 "-Wl,-dead_strip"
+# Surucunun KENDI link satiri (sarici yok): yeni varsayilan gercekten bu mu?
+TULPAR_AOT_NOCACHE=1 "$T" build tls.tpr surucu > surucu.log 2>&1 && \
+    echo "OLCUM surucu-varsayilan: $(wc -c < surucu | tr -d ' ') bayt, cikti '$(./surucu 2>&1 | tail -1)'"
 
 # Bilesim: v0 ve dsg link haritasi, arsiv uyesi grubuna gore __TEXT+__DATA.
 harita() {
