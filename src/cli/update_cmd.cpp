@@ -68,9 +68,13 @@ std::vector<Asset> assets_for_platform() {
         {"libcrypto-3-x64.dll",               "libcrypto-3-x64.dll",   true },
     };
 #elif defined(__APPLE__)
+    // DURUST AD (2026-10-05): ikili yalniz arm64 (macos-latest, Apple Silicon);
+    // eski `*-macos-universal` adi Intel'i de kapsiyor gibi okunuyordu. Surumler
+    // ayni dosyayi gecis icin ESKI adla da yayinliyor (build.yml "Eski macOS
+    // adlari"), cunku bu satirdan onceki guncelleyiciler onu indiriyor.
     return {
-        {"tulpar-macos-universal",            "tulpar",              true },
-        {"libtulpar_runtime-macos-universal.a","libtulpar_runtime.a", false},
+        {"tulpar-macos-arm64",                "tulpar",              true },
+        {"libtulpar_runtime-macos-arm64.a",   "libtulpar_runtime.a", false},
     };
 #else
     return {

@@ -13,6 +13,77 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — macOS'ta `tulpar build` çıktısı Homebrew openssl@3'e bağlanıyordu
+
+- #462 sürücüyü Homebrew'suz açılır yaptı ama **kullanıcı programları** değil:
+  link satırı `-L/opt/homebrew/opt/openssl@3/lib -lssl -lcrypto` taşıyordu ve
+  ld64 aynı dizinde `.dylib`i `.a`ya tercih ediyor — üretilen her ikili
+  `libssl.3.dylib`/`libcrypto.3.dylib`e bağlıydı; openssl@3 olmayan Mac'te ise
+  link `ld: library 'ssl' not found` ile düşüyordu (ölçüldü 2026-10-05, macOS
+  CI, kapı düzeltmesiz kırmızı). Artık macOS'ta OpenSSL'in statik arşivleri
+  `libtulpar_runtime.a`nın **içine** katılıyor (`libtool -static`, CMake
+  `TULPAR_TLS_IN_RUNTIME`) ve sürücü `-lssl`/`-lcrypto` ile OpenSSL `-L`lerini
+  hiç yazmıyor. Tek arşiv, kullanıcıya görünen bir şey yok; boyut macOS işinin
+  "Prepare artifact" adımında ölçülüp özete yazılıyor (v3.38.5: 2,8 MB,
+  OpenSSL dışarıda). Seçilmeyenler: `libssl.a`/`libcrypto.a`yı pakete ayrı
+  koymak (Homebrew'lu makinede `-L` sırası yine dylib'i seçebilir),
+  Security.framework (TLS kodunun yeniden yazımı).
+- İkinci Homebrew bağı aynı ölçümde çıktı: `brew link llvm@18` olan makinede
+  PATH'teki `clang++` Homebrew'unki ve ürettiği ikili
+  `/opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib`e de bağlanıyordu.
+  macOS'ta varsayılan link sürücüsü artık `/usr/bin/clang++` (Apple, Xcode
+  CLT); Homebrew clang'ı isteyen `TULPAR_CC` ile seçer. Düzeltmesiz ölçüm
+  (macOS CI, PR #463 ilk koşum): TLS programı 450 432 bayt, `otool -L`'de üç
+  Homebrew satırı (libunwind, libssl, libcrypto); runtime arşivi 2,7 MB,
+  19 üye, OpenSSL üyesi 0; Homebrew gizliyken her `tulpar build`
+  `ld: library 'ssl' not found`.
+- Kapı `tests/kullanici_ikili_bag.sh` (Linux + macOS CI): `tulpar build` ile
+  `tls_init(sertifika, anahtar)` çağıran program (ağ yok) linklenir, koşar
+  (TLS gerçekten içinde: `tls:var`), çıktısı `dinamik_bag_denetle.sh`ten
+  geçer. Pozitif kontrol: `TULPAR_AOT_LINK_FLAGS` ile geçici dizindeki
+  kitaplığa bağlanan ikili kırmızı. macOS'ta iki kez: Homebrew görünürken
+  (dylib tercihi tuzağı) ve LLVM **+** openssl@3 Cellar'ları gizliyken; arşivde
+  `_SSL_CTX_new` tanımlı mı diye de bakılır. Linux'ta NEEDED zaten sistem
+  kümesindeydi — kilitlendi.
+
+### Düzeltildi — macOS CI'da belirlenimsiz `Killed: 9`
+
+- "Package TameEngine" adımı `./tulpar build`i 3 ms'de `Killed: 9` ile
+  düşürdü, aynı ağaç sonraki koşumda yeşildi (2026-10-02). Adım
+  `cp build/tulpar tulpar` ile bir önceki adımın yüzlerce kez koşturduğu
+  ikilinin **aynı inode'unun** üzerine yazıyordu; macOS çekirdeği
+  çalıştırılmış Mach-O'nun imza durumunu vnode'da önbellekler, içerik değişince
+  sonraki exec SIGKILL alır (Go #42684 sınıfı; belirlenimsizliği vnode'un
+  önbellekte kalmasına bağlı). `build.yml` ve `build.sh`teki her kopya artık
+  önce hedefi siliyor (yeni inode). macOS işine "Yerinde kopya olcumu" adımı
+  eklendi: `stat -f %i` ile yerinde `cp`nin inode'u koruduğu, `mv`nin
+  değiştirdiği kanıtlanır, yerinde kopyanın koşum sonucu özete yazılır (iddia
+  edilmez). Tuzaklar 7l.
+
+### Değişti — macOS varlıkları dürüst adla: `tulpar-macos-arm64`
+
+- `tulpar-macos-universal` hiç universal değildi (yalnız arm64; `macos-latest`
+  Apple Silicon). Varlıklar artık `tulpar-macos-arm64`,
+  `libtulpar_runtime-macos-arm64.a`, `TameEngine-macos-arm64.tar.gz`;
+  `tulpar update` yeni adı indiriyor. **Geçiş:** v3.38.5 ve öncesinin
+  güncelleyicisi, sitedeki `install.sh` ve motor CI'ı eski adı indirdiği için
+  `tulpar-macos-universal` ve `libtulpar_runtime-macos-universal.a` aynı
+  dosyanın kopyası olarak yayınlanmaya devam ediyor (SHA256SUMS'ta da).
+- Gerçek universal (x86_64 dilimi) alınmadı: x86_64 dilimini koşturacak Intel
+  koşucu yok (ölçülmemiş ikili yayınlanmaz), çapraz derleme Rosetta altında
+  ikinci bir Homebrew LLVM + OpenSSL ağacı ister, macOS derlemesi ~iki katına
+  çıkar.
+
+### Değişti — Linux CI LLVM 18'e kilitli; belge düzeltmeleri
+
+- apt `llvm-18-dev` kuruyordu ama `find_package(LLVM)` koşucudaki llvm-17'yi
+  seçiyordu — yayınlanan Linux ikilisinin RUNPATH'i `/usr/lib/llvm-17/lib`
+  (ölçüldü 2026-10-02). `-DLLVM_DIR=$(llvm-config-18 --cmakedir)` ile 18'e
+  kilitlendi; CLAUDE.md'nin "CI 18 ile derler" cümlesi artık doğru.
+- RELEASING.md'deki bayat "No Windows assets" notu güncel Windows varlıklarıyla
+  değiştirildi; `plans/09_eksik_envanteri.md` K228/K242 motor #78 (link.windows,
+  Windows CI GPU'suz köprü) ve K303'e göre güncellendi.
+
 ### Düzeltildi — macOS yayın ikilisi Homebrew'suz açılmıyordu
 
 - Yayınlanmış v3.38.0 `tulpar-macos-universal` dört Homebrew dylib'ine dinamik
@@ -32,8 +103,9 @@ tag still works;
   Linux'ta `NEEDED` listesi v3.38.0'da ölçülen sistem kümesine kilitli. Pozitif
   kontrol: geçici dizindeki kitaplığa bağlı program kırmızı; v3.38.0 macOS
   ikilisi kapıda kırmızı (dört satır).
-- Kalan: macOS'ta derlenen **kullanıcı programları** runtime'ın TLS kodu için
-  hâlâ Homebrew openssl@3'e linkleniyor.
+- Kalan (yukarıda çözüldü, 2026-10-05): macOS'ta derlenen **kullanıcı
+  programları** runtime'ın TLS kodu için hâlâ Homebrew openssl@3'e
+  linkleniyordu.
 
 ### Düzeltildi — `--ext` / `tulpar.toml` ile verilen eklenti dizini çalışan programa görünmüyordu
 

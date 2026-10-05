@@ -58,7 +58,8 @@ struct Manifest {
     bool strict_typecheck = false;
     // `[release.binaries]` — THIS package's own prebuilt binaries, one
     // per supported platform id ("linux-x64", "windows-x64",
-    // "macos-universal" — same ids `tulpar update` uses), pointing at a
+    // "macos-universal" — the registry contract; the language's own macOS
+    // release assets are named `*-macos-arm64` since 2026-10-05), pointing at a
     // plain HTTPS download URL (e.g. a GitHub Release asset). Only
     // meaningful when publishing a binary-shipping package; consumers
     // read it back from the registry, not from their own tulpar.toml.

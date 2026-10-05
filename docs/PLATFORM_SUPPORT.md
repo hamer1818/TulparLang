@@ -12,7 +12,7 @@ which exist any more — and claimed Intel + Apple Silicon for macOS.)
 | **Linux x86_64** | ✅ primary | CI `build-linux` (Ubuntu, LLVM 18): build, `build.sh test` (every runnable example), `build.sh suites` (all `tests/*.test.tpr` + audits), typeinfer gate. Developer machines: Arch/CachyOS with LLVM 22. |
 | **macOS arm64 (Apple Silicon)** | ✅ | CI `build-macos` (`macos-latest`, Homebrew `llvm@18`): build, AOT smoke, `build.sh suites`. This is the only place the AArch64 code path runs in CI. |
 | **Windows x86_64 (MSYS2 MINGW64)** | ✅ since 2026-09-21 | CI `build-windows`: build with MinGW gcc, `build.sh test`, `build.sh suites`, typeinfer gate, DLL-import gate, Inno Setup installer. `errors.test.tpr` was skipped until 2026-09-28 (a `throw` re-raised across a `call()` boundary crashed on MinGW: the generated `_setjmpex` passed a frame, turning longjmp into an SEH unwind); #404 fixes it and runs the suite on Windows too. |
-| macOS x86_64 (Intel) | ⚠️ not built | No CI job. The release asset named `tulpar-macos-universal` is an **arm64-only** binary (no `lipo`); the name is kept because `tulpar update` downloads it by that name. |
+| macOS x86_64 (Intel) | ⚠️ not built | No CI job. The macOS release asset is `tulpar-macos-arm64` (Apple Silicon only, no `lipo`). Until 2026-10-05 it was called `tulpar-macos-universal`; that name is still published as a byte-identical transition copy because older `tulpar update` binaries download it. A real universal build was evaluated and declined: no Intel runner to *run* the x86_64 slice, and a second Homebrew LLVM/OpenSSL tree under Rosetta for the cross build. |
 | Linux arm64 | ⚠️ not built | No CI job; the AArch64 backend is exercised only on macOS. |
 | Windows MSVC / Visual Studio | ❌ | Not built, not tested. There is no `build.ps1` / `build.bat`; use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,clang,cmake,ninja,llvm,zlib,zstd,libxml2,openssl}`, then `./build.sh`). |
 
@@ -30,7 +30,7 @@ AOT link step calls `clang++`, so `clang` must be on
 
 ## Release assets
 
-`tulpar-linux-x64`, `tulpar-macos-universal` (arm64, see above),
+`tulpar-linux-x64`, `tulpar-macos-arm64` (+ the old-name copy `tulpar-macos-universal`, see above),
 `tulpar-windows-x64.zip` (portable, `tulpar.exe` + the MinGW/OpenSSL DLLs it
 imports), `tulpar-setup-windows-x64.exe` (per-user installer),
 `libtulpar_runtime-<platform>.a`, `SHA256SUMS.txt` (+ `.asc`). `tulpar update`

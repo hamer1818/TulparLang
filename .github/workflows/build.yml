@@ -990,29 +990,29 @@ jobs:
           # See build-linux for the rationale on dropping `set -e` here.
           set +e
           mkdir -p dist _pr-artifacts
-          gh run download "$run_id" -n tulpar-macos-universal           -D _pr-artifacts
+          gh run download "$run_id" -n tulpar-macos-arm64           -D _pr-artifacts
           dl_a=$?
-          gh run download "$run_id" -n libtulpar_runtime-macos-universal -D _pr-artifacts
+          gh run download "$run_id" -n libtulpar_runtime-macos-arm64 -D _pr-artifacts
           dl_b=$?
           # TameEngine paketi — build-linux'taki aynı gerekçe.
-          gh run download "$run_id" -n TameEngine-macos-universal        -D _pr-artifacts
+          gh run download "$run_id" -n TameEngine-macos-arm64        -D _pr-artifacts
           dl_c=$?
           if [ $dl_a -ne 0 ] || [ $dl_b -ne 0 ] || [ $dl_c -ne 0 ]; then
             echo "Artifact download failed (codes $dl_a,$dl_b,$dl_c) — falling back to fresh build."
             echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          cp _pr-artifacts/tulpar-macos-universal           dist/tulpar-macos-universal 2>/dev/null || \
-            cp _pr-artifacts/tulpar-macos-universal/tulpar-macos-universal dist/tulpar-macos-universal
-          cp _pr-artifacts/libtulpar_runtime-macos-universal.a dist/libtulpar_runtime-macos-universal.a 2>/dev/null || \
-            cp _pr-artifacts/libtulpar_runtime-macos-universal/libtulpar_runtime-macos-universal.a dist/libtulpar_runtime-macos-universal.a
-          cp _pr-artifacts/TameEngine-macos-universal.tar.gz dist/TameEngine-macos-universal.tar.gz 2>/dev/null || \
-            cp _pr-artifacts/TameEngine-macos-universal/TameEngine-macos-universal.tar.gz dist/TameEngine-macos-universal.tar.gz
-          if [ ! -f dist/tulpar-macos-universal ] || [ ! -f dist/libtulpar_runtime-macos-universal.a ] \
-             || [ ! -f dist/TameEngine-macos-universal.tar.gz ]; then
+          cp _pr-artifacts/tulpar-macos-arm64           dist/tulpar-macos-arm64 2>/dev/null || \
+            cp _pr-artifacts/tulpar-macos-arm64/tulpar-macos-arm64 dist/tulpar-macos-arm64
+          cp _pr-artifacts/libtulpar_runtime-macos-arm64.a dist/libtulpar_runtime-macos-arm64.a 2>/dev/null || \
+            cp _pr-artifacts/libtulpar_runtime-macos-arm64/libtulpar_runtime-macos-arm64.a dist/libtulpar_runtime-macos-arm64.a
+          cp _pr-artifacts/TameEngine-macos-arm64.tar.gz dist/TameEngine-macos-arm64.tar.gz 2>/dev/null || \
+            cp _pr-artifacts/TameEngine-macos-arm64/TameEngine-macos-arm64.tar.gz dist/TameEngine-macos-arm64.tar.gz
+          if [ ! -f dist/tulpar-macos-arm64 ] || [ ! -f dist/libtulpar_runtime-macos-arm64.a ] \
+             || [ ! -f dist/TameEngine-macos-arm64.tar.gz ]; then
             echo "Artifact staging failed (file missing after copy) — falling back to fresh build."
             echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          chmod +x dist/tulpar-macos-universal
+          chmod +x dist/tulpar-macos-arm64
           ls -la dist/
           echo "reused=true" >> "$GITHUB_OUTPUT"
 
@@ -1102,15 +1102,15 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           mkdir -p dist
-          cp build/tulpar dist/tulpar-macos-universal
-          cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
+          cp build/tulpar dist/tulpar-macos-arm64
+          cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-arm64.a
           ls -l dist/
           # Runtime arşivi OpenSSL'i içinde taşıyor (CMakeLists:
           # TULPAR_TLS_IN_RUNTIME); boyutu ve üye sayısı ölçülüp yazılır —
           # v3.38.5'te 2,8 MB idi (OpenSSL dışarıda, Homebrew dylib'inden).
-          A=dist/libtulpar_runtime-macos-universal.a
+          A=dist/libtulpar_runtime-macos-arm64.a
           echo "runtime arsivi: $(du -h "$A" | cut -f1), $(ar -t "$A" | wc -l | tr -d ' ') uye, OpenSSL uyesi: $(ar -t "$A" | grep -ciE 'ssl|crypto|evp|x509|bio' || true)"
-          echo "libtulpar_runtime-macos-universal.a: $(du -h "$A" | cut -f1) ($(ar -t "$A" | wc -l | tr -d ' ') uye)" >> "$GITHUB_STEP_SUMMARY"
+          echo "libtulpar_runtime-macos-arm64.a: $(du -h "$A" | cut -f1) ($(ar -t "$A" | wc -l | tr -d ' ') uye)" >> "$GITHUB_STEP_SUMMARY"
 
       # DİNAMİK BAĞ KAPISI — macOS ikilisi Homebrew'suz açılıyor mu?
       #
@@ -1143,8 +1143,8 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           set -uo pipefail
-          T=dist/tulpar-macos-universal
-          A=dist/libtulpar_runtime-macos-universal.a
+          T=dist/tulpar-macos-arm64
+          A=dist/libtulpar_runtime-macos-arm64.a
           bash tools/dinamik_bag_denetle.sh --oz-sinama
           otool -L "$T"
           bash tools/dinamik_bag_denetle.sh "$T"
@@ -1210,7 +1210,7 @@ jobs:
       # Paketlemeden ÖNCE duruyor: bozuk bir derleyiciyi ucuz denetim söylesin.
       - name: AOT end-to-end smoke
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        run: bash tests/aot_smoke.sh dist/tulpar-macos-universal
+        run: bash tests/aot_smoke.sh dist/tulpar-macos-arm64
         timeout-minutes: 5
 
       # DİL ANLAMBİLİMİ — ARM64'ün TEK gerçek doğrulaması.
@@ -1302,7 +1302,7 @@ jobs:
           # YENİ inode'a kopya (önce sil) — bir üstteki ölçümün sebebi: yerinde
           # cp 2026-10-02'de burada `Killed: 9` üretti.
           rm -f tulpar && cp build/tulpar tulpar && chmod +x tulpar
-          bash tools/package_tameengine.sh macos-universal dist
+          bash tools/package_tameengine.sh macos-arm64 dist
         timeout-minutes: 15
 
       - name: Upload TameEngine bundle
@@ -1310,24 +1310,24 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: TameEngine-macos-universal
-          path: dist/TameEngine-macos-universal.tar.gz
+          name: TameEngine-macos-arm64
+          path: dist/TameEngine-macos-arm64.tar.gz
 
       - name: Upload artifact
         timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: tulpar-macos-universal
-          path: dist/tulpar-macos-universal
+          name: tulpar-macos-arm64
+          path: dist/tulpar-macos-arm64
 
       - name: Upload runtime library
         timeout-minutes: 10
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: libtulpar_runtime-macos-universal
-          path: dist/libtulpar_runtime-macos-universal.a
+          name: libtulpar_runtime-macos-arm64
+          path: dist/libtulpar_runtime-macos-arm64.a
 
   
   create-release:
@@ -1377,6 +1377,22 @@ jobs:
       # verification step instead of being silently installed. Format
       # matches GNU coreutils `sha256sum -b` output (`<hex>  <name>`)
       # so a user can also verify manually with `sha256sum -c`.
+      # ESKİ AD — GEÇİŞ (2026-10-05'ten beri). macOS varlıkları dürüst adla
+      # (`*-macos-arm64`) yayınlanıyor: "universal" adı yalnız arm64 olan bir
+      # ikiliyi Intel + Apple Silicon diye tanıtıyordu. Ama v3.38.5 ve öncesinin
+      # `tulpar update`i, sitedeki install.sh ve motor CI'ı ESKİ adı
+      # indiriyor; aynı dosya bir süre iki adla yayınlanır. Kaldırma koşulu:
+      # eski güncelleyiciler yeni sürüme geçmiş olsun (en az birkaç ay) ve
+      # install.sh (tulpar-lang-web) yeni ada geçsin.
+      - name: Eski macOS adlari (gecis kopyasi)
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          cp tulpar-macos-arm64 tulpar-macos-universal
+          cp libtulpar_runtime-macos-arm64.a libtulpar_runtime-macos-universal.a
+          cmp tulpar-macos-arm64 tulpar-macos-universal
+          cmp libtulpar_runtime-macos-arm64.a libtulpar_runtime-macos-universal.a
+
       - name: Generate SHA256SUMS.txt
         timeout-minutes: 5
         shell: bash
@@ -1390,11 +1406,13 @@ jobs:
           : > SHA256SUMS.txt
           for f in \
               tulpar-linux-x64 \
+              tulpar-macos-arm64 \
               tulpar-macos-universal \
               libtulpar_runtime-linux-x64.a \
+              libtulpar_runtime-macos-arm64.a \
               libtulpar_runtime-macos-universal.a \
               TameEngine-linux-x64.tar.gz \
-              TameEngine-macos-universal.tar.gz \
+              TameEngine-macos-arm64.tar.gz \
               tulpar-windows-x64.zip \
               tulpar-setup-windows-x64.exe \
               libtulpar_runtime-windows-x64.a \
@@ -1465,7 +1483,10 @@ jobs:
             
             ### Downloads
             - `tulpar-linux-x64` - Linux executable
-            - `tulpar-macos-universal` - macOS executable
+            - `tulpar-macos-arm64` - macOS (Apple Silicon) executable. Intel
+              Macs are not built. `tulpar-macos-universal` is the **same file**
+              under its old name (it was never universal), kept for older
+              `tulpar update` and install scripts.
             - `tulpar-setup-windows-x64.exe` - Windows (x64) **installer** —
               per-user install (no admin prompt), Start Menu entry, `PATH`
               wired up, Add/Remove Programs entry. The usual way in.
@@ -1478,7 +1499,7 @@ jobs:
 
             **TameEngine — 3D scene editor** (standalone, no install; the compiler is *not* required to run it):
             - `TameEngine-linux-x64.tar.gz`
-            - `TameEngine-macos-universal.tar.gz`
+            - `TameEngine-macos-arm64.tar.gz`
 
             Unpack and run **from inside the folder** — the editor's texture / sound / model browsers look for their files relative to the working directory:
             ```bash
@@ -1491,7 +1512,7 @@ jobs:
 
             **Runtime libraries** (required for `tulpar build` / AOT, automatically installed by the one-line installer):
             - `libtulpar_runtime-linux-x64.a`
-            - `libtulpar_runtime-macos-universal.a`
+            - `libtulpar_runtime-macos-arm64.a` (old name `libtulpar_runtime-macos-universal.a`, same file) — carries OpenSSL inside, so `tulpar build` needs no Homebrew
 
             **Integrity:**
             - `SHA256SUMS.txt` — `sha256sum -b` manifest covering every asset above. `tulpar update` verifies its downloads against this file; you can also check manually with `sha256sum -c SHA256SUMS.txt`.
@@ -1521,6 +1542,7 @@ jobs:
           prerelease: false
           files: |
             tulpar-linux-x64
+            tulpar-macos-arm64
             tulpar-macos-universal
             tulpar-windows-x64.zip
             tulpar-setup-windows-x64.exe
@@ -1532,9 +1554,10 @@ jobs:
             libssl-3-x64.dll
             libcrypto-3-x64.dll
             libtulpar_runtime-linux-x64.a
+            libtulpar_runtime-macos-arm64.a
             libtulpar_runtime-macos-universal.a
             TameEngine-linux-x64.tar.gz
-            TameEngine-macos-universal.tar.gz
+            TameEngine-macos-arm64.tar.gz
             SHA256SUMS.txt*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

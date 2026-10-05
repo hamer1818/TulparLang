@@ -16,7 +16,7 @@
 # Çıktı: <cikti>/TameEngine-<platform>.tar.gz
 set -euo pipefail
 
-PLATFORM="${1:?kullanim: package_tameengine.sh <linux-x64|macos-universal> [cikti_dizini]}"
+PLATFORM="${1:?kullanim: package_tameengine.sh <linux-x64|macos-arm64> [cikti_dizini]}"
 OUTDIR="${2:-dist}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
