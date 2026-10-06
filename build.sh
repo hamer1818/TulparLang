@@ -1539,6 +1539,12 @@ TPREOF
     # hiz. Ayrinti ve pozitif kontrol betigin basinda.
     kapi_seri "tipsiz int ozellestirmesi bozuk!" bash tests/tipsiz_int.sh ./tulpar
 
+    # YEREL GIRIS NOKTASI `t_<ad>.n` (2026-10-06): tipli fonksiyonun `int`
+    # parametreleri ham i64. Yapi (IR'da .n + main'den dogrudan cagri + .f
+    # dagitimi; uygun olmayanda yok), kapatma anahtari, anlam (acik == kapali),
+    # sabotajla kirmizi. Ayrinti betigin basinda.
+    kapi_kuyruk "yerel giris noktasi (t_<ad>.n) bozuk!" bash tests/yerel_giris.sh ./tulpar
+
     # STRUCT `var` KACIS ANALIZI (K064): kacmayan `var q = mk()` ayirmasiz,
     # kacan kutulu; analiz kapaliyken ayirma gorulmeli (pozitif kontrol).
     kapi_kuyruk "struct var kacis analizi bozuk!" bash tests/struct_kacis.sh ./tulpar

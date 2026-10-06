@@ -37,9 +37,10 @@ derle() {   # derle <ad> [ek ortam] -> derleyici cikisi (TULPAR_DBG_VER)
 
 # ---- 1. KARAR ---------------------------------------------------------------
 # karar <ad> <grep -E deseni> <beklenen: var|yok> <aciklama>; kaynak $TMP/<ad>.tpr
+# KARAR_ENV: derlemeye eklenen ortam (bos = varsayilan).
 karar() {
     local ad="$1" desen="$2" bekle="$3" ne="$4" out var=yok
-    out=$(derle "$ad")
+    out=$(derle "$ad" "${KARAR_ENV:-}")
     grep -qE "$desen" <<<"$out" && var=var
     if [ "$var" = "$bekle" ]; then gecti "$ad: $ne"
     else dustu "$ad: '$desen' $var, beklenen $bekle — $ne"; echo "$out" | sed 's/^/         /'; fi
@@ -95,7 +96,13 @@ print(t);
 TPREOF
 karar mm '^\[iaver\] j: 2 dizi, 3 erisim' var "matmul'un ic dongusu int dizi surumunde"
 karar mm '^\[iavb\] j: aralik kaniti' var "matmul'un ic dongusu aralik kanitli (sinavsiz) govdeyi aliyor"
-karar mm '^\[iver\] satir 2: 1 golge, 4 bildirim' var "matmul'un dis dongusu golgeleniyor (n + i, k, av, j)"
+# `n` kutulu `int` parametre: golge YEREL GIRIS KAPALIYKEN olculur. Acikken
+# (2026-10-06) `carp`in govdesi `t_carp.n`de, `n` orada zaten native — golge
+# gereksiz, `.f` (yalniz INT olmayan argumanda kosan) surumsuz.
+KARAR_ENV=TULPAR_NO_YEREL_GIRIS=1 karar mm '^\[iver\] satir 2: 1 golge, 4 bildirim' var \
+    "matmul'un dis dongusu golgeleniyor (n + i, k, av, j; yerel giris kapali)"
+karar mm '^\[iver\] satir 2: 0 golge, 4 bildirim' var \
+    "yerel giriste n native: dis dongu golgesiz (i, k, av, j)"
 
 # Kapanis iceren dongu: kanit reddediyor.
 cat > "$TMP/kapanis.tpr" <<'TPREOF'

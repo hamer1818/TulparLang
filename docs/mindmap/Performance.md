@@ -2233,3 +2233,79 @@ başka indeksi) ve `tests/int_golge.sh` (`[iavb]` kararı, IR'da `iavb_fast` +
 `iavb.tara`, `TULPAR_NO_IAVB=1` iki yönlü, dört kip aynı çıktı, anlam paketi açık
 ve kapalı geçiyor, `TULPAR_IAVB_SINAMA=sinir` (eşik 62) sabotajı paketi kırmızıya
 çeviriyor — 3 test).
+
+## qsort: çağrı başına maliyet — yerel giriş noktası `t_<ad>.n` — 70,5 → 65,3 ms (2026-10-06)
+
+**Önce ölçüldü** (Ryzen 7 9800X3D, `taskset -c 2,3`, 5 tekrarın en iyisi; perf bu
+makinede yok — `perf_event_open` ile kendi örnekleyici/sayaç sarmalayıcımız):
+qsort 70,5 ms, 646,6 M komut / 366 M döngü; C (`gcc -O2`) 57,1 ms, 283,8 M /
+296 M. Döngü örneklemesi: `t_qs.f` %91,5, içinde prolog + epilog %14, bölme
+döngüleri %78. Çerçeve 1272 B (`sub $0x4f8,%rsp`): her yavaş yol için ayrı
+VMValue geçicisi. Prologun içeriği IR'dan okundu: `int lo` / `int hi` kutulu
+geliyor, her girişte bool→int ve float→int zorlaması (etiket karşılaştırması,
+`cvttsd2si`), `(lo + hi) / 2` etiket dağıtımı (dizgi birleştirme kolu dahil),
+`lo < j` ve iki özyinelemeli çağrının argümanları kutulu.
+
+**Neden kutulu.** Native (i64) ABI yalnız tümü-`int` parametreli, `: int` dönüşlü
+ve gövdesi native alt kümesindeki fonksiyonlara açık; `qs(int[] a, int lo, int hi)`
+dizi parametresi ve dönüşsüzlüğü yüzünden kutulu `t_qs.f`de. `int` bildirimi
+değeri ZORLAMIYOR (bool/float dışında: dizgi dizgi kalır, `cat("ab", 2)` → `"ab2"`),
+yani parametreyi kutusuz yapmak anlamı değiştirirdi — bu yüzden İKİNCİ gövde:
+
+- `t_<ad>.n`: `int` parametreler ham i64, ötekiler VMValue (değer ABI'si). Gövde
+  `.f` ile AYNI kod yolundan (codegen_statement) üretiliyor; tek fark `int`
+  parametrelerin native yerel olması. Koşul: parametre gövdede yeniden
+  bağlanmıyor / dizi tabanı / alıcı / çağrı adı değil; gövdede lambda / match
+  yok; kapanış yakalamıyor; async / main / struct parametre-dönüş değil;
+  `--debug` değil. INT etiketli değer kutulu gövdede de fonksiyon boyunca INT
+  kalırdı → anlam aynı.
+- Doğrudan çağrı: argüman statik INT/bool/float ise `.n` (float `.f`nin
+  zorlamasıyla aynı `fptosi`); kutulu argümanda satır içi etiket sınavı
+  (INT/BOOL → `.n`, öteki → `.f`).
+- `t_<ad>.f`: zorlamadan sonra `int` parametrelerin hepsi INT ise `.n`ye gider
+  — `call()`, fonksiyon değeri, `aot_func_lookup` (motor kancaları) da hızlı
+  gövdeye iniyor. Kalan `.f` gövdesi yalnız dizgi/nesne gelince koşuyor:
+  SOĞUK, döngü sürümleri (iv/fv/fvn/sv, for-len) orada üretilmiyor.
+
+**Sonuç** (dönüşümlü A/B, 3 tur, en iyi 7):
+
+| | ms | komut | döngü |
+|---|--:|--:|--:|
+| qsort önce | 70,5 | 646,6 M | 366 M |
+| qsort sonra | **65,3** | 586,1 M | 339 M |
+| C (`gcc -O2`) | 57,1 | 283,8 M | 296 M |
+
+`t_qs.n`in çerçevesi 680 B, özyineleme `.n`den `.n`ye; prolog artık komutların
+%7'si. Küçük, döngüsüz tipli fonksiyon (`get(int[] a, int i, int k): int`, 20 M
+çağrı döngüde) 58,8 → 44,0 ms. Kalan qsort farkı bölme döngülerinde (komutların
+%59'u): tur başına 9 komut (C 6) — `i <u count` sınır sınavı ve 32-bit genişlik
+dalı (`mov $1,%r12d` / `test`); sınırın kaldırılması aralık kanıtı ister, genişlik
+dalının kaldırılması 2026-10-01'de ölçüldü ve ödemedi.
+
+**Denenip atılan:** gövdenin üst düzeyinde bildirilen `int i = lo;` gibi
+yerelleri de fonksiyon boyunca native yapmak (kanıt: her bağlanma kesin INT) —
+qsort'ta komut sayısı ve süre AYNI (586,1 M): döngü gölgesi + SROA zaten aynı
+koda iniyor. Gönderilmedi. `.f` soğuk gövdesine `minsize/optsize`: derleme süresi
+değişmedi.
+
+**Derleme süresi — bedel.** `.n` gövdeyi ikinci kez üretiyor. İlk sürümde
+(eşiksiz, `.f` sürümlü) wings_groups_test 474 → 537 ms (+%13): `listen`,
+`_wings_dispatch_inner` (557 AST düğümü) gibi büyük sunucu fonksiyonları
+kopyalanıyordu — çağrı başına kazancı olmayan gövdeler. Şimdi: gövde ≤ 100 AST
+düğümü (`TE_MAX_NODES`; qs 87) ve `.f` soğuk/sürümsüz. Ölçüm (7 koşu en iyi,
+`tulpar build` toplam): wings_groups_test 479 → 483, wings_features 512 → 506
+(gürültü), qsort **127 → 142 ms** (`t_qs` gövdesi iki kez: optimize 40 → 48, emit
+35 → 42). qsort'ta derleme +15 ms, çalışma −5,2 ms: kalan bedel gövdenin kendi
+boyunda (21 satırlık `qs` optimizasyon öncesi ~2000 IR komutu — her `a[i]` ~12
+blok) ve IR şişkinliği işinde ele alınıyor. `benchmarks/fair`'in öteki 12
+çekirdeğinde ve `recursion/` altındaki 6 programda ikili BAYT BAYT aynı.
+
+**Kapılar:** `tests/yerel_giris.test.tpr` (12 test: qsort 7 boyda referans
+sıralamayla ELEMAN ELEMAN, 64-bit depo, bool/float/dizgi zorlaması statik ve
+kutulu argümanla, `call()` + fonksiyon değeri, yöntem sözdizimi, sınır dışı,
+sıfıra bölme, i64 taşması, argüman sırası, karşılıklı özyineleme, yeniden
+bağlanan parametre) ve `tests/yerel_giris.sh` (IR'da `.n` + main'den doğrudan
+çağrı + `.f` dağıtımı, uygun olmayanda yok, `TULPAR_NO_YEREL_GIRIS=1` iki yönlü,
+açık == kapalı, `TULPAR_YEREL_GIRIS_SINAMA=etiket` sabotajı kırmızı). Eski
+derleyiciyle yapı denetimleri ve sabotaj kırmızı. `tests/int_golge.sh`in matmul
+kararı: `n` artık `.n`de native — gölge sayısı yerel giriş kapalıyken ölçülüyor.
