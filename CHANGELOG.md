@@ -36,6 +36,33 @@ tag still works;
   global/json/kalıcı kopya, checkpoint, 4 thread — beş sabotajın beşi
   kırmızı), `tests/dap_audit.py` (gdb yazıcısı dizgi deposunu okuyor).
 
+### Düzeltildi — `match` deseninin sonucu struct'ın temsiline bağlıydı
+
+#460'ın notu ("match öznesinin heap struct'ı (OBJ_STRUCT) konumsal yazılır ama
+dışarı sızmıyor") ölçülerek sınandı; sızıyordu ve desenler de etkileniyordu
+(taban derleyici, 2026-10-06):
+
+- Kolda `__match_0` yazmak gizli özneyi (OBJ_STRUCT: alan adı/tipi yok)
+  dışarı veriyordu: `R { 4612811918334230528, 0, 3 }` (2.5'in bit deseni,
+  bool 0/1), `toJson` → `null`; aynı adlı bir yereli de gölgeliyordu. Gizli
+  yerel artık tanımlayıcı olamayan bir adla (`match.N`).
+- Tipli desen (`Q{x}`) yalnız çıplak tipli yerelde eşleşiyordu:
+  `match mk() { Q{x} => .. }`, `match qs[0] { .. }`, `match arr[0] { .. }`
+  (kutulu struct), tipsiz parametre → hep `_`. Şimdi struct değeri veren
+  her ifade (çağrı, struct dizisi elemanı, `pop(d)`) özne kutusuna iniyor;
+  `aot_struct_type_is_ptr` ad etiketli json nesnesini (Obj::struct_tag) de
+  aynı tipin değeri sayıyor; struct dizisinin tipsiz okunan / `pop`lanan
+  elemanı artık ad etiketi taşıyor (`print` `Q { x: 1 }`).
+- Anonim desen (`{ok}`) `str` alanlı struct'ta eşleşip tümü skaler struct'ta
+  eşleşmiyordu; struct öznesinde anahtar alan adına derleme zamanında
+  çözülüyor (olmayan alan, json'daki eksik anahtar gibi `0`).
+- Kapılar: `tests/match_struct_ozne.test.tpr` (taban derleyicide 3/3
+  kırmızı), `tests/match_gizli_ozne.sh` (kolda `__match_0` derlenmemeli;
+  pozitif kontrol: geçerli adla `R { f: 2.5, ok: false, n: 3 }`; tabanda
+  kırmızı). OBJ_STRUCT'ın konumsal metni (`repr_value`) artık hiçbir
+  Tulpar ifadesinden ulaşılamıyor — DAP da gizli yereli göstermiyor
+  (DWARF'ta yok, ölçüldü).
+
 ### Düzeltildi — `import "router"` ve `import "tulpar_api"` depo dışında derlenmiyordu
 
 - Gömülü `router` kendi içinde `import "lib/http_utils.tpr"`, gömülü

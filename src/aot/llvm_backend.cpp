@@ -13536,30 +13536,38 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // first (mirrors the push() escape path) so the destructuring arms can
     // read fields via aot_struct_get_field_ptr and discriminate variants via
     // aot_struct_type_is. Non-struct subjects take codegen_expression as-is.
+    // KUTUSUZ STRUCT OZNESI (2026-10-06): yalniz ciplak tipli yerel degil,
+    // struct DEGERI veren her ifade (struct donduren cagri, struct dizisi
+    // elemani, `pop(d)`) — struct_expr_type. Eskiden yalniz tanimlayici
+    // heap struct'a (OBJ_STRUCT) cikiyordu; `match mk() { Q{x} => .. }` ve
+    // `match qs[0] { Q{x} => .. }` HIC eslesmiyordu (olculdu: -1). subj_st:
+    // oznenin STATIK struct tipi — desenler alanlari ada gore derleme
+    // zamaninda cozer (anonim `{x}` deseni de; asagida).
     LLVMValueRef subj = nullptr;
-    if (node->condition && node->condition->type == AST_IDENTIFIER &&
-        node->condition->name) {
-      const char *src_struct =
-          get_local_struct_type(backend, node->condition->name);
-      LLVMValueRef src_alloca = get_local(backend, node->condition->name);
-      if (src_struct && src_alloca) {
-        StructTypeEntry *st = find_struct_type(backend, src_struct);
-        if (st && struct_is_trivially_unboxable(st)) {
-          LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
-              backend->builder, st->name, "match.struct.type");
-          LLVMValueRef field_count =
-              LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0);
-          LLVMValueRef alloc_args[] = {name_str, field_count,
-                                       struct_native_to_slots(backend, st, src_alloca)};
-          subj = llvm_call_vmvalue_func(
-              backend, backend->func_aot_struct_alloc_from_fields, alloc_args, 3,
-              "match.struct.heap");
-        }
+    StructTypeEntry *subj_st = nullptr;
+    if (StructTypeEntry *sst = struct_expr_type(backend, node->condition)) {
+      LLVMValueRef sp = codegen_struct_expr_ptr(backend, node->condition, sst);
+      if (sp) {
+        LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
+            backend->builder, sst->name, "match.struct.type");
+        LLVMValueRef field_count =
+            LLVMConstInt(backend->int32_type, (unsigned)sst->field_count, 0);
+        LLVMValueRef alloc_args[] = {name_str, field_count,
+                                     struct_native_to_slots(backend, sst, sp)};
+        subj = llvm_call_vmvalue_func(
+            backend, backend->func_aot_struct_alloc_from_fields, alloc_args, 3,
+            "match.struct.heap");
+        subj_st = sst;
       }
     }
     if (!subj) subj = codegen_expression(backend, node->condition);
+    // Gizli ozne yereli KULLANICI KODUNDAN ERISILEMEZ bir adla (nokta bir
+    // tanimlayicida olamaz). Eskiden `__match_N` idi: kolda `__match_0`
+    // yazmak heap struct'i (OBJ_STRUCT: alan adi/tipi yok) disari veriyordu —
+    // `R { 4612811918334230528, 0, 3 }` (float bit deseni, bool 0/1), toJson
+    // `null`; ayni adli bir kullanici yerelini de golgeliyordu.
     char subj_name[32];
-    snprintf(subj_name, sizeof(subj_name), "__match_%d", backend->match_count++);
+    snprintf(subj_name, sizeof(subj_name), "match.%d", backend->match_count++);
     LLVMValueRef subj_slot = llvm_build_alloca_at_entry(
         backend, backend->vm_value_type, subj_name);
     LLVMBuildStore(backend->builder, subj, subj_slot);
@@ -13702,9 +13710,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // Recursively match `val` against `pat`, branching to `fail_bb` on any
     // mismatch and adding bindings on success. Leaves the builder at the
     // success continuation.
-    std::function<void(LLVMValueRef, ASTNode_C *, LLVMBasicBlockRef)>
+    // `vst`: `val` kutusuz struct oznesinin kendisiyse (OBJ_STRUCT) onun
+    // statik tipi, degilse nullptr (ic ice degerler hep nullptr).
+    std::function<void(LLVMValueRef, ASTNode_C *, LLVMBasicBlockRef,
+                       StructTypeEntry *)>
         match_pattern = [&](LLVMValueRef val, ASTNode_C *pat,
-                            LLVMBasicBlockRef fail_bb) {
+                            LLVMBasicBlockRef fail_bb, StructTypeEntry *vst) {
           // Leaf: binding identifier (not `_`).
           if (pat && pat->type == AST_IDENTIFIER && pat->name &&
               strcmp(pat->name, "_") != 0) {
@@ -13760,7 +13771,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                 }
                 continue; // rest consumes no fixed slot
               }
-              match_pattern(read_index(vslot, slot_i), el, fail_bb);
+              match_pattern(read_index(vslot, slot_i), el, fail_bb, nullptr);
               slot_i++;
             }
             return;
@@ -13777,6 +13788,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
               if (cand && struct_is_trivially_unboxable(cand)) pst = cand;
             }
             if (pst) {
+              // Tip sinavi: OBJ_STRUCT'ta type_name, kutulu struct'ta (ad
+              // etiketli json nesnesi: dinamik dizideki `[p]`, struct
+              // dizisinin tipsiz okunan elemani) Obj::struct_tag adi —
+              // aot_struct_type_is_ptr ikisine de bakar (2026-10-06).
               LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
                   backend->builder, pst->name, "pat.type");
               LLVMValueRef ta[] = {vslot, name_str};
@@ -13788,7 +13803,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                   LLVMConstInt(backend->int_type, 0, 0),
                                   "struct_guard"),
                     fail_bb, "destr_struct");
-            } else {
+            } else if (!vst) {
               LLVMValueRef ia[] = {val};
               guard(llvm_build_is_truthy(
                         backend, llvm_call_vmvalue_func(
@@ -13796,12 +13811,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                      1, "is_obj")),
                     fail_bb, "destr_obj");
             }
+            // Anonim `{x, ok}` deseni kutusuz struct oznesinde: nesne sinavi
+            // yok (struct nesne gibi), anahtar alan adina DERLEME ZAMANINDA
+            // cozulur — json nesnesindeki eksik anahtar gibi, olmayan alan 0
+            // baglar (vm_object_get). Eskiden is_object(OBJ_STRUCT) yanlis
+            // donuyordu: `match q { {ok} => ok }` str alanli struct'ta
+            // eslesip tumu skaler struct'ta ESLESMIYORDU (olculdu).
+            // Tipli desen ve ozne ayni tipse alan indeksle (hizli yol); ozne
+            // kutulu struct (json) ise anahtarla.
+            StructTypeEntry *fst = pst ? (vst == pst ? pst : nullptr) : vst;
             for (int f = 0; f < pat->object_count; f++) {
               const char *key = pat->object_keys[f];
               ASTNode_C *sub = pat->object_values[f];
-              LLVMValueRef fv = pst ? read_struct_field(vslot, pst, key)
+              LLVMValueRef fv = fst ? read_struct_field(vslot, fst, key)
                                     : read_key(vslot, key);
-              match_pattern(fv, sub, fail_bb);
+              match_pattern(fv, sub, fail_bb, nullptr);
             }
             return;
           }
@@ -13821,7 +13845,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                   pat->type == AST_OBJECT_LITERAL)) {
         // Recursive matcher: mismatch jumps to next_bb, success falls through
         // (builder ends positioned at the success continuation) with bindings.
-        match_pattern(subj, pat, next_bb);
+        match_pattern(subj, pat, next_bb, subj_st);
       } else {
         LLVMBasicBlockRef then_bb = append_bb(backend, func, "match_arm");
         LLVMValueRef truthy = nullptr;

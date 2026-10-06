@@ -1,0 +1,83 @@
+// match OZNESI STRUCT (2026-10-06) — desenler struct'in HER temsilinde ayni.
+//
+// Bir struct uc sekilde dolasiyor: tipli yerel (kutusuz), kutulu struct (ad
+// etiketli json nesnesi: `[p]`, struct dizisinin tipsiz okunan elemani, str
+// alanli struct) ve match'in kendi kutusu (OBJ_STRUCT, yalniz tumu skaler
+// struct'ta). Eskiden desenin sonucu temsile bagliydi (olculdu, taban
+// derleyici):
+//   * `match mk() { Q{x} => x }`, `match qs[0] { Q{x} => x }`,
+//     `match arr[0] { Q{x} => x }` HIC eslesmiyordu (-1);
+//   * anonim `{ok}` deseni str alanli struct'ta eslesip tumu skaler
+//     struct'ta eslesmiyordu;
+//   * kolda `__match_0` yazmak OBJ_STRUCT'i disari veriyordu (`R { 4612811918334230528,
+//     0, 3 }` — float bit deseni, bool 0/1; toJson null) — bunu
+//     tests/match_gizli_ozne.sh olcer (ad artik erisilemez).
+// Bu paket taban derleyicide KIRMIZI, yenisinde yesil.
+//
+// Calistir: ./tulpar tests/match_struct_ozne.test.tpr
+import "test";
+
+struct Q { int x; bool ok; }
+struct R { float f; bool ok; int n; }
+struct S { str ad; bool ok; }
+
+func _mk(): Q {
+    Q t = { x: 3, ok: false };
+    return t;
+}
+
+func _tip(v): str {
+    return match v { Q{x, ok} => "Q " + toString(x) + " " + toString(ok), _ => "-" };
+}
+
+func run_tipli_desen_her_temsilde() {
+    Q q = { x: 7, ok: true };
+    assert_eq_str(match q { Q{x, ok} => toString(x) + " " + toString(ok), _ => "-" }, "7 true");
+    assert_eq_str(match _mk() { Q{x, ok} => toString(x) + " " + toString(ok), _ => "-" }, "3 false");
+    Q[] qs = [];
+    push(qs, q);
+    assert_eq_str(match qs[0] { Q{x, ok} => toString(x) + " " + toString(ok), _ => "-" }, "7 true");
+    array arr = [q];
+    assert_eq_str(match arr[0] { Q{x, ok} => toString(x) + " " + toString(ok), _ => "-" }, "7 true");
+    // Tipsiz parametre: kutulu struct ve struct dizisinin elemani.
+    assert_eq_str(_tip(arr[0]), "Q 7 true");
+    assert_eq_str(_tip(q), "Q 7 true");
+    // Yanlis tip / json eslesmez.
+    json j = {"x": 7, "ok": true};
+    assert_eq_str(_tip(j), "-");
+    R r = { f: 2.5, ok: false, n: 3 };
+    assert_eq_str(match r { Q{x} => "Q", R{f, ok, n} => toString(f) + " " + toString(ok) + " " + toString(n), _ => "-" },
+                  "2.5 false 3");
+}
+
+func run_anonim_desen_her_temsilde() {
+    Q q = { x: 7, ok: true };
+    S s = { ad: "z", ok: true };
+    assert_eq_str(toString(match q { {ok} => ok, _ => -1 }), "true");
+    assert_eq_str(toString(match s { {ok} => ok, _ => -1 }), "true");
+    assert_eq_int(match q { {x: v} => v, _ => -1 }, 7);
+    assert_eq_str(match q { {x: 7, ok: true} => "tam", _ => "yok" }, "tam");
+    assert_eq_str(match q { {x: 8} => "yanlis", _ => "yok" }, "yok");
+    array arr = [q];
+    assert_eq_int(match arr[0] { {x} => x, _ => -1 }, 7);
+    assert_eq_int(match _mk() { {x} => x, _ => -1 }, 3);
+    // Olmayan alan, json'daki eksik anahtar gibi 0 baglar.
+    assert_eq_int(match q { {yok} => yok, _ => -1 }, 0);
+}
+
+func run_kol_degerleri_tipli() {
+    R r = { f: 2.5, ok: false, n: 3 };
+    var a = match r { R{f} => f, _ => 0.0 };
+    var b = match r { R{ok} => ok, _ => true };
+    var c = match r { {ok} => ok, _ => true };
+    assert_eq_str(toString(a) + " " + toString(b) + " " + toString(c), "2.5 false false");
+    assert_eq_str(toJson([a, b, c]), "[2.5,false,false]");
+    bool bb = match r { R{ok} => ok, _ => true };
+    assert_eq_bool(bb, false);
+}
+
+print("=== match oznesi struct ===");
+test("tipli desen her temsilde", "run_tipli_desen_her_temsilde");
+test("anonim desen her temsilde", "run_anonim_desen_her_temsilde");
+test("kol degerleri tipli", "run_kol_degerleri_tipli");
+test_summary();

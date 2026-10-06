@@ -1493,6 +1493,11 @@ TPREOF
     # print yalniz surec disindan okunabildigi icin .test.tpr'nin ikizi.
     kapi_kuyruk "print / toString deger metni bozuk!" bash tests/deger_metni.sh ./tulpar
 
+    # MATCH'IN GIZLI OZNESI (2026-10-06): heap struct (OBJ_STRUCT, alan adi/
+    # tipi yok) kolda `__match_0` ile disari cikiyordu — ad artik erisilemez.
+    # Desenlerin her temsilde ayni sonucu: tests/match_struct_ozne.test.tpr.
+    kapi_kuyruk "match gizli oznesi kullanici kodundan erisilebilir!" bash tests/match_gizli_ozne.sh ./tulpar
+
     # FLOAT DIZI IC ICE SURUM (2026-10-01): en ic dongulerin sinavi dis dongu
     # basinda bir kez (nbody), int sekil onbellegi yalniz genel govdede;
     # TULPAR_NO_FVNEST=1 pozitif kontrol. Anlam: tests/float_ic_ice.test.tpr.
