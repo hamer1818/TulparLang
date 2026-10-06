@@ -85,6 +85,23 @@ tag still works;
   yardımcıya taşımak wings'i 479 → 446 ms yapıyordu ama tipsiz dizgi/karışık
   işlemlerde komut +%8,5 — çalışma hızından ödemek, gönderilmedi.
 
+### Performans — struct dizisi döngü sürümü `while` biçiminde: 59,5 → 18,9 ms
+
+- #453 yalnız `for (i = E; i < UB; i = i + K)` biçimini sürümlüyordu; aynı
+  gövde `int i = 0; while (i < n) { ...ps[i]...; i += 1; }` ile her erişimde
+  sınır sınavı ödüyordu (particles adımı fonksiyonda: `for` 15,0 ms, `while`
+  59,5 ms). Artık `while` da tanınıyor: artım gövdenin son deyimi, öncesinde
+  `i` bağlanmıyor; döngü başında aynı tek sınav, hızlı kopyada `ps[i]` tek
+  GEP ve kutulu `int i` native gölgede (çıkışta geri yazılıyor). `continue`
+  artımı atlar — `i` değişmez, kanıt geçerli; sınır dışı hâlâ hata.
+- Ölçüm (`taskset -c 2,3`, en iyi 7): **59,5 → 18,9 ms** (1 536 → 516 M
+  komut — `for` biçimiyle aynı komut sayısı). `benchmarks/fair` ve
+  `recursion/`: ikili bayt bayt aynı. Derleme yalnız bu kalıpta (gövde iki
+  kopya, `for` sürümüyle aynı bedel): 85 → 91 ms.
+- `TULPAR_NO_SVER_WHILE=1` kapatır. Kapılar: `tests/struct_dizi_while.test.tpr`
+  (8 test) ve `tests/struct_dizi_surum.sh` "while" bölümü (karar, sınır dışı,
+  IR, kapatma iki yönlü, `TULPAR_SVER_WHILE_SINAMA=golge` sabotajı kırmızı).
+
 ### Hızlandı — `split` sonucu kutusuz dizgi deposunda: `parse` 223,4 → 185,1 MB
 
 - `split` parça tablosu artık `ObjString *` (`ARR_ELEM_STR`): eleman başına

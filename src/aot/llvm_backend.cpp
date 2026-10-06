@@ -8040,6 +8040,8 @@ static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
 // ---------------------------------------------------------------------------
 static void codegen_for_body(LLVMBackend *backend, ASTNode_C *node,
                              LLVMBasicBlockRef after);
+static void codegen_while_body(LLVMBackend *backend, ASTNode_C *node,
+                               LLVMBasicBlockRef after);
 
 static std::unordered_set<std::string> &fv_hint_names() {
   static std::unordered_set<std::string> s;
@@ -8747,21 +8749,54 @@ static bool sv_enabled() {
   return e == 1;
 }
 
+// `while` bicimi (2026-10-06, tulpar_sarr_while_plan): `while (i < UB) {
+// ...; i = i + K; }` — artim govdenin son deyimi; govde iki kopyada da
+// `while` olarak uretilir (codegen_while_body). TULPAR_NO_SVER_WHILE=1
+// yalniz bu bicimi kapatir.
+static bool sv_while_enabled() {
+  static int e = -1;
+  if (e < 0) {
+    const char *v = getenv("TULPAR_NO_SVER_WHILE");
+    e = (v && *v && *v != '0') ? 0 : 1;
+  }
+  return e == 1;
+}
+
+static bool tulpar_body_has_try(ASTNode_C *body) {
+  bool found = false;
+  tulpar_ast_walk(body,
+                  [](ASTNode_C *n, void *p) {
+                    if (n->type == AST_TRY_CATCH) {
+                      *(bool *)p = true;
+                      return 0;
+                    }
+                    return 1;
+                  },
+                  &found);
+  return found;
+}
+
 static bool sv_try_version(LLVMBackend *backend, ASTNode_C *node) {
   if (!sv_enabled() || g_fv || g_sv_cold || iv_cold()) return false;
+  const bool is_while = node->type == AST_WHILE;
+  if (is_while && !sv_while_enabled()) return false;
   int depth = 0;
   for (SvRun *r = g_sv; r; r = r->outer) depth++;
   if (depth >= 2) return false;   // kopya sayisi 2^derinlik; ucuncu kat yok
   TulparSarrLoopPlan plan;
-  if (!tulpar_sarr_loop_plan(node->init, node->condition, node->body, node->increment,
-                             shape_pure_call, backend, &plan)) {
-    if (getenv("TULPAR_DBG_VER") && node->init && node->init->name) {
+  const char *dbg_name =
+      is_while ? (node->condition && node->condition->left ? node->condition->left->name : nullptr)
+               : (node->init ? node->init->name : nullptr);
+  if (!(is_while ? tulpar_sarr_while_plan(node->condition, node->body, shape_pure_call,
+                                          backend, &plan)
+                 : tulpar_sarr_loop_plan(node->init, node->condition, node->body,
+                                         node->increment, shape_pure_call, backend, &plan))) {
+    if (getenv("TULPAR_DBG_VER") && dbg_name) {
       const char *names[8];
       int nn = tulpar_collect_indexed_names(node->condition, node->body, names, 8);
       for (int i = 0; i < nn; i++)
         if (get_local_struct_array_elem(backend, names[i])) {
-          fprintf(stderr, "[sver-yok] %s: %s\n", node->init->name,
-                  plan.why ? plan.why : "?");
+          fprintf(stderr, "[sver-yok] %s: %s\n", dbg_name, plan.why ? plan.why : "?");
           break;
         }
     }
@@ -8797,8 +8832,8 @@ static bool sv_try_version(LLVMBackend *backend, ASTNode_C *node) {
       run.n_arr++;
     }
     if (run.n_arr == 0) {
-      if (getenv("TULPAR_DBG_VER") && node->init && node->init->name)
-        fprintf(stderr, "[sver-yok] %s: struct dizisi onbellekte degil\n", node->init->name);
+      if (getenv("TULPAR_DBG_VER") && dbg_name)
+        fprintf(stderr, "[sver-yok] %s: struct dizisi onbellekte degil\n", dbg_name);
       return false;
     }
   }
@@ -8820,8 +8855,8 @@ static bool sv_try_version(LLVMBackend *backend, ASTNode_C *node) {
   }
   run.ub = ubv;
   if (getenv("TULPAR_DBG_VER"))
-    fprintf(stderr, "[sver] %s: %d struct dizisi, %d erisim\n", plan.ivar, run.n_arr,
-            plan.n_acc);
+    fprintf(stderr, "[sver%s] %s: %d struct dizisi, %d erisim\n", is_while ? "-while" : "",
+            plan.ivar, run.n_arr, plan.n_acc);
 
   LLVMBasicBlockRef b_fast = append_bb(backend, backend->current_function, "sver_fast");
   LLVMBasicBlockRef b_gen = append_bb(backend, backend->current_function, "sver_gen");
@@ -8829,13 +8864,58 @@ static bool sv_try_version(LLVMBackend *backend, ASTNode_C *node) {
   set_branch_weights(backend, LLVMBuildCondBr(backend->builder, ok, b_fast, b_gen), 2000, 1);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_fast);
+  // `while` bicimi: dongu degiskeni cogunlukla fonksiyonun KUTULU `int`
+  // yereli (`for`unki init'in native yuvasi). Hizli kopyada etiketi INT
+  // sinandi ve tek baglanmasi `i = i + K` (plan; i < UB <= count <= INT32_MAX,
+  // tasma yok): fonksiyon boyunca INT — native golgede uretilir, cikista
+  // kutulu yuvaya geri yazilir (`break` de dongunun cikisindan gecer,
+  // `return` fonksiyondan cikar). Golgesiz hizli kopya `i += 1`i kutulu
+  // aritmetikle yapiyordu: olculdu (2026-10-06) ayni adim fonksiyonu `for`
+  // ile 15,0 ms, `while` + surum golgesiz 50,5 ms. try iceren / try icindeki
+  // dongude golge yok (setjmp — Tuzaklar 7i).
+  LocalVar *wiv = is_while ? get_local_var(backend, plan.ivar) : nullptr;
+  const bool shadow = wiv && wiv->value && !wiv->native_value && wiv->is_captured != 1 &&
+                      !wiv->struct_type_name && !wiv->struct_array_elem &&
+                      slot_value_type(wiv->value) == backend->vm_value_type &&
+                      backend->try_depth == 0 && !tulpar_body_has_try(node->body);
+  LLVMValueRef sh_slot = nullptr, sh_saved = nullptr;
+  InferredType sh_type = INFERRED_UNKNOWN;
+  LLVMBasicBlockRef b_fexit = b_done;
+  if (shadow) {
+    sh_slot = llvm_build_alloca_at_entry(backend, backend->int_type, plan.ivar);
+    LLVMBuildStore(backend->builder, jv, sh_slot);
+    sh_saved = wiv->value;
+    sh_type = wiv->known_type;
+    wiv->value = nullptr;
+    wiv->known_type = INFERRED_INT;
+    wiv->native_value = sh_slot;
+    run.ivar_slot = nullptr;
+    run.ivar_native = sh_slot;
+    b_fexit = append_bb(backend, backend->current_function, "sver_golge_cikis");
+  }
   g_sv = &run;
-  codegen_for_body(backend, node, b_done);
+  if (is_while) codegen_while_body(backend, node, b_fexit);
+  else codegen_for_body(backend, node, b_done);
   g_sv = run.outer;
+  if (shadow) {
+    wiv->value = sh_saved;
+    wiv->known_type = sh_type;
+    wiv->native_value = nullptr;
+    LLVMPositionBuilderAtEnd(backend->builder, b_fexit);
+    LLVMValueRef nv = LLVMBuildLoad2(backend->builder, backend->int_type, sh_slot, plan.ivar);
+    // POZITIF KONTROL (tests/struct_dizi_surum.sh): TULPAR_SVER_WHILE_SINAMA=
+    // golge geri yazmayi atlar — dongu sonrasi `i` eski kalir, anlam testi
+    // (tests/struct_dizi_while.test.tpr) KIRMIZIYA donmeli.
+    const char *sab = getenv("TULPAR_SVER_WHILE_SINAMA");
+    if (!(sab && strcmp(sab, "golge") == 0))
+      LLVMBuildStore(backend->builder, llvm_vm_val_int_val(backend, nv), sh_saved);
+    LLVMBuildBr(backend->builder, b_done);
+  }
 
   LLVMPositionBuilderAtEnd(backend->builder, b_gen);
   g_sv_cold++;
-  codegen_for_body(backend, node, b_done);
+  if (is_while) codegen_while_body(backend, node, b_done);
+  else codegen_for_body(backend, node, b_done);
   g_sv_cold--;
 
   LLVMPositionBuilderAtEnd(backend->builder, b_done);
@@ -15834,6 +15914,14 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         backend->shape_count = shape_saved;
         return nullptr;
       }
+    }
+
+    // STRUCT DIZISI DONGU SURUMU, `while` bicimi (2026-10-06; `for` ile ayni
+    // sira: int dizi surumu tutmadiysa). Onbellek yukarida kuruldu; iki govde
+    // de onu goruyor (bkz. sv_try_version).
+    if (sv_try_version(backend, node)) {
+      backend->shape_count = shape_saved;
+      return nullptr;
     }
 
     LLVMBasicBlockRef wb_after =
