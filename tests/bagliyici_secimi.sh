@@ -8,7 +8,8 @@
 # ekliyor; TULPAR_LD=bfd eski yola, =lld zorlar; TULPAR_CC verilmisse
 # dokunmaz. Calisma hizi iddiasi DEGIL bu kapinin isi (o olcum
 # Performance.md "Link tabani"); bu kapi MEKANIZMAYI ve KOD AYNILIGINI olcer:
-#   1. varsayilan link gercekten lld (`.comment`ta "Linker: LLD"), program kosar;
+#   1. varsayilan link gercekten lld (`.comment`ta "Linker: LLD 23.1.1" ya da
+#      dagitim etiketli "Linker: Ubuntu LLD 18.1.3" — CI'da boyle), program kosar;
 #   2. TULPAR_LD=bfd ile lld YOK (anahtar okunuyor — pozitif kontrol);
 #   3. call("ad") — -rdynamic + dlsym lld ile de calisiyor;
 #   4. iki ikilinin KULLANICI fonksiyonlari komut komut ayni (adresler
@@ -56,14 +57,14 @@ done
 if [ "$HATA" -eq 0 ]; then
   C_L=$(readelf -p .comment "$TMP/lld" 2>/dev/null)
   C_B=$(readelf -p .comment "$TMP/bfd" 2>/dev/null)
-  if [[ "$C_L" != *"Linker: LLD"* ]]; then
-    echo "  varsayilan link lld DEGIL (.comment'ta 'Linker: LLD' yok)"; HATA=1
+  if [[ "$C_L" != *"Linker: "*"LLD "* ]]; then
+    echo "  varsayilan link lld DEGIL (.comment'ta 'Linker: … LLD' yok)"; HATA=1
     OUT=zorla derle TULPAR_LD=lld
     echo "    tani: ld.lld=$(command -v ld.lld) -> $(readlink -f "$(command -v ld.lld)"); PATH=$PATH"
     echo "    tani: varsayilan .comment: $(tr '\n' ' ' <<< "$C_L")"
     echo "    tani: TULPAR_LD=lld .comment: $(readelf -p .comment "$TMP/zorla" 2>/dev/null | tr '\n' ' ')"
   fi
-  [[ "$C_B" != *"Linker: LLD"* ]] || { echo "  TULPAR_LD=bfd ile de lld — anahtar okunmuyor"; HATA=1; }
+  [[ "$C_B" != *"Linker: "*"LLD "* ]] || { echo "  TULPAR_LD=bfd ile de lld — anahtar okunmuyor"; HATA=1; }
   if command -v objdump >/dev/null 2>&1; then
     FARK=$(python3 - "$TMP/bfd" "$TMP/lld" <<'PYEOF'
 import re, subprocess, sys
