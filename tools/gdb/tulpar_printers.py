@@ -16,14 +16,22 @@
 # DÜZEN VARSAYIMI (src/vm/vm.hpp, LP64, küçük-sonlu — x86_64 ve AArch64):
 #   VMValue   { uint32 type @0; <pad>; union as @8 (8 bayt) }        16 bayt
 #   Obj       { uint8 type @0; arena @1; moved @2; struct_tag @3; int32 ref @4 }  8 bayt
-#             (struct_tag: kutulu struct adi, runtime tablosunda — bu betik
-#             okumuyor, nesneyi `{k: v}` gosterir; 2026-10-02)
+#             (struct_tag: kutulu struct adi 1..255 — runtime'in
+#             `g_struct_tag_names[256]` tablosunda; bu betik tabloyu sembol
+#             adresinden okur ve nesneyi print gibi `P { x: 1 }` yazar,
+#             2026-10-06. Tablo bulunamazsa json bicimi `{"x": 1}`.)
 #   ObjString { Obj; int length @8; uint32 hash @12; char chars[] @16 }
 #             (karakterler nesnenin ICINDE, isaretci degil — 2026-10-02)
 #   ObjArray  { Obj; int count @8; int cap @12; VMValue *items_ @16;
 #               int64 *idata @24; int elem_bits @32 }
 #   ObjObject { Obj; int count @8; int cap @12; ObjString **keys @16;
 #               VMValue *values @24 }
+#   ObjStructArray { Obj; char *type_name @8; char **field_names @16;
+#               int *field_types @24; int field_count @32; int count @36;
+#               int cap @40; int elem_size @44; char *data @48 }
+#             (elem_size 0: alan basina 8 B yuva, kod 0 int/1 float/2 bool;
+#             > 0: C yerlesimi, field_types[fc + f] alan ofseti, kod 3 f32,
+#             4 i32, 5 C bool — runtime sarr_field_value'nin birebir kopyasi)
 # Obj başlığı 2026-10-02'de 32 -> 8 bayt (src/vm/obj_layout.h); tür TEK
 # bayt — 4 bayt okumak komşu alanları (ve kullanılmayan dolgu baytını) da
 # okur. Kullanıcı ikilisi `libtulpar_runtime.a`'yı hata ayıklama bilgisiz
@@ -45,6 +53,7 @@ ARR_ELEM_STR = -8   # ObjArray::elem_bits, kutusuz dizgi deposu: ObjString* tabl
 OBJ_HDR = 8        # sizeof(Obj) — src/vm/obj_layout.h TULPAR_OBJ_HEADER_SIZE
 
 MAX_ITEMS = 16     # dizi/nesne başına gösterilen eleman
+_TAG_TABLE = []    # [adres] — g_struct_tag_names (bulunamazsa [0])
 MAX_STR = 200      # gösterilen dizgi baytı
 MAX_DEPTH = 3      # iç içe dizi/nesne derinliği
 
@@ -81,6 +90,73 @@ def _string(obj):
     raw = _mem(chars, min(n, MAX_STR))
     txt = raw.decode("utf-8", "replace")
     return _quote(txt) + ("..." if n > MAX_STR else "")
+
+
+def _cstr(addr, n=MAX_STR):
+    """NUL ile biten C dizgisi (struct tip/alan adlari)."""
+    if not addr:
+        return None
+    raw = _mem(addr, n)
+    k = raw.find(b"\0")
+    return (raw if k < 0 else raw[:k]).decode("utf-8", "replace")
+
+
+def _tag_table():
+    """Runtime'in kutulu struct ad tablosu (`static const char
+    *g_struct_tag_names[256]`, runtime_bindings.cpp). Kullanici ikilisi
+    runtime'i hata ayiklama bilgisiz linkliyor; tablo yalniz SEMBOL olarak
+    var (yerel, sembol tablosunda). Adres bir kez cozulur."""
+    if not _TAG_TABLE:
+        addr = 0
+        try:
+            addr = int(gdb.parse_and_eval("(long)&'g_struct_tag_names'"))
+        except gdb.error:
+            try:
+                sym = gdb.lookup_static_symbol("g_struct_tag_names")
+                if sym is not None:
+                    addr = int(sym.value().address)
+            except (gdb.error, AttributeError):
+                addr = 0
+        _TAG_TABLE.append(addr)
+    return _TAG_TABLE[0]
+
+
+def _struct_tag_name(tag):
+    t = _tag_table()
+    if not tag or not t:
+        return None
+    return _cstr(_u64(t + 8 * tag))
+
+
+def _is_tuple(tn):
+    # Coklu donusun sentezlenmis struct'i (`__tup_<tip>_<tip>`): `(a, b)`.
+    return tn is not None and tn.startswith("__tup_")
+
+
+def _struct_text(tn, fields):
+    """print(<struct>) ile ayni: `Ad { a: 1, b: 2.5 }`, tuple `(1, 2.5)`."""
+    if _is_tuple(tn):
+        return "(" + ", ".join(v for _, v in fields) + ")"
+    if not fields:
+        return "%s {}" % tn
+    return "%s { %s }" % (tn, ", ".join("%s: %s" % (k or "_", v) for k, v in fields))
+
+
+def _sarr_field(ftypes, fc, esz, e, f):
+    code = _i32(ftypes + 4 * f) if ftypes else 0
+    off = _i32(ftypes + 4 * (fc + f)) if (esz > 0 and ftypes) else 8 * f
+    p = e + off
+    if code == 1:
+        return fmt_float(struct.unpack("<d", _mem(p, 8))[0])
+    if code == 2:
+        return "true" if _u64(p) else "false"
+    if code == 3:
+        return fmt_float(struct.unpack("<f", _mem(p, 4))[0])
+    if code == 4:
+        return str(_i32(p))
+    if code == 5:
+        return "true" if _u8(p) else "false"
+    return str(struct.unpack("<q", _mem(p, 8))[0])
 
 
 def fmt_float(d):
@@ -162,15 +238,44 @@ def decode_raw(tag, payload, depth=0):
             count = _i32(obj + OBJ_HDR)
             keys = _u64(obj + OBJ_HDR + 8)
             vals = _u64(obj + OBJ_HDR + 16)
+            # Kutulu struct (Obj::struct_tag): print gibi `P { x: 1, ad: "z" }`.
+            tn = _struct_tag_name(_u8(obj + 3))
             shown = []
+            fields = []
             for i in range(min(count, MAX_ITEMS)):
                 k = _u64(keys + 8 * i)
-                ks = _string(k) if k else "?"
+                if not k:
+                    continue
                 t = _u32(vals + 16 * i)
                 p = _u64(vals + 16 * i + 8)
-                shown.append("%s: %s" % (ks, decode_raw(t, p, depth + 1)))
+                v = decode_raw(t, p, depth + 1)
+                fields.append((_string(k)[1:-1], v))
+                shown.append("%s: %s" % (_string(k), v))
             more = ", ... (%d)" % count if count > MAX_ITEMS else ""
+            if tn:
+                return _struct_text(tn, fields)
             return "{" + ", ".join(shown) + more + "}"
+        if otype == OBJ_STRUCT_ARRAY:
+            # Tipli struct dizisi (`P[] d`): print gibi `[P { x: 1 }, ...]`.
+            # Eskiden `<struct_array @0x...>` (2026-10-06'ya kadar).
+            tn = _cstr(_u64(obj + 8)) or "struct"
+            fnames = _u64(obj + 16)
+            ftypes = _u64(obj + 24)
+            fc = _i32(obj + 32)
+            count = _i32(obj + 36)
+            esz = _i32(obj + 44)
+            data = _u64(obj + 48)
+            step = esz if esz > 0 else 8 * fc
+            shown = []
+            for i in range(min(count, MAX_ITEMS)):
+                e = data + step * i
+                fields = []
+                for f in range(fc):
+                    fnm = _cstr(_u64(fnames + 8 * f)) if fnames else None
+                    fields.append((fnm, _sarr_field(ftypes, fc, esz, e, f)))
+                shown.append(_struct_text(tn, fields))
+            more = ", ... (%d)" % count if count > MAX_ITEMS else ""
+            return "[" + ", ".join(shown) + more + "]"
         name = OBJ_NAMES[otype] if otype < len(OBJ_NAMES) else str(otype)
         return "<%s @0x%x>" % (name, obj)
     except gdb.MemoryError:

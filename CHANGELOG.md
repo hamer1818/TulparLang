@@ -13,6 +13,18 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — hata ayıklayıcı struct dizisini ve kutulu struct'ı `print` gibi gösteriyor
+
+- gdb/DAP yazıcısı (`tools/gdb/tulpar_printers.py`, `tulpar debug`'a gömülü)
+  tipli struct dizisini `<struct_array @0x57a930>`, kutulu struct'ı ad
+  etiketsiz `{"x": 1, ...}` gösteriyordu. Şimdi program çıktısıyla aynı:
+  `[P { x: 1, y: 2.5, ok: true }]`, `S { ad: "z", n: 3 }`; f32/i32/C bool
+  alanlı (C yerleşimli) dizi de (`[T { a: 0.5, b: 7, c: false }]`).
+  Kutulu struct'ın adı runtime'ın `g_struct_tag_names` tablosundan
+  (#460, `Obj::struct_tag`) sembol adresiyle okunuyor.
+- Kapı `tests/dap_audit.py`: dört yeni yerel (DAP + `--gdb-script` ile düz
+  gdb); eski yazıcıyla dördü de kırmızı.
+
 ### Hızlandı — `split` sonucu kutusuz dizgi deposunda: `parse` 223,4 → 185,1 MB
 
 - `split` parça tablosu artık `ObjString *` (`ARR_ELEM_STR`): eleman başına
