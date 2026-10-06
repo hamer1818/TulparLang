@@ -20,7 +20,9 @@ tag still works;
   keep-text-section-prefix` ekliyor (Ryzen 7 9800X3D, en iyi 5: hello
   42 → 15 ms, eklentili motor oyunu `engine_dalga` 68 → 22 ms).
   `TULPAR_LD=bfd` eski yol, `=lld` / `=mold` zorlar; `TULPAR_CC` verilmişse
-  dokunulmaz. macOS ve Windows değişmedi.
+  dokunulmaz. macOS (ld64 84 / lld 78 ms — kazanç yok) ve Windows (MinGW
+  ld 155 / lld 79 ms; çalışma hızı A/B'si ve lld'li suit koşumu yok, lld
+  kullanıcı kurulumunda varsayılan değil — ayrı iş) değişmedi.
 - Üretilen kod aynı: bfd ve lld ikililerinde kullanıcı fonksiyonları komut
   komut aynı (adres yüklemesinin gevşetme biçimi ve dolgu dışında).
   2026-10-05'in "lld callfn'i %19–22 yavaşlatıyor" bulgusu yerleşim

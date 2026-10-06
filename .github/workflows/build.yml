@@ -745,13 +745,6 @@ jobs:
           cp build-windows/libtulpar_runtime.a libtulpar_runtime.a
           chmod +x tulpar.exe build.sh
 
-      - name: GECICI baglayici olcumu (Windows)
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
-        timeout-minutes: 5
-        run: |
-          pacman -S --noconfirm --needed mingw-w64-x86_64-lld >/dev/null 2>&1 || echo "lld kurulamadi"
-          bash tools/bagliyici_olc.sh ./tulpar.exe
-
       # Ornekler: her biri tam bir AOT derleme + link. Windows'ta AOT
       # linkleyicisi MSYS2'nin clang++/gcc'sini kullaniyor, yani bu adim
       # ayni zamanda "uretilen ikili KENDI BASINA program derleyebiliyor mu"
@@ -1313,11 +1306,6 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: bash tests/aot_smoke.sh dist/tulpar-macos-arm64
         timeout-minutes: 5
-
-      - name: GECICI baglayici olcumu (macOS)
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        timeout-minutes: 5
-        run: bash tools/bagliyici_olc.sh dist/tulpar-macos-arm64
 
       # DİL ANLAMBİLİMİ — ARM64'ün TEK gerçek doğrulaması.
       #

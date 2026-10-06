@@ -2184,8 +2184,15 @@ bfd gibi `.text.hot`/`.text.unlikely` gruplamak için. TULPAR_LD=bfd eski
 yol, =lld/=mold zorlar; TULPAR_CC verilmişse dokunulmaz. Bölümlü üretimde lld
 `.eh_frame`'i yeniden yazmadığı için tek nesne ile bölümlü ikili arasında
 `.text` 64 B kayabiliyor (wings) — `tests/bolumlu_emit.sh` kimlik ölçümünü bfd
-ile yapıyor, lld ayağında adres hariç komut akışını karşılaştırıyor. macOS
-(ld64) ve Windows (MinGW ld) değişmedi — ölçüm CI'da (PR'da).
+ile yapıyor, lld ayağında adres hariç komut akışını karşılaştırıyor. **macOS ve
+Windows değişmedi** — CI'da ölçüldü (#480, hello, en iyi 5): macOS arm64 ld64 84 ms,
+lld 78, ld64.lld 81 — kazanç yok. Windows MinGW ld.bfd 155 ms, lld 79 (MSYS2
+`mingw-w64-x86_64-lld` kurularak) — ~2 kat, AMA orada çalışma hızı A/B'si ve
+suitlerin lld ile koşumu yok, lld de kullanıcının MinGW kurulumunda varsayılan
+değil: ayrı iş (ölçüm + `windows` dalında aynı otomatik seçim). Motor uyumu:
+`tools/tulpar_dogrula.sh`'nin eksik arşiv kontrolü bağlayıcı hata BİÇİMİNİ okuyor
+(`undefined reference to` / ld64); lld `undefined symbol:` diyor — motor
+tulpar-engine#89 ile üç biçimi de sayıyor (bu değişiklikten önce girmeli).
 
 **Link tabanı (~40 ms, her programda): `lld` daha hızlı ama ÇALIŞMA HIZINDAN öder —
 yapılmadı.** *(2026-10-05; yukarıdaki güncelleme yargıyı düzeltiyor.)* Bir önceki bölümdeki "lld 64 ms" ölçümü tutmadı: `TULPAR_CC="clang++
