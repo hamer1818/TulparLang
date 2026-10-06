@@ -33,6 +33,13 @@
 #      yuvarlanmis 16+22 = 40); olculen fark >= 10 B olmali — olmazsa kapi
 #      parca boyunu olcmuyordur.
 #
+# 2026-10-06: parca TABLOSU kutusuz dizgi deposu (ARR_ELEM_STR): eleman
+# basina 16 B VMValue yerine 8 B `ObjString *`. 5 baytlik parca 40 -> 32 B
+# (24 nesne + 8). Tani satiri `depo dizgi` der; TULPAR_NO_STRARR=1 iken
+# `depo kutulu` (anahtar okunuyor) ve bellek ayagi ayni kosumda iki depoyu
+# olcer: fark parca basina >= 6 B olmali (beklenen 8) — olmazsa kapi depoyu
+# olcmuyordur. Esik 37 B: eski kutulu tablo (40 B) KIRMIZI.
+#
 # Kapinin kendi kontrolu: anahtar KAPALIYKEN hicbir satir basilmamali (anahtar
 # gercekten okunuyor, tani varsayilan olarak ciktiyi kirletmiyor).
 set -u
@@ -86,6 +93,13 @@ NI=$(echo "$TANI" | grep -c "kuyruk iade evet")
 UA=$(echo "$TANI" | sed -n "s/^split-tani: 5 parca, tek arena ayirmasi $BEK_A bayt (ust sinir \([0-9]*\),.*/\1/p")
 [ -n "$UA" ] && [ "$UA" -gt "$BEK_A" ] || { echo "  tek baytlik ayiricida ust sinir ($UA) kullanilmamis"; HATA=1; }
 
+# Depo: uc split de kutusuz dizgi deposunda; TULPAR_NO_STRARR=1 kutuluya cevirir.
+ND=$(grep -c "depo dizgi)" <<< "$TANI")
+[ "$ND" -eq 3 ] || { echo "  depo: 3 'depo dizgi' bekleniyordu, $ND geldi (kutusuz dizgi deposu devre disi?)"; HATA=1; }
+TANI_K=$(TULPAR_SPLIT_TANI=1 TULPAR_NO_STRARR=1 "$TMP/prog" 2>&1 >/dev/null | tr -d '\r')
+NK=$(grep -c "depo kutulu)" <<< "$TANI_K")
+[ "$NK" -eq 3 ] || { echo "  TULPAR_NO_STRARR=1: 3 'depo kutulu' bekleniyordu, $NK geldi (anahtar okunmuyor)"; HATA=1; }
+
 # Kontrol: anahtar kapaliyken sessiz.
 SESSIZ=$("$TMP/prog" 2>&1 >/dev/null | grep -c "split-tani" || true)
 [ "$SESSIZ" -eq 0 ] || { echo "  anahtar KAPALIYKEN $SESSIZ tani satiri basildi"; HATA=1; }
@@ -124,13 +138,13 @@ case "$(uname -s)" in
     # KB; macOS ru_maxrss BAYT.
     rss() {
       local v
-      v=$(SB_N=1000000 SB_UZUN=$1 SB_BOL=$2 "$TMP/rsswrap" "$TMP/bellek" 2>&1 >/dev/null | tr -d '\r' | sed -n 's/^RSS_KB=//p')
+      v=$(SB_N=1000000 SB_UZUN=$1 SB_BOL=$2 TULPAR_NO_STRARR=${3:-0} "$TMP/rsswrap" "$TMP/bellek" 2>&1 >/dev/null | tr -d '\r' | sed -n 's/^RSS_KB=//p')
       [ "$(uname -s)" = "Darwin" ] && [ -n "$v" ] && v=$((v / 1024))
       echo "$v"
     }
-    K0=$(rss 0 0); K1=$(rss 0 1)
+    K0=$(rss 0 0); K1=$(rss 0 1); KN=$(rss 0 1 1)
     U0=$(rss 1 0); U1=$(rss 1 1)
-    for v in "$K0" "$K1" "$U0" "$U1"; do
+    for v in "$K0" "$K1" "$KN" "$U0" "$U1"; do
       [ -n "$v" ] || { echo "  RSS okunamadi"; echo "split toplu kapisi DUSTU"; exit 1; }
     done
     # Cikti dogrulamasi (kapi yanlis programi olcmesin). Sondaki ayirici
@@ -141,9 +155,12 @@ case "$(uname -s)" in
     [ "$UC" = "1000001 21000000" ] || { echo "  bellek sondasi (uzun) ciktisi '$UC'"; HATA=1; }
     KB=$(( (K1 - K0) * 1024 / 1000000 ))
     UB=$(( (U1 - U0) * 1024 / 1000000 ))
-    echo "  bellek: 5 baytlik parca basina ${KB} B (esik 45; split'siz ${K0} KB, split'li ${K1} KB)"
+    NB=$(( (KN - K0) * 1024 / 1000000 ))
+    echo "  bellek: 5 baytlik parca basina ${KB} B (esik 37; split'siz ${K0} KB, split'li ${K1} KB)"
     echo "  pozitif kontrol: 21 baytlik parca basina ${UB} B (fark $((UB - KB)) B, en az 10 olmali)"
-    [ "$KB" -lt 45 ] || { echo "  PARCA BASINA ${KB} B — temsil buyumus (esik 45)"; HATA=1; }
+    echo "  pozitif kontrol: kutulu tablo (TULPAR_NO_STRARR=1) parca basina ${NB} B (fark $((NB - KB)) B, en az 6 olmali)"
+    [ "$KB" -lt 37 ] || { echo "  PARCA BASINA ${KB} B — temsil buyumus (esik 37)"; HATA=1; }
+    [ $((NB - KB)) -ge 6 ] || { echo "  POZITIF KONTROL: kutulu/kutusuz tablo farki $((NB - KB)) B — kapi depoyu olcmuyor"; HATA=1; }
     [ $((UB - KB)) -ge 10 ] || { echo "  POZITIF KONTROL: uzun parca farki $((UB - KB)) B — kapi parca boyunu olcmuyor"; HATA=1; } ;;
 esac
 

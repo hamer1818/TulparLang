@@ -312,6 +312,18 @@ typedef struct ObjArray {
 // genisligiyle karisamaz; codegen ayni sabiti kullanir (llvm_backend.cpp).
 #define ARR_ELEM_F64 (-64)
 
+// Kutusuz DIZGI depo isareti (elem_bits, 2026-10-06): `idata` bir
+// `ObjString *` tablosu (eleman basina 8 bayt; kutulu depoda 16). Dizinin
+// BUTUN elemanlari dizgi iken gecerli; dizgi OLMAYAN bir deger yazilinca
+// dizi kutuya cevrilir (arr_debox) — ARR_ELEM_F64 ile ayni sozlesme.
+// TAMSAYI DEPO = elem_bits > 0 (32/64); butun kutusuz-ama-tamsayi-degil
+// isaretleri NEGATIF. Codegen'in "tamsayi depo mu" sinavi tek karsilastirma
+// (`eb > 0`) — yeni bir negatif isaret eklemek o sinavi bozmaz.
+// ⚠ idata okuyan her yer bu isareti de gormek ZORUNDA: "else 64-bit" diye
+// dusen bir dal isaretciyi tamsayi sanar (sessiz bozulma). Kapi:
+// tests/dizgi_dizisi_deposu.test.tpr + tests/split_toplu.sh.
+#define ARR_ELEM_STR (-8)
+
 // Diziyi kutulu bicime cevirir. Kutuluysa hicbir sey yapmaz.
 extern "C" void arr_debox(ObjArray *a);
 
@@ -320,6 +332,36 @@ extern "C" void arr_debox(ObjArray *a);
 static inline VMValue *arr_items(ObjArray *a) {
   if (a && a->idata) arr_debox(a);
   return a ? a->items_ : nullptr;
+}
+
+// KUTUSUZ DEPODAN OKUMA — TEK YER (2026-10-06). `a->idata` dolu olmali.
+// Depoyu DEGISTIRMEZ (arr_items gibi kutuya cevirmez), yani yalniz okuyan
+// yollar (print/toString, json, join, contains, pop, ...) diziyi 8 bayttan 16
+// bayta cikarmaz ve eszamanli okuma saf kalir (FINDINGS T7). Eskiden her yol
+// kendi `32 ? i32 : (F64 ? double : i64)` zincirini yaziyordu; "son dal
+// 64-bit" varsayimi yeni bir isaretle (ARR_ELEM_STR) isaretciyi tamsayi
+// okurdu. Yeni bir depo isareti BURAYA ve arr_debox'a eklenir.
+static inline VMValue arr_unboxed_get(const ObjArray *a, long long i) {
+  switch (a->elem_bits) {
+  case 32: return vm_make_int((long long)((const int32_t *)a->idata)[i]);
+  case ARR_ELEM_F64: return vm_make_float(((const double *)a->idata)[i]);
+  case ARR_ELEM_STR: return vm_make_obj(((Obj *const *)a->idata)[i]);
+  default: return vm_make_int(a->idata[i]);  // 64
+  }
+}
+
+// Kutulu ya da kutusuz depodan i. eleman, depoyu DEGISTIRMEDEN. Sinir
+// denetimi cagiranin isi.
+static inline VMValue arr_get(const ObjArray *a, long long i) {
+  return a->idata ? arr_unboxed_get(a, i) : a->items_[i];
+}
+
+// Kutusuz depo eleman boyu: 32-bit tamsayi 4, i64/double 8, dizgi
+// isaretcisi sizeof(ObjString *) (64-bit'te 8, wasm32'de 4).
+static inline size_t arr_unboxed_esz(const ObjArray *a) {
+  if (a->elem_bits == 32) return sizeof(int32_t);
+  if (a->elem_bits == ARR_ELEM_STR) return sizeof(ObjString *);
+  return sizeof(long long);
 }
 
 // Object (Map/Dictionary) Object (Requires VMValue)

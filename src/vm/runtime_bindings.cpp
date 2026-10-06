@@ -1486,6 +1486,7 @@ static_assert(offsetof(ObjArray, elem_bits) == 24, "ObjArray::elem_bits @24 olma
 #endif
 // Codegen ayni sabiti kullanir (llvm_backend.cpp kArrElemF64).
 static_assert(ARR_ELEM_F64 == -64, "ARR_ELEM_F64 codegen'deki kArrElemF64 ile ayni olmali");
+static_assert(ARR_ELEM_STR == -8, "ARR_ELEM_STR codegen'deki kArrElemStr ile ayni olmali");
 static_assert(sizeof(double) == sizeof(long long), "double depo idata yuvasina sigmali");
 // P1.1 tipli struct dizisi: eleman erisimi SATIR ICI (llvm_backend.cpp
 // sarr_elem_ptr) — `count` ve `data` alanlarini GEP ile okuyor. Ayni
@@ -1582,6 +1583,9 @@ void arr_debox(ObjArray *a) {
   } else if (a->elem_bits == ARR_ELEM_F64) {
     const double *src = (const double *)a->idata;
     for (int i = 0; i < n; i++) boxed[i] = VM_FLOAT(src[i]);
+  } else if (a->elem_bits == ARR_ELEM_STR) {
+    ObjString *const *src = (ObjString *const *)a->idata;
+    for (int i = 0; i < n; i++) boxed[i] = VM_OBJ((Obj *)src[i]);
   } else {
     for (int i = 0; i < n; i++) boxed[i] = VM_INT(a->idata[i]);
   }
@@ -1707,6 +1711,24 @@ VMValue aot_persist(VMValue v) {
     int n = src->count;
     dst->count = n;
     dst->capacity = n;
+    // Kutusuz DIZGI depo kalici kopyada da kutusuz: her dizgi kalici kopyaya
+    // (aot_persist_string_obj), tablo 8 bayt/eleman. Eskiden arr_items()
+    // KAYNAGI da kutuya ceviriyordu — global'e atanan split sonucu 16 bayta
+    // cikip oyle kaliyordu.
+    if (src->idata && src->elem_bits == ARR_ELEM_STR && n > 0) {
+      ObjString **t = (ObjString **)malloc(sizeof(ObjString *) * (size_t)n);
+      if (t) {
+        ObjString *const *from = (ObjString *const *)src->idata;
+        for (int i = 0; i < n; i++) {
+          VMValue pv = aot_persist(VM_OBJ((Obj *)from[i]));
+          t[i] = AS_STRING(pv);
+        }
+        dst->items_ = nullptr;
+        dst->idata = (long long *)t;
+        dst->elem_bits = ARR_ELEM_STR;
+        return VM_OBJ((Obj *)dst);
+      }
+    }
     dst->items_ = (n > 0) ? (VMValue *)malloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
       arr_items(dst)[i] = aot_persist(arr_items(src)[i]);
@@ -2515,13 +2537,8 @@ VMValue vm_array_get(ObjArray *array, int index) {
   // Kutusuz diziden okumak icin KUTULAMAYA gerek yok. Eskiden asagidaki
   // `arr_items()` diziyi kutuya ceviriyordu: genel yoldan TEK bir okuma bile
   // butun diziyi 8 bayttan 16 bayta cikariyor ve bir daha geri donmuyordu.
-  if (array && array->idata && index >= 0 && index < array->count) {
-    if (array->elem_bits == 32)
-      return VM_INT((long long)((const int32_t *)array->idata)[index]);
-    if (array->elem_bits == ARR_ELEM_F64)
-      return VM_FLOAT(((const double *)array->idata)[index]);
-    return VM_INT(array->idata[index]);
-  }
+  if (array && array->idata && index >= 0 && index < array->count)
+    return arr_unboxed_get(array, index);
   if (!array || index < 0 || index >= array->count) {
     aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
                                "Runtime Error: Array index out of bounds"));
@@ -2540,6 +2557,13 @@ void vm_array_set(ObjArray *array, int index, VMValue value) {
   if (array && array->idata && array->elem_bits == ARR_ELEM_F64) {
     if (IS_FLOAT(value) && index >= 0 && index < array->count) {
       ((double *)array->idata)[index] = AS_FLOAT(value);
+      return;
+    }
+  } else if (array && array->idata && array->elem_bits == ARR_ELEM_STR) {
+    // Dizgi depoya DIZGI yazmak kutulamiyor; baska her tur asagida kutuya
+    // cevirir (ARR_ELEM_F64 ile ayni sozlesme).
+    if (IS_STRING(value) && index >= 0 && index < array->count) {
+      ((ObjString **)array->idata)[index] = AS_STRING(value);
       return;
     }
   } else if (array && array->idata && IS_INT(value) && index >= 0 &&
@@ -3371,18 +3395,7 @@ static void repr_value(ReprOut &out, VMValue v, ReprCtx &cx, bool nested) {
     out.put('[');
     for (int i = 0; i < a->count; i++) {
       if (i > 0) out.put(", ");
-      VMValue e;
-      if (a->idata) {
-        if (a->elem_bits == 32)
-          e = VM_INT((long long)((const int32_t *)a->idata)[i]);
-        else if (a->elem_bits == ARR_ELEM_F64)
-          e = VM_FLOAT(((const double *)a->idata)[i]);
-        else
-          e = VM_INT(a->idata[i]);
-      } else {
-        e = a->items_[i];
-      }
-      repr_value(out, e, cx, true);
+      repr_value(out, arr_get(a, i), cx, true);
     }
     out.put(']');
     break;
@@ -3723,8 +3736,33 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
         return;
       }
     }
-    // Kutulanmamis dizi + int deger: kutuya donmeden ekle.
-    if (arr->idata && arr->elem_bits != ARR_ELEM_F64 && IS_INT(item)) {
+    // Kutusuz DIZGI dizi + dizgi deger: kutuya donmeden ekle (eleman 8 bayt
+    // isaretci; double yolu ile ayni buyume).
+    if (arr->idata && arr->elem_bits == ARR_ELEM_STR && IS_STRING(item)) {
+      if (arr->count >= arr->capacity) {
+        int new_cap = arr->capacity < 8 ? 8 : arr->capacity * 2;
+        if (new_cap <= arr->count) new_cap = arr->count + 1;
+        size_t nb = sizeof(ObjString *) * (size_t)new_cap;
+        long long *ni;
+        if (arr->obj.arena_allocated) {
+          ni = (long long *)aot_arena_alloc(nb);
+          if (ni && arr->count > 0)
+            memcpy(ni, arr->idata, sizeof(ObjString *) * (size_t)arr->count);
+        } else {
+          ni = (long long *)realloc(arr->idata, nb);
+        }
+        if (!ni) { arr_debox(arr); }   // buyutulemedi: kutulu yola dus
+        else { arr->idata = ni; arr->capacity = new_cap; }
+      }
+      if (arr->idata) {
+        ((ObjString **)arr->idata)[arr->count++] = AS_STRING(item);
+        return;
+      }
+    }
+    // Kutulanmamis TAMSAYI dizi (elem_bits > 0) + int deger: kutuya donmeden
+    // ekle. Eskiden kosul `elem_bits != ARR_ELEM_F64` idi — dizgi deposuna
+    // int'i ham yazardi.
+    if (arr->idata && arr->elem_bits > 0 && IS_INT(item)) {
       long long iv = AS_INT(item);
       if (arr->elem_bits == 32 && (long long)(int32_t)iv != iv)
         aot_arr_widen(arr);
@@ -3787,6 +3825,8 @@ VMValue aot_array_pop(VMValue arr_val) {
   if (IS_STRUCT_ARRAY(arr_val)) return aot_sarr_pop_boxed(arr_val);
   if (IS_ARRAY(arr_val) && AS_ARRAY(arr_val)->count > 0) {
     ObjArray *arr = AS_ARRAY(arr_val);
+    // Kutusuz depo (int/double/dizgi) yerinde: pop diziyi kutuya cevirmez.
+    if (arr->idata) return arr_unboxed_get(arr, --arr->count);
     return arr_items(arr)[--arr->count];
   }
   return VM_INT(0);
@@ -4122,8 +4162,12 @@ extern "C" VMValue aot_array_remove_at(VMValue arr, VMValue index) {
       a->count--;
       return out;
     }
-    VMValue out = VM_INT(a->idata[idx]);
-    if (tail) memmove(a->idata + idx, a->idata + idx + 1, tail * sizeof(long long));
+    // i64 ve dizgi isaretcisi (ARR_ELEM_STR; wasm32'de isaretci 4 bayt —
+    // eleman boyu arr_unboxed_esz'den).
+    VMValue out = arr_unboxed_get(a, idx);
+    const size_t esz = arr_unboxed_esz(a);
+    char *d = reinterpret_cast<char *>(a->idata);
+    if (tail) memmove(d + idx * esz, d + (idx + 1) * esz, tail * esz);
     a->count--;
     return out;
   }
@@ -4619,7 +4663,7 @@ static void js_serialize(JSBuilder *b, VMValue v, int depth) {
     for (int i = 0; i < arr->count; i++) {
       if (i > 0)
         js_append_char(b, ',');
-      js_serialize(b, arr_items(arr)[i], depth + 1);
+      js_serialize(b, arr_get(arr, i), depth + 1);
     }
     js_append_char(b, ']');
   } else if (IS_OBJECT(v)) {
@@ -4679,7 +4723,7 @@ static cJSON *vmvalue_to_cjson(VMValue v, int depth) {
     cJSON *json_arr = cJSON_CreateArray();
     for (int i = 0; i < arr->count; i++) {
       cJSON_AddItemToArray(json_arr,
-                           vmvalue_to_cjson(arr_items(arr)[i], depth + 1));
+                           vmvalue_to_cjson(arr_get(arr, i), depth + 1));
     }
     return json_arr;
   } else if (IS_OBJECT(v)) {
@@ -5335,12 +5379,12 @@ VMValue aot_csv_emit(VMValue rowsVal) {
     };
 
     for (int r = 0; r < rows->count; r++) {
-        VMValue rv = arr_items(rows)[r];
+        VMValue rv = arr_get(rows, r);
         if (!IS_ARRAY(rv)) continue;
         ObjArray *row = (ObjArray *)AS_OBJECT(rv);
         for (int c = 0; c < row->count; c++) {
             if (c > 0) out.push_back(',');
-            VMValue fv = arr_items(row)[c];
+            VMValue fv = arr_get(row, c);
             if (!IS_STRING(fv)) continue;
             ObjString *fs = AS_STRING(fv);
             if (needs_quote(fs->chars, fs->length)) {
@@ -5861,19 +5905,35 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
     count++;
   }
 
-  VMValue *items = (VMValue *)malloc(sizeof(VMValue) * count);
+  // KUTUSUZ DIZGI DEPOSU (ARR_ELEM_STR, 2026-10-06): parca tablosu
+  // `ObjString *` (eleman basina 8 bayt; kutulu VMValue 16). benchmarks/fair
+  // parse'in 5M parcasi: tepe bellek 223,4 -> 184 MB (Ryzen 7 9800X3D).
+  // Kapatma anahtari TULPAR_NO_STRARR=1 (A/B olcumu ve tests/split_toplu.sh
+  // pozitif kontrolu: kapaliyken parca basina 8 bayt fazla olculmeli).
+  static std::atomic<int> no_str{-1};
+  int ns = no_str.load(std::memory_order_relaxed);
+  if (ns < 0) {
+    const char *e = getenv("TULPAR_NO_STRARR");
+    ns = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+    no_str.store(ns, std::memory_order_relaxed);
+  }
+  void *items = malloc((ns ? sizeof(VMValue) : sizeof(ObjString *)) * count);
   char *const block0 = items ? (char *)aot_arena_alloc(bytes) : nullptr;
   if (!items || !block0) {
     free(items);
     return VM_OBJ((Obj *)arr); // bellek yok: bos dizi (eski yol da cokerdi)
   }
   char *block = block0;
+  auto put = [&](size_t k, ObjString *o) {
+    if (ns) ((VMValue *)items)[k] = VM_OBJ((Obj *)o);
+    else ((ObjString **)items)[k] = o;
+  };
 
   // 2. gecis: parcalari bitisik kur.
   size_t n = 0;
   if (dlen <= 0) {
     for (const char *p = base; p < end; p++) {
-      items[n++] = VM_OBJ((Obj *)split_emit(block, p, 1));
+      put(n++, split_emit(block, p, 1));
       block += split_piece_bytes(1);
     }
   } else {
@@ -5881,12 +5941,12 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
     while ((q = tek ? split_find1(p, end, d->chars[0])
                     : split_find(p, end, d->chars, dlen)) != nullptr) {
       int len = (int)(q - p);
-      items[n++] = VM_OBJ((Obj *)split_emit(block, p, len));
+      put(n++, split_emit(block, p, len));
       block += split_piece_bytes((size_t)len);
       p = q + dlen;
     }
     int len = (int)(end - p);
-    items[n++] = VM_OBJ((Obj *)split_emit(block, p, len));
+    put(n++, split_emit(block, p, len));
     block += split_piece_bytes((size_t)len);
   }
   const size_t used = (size_t)(block - block0);
@@ -5912,11 +5972,18 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
     char *probe = (char *)aot_arena_alloc(8);
     std::fprintf(stderr,
                  "split-tani: %zu parca, tek arena ayirmasi %zu bayt "
-                 "(ust sinir %zu, kuyruk iade %s)\n",
-                 count, used, bytes, probe == block0 + used ? "evet" : "hayir");
+                 "(ust sinir %zu, kuyruk iade %s, depo %s)\n",
+                 count, used, bytes, probe == block0 + used ? "evet" : "hayir",
+                 ns ? "kutulu" : "dizgi");
   }
 
-  arr->items_ = items;
+  if (ns) {
+    arr->items_ = (VMValue *)items;
+  } else {
+    arr->items_ = nullptr;
+    arr->idata = (long long *)items;
+    arr->elem_bits = ARR_ELEM_STR;
+  }
   arr->capacity = (int)count;
   arr->count = (int)n;
   return VM_OBJ((Obj *)arr);
@@ -6062,7 +6129,7 @@ VMValue aot_array_slice_ptr(VMValue *arr_ptr, long long start) {
     ObjArray *src = AS_ARRAY(*arr_ptr);
     if (start < 0) start = 0;
     for (int i = (int)start; i < src->count; i++)
-      vm_array_push_aot_wrapper(nullptr, out, arr_items(src)[i]);
+      vm_array_push_aot_wrapper(nullptr, out, arr_get(src, i));
   }
   return VM_OBJ((Obj *)out);
 }
@@ -10053,7 +10120,7 @@ VMValue aot_string_contains(VMValue haystack, VMValue needle) {
   if (IS_ARRAY(haystack)) {
     ObjArray *arr = AS_ARRAY(haystack);
     for (int i = 0; i < arr->count; i++)
-      if (vm_values_equal(arr_items(arr)[i], needle)) return VM_BOOL(1);
+      if (vm_values_equal(arr_get(arr, i), needle)) return VM_BOOL(1);
     return VM_BOOL(0);
   }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
@@ -10109,7 +10176,7 @@ VMValue aot_string_index_of(VMValue haystack, VMValue needle) {
   if (IS_ARRAY(haystack)) {
     ObjArray *arr = AS_ARRAY(haystack);
     for (int i = 0; i < arr->count; i++)
-      if (vm_values_equal(arr_items(arr)[i], needle)) return VM_INT(i);
+      if (vm_values_equal(arr_get(arr, i), needle)) return VM_INT(i);
     return VM_INT(-1);
   }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
@@ -10177,7 +10244,7 @@ VMValue aot_at(VMValue arr_val, VMValue idx_val, VMValue def_val) {
   long long i = AS_INT(idx_val);
   if (i < 0 || i >= (long long)a->count)
     return def_val;
-  return arr_items(a)[i];
+  return arr_get(a, i);
 }
 
 VMValue aot_json_get(VMValue obj_val, VMValue key_val, VMValue def_val) {
@@ -10412,8 +10479,8 @@ VMValue aot_string_join(VMValue sep, VMValue arr) {
   // Calculate total length
   int total_len = 0;
   for (int i = 0; i < array->count; i++) {
-    if (IS_STRING(arr_items(array)[i])) {
-      total_len += AS_STRING(arr_items(array)[i])->length;
+    if (IS_STRING(arr_get(array, i))) {
+      total_len += AS_STRING(arr_get(array, i))->length;
     }
     if (i > 0)
       total_len += separator->length;
@@ -10426,8 +10493,8 @@ VMValue aot_string_join(VMValue sep, VMValue arr) {
       memcpy(result + pos, separator->chars, separator->length);
       pos += separator->length;
     }
-    if (IS_STRING(arr_items(array)[i])) {
-      ObjString *s = AS_STRING(arr_items(array)[i]);
+    if (IS_STRING(arr_get(array, i))) {
+      ObjString *s = AS_STRING(arr_get(array, i));
       memcpy(result + pos, s->chars, s->length);
       pos += s->length;
     }

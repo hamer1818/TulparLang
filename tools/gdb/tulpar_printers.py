@@ -41,6 +41,7 @@ OBJ_NAMES = ["string", "array", "object", "function", "struct", "closure",
              "promise", "struct_array"]
 
 ARR_ELEM_F64 = -64  # ObjArray::elem_bits, kutusuz double depo (vm.hpp)
+ARR_ELEM_STR = -8   # ObjArray::elem_bits, kutusuz dizgi deposu: ObjString* tablosu (2026-10-06)
 OBJ_HDR = 8        # sizeof(Obj) — src/vm/obj_layout.h TULPAR_OBJ_HEADER_SIZE
 
 MAX_ITEMS = 16     # dizi/nesne başına gösterilen eleman
@@ -149,6 +150,10 @@ def decode_raw(tag, payload, depth=0):
                         # Kutusuz float[] (double depo): eskiden bit deseni
                         # int diye gösteriliyordu.
                         shown.append(fmt_float(struct.unpack("<d", _mem(idata + 8 * i, 8))[0]))
+                    elif bits == ARR_ELEM_STR:
+                        # Kutusuz dizgi deposu (split): eleman ObjString*.
+                        sp = _u64(idata + 8 * i)
+                        shown.append(_string(sp) if sp else "null")
                     else:
                         shown.append(str(struct.unpack("<q", _mem(idata + 8 * i, 8))[0]))
             more = ", ... (%d)" % count if count > MAX_ITEMS else ""

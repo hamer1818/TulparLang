@@ -2352,6 +2352,36 @@ bu ölçüm gösterdi). Kalan tek fark fonksiyonlar arası hizalama DOLGUSU: bö
 sınırında NOP'u birleştirici değil linker yazıyor — adresler aynı, yürütülmeyen
 baytlar farklı (Tuzaklar 7i'nin tersi: burada yerleşim aynı, dolgu baytı değil).
 
+## 7q. "Değilse 64-bit" dalı — yeni bir depo işareti eski kodda tamsayı okunur
+
+Kutusuz dizinin `idata`'sı önce yalnız tamsayıydı; `ARR_ELEM_F64` (2026-10-01)
+ve `ARR_ELEM_STR` (2026-10-06, `split`'in `ObjString *` tablosu) eklendi. Kod
+tabanındaki okuyucuların çoğu şu kalıptaydı:
+
+```c
+if (eb == 32) i32 ... else if (eb == ARR_ELEM_F64) double ... else i64
+```
+
+ve tamsayı sınavı `eb != ARR_ELEM_F64` idi. Dördüncü bir işaret bu kalıbın
+SON dalına düşer: dizgi işaretçisi tamsayı olarak okunur, yazılır, döndürülür
+— hiçbir şey çökmez, değerler `140566780551184` olur. Ölçüldü: dizgi deposunda
+`push(<int>)`, codegen'in bekçili yazması, şekil doldurma (döngü sürümü) ve
+`pop` dört ayrı yerden bunu yapıyordu (`tests/dizgi_dizisi_deposu.test.tpr`
+sabotajları).
+
+**Kural:** (1) Kutusuz okuma TEK yerde (`arr_unboxed_get`, vm.hpp) — yeni bir
+işaret oraya ve `arr_debox`'a eklenir; yerinde `?:` zinciri yazma. (2)
+"Tamsayı mı" sınavı NEGATİF olarak yazılmaz (`!= F64`); işaretler tamsayı
+için POZİTİF (32/64), geri kalan her şey negatif: `eb > 0`. (3) Yeni depo
+türü eklenince `elem_bits`/`idata` geçen HER satırı oku (runtime + codegen
+GEP'leri `objp, 5/6`) ve "son dal" varsayanı say — sayı küçük çıkar, ama
+birini atlamak sessizdir.
+
+İlgili A/B tuzağı: taban derleyiciyi depo içinden koşmak eski codegen'i yeni
+`./build-linux/libtulpar_runtime.a` ile bağlar (arşiv exe dizinindekinden
+yeniyse önce aranıyor) — eski codegen yeni depoyu okuyamaz ve "taban
+derleyicide de kırmızı" görünür. Taban ölçümü repo dışında, kendi arşiviyle.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

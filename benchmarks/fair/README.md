@@ -281,7 +281,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `mandelbrot` | 158,4 → **154,4** (2026-10-02) | 158,7 | 1,00× → **0,97×** | 3. → ~1.* |
 | `qsort` | 121,2 → **70,0** (2026-10-01) | 57,4 | 2,1× → **1,2×** | 8. → **5.** |
 | `callfn` | 298,6 → 209,6 → **65,5** (2026-10-01) | 91,1 | 2,3× → **0,7×** | 8. → ~3.* |
-| `parse` | 196,3 → 126,2 (2026-10-01) → 75,2 (2026-10-02) → **72,5** (2026-10-02, satır içi dizgi karakteri; bellek 261,7 → 223,4 MB) | 56,7 | 2,2× → **1,3×** | 6. → 4. → ~3.* |
+| `parse` | 196,3 → 126,2 (2026-10-01) → 75,2 (2026-10-02) → 72,5 (2026-10-02, satır içi dizgi karakteri; bellek 261,7 → 223,4 MB) → **70,1** (2026-10-06, kutusuz dizgi deposu; bellek 223,4 → **185,2 MB**) | 56,7 | 2,2× → **1,2×** | 6. → 4. → ~3.* |
 | `particles` | 329,6 → 54,8 (2026-10-01) → **37,3** (2026-10-02) | 42,2 | 7,8× → 1,3× → **0,9×** | 8. → 4. → ~2.* |
 | `nbody` | 1304,8 → 187,3 → **115,3** (2026-10-01) | 114,5 | 11,4× → 1,6× → **1,0×** | 8. → 7. → ~2.* |
 | `matmul` | 821,3 → **37,1** (2026-10-01) | 31,1 | 26,4× → **1,2×** | 8. → **4.** |
@@ -350,8 +350,11 @@ Bulgular, sırayla ele alınması önerilen:
    kuyruğu iade et), iki haneli `itoa`: **121 → 75 ms, 374 → 261 MB**
    (aynı düzenekte C 57,0 ms / 31,7 MB). *Sıra resmî koşumda ölçülmedi;
    `results.json`'daki öteki dillerle (C++ 60,6, Rust 76,6, Go 117,0) yan
-   yana ~3.; bellekte ~5. (Go 118, Python 308).* Kalan: parça hâlâ 32 B
-   nesne + 16 B eleman (Performance.md "parse ... 2026-10-02").
+   yana ~3.; bellekte ~5. (Go 118, Python 308).* **2026-10-06:** `split`
+   sonucu kutusuz dizgi deposunda (`ARR_ELEM_STR`: eleman 16 B `VMValue`
+   yerine 8 B `ObjString *`): **223,4 → 185,2 MB, 72,3 → 70,1 ms** (A/B,
+   aynı makine, en iyi 5). Kalan: parça 24 B nesne + 8 B eleman
+   (Performance.md "parse: kutusuz dizgi deposu").
 5. **`callfn`** — **kısmen kapandı (2026-10-01):** fonksiyon referansı her
    değerlendirmede yeni bir arena dizgisiydi (döngüde `call(f, x)` 20M kez →
    1,26 GB) ve `call()` her çağrıda adı hash'leyip önbelleği yokluyordu.

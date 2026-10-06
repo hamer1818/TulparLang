@@ -93,9 +93,10 @@ PROG_VALS = (
     "    float g = 1.0;\n"                             # 7
     "    float[] fa = array_fill(2, 0.25);\n"          # 8
     "    var yok = null;\n"                            # 9
-    "    print(ad);\n"                                 # 10 <- breakpoint
-    "}\n"                                              # 11
-    "goster(4);\n"                                     # 12
+    "    array sp = split(\"x,yy\", \",\");\n"          # 10 kutusuz dizgi deposu
+    "    print(ad);\n"                                 # 11 <- breakpoint
+    "}\n"                                              # 12
+    "goster(4);\n"                                     # 13
 )
 PROG_LOOP = (
     "func adim(int i): int {\n"            # 1
@@ -321,7 +322,7 @@ def scenario_values(exe, work):
 
     İkinci ayak: `tulpar debug --gdb-script` çıktısı düz gdb'de de aynı işi
     yapmalı (kurulu tulpar'da tools/ dizini yok)."""
-    a = start(exe, work, PROG_VALS, [{"line": 10}])
+    a = start(exe, work, PROG_VALS, [{"line": 11}])
     try:
         a.wait(is_event("stopped"), "breakpoint'te `stopped`")
         _, vars_ = locals_of(a)
@@ -331,7 +332,10 @@ def scenario_values(exe, work):
         # diye gösteriyordu.
         want = {"n": "4", "ad": '"Hamza"', "f": "2.5", "a": "[1, 2, 3]",
                 "j": '{"k": 7, "s": "x"}', "b": "true", "g": "1",
-                "fa": "[0.25, 0.25]", "yok": "null"}
+                "fa": "[0.25, 0.25]", "yok": "null",
+                # split sonucu kutusuz dizgi deposunda (ObjString* tablosu,
+                # 2026-10-06): printer onu tamsayi diye okumamali.
+                "sp": '["x", "yy"]'}
         bad = {k: vars_.get(k) for k, v in want.items() if vars_.get(k) != v}
         if bad:
             raise AssertionError("okunmayan degerler: %s (hepsi: %s)" % (bad, vars_))
@@ -348,7 +352,7 @@ def scenario_values(exe, work):
     subprocess.run([exe, "--debug", "build", os.path.join(work, "prog.tpr"), binp],
                    capture_output=True, cwd=work)
     r = subprocess.run(["gdb", "-batch", "-nx", "-ex", "source " + script,
-                        "-ex", "break prog.tpr:10", "-ex", "run", "-ex", "info locals",
+                        "-ex", "break prog.tpr:11", "-ex", "run", "-ex", "info locals",
                         binp], capture_output=True, text=True, cwd=work, timeout=TIMEOUT)
     if 'ad = "Hamza"' not in r.stdout or "a = [1, 2, 3]" not in r.stdout:
         raise AssertionError("--gdb-script ile duz gdb degerleri cozmedi:\n%s"

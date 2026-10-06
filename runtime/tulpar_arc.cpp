@@ -92,6 +92,12 @@ void arc_free_array(Obj *obj) {
     if (!obj->arena_allocated) {
       free(arr->items_);
     }
+  } else if (arr->idata && arr->elem_bits == ARR_ELEM_STR) {
+    // Kutusuz DIZGI depo (2026-10-06): elemanlar nesne — kutulu depodaki
+    // gibi birakilir. (Tamsayi/double deposunda birakilacak nesne yok.)
+    Obj *const *els = (Obj *const *)arr->idata;
+    for (int i = 0; i < arr->count; i++)
+      if (els[i]) arc_release(els[i]);
   }
   // idata, items_ NULL iken de dolu olabilir (kutulanmamis dizi) — bu yuzden
   // serbest birakma yukaridaki `if (arr->items_)` blogunun DISINDA olmali.
