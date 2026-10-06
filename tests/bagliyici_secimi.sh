@@ -56,7 +56,13 @@ done
 if [ "$HATA" -eq 0 ]; then
   C_L=$(readelf -p .comment "$TMP/lld" 2>/dev/null)
   C_B=$(readelf -p .comment "$TMP/bfd" 2>/dev/null)
-  [[ "$C_L" == *"Linker: LLD"* ]] || { echo "  varsayilan link lld DEGIL (.comment'ta 'Linker: LLD' yok)"; HATA=1; }
+  if [[ "$C_L" != *"Linker: LLD"* ]]; then
+    echo "  varsayilan link lld DEGIL (.comment'ta 'Linker: LLD' yok)"; HATA=1
+    OUT=zorla derle TULPAR_LD=lld
+    echo "    tani: ld.lld=$(command -v ld.lld) -> $(readlink -f "$(command -v ld.lld)"); PATH=$PATH"
+    echo "    tani: varsayilan .comment: $(tr '\n' ' ' <<< "$C_L")"
+    echo "    tani: TULPAR_LD=lld .comment: $(readelf -p .comment "$TMP/zorla" 2>/dev/null | tr '\n' ' ')"
+  fi
   [[ "$C_B" != *"Linker: LLD"* ]] || { echo "  TULPAR_LD=bfd ile de lld — anahtar okunmuyor"; HATA=1; }
   if command -v objdump >/dev/null 2>&1; then
     FARK=$(python3 - "$TMP/bfd" "$TMP/lld" <<'PYEOF'
