@@ -2178,3 +2178,58 @@ bölünemez. Merdivenin modül klonu (15–19 ms) bitcode anlık görüntüsüyl
 değiştirilebilir ama klonun kullanım sırası O3'ün girdisi — çıktının aynı kaldığı
 ayrıca kanıtlanmalı. nbody gibi tek dev fonksiyonlu programda sınır o fonksiyonun
 boyu (döngü sürüm kopyaları).
+
+## int matmul: i32 sığma sınavı döngü başına — aralık kanıtı — 120,8 → 53,7 ms (2026-10-06)
+
+**Önce ölçüldü** (Ryzen 7 9800X3D, `taskset -c 2,3`, en iyi 5; `int[]` matmul
+fonksiyon içinde, N = 640 — 2026-10-01 bölümündeki program): 120,8 ms, 3 000 M komut
+/ 626 M döngü; C `gcc -O2` int64 67,6 ms (skaler, 6 komut/tur), clang -O2 int32
+25,8 ms (vektörleşiyor). Örnekleme: iç döngü 11 komut/tur ve sıcak üç komut
+`add` + `movslq` + `cmp`/`jne` — #438'in deopt sınavı `sext(trunc v) == v`
+(sığmazsa genel gövdeye atla) örneklerin %79'u. Erken çıkışlı döngü
+vektörleşmiyor.
+
+**Denenip atılanlar** (C prototipi, `clang -O3`, aynı veri):
+
+| | ms |
+|---|--:|
+| bugünkü biçim (eleman başına sınav + erken çıkış) | 119,2 |
+| iki geçiş: salt okuma sığma indirgemesi (i64) + sınavsız yazma | 141,1 |
+| tek geçiş, sınav dalsız birikiyor (yanlış anlam, yalnız tavan) | 141,3 |
+| min/max taraması + i32 döngü | 120,7 |
+| **OR(x ^ (x >> 31)) taraması + i32 döngü** | **51,1** |
+
+i64 aritmetiği SSE2'de vektörleşince skalerden yavaş (64-bit çarpma öykünülüyor);
+kazanç ancak i32 aritmetiğinde. min/max taraması SSE2'de karşılaştır+harmanla
+öykünmesi — tarama döngünün kendisinden pahalı. OR taraması üç komut/4 eleman.
+
+**Çözüm** (`fv_try_version`, `iavb_bound`): döngü başında yazılan değerin bit boyu
+üst sınırı K(E) — sabit, değişmez ad (`|v|`), okunan `X[B + j]` aralığının OR
+taraması; `x ± y` → max + 1, `x * y` → toplam. K(E) ≤ 30 ise E'nin ve her ara
+değerin mutlak değeri ≤ 2^30: i64 işlem i32'de birebir, yazma her zaman sığar →
+sınavsız üçüncü gövde (`iavb_fast`; LLVM i32'ye daraltıp vektörleştiriyor).
+Tutmazsa bugünkü deopt'lu gövde, o da tutmazsa genel gövde. Kanıt taranan
+değerlerin döngüde değişmemesine dayanıyor: yazılan dizinin okumaları yazmayla
+AYNI indekste (her tur kendi elemanını önce okur sonra yazar), öteki dizilerin
+deposu yazılanınkinden farklı (çalışma zamanı sınavı — `carp(a, a, a)` eski
+gövdeye düşüyor). j değerde: int planı bunu zaten kabul etmiyor.
+
+**Sonuç** (dönüşümlü, 3 tur, en iyi 5): **120,8 → 53,7 ms** (3 000 → 1 794 M komut,
+626 → 276 M döngü; C int64 67,6). Kalan sürenin ~%40'ı iki OR taraması (c ve b
+satırı, her iç döngü girişinde) — b hiç yazılmıyor, taraması dış döngüye
+taşınabilir (yapılmadı). `benchmarks/fair` 13 çekirdek + `recursion/` 6 program:
+ikili BAYT BAYT aynı (hiçbiri deopt'lu int dizi döngüsü içermiyor); motorun
+engine_aksiyon / engine_dalga betiklerinde de aralık kanıtı yok (`TULPAR_DBG_VER`).
+Derleme süresi yalnız bu kalıbı içeren programda: int matmul 105 → 116 ms,
+`tests/int_golge.test.tpr` 308 → 319 ms (üçüncü gövde + taramalar); wings ve
+loop_versioning aynı. Üçüncü kopya yerine deopt'lu gövdeyi kaldırmak derlemeyi
+eski boyda tutardı ama değerleri 2^30–2^31 arasında olan (sınır tutmaz, eleman
+sığar) döngüleri genel gövdeye düşürürdü — çalışma hızından ödemek, yapılmadı.
+
+**Kapılar:** `tests/int_aralik.test.tpr` (10 test, sürümsüz tipsiz ikize karşı
+ELEMAN ELEMAN: küçük, büyük (deopt + genişleme), sınırın içi K ≤ 30, sınır geçişi
+(önce kanıt, sonra deopt), negatif, takma ad, boş/tek, j'li ifade, yazılan dizinin
+başka indeksi) ve `tests/int_golge.sh` (`[iavb]` kararı, IR'da `iavb_fast` +
+`iavb.tara`, `TULPAR_NO_IAVB=1` iki yönlü, dört kip aynı çıktı, anlam paketi açık
+ve kapalı geçiyor, `TULPAR_IAVB_SINAMA=sinir` (eşik 62) sabotajı paketi kırmızıya
+çeviriyor — 3 test).

@@ -22,6 +22,7 @@ set -uo pipefail
 TUL="${1:-./tulpar}"
 [ -x "$TUL" ] || { echo "HATA: '$TUL' calistirilabilir degil" >&2; exit 1; }
 TUL="$(cd "$(dirname "$TUL")" && pwd)/$(basename "$TUL")"
+ROOT="$(pwd)"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export LC_ALL=C
@@ -93,6 +94,7 @@ for (int i = 0; i < len(c); i = i + 1) { t = t + c[i] * mod(i, 7); }
 print(t);
 TPREOF
 karar mm '^\[iaver\] j: 2 dizi, 3 erisim' var "matmul'un ic dongusu int dizi surumunde"
+karar mm '^\[iavb\] j: aralik kaniti' var "matmul'un ic dongusu aralik kanitli (sinavsiz) govdeyi aliyor"
 karar mm '^\[iver\] satir 2: 1 golge, 4 bildirim' var "matmul'un dis dongusu golgeleniyor (n + i, k, av, j)"
 
 # Kapanis iceren dongu: kanit reddediyor.
@@ -210,21 +212,48 @@ else gecti "pozitif kontrol: TULPAR_NO_IAVER=1 iken int dizi yuklemesi yok"; fi
 if ir_var mm mm_ir.out 'iav\.el' "IG_X=1"; then gecti "IR: int dizi surumunun 32-bit yuklemesi (iav.el) var"
 else dustu "IR: iav.el YOK — int dizi surumu devrede degil"; fi
 
+# ARALIK KANITI (iavb, 2026-10-06): sinavsiz govde IR'de var / kapaliyken yok.
+if ir_var mm mm_b_yok.out 'iavb_fast' "TULPAR_NO_IAVB=1"; then
+    dustu "pozitif kontrol: TULPAR_NO_IAVB=1 iken de iavb_fast var — kapi bir sey olcmuyor"
+else gecti "pozitif kontrol: TULPAR_NO_IAVB=1 iken aralik kanitli govde yok"; fi
+if ir_var mm mm_b_ir.out 'iavb_fast' "IG_X=1" && ir_var mm mm_b_ir.out 'iavb\.tara' "IG_X=1"; then
+    gecti "IR: aralik kanitli govde (iavb_fast) + OR taramasi (iavb.tara) var"
+else dustu "IR: iavb_fast / iavb.tara YOK — aralik kaniti devrede degil"; fi
+
 # ---- 4. FARK ----------------------------------------------------------------
 # Uc kip ayni cikti: varsayilan / golgesiz / int dizi surumsuz. matmul ayrica
 # i32'yi asan degerlerle (IG_M): hizli govdedeki yazma sigmiyor -> deopt.
 for prog in qs mm; do
     (cd "$TMP" && TULPAR_NO_IVER=1 TULPAR_AOT_NOCACHE=1 "$TUL" build $prog.tpr ${prog}_g.out >/dev/null 2>&1)
     (cd "$TMP" && TULPAR_NO_IAVER=1 TULPAR_AOT_NOCACHE=1 "$TUL" build $prog.tpr ${prog}_d.out >/dev/null 2>&1)
+    (cd "$TMP" && TULPAR_NO_IAVB=1 TULPAR_AOT_NOCACHE=1 "$TUL" build $prog.tpr ${prog}_b.out >/dev/null 2>&1)
 done
 for cfg in "qs IG_N=200" "qs IG_N=5000" "mm IG_N=12" "mm IG_N=9 IG_M=100000"; do
     set -- $cfg; prog=$1; shift
     r0=$(cd "$TMP" && env "$@" ./$prog.out 2>&1)
     r1=$(cd "$TMP" && env "$@" ./${prog}_g.out 2>&1)
     r2=$(cd "$TMP" && env "$@" ./${prog}_d.out 2>&1)
-    if [ -n "$r0" ] && [ "$r0" = "$r1" ] && [ "$r0" = "$r2" ]; then gecti "fark: $cfg -> '$r0' (uc kip ayni)"
-    else dustu "fark: $cfg -> varsayilan '$r0' / golgesiz '$r1' / int dizi surumsuz '$r2'"; fi
+    r3=$(cd "$TMP" && env "$@" ./${prog}_b.out 2>&1)
+    if [ -n "$r0" ] && [ "$r0" = "$r1" ] && [ "$r0" = "$r2" ] && [ "$r0" = "$r3" ]; then
+        gecti "fark: $cfg -> '$r0' (dort kip ayni)"
+    else dustu "fark: $cfg -> varsayilan '$r0' / golgesiz '$r1' / int dizi surumsuz '$r2' / aralik kanitsiz '$r3'"; fi
 done
+
+# ---- 5. ARALIK KANITI: anlam + sabotaj --------------------------------------
+# tests/int_aralik.test.tpr her senaryoyu surumsuz ikizle eleman eleman
+# karsilastiriyor; TULPAR_IAVB_SINAMA=sinir esigi 62'ye cikarir (sigmayan deger
+# sinavsiz yazilir) — paket KIRMIZIYA donmeli.
+ia() { (cd "$ROOT" && env TULPAR_AOT_NOCACHE=1 "$@" "$TUL" tests/int_aralik.test.tpr 2>&1); }
+o=$(ia); rc=$?
+if [ "$rc" -eq 0 ] && grep -q "Fail: 0" <<<"$o"; then gecti "int_aralik.test.tpr gecti ($(grep -o 'Tests: [0-9]*' <<<"$o"))"
+else dustu "int_aralik.test.tpr rc=$rc: $(tail -3 <<<"$o")"; fi
+o=$(ia TULPAR_NO_IAVB=1); rc=$?
+if [ "$rc" -eq 0 ] && grep -q "Fail: 0" <<<"$o"; then gecti "int_aralik.test.tpr aralik kaniti KAPALIYKEN de geciyor"
+else dustu "int_aralik.test.tpr (TULPAR_NO_IAVB=1) rc=$rc: $(tail -3 <<<"$o")"; fi
+o=$(ia TULPAR_IAVB_SINAMA=sinir); rc=$?
+if [ "$rc" -ne 0 ] && ! grep -q "Fail: 0" <<<"$o"; then
+    gecti "sabotaj (esik 62) int_aralik.test.tpr'yi kirmiziya ceviriyor ($(grep -c 'FAIL' <<<"$o") test)"
+else dustu "sabotaj YAKALANMADI — anlam testi aralik kanitini olcmuyor"; fi
 
 if [ "$fail" -eq 0 ]; then echo "int_golge: $n_gecti/$n_gecti"; fi
 exit $fail
