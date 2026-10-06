@@ -210,7 +210,10 @@ if [ "$(uname -s)" = Linux ] && command -v ld.lld >/dev/null 2>&1 && objdump --v
         dustu "wings (lld): derleme dustu"; tail -3 "$TMP/wings_bol_lld.log" | sed 's/^/         /'
     fi
 fi
-denetle nbody "$KOK/benchmarks/fair/nbody.tpr" 2 60 evet 1000
+# nbody'de tek dev fonksiyon (`t_advance.f`) bolunemez: payi 2026-10-05'te %52,
+# okuma sonrasi sekil tazelemesi kalkinca (2026-10-06) modul kuculdu ve pay
+# %71 oldu (bolum sayisi yine 2). Esik o fonksiyonun payini izliyor.
+denetle nbody "$KOK/benchmarks/fair/nbody.tpr" 2 75 evet 1000
 denetle sekil "$KOK/tests/array_shape_cache.test.tpr" 2 60 evet
 
 # POZITIF KONTROL: ters link sirasi yerlesimi kaydirir — karsilastirici

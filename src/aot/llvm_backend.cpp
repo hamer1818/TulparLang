@@ -6607,6 +6607,12 @@ static LLVMValueRef emit_boxed_binary_op(LLVMBackend *backend, ASTNode_C *node,
 
   LLVMValueRef fallback_res;
 
+  // YAVAS YOLU MODUL-YEREL noinline YARDIMCIYA TASIMAK DENENDI (2026-10-06):
+  // wings derlemesi 479 -> 446 ms (bu blok optimizasyon oncesi IR'in ~%11'i,
+  // 586 kutulu islem) AMA tipsiz yavas yol mikro kiyasinda komut +%8,5 (deger
+  // ABI'siyle +%16): cagri seviyesi dizgi birlestirmeye eklendi. Derleme suresi
+  // icin calisma hizindan odemek — GONDERILMEDI. Ayrinti: Performance.md
+  // "Derleme hizi: okuma yavas yolundan sonra sekil tazelemesi".
   // For TOKEN_PLUS, check if both are strings and use fast concat
   if (node->op == TOKEN_PLUS) {
     // Check if both are STRING (type == 4)
@@ -7758,6 +7764,37 @@ static void emit_shape_refresh_all(LLVMBackend *backend) {
                            e->is32_slot};
     LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rf), rf, args, 5, "");
   }
+}
+
+// OKUMA yavas yolundan (vm_get_element) sonra sekil onbellegi TAZELENMIYOR
+// (2026-10-06).
+//
+// Tazeleme bir zamanlar SART'ti: vm_array_get kutusuz diziyi okurken kutuya
+// ceviriyor (arr_items -> arr_debox) ve idata'yi FREE ediyordu; onbellekteki
+// idata sarkiyordu (olculdu: "malloc(): unsorted double linked list
+// corrupted"). O yol kapandi — vm_array_get kutusuz diziden kutulamadan okuyor,
+// sinir disinda hata veriyor, kutuyu yalniz ZATEN kutulu dizide kullaniyor; json
+// / dizgi / struct dizisi okumasi bir ObjArray'in deposuna dokunmuyor. Yani
+// okumadan sonra hicbir onbellek girdisi bayatlamaz; YAZMA yollari
+// (vm_set_element: genisletme, kutulama) tazelemeye devam ediyor.
+//
+// Bedeli neydi: her okuma yavas yolu onbellekteki BUTUN diziler icin modul-yerel
+// tazeleme fonksiyonunu cagiriyordu ve LLVM onu satir ici aciyor (~20 komut):
+// nbody'nin `t_advance.f`inde 132 cagri, optimizasyon sonrasi komutlarin ~%33'u;
+// derleme 342 -> 260 ms (olculdu 2026-10-06, Ryzen 7 9800X3D). Calisma hizi
+// degismedi (benchmarks/fair, resmi BENCH_N).
+//
+// ⚠ vm_get_element / vm_array_get bir gun okurken depoyu degistirirse (kutulama,
+// genisletme, yeniden ayirma) BURASI tazelemeyi geri acmali — runtime'daki
+// yorum ve tests/okuma_tazeleme.sh bunu bekler. TULPAR_OKUMA_TAZELE=1 eski
+// davranis (olcum / pozitif kontrol).
+static void emit_shape_refresh_after_read(LLVMBackend *backend) {
+  static int tazele = -1;
+  if (tazele < 0) {
+    const char *v = getenv("TULPAR_OKUMA_TAZELE");
+    tazele = (v && *v && *v != '0') ? 1 : 0;
+  }
+  if (tazele) emit_shape_refresh_all(backend);
 }
 
 // Onbellekli eleman OKUMASI — genislik varsayimina gore.
@@ -9480,7 +9517,7 @@ static LLVMValueRef codegen_elem_step(LLVMBackend *backend, ASTNode_C *node,
   // kutular ve idata'yi FREE eder. Sekil onbellegindeki idata o an sarkiyor;
   // tazelenmezse dongudeki sonraki `a[j]` SERBEST BELLEK okuyor (olculdu:
   // "malloc(): unsorted double linked list corrupted").
-  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+  if (backend->shape_count > 0) emit_shape_refresh_after_read(backend);
   LLVMValueRef oldi = llvm_extract_vm_val_int(backend, old);
   LLVMValueRef newi =
       LLVMBuildAdd(backend->builder, oldi,
@@ -9598,7 +9635,7 @@ static LLVMValueRef codegen_elem_compound(LLVMBackend *backend,
   // Cagri diziyi kutuya cevirmis olabilir (arr_items -> arr_debox idata'yi
   // FREE eder) -> sekil onbellegi tazelenmeli. Sag taraf `a[j]` okuyabilir,
   // yani tazeleme okumadan ONCE olmali.
-  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+  if (backend->shape_count > 0) emit_shape_refresh_after_read(backend);
 
   LLVMValueRef rhs = codegen_expression(backend, node->right);
 
@@ -10237,7 +10274,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef slow_val = llvm_call_vmvalue_func(
           backend, backend->func_vm_get_element, args, 2, "element");
       // Cagri diziyi kutuya cevirmis olabilir -> onbellek tazelenmeli.
-      if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+      if (backend->shape_count > 0) emit_shape_refresh_after_read(backend);
       LLVMBasicBlockRef slow_end = LLVMGetInsertBlock(backend->builder);
       LLVMBuildBr(backend->builder, bb_done);
 
@@ -15545,7 +15582,14 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                        LLVMGlobalGetValueType(backend->func_vm_set_element),
                        backend->func_vm_set_element, args, 4, "");
         // Cagri diziyi kutuya cevirmis olabilir -> onbellek tazelenmeli.
-        if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+        // TULPAR_YAZMA_TAZELEME_SINAMA=atla bu tazelemeyi atlar: tests/
+        // okuma_tazeleme.sh'nin pozitif kontrolu (bayat onbellegi yakaladigini
+        // gostermek icin — okuma yolunun tazelemesizligi ayni testle olculur).
+        {
+          const char *sab = getenv("TULPAR_YAZMA_TAZELEME_SINAMA");
+          if (backend->shape_count > 0 && !(sab && strcmp(sab, "atla") == 0))
+            emit_shape_refresh_all(backend);
+        }
         LLVMBuildBr(backend->builder, sb_done);
 
         LLVMPositionBuilderAtEnd(backend->builder, sb_done);

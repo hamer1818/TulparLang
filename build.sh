@@ -801,6 +801,12 @@ if [ "$ACTION" = "suites" ]; then
     # onunla (aot_link_driver), TULPAR_LD=bfd eski yol; iki ikilinin
     # kullanici kodu komut komut ayni. CI'da ld.lld yoksa kirmizi.
     kapi_kuyruk "baglayici secimi kapisi basarisiz!" bash tests/bagliyici_secimi.sh ./tulpar
+
+    # OKUMA YAVAS YOLUNDAN SONRA SEKIL TAZELEMESI YOK (2026-10-06): IR'da
+    # tazeleme sayisi duser (TULPAR_OKUMA_TAZELE=1 iki yon), okuma yavas yolu
+    # sonrasi hizli erisim dogru; pozitif kontrol: yazma tazelemesi atlaninca
+    # ayni bicim YANLIS sonuc veriyor (test bayat onbellegi yakaliyor).
+    kapi_kuyruk "okuma sonrasi sekil tazelemesi kapisi basarisiz!" bash tests/okuma_tazeleme.sh ./tulpar
     # GOMULU MODULLER DEPO DISINDA (2026-10-05): gomulu router `import
     # "lib/http_utils.tpr"` yaziyordu, yol calisma dizinine gore diskten
     # cozuldugu icin kurulu tulpar ile depo disinda `import "router"` (ve
