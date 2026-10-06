@@ -1673,6 +1673,43 @@ if [ "$ACTION" = "test" ]; then
             *) echo "" ;;
         esac
     }
+
+    # SMOKE SURECINI DURDUR — Windows'ta `kill` DEGIL (2026-10-06).
+    # MSYS2'de yerel (Cygwin olmayan) bir .exe'ye `kill -TERM` onu baslatan
+    # saplama surecine gider; saplama msys2-runtime'in exit_process_tree()'sini
+    # cagirir (winsup/cygwin/include/cygwin/exit_process.h). O fonksiyon
+    # "cocuk" listesini Windows'un th32ParentProcessID alanindan kuruyor —
+    # alan surecin YARATILDIGI andaki ebeveyn PID'i; ebeveyn olunce PID
+    # yeniden kullanilabiliyor ve yaratilma zamani karsilastirilmiyor.
+    # Ebeveyni olmus HERHANGI bir surec, olu ebeveyninin PID'ini yeniden
+    # almis smoke ikilisinin "cocugu" sayilir ve yuruyus onun altina iner;
+    # yolda bulunan MSYS2 grup lideri kill(pid, SIGTERM) yer, yerel surec
+    # TerminateProcess. Olculdu (PR #473 CI): adimin dis kabugunun ata
+    # zincirinde wininit.exe'nin ebeveyni (724) olu ve PID'i baska bir
+    # surecte; `timeout` surecleri grup lideri ve ebeveynleri olu.
+    # Windows CI "Ornekler" bir kez boyle kesildi (PR #470, is 111891244750):
+    # cikis 3840 = 0x0F00 = Cygwin'in Cygwin-disi ebeveyne bayt cevirerek
+    # bildirdigi "sinyal 15 ile oldu" (pinfo::exit); yetim kalan sureclerden
+    # biri tam o anda smoke'ta olan wings_features_api. Burada Windows PID'i
+    # ile dogrudan TerminateProcess (taskkill /F, /T YOK): agac yuruyusu yok.
+    # Goruntu adi ikilinin adiyla eslesmezse (winpid saplamayi gosteriyorsa)
+    # eski yola donulur ve [tani] satiri basilir — sessiz degil.
+    smoke_durdur() {
+        local pid=$1 ad=$2 wp sat tk=""
+        if [ "$PLATFORM" = "Windows" ] && [ -r "/proc/$pid/winpid" ]; then
+            wp=$(cat "/proc/$pid/winpid" 2>/dev/null)
+            sat=$(tasklist //FI "PID eq $wp" //FO CSV //NH 2>/dev/null | tr -d '\r')
+            case "$sat" in
+                "\"$ad.exe\","*|"\"$ad\","*)
+                    tk=$(taskkill //F //PID "$wp" 2>&1) && return 0
+                    # Surec tasklist ile taskkill arasinda kendisi cikmis
+                    # olabilir: o zaman durdurulacak bir sey yok.
+                    kill -0 "$pid" 2>/dev/null || return 0 ;;
+            esac
+            echo "[tani] smoke_durdur: $ad winpid=$wp goruntu='${sat%%,*}' taskkill='$(echo "$tk" | tr -d '\r' | head -n 1)' — kill -TERM yoluna donuldu" >&2
+        fi
+        kill -TERM "$pid" 2>/dev/null
+    }
     probe_port_tekrari=""
     probe_portlari=" "
     for co_file in "${COMPILE_ONLY_TESTS[@]}"; do
@@ -1838,7 +1875,7 @@ if [ "$ACTION" = "test" ]; then
                             probe_status="server_died_after_probe"
                         fi
                     fi
-                    kill -TERM "$smoke_pid" 2>/dev/null
+                    smoke_durdur "$smoke_pid" "$name"
                     wait "$smoke_pid" 2>/dev/null
                     if [ "$probe_status" = "ok" ]; then
                         if [ -n "$probe_url" ]; then
@@ -2104,7 +2141,7 @@ if [ "$ACTION" = "test" ]; then
             return $rc
         }
         export INPUT_DIR FAIL_DIR GREEN RED NC PLATFORM ORNEK_SURE GNU_TIME
-        export -f run_test smoke_probe_for ornek_kos simdi_ms
+        export -f run_test smoke_probe_for smoke_durdur ornek_kos simdi_ms
 
         # xargs exits 123 if ANY worker exited non-zero — that is the
         # failure channel (a worker subshell cannot set TEST_FAILED).
