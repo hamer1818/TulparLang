@@ -3099,6 +3099,7 @@ void vm_set_element_ptr(VM *vm, VMValue *target, VMValue *index,
 
 // Asagidaki struct dizisi yedegi icin (tanimlari daha asagida).
 ObjObject *vm_allocate_object_aot_wrapper(void *vm);
+extern "C" uint8_t aot_struct_tag_of(const char *type_name);  // kutulu struct ad etiketi (asagida)
 void vm_object_set_aot_wrapper(void *vm, ObjObject *obj, char *key, VMValue value);
 
 VMValue vm_get_element(VMValue target, VMValue index) {
@@ -3143,6 +3144,10 @@ VMValue vm_get_element(VMValue target, VMValue index) {
         return VM_INT(0);
       }
       ObjObject *o = vm_allocate_object_aot_wrapper(nullptr);
+      // Kopya KUTULU STRUCT: ad etiketi (Obj::struct_tag) tasir — `print`
+      // `Q { x: 1 }` yazar, `match e { Q{x} => .. }` eslesir (2026-10-06;
+      // eskiden etiketsiz json'du).
+      if (o) o->obj.struct_tag = aot_struct_tag_of(a->type_name);
       const char *e = sarr_elem_at(a, idx);
       for (int f = 0; f < a->field_count; f++) {
         const char *fn = (a->field_names && a->field_names[f]) ? a->field_names[f] : "_";
@@ -3916,8 +3921,20 @@ extern "C" void aot_struct_set_field_ptr(VMValue *vp, int idx, long long val) {
 
 // 1 if *vp is a heap struct whose type_name equals `name`. Used by the
 // `TypeName{...}` match pattern to discriminate struct variants at runtime.
+//
+// KUTULU STRUCT DA (2026-10-06): ad etiketli json nesnesi (Obj::struct_tag —
+// dinamik dizideki `[p]`, struct dizisinin tipsiz okunan elemani, str alanli
+// struct) ayni tipin degeridir. Eskiden yalniz OBJ_STRUCT (match'in kendi
+// kutusu) sayiliyordu: `match arr[0] { Q{x} => x }` HIC eslesmiyordu.
+extern "C" const char *aot_struct_tag_name(uint8_t tag);
 extern "C" long long aot_struct_type_is_ptr(VMValue *vp, const char *name) {
-  if (!vp || !name || !IS_STRUCT(*vp)) return 0;
+  if (!vp || !name) return 0;
+  if (IS_OBJECT(*vp)) {
+    const uint8_t t = AS_OBJ(*vp)->struct_tag;
+    const char *tn = t ? aot_struct_tag_name(t) : nullptr;
+    return (tn && strcmp(tn, name) == 0) ? 1 : 0;
+  }
+  if (!IS_STRUCT(*vp)) return 0;
   ObjStruct *s = AS_STRUCT(*vp);
   return (s->type_name && strcmp(s->type_name, name) == 0) ? 1 : 0;
 }
@@ -4104,6 +4121,7 @@ static VMValue sarr_remove_boxed(VMValue arr, long long idx, bool is_pop) {
   const int fc = a->field_count;
   if (!sarr_remove(&arr, idx, tmp, is_pop)) return VM_INT(0);
   ObjObject *o = vm_allocate_object_aot_wrapper(nullptr);
+  if (o) o->obj.struct_tag = aot_struct_tag_of(a->type_name);  // kutulu struct (yukaridaki not)
   for (int f = 0; f < fc; f++) {
     const char *fn = (a->field_names && a->field_names[f]) ? a->field_names[f] : "_";
     vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(fn),
