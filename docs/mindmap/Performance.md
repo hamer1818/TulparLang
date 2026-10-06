@@ -1816,7 +1816,70 @@ koyduğu için bu bir iç işaretçiyi serbest bırakmaktı. Kod okumasıyla
 bulundu; tetikleyen program ölçülmedi. Artık tek blok, tek `free`.
 
 Kalan: (b) — dizgi dizisi işaretçi deposu, parse'ta −40 MB daha; yukarıdaki
-risk sütunu yüzünden ayrı iş.
+risk sütunu yüzünden ayrı iş. **Yapıldı 2026-10-06** — aşağıdaki bölüm.
+
+## parse: kutusuz dizgi deposu — 223,4 → 185,1 MB, 71,6 → 69,2 ms (2026-10-06)
+
+Yukarıdaki (b): `split` parça tablosu `ObjString *` (`ARR_ELEM_STR`, eleman
+16 B `VMValue` yerine 8 B). Önce ÖLÇÜLDÜ, sonra yapıldı: yalnız `split` +
+bekçili okuma + `arr_debox` ile prototip parse'ta 223,4 → 184,0 MB (−17,4 %)
+ve 71,5 → 69,2 ms verdi — görevin "%15'ten az bellek ya da sıcak yolda
+gerileme varsa yapma" eşiğinin üstünde. Alternatif "dilim" temsili (parçalar
+tek blokta, eleman = ofset) daha çok kazandırırdı ama `parts[i]` her okumada
+bir `ObjString` üretmek (ayırmak) zorunda kalırdı; döngüde okunan her parça
+yeniden ayrılır — elendi.
+
+Riskin (K'nin 76 + 57 sitesi) gerçek boyu ölçülünce küçüldü: `idata`'yı
+TAMSAYI sanan yerler bir avuç ve hepsi aynı kalıptaydı — "32 ise i32, F64
+ise double, DEĞİLSE i64":
+
+| yer | eski varsayım | şimdi |
+|---|---|---|
+| codegen şekil doldurma / tazeleme, `int_probe` (döngü sürümü) | `eb != F64` = tamsayı | `eb > 0` (tek karşılaştırma, aynı maliyet) |
+| codegen bekçili yazma (`a[i] = <int>`) | `eb != F64` iken ham yaz | `eb > 0` |
+| codegen bekçili okuma | son dal i64 | `eb == STR` dalı (int[]/float[] adında yavaş yola) |
+| runtime `push(<int>)` | `elem_bits != F64` | `elem_bits > 0` |
+| `pop`, `remove_at`, `print`/`toString`, `vm_array_get` | son dal i64 / `arr_items` | `arr_unboxed_get` (tek yer) |
+| `json`, `join`, `contains`, `indexOf`, `at`, `csv_emit`, dilim | `arr_items` (KUTUYA çevirir) | `arr_get` (çevirmez) |
+| kalıcı kopya (`aot_persist`) | kaynağı kutuya çevirip kutulu kopya | dizgi deposu → dizgi deposu |
+| `arc_free_array` | yalnız `items_` | dizgi deposunun elemanları da bırakılır |
+
+Geri kalan `arr_items` kullanıcıları DOĞRU (diziyi kutuya çevirir), yalnız o
+an 16 B'ye çıkar. Kutusuz okuma artık tek fonksiyonda (`arr_unboxed_get`,
+vm.hpp); yeni bir depo işareti oraya ve `arr_debox`'a eklenir.
+
+Ölçüm (Ryzen 7 9800X3D, `taskset -c 6,7`, `TULPAR_AOT_NOCACHE=1`, repo
+dışında izole dizin, taban a4462a91 — #472 öncesi, farkı yalnız gömülü kitaplık import satırları; en iyi 7): kaynağa 0–3
+önek satırıyla `parse` {71,6 72,0 71,4 71,9} → {69,2 69,7 69,6 69,6} ms,
+bellek her düzende 223,4 → 185,1 MB — kazanç yerleşimden bağımsız (split'te
+5M × 8 B daha az yazma). 13 çekirdek (en iyi 7; eski/yeni ms): callfn
+80,6/81,2 · hashmap 78,4/79,1 · qsort 71,7/70,3 · intloop 136,2/136,3 ·
+strcat 9,8/10,0 · nbody 116,5/116,3 · mandelbrot 155,8/156,0 · particles
+36,4/36,5 · arrayiter 1,2/1,1 · fib 0,4/0,4 · matmul 36,3/36,4 · sieve
+7,5/7,4; bellekler aynı. Tekrarlarda strcat {9,6 9,7 9,7}/{9,5 9,4 9,4},
+hashmap {79,4 79,4}/{79,3 79,9}, callfn {80,8 80,8}/{81,3 75,0} — gürültü
+(callfn'in yerleşim duyarlılığı [[Tuzaklar]] 7i). qsort'ta ilk sürüm (her
+bekçili okumaya satır içi dizgi bloğu) sıcak fonksiyonu 102 B büyütüp
+%0,7 yavaşlatmıştı (71,8 → 72,4, üç tur); `int[]`/`float[]` bildirilmiş
+adda blok üretilmiyor (dizgi deposu orada yavaş ama doğru yola düşer).
+
+Kapılar: `tests/split_toplu.sh` (5 baytlık parça 32 B < 37; `TULPAR_NO_STRARR=1`
+ile aynı koşumda 40 B — fark ≥ 6 değilse kapı depoyu ölçmüyor; tanı satırı
+`depo dizgi`; taban derleyicide 41 B + tanı yok → kırmızı),
+`tests/dizgi_dizisi_deposu.test.tpr` (okuma yolları, push/pop/remove_at,
+elle insert + sıralama, karışık türe dönüşme, global/json/kalıcı kopya,
+checkpoint, 4 thread; taban derleyicide yeşil — anlam aynı; beş sabotajın
+beşi de kırmızı: `push`'un tamsayı koşulu, `arr_unboxed_get`'in dizgi dalı,
+codegen yazma sınavı, şekil doldurma sınavı, `pop`), `tests/dap_audit.py`
+(`sp = split(...)`: eski printer işaretçileri tamsayı basıyordu → kırmızı).
+Motor: `engine_dalga` 2400 kare `[kapi] kare=972 dalga=4 … hata=0`,
+`engine_aksiyon` 3200 kare `uyari=0` + `TAMAM`, `engine_bridge` 27/27.
+
+A/B tuzağı (ölçerken yakalandı): taban derleyiciyi DEPO İÇİNDEN koşmak eski
+codegen'i yeni runtime'la bağlıyor — `build_link_search_dirs` exe dizinindeki
+arşivden yeniyse `./build-linux`'u önce arıyor. Eski codegen yeni `split`'in
+dizgi deposunu tamsayı okuyup işaretçi bastı; "taban derleyicide kırmızı"
+sanıldı. Repo dışında izole dizinde taban yeşil.
 
 ## particles: struct dizisi döngü sürümü + satır içi `push` / `toFloat` — 53,4 → 37,3 ms, Rust ile aynı (2026-10-02)
 

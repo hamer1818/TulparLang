@@ -13,6 +13,29 @@ tag still works;
 
 ## [Unreleased]
 
+### Hızlandı — `split` sonucu kutusuz dizgi deposunda: `parse` 223,4 → 185,1 MB
+
+- `split` parça tablosu artık `ObjString *` (`ARR_ELEM_STR`): eleman başına
+  16 B `VMValue` yerine 8 B (wasm32'de 4). benchmarks/fair `parse` (5M
+  parça): tepe bellek **223,4 → 185,1 MB (−17 %)**, süre **71,6 → 69,2 ms**
+  (Ryzen 7 9800X3D, `taskset -c 6,7`, repo dışında A/B, en iyi 7; kaynağa
+  0–3 önek satırıyla aynı fark). Öteki 12 çekirdek gürültü içinde. Bir
+  depolama ayrıntısı: dizgi olmayan bir değer yazılınca dizi kutulu depoya
+  döner, eleman türleri korunur. `TULPAR_NO_STRARR=1` kapatır (A/B).
+- Kutusuz depodan okuma tek yerde (`arr_unboxed_get` / `arr_get`, vm.hpp).
+  Yalnız okuyan yollar (`print`/`toString`, json, `join`, `contains`,
+  `indexOf`, `at`, `pop`, `remove_at`, kalıcı kopya) diziyi artık kutuya
+  çevirmiyor — tamsayı/float dizileri için de.
+- "Tamsayı depo mu" sınavı `elem_bits != ARR_ELEM_F64` yerine
+  `elem_bits > 0` (codegen şekil/sürüm sondaları, bekçili yazma, `push`):
+  eski sınav dizgi deposunu tamsayı sanırdı (Tuzaklar 7q).
+- Kapılar: `tests/split_toplu.sh` (parça başına 32 B < 37; `depo dizgi` tanı
+  satırı; aynı koşumda `TULPAR_NO_STRARR=1` ile 40 B — pozitif kontrol; eski
+  derleyicide kırmızı), yeni `tests/dizgi_dizisi_deposu.test.tpr` (anlam:
+  okuma, push/pop/remove_at, elle insert + sıralama, karışık türe dönüşme,
+  global/json/kalıcı kopya, checkpoint, 4 thread — beş sabotajın beşi
+  kırmızı), `tests/dap_audit.py` (gdb yazıcısı dizgi deposunu okuyor).
+
 ### Düzeltildi — `import "router"` ve `import "tulpar_api"` depo dışında derlenmiyordu
 
 - Gömülü `router` kendi içinde `import "lib/http_utils.tpr"`, gömülü

@@ -53,10 +53,20 @@ Zaten güvenli: arena/checkpoint/region/`js_small_buffer`/`g_wings_current_fd` T
 `ObjArray` (64 bayt; `sizeof` ile ölçüldü 2026-09-29, x86_64 Linux —
 `elem_bits` eklenince 56'dan büyüdü) iki depodan **tam olarak birini** tutar:
 - `items_` — `VMValue*`, 16 bayt/eleman, her tür değer.
-- `idata` — yalnız int; eleman genişliği `elem_bits`: dizi **4 bayt/eleman
-  (i32)** başlar, i32'ye sığmayan bir değer yazılınca 8 bayta **genişler**
-  (`aot_arr_widen`) — kutulanmaz. Tür `long long*` ama 32-bit dizide
-  bellek i32 dizisi olarak okunur.
+- `idata` — kutusuz depo; ne tuttuğunu `elem_bits` söyler:
+  - **32 / 64** — tamsayı. Dizi **4 bayt/eleman (i32)** başlar, i32'ye
+    sığmayan bir değer yazılınca 8 bayta **genişler** (`aot_arr_widen`) —
+    kutulanmaz. Tür `long long*` ama 32-bit dizide bellek i32 dizisi olarak
+    okunur.
+  - **`ARR_ELEM_F64` (−64)** — ham double (2026-10-01; `float[]` dolgusu).
+  - **`ARR_ELEM_STR` (−8)** — `ObjString *` tablosu (2026-10-06; `split`
+    sonucu): eleman 16 yerine 8 bayt (wasm32'de 4).
+  **Tamsayı depo = `elem_bits > 0`**; tamsayı olmayan bütün işaretler
+  NEGATİF. Eskiden tamsayı sınavı `elem_bits != ARR_ELEM_F64` idi ve dizgi
+  deposunu tamsayı sanırdı ([[Tuzaklar]] 7q). Kutusuz depodan okuma TEK
+  yerden: `arr_unboxed_get` / `arr_get` (vm.hpp) — depoyu değiştirmez, yeni
+  bir işaret oraya ve `arr_debox`'a eklenir. Negatif işaretli depo, işaretin
+  türünden OLMAYAN bir değer yazılınca kutuya çevrilir.
 
 Diğeri **NULL**. Bu bilinçli: kutulanmamış bir dizide `items_` NULL olduğu için
 atlanan her yol sessizce bozulmak yerine **gürültüyle patlar**.
@@ -67,9 +77,12 @@ eleman başına tek yazma ve yalnız bir kez. Yalnız codegen'in sıcak yolu
 `idata`ya doğrudan bakar. `arr_debox` **kapasiteyi korur**: büyüme kodu
 `old_capacity`'yi önceden okumuş olabilir.
 
-Üreticiler: `array_fill(n, <int>)` ve `push(<int>)`. Float/bool/nesne yazımı
-diziyi kutuya döndürür (codegen bu durumda yavaş yola dalar, orası `arr_items`
-çağırır) — anlam birebir korunur.
+Üreticiler: `array_fill(n, <int>)` ve `push(<int>)` (tamsayı),
+`array_fill(n, <float>)` (double), `split` (dizgi; `TULPAR_NO_STRARR=1` kapatır).
+İşaretin türünden olmayan yazım diziyi kutuya döndürür (codegen bu durumda
+yavaş yola dalar, orası `arr_items` çağırır) — anlam birebir korunur. Yalnız
+OKUYAN yollar (print/toString, json, `join`, `contains`, `indexOf`, `at`,
+`pop`, `remove_at`, kalıcı kopya) kutuya çevirmez.
 
 Serbest bırakma: `idata` da bırakılmalı ve bu, `items_` denetiminin **dışında**
 olmalı (kutulanmamış dizide `items_` NULL'dır). Üç yol: `region_free_one`,

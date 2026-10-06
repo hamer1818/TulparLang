@@ -7351,6 +7351,17 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
 // sabitliyor. "idata dolu = tamsayi" varsayimi bu degerle gecersiz: idata'ya
 // bakan her codegen yolu elem_bits'i de sinar.
 static const int kArrElemF64 = -64;
+// Kutusuz DIZGI depo (ARR_ELEM_STR, 2026-10-06): idata `ObjString *`
+// tablosu. TAMSAYI depo = elem_bits > 0; negatif isaretlerin hicbiri tamsayi
+// degil. Tamsayi sinavlari bu yuzden `eb > 0` (tek karsilastirma) — eskiden
+// `eb != F64` idi ve yeni bir negatif isaret (dizgi) onu tamsayi sanardi.
+static const int kArrElemStr = -8;
+// `eb > 0`: tamsayi (32/64) depo mu?
+static LLVMValueRef emit_eb_is_int(LLVMBackend *backend, LLVMValueRef eb,
+                                   const char *name) {
+  return LLVMBuildICmp(backend->builder, LLVMIntSGT, eb,
+                       LLVMConstInt(backend->int32_type, 0, 0), name);
+}
 
 // Bu ad, hicbir dizinin count/idata alanini degistiremez mi?
 //
@@ -7545,9 +7556,7 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
   LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "shape.ubox");
   if (want != 1)
     ok = LLVMBuildAnd(backend->builder, ok,
-                      LLVMBuildICmp(backend->builder, LLVMIntNE, eb,
-                                    LLVMConstInt(i32t, (unsigned long long)(long long)kArrElemF64, 1),
-                                    "shape.isint"),
+                      emit_eb_is_int(backend, eb, "shape.isint"),
                       "shape.uint");
   if (want == 1)
     ok = LLVMBuildAnd(backend->builder, ok, is32, "shape.ok32");
@@ -7678,9 +7687,7 @@ static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager,
   // iken is32 zaten disliyor).
   if (want != 1)
     ok = LLVMBuildAnd(backend->builder, ok,
-                      LLVMBuildICmp(backend->builder, LLVMIntNE, eb,
-                                    LLVMConstInt(i32t, (unsigned long long)(long long)kArrElemF64, 1),
-                                    "isint"),
+                      emit_eb_is_int(backend, eb, "isint"),
                       "uint");
   // Genislik VARSAYIMI tutmuyorsa count=0: bu surumun uzmanlastirilmis
   // erisimleri devre disi kalir ve bekcili yola dusulur. Genisletme (widen)
@@ -8652,8 +8659,7 @@ static LLVMValueRef get_int_probe_fn(LLVMBackend *backend) {
       LLVMBuildStructGEP2(backend->builder, backend->obj_array_type, objp, 6, "ebp"), "eb");
   LLVMValueRef isint = LLVMBuildAnd(
       backend->builder, LLVMBuildIsNotNull(backend->builder, id, "ubox"),
-      LLVMBuildICmp(backend->builder, LLVMIntNE, eb,
-                    LLVMConstInt(i32t, (unsigned long long)(long long)kArrElemF64, 1), "notf"),
+      emit_eb_is_int(backend, eb, "notf"),
       "isint");
   LLVMBuildRet(backend->builder,
                LLVMBuildZExt(backend->builder, isint, backend->int_type, "r"));
@@ -9889,12 +9895,45 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       // Kutusuz DOUBLE depo (ARR_ELEM_F64): ham bit deseni FLOAT etiketiyle
       // doner — kutulu depodaki VMValue'nun aynisi, yalniz 8 bayt.
       LLVMPositionBuilderAtEnd(backend->builder, bb_w);
+      LLVMBasicBlockRef bb_wn = append_bb(backend, fn, "arr.uwn");
       LLVMBuildCondBr(backend->builder,
                       LLVMBuildICmp(backend->builder, LLVMIntEQ, eb2,
                                     LLVMConstInt(backend->int32_type,
                                                  (unsigned long long)(long long)kArrElemF64, 1),
                                     "arr.isf64"),
-                      bb_f64, bb_u64);
+                      bb_f64, bb_wn);
+      // Kutusuz DIZGI depo (ARR_ELEM_STR): ObjString* -> {OBJ, p}. `int[]` /
+      // `float[]` bildirilmis adda (ipucu — ad tablosu program genelinde,
+      // kapsamsiz) satir ici blok URETILMEZ, dizgi deposu yavas yola
+      // (vm_get_element) gider: dogru, yalniz yavas. Niye: her bekcili
+      // okumaya bir blok daha eklemek qsort'un sicak fonksiyonunu 102 bayt
+      // buyuttu ve %0,7 yavaslatti (olculdu 2026-10-06, en iyi 11, uc tur:
+      // 71,8 -> 72,4 ms); tamsayi dizisinde dizgi deposu zaten beklenmiyor.
+      const char *abn = array_base_name(node);
+      const bool str_inline =
+          !(abn && (iv_hint_names().count(abn) || fv_hint_names().count(abn)));
+      LLVMBasicBlockRef bb_str =
+          str_inline ? append_bb(backend, fn, "arr.str") : bb_slow;
+      LLVMPositionBuilderAtEnd(backend->builder, bb_wn);
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildICmp(backend->builder, LLVMIntEQ, eb2,
+                                    LLVMConstInt(backend->int32_type,
+                                                 (unsigned long long)(long long)kArrElemStr, 1),
+                                    "arr.isstr"),
+                      bb_str, bb_u64);
+      LLVMValueRef str_val = nullptr;
+      LLVMBasicBlockRef str_end = nullptr;
+      if (str_inline) {
+        LLVMPositionBuilderAtEnd(backend->builder, bb_str);
+        LLVMValueRef sep = LLVMBuildGEP2(backend->builder, backend->ptr_type, idata,
+                                         &idxw, 1, "arr.selem.ptr");
+        LLVMValueRef sraw = LLVMBuildLoad2(backend->builder, backend->ptr_type, sep,
+                                           "arr.selem");
+        llvm_tbaa_tag(backend, sraw, 1);
+        str_val = llvm_build_vm_val_obj(backend, sraw);
+        str_end = LLVMGetInsertBlock(backend->builder);
+        LLVMBuildBr(backend->builder, bb_done);
+      }
       LLVMPositionBuilderAtEnd(backend->builder, bb_f64);
       LLVMValueRef fep = LLVMBuildGEP2(backend->builder, backend->float_type, idata,
                                        &idxw, 1, "arr.felem.ptr");
@@ -9960,10 +9999,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMPositionBuilderAtEnd(backend->builder, bb_done);
       LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type,
                                       "arr.res");
-      LLVMValueRef inc[] = {v32, ubox_val, f64_val, fast_val, slow_val, cached_val};
-      LLVMBasicBlockRef inb[] = {u32_end, ubox_end, f64_end, boxed_end, slow_end,
-                                 cached_end};
-      LLVMAddIncoming(phi, inc, inb, cached_end ? 6 : 5);
+      LLVMValueRef inc[7];
+      LLVMBasicBlockRef inb[7];
+      unsigned ninc = 0;
+      inc[ninc] = v32; inb[ninc++] = u32_end;
+      inc[ninc] = ubox_val; inb[ninc++] = ubox_end;
+      inc[ninc] = f64_val; inb[ninc++] = f64_end;
+      if (str_end) { inc[ninc] = str_val; inb[ninc++] = str_end; }
+      inc[ninc] = fast_val; inb[ninc++] = boxed_end;
+      inc[ninc] = slow_val; inb[ninc++] = slow_end;
+      if (cached_end) { inc[ninc] = cached_val; inb[ninc++] = cached_end; }
+      LLVMAddIncoming(phi, inc, inb, ninc);
       return phi;
     }
   }
@@ -15144,10 +15190,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMValueRef s_isf64 = LLVMBuildICmp(
             backend->builder, LLVMIntEQ, s_eb,
             LLVMConstInt(si32, (unsigned long long)(long long)kArrElemF64, 1), "set.isf64");
+        // Tamsayi deger yalniz TAMSAYI depoya (eb > 0) dogrudan yazilir;
+        // double ve dizgi depo (negatif isaretler) yavas yola gider.
         LLVMValueRef s_wok = LLVMBuildAnd(
             backend->builder,
             LLVMBuildAnd(backend->builder, s_visint,
-                         LLVMBuildNot(backend->builder, s_isf64, "set.notf64"),
+                         emit_eb_is_int(backend, s_eb, "set.notf64"),
                          "set.wint"),
             LLVMBuildOr(backend->builder,
                         LLVMBuildNot(backend->builder, s_is32, "set.not32"),

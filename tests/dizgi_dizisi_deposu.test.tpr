@@ -1,0 +1,271 @@
+// KUTUSUZ DIZGI DEPOSU (ARR_ELEM_STR, 2026-10-06) — anlambilim bekcisi.
+//
+// split() parcalari artik `ObjString *` tablosunda (eleman basina 8 bayt;
+// kutulu depoda 16). Bu bir DEPOLAMA ayrintisi: dilin gordugu her sey eski
+// kutulu diziyle AYNI olmali. Paket iki derleyicide de (kutulu ve kutusuz
+// split) yesil; beklenen degerler eski derleyicide bu paketle dogrulandi.
+// Depo gercekten kutusuz mu: tests/split_toplu.sh (`depo dizgi` tani satiri +
+// parca basina bellek). Paketin kutusuz yolu OLCTUGU sabotajla gosterildi
+// (CHANGELOG): remove_at / pop / push / tamsayi yazma dallarindan biri
+// kutusuz depoyu tamsayi sanirsa burasi kirmizi.
+//
+// Calistir: ./tulpar tests/dizgi_dizisi_deposu.test.tpr
+import "test";
+
+func _b(array a): str {
+    str s = "";
+    for (int i = 0; i < len(a); i = i + 1) {
+        if (i > 0) { s = s + "|"; }
+        s = s + toString(a[i]);
+    }
+    return s;
+}
+
+func run_okuma_yollari() {
+    array p = split("a,bb,ccc", ",");
+    assert_eq_str(toString(p), "[\"a\", \"bb\", \"ccc\"]");
+    assert_eq_int(len(p), 3);
+    assert_eq_str(p[1], "bb");
+    assert_eq_bool(p[0] == "a", true);
+    assert_eq_str(join(",", p), "a,bb,ccc");
+    assert_eq_bool(contains(p, "ccc"), true);
+    assert_eq_bool(contains(p, "c"), false);
+    assert_eq_int(indexOf(p, "bb"), 1);
+    assert_eq_int(indexOf(p, "yok"), -1);
+    assert_eq_str(at(p, 2, "yok"), "ccc");
+    assert_eq_str(at(p, 9, "yok"), "yok");
+    assert_eq_str(toJson(p), "[\"a\",\"bb\",\"ccc\"]");
+    str fi = "";
+    for (x in p) { fi = fi + x + ";"; }
+    assert_eq_str(fi, "a;bb;ccc;");
+    // Okuma depoyu DEGISTIRMEZ: ardindan yazma yollari yine dogru.
+    p[0] = "z";
+    assert_eq_str(_b(p), "z|bb|ccc");
+}
+
+func run_push_pop_remove_at() {
+    array p = split("k0,k1", ",");
+    // 8'i asan buyume (realloc / arena kopyasi).
+    for (int i = 2; i < 40; i = i + 1) { push(p, "k" + toString(i)); }
+    assert_eq_int(len(p), 40);
+    int bozuk = 0;
+    for (int i = 0; i < 40; i = i + 1) {
+        if (p[i] != "k" + toString(i)) { bozuk = bozuk + 1; }
+    }
+    assert_eq_int(bozuk, 0);
+    assert_eq_str(pop(p), "k39");
+    assert_eq_int(len(p), 39);
+    assert_eq_str(remove_at(p, 0), "k0");
+    assert_eq_str(remove_at(p, 10), "k11");
+    assert_eq_str(remove_at(p, len(p) - 1), "k38");
+    assert_eq_int(len(p), 36);
+    assert_eq_str(p[0], "k1");
+    assert_eq_str(p[9], "k10");
+    assert_eq_str(p[10], "k12");
+    assert_eq_str(p[35], "k37");
+    // Tumunu bosalt, yeniden doldur.
+    while (len(p) > 0) { pop(p); }
+    assert_eq_int(len(p), 0);
+    push(p, "yeni");
+    assert_eq_str(toString(p), "[\"yeni\"]");
+}
+
+// Elle "insert": sona ekle, sonra kaydirarak yerlestir (dilde insert yerlesigi
+// yok; kaydirma dizgi yazma yolunu olcer).
+func _araya(array a, int k, str v) {
+    push(a, v);
+    int i = len(a) - 1;
+    while (i > k) { a[i] = a[i - 1]; i = i - 1; }
+    a[k] = v;
+}
+
+func run_elle_insert_ve_sort() {
+    array p = split("30,4,1000,25,7", ",");
+    _araya(p, 0, "500");
+    _araya(p, 3, "9");
+    assert_eq_str(_b(p), "500|30|4|9|1000|25|7");
+    // Ekleme siralamasi (dizgileri yerinde tasir).
+    for (int i = 1; i < len(p); i = i + 1) {
+        str anahtar = p[i];
+        int j = i - 1;
+        while (j >= 0 && toInt(p[j]) > toInt(anahtar)) {
+            p[j + 1] = p[j];
+            j = j - 1;
+        }
+        p[j + 1] = anahtar;
+    }
+    assert_eq_str(_b(p), "4|7|9|25|30|500|1000");
+    assert_eq_str(join("+", p), "4+7+9+25+30+500+1000");
+}
+
+func run_karisik_ture_donusme() {
+    // Dizgi OLMAYAN yazma diziyi kutulu depoya cevirir; eleman turleri korunur.
+    array p = split("a,b,c", ",");
+    p[1] = 5;
+    assert_eq_str(toString(p), "[\"a\", 5, \"c\"]");
+    assert_eq_int(p[1] + 1, 6);
+    p[1] = "B";
+    assert_eq_str(toString(p), "[\"a\", \"B\", \"c\"]");
+    array q = split("x,y", ",");
+    push(q, 7);
+    push(q, 2.5);
+    push(q, true);
+    push(q, "z");
+    assert_eq_str(toString(q), "[\"x\", \"y\", 7, 2.5, true, \"z\"]");
+    assert_eq_int(q[2] * 2, 14);
+    assert_eq_str(remove_at(q, 0), "x");
+    assert_eq_int(remove_at(q, 1), 7);
+    assert_eq_str(toString(q), "[\"y\", 2.5, true, \"z\"]");
+    // Dizi ve json elemani.
+    array r = split("m,n", ",");
+    push(r, [1, 2]);
+    push(r, {"k": "v"});
+    assert_eq_str(toString(r), "[\"m\", \"n\", [1, 2], {\"k\": \"v\"}]");
+    // Tamsayi yazma hizli yolu (tipli indeks, skalar deger) kutusuz dizgi
+    // deposuna ham yazmamali.
+    array t = split("1,2,3", ",");
+    for (int i = 0; i < len(t); i = i + 1) { t[i] = i * 10; }
+    assert_eq_str(toString(t), "[0, 10, 20]");
+    assert_eq_int(t[0] + t[1] + t[2], 30);
+}
+
+func run_tipli_dizgi_dizisi() {
+    str[] t = split("u,v", ",");
+    push(t, "w");
+    assert_eq_int(len(t), 3);
+    assert_eq_str(t[2], "w");
+    str top = "";
+    for (int i = 0; i < len(t); i = i + 1) { top = top + t[i]; }
+    assert_eq_str(top, "uvw");
+}
+
+func run_ic_ice_ve_match() {
+    array m = [split("a,b", ","), split("c", ",")];
+    assert_eq_str(toString(m), "[[\"a\", \"b\"], [\"c\"]]");
+    str r = match split("h,t1,t2", ",") {
+        [h, ..rest] => h + ":" + toString(len(rest)) + ":" + toString(rest),
+        _ => "yok",
+    };
+    assert_eq_str(r, "h:2:[\"t1\", \"t2\"]");
+}
+
+func run_bos_ve_bayt_bayt() {
+    array e = split("", ",");
+    assert_eq_int(len(e), 0);
+    push(e, "ilk");
+    assert_eq_str(toString(e), "[\"ilk\"]");
+    array b = split("xyz", "");
+    assert_eq_str(_b(b), "x|y|z");
+    assert_eq_str(pop(b), "z");
+    assert_eq_str(toString(b), "[\"x\", \"y\"]");
+}
+
+// --- kalicilik --------------------------------------------------------------
+array g_p = [];
+array g_kap = [];
+json g_j = {};
+array g_kare = [];
+
+func _cople() {
+    int k = 0;
+    while (k < 3000) {
+        str cop = "COPCOPCOP-" + toString(k) + "-COPCOPCOPCOP";
+        array c = split(cop, "-");
+        json o = {"a": cop, "b": c};
+        k = k + 1;
+    }
+}
+
+func _globale_ata() {
+    g_p = split("g1,g2,g3", ",");
+    push(g_kap, split("d1,d2", ","));
+    g_j["parcalar"] = split("j1,j2", ",");
+}
+
+func run_global_json_kalicilik() {
+    _globale_ata();
+    _cople();
+    assert_eq_str(_b(g_p), "g1|g2|g3");
+    assert_eq_str(toString(g_kap), "[[\"d1\", \"d2\"]]");
+    assert_eq_str(toJson(g_j), "{\"parcalar\":[\"j1\",\"j2\"]}");
+    // Kalici kopyaya ekleme ve yazma (yazma bariyeri).
+    push(g_p, "g" + toString(4));
+    g_p[0] = "G" + toString(1);
+    _cople();
+    assert_eq_str(_b(g_p), "G1|g2|g3|g4");
+    assert_eq_str(pop(g_p), "g4");
+    assert_eq_str(remove_at(g_p, 1), "g2");
+    assert_eq_str(_b(g_p), "G1|g3");
+}
+
+func _kare() {
+    array p = split("x,KALICI,y", ",");
+    g_kare = p;
+}
+
+func run_checkpoint_sonrasi() {
+    int wm = arena_save();
+    _kare();
+    arena_drop(wm);
+    _cople();
+    assert_eq_str(_b(g_kare), "x|KALICI|y");
+    int wm2 = arena_save();
+    array gecici = split("t1,t2,t3", ",");
+    assert_eq_str(gecici[2], "t3");
+    arena_drop(wm2);
+    _cople();
+    assert_eq_str(g_kare[1], "KALICI");
+}
+
+// --- 4 thread eszamanli okuma (FINDINGS T7: okuma yollari saf) ------------
+array g_ortak = [];
+
+func _okuyucu(int id) {
+    int t = 0;
+    int r = 0;
+    while (r < 10) {
+        int i = 0;
+        while (i < len(g_ortak)) { t = t + toInt(g_ortak[i]); i = i + 1; }
+        if (contains(g_ortak, "10003")) { t = t + 1; }
+        t = t + indexOf(g_ortak, "10002");
+        t = t + len(join(",", g_ortak));
+        t = t + len(toString(g_ortak));
+        r = r + 1;
+    }
+    return t;
+}
+
+func run_dort_thread_okur() {
+    var sb = StringBuilder(64);
+    int n = 4000;
+    for (int i = 0; i < n; i = i + 1) {
+        if (i > 0) { sb_append(sb, ","); }
+        sb_append(sb, 10000 + i);
+    }
+    g_ortak = split(sb_tostring(sb), ",");
+    sb_free(sb);
+    int tek = _okuyucu(0);
+    int t1 = thread_create(_okuyucu, 1);
+    int t2 = thread_create(_okuyucu, 2);
+    int t3 = thread_create(_okuyucu, 3);
+    int t4 = thread_create(_okuyucu, 4);
+    assert_eq_int(thread_join(t1), tek);
+    assert_eq_int(thread_join(t2), tek);
+    assert_eq_int(thread_join(t3), tek);
+    assert_eq_int(thread_join(t4), tek);
+    assert_eq_str(g_ortak[0], "10000");
+    assert_eq_str(g_ortak[n - 1], "13999");
+}
+
+print("=== kutusuz dizgi deposu (split) ===");
+test("okuma yollari depoyu degistirmez", "run_okuma_yollari");
+test("push / pop / remove_at", "run_push_pop_remove_at");
+test("elle insert + siralama", "run_elle_insert_ve_sort");
+test("karisik ture donusme", "run_karisik_ture_donusme");
+test("tipli str[]", "run_tipli_dizgi_dizisi");
+test("ic ice dizi + match kuyrugu", "run_ic_ice_ve_match");
+test("bos girdi / bayt bayt", "run_bos_ve_bayt_bayt");
+test("global / json / kalici kopya", "run_global_json_kalicilik");
+test("checkpoint sonrasi", "run_checkpoint_sonrasi");
+test("4 thread eszamanli okur", "run_dort_thread_okur");
+test_summary();
