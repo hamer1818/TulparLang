@@ -1189,9 +1189,18 @@ static void aot_arena_rewind_to(int idx) {
     g_region.resize(cp->region_mark);
 }
 
+// 64-bit indeksi int'e DOYURARAK indirir (2026-10-06, Tuzaklar 7r). Asagidaki
+// erisim yollari `(int)AS_INT(i)` yaziyordu: 2^32 + 1 indeksi 1'e kesiliyor ve
+// `a[4294967297]` SESSIZCE a[1]'i okuyup yaziyordu (sinir disi hatasi yerine).
+// Uzunluklar <= INT32_MAX oldugu icin doyurulmus deger her sinir sinavinda
+// gercek degerle ayni sonucu verir (buyuk pozitif >= uzunluk, buyuk negatif < 0).
+static inline int idx_doyur(long long v) {
+  return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int)v;
+}
+
 VMValue aot_arena_restore(VMValue idxVal) {
   if (!IS_INT(idxVal) || !g_aot_string_arena) return VM_INT(0);
-  int idx = (int)AS_INT(idxVal);
+  int idx = idx_doyur(AS_INT(idxVal));
   if (idx < 0 || idx >= g_arena_checkpoint_top) return VM_INT(0);
   aot_arena_rewind_to(idx);
   // Drop any *nested* checkpoints (idx+1..top) — those scopes have
@@ -1213,7 +1222,7 @@ VMValue aot_arena_restore(VMValue idxVal) {
 // arena/region stopped being reclaimed → unbounded leak under connection churn.
 VMValue aot_arena_drop(VMValue idxVal) {
   if (!IS_INT(idxVal) || !g_aot_string_arena) return VM_INT(0);
-  int idx = (int)AS_INT(idxVal);
+  int idx = idx_doyur(AS_INT(idxVal));
   if (idx < 0 || idx >= g_arena_checkpoint_top) return VM_INT(0);
   aot_arena_rewind_to(idx);
   g_arena_checkpoint_top = idx; // release this checkpoint, not just rewind it
@@ -3105,7 +3114,7 @@ void vm_object_set_aot_wrapper(void *vm, ObjObject *obj, char *key, VMValue valu
 VMValue vm_get_element(VMValue target, VMValue index) {
   if (IS_ARRAY(target)) {
     if (IS_INT(index)) {
-      return vm_array_get(AS_ARRAY(target), (int)AS_INT(index));
+      return vm_array_get(AS_ARRAY(target), idx_doyur(AS_INT(index)));
     }
     // Array indexed by a non-int (string) key has no such entry — return 0
     // silently, matching how a missing object key behaves. (A Wings handler
@@ -3119,7 +3128,7 @@ VMValue vm_get_element(VMValue target, VMValue index) {
   } else if (IS_STRING(target)) {
     if (IS_INT(index)) {
       ObjString *str = AS_STRING(target);
-      int idx = (int)AS_INT(index);
+      int idx = idx_doyur(AS_INT(index));
       if (idx < 0 || idx >= str->length)
         return VM_OBJ(aot_allocate_string("", 0));
       return VM_OBJ(aot_allocate_string(&str->chars[idx], 1));
@@ -3165,7 +3174,7 @@ VMValue vm_get_element(VMValue target, VMValue index) {
 void vm_set_element(VM *vm, VMValue target, VMValue index, VMValue value) {
   if (IS_ARRAY(target)) {
     if (IS_INT(index)) {
-      vm_array_set(AS_ARRAY(target), (int)AS_INT(index), value);
+      vm_array_set(AS_ARRAY(target), idx_doyur(AS_INT(index)), value);
       return;
     }
   } else if (IS_OBJECT(target)) {
@@ -6692,7 +6701,7 @@ VMValue aot_ord(VMValue s_val, VMValue i_val) {
   if (!IS_STRING(s_val))
     return VM_INT(-1);
   ObjString *s = AS_STRING(s_val);
-  int idx = IS_INT(i_val) ? (int)AS_INT(i_val) : -1;
+  int idx = IS_INT(i_val) ? idx_doyur(AS_INT(i_val)) : -1;
   if (idx < 0 || idx >= s->length)
     return VM_INT(-1);
   return VM_INT((int64_t)(unsigned char)s->chars[idx]);
@@ -10217,8 +10226,8 @@ VMValue aot_string_substring(VMValue str, VMValue startVal, VMValue endVal) {
   if (!IS_STRING(str))
     return str;
   ObjString *s = AS_STRING(str);
-  int start = IS_INT(startVal) ? (int)AS_INT(startVal) : 0;
-  int end = IS_INT(endVal) ? (int)AS_INT(endVal) : s->length;
+  int start = IS_INT(startVal) ? idx_doyur(AS_INT(startVal)) : 0;
+  int end = IS_INT(endVal) ? idx_doyur(AS_INT(endVal)) : s->length;
 
   if (start < 0)
     start = 0;

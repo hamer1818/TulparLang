@@ -1,0 +1,73 @@
+import "test";
+
+// 64-BIT INDEKS SINIR DISI (2026-10-06, Tuzaklar 7r).
+//
+// Runtime'in eleman erisim yollari indeksi `(int)AS_INT(i)` ile int'e
+// KESIYORDU: `a[4294967297]` (2^32 + 1) sessizce a[1]'i okuyor ve YAZIYORDU,
+// `s[4294967296]` s[0]'i, `ord(s, 4294967297)` ord(s, 1)'i veriyordu — sinir
+// disi hatasi yerine baska bir elemana erisim. Satir ici hizli yol 64-bit
+// karsilastiriyordu (yavas yola duser), yavas yol kesiyordu. Artik indeks int'e
+// DOYURULARAK iniyor: her buyuk deger gercek degeriyle ayni sonucu veriyor.
+//
+// Beklenen hata iletisi dile bagli: sabit metin yerine kucuk sinir disi
+// indeksin (5) urettigi iletiyle karsilastiriliyor.
+
+func hata_oku(a, i) {
+    var m = "";
+    try { var x = a[i]; } catch (e) { m = toString(e); }
+    return m;
+}
+func hata_yaz(a, i) {
+    var m = "";
+    try { a[i] = 99; } catch (e) { m = toString(e); }
+    return m;
+}
+
+func run_kutulu_dizi() {
+    var a = [7, 8, 9];
+    var beklenen = hata_oku(a, 5);
+    assert_eq_bool(len(beklenen) > 0, true);
+    assert_eq_str(hata_oku(a, 4294967297), beklenen);       // 2^32 + 1 (eskiden a[1])
+    assert_eq_str(hata_oku(a, 4294967296), beklenen);       // 2^32     (eskiden a[0])
+    assert_eq_str(hata_oku(a, -4294967295), beklenen);      // -2^32 + 1 (eskiden a[1])
+    assert_eq_str(hata_oku(a, 9223372036854775807), beklenen);
+    assert_eq_str(hata_yaz(a, 4294967297), hata_yaz(a, 5));
+    // Hicbir eleman degismedi.
+    assert_eq_int(a[0], 7);
+    assert_eq_int(a[1], 8);
+    assert_eq_int(a[2], 9);
+    assert_eq_int(len(a), 3);
+}
+
+func run_tipli_dizi() {
+    int[] a = [7, 8, 9];
+    int k = 4294967297;
+    var b5 = "";
+    try { var x = a[5]; } catch (e) { b5 = toString(e); }
+    var m = "";
+    try { var y = a[k]; } catch (e) { m = toString(e); }
+    assert_eq_str(m, b5);
+    var w5 = "";
+    try { a[5] = 1; } catch (e) { w5 = toString(e); }
+    var w = "";
+    try { a[k] = 1; } catch (e) { w = toString(e); }
+    assert_eq_str(w, w5);
+    assert_eq_int(a[1], 8);
+}
+
+func run_dizgi() {
+    var s = "abc";
+    assert_eq_str(s[1], "b");
+    assert_eq_str(s[4294967297], "");     // eskiden "b"
+    assert_eq_str(s[-4294967295], "");    // eskiden "b"
+    assert_eq_int(ord(s, 1), 98);
+    assert_eq_int(ord(s, 4294967297), -1);  // eskiden 98
+    assert_eq_str(substring(s, 1, 3), "bc");
+    assert_eq_str(substring(s, 4294967297, 4294967299), "");   // eskiden "bc"
+    assert_eq_str(substring(s, 0, 4294967298), "abc");          // eskiden "ab"
+}
+
+test("kutulu dizi: 2^32 civari indeks sinir disi", "run_kutulu_dizi");
+test("tipli int[]: 2^32 + 1 sinir disi", "run_tipli_dizi");
+test("dizgi indeksi / ord / substring", "run_dizgi");
+test_summary();

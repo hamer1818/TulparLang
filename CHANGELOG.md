@@ -13,6 +13,21 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `a[4294967297]` sessizce `a[1]`e erişiyordu (Tuzaklar 7r)
+
+- Satır içi dizi erişimi indeksi 64 bitte sınıyor ve tutmazsa runtime'a
+  düşüyordu; runtime ise indeksi `(int)` ile kesiyordu: 2^32 + 1 → 1. Sonuç
+  sınır dışı hatası yerine başka bir elemana erişim — okuma `a[1]`i
+  döndürüyor, yazma `a[1]`i DEĞİŞTİRİYORDU. Aynı kesme `s[i]` dizgi
+  indeksinde, `ord`, `substring` ve `arena_restore` / `arena_drop`ta vardı.
+  Artık 64-bit indeks int'e DOYURULARAK iniyor (uzunluklar ≤ INT32_MAX:
+  doyurulmuş değer her sınır sınavında gerçek değerle aynı sonucu verir);
+  küçük indekslerde davranış aynı.
+- Test `tests/dizi_indeksi_64.test.tpr` (kutulu dizi, tipli `int[]`, dizgi /
+  `ord` / `substring`; 2^32 ± k): eski derleyicide kırmızı ("expected 8 got
+  99" — sessiz yazma). Web/Android ön derlenmiş runtime arşivleri yeniden
+  üretilene kadar o hedeflerde eski davranış sürer (imza değişmedi).
+
 ### Düzeltildi — hata ayıklayıcı struct dizisini ve kutulu struct'ı `print` gibi gösteriyor
 
 - gdb/DAP yazıcısı (`tools/gdb/tulpar_printers.py`, `tulpar debug`'a gömülü)

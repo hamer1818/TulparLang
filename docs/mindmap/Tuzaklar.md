@@ -2417,6 +2417,28 @@ birini atlamak sessizdir.
 yeniyse önce aranıyor) — eski codegen yeni depoyu okuyamaz ve "taban
 derleyicide de kırmızı" görünür. Taban ölçümü repo dışında, kendi arşiviyle.
 
+## 7r. Hızlı yol 64-bit karşılaştırır, yavaş yol `(int)` keser — `a[2^32 + 1]` sessizce `a[1]`
+
+Bulunuşu (2026-10-06): şekil önbelleği işinde okuma yavaş yolunun anlamına
+bakılırken. Satır içi dizi erişimi indeksi `i <u count` ile **64 bitte**
+sınıyor; tutmazsa `vm_get_element`e düşüyor. O da `vm_array_get(arr,
+(int)AS_INT(index))` yazıyordu: 4294967297 → 1. Sonuç: sınır dışı hatası
+YERİNE başka bir elemana erişim — okuma `a[1]`i döndürüyor, YAZMA `a[1]`i
+değiştiriyordu (ölçüldü: `int[] a = [7, 8, 9]; a[4294967297] = 5;` →
+`a[1] == 5`, hata yok). Aynı kesme dizgi indeksinde (`s[2^32]` → `s[0]`),
+`ord`, `substring` ve `arena_restore/drop` tutamacında vardı. Hiçbir test
+yakalamıyordu: sınır dışı testleri hep KÜÇÜK indeksle (`a[5]`, `a[-1]`)
+yazılmıştı ve onlar kesmeden zarar görmüyor.
+
+**Kural:** (1) İki yollu bir işlemde (satır içi hızlı + runtime yavaş) iki yol
+aynı TİP genişliğinde karar vermeli — biri 64, öteki 32 bitte karar veriyorsa
+fark tam sınırın ötesinde, testlerin bakmadığı yerde. (2) 64-bit değeri
+indekse indirmek KESMEYLE değil DOYURMAYLA (`idx_doyur`, runtime_bindings.cpp):
+uzunluklar ≤ INT32_MAX olduğu için doyurulmuş değer her sınır sınavında gerçek
+değerle aynı sonucu verir. (3) Sınır dışı testine 2^32 + k ve −2^32 + k
+ekle — `tests/dizi_indeksi_64.test.tpr`; eski derleyicide "expected 8 got 99"
+(sessiz yazma) ile kırmızı.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 
