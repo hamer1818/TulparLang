@@ -1,0 +1,198 @@
+import "test";
+
+// INT DIZI SURUMU — ARALIK KANITI (iavb, 2026-10-06).
+//
+// Ic ice dongunun en icteki `for`u `int[]` 32-bit depoda surumleniyor (iav);
+// yazilan deger i32'ye sigmazsa tur genel surume geciyor (deopt) ve dizi
+// genisliyor. Artik dongu basinda bir kez degerin bit boyu siniri
+// hesaplaniyor (okunan araliklarin OR taramasi + degismez adlar + j araligi);
+// sinir <= 30 ise yazma HER ZAMAN sigar ve sinavsiz (vektorlesen) govde
+// kosuyor, degilse bugunku deopt'lu govde.
+//
+// Bu paket her senaryoyu surume GIRMEYEN tipsiz bir ikizle (`var`, `array`,
+// `int[]` ipucu olmayan adlar) ELEMAN ELEMAN karsilastiriyor: kucuk degerler
+// (kanit tutar), buyuk degerler (kanit tutmaz, deopt + genisleme), sinirin iki
+// yani (2^29, 2^30, negatif), takma ad (ayni dizi uc kez), j'li ifade, yazilan
+// dizinin baska indeksi, bos ve tek elemanli dongu. Yapi (IR'da `iavb_fast`,
+// kapatma anahtari, sabotaj): tests/int_golge.sh.
+
+func ayni_dizi(p, q) {
+    if (len(p) != len(q)) {
+        _test_set_fail("uzunluk farkli: " + toString(len(p)) + " / " + toString(len(q)));
+        return;
+    }
+    for (var t = 0; t < len(p); t = t + 1) {
+        if (p[t] != q[t]) {
+            _test_set_fail("eleman " + toString(t) + ": " + toString(p[t]) + " / " +
+                           toString(q[t]));
+            return;
+        }
+    }
+}
+
+// ---- surumlenen: matmul govdesi -------------------------------------------
+func carp(int[] a, int[] b, int[] c, int n) {
+    for (int i = 0; i < n; i = i + 1) {
+        for (int k = 0; k < n; k = k + 1) {
+            int av = a[i * n + k];
+            for (int j = 0; j < n; j = j + 1) { c[i * n + j] = c[i * n + j] + av * b[k * n + j]; }
+        }
+    }
+}
+
+// ---- ikiz: tipsiz, ipucusuz adlar -> surum yok ------------------------------
+func ikiz_carp(ra, rb, rc, n) {
+    var i = 0;
+    while (i < n) {
+        var k = 0;
+        while (k < n) {
+            var av = ra[i * n + k];
+            var j = 0;
+            while (j < n) { rc[i * n + j] = rc[i * n + j] + av * rb[k * n + j]; j = j + 1; }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+}
+
+func kopya(src, n): array {
+    array k = [];
+    for (var i = 0; i < n; i = i + 1) { push(k, src[i]); }
+    return k;
+}
+
+// `int[]` uret: x0 + (i*m) % mod - kaydir
+func doldur(int n, int m, int md, int kaydir, int x0) {
+    int[] a = array_fill(n, 0);
+    for (int i = 0; i < n; i = i + 1) { a[i] = x0 + mod(i * m, md) - kaydir; }
+    return a;
+}
+
+func matmul_esit(int n, int[] a, int[] b, int[] c) {
+    var ra = kopya(a, n * n);
+    var rb = kopya(b, n * n);
+    var rc = kopya(c, n * n);
+    carp(a, b, c, n);
+    ikiz_carp(ra, rb, rc, n);
+    ayni_dizi(c, rc);
+}
+
+func run_kucuk() {
+    int n = 7;
+    matmul_esit(n, doldur(n * n, 7, 11, 5, 0), doldur(n * n, 3, 13, 6, 0), doldur(n * n, 1, 5, 2, 0));
+}
+
+func run_buyuk_tasar() {
+    // a*b ~ 2.5e9 > 2^31: kanit tutmaz, deopt + genisleme.
+    int n = 5;
+    matmul_esit(n, doldur(n * n, 7, 11, 0, 50000), doldur(n * n, 3, 13, 0, 50000),
+                doldur(n * n, 1, 5, 0, 0));
+}
+
+func run_sinir_ici() {
+    // c < 2^28, av < 2^13, b < 2^13, 4 birikim: her dongu girisinde K <= 30
+    // (kanit hep tutar), sonuc ~2^29.
+    int n = 4;
+    matmul_esit(n, doldur(n * n, 1, 3, 0, 8180), doldur(n * n, 5, 7, 0, 8180),
+                doldur(n * n, 3, 4, 0, 268435000));
+}
+
+func run_sinir_gecisi() {
+    // c ~2^29 (k = 29), av < 2^14, b < 2^15: ilk girislerde K = 30 (kanit
+    // tutar), c buyudukce K = 31 (deopt + genisleme) — sonuc ~2,7e9 > 2^31.
+    int n = 4;
+    matmul_esit(n, doldur(n * n, 1, 3, 0, 16380), doldur(n * n, 5, 7, 0, 32760),
+                doldur(n * n, 3, 4, 0, 536870000));
+}
+
+func run_sinir_disi_negatif() {
+    // c ~ -2^30: K = 31, kanit tutmaz; sonuc i32 disina tasar (genisleme).
+    int n = 4;
+    matmul_esit(n, doldur(n * n, 1, 3, 0, -16380), doldur(n * n, 5, 7, 0, 32760),
+                doldur(n * n, 3, 4, 0, -1073741000));
+}
+
+func run_negatif_ici() {
+    int n = 6;
+    matmul_esit(n, doldur(n * n, 7, 9, 4, -3), doldur(n * n, 5, 11, 5, -100),
+                doldur(n * n, 3, 7, 3, -1000));
+}
+
+func run_takma_ad() {
+    // Ayni dizi uc kez: okunan b yazilan c ile ayni depo -> kanit reddedilir
+    // (siradaki turlar onceki yazmalari gorur; ikizle ayni sira).
+    int n = 5;
+    int[] a = doldur(n * n, 3, 7, 2, 0);
+    var r = kopya(a, n * n);
+    carp(a, a, a, n);
+    ikiz_carp(r, r, r, n);
+    ayni_dizi(a, r);
+}
+
+func run_bos_ve_tek() {
+    int[] a = array_fill(1, 3);
+    int[] b = array_fill(1, 4);
+    int[] c = array_fill(1, 5);
+    carp(a, b, c, 1);
+    assert_eq_int(c[0], 17);
+    int[] e = [];
+    carp(e, e, e, 0);
+    assert_eq_int(len(e), 0);
+}
+
+// j ifadede: c[base + j] = c[base + j] + j * k — int plani bunu surumlemiyor
+// ("eleman yazmasi kesin int degil"); anlam yine ikizle ayni olmali.
+func j_ifade(int[] c, int n, int m) {
+    for (int k = 0; k < m; k = k + 1) {
+        for (int j = 0; j < n; j = j + 1) { c[k * n + j] = c[k * n + j] + j * k; }
+    }
+}
+func ikiz_j(rc, n, m) {
+    var k = 0;
+    while (k < m) {
+        var j = 0;
+        while (j < n) { rc[k * n + j] = rc[k * n + j] + j * k; j = j + 1; }
+        k = k + 1;
+    }
+}
+func run_j_ifade() {
+    int[] c = doldur(60, 1, 9, 4, 0);
+    var r = kopya(c, 60);
+    j_ifade(c, 12, 5);
+    ikiz_j(r, 12, 5);
+    ayni_dizi(c, r);
+}
+
+// Yazilan dizinin BASKA indeksi okunuyor: x[j] = x[j + 1] + 1
+func kaydir(int[] x, int n, int t) {
+    for (int r = 0; r < t; r = r + 1) {
+        for (int j = 0; j < n - 1; j = j + 1) { x[j] = x[j + 1] + 1; }
+    }
+}
+func ikiz_kaydir(rx, n, t) {
+    var r = 0;
+    while (r < t) {
+        var j = 0;
+        while (j < n - 1) { rx[j] = rx[j + 1] + 1; j = j + 1; }
+        r = r + 1;
+    }
+}
+func run_baska_indeks() {
+    int[] x = doldur(20, 7, 13, 6, 0);
+    var r = kopya(x, 20);
+    kaydir(x, 20, 3);
+    ikiz_kaydir(r, 20, 3);
+    ayni_dizi(x, r);
+}
+
+test("kucuk degerler (kanit tutar)", "run_kucuk");
+test("buyuk degerler (kanit tutmaz, deopt + genisleme)", "run_buyuk_tasar");
+test("sinirin ici: her giriste K <= 30", "run_sinir_ici");
+test("sinir gecisi: once kanit, sonra deopt", "run_sinir_gecisi");
+test("sinirin disi, negatif: K = 31", "run_sinir_disi_negatif");
+test("negatif degerler (kanit tutar)", "run_negatif_ici");
+test("takma ad: ayni dizi uc kez", "run_takma_ad");
+test("bos ve tek elemanli", "run_bos_ve_tek");
+test("j ifadede (surumsuz)", "run_j_ifade");
+test("yazilan dizinin baska indeksi", "run_baska_indeks");
+test_summary();

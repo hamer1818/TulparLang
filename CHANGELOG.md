@@ -104,6 +104,26 @@ dışarı sızmıyor") ölçülerek sınandı; sızıyordu ve desenler de etkile
   `tools/win_ebeveyn_izi.sh` dış kabuğun Windows ata zincirini ve ilk ölü
   (bayat) ebeveyni basıyor. Tuzaklar 7p.
 
+### Performans — int dizi döngüsünde i32 sığma sınavı döngü başına: int matmul 120,8 → 53,7 ms
+
+- `int[]` iç içe döngüsünün en içteki `for`u (#438) her turda yazılan değerin
+  i32'ye sığdığını sınayıp sığmazsa genel gövdeye atlıyordu; bu erken çıkış
+  döngüyü vektörleştirilemez yapıyordu (int matmul N=640, fonksiyon içinde:
+  120,8 ms, sınavın üç komutu örneklerin %79'u; C int64 67,6). Artık döngü
+  başında bir kez değerin bit boyu sınırı hesaplanıyor — okunan aralıkların
+  OR(x ^ (x >> 31)) taraması, değişmez adlar, `+ - *` kuralı; sınır ≤ 30 ise
+  yazma her zaman sığar ve sınavsız gövde koşuyor (LLVM i32'ye daraltıp
+  vektörleştiriyor), değilse bugünkü gövde. Yazılan dizi yalnız aynı indekste
+  okunuyorsa ve öteki diziler aynı depoyu paylaşmıyorsa (çalışma zamanında
+  sınanır).
+- Ölçüm (`taskset -c 2,3`, dönüşümlü): int matmul **120,8 → 53,7 ms** (C
+  int64 `gcc -O2` 67,6). `benchmarks/fair` ve `recursion/`: ikili bayt bayt
+  aynı. Derleme: bu kalıbı içeren programda +~11 ms (üçüncü gövde), öteki
+  programlarda aynı.
+- `TULPAR_NO_IAVB=1` kapatır. Kapılar: `tests/int_aralik.test.tpr` (10 test,
+  sürümsüz ikize karşı eleman eleman) ve `tests/int_golge.sh` (karar, IR,
+  kapatma iki yönlü, `TULPAR_IAVB_SINAMA=sinir` sabotajı kırmızı).
+
 ### Düzeltildi — `import "router"` ve `import "tulpar_api"` depo dışında derlenmiyordu
 
 - Gömülü `router` kendi içinde `import "lib/http_utils.tpr"`, gömülü

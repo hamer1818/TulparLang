@@ -8213,6 +8213,205 @@ static bool iav_plan(LLVMBackend *backend, ASTNode_C *node, TulparFloatLoopPlan 
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// INT DIZI SURUMU — ARALIK KANITI (iavb, 2026-10-06).
+//
+// iav'in hizli govdesi her tur deopt yazmasinin degerini `sext(trunc v) == v`
+// ile sinayip sigmazsa genel govdeye atliyor. Bu erken cikis donguyu
+// VEKTORLESTIRILEMEZ yapiyordu: int matmul (N=640, fonksiyon icinde) 120,8 ms,
+// ic dongu 11 komut/tur, sinavin uc komutu orneklerin %79'u (olculdu
+// 2026-10-06, Ryzen 7 9800X3D). Ayni dongu i32'de clang -O2 ile 25,8 ms.
+//
+// Kanit dongu basinda BIR KEZ: yazilan deger E'nin bit boyu ust siniri K(E)
+//   sabit c          : bitlen(|c|)          (|x| <= 2^k)
+//   degismez ad v    : bitlen(|v|)  (etiketi zaten INT sinandi)
+//   X[B + j] okumasi : erisilen araliktaki elemanlarin OR(x ^ (x >> 31))'i —
+//                      salt okuma, vektorlesen indirgeme (|x| <= 2^bitlen)
+//   -x               : K(x);   x +/- y : max(Kx, Ky) + 1;   x * y : Kx + Ky
+// K(E) <= 30 ise E'nin ve her ara degerin mutlak degeri <= 2^30 < 2^31: i64
+// islem i32'de birebir, yazma HER ZAMAN sigar — sinavsiz govde (LLVM i32'ye
+// daraltip vektorlestiriyor). Tutmazsa bugunku deopt'lu govde.
+// Kanit taranan degerlerin dongu boyunca DEGISMEMESINE dayanir: yazilan
+// dizinin okumalari yazmayla AYNI indekste (her tur kendi elemanini once
+// okur sonra yazar, baska tur o elemana dokunmaz) ve okunan oteki dizilerin
+// deposu yazilaninkinden FARKLI (calisma zamaninda sinanir — `carp(a, a, a)`
+// takma adi bugunku govdeye duser).
+// TULPAR_NO_IAVB=1 kapatir (olcum / pozitif kontrol).
+// ---------------------------------------------------------------------------
+static bool iavb_enabled() {
+  static int e = -1;
+  if (e < 0) {
+    const char *v = getenv("TULPAR_NO_IAVB");
+    e = (v && *v && *v != '0') ? 0 : 1;
+  }
+  return e == 1;
+}
+
+static bool ast_same_expr(const ASTNode_C *a, const ASTNode_C *b) {
+  if (!a || !b) return a == b;
+  if (a->type != b->type) return false;
+  switch (a->type) {
+  case AST_INT_LITERAL:
+    return a->value.int_value == b->value.int_value;
+  case AST_IDENTIFIER:
+    return a->name && b->name && strcmp(a->name, b->name) == 0;
+  case AST_UNARY_OP:
+    return a->op == b->op && ast_same_expr(a->left, b->left);
+  case AST_BINARY_OP:
+    return a->op == b->op && ast_same_expr(a->left, b->left) &&
+           ast_same_expr(a->right, b->right);
+  default:
+    return false;
+  }
+}
+
+// Derleme aninda: E'nin siniri hesaplanabilir mi (desteklenen dugumler,
+// yazilan dizinin okumalari ayni indekste). Kod URETMEZ.
+static bool iavb_shape_ok(const TulparFloatLoopPlan *p, ASTNode_C *e, int wk) {
+  if (!e) return false;
+  switch (e->type) {
+  case AST_INT_LITERAL:
+    return true;
+  case AST_IDENTIFIER: {
+    // Dongu degiskeni j degerde: int plani bunu zaten kabul etmiyor
+    // ("eleman yazmasi kesin int degil"), yani burada yalniz degismezler.
+    if (!e->name) return false;
+    for (int k = 0; k < p->n_inv; k++)
+      if (strcmp(p->inv_float[k], e->name) == 0) return true;
+    return false;
+  }
+  case AST_UNARY_OP:
+    return e->op == TOKEN_MINUS && iavb_shape_ok(p, e->left, wk);
+  case AST_BINARY_OP:
+    return (e->op == TOKEN_PLUS || e->op == TOKEN_MINUS || e->op == TOKEN_MULTIPLY) &&
+           iavb_shape_ok(p, e->left, wk) && iavb_shape_ok(p, e->right, wk);
+  case AST_ARRAY_ACCESS: {
+    int k = -1;
+    for (int q = 0; q < p->n_acc; q++)
+      if (p->acc[q] == e) k = q;
+    if (k < 0) return false;
+    if (p->acc_arr[k] == p->acc_arr[wk])
+      return p->acc_has_j[k] && p->acc_has_j[wk] &&
+             ast_same_expr(p->acc_base[k], p->acc_base[wk]);
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+// bitlen(x ^ (x >> 63)) — |x| <= 2^sonuc.
+static LLVMValueRef iavb_k_of(LLVMBackend *backend, LLVMValueRef v) {
+  LLVMTypeRef i64 = backend->int_type;
+  LLVMValueRef m = LLVMBuildXor(
+      backend->builder, v,
+      LLVMBuildAShr(backend->builder, v, LLVMConstInt(i64, 63, 0), "iavb.sg"), "iavb.m");
+  unsigned id = LLVMLookupIntrinsicID("llvm.ctlz", 9);
+  LLVMValueRef ctlz = LLVMGetIntrinsicDeclaration(backend->module, id, &i64, 1);
+  LLVMValueRef args[] = {m, LLVMConstInt(LLVMInt1TypeInContext(backend->context), 0, 0)};
+  LLVMValueRef lz = LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(ctlz), ctlz,
+                                   args, 2, "iavb.lz");
+  return LLVMBuildSub(backend->builder, LLVMConstInt(i64, 64, 0), lz, "iavb.k");
+}
+
+static LLVMValueRef iavb_max(LLVMBackend *backend, LLVMValueRef a, LLVMValueRef b) {
+  return LLVMBuildSelect(backend->builder,
+                         LLVMBuildICmp(backend->builder, LLVMIntSGT, a, b, "iavb.gt"), a, b,
+                         "iavb.max");
+}
+
+// i32 deposunda [lo, hi) araliginin OR(x ^ (x >> 31))'i (salt okuma dongusu).
+static LLVMValueRef iavb_or_scan(LLVMBackend *backend, LLVMValueRef data, LLVMValueRef lo,
+                                 LLVMValueRef hi) {
+  LLVMTypeRef i32t = backend->int32_type, i64 = backend->int_type;
+  LLVMValueRef fn = backend->current_function;
+  LLVMBasicBlockRef pre = LLVMGetInsertBlock(backend->builder);
+  LLVMBasicBlockRef body = append_bb(backend, fn, "iavb.tara");
+  LLVMBasicBlockRef done = append_bb(backend, fn, "iavb.tara.son");
+  LLVMBuildCondBr(backend->builder, LLVMBuildICmp(backend->builder, LLVMIntSLT, lo, hi, "iavb.var"),
+                  body, done);
+  LLVMPositionBuilderAtEnd(backend->builder, body);
+  LLVMValueRef ix = LLVMBuildPhi(backend->builder, i64, "iavb.ix");
+  LLVMValueRef acc = LLVMBuildPhi(backend->builder, i32t, "iavb.or");
+  LLVMValueRef ep = LLVMBuildInBoundsGEP2(backend->builder, i32t, data, &ix, 1, "iavb.ep");
+  LLVMValueRef x = LLVMBuildLoad2(backend->builder, i32t, ep, "iavb.x");
+  llvm_tbaa_tag(backend, x, 1);
+  LLVMValueRef mx = LLVMBuildXor(
+      backend->builder, x, LLVMBuildAShr(backend->builder, x, LLVMConstInt(i32t, 31, 0), "iavb.xs"),
+      "iavb.xm");
+  LLVMValueRef acc2 = LLVMBuildOr(backend->builder, acc, mx, "iavb.or2");
+  LLVMValueRef ix2 = LLVMBuildNSWAdd(backend->builder, ix, LLVMConstInt(i64, 1, 0), "iavb.ix2");
+  LLVMBuildCondBr(backend->builder, LLVMBuildICmp(backend->builder, LLVMIntSLT, ix2, hi, "iavb.dv"),
+                  body, done);
+  LLVMValueRef ixs[] = {lo, ix2};
+  LLVMBasicBlockRef ixb[] = {pre, body};
+  LLVMAddIncoming(ix, ixs, ixb, 2);
+  LLVMValueRef accs[] = {LLVMConstInt(i32t, 0, 0), acc2};
+  LLVMAddIncoming(acc, accs, ixb, 2);
+  LLVMPositionBuilderAtEnd(backend->builder, done);
+  LLVMValueRef r = LLVMBuildPhi(backend->builder, i32t, "iavb.r");
+  LLVMValueRef rs[] = {LLVMConstInt(i32t, 0, 0), acc2};
+  LLVMBasicBlockRef rb[] = {pre, body};
+  LLVMAddIncoming(r, rs, rb, 2);
+  return LLVMBuildZExt(backend->builder, r, i64, "iavb.r64");
+}
+
+// K(E), calisma zamaninda (i64). g_fv DOLU olmali (degismez adlar onu okur).
+static LLVMValueRef iavb_bound(LLVMBackend *backend, const FvRun *run, ASTNode_C *e,
+                               LLVMValueRef jv, LLVMValueRef ubx) {
+  // j0 ve UB' yalniz `X[B + j]` taramasinin araligi icin.
+  const TulparFloatLoopPlan *p = run->plan;
+  LLVMTypeRef i64 = backend->int_type;
+  switch (e->type) {
+  case AST_INT_LITERAL: {
+    long long v = e->value.int_value;
+    unsigned long long m = (unsigned long long)(v ^ (v >> 63));
+    int k = 0;
+    while (m) { k++; m >>= 1; }
+    return LLVMConstInt(i64, (unsigned long long)k, 0);
+  }
+  case AST_IDENTIFIER:
+    return iavb_k_of(backend, fv_load_inv_int(backend, e->name));
+  case AST_UNARY_OP:
+    return iavb_bound(backend, run, e->left, jv, ubx);
+  case AST_BINARY_OP: {
+    LLVMValueRef a = iavb_bound(backend, run, e->left, jv, ubx);
+    LLVMValueRef b = iavb_bound(backend, run, e->right, jv, ubx);
+    if (e->op == TOKEN_MULTIPLY) return LLVMBuildAdd(backend->builder, a, b, "iavb.mul");
+    return LLVMBuildAdd(backend->builder, iavb_max(backend, a, b), LLVMConstInt(i64, 1, 0),
+                        "iavb.add");
+  }
+  case AST_ARRAY_ACCESS: {
+    int k = -1;
+    for (int q = 0; q < p->n_acc; q++)
+      if (p->acc[q] == e) k = q;
+    LLVMValueRef data = run->data[p->acc_arr[k]];
+    LLVMValueRef b = run->base[k] ? run->base[k] : LLVMConstInt(i64, 0, 0);
+    LLVMValueRef orv;
+    if (p->acc_has_j[k]) {
+      orv = iavb_or_scan(backend, data, LLVMBuildNSWAdd(backend->builder, b, jv, "iavb.lo"),
+                         LLVMBuildNSWAdd(backend->builder, b, ubx, "iavb.hi"));
+    } else {
+      LLVMValueRef x = LLVMBuildLoad2(
+          backend->builder, backend->int32_type,
+          LLVMBuildInBoundsGEP2(backend->builder, backend->int32_type, data, &b, 1, "iavb.ep1"),
+          "iavb.x1");
+      llvm_tbaa_tag(backend, x, 1);
+      orv = LLVMBuildZExt(
+          backend->builder,
+          LLVMBuildXor(backend->builder, x,
+                       LLVMBuildAShr(backend->builder, x,
+                                     LLVMConstInt(backend->int32_type, 31, 0), "iavb.x1s"),
+                       "iavb.x1m"),
+          i64, "iavb.x1z");
+    }
+    return iavb_k_of(backend, orv);
+  }
+  default:
+    return LLVMConstInt(i64, 64, 0);   // olmaz (iavb_shape_ok)
+  }
+}
+
 // Plan + sinav + iki govde. true: dongu uretildi (cagiran kapsami kapatir).
 // false: hicbir kod uretilmedi, cagiran normal yola devam eder. Float plani
 // tutmazsa (ya da dizileri `float[]` ipuclu degilse) int plani denenir.
@@ -8428,6 +8627,45 @@ static bool fv_try_version(LLVMBackend *backend, ASTNode_C *node, bool float_onl
     LLVMBuildBr(backend->builder, gen_cond);
     LLVMPositionBuilderAtEnd(backend->builder, here);
     run.deopt_bb = b_deopt;
+    // ARALIK KANITI (iavb): uygunsa sinavsiz ucuncu govde (bkz. iavb_bound).
+    ASTNode_C *dw = plan.deopt_write;
+    int wk = (dw->type == AST_ASSIGNMENT) ? -1 : -2;
+    for (int q = 0; wk == -1 && q < plan.n_acc; q++)
+      if (plan.acc[q] == dw->left) wk = q;
+    if (iavb_enabled() && wk >= 0 && plan.acc_has_j[wk] && iavb_shape_ok(&plan, dw->right, wk)) {
+      g_fv = &run;   // degismez adlarin okunusu (fv_load_inv_int) g_fv ister
+      LLVMValueRef K = iavb_bound(backend, &run, dw->right, jv, ubx);
+      g_fv = nullptr;
+      // POZITIF KONTROL (tests/int_golge.sh): TULPAR_IAVB_SINAMA=sinir esigi
+      // 62'ye cikarir — sigmayan deger sinavsiz yazilir, anlam testi
+      // (tests/int_aralik.test.tpr) KIRMIZIYA donmeli.
+      const char *sab = getenv("TULPAR_IAVB_SINAMA");
+      const unsigned esik = (sab && strcmp(sab, "sinir") == 0) ? 62 : 30;
+      LLVMValueRef bok = LLVMBuildICmp(backend->builder, LLVMIntSLE, K,
+                                       LLVMConstInt(backend->int_type, esik, 0), "iavb.ok");
+      // Okunan oteki diziler yazilanla ayni depoyu paylasmamali (takma ad).
+      LLVMValueRef wdata = run.data[plan.acc_arr[wk]];
+      for (int k = 0; k < plan.n_arr; k++)
+        if (k != plan.acc_arr[wk])
+          bok = LLVMBuildAnd(backend->builder, bok,
+                             LLVMBuildICmp(backend->builder, LLVMIntNE, run.data[k], wdata,
+                                           "iavb.ayri"),
+                             "iavb.ok2");
+      if (getenv("TULPAR_DBG_VER"))
+        fprintf(stderr, "[iavb] %s: aralik kaniti\n", plan.ivar);
+      LLVMBasicBlockRef b_fb = append_bb(backend, backend->current_function, "iavb_fast");
+      LLVMBasicBlockRef b_fd = append_bb(backend, backend->current_function, "iav_fast");
+      set_branch_weights(backend, LLVMBuildCondBr(backend->builder, bok, b_fb, b_fd), 2000, 1);
+      LLVMPositionBuilderAtEnd(backend->builder, b_fb);
+      FvRun runb = run;
+      runb.deopt_bb = nullptr;   // yazma her zaman sigar: sinav yok
+      g_fv = &runb;
+      codegen_for_body(backend, node, b_done);
+      g_fv = nullptr;
+      LLVMPositionBuilderAtEnd(backend->builder, b_fd);
+    } else if (getenv("TULPAR_DBG_VER")) {
+      fprintf(stderr, "[iavb-yok] %s: deger siniri kurulamiyor\n", plan.ivar);
+    }
   } else if (is_int && plan.deopt_write) {
     // Kosul blogu yakalanamadi: hizli govde KURULMAZ (yazma deopt'suz olamaz).
     LLVMBuildBr(backend->builder, b_gen);
