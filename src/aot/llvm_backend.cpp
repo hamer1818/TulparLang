@@ -586,6 +586,8 @@ static LLVMValueRef emit_boxed_fn_return(LLVMBackend *backend,
                                          LLVMValueRef vmval);
 static bool boxed_value_abi_eligible(LLVMBackend *backend, ASTNode_C *node);
 static void boxed_fast_name(const char *name, char *out, size_t n);
+static LLVMValueRef emit_typed_entry_call(LLVMBackend *backend, ASTNode_C *node,
+                                          LLVMValueRef ff);
 static int  selfrec_begin(LLVMBackend *backend, ASTNode_C *fn);
 // call(f, ...) yerel int yolu acik mi (TULPAR_NO_CALL_NATIVE=1 kapatir;
 // web'de satir ici call() yolu zaten yok).
@@ -6176,8 +6178,13 @@ static bool iv_fast_decl(const ASTNode_C *n) {
 static bool iv_fast_ewr(const ASTNode_C *n) {
   return g_iv && g_iv->fast && iv_in(g_iv->plan->ewr, g_iv->plan->n_ewr, n);
 }
+// Yerel girisli (`t_<ad>.n`) fonksiyonun `.f` govdesi: yalniz `int`
+// parametrelerden biri INT degilse kosuyor (dizgi/nesne gelmis) — soguk.
+// Orada dongu surumleri (hizli + genel kopya) kod buyutmekten baska ise
+// yaramiyor; govde surumsuz uretilir (bkz. emit_typed_entry_body).
+static bool g_te_cold = false;
 // Soguk kopyada ic ice surumleme yok.
-static bool iv_cold() { return g_iv && !g_iv->fast; }
+static bool iv_cold() { return (g_iv && !g_iv->fast) || g_te_cold; }
 
 static int fv_find_access(ASTNode_C *acc) {
   if (!g_fv || !acc) return -1;
@@ -8921,7 +8928,7 @@ static LLVMValueRef iv_int_of(LLVMBackend *backend, TypedValue tv) {
 
 // true: dongu uretildi. false: hicbir kod uretilmedi, cagiran devam eder.
 static bool iv_try_version(LLVMBackend *backend, ASTNode_C *node) {
-  if (!iv_enabled() || g_iv || g_fv) return false;
+  if (!iv_enabled() || g_iv || g_fv || g_te_cold) return false;
   if (backend->try_depth > 0 || !backend->current_function) return false;
   ASTNode_C *fn = backend->current_function_node;
   if (!fn || fn->is_async) return false;
@@ -13294,6 +13301,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
               if (callee_entry->param_struct_names[i]) { simple = false; break; }
           }
           if (simple && !backend->pending_struct_result_ptr) {
+            // Yerel giris (`.n`, int parametreler ham i64) varsa oraya.
+            if (LLVMValueRef r = emit_typed_entry_call(backend, node, ff)) return r;
             int n2 = node->argument_count;
             LLVMValueRef *va = static_cast<LLVMValueRef *>(
                 malloc(sizeof(LLVMValueRef) * (n2 > 0 ? n2 : 1)));
@@ -17730,6 +17739,354 @@ static void emit_int_spec_clone(LLVMBackend *backend, ASTNode_C *fn) {
   int_spec_clones()[saved_name] = LLVMGetNamedFunction(backend->module, cname.c_str());
 }
 
+// ---- YEREL GIRIS NOKTASI `t_<ad>.n` (2026-10-06) -----------------------------
+//
+// Tipli ama native (i64) ABI'ye sigmayan fonksiyon — `func qs(int[] a, int lo,
+// int hi)` gibi: dizi parametresi, donus yok, govde native yolun alt kumesinin
+// disinda — kutulu `t_<ad>.f`de derleniyordu. `int lo` bildirimi degeri
+// ZORLAMIYOR (bool/float -> int zorlamasi disinda dizgi dizgi kalir), yani her
+// `lo + hi`, `lo < j` bir etiket dagitimi + vm_binary_op geri dususu, ve her
+// cagri bu prologu (etiket zorlamasi) yeniden kosuyor. Olculdu (benchmarks/fair
+// qsort, Ryzen 7 9800X3D, 2026-10-06): t_qs.f'nin prolog + epilog'u orneklerin
+// %14'u; cerceve 1272 bayt (her yavas yol icin ayri VMValue gecicisi).
+//
+// Cozum: ikinci bir govde. `t_<ad>.n` `int` parametreleri HAM i64 olarak alir
+// (oteki parametreler VMValue, deger ABI'si); govdede bu parametreler native
+// int yereli — her okuma kesin INT. Anlam: bir `int` parametreye INT
+// etiketli (zorlamadan sonra: bool ve float da) deger geldiyse kutulu govde de
+// onu INT olarak goruyordu; parametre govdede HIC yeniden baglanmiyorsa
+// (kanit asagida) degeri fonksiyon boyunca o INT kalir. Dolayisiyla:
+//   * dogrudan cagri, arguman statik INT/bool/float ise `.n`yi dogrudan
+//     cagirir; kutulu argumanda satir ici etiket sinavi (INT/BOOL -> `.n`,
+//     oteki -> `.f`);
+//   * `t_<ad>.f`'nin prologu (etiket zorlamasindan SONRA) `int`
+//     parametrelerin hepsi INT ise `.n`ye gider, degilse eski kutulu govde —
+//     call(), fonksiyon degeri, adla arama da hizli govdeye iner.
+// Kapsam disi (kutulu govde degismiyor): async, main, struct parametre/donus,
+// kapanis yakalayan fonksiyon, govdesinde lambda/match olan, parametresi
+// yeniden baglanan ya da dizi/alici gibi kullanilan, hata ayiklama derlemesi.
+// TULPAR_NO_YEREL_GIRIS=1 kapatir (A/B ve kutulu yolun kendi testleri).
+static std::unordered_map<std::string, std::vector<char>> &typed_entry_kinds() {
+  static std::unordered_map<std::string, std::vector<char>> m;
+  return m;
+}
+
+static void typed_entry_name(const char *name, char *out, size_t n) {
+  snprintf(out, n, "t_%s.n", name);
+}
+
+static bool typed_entry_enabled() {
+  static int e = -1;
+  if (e < 0) {
+    const char *v = getenv("TULPAR_NO_YEREL_GIRIS");
+    e = (v && *v && *v != '0') ? 0 : 1;
+  }
+  return e == 1;
+}
+
+struct TeScan {
+  const char *name;
+  bool bad;
+};
+static int te_scan_param(ASTNode_C *n, void *pv) {
+  TeScan *c = static_cast<TeScan *>(pv);
+  switch (n->type) {
+  case AST_LAMBDA:
+  case AST_FUNCTION_DECL:
+  case AST_MATCH:
+    c->bad = true;
+    return 0;
+  case AST_ASSIGNMENT:
+  case AST_COMPOUND_ASSIGN:
+  case AST_INCREMENT:
+  case AST_DECREMENT: {
+    const char *t = n->name;
+    if (!t && n->left && n->left->type == AST_IDENTIFIER) t = n->left->name;
+    if (t && strcmp(t, c->name) == 0) { c->bad = true; return 0; }
+    // Eleman yazmasinin TABANI parametre: `lo[0] = 1`.
+    if (n->left && n->left->type == AST_ARRAY_ACCESS) {
+      ASTNode_C *b = n->left;
+      const char *bn = b->name ? b->name
+                               : (b->left && b->left->type == AST_IDENTIFIER ? b->left->name
+                                                                             : nullptr);
+      if (bn && strcmp(bn, c->name) == 0) { c->bad = true; return 0; }
+    }
+    break;
+  }
+  case AST_VARIABLE_DECL:
+  case AST_FOR_IN:
+    if (n->name && strcmp(n->name, c->name) == 0) { c->bad = true; return 0; }
+    break;
+  case AST_ARRAY_ACCESS: {
+    const char *bn = n->name ? n->name
+                             : (n->left && n->left->type == AST_IDENTIFIER ? n->left->name
+                                                                           : nullptr);
+    if (bn && strcmp(bn, c->name) == 0) { c->bad = true; return 0; }
+    break;
+  }
+  case AST_FUNCTION_CALL:
+    // `lo.f()` alici olarak (yontem cagrisi kutulu degeri bekleyebilir) ya da
+    // `lo(...)` (parametre kapanis gibi cagriliyor).
+    if ((n->name && !n->receiver && strcmp(n->name, c->name) == 0) ||
+        (n->receiver && n->receiver->type == AST_IDENTIFIER && n->receiver->name &&
+         strcmp(n->receiver->name, c->name) == 0)) {
+      c->bad = true;
+      return 0;
+    }
+    break;
+  default:
+    break;
+  }
+  if (n->catch_var && strcmp(n->catch_var, c->name) == 0) { c->bad = true; return 0; }
+  return 1;
+}
+
+// KOD BUYUMESI SINIRI: `.n` govdeyi IKINCI kez uretiyor. Kazanc cagri basina
+// sabit (prolog zorlamasi + kutulu aritmetik), yani kucuk govdede buyuk, buyuk
+// govdede (sunucu dongusu, dispatch) hic. Olcum ve esik: TE_MAX_NODES.
+#ifndef TE_MAX_NODES
+#define TE_MAX_NODES 100
+#endif
+
+// Parametre basina tur: 1 = ham i64 (`int`, yeniden baglanmiyor), 0 = VMValue.
+// Bos vektor: yerel giris yok.
+static std::vector<char> typed_entry_plan(LLVMBackend *backend, ASTNode_C *node) {
+  std::vector<char> kinds;
+  if (!typed_entry_enabled() || !node || node->type != AST_FUNCTION_DECL || !node->name)
+    return kinds;
+  if (backend->di_builder || !backend->use_static_typing) return kinds;
+  if (!boxed_value_abi_eligible(backend, node) || native_abi_eligible(backend, node))
+    return kinds;
+  if (strchr(node->name, '$') || !node->body) return kinds;
+  CaptureData *cd = (CaptureData *)backend->capture_data;
+  if (cd && cd->slots.find(node) != cd->slots.end() && !cd->slots[node].empty()) return kinds;
+  bool any = false;
+  kinds.assign(node->param_count, 0);
+  for (int i = 0; i < node->param_count; i++) {
+    ASTNode_C *p = node->parameters[i];
+    if (!p || !p->name || p->data_type != TYPE_INT) continue;
+    TeScan sc{p->name, false};
+    tulpar_ast_walk(node->body, te_scan_param, &sc);
+    if (sc.bad) {
+      // Lambda/match govdenin tamamini reddeder (parametreden bagimsiz).
+      continue;
+    }
+    kinds[i] = 1;
+    any = true;
+  }
+  if (!any) {
+    kinds.clear();
+    return kinds;
+  }
+  int nodes = 0;
+  tulpar_ast_walk(node->body, [](ASTNode_C *, void *p) { ++*(int *)p; return 1; }, &nodes);
+  static int max_nodes = -1;
+  if (max_nodes < 0) {
+    const char *v = getenv("TULPAR_YEREL_GIRIS_DUGUM");
+    max_nodes = (v && *v) ? atoi(v) : TE_MAX_NODES;
+  }
+  if (getenv("TULPAR_DBG_TE"))
+    fprintf(stderr, "[te] %s: %d dugum%s\n", node->name, nodes,
+            nodes > max_nodes ? " (buyuk, yok)" : "");
+  if (nodes > max_nodes) kinds.clear();
+  return kinds;
+}
+
+// Pass 1a: `.f` yaratildiktan sonra `.n` imzasi.
+static void typed_entry_predeclare(LLVMBackend *backend, ASTNode_C *node) {
+  std::vector<char> kinds = typed_entry_plan(backend, node);
+  if (kinds.empty()) return;
+  char nfn[300];
+  typed_entry_name(node->name, nfn, sizeof(nfn));
+  if (LLVMGetNamedFunction(backend->module, nfn)) return;
+  std::vector<LLVMTypeRef> at(kinds.size() ? kinds.size() : 1);
+  for (size_t i = 0; i < kinds.size(); i++)
+    at[i] = kinds[i] ? backend->int_type : backend->vm_value_type;
+  LLVMTypeRef ft =
+      llvm_make_vmvalue_func_type(backend, at.data(), (unsigned)kinds.size(), 0);
+  LLVMValueRef f = LLVMAddFunction(backend->module, nfn, ft);
+  LLVMSetLinkage(f, LLVMInternalLinkage);
+  LLVMAddAttributeAtIndex(
+      f, LLVMAttributeFunctionIndex,
+      LLVMCreateEnumAttribute(backend->context,
+                              LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
+  typed_entry_kinds()[node->name] = kinds;
+}
+
+static const std::vector<char> *typed_entry_of(LLVMBackend *backend, const char *name,
+                                               LLVMValueRef *fn_out) {
+  if (!name) return nullptr;
+  auto it = typed_entry_kinds().find(name);
+  if (it == typed_entry_kinds().end()) return nullptr;
+  char nfn[300];
+  typed_entry_name(name, nfn, sizeof(nfn));
+  LLVMValueRef f = LLVMGetNamedFunction(backend->module, nfn);
+  if (!f) return nullptr;
+  if (fn_out) *fn_out = f;
+  return &it->second;
+}
+
+// `.n` (deger ABI) parametresi i: sret hedefinde 0. parametre sonuc isaretcisi.
+static LLVMValueRef typed_entry_param(LLVMBackend *backend, LLVMValueRef fn, int i,
+                                      bool native) {
+  const int off = vmvalue_abi_uses_sret(backend) ? 1 : 0;
+  LLVMValueRef p = LLVMGetParam(fn, (unsigned)(i + off));
+  if (native) return p;
+  if (off) return LLVMBuildLoad2(backend->builder, backend->vm_value_type, p, "te.arg");
+  return llvm_convert_ret_pair_to_vmvalue(backend, p);
+}
+
+// `.n` govdesi: kutulu `.f` govdesiyle AYNI kod yolu (codegen_statement), tek
+// fark `int` parametrelerin native yuvada olmasi. (Govdenin ust duzeyindeki
+// `int i = lo;` gibi yerelleri de fonksiyon boyunca native yapmak denendi:
+// qsort'ta komut sayisi ve sure AYNI — dongu golgesi + SROA zaten ayni koda
+// iniyor. Gonderilmedi.)
+static void emit_typed_entry_body(LLVMBackend *backend, ASTNode_C *node, LLVMValueRef nf,
+                                  const std::vector<char> &kinds) {
+  LLVMValueRef prev_func = backend->current_function;
+  LLVMBasicBlockRef prev_block = LLVMGetInsertBlock(backend->builder);
+  const int prev_value_abi = backend->fn_value_abi;
+  const int prev_void_abi = backend->current_function_is_void_abi;
+  const char *prev_returns_struct = backend->current_function_returns_struct;
+  LLVMValueRef prev_env_ptr = backend->current_env_ptr;
+  LLVMValueRef prev_parent_env = backend->current_parent_env;
+  ASTNode_C *prev_func_node = backend->current_function_node;
+
+  LLVMAddAttributeAtIndex(
+      nf, LLVMAttributeFunctionIndex,
+      LLVMCreateEnumAttribute(backend->context,
+                              LLVMGetEnumAttributeKindForName("uwtable", 7), 2));
+  LLVMAddTargetDependentFunctionAttr(nf, "frame-pointer", "all");
+
+  backend->current_function = nf;
+  backend->fn_value_abi = 1;
+  backend->current_function_is_void_abi = 1;
+  backend->current_function_returns_struct = nullptr;
+  backend->current_env_ptr = nullptr;
+  LLVMBasicBlockRef entry = append_bb(backend, nf, "entry");
+  LLVMPositionBuilderAtEnd(backend->builder, entry);
+  enter_scope(backend);
+  FuncStackNode stack_node = {node, backend->func_stack};
+  backend->func_stack = &stack_node;
+  backend->current_function_node = node;
+
+  for (int i = 0; i < node->param_count; i++) {
+    ASTNode_C *p = node->parameters[i];
+    if (!p || !p->name) continue;
+    if (kinds[i]) {
+      LLVMValueRef slot = llvm_build_alloca_at_entry(backend, backend->int_type, p->name);
+      LLVMBuildStore(backend->builder, typed_entry_param(backend, nf, i, true), slot);
+      add_local_typed(backend, p->name, nullptr, INFERRED_INT, slot);
+      continue;
+    }
+    LLVMValueRef val = typed_entry_param(backend, nf, i, false);
+    if (p->data_type == TYPE_INT) {
+      val = llvm_coerce_bool_tag_to_int(backend, val);
+    }
+    LLVMValueRef alloca = llvm_build_alloca_at_entry(backend, backend->vm_value_type, p->name);
+    LLVMBuildStore(backend->builder, val, alloca);
+    add_local(backend, p->name, alloca);
+    if (p->data_type == TYPE_INT) iv_int_param_slots().insert(alloca);
+    if (p->data_type == TYPE_ARRAY && p->elem_custom_type) {
+      StructTypeEntry *pest = find_struct_type(backend, p->elem_custom_type);
+      if (pest && struct_is_trivially_unboxable(pest))
+        add_local_struct_array(backend, p->name, alloca, pest->name);
+    }
+  }
+
+  codegen_statement(backend, node->body);
+  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
+    emit_boxed_fn_return(backend, llvm_vm_val_int(backend, 0));
+
+  backend->func_stack = stack_node.parent;
+  backend->current_function_node = prev_func_node;
+  backend->current_env_ptr = prev_env_ptr;
+  backend->current_parent_env = prev_parent_env;
+  backend->current_function_returns_struct = prev_returns_struct;
+  backend->current_function_is_void_abi = prev_void_abi;
+  backend->fn_value_abi = prev_value_abi;
+  exit_scope(backend);
+  backend->current_function = prev_func;
+  if (prev_block) LLVMPositionBuilderAtEnd(backend->builder, prev_block);
+}
+
+// Dogrudan cagri `name(args)` -> `.n`. Argumanlar SIRAYLA, birer kez
+// uretilir. nullptr: yerel giris yok / uygun degil (hicbir kod uretilmedi).
+static LLVMValueRef emit_typed_entry_call(LLVMBackend *backend, ASTNode_C *node,
+                                          LLVMValueRef ff) {
+  LLVMValueRef nf = nullptr;
+  const std::vector<char> *kinds = typed_entry_of(backend, node->name, &nf);
+  if (!kinds || (int)kinds->size() != node->argument_count || !ff) return nullptr;
+  const int n = node->argument_count;
+  std::vector<LLVMValueRef> nat(n, nullptr), box(n, nullptr);
+  LLVMValueRef ok = nullptr;   // kutulu `int` argumanlarin etiket sinavi
+  for (int i = 0; i < n; i++) {
+    if (!(*kinds)[i]) {
+      LLVMValueRef av = codegen_expression(backend, node->arguments[i]);
+      box[i] = av ? av : llvm_vm_val_int(backend, 0);
+      continue;
+    }
+    TypedValue tv = codegen_typed_expr(backend, node->arguments[i]);
+    if (!tv.boxed && tv.value && LLVMTypeOf(tv.value) == backend->int_type &&
+        (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL)) {
+      nat[i] = tv.value;
+      continue;
+    }
+    if (!tv.boxed && tv.value && tv.type == INFERRED_FLOAT) {
+      // `.f`nin zorlamasiyla ayni: sifira dogru kirpma.
+      nat[i] = typed_to_int_payload(backend, tv);
+      continue;
+    }
+    LLVMValueRef bv = box_typed_value(backend, tv);
+    if (!bv) bv = llvm_vm_val_int(backend, 0);
+    box[i] = bv;
+    LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, bv, 0, "te.tag");
+    LLVMValueRef isint = LLVMBuildOr(
+        backend->builder,
+        LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                      LLVMConstInt(backend->int32_type, 0 /* VM_VAL_INT */, 0), "te.int"),
+        LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                      LLVMConstInt(backend->int32_type, 2 /* VM_VAL_BOOL */, 0), "te.bool"),
+        "te.isint");
+    ok = ok ? LLVMBuildAnd(backend->builder, ok, isint, "te.ok") : isint;
+  }
+  auto call_n = [&]() {
+    std::vector<LLVMValueRef> a(n ? n : 1);
+    for (int i = 0; i < n; i++)
+      a[i] = (*kinds)[i] ? (nat[i] ? nat[i] : llvm_extract_vm_val_int(backend, box[i])) : box[i];
+    return llvm_call_vmvalue_func(backend, nf, a.data(), (unsigned)n, "calln");
+  };
+  // POZITIF KONTROL (tests/yerel_giris.sh): TULPAR_YEREL_GIRIS_SINAMA=etiket
+  // kutulu argumanin etiket sinavini atlar (dizgi `.n`ye ham yuk olarak
+  // gider) — anlam testi KIRMIZIYA donmeli.
+  {
+    const char *sab = getenv("TULPAR_YEREL_GIRIS_SINAMA");
+    if (sab && strcmp(sab, "etiket") == 0) ok = nullptr;
+  }
+  if (!ok) return call_n();
+  LLVMValueRef fn = backend->current_function;
+  LLVMBasicBlockRef b_n = append_bb(backend, fn, "te.n");
+  LLVMBasicBlockRef b_f = append_bb(backend, fn, "te.f");
+  LLVMBasicBlockRef b_done = append_bb(backend, fn, "te.done");
+  set_branch_weights(backend, LLVMBuildCondBr(backend->builder, ok, b_n, b_f), 2000, 1);
+  LLVMPositionBuilderAtEnd(backend->builder, b_n);
+  LLVMValueRef rn = call_n();
+  LLVMBasicBlockRef e_n = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, b_done);
+  LLVMPositionBuilderAtEnd(backend->builder, b_f);
+  std::vector<LLVMValueRef> a(n ? n : 1);
+  for (int i = 0; i < n; i++) a[i] = box[i] ? box[i] : llvm_vm_val_int_val(backend, nat[i]);
+  LLVMValueRef rf = llvm_call_vmvalue_func(backend, ff, a.data(), (unsigned)n, "callf");
+  LLVMBasicBlockRef e_f = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, b_done);
+  LLVMPositionBuilderAtEnd(backend->builder, b_done);
+  LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type, "te.r");
+  LLVMValueRef inc[] = {rn, rf};
+  LLVMBasicBlockRef inb[] = {e_n, e_f};
+  LLVMAddIncoming(phi, inc, inb, 2);
+  return phi;
+}
+
 void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   // K216: tipsiz ama int'e ozellestirilebilir govde -> once native klon.
   if (!int_spec_clones().count(node->name ? node->name : "") &&
@@ -17884,6 +18241,12 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
       backend->fn_value_abi = 1;
     }
   }
+  // Yerel giris (.n): govdesi `.f`ten ONCE uretilir (`.f` prologu ona gider).
+  LLVMValueRef te_fn = nullptr;
+  const std::vector<char> *te_kinds =
+      backend->fn_value_abi ? typed_entry_of(backend, node->name, &te_fn) : nullptr;
+  if (te_kinds && te_fn && LLVMCountBasicBlocks(te_fn) == 0)
+    emit_typed_entry_body(backend, node, te_fn, *te_kinds);
   backend->current_function = func;
 
   LLVMBasicBlockRef entry = append_bb(backend, func, "entry");
@@ -18085,7 +18448,42 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
     }
   }
 
+  // Yerel giris dagitimi: `int` parametrelerin hepsi (zorlamadan sonra) INT
+  // ise `.n` — call() / fonksiyon degeri / adla arama da hizli govdeye iner.
+  bool te_cold_body = false;
+  if (te_kinds && te_fn && (int)te_kinds->size() == node->param_count) {
+    LLVMValueRef all_int = nullptr;
+    std::vector<LLVMValueRef> a(node->param_count ? node->param_count : 1);
+    bool ok = true;
+    for (int i = 0; i < node->param_count && ok; i++) {
+      LLVMValueRef slot = get_local(backend, node->parameters[i]->name);
+      if (!slot) { ok = false; break; }
+      LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot, "te.a");
+      if (!(*te_kinds)[i]) { a[i] = v; continue; }
+      LLVMValueRef isint = LLVMBuildICmp(
+          backend->builder, LLVMIntEQ, LLVMBuildExtractValue(backend->builder, v, 0, "te.tag"),
+          LLVMConstInt(backend->int32_type, 0, 0), "te.int");
+      all_int = all_int ? LLVMBuildAnd(backend->builder, all_int, isint, "te.all") : isint;
+      a[i] = LLVMBuildExtractValue(backend->builder, v, 2, "te.p");
+    }
+    if (ok && all_int) {
+      LLVMBasicBlockRef bb_n = append_bb(backend, func, "te.n");
+      LLVMBasicBlockRef bb_gen = append_bb(backend, func, "te.gen");
+      set_branch_weights(backend, LLVMBuildCondBr(backend->builder, all_int, bb_n, bb_gen),
+                         2000, 1);
+      LLVMPositionBuilderAtEnd(backend->builder, bb_n);
+      LLVMValueRef r = llvm_call_vmvalue_func(backend, te_fn, a.data(),
+                                              (unsigned)node->param_count, "te.r");
+      emit_boxed_fn_return(backend, r);
+      LLVMPositionBuilderAtEnd(backend->builder, bb_gen);
+      te_cold_body = true;
+    }
+  }
+
+  const bool prev_te_cold = g_te_cold;
+  g_te_cold = te_cold_body || prev_te_cold;
   codegen_statement(backend, node->body);
+  g_te_cold = prev_te_cold;
 
   // Default return if missing
   if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder))) {
@@ -18235,6 +18633,7 @@ static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
                 LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
         free(at);
       }
+      typed_entry_predeclare(backend, node);
     }
     // Boxed ABI keeps every parameter slot as a generic `ptr`, so struct
     // params/return don't change the LLVM signature — they only change how
@@ -18410,6 +18809,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   // Int yerel golge surumunun dizi ipucu: `int[]` bildirilmis adlar.
   iv_hint_names().clear();
   iv_int_param_slots().clear();
+  typed_entry_kinds().clear();
   tulpar_collect_int_array_decls(node, iv_hint_add, nullptr);
 
   // MAIN FUNCTION: int main() -> returns raw i32 (OS exit code)

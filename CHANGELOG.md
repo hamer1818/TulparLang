@@ -143,6 +143,36 @@ dışarı sızmıyor") ölçülerek sınandı; sızıyordu ve desenler de etkile
   depo kökünde kalmış bir `tulpar.exe` sürücü kopyasını yanlış dosyaya
   yönlendirmiyor (`.exe` yalnız MSYS2'de).
 
+### Performans — tipli fonksiyonun `int` parametreleri ham i64: qsort 70,5 → 65,3 ms
+
+- `func qs(int[] a, int lo, int hi)` gibi tipli ama native ABI'ye sığmayan
+  (dizi parametresi, dönüşsüz, gövdesi native alt kümenin dışında) fonksiyon
+  kutulu `t_qs.f`de derleniyordu: her çağrıda `int` parametrelerin zorlaması,
+  `lo + hi` / `lo < j` etiket dağıtımı, 1272 baytlık çerçeve. Ölçüldü
+  (Ryzen 7 9800X3D, `perf_event_open` örneklemesi): prolog + epilog
+  örneklerin %14'ü.
+- Artık ikinci bir giriş `t_<ad>.n`: `int` parametreler ham i64, gövde aynı
+  kod yolundan. Doğrudan çağrı argüman statik INT/bool/float ise oraya
+  gidiyor, kutulu argümanda satır içi etiket sınavı; `t_<ad>.f` de
+  (zorlamadan sonra) `int` parametreler INT ise `.n`ye geçiyor — `call()`,
+  fonksiyon değeri ve motor kancaları (`aot_func_lookup`) da hızlı gövdeye
+  iniyor. **Anlam değişmiyor:** `int` parametreye gelen dizgi eskisi gibi
+  dizgi kalıyor (`.f`nin kutulu gövdesi; soğuk, döngü sürümsüz). Kapsam:
+  parametre yeniden bağlanmıyor, gövdede lambda/match yok, kapanış
+  yakalamıyor, async/main/struct değil, `--debug` değil, gövde ≤ 100 AST
+  düğümü (büyük gövdede çağrı başına kazanç yok, kopya derleme süresi).
+- Ölçüm (`taskset -c 2,3`, dönüşümlü, en iyi 7): qsort **70,5 → 65,3 ms**
+  (646,6 → 586,1 M komut; C 57,1); küçük tipli fonksiyon döngüde (20 M
+  çağrı) 58,8 → 44,0 ms. `benchmarks/fair`in öteki 12 çekirdeği ve
+  `recursion/` 6 programı: ikili bayt bayt aynı. Derleme süresi: wings
+  örnekleri gürültü içinde (479 → 483, 512 → 506 ms), qsort 127 → 142 ms
+  (`qs` gövdesi iki kez üretiliyor).
+- `TULPAR_NO_YEREL_GIRIS=1` kapatır. Kapılar: `tests/yerel_giris.test.tpr`
+  (12 test; qsort referans sıralamaya karşı eleman eleman) ve
+  `tests/yerel_giris.sh` (IR yapısı, kapatma anahtarı iki yönlü, açık ==
+  kapalı, sabotajla kırmızı); `tests/int_golge.sh`in matmul kararı yerel
+  giriş kapalıyken ölçülüyor (açıkken `n` zaten native).
+
 ### Eklendi — derleme önbelleği: `tulpar dosya.tpr` aynı girdiyle ikinci kez derlemiyor
 
 - `tulpar dosya.tpr` her koşuda baştan derliyordu. Artık ikili içerik adresli

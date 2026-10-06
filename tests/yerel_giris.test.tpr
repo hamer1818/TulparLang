@@ -1,0 +1,213 @@
+import "test";
+
+// YEREL GIRIS NOKTASI `t_<ad>.n` (2026-10-06).
+//
+// Tipli ama native (i64) ABI'ye sigmayan fonksiyonun (`func qs(int[] a,
+// int lo, int hi)`: dizi parametresi, donus yok) `int` parametreleri artik
+// HAM i64 olarak geciyor: dogrudan cagri `.n`ye gidiyor, kutulu `.f` girisi
+// (call(), fonksiyon degeri) etiketler INT ise ona yonleniyor. `int`
+// parametre degeri ZORLAMIYOR (bool -> 1, float -> kirpma; dizgi DIZGI
+// kalir) — bu test o anlamin `.n` ile degismedigini olcer: statik INT, statik
+// bool/float, kutulu (`var`) arguman, dizgi, call(), fonksiyon degeri, yontem
+// sozdizimi, sinir disi, sifira bolme, tasma, arguman sirasi.
+//
+// Kapinin yapi tarafi (IR'da `.n` var / yok, kapatma anahtari, sabotaj):
+// tests/yerel_giris.sh.
+
+// --- hizli siralama: kiyasin kendisi, eleman eleman ---------------------
+func qs(int[] a, int lo, int hi) {
+    int i = lo;
+    int j = hi;
+    int p = a[(lo + hi) / 2];
+    while (i <= j) {
+        while (a[i] < p) { i = i + 1; }
+        while (a[j] > p) { j = j - 1; }
+        if (i <= j) {
+            int t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+    if (lo < j) { qs(a, lo, j); }
+    if (i < hi) { qs(a, i, hi); }
+}
+
+// Referans: tipsiz araya sokma siralamasi (yerel giris ALMAZ — `int` yok).
+func ref_sirala(a, n) {
+    var k = 1;
+    while (k < n) {
+        var v = a[k];
+        var m = k - 1;
+        while (m >= 0 && a[m] > v) { a[m + 1] = a[m]; m = m - 1; }
+        a[m + 1] = v;
+        k = k + 1;
+    }
+}
+
+func veri(int n, int tohum) {
+    int[] a = array_fill(n, 0);
+    var s = tohum;
+    for (int i = 0; i < n; i = i + 1) {
+        s = (s * 48271) % 2147483647;
+        a[i] = s % 1000 - 500;
+    }
+    return a;
+}
+
+func run_qsort_eleman_eleman() {
+    var boyutlar = [0, 1, 2, 3, 7, 64, 513];
+    for (int b = 0; b < len(boyutlar); b = b + 1) {
+        int n = boyutlar[b];
+        var a = veri(n, 42 + n);
+        var r = veri(n, 42 + n);
+        if (n > 0) { qs(a, 0, n - 1); }
+        ref_sirala(r, n);
+        assert_eq_int(len(a), n);
+        for (int i = 0; i < n; i = i + 1) { assert_eq_int(a[i], r[i]); }
+    }
+}
+
+// 64-bit depo (i32'ye sigmayan eleman) da ayni sirayi vermeli.
+func run_qsort_genis() {
+    int[] a = [5000000000, -3, 7, 5000000000, -9000000000, 0, 12];
+    qs(a, 0, 6);
+    int[] e = [-9000000000, -3, 0, 7, 12, 5000000000, 5000000000];
+    for (int i = 0; i < 7; i = i + 1) { assert_eq_int(a[i], e[i]); }
+}
+
+// --- `int` parametrenin zorlamasi: dogrudan / kutulu / call() / deger ----
+func topla(int[] d, int x, int y) { return x + y; }
+
+func run_zorlama_statik() {
+    int[] d = [0];
+    assert_eq_int(topla(d, 3, 4), 7);
+    assert_eq_int(topla(d, true, 2), 3);          // bool -> 1
+    assert_eq_int(topla(d, 2.9, 2), 4);           // float -> kirpma
+    assert_eq_int(topla(d, -2.9, 0), -2);         // sifira dogru
+}
+
+// Tipi derleme aninda bilinmeyen deger (tip denetimi `int`e dizgi gectigimizi
+// goremesin — korpus taramasi temiz kalsin; calisma zamaninda yine dizgi).
+func kim(v) { return v; }
+
+func run_zorlama_kutulu() {
+    int[] d = [0];
+    var i = 3;
+    var b = false;
+    var f = 7.5;
+    assert_eq_int(topla(d, i, i), 6);
+    assert_eq_int(topla(d, b, 5), 5);             // false -> 0
+    assert_eq_int(topla(d, f, 1), 8);
+    assert_eq_str(topla(d, kim("ab"), 2), "ab2");  // dizgi dizgi kalir
+    assert_eq_str(topla(d, kim("x"), 9), "x9");
+    assert_eq_str(topla(d, 1, kim("x")), "1x");
+}
+
+func run_call_ve_deger() {
+    int[] d = [0];
+    assert_eq_int(call("topla", d, 20, 22), 42);
+    assert_eq_str(call("topla", d, "k", 1), "k1");
+    assert_eq_int(call("topla", d, 1.9, true), 2);
+    var g = topla;
+    assert_eq_int(call(g, d, 5, 6), 11);
+    assert_eq_str(call(g, d, 5, "z"), "5z");
+}
+
+// --- yontem sozdizimi: `a.ilk_n(2)` -> ilk_n(a, 2) -----------------------
+func ilk_n(int[] a, int n) {
+    int s = 0;
+    for (int i = 0; i < n; i = i + 1) { s = s + a[i]; }
+    return s;
+}
+func run_yontem() {
+    int[] a = [4, 5, 6, 7];
+    assert_eq_int(a.ilk_n(3), 15);
+    assert_eq_int(a.ilk_n(0), 0);
+}
+
+// --- hatalar `.n` icinde de ayni ----------------------------------------
+func oku(int[] a, int i) { return a[i]; }
+func yaz(int[] a, int i, int v) { a[i] = v; }
+func bol(int[] d, int x, int y) { return x / y; }
+
+func run_sinir_disi() {
+    int[] a = array_fill(4, 7);
+    var m1 = "";
+    try { oku(a, 4); } catch (e) { m1 = toString(e); }
+    assert_eq_str(m1, "Calisma Zamani Hatasi: Dizi indeksi sinir disinda");
+    var m2 = "";
+    try { oku(a, -1); } catch (e) { m2 = toString(e); }
+    assert_eq_str(m2, "Calisma Zamani Hatasi: Dizi indeksi sinir disinda");
+    var m3 = "";
+    try { yaz(a, 9, 1); } catch (e) { m3 = toString(e); }
+    assert_eq_str(m3, "Calisma Zamani Hatasi: Dizi indeksi sinir disinda");
+    assert_eq_int(len(a), 4);
+    yaz(a, 3, 11);
+    assert_eq_int(oku(a, 3), 11);
+}
+
+func run_sifira_bolme() {
+    int[] d = [0];
+    assert_eq_int(bol(d, 7, 2), 3);
+    assert_eq_int(bol(d, -7, 2), -3);
+    var m = "";
+    try { bol(d, 1, 0); } catch (e) { m = toString(e); }
+    assert_eq_bool(len(m) > 0, true);
+}
+
+// --- tasma: i64 sarar, kutulu yolla ayni ---------------------------------
+func carp(int[] d, int x, int y) { return x * y; }
+func run_tasma() {
+    int[] d = [0];
+    assert_eq_int(carp(d, 3037000500, 3037000500), -9223372036709301616);
+    assert_eq_int(carp(d, -7 * 3037000500, 3037000500), 9223372035836456464);
+}
+
+// --- arguman SIRASI ve birer kez degerlendirme --------------------------
+func kaydet(int[] log, int v): int { log.push(v); return v; }
+func fark(int[] log, int x, int y) { return x - y; }
+func run_arguman_sirasi() {
+    int[] log = [];
+    assert_eq_int(fark(log, kaydet(log, 10), kaydet(log, 3)), 7);
+    assert_eq_int(len(log), 2);
+    assert_eq_int(log[0], 10);
+    assert_eq_int(log[1], 3);
+}
+
+// --- karsilikli ozyineleme, donus degeri ifadede ------------------------
+func cift_mi(int[] d, int n) { if (n == 0) { return 1; } return tek_mi(d, n - 1); }
+func tek_mi(int[] d, int n) { if (n == 0) { return 0; } return cift_mi(d, n - 1); }
+func run_karsilikli() {
+    int[] d = [0];
+    assert_eq_int(cift_mi(d, 10) + 1, 2);
+    assert_eq_int(cift_mi(d, 7), 0);
+    assert_eq_int(tek_mi(d, 7) * 5, 5);
+}
+
+// --- parametre YENIDEN BAGLANIYOR: yerel giris yok, anlam ayni ----------
+func azalt(int[] d, int n) {
+    int s = 0;
+    while (n > 0) { s = s + n; n = n - 1; }
+    return s;
+}
+func run_yeniden_baglama() {
+    int[] d = [0];
+    assert_eq_int(azalt(d, 10), 55);
+    assert_eq_int(azalt(d, 2.5), 3);
+}
+
+test("qsort eleman eleman (7 boy, referans siralamaya karsi)", "run_qsort_eleman_eleman");
+test("qsort 64-bit depo", "run_qsort_genis");
+test("int zorlamasi: statik arguman", "run_zorlama_statik");
+test("int zorlamasi: kutulu (var) arguman", "run_zorlama_kutulu");
+test("call() ve fonksiyon degeri", "run_call_ve_deger");
+test("yontem sozdizimi", "run_yontem");
+test("sinir disi hata .n icinde", "run_sinir_disi");
+test("sifira bolme .n icinde", "run_sifira_bolme");
+test("i64 tasmasi", "run_tasma");
+test("arguman sirasi", "run_arguman_sirasi");
+test("karsilikli ozyineleme", "run_karsilikli");
+test("parametre yeniden baglaniyor", "run_yeniden_baglama");
+test_summary();

@@ -279,7 +279,7 @@ Sonuç (Ryzen 7 9800X3D, Linux, 2026-09-29, 5 tekrar, en iyi; tam tablo
 | `strcat` | 14,1 | 37,8 | 0,37× | 1. |
 | `arrayiter` | 1,2 | 2,3 | 0,52× | 1. |
 | `mandelbrot` | 158,4 → **154,4** (2026-10-02) | 158,7 | 1,00× → **0,97×** | 3. → ~1.* |
-| `qsort` | 121,2 → **70,0** (2026-10-01) | 57,4 | 2,1× → **1,2×** | 8. → **5.** |
+| `qsort` | 121,2 → 70,0 (2026-10-01) → **65,3** (2026-10-06, yerel giriş `t_qs.n`; aynı düzenekte C 57,1) | 57,4 | 2,1× → 1,2× → **1,14×** | 8. → **5.** |
 | `callfn` | 298,6 → 209,6 → **65,5** (2026-10-01) | 91,1 | 2,3× → **0,7×** | 8. → ~3.* |
 | `parse` | 196,3 → 126,2 (2026-10-01) → 75,2 (2026-10-02) → 72,5 (2026-10-02, satır içi dizgi karakteri; bellek 261,7 → 223,4 MB) → **70,1** (2026-10-06, kutusuz dizgi deposu; bellek 223,4 → **185,2 MB**) | 56,7 | 2,2× → **1,2×** | 6. → 4. → ~3.* |
 | `particles` | 329,6 → 54,8 (2026-10-01) → **37,3** (2026-10-02) | 42,2 | 7,8× → 1,3× → **0,9×** | 8. → 4. → ~2.* |
@@ -383,5 +383,12 @@ Bulgular, sırayla ele alınması önerilen:
    **70,0 ms** (C 57,4; dokuz dil arasında 8. → 5., Go 58,9'un hemen
    arkasında). Kalan fark büyük olasılıkla çağrı başına (863 bin özyinelemeli
    çağrı, kutulu ABI). Ayrıntı: `docs/mindmap/Performance.md`.
+   **Çağrı başına maliyet (2026-10-06):** ölçüldü — prolog + epilog `t_qs.f`
+   örneklerinin %14'ü, çerçeve 1272 B. `int` parametreler artık ham i64
+   geçiyor (ikinci gövde `t_qs.n`; dizgi gelirse eski kutulu gövde): 70,5 →
+   **65,3 ms**, 646,6 → 586,1 M komut (C 57,1 ms, 283,8 M). Kalan fark bölme
+   döngülerinde (tur başına 9 komut, C 6: sınır sınavı + genişlik dalı).
+   Derleme süresi qsort'ta 127 → 142 ms (gövde iki kez). Performance.md
+   "qsort: çağrı başına maliyet".
 7. **Başlatma 0,25 ms, derleme ortancası 61 ms, ikili 1,4 MB**; belleğin çoğu
    çekirdekte C ile aynı (`arrayiter`'de 32 bitlik dizi sayesinde yarısı).
