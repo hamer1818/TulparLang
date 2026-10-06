@@ -796,6 +796,11 @@ if [ "$ACTION" = "suites" ]; then
     # ve karsilastirici YAKALAMALI. Yalniz suresine bakilan bir kapi
     # "bolunmus ama hizalamasi kaymis" ikiliyi yesil gecirirdi (Tuzaklar 7i).
     kapi_kuyruk "bolumlu nesne uretimi kapisi basarisiz!" bash tests/bolumlu_emit.sh ./tulpar
+
+    # BAGLAYICI SECIMI (2026-10-06): Linux'ta ld.lld varsa varsayilan link
+    # onunla (aot_link_driver), TULPAR_LD=bfd eski yol; iki ikilinin
+    # kullanici kodu komut komut ayni. CI'da ld.lld yoksa kirmizi.
+    kapi_kuyruk "baglayici secimi kapisi basarisiz!" bash tests/bagliyici_secimi.sh ./tulpar
     # GOMULU MODULLER DEPO DISINDA (2026-10-05): gomulu router `import
     # "lib/http_utils.tpr"` yaziyordu, yol calisma dizinine gore diskten
     # cozuldugu icin kurulu tulpar ile depo disinda `import "router"` (ve

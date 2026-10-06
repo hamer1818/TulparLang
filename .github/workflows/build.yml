@@ -273,7 +273,10 @@ jobs:
           # birlikte kaldırıldı. Kalanlar derleyici ve tame/raylib (X11) için.
           # gdb: `tulpar debug` (DAP) gdb MI3 köprüsü; tests/dap_audit.py onu
           # sürüyor ve bu işte ATLANMASI yasak (TULPAR_DAP_ZORUNLU, suites adımı).
-          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev gdb
+          # lld: Linux'ta varsayilan link ld.lld ile (varsa; aot_link_driver,
+          # 2026-10-06) — CI'da da varsayilan yol olculsun diye kurulu;
+          # tests/bagliyici_secimi.sh CI'da ld.lld yoksa KIRMIZI.
+          packages: build-essential cmake llvm-18-dev lld libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev gdb
           version: 1.4
 
       - name: Verify apt packages installed

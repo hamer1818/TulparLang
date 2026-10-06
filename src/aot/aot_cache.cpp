@@ -789,6 +789,13 @@ Key compute_key(Mode mode, const char *source, const char *source_path,
     }
     const std::string ld = resolve_in_path("ld");
     if (!ld.empty()) m += "ld " + ld + " " + file_identity(ld) + "\n";
+    // Linux'ta surucu `-fuse-ld=lld|mold` tasiyabilir (aot_link_driver,
+    // 2026-10-06): o bagliyicinin kimligi de anahtarda.
+    for (const char *alt : {"lld", "mold"}) {
+      if (drv.find(std::string("-fuse-ld=") + alt) == std::string::npos) continue;
+      const std::string ap = resolve_in_path(std::string(alt) == "lld" ? "ld.lld" : "mold");
+      m += std::string("ld.") + alt + " " + (ap.empty() ? std::string("?") : ap + " " + file_identity(ap)) + "\n";
+    }
     for (const auto &d : parse_search_dirs(aot_cache_link_search_dirs())) {
       for (const char *a : {"libtulpar_runtime.a", "libtulpar_tame.a", "libssl.a", "libcrypto.a"}) {
         const std::string pth = d + "/" + a;

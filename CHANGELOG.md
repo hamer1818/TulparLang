@@ -13,6 +13,31 @@ tag still works;
 
 ## [Unreleased]
 
+### Hızlandı — Linux'ta link `ld.lld` ile (varsa): hello 42 → 15 ms, motor oyunu 68 → 22 ms
+
+- Her programın ödediği sabit link bedeli ld.bfd'de ~42 ms (hello world'ün
+  derlemesinin çoğu). `ld.lld` PATH'teyse sürücü `-fuse-ld=lld -Wl,-z,
+  keep-text-section-prefix` ekliyor (Ryzen 7 9800X3D, en iyi 5: hello
+  42 → 15 ms, eklentili motor oyunu `engine_dalga` 68 → 22 ms).
+  `TULPAR_LD=bfd` eski yol, `=lld` / `=mold` zorlar; `TULPAR_CC` verilmişse
+  dokunulmaz. macOS (ld64 84 / lld 78 ms — kazanç yok) ve Windows (MinGW
+  ld 155 / lld 79 ms; çalışma hızı A/B'si ve lld'li suit koşumu yok, lld
+  kullanıcı kurulumunda varsayılan değil — ayrı iş) değişmedi.
+- Üretilen kod aynı: bfd ve lld ikililerinde kullanıcı fonksiyonları komut
+  komut aynı (adres yüklemesinin gevşetme biçimi ve dolgu dışında).
+  2026-10-05'in "lld callfn'i %19–22 yavaşlatıyor" bulgusu yerleşim
+  gürültüsüydü: 8 farklı yerleşimde iki bağlayıcı aynı düzeyleri geziyor
+  ({64–66, 75–81, 87–105, 120} ms); bugünkü kodda lld callfn'de 81 → 66.
+- Kapılar: yeni `tests/bagliyici_secimi.sh` (varsayılan lld — `.comment`;
+  `TULPAR_LD=bfd` ile bfd; `call()`; iki ikilinin kullanıcı kodu aynı; eski
+  derleyicide kırmızı; CI'da ld.lld yoksa kırmızı — Linux CI `lld`
+  kuruyor). `tests/bolumlu_emit.sh` kimlik ölçümünü bfd ile yapıyor (lld
+  `.eh_frame`'i yeniden yazmıyor; bölümlü wings'te `.text` 64 B kayıyor) ve
+  lld ayağında adres hariç komut akışını karşılaştırıyor (ters sıra pozitif
+  kontrolüyle). Önbellek anahtarı seçilen bağlayıcının kimliğini içeriyor.
+- Ölçüm tuzağı (Tuzaklar 7s): yorum satırı öneki ikiliyi değiştirmiyor —
+  #475'in "0–3 önek satırı" ölçümü KOD önekiyle yeniden yapıldı, sonuç aynı.
+
 ### Düzeltildi — `a[4294967297]` sessizce `a[1]`e erişiyordu (Tuzaklar 7r)
 
 - Satır içi dizi erişimi indeksi 64 bitte sınıyor ve tutmazsa runtime'a
@@ -46,7 +71,7 @@ tag still works;
   16 B `VMValue` yerine 8 B (wasm32'de 4). benchmarks/fair `parse` (5M
   parça): tepe bellek **223,4 → 185,1 MB (−17 %)**, süre **71,6 → 69,2 ms**
   (Ryzen 7 9800X3D, `taskset -c 6,7`, repo dışında A/B, en iyi 7; kaynağa
-  0–3 önek satırıyla aynı fark). Öteki 12 çekirdek gürültü içinde. Bir
+  0–3 KOD satırı önekiyle — dört farklı yerleşim — aynı fark). Öteki 12 çekirdek gürültü içinde. Bir
   depolama ayrıntısı: dizgi olmayan bir değer yazılınca dizi kutulu depoya
   döner, eleman türleri korunur. `TULPAR_NO_STRARR=1` kapatır (A/B).
 - Kutusuz depodan okuma tek yerde (`arr_unboxed_get` / `arr_get`, vm.hpp).

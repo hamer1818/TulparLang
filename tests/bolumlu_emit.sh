@@ -65,6 +65,16 @@ akis_sayisiz() {  # llvm-objdump; anlik degerler/adresler N, NOP dolgusu yok
             if ($0 == "" || $0 ~ /^(nop|udf N)$/) next
             print }'
 }
+akis_adressiz() {  # GNU objdump; adresler / anlik degerler N, dolgu yok (lld ayagi)
+    objdump -d --no-show-raw-insn -j .text "$1" 2>/dev/null | awk '
+        /^ *[0-9a-f]+:\t/ {
+            sub(/^ *[0-9a-f]+:\t/, ""); sub(/ *#.*$/, ""); gsub(/ <[^>]*>/, "")
+            gsub(/0x[0-9a-f]+/, "N"); gsub(/(^|[ ,(])[0-9a-f]{4,}($|[ ,)])/, " N ")
+            gsub(/[ \t]+/, " "); gsub(/^ | $/, "")
+            if ($0 == "") next
+            if ($0 ~ /^((data16|cs|ds|rex[.a-zA-Z]*) )*(nop[a-z]*|xchg %ax,%ax|int3)( |$)/) next
+            print }'
+}
 bolum_bayt() { objcopy -O binary --only-section="$2" "$1" "$3" 2>/dev/null; }
 karsilastir() {  # karsilastir <tek> <bol>
     local a=$1 b=$2 fark=0 n metin=""
@@ -117,9 +127,16 @@ karsilastir() {  # karsilastir <tek> <bol>
 }
 
 exe() { if [ -f "$1.exe" ]; then echo "$1.exe"; else echo "$1"; fi; }
+# BAGLAYICI ld.bfd (2026-10-06): Linux'ta varsayilan link artik ld.lld
+# (varsa; aot_link_driver). lld .eh_frame'i girdi nesnelerinden YENIDEN
+# YAZMIYOR — bolum nesnelerinin FDE dolgulari kaldigi icin cikti birkac bayt
+# buyuyor ve .text 64 B kayiyor (wings: .eh_frame +16 B, her fonksiyon +0x40,
+# hizalama ayni). Bu kapinin iddiasi KOD URETIMI hakkinda ("bolmek makine
+# kodunu degistirmez"); onu bayt bayt yeniden ureten bfd ile olcer. lld
+# ayagi asagida ayri: komut akisi adresler haric ayni.
 derle() {  # derle <kaynak> <cikti> [env...]
     local src=$1 out=$2; shift 2
-    (cd "$TMP" && env TULPAR_AOT_NOCACHE=1 TULPAR_AOT_TIME=1 "$@" "$TUL" build "$src" "$out") > "$TMP/$out.log" 2>&1
+    (cd "$TMP" && env TULPAR_AOT_NOCACHE=1 TULPAR_AOT_TIME=1 TULPAR_LD=bfd "$@" "$TUL" build "$src" "$out") > "$TMP/$out.log" 2>&1
 }
 bolum_satiri() { grep -m1 'AOT-BOLUM' "$TMP/$1.log"; }
 
@@ -169,6 +186,30 @@ denetle() {
 }
 
 denetle wings "$KOK/examples/wings_groups_test.tpr" 4 35 hayir
+# lld AYAGI (Linux, ld.lld varsa — varsayilan link yolu): tek nesne ile
+# bolumlu ikilinin komut akisi adresler ve anlik degerler HARIC ayni olmali.
+if [ "$(uname -s)" = Linux ] && command -v ld.lld >/dev/null 2>&1 && objdump --version 2>/dev/null | grep -q GNU; then
+    if derle "$KOK/examples/wings_groups_test.tpr" wings_tek_lld TULPAR_AOT_BOLUM=1 TULPAR_LD=lld &&
+       derle "$KOK/examples/wings_groups_test.tpr" wings_bol_lld TULPAR_LD=lld; then
+        akis_adressiz "$TMP/wings_tek_lld" > "$TMP/la" & akis_adressiz "$TMP/wings_bol_lld" > "$TMP/lb"; wait
+        if [ -s "$TMP/la" ] && cmp -s "$TMP/la" "$TMP/lb"; then
+            gecti "wings (lld): komut akisi adresler haric ayni ($(wc -l < "$TMP/la" | tr -d ' ') komut)"
+            # Pozitif kontrol: ters link sirasi adressiz akista da gorunmeli.
+            if derle "$KOK/examples/wings_groups_test.tpr" wings_ters_lld TULPAR_AOT_BOLUM_SINAMA=ters TULPAR_LD=lld; then
+                akis_adressiz "$TMP/wings_ters_lld" > "$TMP/lt"
+                if cmp -s "$TMP/la" "$TMP/lt"; then
+                    dustu "wings (lld) pozitif kontrol: ters link sirasi adressiz akista gorulmedi — ayak olcmuyor"
+                else
+                    gecti "wings (lld) pozitif kontrol: ters link sirasi adressiz akista yakalandi"
+                fi
+            fi
+        else
+            dustu "wings (lld): komut akisi farkli ($(wc -l < "$TMP/la" | tr -d ' ') / $(wc -l < "$TMP/lb" | tr -d ' '); ilk fark: $(diff "$TMP/la" "$TMP/lb" | grep '^[<>]' | head -2 | tr '\n' ' '))"
+        fi
+    else
+        dustu "wings (lld): derleme dustu"; tail -3 "$TMP/wings_bol_lld.log" | sed 's/^/         /'
+    fi
+fi
 denetle nbody "$KOK/benchmarks/fair/nbody.tpr" 2 60 evet 1000
 denetle sekil "$KOK/tests/array_shape_cache.test.tpr" 2 60 evet
 

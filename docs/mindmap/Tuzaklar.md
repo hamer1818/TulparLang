@@ -2439,6 +2439,20 @@ değerle aynı sonucu verir. (3) Sınır dışı testine 2^32 + k ve −2^32 + k
 ekle — `tests/dizi_indeksi_64.test.tpr`; eski derleyicide "expected 8 got 99"
 (sessiz yazma) ile kırmızı.
 
+## 7s. Yorum satırı öneki yerleşimi DEĞİŞTİRMEZ — "8 yerleşimde ölçtüm" tekrar ölçümüdür
+
+Yerleşim duyarlılığını (Tuzaklar 7i) ayırmak için kaynağın başına önek satırı
+eklenip her düzeyde ölçülüyor. Önek **yorum** (`// onek 3`) ise derleyici aynı
+ikiliyi üretir — debug bilgisi yokken satır numarası hiçbir yere girmiyor.
+Ölçüldü 2026-10-06: `parse` ve `callfn`'in 0/1/3 yorum önekli ikilileri `cmp`
+ile bayt bayt aynı. O "dağılım" aynı programın tekrarıydı; düzeyler arasındaki
+fark (callfn aynı ikilide 75,0 / 81,6) makinenin gürültüsü — yerleşim değil.
+
+**Kural:** önek KOD olmalı ve ikililerin farklı olduğu `cmp` ile gösterilmeli:
+`int onek_i = toInt(env("ONEK_YOK")) + i;` `main`'i büyütür, sonraki her şey
+kayar (callfn'de gerçekten 4 ayrı düzey: 64 / 77 / 100 / 120 ms). Ölçümü
+yazarken "önek yorum mu kod mu" ve "ikililer farklı mı" birlikte yazılır.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

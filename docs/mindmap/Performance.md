@@ -1851,7 +1851,11 @@ vm.hpp); yeni bir depo işareti oraya ve `arr_debox`'a eklenir.
 Ölçüm (Ryzen 7 9800X3D, `taskset -c 6,7`, `TULPAR_AOT_NOCACHE=1`, repo
 dışında izole dizin, taban a4462a91 — #472 öncesi, farkı yalnız gömülü kitaplık import satırları; en iyi 7): kaynağa 0–3
 önek satırıyla `parse` {71,6 72,0 71,4 71,9} → {69,2 69,7 69,6 69,6} ms,
-bellek her düzende 223,4 → 185,1 MB — kazanç yerleşimden bağımsız (split'te
+bellek her düzende 223,4 → 185,1 MB. **Düzeltme (aynı gün):** o önekler YORUM
+satırıydı ve yorum ikiliyi değiştirmiyor (`cmp` aynı) — dört tekrar ölçümdü,
+dört yerleşim değil ([[Tuzaklar]] 7s). KOD satırı önekiyle (`int onek_i =
+toInt(env(..)) + i;`, ikililer farklı) yeniden: {72,6 72,3 72,8 71,3} →
+{69,9 70,7 69,5 68,8} ms — kazanç gerçekten yerleşimden bağımsız (split'te
 5M × 8 B daha az yazma). 13 çekirdek (en iyi 7; eski/yeni ms): callfn
 80,6/81,2 · hashmap 78,4/79,1 · qsort 71,7/70,3 · intloop 136,2/136,3 ·
 strcat 9,8/10,0 · nbody 116,5/116,3 · mandelbrot 155,8/156,0 · particles
@@ -2160,8 +2164,38 @@ loop_versioning / wings_features'ta 0 farklı fonksiyon. Pozitif kontroller:
 `dso_local` düzeltmesi geri alınınca nesne karşılaştırması arm64'te GOT (`adrp+ldr`),
 MinGW'de `.refptr` farkını gösteriyor. Bulunan üç sessiz mekanizma: Tuzaklar 7o.
 
+**Güncelleme 2026-10-06 — Linux'ta varsayılan link `ld.lld` (varsa); aşağıdaki
+"çalışma hızından öder" yargısı yerleşim gürültüsüydü.** Ölçüm (Ryzen 7
+9800X3D, `taskset -c 6,7`, en iyi 5): link hello 42 → 15 ms (mold 14, gold 27),
+motor oyunu (`engine_dalga`, eklentili) 68 → 22 ms. Kod: aynı programın bfd ve
+lld ikilileri `objdump` ile fonksiyon fonksiyon karşılaştırıldı (adresler
+maskeli) — kullanıcı fonksiyonları ve `main` komut komut aynı; runtime'da 2070
+fonksiyonun 29'u farklı (libstdc++ iç, soğuk yol), fark adres yüklemesinin
+gevşetme biçimi (`mov r, imm32` ↔ `lea r, [rip+d]`) ve dolgu (nop ↔ int3).
+Yerleşim: callfn'e (en duyarlı çekirdek) kaynağın başına 0–7 KOD satırı
+eklenerek 8 farklı yerleşim (iki tur, dönüşümlü): bfd {81/76, 64, 120, 64,
+77/100, 66/64, 66, 65}, lld {67/65, 64, 120, 65, 105/87, 77, 66, 65} — **iki
+bağlayıcı aynı düzeyleri geziyor** ({64–66, 75–81, 87–105, 120}); hangisine
+düşüleceği yerleşime bağlı, bağlayıcıya değil (Tuzaklar 7i). Aşağıdaki "callfn
++%19–22" o günkü yerleşimin lld'de kötü düzeye düşmesiydi; bugünkü kodda tam
+tersi (13 çekirdek, 3 tur: callfn bfd 80,5–81,5 / lld 65–67; diğer 12 ±%1,
+hashmap her iki bağlayıcıda 85–102 gürültü). `-z keep-text-section-prefix`
+bfd gibi `.text.hot`/`.text.unlikely` gruplamak için. TULPAR_LD=bfd eski
+yol, =lld/=mold zorlar; TULPAR_CC verilmişse dokunulmaz. Bölümlü üretimde lld
+`.eh_frame`'i yeniden yazmadığı için tek nesne ile bölümlü ikili arasında
+`.text` 64 B kayabiliyor (wings) — `tests/bolumlu_emit.sh` kimlik ölçümünü bfd
+ile yapıyor, lld ayağında adres hariç komut akışını karşılaştırıyor. **macOS ve
+Windows değişmedi** — CI'da ölçüldü (#480, hello, en iyi 5): macOS arm64 ld64 84 ms,
+lld 78, ld64.lld 81 — kazanç yok. Windows MinGW ld.bfd 155 ms, lld 79 (MSYS2
+`mingw-w64-x86_64-lld` kurularak) — ~2 kat, AMA orada çalışma hızı A/B'si ve
+suitlerin lld ile koşumu yok, lld de kullanıcının MinGW kurulumunda varsayılan
+değil: ayrı iş (ölçüm + `windows` dalında aynı otomatik seçim). Motor uyumu:
+`tools/tulpar_dogrula.sh`'nin eksik arşiv kontrolü bağlayıcı hata BİÇİMİNİ okuyor
+(`undefined reference to` / ld64); lld `undefined symbol:` diyor — motor
+tulpar-engine#89 ile üç biçimi de sayıyor (bu değişiklikten önce girmeli).
+
 **Link tabanı (~40 ms, her programda): `lld` daha hızlı ama ÇALIŞMA HIZINDAN öder —
-yapılmadı.** Bir önceki bölümdeki "lld 64 ms" ölçümü tutmadı: `TULPAR_CC="clang++
+yapılmadı.** *(2026-10-05; yukarıdaki güncelleme yargıyı düzeltiyor.)* Bir önceki bölümdeki "lld 64 ms" ölçümü tutmadı: `TULPAR_CC="clang++
 -fuse-ld=lld"` ile link 40 → 14 ms (mold 15 ms; hello / wings / json.test, 5 koşu en
 iyi). ld.bfd'nin kendisi 31,6 ms, clang++ sürücüsü ~5 ms; `--gc-sections`,
 `--no-keep-memory`, `-O0` bfd'yi hızlandırmıyor. AMA yerleşim değişiyor: kullanıcı
