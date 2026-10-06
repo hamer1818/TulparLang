@@ -75,6 +75,35 @@ dışarı sızmıyor") ölçülerek sınandı; sızıyordu ve desenler de etkile
   Tulpar ifadesinden ulaşılamıyor — DAP da gizli yereli göstermiyor
   (DWARF'ta yok, ölçüldü).
 
+### Düzeltildi — Windows CI "Ornekler" adımı bir kez `exit code 3840` ile kesildi
+
+- 3840 = 0x0F00. MSYS2 süreci sinyalle ölünce Cygwin-dışı ebeveynine (Actions
+  runner'ı) bildirdiği kodun baytlarını çeviriyor (msys2-runtime
+  `pinfo::exit`): 0x0F = sinyal 15. Yani adımın **dış kabuğu SIGTERM ile
+  öldü** (PR #470, iş 111891244750; yetim kalan süreçlerden biri tam o anda
+  smoke'ta olan `wings_features_api`). Çözüm her koşumda ölçülüyor:
+  `tools/win_sinyal_kodu.ps1` (`exit 3` → 3, `kill -TERM $$` → 3840).
+- Adımda SIGTERM gönderen tek yer `build.sh`'in sunucu smoke'unu durduran
+  `kill -TERM`. MSYS2 o sinyali yerel `.exe`'ye `exit_process_tree()` ile
+  iletiyor; ağaç Windows'un `th32ParentProcessID` alanından kuruluyor ve alan
+  ebeveyn ölünce bayatlıyor (PID yeniden kullanılabilir, yaratılma zamanı
+  karşılaştırılmıyor). Ebeveyni ölmüş HERHANGİ bir süreç, o PID'i yeniden
+  almış smoke ikilisinin "çocuğu" sayılıyor ve yürüyüş onun altına iniyor:
+  yoldaki MSYS2 grup lideri SIGTERM, yerel süreç `TerminateProcess` yiyor.
+  Ölçüldü (bu PR'ın Windows koşumu): dış kabuğun ata zinciri `cmd.exe ←
+  Runner.Worker ← Runner.Listener ← … ← wininit.exe ← 724 ÖLÜ, PID başka
+  bir süreçte`; `timeout` süreçleri grup lideri ve ebeveynleri ölü. Yani
+  PID 724'ü alan bir smoke ikilisine `kill` dış kabuğu (3840) — ve yolda
+  Runner.Worker'ı — vurabiliyor. (Runner kaybı #467 ile ilişkisi
+  kanıtlanmadı; aynı yol onu da açıklayabilir.) `build.sh`
+  smoke'u Windows'ta artık Windows PID'iyle doğrudan `taskkill /F` (ağaç
+  yürüyüşü yok) ile durduruyor (`smoke_durdur`); görüntü adı ikiliyle
+  eşleşmezse eski yola dönüp `[tani]` satırı basıyor.
+- Tanı: Ornekler/Suitler adımlarının dış kabuğu SIGTERM'i yakalayıp uyarı
+  basıyor ve ölmüyor (testlerin gerçek sonucu sayılır);
+  `tools/win_ebeveyn_izi.sh` dış kabuğun Windows ata zincirini ve ilk ölü
+  (bayat) ebeveyni basıyor. Tuzaklar 7p.
+
 ### Düzeltildi — `import "router"` ve `import "tulpar_api"` depo dışında derlenmiyordu
 
 - Gömülü `router` kendi içinde `import "lib/http_utils.tpr"`, gömülü

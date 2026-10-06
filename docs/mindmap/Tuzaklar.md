@@ -2352,6 +2352,41 @@ bu ölçüm gösterdi). Kalan tek fark fonksiyonlar arası hizalama DOLGUSU: bö
 sınırında NOP'u birleştirici değil linker yazıyor — adresler aynı, yürütülmeyen
 baytlar farklı (Tuzaklar 7i'nin tersi: burada yerleşim aynı, dolgu baytı değil).
 
+## 7p. MSYS2'de `kill` yerel `.exe`'nin "ağacını" bayat ebeveyn PID'iyle kuruyor
+
+Windows CI "Ornekler" adımı bir kez `Process completed with exit code 3840` ile
+kesildi (PR #470, iş 111891244750; yeniden koşunca geçti). İki bilgi parçası:
+
+1. **3840'ı çöz.** Cygwin/MSYS2 süreci normal çıkınca Cygwin-dışı ebeveyn kodun
+   kendisini görür; **sinyalle ölünce `sinyal << 8`** (msys2-runtime
+   `pinfo::exit` durum baytlarını çeviriyor). 0x0F00 → sinyal 15: adımın dış
+   kabuğu SIGTERM ile öldü — test başarısızlığı değil. `tools/win_sinyal_kodu.ps1`
+   bunu her koşumda ölçüyor (`exit 3` → 3, `kill -TERM $$` → 3840).
+2. **Göndereni bul.** Adımda SIGTERM gönderen tek yer `build.sh`'in sunucu
+   smoke'unu durduran `kill -TERM`. Yerel (Cygwin olmayan) bir `.exe`'ye giden
+   sinyal onu başlatan saplamada `exit_process_tree()`'ye düşer
+   (`winsup/cygwin/include/cygwin/exit_process.h`): "çocuklar" Windows'un
+   `th32ParentProcessID` alanından toplanır, MSYS2 süreci olan ve kendi grubunun
+   lideri olan çocuğa `kill(pid, sig)` gider. Alan sürecin YARATILDIĞI andaki
+   ebeveyn PID'idir; ebeveyn ölünce PID yeniden kullanılabilir ve kod yaratılma
+   zamanını karşılaştırmıyor. Ebeveyni ölmüş HERHANGİ bir süreç o PID'i yeniden
+   almış smoke ikilisinin "çocuğu" sayılır ve yürüyüş onun altına iner: yoldaki
+   MSYS2 grup lideri SIGTERM, yerel süreç `TerminateProcess` yer. Yetim kalan
+   süreçlerden biri tam o anda smoke'ta olan `wings_features_api` idi.
+3. **Önkoşulu ölç.** `tools/win_ebeveyn_izi.sh` (Ornekler adımında her koşum):
+   dış kabuğun kendi ebeveyni canlı (`cmd.exe`), ama zincir `Runner.Worker ←
+   Runner.Listener ← … ← wininit.exe ← 724 ÖLÜ, PID başka bir süreçte` diye
+   bitiyor — PID 724'ü alan bir smoke ikilisine `kill` bütün runner ağacını
+   "çocuk" sayar. `timeout` süreçleri de grup lideri ve ebeveynleri ölü
+   (PR #473 CI, 2026-10-06). İlk tahmin "dış kabuğun ebeveyni bayat" idi;
+   ölçüm onu yalanladı, zincirin üst ucu doğruladı.
+
+**Kural:** MSYS2'de yerel bir Windows sürecini durdururken `kill` yerine Windows
+PID'iyle (`/proc/<pid>/winpid`) `taskkill /F` — `/T` YOK, ağaç yürüyüşü yok
+(`build.sh` `smoke_durdur`; görüntü adı eşleşmezse eski yola dönüp `[tani]`
+basar). Belirlenimsiz bir CI kesintisinde önce çıkış kodunu platformun
+kodlamasıyla çöz: "3840" bir test kodu değil, bir sinyaldi.
+
 ## 7q. "Değilse 64-bit" dalı — yeni bir depo işareti eski kodda tamsayı okunur
 
 Kutusuz dizinin `idata`'sı önce yalnız tamsayıydı; `ARR_ELEM_F64` (2026-10-01)

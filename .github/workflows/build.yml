@@ -771,9 +771,18 @@ jobs:
       # KAYNAK IZI: runner kaybinin kok nedeni olculmuyordu (#467). Iz
       # tools/win_kaynak_izle.sh ile ayri dosyaya; asagidaki `if: always()`
       # adimi basiyor (adim zaman asimiyla oldurulse de).
+      # SIGTERM TANISI (2026-10-06): adim bir kez 3840 ile kesildi (PR #470,
+      # is 111891244750). 3840 = 0x0F00 = "dis kabuk SIGTERM ile oldu"
+      # (cozum: tools/win_sinyal_kodu.ps1, Kaynak izi adiminda her kosumda
+      # olculuyor). Kok neden ve duzeltme build.sh `smoke_durdur`'da. Tuzak
+      # yakalanirsa kabuk artik olmuyor: bash yakalanan sinyali on plandaki
+      # build.sh bitince isler, yani testlerin GERCEK sonucu yine sayilir ve
+      # olay bir uyari satiriyla gorunur.
       - name: Ornekler (build.sh test)
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: |
+          trap 'echo "::warning::[tani] Ornekler adiminin dis kabugu SIGTERM aldi (eski belirti: cikis 3840) — gonderen build.sh smoke durdurma yolu olabilir, bkz. smoke_durdur"' TERM
+          bash tools/win_ebeveyn_izi.sh $$
           bash tools/win_kaynak_izle.sh kaynak_ornekler.log &
           IZ=$!
           rc=0
@@ -787,6 +796,7 @@ jobs:
       - name: Suitler (build.sh suites)
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: |
+          trap 'echo "::warning::[tani] Suitler adiminin dis kabugu SIGTERM aldi (eski belirti: cikis 3840)"' TERM
           bash tools/win_kaynak_izle.sh kaynak_suitler.log &
           IZ=$!
           rc=0
@@ -806,6 +816,8 @@ jobs:
             echo "--- son 15 ---"
             tail -n 15 "$f"
           done
+          # 3840 = SIGTERM cozumunun pozitif kontrolu (tools/win_sinyal_kodu.ps1).
+          powershell -NoProfile -NonInteractive -File tools/win_sinyal_kodu.ps1 "$(cygpath -w /usr/bin/bash.exe)"
 
       - name: Typeinfer kapisi
         if: needs.detect-docs-only.outputs.docs_only != 'true'
