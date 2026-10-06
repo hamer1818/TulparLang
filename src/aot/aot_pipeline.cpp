@@ -454,13 +454,62 @@ static std::string build_link_search_dirs() {
 // LLVM'i olmayan Mac'te acilmayan program (olculdu 2026-10-05, macOS CI,
 // tests/kullanici_ikili_bag.sh). Apple surucusu SDK'nin kendi libc++/libunwind'ini
 // (libSystem) kullaniyor. Homebrew clang'i isteyen TULPAR_CC ile secer.
+//
+// LINUX: `ld.lld` VARSA ONUNLA BAGLA (2026-10-06). Her programin odedigi
+// sabit link bedeli ld.bfd'de ~42 ms, lld'de ~15 ms (hello world; Ryzen 7
+// 9800X3D, en iyi 5) — hello'nun derlemesinin cogu. Uretilen makine kodu
+// AYNI: kullanici fonksiyonlarinin komut akisi bayt bayt, runtime'da 2070
+// fonksiyonun 29'u (libstdc++ ic, soguk yol) — fark adres yuklemesinin
+// gevsetme bicimi (`mov r, imm32` / `lea r, [rip+d]`) ve dolgu (nop/int3).
+// Yerlesim farkli; bunun calisma hizina etkisi olculdu: callfn (dolayli
+// cagri, yerlesime en duyarli cekirdek) kaynagi 8 farkli kaydirmayla iki
+// bagliyicida da AYNI duzeylerde geziyor ({64-66, 75-81, 87-105, 120} ms;
+// hangisine dusecegi yerlesime bagli, bagliyiciya degil — Tuzaklar 7i).
+// Performance.md "Link tabani". `-z keep-text-section-prefix`: bfd gibi
+// `.text.hot`/`.text.unlikely`'yi grupla.
+// TULPAR_LD=bfd kapatir (eski yol), =lld / =mold zorlar (yoksa link duser —
+// sessiz geri donus yok); TULPAR_CC verilmisse ona dokunulmaz.
+// macOS (ld64) ve Windows (MinGW ld) DEGISMEDI: orada olculmedi.
+#if PLATFORM_LINUX
+static bool aot_path_has(const char *exe) {
+  const char *path = getenv("PATH");
+  if (!path || !*path) return false;
+  std::string p(path);
+  size_t s = 0;
+  while (s <= p.size()) {
+    size_t e = p.find(':', s);
+    if (e == std::string::npos) e = p.size();
+    std::string d = p.substr(s, e - s);
+    if (!d.empty() && access((d + "/" + exe).c_str(), X_OK) == 0) return true;
+    s = e + 1;
+  }
+  return false;
+}
+#endif
+
 static const char *aot_link_driver() {
   const char *cc = getenv("TULPAR_CC");
   if (cc && *cc) return cc;
 #if PLATFORM_MACOS
   if (access("/usr/bin/clang++", X_OK) == 0) return "/usr/bin/clang++";
 #endif
+#if PLATFORM_LINUX
+  static std::string drv;
+  if (drv.empty()) {
+    drv = "clang++";
+    const char *ld = getenv("TULPAR_LD");
+    const std::string want = (ld && *ld) ? ld : "";
+    if (want == "lld" || (want.empty() && aot_path_has("ld.lld")))
+      drv += " -fuse-ld=lld -Wl,-z,keep-text-section-prefix";
+    else if (want == "mold")
+      drv += " -fuse-ld=mold -Wl,-z,keep-text-section-prefix";
+    else if (!want.empty() && want != "bfd")
+      drv += " -fuse-ld=" + want;  // bilinmeyen ad: surucu karar verir (duserse gorunur)
+  }
+  return drv.c_str();
+#else
   return "clang++";
+#endif
 }
 
 // Onbellek anahtari bu ikisinden turetiliyor (aot_cache.cpp): link satiri
