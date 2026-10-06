@@ -132,17 +132,28 @@ func oku(int[] a, int i) { return a[i]; }
 func yaz(int[] a, int i, int v) { a[i] = v; }
 func bol(int[] d, int x, int y) { return x / y; }
 
+// Beklenen ileti DILE bagli (LC_ALL / LANG): sabit metin yerine tipsiz
+// ikizin (yerel giris ALMAZ) urettigi iletiyle karsilastiriliyor.
+func ikiz_oku(r, i) { return r[i]; }
+func ikiz_yaz(r, i, v) { r[i] = v; }
+
 func run_sinir_disi() {
     int[] a = array_fill(4, 7);
+    var beklenen = "";
+    try { ikiz_oku(a, 4); } catch (e) { beklenen = toString(e); }
+    assert_eq_bool(len(beklenen) > 0, true);
     var m1 = "";
     try { oku(a, 4); } catch (e) { m1 = toString(e); }
-    assert_eq_str(m1, "Calisma Zamani Hatasi: Dizi indeksi sinir disinda");
+    assert_eq_str(m1, beklenen);
     var m2 = "";
     try { oku(a, -1); } catch (e) { m2 = toString(e); }
-    assert_eq_str(m2, "Calisma Zamani Hatasi: Dizi indeksi sinir disinda");
+    assert_eq_str(m2, beklenen);
+    var by = "";
+    try { ikiz_yaz(a, 9, 1); } catch (e) { by = toString(e); }
     var m3 = "";
     try { yaz(a, 9, 1); } catch (e) { m3 = toString(e); }
-    assert_eq_str(m3, "Calisma Zamani Hatasi: Dizi indeksi sinir disinda");
+    assert_eq_str(m3, by);
+    assert_eq_bool(len(m3) > 0, true);
     assert_eq_int(len(a), 4);
     yaz(a, 3, 11);
     assert_eq_int(oku(a, 3), 11);
