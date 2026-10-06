@@ -94,9 +94,20 @@ PROG_VALS = (
     "    float[] fa = array_fill(2, 0.25);\n"          # 8
     "    var yok = null;\n"                            # 9
     "    array sp = split(\"x,yy\", \",\");\n"          # 10 kutusuz dizgi deposu
-    "    print(ad);\n"                                 # 11 <- breakpoint
-    "}\n"                                              # 12
-    "goster(4);\n"                                     # 13
+    "    P[] pa = [];\n"                               # 11 tipli struct dizisi
+    "    push(pa, Nk);\n"                              # 12
+    "    T[] ta = [];\n"                               # 13 f32/i32 alanli (C yerlesimi)
+    "    push(ta, Tk);\n"                              # 14
+    "    array bx = [Nk];\n"                           # 15 kutulu struct (ad etiketi)
+    "    S s = { ad: \"z\", n: 3 };\n"                  # 16 str alanli struct (kutulu)
+    "    print(ad);\n"                                 # 17 <- breakpoint
+    "}\n"                                              # 18
+    "struct P { int x; float y; bool ok; }\n"          # 19
+    "struct T { f32 a; i32 b; bool c; }\n"             # 20
+    "struct S { str ad; int n; }\n"                    # 21
+    "P Nk = { x: 1, y: 2.5, ok: true };\n"            # 22
+    "T Tk = { a: 0.5, b: 7, c: false };\n"            # 23
+    "goster(4);\n"                                     # 24
 )
 PROG_LOOP = (
     "func adim(int i): int {\n"            # 1
@@ -322,7 +333,7 @@ def scenario_values(exe, work):
 
     İkinci ayak: `tulpar debug --gdb-script` çıktısı düz gdb'de de aynı işi
     yapmalı (kurulu tulpar'da tools/ dizini yok)."""
-    a = start(exe, work, PROG_VALS, [{"line": 11}])
+    a = start(exe, work, PROG_VALS, [{"line": 17}])
     try:
         a.wait(is_event("stopped"), "breakpoint'te `stopped`")
         _, vars_ = locals_of(a)
@@ -335,7 +346,14 @@ def scenario_values(exe, work):
                 "fa": "[0.25, 0.25]", "yok": "null",
                 # split sonucu kutusuz dizgi deposunda (ObjString* tablosu,
                 # 2026-10-06): printer onu tamsayi diye okumamali.
-                "sp": '["x", "yy"]'}
+                "sp": '["x", "yy"]',
+                # Struct dizisi ve kutulu struct print ile AYNI metin
+                # (2026-10-06): eskiden `<struct_array @0x...>` ve ad
+                # etiketsiz `[{"x": 1, ...}]`.
+                "pa": "[P { x: 1, y: 2.5, ok: true }]",
+                "ta": "[T { a: 0.5, b: 7, c: false }]",
+                "bx": "[P { x: 1, y: 2.5, ok: true }]",
+                "s": 'S { ad: "z", n: 3 }'}
         bad = {k: vars_.get(k) for k, v in want.items() if vars_.get(k) != v}
         if bad:
             raise AssertionError("okunmayan degerler: %s (hepsi: %s)" % (bad, vars_))
@@ -352,13 +370,15 @@ def scenario_values(exe, work):
     subprocess.run([exe, "--debug", "build", os.path.join(work, "prog.tpr"), binp],
                    capture_output=True, cwd=work)
     r = subprocess.run(["gdb", "-batch", "-nx", "-ex", "source " + script,
-                        "-ex", "break prog.tpr:11", "-ex", "run", "-ex", "info locals",
+                        "-ex", "break prog.tpr:17", "-ex", "run", "-ex", "info locals",
                         binp], capture_output=True, text=True, cwd=work, timeout=TIMEOUT)
-    if 'ad = "Hamza"' not in r.stdout or "a = [1, 2, 3]" not in r.stdout:
+    if ('ad = "Hamza"' not in r.stdout or "a = [1, 2, 3]" not in r.stdout or
+            "bx = [P { x: 1, y: 2.5, ok: true }]" not in r.stdout or
+            "pa = [P { x: 1, y: 2.5, ok: true }]" not in r.stdout):
         raise AssertionError("--gdb-script ile duz gdb degerleri cozmedi:\n%s"
                              % r.stdout[-400:])
     return ("okunur degerler: ad=\"Hamza\" f=2.5 a=[1, 2, 3] j={...} b=true "
-            "(DAP + --gdb-script ile duz gdb)")
+            "pa/ta=[P {...}] bx=[P {...}] s=S {...} (DAP + --gdb-script ile duz gdb)")
 
 
 def scenario_async_threads(exe, work):

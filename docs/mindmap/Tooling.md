@@ -112,6 +112,16 @@ Nesne düzeni (`ObjString`/`ObjArray`/`ObjObject` ofsetleri) runtime DWARF'sız
 linklendiği için betikte YAZILI — `vm.hpp`'de düzen değişirse `dap_audit.py`'nin
 "okunur değerler" senaryosu kızarır.
 
+**Struct'lar `print` ile aynı metin (2026-10-06).** Tipli struct dizisi
+(`P[] pa`, `OBJ_STRUCT_ARRAY`) `<struct_array @0x…>` yerine `[P { x: 1, y: 2.5,
+ok: true }]` — eleman alanları runtime'ın `sarr_field_value`'sunun Python kopyasıyla
+(eski 8 B yuva düzeni + f32/i32/C bool C yerleşimi). Kutulu struct (ad etiketli json,
+`Obj::struct_tag`) `{"x": 1}` yerine `P { x: 1 }`: ad tablosu runtime'da
+`static g_struct_tag_names[256]`; runtime DWARF'sız ama sembol tablosunda, betik
+adresini `&'g_struct_tag_names'` ile bir kez çözüyor (bulunamazsa — soyulmuş ikili —
+json biçimine düşer). Kapı `dap_audit.py` (`pa`/`ta`/`bx`/`s`, DAP ve düz gdb);
+eski yazıcıyla dördü de kırmızı.
+
 ## Self-update
 `src/cli/update_cmd.cpp` — `tulpar update [--check] [--force]`, GitHub Releases'ten;
 SHA-256 listesi indirilip her varlık doğrulanıyor, sonra kurulum dizinine yerleştiriliyor.
