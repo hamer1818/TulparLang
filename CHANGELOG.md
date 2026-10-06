@@ -13,6 +13,25 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `import "router"` ve `import "tulpar_api"` depo dışında derlenmiyordu
+
+- Gömülü `router` kendi içinde `import "lib/http_utils.tpr"`, gömülü
+  `tulpar_api` de `import "lib/router.tpr"` yazıyordu. Bu yollar çalışma
+  dizinine göre DİSKTEN çözüldüğü için kurulu `tulpar` ile başka bir dizinde
+  `import "router"` eden program "değişken tanımlanmamış / fonksiyon
+  bulunamadı" ile düşüyordu (ölçüldü 2026-10-05, v3.39.6). Depo kökünden
+  koşan bütün testler `lib/` orada olduğu için bunu göremiyordu. İkisi de
+  artık gömülü adla import ediyor (`"http_utils"`, `"router"`).
+- Yeni kapı `tests/gomulu_import_disarida.sh` (`build.sh suites`): gömülü
+  kitaplıkların hiçbiri disk yolu import etmemeli (statik; yapay ihlalli
+  pozitif kontrol her koşumda) ve `lib/` olmayan geçici bir dizinde her gömülü
+  modül derlenip (grafik olmayanlar) koşmalı. Eski derleyicide `router` ve
+  `tulpar_api` ayakları kırmızı.
+- `tests/onbellek.sh`: "gömülü modülün disk importu" senaryosu artık var
+  olmadığı için aynı anahtar yolu iki kademeli yerel modülle sınanıyor; Linux'ta
+  depo kökünde kalmış bir `tulpar.exe` sürücü kopyasını yanlış dosyaya
+  yönlendirmiyor (`.exe` yalnız MSYS2'de).
+
 ### Eklendi — derleme önbelleği: `tulpar dosya.tpr` aynı girdiyle ikinci kez derlemiyor
 
 - `tulpar dosya.tpr` her koşuda baştan derliyordu. Artık ikili içerik adresli

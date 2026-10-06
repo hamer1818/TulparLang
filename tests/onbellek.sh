@@ -16,8 +16,8 @@
 #      paket-yerel kardes import (eski onbellegin gormedigi); mtime'i geri
 #      alinmis icerik; TULPAR_NO_FVER (IR'de fv.el var/yok — kodgeni
 #      gercekten degistiriyor); eklenti arsivi (mtime geri alinmis dahil);
-#      runtime arsivi (mtime geri alinmis dahil); tulpar.toml; gomulu
-#      bir modulun diskten import ettigi dosya (router -> lib/http_utils.tpr).
+#      runtime arsivi (mtime geri alinmis dahil); tulpar.toml; import
+#      edilen bir modulun kendi disk importu (iki kademe "lib/..." yolu).
 #   3. ORTAM: anahtar disi (TULPAR_ENGINE_*) isabeti bozmaz; bilinmeyen bir
 #      TULPAR_* iska verir (guvenli yon: hepsi anahtarda).
 #   4. GOZLEM: TULPAR_AOT_EMIT_LL / TULPAR_AOT_TIME onbellegi atlatir (.ll
@@ -159,15 +159,19 @@ printf '[package]\nname = "onb"\nversion = "0.1.0"\n' > "$A/tulpar.toml"
 kos "$A" -- tek.tpr;  beklenen "tulpar.toml eklendi" iska "2"
 rm -f "$A/tulpar.toml"
 
-# Gomulu bir modulun DISKTEN import ettigi dosya: gomulu router
-# `import "lib/http_utils.tpr"` yaziyor ve bu calisma dizinine gore cozuluyor.
+# Import edilen bir modulun KENDI disk importu (iki kademe, calisma dizinine
+# gore cozulen "lib/..." yolu). Eskiden bu durum gomulu router'in
+# `import "lib/http_utils.tpr"` satiriyla sinaniyordu; o satir 2026-10-05'te
+# gomulu ada ("http_utils") cevrildi (depo disinda derlenmiyordu,
+# tests/gomulu_import_disarida.sh). Ayni anahtar yolu yerel modulle sinaniyor.
 mkdir -p "$TMP/gm/lib"
-cp "$ROOT/lib/http_utils.tpr" "$TMP/gm/lib/http_utils.tpr"
-printf 'import "router";\nprint("router");\n' > "$TMP/gm/r.tpr"
-kos "$TMP/gm" -- r.tpr;  beklenen "gomulu modulun disk importu (ilk)" iska "router"
-kos "$TMP/gm" -- r.tpr;  beklenen "gomulu modulun disk importu (ayni)" isabet "router"
-printf '\n// degisti\n' >> "$TMP/gm/lib/http_utils.tpr"
-kos "$TMP/gm" -- r.tpr;  beklenen "gomulu modulun diskteki importu degisti" iska "router"
+printf 'func gm_deger(): int { return 7; }\n' > "$TMP/gm/lib/gm_alt.tpr"
+printf 'import "lib/gm_alt.tpr";\nfunc gm_ust(): int { return gm_deger(); }\n' > "$TMP/gm/gm_ust.tpr"
+printf 'import "gm_ust.tpr";\nprint(gm_ust());\n' > "$TMP/gm/r.tpr"
+kos "$TMP/gm" -- r.tpr;  beklenen "modulun disk importu (ilk)" iska "7"
+kos "$TMP/gm" -- r.tpr;  beklenen "modulun disk importu (ayni)" isabet "7"
+printf 'func gm_deger(): int { return 8; }\n' > "$TMP/gm/lib/gm_alt.tpr"
+kos "$TMP/gm" -- r.tpr;  beklenen "modulun diskteki importu degisti" iska "8"
 
 # ---- Kod uretimi anahtari: TULPAR_NO_FVER (build yolu, ayni cikti adi) -------
 cat > "$A/ir.tpr" <<'T'
@@ -280,7 +284,13 @@ done
 if [ -n "$RTA" ] && [ -n "$CC_BIN" ] && [ -n "$AR_BIN" ]; then
     S="$TMP/surucu"
     mkdir -p "$S" "$TMP/rt"
-    cp "$TUL$( [ -f "$TUL.exe" ] && echo .exe)" "$S/"
+    # .exe yalniz Windows'ta (MSYS2): Linux'ta depo kokunde
+    # kalmis bir tulpar.exe (capraz derleme artigi) kopyalanip "$S/tulpar"
+    # hic olusmuyordu -> rc=127 (olculdu 2026-10-05, yerel).
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*) cp "$TUL.exe" "$S/" ;;
+      *) cp "$TUL" "$S/" ;;
+    esac
     cp "$RTA/libtulpar_runtime.a" "$S/"
     [ -f "$RTA/libtulpar_tame.a" ] && cp "$RTA/libtulpar_tame.a" "$S/"
     TUL_ESKI=$TUL

@@ -3,7 +3,8 @@
 // Ultra-fast API development for Tulpar
 // ============================================
 
-import "lib/router.tpr";
+// Gomulu adla (bkz. router.tpr: "lib/..." yolu depo disinda cozulmuyordu).
+import "router";
 
 // `len` ZATEN yerlesik; buradaki uc sarmalayici olu koddu (yerlesik
 // kazaniyordu, hicbiri cagrilmiyordu). 2026-09-04'te kullanici tanimi
