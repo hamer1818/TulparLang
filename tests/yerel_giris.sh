@@ -74,7 +74,9 @@ else dustu "uygun olmayan fonksiyona .n uretildi (ya da .f yok)"; fi
 if [ -f "$TMP/off.pre.ll" ] && ! grep -q '\.n(' "$TMP/off.pre.ll" && grep -q '@t_qs\.f(' "$TMP/off.pre.ll"; then
     gecti "TULPAR_NO_YEREL_GIRIS=1: hicbir .n yok, t_qs.f duruyor"
 else dustu "kapatma anahtari calismiyor"; fi
-o_on=$(cd "$TMP" && BENCH_N=20000 ./on 2>&1); o_off=$(cd "$TMP" && BENCH_N=20000 ./off 2>&1)
+# `tr -d '\r'`: Windows'ta ikili satirlari CRLF ile bitiriyor (CI'da olculdu).
+o_on=$(cd "$TMP" && BENCH_N=20000 ./on 2>&1 | tr -d '\r')
+o_off=$(cd "$TMP" && BENCH_N=20000 ./off 2>&1 | tr -d '\r')
 if [ -n "$o_on" ] && [ "$o_on" = "$o_off" ] && [[ "$o_on" == *" 0"$'\n'"10"$'\n'"3660" ]]; then
     gecti "qsort (20 000) + azalt + buyuk: acik/kapali cikti ayni, bozuk sira 0"
 else dustu "cikti: acik '$o_on' / kapali '$o_off'"; fi
