@@ -8,6 +8,7 @@
 #include "../parser/import_alias.hpp"
 #include "../common/localization.hpp"
 #include "../common/diagnostics.hpp"
+#include "../common/import_resolve.hpp"
 #include "llvm_types.hpp"
 #include "llvm_values.hpp"
 #include "llvm_array_shape.hpp"   // TLW_* (perf ipucu, K167); asagida da dahil
@@ -50,6 +51,13 @@ struct ImportedModule {
   // dosyanin adi ve ANA dosyanin o satirinin metniyle basiliyordu.
   std::string source;
   std::string diag_file;
+  // Dosya KIMLIGI (oyun geri bildirimi #6): mutlak normallestirilmis yol;
+  // gomulu icin `<gomulu:ad>`. AST_IMPORT tekillestirmesi bununla — yazim
+  // (`"x.tpr"`, `"alt/x.tpr"`) ayni dosyaya da farkli dosyalara da cikabilir.
+  std::string kimlik;
+  // Ice aktaranin dizininden cozuldu VE calisma dizininde ayni adli baska
+  // bir dosya da var: eski kural onu secerdi (AST_IMPORT uyarir).
+  std::string golgelenen;
 };
 
 // Modul AST onbellegi + import edilen struct tiplerinin kaydi.
@@ -107,6 +115,17 @@ struct ImportState {
   // Kok import'un satiri LSP'de modul tanisinin baglandigi yer
   // (tulpar::diag_set_anchor_line; oyun geri bildirimi #4).
   int kodgen_derinlik = 0;
+  // AST_IMPORT'un islendigi modullerin DOSYA KIMLIKLERI (oyun geri bildirimi
+  // #6). Eskiden tekillestirme import DIZGISIYLE yapiliyordu (sabit 128'lik
+  // dizi, sinir denetimsiz): ayni dosyanin iki yazimi (`"davranis/x.tpr"` ve
+  // davranis/ icinden `"x.tpr"`) iki kez yuklenirdi; ayni yazimin FARKLI iki
+  // dosyasi (`"util"` = ./util.tpr ve alt/util.tpr) ikincisini SESSIZCE
+  // atlardi. Ana dosyanin kimligi de burada: bir modulun ana dosyayi geri
+  // ice aktarmasi (dongu) no-op — eskiden ana dosyanin ust duzey kodu iki kez
+  // kosuyordu.
+  std::unordered_set<std::string> islenen;
+  // Ayni (dizin, yazim, takma ad) ikinci kez: yuklemeden atla.
+  std::unordered_set<std::string> islenen_anahtar;
 };
 
 static ImportState *import_state_of(LLVMBackend *backend) {
@@ -2830,7 +2849,6 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->try_depth = 0;
   backend->lambda_count = 0;
   backend->function_count = 0;
-  backend->imported_count = 0;
   backend->capture_data = new CaptureData();
 
   // Enable static typing by default for performance
@@ -4500,21 +4518,22 @@ StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl
 //                              agacini gezip tipleri kaydeder.
 // ---------------------------------------------------------------------------
 
-// `import "name"` cozum sirasi:
-//   0. <current_import_dir>/<name>.tpr     (bundle-local sibling)
-//   1. literal `name` (relative path or absolute file)
-//   2. literal + `.tpr` extension
-//   3. tulpar_modules/<name>/<name>.tpr    (vendored entry point)
-//   4. tulpar_modules/<name>.tpr           (single-file vendor)
-// Gomulu stdlib adi hepsinden once denenir.
+// `import "name"` cozum sirasi: gomulu stdlib adi -> yerel eklenti modulu ->
+// DISK adaylari (src/common/import_resolve.hpp — TEK kaynak; onbellek,
+// typeinfer ve ayristiricinin on taramasi da onu cagiriyor):
+//   1-2. <current_import_dir>/<name>.tpr, <current_import_dir>/<name>
+//        (ice aktaran dosyanin dizini; ana dosya icin onun dizini)
+//   3-4. <name>, <name>.tpr                  (calisma dizini — eski kural)
+//   5-6. tulpar_modules/<name>/<name>.tpr, tulpar_modules/<name>.tpr
 //
-// (3) + (4) are how `tulpar pkg install` makes a dep usable: it copies a
+// 5-6 are how `tulpar pkg install` makes a dep usable: it copies a
 // path: spec into tulpar_modules/<name>/, and the convention is that
-// `<name>.tpr` inside that dir is the entry. (0) is what makes multi-file
+// `<name>.tpr` inside that dir is the entry. 1 is what makes multi-file
 // bundles work — `tulpar_modules/foo/main.tpr` doing `import "util"` finds
 // `tulpar_modules/foo/util.tpr` before falling back to the cwd-rooted
-// candidates that would either miss the file or grab the wrong unrelated
-// package.
+// candidates. 2 + ana dosyanin dizini (2026-10-08, oyun geri bildirimi #6):
+// `a/b/m1.tpr` icindeki `import "d/c.tpr"` program hangi dizinden
+// baslatilirsa baslatilsin `a/b/d/c.tpr`yi bulur.
 //
 // Sonuc `backend->current_import_dir`e baglidir (cagiran kurar), o yuzden
 // onbellek anahtarinda o da var; `as` takma adi ayristirmadan hemen sonra
@@ -4526,7 +4545,14 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   if (!rel_path) return nullptr;
   const char *alias = (node->name && *node->name) ? node->name : "";
   ImportState *ist = import_state_of(backend);
-  std::string key = std::string(backend->current_import_dir) + '\x1f' +
+  // Gomulu stdlib ve eklenti modulu ice aktaranin dizinine bagli DEGIL:
+  // anahtarlari dizinsiz — farkli dizinlerdeki modullerin `import "test"`i
+  // ayni AST'i paylasir (tekillestirme kimlikle yapildigi icin her yazim
+  // en az bir kez yuklenir; ayni gomulu modulu dizin basina yeniden
+  // ayristirmak bosuna derleme suresi olurdu).
+  const bool dizinsiz = get_embedded_lib(rel_path) != nullptr ||
+                        tulpar::ext::module_owner(rel_path, nullptr) != nullptr;
+  std::string key = std::string(dizinsiz ? "" : backend->current_import_dir) + '\x1f' +
                     rel_path + '\x1f' + alias;
   auto it = ist->modules.find(key);
   if (it != ist->modules.end()) return &it->second;
@@ -4535,7 +4561,7 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   ImportedModule &mod = ist->modules[key];
 
   char *source = nullptr;
-  char resolved_dir[256] = "";
+  char resolved_dir[1024] = "";
   // Ayristirma tanisinin gosterecegi ad (K056): cozulen dosya yolu; gomulu
   // stdlib icin `<gomulu:ad>`.
   std::string diag_file = std::string("<gomulu:") + rel_path + ">";
@@ -4555,72 +4581,35 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
     tulpar::ext::mark_used(ext_idx);
     tulpar::cache::note_input(ext_path.c_str());  // onbellek oz denetimi
   } else {
-    FILE *f = nullptr;
-    char resolved_path[512] = "";
-    if (backend->current_import_dir[0] != '\0') {
-      char path_buf[512];
-      snprintf(path_buf, sizeof(path_buf), "%s/%s.tpr",
-               backend->current_import_dir, rel_path);
-      f = fopen(path_buf, "rb");
-      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
-    }
-    if (!f) {
-      f = fopen(rel_path, "rb");
-      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", rel_path);
-    }
-    if (!f) {
-      char path_buf[512];
-      snprintf(path_buf, sizeof(path_buf), "%s.tpr", rel_path);
-      f = fopen(path_buf, "rb");
-      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
-    }
-    if (!f) {
-      char path_buf[512];
-      snprintf(path_buf, sizeof(path_buf),
-               "tulpar_modules/%s/%s.tpr", rel_path, rel_path);
-      f = fopen(path_buf, "rb");
-      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
-    }
-    if (!f) {
-      char path_buf[512];
-      snprintf(path_buf, sizeof(path_buf),
-               "tulpar_modules/%s.tpr", rel_path);
-      f = fopen(path_buf, "rb");
-      if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
-    }
-    if (!f) return &mod;  // found=false
-    diag_file = resolved_path;
+    const tulpar::imports::Resolution res =
+        tulpar::imports::resolve_disk(rel_path, backend->current_import_dir);
+    if (!res.found) return &mod;  // found=false
+    FILE *f = fopen(res.path.c_str(), "rb");
+    if (!f) return &mod;
+    diag_file = res.path;
+    mod.golgelenen = res.shadowed;
     // Onbellek oz denetimi (aot_cache.hpp): okunan her dosya anahtarda olmali;
     // degilse sonuc onbellege yazilmaz (cozum kurallari burada degisip
     // aot_cache.cpp'de unutulursa bedel bayat ikili DEGIL, iska olur).
-    tulpar::cache::note_input(resolved_path);
+    tulpar::cache::note_input(res.path.c_str());
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
+    if (fsize < 0) fsize = 0;
 
     source = static_cast<char*>(malloc(fsize + 1));
     size_t read_size = fread(source, 1, fsize, f);
-    (void)read_size;
-    source[fsize] = 0;
+    source[read_size] = 0;
     fclose(f);
 
-    // Compute the directory for nested imports. dirname() handling:
-    // strip the last `/` (or `\`) segment. If no separator, the file
-    // lived in cwd → leave resolved_dir empty so nested imports use
-    // the existing cwd-rooted probes only.
-    const char *last_slash = nullptr;
-    for (const char *p = resolved_path; *p; p++) {
-      if (*p == '/' || *p == '\\') last_slash = p;
-    }
-    if (last_slash && last_slash > resolved_path) {
-      size_t dir_len = (size_t)(last_slash - resolved_path);
-      if (dir_len >= sizeof(resolved_dir)) dir_len = sizeof(resolved_dir) - 1;
-      memcpy(resolved_dir, resolved_path, dir_len);
-      resolved_dir[dir_len] = '\0';
-    }
+    // Ic ice import'larin dizini: cozulen dosyanin dizini ("" = calisma
+    // dizini).
+    snprintf(resolved_dir, sizeof(resolved_dir), "%s", res.dir.c_str());
   }
   mod.found = true;
   mod.resolved_dir = resolved_dir;
+  mod.kimlik = mod.embedded ? std::string("<gomulu:") + rel_path + ">"
+                            : tulpar::imports::identity(diag_file);
   mod.source = source;
   mod.diag_file = diag_file;
 
@@ -4655,9 +4644,10 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   // K028: modulun KENDI import'larindaki enum'lar paket-yerel kardesten de
   // cozulsun (ayristiricinin on taramasi; kodgenin cozum sirasiyla ayni).
   // (Tani baglami yukarida, sozcuklemeden once kuruldu.)
+  const std::string prev_parser_dir = tulpar_parser_get_import_dir();
   tulpar_parser_set_import_dir(resolved_dir);
   ASTNode_C *module_ast = parser_parse(parser);
-  tulpar_parser_set_import_dir("");
+  tulpar_parser_set_import_dir(prev_parser_dir);
   parser_set_diagnostic_context(prev_diag_text, prev_diag_file);
   parser_free(parser);
 
@@ -4852,6 +4842,38 @@ static void import_register_types(LLVMBackend *backend, ASTNode_C *module_ast,
   }
 }
 
+// `import "x"` iki yerde: ice aktaranin dizininde (kullanilan) ve calisma
+// dizininde (eski kuralin sececegi). Bir kez basilir (modul kimligiyle bir
+// kez islenir). LSP'de uyari tanisi olarak.
+static void warn_import_ambiguity(LLVMBackend *backend, ASTNode_C *node,
+                                  ImportedModule *imod) {
+  const char *rel = node->value.string_value;
+  char msg[2048];
+  snprintf(msg, sizeof(msg),
+           tulpar::i18n::tr_en(
+               "import \"%s\" iki yerde bulundu: '%s' (ice aktaran dosyanin dizini — "
+               "KULLANILAN) ve '%s' (calisma dizini)",
+               "import \"%s\" resolves in two places: '%s' (the importing file's "
+               "directory — USED) and '%s' (the working directory)"),
+           rel, imod->diag_file.c_str(), imod->golgelenen.c_str());
+  const char *hint = tulpar::i18n::tr_en(
+      "2026-10-08 oncesi derleyici calisma dizinindekini secerdi; belirsizligi "
+      "gidermek icin birini yeniden adlandirin",
+      "compilers before 2026-10-08 picked the working-directory one; rename one "
+      "of them to remove the ambiguity");
+  if (tulpar::diag_sink_active()) {
+    tulpar::diag_sink_push(node->line, 1, 0, "warning", msg, hint,
+                           backend->source_filename ? backend->source_filename : "");
+    return;
+  }
+  fprintf(stderr, "%s: %s\n", tulpar::i18n::tr_en("uyarı", "warning"), msg);
+  fprintf(stderr, "  --> %s:%d\n",
+          backend->source_filename && *backend->source_filename ? backend->source_filename
+                                                                : "(stdin)",
+          node->line);
+  fprintf(stderr, "    = %s: %s\n", tulpar::i18n::tr_en("ipucu", "hint"), hint);
+}
+
 // Import agacini (ana programin gorecegi SIRAYLA: deyim sirasi, derinlik
 // once) gezip her modulun struct'larini kaydeder. AST_IMPORT kodgeni ayni
 // sirayla ve ayni adla (rel_path) tekillestirdigi icin `visited` onu
@@ -4867,17 +4889,18 @@ static void prescan_import_types(LLVMBackend *backend, ASTNode_C *program,
     ASTNode_C *imp = program->statements[i];
     if (!imp || imp->type != AST_IMPORT || !imp->value.string_value) continue;
     const char *rel = imp->value.string_value;
-    if (!visited.insert(rel).second) continue;
     // Modulun ayristirma tanisi LSP'de kok dosyanin import satirina baglanir.
     const int onceki_cipa = tulpar::diag_anchor_line();
     if (depth == 0) tulpar::diag_set_anchor_line(imp->line);
     ImportedModule *m = import_load_module(backend, imp);
     tulpar::diag_set_anchor_line(onceki_cipa);
-    if (!m || !m->ast) continue;
+    // AST_IMPORT kodgeniyle AYNI tekillestirme: dosya kimligi.
+    if (!m || !m->found || !visited.insert(m->kimlik).second) continue;
+    if (!m->ast) continue;
     int line = depth == 0 ? imp->line : report_line;
     const char *tok = depth == 0 ? rel : report_token;
     import_register_types(backend, m->ast, rel, line, tok);
-    char saved_dir[256];
+    char saved_dir[sizeof(backend->current_import_dir)];
     snprintf(saved_dir, sizeof(saved_dir), "%s", backend->current_import_dir);
     snprintf(backend->current_import_dir, sizeof(backend->current_import_dir),
              "%s", m->resolved_dir.c_str());
@@ -5100,7 +5123,7 @@ static void ml_scan_imports(LLVMBackend *backend, std::vector<ASTNode_C *> &impo
     tulpar_ast_walk(m->ast, ml_collect_name, &blocked);
     std::vector<ASTNode_C *> sub;
     tulpar_ast_walk(m->ast, ml_find_imports, &sub);
-    char saved_dir[256];
+    char saved_dir[sizeof(backend->current_import_dir)];
     snprintf(saved_dir, sizeof(saved_dir), "%s", backend->current_import_dir);
     snprintf(backend->current_import_dir, sizeof(backend->current_import_dir),
              "%s", m->resolved_dir.c_str());
@@ -16581,24 +16604,38 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // "tame" (2D oyun kütüphanesi) importu — link satırına libtulpar_tame.a
     // eklenmesi gerektiğini işaretle (dup-import erken dönse de idempotent).
     if (rel_path && strcmp(rel_path, "tame") == 0) backend->uses_tame = 1;
-    // Check duplication
-    for (int i = 0; i < backend->imported_count; i++) {
-      if (strcmp(backend->imported_files[i], rel_path) == 0)
+    if (!rel_path) return nullptr;
+    ImportState *kist = import_state_of(backend);
+    // Tekillestirme DOSYA KIMLIGIYLE (oyun geri bildirimi #6; ImportState::
+    // islenen). Ayni (dizin, yazim, takma ad) ikinci kez: yuklemeden atla.
+    {
+      const char *alias0 = (node->name && *node->name) ? node->name : "";
+      if (!kist->islenen_anahtar
+               .insert(std::string(backend->current_import_dir) + '\x1f' + rel_path +
+                       '\x1f' + alias0)
+               .second)
         return nullptr;
     }
-    backend->imported_files[backend->imported_count++] = strdup(rel_path);
-
-    if (!backend->quiet)
-      printf("[AOT] Importing: %s\n", rel_path);
 
     // Cozum + okuma + ayristirma import_load_module'de. Onbellekli: ana
     // programin on taramasi (prescan_import_types) bu modulu zaten
     // ayristirdiysa AYNI AST doner — modul bir kez ayristirilir.
-    ImportState *kist = import_state_of(backend);
     const int onceki_cipa = tulpar::diag_anchor_line();
     if (kist->kodgen_derinlik == 0) tulpar::diag_set_anchor_line(node->line);
     ImportedModule *imod = import_load_module(backend, node);
     tulpar::diag_set_anchor_line(onceki_cipa);
+    if (imod && imod->found && !kist->islenen.insert(imod->kimlik).second)
+      return nullptr;  // ayni dosya baska bir yazimla zaten islendi
+
+    if (!backend->quiet)
+      printf("[AOT] Importing: %s\n", rel_path);
+
+    // Belirsizlik: ice aktaranin dizininde de calisma dizininde de ayni adli
+    // (farkli) dosya var. Yeni kural ice aktaranin dizinindekini secti; eski
+    // kural (2026-10-08 oncesi) obur dosyayi secerdi. Uyari, hata degil.
+    if (imod && imod->found && !imod->golgelenen.empty())
+      warn_import_ambiguity(backend, node, imod);
+
     if (!imod || !imod->found) {
       fprintf(stderr, tulpar::i18n::tr_for_en("Error: Could not import file '%s'\n"), rel_path);
       // Yol gibi gorunmeyen ad (`import "x"`, `.tpr`/`/` yok) bir eklenti
@@ -16626,7 +16663,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // Track the resolved file's directory so nested imports inside a
     // multi-file bundle (Plan 02 PR3) can find their siblings. Empty
     // when we resolve via embedded libs / cwd-rooted candidates.
-    char resolved_dir[256];
+    char resolved_dir[sizeof(backend->current_import_dir)];
     snprintf(resolved_dir, sizeof(resolved_dir), "%s",
              imod->resolved_dir.c_str());
 
@@ -16714,7 +16751,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // Pass 0.2: Process nested Imports LAST (before functions).
         // Save/restore current_import_dir so a bundle's nested imports
         // see THIS module's directory, not the parent's (Plan 02 PR3).
-        char saved_import_dir[256];
+        char saved_import_dir[sizeof(backend->current_import_dir)];
         snprintf(saved_import_dir, sizeof(saved_import_dir), "%s",
                  backend->current_import_dir);
         snprintf(backend->current_import_dir,
@@ -19026,6 +19063,17 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   if (node->type != AST_PROGRAM)
     return;
   backend->main_program = node;
+  // Ana dosyanin import'lari ONUN dizinine gore (oyun geri bildirimi #6):
+  // `tulpar a/b/m1.tpr` icindeki `import "d/c.tpr"` = `a/b/d/c.tpr`.
+  // Bulunamazsa eski kural (calisma dizini) — import_resolve.hpp. Ana
+  // dosyanin kimligi islenenlere girer: bir modulun onu geri ice aktarmasi
+  // (dongu) no-op.
+  if (backend->source_filename && *backend->source_filename) {
+    snprintf(backend->current_import_dir, sizeof(backend->current_import_dir), "%s",
+             tulpar::imports::dir_of(backend->source_filename).c_str());
+    import_state_of(backend)->islenen.insert(
+        tulpar::imports::identity(backend->source_filename));
+  }
 
   method_rewritten_calls().clear();
   try_volatile_regions().clear();
@@ -19141,6 +19189,8 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
     kok_adlari_topla(backend, node);  // strip_unused_embedded kokleri
     {
       std::unordered_set<std::string> visited;
+      if (backend->source_filename && *backend->source_filename)
+        visited.insert(tulpar::imports::identity(backend->source_filename));
       prescan_import_types(backend, node, 0, visited, node->line, nullptr);
     }
 

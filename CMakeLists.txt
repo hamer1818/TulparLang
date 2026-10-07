@@ -223,6 +223,8 @@ set(COMMON_SOURCES
     src/common/localization.hpp
     src/common/diagnostics.cpp
     src/common/diagnostics.hpp
+    src/common/import_resolve.cpp
+    src/common/import_resolve.hpp
     src/common/http_fetch.cpp
     src/common/http_fetch.hpp
 )

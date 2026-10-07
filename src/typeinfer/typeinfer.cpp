@@ -2,6 +2,7 @@
 // Full static type inference for compile-time type checking
 
 #include "typeinfer.hpp"
+#include "../common/import_resolve.hpp"
 #include "thread_lint.hpp"
 #include <cstring>
 #include "../common/localization.hpp"
@@ -2536,13 +2537,20 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
 // and noisy, and the module's own diagnostics belong to whoever edits it.
 // ---------------------------------------------------------------------------
 
-// Same resolution order as the AOT backend (`src/aot/llvm_backend.cpp`):
-// embedded stdlib → literal path → `<name>.tpr` → the two `tulpar_modules/`
-// slots that `tulpar pkg install` populates. Returns false when nothing
-// resolves; that stays silent here on purpose, because the AOT path owns the
-// "Could not import file" error and we must not double-report it.
-static bool load_import_source(const std::string &name, std::string &out,
-                               std::string &out_path) {
+// Resolve `import "<name>"` the same way the AOT backend does: embedded
+// stdlib → native extension module → the disk candidates of
+// src/common/import_resolve.hpp (importer's directory first, then the
+// working directory, then `tulpar_modules/`). Until 2026-10-08 this copy had
+// no importer-directory slot at all, so a nested module's signatures came
+// from whatever the WORKING directory held (oyun geri bildirimi #6).
+// Returns false when nothing resolves; that stays silent here on purpose,
+// because the AOT path owns the "Could not import file" error and we must
+// not double-report it. `out_dir`: the module's own directory (its nested
+// imports resolve from there); "" for embedded / working directory.
+static bool load_import_source(const std::string &name, const std::string &from_dir,
+                               std::string &out, std::string &out_path,
+                               std::string &out_dir) {
+  out_dir.clear();
   if (const char *embedded = get_embedded_lib(name.c_str())) {
     out = embedded;
     out_path = "<gomulu:" + name + ">";
@@ -2550,28 +2558,17 @@ static bool load_import_source(const std::string &name, std::string &out,
   }
   // Yerel eklenti modulu (K303) — AOT ile ayni sira: gomuluden sonra,
   // diskten once.
-  {
-    std::string dir;
-    if (tulpar::ext::read_module(name.c_str(), out, out_path, dir)) return true;
-  }
-  const std::string candidates[] = {
-      name,
-      name + ".tpr",
-      "tulpar_modules/" + name + "/" + name + ".tpr",
-      "tulpar_modules/" + name + ".tpr",
-  };
-  for (const auto &path : candidates) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-      continue;
-    }
-    std::stringstream ss;
-    ss << in.rdbuf();
-    out = ss.str();
-    out_path = path;
-    return true;
-  }
-  return false;
+  if (tulpar::ext::read_module(name.c_str(), out, out_path, out_dir)) return true;
+  const tulpar::imports::Resolution r = tulpar::imports::resolve_disk(name, from_dir);
+  if (!r.found) return false;
+  std::ifstream in(r.path, std::ios::binary);
+  if (!in) return false;
+  std::stringstream ss;
+  ss << in.rdbuf();
+  out = ss.str();
+  out_path = r.path;
+  out_dir = r.dir;
+  return true;
 }
 
 // K028: ayristiricinin import on taramasi (modul enum'lari) icin yukleyici.
@@ -2591,26 +2588,18 @@ static bool parser_import_loader(const std::string &name, const std::string &fro
       return true;
     }
   }
-  std::vector<std::string> candidates;
-  if (!from_dir.empty()) candidates.push_back(from_dir + "/" + name + ".tpr");
-  candidates.push_back(name);
-  candidates.push_back(name + ".tpr");
-  candidates.push_back("tulpar_modules/" + name + "/" + name + ".tpr");
-  candidates.push_back("tulpar_modules/" + name + ".tpr");
-  for (const auto &path : candidates) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) continue;
-    // Ayristiricinin on taramasi bu dosyanin enum'larini KODA katiyor:
-    // derleme girdisidir (onbellek oz denetimi, aot_cache.hpp).
-    tulpar::cache::note_input(path.c_str());
-    std::stringstream ss;
-    ss << in.rdbuf();
-    out_src = ss.str();
-    const size_t slash = path.find_last_of("/\\");
-    if (slash != std::string::npos && slash > 0) out_dir = path.substr(0, slash);
-    return true;
-  }
-  return false;
+  const tulpar::imports::Resolution r = tulpar::imports::resolve_disk(name, from_dir);
+  if (!r.found) return false;
+  std::ifstream in(r.path, std::ios::binary);
+  if (!in) return false;
+  // Ayristiricinin on taramasi bu dosyanin enum'larini KODA katiyor:
+  // derleme girdisidir (onbellek oz denetimi, aot_cache.hpp).
+  tulpar::cache::note_input(r.path.c_str());
+  std::stringstream ss;
+  ss << in.rdbuf();
+  out_src = ss.str();
+  out_dir = r.dir;
+  return true;
 }
 
 // Derleyici ikilisine baglanan her yol (calistir/derle, typecheck, LSP)
@@ -2675,14 +2664,23 @@ static std::unique_ptr<ASTNode> parse_module_source(const std::string &source,
 static void register_module_exports(TypeInferContext *ctx,
                                     const std::string &module_name,
                                     const std::string &alias,
+                                    const std::string &from_dir,
                                     std::set<std::string> &visited, int depth) {
   // Depth cap and visited set together make an import cycle terminate; the
   // AOT path guards this separately, so hitting either here is silent.
-  if (depth > 8 || !visited.insert(module_name).second) {
+  // Visited holds FILE IDENTITIES (as AST_IMPORT does since 2026-10-08): the
+  // same spelling may name two files, two spellings one file, and the root
+  // file itself is pre-seeded so a module importing it back is a no-op.
+  if (depth > 8) {
     return;
   }
-  std::string source, path;
-  if (!load_import_source(module_name, source, path)) {
+  std::string source, path, mod_dir;
+  if (!load_import_source(module_name, from_dir, source, path, mod_dir)) {
+    return;
+  }
+  const std::string kimlik =
+      path.empty() || path[0] == '<' ? path : tulpar::imports::identity(path);
+  if (!visited.insert(kimlik + '\x1f' + alias).second) {
     return;
   }
   bool parse_failed = false;
@@ -2800,7 +2798,7 @@ static void register_module_exports(TypeInferContext *ctx,
     // `import "wings"` puts http_utils' helpers in scope too, matching how the
     // AOT path flattens them into one namespace.
     if (const auto *nested = as_node<ImportStatement>(stmt.get())) {
-      register_module_exports(ctx, nested->path, nested->alias, visited,
+      register_module_exports(ctx, nested->path, nested->alias, mod_dir, visited,
                               depth + 1);
     }
   }
@@ -3406,9 +3404,16 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   // register_module_exports needs no special case for it.
   if (ctx->has_imports) {
     std::set<std::string> visited;
+    // Ana dosyanin import'lari ONUN dizinine gore (oyun geri bildirimi #6);
+    // ana dosyanin kimligi ziyaret edilmis sayilir (geri ice aktarma no-op).
+    const std::string &root_path =
+        ctx->import_base_path.empty() ? ctx->source_path : ctx->import_base_path;
+    const std::string root_dir = tulpar::imports::dir_of(root_path);
+    if (!root_path.empty())
+      visited.insert(tulpar::imports::identity(root_path) + '\x1f');
     for (const auto &stmt : prog->statements) {
       if (const auto *imp = as_node<ImportStatement>(stmt.get())) {
-        register_module_exports(ctx, imp->path, imp->alias, visited, 0);
+        register_module_exports(ctx, imp->path, imp->alias, root_dir, visited, 0);
       }
     }
   }

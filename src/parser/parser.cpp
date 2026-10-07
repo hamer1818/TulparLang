@@ -1512,6 +1512,7 @@ std::vector<std::pair<std::string, std::string>> collect_imports_alias(
 
 void tulpar_parser_set_import_loader(TulparImportLoader fn) { g_import_loader = fn; }
 void tulpar_parser_set_import_dir(const std::string& dir) { g_import_dir = dir; }
+std::string tulpar_parser_get_import_dir() { return g_import_dir; }
 
 void Parser::prescan_imported_enums() {
     if (!g_import_loader) return;

@@ -9,6 +9,7 @@
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include "../typeinfer/typeinfer.hpp"
+#include "../common/import_resolve.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +63,9 @@ int typecheck_cmd_main(int argc, char **argv) {
   // ayristirma hatasi `--> (stdin):N` diye basiliyordu (K056). Sozcuklemeden
   // ONCE: sozcukleyici hatasi da dosya adini bassin (oyun geri bildirimi #4).
   parser_set_diagnostic_context(source.c_str(), path);
+  // Ayristiricinin import on taramasi (enum / tuple imzalari) bu dosyanin
+  // dizininden cozsun — kodgenle ayni (oyun geri bildirimi #6).
+  tulpar_parser_set_import_dir(tulpar::imports::dir_of(path));
   Lexer lexer(source);
   std::vector<Token> tokens;
   while (true) {
@@ -97,6 +101,7 @@ int typecheck_cmd_main(int argc, char **argv) {
   }
 
   TypeInferContext *ctx = typeinfer_create();
+  ctx->import_base_path = path;  // import'lar bu dosyanin dizinine gore (#6)
   typeinfer_program(ctx, ast.get());
   bool had_errors = typeinfer_has_errors(ctx) != 0;
   int err_count = ctx->error_count;

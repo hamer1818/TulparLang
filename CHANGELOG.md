@@ -13,6 +13,40 @@ tag still works;
 
 ## [Unreleased]
 
+### Değişti — `import` yolu önce içe aktaran dosyanın dizinine göre, bulunamazsa çalışma dizinine göre (oyun geri bildirimi #6)
+
+- `import "..."` çalışma dizinine göre çözülüyordu: `a/b/m1.tpr` içindeki
+  `import "d/c.tpr"` (dosya `a/b/d/c.tpr`) `a/` dizininden `tulpar b/m1.tpr`
+  ile koşunca "Import dosyasi acilamadi". Motor örnekleri bu yüzden
+  `import "examples/davranis/x.tpr"` yazıyor ve yalnız `tulpar/`'dan
+  çalışıyordu; oyun yalnız kendi dizininden. Yeni sıra (gömülü stdlib ve
+  eklenti modülünden sonra): `<içe aktaranın dizini>/<ad>.tpr`,
+  `<içe aktaranın dizini>/<ad>`, sonra ESKİ kural `<ad>`, `<ad>.tpr`
+  (çalışma dizini), sonra `tulpar_modules/`. Ana dosya için "içe aktaranın
+  dizini" ana dosyanın dizini (`tulpar oyun.tpr` için boş — eskisiyle aynı).
+- Geriye uyumlu: çalışma dizinine göre yazılmış her import aynı dosyayı
+  bulur — içe aktaranın dizininde AYNI ADLI başka bir dosya yoksa. Varsa
+  içe aktaranın dizini kazanır ve uyarı basılır (`import "m.tpr" resolves in
+  two places: ...`). Depo, motor örnekleri ve oyunda böyle bir durum yok
+  (tarandı).
+- Kural tek yerde: `src/common/import_resolve.{hpp,cpp}`. Kodgen, derleme
+  önbelleğinin anahtar tarayıcısı, typeinfer ve ayrıştırıcının ön taraması
+  aynı fonksiyonu çağırıyor (önceden dört elle yazılmış kopyaydı; typeinfer
+  iç içe import'u içe aktaranın dizininden hiç aramıyordu). Önbellek
+  anahtarı yeni sırayı görüyor — gölgelenen adayın varlığı da anahtarda
+  (Tuzaklar 7n).
+- Tekilleştirme DOSYA KİMLİĞİYLE (mutlak yol): eskiden import dizgisiyle
+  (sınır denetimsiz 128'lik dizi) yapılıyordu — aynı dosyanın iki yazımı
+  iki kez yükleniyor, aynı yazımın FARKLI iki dosyası (`"util"` = ./util.tpr
+  ve alt/util.tpr) ikincisini SESSİZCE atlıyordu. Bir modülün ana dosyayı
+  geri içe aktarması artık no-op (eskiden ana dosyanın üst düzey kodu iki kez
+  koşuyordu). Aynı adlı DİZİN artık modülü gölgelemiyor (`import "davranis"`
+  + `davranis/` dizini: Linux'ta fopen dizini açıyordu).
+- Kapılar: yeni `tests/import_yolu.sh` (19 denetim; eski derleyicide 13'ü
+  kırmızı) ve `tests/onbellek.sh`'e "içe aktaranın dizini" senaryosu (anahtar
+  tarayıcısına eski kural verilince — sabotaj — ana dosyanın yanındaki modül
+  geri gelince ISABET ve bayat çıktı: 98, doğrusu 3).
+
 ### Düzeltildi — modül, kendisini içe aktaran dosyanın fonksiyonunu da görüyor (oyun geri bildirimi #5)
 
 - Bir modül ana dosyanın GLOBAL'ini okuyabiliyordu ama FONKSİYONUNU

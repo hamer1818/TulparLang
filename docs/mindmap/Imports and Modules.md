@@ -4,7 +4,12 @@ tags: [component, frontend]
 
 # Imports & Modules
 
-`import "name"` çözümleme sırası (`src/aot/llvm_backend.cpp` import handler): gömülü stdlib adı → **yüklü bir yerel eklentinin modülü** (`tulpar-ext.json` `modules`, 2026-10-02 — [[Eklentiler]]) → `name` → `name.tpr` → `tulpar_modules/<name>/<name>.tpr` → `tulpar_modules/<name>.tpr`. Son ikisi `tulpar pkg install`'un kullandığı yer. Typeinfer (`load_import_source`) ve ayrıştırıcının ön taraması (`parser_import_loader`) aynı sırayı izler. Hiçbir yerden çözülmeyen yol-olmayan ad (`import "engine"`) hatanın altında `--ext` ipucunu basar.
+`import "name"` çözümleme sırası: gömülü stdlib adı → **yüklü bir yerel eklentinin modülü** (`tulpar-ext.json` `modules`, 2026-10-02 — [[Eklentiler]]) → DİSK adayları (`src/common/import_resolve.hpp`, TEK kaynak — kodgen `import_load_module`, önbellek `resolve_import`, typeinfer `load_import_source`, ayrıştırıcının ön taraması `parser_import_loader` hepsi onu çağırır):
+1. `<içe aktaranın dizini>/name.tpr`, 2. `<içe aktaranın dizini>/name` — **2026-10-08'den beri ana dosya için de** (ana dosyanın dizini; oyun geri bildirimi #6),
+3. `name`, 4. `name.tpr` — çalışma dizini (eski kural, geri dönüş),
+5. `tulpar_modules/<name>/<name>.tpr`, 6. `tulpar_modules/<name>.tpr` (`tulpar pkg install`).
+
+Yalnız düzenli dosyalar aday (dizin değil). 1-2 ile 3-4 FARKLI dosyalara çıkarsa 1-2 kazanır ve uyarı basılır (`resolves in two places`); 2026-10-08 öncesi derleyici 3-4'ü seçerdi. Tekilleştirme dosya kimliğiyle (`ImportState::islenen`, mutlak yol): aynı dosyanın iki yazımı bir kez yüklenir, aynı yazımın iki farklı dosyası ikisi de; ana dosyanın kimliği baştan içeride (geri içe aktarma no-op). Önbellek anahtarı aynı çözümü + gölgelenen adayın varlığını taşır. Hiçbir yerden çözülmeyen yol-olmayan ad (`import "engine"`) hatanın altında `--ext` ipucunu basar. Bilinen boşluk: kullanılmayan bir import'un bulunamaması derlemeyi durdurmuyor (`Error:` basılıp çıkış 0). `tulpar.toml` ve `tulpar_modules/` hâlâ çalışma dizininde aranır. Kapılar: `tests/import_yolu.sh`, `tests/onbellek.sh`.
 
 ## Alias'lı import
 `import "name" as alias;` → modüldeki her top-level `func` `<alias>__<name>`'e yeniden adlandırılır, intra-module çağrılar da. İki kütüphane aynı `route`/`helper`'ı export etse çakışmaz. Builtin'ler ve importer'ın kendi fonksiyonları dokunulmaz. Rewrite: `src/parser/import_alias.cpp` (AOT `AST_IMPORT` codegen'den çağrılır).

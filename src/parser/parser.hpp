@@ -403,5 +403,6 @@ void tulpar_parser_set_import_loader(TulparImportLoader fn);
 // SONRAKI ayristirmalarin "bu kaynak hangi dizinde" bilgisi (AOT bir modulu
 // ayristirirken kurar, sonra "" yapar).
 void tulpar_parser_set_import_dir(const std::string &dir);
+std::string tulpar_parser_get_import_dir();
 
 #endif // TULPAR_PARSER_HPP
