@@ -13,6 +13,32 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — modül, kendisini içe aktaran dosyanın fonksiyonunu da görüyor (oyun geri bildirimi #5)
+
+- Bir modül ana dosyanın GLOBAL'ini okuyabiliyordu ama FONKSİYONUNU
+  çağıramıyordu ("'ana_yardimci' adında bir fonksiyon bulunamadı"). Kök
+  neden kodgen sırası: ana dosyanın globalleri import'lardan önce (Pass 0.1),
+  fonksiyon imzaları sonra (Pass 1a) bildiriliyordu; modülün gövdeleri
+  arada üretiliyordu. İç içe modüllerde ebeveynin imzaları zaten önce
+  bildiriliyordu (Pass 0.15) — ana dosya tek istisnaydı. Artık bir modülün
+  ANDIĞI (ve hiçbir modülün tanımlamadığı, hiçbir modülde değişken adı
+  olmayan) ana dosya fonksiyonlarının imzaları import'lardan önce
+  bildiriliyor. Yalnız onlar: eskiden derlenen hiçbir programda böyle bir ad
+  yok, yani onların IR'i — fonksiyon sırası dahil — aynı (depodaki 226
+  örnek/test ölçüldü). İlk sürüm BÜTÜN imzaları öne alıyordu; sıra değişti
+  ve bölümlü nesne üretiminin ikili kimlik kapısı LLVM 18'de kırmızıya döndü
+  (`tests/array_shape_cache.test.tpr`: tek nesne ile bölümlü ikilinin
+  `.rodata`'sı 16 bayt kaydı).
+- Kural (tek ve belgeli): bir modül kendi import'larını ve kendisini
+  (doğrudan ya da dolaylı) içe aktaran her dosyanın üst düzey adlarını —
+  global VE fonksiyon — metin sırasından bağımsız görür. Daha SONRA içe
+  aktarılan kardeş modülü görmez (globalini de): hata artık kardeşin adını
+  ve çözümü söylüyor (`bu dosyada import "b.tpr"; yazın`). Kırıcı değil:
+  yalnız eskiden derleme hatası olan programlar derleniyor; aynı adlı
+  fonksiyonda yerel tanım kazanır (K043) değişmedi.
+- Kapı: yeni `tests/modul_ice_aktaran.sh` (8 denetim; eski derleyicide 4'ü
+  kırmızı, öne almayı kapatan sabotajda 3'ü).
+
 ### Düzeltildi — içe aktarılan modüldeki hata modülün kendi dosyası ve satırıyla raporlanıyor (oyun geri bildirimi #4)
 
 - İlk gerçek çok dosyalı oyun (motor deposu, "Küpler ile Kürelerin Savaşı")

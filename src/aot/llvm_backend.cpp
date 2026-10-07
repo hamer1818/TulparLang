@@ -4680,6 +4680,33 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   return &mod;
 }
 
+// `fname` ust duzey fonksiyonunu tanimlayan, ayristirilmis ama henuz
+// ISLENMEMIS (AST_IMPORT kodgeni gormemis) bir modulun ice aktarma adi; yoksa
+// "". On tarama (prescan_import_types) butun agaci ayristirdigi icin sonra
+// gelen kardes modul de tabloda. "Bulunamadi" tanisinin ipucu icin
+// (oyun geri bildirimi #5).
+static std::string import_later_sibling_defining(LLVMBackend *backend,
+                                                 const char *fname) {
+  if (!fname) return "";
+  ImportState *ist = import_state_of(backend);
+  for (auto &kv : ist->modules) {
+    ImportedModule &m = kv.second;
+    if (!m.ast || m.ast->type != AST_PROGRAM || !m.ast->statements) continue;
+    for (int i = 0; i < m.ast->statement_count; i++) {
+      ASTNode_C *d = m.ast->statements[i];
+      if (!d || d->type != AST_FUNCTION_DECL || !d->name || strcmp(d->name, fname) != 0)
+        continue;
+      // Anahtar: import_dir \x1f rel_path \x1f alias
+      const std::string &k = kv.first;
+      size_t a = k.find('\x1f');
+      size_t b = a == std::string::npos ? a : k.find('\x1f', a + 1);
+      if (a == std::string::npos || b == std::string::npos) return "";
+      return k.substr(a + 1, b - a - 1);
+    }
+  }
+  return "";
+}
+
 // Iki TYPE_DECL ayni yerlesimi mi tanimliyor: alan sayisi, adlari, sirasi,
 // tipleri (ozel tipte tip adi da).
 static bool struct_decl_layout_equal(ASTNode_C *a, ASTNode_C *b) {
@@ -13724,10 +13751,29 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       char msg[256];
       snprintf(msg, sizeof(msg),
                "'%s' adında bir fonksiyon bulunamadı", node->name);
-      report_codegen_error_with_suggestion(
-          backend, node->line, "hata", msg, node->name,
-          "fonksiyon adını doğru yazdığınızdan ve gerekli modülü import "
-          "ettiğinizden emin olun");
+      // Ad import agacindaki BASKA bir modulde tanimli ama o modul henuz
+      // islenmedi: ice aktaran onu bu dosyadan SONRA ice aktariyor
+      // (kardes modul). Kural (oyun geri bildirimi #5): bir modul kendi
+      // import'larini ve kendisini ice aktaran dosyalari gorur; sonra gelen
+      // kardesi gormez — globali de gormez. Neyi yapacagini soyle.
+      std::string sonraki = import_later_sibling_defining(backend, node->name);
+      if (!sonraki.empty()) {
+        char hint[768];
+        snprintf(hint, sizeof(hint),
+                 tulpar::i18n::tr_en(
+                     "'%s', '%s' modulunde tanimli ama o modul bu noktadan SONRA "
+                     "ice aktariliyor; bu dosyada `import \"%s\";` yazin ya da "
+                     "import sirasini degistirin",
+                     "'%s' is defined in module '%s', which is imported AFTER this "
+                     "point; add `import \"%s\";` here or reorder the imports"),
+                 node->name, sonraki.c_str(), sonraki.c_str());
+        report_codegen_error(backend, node->line, "hata", msg, node->name, hint);
+      } else {
+        report_codegen_error_with_suggestion(
+            backend, node->line, "hata", msg, node->name,
+            "fonksiyon adını doğru yazdığınızdan ve gerekli modülü import "
+            "ettiğinizden emin olun");
+      }
     } else {
       backend->had_error = 1;
     }
@@ -19111,6 +19157,78 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
+    // Pass 0.15 (ana dosya; oyun geri bildirimi #5, 2026-10-08): bir
+    // modulun ANDIGI ana dosya fonksiyonlarinin imzalari import'lardan
+    // (Pass 0.2) ONCE. Modullerin govdeleri Pass 0.2'de uretiliyor; ana
+    // dosyanin imzalari Pass 1a'da, yani ondan SONRA bildirildigi icin bir
+    // modul ice aktaranin GLOBAL'ini goruyor (Pass 0.1 once) ama
+    // FONKSIYONUNU goremiyordu: "'ana_yardimci' adinda bir fonksiyon
+    // bulunamadi". Ic ice modullerde kural zaten buydu (modulun Pass
+    // 0.15'i imzalarini kendi import'larindan ONCE bildirir); ana dosya tek
+    // istisnaydi. Kural: bir modul, kendisini (dogrudan ya da dolayli) ice
+    // aktaran her dosyanin ust duzey adlarini — global VE fonksiyon — metin
+    // sirasindan bagimsiz gorur.
+    //
+    // YALNIZ bir modulun adini andigi (dogrudan cagri / tanimlayici), hicbir
+    // modulun fonksiyon olarak tanimlamadigi ve hicbir modulde DEGISKEN adi
+    // olmayan (yerel, parametre, dongu degiskeni, atama hedefi) fonksiyonlar.
+    // Eskiden derlenen her programda boyle bir ad yok (o program
+    // "bulunamadi" ile duserdi), yani onlarin IR'i — fonksiyon sirasi dahil
+    // — bayt bayt ayni kalir (depodaki ornek ve paketlerin IR'i olculdu).
+    // Butun imzalari one almak sirayi degistiriyordu ve bolumlu nesne
+    // uretiminin ikili kimlik kapisi (tests/bolumlu_emit.sh, LLVM 18) bunu
+    // gordu; degisken adlarini saymamak da arcade/scene3d orneklerinde
+    // `kare`, `kur` gibi yerelleri yuzunden sirayi kaydiriyordu. Ayni adli
+    // modul fonksiyonunda yerel tanim kazanir (K043) — o yol modulun Pass
+    // 0.15'inde, degismedi.
+    {
+      ImportState *ist0 = import_state_of(backend);
+      struct Topla {
+        std::unordered_set<std::string> anilan, degisken;
+      } topla;
+      std::unordered_set<std::string> modul_tanimladigi;
+      for (auto &kv : ist0->modules) {
+        ASTNode_C *m = kv.second.ast;
+        if (!m || m->type != AST_PROGRAM || !m->statements) continue;
+        for (int i = 0; i < m->statement_count; i++) {
+          ASTNode_C *d = m->statements[i];
+          if (d && d->type == AST_FUNCTION_DECL && d->name) modul_tanimladigi.insert(d->name);
+        }
+        tulpar_ast_walk(
+            m,
+            [](ASTNode_C *n, void *p) -> int {
+              auto *t = static_cast<Topla *>(p);
+              if (n->name && ((n->type == AST_FUNCTION_CALL && !n->callee) ||
+                              n->type == AST_IDENTIFIER))
+                t->anilan.insert(n->name);
+              if (n->name && (n->type == AST_VARIABLE_DECL || n->type == AST_FOR_IN ||
+                              n->type == AST_ASSIGNMENT || n->type == AST_COMPOUND_ASSIGN ||
+                              n->type == AST_INCREMENT || n->type == AST_DECREMENT))
+                t->degisken.insert(n->name);
+              if ((n->type == AST_FUNCTION_DECL || n->type == AST_LAMBDA) && n->parameters)
+                for (int i = 0; i < n->param_count; i++)
+                  if (n->parameters[i] && n->parameters[i]->name)
+                    t->degisken.insert(n->parameters[i]->name);
+              if (n->type == AST_TRY_CATCH && n->catch_var) t->degisken.insert(n->catch_var);
+              return 1;
+            },
+            &topla);
+      }
+      LLVMBasicBlockRef sb = LLVMGetInsertBlock(backend->builder);
+      LLVMValueRef sf = backend->current_function;
+      for (int i = 0; i < node->statement_count; i++) {
+        ASTNode_C *fn = node->statements[i];
+        if (fn->type != AST_FUNCTION_DECL || !fn->name) continue;
+        if (!topla.anilan.count(fn->name) || topla.degisken.count(fn->name) ||
+            modul_tanimladigi.count(fn->name))
+          continue;
+        predeclare_func_signature(backend, fn);
+        selfrec_predeclare(backend, fn);
+      }
+      if (sb) LLVMPositionBuilderAtEnd(backend->builder, sb);
+      backend->current_function = sf;
+    }
+
     // Pass 0.2: Process Imports LAST (before functions)
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type == AST_IMPORT) {
@@ -19120,6 +19238,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
 
     // Pass 1a: Forward-declare all user function signatures so that
     // bodies (Pass 1b) can call recursively / call peers defined later.
+    // (Pass 0.15'te one alinanlar icin no-op.)
     LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(backend->builder);
     LLVMValueRef saved_func = backend->current_function;
     for (int i = 0; i < node->statement_count; i++) {

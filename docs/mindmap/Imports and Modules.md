@@ -12,6 +12,30 @@ tags: [component, frontend]
 ## Çağrı biçimleri
 `m.func(args)` (Python tarzı) ≡ `m__func(args)` (mangled). `parse_postfix` `<id>.<id>(args)` → tek `FunctionCall`. `obj.field` okuma/yazma ayrı (ArrayAccess desugar). **Gerçek obje method'u (`obj.method(x)`) desteklenmiyor.** → [[Parser]]
 
+## Görünürlük kuralı (2026-10-08, oyun geri bildirimi #5)
+Düz `import` her şeyi tek global ad alanına koyar; **bir modül kendi
+import'larını ve kendisini (doğrudan ya da dolaylı) içe aktaran her dosyanın
+üst düzey adlarını — global VE fonksiyon — metin sırasından bağımsız görür.**
+Daha sonra içe aktarılan KARDEŞ modülü görmez (ne fonksiyonunu ne globalini);
+"bulunamadı" hatası kardeşin adını ve çözümü verir: kullandığını kendin içe
+aktar (ikinci `import` tekilleştirilir, yani zararsız). Mekanizma: ana
+dosyanın Pass 0.15'i — bir modülün andığı (çağrı/tanımlayıcı), hiçbir
+modülün tanımlamadığı ve hiçbir modülde değişken adı olmayan ana dosya
+fonksiyonlarının imzaları import'lardan (Pass 0.2) ÖNCE; geri kalanı her
+zamanki gibi Pass 1a'da. Modüller zaten kendi imzalarını iç import'larından
+önce bildiriyordu. Seçicilik bilerek: eskiden derlenen programların IR'i
+(fonksiyon sırası dahil) aynı kalıyor — bütün imzaları öne almak sırayı
+değiştirdi ve bölümlü üretimin ikili kimlik kapısı LLVM 18'de kırmızıya
+döndü ([[Tuzaklar#7o. Aynı IR, FARKLI makine kodu — kod üretimini bölmek "zararsız" değil]]).
+
+Neden kardeş görünür yapılmadı: fonksiyonların başlatılması yok, öne almak
+güvenli; ama kardeşin GLOBAL'ini öne almak, önceki kardeşin üst düzey kodunun
+henüz başlatılmamış bir değer (0) okumasına izin verirdi — derleme hatası
+yerine SESSİZ yanlış değer. (Aynı sessizlik ice aktaranın globali için bugün
+de var: modülün üst düzey kodu, ana dosyanın üst düzey atamalarından ÖNCE
+koşar.) Fonksiyonlar ve globaller aynı kurala uysun diye kardeşte ikisi de
+görünmez. Kapı: `tests/modul_ice_aktaran.sh`. Karar: [[Decisions]].
+
 ## Tanı konumu (modülün hatası modülün dosyasıyla)
 İçe aktarılan modülün **her** tanısı modülün kendi yolu ve satırıyla basılır:
 ayrıştırma (K056, 2026-09-27), kodgen ve sözcükleyici (oyun geri bildirimi #4,
