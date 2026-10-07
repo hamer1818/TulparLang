@@ -648,6 +648,12 @@ if [ "$ACTION" = "suites" ]; then
         kapi_kuyruk "modul tani konumu basarisiz!" bash tests/modul_tani_konumu.sh ./tulpar
     fi
 
+    # Modul ice aktaranin fonksiyonunu da (global'i gibi) gorur; sonraki
+    # kardes gorunmez, ipuculu hata (oyun geri bildirimi #5).
+    if [ -x tests/modul_ice_aktaran.sh ]; then
+        kapi_kuyruk "modul ice aktaran gorunurlugu basarisiz!" bash tests/modul_ice_aktaran.sh ./tulpar
+    fi
+
     # Coklu donus / tuple HATA YOLLARI (P0.1): ayni gerekce.
     if [ -x tests/tuple_hatalari.sh ]; then
         kapi_kuyruk "tuple hata yollari basarisiz!" bash tests/tuple_hatalari.sh ./tulpar

@@ -150,6 +150,20 @@ sayma). **Dil:** L0/L1 C++17, çünkü Tulpar bugün kutusuz struct/işaretçi/a
 alt küme gelince L1 taşınır, L2+ dili o zaman kararlaştırılır — "üstü C++ kalır" varsayılan
 değil. Web hedef değil; masaüstü ürün değil, geliştirme platformu. Motor 2026-09-20'de ayrı depoya taşındı: [tulpar-engine](https://github.com/hamer1818/tulpar-engine).
 
+## Modül, içe aktaranın fonksiyonunu görür; sonraki kardeşi görmez (2026-10-08)
+İlk gerçek çok dosyalı oyunda bir modül ana dosyanın globalini görüyor ama
+fonksiyonunu göremiyordu (oyun geri bildirimi #5). İki tutarlı seçenek
+vardı: ikisi de görünsün ya da ikisi de görünmesin. "Görünmesin" kırıcıydı
+(globali okuyan programlar, oyunun kendisi); seçilen: **ikisi de görünür**,
+ama yalnız içe aktarma ZİNCİRİ yukarı doğru (kendisini doğrudan/dolaylı içe
+aktaran dosyalar) + kendi import'ları. Daha sonra içe aktarılan kardeş
+görünmez, ipuçlu hata verir. Gerekçe: (1) iç içe modüller zaten bu kurala
+uyuyordu, ana dosya istisnaydı; (2) tek dosyada fonksiyon tanımdan önce
+çağrılabiliyor, içe aktaranın fonksiyonu için de aynısı en az şaşırtıcı;
+(3) kardeşi görünür yapmak globalinde başlatılmamış değer okumaya izin
+verirdi (sessiz); (4) "kullandığını içe aktar" modülü tek başına da
+derlenebilir kılar (LSP). → [[Imports and Modules]]
+
 ## Sunset (geri getirme)
 Tree-walk interpreter (`src/interpreter/`) + x64 JIT (`src/jit/`) — 2026-05-05 kaldırıldı.
 
