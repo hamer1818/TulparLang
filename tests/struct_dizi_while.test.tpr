@@ -1,0 +1,201 @@
+import "test";
+
+// STRUCT DIZISI DONGU SURUMU — `while` BICIMI (2026-10-06).
+//
+// `while (i < UB) { ...ps[i]...; i = i + K; }` (artim govdenin SON deyimi,
+// oncesinde `i` baglanmiyor) artik `for` gibi surumleniyor: dongu basinda
+// i >= 0 ve UB' <= count bir kez sinaniyor, hizli kopyada `ps[i]` tek GEP ve
+// kutulu `int i` native golgede (cikista geri yaziliyor). Bu paket ANLAMI
+// kilitliyor: alanlar `for` ikiziyle ELEMAN ELEMAN, dongu sonrasi `i`
+// (normal cikis / break / return / continue), adim, `<=`, sifirdan buyuk
+// baslangic, parametre olan `i`, ic ice, govdede `i`nin baska kullanimi.
+// Karar, IR, sinir disi ve sabotaj: tests/struct_dizi_surum.sh ("while").
+
+struct P { float x; float y; float vx; float vy; }
+
+func yap(int n): P[] {
+    P[] ps = [];
+    for (int k = 0; k < n; k = k + 1) {
+        push(ps, { x: toFloat(k % 10) * 0.5, y: toFloat(k % 7) * 0.25,
+                   vx: toFloat((k % 13) - 6) * 0.1, vy: toFloat((k % 5) - 2) * 0.2 });
+    }
+    return ps;
+}
+
+func ayni(P[] a, P[] b, int n) {
+    assert_eq_int(len(a), n);
+    assert_eq_int(len(b), n);
+    for (int k = 0; k < n; k = k + 1) {
+        assert_eq_float(a[k].x, b[k].x);
+        assert_eq_float(a[k].y, b[k].y);
+        assert_eq_float(a[k].vx, b[k].vx);
+        assert_eq_float(a[k].vy, b[k].vy);
+    }
+}
+
+func adim_while(P[] ps, int n): int {
+    int i = 0;
+    while (i < n) {
+        ps[i].vy = ps[i].vy - 9.81 * 0.01;
+        ps[i].x = ps[i].x + ps[i].vx * 0.01;
+        ps[i].y = ps[i].y + ps[i].vy * 0.01;
+        if (ps[i].x < 0.0 || ps[i].x > 4.0) { ps[i].vx = 0.0 - ps[i].vx; }
+        if (ps[i].y < 0.0) { ps[i].y = 0.0 - ps[i].y; ps[i].vy = (0.0 - ps[i].vy) * 0.9; }
+        i += 1;
+    }
+    return i;
+}
+func adim_for(P[] ps, int n) {
+    for (int i = 0; i < n; i = i + 1) {
+        ps[i].vy = ps[i].vy - 9.81 * 0.01;
+        ps[i].x = ps[i].x + ps[i].vx * 0.01;
+        ps[i].y = ps[i].y + ps[i].vy * 0.01;
+        if (ps[i].x < 0.0 || ps[i].x > 4.0) { ps[i].vx = 0.0 - ps[i].vx; }
+        if (ps[i].y < 0.0) { ps[i].y = 0.0 - ps[i].y; ps[i].vy = (0.0 - ps[i].vy) * 0.9; }
+    }
+}
+
+func run_adim_for_ile_ayni() {
+    P[] a = yap(37);
+    P[] b = yap(37);
+    int son = 0;
+    for (int s = 0; s < 40; s = s + 1) { son = adim_while(a, 37); adim_for(b, 37); }
+    ayni(a, b, 37);
+    assert_eq_int(son, 37);
+}
+
+// Adim 3, `<=`, sifirdan buyuk baslangic; dongu sonrasi i.
+func uclu(P[] ps, int bas, int ust): int {
+    int i = bas;
+    while (i <= ust) { ps[i].x = ps[i].x + 1.0; i = i + 3; }
+    return i;
+}
+func run_adim_ve_kapsam() {
+    P[] a = yap(20);
+    P[] b = yap(20);
+    assert_eq_int(uclu(a, 2, 17), 20);
+    for (int k = 2; k <= 17; k = k + 3) { b[k].x = b[k].x + 1.0; }
+    ayni(a, b, 20);
+    assert_eq_int(uclu(a, 5, 4), 5);   // hic kosmayan dongu: i degismez
+}
+
+// break: dongu sonrasi i kirildigi yer.
+func ilk_buyuk(P[] ps, int n, float esik): int {
+    int i = 0;
+    while (i < n) {
+        if (ps[i].x > esik) { break; }
+        ps[i].y = 0.0;
+        i++;
+    }
+    return i;
+}
+func run_break() {
+    P[] a = yap(30);
+    assert_eq_int(ilk_buyuk(a, 30, 3.9), 8);    // x = (k % 10) * 0.5 > 3.9 ilk k = 8
+    assert_eq_float(a[7].y, 0.0);
+    assert_eq_float(a[8].y, toFloat(8 % 7) * 0.25);
+    assert_eq_int(ilk_buyuk(a, 30, 100.0), 30);
+}
+
+// return dongunun icinden.
+func bul(P[] ps, int n, float hedef): int {
+    int i = 0;
+    while (i < n) {
+        if (ps[i].vx == hedef) { return i; }
+        i += 1;
+    }
+    return -1;
+}
+func run_return() {
+    P[] a = yap(30);
+    assert_eq_int(bul(a, 30, 0.0), 6);       // vx = ((k % 13) - 6) * 0.1 == 0 ilk k = 6
+    assert_eq_int(bul(a, 30, 9.0), -1);
+}
+
+// continue artimi atlar: i degismeden tekrar (sayac ile kirilir).
+func dolan(P[] ps, int n): int {
+    int i = 0;
+    int tur = 0;
+    while (i < n) {
+        tur = tur + 1;
+        if (tur > 50) { break; }
+        if (ps[i].vx < 0.0) { ps[i].vx = 0.0 - ps[i].vx; continue; }
+        ps[i].y = ps[i].y + 1.0;
+        i = i + 1;
+    }
+    return i * 1000 + tur;
+}
+func run_continue() {
+    P[] a = yap(10);
+    // k = 0..5: vx < 0 -> once cevrilir (continue), sonra ayni i ikinci kez
+    // islenir; k = 6..9: vx >= 0 tek tur. 6*2 + 4 = 16 tur, i = 10.
+    assert_eq_int(dolan(a, 10), 10016);
+    for (int k = 0; k < 10; k = k + 1) { assert_eq_bool(a[k].vx >= 0.0, true); }
+}
+
+// `i` parametre (kutulu `int`), dongu sonrasi donuyor.
+func ileri(P[] ps, int i, int n): int {
+    while (i < n) { ps[i].vx = 2.0; i += 2; }
+    return i;
+}
+func run_parametre() {
+    P[] a = yap(9);
+    assert_eq_int(ileri(a, 1, 9), 9);
+    assert_eq_float(a[7].vx, 2.0);
+    assert_eq_float(a[8].vx, toFloat((8 % 13) - 6) * 0.1);
+}
+
+// govdede `i` baska yerlerde: dizgi, yerlesik cagri argumani, aritmetik
+// (kullanici fonksiyonu cagrisi surumu engeller — sekli degistirebilir).
+func izle(P[] ps, int n): str {
+    int i = 0;
+    var iz = "";
+    int top = 0;
+    while (i < n) {
+        iz = iz + toString(i) + ",";
+        top = top + i * i;
+        ps[i].x = toFloat(i);
+        i += 1;
+    }
+    return iz + toString(top);
+}
+func run_i_kullanimi() {
+    P[] a = yap(5);
+    assert_eq_str(izle(a, 5), "0,1,2,3,4,30");
+    assert_eq_float(a[4].x, 4.0);
+}
+
+// ic ice: for icinde while, while icinde for.
+func ic_ice(P[] ps, int n, int m) {
+    int r = 0;
+    while (r < m) {
+        for (int i = 0; i < n; i = i + 1) { ps[i].y = ps[i].y + 1.0; }
+        ps[r].x = ps[r].x + 10.0;
+        r = r + 1;
+    }
+    for (int s = 0; s < 2; s = s + 1) {
+        int i = 0;
+        while (i < n) { ps[i].vy = ps[i].vy + 0.5; i++; }
+    }
+}
+func run_ic_ice() {
+    P[] a = yap(6);
+    P[] b = yap(6);
+    ic_ice(a, 6, 4);
+    for (int r = 0; r < 4; r = r + 1) {
+        for (int i = 0; i < 6; i = i + 1) { b[i].y = b[i].y + 1.0; }
+        b[r].x = b[r].x + 10.0;
+    }
+    for (int s = 0; s < 2; s = s + 1) { for (int i = 0; i < 6; i = i + 1) { b[i].vy = b[i].vy + 0.5; } }
+    ayni(a, b, 6);
+}
+
+test("adim: while ve for ikizi eleman eleman ayni", "run_adim_for_ile_ayni");
+test("adim 3, <=, baslangic > 0, hic kosmayan", "run_adim_ve_kapsam");
+test("break sonrasi i", "run_break");
+test("dongu icinden return", "run_return");
+test("continue artimi atlar", "run_continue");
+test("i parametre", "run_parametre");
+test("govdede i'nin baska kullanimi", "run_i_kullanimi");
+test("ic ice", "run_ic_ice");
+test_summary();

@@ -225,6 +225,9 @@ extern "C" int tulpar_sarr_loop_plan(ASTNode_C *init, ASTNode_C *cond,
                                      ASTNode_C *body, ASTNode_C *incr,
                                      TulparPureCallFn pure, void *ctx,
                                      TulparSarrLoopPlan *p);
+// Ayni kanit `while (i < UB) { ...; i = i + K; }` icin (artim son deyim).
+extern "C" int tulpar_sarr_while_plan(ASTNode_C *cond, ASTNode_C *body, TulparPureCallFn pure,
+                                      void *ctx, TulparSarrLoopPlan *p);
 
 // Butun cocuk alanlarini (walk_all ile AYNI liste) on-sirayla gezer; `visit`
 // 0 dondururse gezinti durur ve 0 doner.

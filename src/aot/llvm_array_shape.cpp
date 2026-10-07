@@ -2183,19 +2183,13 @@ static bool sv_visit_acc(ASTNode_C *n, void *p) {
   return true;
 }
 
-extern "C" int tulpar_sarr_loop_plan(ASTNode_C *init, ASTNode_C *cond,
-                                     ASTNode_C *body, ASTNode_C *incr,
-                                     TulparPureCallFn pure, void *ctx,
-                                     TulparSarrLoopPlan *p) {
-  memset(p, 0, sizeof(*p));
-  p->why = "bicim";
-  if (!init || !cond || !incr || !body) return 0;
-  // init: `int i = E` ya da `i = E` (E dongu basinda bir kez; codegen i'nin
-  // INT ve >= 0 oldugunu sinar).
-  if ((init->type != AST_VARIABLE_DECL && init->type != AST_ASSIGNMENT) || !init->name ||
-      init->left)
-    return 0;
-  const char *ivar = init->name;
+// `for` ve `while` bicimlerinin ORTAK kaniti: kosul `i < UB` / `i <= UB`, UB
+// sabit / dongude atanmayan ad / len(X); artim `incr`; `i` `rebind[]`
+// dugumlerinde (artim HARIC govde) hic baglanmiyor; govde sekli kararli.
+static int sv_plan_core(const char *ivar, ASTNode_C *cond, ASTNode_C *body, ASTNode_C *incr,
+                        ASTNode_C *const *rebind, int n_rebind, TulparPureCallFn pure,
+                        void *ctx, TulparSarrLoopPlan *p) {
+  if (!ivar || !cond || !incr || !body) return 0;
   if (cond->type != AST_BINARY_OP || (cond->op != TOKEN_LESS && cond->op != TOKEN_LESS_EQUAL))
     return 0;
   ASTNode_C *lhs = cond->left, *rhs = cond->right;
@@ -2240,10 +2234,11 @@ extern "C" int tulpar_sarr_loop_plan(ASTNode_C *init, ASTNode_C *cond,
     p->why = "artim i++ / i = i + K / i += K degil";
     return 0;
   }
-  if (sv_rebinds(body, ivar)) {
-    p->why = "dongu degiskeni govdede ataniyor";
-    return 0;
-  }
+  for (int r = 0; r < n_rebind; r++)
+    if (sv_rebinds(rebind[r], ivar)) {
+      p->why = "dongu degiskeni govdede ataniyor";
+      return 0;
+    }
   if (!tulpar_loop_shape_stable(cond, body, incr, pure, ctx)) {
     p->why = "govde sekli degistirebilir (cagri / yeni kap)";
     return 0;
@@ -2264,4 +2259,40 @@ extern "C" int tulpar_sarr_loop_plan(ASTNode_C *init, ASTNode_C *cond,
   p->incl = cond->op == TOKEN_LESS_EQUAL ? 1 : 0;
   p->why = nullptr;
   return 1;
+}
+
+extern "C" int tulpar_sarr_loop_plan(ASTNode_C *init, ASTNode_C *cond,
+                                     ASTNode_C *body, ASTNode_C *incr,
+                                     TulparPureCallFn pure, void *ctx,
+                                     TulparSarrLoopPlan *p) {
+  memset(p, 0, sizeof(*p));
+  p->why = "bicim";
+  if (!init || !cond || !incr || !body) return 0;
+  // init: `int i = E` ya da `i = E` (E dongu basinda bir kez; codegen i'nin
+  // INT ve >= 0 oldugunu sinar).
+  if ((init->type != AST_VARIABLE_DECL && init->type != AST_ASSIGNMENT) || !init->name ||
+      init->left)
+    return 0;
+  ASTNode_C *rb[] = {body};
+  return sv_plan_core(init->name, cond, body, incr, rb, 1, pure, ctx, p);
+}
+
+// `while (i < UB) { ...; i = i + K; }` (2026-10-06): artim govdenin SON deyimi,
+// oncesinde `i` hic baglanmiyor. Govde (artim dahil) `while` olarak uretilir
+// — `continue` artimi atlar ve `i` degismez: aralik kaniti yine gecerli (i
+// yalniz artiyor ya da duruyor, her erisim `i < UB` iken). Baslangic degeri
+// dongu basinda sinanir (i INT ve >= 0), `for` ile ayni.
+extern "C" int tulpar_sarr_while_plan(ASTNode_C *cond, ASTNode_C *body, TulparPureCallFn pure,
+                                      void *ctx, TulparSarrLoopPlan *p) {
+  memset(p, 0, sizeof(*p));
+  p->why = "bicim";
+  if (!cond || !body || body->type != AST_BLOCK || body->statement_count < 1 || !body->statements)
+    return 0;
+  if (cond->type != AST_BINARY_OP || !cond->left || cond->left->type != AST_IDENTIFIER ||
+      !cond->left->name)
+    return 0;
+  ASTNode_C *incr = body->statements[body->statement_count - 1];
+  if (!incr) return 0;
+  return sv_plan_core(cond->left->name, cond, body, incr, body->statements,
+                      body->statement_count - 1, pure, ctx, p);
 }

@@ -2409,3 +2409,48 @@ yoluyla (int depoya float → kutulama, `idata` serbest) ve
 gerçekten yakalıyor. Eski derleyiciyle IR denetimi kırmızı.
 `tests/bolumlu_emit.sh`in nbody eşiği (en büyük bölümün payı) %60 → %75: modül
 küçülünce bölünemeyen `t_advance.f`in payı %52 → %71 oldu (bölüm sayısı yine 2).
+
+## Struct dizisi döngü sürümü `while` biçiminde — 59,5 → 18,9 ms (2026-10-06)
+
+#453'ün sürümü (`ps[i]` erişimleri döngü başında tek sınavla kanıtlı, hızlı
+gövdede tek GEP) yalnız `for (i = E; i < UB; i = i + K)` biçimini tanıyordu.
+Aynı oyun döngüsü `int i = 0; while (i < n) { ...ps[i]...; i += 1; }` yazılınca
+her erişim sınır sınavı + yavaş yol kopyası ödüyordu. Ölçüldü (Ryzen 7 9800X3D,
+`taskset -c 2,3`, en iyi 7; particles adımı fonksiyonda, 200 000 parçacık × 50
+adım): `for` 15,0 ms, aynı gövde `while` ile **59,5 ms** (1 536 M komut).
+
+**Kanıt** (`tulpar_sarr_while_plan`, `sv_plan_core` — `for` ile ortak): koşul
+`i < UB` / `i <= UB`, gövdenin SON deyimi `i = i + K` / `i += K` / `i++` (K > 0
+sabit), öncesinde `i` hiç bağlanmıyor, UB sabit / döngüde atanmayan ad /
+`len(X)`, gövde şekil-kararlı. Gövde iki kopyada da `while` olarak üretiliyor
+(`codegen_while_body`) — `continue` artımı atlıyor ve `i` değişmiyor: aralık
+kanıtı yine geçerli (i yalnız artıyor ya da duruyor, her erişim `i < UB` iken).
+Sayısal kısım `for` ile aynı: döngü başında `i` INT ve ≥ 0, UB' ≤ count(A).
+
+İlk sürümde (yalnız kanıtlı erişim) 59,5 → 50,5 ms: `for`un değişkeni init'in
+native yuvası, `while`ınki fonksiyonun KUTULU `int` yereli — `i += 1` ve
+`ps[i]`'nin indeksi her turda etiketli kutudan geçiyordu (int gölge sürümü
+burada açılmıyor: kesin-INT `int[]` okuması yok). Hızlı kopyada `i` artık native
+gölgede (etiketi döngü başında sınandı, tek bağlanması `i = i + K`, taşma yok:
+i < UB ≤ count ≤ INT32_MAX); döngü çıkışında kutulu yuvaya geri yazılıyor
+(`break` de çıkıştan geçer, `return` fonksiyondan çıkar; `try` içeren / içindeki
+döngüde gölge yok). Sonuç **59,5 → 18,9 ms**, 1 536 → 516 M komut — `for`
+biçimiyle AYNI komut sayısı (516,1 M); kalan 15,0 / 18,9 farkı aynı komut
+akışında döngü sayısı (75 / 95 M) — yerleşim/hizalama (Tuzaklar 7i), kod değil.
+
+Gerileme: `benchmarks/fair` 13 + `recursion/` 6: ikili bayt bayt aynı; motor
+betiklerinde bu biçim yok. Derleme süresi yalnız bu kalıpta: adım programı
+85 → 91 ms (gövde iki kopya — `for` sürümüyle aynı bedel). Üst düzeyde (`main`)
+yazılan `while` 46,6 → 44,5 ms: orada `int i` native global (gölge gereksiz,
+bellek trafiği global olmasından).
+
+**Kapılar:** `tests/struct_dizi_while.test.tpr` (8 test: `for` ikiziyle alanlar
+ELEMAN ELEMAN, adım 3 + `<=` + başlangıç > 0 + hiç koşmayan, break / return /
+continue sonrası `i`, parametre `i`, gövdede `i`nin dizgi/aritmetik kullanımı, iç
+içe) ve `tests/struct_dizi_surum.sh` "while" bölümü (karar iki yön — artım son
+deyim değil / ortada atama / sınır değişiyor / push / azalan: sürüm yok; sınır
+dışı hâlâ yakalanıyor (üst, `<=`, negatif başlangıç); IR'da `sv.ep` +
+`sver_golge_cikis`, `TULPAR_NO_SVER_WHILE=1` iki yönlü; sürümlü / sürümsüz /
+`for` biçimi aynı çıktı; anlam paketi açık ve kapalı geçiyor,
+`TULPAR_SVER_WHILE_SINAMA=golge` (geri yazma atlanıyor) 5 testi kırmızıya
+çeviriyor). Eski derleyiciyle kapının 10 denetimi kırmızı.
