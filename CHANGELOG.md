@@ -65,6 +65,26 @@ tag still works;
 - Kapı `tests/dap_audit.py`: dört yeni yerel (DAP + `--gdb-script` ile düz
   gdb); eski yazıcıyla dördü de kırmızı.
 
+### Derleme hızı — okuma yavaş yolundan sonra şekil tazelemesi yok: nbody 345 → 268 ms
+
+- Döngünün dizi şekil önbelleği (idata/count) her erişim YAVAŞ yolundan sonra
+  önbellekteki bütün diziler için tazeleniyordu ve LLVM tazeleme fonksiyonunu
+  her yerde satır içi açıyordu: nbody'nin `t_advance.f`inde 132 çağrı,
+  optimizasyon sonrası komutların %32'si. Okuma (`vm_get_element` /
+  `vm_array_get`) artık depoyu değiştirmiyor (eskiden kutusuz diziyi
+  kutulayıp `idata`yı serbest bırakıyordu — tazeleme o yüzden vardı); okuma
+  sonrası tazeleme kalktı, yazma sonrası duruyor. Değişmez iki yerde yazılı.
+- Ölçüm (`tulpar build`, 7 koşu en iyi): nbody **345 → 268 ms** (optimize
+  160 → 111, emit 126 → 99), matmul 91 → 85, loop_versioning.test 667 → 646;
+  wings değişmedi. Çalışma hızı (`benchmarks/fair` resmî `BENCH_N`) gürültü
+  içinde; 7 çekirdek + `recursion/` ikili bayt bayt aynı.
+- `TULPAR_OKUMA_TAZELE=1` eski davranış. Kapı `tests/okuma_tazeleme.sh`
+  (IR'da tazeleme 46 → 8 iki yönlü, okuma yavaş yolu sonrası doğru sonuç,
+  pozitif kontrol: yazma tazelemesi atlanınca aynı biçim bozuluyor).
+- Denenip atılan (Performance.md): kutulu işlemin yavaş yolunu noinline
+  yardımcıya taşımak wings'i 479 → 446 ms yapıyordu ama tipsiz dizgi/karışık
+  işlemlerde komut +%8,5 — çalışma hızından ödemek, gönderilmedi.
+
 ### Hızlandı — `split` sonucu kutusuz dizgi deposunda: `parse` 223,4 → 185,1 MB
 
 - `split` parça tablosu artık `ObjString *` (`ARR_ELEM_STR`): eleman başına

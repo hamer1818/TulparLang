@@ -2543,6 +2543,12 @@ void vm_array_push_wrapper(VM *vm, ObjArray *array, VMValue value) {
 }
 
 VMValue vm_array_get(ObjArray *array, int index) {
+  // ⚠ OKUMA DEPOYU DEGISTIRMEZ — codegen buna GUVENIYOR: okuma yavas yolundan
+  // sonra dongunun sekil onbellegi (idata/count) tazelenmiyor
+  // (llvm_backend.cpp emit_shape_refresh_after_read, 2026-10-06). Burada
+  // kutulama / genisletme / yeniden ayirma yapan bir degisiklik oradaki
+  // tazelemeyi geri acmali; tests/okuma_tazeleme.sh bunu olcer.
+  //
   // Kutusuz diziden okumak icin KUTULAMAYA gerek yok. Eskiden asagidaki
   // `arr_items()` diziyi kutuya ceviriyordu: genel yoldan TEK bir okuma bile
   // butun diziyi 8 bayttan 16 bayta cikariyor ve bir daha geri donmuyordu.

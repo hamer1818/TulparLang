@@ -2343,3 +2343,69 @@ bağlanan parametre) ve `tests/yerel_giris.sh` (IR'da `.n` + main'den doğrudan
 açık == kapalı, `TULPAR_YEREL_GIRIS_SINAMA=etiket` sabotajı kırmızı). Eski
 derleyiciyle yapı denetimleri ve sabotaj kırmızı. `tests/int_golge.sh`in matmul
 kararı: `n` artık `.n`de native — gölge sayısı yerel giriş kapalıyken ölçülüyor.
+
+## Derleme hızı: okuma yavaş yolundan sonra şekil tazelemesi yok — nbody 345 → 268 ms (2026-10-06)
+
+**Ölçüm önce** (#471'in bulgusu: derlemenin ~%70'i optimize, nbody'de `t_advance.f`
+modülün %52'si). Optimizasyon sonrası IR'ı blok adı ailesine göre saydık
+(`t_advance.f`, 8 760 komut): en büyük kalem **satır içi açılmış şekil tazelemesi**
+— `ld`/`ty` blokları 2 836 komut (%32), 144 kopya. Kaynağı: her dizi erişiminin
+YAVAŞ yolu (runtime çağrısı) dönüşte döngünün şekil önbelleğindeki BÜTÜN diziler
+için modül-yerel `tulpar.shape_refill`i çağırıyor (`t_advance.f`te 132 çağrı) ve
+LLVM onu her yerde açıyor (~20 komut). Kutulu ikili işlemler (`op_*`) %12, sürüm
+kopyalarının kendisi bunların arkasında.
+
+**Neden vardı, neden artık gereksiz.** Tazeleme bir zamanlar okumada da ŞARTTI:
+`vm_array_get` kutusuz diziyi okurken kutuya çeviriyor ve `idata`yı serbest
+bırakıyordu (sarkan önbellek, "malloc(): unsorted double linked list corrupted").
+O yol kapandı — okuma kutusuz diziden kutulamadan okuyor, sınır dışında hata
+veriyor; json / dizgi / struct dizisi okuması bir ObjArray'in deposuna dokunmuyor.
+Yazma yolları (genişletme, kutulama) tazelemeye devam ediyor. Değişmez artık iki
+yerde yazılı: `emit_shape_refresh_after_read` ve `vm_array_get`in başı.
+
+**Sonuç** (`tulpar build` toplam, 7 koşu en iyi; taban = main 90dc7351):
+
+| program | önce | sonra | optimize | emit-obj |
+|---|--:|--:|--:|--:|
+| benchmarks/fair/nbody | 345 | **268** | 160 → 111 | 126 → 99 |
+| benchmarks/fair/matmul | 91 | 85 | 23 → 20 | 18 → 15 |
+| tests/loop_versioning.test | 667 | 646 | 531 → 505 | 61 → 64 |
+| tests/wings_features.test | 511 | 500 | 353 → 346 | 66 → 64 |
+| examples/wings_groups_test | 480 | 481 | 337 → 340 | 58 → 58 |
+| tests/array_shape_cache.test | 291 | 291 | 182 → 172 | 49 → 58 |
+
+nbody optimizasyon sonrası IR 16 722 → 11 557 komut. Çalışma hızı (resmî
+`BENCH_N`, dönüşümlü 3 tur × en iyi 5): değişen ikililer arrayiter 1,14/1,14 ·
+matmul 36,0/35,9 · nbody 114,7/115,2 · parse 68,2/68,1 · qsort 69,1/68,4 · sieve
+7,22/7,17 ms — gürültü içinde; öteki 7 çekirdek ve `recursion/` 6 program ikili
+bayt bayt aynı. **wings değişmedi**: orada döngü önbelleği az; IR kutulu kodun
+kendisi (586 kutulu ikili işlem, 846 dizgi sabiti) ve çalışma hızından ödemeyen
+bir kaldıraç bulunamadı (aşağıda).
+
+**Denenip atılanlar:**
+- *Kutulu ikili işlemin yavaş yolunu (dizgi sınavı + `aot_string_concat_fast` /
+  `vm_binary_op`) modül-yerel noinline yardımcıya taşımak:* wings derlemesi
+  479 → 446 ms, wings_features 499 → 470. AMA tipsiz yavaş yol mikro kıyasında
+  (dizgi + dizgi, dizgi ==, float + int; 3M tur) komut **+%16** (değer ABI'si) /
+  **+%8,5** (işaretçi ABI'si), süre +%3: her dizgi birleştirmeye bir çağrı seviyesi
+  ekleniyor. Derleme süresi için çalışma hızından ödemek — gönderilmedi.
+- *İç içe float sürümünün (fvn) GENEL dış gövdesinde iç döngüleri sürümlememek*
+  (iv'nin soğuk kopya kuralı): nbody optimizasyon öncesi IR 15 794 → 14 386 ama
+  sonrası yalnız 16 965 → 16 722, derleme süresi ölçülebilir değişmedi; genel
+  gövde dış sınavın tutmadığı (ama iç sınavın tutabileceği) durumda koşuyor —
+  çalışma hızı riski kazançsız. Gönderilmedi.
+- Elek (`sieve`) bu deneylerde bir ikilide 7,37 → 7,85 ms gösterdi: iç döngü
+  KOMUT KOMUT aynı, adresi 64 baytlık çizgide 0x00 → 0x30; kaynağa 0–3 zararsız
+  önek satırı eklenince iki derleyici de 7,28–7,68 arasında karışık sıralandı —
+  hizalama (Tuzaklar 7i), kod değil.
+
+**Kapı** `tests/okuma_tazeleme.sh` (`build.sh suites`): IR'da tazeleme çağrısı
+46 → 8 (`TULPAR_OKUMA_TAZELE=1` eski sayıyı geri getiriyor); okuma yavaş yolu
+(çalışma zamanı dizgi indeksi, kutulu dizi, dizgi hedef) alınan önbellekli döngüde
+hızlı okuma/yazma doğru — varsayılan / tazelemeli / sürümsüz derleme aynı ve
+Python'la bağımsız hesaplanan değer; pozitif kontrol: aynı biçim YAZMA yavaş
+yoluyla (int depoya float → kutulama, `idata` serbest) ve
+`TULPAR_YAZMA_TAZELEME_SINAMA=atla` ile sonuç BOZULUYOR — test bayat önbelleği
+gerçekten yakalıyor. Eski derleyiciyle IR denetimi kırmızı.
+`tests/bolumlu_emit.sh`in nbody eşiği (en büyük bölümün payı) %60 → %75: modül
+küçülünce bölünemeyen `t_advance.f`in payı %52 → %71 oldu (bölüm sayısı yine 2).
