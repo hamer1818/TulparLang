@@ -171,9 +171,15 @@ extern "C" void parser_set_diagnostic_context(const char *source_text,
     g_parser_source_text = source_text;
     g_parser_source_filename = source_filename;
     g_parser_error_count = 0;
+    // Sozcukleyici hatalari da ayni dosya adini bassin (oyun geri bildirimi
+    // #4) ve LSP tanisi hangi dosyaya ait oldugunu tasisin.
+    tulpar::diag_set_file(source_filename);
 }
 
-extern "C" void parser_set_quiet(int quiet) { g_parser_quiet = quiet ? 1 : 0; }
+extern "C" void parser_set_quiet(int quiet) {
+    g_parser_quiet = quiet ? 1 : 0;
+    tulpar::diag_set_quiet(quiet != 0);  // sozcukleyici de sussun
+}
 
 // K056: import edilen modulu ayristiran cagiran (AOT, typeinfer) baglami
 // modulun kendisine cevirip sonra geri koyabilsin — yoksa modulun hatasi
@@ -1539,6 +1545,11 @@ void Parser::prescan_imported_enums() {
             if (src.find("enum") != std::string::npos || src.find("import") != std::string::npos ||
                 src.find(": (") != std::string::npos || src.find(":(") != std::string::npos) {
                 std::vector<Token> toks;
+                // On tarama SESSIZ: modulun sozcukleyici hatasi, modul
+                // asil ayristirildiginda kendi adiyla basilir (oyun geri
+                // bildirimi #4) — burada basmak ikinci, dosya adsiz kopyaydi.
+                const bool onceki_sessiz = tulpar::diag_quiet();
+                tulpar::diag_set_quiet(true);
                 try {
                     Lexer lx(src);
                     while (true) {
@@ -1550,6 +1561,7 @@ void Parser::prescan_imported_enums() {
                 } catch (...) {
                     toks.clear();
                 }
+                tulpar::diag_set_quiet(onceki_sessiz);
                 collect_enums(toks, scan.enums, true);
                 scan.tuple_sigs = scan_tuple_sigs_raw(toks);
                 scan.imports = collect_imports(toks);

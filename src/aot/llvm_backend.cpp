@@ -44,6 +44,12 @@ struct ImportedModule {
   ASTNode_C *ast = nullptr;    // ayristirma hatasinda nullptr
   std::string resolved_dir;    // ic ice importlar icin (Plan 02 PR3)
   bool embedded = false;       // gomulu stdlib (lib/*.tpr) — ayiklanabilir
+  // Kodgen tanisinin baglami (oyun geri bildirimi #4): modulun kaynak metni
+  // ve gosterilecek adi. Modulun govdeleri uretilirken backend->source_text /
+  // source_filename bunlara cevrilir; eskiden modulun HER kodgen hatasi ana
+  // dosyanin adi ve ANA dosyanin o satirinin metniyle basiliyordu.
+  std::string source;
+  std::string diag_file;
 };
 
 // Modul AST onbellegi + import edilen struct tiplerinin kaydi.
@@ -97,6 +103,10 @@ struct ImportState {
   };
   std::vector<FnKayit> kayitlar;
   bool ayiklandi = false;
+  // AST_IMPORT kodgeninin ic ice derinligi: 0 = kok dosyanin kendi import'u.
+  // Kok import'un satiri LSP'de modul tanisinin baglandigi yer
+  // (tulpar::diag_set_anchor_line; oyun geri bildirimi #4).
+  int kodgen_derinlik = 0;
 };
 
 static ImportState *import_state_of(LLVMBackend *backend) {
@@ -1088,7 +1098,8 @@ static void report_codegen_error(LLVMBackend *backend, int line,
   // LSP / structured-collection mode: push and skip stderr.
   if (tulpar::diag_sink_active()) {
     tulpar::diag_sink_push(line, caret_col_1based, caret_len,
-                           kind ? kind : "error", message, hint);
+                           kind ? kind : "error", message, hint,
+                           backend->source_filename ? backend->source_filename : "");
     return;
   }
 
@@ -4610,6 +4621,15 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   }
   mod.found = true;
   mod.resolved_dir = resolved_dir;
+  mod.source = source;
+  mod.diag_file = diag_file;
+
+  // Tani baglami MODULUN kendisi (K056) — sozcuklemeden ONCE kurulur ki
+  // sozcukleyici hatasi da modulun adini bassin (oyun geri bildirimi #4).
+  // Ana baglam ayristirmadan sonra geri konur.
+  const char *prev_diag_text = nullptr, *prev_diag_file = nullptr;
+  parser_get_diagnostic_context(&prev_diag_text, &prev_diag_file);
+  parser_set_diagnostic_context(mod.source.c_str(), mod.diag_file.c_str());
 
   Lexer *lexer = lexer_create(source);
   int token_capacity = 1024;
@@ -4634,12 +4654,7 @@ static ImportedModule *import_load_module(LLVMBackend *backend,
   Parser_C *parser = parser_create(tokens, token_count);
   // K028: modulun KENDI import'larindaki enum'lar paket-yerel kardesten de
   // cozulsun (ayristiricinin on taramasi; kodgenin cozum sirasiyla ayni).
-  // Tani baglami MODULUN kendisi (K056): eskiden modulun ayristirma hatasi
-  // ANA dosyanin adi ve o satirin metniyle basiliyordu (`--> ana.tpr:2` +
-  // ana dosyanin 2. satiri). Ana baglam ayristirmadan sonra geri konur.
-  const char *prev_diag_text = nullptr, *prev_diag_file = nullptr;
-  parser_get_diagnostic_context(&prev_diag_text, &prev_diag_file);
-  parser_set_diagnostic_context(source, diag_file.c_str());
+  // (Tani baglami yukarida, sozcuklemeden once kuruldu.)
   tulpar_parser_set_import_dir(resolved_dir);
   ASTNode_C *module_ast = parser_parse(parser);
   tulpar_parser_set_import_dir("");
@@ -4826,7 +4841,11 @@ static void prescan_import_types(LLVMBackend *backend, ASTNode_C *program,
     if (!imp || imp->type != AST_IMPORT || !imp->value.string_value) continue;
     const char *rel = imp->value.string_value;
     if (!visited.insert(rel).second) continue;
+    // Modulun ayristirma tanisi LSP'de kok dosyanin import satirina baglanir.
+    const int onceki_cipa = tulpar::diag_anchor_line();
+    if (depth == 0) tulpar::diag_set_anchor_line(imp->line);
     ImportedModule *m = import_load_module(backend, imp);
+    tulpar::diag_set_anchor_line(onceki_cipa);
     if (!m || !m->ast) continue;
     int line = depth == 0 ? imp->line : report_line;
     const char *tok = depth == 0 ? rel : report_token;
@@ -16529,7 +16548,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // Cozum + okuma + ayristirma import_load_module'de. Onbellekli: ana
     // programin on taramasi (prescan_import_types) bu modulu zaten
     // ayristirdiysa AYNI AST doner — modul bir kez ayristirilir.
+    ImportState *kist = import_state_of(backend);
+    const int onceki_cipa = tulpar::diag_anchor_line();
+    if (kist->kodgen_derinlik == 0) tulpar::diag_set_anchor_line(node->line);
     ImportedModule *imod = import_load_module(backend, node);
+    tulpar::diag_set_anchor_line(onceki_cipa);
     if (!imod || !imod->found) {
       fprintf(stderr, tulpar::i18n::tr_for_en("Error: Could not import file '%s'\n"), rel_path);
       // Yol gibi gorunmeyen ad (`import "x"`, `.tpr`/`/` yok) bir eklenti
@@ -16571,6 +16594,32 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // tavani) burada kaydolur.
         import_register_types(backend, module_ast, rel_path, node->line,
                               rel_path);
+
+        // Buradan Pass 2'nin sonuna kadar uretilen her sey MODULUN kodu:
+        // tanilar modulun adini ve modulun satirini gostersin (oyun geri
+        // bildirimi #4). Eskiden `--> ana.tpr:6` + ana dosyanin 6. satiri
+        // basiliyordu — satir numarasi modulun, dosya ve alinti ana
+        // dosyanin; hatayi arayan masum bir satira bakiyordu. Ic ice
+        // import'lar (Pass 0.2) kendi baglamini kurup bunu geri koyar.
+        // Yukaridaki import_register_types BILEREK disarida: o hatayi ice
+        // aktaranin import satirinda gosteriyor.
+        struct ModulTaniBaglami {
+          LLVMBackend *b;
+          const char *text, *file;
+          int cipa;
+          ImportState *ist;
+          ~ModulTaniBaglami() {
+            b->source_text = text;
+            b->source_filename = file;
+            tulpar::diag_set_anchor_line(cipa);
+            ist->kodgen_derinlik--;
+          }
+        } modul_tani{backend, backend->source_text, backend->source_filename,
+                     tulpar::diag_anchor_line(), kist};
+        if (kist->kodgen_derinlik == 0) tulpar::diag_set_anchor_line(node->line);
+        kist->kodgen_derinlik++;
+        backend->source_text = imod->source.c_str();
+        backend->source_filename = imod->diag_file.c_str();
 
         // Pass 0.1: Pre-scan for Global Variables (Forward Declaration).
         // Ana programla AYNI kural (predeclare_top_level_global): tipli int,

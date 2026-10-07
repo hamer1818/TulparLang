@@ -29,6 +29,12 @@ int typeinfer_emit_warnings(const char *source, const char *source_filename) {
   // against the std::variant ASTNode produced by Parser. Parsing twice
   // costs microseconds on typical user files and keeps this module a
   // pure additive overlay — no AST refactor required.
+  // Sessizlik SOZCUKLEMEDEN once: sozcukleyici hatasi da AOT yolunda dosya
+  // adiyla yeniden basiliyor; burada basmak ikinci kopyaydi (oyun geri
+  // bildirimi #4).
+  parser_set_quiet(1);  // Suppress pretty-render — the AOT path re-parses
+                        // and emits the same diagnostics with proper
+                        // filename context.
   Lexer lexer(source);
   std::vector<Token> tokens;
   while (true) {
@@ -39,9 +45,6 @@ int typeinfer_emit_warnings(const char *source, const char *source_filename) {
   }
 
   std::unique_ptr<ASTNode> ast;
-  parser_set_quiet(1);  // Suppress pretty-render — the AOT path re-parses
-                        // and emits the same diagnostics with proper
-                        // filename context.
   try {
     Parser parser(std::move(tokens));
     ast = parser.parse();

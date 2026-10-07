@@ -13,6 +13,31 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — içe aktarılan modüldeki hata modülün kendi dosyası ve satırıyla raporlanıyor (oyun geri bildirimi #4)
+
+- İlk gerçek çok dosyalı oyun (motor deposu, "Küpler ile Kürelerin Savaşı")
+  `savas.tpr` içindeki tanımsız bir çağrıyı `oyun.tpr:311` diye ve
+  **oyun.tpr'nin** 311. satırının metniyle gösterdi: satır numarası modülün,
+  dosya adı ve alıntı içe aktaranın. Kök neden: kodgen tanısı
+  (`report_codegen_error`) hep kök dosyanın kaynak metnini/adını
+  kullanıyordu; K056 (2026-09-27) yalnız ayrıştırma hatalarını düzeltmişti.
+  Artık `ImportedModule` modülün kaynağını tutuyor ve `AST_IMPORT` kodgeni
+  modülün globallerini/gövdelerini/üst düzey deyimlerini üretirken tanı
+  bağlamını modüle çeviriyor (iç içe import kendi bağlamını kurup geri
+  koyuyor; dönüşte kök dosyanın hatası yine kök dosyanın adıyla).
+- Sözcükleyici hataları dosya adı taşıyor (`  --> mlex.tpr:3:12`; ilk satır
+  aynı) ve tek kopya: typeinfer'in sessiz ön geçişi ile ayrıştırıcının
+  import ön taraması aynı hatayı adsız ikinci kez basıyordu.
+- LSP: modülün tanısı eskiden kök belgenin AYNI numaralı (masum) satırına
+  konuyordu. Artık clangd'nin "In included file" kalıbıyla kök belgede ona
+  götüren `import` satırında, mesaj `modul.tpr:6:` önekli, `relatedInformation`
+  modülün kendi konumunu veriyor (`Diagnostic.file` / `anchor_line`).
+- Kapılar: yeni `tests/modul_tani_konumu.sh` (kodgen hatası modülde, iç içe
+  modül, dönüşte kök bağlam, sözcükleyici hatası modülde/ana dosyada/typecheck;
+  eski derleyicide 7'nin 5'i kırmızı, bağlamı geri koymayan sabotajda
+  "dönüşte kök bağlam" kırmızı) ve `tests/lsp_audit.py`ye modül tanısı (eski
+  derleyicide tanı 5. satırda — masum satır).
+
 ### Hızlandı — Linux'ta link `ld.lld` ile (varsa): hello 42 → 15 ms, motor oyunu 68 → 22 ms
 
 - Her programın ödediği sabit link bedeli ld.bfd'de ~42 ms (hello world'ün

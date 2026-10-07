@@ -2453,6 +2453,29 @@ fark (callfn aynı ikilide 75,0 / 81,6) makinenin gürültüsü — yerleşim de
 kayar (callfn'de gerçekten 4 ayrı düzey: 64 / 77 / 100 / 120 ms). Ölçümü
 yazarken "önek yorum mu kod mu" ve "ikililer farklı mı" birlikte yazılır.
 
+## 7t. Tanı bağlamını tek katmanda düzeltmek — öbür katman kök dosyanın adını basmaya devam eder
+
+K056 (2026-09-27) içe aktarılan modülün AYRIŞTIRMA hatasını modülün adıyla
+bastırdı ve madde "düzeltildi" sayıldı. Aynı modülün KODGEN hatası
+(tanımsız çağrı, en sık hata) on gün daha kök dosyanın adıyla ve kök
+dosyanın o numaralı satırının metniyle basıldı; sözcükleyici hatası hiç dosya
+adı taşımıyordu. İlk gerçek çok dosyalı oyun bunu hemen buldu
+(`savas.tpr`'deki hata `oyun.tpr:311` + oyun.tpr'nin 311. satırı — satır
+numarası doğru olduğu için alıntı "makul" görünüyor ve göz masum satırda
+hata arıyor). LSP'de de aynısı: tanı kök belgenin aynı numaralı satırına
+düşüyordu.
+
+Kök neden yapısal: tanı bağlamı her katmanda AYRI bir global (ayrıştırıcının
+`g_parser_source_*`, kodgenin `backend->source_*`, sözcükleyicide hiç yok,
+LSP kaydında dosya alanı yok). Birini düzeltmek ötekileri düzeltmiyor ve
+testi yalnız düzeltilen katmanı sürüyordu.
+
+**Kural:** "X'in konumu yanlış" türü bir hatayı kapatırken aynı girdinin
+BÜTÜN tanı üreticilerini (sözcükleyici, ayrıştırıcı, typeinfer, kodgen, LSP)
+aynı test dosyasında sür; satır numarası iki dosyada aynı olmayan bir düzen
+kur (modülün 6. satırı hatalı, kök dosyanın 6. satırı farklı metinli) ki
+alıntı yanlış dosyadan gelirse ele versin. Kapı: `tests/modul_tani_konumu.sh`.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

@@ -58,6 +58,10 @@ int typecheck_cmd_main(int argc, char **argv) {
 
   // Lex into a token vector. We use the C++ Lexer/Parser path directly so
   // we get the modern AST (std::variant) — the same input typeinfer expects.
+  // Tani baglami: dosya adi + satir alintisi. Eskiden verilmiyordu ve her
+  // ayristirma hatasi `--> (stdin):N` diye basiliyordu (K056). Sozcuklemeden
+  // ONCE: sozcukleyici hatasi da dosya adini bassin (oyun geri bildirimi #4).
+  parser_set_diagnostic_context(source.c_str(), path);
   Lexer lexer(source);
   std::vector<Token> tokens;
   while (true) {
@@ -67,9 +71,6 @@ int typecheck_cmd_main(int argc, char **argv) {
     if (eof) break;
   }
 
-  // Tani baglami: dosya adi + satir alintisi. Eskiden verilmiyordu ve her
-  // ayristirma hatasi `--> (stdin):N` diye basiliyordu (K056).
-  parser_set_diagnostic_context(source.c_str(), path);
   std::unique_ptr<ASTNode> ast;
   try {
     Parser parser(std::move(tokens));
