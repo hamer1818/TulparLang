@@ -1,6 +1,8 @@
 #include "lexer.hpp"
 #include "../common/localization.hpp"
+#include "../common/diagnostics.hpp"
 #include <cctype>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +12,31 @@
 // DEGISMEDI, cunku akislari baska bir birim de cekiyor — yine de
 // kullanilmayan bir bagimliligi tasimanin anlami yok.
 #include <unordered_map>
+
+// Sozcukleyici tanisi (oyun geri bildirimi #4, 2026-10-08). Eskiden her hata
+// yalniz `... at line 3, col 12` diyordu — cok dosyali programda HANGI
+// dosyanin 3. satiri oldugu yazmiyordu — ve typeinfer'in sessiz on gecisi
+// (ayni dosyayi AOT'den once sozcukluyor) ikinci bir kopya basiyordu. Dosya
+// adi ve sessizlik ayristiricinin tani baglamindan geliyor
+// (parser_set_diagnostic_context / parser_set_quiet -> diagnostics.hpp);
+// mesajin ilk satiri ayni kaldi (`tests/fmt_audit.py` onu sayiyor).
+static void lexer_report(int line, int col, const char *fmt, ...) {
+    if (tulpar::diag_quiet()) return;
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (tulpar::diag_sink_active()) {
+        size_t n = strlen(buf);
+        while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = '\0';
+        tulpar::diag_sink_push(line, col, 1, "error", buf, nullptr);
+        return;
+    }
+    fputs(buf, stderr);
+    const char *f = tulpar::diag_file();
+    if (f && *f) fprintf(stderr, "  --> %s:%d:%d\n", f, line, col);
+}
 
 // ============================================================================
 // Keyword Mapping Table (Turkish-first with English/ASCII aliases)
@@ -290,7 +317,7 @@ void Lexer::skip_block_comment() {
         }
         
         // Not terminated
-        fprintf(stderr,
+        lexer_report(start_line, start_col,
                 tulpar::i18n::tr_for_en("Lexer Error: Block comment not terminated (started at line %d, col %d)\n"),
                 start_line, start_col);
     }
@@ -326,7 +353,7 @@ static int digit_value_in_base(char c, int base) {
 // packages/ icinde tek ornek cikmadi; `camera3d`/`sha1` gibi adlar HARFLE
 // basladigi icin bu yola hic girmiyor).
 static Token number_suffix_error(int line, int column) {
-    fprintf(stderr,
+    lexer_report(line, column,
             tulpar::i18n::tr_en(
                 "Sozcukleyici Hatasi: sayidan hemen sonra harf gelemez — "
                 "sayi soneki (`1u`, `2f`) desteklenmiyor (satir %d, sutun %d)\n",
@@ -384,7 +411,7 @@ Token Lexer::read_number() {
             advance();
         }
         if (digits == 0) {
-            fprintf(stderr,
+            lexer_report(start_line, start_column,
                     tulpar::i18n::tr_en(
                         "Sozcukleyici Hatasi: '0%c' onekinden sonra basamak "
                         "yok (satir %d, sutun %d)\n",
@@ -395,7 +422,7 @@ Token Lexer::read_number() {
                          start_line, start_column);
         }
         if (overflow) {
-            fprintf(stderr,
+            lexer_report(start_line, start_column,
                     tulpar::i18n::tr_en(
                         "Sozcukleyici Hatasi: tabanli sayi 64 bite sigmiyor "
                         "(satir %d, sutun %d)\n",
@@ -818,7 +845,7 @@ Token Lexer::next_token() {
             // ayristirici `func` onunde kabul ediyor; baska yerde hata.
             case '@': return Token(TOKEN_AT, value, start_line, start_column);
             default:
-                fprintf(stderr, tulpar::i18n::tr_for_en("Lexer Error: Unknown character '%c' at line %d, col %d\n"),
+                lexer_report(start_line, start_column, tulpar::i18n::tr_for_en("Lexer Error: Unknown character '%c' at line %d, col %d\n"),
                         ch, start_line, start_column);
                 return Token(TOKEN_ERROR, value, start_line, start_column);
         }

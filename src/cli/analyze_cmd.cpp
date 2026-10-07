@@ -133,6 +133,7 @@ int analyze_cmd_main(int argc, char **argv) {
   const std::string source = ss.str();
   in.close();
 
+  parser_set_diagnostic_context(source.c_str(), path);  // sozcukleyici de
   Lexer lexer(source);
   std::vector<Token> tokens;
   while (true) {
@@ -141,7 +142,6 @@ int analyze_cmd_main(int argc, char **argv) {
     tokens.push_back(std::move(tok));
     if (eof) break;
   }
-  parser_set_diagnostic_context(source.c_str(), path);
   std::unique_ptr<ASTNode> ast;
   try {
     Parser parser(std::move(tokens));

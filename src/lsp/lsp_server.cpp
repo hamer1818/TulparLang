@@ -20,7 +20,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -196,6 +198,68 @@ struct DocumentStore {
     std::unordered_map<std::string, DocumentEntry> docs;
 };
 
+// Ayni dosya mi (goreli/mutlak yazim farki onemsiz). Kodgen modulun yolunu
+// cozuldugu bicimde tasiyor (`modul.tpr`, `alt/m.tpr`), belge yolu mutlak.
+static bool same_file(const std::string &a, const std::string &b) {
+    if (a == b) return true;
+    namespace fs = std::filesystem;
+    std::error_code e1, e2;
+    const fs::path ca = fs::weakly_canonical(fs::path(a), e1);
+    const fs::path cb = fs::weakly_canonical(fs::path(b), e2);
+    return !e1 && !e2 && ca == cb;
+}
+
+static std::string path_to_file_uri(const std::string &p) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::string abs = fs::absolute(fs::path(p), ec).generic_string();
+    if (ec) abs = p;
+    std::string out = "file://";
+    if (!abs.empty() && abs[0] != '/') out += '/';  // Windows: file:///d:/x
+    static const char *hex = "0123456789ABCDEF";
+    for (unsigned char c : abs) {
+        if (std::isalnum(c) || c == '/' || c == '-' || c == '_' || c == '.' || c == '~' ||
+            c == ':') {
+            out += (char)c;
+        } else {
+            out += '%';
+            out += hex[c >> 4];
+            out += hex[c & 15];
+        }
+    }
+    return out;
+}
+
+// Ice aktarilan modulun tanisi (oyun geri bildirimi #4, 2026-10-08). Kodgen
+// ve ayristirici artik tanida modulun yolunu tasiyor; eskiden LSP modulun
+// satir numarasini KOK belgeye koyuyordu (modulun 6. satirindaki hata, ana
+// dosyanin masum 6. satirinda gorunuyordu). clangd'nin "In included file"
+// kalibi: tani kok belgede, ona goturen ust duzey `import` satirinda; mesaj
+// `modul.tpr:6:` onekini tasir, relatedInformation modulun kendi konumunu
+// verir (istemci tiklaninca oraya gider).
+static void remap_foreign_diagnostics(const std::string &doc_path, const std::string &text,
+                                      std::vector<Diagnostic> &records) {
+    for (auto &d : records) {
+        if (d.file.empty() || doc_path.empty() || same_file(d.file, doc_path)) continue;
+        d.related_file = d.file;
+        d.related_line = d.line;
+        d.related_column = d.column;
+        d.related_length = d.length;
+        d.message = d.file + ":" + std::to_string(d.line) + ": " + d.message;
+        d.line = d.anchor_line > 0 ? d.anchor_line : 1;
+        d.column = 1;
+        // Butun import satiri.
+        int cur = 1;
+        size_t start = 0;
+        for (size_t i = 0; i < text.size() && cur < d.line; i++)
+            if (text[i] == '\n') { cur++; start = i + 1; }
+        size_t end = start;
+        while (end < text.size() && text[end] != '\n' && text[end] != '\r') end++;
+        d.length = (int)(end - start);
+        d.file.clear();
+    }
+}
+
 void publish_diagnostics(const std::string &uri,
                          const std::vector<Diagnostic> &diags) {
     cJSON *root = cJSON_CreateObject();
@@ -239,6 +303,25 @@ void publish_diagnostics(const std::string &uri,
         }
         cJSON_AddStringToObject(item, "message", msg.c_str());
 
+        if (!d.related_file.empty() && d.related_file[0] != '<') {
+            cJSON *rel = cJSON_AddArrayToObject(item, "relatedInformation");
+            cJSON *ri = cJSON_CreateObject();
+            cJSON *loc = cJSON_AddObjectToObject(ri, "location");
+            cJSON_AddStringToObject(loc, "uri", path_to_file_uri(d.related_file).c_str());
+            cJSON *rr = cJSON_AddObjectToObject(loc, "range");
+            int rl0 = d.related_line > 0 ? d.related_line - 1 : 0;
+            int rc0 = d.related_column > 0 ? d.related_column - 1 : 0;
+            int rspan = d.related_length > 0 ? d.related_length : 1;
+            cJSON *rs = cJSON_AddObjectToObject(rr, "start");
+            cJSON_AddNumberToObject(rs, "line", rl0);
+            cJSON_AddNumberToObject(rs, "character", rc0);
+            cJSON *re = cJSON_AddObjectToObject(rr, "end");
+            cJSON_AddNumberToObject(re, "line", rl0);
+            cJSON_AddNumberToObject(re, "character", rc0 + rspan);
+            cJSON_AddStringToObject(ri, "message", d.message.c_str());
+            cJSON_AddItemToArray(rel, ri);
+        }
+
         cJSON_AddItemToArray(arr, item);
     }
 
@@ -268,6 +351,7 @@ void check_and_publish(const std::string &uri, DocumentEntry &entry) {
     aot_check_and_index(entry.text.c_str(), source_filename, &fresh_index);
     auto records = diag_sink_drain();
     diag_sink_disable();
+    remap_foreign_diagnostics(path, entry.text, records);
 
     // Replace the cached index even when codegen errored — partial info is
     // more useful for hover/completion than stale info from before the

@@ -17,6 +17,7 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -199,6 +200,41 @@ def main():
             if ds:
                 check(ds[0].get("severity") == 1, "tani siddeti HATA degil",
                       ds[0].get("severity"))
+
+        # İÇE AKTARILAN MODÜLÜN TANISI (oyun geri bildirimi #4, 2026-10-08).
+        # Modülün 6. satırındaki hata eskiden KÖK belgenin 6. satırına
+        # konuyordu (kodgen tanısı dosya taşımıyordu): editör masum bir satırı
+        # kırmızıya boyuyordu. Artık tanı kök belgede, ona götüren `import`
+        # satırında; mesaj modülün yolunu ve satırını söylüyor,
+        # relatedInformation modülün kendi konumunu veriyor. Modül MUTLAK yolla
+        # içe aktarılıyor: sunucunun çalışma dizini (depo kökü) önemsiz kalsın.
+        with tempfile.TemporaryDirectory() as td:
+            mod = os.path.join(td, "modul_lsp.tpr").replace("\\", "/")
+            with open(mod, "w") as f:
+                f.write("// m1\n// m2\n// m3\nfunc modul_f(): int {\n"
+                        "    int x = 1;\n    return tanimsiz_cagri() + x;\n}\n")
+            ana_uri = "file://" + os.path.join(td, "ana_lsp.tpr")
+            ana = ('import "%s";\nprint(modul_f());\n// a3\n// a4\n// a5\n'
+                   '// masum altinci satir\n' % mod)
+            srv.send({"jsonrpc": "2.0", "method": "textDocument/didOpen",
+                      "params": {"textDocument": {"uri": ana_uri, "languageId": "tulpar",
+                                                  "version": 1, "text": ana}}})
+            d3 = srv.wait(lambda m: m.get("method") == "textDocument/publishDiagnostics"
+                          and m["params"]["uri"] == ana_uri)
+            if check(d3 is not None, "modullu belgede tani bildirimi gelmedi"):
+                ds = d3["params"]["diagnostics"]
+                hit = [x for x in ds if "tanimsiz_cagri" in x.get("message", "")]
+                if check(len(hit) == 1, "modul tanisi yok ya da birden cok", ds):
+                    x = hit[0]
+                    check(x["range"]["start"]["line"] == 0,
+                          "modul tanisi import satirinda degil (masum satira dustu)",
+                          x["range"])
+                    check("modul_lsp.tpr:6" in x["message"],
+                          "modul tanisi modulun yolunu/satirini soylemiyor", x["message"])
+                    rel = x.get("relatedInformation") or []
+                    ok = bool(rel) and rel[0]["location"]["uri"].endswith("/modul_lsp.tpr") \
+                        and rel[0]["location"]["range"]["start"]["line"] == 5
+                    check(ok, "relatedInformation modulun konumunu vermiyor", rel)
 
         srv.request(99, "shutdown", {})
         srv.send({"jsonrpc": "2.0", "method": "exit", "params": {}})

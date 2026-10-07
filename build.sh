@@ -642,6 +642,12 @@ if [ "$ACTION" = "suites" ]; then
         kapi_kuyruk "modul ayristirma hata yollari basarisiz!" bash tests/modul_ayristirma_hatalari.sh ./tulpar
     fi
 
+    # Ice aktarilan modulde KODGEN / sozcukleyici hatasinin konumu (oyun geri
+    # bildirimi #4): modulun adi + modulun satiri, tek kopya, donuste kok baglam.
+    if [ -x tests/modul_tani_konumu.sh ]; then
+        kapi_kuyruk "modul tani konumu basarisiz!" bash tests/modul_tani_konumu.sh ./tulpar
+    fi
+
     # Coklu donus / tuple HATA YOLLARI (P0.1): ayni gerekce.
     if [ -x tests/tuple_hatalari.sh ]; then
         kapi_kuyruk "tuple hata yollari basarisiz!" bash tests/tuple_hatalari.sh ./tulpar
