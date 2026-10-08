@@ -510,6 +510,19 @@ void try_fetch_binary(const std::string &registry_url, const std::string &name,
                  bin_path.string().c_str());
 }
 
+// Manifest geri yazilirken to_toml taninmayan (atlanmis) anahtarlari YAZMAZ:
+// kaydetmek onlari sessizce silerdi. Eskiden parse zaten dusuyordu (komut hata
+// veriyordu); uyariya donusunce (#21) bu kapi o davranisi koruyor.
+static bool manifest_save_guard(const char *cmd, const Manifest &m) {
+    if (m.warnings.empty()) return true;
+    manifest_print_warnings("", kManifestFile, m);
+    std::fprintf(stderr, "%s: %s has keys this tulpar does not recognise; "
+                         "rewriting it would delete them — not saving "
+                         "(update tulpar or edit the file by hand)\n",
+                 cmd, kManifestFile);
+    return false;
+}
+
 int cmd_init(int argc, char **argv) {
     const char *name = (argc > 0) ? argv[0] : nullptr;
     if (file_exists(kManifestFile)) {
@@ -636,6 +649,7 @@ int cmd_add(int argc, char **argv) {
         }
         if (!already) m.binary_opt_in.push_back(name);
     }
+    if (!manifest_save_guard("tulpar pkg add", m)) return 1;
     if (!manifest_save(kManifestFile, m, err)) {
         std::fprintf(stderr, "tulpar pkg add: %s\n", err.c_str());
         return 1;
@@ -1947,6 +1961,7 @@ int cmd_remove(int argc, char **argv) {
                      target.c_str());
         return 1;
     }
+    if (!manifest_save_guard("tulpar pkg remove", m)) return 1;
     if (!manifest_save(kManifestFile, m, err)) {
         std::fprintf(stderr, "tulpar pkg remove: %s\n", err.c_str());
         return 1;

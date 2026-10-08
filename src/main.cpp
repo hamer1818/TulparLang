@@ -383,12 +383,15 @@ int main(int argc, char **argv) {
       tulpar::Manifest cwd_manifest;
       std::string manifest_err;
       if (tulpar::manifest_load("tulpar.toml", cwd_manifest, manifest_err)) {
+        // Taninmayan anahtar/bolum: o satir atlandi, gerisi gecerli (#21).
+        // Tek yer burasi — eklenti ve Android yollari ayni dosyayi sessiz okur.
+        tulpar::manifest_print_warnings("[manifest] ", "tulpar.toml", cwd_manifest);
         if (cwd_manifest.strict_typecheck) strict_typecheck = 1;
         toml_build_target = cwd_manifest.build_target;
         toml_build_entry = cwd_manifest.build_entry;
         toml_build_output = cwd_manifest.build_output;
       } else {
-        std::fprintf(stderr, "[manifest] tulpar.toml: %s (ignoring)\n",
+        std::fprintf(stderr, "[manifest] tulpar.toml: %s (ignoring the whole file)\n",
                      manifest_err.c_str());
       }
     }

@@ -31,6 +31,13 @@ namespace tulpar {
 //
 //   [release.binaries]
 //   linux-x64 = "https://example.com/releases/mytool-linux-x64"
+// Taninmayan bolum/anahtar: parse BASARILI, o satir atlanir ve buraya yazilir
+// (oyun geri bildirimi #21). Cagiran basar — manifest_print_warnings.
+struct ManifestWarning {
+    int line;
+    std::string message;
+};
+
 struct Manifest {
     std::string name;
     std::string version;
@@ -111,6 +118,11 @@ struct Manifest {
     // TULPAR_EXT_PATH'ten SONRA yuklenir (ayni adli eklentide onlar kazanir).
     std::vector<std::string> ext_paths;
 
+    // Parse sirasinda atlanan (taninmayan) bolum/anahtarlar — to_toml bunlari
+    // YAZMAZ, yani bu manifesti geri kaydetmek onlari siler (pkg add/remove
+    // bu yuzden uyari varken kaydetmeyi reddeder).
+    std::vector<ManifestWarning> warnings;
+
     // Round-trip serialise this manifest back to the TOML subset we
     // accept on input. Idempotent — reading a manifest, serialising it,
     // and re-reading produces the same struct.
@@ -121,6 +133,10 @@ struct Manifest {
 // (line-numbered when possible) and the function returns false.
 bool manifest_parse(const std::string &source, Manifest &out,
                     std::string &out_err);
+
+// `<prefix><path>:<line>: warning: <message>` — her uyari icin stderr'e.
+void manifest_print_warnings(const char *prefix, const std::string &path,
+                             const Manifest &m);
 
 // Convenience: read manifest from a file. Sets `out_err` on I/O or
 // parse failure.

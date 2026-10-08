@@ -13,6 +13,26 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `tulpar.toml`'da tanınmayan anahtar artık dosyanın tamamını düşürmüyor (tulpar-engine geri bildirimi #21)
+
+- Tanınmayan bir bölüm (`[gelecek]`) ya da anahtar (`[android] cutout`, onu
+  tanımayan bir sürümde) eskiden parse'ı düşürüyordu ve sürücü **dosyanın
+  tamamını** tek satırlık bir `(ignoring)` ile yok sayıyordu: `[ext] paths`
+  gidiyor, `import "engine"` "şu an hiçbir eklenti yüklü değil" diye
+  yanıltıcı patlıyordu; Android derlemesinde paket/ad/ikon/assets
+  varsayılana düşerdi. Şimdi `[manifest] tulpar.toml:<satır>: warning:
+  [android] key 'x' is not recognised (...) — ignored` basılır, o satır
+  (bölümse altındaki satırlar) atlanır, **gerisi geçerli**.
+- Biçimi bozuk satır (tanınan anahtarın yanlış tipli değeri, kapanmamış
+  tırnak) hâlâ hata; mesaj artık `(ignoring the whole file)` diyor, Android
+  yolu da `[android] ayarları UYGULANMADI` diye sonucu söylüyor.
+- `tulpar pkg add/remove` tanınmayan anahtar varken dosyayı **yeniden
+  yazmıyor** (geri yazım onları silerdi; eski davranış da reddetmekti).
+- Kapı: `tests/toml_taninmayan_anahtar.sh` (`build.sh suites`): `[ext] paths`
+  ile gerçek eklenti importu, `[build]` varsayılanları, uyarı satırları,
+  `pkg add` reddi, bozuk değer kontrolü. Pozitif kontrol: e1bf5a44 ikilisine
+  karşı 5/5 kırmızı.
+
 ### Eklendi — Android: ekran çentiği alanı ve hata ayıklanabilir APK seçenekleri (tulpar-engine geri bildirimi #17/#19)
 
 - `tulpar.toml [android] cutout = "short_edges" | "default" | "never"` (ya da
