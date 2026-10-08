@@ -41,6 +41,21 @@ de var: modülün üst düzey kodu, ana dosyanın üst düzey atamalarından ÖN
 koşar.) Fonksiyonlar ve globaller aynı kurala uysun diye kardeşte ikisi de
 görünmez. Kapı: `tests/modul_ice_aktaran.sh`. Karar: [[Decisions]].
 
+## Çoklu bildirim ve modüller (2026-10-08, oyun geri bildirimi #7)
+`float a, b = f();` ayrıştırıcı şekeri: `f`'nin tuple tipi AYRIŞTIRMA anında
+bilinmeli. Kaynaklar (öncelik sırasıyla): dosyanın kendi imzaları → kendi
+import ağacının imzaları (K030, token taraması) → PROGRAMIN tablosu (kök
+ayrıştırmanın yakaladığı: ana dosya + bütün import ağacı;
+`Parser::program_tuple_sigs_`, her ana ayrıştırmadan önce
+`tulpar_parser_begin_program()` — AOT, typeinfer ön geçişi, typecheck,
+analyze). Böylece modül, görebildiği (#5 kuralı) her `: (T, T)` fonksiyonu
+çoklu bildirimle çağırabiliyor; görünmeyen (sonra gelen kardeş) kodgende
+ipuçlu "bulunamadı" alır. Tip: tipi yazılmayan ad İLK adın tipini alır;
+uyuşmazlık typeinfer'de bildirim satırında (`__tup_*` alanı tipleniyor).
+Kapı: `tests/coklu_bildirim_modul.sh`. Sınır: aynı miras enum'lar için YOK
+(modül, ana dosyanın `enum`unu kendisi import etmeden göremez) — enum adının
+modülde bir değişken adıyla çakışması katlamayı değiştirebilirdi, kırıcı.
+
 ## Tanı konumu (modülün hatası modülün dosyasıyla)
 İçe aktarılan modülün **her** tanısı modülün kendi yolu ve satırıyla basılır:
 ayrıştırma (K056, 2026-09-27), kodgen ve sözcükleyici (oyun geri bildirimi #4,

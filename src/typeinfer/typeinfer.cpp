@@ -144,7 +144,25 @@ static std::string enum_name_of(TypeInferContext *ctx, const ASTNode *expr) {
 //   * struct <-> json / bilinmeyen: serbest (json her degeri tasir; nesne
 //     literali struct'a yazilir, kutulu eleman struct'a acilir);
 //   * struct <-> struct: iki tarafin ADI biliniyor ve farkliysa uyusmazlik.
+// Coklu bildirimin alani: ayristirici `float a, b = f();`yi
+// `__tN = f(); float a = __tN._0; float b = __tN._1;`e aciyor (`__tN` tipi
+// sentezlenmis `__tup_*` struct'i). Alanin tipi o struct'tan; baska hicbir
+// struct alan erisimi tiplenmiyor (genel alan tiplemesi ayri — bkz.
+// is_unknown notu). nullptr: bu bir tuple alani degil. (oyun geri bildirimi
+// #7: tip uyusmazligi bildirimde degil sonraki ATAMA satirlarinda
+// cikiyordu, cunku baslatici hep "bilinmiyor"du.)
+static const StructTypeInfo *tuple_field_of(TypeInferContext *ctx, const ASTNode *expr,
+                                            size_t *field_index);
+
 static std::string custom_name_of(TypeInferContext *ctx, const ASTNode *expr) {
+  {
+    size_t fi = 0;
+    if (const StructTypeInfo *st = tuple_field_of(ctx, expr, &fi)) {
+      return (fi < st->field_custom_types.size() && st->field_custom_types[fi])
+                 ? *st->field_custom_types[fi]
+                 : "";
+    }
+  }
   if (const auto *id = as_node<Identifier>(expr)) {
     auto it = ctx->symbols.find(id->name);
     if (it != ctx->symbols.end() && it->second.type == TYPE_CUSTOM &&
@@ -158,6 +176,29 @@ static std::string custom_name_of(TypeInferContext *ctx, const ASTNode *expr) {
     return it == ctx->fn_return_custom.end() ? "" : it->second;
   }
   return "";
+}
+
+static const StructTypeInfo *tuple_field_of(TypeInferContext *ctx, const ASTNode *expr,
+                                            size_t *field_index) {
+  const auto *acc = as_node<ArrayAccess>(expr);
+  if (!acc) return nullptr;
+  const auto *id = as_node<Identifier>(acc->object.get());
+  const auto *key = as_node<StringLiteral>(acc->index.get());
+  if (!id || !key || key->value.size() < 2 || key->value[0] != '_') return nullptr;
+  auto sym = ctx->symbols.find(id->name);
+  if (sym == ctx->symbols.end() || sym->second.type != TYPE_CUSTOM ||
+      !sym->second.custom_type_name || sym->second.custom_type_name->rfind("__tup", 0) != 0)
+    return nullptr;
+  auto st = ctx->struct_types.find(*sym->second.custom_type_name);
+  if (st == ctx->struct_types.end()) return nullptr;
+  size_t idx = 0;
+  for (size_t i = 1; i < key->value.size(); i++) {
+    if (key->value[i] < '0' || key->value[i] > '9') return nullptr;
+    idx = idx * 10 + (size_t)(key->value[i] - '0');
+  }
+  if (idx >= st->second.field_types.size()) return nullptr;
+  if (field_index) *field_index = idx;
+  return &st->second;
 }
 
 // true: `want` enum'lu bir yuvaya (tip `got`, enum adi `got_enum`) yazilamaz.
@@ -1013,6 +1054,10 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
   }
 
   if (const auto *access = as_node<ArrayAccess>(expr)) {
+    {
+      size_t fi = 0;
+      if (const StructTypeInfo *st = tuple_field_of(ctx, expr, &fi)) return st->field_types[fi];
+    }
     DataType arr_type = infer_expr(ctx, access->object.get());
     switch (arr_type) {
     case TYPE_ARRAY_INT:
@@ -1169,9 +1214,32 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       } else if (!is_unknown(declared_type) && !is_unknown(init_type) &&
           !store_coercible(declared_type, init_type) &&
           !types_compatible(declared_type, init_type)) {
-        report_error(ctx, "Type mismatch in declaration of '%s': expected %s, got %s at line %d",
-                     decl->name.c_str(), datatype_to_string(declared_type),
-                     datatype_to_string(init_type), decl->loc.line);
+        size_t fi = 0;
+        if (tuple_field_of(ctx, decl->initializer.get(), &fi)) {
+          // Coklu bildirim (oyun geri bildirimi #7): `bool bas, px, py = f();`
+          // ucunu de bool yapar — tipi yazilmayan ad ILK adin tipini alir
+          // (C'deki `int a, b;` gibi; degistirmek `float a, b = f()`yi
+          // (float, int) donen f icin sessizce int'e cevirirdi). Tani bu
+          // satirda ve cozumu soyler; eskiden ilk ATAMA satirinda
+          // "expected bool, got float" diye cikiyordu.
+          report_error(ctx,
+                       tulpar::i18n::tr_en(
+                           "Type mismatch in declaration of '%s': expected %s, got %s at line "
+                           "%d — coklu bildirimin %zu. degeri %s; tipi yazilmayan ad ILK adin "
+                           "tipini alir: tipini yazin (`..., %s %s = ...`) ya da `var` kullanin",
+                           "Type mismatch in declaration of '%s': expected %s, got %s at line "
+                           "%d — value %zu of the tuple is %s; a name without its own type "
+                           "takes the FIRST name's type: write its type (`..., %s %s = ...`) "
+                           "or use `var`"),
+                       decl->name.c_str(), datatype_to_string(declared_type),
+                       datatype_to_string(init_type), decl->loc.line, fi + 1,
+                       datatype_to_string(init_type), datatype_to_string(init_type),
+                       decl->name.c_str());
+        } else {
+          report_error(ctx, "Type mismatch in declaration of '%s': expected %s, got %s at line %d",
+                       decl->name.c_str(), datatype_to_string(declared_type),
+                       datatype_to_string(init_type), decl->loc.line);
+        }
       } else if (decl->enum_type) {
         // K027: nominal enum (bkz. enum_mismatch).
         const std::string ie = enum_name_of(ctx, decl->initializer.get());

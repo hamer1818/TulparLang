@@ -185,6 +185,17 @@ private:
     // import edilen modullerin tuple imzalari — anahtar ad, `import ... as a`
     // ile gelende `a__ad`; yerel imza kazanir (prescan_tuple_sigs birlestirir).
     std::vector<RawTupleSig> imported_tuple_sigs_raw_;
+    // PROGRAMIN tuple imza tablosu (oyun geri bildirimi #7, 2026-10-08):
+    // KOK ayristirmanin (ana dosya: kendi + butun import agaci) cozulmus
+    // tablosu. Sonraki her modul ayristirmasi onu EN DUSUK oncelikle gorur —
+    // modul, ice aktaranin ya da kardesinin `: (T, T)` fonksiyonunu kendisi
+    // import etmeden `float a, b = f();` ile cagirabilsin (normal cagri onu
+    // zaten buluyordu). begin_program() bir sonraki ayristirmayi kok yapar.
+    static std::unordered_map<std::string, std::vector<TupleElem>> program_tuple_sigs_;
+    static bool capture_program_sigs_;
+public:
+    static void begin_program();
+private:
     std::vector<TupleElem> resolve_tuple_elems(const std::vector<RawTupleElem>& raw) const;
     std::unordered_map<std::string, std::vector<TupleElem>> synth_tuple_structs_;
     std::vector<TupleElem> current_tuple_types_;   // bos = tuple donmuyor
@@ -403,6 +414,11 @@ void tulpar_parser_set_import_loader(TulparImportLoader fn);
 // SONRAKI ayristirmalarin "bu kaynak hangi dizinde" bilgisi (AOT bir modulu
 // ayristirirken kurar, sonra "" yapar).
 void tulpar_parser_set_import_dir(const std::string &dir);
+// Bir sonraki ayristirma programin KOKU (ana dosya): tuple imza tablosunu
+// yakalar, sonraki modul ayristirmalari onu miras alir (oyun geri bildirimi
+// #7). Her ana dosya ayristirmasindan once cagrilir (AOT, typeinfer on
+// gecisi, typecheck, analyze; LSP AOT yolundan).
+void tulpar_parser_begin_program();
 std::string tulpar_parser_get_import_dir();
 
 #endif // TULPAR_PARSER_HPP

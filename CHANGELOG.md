@@ -13,6 +13,39 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — çoklu bildirim modüller arasında; tek tipli çoklu bildirimin tanısı bildirim satırında (oyun geri bildirimi #7)
+
+- `float sx, sy = ekrana(...)`: `ekrana` ana dosyanın içe aktardığı BAŞKA bir
+  modülde (ya da ana dosyanın kendisinde) ise bu dosya onu kendisi import
+  etmedikçe "coklu bildirimin sag tarafi `: (T, T)` bildiren bir fonksiyonun
+  dogrudan cagrisi olmali" — normal çağrı `ekrana(...)` aynı fonksiyonu
+  buluyordu. Kök neden: çoklu bildirim ayrıştırıcı şekeri, callee'nin tuple
+  tipini ayrıştırma anında bilmeli ve modülün ayrıştırıcısı yalnız KENDİ
+  import'larının imzalarını görüyordu. Artık kök (ana dosya) ayrıştırması
+  programın bütün `: (T, T)` imzalarını yakalıyor (kendi + bütün import
+  ağacı), modül ayrıştırmaları onu en düşük öncelikle miras alıyor; yerel ve
+  kendi import'larının imzası kazanır. Görünürlük kararı kodgende (#5
+  kuralı): sonra içe aktarılan kardeşin fonksiyonu ayrıştırmada kabul, kodgende
+  normal çağrıdaki ipuçlu "bulunamadı". `tulpar typecheck` da modülü artık
+  ayrıştırabiliyor.
+- `bool bas, px, py = isaretci()` (`: (bool, float, float)`) üçünü de bool
+  yapıyor — kural DEĞİŞMEDİ (tipi yazılmayan ad ilk adın tipini alır, C gibi;
+  değiştirmek `float a, b = f()`yi `(float, int)` için sessizce int yapardı).
+  Ama tanı bildirimde değil sonraki ATAMA satırlarında çıkıyordu, çünkü
+  typeinfer tuple alanının tipini bilmiyordu. Artık bildirim satırında:
+  `Type mismatch in declaration of 'px': expected bool, got float at line 2 —
+  value 2 of the tuple is float; a name without its own type takes the FIRST
+  name's type: write its type (..., float px = ...) or use var`. Yalnız
+  sentezlenmiş `__tup_*` alanları tipleniyor (genel struct alanı tiplemesi
+  yeni uyarılar doğururdu); tipli / `var` / genişleyen (int → float) yazımlar
+  tanısız.
+- Kapı: yeni `tests/coklu_bildirim_modul.sh` (8 denetim; eski derleyicide
+  5'i kırmızı; miras tabloyu kapatan sabotajda 4'ü).
+- Ek düzeltme (#5 ile #6'nın kesişimi): bir modül ana dosyayı geri içe
+  aktarınca ana dosya modül tablosunda da görünüyordu ve fonksiyonları
+  "modülün tanımladığı" sayılıp öne alınmıyordu — döngüdeki modül ana
+  dosyanın fonksiyonunu göremiyordu (`tests/import_yolu.sh` döngü denetimi).
+
 ### Değişti — `import` yolu önce içe aktaran dosyanın dizinine göre, bulunamazsa çalışma dizinine göre (oyun geri bildirimi #6)
 
 - `import "..."` çalışma dizinine göre çözülüyordu: `a/b/m1.tpr` içindeki

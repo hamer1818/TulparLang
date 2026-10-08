@@ -19237,9 +19237,18 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
         std::unordered_set<std::string> anilan, degisken;
       } topla;
       std::unordered_set<std::string> modul_tanimladigi;
+      // Ana dosyanin KENDISI de modul tablosunda olabilir (bir modul onu geri
+      // ice aktarinca on tarama onu modul olarak ayristirir; AST_IMPORT'u
+      // kimlikle no-op). Onun fonksiyonlari "modulun tanimladigi" sayilirsa
+      // dongudeki modul ana dosyanin fonksiyonunu hic goremezdi.
+      const std::string ana_kimlik =
+          backend->source_filename && *backend->source_filename
+              ? tulpar::imports::identity(backend->source_filename)
+              : std::string();
       for (auto &kv : ist0->modules) {
         ASTNode_C *m = kv.second.ast;
         if (!m || m->type != AST_PROGRAM || !m->statements) continue;
+        if (!ana_kimlik.empty() && kv.second.kimlik == ana_kimlik) continue;
         for (int i = 0; i < m->statement_count; i++) {
           ASTNode_C *d = m->statements[i];
           if (d && d->type == AST_FUNCTION_DECL && d->name) modul_tanimladigi.insert(d->name);

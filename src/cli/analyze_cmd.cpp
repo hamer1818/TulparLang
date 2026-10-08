@@ -136,6 +136,7 @@ int analyze_cmd_main(int argc, char **argv) {
 
   parser_set_diagnostic_context(source.c_str(), path);  // sozcukleyici de
   tulpar_parser_set_import_dir(tulpar::imports::dir_of(path));  // #6
+  tulpar_parser_begin_program();  // tuple imza tablosu modullere miras (#7)
   Lexer lexer(source);
   std::vector<Token> tokens;
   while (true) {

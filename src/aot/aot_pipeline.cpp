@@ -1373,6 +1373,7 @@ static ASTNode_C *parse_source(const char *source,
   const std::string onceki_dizin = tulpar_parser_get_import_dir();
   tulpar_parser_set_import_dir(
       tulpar::imports::dir_of(source_filename ? source_filename : ""));
+  tulpar_parser_begin_program();  // tuple imza tablosu modullere miras (#7)
   ASTNode_C *ast = parser_parse(parser);
   tulpar_parser_set_import_dir(onceki_dizin);
 

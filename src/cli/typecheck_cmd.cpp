@@ -66,6 +66,7 @@ int typecheck_cmd_main(int argc, char **argv) {
   // Ayristiricinin import on taramasi (enum / tuple imzalari) bu dosyanin
   // dizininden cozsun — kodgenle ayni (oyun geri bildirimi #6).
   tulpar_parser_set_import_dir(tulpar::imports::dir_of(path));
+  tulpar_parser_begin_program();  // tuple imza tablosu modullere miras (#7)
   Lexer lexer(source);
   std::vector<Token> tokens;
   while (true) {
