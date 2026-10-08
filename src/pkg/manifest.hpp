@@ -92,6 +92,11 @@ struct Manifest {
     std::string android_version_name;
     std::string android_assets;
     std::string android_splash_color;   // "#RRGGBB" — açılış/splash arka planı
+    // "short_edges" | "default" | "never" — ekran çentiği (display cutout)
+    // alanı. short_edges: pencere çentiğin olduğu kısa kenara uzanır (oyun
+    // güvenli alanı kendisi bilmeli; tulpar-engine eng_safe_inset_*).
+    // Varsayılan "default": sistem çentik şeridini siyah bırakır (eski davranış).
+    std::string android_cutout;
 
     // [build] — `tulpar build` bunları CLI bayrağı verilmediğinde kullanır.
     // target: "desktop" (varsayılan) | "web" | "android" | "apk" | "aab".
