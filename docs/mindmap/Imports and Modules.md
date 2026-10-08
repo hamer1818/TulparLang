@@ -4,7 +4,12 @@ tags: [component, frontend]
 
 # Imports & Modules
 
-`import "name"` çözümleme sırası (`src/aot/llvm_backend.cpp` import handler): gömülü stdlib adı → **yüklü bir yerel eklentinin modülü** (`tulpar-ext.json` `modules`, 2026-10-02 — [[Eklentiler]]) → `name` → `name.tpr` → `tulpar_modules/<name>/<name>.tpr` → `tulpar_modules/<name>.tpr`. Son ikisi `tulpar pkg install`'un kullandığı yer. Typeinfer (`load_import_source`) ve ayrıştırıcının ön taraması (`parser_import_loader`) aynı sırayı izler. Hiçbir yerden çözülmeyen yol-olmayan ad (`import "engine"`) hatanın altında `--ext` ipucunu basar.
+`import "name"` çözümleme sırası: gömülü stdlib adı → **yüklü bir yerel eklentinin modülü** (`tulpar-ext.json` `modules`, 2026-10-02 — [[Eklentiler]]) → DİSK adayları (`src/common/import_resolve.hpp`, TEK kaynak — kodgen `import_load_module`, önbellek `resolve_import`, typeinfer `load_import_source`, ayrıştırıcının ön taraması `parser_import_loader` hepsi onu çağırır):
+1. `<içe aktaranın dizini>/name.tpr`, 2. `<içe aktaranın dizini>/name` — **2026-10-08'den beri ana dosya için de** (ana dosyanın dizini; oyun geri bildirimi #6),
+3. `name`, 4. `name.tpr` — çalışma dizini (eski kural, geri dönüş),
+5. `tulpar_modules/<name>/<name>.tpr`, 6. `tulpar_modules/<name>.tpr` (`tulpar pkg install`).
+
+Yalnız düzenli dosyalar aday (dizin değil). 1-2 ile 3-4 FARKLI dosyalara çıkarsa 1-2 kazanır ve uyarı basılır (`resolves in two places`); 2026-10-08 öncesi derleyici 3-4'ü seçerdi. Tekilleştirme dosya kimliğiyle (`ImportState::islenen`, mutlak yol): aynı dosyanın iki yazımı bir kez yüklenir, aynı yazımın iki farklı dosyası ikisi de; ana dosyanın kimliği baştan içeride (geri içe aktarma no-op). Önbellek anahtarı aynı çözümü + gölgelenen adayın varlığını taşır. Hiçbir yerden çözülmeyen yol-olmayan ad (`import "engine"`) hatanın altında `--ext` ipucunu basar. Bilinen boşluk: kullanılmayan bir import'un bulunamaması derlemeyi durdurmuyor (`Error:` basılıp çıkış 0). `tulpar.toml` ve `tulpar_modules/` hâlâ çalışma dizininde aranır. Kapılar: `tests/import_yolu.sh`, `tests/onbellek.sh`.
 
 ## Alias'lı import
 `import "name" as alias;` → modüldeki her top-level `func` `<alias>__<name>`'e yeniden adlandırılır, intra-module çağrılar da. İki kütüphane aynı `route`/`helper`'ı export etse çakışmaz. Builtin'ler ve importer'ın kendi fonksiyonları dokunulmaz. Rewrite: `src/parser/import_alias.cpp` (AOT `AST_IMPORT` codegen'den çağrılır).
@@ -35,6 +40,21 @@ yerine SESSİZ yanlış değer. (Aynı sessizlik ice aktaranın globali için bu
 de var: modülün üst düzey kodu, ana dosyanın üst düzey atamalarından ÖNCE
 koşar.) Fonksiyonlar ve globaller aynı kurala uysun diye kardeşte ikisi de
 görünmez. Kapı: `tests/modul_ice_aktaran.sh`. Karar: [[Decisions]].
+
+## Çoklu bildirim ve modüller (2026-10-08, oyun geri bildirimi #7)
+`float a, b = f();` ayrıştırıcı şekeri: `f`'nin tuple tipi AYRIŞTIRMA anında
+bilinmeli. Kaynaklar (öncelik sırasıyla): dosyanın kendi imzaları → kendi
+import ağacının imzaları (K030, token taraması) → PROGRAMIN tablosu (kök
+ayrıştırmanın yakaladığı: ana dosya + bütün import ağacı;
+`Parser::program_tuple_sigs_`, her ana ayrıştırmadan önce
+`tulpar_parser_begin_program()` — AOT, typeinfer ön geçişi, typecheck,
+analyze). Böylece modül, görebildiği (#5 kuralı) her `: (T, T)` fonksiyonu
+çoklu bildirimle çağırabiliyor; görünmeyen (sonra gelen kardeş) kodgende
+ipuçlu "bulunamadı" alır. Tip: tipi yazılmayan ad İLK adın tipini alır;
+uyuşmazlık typeinfer'de bildirim satırında (`__tup_*` alanı tipleniyor).
+Kapı: `tests/coklu_bildirim_modul.sh`. Sınır: aynı miras enum'lar için YOK
+(modül, ana dosyanın `enum`unu kendisi import etmeden göremez) — enum adının
+modülde bir değişken adıyla çakışması katlamayı değiştirebilirdi, kırıcı.
 
 ## Tanı konumu (modülün hatası modülün dosyasıyla)
 İçe aktarılan modülün **her** tanısı modülün kendi yolu ve satırıyla basılır:

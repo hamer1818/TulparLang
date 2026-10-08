@@ -1512,6 +1512,7 @@ std::vector<std::pair<std::string, std::string>> collect_imports_alias(
 
 void tulpar_parser_set_import_loader(TulparImportLoader fn) { g_import_loader = fn; }
 void tulpar_parser_set_import_dir(const std::string& dir) { g_import_dir = dir; }
+std::string tulpar_parser_get_import_dir() { return g_import_dir; }
 
 void Parser::prescan_imported_enums() {
     if (!g_import_loader) return;
@@ -3017,12 +3018,38 @@ std::vector<Parser::TupleElem> Parser::resolve_tuple_elems(
     return out;
 }
 
+std::unordered_map<std::string, std::vector<Parser::TupleElem>> Parser::program_tuple_sigs_;
+bool Parser::capture_program_sigs_ = false;
+
+void Parser::begin_program() {
+    program_tuple_sigs_.clear();
+    capture_program_sigs_ = true;
+}
+
+void tulpar_parser_begin_program() { Parser::begin_program(); }
+
 void Parser::prescan_tuple_sigs() {
     for (auto& sig : scan_tuple_sigs_raw(tokens_))
         tuple_sigs_[sig.first] = resolve_tuple_elems(sig.second);
     // Import edilen modullerin imzalari (K030): yerel ad kazanir.
     for (const auto& sig : imported_tuple_sigs_raw_)
         if (!tuple_sigs_.count(sig.first)) tuple_sigs_[sig.first] = resolve_tuple_elems(sig.second);
+    // Programin tablosu (oyun geri bildirimi #7). Kok ayristirma yakalar
+    // (kendi + butun import agaci = programin her `: (T, T)` fonksiyonu);
+    // modul ayristirmalari onu EN SON, yalniz kendi bilmedigi adlar icin
+    // ekler. Eskiden modul yalniz KENDI import'larini gorebiliyordu: kok
+    // dosyanin ya da kardes modulun fonksiyonuna normal cagri derleniyor,
+    // `float a, b = f();` "dogrudan cagrisi olmali" diye reddediliyordu.
+    // Gorunurluk karari kodgende (oyun geri bildirimi #5): sonra ice
+    // aktarilan kardesin fonksiyonu burada kabul edilir ama kodgen
+    // normal cagridaki ipuculu "bulunamadi" hatasini verir.
+    if (capture_program_sigs_) {
+        program_tuple_sigs_ = tuple_sigs_;
+        capture_program_sigs_ = false;
+    } else {
+        for (const auto& kv : program_tuple_sigs_)
+            if (!tuple_sigs_.count(kv.first)) tuple_sigs_[kv.first] = kv.second;
+    }
 }
 
 // '(' T, T, ... ')' — en az iki tip. `(` tuketilmemis gelir.

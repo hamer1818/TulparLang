@@ -6,6 +6,7 @@
 #define _WIN32_WINNT 0x0600  // GetFileInformationByHandleEx (FileBasicInfo)
 #endif
 #include "aot_cache.hpp"
+#include "../common/import_resolve.hpp"
 #include "aot_pipeline.hpp"
 #include "../common/platform.h"
 #include "../common/localization.hpp"
@@ -373,13 +374,19 @@ void scan_import_names(const std::string &src, std::vector<std::string> &out) {
 struct Resolved {
   int kind = 0;  // 0 yok, 1 gomulu, 2 eklenti, 3 disk
   std::string path, dir, src;
+  // Ice aktaranin dizini kazandi ama calisma dizininde ayni adli baska dosya
+  // da var: kodgen UYARI basiyor ve uyari isabette yeniden basiliyor —
+  // golgelenenin VARLIGI anahtarda (silinince uyari bayat kalmasin).
+  std::string golge;
 };
 
 // Cozum sirasi src/aot/llvm_backend.cpp import_load_module ile AYNI: gomulu
-// stdlib -> yerel eklenti modulu -> <ice aktaranin dizini>/<ad>.tpr -> <ad>
-// -> <ad>.tpr -> tulpar_modules/<ad>/<ad>.tpr -> tulpar_modules/<ad>.tpr.
-// Goreli yollar CALISMA DIZININE gore (kodgen de oyle). fopen, kodgenin
-// kullandigi cagrinin ta kendisi (Linux'ta bir DIZIN de acilir — ayni sonuc).
+// stdlib -> yerel eklenti modulu -> DISK adaylari. Disk adaylari kodgenle
+// AYNI fonksiyondan (src/common/import_resolve.hpp: once ice aktaranin
+// dizini, sonra calisma dizini, sonra tulpar_modules/) — 2026-10-08'e kadar
+// burada elle yazilmis bir kopyaydi; kural kodgende degisip burada
+// unutulsaydi anahtar YANLIS dosyanin ozetini tasirdi (bayat ikili,
+// Tuzaklar 7n). Ana dosya icin from_dir onun dizini (compute_key).
 Resolved resolve_import(const std::string &name, const std::string &from_dir) {
   Resolved r;
   if (const char *emb = get_embedded_lib(name.c_str())) {
@@ -397,25 +404,18 @@ Resolved resolve_import(const std::string &name, const std::string &from_dir) {
       return r;
     }
   }
-  std::vector<std::string> cands;
-  if (!from_dir.empty()) cands.push_back(from_dir + "/" + name + ".tpr");
-  cands.push_back(name);
-  cands.push_back(name + ".tpr");
-  cands.push_back("tulpar_modules/" + name + "/" + name + ".tpr");
-  cands.push_back("tulpar_modules/" + name + ".tpr");
-  for (const auto &c : cands) {
-    FILE *f = fopen(c.c_str(), "rb");
-    if (!f) continue;
-    char buf[1 << 16];
-    size_t k;
-    while ((k = fread(buf, 1, sizeof buf, f)) > 0) r.src.append(buf, k);
-    fclose(f);
-    r.kind = 3;
-    r.path = c;
-    const size_t slash = c.find_last_of("/\\");
-    if (slash != std::string::npos && slash > 0) r.dir = c.substr(0, slash);
-    return r;
-  }
+  const tulpar::imports::Resolution d = tulpar::imports::resolve_disk(name, from_dir);
+  if (!d.found) return r;
+  FILE *f = fopen(d.path.c_str(), "rb");
+  if (!f) return r;
+  char buf[1 << 16];
+  size_t k;
+  while ((k = fread(buf, 1, sizeof buf, f)) > 0) r.src.append(buf, k);
+  fclose(f);
+  r.kind = 3;
+  r.path = d.path;
+  r.dir = d.dir;
+  r.golge = d.shadowed;
   return r;
 }
 
@@ -444,7 +444,8 @@ void scan_imports(const std::string &src, const std::string &from_dir, int depth
         break;
       default:
         st.material += (r.kind == 2 ? "eklenti " : "disk ") + r.path + " " +
-                       tulpar::sha256_hex(r.src) + "\n";
+                       tulpar::sha256_hex(r.src) +
+                       (r.golge.empty() ? std::string() : " golge " + r.golge) + "\n";
         st.inputs.insert(canonical(r.path));
         scan_imports(r.src, r.dir, depth + 1, st);
         break;
@@ -724,7 +725,9 @@ Key compute_key(Mode mode, const char *source, const char *source_path,
   if (sinama && strcmp(sinama, "tarama-yok") == 0) {
     m += "sinama tarama-yok\n";
   } else {
-    scan_imports(src, "", 0, st);
+    // Ana dosyanin import'lari onun dizinine gore (kodgenin
+    // llvm_backend_compile'i ile ayni; oyun geri bildirimi #6).
+    scan_imports(src, tulpar::imports::dir_of(sp), 0, st);
     m += st.material;
   }
 

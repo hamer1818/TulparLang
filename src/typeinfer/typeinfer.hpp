@@ -112,6 +112,11 @@ struct TypeInferContext {
   // standalone `tulpar typecheck` subcommand keeps the default error mode.
   bool warning_mode;
   std::string source_path;
+  // Ana dosyanin yolu — yalniz import cozumu icin (ice aktaranin dizini,
+  // oyun geri bildirimi #6). Bossa source_path kullanilir. Ayri alan, cunku
+  // source_path dolunca tanilarin BICIMI degisiyor (`[typecheck] yol:`) ve
+  // `tulpar typecheck` / `analyze` o bicimi kullanmiyor.
+  std::string import_base_path;
 
   // Program `import "x"` içeriyor mu? İçeriyorsa, yerel struct tablosunda
   // bulunmayan bir custom-type "Unknown type" uyarısı VERMEZ — tipi import

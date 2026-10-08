@@ -173,6 +173,34 @@ kos "$TMP/gm" -- r.tpr;  beklenen "modulun disk importu (ayni)" isabet "7"
 printf 'func gm_deger(): int { return 8; }\n' > "$TMP/gm/lib/gm_alt.tpr"
 kos "$TMP/gm" -- r.tpr;  beklenen "modulun diskteki importu degisti" iska "8"
 
+# Ice aktaranin DIZININE gore cozum (oyun geri bildirimi #6, 2026-10-08):
+# program BASKA bir dizinden baslatiliyor, import ana dosyanin dizininden
+# cozuluyor; calisma dizininde AYNI ADLI baska bir dosya da var. Anahtarin
+# tarayicisi eski kurali (calisma dizini) izleseydi calisma dizinindekinin
+# ozetini tasir, ana dosyanin yanindaki modul degisince ISABET verirdi —
+# bayat ikili (Tuzaklar 7n). Golgelenenin VARLIGI da anahtarda: kodgenin
+# belirsizlik uyarisi isabette yeniden basiliyor, silinince bayat kalmasin.
+mkdir -p "$TMP/iy/oyun"
+printf 'func iy_deger(): int { return 1; }\n' > "$TMP/iy/oyun/iy_m.tpr"
+printf 'func iy_deger(): int { return 99; }\n' > "$TMP/iy/iy_m.tpr"
+printf 'import "iy_m.tpr";\nprint(iy_deger());\n' > "$TMP/iy/oyun/ana.tpr"
+kos "$TMP/iy" -- oyun/ana.tpr;  beklenen "ice aktaranin dizini (ilk)" iska "1"
+grep -qF "resolves in two places" <<<"$ERR" && gecti "belirsizlik uyarisi basildi" \
+    || dustu "belirsizlik uyarisi YOK"
+kos "$TMP/iy" -- oyun/ana.tpr;  beklenen "ice aktaranin dizini (ayni)" isabet "1"
+printf 'func iy_deger(): int { return 2; }\n' > "$TMP/iy/oyun/iy_m.tpr"
+kos "$TMP/iy" -- oyun/ana.tpr;  beklenen "ana dosyanin yanindaki modul degisti" iska "2"
+printf 'func iy_deger(): int { return 98; }\n' > "$TMP/iy/iy_m.tpr"
+kos "$TMP/iy" -- oyun/ana.tpr;  beklenen "golgelenenin ICERIGI degisti (kullanilmiyor)" isabet "2"
+rm -f "$TMP/iy/oyun/iy_m.tpr"
+kos "$TMP/iy" -- oyun/ana.tpr;  beklenen "yanindaki silindi: eski kurala (calisma dizini) donus" iska "98"
+printf 'func iy_deger(): int { return 3; }\n' > "$TMP/iy/oyun/iy_m.tpr"
+kos "$TMP/iy" -- oyun/ana.tpr;  beklenen "yanindaki geri geldi" iska "3"
+rm -f "$TMP/iy/iy_m.tpr"
+kos "$TMP/iy" -- oyun/ana.tpr;  beklenen "golgelenen silindi (uyari bayat kalmaz)" iska "3"
+grep -qF "resolves in two places" <<<"$ERR" && dustu "golgelenen silindi ama uyari hala basiliyor" \
+    || gecti "golgelenen silinince uyari yok"
+
 # ---- Kod uretimi anahtari: TULPAR_NO_FVER (build yolu, ayni cikti adi) -------
 cat > "$A/ir.tpr" <<'T'
 func f(float[] a, float[] b, int n, int m) {

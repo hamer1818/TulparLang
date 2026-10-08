@@ -27,6 +27,7 @@
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include "../typeinfer/typeinfer.hpp"
+#include "../common/import_resolve.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -134,6 +135,8 @@ int analyze_cmd_main(int argc, char **argv) {
   in.close();
 
   parser_set_diagnostic_context(source.c_str(), path);  // sozcukleyici de
+  tulpar_parser_set_import_dir(tulpar::imports::dir_of(path));  // #6
+  tulpar_parser_begin_program();  // tuple imza tablosu modullere miras (#7)
   Lexer lexer(source);
   std::vector<Token> tokens;
   while (true) {
@@ -156,6 +159,7 @@ int analyze_cmd_main(int argc, char **argv) {
 
   // 1) Ayirma: typeinfer (tanilarini stderr'e kendisi basar), sonra rapor.
   TypeInferContext *ctx = typeinfer_create();
+  ctx->import_base_path = path;  // import'lar bu dosyanin dizinine gore (#6)
   typeinfer_program(ctx, ast.get());
   const int type_issues = typeinfer_has_errors(ctx) ? ctx->error_count : 0;
   std::vector<TypeinferAllocRow> rows = typeinfer_alloc_report(ctx, ast.get());

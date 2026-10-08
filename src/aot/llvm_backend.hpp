@@ -256,8 +256,6 @@ typedef struct {
   int struct_type_count;
 
   // Import tracking
-  char *imported_files[128];
-  int imported_count;
 
   // `import "tame"` veya bir tm_* builtin çağrısı görüldü — AOT link
   // satırına libtulpar_tame.a + platform pencere/GL bayrakları eklenmeli
@@ -279,7 +277,10 @@ typedef struct {
   // probes. Holds the path of the directory currently being recursed
   // into (e.g. `tulpar_modules/foo`); empty string when the import
   // came from cwd. Saved/restored across nested imports.
-  char current_import_dir[256];
+  // 2026-10-08 (oyun geri bildirimi #6): ana dosya icin de dolu — ana
+  // dosyanin dizini (llvm_backend_compile kurar). 1024: mutlak yollar 256'yi
+  // asabiliyordu ve snprintf SESSIZCE keserdi.
+  char current_import_dir[1024];
 
   // AOT Builtin Functions
   LLVMValueRef func_aot_to_string;

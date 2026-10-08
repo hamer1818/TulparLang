@@ -2476,6 +2476,27 @@ aynı test dosyasında sür; satır numarası iki dosyada aynı olmayan bir düz
 kur (modülün 6. satırı hatalı, kök dosyanın 6. satırı farklı metinli) ki
 alıntı yanlış dosyadan gelirse ele versin. Kapı: `tests/modul_tani_konumu.sh`.
 
+## 7u. Bir kural dört yerde elle yazılmış — kopyalar ayrışır, en sessizi önbellek
+
+`import` çözüm sırası kodgende (`import_load_module`), önbellek anahtarının
+tarayıcısında (`resolve_import`), typeinfer'de (`load_import_source`) ve
+ayrıştırıcının ön tarama yükleyicisinde ayrı ayrı yazılıydı. 2026-10-08'de
+ayrışmıştı bile: typeinfer'in kopyasında "içe aktaranın dizini" adımı hiç
+yoktu (iç içe modülün imzaları çalışma dizinindeki AYNI ADLI başka bir
+dosyadan okunabilirdi). Kural değişince (oyun geri bildirimi #6: önce içe
+aktaranın dizini) en tehlikeli kopya önbelleğinki: kodgen yeni dosyayı derler,
+anahtar eski kuralın seçtiği dosyanın özetini taşır, ana dosyanın yanındaki
+modül değişince ISABET — bayat ikili. Öz denetim (`note_input`) bunu
+belirsizlik anında yakalıyor ama yakalamadığı an ölçüldü: yanındaki dosya
+silinip (eski kuralla aynı dosya, öz denetim geçer, yayımlanır) geri
+gelince isabet ve eski çıktı (98, doğrusu 3).
+
+**Kural:** aynı kararı veren iki kod yolu varsa ikisi de AYNI fonksiyonu
+çağırsın (`src/common/import_resolve.hpp`); "aynı sırayı izler" diyen bir yorum
+kopyayı korumaz. Önbellek kapısı (`tests/onbellek.sh`) kuralın her dalında
+(yeni kazanır / geri dönüş / geri gelir / gölgelenen silinir) iska-isabet
+bekler; anahtar tarayıcısına eski kuralı veren sabotajda kırmızı.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

@@ -2,6 +2,7 @@
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include "../common/localization.hpp"
+#include "../common/import_resolve.hpp"
 #include "../common/platform.h"
 #include "../pkg/manifest.hpp"  // [android] bölümü: paket adi/ikon/yon/surum
 #include "../lsp/document_index.hpp"
@@ -1367,7 +1368,14 @@ static ASTNode_C *parse_source(const char *source,
   lexer_free(lexer);
 
   Parser_C *parser = parser_create(tokens, token_count);
+  // Ayristiricinin import on taramasi (enum / tuple imzalari) ana dosyanin
+  // DIZININDEN cozsun — kodgenle ayni kural (oyun geri bildirimi #6).
+  const std::string onceki_dizin = tulpar_parser_get_import_dir();
+  tulpar_parser_set_import_dir(
+      tulpar::imports::dir_of(source_filename ? source_filename : ""));
+  tulpar_parser_begin_program();  // tuple imza tablosu modullere miras (#7)
   ASTNode_C *ast = parser_parse(parser);
+  tulpar_parser_set_import_dir(onceki_dizin);
 
   // Note: tokens are still referenced by AST, careful with cleanup
   parser_free(parser);

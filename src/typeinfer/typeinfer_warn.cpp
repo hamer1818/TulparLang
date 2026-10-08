@@ -5,6 +5,8 @@
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include "typeinfer.hpp"
+#include "../common/import_resolve.hpp"
+#include <string>
 
 #include <cstdlib>
 #include <cstring>
@@ -45,6 +47,16 @@ int typeinfer_emit_warnings(const char *source, const char *source_filename) {
   }
 
   std::unique_ptr<ASTNode> ast;
+  // Ayristiricinin import on taramasi ana dosyanin dizininden cozsun
+  // (oyun geri bildirimi #6); sonra eski degere don.
+  const std::string onceki_dizin = tulpar_parser_get_import_dir();
+  tulpar_parser_set_import_dir(
+      tulpar::imports::dir_of(source_filename ? source_filename : ""));
+  struct DizinGeri {
+    std::string d;
+    ~DizinGeri() { tulpar_parser_set_import_dir(d); }
+  } dizin_geri{onceki_dizin};
+  tulpar_parser_begin_program();  // tuple imza tablosu modullere miras (#7)
   try {
     Parser parser(std::move(tokens));
     ast = parser.parse();

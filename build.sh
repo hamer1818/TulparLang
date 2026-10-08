@@ -654,6 +654,20 @@ if [ "$ACTION" = "suites" ]; then
         kapi_kuyruk "modul ice aktaran gorunurlugu basarisiz!" bash tests/modul_ice_aktaran.sh ./tulpar
     fi
 
+    # Import yolu once ice aktaran dosyanin dizinine, sonra calisma dizinine
+    # gore; belirsizlik uyarisi; tekillestirme dosya kimligiyle (oyun geri
+    # bildirimi #6). Onbellek anahtari ayagi tests/onbellek.sh'de.
+    if [ -x tests/import_yolu.sh ]; then
+        kapi_kuyruk "import yolu kapisi basarisiz!" bash tests/import_yolu.sh ./tulpar
+    fi
+
+    # Coklu bildirim moduller arasi (ice aktaranin / kardesin tuple
+    # fonksiyonu) + tek tip coklu bildirimin tanisi bildirim satirinda
+    # (oyun geri bildirimi #7).
+    if [ -x tests/coklu_bildirim_modul.sh ]; then
+        kapi_kuyruk "coklu bildirim modul kapisi basarisiz!" bash tests/coklu_bildirim_modul.sh ./tulpar
+    fi
+
     # Coklu donus / tuple HATA YOLLARI (P0.1): ayni gerekce.
     if [ -x tests/tuple_hatalari.sh ]; then
         kapi_kuyruk "tuple hata yollari basarisiz!" bash tests/tuple_hatalari.sh ./tulpar
