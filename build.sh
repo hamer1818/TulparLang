@@ -929,6 +929,33 @@ if [ "$ACTION" = "suites" ]; then
             # kimliği verir ve cihazda ikinci oyun birinciyi SİLER — sebebi
             # hiçbir yerde yazmadan. Denetim bunu her koşumda ölçüyor.
             echo -e "${GREEN}android derlemesi calisiyor${NC} (iki ABI + manifest + ada gore paket)"
+            # SECENEKLER: centik (TULPAR_ANDROID_CUTOUT) ve hata ayiklanabilir
+            # APK (TULPAR_ANDROID_DEBUGGABLE). Varsayilan ikisini de ACMAMALI
+            # (eski oyunun arayuzu centige girmesin; yayin APK'si debuggable
+            # olmasin) — KONTROL: yukaridaki varsayilan derlemenin ciktisi.
+            # tulpar-engine geri bildirim #17/#19 (Huawei P20 Pro, 2026-10-08).
+            ASEC_OK=1
+            if grep -q 'android:debuggable' "$ASMOKE_MAN" || [ -d "$ASMOKE/tulparsmoke_apk/res/values-v28" ]; then
+                echo -e "${RED}android varsayilan manifest debuggable/centik tasiyor!${NC}"; ASEC_OK=0
+            fi
+            ASEC_TP="$(pwd)/tulpar"
+            printf 'print("merhaba");\n' > "$ASMOKE/secenek.tpr"
+            ASEC_OUT=$(cd "$ASMOKE" && TULPAR_ANDROID_CUTOUT=short_edges TULPAR_ANDROID_DEBUGGABLE=1 DISPLAY= \
+                       "$ASEC_TP" build --target=android secenek.tpr secenek 2>&1)
+            ASEC_STY="$ASMOKE/secenek_apk/res/values-v28/styles.xml"
+            if ! grep -q 'android:debuggable="true"' "$ASMOKE/secenek_apk/AndroidManifest.xml" 2>/dev/null ||
+               ! grep -q 'windowLayoutInDisplayCutoutMode">shortEdges<' "$ASEC_STY" 2>/dev/null ||
+               ! grep -q 'windowBackground' "$ASEC_STY" 2>/dev/null; then
+                echo -e "${RED}android secenekleri (cutout/debuggable) manifeste yansimadi!${NC}"
+                echo "$ASEC_OUT" | tail -8
+                ASEC_OK=0
+            fi
+            if [ "$ASEC_OK" -eq 1 ]; then
+                echo -e "${GREEN}android secenekleri calisiyor${NC} (varsayilan: centik/debuggable yok; short_edges -> values-v28, debuggable -> manifest)"
+            else
+                rm -rf "$ASMOKE"
+                exit 1
+            fi
         else
             echo -e "${RED}Android derlemesi basarisiz!${NC}"
             echo "$ASMOKE_OUT" | tail -12

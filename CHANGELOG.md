@@ -13,6 +13,23 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — Android: ekran çentiği alanı ve hata ayıklanabilir APK seçenekleri (tulpar-engine geri bildirimi #17/#19)
+
+- `tulpar.toml [android] cutout = "short_edges" | "default" | "never"` (ya da
+  `TULPAR_ANDROID_CUTOUT`): API 28+ `windowLayoutInDisplayCutoutMode`
+  `res/values-v28/styles.xml`'e yazılır (eski sürümler özniteliği tanımıyor,
+  ana `values/` onu taşımıyor). Neden: Huawei P20 Pro'da (2026-10-08)
+  pencere 2240 yerine 2159 piksel açılıyordu, solda çentik şeridi siyah
+  kalıyordu. **Varsayılan değişmedi** (`default`): `short_edges` çentiği
+  pencerenin içine alır, güvenli alanı bilmeyen eski bir oyunun arayüzü
+  çentiğin altında kalırdı (tulpar-engine `eng_safe_inset_*` bu bilgiyi verir).
+- `TULPAR_ANDROID_DEBUGGABLE=1`: `<application android:debuggable="true">` —
+  `run-as` ve motorların yalnız-debug tanıları (tulpar-engine: kayıt dosyası
+  adb'nin okuyabildiği dış dizinde, `setprop debug.tulpar.kayit dis`). Yalnız
+  açıkça istenince; Play hata ayıklanabilir APK'yı reddeder.
+- Kapı: `build.sh suites`'in Android derleme denetimi iki seçeneği de ölçüyor
+  (seçenekli derlemede manifest + values-v28; KONTROL varsayılan derlemede
+  ikisi de yok).
 ### Düzeltildi — çoklu bildirim modüller arasında; tek tipli çoklu bildirimin tanısı bildirim satırında (oyun geri bildirimi #7)
 
 - `float sx, sy = ekrana(...)`: `ekrana` ana dosyanın içe aktardığı BAŞKA bir

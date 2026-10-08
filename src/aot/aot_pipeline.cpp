@@ -760,6 +760,17 @@ struct AndroidAppConfig {
   std::string version_name = "1.0";
   bool has_icon = false;                   // res/mipmap/ic_launcher.png kondu
   std::string splash_color = "#10121A";    // açılış/splash arka planı (koyu lacivert)
+  // Ekran çentiği (API 28+ windowLayoutInDisplayCutoutMode): default | shortEdges | never.
+  // Neden seçenek, varsayılan değil: Huawei P20 Pro'da (2026-10-08, tulpar-engine
+  // geri bildirim #17) pencere 2240 yerine 2159 piksel açılıyordu — solda çentik
+  // şeridi siyah. shortEdges onu açar ama çentik pencerenin İÇİNE girer; güvenli
+  // alanı bilmeyen eski bir oyunun arayüzü çentiğin altında kalırdı.
+  std::string cutout = "default";
+  // TULPAR_ANDROID_DEBUGGABLE=1: <application android:debuggable="true"> — hata
+  // ayıklama derlemesi (run-as, motorun yalnız-debug tanıları). Yalnız açıkça
+  // istenince: Play bu APK'yı reddeder, sürücüler hata ayıklanabilir süreçte ek
+  // katman yükleyebilir.
+  bool debuggable = false;
 };
 
 // Çıktı adından geçerli bir paket kimliği türet: "dev.tulparlang.<ad>".
@@ -857,7 +868,7 @@ static void write_android_manifest(const std::string &stage,
           "  <uses-permission android:name=\"android.permission.INTERNET\"/>\n"
           "  <application android:label=\"%s\" android:hasCode=\"false\"\n"
           "      android:theme=\"@style/TulparSplash\"\n"
-          "      android:extractNativeLibs=\"true\"%s>\n"
+          "      android:extractNativeLibs=\"true\"%s%s>\n"
           "    <activity android:name=\"android.app.NativeActivity\"\n"
           "        android:theme=\"@style/TulparSplash\"\n"
           "        android:configChanges=\"orientation|keyboardHidden|screenSize\"\n"
@@ -874,7 +885,8 @@ static void write_android_manifest(const std::string &stage,
           "</manifest>\n",
           xml_escape(cfg.package).c_str(), xml_escape(cfg.version_code).c_str(),
           xml_escape(cfg.version_name).c_str(), xml_escape(cfg.label).c_str(),
-          icon_attr.c_str(), xml_escape(cfg.orientation).c_str());
+          icon_attr.c_str(), cfg.debuggable ? " android:debuggable=\"true\"" : "",
+          xml_escape(cfg.orientation).c_str());
   fclose(f);
 }
 
@@ -915,6 +927,27 @@ static void write_android_resources(const std::string &stage,
               "@color/tulpar_splash_bg</item>\n"
               "  </style>\n</resources>\n");
       fclose(f);
+    }
+  }
+  // Çentik (API 28+): aynı stil values-v28'de ek öğeyle — eski sürümler
+  // özniteliği tanımıyor, ana values/ onu taşımamalı.
+  if (cfg.cutout != "default") {
+    std::string v28 = stage + "/res/values-v28";
+    std::string mk28 = "mkdir -p \"" + v28 + "\"";
+    if (system(mk28.c_str()) == 0) {
+      std::string p = v28 + "/styles.xml";
+      if (FILE *f = fopen(p.c_str(), "wb")) {
+        fprintf(f,
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n"
+                "  <style name=\"TulparSplash\" "
+                "parent=\"@android:style/Theme.NoTitleBar.Fullscreen\">\n"
+                "    <item name=\"android:windowBackground\">"
+                "@color/tulpar_splash_bg</item>\n"
+                "    <item name=\"android:windowLayoutInDisplayCutoutMode\">%s</item>\n"
+                "  </style>\n</resources>\n",
+                cfg.cutout.c_str());
+        fclose(f);
+      }
     }
   }
   // Adaptive icon (ikon varsa): ön plan = kullanıcının PNG'si, arka plan =
@@ -987,8 +1020,31 @@ static void stage_android_assets(const std::string &stage,
 
 // tulpar.toml [android] bölümünü oku (varsa) + ikon ve asset'leri staging'e
 // kopyala. Dönen cfg her durumda geçerli varsayılanlarla doludur.
+// "short_edges"/"shortEdges"/"default"/"never" -> manifest degeri; tanimsiz uyari basar.
+static void android_cutout_set(AndroidAppConfig &cfg, const std::string &v) {
+  if (v == "short_edges" || v == "shortEdges") cfg.cutout = "shortEdges";
+  else if (v == "never") cfg.cutout = "never";
+  else if (v == "default") cfg.cutout = "default";
+  else
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en(
+                "[AOT] [android] cutout short_edges|default|never olmali; "
+                "default kullaniliyor.",
+                "[AOT] [android] cutout must be short_edges|default|never; "
+                "using default."));
+}
+static AndroidAppConfig load_android_app_config_toml(const std::string &stage,
+                                                     const char *fallback_label);
+// Ortam degiskenleri toml'u ezer (TULPAR_ANDROID_ASSETS ile ayni oncelik).
 static AndroidAppConfig load_android_app_config(const std::string &stage,
                                                 const char *fallback_label) {
+  AndroidAppConfig cfg = load_android_app_config_toml(stage, fallback_label);
+  if (const char *c = getenv("TULPAR_ANDROID_CUTOUT"); c && *c) android_cutout_set(cfg, c);
+  if (const char *d = getenv("TULPAR_ANDROID_DEBUGGABLE"); d && *d && d[0] != '0') cfg.debuggable = true;
+  return cfg;
+}
+static AndroidAppConfig load_android_app_config_toml(const std::string &stage,
+                                                     const char *fallback_label) {
   AndroidAppConfig cfg;
   cfg.label = fallback_label;
   // Kimlik ADDAN türüyor — toml yoksa da iki oyun aynı pakette çakışmasın.
@@ -1031,6 +1087,7 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
                   "default."));
     }
   }
+  if (!m.android_cutout.empty()) android_cutout_set(cfg, m.android_cutout);
   if (!m.android_orientation.empty()) {
     if (m.android_orientation == "landscape" ||
         m.android_orientation == "portrait" ||
