@@ -970,6 +970,14 @@ if [ "$ACTION" = "suites" ]; then
                     rm -rf "$ASMOKE"
                     exit 1
                 fi
+                # INTERNET izni: varsayilan VAR, `[android] internet = false` /
+                # TULPAR_ANDROID_INTERNET=0 kaldirir (manifest + aapt2 dump
+                # permissions). Pozitif kontrol: eski ikiliyle ikinci arguman.
+                if ! bash tests/android_internet_izni.sh ./tulpar; then
+                    echo -e "${RED}android internet izni kapisi basarisiz!${NC}"
+                    rm -rf "$ASMOKE"
+                    exit 1
+                fi
             else
                 rm -rf "$ASMOKE"
                 exit 1

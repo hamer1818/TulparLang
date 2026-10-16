@@ -107,6 +107,14 @@ struct Manifest {
     // Hedef API düzeyi ("36"). Boş → derleyici varsayılanı (Play'in güncel
     // asgarisi). TULPAR_ANDROID_TARGET_SDK ezer.
     std::string android_target_sdk;
+    // `internet = false` — manifeste android.permission.INTERNET YAZILMAZ.
+    // -1 = verilmedi (derleyici varsayilani: izin VAR, eski davranis; ag
+    // kullanan bir oyun sessizce kirilmasin), 0 = yok, 1 = var.
+    // TULPAR_ANDROID_INTERNET=0|1 ezer. Neden secenek: interneti hic
+    // kullanmayan bir oyunun magaza sayfasi "tam ag erisimi" gosteriyor ve
+    // Play Veri guvenligi formunda aciklanmasi gerekiyordu (tulpar-engine
+    // oyunu, 2026-10-16).
+    int android_internet = -1;
 
     // [build] — `tulpar build` bunları CLI bayrağı verilmediğinde kullanır.
     // target: "desktop" (varsayılan) | "web" | "android" | "apk" | "aab".

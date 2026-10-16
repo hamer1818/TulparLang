@@ -13,6 +13,26 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — Android: `INTERNET` izni artık kaldırılabiliyor (`[android] internet = false`)
+
+- Derleyici `android.permission.INTERNET`'i her APK'ya **koşulsuz** yazıyordu.
+  Ağ kullanmayan bir oyunun mağaza sayfası yine de ağ erişimi gösteriyor, Play
+  "Veri güvenliği" formu izni açıklamayı istiyordu (tulpar-engine oyunu,
+  2026-10-16). Şimdi `tulpar.toml [android] internet = false` (tırnaklı
+  `"false"` da olur) ya da `TULPAR_ANDROID_INTERNET=0` izni manifestten
+  çıkarır; env toml'u ezer (`=1` geri açar). `VIBRATE` etkilenmez.
+- **Varsayılan değişmedi** (izin VAR): `http_get` / çevrimiçi skor kullanan
+  eski bir oyun sessizce kırılmasın.
+- Yazım hatası sessiz değil: `internet = "evet"` satır numarasıyla hata
+  (toml'daki diğer biçim hataları gibi `[android]` ayarları uygulanmaz ve
+  bu söylenir), `TULPAR_ANDROID_INTERNET=hayir` derlemeyi durdurur.
+- Kapı: `tests/android_internet_izni.sh [tulpar] [eski_tulpar]` (`build.sh
+  suites`, Android dumanının içinde): staging manifesti (varsayılan / false /
+  tırnaklı / env iki yönde) + imzalı APK'nın `aapt2 dump permissions` çıktısı.
+  Pozitif kontroller: varsayılan APK'da izin görülüyor; iki yazım hatası
+  yakalanıyor; seçenekten önceki yerel ikiliye (b72260d8-dirty) karşı 6 madde kırmızı. Ölçüldü 2026-10-16
+  (bu makine, build-tools 37): 10/10, 1,7 s.
+
 ### Güvenlik — imza parolası artık süreç argv'sinde görünmüyor (Android)
 
 - `android/package_aab.sh` ve `package_apk.sh` yükleme anahtarının parolasını
