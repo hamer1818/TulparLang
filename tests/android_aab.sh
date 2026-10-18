@@ -158,6 +158,78 @@ else
     dustu "build-apks --mode=universal basarisiz"
 fi
 
+# --- (3) yükleme anahtarıyla imza: parola hiçbir sürecin argv'sinde görünmez ---
+# NEDEN (2026-10-18, tulpar-engine A8): package_aab.sh/package_apk.sh parolayı
+# `-storepass "$P"` / `--ks-pass pass:$P` ile veriyordu; imza sürdükçe parola
+# /proc/<pid>/cmdline'da (ps) okunuyordu. Artık `-storepass:env` / `env:AD`.
+# ÖLÇER: atılık anahtarla --aab; imzacı sertifikası anahtarınkiyle aynı SHA-256;
+# derleme boyunca /proc/*/cmdline taraması parolayı HİÇ görmüyor; çıktıda yok.
+# POZİTİF KONTROL: parolayı bilerek argv'ye koyan bir süreci tarayıcı GÖRÜYOR.
+if command -v keytool >/dev/null 2>&1; then
+    PASS="tulpar-test-$$-${RANDOM}${RANDOM}-gizli"
+    YKS="$TMP/yukleme.jks"
+    TULPAR_ANDROID_KS_PASS="$PASS" keytool -genkeypair -keystore "$YKS" -storetype PKCS12 \
+        -alias yukleme -keyalg RSA -keysize 2048 -validity 9200 -dname "CN=Tulpar AAB Test" \
+        -storepass:env TULPAR_ANDROID_KS_PASS >/dev/null 2>&1
+    # Tarayıcı parolayı ortamdan alır (kendi argv'sinde taşımaz); bulduğu
+    # süreçlerin argv'sini (parola maskeli) dosyaya yazar, durdurma dosyası silinene dek.
+    tara() {
+        : > "$TMP/goruldu"; touch "$TMP/tara_$1"
+        TARA_PASS="$PASS" python3 - "$TMP/tara_$1" "$TMP/goruldu" <<'PY2' &
+import os, sys, time
+dur, out, p = sys.argv[1], sys.argv[2], os.environ["TARA_PASS"].encode()
+ben = str(os.getpid()); hits = set()
+while os.path.exists(dur):
+    for d in os.listdir("/proc"):
+        if not d.isdigit() or d == ben: continue
+        try: c = open("/proc/%s/cmdline" % d, "rb").read()
+        except OSError: continue
+        if p in c: hits.add(c.replace(p, b"<PAROLA>").replace(b"\0", b" ")[:160])
+    time.sleep(0.02)
+open(out, "wb").write(b"".join(h + b"\n" for h in sorted(hits)))
+PY2
+        TARA_PID=$!
+        sleep 0.3
+    }
+    tara_bitir() { rm -f "$TMP/tara_$1"; wait "$TARA_PID" 2>/dev/null; }
+    tara kontrol
+    # `sh -c 'sleep ..'` DEĞİL: kabuk son komutu exec eder, argv parolayı ilk
+    # milisaniyede kaybeder ve kontrol rastlantıya kalır (ilk koşuda öyle oldu).
+    python3 -c 'import time; time.sleep(0.5)' "$PASS"
+    tara_bitir kontrol
+    if [ -s "$TMP/goruldu" ]; then
+        gecti "KONTROL: argv'sinde parola olan sureci tarayici gordu"
+    else
+        dustu "tarayici argv'deki parolayi GORMEDI (tarama bir sey olcmuyor)"
+    fi
+    tara imza
+    OUT=$(cd "$TMP/p" && TULPAR_ANDROID_KEYSTORE="$YKS" TULPAR_ANDROID_KS_PASS="$PASS" \
+          TULPAR_ANDROID_KEY_ALIAS=yukleme DISPLAY= "$TULPAR" build --aab t.tpr imzali 2>&1)
+    RC=$?
+    tara_bitir imza
+    IAAB="$TMP/p/imzali.aab"
+    if [ $RC -eq 0 ] && [ -f "$IAAB" ] && jarsigner -verify "$IAAB" 2>&1 | grep -q "jar verified"; then
+        gecti "yukleme anahtariyla --aab + jarsigner -verify"
+        A=$(keytool -printcert -jarfile "$IAAB" 2>/dev/null | sed -n 's/^[[:space:]]*SHA256: //p' | head -1)
+        B=$(TULPAR_ANDROID_KS_PASS="$PASS" keytool -list -v -keystore "$YKS" -alias yukleme \
+              -storepass:env TULPAR_ANDROID_KS_PASS 2>/dev/null | sed -n 's/^[[:space:]]*SHA256: //p' | head -1)
+        if [ -n "$A" ] && [ "$A" = "$B" ]; then gecti "imzaci sertifikasi = yukleme anahtari (SHA-256)"
+        else dustu "imzaci sertifikasi anahtarinki degil ('$A' / '$B')"; fi
+        if bt validate --bundle="$IAAB" >/dev/null 2>&1; then gecti "imzali aab bundletool validate"
+        else dustu "imzali aab validate reddetti"; fi
+    else
+        dustu "yukleme anahtariyla --aab basarisiz (kod $RC)"; printf '%s\n' "${OUT//"$PASS"/<PAROLA>}" | tail -8
+    fi
+    if [ -s "$TMP/goruldu" ]; then
+        dustu "parola imza sirasinda argv'de goruldu:"; sed 's/^/      /' "$TMP/goruldu"
+    else
+        gecti "parola imza boyunca hicbir surecin argv'sinde gorulmedi"
+    fi
+    case "$OUT" in *"$PASS"*) dustu "parola derleme ciktisinda basildi" ;; *) gecti "parola derleme ciktisinda yok" ;; esac
+else
+    echo "  ATLANDI: keytool yok — yukleme anahtari imzasi olculmedi"
+fi
+
 if [ $FAIL -eq 0 ]; then
     echo "android aab kapisi: $OK gecti"
     exit 0

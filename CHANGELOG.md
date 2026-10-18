@@ -13,6 +13,21 @@ tag still works;
 
 ## [Unreleased]
 
+### Güvenlik — imza parolası artık süreç argv'sinde görünmüyor (Android)
+
+- `android/package_aab.sh` ve `package_apk.sh` yükleme anahtarının parolasını
+  `-storepass "$TULPAR_ANDROID_KS_PASS"` / `--ks-pass pass:...` ile veriyordu:
+  imza sürdükçe parola `/proc/<pid>/cmdline`'da (`ps`, süreç izleyicileri) aynı
+  makinedeki herkese açıktı. Şimdi `jarsigner -storepass:env` / `-keypass:env` ve
+  `apksigner --ks-pass env:` — araca değişkenin **adı** gider, değeri değil.
+  WSL'de Windows `.exe`'ye geçsin diye adlar `WSLENV`'e eklenir. Arayüz aynı
+  (`TULPAR_ANDROID_KEYSTORE` / `_KS_PASS` / `_KEY_ALIAS` / `_KEY_PASS`).
+- Kapı: `tests/android_aab.sh` (3) — atılık anahtarla `--aab`, imzacı sertifikası
+  anahtarınkiyle aynı SHA-256, derleme boyunca `/proc/*/cmdline` taraması parolayı
+  hiç görmüyor, çıktıda da yok. Pozitif kontroller: parolayı bilerek argv'ye koyan
+  süreci tarayıcı görüyor; eski betikler (`TULPAR_ANDROID_TOOLS` ile) kapıyı
+  KIRMIZI yapıyor (jarsigner satırı yakalandı, 2026-10-18).
+
 ### Değişti — CI: etiket PR'da test edilen ikiliyi yayınlıyor, Linux arşivleri paralel, Windows birleşmede yeniden derlemiyor
 
 - **Etikette yeniden derleme yok (çoğu zaman).** PR CI artık birleşince çıkacak
