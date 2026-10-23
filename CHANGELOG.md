@@ -13,6 +13,21 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `int` hedefe ondalık değer ham bit deseniyle gidiyordu (AOT)
+
+- `: int` döndüren ve bütün parametreleri `int` olan fonksiyon (native i64 ABI)
+  `return` / `int x = ...` / atama / döngü içi atamada kutulu değerin HAM YÜKÜNÜ
+  alıyordu. `min`/`max` int argümanda da float döndürdüğü için `return v % max(1, n)`
+  4611686018427387904 (2.0'ın bitleri), `return max(1, n)` 4619567317775286272
+  verdi; kutusuz yerel float (`int q = sqrt(4.0)`) sessizce 0 yazıyordu. Kutulu
+  ABI'de (`func f(float x): int { return x * 2.0; }`) 3.5 çağırana float gidiyordu.
+- Kural `toInt` ile aynı: sıfıra doğru kırpma (`int k = 2.7`, struct alanı ve dizin
+  yolu, #28). Yalnız FLOAT etiketi çevrilir. `min`/`max`'ın float dönüşü
+  DEĞİŞMEDİ (`min(3, 5) / 2` hâlâ 1.5).
+- Kapı `tests/int_hedef_ondalik.test.tpr`: düzeltmeden önceki ikili (e0e4200f)
+  5 testin 4'ünde KIRMIZI; karşılaştırma / `%=` / `+=` / global testi kontrol (iki
+  ikilide de geçer). Bulan: tulpar-engine ağ 1v1 (N2b), 2026-10-23.
+
 ### Düzeltildi — `A[min(i, j)]` / `A[max(i, j)]` sessizce 0 okuyordu (ondalık dizin)
 
 - `min`/`max` int argümanda bile **float** döndürüyor; dizin olarak kullanılınca

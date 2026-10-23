@@ -16428,6 +16428,22 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         emit_struct_obj_tag(backend, ret, tst->name);
     }
 
+    // `: int` bildirilen kutulu fonksiyon FLOAT etiketli deger donduruyorsa
+    // (`func f(float x): int { return x * 2.0; }`, `return max(1, n)`):
+    // `toInt` kurali, sifira dogru kirpma — native (i64) yol ve `int x = 2.7`
+    // ile AYNI. Eskiden 3.5 cagirana float olarak gidiyordu. Yalniz float
+    // etiketi cevrilir; obur etiketler (typecheck'in yakaladigi uyumsuzluklar)
+    // eskisi gibi gecer.
+    if (ret && node->return_value && backend->current_function_node &&
+        backend->current_function_node->type == AST_FUNCTION_DECL &&
+        backend->current_function_node->return_type == TYPE_INT &&
+        !backend->current_function_returns_struct) {
+      LLVMValueRef vtag = LLVMBuildExtractValue(backend->builder, ret, 0, "ret.tag");
+      LLVMValueRef is_flt = LLVMBuildICmp(backend->builder, LLVMIntEQ, vtag,
+                                          LLVMConstInt(backend->int32_type, /*VM_VAL_FLOAT=*/1, 0), "ret.is_flt");
+      LLVMValueRef as_int = llvm_vm_val_int_val(backend, llvm_vm_val_to_int_payload(backend, ret));
+      ret = LLVMBuildSelect(backend->builder, is_flt, as_int, ret, "ret.int");
+    }
     // Pops go AFTER evaluating the return expression: `return f();` inside a
     // try must still route f's throw to this try's handler.
     emit_try_pops(backend, backend->try_depth);
@@ -17035,11 +17051,25 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
 //
 // `have_default`: declarations must store something, so fall back to 0 as
 // before; assignments return null to mean "nothing to store".
+// Native (i64) fonksiyonun `int` HEDEFI (return / `int x = ...` / atama):
+// deger int/bool degilse `toInt` ile AYNI kural — float sifira dogru kirpilir.
+// ESKIDEN kutulu degerin ham yuku (alan 2) alinıyordu: `func f(int n): int
+// { return max(1, n); }` (min/max int argumanda da FLOAT donduruyor) double'in
+// BIT DESENINI tamsayi diye donduruyordu (7 -> 4619567317775286272), `int q =
+// sqrt(4.0)` ise (yerel float, kutusuz) sessizce 0 yaziyordu. Olculdu
+// 2026-10-23 (tulpar-engine N2b: `v % max(1, n)` 4611686018427387904).
+static LLVMValueRef typed_to_int_payload(LLVMBackend *backend, TypedValue tv);
+static LLVMValueRef native_int_sink(LLVMBackend *backend, TypedValue v) {
+  if (v.type == INFERRED_INT || v.type == INFERRED_BOOL) return v.value;
+  if (v.type == INFERRED_FLOAT && v.value) return typed_to_int_payload(backend, v);
+  if (v.boxed) return llvm_vm_val_to_int_payload(backend, v.boxed);
+  if (!v.value) return nullptr;
+  return llvm_vm_val_to_int_payload(backend, box_typed_value(backend, v));
+}
 static LLVMValueRef native_loop_int_value(LLVMBackend *backend, TypedValue v,
                                           int have_default) {
-  if (v.type == INFERRED_INT || v.type == INFERRED_BOOL) return v.value;
-  if (v.boxed)
-    return LLVMBuildExtractValue(backend->builder, v.boxed, 2, "loop_int");
+  LLVMValueRef r = native_int_sink(backend, v);
+  if (r) return r;
   return have_default ? LLVMConstInt(backend->int_type, 0, 0) : nullptr;
 }
 
@@ -17437,14 +17467,9 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
       if (stmt->type == AST_RETURN) {
         // Use typed codegen for return value
         TypedValue ret = codegen_typed_expr(backend, stmt->return_value);
-        if (ret.type == INFERRED_INT || ret.type == INFERRED_BOOL) {
-          LLVMBuildRet(backend->builder, ret.value);
-        } else {
-          // Extract int from boxed value
-          LLVMValueRef boxed = box_typed_value(backend, ret);
-          LLVMValueRef int_val =
-              LLVMBuildExtractValue(backend->builder, boxed, 2, "ret_int");
-          LLVMBuildRet(backend->builder, int_val);
+        {
+          LLVMValueRef int_val = native_int_sink(backend, ret);
+          LLVMBuildRet(backend->builder, int_val ? int_val : LLVMConstInt(backend->int_type, 0, 0));
         }
       } else if (stmt->type == AST_IF) {
         // Handle if statement in native context
@@ -17478,13 +17503,9 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
           if (stmt->then_branch->type == AST_RETURN) {
             TypedValue ret =
                 codegen_typed_expr(backend, stmt->then_branch->return_value);
-            if (ret.type == INFERRED_INT || ret.type == INFERRED_BOOL) {
-              LLVMBuildRet(backend->builder, ret.value);
-            } else {
-              LLVMValueRef boxed = box_typed_value(backend, ret);
-              LLVMValueRef int_val =
-                  LLVMBuildExtractValue(backend->builder, boxed, 2, "ret_int");
-              LLVMBuildRet(backend->builder, int_val);
+            {
+              LLVMValueRef int_val = native_int_sink(backend, ret);
+              LLVMBuildRet(backend->builder, int_val ? int_val : LLVMConstInt(backend->int_type, 0, 0));
             }
           } else if (stmt->then_branch->type == AST_BLOCK &&
                      stmt->then_branch->statements) {
@@ -17493,13 +17514,9 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
               if (inner->type == AST_RETURN) {
                 TypedValue ret =
                     codegen_typed_expr(backend, inner->return_value);
-                if (ret.type == INFERRED_INT || ret.type == INFERRED_BOOL) {
-                  LLVMBuildRet(backend->builder, ret.value);
-                } else {
-                  LLVMValueRef boxed = box_typed_value(backend, ret);
-                  LLVMValueRef int_val = LLVMBuildExtractValue(
-                      backend->builder, boxed, 2, "ret_int");
-                  LLVMBuildRet(backend->builder, int_val);
+                {
+                  LLVMValueRef int_val = native_int_sink(backend, ret);
+                  LLVMBuildRet(backend->builder, int_val ? int_val : LLVMConstInt(backend->int_type, 0, 0));
                 }
                 break;
               }
@@ -17525,16 +17542,8 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
             LLVMBuildAlloca(backend->builder, backend->int_type, stmt->name);
         if (stmt->right) {
           TypedValue init = codegen_typed_expr(backend, stmt->right);
-          if (init.type == INFERRED_INT || init.type == INFERRED_BOOL) {
-            LLVMBuildStore(backend->builder, init.value, alloca);
-          } else if (init.boxed) {
-            LLVMValueRef int_val = LLVMBuildExtractValue(
-                backend->builder, init.boxed, 2, "init_int");
-            LLVMBuildStore(backend->builder, int_val, alloca);
-          } else {
-            LLVMBuildStore(backend->builder,
-                           LLVMConstInt(backend->int_type, 0, 0), alloca);
-          }
+          LLVMValueRef int_val = native_int_sink(backend, init);
+          LLVMBuildStore(backend->builder, int_val ? int_val : LLVMConstInt(backend->int_type, 0, 0), alloca);
         } else {
           LLVMBuildStore(backend->builder,
                          LLVMConstInt(backend->int_type, 0, 0), alloca);
@@ -17549,13 +17558,8 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
             backend, stmt->left ? stmt->left->name : stmt->name);
         if (var_ptr) {
           TypedValue val = codegen_typed_expr(backend, stmt->right);
-          if (val.type == INFERRED_INT || val.type == INFERRED_BOOL) {
-            LLVMBuildStore(backend->builder, val.value, var_ptr);
-          } else if (val.boxed) {
-            LLVMValueRef int_val = LLVMBuildExtractValue(
-                backend->builder, val.boxed, 2, "assign_int");
+          if (LLVMValueRef int_val = native_int_sink(backend, val))
             LLVMBuildStore(backend->builder, int_val, var_ptr);
-          }
         }
       } else if (stmt->type == AST_WHILE) {
         // Native while loop (typed-int locals path)
