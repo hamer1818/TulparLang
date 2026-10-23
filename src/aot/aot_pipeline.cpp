@@ -788,6 +788,13 @@ struct AndroidAppConfig {
   // kullanmayan oyunun magaza sayfasi ag erisimi gosteriyor, Play Veri
   // guvenligi formu da izni aciklamayi istiyordu.
   bool internet = true;
+  // Yerel ag (ayni Wi-Fi'da UDP yayini ile oyuncu bulma): CHANGE_WIFI_MULTICAST_STATE.
+  // Cogu telefonun Wi-Fi surucusu yayin/coklu yayin paketlerini MulticastLock yokken
+  // suzer; kilidi almak bu izni ister (normal izin, kurulumda verilir). Varsayilan YOK.
+  // TULPAR_ANDROID_LAN=1 acar; INTERNET'siz istenirse HATA (soket EACCES ile acilmaz,
+  // izinli manifest yine de sessizce "ag var" gibi gorunurdu). tulpar-engine N2a,
+  // 2026-10-23.
+  bool lan = false;
 };
 
 // Çıktı adından geçerli bir paket kimliği türet: "dev.tulparlang.<ad>".
@@ -883,7 +890,7 @@ static void write_android_manifest(const std::string &stage,
           // İnternet: online skor tablosu / http_get gibi ağ çağrıları için
           // (normal izin, kurulumda otomatik verilir). Varsayılan VAR; toml
           // `[android] internet = false` / TULPAR_ANDROID_INTERNET=0 kaldırır.
-          "%s"
+          "%s%s"
           // appCategory="game": Android 16 (API 36 hedefi) büyük ekranda
           // (sw600dp+) screenOrientation'ı yok sayıyor — oyunlar muaf; bu
           // öznitelik olmadan tablette yatay oyun dikey açılabilirdi.
@@ -917,6 +924,8 @@ static void write_android_manifest(const std::string &stage,
           cfg.internet
               ? "  <uses-permission android:name=\"android.permission.INTERNET\"/>\n"
               : "",
+          cfg.lan ? "  <uses-permission android:name=\"android.permission.CHANGE_WIFI_MULTICAST_STATE\"/>\n"
+                  : "",
           xml_escape(cfg.label).c_str(),
           icon_attr.c_str(), cfg.debuggable ? " android:debuggable=\"true\"" : "",
           xml_escape(cfg.orientation).c_str());
@@ -1087,6 +1096,25 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
                       "TULPAR_ANDROID_INTERNET must be 0|1|false|true, got: '")) +
                   iv + "'";
   }
+  // TULPAR_ANDROID_LAN=0|1: yerel ag izni (CHANGE_WIFI_MULTICAST_STATE). Yalniz env
+  // (toml anahtari yok: tulpar-engine oyunu anahtarlari env'den verir, eski tulpar toml'u
+  // bilinmeyen anahtarda reddederdi). Baska deger DURDURUR.
+  if (const char *v = getenv("TULPAR_ANDROID_LAN"); v && *v) {
+    std::string lv = v;
+    if (lv == "0" || lv == "false") cfg.lan = false;
+    else if (lv == "1" || lv == "true") cfg.lan = true;
+    else
+      cfg.error = std::string(tulpar::i18n::tr_en(
+                      "TULPAR_ANDROID_LAN 0|1|false|true olmali, verilen: '",
+                      "TULPAR_ANDROID_LAN must be 0|1|false|true, got: '")) +
+                  lv + "'";
+  }
+  if (cfg.lan && !cfg.internet && cfg.error.empty())
+    cfg.error = tulpar::i18n::tr_en(
+        "TULPAR_ANDROID_LAN=1 INTERNET izni ister (TULPAR_ANDROID_INTERNET=0 ile birlikte verildi): "
+        "izinsiz soket acilmaz",
+        "TULPAR_ANDROID_LAN=1 needs the INTERNET permission (given with TULPAR_ANDROID_INTERNET=0): "
+        "sockets cannot open without it");
   // Sürüm kimliği env ile de verilir: yayın betiği her yüklemede versionCode'u
   // artırır, toml'u düzenlemeden (CI / apk_derle.sh).
   if (const char *v = getenv("TULPAR_ANDROID_VERSION_CODE"); v && *v) cfg.version_code = v;

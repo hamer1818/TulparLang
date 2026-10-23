@@ -13,6 +13,21 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — yerel ağ izni: `TULPAR_ANDROID_LAN=1` (Android)
+
+- Aynı Wi-Fi'da UDP yayınıyla oyuncu bulan bir oyun (tulpar-engine ağ 1v1, N2a)
+  `WifiManager.MulticastLock` almalı: çoğu telefonun Wi-Fi sürücüsü kilit yokken
+  yayın/çoklu yayın paketlerini süzer ve bu hata vermeden olur. Kilidi almak
+  `android.permission.CHANGE_WIFI_MULTICAST_STATE` ister (normal izin).
+  `TULPAR_ANDROID_LAN=1` bu izni manifeste yazar; varsayılan YOK.
+- `TULPAR_ANDROID_LAN=1` ile `TULPAR_ANDROID_INTERNET=0` birlikte verilirse derleme
+  DURUR (izinsiz soket açılmaz). Yazım hatası (`evet`) da durdurur. Yalnız env
+  (toml anahtarı yok).
+- Kapı: `tests/android_lan_izni.sh` (build.sh) — manifest + `aapt2 dump
+  permissions`; pozitif kontroller varsayılan APK'da izin yok / INTERNET var, iki
+  durduran yazım, seçenekten önceki ikili (59d5e1be) 4 maddede KIRMIZI.
+  8/8 (2026-10-23, geliştirme makinesi).
+
 ### Eklendi — Android: `INTERNET` izni artık kaldırılabiliyor (`[android] internet = false`)
 
 - Derleyici `android.permission.INTERNET`'i her APK'ya **koşulsuz** yazıyordu.

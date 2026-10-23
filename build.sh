@@ -978,6 +978,13 @@ if [ "$ACTION" = "suites" ]; then
                     rm -rf "$ASMOKE"
                     exit 1
                 fi
+                # Yerel ag izni: TULPAR_ANDROID_LAN=1 -> CHANGE_WIFI_MULTICAST_STATE
+                # (MulticastLock); INTERNET'siz istenirse durur.
+                if ! bash tests/android_lan_izni.sh ./tulpar; then
+                    echo -e "${RED}android lan izni kapisi basarisiz!${NC}"
+                    rm -rf "$ASMOKE"
+                    exit 1
+                fi
             else
                 rm -rf "$ASMOKE"
                 exit 1
