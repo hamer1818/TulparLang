@@ -3117,7 +3117,41 @@ ObjObject *vm_allocate_object_aot_wrapper(void *vm);
 extern "C" uint8_t aot_struct_tag_of(const char *type_name);  // kutulu struct ad etiketi (asagida)
 void vm_object_set_aot_wrapper(void *vm, ObjObject *obj, char *key, VMValue value);
 
+// ONDALIK DIZIN -> TAMSAYI (tulpar-engine OYUN_GERI_BILDIRIM #28, 2026-10-18).
+// `min`/`max` int argumanda bile FLOAT donduruyor (typeinfer.cpp'de olculmus
+// imza), yani `A[min(i, j)]` dizine FLOAT etiketli bir deger getiriyor.
+// Satir ici hizli yol yalniz INT etiketini aliyor, digeri buraya dusuyor ve
+// dizi dali "int olmayan anahtar" gorup SESSIZCE 0 donduruyordu: hata yok,
+// uyari yok, oyunda iki tablo okumasi hep 0 cikti. Yazma ayni
+// yoldan "gecersiz indeks" hatasina dusuyordu (okuma ile yazma tutarsizdi).
+// Kural, `int k = 2.7` bildiriminin ve struct dizisi yolunun
+// (llvm_vm_val_to_int_payload: fptosi) aynisi: sifira dogru kesme. Kesilemeyen
+// (NaN / sonsuz) dizin SESSIZ GECMEZ, calisma zamani hatasi verir.
+// Yalniz konumsal hedeflerde (dizi, dizgi, struct dizisi); json nesnesinin
+// anahtari dizgi, orada ondalik anahtar eskisi gibi gecersiz.
+static inline bool dizin_ondalik_mi(VMValue target, VMValue index) {
+  return IS_FLOAT(index) &&
+         (IS_ARRAY(target) || IS_STRING(target) || IS_STRUCT_ARRAY(target));
+}
+// false: dizin kesilemedi, hata bildirildi — cagiran erisimi YAPMAZ.
+static bool dizin_tamsayiya(VMValue *index) {
+  double d = AS_FLOAT(*index);
+  if (!__builtin_isfinite(d)) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: dizi indeksi sayi degil (NaN/sonsuz)",
+        "Runtime Error: array index is not a number (NaN/infinity)"));
+    return false;
+  }
+  // Doyurma kesmeden ONCE: 2^63'u asan double'in int64'e cevrimi tanimsiz.
+  if (d > 4.0e18) d = 4.0e18;
+  if (d < -4.0e18) d = -4.0e18;
+  *index = VM_INT((long long)d);
+  return true;
+}
+
 VMValue vm_get_element(VMValue target, VMValue index) {
+  if (dizin_ondalik_mi(target, index) && !dizin_tamsayiya(&index))
+    return VM_INT(0);
   if (IS_ARRAY(target)) {
     if (IS_INT(index)) {
       return vm_array_get(AS_ARRAY(target), idx_doyur(AS_INT(index)));
@@ -3178,6 +3212,9 @@ VMValue vm_get_element(VMValue target, VMValue index) {
 }
 
 void vm_set_element(VM *vm, VMValue target, VMValue index, VMValue value) {
+  // Okuma ile ayni kural (yukarida, vm_get_element).
+  if (dizin_ondalik_mi(target, index) && !dizin_tamsayiya(&index))
+    return;
   if (IS_ARRAY(target)) {
     if (IS_INT(index)) {
       vm_array_set(AS_ARRAY(target), idx_doyur(AS_INT(index)), value);

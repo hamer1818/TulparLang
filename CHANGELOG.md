@@ -13,6 +13,26 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `A[min(i, j)]` / `A[max(i, j)]` sessizce 0 okuyordu (ondalık dizin)
+
+- `min`/`max` int argümanda bile **float** döndürüyor; dizin olarak kullanılınca
+  satır içi hızlı yol (yalnız INT etiketi) çalışma zamanına düşüyor,
+  `vm_get_element` de dizide int olmayan anahtarı "yok" sayıp **hata vermeden 0**
+  döndürüyordu. `G[0] = min(3, 0); A[G[0]]` de aynı yoldan 0'dı (int[] öğesi
+  float tutuyor). Yazma (`A[min(..)] = v`) ise "geçersiz indeks" hatası
+  veriyordu. tulpar-engine'in ilk oyununda iki tablo okuması sessizce 0'dı
+  (OYUN_GERI_BILDIRIM #28, 2026-10-09 / 2026-10-16).
+- Şimdi dizi ve dizgi hedefinde ondalık dizin **sıfıra doğru kesilir** —
+  `int k = 2.7` bildirimi ve struct dizisi yolu (fptosi) ile aynı kural; okuma
+  ve yazma (`=`, `+=`, `++`) tutarlı. NaN/sonsuz dizin yakalanabilir çalışma
+  zamanı hatası verir. json nesnesi anahtarı değişmedi. `min`/`max`'ın dönüş
+  tipi **değişmedi** (float; `min(3, 5) / 2` hâlâ 1.5).
+- Kapı: `tests/dizin_ondalik.test.tpr` (10 test). Pozitif kontrol: düzeltmeden
+  önceki yerel ikili (v3.41.0-4-g8394d669) paketi kırmızı koşar — 11 assert
+  "expected 7 got 0", yazma testinde yakalanmamış hata (ölçüldü 2026-10-18,
+  Linux x86_64; eski ikili depo dışından koşulmalı, derleyici runtime'ı önce
+  CWD'deki `build-linux/`'tan alıyor). `build.sh suites`: 124/124.
+
 ### Düzeltildi — `tulpar.toml`'da tanınmayan anahtar artık dosyanın tamamını düşürmüyor (tulpar-engine geri bildirimi #21)
 
 - Tanınmayan bir bölüm (`[gelecek]`) ya da anahtar (`[android] cutout`, onu

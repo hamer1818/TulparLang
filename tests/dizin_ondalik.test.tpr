@@ -1,0 +1,138 @@
+// ONDALIK DIZIN (tulpar-engine OYUN_GERI_BILDIRIM #28, 2026-10-18).
+//
+// `min`/`max` int argumanda bile FLOAT donduruyor (typeinfer.cpp'deki olculmus
+// imza; bu paket o anlami DEGISTIRMIYOR). `A[min(i, j)]` dizine FLOAT etiketli
+// deger getiriyordu; satir ici hizli yol yalniz INT etiketini aliyor, digeri
+// vm_get_element'e dusuyor ve dizi dali onu "int olmayan anahtar" sayip
+// SESSIZCE 0 donduruyordu. Oyunda iki sessiz bozulma: `T[min(..)]` hep 0
+// ve `G[k] = min(3, ..)` int[] ogesine float yazip `B[G[k]]` 0 okutuyordu.
+// Yazma ayni yoldan
+// "gecersiz indeks" hatasina dusuyordu — okuma ile yazma tutarsizdi.
+//
+// Kural: konumsal hedefte (dizi, dizgi) ondalik dizin sifira dogru kesilir —
+// `int k = 2.7` bildirimi ve struct dizisi yolu (fptosi) ile ayni. NaN/sonsuz
+// dizin calisma zamani hatasi verir (sessiz 0 yok).
+//
+// Pozitif kontrol (olculdu 2026-10-18, Linux x86_64): duzeltmeden onceki
+// v3.41.0-4-g8394d669 bu paketi KIRMIZI kosar — ilk uc test 11 assert'le FAIL
+// ("expected 7 got 0"), dorduncusu (yazma) yakalanmamis "set islemi icin
+// gecersiz ... indeks" hatasiyla durur, cikis kodu 1. Struct dizisi testi
+// kontroldur: o yol zaten kesiyordu, iki ikilide de gecer.
+// DIKKAT: derleyici calisma zamani arsivini once CWD'deki build-linux/'tan
+// aliyor; eski ikiliyi depo kokunden kosmak YENI runtime'i baglar ve bu kontrol
+// yanlislikla yesil cikar (oyle de oldu). Eski ikiliyi depo disindan kosun.
+
+import "test";
+
+int[] GA = [5, 6, 7, 8];
+float[] GF = [0.5, 1.5, 2.5, 3.5];
+int GX = 3;
+
+struct DizinP { int x; float y; }
+func dizin_p(int x): DizinP { DizinP p; p.x = x; p.y = 0.5; return p; }
+
+func t_global_min_max() {
+    // Sondanin birebir aynisi (2026-10-09): eskiden uc satir da 0.
+    assert_eq_int(GA[min(2, GX)], 7);
+    assert_eq_int(GA[max(2, 1)], 7);
+    assert_close(GF[min(2, GX)], 2.5, 0.000001);
+}
+
+func _ilk_sinirli(int[] B, int j): int { return B[min(j, 3)]; }
+
+func t_yerel_ve_parametre() {
+    int[] A = [10, 20, 30, 40];
+    assert_eq_int(A[min(1, 2)], 20);
+    assert_eq_int(_ilk_sinirli(A, 9), 40);
+    assert_eq_int(_ilk_sinirli(A, 0), 10);
+    var V = [1, 2, 3];
+    assert_eq_int(V[min(5, 1)], 2);
+}
+
+func t_int_dizi_ogesi_dizin() {
+    // Ikinci yuz (2026-10-16): min() sonucu int[] ogesine yazilinca o oge de
+    // dizin olarak 0 okutuyordu (bedel tablosu).
+    int[] BEDEL = [2, 2, 1, 9];
+    int[] K = [0, 0, 0];
+    K[0] = min(3, 0);
+    K[1] = min(3, 2);
+    K[2] = max(1, 2);
+    assert_eq_int(BEDEL[K[0]], 2);
+    assert_eq_int(BEDEL[K[1]], 1);
+    assert_eq_int(BEDEL[K[2]], 1);
+    int t = 0;
+    for (int h = 0; h < 3; h++) { t += BEDEL[K[h]]; }
+    assert_eq_int(t, 4);
+}
+
+func t_yazma() {
+    int[] A = [5, 6, 7, 8];
+    A[min(1, 2)] = 60;            // eskiden "set islemi icin gecersiz ... indeks"
+    assert_eq_int(A[1], 60);
+    A[max(0, 2)] += 10;
+    assert_eq_int(A[2], 17);
+    A[max(0, 3)]++;
+    assert_eq_int(A[3], 9);
+    float[] F = [0.5, 1.5];
+    F[min(1, 4)] = 9.5;
+    assert_close(F[1], 9.5, 0.000001);
+}
+
+func t_dongu_icinde() {
+    int[] A = [1, 2, 3, 4];
+    int s = 0;
+    for (int i = 0; i < 4; i++) { s += A[max(i, 1)]; }
+    assert_eq_int(s, 2 + 2 + 3 + 4);
+}
+
+func t_kesme_kurali() {
+    int[] A = [5, 6, 7, 8];
+    float f = 2.0;
+    assert_eq_int(A[f], 7);
+    assert_eq_int(A[2.7], 7);      // sifira dogru kesme, `int k = 2.7` ile ayni
+    int k = 2.7;
+    assert_eq_int(A[k], A[2.7]);
+}
+
+func t_dizgi() {
+    str s = "abcd";
+    assert_eq_str(s[max(1, 2)], "c");
+}
+
+func t_struct_dizisi_kontrol() {
+    // Struct dizisi yolu (llvm_vm_val_to_int_payload) zaten kesiyordu: kontrol.
+    DizinP[] D = [dizin_p(1), dizin_p(2), dizin_p(3)];
+    assert_eq_int(D[min(1, 2)].x, 2);
+    D[max(0, 2)].x = 30;
+    assert_eq_int(D[2].x, 30);
+}
+
+func t_nan_hata() {
+    // Kesilemeyen dizin SESSIZ 0 degil, yakalanabilir hata.
+    int[] A = [5, 6, 7, 8];
+    float z = 0.0;
+    int yakalandi = 0;
+    try { int q = A[z / z]; } catch (e) { yakalandi = 1; }
+    assert_eq_int(yakalandi, 1);
+    yakalandi = 0;
+    try { A[z / z] = 1; } catch (e) { yakalandi = 1; }
+    assert_eq_int(yakalandi, 1);
+}
+
+func t_json_anahtari_degismedi() {
+    // Konumsal olmayan hedef: json nesnesinde ondalik anahtar eskisi gibi.
+    var o = { "a": 1 };
+    assert_eq_int(o["a"], 1);
+}
+
+test("A[min/max] global int[]/float[]", "t_global_min_max");
+test("A[min] yerel, parametre, var dizi", "t_yerel_ve_parametre");
+test("int[] ogesine yazilan min dizin olarak", "t_int_dizi_ogesi_dizin");
+test("A[min] = / += / ++", "t_yazma");
+test("dongude A[max(i, 1)]", "t_dongu_icinde");
+test("ondalik dizin sifira dogru kesilir", "t_kesme_kurali");
+test("dizgi[max]", "t_dizgi");
+test("struct dizisi D[min].x (kontrol)", "t_struct_dizisi_kontrol");
+test("NaN dizin hata verir", "t_nan_hata");
+test("json anahtari degismedi", "t_json_anahtari_degismedi");
+test_summary();
