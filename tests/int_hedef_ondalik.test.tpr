@@ -1,0 +1,103 @@
+// INT HEDEFE ONDALIK DEGER (tulpar-engine N2b/N2c, 2026-10-23).
+//
+// `min`/`max` int argumanda bile FLOAT donduruyor (bilinerek; bkz.
+// dizin_ondalik.test.tpr). Dizin yolu #28'de duzeltilmisti; AYNI sinifin
+// oburu `int` HEDEFLERDI. Native (i64) ABI'li fonksiyonda (`: int` donus +
+// hepsi int parametre) return / `int x = ...` / atama / dongu ici atama,
+// kutulu degerin HAM YUKUNU (alan 2) aliyordu: double'in BIT DESENI tamsayi
+// sayiliyordu. Oyunda `v % max(1, n)` 4611686018427387904 (= 2.0'in bitleri)
+// donduruyor ve dizi sinirini asiyordu. Kutusuz yerel float (`int q =
+// sqrt(4.0)`) ise sessizce 0 yaziliyordu. Kutulu ABI'de (`: int` ama float/
+// dizgi parametre) `return x * 2.0` cagirana 3.5 olarak gidiyordu.
+//
+// Kural: `toInt` ile ayni — sifira dogru kirpma (`int k = 2.7` bildirimi,
+// struct alani, dizin yolu gibi).
+//
+// Pozitif kontrol (olculdu 2026-10-23, Linux x86_64): duzeltmeden onceki ikili
+// (tulpar_yerel/tulpar.n2c_yedek, v3.41.0 yerel/aab e0e4200f) bu paketi KIRMIZI
+// kosar (native return/bildirim/atama/dongu ve kutulu return testleri FAIL,
+// "expected 2 got 4611686018427387904" vb.); karsilastirma ve %=/+= testleri
+// kontroldur, iki ikilide de gecer. DIKKAT (dizin_ondalik ile ayni): eski
+// ikiliyi depo DISINDAN kosun, yoksa CWD'deki build-linux/ runtime'i baglanir.
+
+import "test";
+
+int GN = 7;
+
+// --- native (i64) ABI: `: int` + hepsi int parametre ---
+func n_mod(int n): int { return 23 % max(1, n); }
+func n_bol(int n): int { return 23 / max(1, n); }
+func n_eksi(int n): int { return 23 - max(1, n); }
+func n_carp(int n): int { return (23 % max(1, n)) * 3; }
+func n_kendi(int n): int { return max(1, n); }
+func n_min(int n): int { return min(100, n); }
+func n_sqrt(int n): int { return sqrt(16.0); }
+func n_floor(int n): int { return floor(2.5); }
+func n_pow(int n): int { return pow(2, 3); }
+func n_kesir(int n): int { return n + 0.75; }
+func n_bildirim(int n): int { int q = 23 % max(1, n); return q; }
+func n_bildirim_yerel_float(int n): int { int q = sqrt(4.0); return q; }
+func n_atama(int n): int { int q = 0; q = max(1, n); return q; }
+func n_if(int n): int { if (n > 0) { return max(1, n); } return 0; }
+func n_while(int n): int { int t = 0; while (t < 5) { t = t + max(1, n); } return t; }
+func n_for(int n): int { int t = 0; for (int i = 0; i < 3; i++) { t = max(t, n + i); } return t; }
+func n_negatif(int n): int { return -n - 0.5; }
+// kontrol: zaten dogruydu
+func n_esit(int n): bool { return 23 % max(1, n) == 2; }
+func n_bilesik(int n): int { int v = 23; v %= max(1, n); int t = 0; t += max(1, n); return v * 100 + t; }
+
+// --- kutulu ABI: `: int` ama int olmayan parametre ---
+func k_mod(str s, int n): int { return 23 % max(1, n); }
+func k_float(float f): int { return f * 2.0; }
+func k_sqrt(str s): int { return sqrt(16.0); }
+func k_negatif(float f): int { return f; }
+
+func t_native_return() {
+    assert_eq_int(n_mod(GN), 2);
+    assert_eq_int(n_bol(GN), 3);
+    assert_eq_int(n_eksi(GN), 16);
+    assert_eq_int(n_carp(GN), 6);
+    assert_eq_int(n_kendi(GN), 7);
+    assert_eq_int(n_min(GN), 7);
+    assert_eq_int(n_sqrt(0), 4);
+    assert_eq_int(n_floor(0), 2);
+    assert_eq_int(n_pow(0), 8);
+    assert_eq_int(n_kesir(GN), 7);
+    assert_eq_int(n_negatif(2), -2);
+}
+func t_native_bildirim_atama() {
+    assert_eq_int(n_bildirim(GN), 2);
+    assert_eq_int(n_bildirim_yerel_float(0), 2);
+    assert_eq_int(n_atama(GN), 7);
+}
+func t_native_dal_dongu() {
+    assert_eq_int(n_if(9), 9);
+    assert_eq_int(n_while(2), 6);
+    assert_eq_int(n_for(4), 6);
+}
+func t_kutulu_return() {
+    assert_eq_int(k_mod("a", GN), 2);
+    assert_eq_int(k_float(1.75), 3);
+    assert_eq_int(k_sqrt("a"), 4);
+    assert_eq_int(k_negatif(-2.5), -2);
+    // sonuc gercekten int (assert_eq_int'in int parametresi kendisi kirptigi icin ayrica):
+    // eski ikilide 3.5 * 2 = 7.0 ve isInt false
+    assert_eq_bool(k_float(1.75) * 2 == 6, true);
+    assert_eq_bool(isInt(k_float(1.75)), true);
+    assert_eq_bool(isInt(k_mod("a", GN)), true);
+}
+func t_kontrol_zaten_dogru() {
+    assert_eq_bool(n_esit(GN), true);
+    assert_eq_int(n_bilesik(GN), 207);
+    int gq = max(1, 7);
+    assert_eq_int(gq, 7);
+    // min/max'in kendi anlami DEGISMEDI: float donus
+    assert_close(min(3, 5) / 2, 1.5, 0.000001);
+}
+
+test("native int donus: min/max/sqrt/floor/pow/kesir", "t_native_return");
+test("native int bildirim / atama", "t_native_bildirim_atama");
+test("native if-return / while / for atamasi", "t_native_dal_dongu");
+test("kutulu ABI int donus float'i kirpar", "t_kutulu_return");
+test("karsilastirma, %=, +=, global (kontrol)", "t_kontrol_zaten_dogru");
+test_summary();
