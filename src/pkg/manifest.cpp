@@ -94,7 +94,7 @@ bool manifest_parse(const std::string &source, Manifest &out,
             case SEC_REGISTRY: return "url, mirrors";
             case SEC_ANDROID: return "package, name, icon, orientation, version_code, "
                                      "version_name, assets, splash_color, cutout, target_sdk, "
-                                     "internet";
+                                     "internet, lan";
             case SEC_BUILD: return "target, entry, output";
             case SEC_EXT: return "paths";
             default: return "";
@@ -205,6 +205,27 @@ bool manifest_parse(const std::string &source, Manifest &out,
             }
             out_err = "line " + std::to_string(lineno) +
                       ": [android] 'internet' must be `true` or `false` (got: '" +
+                      bool_part + "')";
+            return false;
+        }
+
+        // `[android] lan = true` — ayni kural: bool ya da tirnakli bool,
+        // baska deger HATA (yazim hatasi sessizce "izin yok"a dusseydi oyuncu
+        // bulma telefonda hicbir hata vermeden calismazdi).
+        if (section == SEC_ANDROID && key == "lan") {
+            std::string bool_part = val_part;
+            size_t hash = bool_part.find('#');
+            if (hash != std::string::npos) bool_part = strip(bool_part.substr(0, hash));
+            if (bool_part == "true" || bool_part == "\"true\"") {
+                out.android_lan = 1;
+                continue;
+            }
+            if (bool_part == "false" || bool_part == "\"false\"") {
+                out.android_lan = 0;
+                continue;
+            }
+            out_err = "line " + std::to_string(lineno) +
+                      ": [android] 'lan' must be `true` or `false` (got: '" +
                       bool_part + "')";
             return false;
         }
@@ -423,7 +444,7 @@ std::string Manifest::to_toml() const {
         !android_version_code.empty() || !android_version_name.empty() ||
         !android_assets.empty() || !android_splash_color.empty() ||
         !android_cutout.empty() || !android_target_sdk.empty() ||
-        android_internet >= 0) {
+        android_internet >= 0 || android_lan >= 0) {
         out += "\n[android]\n";
         auto akv = [&](const char *k, const std::string &v) {
             if (v.empty()) return;
@@ -444,6 +465,8 @@ std::string Manifest::to_toml() const {
         akv("target_sdk", android_target_sdk);
         if (android_internet >= 0)
             out += android_internet ? "internet = true\n" : "internet = false\n";
+        if (android_lan >= 0)
+            out += android_lan ? "lan = true\n" : "lan = false\n";
     }
     if (!build_target.empty() || !build_entry.empty() || !build_output.empty()) {
         out += "\n[build]\n";

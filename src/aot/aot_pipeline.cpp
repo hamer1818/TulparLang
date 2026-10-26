@@ -791,7 +791,7 @@ struct AndroidAppConfig {
   // Yerel ag (ayni Wi-Fi'da UDP yayini ile oyuncu bulma): CHANGE_WIFI_MULTICAST_STATE.
   // Cogu telefonun Wi-Fi surucusu yayin/coklu yayin paketlerini MulticastLock yokken
   // suzer; kilidi almak bu izni ister (normal izin, kurulumda verilir). Varsayilan YOK.
-  // TULPAR_ANDROID_LAN=1 acar; INTERNET'siz istenirse HATA (soket EACCES ile acilmaz,
+  // `[android] lan = true` / TULPAR_ANDROID_LAN=1 acar; INTERNET'siz istenirse HATA (soket EACCES ile acilmaz,
   // izinli manifest yine de sessizce "ag var" gibi gorunurdu). tulpar-engine N2a,
   // 2026-10-23.
   bool lan = false;
@@ -1096,9 +1096,9 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
                       "TULPAR_ANDROID_INTERNET must be 0|1|false|true, got: '")) +
                   iv + "'";
   }
-  // TULPAR_ANDROID_LAN=0|1: yerel ag izni (CHANGE_WIFI_MULTICAST_STATE). Yalniz env
-  // (toml anahtari yok: tulpar-engine oyunu anahtarlari env'den verir, eski tulpar toml'u
-  // bilinmeyen anahtarda reddederdi). Baska deger DURDURUR.
+  // TULPAR_ANDROID_LAN=0|1: yerel ag izni (CHANGE_WIFI_MULTICAST_STATE). toml
+  // `[android] lan = true` ile de verilir; env toml'u ezer (INTERNET ile ayni
+  // kural). Baska deger DURDURUR.
   if (const char *v = getenv("TULPAR_ANDROID_LAN"); v && *v) {
     std::string lv = v;
     if (lv == "0" || lv == "false") cfg.lan = false;
@@ -1208,6 +1208,7 @@ static AndroidAppConfig load_android_app_config_toml(const std::string &stage,
   }
   if (!m.android_cutout.empty()) android_cutout_set(cfg, m.android_cutout);
   if (m.android_internet >= 0) cfg.internet = m.android_internet != 0;
+  if (m.android_lan >= 0) cfg.lan = m.android_lan != 0;
   if (!m.android_orientation.empty()) {
     if (m.android_orientation == "landscape" ||
         m.android_orientation == "portrait" ||

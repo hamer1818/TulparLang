@@ -13,7 +13,7 @@ tag still works;
 
 ## [Unreleased]
 
-### Eklendi — yerel ağ izni: `TULPAR_ANDROID_LAN=1` (Android)
+### Eklendi — yerel ağ izni: `[android] lan = true` / `TULPAR_ANDROID_LAN=1` (Android)
 
 - Aynı Wi-Fi'da UDP yayınıyla oyuncu bulan bir oyun (tulpar-engine ağ 1v1, N2a)
   `WifiManager.MulticastLock` almalı: çoğu telefonun Wi-Fi sürücüsü kilit yokken
@@ -21,12 +21,18 @@ tag still works;
   `android.permission.CHANGE_WIFI_MULTICAST_STATE` ister (normal izin).
   `TULPAR_ANDROID_LAN=1` bu izni manifeste yazar; varsayılan YOK.
 - `TULPAR_ANDROID_LAN=1` ile `TULPAR_ANDROID_INTERNET=0` birlikte verilirse derleme
-  DURUR (izinsiz soket açılmaz). Yazım hatası (`evet`) da durdurur. Yalnız env
-  (toml anahtarı yok).
+  DURUR (izinsiz soket açılmaz). Yazım hatası (`evet`) da durdurur.
+- `tulpar.toml [android] lan = true` de aynı izni yazar (2026-10-26); env toml'u
+  ezer (`internet` ile aynı kural), `lan = "evet"` satır numarasıyla hata,
+  `internet = false` + `lan = true` derlemeyi durdurur. Anahtar artık güvenli:
+  tanınmayan toml anahtarı uyarı + atla (yukarıda, #21) — eski bir derleyici
+  dosyanın gerisini düşürmez.
 - Kapı: `tests/android_lan_izni.sh` (build.sh) — manifest + `aapt2 dump
   permissions`; pozitif kontroller varsayılan APK'da izin yok / INTERNET var, iki
   durduran yazım, seçenekten önceki ikili (59d5e1be) 4 maddede KIRMIZI.
-  8/8 (2026-10-23, geliştirme makinesi).
+  8/8 (2026-10-23, geliştirme makinesi); toml anahtarıyla 12/12, yalnız-env
+  ikili (728e3538) toml maddelerinde 3 KIRMIZI (2026-10-26, Linux x86_64,
+  build-tools 37).
 
 ### Eklendi — Android: `INTERNET` izni artık kaldırılabiliyor (`[android] internet = false`)
 

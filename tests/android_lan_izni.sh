@@ -9,7 +9,7 @@
 # acquire SecurityException atar. Ayrıca INTERNET'siz (TULPAR_ANDROID_INTERNET=0)
 # LAN istemek DURDURUR: izinsiz soket EACCES ile açılmaz.
 #
-# ÖLÇER: staging manifesti (varsayılan / LAN=1 / LAN=0) + imzalı APK'nın
+# ÖLÇER: staging manifesti (varsayılan / LAN=1 / LAN=0 / toml `[android] lan`) + imzalı APK'nın
 # `aapt2 dump permissions` çıktısı (paketin KENDİSİ).
 # POZİTİF KONTROLLER: (a) varsayılanda INTERNET satırı GÖRÜLÜYOR (kapı izin satırını
 # okuyabiliyor) ve LAN izni YOK; (b) LAN=evet ve LAN=1+INTERNET=0 derlemeyi DURDURUYOR;
@@ -74,6 +74,32 @@ kos() {  # kos <tulpar> -> FAIL/OK
   stage celiski TULPAR_ANDROID_LAN=1 TULPAR_ANDROID_INTERNET=0
   if [ $RC -ne 0 ] && echo "$OUT" | grep -q "INTERNET"; then gecti "KONTROL: LAN=1 + INTERNET=0 derlemeyi durdurdu (kod $RC)"
   else dustu "LAN=1 + INTERNET=0 kabul edildi (kod $RC)"; fi
+
+  # toml anahtari (2026-10-26): `[android] lan = true` env'siz izni yazar, env ezer,
+  # yazim hatasi ve INTERNET'siz istek durdurur.
+  toml_stage() {  # toml_stage <cikti> <android satirlari> [env...]
+    local ad="$1" ek="$2"; shift 2
+    printf 'name = "lantest"\n\n[android]\npackage = "dev.tulparlang.lantest"\n%b' "$ek" > "$P/tulpar.toml"
+    stage "$ad" "$@"
+    printf 'name = "lantest"\n\n[android]\npackage = "dev.tulparlang.lantest"\n' > "$P/tulpar.toml"
+  }
+  toml_stage tlan 'lan = true\n'
+  if [ $RC -eq 0 ] && izin_var && grep -q 'android.permission.INTERNET' "$MAN"; then
+    gecti "toml [android] lan = true -> $IZIN + INTERNET var"
+  else dustu "toml lan = true manifeste yansimadi (kod $RC)"; echo "$OUT" | tail -4; fi
+
+  toml_stage tlanenv 'lan = true\n' TULPAR_ANDROID_LAN=0
+  if [ $RC -eq 0 ] && [ -f "$MAN" ] && ! izin_var; then gecti "toml lan = true + TULPAR_ANDROID_LAN=0 -> env ezdi, izin yok"
+  else dustu "env toml'u ezmedi (kod $RC)"; fi
+
+  toml_stage tbozuk 'lan = "evet"\n'
+  if echo "$OUT" | grep -q "line [0-9]*: \[android\] 'lan' must be" && ! izin_var; then
+    gecti "KONTROL: toml lan = \"evet\" satir numarasiyla hata, izin yazilmadi (kod $RC)"
+  else dustu "toml lan = \"evet\" sessizce kabul edildi (kod $RC)"; echo "$OUT" | tail -3; fi
+
+  toml_stage tceliski 'internet = false\nlan = true\n'
+  if [ $RC -ne 0 ] && echo "$OUT" | grep -q "INTERNET"; then gecti "KONTROL: toml internet = false + lan = true derlemeyi durdurdu (kod $RC)"
+  else dustu "toml internet = false + lan = true kabul edildi (kod $RC)"; fi
 
   local PK=""
   for d in "$(dirname "$T")/android" ./android; do
