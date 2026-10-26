@@ -963,7 +963,8 @@ if [ "$ACTION" = "suites" ]; then
                 echo -e "${GREEN}android secenekleri calisiyor${NC} (varsayilan: centik/debuggable yok; short_edges -> values-v28, debuggable -> manifest)"
                 # AAB: Play'e yuklenebilir paket (bundletool validate + universal
                 # APK badging: env versionCode, targetSdk 36, iki ABI). bundletool
-                # yoksa kapi GORUNUR atlanir (TULPAR_BUNDLETOOL_ALL).
+                # yoksa kapi GORUNUR atlanir (TULPAR_BUNDLETOOL_ALL); CI Linux
+                # TULPAR_AAB_ZORUNLU=1 verir: orada atlama KIRMIZI.
                 if ! bash tests/android_aab.sh ./tulpar; then
                     echo -e "${RED}android AAB kapisi basarisiz!${NC}"
                     rm -rf "$ASMOKE"

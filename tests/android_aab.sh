@@ -26,7 +26,8 @@
 # rastlantı değil).
 #
 # Araç yoksa (NDK / Android SDK / java / bundletool) GÖRÜNÜR atlanır:
-# "android aab kapisi: ATLANDI: <sebep>" basar, çıkış 0.
+# "android aab kapisi: ATLANDI: <sebep>" basar, çıkış 0 — TULPAR_AAB_ZORUNLU=1
+# iken (CI) aynı durum KIRMIZI.
 #
 # Kullanım: tests/android_aab.sh [tulpar]   (bundletool: TULPAR_BUNDLETOOL_ALL)
 set -u
@@ -35,7 +36,14 @@ TULPAR="${1:-./tulpar}"
 TULPAR="$(cd "$(dirname "$TULPAR")" && pwd)/$(basename "$TULPAR")"
 [ -x "$TULPAR" ] || { echo "android aab kapisi: $TULPAR yok"; exit 1; }
 
-atla() { echo "android aab kapisi: ATLANDI: $1"; exit 0; }
+# TULPAR_AAB_ZORUNLU=1 (CI Linux: bundletool + SDK o iste kuruldu): atlama KUSUR,
+# kapi KIRMIZI doner — yoksa arac eksikligi CI'da sessizce "olcmuyor" olurdu.
+atla() {
+    if [ "${TULPAR_AAB_ZORUNLU:-}" = "1" ]; then
+        echo "android aab kapisi: DUSTU: $1 (TULPAR_AAB_ZORUNLU=1 — atlama kusur)"; exit 1
+    fi
+    echo "android aab kapisi: ATLANDI: $1"; exit 0
+}
 
 SDK="${TULPAR_ANDROID_SDK:-$HOME/Android/Sdk}"
 [ -d "$SDK" ] || atla "Android SDK yok ($SDK)"
