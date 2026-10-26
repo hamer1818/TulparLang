@@ -72,8 +72,43 @@ std::string escape_for_toml(const std::string &s) {
 bool manifest_parse(const std::string &source, Manifest &out,
                     std::string &out_err) {
     out = Manifest{};
-    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID, SEC_BUILD, SEC_EXT };
+    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID, SEC_BUILD, SEC_EXT, SEC_UNKNOWN };
     Section section = SEC_TOP;
+    // TANINMAYAN bolum/anahtar HATA DEGIL, UYARI (tulpar-engine oyun geri
+    // bildirimi #21, 2026-10-08): eskiden tek bir yeni anahtar (`[android]
+    // cutout`, onu tanimayan eski bir tulpar'da) parse'i dusuruyordu ve
+    // cagiranlar DOSYANIN TAMAMINI yok sayiyordu — `[ext] paths` gidiyor,
+    // `import "engine"` "hicbir eklenti yuklu degil" diye yaniltici patliyor,
+    // Android'de paket/assets/ikon dusuyordu. Simdi o anahtar `warnings`'e
+    // satir numarasiyla yazilir ve atlanir; dosyanin geri kalani gecerli.
+    // Bicimi bozuk satir (deger tipi, tirnak, dizi) hala HATA: o bir yazim
+    // hatasi, ileri uyumluluk degil.
+    auto warn = [&](int ln, const std::string &msg) {
+        out.warnings.push_back({ln, msg});
+    };
+    // Bolum basina taninan anahtarlar (bos = her anahtar serbest: kullanici
+    // adlari — bagimlilik / platform / ikili adi).
+    auto known_keys = [](Section sec) -> const char * {
+        switch (sec) {
+            case SEC_TOP: return "name, version, description, author, license, strict";
+            case SEC_REGISTRY: return "url, mirrors";
+            case SEC_ANDROID: return "package, name, icon, orientation, version_code, "
+                                     "version_name, assets, splash_color, cutout";
+            case SEC_BUILD: return "target, entry, output";
+            case SEC_EXT: return "paths";
+            default: return "";
+        }
+    };
+    auto section_label = [](Section sec) -> const char * {
+        switch (sec) {
+            case SEC_TOP: return "top-level";
+            case SEC_REGISTRY: return "[registry]";
+            case SEC_ANDROID: return "[android]";
+            case SEC_BUILD: return "[build]";
+            case SEC_EXT: return "[ext]";
+            default: return "";
+        }
+    };
 
     std::istringstream in(source);
     std::string raw;
@@ -100,9 +135,12 @@ bool manifest_parse(const std::string &source, Manifest &out,
             } else if (name == "ext") {
                 section = SEC_EXT;
             } else {
-                out_err = "line " + std::to_string(lineno) +
-                          ": unknown section [" + name + "]";
-                return false;
+                // Bolumun anahtarlari tek tek uyarilmaz: bolum basligi bir
+                // kez soylenir, altindaki satirlar sessizce atlanir.
+                warn(lineno, "unknown section [" + name + "] (dependencies, registry, "
+                             "release.binaries, binaries, android, build, ext) — "
+                             "its keys are ignored");
+                section = SEC_UNKNOWN;
             }
             continue;
         }
@@ -115,6 +153,17 @@ bool manifest_parse(const std::string &source, Manifest &out,
         }
         std::string key = strip(line.substr(0, eq));
         std::string val_part = strip(line.substr(eq + 1));
+        if (section == SEC_UNKNOWN) continue;
+        // Taninmayan anahtar: degerine bakmadan (tipi ne olursa olsun) uyar
+        // ve atla.
+        if (const char *kk = known_keys(section); *kk) {
+            std::string list = std::string(", ") + kk + ",";
+            if (list.find(", " + key + ",") == std::string::npos) {
+                warn(lineno, std::string(section_label(section)) + " key '" + key +
+                             "' is not recognised (" + kk + ") — ignored");
+                continue;
+            }
+        }
         // strip trailing line comment ("foo" # bar)
         // Bool literals (true/false) are accepted only for the
         // top-level `strict` key — every other key is string-only.
@@ -144,12 +193,6 @@ bool manifest_parse(const std::string &source, Manifest &out,
         // runs; an extension path list the same).
         const bool is_mirrors = section == SEC_REGISTRY && key == "mirrors";
         const bool is_ext_paths = section == SEC_EXT && key == "paths";
-        if (section == SEC_EXT && !is_ext_paths) {
-            out_err = "line " + std::to_string(lineno) +
-                      ": [ext] key '" + key +
-                      "' is not recognised (only 'paths')";
-            return false;
-        }
         if (is_mirrors || is_ext_paths) {
             const std::string what = is_mirrors ? "[registry] mirrors" : "[ext] paths";
             std::vector<std::string> &dest = is_mirrors ? out.registry_mirrors : out.ext_paths;
@@ -233,23 +276,12 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 else if (key == "description") out.description = val;
                 else if (key == "author") out.author = val;
                 else if (key == "license") out.license = val;
-                else {
-                    out_err = "line " + std::to_string(lineno) +
-                              ": unknown top-level key '" + key + "'";
-                    return false;
-                }
             } else if (section == SEC_DEPS) {
                 out.dependencies.push_back({key, val});
             } else if (section == SEC_RELEASE_BINARIES) {
                 out.release_binaries.push_back({key, val});
             } else if (section == SEC_REGISTRY) {
                 if (key == "url") out.registry_url = val;
-                else {
-                    out_err = "line " + std::to_string(lineno) +
-                              ": [registry] key '" + key +
-                              "' is not recognised (only 'url' and 'mirrors')";
-                    return false;
-                }
             } else if (section == SEC_ANDROID) {
                 if (key == "package") out.android_package = val;
                 else if (key == "name") out.android_label = val;
@@ -260,24 +292,10 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 else if (key == "assets") out.android_assets = val;
                 else if (key == "splash_color") out.android_splash_color = val;
                 else if (key == "cutout") out.android_cutout = val;
-                else {
-                    out_err = "line " + std::to_string(lineno) +
-                              ": [android] key '" + key +
-                              "' is not recognised (package, name, icon, "
-                              "orientation, version_code, version_name, "
-                              "assets, splash_color, cutout)";
-                    return false;
-                }
             } else if (section == SEC_BUILD) {
                 if (key == "target") out.build_target = val;
                 else if (key == "entry") out.build_entry = val;
                 else if (key == "output") out.build_output = val;
-                else {
-                    out_err = "line " + std::to_string(lineno) +
-                              ": [build] key '" + key +
-                              "' is not recognised (target, entry, output)";
-                    return false;
-                }
             }
         } else {
             out_err = "line " + std::to_string(lineno) +
@@ -287,6 +305,13 @@ bool manifest_parse(const std::string &source, Manifest &out,
         }
     }
     return true;
+}
+
+void manifest_print_warnings(const char *prefix, const std::string &path,
+                             const Manifest &m) {
+    for (const auto &w : m.warnings)
+        std::fprintf(stderr, "%s%s:%d: warning: %s\n", prefix ? prefix : "",
+                     path.c_str(), w.line, w.message.c_str());
 }
 
 bool manifest_load(const std::string &path, Manifest &out,

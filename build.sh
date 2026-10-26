@@ -760,6 +760,15 @@ if [ "$ACTION" = "suites" ]; then
         kapi_kuyruk "yerel eklenti kapisi basarisiz!" bash tests/yerel_eklenti.sh ./tulpar
     fi
 
+    # TANINMAYAN tulpar.toml ANAHTARI (tulpar-engine geri bildirimi #21): tek
+    # bir yeni anahtar (eski tulpar'da `[android] cutout`) eskiden DOSYANIN
+    # TAMAMINI dusuruyordu — `[ext] paths` gidiyor, motor "hicbir eklenti
+    # yuklu degil" diye patliyordu. Simdi dosya:satir uyarisi + o satir atlanir.
+    # Pozitif kontrol: eski ikiliyle `tests/toml_taninmayan_anahtar.sh ./tulpar <eski>`.
+    if [ -x tests/toml_taninmayan_anahtar.sh ]; then
+        kapi_kuyruk "toml taninmayan anahtar kapisi basarisiz!" bash tests/toml_taninmayan_anahtar.sh ./tulpar
+    fi
+
     # SPLIT TOPLU YOL (2026-10-01): split() parcalari TEK arena ayirmasinda
     # bitisik kurar (parse cekirdegi 200 -> 126 ms). Anlambilim
     # tests/split_toplu.test.tpr'de; bu kapi mekanizmayi (tek ayirma, beklenen

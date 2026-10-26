@@ -1060,7 +1060,12 @@ static AndroidAppConfig load_android_app_config_toml(const std::string &stage,
   tulpar::Manifest m;
   std::string err;
   if (!tulpar::manifest_load("tulpar.toml", m, err)) {
-    fprintf(stderr, "[AOT] tulpar.toml: %s\n", err.c_str());
+    // Sebep ana surucuden de basildi; burada SONUCU soyle: paket/ad/ikon/assets
+    // varsayilana dustu (oyun varliksiz ve baska paket kimligiyle paketlenir).
+    fprintf(stderr, "[AOT] tulpar.toml: %s — %s\n", err.c_str(),
+            tulpar::i18n::tr_en(
+                "[android] ayarlari UYGULANMADI (paket, ad, ikon, assets varsayilan)",
+                "[android] settings NOT applied (package, name, icon, assets default)"));
     if (const char *env = getenv("TULPAR_ANDROID_ASSETS"); env && *env)
       stage_android_assets(stage, env);
     return cfg;
