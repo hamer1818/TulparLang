@@ -57,22 +57,51 @@ else
 fi
 [ -z "$JAVA" ] && { echo "HATA: java bulunamadi."; exit 1; }
 
-# bundletool jar: TULPAR_BUNDLETOOL env → gradle önbelleği (en yüksek sürüm).
-# bundletool jar seç: gradle önbelleği (Linux HOME + Windows Users) içindeki
-# TÜM sürümleri topla, sürüm sırasına göre EN YÜKSEĞİ al (eski 1.9.0 jar'ında
-# çalıştırılabilir manifest yok → newest şart). TULPAR_BUNDLETOOL bunu ezer.
-BUNDLETOOL="${TULPAR_BUNDLETOOL:-}"
-if [ -z "$BUNDLETOOL" ]; then
+# bundletool: Google'in resmi aracı (github.com/google/bundletool/releases).
+# Arama sırası:
+#   1) TULPAR_BUNDLETOOL_ALL / TULPAR_BUNDLETOOL — jar yolu
+#   2) bu betiğin yanı: bundletool-all*.jar (kurulum düzeni: <tulpar>/android/)
+#   3) PATH'te `bundletool` komutu (Homebrew / paket yöneticisi sarmalayıcısı)
+#   4) gradle önbelleği (kütüphane jar'ı — classpath önbellekten kurulur)
+# Jar'ın kendi başına çalışıp çalışmadığı Main-Class'tan anlaşılır: GitHub'daki
+# "bundletool-all" çalışır (tek jar, bağımlılıklar gömülü); gradle önbelleğindeki
+# kütüphane jar'ında Main-Class yok, eski 1.9.0'da manifest bile eksik.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+jar_runnable() {
+    python3 -c '
+import sys, zipfile
+try:
+    with zipfile.ZipFile(sys.argv[1]) as z:
+        m = z.read("META-INF/MANIFEST.MF").decode("utf-8", "replace")
+    sys.exit(0 if "Main-Class:" in m else 1)
+except Exception:
+    sys.exit(1)
+' "$1"
+}
+BT_MODE=""     # jar | cmd | cp
+BUNDLETOOL=""
+for cand in "${TULPAR_BUNDLETOOL_ALL:-}" "${TULPAR_BUNDLETOOL:-}" $(ls -1 "$SCRIPT_DIR"/bundletool-all*.jar 2>/dev/null | sort -V | tail -1); do
+    [ -n "$cand" ] || continue
+    if [ ! -f "$cand" ]; then echo "HATA: bundletool jar yok: $cand"; exit 1; fi
+    if jar_runnable "$cand"; then BUNDLETOOL="$cand"; BT_MODE=jar; break; fi
+    # Kütüphane jar'ı verildiyse gradle classpath yoluna düş.
+    BUNDLETOOL="$cand"; BT_MODE=cp; break
+done
+if [ -z "$BT_MODE" ] && command -v bundletool >/dev/null 2>&1; then
+    BUNDLETOOL="$(command -v bundletool)"; BT_MODE=cmd
+fi
+if [ -z "$BT_MODE" ]; then
     BUNDLETOOL=$(ls -1 \
         "$HOME"/.gradle/caches/modules-2/files-2.1/com.android.tools.build/bundletool/*/*/bundletool-*.jar \
         /mnt/c/Users/*/.gradle/caches/modules-2/files-2.1/com.android.tools.build/bundletool/*/*/bundletool-*.jar \
         2>/dev/null | sed 's#.*/bundletool-\([0-9.]*\)\.jar#\1 &#' | sort -V | tail -1 | cut -d' ' -f2-)
+    [ -n "$BUNDLETOOL" ] && BT_MODE=cp
 fi
-[ -z "$BUNDLETOOL" ] && { echo "HATA: bundletool.jar bulunamadi. TULPAR_BUNDLETOOL ile yolunu goster (https://github.com/google/bundletool/releases)."; exit 1; }
+[ -z "$BT_MODE" ] && { echo "HATA: bundletool bulunamadi. https://github.com/google/bundletool/releases adresinden bundletool-all-<surum>.jar indirip TULPAR_BUNDLETOOL_ALL ile gosterin (ya da $SCRIPT_DIR/ altina koyun)."; exit 1; }
 
 echo "SDK:         $SDK"
 echo "build-tools: $BT"
-echo "bundletool:  $(basename "$BUNDLETOOL")"
+echo "bundletool:  $(basename "$BUNDLETOOL") ($BT_MODE)"
 echo "java:        $JAVA"
 
 winpath() { if [ -n "$EXE" ]; then wslpath -w "$1"; else echo "$1"; fi; }
@@ -86,6 +115,8 @@ fi
 rm -rf "$WORK"; mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
+# min/target SDK burada aapt2 bayragiyla VERILMEZ: manifestteki <uses-sdk>
+# tek kaynak (package_apk.sh ile ayni; eskiden sabit 34 vardi).
 # --- 1) aapt2 link --proto-format: bundletool proto APK'sı -----------------
 # AAB, protobuf kodlu manifest + resources.pb ister (ikili XML değil). aapt2
 # --proto-format bunu üretir; APK yolundan tek fark bu bayrak.
@@ -106,7 +137,6 @@ fi
 "$AAPT2" link --proto-format -o "$(winpath "$PROTO")" \
     --manifest "$(winpath "$STAGE/AndroidManifest.xml")" \
     -I "$(winpath "$ANDROID_JAR")" \
-    --min-sdk-version 26 --target-sdk-version 34 \
     ${RES_FLAT[@]+"${RES_FLAT[@]}"}
 
 # --- 2) bundletool modül düzeni: base/ ------------------------------------
@@ -126,23 +156,36 @@ BASE="$WORK/base"; mkdir -p "$BASE/manifest"
 mv "$MOD/AndroidManifest.xml" "$BASE/manifest/AndroidManifest.xml"
 [ -f "$MOD/resources.pb" ] && mv "$MOD/resources.pb" "$BASE/resources.pb"
 [ -d "$MOD/res" ] && mv "$MOD/res" "$BASE/res"
-# native kütüphaneler + oyun asset'leri (STORED/DEFLATED python ile — apk yolu)
+# native kütüphaneler + (varsa) dex + oyun asset'leri. Düzen:
+#   base/lib/<abi>/*.so, base/dex/classes.dex, base/assets/**
+# symbols/ (striplenmemiş kopyalar) GİRMEZ — Play'e ayrı yüklenir.
 python3 - "$BASE" "$STAGE" <<'PY'
 import os, sys, shutil
 base, stage = sys.argv[1], sys.argv[2]
 libroot = os.path.join(stage, "lib")
+n_so = 0
 if os.path.isdir(libroot):
     for abi in sorted(os.listdir(libroot)):
-        so = os.path.join(libroot, abi, "libtulpargame.so")
-        if os.path.isfile(so):
+        for name in sorted(os.listdir(os.path.join(libroot, abi))):
+            if not name.endswith(".so"):
+                continue
             d = os.path.join(base, "lib", abi); os.makedirs(d, exist_ok=True)
-            shutil.copy2(so, os.path.join(d, "libtulpargame.so"))
-            print("  +", "lib/%s/libtulpargame.so" % abi)
+            shutil.copy2(os.path.join(libroot, abi, name), os.path.join(d, name))
+            n_so += 1
+            print("  +", "lib/%s/%s" % (abi, name))
+if n_so == 0:
+    print("HATA: staging'de hic lib/<abi>/*.so yok"); sys.exit(1)
+dex = os.path.join(stage, "classes.dex")
+if os.path.isfile(dex):
+    os.makedirs(os.path.join(base, "dex"), exist_ok=True)
+    shutil.copy2(dex, os.path.join(base, "dex", "classes.dex"))
+    print("  + dex/classes.dex")
 aroot = os.path.join(stage, "assets")
 if os.path.isdir(aroot):
     dst = os.path.join(base, "assets")
     shutil.copytree(aroot, dst, dirs_exist_ok=True)
-    print("  + assets/")
+    n = sum(len(f) for _d, _s, f in os.walk(dst))
+    print("  + assets/ (%d dosya)" % n)
 PY
 
 # base.zip: base/ içeriğini KÖKTEN zip'le (manifest/, res/, lib/, resources.pb)
@@ -165,11 +208,15 @@ RAW_AAB="$WORK/raw.aab"
 # Gradle önbelleğindeki bundletool jar'ı kütüphane jarıdır (Main-Class + gömülü
 # bağımlılık YOK). Fat "bundletool-all" jar'ı yoksa classpath'i önbellekten
 # kur: bundletool + transitif bağımlılıkları. CPSEP: Windows java ';', Linux ':'.
-if [ -n "${TULPAR_BUNDLETOOL_ALL:-}" ]; then
-    # Kullanıcı fat "bundletool-all-*.jar" verdiyse doğrudan onu kullan (en temiz).
-    "$JAVA" -jar "$(winpath "$TULPAR_BUNDLETOOL_ALL")" build-bundle \
-        --modules="$(winpath "$BASEZIP")" --output="$(winpath "$RAW_AAB")"
-else
+# bt <args...>: seçilen bundletool'u çalıştır (jar | cmd | gradle classpath).
+bt() {
+    case "$BT_MODE" in
+        jar) "$JAVA" -jar "$(winpath "$BUNDLETOOL")" "$@" ;;
+        cmd) "$BUNDLETOOL" "$@" ;;
+        cp)  "$JAVA" -cp "$BT_CP" com.android.tools.build.bundletool.BundleToolMain "$@" ;;
+    esac
+}
+if [ "$BT_MODE" = cp ]; then
     # Fat jar yok → classpath'i gradle önbelleğinden kur. TÜM bağımlılık
     # jar'larını tek dizine kopyalayıp `-cp "dir/*"` joker'i ile ver: komut
     # satırı uzunluk sınırına takılmaz, eksik bir jar kalırsa NoClassDefFound
@@ -200,13 +247,13 @@ else
     add_dep com.google.auto.value/auto-value-annotations
     add_dep com.google.code.findbugs/jsr305
     add_dep org.slf4j/slf4j-api
-    WILD="$(winpath "$CPDIR")"
-    [ -n "$EXE" ] && WILD="$WILD\\*" || WILD="$WILD/*"
-    "$JAVA" -cp "$WILD" \
-        com.android.tools.build.bundletool.BundleToolMain build-bundle \
-        --modules="$(winpath "$BASEZIP")" \
-        --output="$(winpath "$RAW_AAB")"
+    BT_CP="$(winpath "$CPDIR")"
+    if [ -n "$EXE" ]; then BT_CP="$BT_CP\\*"; else BT_CP="$BT_CP/*"; fi
 fi
+bt build-bundle --modules="$(winpath "$BASEZIP")" --output="$(winpath "$RAW_AAB")"
+# Kendi çıktımızı hemen doğrula: bozuk modül düzeni Play Console'da değil
+# burada kırmızı olsun.
+bt validate --bundle="$(winpath "$RAW_AAB")" >/dev/null || { echo "HATA: bundletool validate reddetti"; exit 1; }
 
 # --- 5) imzala: jarsigner (AAB, apksigner değil) --------------------------
 # Play upload key ile imza: TULPAR_ANDROID_KEYSTORE + _KS_PASS + _KEY_ALIAS
@@ -235,6 +282,8 @@ else
             -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1 || true
     fi
     echo "[5/5] jarsigner (debug)"
+    echo "UYARI: DEBUG anahtariyla imzalaniyor — Play Console debug imzali paketi REDDEDER."
+    echo "       Yukleme anahtari: TULPAR_ANDROID_KEYSTORE + _KS_PASS + _KEY_ALIAS (+ _KEY_PASS)."
     cp "$RAW_AAB" "$OUT_AAB"
     "$JARSIGNER" -keystore "$(winpath "$KS")" \
         -storepass android -keypass android \
@@ -245,5 +294,5 @@ fi
 echo ""
 echo "Tamam: $OUT_AAB"
 ls -lh "$OUT_AAB"
-echo "Dogrula:  java -jar bundletool validate --bundle=$OUT_AAB"
+echo "Cihaz APK'lari:  java -jar bundletool-all.jar build-apks --bundle=$OUT_AAB --output=x.apks --mode=universal"
 echo "Not: Play Console'a yuklemeden once kendi upload anahtarinla imzala."
