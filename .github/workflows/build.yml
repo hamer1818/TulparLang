@@ -1231,11 +1231,16 @@ jobs:
       # yalniz refs/pull/N/merge ve etiket kapsamlarinda vardi ve her PR'in ilk
       # koşumu OpenSSL'i sifirdan derliyordu (PR #490: 101 s). Artik main push'ta
       # da kosuyorlar: anahtar varsa yalniz bakilir (lookup-only, indirme yok),
-      # yoksa bir kez derlenip MAIN kapsaminda kaydedilir.
+      # yoksa bir kez derlenip MAIN kapsaminda kaydedilir. YALNIZ main'de: etikette
+      # yeniden kullanim yolunda derleme yok, ve etiket kapsaminda kaydedilen
+      # onbellegi kimse okumuyor (v3.42.1 etiket koşumu 41035305584: macOS isi bu
+      # yuzden 112 s surdu, 80 s OpenSSL derlemesi). Homebrew openssl@3 surumu koşucu
+      # imajina gore degisiyor (2026-10-30: 3.5.9 ve 3.6.5 ikisi de goruldu);
+      # main her ikisini de ilk rastladiginda bir kez isitir.
       - name: OpenSSL surumu (Homebrew openssl@3)
         id: ossl
         timeout-minutes: 2
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && (steps.reuse.outputs.reused != 'true' || github.ref == 'refs/heads/main')
         run: |
           V=$(brew list --versions openssl@3 | awk '{print $2}' | sed 's/_[0-9]*$//')
           [ -n "$V" ] || { echo "::error::openssl@3 surumu okunamadi"; exit 1; }
@@ -1245,7 +1250,7 @@ jobs:
       - name: Cache kucuk OpenSSL
         id: ossl-cache
         timeout-minutes: 5
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && (steps.reuse.outputs.reused != 'true' || github.ref == 'refs/heads/main')
         uses: actions/cache@v4
         with:
           lookup-only: ${{ steps.reuse.outputs.reused == 'true' }}
@@ -1254,7 +1259,7 @@ jobs:
 
       - name: Kucuk OpenSSL derle (onbellekte yoksa)
         timeout-minutes: 10
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.ossl-cache.outputs.cache-hit != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && (steps.reuse.outputs.reused != 'true' || github.ref == 'refs/heads/main') && steps.ossl-cache.outputs.cache-hit != 'true'
         run: bash tools/openssl_kucuk_derle.sh "${{ steps.ossl.outputs.surum }}" "$HOME/openssl-kucuk"
 
       - name: Build with LLVM
