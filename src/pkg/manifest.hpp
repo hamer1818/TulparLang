@@ -104,6 +104,9 @@ struct Manifest {
     // güvenli alanı kendisi bilmeli; tulpar-engine eng_safe_inset_*).
     // Varsayılan "default": sistem çentik şeridini siyah bırakır (eski davranış).
     std::string android_cutout;
+    // Hedef API düzeyi ("36"). Boş → derleyici varsayılanı (Play'in güncel
+    // asgarisi). TULPAR_ANDROID_TARGET_SDK ezer.
+    std::string android_target_sdk;
 
     // [build] — `tulpar build` bunları CLI bayrağı verilmediğinde kullanır.
     // target: "desktop" (varsayılan) | "web" | "android" | "apk" | "aab".

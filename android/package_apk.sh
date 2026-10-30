@@ -81,6 +81,10 @@ fi
 rm -rf "$WORK"; mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
+# min/target SDK aapt2 bayragiyla VERILMEZ: surucunun yazdigi manifestteki
+# <uses-sdk> tek kaynak (tulpar.toml target_sdk / TULPAR_ANDROID_TARGET_SDK).
+# Eskiden burada sabit --target-sdk-version 34 vardi; manifest 36 dese bile
+# hangisinin kazandigini aapt2 surumu belirliyordu.
 # --- 1) aapt2 link: manifest (+ varsa res/: uygulama ikonu) -> base APK ----
 # tulpar.toml [android] icon=... verdiyse driver, staging'e res/mipmap/
 # ic_launcher.png koyar ve manifest @mipmap/ic_launcher'a atifta bulunur —
@@ -102,7 +106,6 @@ fi
 "$AAPT2" link -o "$(winpath "$BASE")" \
     --manifest "$(winpath "$STAGE/AndroidManifest.xml")" \
     -I "$(winpath "$ANDROID_JAR")" \
-    --min-sdk-version 26 --target-sdk-version 34 \
     ${RES_FLAT[@]+"${RES_FLAT[@]}"}
 
 # --- 2) native kütüphaneler (STORED) + oyun asset'leri ---------------------

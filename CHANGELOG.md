@@ -13,6 +13,41 @@ tag still works;
 
 ## [Unreleased]
 
+### Değişti — Android: `targetSdk` 36, sürüm kimliği env'den, `--aab` uçtan uca ölçülüyor (tulpar-engine Play hazırlığı)
+
+- **`targetSdk` varsayılanı 34 → 36.** Google Play 31 Ağustos 2026'dan beri yeni
+  uygulama ve güncellemede API 36 (Android 16) istiyor; 34 hedefli paket Play
+  Console'da reddedilir. Değer artık manifestteki `<uses-sdk>`'dan **tek
+  kaynaktan** gelir: `package_apk.sh`/`package_aab.sh` içindeki sabit
+  `--target-sdk-version 34` bayrağı kalktı. `tulpar.toml [android] target_sdk`
+  ya da `TULPAR_ANDROID_TARGET_SDK` ezer; 36'dan küçükse derleme uyarı basar.
+  `minSdk` 26 kalır.
+- `<application android:appCategory="game">`: Android 16 büyük ekranda
+  (sw600dp+) `screenOrientation`'ı yok sayıyor, oyunlar muaf.
+- **`TULPAR_ANDROID_VERSION_CODE` / `TULPAR_ANDROID_VERSION_NAME`** toml'u ezer
+  (yayın betiği her yüklemede versionCode'u artırabilsin). Geçersiz değer
+  (tamsayı değil, 1..2100000000 dışı; targetSdk 26..99 dışı; boş versionName)
+  artık **derlemeyi durdurur** — sessizce varsayılana düşmek Play'de "sürüm
+  kodu kullanıldı" diye dönerdi.
+- `package_aab.sh`: çalıştırılabilir; bundletool'u sırayla
+  `TULPAR_BUNDLETOOL_ALL`/`TULPAR_BUNDLETOOL`, betiğin yanındaki
+  `bundletool-all*.jar`, PATH'teki `bundletool`, gradle önbelleği olarak arar
+  (jar'ın tek başına çalışıp çalışmadığına Main-Class'tan bakar). Her `.so`
+  ve varsa `classes.dex` (`base/dex/`) modüle girer; `symbols/` girmez. Çıktı
+  imzadan önce `bundletool validate`'ten geçer. Debug anahtarıyla
+  imzalanınca "Play reddeder" uyarısı basılır (yükleme anahtarı:
+  `TULPAR_ANDROID_KEYSTORE` + `_KS_PASS` + `_KEY_ALIAS`).
+- Kapı: `tests/android_aab.sh` (`build.sh suites`, Android dumanının içinde):
+  modül düzeni, `jarsigner -verify`, `bundletool validate`, `build-apks
+  --mode=universal` APK'sının badging'i (env versionCode 42, targetSdk 36, iki
+  ABI, assets). Pozitif kontroller: `versionCode=abc` derlemeyi durduruyor,
+  `BundleConfig.pb`'siz kopyayı validate reddediyor, env'siz manifest toml'daki
+  değeri taşıyor; 760e9439 ikilisine karşı 4 madde kırmızı. Araç yoksa görünür
+  `ATLANDI`. Ölçüldü 2026-10-13 (bu makine, bundletool 1.18.3, build-tools 37):
+  18/18, 9,7 s.
+- `armeabi-v7a` desteklenmiyor (değişmedi): `VMValue` {i64,i64} ABI'si ve
+  motor arşivleri yalnız 64 bit; Play 64 bit'i zorunlu tutuyor, 32 bit isteğe bağlı.
+
 ### Düzeltildi — `int` hedefe ondalık değer ham bit deseniyle gidiyordu (AOT)
 
 - `: int` döndüren ve bütün parametreleri `int` olan fonksiyon (native i64 ABI)

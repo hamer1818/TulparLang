@@ -420,6 +420,39 @@ jobs:
           echo "TULPAR_DIST_ZORUNLU=1" >> "$GITHUB_ENV"
         timeout-minutes: 15
 
+      # BUNDLETOOL (SHA'lı) — `tests/android_aab.sh` (`build.sh suites`, Android
+      # dumanının içinde) bundletool-all jar'ı ve Android SDK'sı yoksa GÖRÜNÜR
+      # atlıyordu; CI'da ikisi de yoktu, yani `--aab` kapısı burada HİÇ ölçmüyordu
+      # (tulpar-engine planı §1.9, karar 11, 2026-10-26). Jar sabit sürüm + sabit
+      # SHA-256 ile indirilir (1.18.3; özet 2026-10-26'da GitHub sürümünden ve
+      # yereldeki kopyadan aynı ölçüldü). Pozitif kontrol: tek baytı bozulmuş
+      # kopya aynı denetimden GEÇMEMELİ. TULPAR_AAB_ZORUNLU=1: kapı bu işte atlarsa
+      # KIRMIZI (araç burada kuruldu; atlama artık kusur).
+      - name: bundletool (SHA'li) + Android SDK yolu
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          BT_SURUM=1.18.3
+          BT_OZET=a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
+          d="$RUNNER_TEMP/bundletool"; mkdir -p "$d"
+          curl -fsSL --retry 3 -o "$d/bundletool-all.jar" \
+            "https://github.com/google/bundletool/releases/download/$BT_SURUM/bundletool-all-$BT_SURUM.jar"
+          echo "$BT_OZET  $d/bundletool-all.jar" | sha256sum -c -
+          cp "$d/bundletool-all.jar" "$d/bozuk.jar"
+          printf 'X' | dd of="$d/bozuk.jar" bs=1 seek=100 conv=notrunc 2>/dev/null
+          if echo "$BT_OZET  $d/bozuk.jar" | sha256sum -c - >/dev/null 2>&1; then
+            echo "::error::bundletool ozet denetimi bozuk kopyayi GECIRDI — denetim bir sey olcmuyor"; exit 1
+          fi
+          rm -f "$d/bozuk.jar"
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          ls -d "$sdk"/build-tools/* >/dev/null 2>&1 || { echo "::error::Android SDK build-tools yok ($sdk)"; exit 1; }
+          {
+            echo "TULPAR_BUNDLETOOL_ALL=$d/bundletool-all.jar"
+            echo "TULPAR_ANDROID_SDK=$sdk"
+            echo "TULPAR_AAB_ZORUNLU=1"
+          } >> "$GITHUB_ENV"
+          java -jar "$d/bundletool-all.jar" version
+        timeout-minutes: 5
+
       # tests/*.test.tpr regression suites (gömülü `test` kitaplığı,
       # jest tarzı assert'ler). `./build.sh test` YALNIZ examples/ üzerinde
       # dolaşır ve orada tek ölçüt çıkış kodudur; bu paketler uzun süre

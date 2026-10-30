@@ -758,6 +758,16 @@ struct AndroidAppConfig {
   std::string orientation = "landscape";   // landscape | portrait | sensor
   std::string version_code = "1";
   std::string version_name = "1.0";
+  // Hedef API düzeyi. 34'tü; Google Play 31 Ağustos 2026'dan beri yeni uygulama
+  // ve güncellemede API 36 (Android 16) istiyor (developer.android.com/google/
+  // play/requirements/target-sdk, 2026-10-13'te okundu) — 34 hedefli bir AAB
+  // Play Console'da reddedilir. toml `target_sdk` / TULPAR_ANDROID_TARGET_SDK ezer.
+  // minSdk 26 kalır (adaptive ikon + AAudio tabanı).
+  std::string target_sdk = "36";
+  // Doğrulama hatası (boş = geçerli). versionCode gibi alanlarda sessiz
+  // varsayılana düşmek Play'de "bu sürüm kodu zaten kullanıldı" diye dönerdi;
+  // o yüzden geçersiz değer derlemeyi DURDURUR.
+  std::string error;
   bool has_icon = false;                   // res/mipmap/ic_launcher.png kondu
   std::string splash_color = "#10121A";    // açılış/splash arka planı (koyu lacivert)
   // Ekran çentiği (API 28+ windowLayoutInDisplayCutoutMode): default | shortEdges | never.
@@ -860,13 +870,24 @@ static void write_android_manifest(const std::string &stage,
           "    package=\"%s\"\n"
           "    android:versionCode=\"%s\" android:versionName=\"%s\">\n"
           "  <uses-sdk android:minSdkVersion=\"26\" "
-          "android:targetSdkVersion=\"34\"/>\n"
+          "android:targetSdkVersion=\"%s\"/>\n"
           // titret()/vibrate() için; normal izin — kurulumda otomatik verilir.
           "  <uses-permission android:name=\"android.permission.VIBRATE\"/>\n"
           // İnternet: online skor tablosu / http_get gibi ağ çağrıları için
           // (normal izin, kurulumda otomatik verilir; kullanılmasa da zararsız).
           "  <uses-permission android:name=\"android.permission.INTERNET\"/>\n"
+          // appCategory="game": Android 16 (API 36 hedefi) büyük ekranda
+          // (sw600dp+) screenOrientation'ı yok sayıyor — oyunlar muaf; bu
+          // öznitelik olmadan tablette yatay oyun dikey açılabilirdi.
+          // enableOnBackInvokedCallback="false": API 36 hedefinde öngörülü geri
+          // (predictive back) varsayılan açık — sistem KEYCODE_BACK'i NativeActivity'ye
+          // HİÇ göndermiyor, geri tuşu etkinliği kapatıyor (oyun menüsüne dönmek yerine
+          // uygulamadan çıkıyordu; ölçüldü 2026-10-16, Pixel 10 Pro XL emülatörü API 37,
+          // tulpar-engine yayın adımı 8). NativeActivity'de OnBackInvokedCallback yok
+          // (hasCode=false), bu yüzden eski KEYCODE_BACK yoluna dönülür.
           "  <application android:label=\"%s\" android:hasCode=\"false\"\n"
+          "      android:appCategory=\"game\"\n"
+          "      android:enableOnBackInvokedCallback=\"false\"\n"
           "      android:theme=\"@style/TulparSplash\"\n"
           "      android:extractNativeLibs=\"true\"%s%s>\n"
           "    <activity android:name=\"android.app.NativeActivity\"\n"
@@ -884,7 +905,8 @@ static void write_android_manifest(const std::string &stage,
           "  </application>\n"
           "</manifest>\n",
           xml_escape(cfg.package).c_str(), xml_escape(cfg.version_code).c_str(),
-          xml_escape(cfg.version_name).c_str(), xml_escape(cfg.label).c_str(),
+          xml_escape(cfg.version_name).c_str(), xml_escape(cfg.target_sdk).c_str(),
+          xml_escape(cfg.label).c_str(),
           icon_attr.c_str(), cfg.debuggable ? " android:debuggable=\"true\"" : "",
           xml_escape(cfg.orientation).c_str());
   fclose(f);
@@ -1041,6 +1063,45 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
   AndroidAppConfig cfg = load_android_app_config_toml(stage, fallback_label);
   if (const char *c = getenv("TULPAR_ANDROID_CUTOUT"); c && *c) android_cutout_set(cfg, c);
   if (const char *d = getenv("TULPAR_ANDROID_DEBUGGABLE"); d && *d && d[0] != '0') cfg.debuggable = true;
+  // Sürüm kimliği env ile de verilir: yayın betiği her yüklemede versionCode'u
+  // artırır, toml'u düzenlemeden (CI / apk_derle.sh).
+  if (const char *v = getenv("TULPAR_ANDROID_VERSION_CODE"); v && *v) cfg.version_code = v;
+  if (const char *v = getenv("TULPAR_ANDROID_VERSION_NAME"); v && *v) cfg.version_name = v;
+  if (const char *v = getenv("TULPAR_ANDROID_TARGET_SDK"); v && *v) cfg.target_sdk = v;
+  // DOĞRULAMA. versionCode: pozitif tamsayı, Play üst sınırı 2100000000.
+  // targetSdk: 26..99 tamsayı. versionName: boş olamaz, XML kaçışıyla güvenli.
+  auto all_digits = [](const std::string &s) {
+    if (s.empty() || s.size() > 10) return false;
+    for (char c : s)
+      if (c < '0' || c > '9') return false;
+    return true;
+  };
+  if (!all_digits(cfg.version_code) || std::stoll(cfg.version_code) < 1 ||
+      std::stoll(cfg.version_code) > 2100000000LL) {
+    cfg.error = std::string(tulpar::i18n::tr_en(
+                    "versionCode 1..2100000000 arasi tamsayi olmali, verilen: '",
+                    "versionCode must be an integer in 1..2100000000, got: '")) +
+                cfg.version_code + "'";
+  } else if (!all_digits(cfg.target_sdk) || std::stoll(cfg.target_sdk) < 26 ||
+             std::stoll(cfg.target_sdk) > 99) {
+    cfg.error = std::string(tulpar::i18n::tr_en(
+                    "targetSdk 26..99 arasi tamsayi olmali, verilen: '",
+                    "targetSdk must be an integer in 26..99, got: '")) +
+                cfg.target_sdk + "'";
+  } else if (cfg.version_name.empty()) {
+    cfg.error = tulpar::i18n::tr_en("versionName bos olamaz",
+                                    "versionName must not be empty");
+  } else if (std::stoll(cfg.target_sdk) < 36) {
+    fprintf(stderr,
+            tulpar::i18n::tr_en(
+                "[AOT] [android] Uyari: targetSdk %s — Google Play yeni "
+                "uygulama/guncellemede 36 istiyor (2026-08-31'den beri); bu "
+                "paket Play'e yuklenemez.\n",
+                "[AOT] [android] Warning: targetSdk %s — Google Play requires "
+                "36 for new apps/updates (since 2026-08-31); this package "
+                "cannot be uploaded to Play.\n"),
+            cfg.target_sdk.c_str());
+  }
   return cfg;
 }
 static AndroidAppConfig load_android_app_config_toml(const std::string &stage,
@@ -1080,6 +1141,7 @@ static AndroidAppConfig load_android_app_config_toml(const std::string &stage,
   if (!m.android_label.empty()) cfg.label = m.android_label;
   if (!m.android_version_code.empty()) cfg.version_code = m.android_version_code;
   if (!m.android_version_name.empty()) cfg.version_name = m.android_version_name;
+  if (!m.android_target_sdk.empty()) cfg.target_sdk = m.android_target_sdk;
   if (!m.android_splash_color.empty()) {
     if (valid_hex_color(m.android_splash_color)) {
       cfg.splash_color = m.android_splash_color;
@@ -1843,6 +1905,13 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     const char *label = output_name;
     if (const char *slash = strrchr(output_name, '/')) label = slash + 1;
     AndroidAppConfig app_cfg = load_android_app_config(stage, label);
+    if (!app_cfg.error.empty()) {
+      fprintf(stderr, "[AOT] [android] %s: %s\n",
+              tulpar::i18n::tr_en("Hata", "Error"), app_cfg.error.c_str());
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_LINK;
+    }
     write_android_manifest(stage, app_cfg);
     write_android_resources(stage, app_cfg);   // splash teması + adaptive ikon
     printf("[AOT] Successfully created: %s/ (lib/arm64-v8a + lib/x86_64 + "
