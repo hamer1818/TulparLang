@@ -163,13 +163,18 @@ echo "[3/4] zipalign -P 16"
 if [ -n "${TULPAR_ANDROID_KEYSTORE:-}" ]; then
     KS="$TULPAR_ANDROID_KEYSTORE"
     [ -f "$KS" ] || { echo "HATA: keystore yok: $KS"; exit 1; }
-    KS_PASS="${TULPAR_ANDROID_KS_PASS:?HATA: TULPAR_ANDROID_KS_PASS gerekli}"
+    : "${TULPAR_ANDROID_KS_PASS:?HATA: TULPAR_ANDROID_KS_PASS gerekli}"
     KEY_ALIAS="${TULPAR_ANDROID_KEY_ALIAS:?HATA: TULPAR_ANDROID_KEY_ALIAS gerekli}"
-    KEY_PASS="${TULPAR_ANDROID_KEY_PASS:-$KS_PASS}"
+    # Parola komut satırına girmez (`env:AD`, değer değil): `pass:$P` biçimi onu
+    # imza boyunca /proc/<pid>/cmdline'da açık bırakıyordu (package_aab.sh ile aynı).
+    KP_VAR=TULPAR_ANDROID_KEY_PASS
+    [ -n "${TULPAR_ANDROID_KEY_PASS:-}" ] || KP_VAR=TULPAR_ANDROID_KS_PASS
+    export TULPAR_ANDROID_KS_PASS "$KP_VAR"
+    case "$JAVA" in *.exe) export WSLENV="${WSLENV:+$WSLENV:}TULPAR_ANDROID_KS_PASS:$KP_VAR" ;; esac
     echo "[4/4] apksigner ile imzalaniyor (RELEASE: $(basename "$KS"), alias: $KEY_ALIAS)"
     "$JAVA" -jar "$(winpath "$BT/lib/apksigner.jar")" sign \
-        --ks "$(winpath "$KS")" --ks-pass "pass:$KS_PASS" \
-        --key-pass "pass:$KEY_PASS" --ks-key-alias "$KEY_ALIAS" \
+        --ks "$(winpath "$KS")" --ks-pass "env:TULPAR_ANDROID_KS_PASS" \
+        --key-pass "env:$KP_VAR" --ks-key-alias "$KEY_ALIAS" \
         --out "$(winpath "$OUT_APK")" "$(winpath "$ALIGNED")"
 else
     # ~/.android/debug.keystore (yoksa üret). Standart debug parametreleri.

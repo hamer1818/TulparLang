@@ -262,13 +262,20 @@ bt validate --bundle="$(winpath "$RAW_AAB")" >/dev/null || { echo "HATA: bundlet
 if [ -n "${TULPAR_ANDROID_KEYSTORE:-}" ]; then
     KS="$TULPAR_ANDROID_KEYSTORE"
     [ -f "$KS" ] || { echo "HATA: keystore yok: $KS"; exit 1; }
-    KS_PASS="${TULPAR_ANDROID_KS_PASS:?HATA: TULPAR_ANDROID_KS_PASS gerekli}"
+    : "${TULPAR_ANDROID_KS_PASS:?HATA: TULPAR_ANDROID_KS_PASS gerekli}"
     KEY_ALIAS="${TULPAR_ANDROID_KEY_ALIAS:?HATA: TULPAR_ANDROID_KEY_ALIAS gerekli}"
-    KEY_PASS="${TULPAR_ANDROID_KEY_PASS:-$KS_PASS}"
+    # Parola KOMUT SATIRINA girmez: jarsigner'a `-storepass:env AD` ile değişkenin
+    # ADI verilir, değeri değil. `-storepass "$P"` biçimi parolayı imza boyunca
+    # /proc/<pid>/cmdline'da (ps, top, süreç izleyicileri) herkese açık bırakıyordu.
+    KP_VAR=TULPAR_ANDROID_KEY_PASS
+    [ -n "${TULPAR_ANDROID_KEY_PASS:-}" ] || KP_VAR=TULPAR_ANDROID_KS_PASS
+    export TULPAR_ANDROID_KS_PASS "$KP_VAR"
+    # WSL interop: Windows .exe'ye ortam değişkeni yalnız WSLENV'de adı varsa geçer.
+    case "$JARSIGNER" in *.exe) export WSLENV="${WSLENV:+$WSLENV:}TULPAR_ANDROID_KS_PASS:$KP_VAR" ;; esac
     echo "[5/5] jarsigner (RELEASE: $(basename "$KS"), alias: $KEY_ALIAS)"
     cp "$RAW_AAB" "$OUT_AAB"
     "$JARSIGNER" -keystore "$(winpath "$KS")" \
-        -storepass "$KS_PASS" -keypass "$KEY_PASS" \
+        -storepass:env TULPAR_ANDROID_KS_PASS -keypass:env "$KP_VAR" \
         -sigalg SHA256withRSA -digestalg SHA-256 \
         "$(winpath "$OUT_AAB")" "$KEY_ALIAS"
 else
