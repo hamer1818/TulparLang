@@ -35,6 +35,9 @@ license = "MIT"
 #   splash_color : acilis/splash arka plani (menu temasi rgb 16,18,26 = #10121A)
 #   version_code : her yayinda ARTIR (Play upgrade + adb -r downgrade'i reddeder)
 #   version_name : kullaniciya gorunen surum
+#   internet     : (istege bagli) false -> APK'da android.permission.INTERNET
+#                  OLMAZ (ag kullanmayan oyun). Varsayilan true. Ornek:
+#                  internet = false   (ya da TULPAR_ANDROID_INTERNET=0)
 [android]
 package = "dev.tulparlang.arcade"
 name = "Tulpar Arcade"

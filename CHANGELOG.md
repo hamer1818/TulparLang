@@ -13,6 +13,47 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — yerel ağ izni: `[android] lan = true` / `TULPAR_ANDROID_LAN=1` (Android)
+
+- Aynı Wi-Fi'da UDP yayınıyla oyuncu bulan bir oyun (tulpar-engine ağ 1v1, N2a)
+  `WifiManager.MulticastLock` almalı: çoğu telefonun Wi-Fi sürücüsü kilit yokken
+  yayın/çoklu yayın paketlerini süzer ve bu hata vermeden olur. Kilidi almak
+  `android.permission.CHANGE_WIFI_MULTICAST_STATE` ister (normal izin).
+  `TULPAR_ANDROID_LAN=1` bu izni manifeste yazar; varsayılan YOK.
+- `TULPAR_ANDROID_LAN=1` ile `TULPAR_ANDROID_INTERNET=0` birlikte verilirse derleme
+  DURUR (izinsiz soket açılmaz). Yazım hatası (`evet`) da durdurur.
+- `tulpar.toml [android] lan = true` de aynı izni yazar (2026-10-26); env toml'u
+  ezer (`internet` ile aynı kural), `lan = "evet"` satır numarasıyla hata,
+  `internet = false` + `lan = true` derlemeyi durdurur. Anahtar artık güvenli:
+  tanınmayan toml anahtarı uyarı + atla (yukarıda, #21) — eski bir derleyici
+  dosyanın gerisini düşürmez.
+- Kapı: `tests/android_lan_izni.sh` (build.sh) — manifest + `aapt2 dump
+  permissions`; pozitif kontroller varsayılan APK'da izin yok / INTERNET var, iki
+  durduran yazım, seçenekten önceki ikili (59d5e1be) 4 maddede KIRMIZI.
+  8/8 (2026-10-23, geliştirme makinesi); toml anahtarıyla 12/12, yalnız-env
+  ikili (728e3538) toml maddelerinde 3 KIRMIZI (2026-10-26, Linux x86_64,
+  build-tools 37).
+
+### Eklendi — Android: `INTERNET` izni artık kaldırılabiliyor (`[android] internet = false`)
+
+- Derleyici `android.permission.INTERNET`'i her APK'ya **koşulsuz** yazıyordu.
+  Ağ kullanmayan bir oyunun mağaza sayfası yine de ağ erişimi gösteriyor, Play
+  "Veri güvenliği" formu izni açıklamayı istiyordu (tulpar-engine oyunu,
+  2026-10-16). Şimdi `tulpar.toml [android] internet = false` (tırnaklı
+  `"false"` da olur) ya da `TULPAR_ANDROID_INTERNET=0` izni manifestten
+  çıkarır; env toml'u ezer (`=1` geri açar). `VIBRATE` etkilenmez.
+- **Varsayılan değişmedi** (izin VAR): `http_get` / çevrimiçi skor kullanan
+  eski bir oyun sessizce kırılmasın.
+- Yazım hatası sessiz değil: `internet = "evet"` satır numarasıyla hata
+  (toml'daki diğer biçim hataları gibi `[android]` ayarları uygulanmaz ve
+  bu söylenir), `TULPAR_ANDROID_INTERNET=hayir` derlemeyi durdurur.
+- Kapı: `tests/android_internet_izni.sh [tulpar] [eski_tulpar]` (`build.sh
+  suites`, Android dumanının içinde): staging manifesti (varsayılan / false /
+  tırnaklı / env iki yönde) + imzalı APK'nın `aapt2 dump permissions` çıktısı.
+  Pozitif kontroller: varsayılan APK'da izin görülüyor; iki yazım hatası
+  yakalanıyor; seçenekten önceki yerel ikiliye (b72260d8-dirty) karşı 6 madde kırmızı. Ölçüldü 2026-10-16
+  (bu makine, build-tools 37): 10/10, 1,7 s.
+
 ### Güvenlik — imza parolası artık süreç argv'sinde görünmüyor (Android)
 
 - `android/package_aab.sh` ve `package_apk.sh` yükleme anahtarının parolasını
