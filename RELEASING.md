@@ -4,9 +4,20 @@
 mints a tag and publishes a GitHub Release —
 `.github/workflows/otomatik-surum.yml` computes the next version and
 pushes the tag; `build.yml` then builds, runs the tests and creates
-the Release exactly as it always did for a hand-pushed tag. Nothing
-is published without a green build: the tag run is a full build from
-source (tag pushes never reuse PR artifacts).
+the Release. Nothing is published without a green build — and since
+2026-10-30 the published bytes are, whenever possible, **the bytes the PR
+run tested**: the PR build already embeds the version the merge will get
+(see "Version string" below), so the tag run downloads the PR's artifacts
+instead of rebuilding all three platforms (~10–11 min → ~1–2 min). It does
+so only if every check holds — tag commit is the squash of PR #N, the tag's
+tree equals the tree the PR run built, the PR run is green, the recorded
+embedded version equals the tag *and* the downloaded binary, when run,
+reports the tag (`tools/ci_yeniden_kullan.sh`, decision in
+`tools/yeniden_kullanim_karar.sh`, both with positive controls in
+`tests/ci_yeniden_kullan.sh`). If any check fails the tag run builds from
+source and runs every test, exactly as before; the job summary says which
+path was taken and why. A hand-pushed tag (no `(#N)` in the subject) always
+builds from source.
 
 The numbers stay meaningful — this is **not** the rolling
 `v2.1.0.<run>` scheme the project removed in 3.13.0. Each merge takes
@@ -238,7 +249,16 @@ as follows:
 
 - **Tag push** (`refs/tags/v*`): the tag name verbatim — `v3.37.16`
   (`-DTULPAR_VERSION=<tag>`).
-- **Everything else** (branch push, PR, local build): `git describe --tags
+- **PR into `main`**: the version the merge will be tagged with, predicted
+  by `tools/ci_surum.sh` with the **same** calculation `otomatik-surum.yml`
+  uses (`tools/sonraki_surum.sh`: latest `v*` tag + the `Surum:` level from
+  the PR description / commit messages). If the PR's base is a fresh merge
+  whose tag has not been pushed yet, it waits up to 120 s; if the tag still
+  is not there it does not guess (empty → `git describe`) and the tag run
+  later builds from source. A wrong prediction (e.g. the description's
+  `Surum:` line edited after the run) is caught at the tag and also falls
+  back to a source build.
+- **Everything else** (branch push, local build): `git describe --tags
   --match 'v[0-9]*' --dirty` — `v3.37.16` on the clean tagged commit,
   `v3.37.16-4-gabc1234` four commits later, `-dirty` with uncommitted
   changes. No number is ever written by hand, so it cannot drift.
@@ -255,10 +275,11 @@ leaves the generated header untouched, so nothing recompiles.
 fails when `tulpar version` differs from the tag / `git describe`; it also
 self-checks the script's override, no-git and repo paths.
 
-The tag-push path flows through the `TULPAR_VERSION` env var. If you
-change the formula, update it everywhere it appears in `build.yml`
-*and* the `Compute release tag` step in `create-release` so the
-embedded version matches the published tag.
+The version flows through the `TULPAR_VERSION` env var, written once per
+job by the "Surum (etiket / PR tahmini)" step (`tools/ci_surum.sh`) into
+`GITHUB_ENV`. The next-version formula lives only in
+`tools/sonraki_surum.sh`; `otomatik-surum.yml` and the PR prediction both
+call it, so they cannot drift.
 
 ## Rolling back
 

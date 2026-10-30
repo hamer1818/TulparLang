@@ -121,16 +121,14 @@ jobs:
           # --- 2) Yalniz belge mi degisti? ---------------------------------
           # build.yml'deki detect-docs-only ile AYNI izin listesi: bu yollar
           # ikiliyi degistiremez, yani yeni bir surum anlamsiz olur.
-          if git rev-parse HEAD^ >/dev/null 2>&1; then
-            degisen="$(git diff --name-only HEAD^..HEAD)"
-            kod="$(echo "$degisen" | grep -vE '^(README\.md|benchmarks/RESULTS\.(md|json))$' || true)"
-            if [ -n "$degisen" ] && [ -z "$kod" ]; then
-              ozet "## Surum atlandi"
-              ozet ""
-              ozet "Yalniz belge/olcum ciktisi degismis — ikili ayni, yeni surum anlamsiz."
-              echo "Yalniz belge degismis — surum cikarilmiyor."
-              exit 0
-            fi
+          # Kural tools/sonraki_surum.sh'te (PR CI'in surum tahmini AYNI kurali
+          # kullanir; iki kopya kayarsa tahmin her etikette tutmaz).
+          if tools/sonraki_surum.sh belge_yalniz HEAD; then
+            ozet "## Surum atlandi"
+            ozet ""
+            ozet "Yalniz belge/olcum ciktisi degismis — ikili ayni, yeni surum anlamsiz."
+            echo "Yalniz belge degismis — surum cikarilmiyor."
+            exit 0
           fi
 
           # --- 3) Artis seviyesi -------------------------------------------
@@ -157,15 +155,7 @@ jobs:
           fi
           # CRLF: web'de duzenlenen aciklamalar \r\n tasir; satir sonundaki \r
           # `[[:space:]]*$` ile yutulur.
-          seviye_bul() {
-            if grep -Eqi '^[[:space:]]*(surum|sürüm|release)[[:space:]]*:[[:space:]]*major[[:space:]]*$' <<< "$1"; then
-              echo major
-            elif grep -Eqi '^[[:space:]]*(surum|sürüm|release)[[:space:]]*:[[:space:]]*minor[[:space:]]*$' <<< "$1"; then
-              echo minor
-            else
-              echo patch
-            fi
-          }
+          seviye_bul() { printf '%s\n' "$1" > "$RUNNER_TEMP/seviye.txt"; tools/sonraki_surum.sh seviye "$RUNNER_TEMP/seviye.txt"; }
           seviye_pr="$(seviye_bul "$pr_govde")"
           seviye_commit="$(seviye_bul "$mesaj")"
           # Ikisinden BUYUGU: PR'da minor, commit'te major yazan biri major ister.
@@ -179,21 +169,12 @@ jobs:
           echo "artis: $seviye ($seviye_kaynak; PR #${pr_no:-yok}: $seviye_pr, commit: $seviye_commit)"
 
           # --- 4) Son surumden sonrakini hesapla ---------------------------
-          son="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1)"
+          son="$(tools/sonraki_surum.sh son)"
           if [ -z "$son" ]; then
-            son="v0.0.0"
-            echo "Hic `v*` etiketi yok — v0.0.0'dan basliyoruz."
+            echo "Hic \`v*\` etiketi yok — v0.0.0'dan basliyoruz."
           fi
-          cekirdek="${son#v}"
-          cekirdek="${cekirdek%%-*}"          # v1.2.3-rc1 -> 1.2.3
-          IFS=. read -r X Y Z <<< "$cekirdek"
-          X="${X:-0}"; Y="${Y:-0}"; Z="${Z:-0}"
-          case "$seviye" in
-            major) X=$((X+1)); Y=0; Z=0 ;;
-            minor) Y=$((Y+1)); Z=0 ;;
-            *)     Z=$((Z+1)) ;;
-          esac
-          yeni="v${X}.${Y}.${Z}"
+          yeni="$(tools/sonraki_surum.sh sonraki "$seviye" "$son")"
+          son="${son:-v0.0.0}"
 
           if git rev-parse -q --verify "refs/tags/$yeni" >/dev/null; then
             echo "::error::Hesaplanan etiket '$yeni' ZATEN VAR (son bulunan: $son). Etiket gecmisi beklenenden farkli — elle bakin; sessizce uzerine yazmiyoruz."
