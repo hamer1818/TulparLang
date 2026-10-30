@@ -45,8 +45,10 @@ function(embed_library LIB_NAME LIB_FILE OUTPUT_VAR)
         # girince derleme sistemi onu izliyor: degisirse once cmake yeniden
         # kosuyor, configure_file basligi yeniden yaziyor, onu iceren uc TU
         # yeniden derleniyor. Kapisi: tests/gomulu_stdlib_tazelik.py.
-        set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY
-            CMAKE_CONFIGURE_DEPENDS "${LIB_PATH}")
+        if(NOT CMAKE_SCRIPT_MODE_FILE)
+            set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY
+                CMAKE_CONFIGURE_DEPENDS "${LIB_PATH}")
+        endif()
         file(READ "${LIB_PATH}" LIB_CONTENT)
         escape_for_c_string("${LIB_CONTENT}" ESCAPED_CONTENT)
         set(${OUTPUT_VAR} "${ESCAPED_CONTENT}" PARENT_SCOPE)
@@ -57,6 +59,12 @@ function(embed_library LIB_NAME LIB_FILE OUTPUT_VAR)
     endif()
 endfunction()
 
+# BETIK KIPI (`cmake -P cmake/EmbedLibraries.cmake`, depo kokunden): yalniz
+# src/embedded_libs.h uretilir — yapilandirma bagimliligi ve derleme dizinine
+# yazilan gdb basligi yapilandirma kipine ozgu. Kullanan: build.yml'deki
+# paralel dist-arsivleri isi (web/android runtime'i vm.cpp'yi derliyor ve bu
+# basligi istiyor, ama LLVM'li tam yapilandirma o ise gereksiz; 2026-10-30).
+# Ayni kod yolu: ayri bir uretici yok, kayma yok.
 # Embed all libraries
 embed_library("wings" "wings.tpr" EMBEDDED_WINGS_CONTENT)
 embed_library("router" "router.tpr" EMBEDDED_ROUTER_CONTENT)
@@ -90,6 +98,7 @@ message(STATUS "Generated: src/embedded_libs.h")
 # .py dosyası). Başlık DERLEME dizininde üretiliyor, kaynak ağacına yazılmıyor;
 # içerik aynıysa dosyaya dokunulmuyor (configure_file COPYONLY), yani her
 # yeniden yapılandırma debug_cmd.cpp'yi yeniden derletmiyor.
+if(NOT CMAKE_SCRIPT_MODE_FILE)
 set(TULPAR_GDB_SCRIPT "${CMAKE_SOURCE_DIR}/tools/gdb/tulpar_printers.py")
 set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY
     CMAKE_CONFIGURE_DEPENDS "${TULPAR_GDB_SCRIPT}")
@@ -102,3 +111,4 @@ static const char *kTulparGdbPrinters = R\"TPGDB(${TULPAR_GDB_SCRIPT_CONTENT})TP
 configure_file("${CMAKE_BINARY_DIR}/generated/tulpar_gdb_printers.h.tmp"
                "${CMAKE_BINARY_DIR}/generated/tulpar_gdb_printers.h" COPYONLY)
 include_directories("${CMAKE_BINARY_DIR}/generated")
+endif()

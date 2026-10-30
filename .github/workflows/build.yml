@@ -644,6 +644,9 @@ jobs:
           export TULPAR_ANDROID_NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
           test -x "$TULPAR_ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" || {
             echo "::error::NDK yok ($TULPAR_ANDROID_NDK) — android dist kapisi olcemez"; exit 1; }
+          # vm.cpp src/embedded_libs.h'yi istiyor; build-linux'ta onu CMake
+          # yapilandirmasi uretiyor. Burada ayni betik, betik kipinde (LLVM'siz).
+          cmake -P cmake/EmbedLibraries.cmake
           ./wasm/build_tame_web.sh
           ./android/build_tame_android.sh
           ls -la wasm/dist android/dist/*/
