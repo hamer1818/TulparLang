@@ -13,6 +13,27 @@ tag still works;
 
 ## [Unreleased]
 
+### Değişti — CI: etiket PR'da test edilen ikiliyi yayınlıyor, Linux arşivleri paralel, Windows birleşmede yeniden derlemiyor
+
+- **Etikette yeniden derleme yok (çoğu zaman).** PR CI artık birleşince çıkacak
+  sürümü tahmin edip ikiliye gömüyor (`tools/ci_surum.sh`; hesap
+  `tools/sonraki_surum.sh`'te, `otomatik-surum.yml` ile **ortak**). Etiket işi
+  PR koşumunun artefaktlarını, yalnız ağaç / gömülü sürüm / PR durumu / koşum
+  sonucu tutuyor ve indirilen ikili çalıştırılınca etiketi söylüyorsa yayınlıyor
+  (`tools/ci_yeniden_kullan.sh`); biri tutmazsa eskisi gibi sıfırdan derleyip
+  bütün testleri koşuyor. Yayınlanan bayt = PR'da test edilen bayt.
+- **Windows** main birleşmesinde PR artefaktını yeniden kullanıyor (Linux/macOS
+  gibi); önce her birleşmede 6–9 dk sıfırdan derliyordu.
+- **macOS küçük OpenSSL önbelleği** artık main kapsamında da kaydediliyor: PR
+  önbelleği yalnız o PR'a görünür, main hiç kaydetmediği için her PR OpenSSL'i
+  sıfırdan derliyordu (~100 s).
+- **Linux:** web + Android dist arşivleri ayrı `dist-arsivleri` işinde, derleme ve
+  testlerle paralel üretiliyor; `build-linux` (zorunlu check adı aynı) onları
+  bekleyip indiriyor, iş düşerse kırmızı. Kapı gevşemedi: suites yine
+  `TULPAR_DIST_ZORUNLU=1` ile gerçek arşivlerle koşuyor.
+- Mekanizmaların pozitif kontrolleri: `tests/ci_surum.sh`, `tests/ci_yeniden_kullan.sh`,
+  `tests/ci_dist_bekle.sh` (sahte `gh` + geçici depolar), CI'da Linux işinde.
+
 ### Değişti — Android: `targetSdk` 36, sürüm kimliği env'den, `--aab` uçtan uca ölçülüyor (tulpar-engine Play hazırlığı)
 
 - **`targetSdk` varsayılanı 34 → 36.** Google Play 31 Ağustos 2026'dan beri yeni

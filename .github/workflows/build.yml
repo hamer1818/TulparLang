@@ -154,83 +154,34 @@ jobs:
       # min of runner wall time and a few cents of compute. Try to
       # reuse the PR's published artifacts instead; if anything about
       # the lookup fails we fall through to a fresh build (no behavior
-      # change in the worst case). pull_request and tag pushes always
-      # build from source — they don't have a prior PR to reuse.
+      # change in the worst case). pull_request always builds from
+      # source; tag pushes reuse only under the strict check below.
+      # SURUM: etikette etiketin kendisi, main'e acilan PR'da BIRLESINCE CIKACAK
+      # surumun tahmini (tools/ci_surum.sh — otomatik-surum.yml ile ayni hesap,
+      # tools/sonraki_surum.sh). TULPAR_VERSION GITHUB_ENV'e yazilir; derleme,
+      # surum denetimi ve Windows kurulumcusu oradan okur. PR ikilisi boylece
+      # etikette OLDUGU GIBI yayinlanabilir (asagida yeniden kullanim).
+      - name: Surum (etiket / PR tahmini)
+        timeout-minutes: 4
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        env:
+          PR_GOVDE: ${{ github.event.pull_request.body }}
+        run: bash tools/ci_surum.sh
+
+      # YENIDEN KULLANIM (tools/ci_yeniden_kullan.sh): main push'ta birlesen PR'in
+      # yesil koşumundan; `v*` etiketinde KATI karar (agac = PR koşumunun
+      # derledigi agac, gomulu surum = etiket — ikili calistirilip olculur, PR
+      # birlesmis, koşum yesil; tools/yeniden_kullanim_karar.sh). Biri tutmazsa
+      # sifirdan derlenir (eski yol); karar ve sebep is ozetinde. Etiket isi
+      # boylece uc platformu yeniden derleyip testleri ikinci kez kosmuyor:
+      # yayinlanan bayt = PR'da test edilen bayt (2026-10-30; once ~10-11 dk).
       - name: Try to reuse PR's build artifacts
         timeout-minutes: 10
         id: reuse
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          # Default squash subject is "Title (#NN)" — extract NN. If
-          # the commit isn't from a squash merge (e.g. direct push, or
-          # merge-commit instead of squash), the subject lacks the ref
-          # and we fall back to building.
-          pr_num=$(git log -1 --format='%s' | grep -oE '\(#[0-9]+\)' | tr -d '(#)' || true)
-          if [ -z "$pr_num" ]; then
-            echo "No PR reference in commit subject — building from scratch."
-            echo "reused=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          head_sha=$(gh pr view "$pr_num" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)
-          if [ -z "$head_sha" ]; then
-            echo "PR #$pr_num not accessible — building from scratch."
-            echo "reused=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Find a successful build on the PR's head commit. Limit 30
-          # so a long-running PR with many force-pushes still finds
-          # the right run. Returns the most recent if multiple.
-          run_id=$(gh run list --workflow='Build (LLVM)' \
-                     --status=success --limit=30 \
-                     --json databaseId,headSha \
-                     --jq ".[] | select(.headSha==\"$head_sha\") | .databaseId" \
-                     | head -1)
-          if [ -z "$run_id" ]; then
-            echo "No successful build run for PR #$pr_num head $head_sha — building from scratch."
-            echo "reused=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Reusing artifacts from PR #$pr_num build run $run_id"
-          # Stage the artifacts at the canonical paths the existing
-          # Upload steps already point at, so reuse and built paths
-          # produce structurally identical artifacts.
-          #
-          # Drop `set -e` around the restore so a transient download/cp
-          # failure falls back to a fresh build instead of failing the
-          # whole job. The job-level promise is "reuse if cheap, else
-          # rebuild" — a flaky artifact API shouldn't take main red.
-          set +e
-          mkdir -p dist _pr-artifacts
-          gh run download "$run_id" -n tulpar-linux-x64           -D _pr-artifacts
-          dl_a=$?
-          gh run download "$run_id" -n libtulpar_runtime-linux-x64 -D _pr-artifacts
-          dl_b=$?
-          # TameEngine paketi de yeniden kullanılıyor. Getirilmezse "Upload
-          # TameEngine bundle" adımı boşa düşerdi: paketleme adımı reuse
-          # yolunda ATLANIYOR, yani dosya yerelde hiç üretilmiyor.
-          gh run download "$run_id" -n TameEngine-linux-x64        -D _pr-artifacts
-          dl_c=$?
-          if [ $dl_a -ne 0 ] || [ $dl_b -ne 0 ] || [ $dl_c -ne 0 ]; then
-            echo "Artifact download failed (codes $dl_a,$dl_b,$dl_c) — falling back to fresh build."
-            echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          cp _pr-artifacts/tulpar-linux-x64           dist/tulpar-linux-x64 2>/dev/null || \
-            cp _pr-artifacts/tulpar-linux-x64/tulpar-linux-x64 dist/tulpar-linux-x64
-          cp _pr-artifacts/libtulpar_runtime-linux-x64.a dist/libtulpar_runtime-linux-x64.a 2>/dev/null || \
-            cp _pr-artifacts/libtulpar_runtime-linux-x64/libtulpar_runtime-linux-x64.a dist/libtulpar_runtime-linux-x64.a
-          cp _pr-artifacts/TameEngine-linux-x64.tar.gz dist/TameEngine-linux-x64.tar.gz 2>/dev/null || \
-            cp _pr-artifacts/TameEngine-linux-x64/TameEngine-linux-x64.tar.gz dist/TameEngine-linux-x64.tar.gz
-          if [ ! -f dist/tulpar-linux-x64 ] || [ ! -f dist/libtulpar_runtime-linux-x64.a ] \
-             || [ ! -f dist/TameEngine-linux-x64.tar.gz ]; then
-            echo "Artifact staging failed (file missing after copy) — falling back to fresh build."
-            echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          chmod +x dist/tulpar-linux-x64
-          ls -la dist/
-          echo "reused=true" >> "$GITHUB_OUTPUT"
+        run: bash tools/ci_yeniden_kullan.sh linux-x64
 
       # ccache stores compiler outputs keyed on preprocessed source +
       # flags. First run on a fresh branch is a cold miss (no speedup);
@@ -296,16 +247,10 @@ jobs:
 
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        env:
-          # Mirrors the formula used by `create-release` below so the
-          # embedded version (`tulpar --version`) matches the published
-          # release tag — which is what `tulpar update --check` compares
-          # against.
-          # Tag-pushed builds embed the tag name verbatim (so
-          # `tulpar --version` shows e.g. `v3.37.16`). Branch builds
-          # (main, PRs) omit the override and get `git describe`
-          # (e.g. `v3.37.16-3-gabc1234`) — cmake/TulparVersion.cmake.
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        # TULPAR_VERSION "Surum (etiket / PR tahmini)" adimindan (GITHUB_ENV):
+        # etikette etiketin kendisi, main'e acilan PR'da birlesince cikacak
+        # surum, digerlerinde bos -> `git describe` (cmake/TulparVersion.cmake).
+        # `tulpar update --check` yayin etiketiyle bunu karsilastirir.
         run: |
           mkdir -p build
           cd build
@@ -340,10 +285,29 @@ jobs:
       # (override / git'siz dizin / depo) da kosar.
       - name: Surum etiketle tutarli mi
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        env:
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: bash tools/surum_denetle.sh build/tulpar
         timeout-minutes: 2
+
+      # Etikette yeniden kullanim icin KAYIT: bu koşumun derledigi agac ve
+      # ikiliye gomulen surum (tools/yeniden_kullanim_karar.sh bunlari etiketle
+      # karsilastirir; ikili ayrica calistirilarak olculur).
+      - name: Derleme bilgisi (etikette yeniden kullanim icin)
+        timeout-minutes: 2
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        shell: bash
+        run: |
+          mkdir -p _bilgi
+          { echo "agac=$(git rev-parse 'HEAD^{tree}')"; echo "surum=${TULPAR_VERSION:-}"
+             echo "ikili=$(build/tulpar version 2>&1 | tr -d '\r' | head -1)"; echo "olay=$GITHUB_EVENT_NAME"; } > _bilgi/derleme-bilgisi.txt
+          cat _bilgi/derleme-bilgisi.txt
+
+      - name: Upload derleme bilgisi
+        timeout-minutes: 5
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: derleme-bilgisi-linux-x64
+          path: _bilgi/derleme-bilgisi.txt
 
       # Test failures used to be masked with `continue-on-error: true`,
       # which hid a months-long Linux regression where every example
@@ -407,18 +371,39 @@ jobs:
           version: 5.0.0
           actions-cache-folder: emsdk-cache
 
-      - name: Dist arsivleri (web + android)
+      # Arsivleri artik PARALEL `dist-arsivleri` isi uretiyor (2026-10-30: kritik
+      # yoldan ~166 s cikti); burada onun bitmesi beklenir ve arsivler indirilir.
+      # Emscripten yukaridaki adimda yine kuruluyor: suites'teki web link kapisi
+      # (tests/web_try_catch.sh) em++ ile GERCEKTEN link ediyor. Paralel is
+      # duserse bu adim kirmizi -> zorunlu check build-linux onun sonucunu tasir.
+      # main push'ta (yeniden kullanim duserse) arsivler yerinde uretilir.
+      - name: Dist arsivleri (paralel isten / main'de yerinde)
+        id: dist
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tools/ci_dist_bekle.sh
+        timeout-minutes: 22
+
+      - name: Dist arsivlerini indir (paralel is)
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true' && steps.dist.outputs.kaynak == 'paralel'
+        timeout-minutes: 5
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-arsivleri
+          path: .
+
+      - name: Dist arsivleri yerinde mi
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        timeout-minutes: 2
         run: |
-          export TULPAR_ANDROID_NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
-          test -x "$TULPAR_ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" || {
-            echo "::error::NDK yok ($TULPAR_ANDROID_NDK) — android dist kapisi olcemez"; exit 1; }
-          ./wasm/build_tame_web.sh
-          ./android/build_tame_android.sh
-          # Arsivler BU iste uretildi: sonraki adimlarda (suites) eksik ya da
+          for f in wasm/dist/libtulpar_runtime_web.a android/dist/arm64-v8a/libtulpar_runtime_android.a android/dist/x86_64/libtulpar_runtime_android.a; do
+            [ -s "$f" ] || { echo "::error::$f yok ya da bos (kaynak: ${{ steps.dist.outputs.kaynak }})"; exit 1; }
+          done
+          ls -la wasm/dist android/dist/*/
+          # Arsivler BU koşumda uretildi: sonraki adimlarda (suites) eksik ya da
           # bulunamayan arsiv artik "gelistiricide NDK yok" degil, KUSUR.
           echo "TULPAR_DIST_ZORUNLU=1" >> "$GITHUB_ENV"
-        timeout-minutes: 15
 
       # BUNDLETOOL (SHA'lı) — `tests/android_aab.sh` (`build.sh suites`, Android
       # dumanının içinde) bundletool-all jar'ı ve Android SDK'sı yoksa GÖRÜNÜR
@@ -495,6 +480,20 @@ jobs:
       # Compiles the helper standalone against FIPS 180-4 reference
       # vectors. Cheap (~1s) and orthogonal to the main `tulpar` binary
       # so a regression in this isolated unit fails fast.
+      # CI hiz mekanizmalarinin pozitif kontrolleri (2026-10-30): surum tahmini
+      # (ayni hesap otomatik-surum'da), etikette yeniden kullanim karari (agac /
+      # surum / koşum / ikili farkli -> sifirdan), paralel dist isinin sonucunu
+      # build-linux'un tasimasi. Sahte `gh` + gecici git depolari; ag yok.
+      - name: CI hiz mekanizmalari kapisi
+        timeout-minutes: 3
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          bash tools/sonraki_surum.sh --oz-test
+          bash tools/yeniden_kullanim_karar.sh --oz-test
+          bash tests/ci_surum.sh
+          bash tests/ci_yeniden_kullan.sh
+          bash tests/ci_dist_bekle.sh
+
       - name: SHA-256 helper test
         timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
@@ -610,6 +609,61 @@ jobs:
   # KOSMUYOR: platformdan bagimsizlar ve Linux ayagi hepsini kosuyor; MSYS2'ye
   # python cekmek paket listesini ve sureyi bosuna buyuturdu.
   # ---------------------------------------------------------------------
+  # WEB + ANDROID DIST ARSIVLERI — build-linux'tan AYRI, paralel (2026-10-30).
+  # Neden ayri: arsivleri uretmek (emscripten + iki ABI NDK) Linux isinin kritik
+  # yolunda ~190 s idi ve derleme + ornek testlerinden BAGIMSIZ (PR #490
+  # koşumu 41030403942: emsdk 25 s, arsivler 166 s). build-linux suites'ten
+  # once bu isin bitmesini bekler (tools/ci_dist_bekle.sh) ve arsivleri indirir;
+  # bu is duserse build-linux kirmizi olur. Zorunlu check adi degismedi.
+  # main push'ta kosmaz: orada build-linux PR artefaktini yeniden kullanir;
+  # kullanamazsa arsivleri kendisi yerinde uretir.
+  dist-arsivleri:
+    timeout-minutes: 30
+    needs: detect-docs-only
+    if: needs.detect-docs-only.outputs.docs_only != 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        timeout-minutes: 5
+        with:
+          sparse-checkout: |
+            /*
+            !wasm/emsdk
+          sparse-checkout-cone-mode: false
+
+      - name: Emscripten
+        timeout-minutes: 10
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 5.0.0
+          actions-cache-folder: emsdk-cache
+
+      - name: Dist arsivleri (web + android)
+        timeout-minutes: 15
+        run: |
+          export TULPAR_ANDROID_NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          test -x "$TULPAR_ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" || {
+            echo "::error::NDK yok ($TULPAR_ANDROID_NDK) — android dist kapisi olcemez"; exit 1; }
+          # vm.cpp src/embedded_libs.h'yi istiyor; build-linux'ta onu CMake
+          # yapilandirmasi uretiyor. Burada ayni betik, betik kipinde (LLVM'siz).
+          cmake -P cmake/EmbedLibraries.cmake
+          ./wasm/build_tame_web.sh
+          ./android/build_tame_android.sh
+          ls -la wasm/dist android/dist/*/
+
+      - name: Upload dist arsivleri
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-arsivleri
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            wasm/dist
+            android/dist
+            !wasm/dist/obj
+            !android/dist/*/obj
+
   build-windows:
     # Is duzeyi sinir: adim sinirlarinin YAKALAYAMADIGI asilmalar icin
     # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
@@ -644,6 +698,37 @@ jobs:
             !wasm/emsdk
           sparse-checkout-cone-mode: false
 
+      # Linux/macOS ile ayni surum + yeniden kullanim deseni. Windows'ta main
+      # push yeniden kullanimi HIC yoktu: her birlesmede 6-9 dk sifirdan (2026-10-30).
+      # SURUM: etikette etiketin kendisi, main'e acilan PR'da BIRLESINCE CIKACAK
+      # surumun tahmini (tools/ci_surum.sh — otomatik-surum.yml ile ayni hesap,
+      # tools/sonraki_surum.sh). TULPAR_VERSION GITHUB_ENV'e yazilir; derleme,
+      # surum denetimi ve Windows kurulumcusu oradan okur. PR ikilisi boylece
+      # etikette OLDUGU GIBI yayinlanabilir (asagida yeniden kullanim).
+      - name: Surum (etiket / PR tahmini)
+        timeout-minutes: 4
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        shell: bash
+        env:
+          PR_GOVDE: ${{ github.event.pull_request.body }}
+        run: bash tools/ci_surum.sh
+
+      # YENIDEN KULLANIM (tools/ci_yeniden_kullan.sh): main push'ta birlesen PR'in
+      # yesil koşumundan; `v*` etiketinde KATI karar (agac = PR koşumunun
+      # derledigi agac, gomulu surum = etiket — ikili calistirilip olculur, PR
+      # birlesmis, koşum yesil; tools/yeniden_kullanim_karar.sh). Biri tutmazsa
+      # sifirdan derlenir (eski yol); karar ve sebep is ozetinde. Etiket isi
+      # boylece uc platformu yeniden derleyip testleri ikinci kez kosmuyor:
+      # yayinlanan bayt = PR'da test edilen bayt (2026-10-30; once ~10-11 dk).
+      - name: Try to reuse PR's build artifacts
+        timeout-minutes: 10
+        id: reuse
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tools/ci_yeniden_kullan.sh windows-x64
+
       # MSYS2 mingw64, bir Windows runner'inda TAM bir LLVM gelistirme agacini
       # (basliklar + LLVM*.dll.a) 30+ dakikalik bir vcpkg/kaynak derlemesi
       # olmadan almanin tek gercekci yolu: resmi LLVM Windows kurulumu ve
@@ -664,7 +749,7 @@ jobs:
       - name: MSYS2 (MINGW64)
         timeout-minutes: 15
         id: msys2
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -697,7 +782,7 @@ jobs:
       # cozuluyor ve onbellek gidis-donusu tutmuyordu.
       - name: Restore ccache
         timeout-minutes: 5
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/ccache
@@ -706,9 +791,8 @@ jobs:
             ${{ runner.os }}-msys2-ccache-
 
       - name: Build with LLVM
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           CCACHE_DIR: ${{ runner.temp }}/ccache
         run: |
           llvm-config --version
@@ -729,7 +813,7 @@ jobs:
 
       - name: ccache stats
         timeout-minutes: 5
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
           CCACHE_DIR: ${{ runner.temp }}/ccache
         run: ccache -s
@@ -739,22 +823,40 @@ jobs:
       # ariza; `--version` bunu bir saniyede olcer.
       - name: Duman (tulpar.exe --version)
         timeout-minutes: 2
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: ./build-windows/tulpar.exe version
 
       - name: Surum etiketle tutarli mi
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
-        env:
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: bash tools/surum_denetle.sh build-windows/tulpar.exe
         timeout-minutes: 2
+
+      # Etikette yeniden kullanim icin KAYIT: bu koşumun derledigi agac ve
+      # ikiliye gomulen surum (tools/yeniden_kullanim_karar.sh bunlari etiketle
+      # karsilastirir; ikili ayrica calistirilarak olculur).
+      - name: Derleme bilgisi (etikette yeniden kullanim icin)
+        timeout-minutes: 2
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          mkdir -p _bilgi
+          { echo "agac=$(git rev-parse 'HEAD^{tree}')"; echo "surum=${TULPAR_VERSION:-}"
+             echo "ikili=$(build-windows/tulpar.exe version 2>&1 | tr -d '\r' | head -1)"; echo "olay=$GITHUB_EVENT_NAME"; } > _bilgi/derleme-bilgisi.txt
+          cat _bilgi/derleme-bilgisi.txt
+
+      - name: Upload derleme bilgisi
+        timeout-minutes: 5
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: derleme-bilgisi-windows-x64
+          path: _bilgi/derleme-bilgisi.txt
 
       # AOT linkleyicisi `clang++` cagiriyor. Yoksa her ornek ayni anlamsiz
       # satirla duser ("Linking failed (code 1)") ve 23 kirmizi satirin
       # ardindaki tek sebep gorunmez olur. Burada TEK satirda soyluyoruz.
       - name: AOT linkleyicisi yerinde mi (clang++)
         timeout-minutes: 2
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           if ! command -v clang++ >/dev/null 2>&1; then
             echo "::error::clang++ PATH'te yok — uretilen tulpar.exe AOT link adiminda onu cagiriyor, yani hicbir program derlenemez. MSYS2 paket listesine mingw-w64-x86_64-clang ekleyin."
@@ -772,7 +874,7 @@ jobs:
       # tutuyor (tests/typeinfer/run.sh).
       - name: Ikiliyi koke koy
         timeout-minutes: 2
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           cp build-windows/tulpar.exe tulpar.exe
           cp build-windows/libtulpar_runtime.a libtulpar_runtime.a
@@ -815,7 +917,7 @@ jobs:
       # build.sh bitince isler, yani testlerin GERCEK sonucu yine sayilir ve
       # olay bir uyari satiriyla gorunur.
       - name: Ornekler (build.sh test)
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           trap 'echo "::warning::[tani] Ornekler adiminin dis kabugu SIGTERM aldi (eski belirti: cikis 3840) — gonderen build.sh smoke durdurma yolu olabilir, bkz. smoke_durdur"' TERM
           bash tools/win_ebeveyn_izi.sh $$
@@ -830,7 +932,7 @@ jobs:
           TULPAR_TEST_JOBS: '2'
 
       - name: Suitler (build.sh suites)
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           trap 'echo "::warning::[tani] Suitler adiminin dis kabugu SIGTERM aldi (eski belirti: cikis 3840)"' TERM
           bash tools/win_kaynak_izle.sh kaynak_suitler.log &
@@ -842,7 +944,7 @@ jobs:
         timeout-minutes: 12
 
       - name: Kaynak izi (Windows ornekler + suitler)
-        if: always() && needs.detect-docs-only.outputs.docs_only != 'true'
+        if: always() && needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         timeout-minutes: 2
         run: |
           for f in kaynak_ornekler.log kaynak_suitler.log; do
@@ -856,7 +958,7 @@ jobs:
           powershell -NoProfile -NonInteractive -File tools/win_sinyal_kodu.ps1 "$(cygpath -w /usr/bin/bash.exe)"
 
       - name: Typeinfer kapisi
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           chmod +x tests/typeinfer/run.sh
           ./tests/typeinfer/run.sh
@@ -871,7 +973,7 @@ jobs:
       # yuzden YALNIZ bu adimda kuruluyor. Linux/macOS'ta ayni harness
       # `build.sh suites` icinde kosuyor.
       - name: WebSocket cok cerceve (MinGW recv)
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           pacman -S --noconfirm --needed mingw-w64-x86_64-python
           python3 tests/ws_masked_client_smoke.py ./tulpar
@@ -879,7 +981,7 @@ jobs:
 
       - name: Paketle + DLL kapisi
         timeout-minutes: 10
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -936,10 +1038,8 @@ jobs:
       # kurulumcusuz surum yayinlamak yerine).
       - name: GUI kurulumcu (Inno Setup)
         timeout-minutes: 10
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         shell: pwsh
-        env:
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: |
           $ErrorActionPreference = 'Stop'
           # Inno Setup AppVersion saf x.y.z bekler, basindaki 'v' olmadan.
@@ -1043,64 +1143,33 @@ jobs:
             !wasm/emsdk
           sparse-checkout-cone-mode: false
 
-      # Same reuse-on-push:main pattern as build-linux. See the Linux
-      # job's reuse step for the rationale and fallback behavior.
+      # Same version + reuse pattern as build-linux (main push and `v*` tag).
+      # SURUM: etikette etiketin kendisi, main'e acilan PR'da BIRLESINCE CIKACAK
+      # surumun tahmini (tools/ci_surum.sh — otomatik-surum.yml ile ayni hesap,
+      # tools/sonraki_surum.sh). TULPAR_VERSION GITHUB_ENV'e yazilir; derleme,
+      # surum denetimi ve Windows kurulumcusu oradan okur. PR ikilisi boylece
+      # etikette OLDUGU GIBI yayinlanabilir (asagida yeniden kullanim).
+      - name: Surum (etiket / PR tahmini)
+        timeout-minutes: 4
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        env:
+          PR_GOVDE: ${{ github.event.pull_request.body }}
+        run: bash tools/ci_surum.sh
+
+      # YENIDEN KULLANIM (tools/ci_yeniden_kullan.sh): main push'ta birlesen PR'in
+      # yesil koşumundan; `v*` etiketinde KATI karar (agac = PR koşumunun
+      # derledigi agac, gomulu surum = etiket — ikili calistirilip olculur, PR
+      # birlesmis, koşum yesil; tools/yeniden_kullanim_karar.sh). Biri tutmazsa
+      # sifirdan derlenir (eski yol); karar ve sebep is ozetinde. Etiket isi
+      # boylece uc platformu yeniden derleyip testleri ikinci kez kosmuyor:
+      # yayinlanan bayt = PR'da test edilen bayt (2026-10-30; once ~10-11 dk).
       - name: Try to reuse PR's build artifacts
         timeout-minutes: 10
         id: reuse
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          pr_num=$(git log -1 --format='%s' | grep -oE '\(#[0-9]+\)' | tr -d '(#)' || true)
-          if [ -z "$pr_num" ]; then
-            echo "No PR reference in commit subject — building from scratch."
-            echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          head_sha=$(gh pr view "$pr_num" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)
-          if [ -z "$head_sha" ]; then
-            echo "PR #$pr_num not accessible — building from scratch."
-            echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          run_id=$(gh run list --workflow='Build (LLVM)' \
-                     --status=success --limit=30 \
-                     --json databaseId,headSha \
-                     --jq ".[] | select(.headSha==\"$head_sha\") | .databaseId" \
-                     | head -1)
-          if [ -z "$run_id" ]; then
-            echo "No successful build run for PR #$pr_num head $head_sha — building from scratch."
-            echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          echo "Reusing artifacts from PR #$pr_num build run $run_id"
-          # See build-linux for the rationale on dropping `set -e` here.
-          set +e
-          mkdir -p dist _pr-artifacts
-          gh run download "$run_id" -n tulpar-macos-arm64           -D _pr-artifacts
-          dl_a=$?
-          gh run download "$run_id" -n libtulpar_runtime-macos-arm64 -D _pr-artifacts
-          dl_b=$?
-          # TameEngine paketi — build-linux'taki aynı gerekçe.
-          gh run download "$run_id" -n TameEngine-macos-arm64        -D _pr-artifacts
-          dl_c=$?
-          if [ $dl_a -ne 0 ] || [ $dl_b -ne 0 ] || [ $dl_c -ne 0 ]; then
-            echo "Artifact download failed (codes $dl_a,$dl_b,$dl_c) — falling back to fresh build."
-            echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          cp _pr-artifacts/tulpar-macos-arm64           dist/tulpar-macos-arm64 2>/dev/null || \
-            cp _pr-artifacts/tulpar-macos-arm64/tulpar-macos-arm64 dist/tulpar-macos-arm64
-          cp _pr-artifacts/libtulpar_runtime-macos-arm64.a dist/libtulpar_runtime-macos-arm64.a 2>/dev/null || \
-            cp _pr-artifacts/libtulpar_runtime-macos-arm64/libtulpar_runtime-macos-arm64.a dist/libtulpar_runtime-macos-arm64.a
-          cp _pr-artifacts/TameEngine-macos-arm64.tar.gz dist/TameEngine-macos-arm64.tar.gz 2>/dev/null || \
-            cp _pr-artifacts/TameEngine-macos-arm64/TameEngine-macos-arm64.tar.gz dist/TameEngine-macos-arm64.tar.gz
-          if [ ! -f dist/tulpar-macos-arm64 ] || [ ! -f dist/libtulpar_runtime-macos-arm64.a ] \
-             || [ ! -f dist/TameEngine-macos-arm64.tar.gz ]; then
-            echo "Artifact staging failed (file missing after copy) — falling back to fresh build."
-            echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          chmod +x dist/tulpar-macos-arm64
-          ls -la dist/
-          echo "reused=true" >> "$GITHUB_OUTPUT"
+        run: bash tools/ci_yeniden_kullan.sh macos-arm64
 
       - name: Setup ccache
         timeout-minutes: 5
@@ -1155,10 +1224,18 @@ jobs:
       # basliginda). Surum her kosumda Homebrew'un openssl@3'unden okunur;
       # onbellek anahtari surum + betik ozeti, yani yama ya da secenek
       # degisince yeniden derlenir (soguk 49 s, -j3).
+      # ONBELLEK KAPSAMI (2026-10-30, `gh api .../actions/caches` ile olculdu):
+      # GitHub'da PR'in kaydettigi onbellek YALNIZ o PR'a gorunur; tum PR'larin
+      # okuyabildigi tek kapsam main. Bu uc adim main push'ta (yeniden kullanim
+      # yolunda) atlandigi icin main HIC kaydetmiyordu: `openssl-kucuk-*`
+      # yalniz refs/pull/N/merge ve etiket kapsamlarinda vardi ve her PR'in ilk
+      # koşumu OpenSSL'i sifirdan derliyordu (PR #490: 101 s). Artik main push'ta
+      # da kosuyorlar: anahtar varsa yalniz bakilir (lookup-only, indirme yok),
+      # yoksa bir kez derlenip MAIN kapsaminda kaydedilir.
       - name: OpenSSL surumu (Homebrew openssl@3)
         id: ossl
         timeout-minutes: 2
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         run: |
           V=$(brew list --versions openssl@3 | awk '{print $2}' | sed 's/_[0-9]*$//')
           [ -n "$V" ] || { echo "::error::openssl@3 surumu okunamadi"; exit 1; }
@@ -1168,23 +1245,21 @@ jobs:
       - name: Cache kucuk OpenSSL
         id: ossl-cache
         timeout-minutes: 5
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/cache@v4
         with:
+          lookup-only: ${{ steps.reuse.outputs.reused == 'true' }}
           path: ~/openssl-kucuk
           key: openssl-kucuk-${{ runner.os }}-${{ runner.arch }}-${{ steps.ossl.outputs.surum }}-${{ hashFiles('tools/openssl_kucuk_derle.sh') }}
 
       - name: Kucuk OpenSSL derle (onbellekte yoksa)
         timeout-minutes: 10
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true' && steps.ossl-cache.outputs.cache-hit != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.ossl-cache.outputs.cache-hit != 'true'
         run: bash tools/openssl_kucuk_derle.sh "${{ steps.ossl.outputs.surum }}" "$HOME/openssl-kucuk"
 
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        env:
-          # Tag-pushed builds embed the tag name verbatim; branch
-          # builds omit the override and get `git describe`.
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        # TULPAR_VERSION: "Surum (etiket / PR tahmini)" adimindan (GITHUB_ENV).
         run: |
           # Use `brew --prefix` instead of hardcoding /opt/homebrew so
           # this still works if GitHub's macos-latest image switches
@@ -1219,10 +1294,29 @@ jobs:
 
       - name: Surum etiketle tutarli mi
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        env:
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: bash tools/surum_denetle.sh build/tulpar
         timeout-minutes: 2
+
+      # Etikette yeniden kullanim icin KAYIT: bu koşumun derledigi agac ve
+      # ikiliye gomulen surum (tools/yeniden_kullanim_karar.sh bunlari etiketle
+      # karsilastirir; ikili ayrica calistirilarak olculur).
+      - name: Derleme bilgisi (etikette yeniden kullanim icin)
+        timeout-minutes: 2
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        shell: bash
+        run: |
+          mkdir -p _bilgi
+          { echo "agac=$(git rev-parse 'HEAD^{tree}')"; echo "surum=${TULPAR_VERSION:-}"
+             echo "ikili=$(build/tulpar version 2>&1 | tr -d '\r' | head -1)"; echo "olay=$GITHUB_EVENT_NAME"; } > _bilgi/derleme-bilgisi.txt
+          cat _bilgi/derleme-bilgisi.txt
+
+      - name: Upload derleme bilgisi
+        timeout-minutes: 5
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: derleme-bilgisi-macos-arm64
+          path: _bilgi/derleme-bilgisi.txt
 
       - name: Prepare artifact
         timeout-minutes: 10
