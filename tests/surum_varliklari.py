@@ -44,6 +44,11 @@ def update_assets():
     all_names = re.findall(r'\{\s*"([^"]+)"\s*,\s*"[^"]+"\s*,\s*(?:true|false)\s*\}', body)
     win = re.search(r"#if defined\(_WIN32\)(.*?)#elif", body, re.S)
     win_names = re.findall(r'\{\s*"([^"]+)"\s*,', win.group(1)) if win else []
+    # Android kiti assets_for_platform disinda (ayri kurulur, update_cmd.cpp
+    # install_android_kit) ama ayni kurala tabi: yayinda VE SHA256SUMS'ta olmali.
+    kit = re.search(r'kAndroidKit\s*=\s*"([^"]+)"', src)
+    if kit:
+        all_names.append(kit.group(1))
     return all_names, win_names
 
 

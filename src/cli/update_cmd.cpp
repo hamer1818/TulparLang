@@ -542,6 +542,106 @@ int run_install_script_fallback() {
     return std::system(cmd);
 }
 
+// ANDROID KITI (2026-11-02). Surumler `tulpar build --target=android`in
+// istedigi araclari da yayinliyor: `tulpar-android-kit.tar.gz` = `android/`
+// (package_apk.sh, package_aab.sh, install_run.sh, symbolize.sh,
+// build_tame_android.sh, dist/<abi>/libtulpar_{runtime,tame}_android.a, SURUM).
+// Daha once yalniz kaynak agacinda vardi: kurulu tulpar APK uretemiyordu ve
+// motorun oyunu araclari bir CI artefaktindan (3 gunde siliniyor) topluyordu.
+//
+// Kit ikiliyle AYNI surumden olmali — runtime arsivi derleyicinin urettigi
+// koda linklenir; Obj/dizgi duzeni surumden surume degisti (#449, #454). Bu
+// yuzden: kurulum dizininde kit varsa (android/SURUM) her guncelleme onu da
+// yeniler; yoksa yalniz `--android` ile kurulur. Windows host Android
+// hedefini derlemiyor (aot_pipeline.cpp find_android_ndk), orada kit yok.
+constexpr const char *kAndroidKit = "tulpar-android-kit.tar.gz";
+
+#ifndef _WIN32
+bool path_exists(const std::string &p) {
+    struct stat st;
+    return ::stat(p.c_str(), &st) == 0;
+}
+#endif
+
+// Kiti `install_dir/android`a koyar. Once kurulum dizininin ICINDE gecici bir
+// dizine acar (rename ayni dosya sisteminde kalsin — EXDEV, update_yerlestirme.sh),
+// SONRA icerigi denetler: zorunlu dosyalardan biri eksikse ya da SURUM
+// `beklenen` degilse eski kit YERINDE kalir ve false doner. Yarim kit sessizce
+// kurulmaz: eksik package_apk.sh ya da bayat dist arsivi APK'yi derleme
+// aninda degil cihazda bozardi.
+bool install_android_kit(const std::string &tar_path,
+                         const std::string &install_dir,
+                         const std::string &beklenen,
+                         std::string &err) {
+#ifdef _WIN32
+    (void)tar_path; (void)install_dir; (void)beklenen;
+    err = std::string(i18n::tr_en("Android kiti Windows'ta kurulmaz (Android hedefi Linux/macOS host ister)", "The Android kit is not installed on Windows (Android target needs a Linux/macOS host)"));
+    return false;
+#else
+    const std::string yeni = path_join(install_dir, ".tulpar-android-yeni");
+    const std::string eski = path_join(install_dir, ".tulpar-android-eski");
+    const std::string hedef = path_join(install_dir, "android");
+    std::string cmd = "rm -rf '" + yeni + "' && mkdir -p '" + yeni + "' && tar -xzf '" +
+                      tar_path + "' -C '" + yeni + "'";
+    if (std::system(cmd.c_str()) != 0) {
+        err = std::string(i18n::tr_en("Android kiti acilamadi: ", "Could not extract the Android kit: ")) + tar_path;
+        return false;
+    }
+    const std::string acilan = path_join(yeni, "android");
+    static const char *const kZorunlu[] = {
+        "package_apk.sh", "package_aab.sh", "SURUM",
+        "dist/arm64-v8a/libtulpar_runtime_android.a", "dist/arm64-v8a/libtulpar_tame_android.a",
+        "dist/x86_64/libtulpar_runtime_android.a",    "dist/x86_64/libtulpar_tame_android.a",
+    };
+    for (const char *f : kZorunlu) {
+        if (!path_exists(path_join(acilan, f))) {
+            err = std::string(i18n::tr_en("Android kitinde eksik dosya: ", "Android kit is missing: ")) + f;
+            std::system(("rm -rf '" + yeni + "'").c_str());
+            return false;
+        }
+    }
+    std::string surum;
+    if (!read_file_all(path_join(acilan, "SURUM"), surum, err)) return false;
+    while (!surum.empty() && (surum.back() == '\n' || surum.back() == '\r')) surum.pop_back();
+    if (surum != "TulparLang " + beklenen) {
+        err = std::string(i18n::tr_en("Android kiti surumu uyusmuyor: '", "Android kit version mismatch: '")) +
+              surum + "' != 'TulparLang " + beklenen + "'";
+        std::system(("rm -rf '" + yeni + "'").c_str());
+        return false;
+    }
+    // Eskiyi kenara al, yeniyi koy, eskiyi sil. rename ayni dizinde: atomik.
+    std::system(("rm -rf '" + eski + "'").c_str());
+    if (path_exists(hedef) && ::rename(hedef.c_str(), eski.c_str()) != 0) {
+        err = std::string(i18n::tr_en("Eski Android kiti kenara alinamadi: ", "Could not move the old Android kit: ")) + hedef;
+        return false;
+    }
+    if (::rename(acilan.c_str(), hedef.c_str()) != 0) {
+        err = std::string(i18n::tr_en("Android kiti yerine konamadi: ", "Could not install the Android kit: ")) + hedef;
+        if (path_exists(eski)) ::rename(eski.c_str(), hedef.c_str());
+        return false;
+    }
+    std::system(("rm -rf '" + eski + "' '" + yeni + "'").c_str());
+    return true;
+#endif
+}
+
+// TANILAMA: kit kurulumunu AGDAN BAGIMSIZ kosturur (tests/android_kiti.sh).
+int test_android_kit(const std::string &arg) {
+    // <tar>,<dizin>,<surum>
+    size_t a = arg.find(','), b = arg.rfind(',');
+    if (a == std::string::npos || b == a) {
+        std::fprintf(stderr, "--test-android-kit=<tar>,<dizin>,<surum>\n");
+        return 2;
+    }
+    std::string err;
+    if (!install_android_kit(arg.substr(0, a), arg.substr(a + 1, b - a - 1), arg.substr(b + 1), err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 1;
+    }
+    std::printf("android kiti kuruldu\n");
+    return 0;
+}
+
 // TANILAMA: yerlestirme yolunu AGDAN BAGIMSIZ kosturur.
 //
 // `tulpar update`in en kirilgan adimi indirme degil, indirileni yerine
@@ -621,9 +721,16 @@ int test_install(const std::string &dir) {
 int update_cmd_main(int argc, char **argv) {
     bool check_only = false;
     bool force      = false;
+    bool android    = false;
     for (int i = 2; i < argc; i++) {
         if (std::strncmp(argv[i], "--test-install=", 15) == 0) {
             return test_install(argv[i] + 15);
+        } else if (std::strncmp(argv[i], "--test-android-kit=", 19) == 0) {
+            return test_android_kit(argv[i] + 19);
+        } else if (std::strcmp(argv[i], "--android") == 0) {
+            // Android kitini (APK/AAB araclari + runtime arsivleri) de kur.
+            // Kit bir kez kurulunca sonraki guncellemeler onu kendiliginden yeniler.
+            android = true;
         } else if (std::strcmp(argv[i], "--check") == 0) {
             check_only = true;
         } else if (std::strcmp(argv[i], "--force") == 0) {
@@ -640,9 +747,9 @@ int update_cmd_main(int argc, char **argv) {
                          argv[i]);
             std::fprintf(stderr,
                          i18n::tr_en(
-                             "Kullanım: tulpar update [--check] [--force] "
+                             "Kullanım: tulpar update [--check] [--force] [--android] "
                              "[--test-install=<dizin>]\n",
-                             "Usage: tulpar update [--check] [--force] "
+                             "Usage: tulpar update [--check] [--force] [--android] "
                              "[--test-install=<dir>]\n"));
             return 2;
         }
@@ -666,11 +773,24 @@ int update_cmd_main(int argc, char **argv) {
     // (other builds embed `git describe`, e.g. v3.37.16-4-gabc1234, which
     // never equals a tag unless it IS that clean tagged commit)
     // for any semver tag (v2.2.0, v3.0.0-rc.1, etc.).
+    // Android kiti: istendiyse ya da zaten kuruluysa (surumu ikiliyle birlikte
+    // yurumeli). Windows host Android hedefini derlemiyor.
+#ifdef _WIN32
+    const bool kit = false;
+    (void)android;
+#else
+    const std::string kit_dizin = get_install_dir();
+    const bool kit = android || (!kit_dizin.empty() && path_exists(path_join(path_join(kit_dizin, "android"), "SURUM")));
+#endif
+    bool yalniz_kit = false;
     if (!force && latest == kVersion) {
-        std::printf("%s\n",
-                    i18n::tr_en("✓ Zaten son sürümdesiniz.",
-                                "✓ You are on the latest version."));
-        return 0;
+        if (!android) {
+            std::printf("%s\n",
+                        i18n::tr_en("✓ Zaten son sürümdesiniz.",
+                                    "✓ You are on the latest version."));
+            return 0;
+        }
+        yalniz_kit = true;  // ikili guncel; yalniz Android kiti kurulacak
     }
 
     if (check_only) {
@@ -731,35 +851,36 @@ int update_cmd_main(int argc, char **argv) {
         return 1;
     }
 
-    auto needed = assets_for_platform();
+    std::vector<Asset> needed;
+    if (!yalniz_kit) needed = assets_for_platform();
 
     // 1. Download every required artifact into staging.
     // 2. Verify each one's SHA-256 against the manifest. Bail on any
     //    mismatch — partial replacements are worse than no replacement.
-    for (const auto &a : needed) {
-        std::string url = release_download_url(latest, a.release_name);
-        std::string path = path_join(staging, a.release_name);
+    auto indir_dogrula = [&](const char *release_name) -> bool {
+        std::string url = release_download_url(latest, release_name);
+        std::string path = path_join(staging, release_name);
         std::printf("%s %s\n",
                     i18n::tr_en("→ İndiriliyor:", "→ Downloading:"),
-                    a.release_name);
+                    release_name);
         if (!download_to_file(url, path, err)) {
             std::fprintf(stderr, "  %s\n", err.c_str());
-            return 1;
+            return false;
         }
 
-        auto it = expected.find(a.release_name);
+        auto it = expected.find(release_name);
         if (it == expected.end()) {
             std::fprintf(stderr, "  %s %s\n",
                          i18n::tr_en(
                              "Manifeste yok:",
                              "Not in manifest:"),
-                         a.release_name);
-            return 1;
+                         release_name);
+            return false;
         }
         std::string actual_hex;
         if (!sha256_file_hex(path, actual_hex, err)) {
             std::fprintf(stderr, "  %s\n", err.c_str());
-            return 1;
+            return false;
         }
         if (actual_hex != it->second) {
             std::fprintf(stderr,
@@ -767,15 +888,23 @@ int update_cmd_main(int argc, char **argv) {
                          i18n::tr_en(
                              "✗ SHA-256 uyuşmazlığı:",
                              "✗ SHA-256 mismatch:"),
-                         a.release_name,
+                         release_name,
                          i18n::tr_en("Beklenen", "Expected"),
                          it->second.c_str(),
                          i18n::tr_en("Bulunan ", "Got     "),
                          actual_hex.c_str());
-            return 1;
+            return false;
         }
         std::printf("  ✓ %s\n", actual_hex.c_str());
+        return true;
+    };
+    for (const auto &a : needed) {
+        if (!indir_dogrula(a.release_name)) return 1;
     }
+    // Kit ikilinin yanina inmeden ONCE dogrulanir: ikili yeni, kit eski kalirsa
+    // APK eski runtime'a linklenirdi. Kit inemezse (eski surum yayinlamiyorsa)
+    // guncelleme durur, ikili de degismez.
+    if (kit && !indir_dogrula(kAndroidKit)) return 1;
 
     // 3. All downloads verified; do the install. Atomic moves are
     //    per-file: a half-completed update leaves the install dir in a
@@ -799,6 +928,13 @@ int update_cmd_main(int argc, char **argv) {
             return 1;
         }
         std::printf("  ✓ %s\n", a.install_name);
+    }
+    if (kit) {
+        if (!install_android_kit(path_join(staging, kAndroidKit), install_dir, latest, err)) {
+            std::fprintf(stderr, "  %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("  ✓ android/ (%s)\n", kAndroidKit);
     }
 
     std::printf("%s\n",
