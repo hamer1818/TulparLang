@@ -547,6 +547,7 @@ tulpar cache [info|clean|dir] # Compile cache (see below)
 
 tulpar version                # Show installed version
 tulpar update [--check]       # Self-update from tulparlang.dev
+tulpar update --android       # + Android build kit (APK/AAB scripts, runtime archives)
 tulpar --help                 # Show command reference
 ```
 

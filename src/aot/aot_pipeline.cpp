@@ -1,6 +1,7 @@
 #include "aot_pipeline.hpp"
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
+#include "../common/version.hpp"
 #include "../common/localization.hpp"
 #include "../common/import_resolve.hpp"
 #include "../common/platform.h"
@@ -1767,6 +1768,32 @@ AOTResult aot_compile_with_filename_debug(const char *source,
         llvm_backend_destroy(backend);
         ast_node_free(ast);
         return AOT_ERROR_LINK;
+      }
+    }
+    // Kurulu Android kiti (tulpar update --android: exe yaninda android/SURUM)
+    // bu derleyiciyle AYNI surumden olmali: dist/<abi> runtime arsivi bu
+    // derleyicinin urettigi koda linklenir, Obj/dizgi duzeni surumler arasinda
+    // degisti (#449, #454) — eski kit derlemede degil CIHAZDA bozulurdu.
+    // SURUM yoksa (kaynak agaci, elle kurulum) denetim yok.
+    {
+      std::string exe_dir = get_executable_dir();
+      std::string surum_yol = exe_dir.empty() ? std::string() : exe_dir + "/android/SURUM";
+      FILE *sf = surum_yol.empty() ? nullptr : fopen(surum_yol.c_str(), "rb");
+      if (sf) {
+        char buf[128] = {0};
+        size_t n = fread(buf, 1, sizeof(buf) - 1, sf);
+        fclose(sf);
+        while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
+        std::string beklenen = std::string("TulparLang ") + tulpar::kVersion;
+        if (beklenen != buf && !getenv("TULPAR_ANDROID_KIT_SURUM_IZIN")) {
+          fprintf(stderr,
+                  "[AOT] Android kiti '%s', derleyici '%s' (%s). `tulpar update --android` "
+                  "kiti yeniler; bilerek eski kitle derlemek icin TULPAR_ANDROID_KIT_SURUM_IZIN=1.\n",
+                  buf, beklenen.c_str(), surum_yol.c_str());
+          llvm_backend_destroy(backend);
+          ast_node_free(ast);
+          return AOT_ERROR_LINK;
+        }
       }
     }
     // Eklenti kullanan ve tame kullanmayan program (kendi NativeActivity

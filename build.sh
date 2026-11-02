@@ -900,6 +900,11 @@ if [ "$ACTION" = "suites" ]; then
     if [ -x tests/update_yerlestirme.sh ]; then
         kapi_kuyruk "guncelleme yerlestirme yolu basarisiz!" bash tests/update_yerlestirme.sh ./tulpar
     fi
+    # Android kiti (`tulpar update --android`): tam kit kurulur, eksik/baska
+    # surumlu kit reddedilir ve eski kit yerinde kalir. Agsiz (--test-android-kit).
+    if [ -x tests/android_kiti.sh ]; then
+        kapi_kuyruk "android kiti kurulum yolu basarisiz!" bash tests/android_kiti.sh ./tulpar
+    fi
 
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir

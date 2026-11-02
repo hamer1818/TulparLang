@@ -651,6 +651,13 @@ jobs:
           ./android/build_tame_android.sh
           ls -la wasm/dist android/dist/*/
 
+      # Surumun Android kiti bu arsivlerden paketleniyor (release isi). Paketleyici
+      # burada da kosar: kitin yapisi yayin etiketinde ILK KEZ kirilmasin.
+      - name: Android kiti deneme paketi
+        timeout-minutes: 3
+        run: |
+          bash tools/android_kiti_paketle.sh android android/dist "TulparLang deneme" /tmp/tulpar-android-kit.tar.gz
+
       - name: Upload dist arsivleri
         timeout-minutes: 5
         uses: actions/upload-artifact@v7
@@ -1561,7 +1568,7 @@ jobs:
     # (adimsiz bekleme, Post adimlari). Olculen en uzun basarili is
     # suresinin birkac kati.
     timeout-minutes: 20
-    needs: [detect-docs-only, build-linux, build-macos, build-windows]
+    needs: [detect-docs-only, build-linux, build-macos, build-windows, dist-arsivleri]
     runs-on: ubuntu-latest
     # Stable-only versioning: releases are created ONLY when a `v*` tag
     # is pushed (e.g. `git tag -a v2.2.0 -m "..." && git push origin
@@ -1583,6 +1590,29 @@ jobs:
         with:
           pattern: '{tulpar-*,libtulpar_runtime-*,TameEngine-*}'  # Windows zip/lib de bu kalibda
           merge-multiple: true
+
+      # ANDROID KITI (2026-11-02): `tulpar build --target=android`in istedigi
+      # paketleme betikleri + dist/<abi> runtime arsivleri. Eskiden yalniz
+      # kaynak agacindaydi; kurulu tulpar APK uretemiyordu ve tek kopya
+      # 3 gunluk dist-arsivleri artefaktiydi. Arsivler BU etiketin
+      # dist-arsivleri isinden (ayni kaynak), betikler etiketin android/'inden.
+      # `tulpar update --android` kurar; SURUM ikiliyle ayni olmali (update_cmd.cpp).
+      - name: Android kiti icin kaynak (android/)
+        timeout-minutes: 5
+        uses: actions/checkout@v6
+        with:
+          path: kaynak
+          sparse-checkout: |
+            android
+            tools
+          sparse-checkout-cone-mode: true
+
+      - name: Android kiti icin dist arsivleri
+        timeout-minutes: 5
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-arsivleri
+          path: dist-arsivleri
 
       - name: Compute release tag
         timeout-minutes: 5
@@ -1620,6 +1650,13 @@ jobs:
           cmp tulpar-macos-arm64 tulpar-macos-universal
           cmp libtulpar_runtime-macos-arm64.a libtulpar_runtime-macos-universal.a
 
+      - name: Android kiti (tulpar-android-kit.tar.gz)
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          bash kaynak/tools/android_kiti_paketle.sh kaynak/android dist-arsivleri/android/dist \
+            "TulparLang ${{ steps.ver.outputs.tag }}" tulpar-android-kit.tar.gz
+
       - name: Generate SHA256SUMS.txt
         timeout-minutes: 5
         shell: bash
@@ -1640,6 +1677,7 @@ jobs:
               libtulpar_runtime-macos-universal.a \
               TameEngine-linux-x64.tar.gz \
               TameEngine-macos-arm64.tar.gz \
+              tulpar-android-kit.tar.gz \
               tulpar-windows-x64.zip \
               tulpar-setup-windows-x64.exe \
               libtulpar_runtime-windows-x64.a \
@@ -1741,6 +1779,9 @@ jobs:
             - `libtulpar_runtime-linux-x64.a`
             - `libtulpar_runtime-macos-arm64.a` (old name `libtulpar_runtime-macos-universal.a`, same file) — carries OpenSSL inside, so `tulpar build` needs no Homebrew
 
+            **Android kit** (Linux / macOS host; `tulpar build --target=android` packaging scripts + `dist/<abi>` runtime archives for arm64-v8a and x86_64):
+            - `tulpar-android-kit.tar.gz` — installed next to the binary by `tulpar update --android` (later updates refresh it automatically). Its `android/SURUM` must equal `tulpar --version`; the Android build refuses a mismatched kit. The Android NDK is still required.
+
             **Integrity:**
             - `SHA256SUMS.txt` — `sha256sum -b` manifest covering every asset above. `tulpar update` verifies its downloads against this file; you can also check manually with `sha256sum -c SHA256SUMS.txt`.
             - `SHA256SUMS.txt.asc` — detached GPG signature over `SHA256SUMS.txt`, signed by the [TulparLang Release key](https://github.com/hamer1818/TulparLang/blob/main/release-public.asc) (fingerprint `CE5C 22BD EA61 58BC 8221 3A7E 4396 41B3 0E8D FDEE`). Optional verification: `gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt`. Present only when the workflow has the signing secret; absent on fork builds.
@@ -1785,6 +1826,7 @@ jobs:
             libtulpar_runtime-macos-universal.a
             TameEngine-linux-x64.tar.gz
             TameEngine-macos-arm64.tar.gz
+            tulpar-android-kit.tar.gz
             SHA256SUMS.txt*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
