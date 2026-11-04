@@ -39,8 +39,8 @@ enum class CType { Void, I32, I64, F32, F64, Bool, Str };
 
 const char *ctype_name(CType t);
 
-enum class Platform { Linux, MacOS, Windows, Android, Web };
-constexpr int kPlatformCount = 5;
+enum class Platform { Linux, MacOS, Windows, Android, Web, Ios };
+constexpr int kPlatformCount = 6;
 const char *platform_key(Platform p);
 
 struct Function {

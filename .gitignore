@@ -171,6 +171,8 @@ _fio_t*.txt
 
 # Android build outputs (android/build_tame_android.sh)
 android/dist/
+# ios/build_runtime_ios.sh (macOS) ciktisi
+ios/dist/
 *_apk/
 *.apk
 *.apk.idsig

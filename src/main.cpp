@@ -96,7 +96,7 @@ static void print_help() {
   std::printf("  tulpar build <source.tpr> [out]  %s\n",
               tulpar::i18n::tr_en("- Bagimsiz native ikili olustur",
                                   "- Build standalone native binary"));
-  std::printf("  tulpar build --target=web|android %s\n",
+  std::printf("  tulpar build --target=web|android|ios %s\n",
               tulpar::i18n::tr_en("- Web (wasm) / Android hedefi",
                                   "- Web (wasm) / Android target"));
   std::printf("  tulpar build --apk <src> [out]   %s\n",
@@ -340,7 +340,12 @@ int main(int argc, char **argv) {
   // --aab: staging'in ardından package_aab.sh koşsun → Play Store'a yüklenebilir
   // imzalı .aab. Android hedefini ima eder; --apk yerine geçer.
   int aab_package = 0;
+  // --target=ios / --ios: arm64-apple-ios nesnesi + (macOS'ta xcrun ile) .app
+  // + imzasiz .ipa. Ayrinti aot_pipeline.cpp iOS yolunda.
+  int ios_target = 0;
   for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--target=ios") == 0 || strcmp(argv[i], "--ios") == 0)
+      ios_target = 1;
     if (strcmp(argv[i], "--target=web") == 0 || strcmp(argv[i], "--web") == 0)
       web_target = 1;
     if (strcmp(argv[i], "--target=android") == 0 ||
@@ -481,6 +486,15 @@ int main(int argc, char **argv) {
                 "tulpar build --sanitize=address x.tpr [output]"));
     return 1;
   }
+  if (ios_target && !build_mode) {
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en(
+                "--target=ios yalnizca 'tulpar build' ile kullanilir: "
+                "tulpar build --target=ios oyun.tpr [cikti]",
+                "--target=ios only works with 'tulpar build': "
+                "tulpar build --target=ios game.tpr [output]"));
+    return 1;
+  }
   if (android_target && !build_mode) {
     fprintf(stderr, "%s\n",
             tulpar::i18n::tr_en(
@@ -496,7 +510,7 @@ int main(int argc, char **argv) {
     // (`tulpar build` tek başına config'i okur; --target/--web/--android/--apk/
     //  --aab verilmişse o kazanır.) Değerler: desktop|web|android|apk|aab.
     bool cli_target_given =
-        web_target || android_target || apk_package || aab_package;
+        web_target || android_target || apk_package || aab_package || ios_target;
     if (!cli_target_given && !toml_build_target.empty()) {
       const std::string &t = toml_build_target;
       if (t == "web") {
@@ -509,12 +523,14 @@ int main(int argc, char **argv) {
       } else if (t == "aab") {
         android_target = 1;
         aab_package = 1;
+      } else if (t == "ios") {
+        ios_target = 1;
       } else if (t == "desktop" || t == "native") {
         // yerel binary — bayrak gerekmez
       } else {
         std::fprintf(stderr,
                      "[build] tulpar.toml target='%s' taninmadi "
-                     "(desktop|web|android|apk|aab); desktop varsayildi.\n",
+                     "(desktop|web|android|apk|aab|ios); desktop varsayildi.\n",
                      t.c_str());
       }
     }
@@ -522,6 +538,13 @@ int main(int argc, char **argv) {
     if (android_target) aot_set_target_android(1);
     if (apk_package) aot_set_android_apk(1);
     if (aab_package) aot_set_android_aab(1);
+    if (ios_target) aot_set_target_ios(1);
+    if (ios_target && (web_target || android_target)) {
+      fprintf(stderr, "%s\n",
+              tulpar::i18n::tr_en("--target=ios web/android hedefiyle birlikte verilemez",
+                                  "--target=ios cannot be combined with web/android"));
+      return 1;
+    }
     // Pozisyonel argümanlar: bayraklar (`--target=web`, `--debug`, ...)
     // build'den sonra da gelebilir; '-' ile başlayanları atla.
     //
@@ -549,7 +572,8 @@ int main(int argc, char **argv) {
         } else if (strcmp(f, "--target=web") == 0 || strcmp(f, "--web") == 0 ||
                    strcmp(f, "--target=android") == 0 ||
                    strcmp(f, "--android") == 0 || strcmp(f, "--apk") == 0 ||
-                   strcmp(f, "--aab") == 0 || strcmp(f, "-o") == 0 ||
+                   strcmp(f, "--aab") == 0 || strcmp(f, "--target=ios") == 0 ||
+                   strcmp(f, "--ios") == 0 || strcmp(f, "-o") == 0 ||
                    strcmp(f, "--aot") == 0 || strcmp(f, "--build") == 0 ||
                    strcmp(f, "--vm") == 0 || strcmp(f, "--run") == 0) {
           // Yukarıda (hedef taraması) ya da konumdan ele alınıyor; `-o`

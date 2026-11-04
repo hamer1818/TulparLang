@@ -48,6 +48,11 @@ void aot_set_android_apk(int enable);
 // Play Store'a yüklenebilir imzalı <out>.aab (bundletool). Android hedefini ima
 // eder; --apk yerine geçer (ikisi verilirse --aab kazanır).
 void aot_set_android_aab(int enable);
+// `tulpar build --target=ios`: arm64-apple-ios nesnesi (TULPAR_IOS_SDK=
+// iphonesimulator ise -simulator), oyunun `main`i `tulpar_main` olur (iOS'ta
+// surecin main'i UIApplicationMain'i kosan host'undur — yerel eklenti verir).
+// macOS'ta xcrun varsa <out>.app (Info.plist + varliklar) + imzasiz <out>.ipa.
+void aot_set_target_ios(int enable);
 
 // Compile Tulpar source to executable (verbose mode).
 // Returns AOT_OK on success, error code otherwise.

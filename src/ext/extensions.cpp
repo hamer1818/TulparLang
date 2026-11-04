@@ -323,7 +323,7 @@ bool parse_manifest(const std::string &mpath, const char *origin,
       if (idx < 0) {
         err = merr(mpath, std::string(tr_en("bilinmeyen link platformu '", "unknown link platform '")) +
                               (pl->string ? pl->string : "") +
-                              "' (linux, macos, windows, android, web)");
+                              "' (linux, macos, windows, android, web, ios)");
         return false;
       }
       if (!parse_link(pl, mpath, ex.dir, pl->string, ex.link[idx], err)) return false;
@@ -496,6 +496,7 @@ const char *platform_key(Platform p) {
   case Platform::Windows: return "windows";
   case Platform::Android: return "android";
   case Platform::Web: return "web";
+  case Platform::Ios: return "ios";
   }
   return "?";
 }
@@ -740,7 +741,7 @@ bool link_flags(Platform target, const char *abi, std::string &out,
     };
     for (const auto &d : L.lib_dirs) out += " -L\"" + subst(d) + "\"";
     // macOS ld64 arsivleri tekrar tarar; grup bayragi orada yok.
-    const bool grp = L.group && target != Platform::MacOS && !L.libs.empty();
+    const bool grp = L.group && target != Platform::MacOS && target != Platform::Ios && !L.libs.empty();
     if (grp) out += " -Wl,--start-group";
     for (const auto &l : L.libs) out += " -l" + l;
     if (grp) out += " -Wl,--end-group";

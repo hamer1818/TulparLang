@@ -6280,6 +6280,12 @@ VMValue aot_sys_run(VMValue cmd_val) {
   if (!IS_STRING(cmd_val))
     return VM_INT(-1);
   const char *cmd = AS_STRING(cmd_val)->chars;
+#if defined(__APPLE__) && defined(TULPAR_TARGET_IOS)
+  // iOS SDK'si system()'i "unavailable" isaretler: uygulama kabugu baska surec
+  // baslatamaz. sys_run orada her zaman "baslatilamadi" (-1).
+  (void)cmd;
+  return VM_INT(-1);
+#else
   int rc = system(cmd);
   if (rc == -1)
     return VM_INT(-1);
@@ -6289,6 +6295,7 @@ VMValue aot_sys_run(VMValue cmd_val) {
 #else
   // POSIX: unwrap the wait-status into the plain exit code.
   return VM_INT(WEXITSTATUS(rc));
+#endif
 #endif
 }
 

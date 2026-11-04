@@ -625,6 +625,13 @@ static int g_target_android = 0;
 
 void aot_set_target_android(int enable) { g_target_android = enable ? 1 : 0; }
 
+// --- iOS hedefi (arm64-apple-ios / -simulator) ---------------------------------
+// `tulpar build --target=ios`. Nesne her makinede uretilir (LLVM AArch64 +
+// Mach-O; SDK gerekmez). Link, .app ve .ipa macOS'ta xcrun ile — Apple SDK'si
+// yalniz orada (Mac'siz akis: GitHub'in macOS kosucusu). Ayrinti asagida.
+static int g_target_ios = 0;
+void aot_set_target_ios(int enable) { g_target_ios = enable ? 1 : 0; }
+
 // `--apk`: staging'in ardından android/package_apk.sh'yi de çalıştır → tek
 // komutta imzalı, kurulabilir .apk. Betik WSL/Windows-interop ayrıntılarını
 // zaten çözüyor; driver yalnızca onu bulup çağırır.
@@ -1699,7 +1706,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     llvm_backend_optimize(backend);
   }
   if (g_sanitize_address) {
-    if (g_target_web || g_target_android) {
+    if (g_target_web || g_target_android || g_target_ios) {
       fprintf(stderr, "%s\n", tulpar::i18n::tr_en(
           "[AOT] Hata: --sanitize yalniz yerel hedefte destekleniyor.",
           "[AOT] Error: --sanitize is only supported for the native target."));
@@ -1756,6 +1763,265 @@ AOTResult aot_compile_with_filename_debug(const char *source,
       snprintf(ir_file, sizeof(ir_file), "%s.ll", output_name);
       llvm_backend_emit_ir_file(backend, ir_file);
     }
+  }
+
+  // iOS hedefi: tek ABI (arm64) nesnesi + macOS'ta link/.app/.ipa, sonra cik.
+  //
+  // NEDEN `main` -> `tulpar_main`: iOS'ta surecin main'i UIApplicationMain'i
+  // ana iplikte kosturmak ZORUNDA (UIKit baska iplikten kurulamaz) ve hic
+  // donmez. Oyunun dongusu (motor_ac .. kare_bitir) kendi ipliginde kosar;
+  // onu baslatan, main'i veren host'tur (yerel eklenti: tulpar-engine
+  // bridge/ios_host.mm). Android'deki android_main -> main deseninin aynisi,
+  // yalniz ad cakismasin diye oyununki yeniden adlanir.
+  if (g_target_ios) {
+    const char *sdk_env = getenv("TULPAR_IOS_SDK");
+    const std::string sdk = (sdk_env && *sdk_env) ? sdk_env : "iphoneos";
+    if (sdk != "iphoneos" && sdk != "iphonesimulator") {
+      fprintf(stderr, "[AOT] TULPAR_IOS_SDK iphoneos|iphonesimulator olmali, verilen: '%s'\n", sdk.c_str());
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_LINK;
+    }
+    const char *minos_env = getenv("TULPAR_IOS_MIN");
+    const std::string minos = (minos_env && *minos_env) ? minos_env : "15.0";
+    const std::string triple = "arm64-apple-ios" + minos + (sdk == "iphonesimulator" ? "-simulator" : "");
+    {
+      std::string probe;
+      if (!ext_link_flags_for(tulpar::ext::Platform::Ios, sdk.c_str(), probe)) {
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+    }
+    if (LLVMValueRef mainfn = LLVMGetNamedFunction(backend->module, "main")) {
+      LLVMSetValueName2(mainfn, "tulpar_main", 11);
+    } else {
+      fprintf(stderr, "%s\n", tulpar::i18n::tr_en("[AOT] Hata: iOS: modulde main yok",
+                                                    "[AOT] Error: iOS: module has no main"));
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_EMIT;
+    }
+    const char *label = output_name;
+    if (const char *slash = strrchr(output_name, '/')) label = slash + 1;
+    const std::string stage = std::string(output_name) + "_ios";
+    {
+      std::string mk = "rm -rf \"" + stage + "\" && mkdir -p \"" + stage + "\"";
+      if (system(mk.c_str()) != 0) { /* emit hata verir */ }
+    }
+    const std::string obj = stage + "/" + sdk + ".o";
+    AOT_PROGRESS("[AOT] Emitting iOS object (%s): %s\n", triple.c_str(), obj.c_str());
+    if (llvm_backend_emit_object_for_triple(backend, obj.c_str(), triple.c_str()) != 0) {
+      fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to emit object file\n"));
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_EMIT;
+    }
+    // Uygulama kimligi: Android ile ayni tulpar.toml [android] bolumu (paket
+    // adi = bundle id, ad, surum, yon, varliklar, ikon). Varliklar ve ikon
+    // stage/assets ve stage/res altina kopyalanir; .app'e oradan gecer.
+    AndroidAppConfig app_cfg = load_android_app_config(stage, label);
+    if (!app_cfg.error.empty()) {
+      fprintf(stderr, "[AOT] %s\n", app_cfg.error.c_str());
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_LINK;
+    }
+    const std::string app = stage + "/" + std::string(label) + ".app";
+    // Link ancak Apple SDK'si olan makinede (xcrun). Yoksa nesne + bir not:
+    // Linux'ta derleme hatasiz biter, link macOS'ta yapilir.
+    const bool have_xcrun = system("xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1") == 0;
+    if (!have_xcrun) {
+      printf("[AOT] iOS nesnesi: %s (%s)\n", obj.c_str(), triple.c_str());
+      printf("%s\n", tulpar::i18n::tr_en(
+                         "[AOT] xcrun yok: link, .app ve .ipa macOS'ta (Xcode komut satiri araclari) yapilir.",
+                         "[AOT] no xcrun: link, .app and .ipa happen on macOS (Xcode command line tools)."));
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_OK;
+    }
+    {
+      std::string mk = "mkdir -p \"" + app + "\"";
+      if (system(mk.c_str()) != 0) { /* link hata verir */ }
+    }
+    std::string search;
+    {
+      auto add = [&](const std::string &dir) {
+        if (!dir.empty()) search += "-L\"" + dir + "\" ";
+      };
+      std::string exe_dir = get_executable_dir();
+      if (!exe_dir.empty()) add(exe_dir + "/ios/dist/" + sdk);
+      add("./ios/dist/" + sdk);
+      if (const char *env = getenv("TULPAR_IOS_LIB_DIR"); env && *env) add(std::string(env) + "/" + sdk);
+    }
+    std::string ext_flags, ext_err;
+    (void)tulpar::ext::link_flags(tulpar::ext::Platform::Ios, sdk.c_str(), ext_flags, ext_err);
+    const std::string exe_name = "tulpargame";
+    std::string cmd = "xcrun -sdk " + sdk + " clang++ -target " + triple + " -o \"" + app + "/" + exe_name +
+                      "\" \"" + obj + "\" " + search + ext_flags +
+                      " -ltulpar_runtime_ios -framework Foundation -lc++ -dead_strip" + aot_extra_link_flags() +
+                      " -Wl,-rpath,@executable_path/Frameworks 2>&1";
+    AOT_PROGRESS("[AOT] Linking iOS (%s): %s/%s\n", sdk.c_str(), app.c_str(), exe_name.c_str());
+    int rc;
+    {
+      AOTPhaseTimer t("link-ios");
+      rc = system(cmd.c_str());
+    }
+    if (rc != 0) {
+      fprintf(stderr, "[AOT] iOS link basarisiz (kod %d). Komut:\n  %s\n", rc, cmd.c_str());
+      fprintf(stderr, "%s\n", tulpar::i18n::tr_en(
+                                  "[AOT] iOS runtime arsivi ios/dist/<sdk>/libtulpar_runtime_ios.a gerekir: "
+                                  "ios/build_runtime_ios.sh (macOS).",
+                                  "[AOT] The iOS link needs ios/dist/<sdk>/libtulpar_runtime_ios.a: "
+                                  "run ios/build_runtime_ios.sh (macOS)."));
+      ext_link_failure_hint(nullptr);
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_LINK;
+    }
+    // Varliklar: stage/assets/<montaj> -> <app>/<montaj> (oyun calisma dizinine
+    // gore "assets/x" okur; host cwd'yi .app kokune alir).
+    {
+      std::string cp = "if [ -d \"" + stage + "/assets\" ]; then cp -R \"" + stage + "/assets/.\" \"" + app + "/\"; fi";
+      if (system(cp.c_str()) != 0)
+        fprintf(stderr, "[AOT] [ios] varliklar .app'e kopyalanamadi\n");
+    }
+    // Ikon: [android] icon (512x512 PNG) -> sips ile 120/180 (iPhone) + 152/167 (iPad).
+    std::string icon_plist;
+    if (app_cfg.has_icon) {
+      const std::string src = stage + "/res/mipmap/ic_launcher.png";
+      std::string files;
+      bool ok = true;
+      for (int px : {120, 180, 152, 167}) {
+        const std::string dst = app + "/AppIcon" + std::to_string(px) + ".png";
+        std::string c = "sips -z " + std::to_string(px) + " " + std::to_string(px) + " \"" + src + "\" --out \"" + dst + "\" >/dev/null 2>&1";
+        if (system(c.c_str()) != 0) ok = false;
+        files += "        <string>AppIcon" + std::to_string(px) + "</string>\n";
+      }
+      if (ok)
+        icon_plist = "  <key>CFBundleIcons</key>\n  <dict>\n    <key>CFBundlePrimaryIcon</key>\n    <dict>\n"
+                     "      <key>CFBundleIconFiles</key>\n      <array>\n" + files +
+                     "      </array>\n    </dict>\n  </dict>\n"
+                     "  <key>CFBundleIcons~ipad</key>\n  <dict>\n    <key>CFBundlePrimaryIcon</key>\n    <dict>\n"
+                     "      <key>CFBundleIconFiles</key>\n      <array>\n" + files +
+                     "      </array>\n    </dict>\n  </dict>\n";
+      else
+        fprintf(stderr, "[AOT] [ios] ikon olceklenemedi (sips), ikonsuz devam\n");
+    }
+    auto xml = [](const std::string &v) {
+      std::string o;
+      for (char c : v) {
+        if (c == '&') o += "&amp;";
+        else if (c == '<') o += "&lt;";
+        else if (c == '>') o += "&gt;";
+        else o += c;
+      }
+      return o;
+    };
+    std::string orient;
+    if (app_cfg.orientation == "portrait")
+      orient = "    <string>UIInterfaceOrientationPortrait</string>\n";
+    else if (app_cfg.orientation == "landscape")
+      orient = "    <string>UIInterfaceOrientationLandscapeLeft</string>\n"
+               "    <string>UIInterfaceOrientationLandscapeRight</string>\n";
+    else
+      orient = "    <string>UIInterfaceOrientationPortrait</string>\n"
+               "    <string>UIInterfaceOrientationLandscapeLeft</string>\n"
+               "    <string>UIInterfaceOrientationLandscapeRight</string>\n";
+    const std::string disp = app_cfg.label.empty() ? std::string(label) : app_cfg.label;
+    {
+      const std::string plist = app + "/Info.plist";
+      FILE *f = fopen(plist.c_str(), "wb");
+      if (!f) {
+        fprintf(stderr, "[AOT] [ios] Info.plist yazilamadi: %s\n", plist.c_str());
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+      // UILaunchScreen: bos sozluk bile olsa SART — yoksa iOS uygulamayi eski
+      // 3.5" uyumluluk kipinde (kucuk, siyah seritli) acar.
+      // UIRequiresFullScreen: iPad'de bolunmus ekran yok (sabit yon).
+      // NSLocalNetworkUsageDescription: yerel ag 1v1 (iOS 14+ izin sorusu).
+      fprintf(f,
+              "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+              "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+              "<plist version=\"1.0\">\n<dict>\n"
+              "  <key>CFBundleDevelopmentRegion</key><string>tr</string>\n"
+              "  <key>CFBundleExecutable</key><string>%s</string>\n"
+              "  <key>CFBundleIdentifier</key><string>%s</string>\n"
+              "  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>\n"
+              "  <key>CFBundleName</key><string>%s</string>\n"
+              "  <key>CFBundleDisplayName</key><string>%s</string>\n"
+              "  <key>CFBundlePackageType</key><string>APPL</string>\n"
+              "  <key>CFBundleShortVersionString</key><string>%s</string>\n"
+              "  <key>CFBundleVersion</key><string>%s</string>\n"
+              "  <key>CFBundleSupportedPlatforms</key><array><string>%s</string></array>\n"
+              "  <key>MinimumOSVersion</key><string>%s</string>\n"
+              "  <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>\n"
+              "  <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>\n"
+              "  <key>UILaunchScreen</key><dict/>\n"
+              "  <key>UIRequiresFullScreen</key><true/>\n"
+              "  <key>UIStatusBarHidden</key><true/>\n"
+              "  <key>UIViewControllerBasedStatusBarAppearance</key><false/>\n"
+              "  <key>NSLocalNetworkUsageDescription</key><string>Yerel ağda 1v1 oyun için / For local network 1v1 play</string>\n"
+              "  <key>UISupportedInterfaceOrientations</key>\n  <array>\n%s  </array>\n"
+              "  <key>UISupportedInterfaceOrientations~ipad</key>\n  <array>\n%s  </array>\n"
+              "%s"
+              "</dict>\n</plist>\n",
+              exe_name.c_str(), xml(app_cfg.package).c_str(), xml(disp).c_str(), xml(disp).c_str(),
+              xml(app_cfg.version_name).c_str(), xml(app_cfg.version_code).c_str(),
+              sdk == "iphonesimulator" ? "iPhoneSimulator" : "iPhoneOS", minos.c_str(), orient.c_str(),
+              orient.c_str(), icon_plist.c_str());
+      fclose(f);
+    }
+    // Kullanilan eklentilerin kendi varliklari (<eklenti dizini>/assets: motorun
+    // HUD fontu gibi) -> <app>/tulpar-ext/<ad>/assets. Masaustunde bunlar paketin
+    // yanindan okunur; iOS paketinde baska yol yok. Host TULPAR_EXT_PATH'i
+    // <app>/tulpar-ext/<ad>'a kurar (tulpar-engine bridge/ios_host.mm).
+    for (const auto &e : tulpar::ext::extensions()) {
+      if (!e.used) continue;
+      struct stat est;
+      const std::string src = e.dir + "/assets";
+      if (stat(src.c_str(), &est) != 0 || !S_ISDIR(est.st_mode)) continue;
+      const std::string dst = app + "/tulpar-ext/" + e.name;
+      std::string c = "mkdir -p \"" + dst + "\" && cp -R \"" + src + "\" \"" + dst + "/\"";
+      if (system(c.c_str()) != 0) fprintf(stderr, "[AOT] [ios] eklenti varliklari kopyalanamadi: %s\n", src.c_str());
+      else AOT_PROGRESS("[AOT] [ios] eklenti varliklari: %s -> %s/assets\n", src.c_str(), dst.c_str());
+    }
+    // Gomulecek cerceve (link.ios "embed") simdilik yok: motor MoltenVK'yi statik baglar.
+    // Gecici (ad-hoc) imza: simulator imzasiz arm64 ikiliyi CALISTIRMAZ; cihaz
+    // icin de zararsiz — Sideloadly/AltStore kurarken kendi kimligiyle yeniden imzalar.
+    {
+      const char *sg = getenv("TULPAR_IOS_SIGN");
+      const std::string ident = (sg && *sg) ? sg : "-";
+      std::string c = "codesign --force --sign \"" + ident + "\" --timestamp=none \"" + app + "\" 2>&1";
+      if (system(c.c_str()) != 0) fprintf(stderr, "[AOT] [ios] codesign basarisiz (imzasiz devam)\n");
+    }
+    printf("[AOT] Successfully created: %s (%s)\n", app.c_str(), sdk.c_str());
+    if (sdk == "iphoneos") {
+      const std::string ipa = std::string(output_name) + ".ipa";
+      std::error_code fe;
+      const std::string ipa_abs = std::filesystem::absolute(ipa, fe).string();
+      const std::string app_rel = app.substr(stage.size() + 1);
+      std::string c = "cd \"" + stage + "\" && rm -rf Payload && mkdir Payload && cp -R \"" + app_rel +
+                      "\" Payload/ && rm -f \"" + ipa_abs + "\" && zip -qry \"" + ipa_abs +
+                      "\" Payload && rm -rf Payload";
+      if (system(c.c_str()) != 0) {
+        fprintf(stderr, "[AOT] [ios] .ipa paketlenemedi\n");
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+      printf("[AOT] IPA: %s\n", ipa.c_str());
+      printf("%s\n", tulpar::i18n::tr_en(
+                         "[AOT] Imzasiz/gecici imzali: cihaza Sideloadly/AltStore (kendi Apple ID'nle) ya da "
+                         "gelistirici hesabiyla yeniden imzalayip kur.",
+                         "[AOT] Unsigned/ad-hoc: install with Sideloadly/AltStore (your Apple ID) or re-sign "
+                         "with a developer account."));
+    }
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_OK;
   }
 
   // Android hedefi: iki ABI için obje + NDK linki + APK staging, sonra çık.
