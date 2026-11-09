@@ -13,6 +13,18 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — Android URL şeması / deep link (`[android] url_scheme`)
+
+- `tulpar.toml` `[android] url_scheme = "woe"` (ya da `TULPAR_ANDROID_URL_SCHEME=woe`) etkinliğe
+  `VIEW` + `DEFAULT` + `BROWSABLE` intent-filter'ı (`<data android:scheme="woe"/>`) ve
+  `launchMode="singleTask"` yazar: tarayıcıdaki bir sayfanın `woe://...` ya da
+  `intent://...#Intent;scheme=woe;package=...;end` bağlantısı **çalışan** oyunu öne getirir (OAuth dönüş
+  sayfasındaki "oyuna dön" düğmesi). singleTask olmadan Chrome'un görevinde ikinci bir NativeActivity
+  açılırdı. Varsayılan YOK (manifest birebir eskisi gibi); env toml'u ezer (boş dizgi kapatır).
+  Geçersiz şema (büyük harf, `http`/`https`/`intent`/`file` gibi tarayıcı şemaları) derlemeyi DURDURUR.
+- Kapı `tests/android_url_semasi.sh` (6 kontrol, `build.sh`'a bağlı). Pozitif kontrol: eski derleyici
+  ile 4 kırmızı.
+
 ### Eklendi — Android `POST_NOTIFICATIONS` izni (`[android] bildirim`)
 
 - `tulpar.toml` `[android] bildirim = true` (ya da `TULPAR_ANDROID_BILDIRIM=1`) manifeste

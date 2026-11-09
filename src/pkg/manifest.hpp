@@ -127,6 +127,10 @@ struct Manifest {
     // `bildirim = true` — manifeste android.permission.POST_NOTIFICATIONS (Android 13+ calisma zamaninda
     // sorulur). -1 verilmedi (varsayilan YOK), 0 yok, 1 var. TULPAR_ANDROID_BILDIRIM=0|1 ezer.
     int android_bildirim = -1;
+    // `url_scheme = "woe"` — etkinlige VIEW/BROWSABLE intent-filter'i (woe://...) + launchMode singleTask:
+    // tarayicidaki bir sayfa (or. OAuth donus sayfasi) "oyuna don" baglantisiyla calisan oyunu one getirir
+    // (singleTask: yeni NativeActivity ornegi acilmaz). Bos = yok. TULPAR_ANDROID_URL_SCHEME ezer.
+    std::string android_url_scheme;
 
     // [build] — `tulpar build` bunları CLI bayrağı verilmediğinde kullanır.
     // target: "desktop" (varsayılan) | "web" | "android" | "apk" | "aab".

@@ -94,7 +94,7 @@ bool manifest_parse(const std::string &source, Manifest &out,
             case SEC_REGISTRY: return "url, mirrors";
             case SEC_ANDROID: return "package, name, icon, orientation, version_code, "
                                      "version_name, assets, splash_color, cutout, target_sdk, "
-                                     "internet, lan, bildirim";
+                                     "internet, lan, bildirim, url_scheme";
             case SEC_BUILD: return "target, entry, output";
             case SEC_EXT: return "paths";
             default: return "";
@@ -358,6 +358,7 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 else if (key == "splash_color") out.android_splash_color = val;
                 else if (key == "cutout") out.android_cutout = val;
                 else if (key == "target_sdk") out.android_target_sdk = val;
+                else if (key == "url_scheme") out.android_url_scheme = val;
             } else if (section == SEC_BUILD) {
                 if (key == "target") out.build_target = val;
                 else if (key == "entry") out.build_entry = val;
@@ -465,7 +466,8 @@ std::string Manifest::to_toml() const {
         !android_version_code.empty() || !android_version_name.empty() ||
         !android_assets.empty() || !android_splash_color.empty() ||
         !android_cutout.empty() || !android_target_sdk.empty() ||
-        android_internet >= 0 || android_lan >= 0 || android_bildirim >= 0) {
+        android_internet >= 0 || android_lan >= 0 || android_bildirim >= 0 ||
+        !android_url_scheme.empty()) {
         out += "\n[android]\n";
         auto akv = [&](const char *k, const std::string &v) {
             if (v.empty()) return;
@@ -484,6 +486,7 @@ std::string Manifest::to_toml() const {
         akv("splash_color", android_splash_color);
         akv("cutout", android_cutout);
         akv("target_sdk", android_target_sdk);
+        akv("url_scheme", android_url_scheme);
         if (android_internet >= 0)
             out += android_internet ? "internet = true\n" : "internet = false\n";
         if (android_lan >= 0)

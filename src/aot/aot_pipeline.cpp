@@ -800,7 +800,24 @@ struct AndroidAppConfig {
   // daha eski surumlerde etkisiz). Varsayilan YOK. `[android] bildirim = true` / TULPAR_ANDROID_BILDIRIM=1.
   // tulpar-engine eng_notify (Warlords of Era, 2026-11-09).
   bool bildirim = false;
+  // URL semasi (deep link): bos degilse etkinlige VIEW + DEFAULT + BROWSABLE intent-filter'i ve
+  // launchMode="singleTask". Tarayicidaki "oyuna don" baglantisi (woe://... ya da intent://...;scheme=woe)
+  // calisan oyunu ONE GETIRIR; singleTask olmadan Chrome'un gorevinde ikinci bir NativeActivity acilirdi.
+  // Kural: [a-z][a-z0-9+.-]* ve http/https/file/content/intent/javascript degil (yanlis yazim derlemeyi DURDURUR).
+  // `[android] url_scheme = "woe"` / TULPAR_ANDROID_URL_SCHEME. Warlords of Era Google girisi, 2026-11-09.
+  std::string url_scheme;
 };
+
+// URL semasi gecerli mi (RFC 3986 scheme, kucuk harf; tarayicinin kendi semalari yasak).
+static bool android_url_scheme_gecerli(const std::string &s) {
+  if (s.empty() || s.size() > 32 || !(s[0] >= 'a' && s[0] <= 'z')) return false;
+  for (char c : s)
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '.' || c == '-')) return false;
+  static const char *yasak[] = {"http", "https", "file", "content", "intent", "javascript", "data", "about", "android-app"};
+  for (const char *y : yasak)
+    if (s == y) return false;
+  return true;
+}
 
 // Çıktı adından geçerli bir paket kimliği türet: "dev.tulparlang.<ad>".
 //
@@ -878,6 +895,17 @@ static void write_android_manifest(const std::string &stage,
   FILE *f = fopen(path.c_str(), "wb");
   if (!f) return;
   std::string icon_attr;
+  // URL semasi (cfg.url_scheme dogrulanmis): singleTask + VIEW/BROWSABLE filtresi
+  std::string launch_attr, scheme_filter;
+  if (!cfg.url_scheme.empty()) {
+    launch_attr = "\n        android:launchMode=\"singleTask\"";
+    scheme_filter = "      <intent-filter>\n"
+                    "        <action android:name=\"android.intent.action.VIEW\"/>\n"
+                    "        <category android:name=\"android.intent.category.DEFAULT\"/>\n"
+                    "        <category android:name=\"android.intent.category.BROWSABLE\"/>\n"
+                    "        <data android:scheme=\"" + xml_escape(cfg.url_scheme) + "\"/>\n"
+                    "      </intent-filter>\n";
+  }
   // İkon varsa hem klasik hem yuvarlak (roundIcon) slotu — ikisi de adaptive
   // ic_launcher'ı gösterir (res/mipmap-anydpi-v26/ic_launcher.xml).
   if (cfg.has_icon)
@@ -914,13 +942,14 @@ static void write_android_manifest(const std::string &stage,
           "        android:theme=\"@style/TulparSplash\"\n"
           "        android:configChanges=\"orientation|keyboardHidden|screenSize\"\n"
           "        android:screenOrientation=\"%s\"\n"
-          "        android:exported=\"true\">\n"
+          "        android:exported=\"true\"%s>\n"
           "      <meta-data android:name=\"android.app.lib_name\" "
           "android:value=\"tulpargame\"/>\n"
           "      <intent-filter>\n"
           "        <action android:name=\"android.intent.action.MAIN\"/>\n"
           "        <category android:name=\"android.intent.category.LAUNCHER\"/>\n"
           "      </intent-filter>\n"
+          "%s"
           "    </activity>\n"
           "  </application>\n"
           "</manifest>\n",
@@ -934,7 +963,7 @@ static void write_android_manifest(const std::string &stage,
           cfg.bildirim ? "  <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n" : "",
           xml_escape(cfg.label).c_str(),
           icon_attr.c_str(), cfg.debuggable ? " android:debuggable=\"true\"" : "",
-          xml_escape(cfg.orientation).c_str());
+          xml_escape(cfg.orientation).c_str(), launch_attr.c_str(), scheme_filter.c_str());
   fclose(f);
 }
 
@@ -1127,6 +1156,15 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
                       "TULPAR_ANDROID_BILDIRIM must be 0|1|false|true, got: '")) +
                   bv + "'";
   }
+  // TULPAR_ANDROID_URL_SCHEME=<sema>: deep link (bos dizgi = kapat). toml `[android] url_scheme`; env toml'u ezer.
+  if (const char *v = getenv("TULPAR_ANDROID_URL_SCHEME"); v) cfg.url_scheme = v;
+  if (!cfg.url_scheme.empty() && !android_url_scheme_gecerli(cfg.url_scheme) && cfg.error.empty())
+    cfg.error = std::string(tulpar::i18n::tr_en(
+                    "[android] url_scheme / TULPAR_ANDROID_URL_SCHEME kucuk harfle baslayan [a-z0-9+.-] olmali "
+                    "(http/https/intent/file gibi tarayici semalari olmaz), verilen: '",
+                    "[android] url_scheme / TULPAR_ANDROID_URL_SCHEME must be lowercase [a-z][a-z0-9+.-]* "
+                    "(not a browser scheme such as http/https/intent/file), got: '")) +
+                cfg.url_scheme + "'";
   if (cfg.lan && !cfg.internet && cfg.error.empty())
     cfg.error = tulpar::i18n::tr_en(
         "TULPAR_ANDROID_LAN=1 INTERNET izni ister (TULPAR_ANDROID_INTERNET=0 ile birlikte verildi): "
@@ -1228,6 +1266,7 @@ static AndroidAppConfig load_android_app_config_toml(const std::string &stage,
   if (m.android_internet >= 0) cfg.internet = m.android_internet != 0;
   if (m.android_lan >= 0) cfg.lan = m.android_lan != 0;
   if (m.android_bildirim >= 0) cfg.bildirim = m.android_bildirim != 0;
+  if (!m.android_url_scheme.empty()) cfg.url_scheme = m.android_url_scheme;
   if (!m.android_orientation.empty()) {
     if (m.android_orientation == "landscape" ||
         m.android_orientation == "portrait" ||
