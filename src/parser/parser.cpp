@@ -2225,6 +2225,11 @@ std::unique_ptr<ASTNode> Parser::build_tstring(const std::string& tmpl,
                 case '\\': lit += '\\'; break;
                 case '"': lit += '"'; break;
                 case 'e': lit += '\x1b'; break; // ESC — ANSI escape sequences
+                case 'b': lit += '\b'; break;   // duz dizgiyle ayni kacislar (lexer.cpp read_string)
+                case 'f': lit += '\f'; break;
+                case 'v': lit += '\v'; break;
+                case 'a': lit += '\a'; break;
+                case '0': lit += '\0'; break;
                 case '{': lit += '{'; break; // literal brace via \{
                 case '}': lit += '}'; break;
                 default: lit += e; break;

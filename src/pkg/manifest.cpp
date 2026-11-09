@@ -94,7 +94,7 @@ bool manifest_parse(const std::string &source, Manifest &out,
             case SEC_REGISTRY: return "url, mirrors";
             case SEC_ANDROID: return "package, name, icon, orientation, version_code, "
                                      "version_name, assets, splash_color, cutout, target_sdk, "
-                                     "internet, lan";
+                                     "internet, lan, bildirim, url_scheme";
             case SEC_BUILD: return "target, entry, output";
             case SEC_EXT: return "paths";
             default: return "";
@@ -230,6 +230,27 @@ bool manifest_parse(const std::string &source, Manifest &out,
             return false;
         }
 
+        // `[android] bildirim = true` — lan ile ayni kural: bool ya da tirnakli bool,
+        // baska deger HATA (yazim hatasi sessizce "izin yok"a dusseydi oyuncu
+        // bulma telefonda hicbir hata vermeden calismazdi).
+        if (section == SEC_ANDROID && key == "bildirim") {
+            std::string bool_part = val_part;
+            size_t hash = bool_part.find('#');
+            if (hash != std::string::npos) bool_part = strip(bool_part.substr(0, hash));
+            if (bool_part == "true" || bool_part == "\"true\"") {
+                out.android_bildirim = 1;
+                continue;
+            }
+            if (bool_part == "false" || bool_part == "\"false\"") {
+                out.android_bildirim = 0;
+                continue;
+            }
+            out_err = "line " + std::to_string(lineno) +
+                      ": [android] 'bildirim' must be `true` or `false` (got: '" +
+                      bool_part + "')";
+            return false;
+        }
+
         // `[registry] mirrors = ["a", "b"]` and `[ext] paths = ["a"]` — the
         // array-valued keys. Single-line array of quoted strings; anything
         // else is an error (not silently dropped: a mirror list that parses
@@ -337,6 +358,7 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 else if (key == "splash_color") out.android_splash_color = val;
                 else if (key == "cutout") out.android_cutout = val;
                 else if (key == "target_sdk") out.android_target_sdk = val;
+                else if (key == "url_scheme") out.android_url_scheme = val;
             } else if (section == SEC_BUILD) {
                 if (key == "target") out.build_target = val;
                 else if (key == "entry") out.build_entry = val;
@@ -444,7 +466,8 @@ std::string Manifest::to_toml() const {
         !android_version_code.empty() || !android_version_name.empty() ||
         !android_assets.empty() || !android_splash_color.empty() ||
         !android_cutout.empty() || !android_target_sdk.empty() ||
-        android_internet >= 0 || android_lan >= 0) {
+        android_internet >= 0 || android_lan >= 0 || android_bildirim >= 0 ||
+        !android_url_scheme.empty()) {
         out += "\n[android]\n";
         auto akv = [&](const char *k, const std::string &v) {
             if (v.empty()) return;
@@ -463,10 +486,13 @@ std::string Manifest::to_toml() const {
         akv("splash_color", android_splash_color);
         akv("cutout", android_cutout);
         akv("target_sdk", android_target_sdk);
+        akv("url_scheme", android_url_scheme);
         if (android_internet >= 0)
             out += android_internet ? "internet = true\n" : "internet = false\n";
         if (android_lan >= 0)
             out += android_lan ? "lan = true\n" : "lan = false\n";
+        if (android_bildirim >= 0)
+            out += android_bildirim ? "bildirim = true\n" : "bildirim = false\n";
     }
     if (!build_target.empty() || !build_entry.empty() || !build_output.empty()) {
         out += "\n[build]\n";

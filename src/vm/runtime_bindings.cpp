@@ -10635,14 +10635,55 @@ static VMValue parse_json_string(const char **p, const char *end) {
     }
   }
 
-  // Build unescaped string
-  char *result = static_cast<char *>(aot_arena_alloc(len + 1));
+  // Build unescaped string. Her kacis girdisinden KISA ya da esit cikti uretir (\uXXXX 6 bayt -> en cok
+  // 3 bayt UTF-8; vekil cifti 12 -> 4), bu yuzden ham uzunluk yeter.
+  (void)len;
+  char *result = static_cast<char *>(aot_arena_alloc((size_t)(*p - start) + 1));
   const char *src = start;
   int i = 0;
+  auto hex4 = [&](const char *h, unsigned *out) -> bool {
+    if (h + 4 > *p) return false;
+    unsigned v = 0;
+    for (int k = 0; k < 4; k++) {
+      char c = h[k];
+      int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+      if (d < 0) return false;
+      v = v * 16 + (unsigned)d;
+    }
+    *out = v;
+    return true;
+  };
   while (src < *p) {
+    if (*src == '\\' && src + 1 < *p && src[1] == 'u') {
+      // JSON \uXXXX (RFC 8259 §7) -> UTF-8; UTF-16 vekil cifti birlestirilir. Eskiden ters bolu
+      // dusup "u00fc" metni kaliyordu (WoE sunucusu Turkce ferman, 2026-11-08).
+      unsigned cp = 0;
+      if (hex4(src + 2, &cp)) {
+        src += 6;
+        if (cp >= 0xD800 && cp <= 0xDBFF && src + 1 < *p && src[0] == '\\' && src[1] == 'u') {
+          unsigned lo = 0;
+          if (hex4(src + 2, &lo) && lo >= 0xDC00 && lo <= 0xDFFF) { cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00); src += 6; }
+          else cp = 0xFFFD;
+        } else if (cp >= 0xD800 && cp <= 0xDFFF) cp = 0xFFFD;
+        if (cp < 0x80) result[i++] = (char)cp;
+        else if (cp < 0x800) { result[i++] = (char)(0xC0 | (cp >> 6)); result[i++] = (char)(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) { result[i++] = (char)(0xE0 | (cp >> 12)); result[i++] = (char)(0x80 | ((cp >> 6) & 0x3F)); result[i++] = (char)(0x80 | (cp & 0x3F)); }
+        else { result[i++] = (char)(0xF0 | (cp >> 18)); result[i++] = (char)(0x80 | ((cp >> 12) & 0x3F)); result[i++] = (char)(0x80 | ((cp >> 6) & 0x3F)); result[i++] = (char)(0x80 | (cp & 0x3F)); }
+        continue;
+      }
+    }
     if (*src == '\\' && src + 1 < *p) {
       src++;
       switch (*src) {
+      case 'b':
+        result[i++] = '\b';
+        break;
+      case 'f':
+        result[i++] = '\f';
+        break;
+      case '/':
+        result[i++] = '/';
+        break;
       case 'n':
         result[i++] = '\n';
         break;

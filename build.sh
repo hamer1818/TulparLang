@@ -990,6 +990,18 @@ if [ "$ACTION" = "suites" ]; then
                     rm -rf "$ASMOKE"
                     exit 1
                 fi
+                # Bildirim izni: TULPAR_ANDROID_BILDIRIM=1 -> POST_NOTIFICATIONS (2026-11-09).
+                if ! bash tests/android_bildirim_izni.sh ./tulpar; then
+                    echo -e "${RED}android bildirim izni kapisi basarisiz!${NC}"
+                    rm -rf "$ASMOKE"
+                    exit 1
+                fi
+                # URL semasi (deep link): [android] url_scheme -> VIEW/BROWSABLE + singleTask (2026-11-09).
+                if ! bash tests/android_url_semasi.sh ./tulpar; then
+                    echo -e "${RED}android url semasi kapisi basarisiz!${NC}"
+                    rm -rf "$ASMOKE"
+                    exit 1
+                fi
             else
                 rm -rf "$ASMOKE"
                 exit 1

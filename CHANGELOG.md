@@ -13,6 +13,41 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — Android URL şeması / deep link (`[android] url_scheme`)
+
+- `tulpar.toml` `[android] url_scheme = "woe"` (ya da `TULPAR_ANDROID_URL_SCHEME=woe`) etkinliğe
+  `VIEW` + `DEFAULT` + `BROWSABLE` intent-filter'ı (`<data android:scheme="woe"/>`) ve
+  `launchMode="singleTask"` yazar: tarayıcıdaki bir sayfanın `woe://...` ya da
+  `intent://...#Intent;scheme=woe;package=...;end` bağlantısı **çalışan** oyunu öne getirir (OAuth dönüş
+  sayfasındaki "oyuna dön" düğmesi). singleTask olmadan Chrome'un görevinde ikinci bir NativeActivity
+  açılırdı. Varsayılan YOK (manifest birebir eskisi gibi); env toml'u ezer (boş dizgi kapatır).
+  Geçersiz şema (büyük harf, `http`/`https`/`intent`/`file` gibi tarayıcı şemaları) derlemeyi DURDURUR.
+- Kapı `tests/android_url_semasi.sh` (6 kontrol, `build.sh`'a bağlı). Pozitif kontrol: eski derleyici
+  ile 4 kırmızı.
+
+### Eklendi — Android `POST_NOTIFICATIONS` izni (`[android] bildirim`)
+
+- `tulpar.toml` `[android] bildirim = true` (ya da `TULPAR_ANDROID_BILDIRIM=1`) manifeste
+  `android.permission.POST_NOTIFICATIONS` yazar (Android 13+ yerel bildirimler için zorunlu). Varsayılan
+  KAPALI; env toml'u ezer; `true/false` dışı değer satır numarasıyla HATA (`lan` ile aynı kural).
+- Kapı `tests/android_bildirim_izni.sh` (7 kontrol, `build.sh`'a bağlı). Pozitif kontrol: eski derleyici
+  ile 4 kırmızı.
+
+### Düzeltildi — dizgi kaçışları `\b \f \v \a \u` ve JSON `\uXXXX` çözümü
+
+- **Dizgi**: `"\b"` sessizce düz `b` okunuyordu (bilinmeyen kaçış = harfin kendisi). Warlords of Era'da
+  metin girişinin silme karakterini `== "\b"` ile karşılaştıran kod her `b` harfinde siliyordu
+  ("Merhaba" -> "Merha"). Artık `\b` (0x08), `\f`, `\v`, `\a` C anlamında; `\uXXXX` ve `\u{X..XXXXXX}`
+  kod noktasını UTF-8 yazar (`"\u00fc" == "ü"`, `"\u{1F600}"` 4 bayt). t-dizgiler aynı kaçışları alır.
+- **JSON** (`fromJson`): `\uXXXX` çözülmüyordu — ters bölü düşüyor, `"u00fc"` metni kalıyordu; standart
+  JSON üreten her istemcinin (Python `json.dumps` varsayılanı, tarayıcılar) Türkçe harfleri sunucuda
+  bozuluyordu. Artık RFC 8259 §7: `\uXXXX` -> UTF-8, UTF-16 vekil çifti birleştirilir, yalnız vekil
+  U+FFFD olur; `\b \f \/` de çözülür. Çözülmüş dizgi için ayrılan alan ham uzunluk (çıktı her zaman
+  girdiden kısa ya da eşit).
+- Kapı `tests/kacis_dizileri.test.tpr` (3 test). Pozitif kontrol: eski derleyici (v3.44.0) ile 3/3 kırmızı
+  (`expected 'güç' got 'gu00fcu00e7'`).
+- Uyumluluk: `"\b"`'yi bilerek `b` harfi için yazan kod değişir (yazım hatası dışında anlamlı kullanımı yok).
+
 ### Eklendi — yerel ağ izni: `[android] lan = true` / `TULPAR_ANDROID_LAN=1` (Android)
 
 - Aynı Wi-Fi'da UDP yayınıyla oyuncu bulan bir oyun (tulpar-engine ağ 1v1, N2a)
