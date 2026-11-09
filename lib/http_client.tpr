@@ -11,8 +11,12 @@
 //
 // without remembering the builtin's positional contract.
 //
+// HTTPS: supported when Tulpar is built with OpenSSL (TULPAR_HAS_TLS; release builds are). The
+//   peer certificate AND host name are verified (system roots; TULPAR_CA_BUNDLE overrides) — a
+//   self-signed or wrong-host server fails with {ok:0, error:"TLS handshake failed ..."}. Measured
+//   2026-11-09: oauth2.googleapis.com answers; self-signed.badssl.com is refused.
+//   4-arg form http_request(method, url, body, {Header: value}) adds request headers.
 // Limitations (current):
-//   * No HTTPS — `https://` URLs return `{ok:0, error:"…"}`.
 //   * No redirects, no chunked encoding, no client-side keep-alive.
 //   * Response body is a raw string; use fromJson() to parse.
 // ============================================
