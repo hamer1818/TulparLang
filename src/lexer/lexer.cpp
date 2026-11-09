@@ -525,6 +525,34 @@ Token Lexer::read_string() {
                 case '\\': buffer += '\\'; break;
                 case '"': buffer += '"'; break;
                 case 'e': buffer += '\x1b'; break; // ESC — ANSI escape sequences
+                case 'b': buffer += '\b'; break;   // geri silme (0x08) — eskiden duz 'b' okunuyordu
+                case 'f': buffer += '\f'; break;
+                case 'v': buffer += '\v'; break;
+                case 'a': buffer += '\a'; break;
+                case 'u': {
+                    // \uXXXX ya da \u{X..XXXXXX}: kod noktasi -> UTF-8. Gecersizse duz 'u'.
+                    unsigned cp = 0; int cnt = 0;
+                    const bool brace = peek() == '{';
+                    if (brace) advance();
+                    while (cnt < (brace ? 6 : 4)) {
+                        char q = peek();
+                        int d;
+                        if (q >= '0' && q <= '9') d = q - '0';
+                        else if (q >= 'a' && q <= 'f') d = q - 'a' + 10;
+                        else if (q >= 'A' && q <= 'F') d = q - 'A' + 10;
+                        else break;
+                        advance();
+                        cp = cp * 16 + (unsigned)d;
+                        cnt++;
+                    }
+                    if (brace && peek() == '}') advance();
+                    if (cnt == 0 || cp > 0x10FFFF) { buffer += 'u'; break; }
+                    if (cp < 0x80) buffer += (char)cp;
+                    else if (cp < 0x800) { buffer += (char)(0xC0 | (cp >> 6)); buffer += (char)(0x80 | (cp & 0x3F)); }
+                    else if (cp < 0x10000) { buffer += (char)(0xE0 | (cp >> 12)); buffer += (char)(0x80 | ((cp >> 6) & 0x3F)); buffer += (char)(0x80 | (cp & 0x3F)); }
+                    else { buffer += (char)(0xF0 | (cp >> 18)); buffer += (char)(0x80 | ((cp >> 12) & 0x3F)); buffer += (char)(0x80 | ((cp >> 6) & 0x3F)); buffer += (char)(0x80 | (cp & 0x3F)); }
+                    break;
+                }
                 case 'x': case 'X': {
                     // \xHH — up to two hex digits (e.g. "\x1b" == ESC).
                     int val = 0, cnt = 0;

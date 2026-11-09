@@ -13,6 +13,21 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — dizgi kaçışları `\b \f \v \a \u` ve JSON `\uXXXX` çözümü
+
+- **Dizgi**: `"\b"` sessizce düz `b` okunuyordu (bilinmeyen kaçış = harfin kendisi). Warlords of Era'da
+  metin girişinin silme karakterini `== "\b"` ile karşılaştıran kod her `b` harfinde siliyordu
+  ("Merhaba" -> "Merha"). Artık `\b` (0x08), `\f`, `\v`, `\a` C anlamında; `\uXXXX` ve `\u{X..XXXXXX}`
+  kod noktasını UTF-8 yazar (`"\u00fc" == "ü"`, `"\u{1F600}"` 4 bayt). t-dizgiler aynı kaçışları alır.
+- **JSON** (`fromJson`): `\uXXXX` çözülmüyordu — ters bölü düşüyor, `"u00fc"` metni kalıyordu; standart
+  JSON üreten her istemcinin (Python `json.dumps` varsayılanı, tarayıcılar) Türkçe harfleri sunucuda
+  bozuluyordu. Artık RFC 8259 §7: `\uXXXX` -> UTF-8, UTF-16 vekil çifti birleştirilir, yalnız vekil
+  U+FFFD olur; `\b \f \/` de çözülür. Çözülmüş dizgi için ayrılan alan ham uzunluk (çıktı her zaman
+  girdiden kısa ya da eşit).
+- Kapı `tests/kacis_dizileri.test.tpr` (3 test). Pozitif kontrol: eski derleyici (v3.44.0) ile 3/3 kırmızı
+  (`expected 'güç' got 'gu00fcu00e7'`).
+- Uyumluluk: `"\b"`'yi bilerek `b` harfi için yazan kod değişir (yazım hatası dışında anlamlı kullanımı yok).
+
 ### Eklendi — yerel ağ izni: `[android] lan = true` / `TULPAR_ANDROID_LAN=1` (Android)
 
 - Aynı Wi-Fi'da UDP yayınıyla oyuncu bulan bir oyun (tulpar-engine ağ 1v1, N2a)

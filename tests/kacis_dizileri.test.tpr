@@ -1,0 +1,62 @@
+// KACIS DIZILERI (2026-11-09) — dizgi kacislari ve JSON \uXXXX cozumu.
+//
+// Iki sessiz bozulma vardi (Warlords of Era oyununda bulundu):
+//   1) "\b" dizgide duz 'b' okunuyordu (bilinmeyen kacis = harfin kendisi): metin girisinde silme
+//      karakterini karsilastiran kod her 'b' harfinde siliyordu ("Merhaba" -> "Merha").
+//   2) fromJson "\u00fc" kacisini cozmuyordu: ters bolu dusuyor, "u00fc" metni kaliyordu; standart
+//      JSON ureten her istemcinin (Python json.dumps varsayilani) Turkce harfleri bozuluyordu.
+// Ikisi de burada; her iddianin yaninda eski davranisi yakalayan KONTROL var.
+//
+// Calistir: ./tulpar tests/kacis_dizileri.test.tpr
+import "test";
+
+func run_dizgi_kacislari() {
+    assert_eq_int(length("x\by"), 3);
+    assert(substring("x\by", 1, 2) != "b", "\\b artik 'b' degil (KONTROL: eski davranis)");
+    assert_eq_int(length("\f\v\a"), 3);
+    assert(substring("a\fb", 1, 2) != "f", "\\f 'f' degil");
+    // \uXXXX ve \u{...} -> UTF-8
+    assert_eq_str("\u00fc", "ü");
+    assert_eq_str("g\u00fc\u00e7", "güç");
+    assert_eq_str("\u{1F600}", "😀");
+    assert_eq_int(length("\u{1F600}"), 4);
+    assert_eq_str("\u0041", "A");
+    // eski kacislar degismedi
+    assert_eq_str("\x41", "A");
+    assert_eq_int(length("\033[0m"), 4);
+    assert_eq_str("a\\b", "a" + "\\" + "b");
+}
+
+func run_t_dizgi_kacislari() {
+    int n = 5;
+    str s = t"x\b{n}";
+    assert_eq_int(length(s), 3);
+    assert(substring(s, 1, 2) != "b", "t-dizgide \\b 'b' degil");
+}
+
+func run_json_unicode() {
+    json j = fromJson("{\"a\": \"g\\u00fc\\u00e7\", \"b\": \"\\u015f\\u0130\", \"c\": \"\\ud83d\\ude00\"}");
+    assert_eq_str(j["a"], "güç");
+    assert_eq_str(j["b"], "şİ");
+    assert_eq_str(j["c"], "😀");
+    // KONTROL: eski hata "gu00fcu00e7" uretirdi
+    assert(j["a"] != "gu00fcu00e7", "ters bolu dusmuyor");
+    // diger JSON kacislari
+    json k = fromJson("{\"t\": \"a\\tb\\nc\\/d\\\\e\\\"f\\bg\"}");
+    assert_eq_str(k["t"], "a\tb\nc/d\\e\"f\bg");
+    // bozuk / yalniz vekil -> U+FFFD (cokmez)
+    json r = fromJson("{\"x\": \"\\ud83d!\"}");
+    assert_eq_str(r["x"], "\u{FFFD}!");
+    // gidis-donus: toJson ham UTF-8 yazar, fromJson geri okur
+    json g = fromJson(toJson({"m": "Merhaba dünya! ğüşiöç ĞÜŞİÖÇ"}));
+    assert_eq_str(g["m"], "Merhaba dünya! ğüşiöç ĞÜŞİÖÇ");
+    // anahtarlarda da cozulur
+    json h = fromJson("{\"\\u00e7\": 1}");
+    assert_eq_int(toInt(h["ç"]), 1);
+}
+
+print("=== kacis dizileri ===");
+test("dizgi kacislari (\\b \\f \\v \\a \\u)", "run_dizgi_kacislari");
+test("t-dizgi kacislari", "run_t_dizgi_kacislari");
+test("JSON \\uXXXX + vekil cifti", "run_json_unicode");
+test_summary();
