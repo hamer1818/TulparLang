@@ -103,19 +103,62 @@ if [ -d "$STAGE/res" ]; then
 else
     echo "[1/4] aapt2 link (manifest -> APK)"
 fi
+# Android kutuphaneleri (STAGE/android_lib/, or. tulpar-engine tools/android_google.py: Credential Manager):
+#   res/*.zip       aapt2 ile derlenmis kutuphane kaynaklari -> -R (ust uste; ayni ad sonrakinde kalir)
+#   paketler.txt    kaynaklari olan kutuphane paketleri -> --extra-packages: R siniflari BU link'in son
+#                   kimlikleriyle uretilir (kutuphane dex'i R'yi icermez; R8'e kutuphane olarak verildi)
+#   classes*.dex    kutuphane + motor Java kodu (R'siz) -> R dex'iyle birlestirilip APK'ya
+# Manifest (hasCode=true, bilesenler) staging'e kutuphaneyi ekleyen arac tarafindan yazilmistir.
+LIB="$STAGE/android_lib"
+LIB_ARGS=()
+if [ -d "$LIB" ]; then
+    for z in "$LIB"/res/*.zip; do [ -f "$z" ] && LIB_ARGS+=(-R "$(winpath "$z")"); done
+    [ ${#LIB_ARGS[@]} -gt 0 ] && LIB_ARGS+=(--auto-add-overlay)
+    if [ -s "$LIB/paketler.txt" ]; then
+        mkdir -p "$WORK/gen"
+        LIB_ARGS+=(--extra-packages "$(grep -v '^$' "$LIB/paketler.txt" | paste -sd: -)" --java "$(winpath "$WORK/gen")")
+    fi
+    echo "      android_lib: $(ls "$LIB"/res/*.zip 2>/dev/null | wc -l) kaynak paketi, $(ls "$LIB"/classes*.dex 2>/dev/null | wc -l) dex"
+fi
 "$AAPT2" link -o "$(winpath "$BASE")" \
     --manifest "$(winpath "$STAGE/AndroidManifest.xml")" \
     -I "$(winpath "$ANDROID_JAR")" \
+    ${LIB_ARGS[@]+"${LIB_ARGS[@]}"} \
     ${RES_FLAT[@]+"${RES_FLAT[@]}"}
+
+# Kutuphane R siniflari (son kimlikler) -> dex; kutuphane dex'iyle birlestir -> STAGE/classes.dex
+DEX_OUT=""
+if [ -d "$LIB" ] && ls "$LIB"/classes*.dex >/dev/null 2>&1; then
+    JAVAC="$(dirname "$JAVA")/javac"; [ -x "$JAVAC" ] || JAVAC="$(command -v javac || true)"
+    [ -n "$JAVAC" ] || { echo "HATA: javac yok (android_lib R siniflari icin JDK gerekir)"; exit 1; }
+    D8JAR="$BT/lib/d8.jar"
+    [ -f "$D8JAR" ] || { echo "HATA: d8.jar yok: $D8JAR"; exit 1; }
+    DEX_IN=()
+    for d in "$LIB"/classes*.dex; do DEX_IN+=("$(winpath "$d")"); done
+    if [ -d "$WORK/gen" ] && [ -n "$(find "$WORK/gen" -name '*.java' -print -quit)" ]; then
+        mkdir -p "$WORK/rcls"
+        find "$WORK/gen" -name '*.java' > "$WORK/rliste.txt"
+        "$JAVAC" --release 11 -nowarn -d "$WORK/rcls" @"$WORK/rliste.txt" || { echo "HATA: R siniflari derlenemedi"; exit 1; }
+        (cd "$WORK/rcls" && find . -name '*.class') > "$WORK/rcls.txt"
+        while read -r c; do DEX_IN+=("$(winpath "$WORK/rcls/${c#./}")"); done < "$WORK/rcls.txt"
+    fi
+    mkdir -p "$WORK/dex"
+    "$JAVA" -cp "$(winpath "$D8JAR")" com.android.tools.r8.D8 --release --min-api 26 \
+        --lib "$(winpath "$ANDROID_JAR")" --output "$(winpath "$WORK/dex")" "${DEX_IN[@]}" \
+        || { echo "HATA: d8 (android_lib dex birlestirme)"; exit 1; }
+    DEX_OUT="$WORK/dex"
+    echo "      android_lib dex: $(ls "$WORK/dex" | tr '\n' ' ')"
+fi
 
 # --- 2) native kütüphaneler (STORED) + oyun asset'leri ---------------------
 # assets/: driver'ın stage'e koyduğu ses/sprite/font dosyaları. aapt2 -A
 # KULLANILMAZ — Windows aapt2'si girdi adlarını ters bölüyle yazıp
 # AAssetManager eşleşmesini bozuyor; python zipfile ile düz '/' garanti.
 echo "[2/4] lib/<abi>/*.so + assets/ ekleniyor"
-python3 - "$BASE" "$STAGE" <<'PY'
+python3 - "$BASE" "$STAGE" "$DEX_OUT" <<'PY'
 import os, sys, zipfile
 base, stage = sys.argv[1], sys.argv[2]
+dex_out = sys.argv[3] if len(sys.argv) > 3 else ""
 libroot = os.path.join(stage, "lib")
 with zipfile.ZipFile(base, "a", zipfile.ZIP_STORED) as z:
     for abi in sorted(os.listdir(libroot)):
@@ -132,7 +175,12 @@ with zipfile.ZipFile(base, "a", zipfile.ZIP_STORED) as z:
                 z.writestr(zi, f.read())
             print("  +", arc, "(%d bytes)" % os.path.getsize(so))
     dex = os.path.join(stage, "classes.dex")
-    if os.path.isfile(dex):  # hasCode=true host (motor: Swappy Java simi icin gerekli)
+    if dex_out:  # android_lib: kutuphane + R dex'leri (classes.dex, classes2.dex ...)
+        for fn in sorted(os.listdir(dex_out)):
+            if fn.endswith(".dex"):
+                z.write(os.path.join(dex_out, fn), fn, zipfile.ZIP_DEFLATED)
+                print("  + %s (%d bytes)" % (fn, os.path.getsize(os.path.join(dex_out, fn))))
+    elif os.path.isfile(dex):  # hasCode=true host (motor: Swappy Java simi icin gerekli)
         z.write(dex, "classes.dex", zipfile.ZIP_DEFLATED)
         print("  + classes.dex (%d bytes)" % os.path.getsize(dex))
     aroot = os.path.join(stage, "assets")

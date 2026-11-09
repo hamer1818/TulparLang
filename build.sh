@@ -1002,6 +1002,12 @@ if [ "$ACTION" = "suites" ]; then
                     rm -rf "$ASMOKE"
                     exit 1
                 fi
+                # Android kutuphaneleri (android_lib/: kaynak -R, R son kimliklerle, dex birlestirme) (2026-11-09).
+                if ! bash tests/android_kutuphane.sh ./tulpar; then
+                    echo -e "${RED}android kutuphane kapisi basarisiz!${NC}"
+                    rm -rf "$ASMOKE"
+                    exit 1
+                fi
             else
                 rm -rf "$ASMOKE"
                 exit 1
