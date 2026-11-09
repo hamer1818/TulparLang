@@ -13,6 +13,17 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — Android kütüphaneleri Gradle'sız (`android_lib/`, `package_apk.sh`)
+
+- Staging dizininde `android_lib/` varsa `android/package_apk.sh`: `res/*.zip` (aapt2 ile derlenmiş kütüphane
+  kaynakları) `-R` ile bağlanır; `paketler.txt`'teki paketlerin R sınıfları `--extra-packages` ile **son**
+  kaynak kimlikleriyle üretilir, javac + d8 ile `classes*.dex` (R'siz kütüphane kodu) ile birleştirilip APK'ya
+  girer. Manifesti (hasCode, bileşenler) kütüphaneyi ekleyen araç yazar. İlk kullanıcı: tulpar-engine
+  `tools/android_google.py` (Credential Manager — yerli "Google ile giriş", Warlords of Era).
+- Kapı `tests/android_kutuphane.sh` (4 kontrol, `build.sh`'a bağlı): kütüphane kaynağı APK'da, dex'te sınıf +
+  R, R alanı = kaynak tablosundaki kimlik. Pozitif kontrol: önceki `package_apk.sh` ile 3 kırmızı.
+- Sınır: `package_aab.sh` (Play paketi) henüz `android_lib/` okumuyor.
+
 ### Eklendi — Android URL şeması / deep link (`[android] url_scheme`)
 
 - `tulpar.toml` `[android] url_scheme = "woe"` (ya da `TULPAR_ANDROID_URL_SCHEME=woe`) etkinliğe
