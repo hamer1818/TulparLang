@@ -13,6 +13,14 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — Android `POST_NOTIFICATIONS` izni (`[android] bildirim`)
+
+- `tulpar.toml` `[android] bildirim = true` (ya da `TULPAR_ANDROID_BILDIRIM=1`) manifeste
+  `android.permission.POST_NOTIFICATIONS` yazar (Android 13+ yerel bildirimler için zorunlu). Varsayılan
+  KAPALI; env toml'u ezer; `true/false` dışı değer satır numarasıyla HATA (`lan` ile aynı kural).
+- Kapı `tests/android_bildirim_izni.sh` (7 kontrol, `build.sh`'a bağlı). Pozitif kontrol: eski derleyici
+  ile 4 kırmızı.
+
 ### Düzeltildi — dizgi kaçışları `\b \f \v \a \u` ve JSON `\uXXXX` çözümü
 
 - **Dizgi**: `"\b"` sessizce düz `b` okunuyordu (bilinmeyen kaçış = harfin kendisi). Warlords of Era'da

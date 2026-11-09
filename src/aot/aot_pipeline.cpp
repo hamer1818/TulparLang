@@ -796,6 +796,10 @@ struct AndroidAppConfig {
   // izinli manifest yine de sessizce "ag var" gibi gorunurdu). tulpar-engine N2a,
   // 2026-10-23.
   bool lan = false;
+  // Bildirim: android.permission.POST_NOTIFICATIONS (Android 13+ calisma zamaninda da sorulan izin;
+  // daha eski surumlerde etkisiz). Varsayilan YOK. `[android] bildirim = true` / TULPAR_ANDROID_BILDIRIM=1.
+  // tulpar-engine eng_notify (Warlords of Era, 2026-11-09).
+  bool bildirim = false;
 };
 
 // Çıktı adından geçerli bir paket kimliği türet: "dev.tulparlang.<ad>".
@@ -891,7 +895,7 @@ static void write_android_manifest(const std::string &stage,
           // İnternet: online skor tablosu / http_get gibi ağ çağrıları için
           // (normal izin, kurulumda otomatik verilir). Varsayılan VAR; toml
           // `[android] internet = false` / TULPAR_ANDROID_INTERNET=0 kaldırır.
-          "%s%s"
+          "%s%s%s"
           // appCategory="game": Android 16 (API 36 hedefi) büyük ekranda
           // (sw600dp+) screenOrientation'ı yok sayıyor — oyunlar muaf; bu
           // öznitelik olmadan tablette yatay oyun dikey açılabilirdi.
@@ -927,6 +931,7 @@ static void write_android_manifest(const std::string &stage,
               : "",
           cfg.lan ? "  <uses-permission android:name=\"android.permission.CHANGE_WIFI_MULTICAST_STATE\"/>\n"
                   : "",
+          cfg.bildirim ? "  <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n" : "",
           xml_escape(cfg.label).c_str(),
           icon_attr.c_str(), cfg.debuggable ? " android:debuggable=\"true\"" : "",
           xml_escape(cfg.orientation).c_str());
@@ -1110,6 +1115,18 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
                       "TULPAR_ANDROID_LAN must be 0|1|false|true, got: '")) +
                   lv + "'";
   }
+  // TULPAR_ANDROID_BILDIRIM=0|1: bildirim izni (POST_NOTIFICATIONS). toml `[android] bildirim = true`;
+  // env toml'u ezer, baska deger DURDURUR.
+  if (const char *v = getenv("TULPAR_ANDROID_BILDIRIM"); v && *v) {
+    std::string bv = v;
+    if (bv == "0" || bv == "false") cfg.bildirim = false;
+    else if (bv == "1" || bv == "true") cfg.bildirim = true;
+    else
+      cfg.error = std::string(tulpar::i18n::tr_en(
+                      "TULPAR_ANDROID_BILDIRIM 0|1|false|true olmali, verilen: '",
+                      "TULPAR_ANDROID_BILDIRIM must be 0|1|false|true, got: '")) +
+                  bv + "'";
+  }
   if (cfg.lan && !cfg.internet && cfg.error.empty())
     cfg.error = tulpar::i18n::tr_en(
         "TULPAR_ANDROID_LAN=1 INTERNET izni ister (TULPAR_ANDROID_INTERNET=0 ile birlikte verildi): "
@@ -1210,6 +1227,7 @@ static AndroidAppConfig load_android_app_config_toml(const std::string &stage,
   if (!m.android_cutout.empty()) android_cutout_set(cfg, m.android_cutout);
   if (m.android_internet >= 0) cfg.internet = m.android_internet != 0;
   if (m.android_lan >= 0) cfg.lan = m.android_lan != 0;
+  if (m.android_bildirim >= 0) cfg.bildirim = m.android_bildirim != 0;
   if (!m.android_orientation.empty()) {
     if (m.android_orientation == "landscape" ||
         m.android_orientation == "portrait" ||

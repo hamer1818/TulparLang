@@ -124,6 +124,9 @@ struct Manifest {
     // (tanimayan anahtar artik uyari + atla — eski bir derleyici dosyanin
     // gerisini dusurmez).
     int android_lan = -1;
+    // `bildirim = true` — manifeste android.permission.POST_NOTIFICATIONS (Android 13+ calisma zamaninda
+    // sorulur). -1 verilmedi (varsayilan YOK), 0 yok, 1 var. TULPAR_ANDROID_BILDIRIM=0|1 ezer.
+    int android_bildirim = -1;
 
     // [build] — `tulpar build` bunları CLI bayrağı verilmediğinde kullanır.
     // target: "desktop" (varsayılan) | "web" | "android" | "apk" | "aab".
