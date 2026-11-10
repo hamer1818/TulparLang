@@ -13,6 +13,16 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `package_aab.sh` de `android_lib/` okuyor (Play paketi)
+
+- AAB yolu kütüphane kaynaklarını (`-R`), R sınıflarını (son kimlikler) ve kütüphane dex'ini APK yoluyla
+  **aynı** biçimde bağlıyor; dex'ler `base/dex/`'e girer. Eskiden AAB'de bunlar sessizce düşüyordu (manifest
+  bileşenleri kalır, sınıflar yok → cihazda `ClassNotFoundException`). İlk kullanıcı: Küpler ile Küreler —
+  Google Play Oyunlar kayıtlı oyun (tulpar-engine `android_google.py --profil oyunlar`).
+- Kapı `tests/android_kutuphane.sh` AAB'yi de ölçer (bundletool varsa; yoksa görünür ATLANDI): `base/dex`'te
+  sınıf + `R$string`, R alanı = son kimlik, `resources.pb`'de kütüphane dizgisi (7 kontrol). Pozitif kontrol:
+  önceki `package_aab.sh` ile kırmızı (`PAKETLE_AAB=`).
+
 ### Eklendi — Android kütüphaneleri Gradle'sız (`android_lib/`, `package_apk.sh`)
 
 - Staging dizininde `android_lib/` varsa `android/package_apk.sh`: `res/*.zip` (aapt2 ile derlenmiş kütüphane
@@ -22,7 +32,7 @@ tag still works;
   `tools/android_google.py` (Credential Manager — yerli "Google ile giriş", Warlords of Era).
 - Kapı `tests/android_kutuphane.sh` (4 kontrol, `build.sh`'a bağlı): kütüphane kaynağı APK'da, dex'te sınıf +
   R, R alanı = kaynak tablosundaki kimlik. Pozitif kontrol: önceki `package_apk.sh` ile 3 kırmızı.
-- Sınır: `package_aab.sh` (Play paketi) henüz `android_lib/` okumuyor.
+- (`package_aab.sh` desteği: yukarıdaki düzeltme.)
 
 ### Eklendi — Android URL şeması / deep link (`[android] url_scheme`)
 
