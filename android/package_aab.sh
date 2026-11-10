@@ -134,10 +134,51 @@ else
     echo ""
     echo "[1/5] aapt2 link --proto-format (manifest)"
 fi
+# Android kutuphaneleri (STAGE/android_lib/; package_apk.sh ile AYNI duzen — or. tulpar-engine
+# tools/android_google.py: Credential Manager, Play Oyunlar): res/*.zip -> -R, paketler.txt -> --extra-packages
+# (R siniflari BU link'in son kimlikleriyle), classes*.dex -> R dex'iyle birlestirilip base/dex/'e.
+# Eskiden yalniz APK yolu biliyordu: AAB'de kutuphane kaynaklari ve dex'i SESSIZCE duserdi (manifest
+# hasCode=true + bilesenler kalir, siniflar yok -> cihazda ClassNotFoundException).
+LIB="$STAGE/android_lib"
+LIB_ARGS=()
+if [ -d "$LIB" ]; then
+    for z in "$LIB"/res/*.zip; do [ -f "$z" ] && LIB_ARGS+=(-R "$(winpath "$z")"); done
+    [ ${#LIB_ARGS[@]} -gt 0 ] && LIB_ARGS+=(--auto-add-overlay)
+    if [ -s "$LIB/paketler.txt" ]; then
+        mkdir -p "$WORK/gen"
+        LIB_ARGS+=(--extra-packages "$(grep -v '^$' "$LIB/paketler.txt" | paste -sd: -)" --java "$(winpath "$WORK/gen")")
+    fi
+    echo "      android_lib: $(ls "$LIB"/res/*.zip 2>/dev/null | wc -l) kaynak paketi, $(ls "$LIB"/classes*.dex 2>/dev/null | wc -l) dex"
+fi
 "$AAPT2" link --proto-format -o "$(winpath "$PROTO")" \
     --manifest "$(winpath "$STAGE/AndroidManifest.xml")" \
     -I "$(winpath "$ANDROID_JAR")" \
+    ${LIB_ARGS[@]+"${LIB_ARGS[@]}"} \
     ${RES_FLAT[@]+"${RES_FLAT[@]}"}
+
+# Kutuphane R siniflari (son kimlikler) -> dex; kutuphane dex'iyle birlestir (package_apk.sh ile ayni)
+DEX_OUT=""
+if [ -d "$LIB" ] && ls "$LIB"/classes*.dex >/dev/null 2>&1; then
+    JAVAC="$(dirname "$JAVA")/javac"; [ -x "$JAVAC" ] || JAVAC="$(command -v javac || true)"
+    [ -n "$JAVAC" ] || { echo "HATA: javac yok (android_lib R siniflari icin JDK gerekir)"; exit 1; }
+    D8JAR="$BT/lib/d8.jar"
+    [ -f "$D8JAR" ] || { echo "HATA: d8.jar yok: $D8JAR"; exit 1; }
+    DEX_IN=()
+    for d in "$LIB"/classes*.dex; do DEX_IN+=("$(winpath "$d")"); done
+    if [ -d "$WORK/gen" ] && [ -n "$(find "$WORK/gen" -name '*.java' -print -quit)" ]; then
+        mkdir -p "$WORK/rcls"
+        find "$WORK/gen" -name '*.java' > "$WORK/rliste.txt"
+        "$JAVAC" --release 11 -nowarn -d "$WORK/rcls" @"$WORK/rliste.txt" || { echo "HATA: R siniflari derlenemedi"; exit 1; }
+        (cd "$WORK/rcls" && find . -name '*.class') > "$WORK/rcls.txt"
+        while read -r c; do DEX_IN+=("$(winpath "$WORK/rcls/${c#./}")"); done < "$WORK/rcls.txt"
+    fi
+    mkdir -p "$WORK/dex"
+    "$JAVA" -cp "$(winpath "$D8JAR")" com.android.tools.r8.D8 --release --min-api 26 \
+        --lib "$(winpath "$ANDROID_JAR")" --output "$(winpath "$WORK/dex")" "${DEX_IN[@]}" \
+        || { echo "HATA: d8 (android_lib dex birlestirme)"; exit 1; }
+    DEX_OUT="$WORK/dex"
+    echo "      android_lib dex: $(ls "$WORK/dex" | tr '\n' ' ')"
+fi
 
 # --- 2) bundletool modül düzeni: base/ ------------------------------------
 # proto APK içinden AndroidManifest.xml (proto) + resources.pb + res/ alınır;
@@ -159,9 +200,10 @@ mv "$MOD/AndroidManifest.xml" "$BASE/manifest/AndroidManifest.xml"
 # native kütüphaneler + (varsa) dex + oyun asset'leri. Düzen:
 #   base/lib/<abi>/*.so, base/dex/classes.dex, base/assets/**
 # symbols/ (striplenmemiş kopyalar) GİRMEZ — Play'e ayrı yüklenir.
-python3 - "$BASE" "$STAGE" <<'PY'
+python3 - "$BASE" "$STAGE" "$DEX_OUT" <<'PY'
 import os, sys, shutil
 base, stage = sys.argv[1], sys.argv[2]
+dex_out = sys.argv[3] if len(sys.argv) > 3 else ""
 libroot = os.path.join(stage, "lib")
 n_so = 0
 if os.path.isdir(libroot):
@@ -176,7 +218,13 @@ if os.path.isdir(libroot):
 if n_so == 0:
     print("HATA: staging'de hic lib/<abi>/*.so yok"); sys.exit(1)
 dex = os.path.join(stage, "classes.dex")
-if os.path.isfile(dex):
+if dex_out:  # android_lib: kutuphane + R dex'leri (classes.dex, classes2.dex ...)
+    os.makedirs(os.path.join(base, "dex"), exist_ok=True)
+    for fn in sorted(os.listdir(dex_out)):
+        if fn.endswith(".dex"):
+            shutil.copy2(os.path.join(dex_out, fn), os.path.join(base, "dex", fn))
+            print("  + dex/%s (%d bytes)" % (fn, os.path.getsize(os.path.join(dex_out, fn))))
+elif os.path.isfile(dex):
     os.makedirs(os.path.join(base, "dex"), exist_ok=True)
     shutil.copy2(dex, os.path.join(base, "dex", "classes.dex"))
     print("  + dex/classes.dex")

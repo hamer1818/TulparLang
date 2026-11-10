@@ -5,7 +5,9 @@
 # secici (Credential Manager) NativeActivity oyununa Gradle'siz girer; R kimlikleri ancak son link'te belli.
 # OLCER: uretilen APK — aapt2 dump resources'ta kutuphane dizgisi, classes.dex'te kutuphane sinifi + R$string,
 # ve R alani ile kaynak tablosundaki kimlik AYNI (dexdump). POZITIF KONTROL: android_lib'siz staging'de dex yok.
-# Kullanim: tests/android_kutuphane.sh [tulpar]   (PAKETLE=<eski package_apk.sh>: pozitif kontrol, KIRMIZI gormeli)
+# AAB (package_aab.sh) da ayni olculerle (bundletool varsa).
+# Kullanim: tests/android_kutuphane.sh [tulpar]   (PAKETLE=<eski package_apk.sh> / PAKETLE_AAB=<eski package_aab.sh>:
+# pozitif kontrol, KIRMIZI gormeli)
 set -u
 cd "$(dirname "$0")/.."
 TULPAR="${1:-./tulpar}"
@@ -57,6 +59,25 @@ if [ -f "$TMP/var.apk" ]; then
   # R alaninin ilk degeri (static init) kaynak tablosundaki kimlikle ayni olmali
   RV=$(grep -A6 "name          : 'kut_selam'" <<< "$DD" | sed -n 's/^ *value *: \(-\?[0-9]*\).*/\1/p' | head -1)
   if [ -n "$KIM" ] && [ -n "$RV" ] && [ "$(printf '%d' "$KIM")" = "$RV" ]; then gecti "R.string.kut_selam = son kimlik ($RV)"; else dustu "R kimligi tutmuyor (R $RV, tablo $KIM)"; fi
+fi
+# AAB (package_aab.sh, 2026-11-10: Play paketinde kutuphane kaynagi + dex SESSIZCE duserdi): ayni staging'den
+# base/dex/classes.dex'te sinif + R$string, R alani = APK'daki kimlik (ayni link girdisi -> ayni kimlik),
+# base/resources.pb'de kutuphane dizgisi. bundletool yoksa (TULPAR_BUNDLETOOL_ALL) bu bolum ATLANIR, gorunur.
+AABP="${PAKETLE_AAB:-android/package_aab.sh}"
+if [ -z "${TULPAR_BUNDLETOOL_ALL:-}${TULPAR_BUNDLETOOL:-}" ] && ! ls android/bundletool-all*.jar >/dev/null 2>&1 && ! command -v bundletool >/dev/null; then
+  echo "  ATLANDI AAB: bundletool yok (TULPAR_BUNDLETOOL_ALL)"
+else
+  LOG=$(bash "$AABP" "$STAGE" "$TMP/var.aab" 2>&1)
+  if [ -f "$TMP/var.aab" ]; then
+    rm -rf "$TMP/a"; unzip -o -q "$TMP/var.aab" 'base/dex/*' base/resources.pb -d "$TMP/a" 2>/dev/null
+    ADD=$([ -f "$TMP/a/base/dex/classes.dex" ] && "$BT/dexdump" -d "$TMP/a/base/dex/classes.dex" 2>/dev/null)
+    if grep -q "Lorg/ornek/kut/Selam;" <<< "$ADD" && grep -q 'Lorg/ornek/kut/R\$string;' <<< "$ADD"; then gecti "AAB base/dex: kutuphane sinifi + R\$string"; else dustu "AAB base/dex'te Selam ya da R\$string yok"; fi
+    ARV=$(grep -A6 "name          : 'kut_selam'" <<< "$ADD" | sed -n 's/^ *value *: \(-\?[0-9]*\).*/\1/p' | head -1)
+    if [ -n "$KIM" ] && [ -n "$ARV" ] && [ "$(printf '%d' "$KIM")" = "$ARV" ]; then gecti "AAB R.string.kut_selam = son kimlik ($ARV)"; else dustu "AAB R kimligi tutmuyor (R $ARV, APK tablosu $KIM)"; fi
+    if [ -f "$TMP/a/base/resources.pb" ] && grep -aq 'merhaba kutuphane' "$TMP/a/base/resources.pb"; then gecti "AAB resources.pb: kutuphane dizgisi"; else dustu "AAB resources.pb'de kutuphane dizgisi yok"; fi
+  else
+    echo "$LOG" | tail -6; dustu "android_lib'li AAB uretilemedi"
+  fi
 fi
 if [ $FAIL -eq 0 ]; then echo "android kutuphane kapisi: $OK gecti"; exit 0; fi
 echo "android kutuphane kapisi: $OK gecti, KIRMIZI"; exit 1
