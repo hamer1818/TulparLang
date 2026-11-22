@@ -138,7 +138,10 @@ struct AOTPhaseTimer {
     // a parade of `undefined reference to __imp_CertFindCertificateInStore`.
     // ws2_32 is already in the Windows base flags below, so we don't
     // duplicate it here.
-    #define AOT_TLS_LINK_FLAGS " -lssl -lcrypto -lcrypt32"
+    // -lbcrypt (2026-11-22, UCRT64 gocu): UCRT64'un statik libcrypto.a'si rastgele sayi icin BCryptGenRandom kullaniyor
+    // (libdefault-lib-rand_win.obj); MINGW64 derlemesi kullanmiyordu. CI'da olculdu: 37_async_http / api_wings_tls
+    // `undefined reference to BCryptGenRandom` ile dustu. bcrypt.dll Windows'un kendi DLL'i (Vista+).
+    #define AOT_TLS_LINK_FLAGS " -lssl -lcrypto -lcrypt32 -lbcrypt"
   #else
     #define AOT_TLS_LINK_FLAGS " -lssl -lcrypto"
   #endif
