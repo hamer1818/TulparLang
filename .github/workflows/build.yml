@@ -1074,6 +1074,21 @@ jobs:
           $eksik = @($bundledDlls | Where-Object { $_ -notin $bundled })
           if ($fazla.Count -gt 0 -or $eksik.Count -gt 0) {
             $fazla | ForEach-Object { Write-Host "  ithal edilen ama beklenmeyen: $_" -ForegroundColor Red }
+            # TESHIS: beklenmeyen DLL'den hangi fonksiyonlar ithal ediliyor ve hangi statik arsiv onlara __imp_ (dllimport) ile
+            # basvuruyor — -static'e ragmen DLL'e baglanmanin tek yolu bu.
+            $dump = & objdump.exe -p dist\tulpar-windows-x64.exe
+            foreach ($d in $fazla) {
+              $i0 = ($dump | Select-String -SimpleMatch "DLL Name: $d" | Select-Object -First 1).LineNumber
+              if ($i0) { Write-Host "  -- $d ithalatlari (ilk 12):"; $dump[($i0 + 1)..($i0 + 14)] | ForEach-Object { Write-Host "     $_" } }
+            }
+            $lib = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\lib"
+            foreach ($a in @('libLLVMSupport.a', 'libLLVMCore.a', 'libstdc++.a')) {
+              $yol = Join-Path $lib $a
+              if (Test-Path $yol) {
+                $imp = & nm.exe -A $yol 2>$null | Select-String '__imp_(_Z|pthread)' | Select-Object -First 6
+                Write-Host "  -- $a icinde __imp_ basvurulari: $(@($imp).Count) (ilk 6)"; $imp | ForEach-Object { Write-Host "     $_" }
+              }
+            }
             $eksik | ForEach-Object { Write-Host "  beklenen ama ithal edilmeyen: $_" -ForegroundColor Red }
             throw "Ithal edilen DLL kumesi `$bundledDlls ile ayni degil — liste ve update_cmd.cpp guncellenmeli."
           }
