@@ -7,7 +7,7 @@
 ; can `iscc installer\tulpar.iss` after `cmake --build`.
 ;
 ; On Windows, tulpar.exe pulls five non-system DLLs out of MSYS2's
-; mingw64 runtime that don't ship with stock Windows:
+; ucrt64 runtime (UCRT64 since 2026-11-22; MSYS2 retired MINGW64) that don't ship with stock Windows:
 ;   * libwinpthread-1.dll, zlib1.dll, libzstd.dll — MinGW + LLVM
 ;     transitive deps (PR #52, PR #54).
 ;   * libssl-3-x64.dll, libcrypto-3-x64.dll — OpenSSL 3, linked into
@@ -38,7 +38,7 @@
 #endif
 
 #ifndef SourceMingwBin
-  #define SourceMingwBin "C:\msys64\mingw64\bin"
+  #define SourceMingwBin "C:\msys64\ucrt64\bin"
 #endif
 
 ; Dosya ozelliklerinde gorunen SURUM. Inno bu alanda YALNIZ sayisal

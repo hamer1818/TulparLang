@@ -514,6 +514,54 @@ static const char *aot_link_driver() {
 #endif
 }
 
+// WINDOWS CRT DENETIMI (2026-11-22, UCRT64 gocu): MSYS2 MINGW64 ortamini kaldiriyor (msys2.org/news 2026-10-24); tulpar.exe ve
+// yaninda gelen libtulpar_runtime.a UCRT64'te derleniyor. Kullanicinin PATH'teki clang++'i MINGW64'unkiyse (msvcrt) iki C calisma
+// zamani AYNI programa karisir — link bazen GECER ve program FILE*/errno/locale sinirinda bozulur. Bu yuzden link oncesi bir kez
+// surucunun CRT'si sorulur (`-dM -E -include _mingw.h`: UCRT basliklari `_UCRT` tanimlar) ve tulpar'in KENDI derlendigi CRT ile
+// karsilastirilir (runtime arsivi ayni arac zinciriyle derleniyor). Uyusmazsa net hata. Surucu sorgulanamazsa (bilinmeyen surucu,
+// cikti yok) ENGELLENMEZ: yanlis alarm, link hatasindan kotu. TULPAR_CRT_DENETIMI=0 kapatir.
+#if PLATFORM_WINDOWS && defined(__MINGW32__)
+static bool aot_windows_crt_uyumlu(const char *driver) {
+  static int sonuc = -1;   // -1 bilinmiyor, 0 uyusmaz, 1 uyumlu
+  if (sonuc >= 0) return sonuc == 1;
+  sonuc = 1;
+  const char *kapali = getenv("TULPAR_CRT_DENETIMI");
+  if (kapali && kapali[0] == '0') return true;
+#if defined(_UCRT)
+  const bool ben_ucrt = true;
+#else
+  const bool ben_ucrt = false;
+#endif
+  std::string cmd = std::string(driver) + " -dM -E -x c -include _mingw.h NUL 2>NUL";
+  FILE *p = popen(cmd.c_str(), "r");
+  if (!p) return true;
+  char satir[512];
+  bool gordu = false, ucrt = false;
+  while (fgets(satir, sizeof satir, p)) {
+    gordu = true;
+    if (!strncmp(satir, "#define _UCRT", 13) && (satir[13] == ' ' || satir[13] == '\n' || satir[13] == '\r' || satir[13] == 0)) ucrt = true;
+  }
+  pclose(p);
+  if (!gordu) return true;
+  if (ucrt == ben_ucrt) return true;
+  sonuc = 0;
+  fprintf(stderr, "%s\n",
+          ben_ucrt ? tulpar::i18n::tr_en(
+                         "[AOT] Hata: PATH'teki clang++ MSYS2 MINGW64'un (msvcrt), tulpar ise UCRT64 ile derlenmis. Iki C calisma zamani "
+                         "ayni programa karisir. MSYS2 UCRT64 kabugunda: pacman -S mingw-w64-ucrt-x86_64-clang ve ucrt64\\bin'i PATH'e "
+                         "mingw64\\bin'den ONCE koyun (ya da TULPAR_CC ile UCRT64 clang++'i secin).",
+                         "[AOT] Error: the clang++ on PATH is MSYS2 MINGW64's (msvcrt) but tulpar was built with UCRT64. Two C "
+                         "runtimes would mix in one program. In an MSYS2 UCRT64 shell: pacman -S mingw-w64-ucrt-x86_64-clang and put "
+                         "ucrt64\\bin on PATH BEFORE mingw64\\bin (or pick the UCRT64 clang++ with TULPAR_CC).")
+                   : tulpar::i18n::tr_en(
+                         "[AOT] Hata: PATH'teki clang++ UCRT64'un, tulpar ise MINGW64 (msvcrt) ile derlenmis. Iki C calisma zamani "
+                         "ayni programa karisir; tulpar'i guncelleyin (tulpar update) ya da TULPAR_CC ile MINGW64 clang++'i secin.",
+                         "[AOT] Error: the clang++ on PATH is UCRT64's but tulpar was built with MINGW64 (msvcrt). Two C runtimes "
+                         "would mix in one program; update tulpar (tulpar update) or pick the MINGW64 clang++ with TULPAR_CC."));
+  return false;
+}
+#endif
+
 // Onbellek anahtari bu ikisinden turetiliyor (aot_cache.cpp): link satiri
 // degisirse anahtar da AYNI kaynaktan degisir.
 const char *aot_cache_link_driver(void) { return aot_link_driver(); }
@@ -2245,6 +2293,14 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   }
 
   int link_result;
+#if PLATFORM_WINDOWS && defined(__MINGW32__)
+  if (!g_target_web && !aot_windows_crt_uyumlu(aot_link_driver())) {
+    llvm_backend_ek_nesneleri_sil(backend, nullptr);
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_ERROR_LINK;
+  }
+#endif
   {
     AOTPhaseTimer t("link");
     link_result = system(link_cmd);
@@ -2379,6 +2435,15 @@ static AOTResult aot_compile_silent(const char *source,
       tame_link_flags(backend->uses_tame), silent_ext_flags.c_str(), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str(), redirect.c_str());
 
+#if PLATFORM_WINDOWS && defined(__MINGW32__)
+  if (!aot_windows_crt_uyumlu(aot_link_driver())) {
+    remove(obj_filename);
+    llvm_backend_ek_nesneleri_sil(backend, obj_filename);
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_ERROR_LINK;
+  }
+#endif
   int link_result = system(link_cmd);
   if (link_result != 0 && ext_used) ext_link_failure_hint(link_log.c_str());
   if (ext_used) remove(link_log.c_str());

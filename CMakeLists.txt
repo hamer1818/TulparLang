@@ -1,6 +1,6 @@
 # TulparLang - Programming Language (Modern C++17 + LLVM Backend)
 # Built and tested in CI: Linux x86_64, macOS arm64, Windows x86_64 via MSYS2
-# MINGW64 (MSVC is not built or tested) — see docs/PLATFORM_SUPPORT.md
+# UCRT64 (MINGW64 until 2026-11-22; MSVC is not built or tested) — see docs/PLATFORM_SUPPORT.md
 # Minimum CMake version
 cmake_minimum_required(VERSION 3.14)
 
@@ -63,8 +63,8 @@ add_compile_definitions(TULPAR_LLVM_MAJOR=${LLVM_VERSION_MAJOR})
 # Install:
 #   Linux:  apt install libssl-dev          (auto-detected)
 #   macOS:  brew install openssl            (auto-detected via brew prefix)
-#   MSYS2:  pacman -S mingw-w64-x86_64-openssl
-#           — build.bat passes -DOPENSSL_ROOT_DIR=C:/msys64/mingw64
+#   MSYS2:  pacman -S mingw-w64-ucrt-x86_64-openssl
+#           — build.bat passes -DOPENSSL_ROOT_DIR=C:/msys64/ucrt64
 #             so the auto-detect Just Works on the standard MSYS2 path.
 #             Override with -DOPENSSL_ROOT_DIR=... for non-default installs.
 #

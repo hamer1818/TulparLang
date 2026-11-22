@@ -149,7 +149,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 >
 > **Platform politikası (2026-09-28 itibarıyla):** natif Windows 3.13.0'da
 > bırakılmıştı, 2026-09-21/22'de **geri geldi** (#340, #341, #342): CI'daki
-> `build-windows` işi MSYS2 MINGW64 ile derliyor, örnekleri ve `build.sh
+> `build-windows` işi MSYS2 UCRT64 ile derliyor (2026-11-22'ye kadar MINGW64), örnekleri ve `build.sh
 > suites`i koşuyor, Inno Setup kurulumcusunu üretiyor; sürümde Windows
 > varlıkları var. `build-windows` dal korumasında **zorunlu** check'tir.
 > ⚠️ Buradaki eski metin "zorunlu check elle kaldırılmalı" diyordu; bu artık

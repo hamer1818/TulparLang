@@ -595,7 +595,10 @@ jobs:
           path: dist/libtulpar_runtime-linux-x64.a
 
   # ---------------------------------------------------------------------
-  # WINDOWS (MSYS2 MINGW64) — 2026-09-21'de geri geldi.
+  # WINDOWS (MSYS2 UCRT64) — 2026-09-21'de geri geldi; 2026-11-22'de MINGW64'ten UCRT64'e tasindi: MSYS2 MINGW64 ortamini
+  # kaldiriyor (msys2.org/news 2026-03-15, 2026-10-24: leaf paketlerin MINGW64 derlemeleri siliniyor; Tulpar Engine'in
+  # mingw-w64-x86_64-glfw paketi 2026-11-22'de gitti). Yayinlanan tulpar.exe + libtulpar_runtime-windows-x64.a UCRT;
+  # kullanicinin AOT link surucusu de UCRT64 olmali — tulpar link oncesi denetler (aot_pipeline.cpp aot_windows_crt_uyumlu).
   #
   # TESTLERI DE KOSUYOR (2026-09-21, ikinci tur). Ilk yazimda "pahali" diye
   # atlanmisti; OLCULDU ve gerekce tutmadi: derleme-yalniz Windows isi
@@ -736,7 +739,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash tools/ci_yeniden_kullan.sh windows-x64
 
-      # MSYS2 mingw64, bir Windows runner'inda TAM bir LLVM gelistirme agacini
+      # MSYS2 ucrt64, bir Windows runner'inda TAM bir LLVM gelistirme agacini
       # (basliklar + LLVM*.dll.a) 30+ dakikalik bir vcpkg/kaynak derlemesi
       # olmadan almanin tek gercekci yolu: resmi LLVM Windows kurulumu ve
       # Chocolatey yalnizca derleyici dagitimini veriyor, linklediğimiz statik
@@ -753,13 +756,13 @@ jobs:
       # cikarmisti — dogruydu, CUNKU O IS TEST KOSMUYORDU. Testler eklenince
       # butun ornekler `[AOT] Error: Linking failed (code 1)` ile dustu:
       # derleyici uretiliyor ama HICBIR PROGRAM derleyemiyordu.
-      - name: MSYS2 (MINGW64)
+      - name: MSYS2 (UCRT64)
         timeout-minutes: 15
         id: msys2
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: false
           cache: true
           # `diffutils` (mingw- onekSIZ, cunku bash'in kullandigi MSYS
@@ -772,16 +775,16 @@ jobs:
           # isinde zaten kosuyor; buraya python getirmek dist arsiv
           # denetimini de tetikler ve bu isin olcmesi gereken sey degil.
           install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-clang
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-llvm
-            mingw-w64-x86_64-ccache
-            mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-zstd
-            mingw-w64-x86_64-libxml2
-            mingw-w64-x86_64-openssl
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-llvm
+            mingw-w64-ucrt-x86_64-ccache
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-zstd
+            mingw-w64-ucrt-x86_64-libxml2
+            mingw-w64-ucrt-x86_64-openssl
             diffutils
             git
 
@@ -866,10 +869,37 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           if ! command -v clang++ >/dev/null 2>&1; then
-            echo "::error::clang++ PATH'te yok — uretilen tulpar.exe AOT link adiminda onu cagiriyor, yani hicbir program derlenemez. MSYS2 paket listesine mingw-w64-x86_64-clang ekleyin."
+            echo "::error::clang++ PATH'te yok — uretilen tulpar.exe AOT link adiminda onu cagiriyor, yani hicbir program derlenemez. MSYS2 paket listesine mingw-w64-ucrt-x86_64-clang ekleyin."
             exit 1
           fi
           clang++ --version | head -1
+          # CRT: PATH'teki surucu UCRT olmali (tulpar.exe de UCRT; aot_windows_crt_uyumlu ayni soruyu sorar)
+          echo '' | clang++ -dM -E -x c -include _mingw.h - | grep -E '^#define _UCRT( |$)' || { echo "::error::PATH'teki clang++ UCRT degil"; exit 1; }
+
+      # CRT DENETIMININ POZITIF KONTROLU (2026-11-22, UCRT64 gocu): tulpar link oncesi surucunun CRT'sini sorar ve kendi CRT'siyle
+      # karsilastirir. Iki SAHTE surucu (cmd .bat): _UCRT basmayan (MINGW64/msvcrt gibi) -> CRT hatasi beklenir; _UCRT basan ama linki
+      # beceremeyen -> CRT denetimi GECER, link baska sebeple duser (CRT hatasi metni GORUNMEMELI). Ikisi birlikte denetimin hem
+      # dustugunu hem de yanlis alarm vermedigini olcer; ek paket gerekmez.
+      - name: CRT denetimi pozitif kontrolu (sahte surucu)
+        timeout-minutes: 5
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          set -uo pipefail
+          t="$(cygpath -u "$RUNNER_TEMP")/crt_kontrol"; mkdir -p "$t"; w="$(cygpath -w "$t")"; tul="$(cygpath -u "$GITHUB_WORKSPACE")/tulpar.exe"
+          [ -x "$tul" ] || tul="$(cygpath -u "$GITHUB_WORKSPACE")/build-windows/tulpar.exe"
+          printf '@echo #define __MINGW32__ 1\r\n@exit /b 0\r\n' > "$t/sahte_msvcrt.bat"
+          printf '@echo #define _UCRT 1\r\n@exit /b 1\r\n' > "$t/sahte_ucrt.bat"
+          cp examples/01_hello_world.tpr "$t/crt.tpr"
+          desen='Iki C calisma zamani|Two C runtimes'
+          o1="$(cd "$t" && TULPAR_CC="$w\\sahte_msvcrt.bat" "$tul" --aot crt.tpr 2>&1)"; k1=$?
+          o2="$(cd "$t" && TULPAR_CC="$w\\sahte_ucrt.bat" "$tul" --aot crt.tpr 2>&1)"; k2=$?
+          o3="$(cd "$t" && TULPAR_CRT_DENETIMI=0 TULPAR_CC="$w\\sahte_msvcrt.bat" "$tul" --aot crt.tpr 2>&1)"; k3=$?
+          printf '%s\n--- (cikis %s)\n%s\n--- (cikis %s)\n%s\n--- (cikis %s)\n' "$o1" "$k1" "$o2" "$k2" "$o3" "$k3"
+          grep -qE "$desen" <<< "$o1" || { echo "::error::msvcrt sahte surucusu CRT hatasi VERMEDI — denetim olcmuyor"; exit 1; }
+          if grep -qE "$desen" <<< "$o2"; then echo "::error::UCRT sahte surucusunde CRT hatasi verildi — yanlis alarm"; exit 1; fi
+          if grep -qE "$desen" <<< "$o3"; then echo "::error::TULPAR_CRT_DENETIMI=0 denetimi kapatmadi"; exit 1; fi
+          [ "$k1" != 0 ] && [ "$k2" != 0 ] || { echo "::error::sahte surucuyle link basarili sayildi"; exit 1; }
+          echo "CRT denetimi: msvcrt surucusu reddedildi, UCRT surucusu gecti (link sahte surucude dustu), kapatma calisti"
 
       # Paketleme + DLL KAPISI: Windows dagitimi kendi kendine yeten bir
       # klasor olmali. Ikilinin ITHALAT TABLOSU okunuyor; sistem DLL'i ya da
@@ -982,7 +1012,7 @@ jobs:
       - name: WebSocket cok cerceve (MinGW recv)
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
-          pacman -S --noconfirm --needed mingw-w64-x86_64-python
+          pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-python
           python3 tests/ws_masked_client_smoke.py ./tulpar
         timeout-minutes: 8
 
@@ -995,7 +1025,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item build-windows\tulpar.exe          dist\tulpar-windows-x64.exe
           Copy-Item build-windows\libtulpar_runtime.a dist\libtulpar_runtime-windows-x64.a
-          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
+          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
           $bundledDlls = @(
             'libwinpthread-1.dll',
             'zlib1.dll',
@@ -1011,7 +1041,7 @@ jobs:
             Copy-Item $src "dist\$dll"
           }
           $systemDlls = @(
-            'kernel32.dll', 'kernelbase.dll', 'ntdll.dll', 'msvcrt.dll',
+            'kernel32.dll', 'kernelbase.dll', 'ntdll.dll', 'ucrtbase.dll',
             'advapi32.dll', 'user32.dll', 'shell32.dll', 'ole32.dll',
             'oleaut32.dll', 'ws2_32.dll', 'crypt32.dll', 'secur32.dll',
             'gdi32.dll', 'rpcrt4.dll', 'shlwapi.dll', 'bcrypt.dll',
@@ -1022,7 +1052,12 @@ jobs:
           $imports = & objdump.exe -p dist\tulpar-windows-x64.exe |
                      Select-String '^\s*DLL Name:\s*(.+)$' |
                      ForEach-Object { $_.Matches[0].Groups[1].Value.Trim().ToLower() }
-          $missing = $imports | Where-Object { $_ -notin $allowed }
+          # UCRT (2026-11-22): CRT ithalatlari api-ms-win-crt-*.dll "API set"leri — Windows 10+ sistemle gelir (ucrtbase.dll'e
+          # cozulur). msvcrt.dll ARTIK izinli DEGIL: ithalat tablosunda gorunmesi derlemenin MINGW64'e (msvcrt) kaydigini gosterir.
+          $missing = $imports | Where-Object { $_ -notin $allowed -and $_ -notlike 'api-ms-win-crt-*.dll' }
+          if (-not ($imports | Where-Object { $_ -like 'api-ms-win-crt-*.dll' -or $_ -eq 'ucrtbase.dll' })) {
+            throw "tulpar.exe UCRT'ye baglanmiyor (api-ms-win-crt-* / ucrtbase.dll ithalati yok) — UCRT64 ile mi derlendi?"
+          }
           if ($missing) {
             Write-Host "tulpar.exe ne sistem ne de pakete konan DLL'lere baglaniyor:" -ForegroundColor Red
             $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
@@ -1065,7 +1100,7 @@ jobs:
           if (-not (Test-Path $iscc)) {
             throw "ISCC.exe bulunamadi: $iscc — runner imaji mi degisti?"
           }
-          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
+          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
           & $iscc `
             "/DAppVersion=$appVersion" `
             "/DVersionInfo=$viVersion" `
@@ -1805,7 +1840,8 @@ jobs:
             `tests/*.test.tpr` suites and the typeinfer gate, then builds the
             installer — the same evidence the Linux job produces, minus the
             Python audits (platform-independent, covered on Linux). Build it
-            yourself with MSYS2 MINGW64; see README.
+            yourself with MSYS2 UCRT64; see README. Since 2026-11-22 the Windows build is UCRT (MSYS2 retired
+            MINGW64): the AOT link driver must be UCRT64's clang++ — tulpar checks and says so.
           draft: false
           prerelease: false
           files: |

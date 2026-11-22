@@ -22,7 +22,7 @@ söylüyordu, hepsi yanlıştı:
 
 Kısa yol:
 
-- Derleme: `./build.sh` (Linux/macOS; Windows'ta MSYS2 MINGW64 kabuğunda).
+- Derleme: `./build.sh` (Linux/macOS; Windows'ta MSYS2 UCRT64 kabuğunda (2026-11-22'den beri; MINGW64 kalktı)).
 - Testler: `./build.sh test` (örnekler) ve `./build.sh suites` (paketler ve
   kapılar). Pencere açan hiçbir şeyi `DISPLAY=` olmadan koşmayın.
 - Belge ve commit dili Türkçe; ayrıntı ve bütün kurallar `CLAUDE.md`'de.

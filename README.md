@@ -95,8 +95,10 @@ is written outside. Both are self-contained — CI checks on every build that
 the binary imports nothing beyond Windows system DLLs and the MinGW ones
 shipped alongside it. One caveat on Windows: compiling a program (`tulpar
 file.tpr`, `tulpar build`) links through `clang++`, which the packages do
-not ship — install it from an MSYS2 MINGW64 shell
-(`pacman -S mingw-w64-x86_64-clang`) and put `mingw64\bin` on `PATH`.
+not ship — install it from an MSYS2 **UCRT64** shell
+(`pacman -S mingw-w64-ucrt-x86_64-clang`) and put `ucrt64\bin` on `PATH`. Since 2026-11-22 the Windows
+build is UCRT (MSYS2 retired MINGW64); a MINGW64 (msvcrt) `clang++` would mix two C runtimes, so `tulpar` checks the
+driver before linking and tells you (`TULPAR_CRT_DENETIMI=0` skips the check).
 `tulpar version`, `fmt`, `typecheck`, `pkg` and `--lsp` work without it.
 
 ### Verifying releases
@@ -569,7 +571,7 @@ always compile.
 
 `tulpar debug` is a bridge to **gdb** (MI3), so gdb must be on `PATH`:
 your distro's package on Linux (`apt install gdb`, `pacman -S gdb`),
-`pacman -S mingw-w64-x86_64-gdb` in an MSYS2 MINGW64 shell on Windows.
+`pacman -S mingw-w64-ucrt-x86_64-gdb` in an MSYS2 UCRT64 shell on Windows.
 There is no lldb backend yet — on Apple Silicon build with
 `tulpar --debug build x.tpr x` and use `lldb ./x` directly. Without gdb,
 `launch` fails with that install hint instead of hanging. Values show decoded
@@ -592,10 +594,10 @@ OpenSSL (enables `https://` for the HTTP client and `wings_tls`).
 ./build.sh
 ```
 
-**Windows (MSYS2 MINGW64 shell):**
+**Windows (MSYS2 UCRT64 shell):**
 
 ```bash
-pacman -S mingw-w64-x86_64-{gcc,clang,cmake,ninja,llvm,zlib,zstd,libxml2,openssl}
+pacman -S mingw-w64-ucrt-x86_64-{gcc,clang,cmake,ninja,llvm,zlib,zstd,libxml2,openssl}
 ./build.sh
 ```
 
