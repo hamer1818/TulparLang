@@ -1076,10 +1076,14 @@ jobs:
             $fazla | ForEach-Object { Write-Host "  ithal edilen ama beklenmeyen: $_" -ForegroundColor Red }
             # TESHIS: beklenmeyen DLL'den hangi fonksiyonlar ithal ediliyor ve hangi statik arsiv onlara __imp_ (dllimport) ile
             # basvuruyor — -static'e ragmen DLL'e baglanmanin tek yolu bu.
-            $dump = & objdump.exe -p dist\tulpar-windows-x64.exe
+            $dump = @(& objdump.exe -p dist\tulpar-windows-x64.exe | ForEach-Object { "$_" })
             foreach ($d in $fazla) {
-              $i0 = ($dump | Select-String -SimpleMatch "DLL Name: $d" | Select-Object -First 1).LineNumber
-              if ($i0) { Write-Host "  -- $d ithalatlari (ilk 12):"; $dump[($i0 + 1)..($i0 + 14)] | ForEach-Object { Write-Host "     $_" } }
+              $i0 = -1
+              for ($k = 0; $k -lt $dump.Count; $k++) { if ($dump[$k] -match "DLL Name:\s*$([regex]::Escape($d))") { $i0 = $k; break } }
+              if ($i0 -ge 0) {
+                Write-Host "  -- $d ithalatlari (ilk 12):"
+                $dump[($i0 + 1)..([Math]::Min($i0 + 14, $dump.Count - 1))] | Where-Object { $_.Trim() } | ForEach-Object { Write-Host "     $_" }
+              }
             }
             $lib = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\lib"
             foreach ($a in @('libLLVMSupport.a', 'libLLVMCore.a', 'libstdc++.a')) {

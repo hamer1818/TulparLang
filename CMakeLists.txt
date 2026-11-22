@@ -715,8 +715,11 @@ elseif(WIN32)
             -static
             -static-libgcc
             -static-libstdc++
-            -Wl,-Bstatic -lwinpthread -lz -lzstd -Wl,-Bdynamic
         )
+        # ESKI `-Wl,-Bstatic -lwinpthread -lz -lzstd -Wl,-Bdynamic` KALKTI (2026-11-22): -static ile birlikte sondaki -Bdynamic,
+        # GCC surucusunun EN SONA ekledigi -lstdc++ / -lpthread'i DINAMIGE ceviriyordu — UCRT64 CI'da tulpar.exe libstdc++-6.dll
+        # ve libwinpthread-1.dll ithal etti (statik arsivlerde __imp_ basvurusu YOKTU, olculdu). zlib/zstd yukarida hedef
+        # yonlendirmesiyle, gerisi -static ile statik.
         # -static (2026-11-22): kalan MinGW DLL'leri de (libwinpthread-1) ikiliye; Windows'un kendi kitapliklarinin yalniz
         # ithalat-arsivi bicimi var (libws2_32.a ...), onlar yine dinamik cozulur. Hedef: tulpar.exe YALNIZ sistem DLL'i ve
         # UCRT API set'i ithal etsin — gelecekte bir MSYS2 paketinin DLL'i yeniden adlandirilsa da guncelleme kirilmasin.
