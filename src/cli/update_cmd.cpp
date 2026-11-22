@@ -55,13 +55,11 @@ std::vector<Asset> assets_for_platform() {
     return {
         {"tulpar-windows-x64.exe",            "tulpar.exe",            true },
         {"libtulpar_runtime-windows-x64.a",   "libtulpar_runtime.a",   false},
-        {"libwinpthread-1.dll",               "libwinpthread-1.dll",   true },
-        {"zlib1.dll",                         "zlib1.dll",             true },
-        {"libzstd.dll",                       "libzstd.dll",           true },
-        // OpenSSL 2026-11-22'den beri tulpar.exe'ye STATIK (UCRT64 gocu, CMakeLists.txt): ikili libssl/libcrypto DLL'i
-        // ithal etmiyor, bu yuzden burada YOK. Surumler libssl-3-x64.dll / libcrypto-3-x64.dll'i yine yayinliyor — bu
-        // satirdan ONCEKI guncelleyiciler onlari zorunlu indiriyor (gecis kopyasi; yeni ikili yuklemez). CI DLL kapisinin
-        // `$bundledDlls`'i tek dogruluk kaynagi; tests/surum_varliklari.py bu listeyi ona esitler.
+        // 2026-11-22'den beri tulpar.exe Windows'ta TAMAMEN STATIK (UCRT64 gocu, CMakeLists.txt): MinGW / OpenSSL / zlib /
+        // zstd DLL'i ithal etmiyor, bu yuzden burada DLL YOK. Surumler eski bes adi (libwinpthread-1, zlib1, libzstd,
+        // libssl-3-x64, libcrypto-3-x64) yine yayinliyor: bu satirdan ONCEKI guncelleyiciler onlari zorunlu indiriyor (gecis
+        // kopyasi; yeni ikili yuklemez — tests/surum_varliklari.py GECIS listesi bunu kapilar). CI DLL kapisinin
+        // `$bundledDlls`'i tek dogruluk kaynagi; ayni test bu listeyi ona esitler.
     };
 #elif defined(__APPLE__)
     // DURUST AD (2026-10-05): ikili yalniz arm64 (macos-latest, Apple Silicon);

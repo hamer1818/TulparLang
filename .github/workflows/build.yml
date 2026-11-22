@@ -1051,10 +1051,9 @@ jobs:
           }
           # BEKLENEN liste (tests/surum_varliklari.py bunu update_cmd.cpp'nin Windows listesiyle esitler). OpenSSL STATIK
           # (CMakeLists.txt, 2026-11-22): ikili libssl/libcrypto DLL'i ITHAL ETMEMELI — ederse asagidaki esitlik duser.
+          # TAMAMEN STATIK (CMakeLists.txt -static + LLVM zlib/zstd -> .a): pakete DLL GIRMEZ. Liste bos ama BILDIRILMIS
+          # (tests/surum_varliklari.py update_cmd.cpp'nin Windows DLL listesini buna esitler: o da bos).
           $bundledDlls = @(
-            'libwinpthread-1.dll',
-            'zlib1.dll',
-            'libzstd.dll'
           )
           $bundled = @()
           $missing = @()
@@ -1068,8 +1067,8 @@ jobs:
             $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
             throw "DLL paketleme kapisi dustu."
           }
-          # POZITIF KONTROL: tulpar.exe MinGW pthread'ine dinamik bagli; liste bossa ithalat okumasi/siniflama bozuktur.
-          if (-not ($bundled -contains 'libwinpthread-1.dll')) { throw "Paket listesinde libwinpthread-1.dll yok — siniflama olcmuyor." }
+          # POZITIF KONTROL: ithalat okumasi gercekten calisiyor mu — her Windows ikilisi kernel32 ithal eder.
+          if (-not ($imports -contains 'kernel32.dll')) { throw "Ithalat tablosunda kernel32.dll yok — objdump/siniflama olcmuyor." }
           $fark = Compare-Object ($bundled | Sort-Object) ($bundledDlls | Sort-Object)
           if ($fark) {
             $fark | ForEach-Object { Write-Host "  $($_.SideIndicator) $($_.InputObject)  (<= ithal edilen ama beklenmeyen, => beklenen ama ithal edilmeyen)" -ForegroundColor Red }
@@ -1079,12 +1078,21 @@ jobs:
           # GECIS KOPYALARI (2026-11-22): eski `tulpar update` istemcileri libssl-3-x64.dll / libcrypto-3-x64.dll'i ZORUNLU varlik
           # olarak indiriyor; yayinlanmazsa guncellemeleri 404'te durur. Yeni ikili onlari YUKLEMEZ (OpenSSL statik). Zip'e GIRMEZ;
           # yalniz gevsek surum varligi olarak (macOS'un eski adlari gibi gecis icin).
-          foreach ($ad in @('ssl', 'crypto')) {
-            $kaynak = Get-ChildItem -Path $mingwBin -Filter "lib$ad-*-x64.dll" | Select-Object -First 1
-            if (-not $kaynak) { throw "Gecis kopyasi icin lib$ad-*-x64.dll ucrt64\bin'de yok" }
-            Copy-Item $kaynak.FullName "dist\lib$ad-3-x64.dll"
+          # Bes eski ad (bu surumden onceki update_cmd.cpp'nin Windows listesi), ucrt64\bin'deki karsiliklarindan.
+          $gecis = [ordered]@{
+            'libwinpthread-1.dll' = 'libwinpthread-1.dll'
+            'zlib1.dll'           = 'libz-1.dll'
+            'libzstd.dll'         = 'libzstd.dll'
+            'libssl-3-x64.dll'    = 'libssl-*-x64.dll'
+            'libcrypto-3-x64.dll' = 'libcrypto-*-x64.dll'
           }
-          $zipe = @('dist\tulpar-windows-x64.exe') + ($bundled | ForEach-Object { "dist\$_" })
+          foreach ($ad in $gecis.Keys) {
+            $kaynak = Get-ChildItem -Path $mingwBin -Filter $gecis[$ad] | Select-Object -First 1
+            if (-not $kaynak) { $kaynak = Get-ChildItem -Path $mingwBin -Filter $ad | Select-Object -First 1 }
+            if (-not $kaynak) { throw "Gecis kopyasi icin $($gecis[$ad]) ucrt64\bin'de yok" }
+            Copy-Item $kaynak.FullName "dist\$ad"
+          }
+          $zipe = @('dist\tulpar-windows-x64.exe') + @($bundled | ForEach-Object { "dist\$_" })
           Compress-Archive -Path $zipe -DestinationPath dist\tulpar-windows-x64.zip
 
       # GUI KURULUMCU (Inno Setup 6) — 3.13.0'da natif Windows'la birlikte

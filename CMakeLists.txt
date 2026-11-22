@@ -499,6 +499,29 @@ else()
     message(STATUS "LLVM: statik bilesenlerle linkleniyor")
 endif()
 
+# MinGW: LLVM'in zlib / zstd bagimliliklarini STATIK arsive cevir (2026-11-22, UCRT64 gocu). Asagidaki
+# `-Wl,-Bstatic -lz -lzstd` bunu yapmiyordu: LLVMSupport'un INTERFACE_LINK_LIBRARIES'i ZLIB::ZLIB / zstd::libzstd_shared
+# hedeflerini tasiyor ve onlarin IMPORTED_LOCATION'i libz.dll.a / libzstd.dll.a — link satirina dogrudan bu yollar giriyor,
+# sembol oradan cozuluyor, -lz hic kullanilmiyordu. Sonuc: tulpar.exe zlib1.dll / libzstd.dll ithal etti. UCRT64'te zlib 1.4'un
+# DLL adi libz-1.dll oldu; eski `tulpar update` istemcileri yeni adi bilmedigi icin guncelleme ACILMAYAN bir tulpar
+# birakacakti. Kardes .a varsa hedef ona yonlendirilir; DLL kapisi (build.yml) sonucu olcer.
+if(MINGW)
+    foreach(_t ZLIB::ZLIB zstd::libzstd_shared zstd::libzstd_static)
+        if(TARGET ${_t})
+            foreach(_p IMPORTED_LOCATION IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION_NOCONFIG IMPORTED_IMPLIB IMPORTED_IMPLIB_RELEASE)
+                get_target_property(_loc ${_t} ${_p})
+                if(_loc AND _loc MATCHES "\\.dll\\.a$")
+                    string(REGEX REPLACE "\\.dll\\.a$" ".a" _st "${_loc}")
+                    if(EXISTS "${_st}")
+                        set_target_properties(${_t} PROPERTIES ${_p} "${_st}")
+                        message(STATUS "MinGW statik: ${_t} ${_p} -> ${_st}")
+                    endif()
+                endif()
+            endforeach()
+        endif()
+    endforeach()
+endif()
+
 # Windows-specific linking requirements (applies to MSVC and MinGW)
 if(WIN32)
     # version.lib is required by LLVM (VerQueryValue) on Windows;
@@ -689,10 +712,14 @@ elseif(WIN32)
     # only have import-lib form) keep being resolved dynamically.
     if(NOT MSVC)
         target_link_options(tulpar PRIVATE
+            -static
             -static-libgcc
             -static-libstdc++
             -Wl,-Bstatic -lwinpthread -lz -lzstd -Wl,-Bdynamic
         )
+        # -static (2026-11-22): kalan MinGW DLL'leri de (libwinpthread-1) ikiliye; Windows'un kendi kitapliklarinin yalniz
+        # ithalat-arsivi bicimi var (libws2_32.a ...), onlar yine dinamik cozulur. Hedef: tulpar.exe YALNIZ sistem DLL'i ve
+        # UCRT API set'i ithal etsin — gelecekte bir MSYS2 paketinin DLL'i yeniden adlandirilsa da guncelleme kirilmasin.
     endif()
 
     # UTF-8 console support
