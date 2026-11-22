@@ -884,6 +884,8 @@ jobs:
         timeout-minutes: 5
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
+          # msys2 kabugu `bash -e` ile kosar: BEKLENEN sekilde dusen tulpar cagrisi betigi printf'ten once olduruyordu (ilk
+          # kosum: cikti bos, cikis 1). Cikis kodlari `|| k=$?` ile yakalanir.
           set -uo pipefail
           t="$(cygpath -u "$RUNNER_TEMP")/crt_kontrol"; mkdir -p "$t"; w="$(cygpath -w "$t")"; tul="$(cygpath -u "$GITHUB_WORKSPACE")/tulpar.exe"
           [ -x "$tul" ] || tul="$(cygpath -u "$GITHUB_WORKSPACE")/build-windows/tulpar.exe"
@@ -891,9 +893,9 @@ jobs:
           printf '@echo #define _UCRT 1\r\n@exit /b 1\r\n' > "$t/sahte_ucrt.bat"
           cp examples/01_hello_world.tpr "$t/crt.tpr"
           desen='Iki C calisma zamani|Two C runtimes'
-          o1="$(cd "$t" && TULPAR_CC="$w\\sahte_msvcrt.bat" "$tul" --aot crt.tpr 2>&1)"; k1=$?
-          o2="$(cd "$t" && TULPAR_CC="$w\\sahte_ucrt.bat" "$tul" --aot crt.tpr 2>&1)"; k2=$?
-          o3="$(cd "$t" && TULPAR_CRT_DENETIMI=0 TULPAR_CC="$w\\sahte_msvcrt.bat" "$tul" --aot crt.tpr 2>&1)"; k3=$?
+          k1=0; o1="$(cd "$t" && TULPAR_CC="$w\\sahte_msvcrt.bat" "$tul" --aot crt.tpr 2>&1)" || k1=$?
+          k2=0; o2="$(cd "$t" && TULPAR_CC="$w\\sahte_ucrt.bat" "$tul" --aot crt.tpr 2>&1)" || k2=$?
+          k3=0; o3="$(cd "$t" && TULPAR_CRT_DENETIMI=0 TULPAR_CC="$w\\sahte_msvcrt.bat" "$tul" --aot crt.tpr 2>&1)" || k3=$?
           printf '%s\n--- (cikis %s)\n%s\n--- (cikis %s)\n%s\n--- (cikis %s)\n' "$o1" "$k1" "$o2" "$k2" "$o3" "$k3"
           grep -qE "$desen" <<< "$o1" || { echo "::error::msvcrt sahte surucusu CRT hatasi VERMEDI — denetim olcmuyor"; exit 1; }
           if grep -qE "$desen" <<< "$o2"; then echo "::error::UCRT sahte surucusunde CRT hatasi verildi — yanlis alarm"; exit 1; fi
