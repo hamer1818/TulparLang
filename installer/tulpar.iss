@@ -6,8 +6,8 @@
 ; "0.0.0-dev" stamp and the build-windows/tulpar.exe path so a developer
 ; can `iscc installer\tulpar.iss` after `cmake --build`.
 ;
-; On Windows, tulpar.exe pulls five non-system DLLs out of MSYS2's
-; mingw64 runtime that don't ship with stock Windows:
+; On Windows, tulpar.exe USED TO pull five non-system DLLs (until 2026-11-22; it is fully static now) out of MSYS2's
+; ucrt64 runtime (UCRT64 since 2026-11-22; MSYS2 retired MINGW64) that don't ship with stock Windows:
 ;   * libwinpthread-1.dll, zlib1.dll, libzstd.dll — MinGW + LLVM
 ;     transitive deps (PR #52, PR #54).
 ;   * libssl-3-x64.dll, libcrypto-3-x64.dll — OpenSSL 3, linked into
@@ -38,7 +38,7 @@
 #endif
 
 #ifndef SourceMingwBin
-  #define SourceMingwBin "C:\msys64\mingw64\bin"
+  #define SourceMingwBin "C:\msys64\ucrt64\bin"
 #endif
 
 ; Dosya ozelliklerinde gorunen SURUM. Inno bu alanda YALNIZ sayisal
@@ -184,11 +184,7 @@ Source: "assets\tulpar.ico";   DestDir: "{app}"; Flags: ignoreversion
 ; STATUS_DLL_NOT_FOUND on the very first invocation. Sitting next to
 ; tulpar.exe is enough — Windows resolves DLLs from the executable's
 ; own directory before walking PATH.
-Source: "{#SourceMingwBin}\libwinpthread-1.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceMingwBin}\zlib1.dll";           DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceMingwBin}\libzstd.dll";         DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceMingwBin}\libssl-3-x64.dll";    DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceMingwBin}\libcrypto-3-x64.dll"; DestDir: "{app}"; Flags: ignoreversion
+; 2026-11-22'den beri tulpar.exe TAMAMEN STATIK (CMakeLists.txt, UCRT64 gocu): MinGW / OpenSSL / zlib / zstd DLL'i kurulmaz.
 
 [Icons]
 ; Start Menu group. REPL launcher first (most useful thing a non-CLI

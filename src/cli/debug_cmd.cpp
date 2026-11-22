@@ -514,11 +514,11 @@ const char *gdb_install_hint() {
 #ifdef _WIN32
   return tulpar::i18n::tr_en(
       "launch: gdb.exe PATH'te bulunamadi. `tulpar debug` gdb MI3 koprusu "
-      "kullanir; MSYS2 MINGW64 kabugunda kurun: "
-      "pacman -S mingw-w64-x86_64-gdb (sonra mingw64\\bin PATH'te olmali)",
+      "kullanir; MSYS2 UCRT64 kabugunda kurun: "
+      "pacman -S mingw-w64-ucrt-x86_64-gdb (sonra ucrt64\\bin PATH'te olmali)",
       "launch: gdb.exe not found on PATH. `tulpar debug` drives gdb over "
-      "MI3; install it from an MSYS2 MINGW64 shell: "
-      "pacman -S mingw-w64-x86_64-gdb (mingw64\\bin must be on PATH)");
+      "MI3; install it from an MSYS2 UCRT64 shell: "
+      "pacman -S mingw-w64-ucrt-x86_64-gdb (ucrt64\\bin must be on PATH)");
 #elif defined(__APPLE__)
   return tulpar::i18n::tr_en(
       "launch: gdb PATH'te bulunamadi. `tulpar debug` bugun yalniz gdb MI3 "

@@ -1,6 +1,6 @@
 # TulparLang - Programming Language (Modern C++17 + LLVM Backend)
 # Built and tested in CI: Linux x86_64, macOS arm64, Windows x86_64 via MSYS2
-# MINGW64 (MSVC is not built or tested) — see docs/PLATFORM_SUPPORT.md
+# UCRT64 (MINGW64 until 2026-11-22; MSVC is not built or tested) — see docs/PLATFORM_SUPPORT.md
 # Minimum CMake version
 cmake_minimum_required(VERSION 3.14)
 
@@ -63,8 +63,8 @@ add_compile_definitions(TULPAR_LLVM_MAJOR=${LLVM_VERSION_MAJOR})
 # Install:
 #   Linux:  apt install libssl-dev          (auto-detected)
 #   macOS:  brew install openssl            (auto-detected via brew prefix)
-#   MSYS2:  pacman -S mingw-w64-x86_64-openssl
-#           — build.bat passes -DOPENSSL_ROOT_DIR=C:/msys64/mingw64
+#   MSYS2:  pacman -S mingw-w64-ucrt-x86_64-openssl
+#           — build.bat passes -DOPENSSL_ROOT_DIR=C:/msys64/ucrt64
 #             so the auto-detect Just Works on the standard MSYS2 path.
 #             Override with -DOPENSSL_ROOT_DIR=... for non-default installs.
 #
@@ -76,6 +76,13 @@ add_compile_definitions(TULPAR_LLVM_MAJOR=${LLVM_VERSION_MAJOR})
 option(TULPAR_MACOS_TASINABILIR
        "macOS: tulpar yalniz sistem kitapliklarina baglansin (Homebrew dylib'i yok)" ON)
 if(APPLE AND TULPAR_MACOS_TASINABILIR)
+    set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
+# Windows (2026-11-22, UCRT64 gocu): tulpar.exe OpenSSL'i STATIK alir. UCRT64'te OpenSSL 4.x geldi ve DLL adlari surum
+# tasiyor (libssl-4-x64.dll); eski `tulpar update` istemcileri DLL'leri ADLARIYLA indiriyor (update_cmd.cpp) ve yeni adi
+# bilmiyorlardi — dinamik kalsaydi eski surumden guncelleyen her Windows kullanicisi acilmayan bir tulpar.exe ile kalirdi.
+# Statik: ikilinin ithalatlari adi degismeyen uc DLL'e iner (libwinpthread-1, zlib1, libzstd).
+if(WIN32)
     set(OPENSSL_USE_STATIC_LIBS TRUE)
 endif()
 find_package(OpenSSL QUIET)
@@ -492,6 +499,29 @@ else()
     message(STATUS "LLVM: statik bilesenlerle linkleniyor")
 endif()
 
+# MinGW: LLVM'in zlib / zstd bagimliliklarini STATIK arsive cevir (2026-11-22, UCRT64 gocu). Asagidaki
+# `-Wl,-Bstatic -lz -lzstd` bunu yapmiyordu: LLVMSupport'un INTERFACE_LINK_LIBRARIES'i ZLIB::ZLIB / zstd::libzstd_shared
+# hedeflerini tasiyor ve onlarin IMPORTED_LOCATION'i libz.dll.a / libzstd.dll.a — link satirina dogrudan bu yollar giriyor,
+# sembol oradan cozuluyor, -lz hic kullanilmiyordu. Sonuc: tulpar.exe zlib1.dll / libzstd.dll ithal etti. UCRT64'te zlib 1.4'un
+# DLL adi libz-1.dll oldu; eski `tulpar update` istemcileri yeni adi bilmedigi icin guncelleme ACILMAYAN bir tulpar
+# birakacakti. Kardes .a varsa hedef ona yonlendirilir; DLL kapisi (build.yml) sonucu olcer.
+if(MINGW)
+    foreach(_t ZLIB::ZLIB zstd::libzstd_shared zstd::libzstd_static)
+        if(TARGET ${_t})
+            foreach(_p IMPORTED_LOCATION IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION_NOCONFIG IMPORTED_IMPLIB IMPORTED_IMPLIB_RELEASE)
+                get_target_property(_loc ${_t} ${_p})
+                if(_loc AND _loc MATCHES "\\.dll\\.a$")
+                    string(REGEX REPLACE "\\.dll\\.a$" ".a" _st "${_loc}")
+                    if(EXISTS "${_st}")
+                        set_target_properties(${_t} PROPERTIES ${_p} "${_st}")
+                        message(STATUS "MinGW statik: ${_t} ${_p} -> ${_st}")
+                    endif()
+                endif()
+            endforeach()
+        endif()
+    endforeach()
+endif()
+
 # Windows-specific linking requirements (applies to MSVC and MinGW)
 if(WIN32)
     # version.lib is required by LLVM (VerQueryValue) on Windows;
@@ -503,6 +533,14 @@ endif()
 
 if(OpenSSL_FOUND)
     target_link_libraries(tulpar OpenSSL::SSL OpenSSL::Crypto)
+    if(WIN32)
+        if(NOT OPENSSL_SSL_LIBRARY MATCHES "\\.a$" OR NOT OPENSSL_CRYPTO_LIBRARY MATCHES "\\.a$")
+            message(FATAL_ERROR "Windows: OpenSSL statik arsivi yok (ssl='${OPENSSL_SSL_LIBRARY}', crypto='${OPENSSL_CRYPTO_LIBRARY}'); "
+                "MSYS2 mingw-w64-ucrt-x86_64-openssl libssl.a / libcrypto.a'yi kurar.")
+        endif()
+        # statik libcrypto: CertOpenSystemStoreW (crypt32), BCryptGenRandom (bcrypt), soket (ws2_32) — sistem kitapliklari SONDA
+        target_link_libraries(tulpar crypt32 bcrypt ws2_32)
+    endif()
 endif()
 
 # ============================================
@@ -674,10 +712,17 @@ elseif(WIN32)
     # only have import-lib form) keep being resolved dynamically.
     if(NOT MSVC)
         target_link_options(tulpar PRIVATE
+            -static
             -static-libgcc
             -static-libstdc++
-            -Wl,-Bstatic -lwinpthread -lz -lzstd -Wl,-Bdynamic
         )
+        # ESKI `-Wl,-Bstatic -lwinpthread -lz -lzstd -Wl,-Bdynamic` KALKTI (2026-11-22): -static ile birlikte sondaki -Bdynamic,
+        # GCC surucusunun EN SONA ekledigi -lstdc++ / -lpthread'i DINAMIGE ceviriyordu — UCRT64 CI'da tulpar.exe libstdc++-6.dll
+        # ve libwinpthread-1.dll ithal etti (statik arsivlerde __imp_ basvurusu YOKTU, olculdu). zlib/zstd yukarida hedef
+        # yonlendirmesiyle, gerisi -static ile statik.
+        # -static (2026-11-22): kalan MinGW DLL'leri de (libwinpthread-1) ikiliye; Windows'un kendi kitapliklarinin yalniz
+        # ithalat-arsivi bicimi var (libws2_32.a ...), onlar yine dinamik cozulur. Hedef: tulpar.exe YALNIZ sistem DLL'i ve
+        # UCRT API set'i ithal etsin — gelecekte bir MSYS2 paketinin DLL'i yeniden adlandirilsa da guncelleme kirilmasin.
     endif()
 
     # UTF-8 console support

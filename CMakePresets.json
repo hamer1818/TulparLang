@@ -18,7 +18,7 @@
       "generator": "MinGW Makefiles",
       "binaryDir": "${sourceDir}/build-windows",
       "cacheVariables": {
-        "CMAKE_PREFIX_PATH": "C:/msys64/mingw64",
+        "CMAKE_PREFIX_PATH": "C:/msys64/ucrt64",
         "CMAKE_C_COMPILER": "gcc",
         "CMAKE_CXX_COMPILER": "g++"
       }
