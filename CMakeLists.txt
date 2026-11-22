@@ -78,6 +78,13 @@ option(TULPAR_MACOS_TASINABILIR
 if(APPLE AND TULPAR_MACOS_TASINABILIR)
     set(OPENSSL_USE_STATIC_LIBS TRUE)
 endif()
+# Windows (2026-11-22, UCRT64 gocu): tulpar.exe OpenSSL'i STATIK alir. UCRT64'te OpenSSL 4.x geldi ve DLL adlari surum
+# tasiyor (libssl-4-x64.dll); eski `tulpar update` istemcileri DLL'leri ADLARIYLA indiriyor (update_cmd.cpp) ve yeni adi
+# bilmiyorlardi — dinamik kalsaydi eski surumden guncelleyen her Windows kullanicisi acilmayan bir tulpar.exe ile kalirdi.
+# Statik: ikilinin ithalatlari adi degismeyen uc DLL'e iner (libwinpthread-1, zlib1, libzstd).
+if(WIN32)
+    set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
     message(STATUS "OpenSSL: ${OPENSSL_VERSION} (TLS enabled)")
@@ -503,6 +510,14 @@ endif()
 
 if(OpenSSL_FOUND)
     target_link_libraries(tulpar OpenSSL::SSL OpenSSL::Crypto)
+    if(WIN32)
+        if(NOT OPENSSL_SSL_LIBRARY MATCHES "\\.a$" OR NOT OPENSSL_CRYPTO_LIBRARY MATCHES "\\.a$")
+            message(FATAL_ERROR "Windows: OpenSSL statik arsivi yok (ssl='${OPENSSL_SSL_LIBRARY}', crypto='${OPENSSL_CRYPTO_LIBRARY}'); "
+                "MSYS2 mingw-w64-ucrt-x86_64-openssl libssl.a / libcrypto.a'yi kurar.")
+        endif()
+        # statik libcrypto: CertOpenSystemStoreW (crypt32), BCryptGenRandom (bcrypt), soket (ws2_32) — sistem kitapliklari SONDA
+        target_link_libraries(tulpar crypt32 bcrypt ws2_32)
+    endif()
 endif()
 
 # ============================================

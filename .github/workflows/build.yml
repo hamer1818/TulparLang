@@ -1028,20 +1028,10 @@ jobs:
           Copy-Item build-windows\tulpar.exe          dist\tulpar-windows-x64.exe
           Copy-Item build-windows\libtulpar_runtime.a dist\libtulpar_runtime-windows-x64.a
           $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
-          $bundledDlls = @(
-            'libwinpthread-1.dll',
-            'zlib1.dll',
-            'libzstd.dll',
-            'libssl-3-x64.dll',
-            'libcrypto-3-x64.dll'
-          )
-          foreach ($dll in $bundledDlls) {
-            $src = Join-Path $mingwBin $dll
-            if (-not (Test-Path $src)) {
-              throw "Pakete konacak DLL MSYS2'de yok: $src — paket duzeni mi degisti?"
-            }
-            Copy-Item $src "dist\$dll"
-          }
+          # PAKETE GIRECEK DLL'LER ITHALAT TABLOSUNDAN TURETILIR (2026-11-22, UCRT64 gocu). Eskiden bes ad ELLE yaziliydi
+          # (libssl-3-x64.dll ...); UCRT64'te OpenSSL 4.1 geldi ve kapi "Pakete konacak DLL MSYS2'de yok" diye dustu — surum
+          # numarasi gomulu sabit liste her paket guncellemesinde kirilir. Kural ayni kaldi, olcusu degisti: ithalat ya Windows'un
+          # kendi DLL'i / UCRT API set'i ya da ucrt64\bin'de VAR ve pakete kopyalanir; ikisi de degilse KIRMIZI.
           $systemDlls = @(
             'kernel32.dll', 'kernelbase.dll', 'ntdll.dll', 'ucrtbase.dll',
             'advapi32.dll', 'user32.dll', 'shell32.dll', 'ole32.dll',
@@ -1050,28 +1040,57 @@ jobs:
             'iphlpapi.dll', 'userenv.dll', 'version.dll', 'winmm.dll',
             'powrprof.dll', 'dbghelp.dll', 'imm32.dll'
           )
-          $allowed = ($systemDlls + $bundledDlls) | ForEach-Object { $_.ToLower() }
           $imports = & objdump.exe -p dist\tulpar-windows-x64.exe |
                      Select-String '^\s*DLL Name:\s*(.+)$' |
                      ForEach-Object { $_.Matches[0].Groups[1].Value.Trim().ToLower() }
-          # UCRT (2026-11-22): CRT ithalatlari api-ms-win-crt-*.dll "API set"leri — Windows 10+ sistemle gelir (ucrtbase.dll'e
-          # cozulur). msvcrt.dll ARTIK izinli DEGIL: ithalat tablosunda gorunmesi derlemenin MINGW64'e (msvcrt) kaydigini gosterir.
-          $missing = $imports | Where-Object { $_ -notin $allowed -and $_ -notlike 'api-ms-win-crt-*.dll' }
+          if (-not $imports) { throw "objdump ithalat tablosunu okuyamadi — olcum yapilamadi." }
+          # UCRT: CRT ithalatlari api-ms-win-crt-*.dll "API set"leri — Windows 10+ sistemle gelir (ucrtbase.dll'e cozulur).
+          # msvcrt.dll ARTIK izinli DEGIL: ithalat tablosunda gorunmesi derlemenin MINGW64'e (msvcrt) kaydigini gosterir.
           if (-not ($imports | Where-Object { $_ -like 'api-ms-win-crt-*.dll' -or $_ -eq 'ucrtbase.dll' })) {
             throw "tulpar.exe UCRT'ye baglanmiyor (api-ms-win-crt-* / ucrtbase.dll ithalati yok) — UCRT64 ile mi derlendi?"
           }
+          # BEKLENEN liste (tests/surum_varliklari.py bunu update_cmd.cpp'nin Windows listesiyle esitler). OpenSSL STATIK
+          # (CMakeLists.txt, 2026-11-22): ikili libssl/libcrypto DLL'i ITHAL ETMEMELI — ederse asagidaki esitlik duser.
+          $bundledDlls = @(
+            'libwinpthread-1.dll',
+            'zlib1.dll',
+            'libzstd.dll'
+          )
+          $bundled = @()
+          $missing = @()
+          foreach ($dll in $imports) {
+            if ($dll -in $systemDlls -or $dll -like 'api-ms-win-crt-*.dll') { continue }
+            $src = Join-Path $mingwBin $dll
+            if (Test-Path $src) { Copy-Item $src "dist\$dll"; $bundled += $dll } else { $missing += $dll }
+          }
           if ($missing) {
-            Write-Host "tulpar.exe ne sistem ne de pakete konan DLL'lere baglaniyor:" -ForegroundColor Red
+            Write-Host "tulpar.exe ne sistem DLL'ine ne de ucrt64\bin'deki bir DLL'e cozulen ithalat tasiyor:" -ForegroundColor Red
             $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
             throw "DLL paketleme kapisi dustu."
           }
-          Write-Host "DLL kapisi: TAMAM ($($imports.Count) ithalat, hepsi kapsanmis)"
-          Compress-Archive -Path dist\tulpar-windows-x64.exe, dist\*.dll -DestinationPath dist\tulpar-windows-x64.zip
+          # POZITIF KONTROL: tulpar.exe MinGW pthread'ine dinamik bagli; liste bossa ithalat okumasi/siniflama bozuktur.
+          if (-not ($bundled -contains 'libwinpthread-1.dll')) { throw "Paket listesinde libwinpthread-1.dll yok — siniflama olcmuyor." }
+          $fark = Compare-Object ($bundled | Sort-Object) ($bundledDlls | Sort-Object)
+          if ($fark) {
+            $fark | ForEach-Object { Write-Host "  $($_.SideIndicator) $($_.InputObject)  (<= ithal edilen ama beklenmeyen, => beklenen ama ithal edilmeyen)" -ForegroundColor Red }
+            throw "Ithal edilen DLL kumesi `$bundledDlls ile ayni degil — liste ve update_cmd.cpp guncellenmeli."
+          }
+          Write-Host "DLL kapisi: TAMAM ($($imports.Count) ithalat; pakete giren: $($bundled -join ', '))"
+          # GECIS KOPYALARI (2026-11-22): eski `tulpar update` istemcileri libssl-3-x64.dll / libcrypto-3-x64.dll'i ZORUNLU varlik
+          # olarak indiriyor; yayinlanmazsa guncellemeleri 404'te durur. Yeni ikili onlari YUKLEMEZ (OpenSSL statik). Zip'e GIRMEZ;
+          # yalniz gevsek surum varligi olarak (macOS'un eski adlari gibi gecis icin).
+          foreach ($ad in @('ssl', 'crypto')) {
+            $kaynak = Get-ChildItem -Path $mingwBin -Filter "lib$ad-*-x64.dll" | Select-Object -First 1
+            if (-not $kaynak) { throw "Gecis kopyasi icin lib$ad-*-x64.dll ucrt64\bin'de yok" }
+            Copy-Item $kaynak.FullName "dist\lib$ad-3-x64.dll"
+          }
+          $zipe = @('dist\tulpar-windows-x64.exe') + ($bundled | ForEach-Object { "dist\$_" })
+          Compress-Archive -Path $zipe -DestinationPath dist\tulpar-windows-x64.zip
 
       # GUI KURULUMCU (Inno Setup 6) — 3.13.0'da natif Windows'la birlikte
       # silinmisti, 2026-09-21'de geri geldi. `installer/tulpar.iss` ve marka
       # varliklari (.ico + iki .bmp) tarihten AYNEN geri alindi; betik yalnizca
-      # ikiliye, runtime kutuphanesine, ikona ve bes MinGW DLL'ine dokunuyor,
+      # ikiliye, runtime kutuphanesine, ikona ve uc MinGW DLL'ine (2026-11-22'ye kadar bes; OpenSSL artik statik) dokunuyor,
       # yani bu isin zaten urettigi seylere.
       #
       # Kurulum KULLANICI BAZINDA (yonetici hakki istemez, %LOCALAPPDATA%
