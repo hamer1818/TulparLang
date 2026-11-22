@@ -1069,9 +1069,12 @@ jobs:
           }
           # POZITIF KONTROL: ithalat okumasi gercekten calisiyor mu — her Windows ikilisi kernel32 ithal eder.
           if (-not ($imports -contains 'kernel32.dll')) { throw "Ithalat tablosunda kernel32.dll yok — objdump/siniflama olcmuyor." }
-          $fark = Compare-Object ($bundled | Sort-Object) ($bundledDlls | Sort-Object)
-          if ($fark) {
-            $fark | ForEach-Object { Write-Host "  $($_.SideIndicator) $($_.InputObject)  (<= ithal edilen ama beklenmeyen, => beklenen ama ithal edilmeyen)" -ForegroundColor Red }
+          # Compare-Object bos listede $null argumani diye DUSUYOR (tamamen statik ikilide iki liste de bos): elle karsilastir.
+          $fazla = @($bundled | Where-Object { $_ -notin $bundledDlls })
+          $eksik = @($bundledDlls | Where-Object { $_ -notin $bundled })
+          if ($fazla.Count -gt 0 -or $eksik.Count -gt 0) {
+            $fazla | ForEach-Object { Write-Host "  ithal edilen ama beklenmeyen: $_" -ForegroundColor Red }
+            $eksik | ForEach-Object { Write-Host "  beklenen ama ithal edilmeyen: $_" -ForegroundColor Red }
             throw "Ithal edilen DLL kumesi `$bundledDlls ile ayni degil — liste ve update_cmd.cpp guncellenmeli."
           }
           Write-Host "DLL kapisi: TAMAM ($($imports.Count) ithalat; pakete giren: $($bundled -join ', '))"
