@@ -548,7 +548,10 @@ if [ "$ACTION" = "suites" ]; then
         # sunucusuna STARTTLS/TLS + AUTH ile gonderiyor; yanlis ad, CA disi,
         # indirgeme, STARTTLS enjeksiyonu, zarf enjeksiyonu REDDEDILMELI.
         # openssl yoksa SKIP.
-        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke; do
+        # wings_rate_limit_smoke (2026-11-25): client_ip (XFF yok, X-Real-IP
+        # yalniz ozel esten), rota bazli sinir, listen_pool(16) altinda kayipsiz
+        # sinir + shared_incr sayimi, giris kilidi.
+        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke wings_rate_limit_smoke; do
             SMOKE_OUT=$(DISPLAY= WAYLAND_DISPLAY= python3 "tests/$smoke.py" 2>&1)
             SMOKE_RC=$?
             SMOKE_LAST=$(printf '%s\n' "$SMOKE_OUT" | tail -1)

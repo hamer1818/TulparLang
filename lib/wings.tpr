@@ -783,17 +783,224 @@ func cors(str origin, json opts) {
     }
 }
 
+// ----- Client IP --------------------------------------------------------------
+// client_ip(req): the address rate limits and logs should key on. It is the
+// TCP peer (`req["remote_addr"]`, set by every serve loop). `X-Real-IP` is
+// honoured ONLY when that peer is a private / loopback address (i.e. our own
+// reverse proxy: Nginx Proxy Manager on the Docker network) AND the header is
+// a valid IP. `X-Forwarded-For` is never read: any client can write it, and
+// until 2026-11-25 rate_limit trusted its first value unconditionally — a
+// client could pick a fresh "IP" per request and walk past the login lock.
+// Same rule as hamza-backend's middleware.RealIP (Go net.IP IsPrivate ||
+// IsLoopback: 10/8, 172.16/12, 192.168/16, 127/8, ::1, fc00::/7).
+func client_ip(json req) {
+    str peer = "";
+    if (typeof(req["remote_addr"]) == "string") {
+        peer = req["remote_addr"];
+    }
+    if (length(peer) == 0) {
+        return "unknown";
+    }
+    if (ip_is_private(peer)) {
+        json h = req["headers"];
+        str xr = "";
+        if (typeof(h["X-Real-IP"]) == "string") {
+            xr = trim(h["X-Real-IP"]);
+        } else if (typeof(h["x-real-ip"]) == "string") {
+            xr = trim(h["x-real-ip"]);
+        } else if (typeof(h["X-Real-Ip"]) == "string") {
+            xr = trim(h["X-Real-Ip"]);
+        }
+        if (ip_is_valid(xr)) {
+            return lower(xr);
+        }
+    }
+    return peer;
+}
+
+// "1.2.3.4" -> [1, 2, 3, 4]; anything else -> []. Strict dotted decimal: no
+// leading zeros (Go 1.17+ ParseIP), no signs, no spaces, each part 0..255.
+func _wings_ipv4(str s) {
+    json parts = split(s, ".");
+    if (length(parts) != 4) {
+        return [];
+    }
+    json out = [];
+    for (int i = 0; i < 4; i++) {
+        str p = parts[i];
+        int n = length(p);
+        if (n == 0 || n > 3) {
+            return [];
+        }
+        if (n > 1 && ord(p, 0) == 48) {
+            return [];
+        }
+        int v = 0;
+        for (int j = 0; j < n; j++) {
+            int c = ord(p, j);
+            if (c < 48 || c > 57) {
+                return [];
+            }
+            v = v * 10 + (c - 48);
+        }
+        if (v > 255) {
+            return [];
+        }
+        push(out, v);
+    }
+    return out;
+}
+
+func _wings_hex4(str g) {
+    int n = length(g);
+    if (n == 0 || n > 4) {
+        return -1;
+    }
+    int v = 0;
+    for (int i = 0; i < n; i++) {
+        int c = ord(g, i);
+        int d = -1;
+        if (c >= 48 && c <= 57) {
+            d = c - 48;
+        } else if (c >= 97 && c <= 102) {
+            d = c - 87;
+        } else if (c >= 65 && c <= 70) {
+            d = c - 55;
+        }
+        if (d < 0) {
+            return -1;
+        }
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+// IPv6 text -> 8 16-bit groups, or [] when invalid. Accepts one "::" and a
+// trailing embedded IPv4 ("::ffff:10.0.0.1"); rejects zones ("%eth0").
+func _wings_ipv6(str s) {
+    if (length(s) < 2 || contains(s, "%") || !contains(s, ":")) {
+        return [];
+    }
+    json halves = split(s, "::");
+    if (length(halves) > 2) {
+        return [];
+    }
+    json head = [];
+    json tail = [];
+    for (int side = 0; side < length(halves); side++) {
+        str part = halves[side];
+        json acc = [];
+        if (length(part) > 0) {
+            json gs = split(part, ":");
+            for (int i = 0; i < length(gs); i++) {
+                str g = gs[i];
+                bool last = (side == length(halves) - 1) && (i == length(gs) - 1);
+                if (last && contains(g, ".")) {
+                    json v4 = _wings_ipv4(g);
+                    if (length(v4) != 4) {
+                        return [];
+                    }
+                    push(acc, v4[0] * 256 + v4[1]);
+                    push(acc, v4[2] * 256 + v4[3]);
+                } else {
+                    int v = _wings_hex4(g);
+                    if (v < 0) {
+                        return [];
+                    }
+                    push(acc, v);
+                }
+            }
+        }
+        if (side == 0) {
+            head = acc;
+        } else {
+            tail = acc;
+        }
+    }
+    int have = length(head) + length(tail);
+    json out = [];
+    if (length(halves) == 1) {
+        if (have != 8) {
+            return [];
+        }
+        return head;
+    }
+    if (have > 7) {
+        return [];
+    }
+    for (int i = 0; i < length(head); i++) {
+        push(out, head[i]);
+    }
+    for (int i = 0; i < 8 - have; i++) {
+        push(out, 0);
+    }
+    for (int i = 0; i < length(tail); i++) {
+        push(out, tail[i]);
+    }
+    return out;
+}
+
+func ip_is_valid(str s) {
+    if (length(_wings_ipv4(s)) == 4) {
+        return true;
+    }
+    return length(_wings_ipv6(s)) == 8;
+}
+
+// Private (RFC 1918 / RFC 4193) or loopback. IPv4-mapped IPv6 is judged by
+// its IPv4 part, as Go does.
+func ip_is_private(str s) {
+    json v4 = _wings_ipv4(s);
+    if (length(v4) != 4) {
+        json g = _wings_ipv6(s);
+        if (length(g) != 8) {
+            return false;
+        }
+        bool zero5 = g[0] == 0 && g[1] == 0 && g[2] == 0 && g[3] == 0 && g[4] == 0;
+        if (zero5 && g[5] == 65535) {
+            v4 = [toInt(g[6] / 256), g[6] % 256, toInt(g[7] / 256), g[7] % 256];
+        } else {
+            if (zero5 && g[5] == 0 && g[6] == 0 && g[7] == 1) {
+                return true;                       // ::1
+            }
+            return toInt(g[0] / 512) == 126;       // fc00::/7
+        }
+    }
+    int a = v4[0];
+    int b = v4[1];
+    if (a == 10 || a == 127) {
+        return true;
+    }
+    if (a == 172 && b >= 16 && b <= 31) {
+        return true;
+    }
+    return a == 192 && b == 168;
+}
+
 // ----- Rate limiting ----------------------------------------------------------
-// Fixed-window limiter as a use()-able middleware. Keyed on the client IP from
-// X-Forwarded-For / X-Real-IP (first hop) when present, else one global bucket
-// (fine behind a proxy; direct exposure without those headers = global limit).
-// The whole table resets when the window rolls over, so memory stays bounded.
+// Fixed-window limiters keyed by client_ip(req), stored in the process-wide
+// shared table (shared_incr), so every listen_pool worker sees the same
+// counts — the old per-thread-unsafe json table both raced and, under a pool,
+// was one table mutated from N threads without a lock. Same algorithm as
+// hamza-backend's RateLimiter: the window starts at the first hit; every hit
+// (allowed or not) counts.
 //
-//   rate_limit(100, 60);   // max 100 requests per 60s per client
-json _wings_rl_hits = {};
+//   rate_limit(100, 60);                             // global: 100 / 60 s / IP
+//   rate_limit_route("POST", "/api/contact", 5, 600);  // one route: 5 / 10 min
+//   rate_limit_route("POST", "/api/views/:key", 120, 60);
+//
+// From inside a handler (e.g. login: 10 FAILED attempts / 15 min, reset on
+// success):
+//   str ip = client_ip(req);
+//   if (!limiter_allow("login", ip, 10, 900)) {
+//       return too_many_requests(limiter_retry_after("login", ip, 900));
+//   }
+//   ... on success: limiter_reset("login", ip);
 int _wings_rl_max = 60;
 int _wings_rl_window = 60;
-int _wings_rl_epoch = 0;
+json _wings_rl_routes = [];
+bool _wings_rl_route_mw = false;
+json _wings_rl_body = {"error": "rate limit exceeded"};
 
 func rate_limit(int max_req, int window_s) {
     if (max_req > 0) {
@@ -805,39 +1012,69 @@ func rate_limit(int max_req, int window_s) {
     use("_wings_rate_limit_mw");
 }
 
-func _wings_rl_key(json req) {
-    json h = req["headers"];
-    str ip = h["X-Forwarded-For"];
-    if (length(ip) == 0) {
-        ip = h["x-forwarded-for"];
+func rate_limit_route(str method, str path, int max_req, int window_s) {
+    push(_wings_rl_routes, {"method": upper(method), "path": _route_prefix + path,
+                            "handler": "", "max": max_req, "window": window_s});
+    if (!_wings_rl_route_mw) {
+        _wings_rl_route_mw = true;
+        use("_wings_rate_limit_route_mw");
     }
-    if (length(ip) == 0) {
-        ip = h["X-Real-IP"];
+}
+
+// JSON body of every 429 the limiters send (default {"error": "rate limit exceeded"}).
+func rate_limit_body(json body) {
+    _wings_rl_body = body;
+}
+
+func _wings_rl_key(str name, str key) {
+    return "wings.rl:" + name + ":" + key;
+}
+
+// Records a hit; true while the key is within `max_req` for this window.
+func limiter_allow(str name, str key, int max_req, int window_s) {
+    int c = shared_incr(_wings_rl_key(name, key), window_s);
+    return c <= max_req;
+}
+
+func limiter_reset(str name, str key) {
+    shared_del(_wings_rl_key(name, key));
+}
+
+// Seconds until the key's window ends (>= 1); `window_s` when it has none.
+func limiter_retry_after(str name, str key, int window_s) {
+    int t = shared_ttl(_wings_rl_key(name, key));
+    if (t < 1) {
+        return window_s;
     }
-    if (length(ip) == 0) {
-        ip = h["x-real-ip"];
-    }
-    if (length(ip) == 0) {
-        return "global";
-    }
-    json parts = split(ip, ",");
-    return trim(parts[0]);
+    return t;
+}
+
+func too_many_requests(int retry_after) {
+    json r = clone(_wings_rl_body);
+    r["_status"] = 429;
+    r["_headers"] = {"Retry-After": toString(retry_after)};
+    return r;
 }
 
 func _wings_rate_limit_mw(req) {
-    int now = timestamp();
-    int epoch = toInt(now / _wings_rl_window);
-    if (epoch != _wings_rl_epoch) {
-        _wings_rl_epoch = epoch;
-        _wings_rl_hits = {};
+    str ip = client_ip(req);
+    if (!limiter_allow("global", ip, _wings_rl_max, _wings_rl_window)) {
+        return too_many_requests(limiter_retry_after("global", ip, _wings_rl_window));
     }
-    str k = _wings_rl_key(req);
-    int c = _wings_rl_hits[k];
-    c = c + 1;
-    _wings_rl_hits[k] = c;
-    if (c > _wings_rl_max) {
-        return {"error": "rate limit exceeded", "_status": 429,
-                "_headers": {"Retry-After": toString(_wings_rl_window)}};
+    return {};
+}
+
+func _wings_rate_limit_route_mw(req) {
+    json m = wings_find_route(_wings_rl_routes, req["method"], req["path"]);
+    int i = m["index"];
+    if (i < 0) {
+        return {};
+    }
+    json rl = _wings_rl_routes[i];
+    str name = "route:" + rl["method"] + " " + rl["path"];
+    str ip = client_ip(req);
+    if (!limiter_allow(name, ip, rl["max"], rl["window"])) {
+        return too_many_requests(limiter_retry_after(name, ip, rl["window"]));
     }
     return {};
 }
@@ -2294,6 +2531,7 @@ func _wings_serve_one_request(int client) {
     int keep = http_should_keepalive(req);
 
     _request = req;
+    _request["remote_addr"] = socket_peer_ip(client);
     wings_set_current_fd(client);
     str method = req["method"];
     str path = req["path"];
@@ -2852,6 +3090,7 @@ func listen(int port) {
             }
             json req = http_parse_request(raw);
             _request = req;
+            _request["remote_addr"] = socket_peer_ip(client);
             wings_set_current_fd(client);
 
             str method = req["method"];
