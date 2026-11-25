@@ -47,7 +47,17 @@ while (i < 50) {
 }
 print("hayatta son=" + toString(last));
 EOF
-OUT=$(DISPLAY= "$TULPAR" "$T/yaz.tpr" 2>&1); RC=$?
+# SIGPIPE'i VARSAYILANA sifirlayip calistir. Neden: GitHub Actions runner'i
+# (ve Python'dan dogan her surec) SIGPIPE'i YOK SAYILMIS devraliyor; exec bunu
+# korur. O ortamda ag kontrolu duzeltme olmadan da gecer (hicbir sey olcmez),
+# `| head` kontrolu de 141 yerine 0 verir — 2026-11-25 PR #501'de olculdu.
+cat > "$T/dfl.py" <<'PYEOF'
+import os, signal, sys
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+os.execv(sys.argv[1], sys.argv[1:])
+PYEOF
+"$TULPAR" build "$T/yaz.tpr" "$T/yaz" >/dev/null 2>&1 || { echo "FAIL: yaz.tpr derlenmedi"; exit 1; }
+OUT=$(python3 "$T/dfl.py" "$T/yaz" 2>&1); RC=$?
 
 cat > "$T/bas.tpr" <<'EOF'
 int i = 0;
@@ -58,8 +68,10 @@ while (i < 2000000) {
 EOF
 "$TULPAR" build "$T/bas.tpr" "$T/bas" >/dev/null 2>&1 || { echo "FAIL: bas.tpr derlenmedi"; exit 1; }
 # Ag kullanmayan program: head 1 satir okuyup kapatinca SIGPIPE ile hemen bitmeli.
+# (`timeout` yok: macOS'ta bulunmuyor; SIGPIPE yok sayilsa da program EPIPE
+# alip hizla biter ve rc 0 kontrolu kirmiziya cevirir.)
 set -o pipefail
-timeout 20 "$T/bas" | head -1 >/dev/null
+python3 "$T/dfl.py" "$T/bas" | head -1 >/dev/null
 PIPE_RC=$?
 set +o pipefail
 
@@ -67,7 +79,7 @@ ok=1
 if [ "$RC" -ne 0 ] || [[ "$OUT" != *"hayatta son=-1"* ]]; then
     echo "  - ag yazan program SIGPIPE'tan sag cikmadi (rc=$RC, cikti: $OUT)"; ok=0
 fi
-# 141 = 128+SIGPIPE (bas), pipefail onu tasir; 124 = timeout (SIGPIPE yok sayilmis).
+# 141 = 128+SIGPIPE (bas), pipefail onu tasir; 0 = SIGPIPE yok sayilmis.
 if [ "$PIPE_RC" -ne 141 ]; then
     echo "  - ag kullanmayan program '| head' ile SIGPIPE'ta bitmedi (rc=$PIPE_RC)"; ok=0
 fi
