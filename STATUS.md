@@ -781,6 +781,13 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     bayt bayt aynı; alg HS256'ya sabit, exp zorunlu, nbf) + `jwt_required` /
     `jwt_optional` bağımlılıkları. Kapılar: `tests/wings_tasima_smoke.py`,
     `tests/wings_jwt_standart.test.tpr`.
+  - ✅ **Düzgün kapanış (2026-11-25):** `graceful_shutdown(sn)` + `on_shutdown("fn")`
+    — SIGTERM/SIGINT'te `listen`/`listen_pool` kabulü bırakır, süren
+    istekleri (en çok `sn`) bitirir, kancaları (DB kapatma) koşar, 0 ile
+    çıkar; boşta keep-alive beklenmez. Opt-in: çağrılmazsa SIGTERM eskisi
+    gibi öldürür. `listen_evented`/`listen_async`/`wings_tls` kapsamda değil.
+    Kapı: `tests/wings_kapanis_smoke.py` (+ set-password/backup tarifi:
+    stdin'den parola, `VACUUM INTO ?`).
   - ✅ **JWT guard:** `jwt_guard(secret)` — `wings_jwt` paketiyle birebir
     wire-interop (HS256, base64url segmentler, imza=base64url(hex MAC));
     doğrulama `_wings_jwt_verify` (çifte-HMAC imza karşılaştırma + exp).

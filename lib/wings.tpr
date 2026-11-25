@@ -2819,6 +2819,12 @@ func _wings_serve_connection(int client) {
         }
         json req = http_parse_request(raw);
         int keep = http_should_keepalive(req);
+        if (_wings_graceful_s > 0) {
+            atomic_add(_wings_inflight, 1);
+            if (shutdown_requested()) {
+                keep = 0;     // finish this request, then close
+            }
+        }
 
         _request = req;
         // Surface the connection fd to streaming handlers via a
@@ -2850,6 +2856,9 @@ func _wings_serve_connection(int client) {
             str preflight = http_create_response(
                 204, "text/plain; charset=utf-8", "", _wings_hdrs(), keep);
             socket_send(client, preflight);
+            if (_wings_graceful_s > 0) {
+                atomic_sub(_wings_inflight, 1);
+            }
             _wings_log_request(method, path, 204, clock_ms() - _t0, length(preflight));
             arena_restore(wm);
             if (keep == 0) {
@@ -2900,10 +2909,16 @@ func _wings_serve_connection(int client) {
         // force-close: keep-alive across a stream boundary would
         // strand connection state.
         if (length(response) == 0) {
+            if (_wings_graceful_s > 0) {
+                atomic_sub(_wings_inflight, 1);
+            }
             arena_restore(wm);
             break;
         }
         socket_send(client, response);
+        if (_wings_graceful_s > 0) {
+            atomic_sub(_wings_inflight, 1);
+        }
         arena_restore(wm);
 
         if (keep == 0) {
@@ -3131,11 +3146,69 @@ func listen_evented(int port) {
 // At 1k req/s, listen_async creates 1000 threads/sec; listen_pool
 // reuses N. Empirically 4-16 workers saturate a single CPU core's
 // worth of HTTP work; tune to physical cores for CPU-bound handlers.
+// ----- Graceful shutdown ---------------------------------------------------------
+// graceful_shutdown(seconds): on SIGTERM / SIGINT (docker stop, Ctrl+C) stop
+// accepting, let requests already being handled finish (at most `seconds`),
+// run the on_shutdown() hooks (close the DB...), exit 0. Idle keep-alive
+// connections are not waited for. A second signal kills immediately. Covers
+// listen() and listen_pool(); call before serve(). docker stop gives 10 s
+// before SIGKILL, so keep `seconds` below that.
+//
+//   func close_db() { db_close(DB); }
+//   on_shutdown("close_db");
+//   graceful_shutdown(8);
+//   serve(8080, 16);
+int _wings_graceful_s = 0;
+int _wings_inflight = 0;
+json _wings_shutdown_hooks = [];
+
+func graceful_shutdown(int seconds) {
+    if (seconds < 1) {
+        seconds = 1;
+    }
+    _wings_graceful_s = seconds;
+    shutdown_requested();          // first call installs the signal handlers
+}
+
+func on_shutdown(str fn) {
+    push(_wings_shutdown_hooks, fn);
+}
+
+func _wings_drain_and_exit() {
+    if (_wings_quiet == 0) {
+        print("  Shutting down — waiting for in-flight requests...");
+    }
+    float deadline = clock_ms() + _wings_graceful_s * 1000;
+    while (atomic_load(_wings_inflight) > 0 && clock_ms() < deadline) {
+        sleep(20);
+    }
+    int left = atomic_load(_wings_inflight);
+    for (int i = 0; i < length(_wings_shutdown_hooks); i++) {
+        call(_wings_shutdown_hooks[i], 0);
+    }
+    if (_wings_quiet == 0) {
+        if (left > 0) {
+            print("  Server stopped (" + toString(left) + " request(s) cut off at the deadline)");
+        } else {
+            print("  Server stopped");
+        }
+    }
+    exit(0);
+}
+
 func _wings_pool_worker(int server) {
     while (true) {
+        if (_wings_graceful_s > 0) {
+            if (shutdown_requested()) {
+                return 0;
+            }
+        }
         int client = socket_accept(server);
         if (client < 0) {
             continue;
+        }
+        if (_wings_graceful_s > 0) {
+            socket_timeout(client, 0);   // do not inherit the accept poll timeout
         }
         // Reuse the existing per-connection serve function — keep-alive
         // loop, arena reset, request counters, etc. all already there.
@@ -3181,6 +3254,11 @@ func listen_pool(int port, int n_workers) {
         return;
     }
 
+    // Graceful mode: accept() wakes every 250 ms so workers notice SIGTERM.
+    if (_wings_graceful_s > 0) {
+        socket_timeout(server, 250);
+    }
+
     // Spawn N worker threads, each blocks on accept() of the same
     // listening socket. The first kernel-delivered connection wakes
     // exactly one worker.
@@ -3193,7 +3271,14 @@ func listen_pool(int port, int n_workers) {
     // need to also serve from main. Keeping main idle simplifies
     // shutdown signalling once we add it.
     while (true) {
-        sleep(60000);
+        if (_wings_graceful_s > 0) {
+            sleep(100);
+            if (shutdown_requested()) {
+                _wings_drain_and_exit();
+            }
+        } else {
+            sleep(60000);
+        }
     }
 }
 
@@ -3488,11 +3573,25 @@ func listen(int port) {
     // are recycled, not accumulated. Routes + _default_headers were
     // allocated before this point and stay live forever.
     int _wings_arena_wm = arena_save();
+    if (_wings_graceful_s > 0) {
+        socket_timeout(server, 250);
+    }
 
     while (true) {
+        if (_wings_graceful_s > 0) {
+            if (shutdown_requested()) {
+                break;
+            }
+        }
         int client = socket_accept(server);
         if (client < 0) {
             continue;
+        }
+        if (_wings_graceful_s > 0) {
+            // Single thread: an idle keep-alive peer must not park us in
+            // recv() past a SIGTERM. 2 s per recv, not per request — slow
+            // uploads that keep sending are unaffected.
+            socket_timeout(client, 2000);
         }
 
         while (true) {
@@ -3581,9 +3680,15 @@ func listen(int port) {
             if (keep == 0) {
                 break;
             }
+            if (_wings_graceful_s > 0) {
+                if (shutdown_requested()) {
+                    break;
+                }
+            }
         }
         socket_close(client);
     }
+    _wings_drain_and_exit();
 }
 
 // ============================================================================
