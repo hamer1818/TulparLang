@@ -64,7 +64,7 @@ PIPE_RC=$?
 set +o pipefail
 
 ok=1
-if [ "$RC" -ne 0 ] || ! printf '%s' "$OUT" | grep -q "hayatta son=-1"; then
+if [ "$RC" -ne 0 ] || [[ "$OUT" != *"hayatta son=-1"* ]]; then
     echo "  - ag yazan program SIGPIPE'tan sag cikmadi (rc=$RC, cikti: $OUT)"; ok=0
 fi
 # 141 = 128+SIGPIPE (bas), pipefail onu tasir; 124 = timeout (SIGPIPE yok sayilmis).
