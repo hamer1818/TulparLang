@@ -7488,8 +7488,19 @@ VMValue aot_socket_client(VMValue hostVal, VMValue portVal) {
   serv_addr.sin_port = htons((uint16_t)port);
 
   if (inet_pton(AF_INET, host, &serv_addr.sin_addr) <= 0) {
-    tulpar_close(sock);
-    return VM_INT(-1);
+    // IP degil: ad cozumle (smtp.example.com gibi). Eskiden burada -1
+    // donuyordu, yani socket_client yalniz IP kabul ediyordu.
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = nullptr;
+    if (getaddrinfo(host, nullptr, &hints, &res) != 0 || !res) {
+      tulpar_close(sock);
+      return VM_INT(-1);
+    }
+    serv_addr.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+    freeaddrinfo(res);
   }
 
   if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {

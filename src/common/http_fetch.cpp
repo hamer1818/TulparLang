@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 
 #if defined(_WIN32)
   // ws2tcpip.h is included via platform_sockets.h.
@@ -143,6 +144,60 @@ bool parse_http_url_internal(const std::string &url, std::string &host,
 }
 
 }  // namespace
+
+// Acik bir TCP soketi uzerinde istemci TLS el sikismasi (SMTP STARTTLS ve
+// dogrudan TLS — tls_connect / tls_starttls yerlesikleri). Dogrulama
+// http_request ile BIREBIR ayni: make_client_tls_ctx (VERIFY_PEER, sistem
+// guven deposu + TULPAR_CA_BUNDLE, TULPAR_TLS_INSECURE=1 kacisi) ve
+// apply_tls_hostname_check (SNI + ad denetimi). Baglam surec basina bir kez
+// kurulur; SSL nesnesi her baglantiya ayri.
+void *tls_client_handshake(long long fd, const std::string &host,
+                           std::string &out_err) {
+#if defined(TULPAR_HAS_TLS)
+    static std::once_flag once;
+    static SSL_CTX *ctx = nullptr;
+    static std::string ctx_err;
+    std::call_once(once, [] {
+        ctx = make_client_tls_ctx(ctx_err);
+        if (ctx) SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    });
+    if (!ctx) {
+        out_err = ctx_err.empty() ? "TLS baglami kurulamadi" : ctx_err;
+        return nullptr;
+    }
+    SSL *ssl = SSL_new(ctx);
+    if (!ssl) {
+        out_err = "SSL_new failed";
+        return nullptr;
+    }
+    SSL_set_fd(ssl, (int)fd);
+    apply_tls_hostname_check(ssl, host);
+    int rc = SSL_connect(ssl);
+    if (rc != 1) {
+        long verify_rc = SSL_get_verify_result(ssl);
+        char buf[256];
+        if (verify_rc != X509_V_OK) {
+            snprintf(buf, sizeof(buf), "TLS handshake failed (cert verify: %s)",
+                     X509_verify_cert_error_string(verify_rc));
+        } else {
+            unsigned long e = ERR_get_error();
+            const char *why = e ? ERR_reason_error_string(e) : nullptr;
+            snprintf(buf, sizeof(buf), "TLS handshake failed (%s)",
+                     why ? why : "connection closed");
+        }
+        ERR_clear_error();
+        out_err = buf;
+        SSL_free(ssl);
+        return nullptr;
+    }
+    return ssl;
+#else
+    (void)fd;
+    (void)host;
+    out_err = "TLS destegi olmadan derlendi (OpenSSL yok)";
+    return nullptr;
+#endif
+}
 
 bool http_fetch_url(const std::string &url, std::string &out_body,
                     int &out_status, std::string &out_err) {
