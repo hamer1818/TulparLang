@@ -1,0 +1,96 @@
+import "test";
+
+// null bir deger, 0 degil (2026-11-25). Uc yerde 0'a donusuyordu:
+//   - db_query: SQL NULL sutun int 0 geliyordu (iki bicimde de) — NULL olabilen
+//     bir TEXT sutunu API'de `"hero_image": 0` olarak cikiyordu ve gercek 0'dan
+//     ayirt edilemiyordu.
+//   - ==/!=: varsayilan dala dusuyordu; `json x = null; x == null` bile false.
+//     NULL sutunu sinamanin bir yolu yoktu (typeof disinda).
+//   - fromJson: JSON null int 0 donuyordu, fromJson(toJson(x)) null'u kaybediyordu.
+// Beklentiler formulden degil SQL/JSON'un anlamindan: NULL yalniz NULL'a esit,
+// 0 / "" / false NULL degil.
+
+int db = db_open(":memory:");
+db_execute(db, "CREATE TABLE t (id INTEGER PRIMARY KEY, s TEXT, n INTEGER, f REAL)");
+db_execute(db, "INSERT INTO t VALUES (1, NULL, NULL, NULL)");
+db_execute(db, "INSERT INTO t VALUES (2, '', 0, 0.0)");
+
+func run_db_null_two_arg() {
+    array rows = db_query(db, "SELECT s, n, f FROM t WHERE id = 1");
+    assert_eq_str(typeof(rows[0]["s"]), "null");
+    assert_eq_str(typeof(rows[0]["n"]), "null");
+    assert_eq_str(typeof(rows[0]["f"]), "null");
+    assert_eq_str(toJson(rows[0]), "{\"s\":null,\"n\":null,\"f\":null}");
+}
+
+func run_db_null_params() {
+    array rows = db_query(db, "SELECT s, n, f FROM t WHERE id = ?", [1]);
+    assert_eq_str(toJson(rows[0]), "{\"s\":null,\"n\":null,\"f\":null}");
+}
+
+// Gercek 0 / "" null DEGIL — eski davranista ikisi ayni gorunuyordu
+func run_db_zero_is_not_null() {
+    array rows = db_query(db, "SELECT s, n, f FROM t WHERE id = ?", [2]);
+    assert_eq_str(typeof(rows[0]["s"]), "string");
+    assert_eq_str(typeof(rows[0]["n"]), "int");
+    assert_eq_bool(rows[0]["n"] == null, false);
+    assert_eq_bool(rows[0]["s"] == null, false);
+}
+
+// null parametre SQL NULL olarak baglaniyor ve geri null okunuyor
+func run_db_null_roundtrip() {
+    db_execute(db, "INSERT INTO t VALUES (?, ?, ?, ?)", [3, null, null, null]);
+    array rows = db_query(db, "SELECT COUNT(*) AS c FROM t WHERE s IS NULL AND n IS NULL", []);
+    assert_eq_int(rows[0]["c"], 2);
+    array back = db_query(db, "SELECT s FROM t WHERE id = ?", [3]);
+    assert_eq_bool(back[0]["s"] == null, true);
+}
+
+func run_equality() {
+    json x = null;
+    assert_eq_bool(x == null, true);
+    assert_eq_bool(x != null, false);
+    json o = {"a": null, "z": 0, "e": "", "b": false};
+    assert_eq_bool(o["a"] == null, true);
+    assert_eq_bool(o["z"] == null, false);
+    assert_eq_bool(o["e"] == null, false);
+    assert_eq_bool(o["b"] == null, false);
+    assert_eq_bool(o["z"] != null, true);
+    assert_eq_bool(null == 0, false);
+}
+
+// Bir DB satirinda NULL'u if ile ayirmak — duzeltmenin asil kullanim yeri
+func run_branch_on_null() {
+    array rows = db_query(db, "SELECT id, s FROM t ORDER BY id", []);
+    str seen = "";
+    for (r in rows) {
+        if (r["s"] == null) { seen = seen + "N"; } else { seen = seen + "V"; }
+    }
+    assert_eq_str(seen, "NVN");
+}
+
+func run_contains_index_of() {
+    assert_eq_bool(contains([1, null, 3], null), true);
+    assert_eq_bool(contains([0, 2], null), false);
+    assert_eq_int(indexOf([1, 2, null], null), 2);
+}
+
+func run_from_json() {
+    json p = fromJson("{\"a\": null, \"b\": [1, null], \"c\": 0}");
+    assert_eq_str(typeof(p["a"]), "null");
+    assert_eq_str(typeof(p["b"][1]), "null");
+    assert_eq_str(typeof(p["c"]), "int");
+    assert_eq_str(toJson(p), "{\"a\":null,\"b\":[1,null],\"c\":0}");
+    assert_eq_str(toJson(fromJson(toJson(p))), toJson(p));
+}
+
+print("=== null degeri ===");
+test("db_query (2 arguman): NULL -> null", "run_db_null_two_arg");
+test("db_query (parametreli): NULL -> null", "run_db_null_params");
+test("gercek 0 ve \"\" null degil", "run_db_zero_is_not_null");
+test("null parametre NULL yazilir, null okunur", "run_db_null_roundtrip");
+test("== / != null", "run_equality");
+test("NULL sutunla dallanma", "run_branch_on_null");
+test("contains / indexOf null", "run_contains_index_of");
+test("fromJson null", "run_from_json");
+test_summary();
