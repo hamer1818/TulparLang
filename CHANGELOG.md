@@ -13,6 +13,20 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — null artık null: `db_query` NULL, `fromJson` null ve `== null` (davranış değişikliği)
+
+- **`db_query` (iki biçimi de):** SQL NULL sütun `0` yerine **null** döner (`typeof` "null", `toJson` `null`).
+  Eskiden NULL olabilen bir TEXT sütunu API'de `"hero_image": 0` olarak çıkıyor, gerçek `0`'dan ayırt
+  edilemiyordu. İki fonksiyonun elle tutulan kopya dönüşüm kodu tek `db_column_value`'da birleşti.
+- **`==` / `!=`:** null yalnız null'a eşit. Eskiden varsayılan dala düşüyordu: `json x = null; x == null`
+  bile `false`'tu, NULL sütunu `typeof` dışında sınamanın yolu yoktu. `contains` / `indexOf` aynı kuralla.
+- **`fromJson`:** JSON `null` artık null (eskiden `0`); `fromJson(toJson(x))` null'u kaybetmiyor.
+- **Değişen davranış:** NULL'un `0` gelmesine dayanan kod etkilenir — `toString` `"null"` verir,
+  `null + 1` `0`'dır (eskiden 1). `0` isteyen sorgu `IFNULL(sutun, 0)` yazmalı. `toInt`, `length`,
+  doğruluk (`if`) ve null parametre bağlama (`[null]` → SQL NULL) değişmedi. BLOB hâlâ `0` döner.
+- Kapı `tests/null_degeri.test.tpr` (8 test). Üç düzeltmenin her biri tek tek geri alınınca kırmızı
+  (DB: 4, `==`: 4, `fromJson`: 1 başarısız).
+
 ### Düzeltildi — `package_aab.sh` de `android_lib/` okuyor (Play paketi)
 
 - AAB yolu kütüphane kaynaklarını (`-R`), R sınıflarını (son kimlikler) ve kütüphane dex'ini APK yoluyla

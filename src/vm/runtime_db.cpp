@@ -345,6 +345,34 @@ VMValue aot_db_execute_ptr(VMValue *db_ptr, VMValue *sql_ptr) {
 }
 
 // db_query(db_handle, sql) -> array of objects (rows)
+// One result column -> runtime value. Shared by db_query and its parameterized
+// form so the two can't drift apart again (they were hand-kept copies).
+//
+// SQL NULL is Tulpar null (VM_VOID: typeof "null", toJson `null`, `== null`).
+// Until 2026-11-25 it came back as int 0, so a nullable TEXT column read as
+// the number 0 and an API serialising the row sent `"hero_image": 0` instead
+// of `null` — and NULL was indistinguishable from a real 0. Writing goes the
+// other way already: db_bind_params binds a null parameter as SQL NULL.
+// BLOB is still not mapped (comes back as 0) — no byte-array value yet.
+static VMValue db_column_value(sqlite3_stmt *stmt, int i) {
+  switch (sqlite3_column_type(stmt, i)) {
+  case SQLITE_INTEGER:
+    return VM_INT(sqlite3_column_int64(stmt, i));
+  case SQLITE_FLOAT:
+    return VM_FLOAT(sqlite3_column_double(stmt, i));
+  case SQLITE_TEXT: {
+    const char *text = (const char *)sqlite3_column_text(stmt, i);
+    int len = sqlite3_column_bytes(stmt, i);
+    return VM_OBJ((Obj *)aot_allocate_string(text, len));
+  }
+  case SQLITE_NULL:
+    return VM_VOID();
+  case SQLITE_BLOB:
+  default:
+    return VM_INT(0);
+  }
+}
+
 VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
   if (!IS_STRING(sqlVal)) {
     // Return empty array
@@ -404,31 +432,7 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
       const char *col_name = sqlite3_column_name(stmt, i);
       row->keys[row->count] = aot_allocate_string(col_name, strlen(col_name));
 
-      // Get value based on type
-      int col_type = sqlite3_column_type(stmt, i);
-      VMValue val;
-
-      switch (col_type) {
-      case SQLITE_INTEGER:
-        val = VM_INT(sqlite3_column_int64(stmt, i));
-        break;
-      case SQLITE_FLOAT:
-        val = VM_FLOAT(sqlite3_column_double(stmt, i));
-        break;
-      case SQLITE_TEXT: {
-        const char *text = (const char *)sqlite3_column_text(stmt, i);
-        int len = sqlite3_column_bytes(stmt, i);
-        val = VM_OBJ((Obj *)aot_allocate_string(text, len));
-        break;
-      }
-      case SQLITE_BLOB:
-      case SQLITE_NULL:
-      default:
-        val = VM_INT(0); // nullptr
-        break;
-      }
-
-      row->values[row->count] = val;
+      row->values[row->count] = db_column_value(stmt, i);
       row->count++;
     }
 
@@ -573,28 +577,7 @@ VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
     for (int i = 0; i < col_count; i++) {
       const char *col_name = sqlite3_column_name(stmt, i);
       row->keys[row->count] = aot_allocate_string(col_name, strlen(col_name));
-      int col_type = sqlite3_column_type(stmt, i);
-      VMValue val;
-      switch (col_type) {
-      case SQLITE_INTEGER:
-        val = VM_INT(sqlite3_column_int64(stmt, i));
-        break;
-      case SQLITE_FLOAT:
-        val = VM_FLOAT(sqlite3_column_double(stmt, i));
-        break;
-      case SQLITE_TEXT: {
-        const char *text = (const char *)sqlite3_column_text(stmt, i);
-        int len = sqlite3_column_bytes(stmt, i);
-        val = VM_OBJ((Obj *)aot_allocate_string(text, len));
-        break;
-      }
-      case SQLITE_BLOB:
-      case SQLITE_NULL:
-      default:
-        val = VM_INT(0);
-        break;
-      }
-      row->values[row->count] = val;
+      row->values[row->count] = db_column_value(stmt, i);
       row->count++;
     }
     if (result->count >= result->capacity) {

@@ -2490,7 +2490,10 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
         *result = VM_BOOL(strcmp(s1->chars, s2->chars) == 0);
         return;
       }
-      *result = VM_BOOL(0);
+      // null equals only null (not 0, "" or false). Until 2026-11-25 this fell
+      // through to false, so `x == null` was false even for `json x = null`
+      // and a NULL column could not be tested at all.
+      *result = VM_BOOL(IS_VOID(a) && IS_VOID(b));
       return;
     }
     }
@@ -2520,7 +2523,7 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
         ObjString *s2 = AS_STRING(b);
         eq = strcmp(s1->chars, s2->chars) == 0;
       } else {
-        eq = false;
+        eq = IS_VOID(a) && IS_VOID(b); // same rule as == above
       }
       break;
     }
@@ -10179,7 +10182,7 @@ static bool vm_values_equal(VMValue a, VMValue b) {
   default:
     if (IS_STRING(a) && IS_STRING(b))
       return strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) == 0;
-    return false;
+    return IS_VOID(a) && IS_VOID(b);
   }
 }
 
@@ -10878,9 +10881,12 @@ static VMValue parse_json_value(const char **p, const char *end) {
   } else if (c == 'f' && strncmp(*p, "false", 5) == 0) {
     *p += 5;
     return VM_BOOL(0);
-  } else if (c == 'n' && strncmp(*p, "nullptr", 4) == 0) {
+  } else if (c == 'n' && strncmp(*p, "null", 4) == 0) {
+    // JSON null is Tulpar null. It used to come back as int 0 (and the literal
+    // here read "nullptr" — the same blanket NULL->nullptr rename the typeof
+    // table carries a note about), so fromJson(toJson(x)) turned null into 0.
     *p += 4;
-    return VM_INT(0);
+    return VM_VOID();
   } else if (c == '-' || isdigit(c)) {
     return parse_json_number(p, end);
   }

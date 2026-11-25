@@ -8,9 +8,16 @@ SQLite (`lib/sqlite3/sqlite3.c`) vendored, hem `tulpar` hem `tulpar_runtime` iç
 
 ## API (Tulpar tarafı)
 - `db_open(path) -> int handle` — handle artık ham pointer DEĞİL, 1-tabanlı `DbConn` descriptor index'i (API aynı, int64).
-- `db_query(handle, sql) -> array<json>` (SELECT, satırlar obje)
+- `db_query(handle, sql) -> array<json>` (SELECT, satırlar obje; NULL → null)
 - `db_execute(handle, sql) -> bool` (INSERT/UPDATE/DELETE; PRAGMA da çalışır)
 - `db_last_insert_id(handle) -> int`, `db_error(handle) -> str`, `db_close(handle)`
+
+## NULL → null (2026-11-25)
+- SQL NULL sütun **null** döner (VM_VOID: `typeof` "null", `toJson` `null`, `== null` true). 2026-11-25'e kadar
+  `VM_INT(0)` dönüyordu — API'ler `"alan": 0` yayınlıyor, NULL gerçek 0'dan ayırt edilemiyordu. Aynı gün
+  `==`/`!=` null'u (varsayılan dalda hep false'tu) ve `fromJson` null'u (0'dı) da düzeldi. Satır dönüşümü tek
+  yerde: `db_column_value` (`runtime_db.cpp`); `db_query` ile parametreli biçimi artık kopya tutmuyor.
+- 0 isteyen sorgu `IFNULL(sutun, 0)` yazar. BLOB hâlâ `0` (bayt dizisi değeri yok). Kapı: `tests/null_degeri.test.tpr`.
 
 ## Bilinmesi gerekenler (2026-06-18)
 - **`db_open` server-dostu varsayılanlar:** `busy_timeout=5000` + dosya-tabanlı DB'lerde **WAL + synchronous=NORMAL**. Stres testinde write **8.8k → 20.4k RPS (2.3×)**. `:memory:` atlanır; opt-out `TULPAR_DB_NO_WAL=1`.
