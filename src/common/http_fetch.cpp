@@ -244,6 +244,7 @@ bool http_fetch_url(const std::string &url, std::string &out_body,
         out_err = "dns failed for " + host;
         return false;
     }
+    tulpar_net_ignore_sigpipe();
     tul_socket sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sock == TUL_INVALID) {
         freeaddrinfo(res);
@@ -423,6 +424,7 @@ bool http_request_url(const std::string &method, const std::string &url,
         out_err = "dns failed for " + host;
         return false;
     }
+    tulpar_net_ignore_sigpipe();
     tul_socket sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sock == TUL_INVALID) {
         freeaddrinfo(res);

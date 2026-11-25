@@ -132,6 +132,7 @@ tulpar_socket http_dial(const char *host, int port) {
     if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
         return tulpar_invalid_socket;
     }
+    tulpar_net_ignore_sigpipe();
     tulpar_socket sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sock == tulpar_invalid_socket) {
         freeaddrinfo(res);

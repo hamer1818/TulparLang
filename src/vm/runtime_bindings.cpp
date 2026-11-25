@@ -7373,6 +7373,7 @@ VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
 
   int port = (int)AS_INT(portVal);
 
+  tulpar_net_ignore_sigpipe();
   tulpar_socket server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd == tulpar_invalid_socket)
     return VM_INT(-1);
@@ -7479,6 +7480,7 @@ VMValue aot_socket_client(VMValue hostVal, VMValue portVal) {
   const char *host = AS_STRING(hostVal)->chars;
   int port = (int)AS_INT(portVal);
 
+  tulpar_net_ignore_sigpipe();
   tulpar_socket sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock == tulpar_invalid_socket)
     return VM_INT(-1);

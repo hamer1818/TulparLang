@@ -107,6 +107,27 @@
     
 #endif
 
+// SIGPIPE: kapanmis bir sokete (karsi taraf RST etti, SMTP sunucusu
+// baglantiyi kesti) ikinci kez yazmak POSIX'te sureci SIGPIPE ile OLDURUR —
+// Wings sunucusu dahil. Olculdu (2026-11-25, smtp_smoke sabotaji): istemci
+// cikis kodu 141. Her soket/TLS acilisindan once cagrilir ve SIGPIPE'i yok
+// sayar; yazma -1/EPIPE doner, kod onu hata olarak gorur (Rust, Python ve
+// Go'nun soketler icin yaptigi). Yalniz AG KULLANAN programda kurulur:
+// `./prog | head` gibi ag kullanmayan bir programda stdout'un kapanmasi
+// eskisi gibi sureci bitirir. Kapisi: tests/sigpipe_kapisi.sh.
+#if !defined(_WIN32)
+    #include <signal.h>
+    static inline void tulpar_net_ignore_sigpipe(void) {
+        static volatile int done = 0;  // yaris zararsiz: signal() es-kuvvetli
+        if (!done) {
+            done = 1;
+            signal(SIGPIPE, SIG_IGN);
+        }
+    }
+#else
+    static inline void tulpar_net_ignore_sigpipe(void) {}
+#endif
+
 // ============================================================================
 // Common Socket Functions (Platform-Independent Interface)
 // ============================================================================
