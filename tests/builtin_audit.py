@@ -103,6 +103,12 @@ def collect():
         r'\b[A-Z][A-Z0-9_]*_FUNC\(\s*"([A-Za-z_][A-Za-z_0-9]*)"', cg))
     # tame tablosu: {"tm_x", "aot_tm_x_ptr", n}
     codegen |= set(re.findall(r'\{"(tm3?_[A-Za-z_0-9]+)",\s*"aot_', cg))
+    # sunucu/ag tablosu (k_std_builtins, 2026-11-25): ayni satir bicimi,
+    # dispatch tablo uzerinden — strcmp zincirinde gorunmuyor.
+    m = re.search(r"k_std_builtins\s*\[\s*\]\s*=\s*\{(.*?)\n\s*\}\s*;", cg, re.S)
+    if not m:
+        sys.exit("builtin_audit: k_std_builtins tablosu bulunamadi")
+    codegen |= set(re.findall(r'\{"([A-Za-z_][A-Za-z_0-9]*)",\s*"aot_', m.group(1)))
     codegen |= set(re.findall(
         r'node->name\s*==\s*"([A-Za-z_][A-Za-z_0-9]*)"', cg))
 

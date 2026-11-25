@@ -754,11 +754,45 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     origin'de `Vary: Origin`; `credentials:true` →
     `Access-Control-Allow-Credentials` (registry'nin proxy workaround'ına
     neden olan boşluk buydu). methods/headers/expose/max_age opsiyonları.
-  - ✅ **Rate-limit middleware:** `rate_limit(max, window_s)` — fixed-window,
-    `use()` zinciri üstünden (3 serve modunu da kapsar). Anahtar:
-    X-Forwarded-For/X-Real-IP ilk hop, yoksa global bucket. Pencere
-    devrilince tablo sıfırlanır (bellek sınırlı). Aşımda 429 +
-    `Retry-After`. Canlı: aynı IP'den tam 100×200 → 5×429, farklı IP 200.
+  - ✅ **Rate-limit middleware:** `rate_limit(max, window_s)` (global) ve
+    `rate_limit_route(method, desen, max, window_s)` (rota deseni başına) —
+    fixed-window, `use()` zinciri üstünden. Handler içinden
+    `limiter_allow/limiter_reset/limiter_retry_after` + `too_many_requests()`
+    (giriş kilidi: 10 başarısız / 15 dk / IP, başarıda sıfırla).
+    **Anahtar `client_ip(req)` (2026-11-25):** TCP eşi; `X-Real-IP` yalnız eş
+    özel/loopback ise ve geçerli IP ise; `X-Forwarded-For` HİÇ okunmaz. Önceden
+    XFF'nin ilk değerine koşulsuz güveniyordu (istemci sınırı atlatıyordu),
+    başlık yoksa tek global kova vardı. Sayaçlar paylaşılan tabloda
+    (`shared_incr`): `listen_pool` işçileri aynı sayımı görüyor — eski kilitsiz
+    json tablo pool altında fazla sayıyordu (ölçüldü: 1000 sınırda 1002).
+    Kapılar: `tests/wings_istemci_ip.test.tpr`, `tests/wings_rate_limit_smoke.py`.
+    Bilinen boşluk: `wings_tls` dinleyicisi `remote_addr` doldurmuyor →
+    orada `client_ip` "unknown" (tek kova); dinleyici zaten 127.0.0.1'e bağlı.
+  - ✅ **Taşıma paketi (2026-11-25, hamza.tr API'si için):**
+    `max_body(bytes)` + `max_body_prefix(önek, bytes)` — aşım Content-Length'ten
+    karar verilip GÖVDE OKUNMADAN 413 (önceden bağlantı sessizce kapanıyordu;
+    `http_recv_error()` nedeni söylüyor); `security_headers()`; `cors([liste])`
+    tam eşleşmeli izinli liste (`Vary: Origin`, cached_get bu kipte önbelleğe
+    almaz — aksi hâlde ilk origin sızıyordu, ölçüldü); `static(önek, dizin,
+    başlıklar)` mount başına başlık (CSP/CORP/Cache-Control), yalnız GET/HEAD,
+    jpg/gif/webp/ico/woff2/pdf/wasm MIME; `save_upload(dosya, dizin, uzantılar)`
+    (uzantı beyaz listesi + `detect_content_type` imzası + üretilen ad) ve
+    `make_dirs`; standart RFC 7519 `jwt_sign`/`jwt_verify` (golang-jwt ile
+    bayt bayt aynı; alg HS256'ya sabit, exp zorunlu, nbf) + `jwt_required` /
+    `jwt_optional` bağımlılıkları. Kapılar: `tests/wings_tasima_smoke.py`,
+    `tests/wings_jwt_standart.test.tpr`.
+  - ✅ **Düzgün kapanış (2026-11-25):** `graceful_shutdown(sn)` + `on_shutdown("fn")`
+    — SIGTERM/SIGINT'te `listen`/`listen_pool` kabulü bırakır, süren
+    istekleri (en çok `sn`) bitirir, kancaları (DB kapatma) koşar, 0 ile
+    çıkar; boşta keep-alive beklenmez. Opt-in: çağrılmazsa SIGTERM eskisi
+    gibi öldürür. `listen_evented`/`listen_async`/`wings_tls` kapsamda değil.
+    Kapı: `tests/wings_kapanis_smoke.py` (+ set-password/backup tarifi:
+    stdin'den parola, `VACUUM INTO ?`).
+  - ✅ **Alpine Docker (2026-11-25):** `examples/docker/Dockerfile.alpine` —
+    derleyici musl üzerinde kurulup uygulama orada AOT derleniyor (glibc'li
+    ikili alpine'de açılmaz; statik glibc DNS'i bozar). 21 MB imaj; konteyner
+    içinden HTTPS + SMTP TLS doğrulaması + kendinden imzalı ret ölçüldü,
+    `graceful_shutdown` ile `docker stop` 0,1 sn. CI'da değil.
   - ✅ **JWT guard:** `jwt_guard(secret)` — `wings_jwt` paketiyle birebir
     wire-interop (HS256, base64url segmentler, imza=base64url(hex MAC));
     doğrulama `_wings_jwt_verify` (çifte-HMAC imza karşılaştırma + exp).

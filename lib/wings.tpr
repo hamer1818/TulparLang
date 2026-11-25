@@ -72,6 +72,12 @@ int _wings_requests_5xx = 0;
 // uploads (package tarballs, multi-record JSON imports). Override
 // via `TULPAR_HTTP_MAX_BODY=<bytes>` for stricter or looser caps.
 int _wings_max_body_bytes = 16777216;
+// Route-prefix body caps (max_body_prefix). Folded with the default into one
+// immutable spec string "default;prefix=bytes;..." at listen time — the native
+// reader picks the longest matching prefix from the request line and rejects
+// on Content-Length BEFORE reading the body (413).
+json _wings_body_prefixes = [];
+str _wings_body_spec = "";
 
 // HTTP_QUIET cache. The per-request access log lookup used to call
 // `env("TULPAR_HTTP_QUIET")` on every served request — one getenv
@@ -114,6 +120,15 @@ func _wings_apply_env_config() {
         if (parsed >= 1024) {
             _wings_max_body_bytes = parsed;
         }
+    }
+    _wings_body_spec = "";
+    if (length(_wings_body_prefixes) > 0) {
+        str spec = toString(_wings_max_body_bytes);
+        for (int i = 0; i < length(_wings_body_prefixes); i++) {
+            json bp = _wings_body_prefixes[i];
+            spec = spec + ";" + bp[0] + "=" + toString(bp[1]);
+        }
+        _wings_body_spec = spec;
     }
     // Snapshot HTTP_QUIET once so the per-request access log check is
     // a single int comparison instead of a getenv syscall + length()
@@ -740,6 +755,86 @@ func session_destroy(str sid) {
     _wings_sessions[sid] = 0;
 }
 
+// ----- Request body limits ---------------------------------------------------
+// max_body(bytes): cap for every request (default 16 MiB; TULPAR_HTTP_MAX_BODY
+// overrides). max_body_prefix(prefix, bytes): a different cap for paths under
+// `prefix` (longest prefix wins). Oversized requests get 413 decided from the
+// Content-Length header alone — the body is never read — and the connection
+// is closed (until 2026-11-25 it was closed SILENTLY, no status at all).
+//
+//   max_body(1048576);                         // 1 MB everywhere...
+//   max_body_prefix("/api/upload", 10485760);  // ...10 MB for uploads
+func max_body(int bytes) {
+    if (bytes >= 1024) {
+        _wings_max_body_bytes = bytes;
+    }
+}
+
+func max_body_prefix(str prefix, int bytes) {
+    if (length(prefix) > 0 && !contains(prefix, ";") && !contains(prefix, "=")) {
+        push(_wings_body_prefixes, [_route_prefix + prefix, bytes]);
+    }
+}
+
+func _wings_recv(int client) {
+    if (length(_wings_body_spec) > 0) {
+        return http_recv_request(client, _wings_body_spec);
+    }
+    return http_recv_request(client, _wings_max_body_bytes);
+}
+
+// Called when the reader returned "": answer 413 / 431 if that was the
+// reason (plain close otherwise — the peer hung up).
+func _wings_reject_oversize(int client) {
+    int why = http_recv_error();
+    if (why == 413 || why == 431) {
+        str msg = "request body too large";
+        if (why == 431) {
+            msg = "request header fields too large";
+        }
+        _wings_requests_total = _wings_requests_total + 1;
+        _wings_requests_4xx = _wings_requests_4xx + 1;
+        socket_send(client, http_create_response(why, "application/json",
+            toJson({"error": msg}), _default_headers, 0));
+    }
+}
+
+// ----- Security headers --------------------------------------------------------
+// security_headers(opts): conservative headers on EVERY response (same set as
+// hamza-backend's SecurityHeaders): X-Content-Type-Options: nosniff,
+// X-Frame-Options: DENY, Referrer-Policy: strict-origin-when-cross-origin,
+// Strict-Transport-Security: max-age=31536000. {"hsts": false} drops HSTS
+// (plain-HTTP dev servers); {"frame": "SAMEORIGIN"} / {"referrer": "..."} /
+// {"hsts": "max-age=...; includeSubDomains"} override. Startup-only.
+func security_headers(json opts) {
+    json o = opts;
+    if (typeof(o) != "object") {
+        o = {};
+    }
+    _default_headers["X-Content-Type-Options"] = "nosniff";
+    str frame = "DENY";
+    if (typeof(o["frame"]) == "string") {
+        frame = o["frame"];
+    }
+    _default_headers["X-Frame-Options"] = frame;
+    str ref = "strict-origin-when-cross-origin";
+    if (typeof(o["referrer"]) == "string") {
+        ref = o["referrer"];
+    }
+    _default_headers["Referrer-Policy"] = ref;
+    bool hsts_off = false;
+    if (typeof(o["hsts"]) == "bool") {
+        hsts_off = !o["hsts"];
+    }
+    if (!hsts_off) {
+        str hv = "max-age=31536000";
+        if (typeof(o["hsts"]) == "string") {
+            hv = o["hsts"];
+        }
+        _default_headers["Strict-Transport-Security"] = hv;
+    }
+}
+
 // ----- CORS configuration ----------------------------------------------------
 // Replace the default wildcard CORS headers. Call once, before serve().
 // `origin` is a single origin ("https://app.example.com") or "*".
@@ -754,11 +849,35 @@ func session_destroy(str sid) {
 // Startup-only mutation of `_default_headers` (write-once before the serve
 // loop), so it is thread-safe under every listen mode and covers the automatic
 // OPTIONS/preflight 204 response too.
-func cors(str origin, json opts) {
-    _default_headers["Access-Control-Allow-Origin"] = origin;
-    if (origin != "*") {
-        // Caches must key the response on the requesting origin.
+// ALLOW-LIST: pass an ARRAY of origins instead of one string —
+//   cors(["https://hamza.tr", "https://www.hamza.tr"], {...});
+// The request's Origin is echoed back only when it EXACTLY matches a list
+// entry (scheme + host + port; no wildcards, no suffix match); other origins
+// get no Access-Control-Allow-Origin at all. `Vary: Origin` is always sent.
+// cached_get() routes are not cached in this mode (their pinned bytes would
+// carry the first requester's origin to everyone).
+json _wings_cors_list = [];
+int _wings_cors_n = 0;
+
+func cors(origin, json opts) {
+    if (typeof(origin) == "array") {
+        _wings_cors_list = origin;
+        _wings_cors_n = length(origin);
+        json base = {};
+        array hk = keys(_default_headers);
+        for (int i = 0; i < length(hk); i++) {
+            if (hk[i] != "Access-Control-Allow-Origin") {
+                base[hk[i]] = _default_headers[hk[i]];
+            }
+        }
+        _default_headers = base;
         _default_headers["Vary"] = "Origin";
+    } else {
+        _default_headers["Access-Control-Allow-Origin"] = origin;
+        if (origin != "*") {
+            // Caches must key the response on the requesting origin.
+            _default_headers["Vary"] = "Origin";
+        }
     }
     json o = opts;
     if (typeof(o) != "object") {
@@ -783,17 +902,224 @@ func cors(str origin, json opts) {
     }
 }
 
+// ----- Client IP --------------------------------------------------------------
+// client_ip(req): the address rate limits and logs should key on. It is the
+// TCP peer (`req["remote_addr"]`, set by every serve loop). `X-Real-IP` is
+// honoured ONLY when that peer is a private / loopback address (i.e. our own
+// reverse proxy: Nginx Proxy Manager on the Docker network) AND the header is
+// a valid IP. `X-Forwarded-For` is never read: any client can write it, and
+// until 2026-11-25 rate_limit trusted its first value unconditionally — a
+// client could pick a fresh "IP" per request and walk past the login lock.
+// Same rule as hamza-backend's middleware.RealIP (Go net.IP IsPrivate ||
+// IsLoopback: 10/8, 172.16/12, 192.168/16, 127/8, ::1, fc00::/7).
+func client_ip(json req) {
+    str peer = "";
+    if (typeof(req["remote_addr"]) == "string") {
+        peer = req["remote_addr"];
+    }
+    if (length(peer) == 0) {
+        return "unknown";
+    }
+    if (ip_is_private(peer)) {
+        json h = req["headers"];
+        str xr = "";
+        if (typeof(h["X-Real-IP"]) == "string") {
+            xr = trim(h["X-Real-IP"]);
+        } else if (typeof(h["x-real-ip"]) == "string") {
+            xr = trim(h["x-real-ip"]);
+        } else if (typeof(h["X-Real-Ip"]) == "string") {
+            xr = trim(h["X-Real-Ip"]);
+        }
+        if (ip_is_valid(xr)) {
+            return lower(xr);
+        }
+    }
+    return peer;
+}
+
+// "1.2.3.4" -> [1, 2, 3, 4]; anything else -> []. Strict dotted decimal: no
+// leading zeros (Go 1.17+ ParseIP), no signs, no spaces, each part 0..255.
+func _wings_ipv4(str s) {
+    json parts = split(s, ".");
+    if (length(parts) != 4) {
+        return [];
+    }
+    json out = [];
+    for (int i = 0; i < 4; i++) {
+        str p = parts[i];
+        int n = length(p);
+        if (n == 0 || n > 3) {
+            return [];
+        }
+        if (n > 1 && ord(p, 0) == 48) {
+            return [];
+        }
+        int v = 0;
+        for (int j = 0; j < n; j++) {
+            int c = ord(p, j);
+            if (c < 48 || c > 57) {
+                return [];
+            }
+            v = v * 10 + (c - 48);
+        }
+        if (v > 255) {
+            return [];
+        }
+        push(out, v);
+    }
+    return out;
+}
+
+func _wings_hex4(str g) {
+    int n = length(g);
+    if (n == 0 || n > 4) {
+        return -1;
+    }
+    int v = 0;
+    for (int i = 0; i < n; i++) {
+        int c = ord(g, i);
+        int d = -1;
+        if (c >= 48 && c <= 57) {
+            d = c - 48;
+        } else if (c >= 97 && c <= 102) {
+            d = c - 87;
+        } else if (c >= 65 && c <= 70) {
+            d = c - 55;
+        }
+        if (d < 0) {
+            return -1;
+        }
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+// IPv6 text -> 8 16-bit groups, or [] when invalid. Accepts one "::" and a
+// trailing embedded IPv4 ("::ffff:10.0.0.1"); rejects zones ("%eth0").
+func _wings_ipv6(str s) {
+    if (length(s) < 2 || contains(s, "%") || !contains(s, ":")) {
+        return [];
+    }
+    json halves = split(s, "::");
+    if (length(halves) > 2) {
+        return [];
+    }
+    json head = [];
+    json tail = [];
+    for (int side = 0; side < length(halves); side++) {
+        str part = halves[side];
+        json acc = [];
+        if (length(part) > 0) {
+            json gs = split(part, ":");
+            for (int i = 0; i < length(gs); i++) {
+                str g = gs[i];
+                bool last = (side == length(halves) - 1) && (i == length(gs) - 1);
+                if (last && contains(g, ".")) {
+                    json v4 = _wings_ipv4(g);
+                    if (length(v4) != 4) {
+                        return [];
+                    }
+                    push(acc, v4[0] * 256 + v4[1]);
+                    push(acc, v4[2] * 256 + v4[3]);
+                } else {
+                    int v = _wings_hex4(g);
+                    if (v < 0) {
+                        return [];
+                    }
+                    push(acc, v);
+                }
+            }
+        }
+        if (side == 0) {
+            head = acc;
+        } else {
+            tail = acc;
+        }
+    }
+    int have = length(head) + length(tail);
+    json out = [];
+    if (length(halves) == 1) {
+        if (have != 8) {
+            return [];
+        }
+        return head;
+    }
+    if (have > 7) {
+        return [];
+    }
+    for (int i = 0; i < length(head); i++) {
+        push(out, head[i]);
+    }
+    for (int i = 0; i < 8 - have; i++) {
+        push(out, 0);
+    }
+    for (int i = 0; i < length(tail); i++) {
+        push(out, tail[i]);
+    }
+    return out;
+}
+
+func ip_is_valid(str s) {
+    if (length(_wings_ipv4(s)) == 4) {
+        return true;
+    }
+    return length(_wings_ipv6(s)) == 8;
+}
+
+// Private (RFC 1918 / RFC 4193) or loopback. IPv4-mapped IPv6 is judged by
+// its IPv4 part, as Go does.
+func ip_is_private(str s) {
+    json v4 = _wings_ipv4(s);
+    if (length(v4) != 4) {
+        json g = _wings_ipv6(s);
+        if (length(g) != 8) {
+            return false;
+        }
+        bool zero5 = g[0] == 0 && g[1] == 0 && g[2] == 0 && g[3] == 0 && g[4] == 0;
+        if (zero5 && g[5] == 65535) {
+            v4 = [toInt(g[6] / 256), g[6] % 256, toInt(g[7] / 256), g[7] % 256];
+        } else {
+            if (zero5 && g[5] == 0 && g[6] == 0 && g[7] == 1) {
+                return true;                       // ::1
+            }
+            return toInt(g[0] / 512) == 126;       // fc00::/7
+        }
+    }
+    int a = v4[0];
+    int b = v4[1];
+    if (a == 10 || a == 127) {
+        return true;
+    }
+    if (a == 172 && b >= 16 && b <= 31) {
+        return true;
+    }
+    return a == 192 && b == 168;
+}
+
 // ----- Rate limiting ----------------------------------------------------------
-// Fixed-window limiter as a use()-able middleware. Keyed on the client IP from
-// X-Forwarded-For / X-Real-IP (first hop) when present, else one global bucket
-// (fine behind a proxy; direct exposure without those headers = global limit).
-// The whole table resets when the window rolls over, so memory stays bounded.
+// Fixed-window limiters keyed by client_ip(req), stored in the process-wide
+// shared table (shared_incr), so every listen_pool worker sees the same
+// counts — the old per-thread-unsafe json table both raced and, under a pool,
+// was one table mutated from N threads without a lock. Same algorithm as
+// hamza-backend's RateLimiter: the window starts at the first hit; every hit
+// (allowed or not) counts.
 //
-//   rate_limit(100, 60);   // max 100 requests per 60s per client
-json _wings_rl_hits = {};
+//   rate_limit(100, 60);                             // global: 100 / 60 s / IP
+//   rate_limit_route("POST", "/api/contact", 5, 600);  // one route: 5 / 10 min
+//   rate_limit_route("POST", "/api/views/:key", 120, 60);
+//
+// From inside a handler (e.g. login: 10 FAILED attempts / 15 min, reset on
+// success):
+//   str ip = client_ip(req);
+//   if (!limiter_allow("login", ip, 10, 900)) {
+//       return too_many_requests(limiter_retry_after("login", ip, 900));
+//   }
+//   ... on success: limiter_reset("login", ip);
 int _wings_rl_max = 60;
 int _wings_rl_window = 60;
-int _wings_rl_epoch = 0;
+json _wings_rl_routes = [];
+bool _wings_rl_route_mw = false;
+json _wings_rl_body = {"error": "rate limit exceeded"};
 
 func rate_limit(int max_req, int window_s) {
     if (max_req > 0) {
@@ -805,39 +1131,69 @@ func rate_limit(int max_req, int window_s) {
     use("_wings_rate_limit_mw");
 }
 
-func _wings_rl_key(json req) {
-    json h = req["headers"];
-    str ip = h["X-Forwarded-For"];
-    if (length(ip) == 0) {
-        ip = h["x-forwarded-for"];
+func rate_limit_route(str method, str path, int max_req, int window_s) {
+    push(_wings_rl_routes, {"method": upper(method), "path": _route_prefix + path,
+                            "handler": "", "max": max_req, "window": window_s});
+    if (!_wings_rl_route_mw) {
+        _wings_rl_route_mw = true;
+        use("_wings_rate_limit_route_mw");
     }
-    if (length(ip) == 0) {
-        ip = h["X-Real-IP"];
+}
+
+// JSON body of every 429 the limiters send (default {"error": "rate limit exceeded"}).
+func rate_limit_body(json body) {
+    _wings_rl_body = body;
+}
+
+func _wings_rl_key(str name, str key) {
+    return "wings.rl:" + name + ":" + key;
+}
+
+// Records a hit; true while the key is within `max_req` for this window.
+func limiter_allow(str name, str key, int max_req, int window_s) {
+    int c = shared_incr(_wings_rl_key(name, key), window_s);
+    return c <= max_req;
+}
+
+func limiter_reset(str name, str key) {
+    shared_del(_wings_rl_key(name, key));
+}
+
+// Seconds until the key's window ends (>= 1); `window_s` when it has none.
+func limiter_retry_after(str name, str key, int window_s) {
+    int t = shared_ttl(_wings_rl_key(name, key));
+    if (t < 1) {
+        return window_s;
     }
-    if (length(ip) == 0) {
-        ip = h["x-real-ip"];
-    }
-    if (length(ip) == 0) {
-        return "global";
-    }
-    json parts = split(ip, ",");
-    return trim(parts[0]);
+    return t;
+}
+
+func too_many_requests(int retry_after) {
+    json r = clone(_wings_rl_body);
+    r["_status"] = 429;
+    r["_headers"] = {"Retry-After": toString(retry_after)};
+    return r;
 }
 
 func _wings_rate_limit_mw(req) {
-    int now = timestamp();
-    int epoch = toInt(now / _wings_rl_window);
-    if (epoch != _wings_rl_epoch) {
-        _wings_rl_epoch = epoch;
-        _wings_rl_hits = {};
+    str ip = client_ip(req);
+    if (!limiter_allow("global", ip, _wings_rl_max, _wings_rl_window)) {
+        return too_many_requests(limiter_retry_after("global", ip, _wings_rl_window));
     }
-    str k = _wings_rl_key(req);
-    int c = _wings_rl_hits[k];
-    c = c + 1;
-    _wings_rl_hits[k] = c;
-    if (c > _wings_rl_max) {
-        return {"error": "rate limit exceeded", "_status": 429,
-                "_headers": {"Retry-After": toString(_wings_rl_window)}};
+    return {};
+}
+
+func _wings_rate_limit_route_mw(req) {
+    json m = wings_find_route(_wings_rl_routes, req["method"], req["path"]);
+    int i = m["index"];
+    if (i < 0) {
+        return {};
+    }
+    json rl = _wings_rl_routes[i];
+    str name = "route:" + rl["method"] + " " + rl["path"];
+    str ip = client_ip(req);
+    if (!limiter_allow(name, ip, rl["max"], rl["window"])) {
+        return too_many_requests(limiter_retry_after(name, ip, rl["window"]));
     }
     return {};
 }
@@ -979,6 +1335,138 @@ func _wings_jwt_mw(req) {
     }
     req["jwt"] = v["claims"];
     return {};
+}
+
+// ----- Standard JWT (RFC 7519, HS256) -------------------------------------------
+// jwt_sign / jwt_verify speak the STANDARD wire format (signature =
+// base64url of the raw 32-byte HMAC), so tokens interoperate with
+// golang-jwt, PyJWT, jsonwebtoken... — a token minted by hamza-backend (Go)
+// verifies here and vice versa. (jwt_guard above keeps the older
+// wings_jwt format: base64url of the HEX digest.)
+//
+// jwt_verify is strict, like golang-jwt with WithValidMethods(HS256) +
+// WithExpirationRequired: header alg MUST be "HS256" ("none", HS512, RS256,
+// missing -> rejected), `exp` is REQUIRED and numeric, `nbf` honoured when
+// present, signature compared in constant time.
+//
+//   str tok = jwt_sign({"user_id": 1, "iat": timestamp(), "exp": timestamp() + 43200}, SECRET);
+//   json v = jwt_verify(tok, SECRET);   // {"ok": 1, "claims": {...}} | {"ok": 0, "error": "..."}
+//
+// Route guards as Wings dependencies (set the secret once with jwt_secret):
+//   jwt_secret(env("JWT_SECRET"));
+//   post("/api/posts", "create_post");  depends("jwt_required");  // 401 unless valid
+//   get("/api/posts", "list_posts");    depends("jwt_optional");  // never rejects
+//   func list_posts(req) { json u = dep("jwt_optional"); bool admin = isObject(u) && length(keys(u)) > 0; ... }
+func jwt_sign(json claims, str secret) {
+    str head = _wings_b64url_encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+    str body = _wings_b64url_encode(toJson(claims));
+    str input = head + "." + body;
+    return input + "." + _wings_b64url_encode(hex_decode(hmac_sha256(secret, input)));
+}
+
+func jwt_verify(str token, str secret) {
+    json parts = split(token, ".");
+    if (length(parts) != 3) {
+        return {"ok": 0, "error": "malformed token"};
+    }
+    if (length(parts[0]) == 0 || length(parts[1]) == 0 || length(parts[2]) == 0) {
+        return {"ok": 0, "error": "malformed token"};
+    }
+    json header = fromJson(_wings_b64url_decode(parts[0]));
+    if (!isObject(header)) {
+        return {"ok": 0, "error": "malformed header"};
+    }
+    if (typeof(header["alg"]) != "string") {
+        return {"ok": 0, "error": "unexpected signing method"};
+    }
+    if (header["alg"] != "HS256") {
+        return {"ok": 0, "error": "unexpected signing method"};
+    }
+    str input = parts[0] + "." + parts[1];
+    str expected = _wings_b64url_encode(hex_decode(hmac_sha256(secret, input)));
+    // Double-HMAC: the comparison runs over two digests of fixed length, so
+    // its timing says nothing about how many signature bytes matched.
+    if (hmac_sha256(secret, parts[2]) != hmac_sha256(secret, expected)) {
+        return {"ok": 0, "error": "bad signature"};
+    }
+    json claims = fromJson(_wings_b64url_decode(parts[1]));
+    if (!isObject(claims)) {
+        return {"ok": 0, "error": "malformed claims"};
+    }
+    // Eksik anahtar 0 (int) okunur — typeof tek basina "yok"u ayirmaz.
+    if (!_wings_has_key(claims, "exp")) {
+        return {"ok": 0, "error": "token has no exp"};
+    }
+    str et = typeof(claims["exp"]);
+    if (et != "int" && et != "float") {
+        return {"ok": 0, "error": "token has no exp"};
+    }
+    int now = timestamp();
+    if (now >= claims["exp"]) {
+        return {"ok": 0, "error": "token is expired"};
+    }
+    str nt = "";
+    if (_wings_has_key(claims, "nbf")) {
+        nt = typeof(claims["nbf"]);
+    }
+    if (nt == "int" || nt == "float") {
+        if (now < claims["nbf"]) {
+            return {"ok": 0, "error": "token not valid yet"};
+        }
+    }
+    return {"ok": 1, "claims": claims};
+}
+
+str _wings_jwt_dep_secret = "";
+
+func jwt_secret(str secret) {
+    _wings_jwt_dep_secret = secret;
+    _wings_docs_bearer = 1;
+}
+
+// "Bearer <token>" -> token; anything else -> "". Same parse as Go's
+// RequireAuth: exactly two space-separated parts, scheme exactly "Bearer".
+func _wings_bearer(json req) {
+    str auth = _hdr_ci(req["headers"], "Authorization");
+    json p = split(auth, " ");
+    if (length(p) != 2) {
+        return "";
+    }
+    if (p[0] != "Bearer") {
+        return "";
+    }
+    return p[1];
+}
+
+func jwt_required(req) {
+    if (length(_wings_jwt_dep_secret) == 0) {
+        return server_error("jwt_secret() not set");
+    }
+    str tok = _wings_bearer(req);
+    if (length(tok) == 0) {
+        return unauthorized("missing bearer token");
+    }
+    json v = jwt_verify(tok, _wings_jwt_dep_secret);
+    if (v["ok"] == 0) {
+        return unauthorized("invalid token");
+    }
+    return v["claims"];
+}
+
+// Never rejects: valid token -> its claims, anything else -> {}.
+func jwt_optional(req) {
+    if (length(_wings_jwt_dep_secret) == 0) {
+        return {};
+    }
+    str tok = _wings_bearer(req);
+    if (length(tok) == 0) {
+        return {};
+    }
+    json v = jwt_verify(tok, _wings_jwt_dep_secret);
+    if (v["ok"] == 0) {
+        return {};
+    }
+    return v["claims"];
 }
 
 // ----- HTML responses + tiny template render ----------------------------------
@@ -1124,6 +1612,81 @@ func form(json req, str name, str fallback) {
 func uploaded_files(json req) {
     json mp = form_data(req);
     return mp["files"];
+}
+
+// save_upload(file, dir, exts) — store one uploaded file safely
+// (hamza-backend upload.go):
+//   * extension (lower-cased, from the client's filename) must be in `exts`
+//     (array like [".jpg", ".png", ".svg"]); default jpg jpeg png gif webp svg;
+//   * raster images must REALLY be images: detect_content_type() on the bytes
+//     must say image/* — the extension alone is not trusted (an .png that is
+//     HTML is rejected); SVG is not sniffed (serve it with a sandboxing CSP);
+//   * the stored name is generated, never the client's:
+//     "<unix>-<8 hex>.<ext>", so `../` or odd bytes in the filename cannot
+//     escape `dir` or overwrite anything.
+// Returns {"ok": 1, "filename": ..., "path": dir/filename} or
+//         {"ok": 0, "error": "...", "_status": 400 | 500}.
+//
+//   json files = uploaded_files(req);
+//   if (length(files) == 0) { return bad_request("Dosya bulunamadı"); }
+//   json r = save_upload(files[0], "./uploads", 0);
+//   if (!r["ok"]) { return r; }
+//   return {"url": "/uploads/" + r["filename"], "filename": r["filename"]};
+func save_upload(json file, str dir, exts) {
+    json allowed = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"];
+    if (typeof(exts) == "array") {
+        allowed = exts;
+    }
+    if (typeof(file) != "object") {
+        return {"ok": 0, "error": "no file", "_status": 400};
+    }
+    str fname = "";
+    if (typeof(file["filename"]) == "string") {
+        fname = file["filename"];
+    }
+    str ext = _wings_file_ext(fname);
+    bool ok_ext = false;
+    for (int i = 0; i < length(allowed); i++) {
+        if (lower(allowed[i]) == ext) {
+            ok_ext = true;
+        }
+    }
+    if (!ok_ext || length(ext) < 2) {
+        return {"ok": 0, "error": "unsupported file type", "_status": 400};
+    }
+    str data = "";
+    if (typeof(file["data"]) == "string") {
+        data = file["data"];
+    }
+    if (ext != ".svg") {
+        if (!startsWith(detect_content_type(data), "image/")) {
+            return {"ok": 0, "error": "file content is not an image", "_status": 400};
+        }
+    }
+    str name = toString(timestamp()) + "-" + substring(uuid_v4(), 0, 8) + ext;
+    str d = dir;
+    if (!_ends_with(d, "/")) {
+        d = d + "/";
+    }
+    if (!file_exists(dir)) {
+        make_dirs(dir);
+    }
+    if (!write_file(d + name, data)) {
+        return {"ok": 0, "error": "could not save file", "_status": 500};
+    }
+    return {"ok": 1, "filename": name, "path": d + name};
+}
+
+// ".PNG" -> ".png"; no dot / dot only in a directory part -> "".
+func _wings_file_ext(str name) {
+    str base = replace(name, "\\", "/");
+    json segs = split(base, "/");
+    str last = segs[length(segs) - 1];
+    json dots = split(last, ".");
+    if (length(dots) < 2) {
+        return "";
+    }
+    return "." + lower(dots[length(dots) - 1]);
 }
 
 // Friendly alias for listen() — reads better at the bottom of an app file:
@@ -1598,7 +2161,7 @@ func _wings_dispatch_inner(int route_idx, int keep) {
 
     json route = _routes[route_idx];
 
-    if (route["cached"] == 1) {
+    if (route["cached"] == 1 && _wings_cors_n == 0) {
         str cached = _wings_cache_wires[route_idx];
         if (length(cached) > 0) {
             // Conditional request: a client re-sending the ETag we served
@@ -1766,7 +2329,7 @@ func _wings_dispatch_inner(int route_idx, int keep) {
     // response header BEFORE framing so the cached wire bytes carry it. The
     // etag is remembered in `_wings_cache_etags` for If-None-Match -> 304.
     str _etag = "";
-    if (route["cached"] == 1 && eff_status < 400) {
+    if (route["cached"] == 1 && eff_status < 400 && _wings_cors_n == 0) {
         str _ebody = "";
         if (_wings_has_raw(result)) {
             _ebody = result["_raw"];
@@ -1792,7 +2355,7 @@ func _wings_dispatch_inner(int route_idx, int keep) {
     // points at. The keep flag is baked into the cached bytes; that's
     // fine because Connection is advisory and a close-requesting
     // client closes regardless of the server's hint.
-    if (route["cached"] == 1 && eff_status < 400) {
+    if (route["cached"] == 1 && eff_status < 400 && _wings_cors_n == 0) {
         _wings_cache_wires[route_idx] = string_pin(response);
         _wings_cache_etags[route_idx] = string_pin(_etag);
     }
@@ -1812,7 +2375,28 @@ func _wings_dispatch_inner(int route_idx, int keep) {
 // The Tulpar wrapper is kept so library consumers calling
 // `_wings_build_response` directly (uncommon, but legal) still resolve.
 func _wings_build_response(json result, int keep) {
-    return wings_build_response(result, _default_headers, keep);
+    return wings_build_response(result, _wings_hdrs(), keep);
+}
+
+// Headers for THIS request's response: the shared defaults, plus — in CORS
+// allow-list mode — the request's Origin when it is on the list. Clones per
+// request only in that mode; otherwise returns the shared table untouched.
+func _wings_hdrs() {
+    if (_wings_cors_n == 0) {
+        return _default_headers;
+    }
+    str o = _hdr_ci(_request["headers"], "Origin");
+    if (length(o) == 0) {
+        return _default_headers;
+    }
+    for (int i = 0; i < _wings_cors_n; i++) {
+        if (_wings_cors_list[i] == o) {
+            json h = clone(_default_headers);
+            h["Access-Control-Allow-Origin"] = o;
+            return h;
+        }
+    }
+    return _default_headers;
 }
 
 // ----- Static file serving -------------------------------------------------
@@ -1829,8 +2413,22 @@ func _wings_build_response(json result, int keep) {
 // length-tracked, not strlen-based.
 array _static_mounts = [];
 
-func static(str url_prefix, str dir) {
-    json mount = {"prefix": url_prefix, "dir": dir};
+//
+// Optional third argument: extra headers for every file of this mount — e.g.
+// sandboxing user uploads so an uploaded SVG can never run script in the API
+// origin (hamza-backend UploadHeaders):
+//   static("/uploads/", "./uploads", {
+//       "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
+//       "Cross-Origin-Resource-Policy": "cross-origin",
+//       "Cache-Control": "public, max-age=604800"});
+// Only GET/HEAD are served; there is NO directory listing (a directory path
+// serves its index.html or 404s).
+func static(str url_prefix, str dir, json headers) {
+    json h = {};
+    if (typeof(headers) == "object") {
+        h = headers;
+    }
+    json mount = {"prefix": url_prefix, "dir": dir, "headers": h};
     push(_static_mounts, mount);
 }
 
@@ -1860,11 +2458,49 @@ func _wings_content_type(str p) {
     } else if (_ends_with(p, ".txt")) {
         return "text/plain; charset=utf-8";
     }
+    str lp = lower(p);
+    if (_ends_with(lp, ".jpg") || _ends_with(lp, ".jpeg")) {
+        return "image/jpeg";
+    } else if (_ends_with(lp, ".gif")) {
+        return "image/gif";
+    } else if (_ends_with(lp, ".webp")) {
+        return "image/webp";
+    } else if (_ends_with(lp, ".png")) {
+        return "image/png";
+    } else if (_ends_with(lp, ".svg")) {
+        return "image/svg+xml";
+    } else if (_ends_with(lp, ".ico")) {
+        return "image/x-icon";
+    } else if (_ends_with(lp, ".avif")) {
+        return "image/avif";
+    } else if (_ends_with(lp, ".woff2")) {
+        return "font/woff2";
+    } else if (_ends_with(lp, ".woff")) {
+        return "font/woff";
+    } else if (_ends_with(lp, ".pdf")) {
+        return "application/pdf";
+    } else if (_ends_with(lp, ".wasm")) {
+        return "application/wasm";
+    } else if (_ends_with(lp, ".mjs")) {
+        return "application/javascript; charset=utf-8";
+    } else if (_ends_with(lp, ".xml")) {
+        return "application/xml";
+    } else if (_ends_with(lp, ".mp4")) {
+        return "video/mp4";
+    } else if (_ends_with(lp, ".webm")) {
+        return "video/webm";
+    } else if (_ends_with(lp, ".mp3")) {
+        return "audio/mpeg";
+    }
     return "application/octet-stream";
 }
 
 // Returns the file's wire response, or "" when no mount serves `path`.
 func _wings_static_try(str path, int keep) {
+    str _sm = _request["method"];
+    if (_sm != "GET" && _sm != "HEAD") {
+        return "";
+    }
     int i = 0;
     while (i < length(_static_mounts)) {
         json m = _static_mounts[i];
@@ -1897,7 +2533,18 @@ func _wings_static_try(str path, int keep) {
                     str filepath = dir + rel;
                     str content = read_file(filepath);
                     if (length(content) > 0) {
-                        return http_create_response(200, _wings_content_type(rel), content, _default_headers, keep);
+                        json _mh = m["headers"];
+                        json _hh = _wings_hdrs();
+                        if (typeof(_mh) == "object") {
+                            array _mk = keys(_mh);
+                            if (length(_mk) > 0) {
+                                _hh = clone(_hh);
+                                for (int _k = 0; _k < length(_mk); _k++) {
+                                    _hh[_mk[_k]] = _mh[_mk[_k]];
+                                }
+                            }
+                        }
+                        return http_create_response(200, _wings_content_type(rel), content, _hh, keep);
                     }
                 }
             }
@@ -1916,7 +2563,7 @@ func _wings_build_404(str path, int keep) {
     str body = "{\"error\":\"" + http_status_text(404) +
         "\",\"path\":\"" + path + "\"}";
     return http_create_response(404, "application/json", body,
-        _default_headers, keep);
+        _wings_hdrs(), keep);
 }
 
 // HTTP HEAD support — RFC 9110 §9.3.2: "The server SHOULD send the
@@ -2165,12 +2812,19 @@ func _wings_serve_connection(int client) {
     int wm = arena_save();
 
     while (true) {
-        str raw = http_recv_request(client, _wings_max_body_bytes);
+        str raw = _wings_recv(client);
         if (length(raw) == 0) {
+            _wings_reject_oversize(client);
             break;
         }
         json req = http_parse_request(raw);
         int keep = http_should_keepalive(req);
+        if (_wings_graceful_s > 0) {
+            atomic_add(_wings_inflight, 1);
+            if (shutdown_requested()) {
+                keep = 0;     // finish this request, then close
+            }
+        }
 
         _request = req;
         // Surface the connection fd to streaming handlers via a
@@ -2200,8 +2854,11 @@ func _wings_serve_connection(int client) {
             _wings_requests_total = _wings_requests_total + 1;
             _wings_requests_2xx = _wings_requests_2xx + 1;
             str preflight = http_create_response(
-                204, "text/plain; charset=utf-8", "", _default_headers, keep);
+                204, "text/plain; charset=utf-8", "", _wings_hdrs(), keep);
             socket_send(client, preflight);
+            if (_wings_graceful_s > 0) {
+                atomic_sub(_wings_inflight, 1);
+            }
             _wings_log_request(method, path, 204, clock_ms() - _t0, length(preflight));
             arena_restore(wm);
             if (keep == 0) {
@@ -2252,10 +2909,16 @@ func _wings_serve_connection(int client) {
         // force-close: keep-alive across a stream boundary would
         // strand connection state.
         if (length(response) == 0) {
+            if (_wings_graceful_s > 0) {
+                atomic_sub(_wings_inflight, 1);
+            }
             arena_restore(wm);
             break;
         }
         socket_send(client, response);
+        if (_wings_graceful_s > 0) {
+            atomic_sub(_wings_inflight, 1);
+        }
         arena_restore(wm);
 
         if (keep == 0) {
@@ -2285,8 +2948,9 @@ func _wings_serve_connection(int client) {
 // the typical < 64 KiB JSON request/response we see in practice.
 func _wings_serve_one_request(int client) {
     int wm = arena_save();
-    str raw = http_recv_request(client, _wings_max_body_bytes);
+    str raw = _wings_recv(client);
     if (length(raw) == 0) {
+        _wings_reject_oversize(client);
         arena_drop(wm);
         return 0;
     }
@@ -2294,6 +2958,7 @@ func _wings_serve_one_request(int client) {
     int keep = http_should_keepalive(req);
 
     _request = req;
+    _request["remote_addr"] = socket_peer_ip(client);
     wings_set_current_fd(client);
     str method = req["method"];
     str path = req["path"];
@@ -2305,7 +2970,7 @@ func _wings_serve_one_request(int client) {
         _wings_requests_total = _wings_requests_total + 1;
         _wings_requests_2xx = _wings_requests_2xx + 1;
         str preflight = http_create_response(
-            204, "text/plain; charset=utf-8", "", _default_headers, keep);
+            204, "text/plain; charset=utf-8", "", _wings_hdrs(), keep);
         socket_send(client, preflight);
         _wings_log_request(method, path, 204, clock_ms() - _t0, length(preflight));
         arena_drop(wm);
@@ -2481,11 +3146,69 @@ func listen_evented(int port) {
 // At 1k req/s, listen_async creates 1000 threads/sec; listen_pool
 // reuses N. Empirically 4-16 workers saturate a single CPU core's
 // worth of HTTP work; tune to physical cores for CPU-bound handlers.
+// ----- Graceful shutdown ---------------------------------------------------------
+// graceful_shutdown(seconds): on SIGTERM / SIGINT (docker stop, Ctrl+C) stop
+// accepting, let requests already being handled finish (at most `seconds`),
+// run the on_shutdown() hooks (close the DB...), exit 0. Idle keep-alive
+// connections are not waited for. A second signal kills immediately. Covers
+// listen() and listen_pool(); call before serve(). docker stop gives 10 s
+// before SIGKILL, so keep `seconds` below that.
+//
+//   func close_db() { db_close(DB); }
+//   on_shutdown("close_db");
+//   graceful_shutdown(8);
+//   serve(8080, 16);
+int _wings_graceful_s = 0;
+int _wings_inflight = 0;
+json _wings_shutdown_hooks = [];
+
+func graceful_shutdown(int seconds) {
+    if (seconds < 1) {
+        seconds = 1;
+    }
+    _wings_graceful_s = seconds;
+    shutdown_requested();          // first call installs the signal handlers
+}
+
+func on_shutdown(str fn) {
+    push(_wings_shutdown_hooks, fn);
+}
+
+func _wings_drain_and_exit() {
+    if (_wings_quiet == 0) {
+        print("  Shutting down — waiting for in-flight requests...");
+    }
+    float deadline = clock_ms() + _wings_graceful_s * 1000;
+    while (atomic_load(_wings_inflight) > 0 && clock_ms() < deadline) {
+        sleep(20);
+    }
+    int left = atomic_load(_wings_inflight);
+    for (int i = 0; i < length(_wings_shutdown_hooks); i++) {
+        call(_wings_shutdown_hooks[i], 0);
+    }
+    if (_wings_quiet == 0) {
+        if (left > 0) {
+            print("  Server stopped (" + toString(left) + " request(s) cut off at the deadline)");
+        } else {
+            print("  Server stopped");
+        }
+    }
+    exit(0);
+}
+
 func _wings_pool_worker(int server) {
     while (true) {
+        if (_wings_graceful_s > 0) {
+            if (shutdown_requested()) {
+                return 0;
+            }
+        }
         int client = socket_accept(server);
         if (client < 0) {
             continue;
+        }
+        if (_wings_graceful_s > 0) {
+            socket_timeout(client, 0);   // do not inherit the accept poll timeout
         }
         // Reuse the existing per-connection serve function — keep-alive
         // loop, arena reset, request counters, etc. all already there.
@@ -2531,6 +3254,11 @@ func listen_pool(int port, int n_workers) {
         return;
     }
 
+    // Graceful mode: accept() wakes every 250 ms so workers notice SIGTERM.
+    if (_wings_graceful_s > 0) {
+        socket_timeout(server, 250);
+    }
+
     // Spawn N worker threads, each blocks on accept() of the same
     // listening socket. The first kernel-delivered connection wakes
     // exactly one worker.
@@ -2543,7 +3271,14 @@ func listen_pool(int port, int n_workers) {
     // need to also serve from main. Keeping main idle simplifies
     // shutdown signalling once we add it.
     while (true) {
-        sleep(60000);
+        if (_wings_graceful_s > 0) {
+            sleep(100);
+            if (shutdown_requested()) {
+                _wings_drain_and_exit();
+            }
+        } else {
+            sleep(60000);
+        }
     }
 }
 
@@ -2838,20 +3573,36 @@ func listen(int port) {
     // are recycled, not accumulated. Routes + _default_headers were
     // allocated before this point and stay live forever.
     int _wings_arena_wm = arena_save();
+    if (_wings_graceful_s > 0) {
+        socket_timeout(server, 250);
+    }
 
     while (true) {
+        if (_wings_graceful_s > 0) {
+            if (shutdown_requested()) {
+                break;
+            }
+        }
         int client = socket_accept(server);
         if (client < 0) {
             continue;
         }
+        if (_wings_graceful_s > 0) {
+            // Single thread: an idle keep-alive peer must not park us in
+            // recv() past a SIGTERM. 2 s per recv, not per request — slow
+            // uploads that keep sending are unaffected.
+            socket_timeout(client, 2000);
+        }
 
         while (true) {
-            str raw = http_recv_request(client, _wings_max_body_bytes);
+            str raw = _wings_recv(client);
             if (length(raw) == 0) {
+                _wings_reject_oversize(client);
                 break;
             }
             json req = http_parse_request(raw);
             _request = req;
+            _request["remote_addr"] = socket_peer_ip(client);
             wings_set_current_fd(client);
 
             str method = req["method"];
@@ -2868,7 +3619,7 @@ func listen(int port) {
                 _request["params"] = {};
                 _request["cookies"] = {};
                 str preflight = http_create_response(
-                    204, "text/plain; charset=utf-8", "", _default_headers, keep);
+                    204, "text/plain; charset=utf-8", "", _wings_hdrs(), keep);
                 socket_send(client, preflight);
                 _wings_log_request(method, path, 204, clock_ms() - _t0, length(preflight));
                 _wings_requests_total = _wings_requests_total + 1;
@@ -2929,9 +3680,15 @@ func listen(int port) {
             if (keep == 0) {
                 break;
             }
+            if (_wings_graceful_s > 0) {
+                if (shutdown_requested()) {
+                    break;
+                }
+            }
         }
         socket_close(client);
     }
+    _wings_drain_and_exit();
 }
 
 // ============================================================================

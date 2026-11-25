@@ -33,6 +33,14 @@ bool http_request_url(const std::string &method, const std::string &url,
                       std::string &out_err,
                       const std::string &extra_headers = "");
 
+// Client TLS handshake on an already-connected socket (STARTTLS, or a
+// direct-TLS connection the caller dialled). Same verification as
+// http_request_url: VERIFY_PEER + system trust store (+ TULPAR_CA_BUNDLE),
+// SNI + hostname check, TLS 1.2 minimum; TULPAR_TLS_INSECURE=1 disables.
+// Returns the SSL* as void* (nullptr + out_err on failure; fd stays open).
+void *tls_client_handshake(long long fd, const std::string &host,
+                           std::string &out_err);
+
 }  // namespace tulpar
 
 #endif  // TULPAR_COMMON_HTTP_FETCH_HPP

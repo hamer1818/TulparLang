@@ -544,7 +544,18 @@ if [ "$ACTION" = "suites" ]; then
         # SKIP GORUNUR: `wings_tls_smoke.py` openssl yoksa ya da ikili TLS'siz
         # derlendiyse exit 0 ile ATLIYOR. Sessiz gecerse kapi bos yere yesil
         # verir, o yuzden sondanin kendi satiri basiliyor ve SKIP sari yazilir.
-        for smoke in ws_masked_client_smoke wings_tls_smoke; do
+        # smtp_smoke (2026-11-25): `import "smtp"` gercek bir yerel SMTP
+        # sunucusuna STARTTLS/TLS + AUTH ile gonderiyor; yanlis ad, CA disi,
+        # indirgeme, STARTTLS enjeksiyonu, zarf enjeksiyonu REDDEDILMELI.
+        # openssl yoksa SKIP.
+        # wings_rate_limit_smoke (2026-11-25): client_ip (XFF yok, X-Real-IP
+        # yalniz ozel esten), rota bazli sinir, listen_pool(16) altinda kayipsiz
+        # sinir + shared_incr sayimi, giris kilidi.
+        # wings_tasima_smoke (2026-11-25): 413 govde okunmadan + rota oneki,
+        # statik mount basliklari/MIME, guvenlik basliklari, CORS izinli liste.
+        # wings_kapanis_smoke (2026-11-25): graceful_shutdown + on_shutdown gercek
+        # SIGTERM ile; set-password/backup tarifi. Windows'ta SKIP.
+        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke wings_rate_limit_smoke wings_tasima_smoke wings_kapanis_smoke; do
             SMOKE_OUT=$(DISPLAY= WAYLAND_DISPLAY= python3 "tests/$smoke.py" 2>&1)
             SMOKE_RC=$?
             SMOKE_LAST=$(printf '%s\n' "$SMOKE_OUT" | tail -1)
@@ -634,6 +645,12 @@ if [ "$ACTION" = "suites" ]; then
     # bu harness derleyiciyi disaridan cagirip cikis kodu + mesaj olcuyor.
     if [ -x tests/enum_hatalari.sh ]; then
         kapi_kuyruk "enum hata yollari basarisiz!" bash tests/enum_hatalari.sh ./tulpar
+    fi
+
+    # SIGPIPE (2026-11-25): RST'li sokete yazmak ag kullanan sureci
+    # oldurmemeli; ag'siz programda `| head` eskisi gibi 141 ile bitmeli.
+    if [ -x tests/sigpipe_kapisi.sh ]; then
+        kapi_kuyruk "SIGPIPE kapisi basarisiz!" bash tests/sigpipe_kapisi.sh
     fi
 
     # Ayrilmis sozcuk + import edilen modulde ayristirma hatasi (K056): konum

@@ -1,0 +1,217 @@
+// Sunucu yardimcilari (src/vm/runtime_server.cpp, 2026-11-25): bcrypt,
+// paylasilan TTL'li sozluk, uuid_v4, html_escape, rfc3339,
+// detect_content_type, hex_decode.
+//
+// bcrypt vektorleri UYDURULMADI: hepsi golang.org/x/crypto/bcrypt v0.59.0'in
+// CompareHashAndPassword'u ile dogrulandi (ilk bes Openwall/OpenBSD, sonraki
+// ikisi Go'nun kendi testleri, GEN satirlari Go GenerateFromPassword ciktisi).
+// Calistir (depo kokunden): ./tulpar tests/sunucu_yardimcilari.test.tpr
+import "test";
+
+json BILINEN = [
+    ["U*U", "$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW"],
+    ["U*U*", "$2a$05$CCCCCCCCCCCCCCCCCCCCC.VGOzA784oUp/Z0DY336zx7pLYAy0lwK"],
+    ["U*U*U", "$2a$05$XXXXXXXXXXXXXXXXXXXXXOAcXxm9kjPGEMsLznoKqmqw7tc8WCx4a"],
+    ["0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789chars after 72 are ignored",
+     "$2a$05$abcdefghijklmnopqrstuu5s2v8.iXieOjg/.AySBTTZIIVFJeBui"],
+    ["", "$2a$05$CCCCCCCCCCCCCCCCCCCCC.7uG0VCzI2bS7j6ymqJi9CdcdxiRTWNy"],
+    ["allmine", "$2a$10$XajjQvNhvvRt5GSeFk1xFeyqRrsxkhBkUiQeg0dt.wU1qD4aFDcga"],
+    ["012345678901234567890123456789012345678901234567890123456",
+     "$2a$10$XajjQvNhvvRt5GSeFk1xFe5l47dONXg781AmZtd869sO8zfsHuw7C"],
+    ["a", "$2a$04$RYw9ABaHI7vgXyYHSaPL2e7T2sPedhaXbbzkYKn1iDjFDjN94OKPW"],
+    ["şifre-İĞÜ-ç", "$2a$05$anZuvlsKNJTuzfTePbhOmOv0.fWdRM/y9152cVWaq1AZ2b4z/.vwW"],
+    ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "$2a$04$GmJRWKzTROl5nJuk88H6b.Hz2E70qjiHa6jMVbKzU7kV9w86qjedS"],
+    ["yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+     "$2a$05$SbsILe7Cu.K2.EFbl9Ujme58ZnSQleLK5iMVYlePx6UVa9M3dIQSW"],
+    ["correct horse battery staple", "$2a$04$05lHuob5OOUvJWHhCiU9K.4dXuJlYDUaSENnFTXAh743QZunpIop6"]
+];
+
+func run_bcrypt_bilinen() {
+    for (int i = 0; i < length(BILINEN); i++) {
+        json v = BILINEN[i];
+        str pw = v[0];
+        str h = v[1];
+        assert(bcrypt_verify(pw, h), "dogru parola reddedildi: " + h);
+        // Yanlis parolayi BASA ekle: 72 bayti asan parolada sona eklenen yok sayilir.
+        assert(bcrypt_verify("!" + pw, h) == false, "yanlis parola kabul edildi: " + h);
+    }
+}
+
+func run_bcrypt_surum_harfleri() {
+    // $2b$ ve $2y$ ayni algoritma; yalniz on ek farkli.
+    str h = "$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW";
+    str hb = "$2b$" + substring(h, 4, length(h));
+    str hy = "$2y$" + substring(h, 4, length(h));
+    assert(bcrypt_verify("U*U", hb), "$2b$ reddedildi");
+    assert(bcrypt_verify("U*U", hy), "$2y$ reddedildi");
+    str hx = "$2x$" + substring(h, 4, length(h));
+    assert(bcrypt_verify("U*U", hx) == false, "$2x$ (hatali surum) kabul edildi");
+}
+
+func run_bcrypt_72_bayt_siniri() {
+    // 72 bayttan sonrasi yok sayilir (bilinen vektor 4 bunu da olcuyor).
+    str h = "$2a$05$abcdefghijklmnopqrstuu5s2v8.iXieOjg/.AySBTTZIIVFJeBui";
+    assert(bcrypt_verify("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", h),
+           "ilk 72 bayt yetmedi");
+    assert(bcrypt_verify("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345678", h) == false,
+           "71 bayt kabul edildi");
+}
+
+func run_bcrypt_bozuk_hash_false() {
+    assert(bcrypt_verify("x", "") == false, "bos");
+    assert(bcrypt_verify("x", "$2a$10$fooo") == false, "kisa");
+    assert(bcrypt_verify("x", "$2a$32$sssssssssssssssssssssshhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh") == false, "maliyet 32");
+    assert(bcrypt_verify("x", "$2a$03$sssssssssssssssssssssshhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh") == false, "maliyet 3");
+    assert(bcrypt_verify("x", "$2a$10$XajjQvNhvvRt5GSeFk1xFeyqRrsxkhBkUiQeg0dt.wU1qD4aFDcg!") == false, "alfabe disi");
+    assert(bcrypt_verify("U*U", "pbkdf2_sha256$1$00$00") == false, "baska bicim");
+    assert_eq_int(bcrypt_cost("bozuk"), 0);
+    assert_eq_int(bcrypt_cost("$2a$12$qjEWaeMQ4NnupdLeMpgPS.kFXB6Roy6ew6CtcNHlILvOOPjW7kgT."), 12);
+}
+
+func run_bcrypt_hash_gidis_donus() {
+    str h = bcrypt_hash("tulpar-parola", 4);
+    assert_eq_int(length(h), 60);
+    assert(startsWith(h, "$2b$04$"), "on ek: " + h);
+    assert(bcrypt_verify("tulpar-parola", h), "kendi hash'ini dogrulamadi");
+    assert(bcrypt_verify("tulpar-parolA", h) == false, "yanlis parola");
+    str h2 = bcrypt_hash("tulpar-parola", 4);
+    assert(h != h2, "tuz rastgele degil");
+    assert_eq_int(bcrypt_cost(bcrypt_hash("x", 0)), 10);   // 0 -> varsayilan 10
+}
+
+func _maliyet_cok_yuksek() { bcrypt_hash("x", 32); }
+func _maliyet_cok_dusuk() { bcrypt_hash("x", 3); }
+func _parola_cok_uzun() {
+    bcrypt_hash("1234567890123456789012345678901234567890123456789012345678901234567890123", 4);
+}
+
+func run_bcrypt_hash_hatalari() {
+    assert_throws("_maliyet_cok_yuksek", "bcrypt_hash");
+    assert_throws("_maliyet_cok_dusuk", "bcrypt_hash");
+    assert_throws("_parola_cok_uzun", "72");
+}
+
+func run_shared_temel() {
+    shared_set("t:a", "bir", 0);
+    assert_eq_str(shared_get("t:a"), "bir");
+    assert(shared_has("t:a"), "has");
+    assert_eq_int(shared_ttl("t:a"), -1);
+    assert_eq_int(shared_ttl("t:yok"), -2);
+    assert_eq_str(shared_get("t:yok"), "");
+    shared_set("t:sayi", 42, 0);              // dizgi olmayan deger toString ile
+    assert_eq_str(shared_get("t:sayi"), "42");
+    assert(shared_del("t:a"), "del");
+    assert(shared_del("t:a") == false, "ikinci del");
+    assert(shared_has("t:a") == false, "silindi");
+}
+
+func run_shared_add_tekillestirme() {
+    assert(shared_add("goruntu:1.2.3.4|ua|yazi-1", "1", 3600), "ilk kez");
+    assert(shared_add("goruntu:1.2.3.4|ua|yazi-1", "1", 3600) == false, "ikinci kez sayilmamali");
+    assert(shared_add("goruntu:5.6.7.8|ua|yazi-1", "1", 3600), "baska IP sayilmali");
+    int t = shared_ttl("goruntu:1.2.3.4|ua|yazi-1");
+    assert(t > 3590 && t <= 3600, "ttl: " + toString(t));
+}
+
+func run_shared_incr_ve_sure() {
+    assert_eq_int(shared_incr("rl:x", 1), 1);
+    assert_eq_int(shared_incr("rl:x", 1), 2);
+    assert_eq_int(shared_incr("rl:x", 100), 3);   // var olanin suresine dokunmaz
+    assert(shared_ttl("rl:x") <= 1, "pencere uzatildi");
+    sleep(1100);
+    assert(shared_has("rl:x") == false, "suresi dolmadi");
+    assert_eq_int(shared_incr("rl:x", 1), 1);     // yeni pencere
+}
+
+func _incr_isci(int n): int {
+    for (int i = 0; i < n; i++) {
+        shared_incr("yaris:sayac", 0);
+        shared_add("yaris:tek:" + toString(mod(i, 100)), "1", 0);
+    }
+    return 0;
+}
+
+func run_shared_ipliklerde_kayipsiz() {
+    shared_del("yaris:sayac");
+    int[] th = [];
+    for (int k = 0; k < 8; k++) { push(th, thread_create(_incr_isci, 20000)); }
+    for (int k = 0; k < 8; k++) { thread_join(th[k]); }
+    assert_eq_str(shared_get("yaris:sayac"), "160000");
+    int tek = 0;
+    for (int i = 0; i < 100; i++) {
+        if (shared_has("yaris:tek:" + toString(i))) { tek = tek + 1; }
+    }
+    assert_eq_int(tek, 100);
+}
+
+func run_uuid_v4() {
+    str u = uuid_v4();
+    assert_eq_int(length(u), 36);
+    assert(regex_match("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", u) == 1, "bicim: " + u);
+    assert(uuid_v4() != u, "tekrar");
+}
+
+func run_html_escape() {
+    assert_eq_str(html_escape("<a href=\"x\">Tom & Jerry's</a>"),
+                  "&lt;a href=&#34;x&#34;&gt;Tom &amp; Jerry&#39;s&lt;/a&gt;");
+    assert_eq_str(html_escape("düz metin"), "düz metin");
+    assert_eq_str(html_escape(""), "");
+}
+
+func run_rfc3339() {
+    // hamza.tr: SQLite'ta duran bicim -> API'nin gonderdigi bicim.
+    assert_eq_str(rfc3339("2026-10-06 08:58:24.366616+00:00"), "2026-10-06T08:58:24.366616Z");
+    assert_eq_str(rfc3339("2026-10-06 08:58:24"), "2026-10-06T08:58:24Z");          // CURRENT_TIMESTAMP
+    assert_eq_str(rfc3339("2026-10-06T11:58:24.5+03:00"), "2026-10-06T08:58:24.5Z");
+    assert_eq_str(rfc3339("2026-01-01T01:00:00-0230"), "2026-01-01T03:30:00Z");
+    assert_eq_str(rfc3339("2026-01-01T00:30:00+01:00"), "2025-12-31T23:30:00Z");  // gun/yil geri
+    assert_eq_str(rfc3339("2024-02-29 12:00:00.120000000Z"), "2024-02-29T12:00:00.12Z");
+    assert_eq_str(rfc3339("2026-10-06 08:58:24.1234567891234"), "2026-10-06T08:58:24.123456789Z");
+    assert_eq_str(rfc3339("2026-10-06"), "2026-10-06T00:00:00Z");
+    assert_eq_str(rfc3339(0), "1970-01-01T00:00:00Z");
+    assert_eq_str(rfc3339(1791363504), "2026-10-07T08:58:24Z");
+    assert_eq_str(rfc3339("dun"), "");
+    assert_eq_str(rfc3339("2026-13-01 00:00:00"), "");
+    assert_eq_str(rfc3339("2026-10-06 08:58:24 fazlalik"), "");
+}
+
+func run_detect_content_type() {
+    assert_eq_str(detect_content_type(hex_decode("89504e470d0a1a0a0000000d49484452")), "image/png");
+    assert_eq_str(detect_content_type(hex_decode("ffd8ffe000104a464946")), "image/jpeg");
+    assert_eq_str(detect_content_type("GIF89a" + hex_decode("0100010000")), "image/gif");
+    assert_eq_str(detect_content_type("RIFF" + hex_decode("24000000") + "WEBPVP8 "), "image/webp");
+    assert_eq_str(detect_content_type("  <!DOCTYPE html><html>"), "text/html; charset=utf-8");
+    assert_eq_str(detect_content_type("<svg xmlns=\"http://www.w3.org/2000/svg\"/>"), "text/plain; charset=utf-8");
+    assert_eq_str(detect_content_type("<?xml version=\"1.0\"?><svg/>"), "text/xml; charset=utf-8");
+    assert_eq_str(detect_content_type("%PDF-1.7"), "application/pdf");
+    assert_eq_str(detect_content_type("merhaba dünya"), "text/plain; charset=utf-8");
+    assert_eq_str(detect_content_type(hex_decode("00010203")), "application/octet-stream");
+    // Uzantisi .png olan HTML gorsel DEGIL — yukleme denetiminin tum amaci.
+    assert(startsWith(detect_content_type("<html><script>alert(1)</script>"), "image/") == false,
+           "html gorsel sanildi");
+}
+
+func run_hex_decode() {
+    assert_eq_str(hex_decode("48690A"), "Hi\n");
+    assert_eq_int(length(hex_decode("00ff00")), 3);     // ikili guvenli
+    assert_eq_str(hex_decode("abc"), "");               // tek uzunluk
+    assert_eq_str(hex_decode("zz"), "");
+}
+
+test("bcrypt: bilinen vektorler (Go ile dogrulanmis)", "run_bcrypt_bilinen");
+test("bcrypt: $2b$ / $2y$ kabul, $2x$ ret", "run_bcrypt_surum_harfleri");
+test("bcrypt: 72 bayt siniri", "run_bcrypt_72_bayt_siniri");
+test("bcrypt: bozuk hash false, hata degil", "run_bcrypt_bozuk_hash_false");
+test("bcrypt: hash + verify gidis donus", "run_bcrypt_hash_gidis_donus");
+test("bcrypt: gecersiz maliyet/uzun parola hata", "run_bcrypt_hash_hatalari");
+test("shared: set/get/has/del/ttl", "run_shared_temel");
+test("shared: add ile tekillestirme", "run_shared_add_tekillestirme");
+test("shared: incr sabit pencere + sure dolumu", "run_shared_incr_ve_sure");
+test("shared: 8 iplik x 20000 kayipsiz", "run_shared_ipliklerde_kayipsiz");
+test("uuid_v4 bicimi", "run_uuid_v4");
+test("html_escape (Go ile ayni)", "run_html_escape");
+test("rfc3339: SQLite -> UTC RFC 3339", "run_rfc3339");
+test("detect_content_type imzalari", "run_detect_content_type");
+test("hex_decode", "run_hex_decode");
+test_summary();

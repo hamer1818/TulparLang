@@ -95,6 +95,12 @@ static const char *EMBEDDED_SCENE3D =
 @EMBEDDED_SCENE3D_CONTENT@;
 
 // ========================================
+// lib/smtp.tpr
+// ========================================
+static const char *EMBEDDED_SMTP =
+@EMBEDDED_SMTP_CONTENT@;
+
+// ========================================
 // Library Lookup
 // ========================================
 static const char* get_embedded_lib(const char *name) {
@@ -113,6 +119,7 @@ static const char* get_embedded_lib(const char *name) {
     if (strcmp(name, "tame") == 0) return EMBEDDED_TAME;
     if (strcmp(name, "arcade") == 0) return EMBEDDED_ARCADE;
     if (strcmp(name, "scene3d") == 0) return EMBEDDED_SCENE3D;
+    if (strcmp(name, "smtp") == 0) return EMBEDDED_SMTP;
     return NULL;
 }
 

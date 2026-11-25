@@ -87,7 +87,10 @@ func run_cors() {
 func run_rate_limit() {
     _wings_rl_max = 3;
     _wings_rl_window = 3600;
-    json req = {"headers": {"X-Forwarded-For": "10.0.0.1"}};
+    // Kova TCP esi (remote_addr). 2026-11-25'e kadar bu test X-Forwarded-For
+    // ile ayri kova BEKLIYORDU — yani acigi (istemci kendi XFF'sini yazip
+    // siniri asiyordu) sabitliyordu. Artik XFF kovayi bolemez.
+    json req = {"remote_addr": "203.0.113.1", "headers": {"X-Forwarded-For": "10.0.0.1"}};
     int i = 0;
     while (i < 3) {
         json r = _wings_rate_limit_mw(req);
@@ -96,8 +99,11 @@ func run_rate_limit() {
     }
     json over = _wings_rate_limit_mw(req);
     assert_eq_int(over["_status"], 429);
-    // Different client has its own bucket.
-    json other = _wings_rate_limit_mw({"headers": {"X-Forwarded-For": "10.0.0.2"}});
+    // Ayni es, farkli XFF: AYNI kova -> hala 429.
+    json spoof = _wings_rate_limit_mw({"remote_addr": "203.0.113.1", "headers": {"X-Forwarded-For": "10.0.0.2"}});
+    assert_eq_int(spoof["_status"], 429);
+    // Farkli es: kendi kovasi.
+    json other = _wings_rate_limit_mw({"remote_addr": "203.0.113.2", "headers": {}});
     assert_eq_int(other["_status"], 0);
 }
 

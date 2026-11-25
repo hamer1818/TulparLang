@@ -7373,6 +7373,7 @@ VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
 
   int port = (int)AS_INT(portVal);
 
+  tulpar_net_ignore_sigpipe();
   tulpar_socket server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd == tulpar_invalid_socket)
     return VM_INT(-1);
@@ -7479,6 +7480,7 @@ VMValue aot_socket_client(VMValue hostVal, VMValue portVal) {
   const char *host = AS_STRING(hostVal)->chars;
   int port = (int)AS_INT(portVal);
 
+  tulpar_net_ignore_sigpipe();
   tulpar_socket sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock == tulpar_invalid_socket)
     return VM_INT(-1);
@@ -7488,8 +7490,19 @@ VMValue aot_socket_client(VMValue hostVal, VMValue portVal) {
   serv_addr.sin_port = htons((uint16_t)port);
 
   if (inet_pton(AF_INET, host, &serv_addr.sin_addr) <= 0) {
-    tulpar_close(sock);
-    return VM_INT(-1);
+    // IP degil: ad cozumle (smtp.example.com gibi). Eskiden burada -1
+    // donuyordu, yani socket_client yalniz IP kabul ediyordu.
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = nullptr;
+    if (getaddrinfo(host, nullptr, &hints, &res) != 0 || !res) {
+      tulpar_close(sock);
+      return VM_INT(-1);
+    }
+    serv_addr.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+    freeaddrinfo(res);
   }
 
   if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
@@ -9290,7 +9303,61 @@ VMValue aot_http_should_keepalive(VMValue requestVal) {
 // hot-path benchmarks. The heap fallback only kicks in for body
 // payloads larger than 64KB (file uploads, big JSON, etc.), which is
 // when the cost of the malloc is dwarfed by the bytes themselves.
+// Neden reddedildi? http_recv_request "" dondugunde ayirt etmek icin:
+// 0 = kapandi / hata, 413 = govde siniri asildi, 431 = baslik blogu sigmadi.
+// Wings 413'te istemciye yanit yazip kapatiyor (eskiden SESSIZCE kapatiyordu).
+static thread_local int g_http_recv_err = 0;
+
+// Rota-onekli sinir tablosu: "varsayilan;onek=sinir;onek=sinir". Dizgi
+// (dizi degil): tablo butun isciler arasinda ortak ve degismez; bir diziyi
+// burada okumak arr_items() ile kutusunu ACIP diziyi degistirirdi — N
+// iplikten ayni anda. En uzun eslesen onek kazanir.
+static int http_recv_pick_limit(const char *spec, int spec_len,
+                                const char *req, int req_len, int *out_default) {
+  int i = 0;
+  long long def = 0;
+  while (i < spec_len && spec[i] >= '0' && spec[i] <= '9') {
+    def = def * 10 + (spec[i] - '0');
+    if (def > 0x7fffffffLL) def = 0x7fffffffLL;
+    i++;
+  }
+  if (def < 1024) def = 1024;
+  *out_default = (int)def;
+  // Istek satirindan yol: "METHOD SP yol[?sorgu] SP ..."
+  int p = 0;
+  while (p < req_len && req[p] != ' ' && req[p] != '\r') p++;
+  if (p >= req_len || req[p] != ' ') return (int)def;
+  p++;
+  int ps = p;
+  while (p < req_len && req[p] != ' ' && req[p] != '?' && req[p] != '\r') p++;
+  int path_len = p - ps;
+  const char *path = req + ps;
+  long long best = def;
+  int best_len = -1;
+  while (i < spec_len) {
+    if (spec[i] == ';') { i++; continue; }
+    int ks = i;
+    while (i < spec_len && spec[i] != '=' && spec[i] != ';') i++;
+    int klen = i - ks;
+    if (i >= spec_len || spec[i] != '=') continue;
+    i++;
+    long long v = 0;
+    while (i < spec_len && spec[i] >= '0' && spec[i] <= '9') {
+      v = v * 10 + (spec[i] - '0');
+      if (v > 0x7fffffffLL) v = 0x7fffffffLL;
+      i++;
+    }
+    if (klen > 0 && klen <= path_len && klen > best_len &&
+        memcmp(path, spec + ks, (size_t)klen) == 0) {
+      best = v < 1024 ? 1024 : v;
+      best_len = klen;
+    }
+  }
+  return (int)best;
+}
+
 VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
+  g_http_recv_err = 0;
   if (!IS_INT(fdVal))
     return VM_OBJ((Obj *)aot_allocate_string("", 0));
   tulpar_socket fd = (tulpar_socket)AS_INT(fdVal);
@@ -9298,6 +9365,15 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
   // tarballs, multi-record JSON imports), small enough that a single
   // worker can't exhaust memory under attack.
   int max_bytes = IS_INT(maxVal) ? (int)AS_INT(maxVal) : 16 * 1024 * 1024;
+  const char *limit_spec = nullptr;
+  int limit_spec_len = 0;
+  if (IS_STRING(maxVal)) {
+    limit_spec = AS_STRING(maxVal)->chars;
+    limit_spec_len = AS_STRING(maxVal)->length;
+    int d = 0;
+    http_recv_pick_limit(limit_spec, limit_spec_len, "", 0, &d);
+    max_bytes = d;
+  }
   if (max_bytes < 1024) max_bytes = 1024;
 
   static const int STATIC_CAP = 65536;
@@ -9352,6 +9428,7 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
         // Header didn't fit in `cap` bytes — pathological client; reject.
         if (total >= cap) {
           if (buf_owned) free(buf);
+          g_http_recv_err = 431;
           return VM_OBJ((Obj *)aot_allocate_string("", 0));
         }
         continue;
@@ -9394,9 +9471,19 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
       }
       needed = header_end + content_length;
 
-      // DoS guard: announced body would push us past max_bytes.
+      // Rota-onekli tablo verildiyse sinir istegin yoluna gore secilir
+      // (ornek: genel 1 MB, /api/upload 10 MB).
+      if (limit_spec) {
+        int d = 0;
+        max_bytes = http_recv_pick_limit(limit_spec, limit_spec_len, buf,
+                                         header_end, &d);
+      }
+
+      // DoS guard: announced body would push us past max_bytes. Govde
+      // OKUNMADAN reddedilir — yalniz Content-Length'e bakilir.
       if (needed > max_bytes) {
         if (buf_owned) free(buf);
+        g_http_recv_err = 413;
         return VM_OBJ((Obj *)aot_allocate_string("", 0));
       }
 
@@ -9425,6 +9512,10 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
   if (buf_owned) free(buf);
   return VM_OBJ((Obj *)res);
 }
+
+// http_recv_error() -> int: bu iplikte son http_recv_request neden "" dondu
+// (0 kapandi/hata, 413 govde siniri, 431 baslik blogu). k_std_builtins.
+VMValue aot_http_recv_error_ptr(void) { return VM_INT(g_http_recv_err); }
 
 // Builtin: http_create_response_keepalive(status, ct, body, headers, keep)
 //

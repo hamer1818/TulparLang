@@ -1,0 +1,113 @@
+// Wings client_ip + IP ayristirma + sinirlayici mantigi (2026-11-25).
+//
+// Neden: rate_limit X-Forwarded-For'un ilk degerine KOSULSUZ guveniyordu —
+// istemci her istekte yeni bir "IP" yazip giris kilidini atlatabiliyordu;
+// baslik yoksa tek global kova vardi (bir kisi herkesi kilitlerdi). Kural
+// artik hamza-backend middleware.RealIP ile ayni: anahtar TCP esi; X-Real-IP
+// YALNIZ es ozel/loopback ise ve gecerli bir IP ise. HTTP ve listen_pool
+// tarafi tests/wings_rate_limit_smoke.py'de.
+// Calistir: ./tulpar tests/wings_istemci_ip.test.tpr
+import "wings";
+import "test";
+
+func istek(str peer, json headers) {
+    return {"remote_addr": peer, "headers": headers, "method": "GET", "path": "/"};
+}
+
+func run_xff_hic_okunmaz() {
+    json h = {"X-Forwarded-For": "1.2.3.4", "x-forwarded-for": "5.6.7.8"};
+    assert_eq_str(client_ip(istek("203.0.113.9", h)), "203.0.113.9");
+    // Ozel esten gelse bile XFF yok sayilir (yalniz X-Real-IP).
+    assert_eq_str(client_ip(istek("10.0.0.2", h)), "10.0.0.2");
+}
+
+func run_xreal_yalniz_ozel_esten() {
+    json h = {"X-Real-IP": "198.51.100.7"};
+    assert_eq_str(client_ip(istek("203.0.113.9", h)), "203.0.113.9");   // genel es: yok say
+    assert_eq_str(client_ip(istek("172.18.0.5", h)), "198.51.100.7");    // docker agi
+    assert_eq_str(client_ip(istek("127.0.0.1", h)), "198.51.100.7");     // loopback
+    assert_eq_str(client_ip(istek("192.168.1.1", {"x-real-ip": " 2001:DB8::1 "})), "2001:db8::1");
+}
+
+func run_xreal_gecersizse_es() {
+    assert_eq_str(client_ip(istek("10.1.2.3", {"X-Real-IP": "evil"})), "10.1.2.3");
+    assert_eq_str(client_ip(istek("10.1.2.3", {"X-Real-IP": "1.2.3.4, 5.6.7.8"})), "10.1.2.3");
+    assert_eq_str(client_ip(istek("10.1.2.3", {"X-Real-IP": ""})), "10.1.2.3");
+    assert_eq_str(client_ip(istek("", {"X-Real-IP": "1.2.3.4"})), "unknown");
+    assert_eq_str(client_ip({"headers": {}}), "unknown");
+}
+
+func run_ip_gecerlilik() {
+    json iyi = ["0.0.0.0", "1.2.3.4", "255.255.255.255", "::", "::1", "2001:db8::1",
+                "fe80::1:2:3:4", "1:2:3:4:5:6:7:8", "::ffff:10.0.0.1", "64:ff9b::192.0.2.33",
+                "2001:DB8:0:0:8:800:200C:417A"];
+    json kotu = ["", "1.2.3", "1.2.3.4.5", "256.1.1.1", "01.2.3.4", "1.2.3.-4", " 1.2.3.4",
+                 "1.2.3.4 ", "a.b.c.d", "1:2:3:4:5:6:7:8:9", "1::2::3", "12345::1",
+                 "fe80::1%eth0", ":", "1:2:3:4:5:6:7", "::1.2.3", "gggg::1", "1.2.3.4::"];
+    for (int i = 0; i < length(iyi); i++) {
+        assert(ip_is_valid(iyi[i]), "gecerli sanilmadi: " + iyi[i]);
+    }
+    for (int i = 0; i < length(kotu); i++) {
+        assert(ip_is_valid(kotu[i]) == false, "gecersiz kabul edildi: '" + kotu[i] + "'");
+    }
+}
+
+func run_ozel_aralik_sinirlari() {
+    json ozel = ["10.0.0.0", "10.255.255.255", "172.16.0.0", "172.31.255.255",
+                 "192.168.0.1", "127.0.0.1", "127.9.9.9", "::1", "fc00::1", "fdff::1",
+                 "::ffff:192.168.1.1"];
+    json genel = ["9.255.255.255", "11.0.0.0", "172.15.255.255", "172.32.0.0",
+                  "192.167.1.1", "192.169.0.0", "8.8.8.8", "2001:db8::1", "fe80::1",
+                  "fbff::1", "fe00::1", "::ffff:8.8.8.8", "::2", "::", "0.0.0.0", "bozuk"];
+    for (int i = 0; i < length(ozel); i++) {
+        assert(ip_is_private(ozel[i]), "ozel sanilmadi: " + ozel[i]);
+    }
+    for (int i = 0; i < length(genel); i++) {
+        assert(ip_is_private(genel[i]) == false, "ozel sanildi: " + genel[i]);
+    }
+}
+
+// Giris akisi (hamza-backend auth.go): 10 basarisiz deneme / 15 dk / IP,
+// basarili giriste sifirlanir; bir IP digerini kilitlemez.
+func run_limiter_giris_akisi() {
+    str a = "198.51.100.1";
+    str b = "198.51.100.2";
+    limiter_reset("t_login", a);
+    limiter_reset("t_login", b);
+    for (int i = 0; i < 10; i++) {
+        assert(limiter_allow("t_login", a, 10, 900), "deneme " + toString(i + 1) + " reddedildi");
+    }
+    assert(limiter_allow("t_login", a, 10, 900) == false, "11. deneme gecti");
+    assert(limiter_allow("t_login", b, 10, 900), "baska IP kilitlendi");
+    int ra = limiter_retry_after("t_login", a, 900);
+    assert(ra >= 899 && ra <= 900, "Retry-After: " + toString(ra));
+    limiter_reset("t_login", a);
+    assert(limiter_allow("t_login", a, 10, 900), "sifirlamadan sonra reddedildi");
+    // Ayni anahtar, farkli sinirlayici adi: birbirini etkilemez.
+    assert(limiter_allow("t_baska", a, 1, 60), "ad alani karisti");
+    assert(limiter_allow("t_baska", a, 1, 60) == false, "1/60 siniri tutmadi");
+}
+
+func run_too_many_requests_zarfi() {
+    json r = too_many_requests(42);
+    assert_eq_int(r["_status"], 429);
+    assert_eq_str(r["_headers"]["Retry-After"], "42");
+    assert_eq_str(r["error"], "rate limit exceeded");
+    rate_limit_body({"success": false, "message": "Too many requests"});
+    json r2 = too_many_requests(60);
+    assert_eq_str(r2["message"], "Too many requests");
+    assert_eq_int(r2["_status"], 429);
+    // Govde sablonu kopyalaniyor: zarf alanlari sablona sizmamali.
+    json r3 = too_many_requests(5);
+    assert_eq_str(r3["_headers"]["Retry-After"], "5");
+    rate_limit_body({"error": "rate limit exceeded"});
+}
+
+test("client_ip: X-Forwarded-For hic okunmaz", "run_xff_hic_okunmaz");
+test("client_ip: X-Real-IP yalniz ozel/loopback esten", "run_xreal_yalniz_ozel_esten");
+test("client_ip: gecersiz X-Real-IP -> es", "run_xreal_gecersizse_es");
+test("ip_is_valid: IPv4/IPv6 kabul/ret tablosu", "run_ip_gecerlilik");
+test("ip_is_private: aralik sinirlari (Go IsPrivate||IsLoopback)", "run_ozel_aralik_sinirlari");
+test("limiter: giris akisi 10/15dk, reset, IP ayrimi", "run_limiter_giris_akisi");
+test("too_many_requests: 429 + Retry-After + govde", "run_too_many_requests_zarfi");
+test_summary();

@@ -1395,6 +1395,7 @@ static void warn_if_prebuilt_archive_stale(const char *dist_dir,
   static const char *srcs[] = {
       "runtime/tame_impl.c", "runtime/tame_bindings.cpp",
       "src/vm/runtime_bindings.cpp", "src/vm/vm.cpp",
+      "src/vm/runtime_server.cpp",
   };
   struct stat as;
   time_t oldest_archive = 0;

@@ -1,0 +1,623 @@
+// ============================================
+// Tulpar SMTP istemcisi (giden e-posta) — import "smtp"
+// ============================================
+//
+//     import "smtp";
+//     json cfg = {"host": "smtp.example.com", "port": 587,
+//                 "user": "me@example.com", "pass": env("SMTP_PASS")};
+//     json r = smtp_mail(cfg, {
+//         "from": "me@example.com", "to": "you@example.com",
+//         "reply_to": visitor_email,
+//         "subject": "[Portfolio İletişim] " + subject,
+//         "html": "<p>" + html_escape(message) + "</p>"});
+//     if (!r["ok"]) { print(r["error"]); }
+//
+// GUVENLIK (Go net/smtp + PlainAuth ile ayni sozlesme, bir yerde daha siki):
+//   * Port 465 -> dogrudan TLS ("security": "tls"); diger portlar STARTTLS
+//     ("starttls"). Sertifika + ad dogrulamasi http_request ile BIREBIR ayni
+//     (tls_connect / tls_starttls; sistem kokleri, TULPAR_CA_BUNDLE ezer).
+//     Kendinden imzali ya da yanlis adli sertifika -> ok:0, hic veri gitmez.
+//   * "starttls" kipinde sunucu STARTTLS sunmuyorsa BAGLANTI KESILIR (Go
+//     SendMail duz metinle devam ederdi; parola orada PlainAuth'a takiliyordu,
+//     kimlik dogrulamasiz gonderim ise duz gidiyordu). Indirgeme yok.
+//   * STARTTLS'ten once sunucunun tampona fazladan bayt koymasi (yanit
+//     enjeksiyonu, CVE-2011-0411 sinifi) hata — TLS oncesi tampon atilmaz,
+//     reddedilir.
+//   * Parola yalniz TLS uzerinden ya da localhost'a gider ("security":
+//     "none" + localhost disi + user dolu -> hata), Go PlainAuth kurali.
+//   * Baslik enjeksiyonu: Subject / Reply-To / From / To degerlerindeki CR/LF
+//     bosluga cevrilir (Go stripHeaderBreaks); zarf adreslerinde CR/LF, <, >
+//     varsa gonderim reddedilir. Turkce baslik RFC 2047 (=?UTF-8?B?...?=),
+//     govde UTF-8 + base64 (satir uzunlugu / 8BITMIME derdi yok).
+//
+// Donus: {"ok": 1, "code": 250, "reply": "..."} ya da
+//        {"ok": 0, "error": "...", "code": <son SMTP kodu ya da 0>, "stage": "..."}
+// ============================================
+
+// --- baslik yardimcilari -----------------------------------------------------
+
+// CR/LF -> bosluk (Go stripHeaderBreaks ile ayni).
+func smtp_header_clean(str s) {
+    str r = replace(s, "\r", " ");
+    return replace(r, "\n", " ");
+}
+
+func _smtp_is_ascii(str s) {
+    int n = len(s);
+    int i = 0;
+    while (i < n) {
+        if (ord(s, i) >= 128) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// RFC 2047 B-kodlamasi. ASCII (ve "=?" icermeyen) deger aynen doner; aksi
+// halde <= 45 baytlik (base64 60 karakter, kodlanmis kelime 72 <= 75) UTF-8
+// sinirinda bolunmus kelimeler, "\r\n " ile katlanmis.
+func smtp_encode_header(str s) {
+    str v = smtp_header_clean(s);
+    if (_smtp_is_ascii(v) && !contains(v, "=?")) {
+        return v;
+    }
+    json words = [];
+    int n = len(v);
+    int start = 0;
+    int i = 0;
+    while (i < n) {
+        int b = ord(v, i);
+        int cl = 1;
+        if (b >= 240) {
+            cl = 4;
+        } else if (b >= 224) {
+            cl = 3;
+        } else if (b >= 192) {
+            cl = 2;
+        }
+        if (i + cl - start > 45) {
+            push(words, "=?UTF-8?B?" + base64_encode(substring(v, start, i)) + "?=");
+            start = i;
+        }
+        i = i + cl;
+    }
+    if (i > n) {
+        i = n;
+    }
+    if (i > start) {
+        push(words, "=?UTF-8?B?" + base64_encode(substring(v, start, i)) + "?=");
+    }
+    return join("\r\n ", words);
+}
+
+// "Ad Soyad" <a@b.c> — ad gerekiyorsa RFC 2047 ile kodlanir.
+func smtp_address(str name, str email) {
+    str e = smtp_header_clean(email);
+    if (len(name) == 0) {
+        return e;
+    }
+    str nm = smtp_header_clean(name);
+    if (_smtp_is_ascii(nm)) {
+        nm = "\"" + replace(replace(nm, "\\", "\\\\"), "\"", "\\\"") + "\"";
+    } else {
+        nm = smtp_encode_header(nm);
+    }
+    return nm + " <" + e + ">";
+}
+
+// "Ad <a@b>" -> "a@b"; "a@b" -> "a@b". Supheli girdi -> "" (gonderim
+// reddedilir): CR/LF, birden fazla < ya da >, > sonrasi metin. Ayiklamadan
+// ONCE denetlenir — yoksa "a@b>\r\nRCPT TO:<kurban@x" son <'dan sonrasi
+// alinip temiz bir "kurban@x" alicisina donusuyordu (olculdu, smtp_smoke S11).
+func _smtp_bare_addr(str s) {
+    if (contains(s, "\r") || contains(s, "\n")) {
+        return "";
+    }
+    int lt = len(split(s, "<")) - 1;
+    int gt = len(split(s, ">")) - 1;
+    if (lt == 0 && gt == 0) {
+        return trim(s);
+    }
+    if (lt != 1 || gt != 1) {
+        return "";
+    }
+    json p = split(s, "<");
+    json q = split(p[1], ">");
+    if (len(trim(q[1])) > 0) {
+        return "";
+    }
+    return trim(q[0]);
+}
+
+func _smtp_addr_ok(str a) {
+    if (len(a) == 0 || len(a) > 254) {
+        return false;
+    }
+    if (contains(a, "\r") || contains(a, "\n") || contains(a, "<") || contains(a, ">")) {
+        return false;
+    }
+    return contains(a, "@");
+}
+
+// --- tarih (RFC 5322) ---------------------------------------------------------
+
+func _smtp_date(int t) {
+    json days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    json months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    str iso = format_iso8601(t);
+    // 2026-11-25T12:00:00Z
+    str y = substring(iso, 0, 4);
+    int mo = toInt(substring(iso, 5, 7));
+    str d = substring(iso, 8, 10);
+    str hms = substring(iso, 11, 19);
+    return days[weekday(t)] + ", " + d + " " + months[mo - 1] + " " + y + " " + hms + " +0000";
+}
+
+// --- ileti kurma ----------------------------------------------------------------
+
+func _smtp_wrap76(str b64) {
+    json lines = [];
+    int n = len(b64);
+    int i = 0;
+    while (i < n) {
+        int e = i + 76;
+        if (e > n) {
+            e = n;
+        }
+        push(lines, substring(b64, i, e));
+        i = e;
+    }
+    return join("\r\n", lines);
+}
+
+func _smtp_join_addrs(to) {
+    if (typeof(to) == "array") {
+        json clean = [];
+        int i = 0;
+        while (i < len(to)) {
+            push(clean, smtp_header_clean(to[i]));
+            i = i + 1;
+        }
+        return join(", ", clean);
+    }
+    return smtp_header_clean(to);
+}
+
+// smtp_message({from, to, subject, html | text, reply_to?, cc?}) -> ham ileti.
+// Date ve Message-ID eklenir; govde UTF-8 + base64.
+func smtp_message(json m) {
+    str from = smtp_header_clean(m["from"]);
+    str ctype = "text/plain";
+    str body = m["text"];
+    if (typeof(m["html"]) == "string") {
+        ctype = "text/html";
+        body = m["html"];
+    }
+    if (typeof(body) != "string") {
+        body = "";
+    }
+    str dom = "localhost";
+    str bare = _smtp_bare_addr(from);
+    if (contains(bare, "@")) {
+        json parts = split(bare, "@");
+        dom = parts[len(parts) - 1];
+    }
+    json h = [];
+    push(h, "From: " + from);
+    push(h, "To: " + _smtp_join_addrs(m["to"]));
+    if (typeof(m["cc"]) == "string" || typeof(m["cc"]) == "array") {
+        push(h, "Cc: " + _smtp_join_addrs(m["cc"]));
+    }
+    if (typeof(m["reply_to"]) == "string") {
+        if (len(m["reply_to"]) > 0) {
+            push(h, "Reply-To: " + smtp_header_clean(m["reply_to"]));
+        }
+    }
+    str subj = "";
+    if (typeof(m["subject"]) == "string") {
+        subj = m["subject"];
+    }
+    push(h, "Subject: " + smtp_encode_header(subj));
+    push(h, "Date: " + _smtp_date(timestamp()));
+    push(h, "Message-ID: <" + uuid_v4() + "@" + smtp_header_clean(dom) + ">");
+    push(h, "MIME-Version: 1.0");
+    push(h, "Content-Type: " + ctype + "; charset=UTF-8");
+    push(h, "Content-Transfer-Encoding: base64");
+    return join("\r\n", h) + "\r\n\r\n" + _smtp_wrap76(base64_encode(body)) + "\r\n";
+}
+
+// Satir sonlarini CRLF'ye cevirir, "." ile baslayan satirlara nokta ekler
+// (RFC 5321 4.5.2) ve ileti sonu isaretini ekler.
+func smtp_dot_stuff(str raw) {
+    str r = replace(raw, "\r\n", "\n");
+    r = replace(r, "\r", "\n");
+    json lines = split(r, "\n");
+    int n = len(lines);
+    // "...\n" ile biten iletide split sona bos bir parca koyar — onu at.
+    if (n > 0) {
+        if (len(lines[n - 1]) == 0) {
+            n = n - 1;
+        }
+    }
+    json out = [];
+    int i = 0;
+    while (i < n) {
+        str ln = lines[i];
+        if (len(ln) > 0) {
+            if (ord(ln, 0) == 46) {
+                ln = "." + ln;
+            }
+        }
+        push(out, ln);
+        i = i + 1;
+    }
+    return join("\r\n", out) + "\r\n.\r\n";
+}
+
+// --- baglanti -------------------------------------------------------------------
+
+func _smtp_send_raw(json c, str data) {
+    if (c["ssl"] != 0) {
+        int w = tls_send(c["ssl"], data);
+        return w == len(data);
+    }
+    str rest = data;
+    int tries = 0;
+    while (len(rest) > 0) {
+        int sent = socket_send(c["fd"], rest);
+        if (sent <= 0) {
+            return false;
+        }
+        rest = substring(rest, sent, len(rest));
+        tries = tries + 1;
+        if (tries > 100000) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func _smtp_fill(json c) {
+    str chunk = "";
+    if (c["ssl"] != 0) {
+        chunk = tls_recv(c["ssl"], 8192);
+    } else {
+        chunk = socket_receive(c["fd"], 8192);
+    }
+    if (len(chunk) == 0) {
+        return false;
+    }
+    c["buf"] = c["buf"] + chunk;
+    return true;
+}
+
+func _smtp_is_digits3(str s) {
+    if (len(s) < 3) {
+        return false;
+    }
+    int i = 0;
+    while (i < 3) {
+        int b = ord(s, i);
+        if (b < 48 || b > 57) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Bir (cok satirli olabilir) yaniti okur: {"code": 250, "text": "...", "lines": [...]}
+// Kod 0 = baglanti koptu / bozuk yanit.
+func _smtp_reply(json c) {
+    json lines = [];
+    int guard = 0;
+    while (guard < 1000) {
+        guard = guard + 1;
+        str buf = c["buf"];
+        if (!contains(buf, "\n")) {
+            if (len(buf) > 65536) {
+                return {"code": 0, "text": "reply line too long", "lines": lines};
+            }
+            if (!_smtp_fill(c)) {
+                return {"code": 0, "text": "connection closed", "lines": lines};
+            }
+        } else {
+            json p = split(buf, "\n");
+            str ln = p[0];
+            c["buf"] = substring(buf, len(ln) + 1, len(buf));
+            if (len(ln) > 0) {
+                if (ord(ln, len(ln) - 1) == 13) {
+                    ln = substring(ln, 0, len(ln) - 1);
+                }
+            }
+            if (!_smtp_is_digits3(ln)) {
+                return {"code": 0, "text": "malformed reply: " + ln, "lines": lines};
+            }
+            push(lines, ln);
+            bool more = false;
+            if (len(ln) > 3) {
+                if (ord(ln, 3) == 45) {
+                    more = true;
+                }
+            }
+            if (!more) {
+                return {"code": toInt(substring(ln, 0, 3)), "text": ln, "lines": lines};
+            }
+        }
+    }
+    return {"code": 0, "text": "too many reply lines", "lines": lines};
+}
+
+func _smtp_fail(json c, str stage, str why, int code) {
+    _smtp_close(c);
+    return {"ok": 0, "error": stage + ": " + why, "code": code, "stage": stage};
+}
+
+func _smtp_close(json c) {
+    if (c["ssl"] != 0) {
+        tls_close(c["ssl"]);
+        c["ssl"] = 0;
+        c["fd"] = -1;
+    } else if (c["fd"] >= 0) {
+        socket_close(c["fd"]);
+        c["fd"] = -1;
+    }
+}
+
+// Komut gonderir, yaniti okur. Beklenen kod araligi [lo, hi].
+func _smtp_cmd(json c, str line) {
+    if (!_smtp_send_raw(c, line + "\r\n")) {
+        return {"code": 0, "text": "write failed", "lines": []};
+    }
+    return _smtp_reply(c);
+}
+
+func _smtp_ehlo(json c, str helo) {
+    json r = _smtp_cmd(c, "EHLO " + helo);
+    if (r["code"] != 250) {
+        return r;
+    }
+    // Yetenekler: "250-STARTTLS", "250-AUTH PLAIN LOGIN", "250 SIZE ..."
+    json caps = {};
+    json ls = r["lines"];
+    int i = 1;
+    while (i < len(ls)) {
+        str ln = upper(substring(ls[i], 4, len(ls[i])));
+        json kv = split(ln, " ");
+        caps[kv[0]] = ln;
+        i = i + 1;
+    }
+    c["caps"] = caps;
+    return r;
+}
+
+func _smtp_is_local(str host) {
+    return host == "localhost" || host == "127.0.0.1" || host == "::1";
+}
+
+// smtp_send(cfg, from, to, raw) — ham iletiyi (smtp_message ciktisi ya da
+// kendi kurdugunuz) gonderir. `to`: tek adres ya da adres dizisi (zarf).
+// cfg: host, port (587), user, pass, security ("starttls" | "tls" | "none";
+// port 465 -> "tls"), helo ("localhost"), auth ("auto" | "plain" | "login"),
+// timeout_ms (30000).
+func smtp_send(json cfg, str from, to, str raw) {
+    str host = cfg["host"];
+    int port = 587;
+    if (typeof(cfg["port"]) == "int") {
+        port = cfg["port"];
+    }
+    str sec = "starttls";
+    if (port == 465) {
+        sec = "tls";
+    }
+    if (typeof(cfg["security"]) == "string") {
+        sec = cfg["security"];
+    }
+    str helo = "localhost";
+    if (typeof(cfg["helo"]) == "string") {
+        helo = smtp_header_clean(cfg["helo"]);
+    }
+    str user = "";
+    str pass = "";
+    if (typeof(cfg["user"]) == "string") {
+        user = cfg["user"];
+    }
+    if (typeof(cfg["pass"]) == "string") {
+        pass = cfg["pass"];
+    }
+    str mech = "auto";
+    if (typeof(cfg["auth"]) == "string") {
+        mech = lower(cfg["auth"]);
+    }
+    int tmo = 30000;
+    if (typeof(cfg["timeout_ms"]) == "int") {
+        tmo = cfg["timeout_ms"];
+    }
+
+    json rcpts = [];
+    if (typeof(to) == "array") {
+        int k = 0;
+        while (k < len(to)) {
+            push(rcpts, _smtp_bare_addr(to[k]));
+            k = k + 1;
+        }
+    } else {
+        push(rcpts, _smtp_bare_addr(to));
+    }
+    str env_from = _smtp_bare_addr(from);
+    json c = {"fd": -1, "ssl": 0, "buf": "", "caps": {}};
+    if (len(host) == 0) {
+        return {"ok": 0, "error": "config: host is empty", "code": 0, "stage": "config"};
+    }
+    if (!_smtp_addr_ok(env_from)) {
+        return {"ok": 0, "error": "config: bad sender address", "code": 0, "stage": "config"};
+    }
+    if (len(rcpts) == 0) {
+        return {"ok": 0, "error": "config: no recipients", "code": 0, "stage": "config"};
+    }
+    int ri = 0;
+    while (ri < len(rcpts)) {
+        if (!_smtp_addr_ok(rcpts[ri])) {
+            return {"ok": 0, "error": "config: bad recipient address", "code": 0, "stage": "config"};
+        }
+        ri = ri + 1;
+    }
+    if (sec != "tls" && sec != "starttls" && sec != "none") {
+        return {"ok": 0, "error": "config: security must be tls, starttls or none", "code": 0, "stage": "config"};
+    }
+    if (sec == "none" && len(user) > 0 && !_smtp_is_local(host)) {
+        return {"ok": 0, "error": "config: refusing to send credentials without TLS", "code": 0, "stage": "config"};
+    }
+
+    // 1. Baglan
+    if (sec == "tls") {
+        int ssl = tls_connect(host, port);
+        if (ssl == 0) {
+            return {"ok": 0, "error": "tls: " + tls_error(), "code": 0, "stage": "connect"};
+        }
+        c["ssl"] = ssl;
+    } else {
+        int fd = socket_client(host, port);
+        if (fd < 0) {
+            return {"ok": 0, "error": "connect: cannot reach " + host + ":" + toString(port), "code": 0, "stage": "connect"};
+        }
+        c["fd"] = fd;
+        socket_timeout(fd, tmo);
+    }
+
+    // 2. Karsilama
+    json r = _smtp_reply(c);
+    if (r["code"] != 220) {
+        return _smtp_fail(c, "greeting", r["text"], r["code"]);
+    }
+    r = _smtp_ehlo(c, helo);
+    if (r["code"] != 250) {
+        return _smtp_fail(c, "ehlo", r["text"], r["code"]);
+    }
+
+    // 3. STARTTLS
+    if (sec == "starttls") {
+        if (!_smtp_has(c["caps"], "STARTTLS")) {
+            return _smtp_fail(c, "starttls", "server does not offer STARTTLS (refusing plaintext)", 0);
+        }
+        r = _smtp_cmd(c, "STARTTLS");
+        if (r["code"] != 220) {
+            return _smtp_fail(c, "starttls", r["text"], r["code"]);
+        }
+        if (len(c["buf"]) > 0) {
+            return _smtp_fail(c, "starttls", "unexpected data before TLS handshake", 0);
+        }
+        int up = tls_starttls(c["fd"], host);
+        if (up == 0) {
+            return _smtp_fail(c, "starttls", "tls: " + tls_error(), 0);
+        }
+        c["ssl"] = up;
+        c["caps"] = {};
+        r = _smtp_ehlo(c, helo);
+        if (r["code"] != 250) {
+            return _smtp_fail(c, "ehlo", r["text"], r["code"]);
+        }
+    }
+
+    // 4. AUTH
+    if (len(user) > 0) {
+        str offered = "";
+        if (_smtp_has(c["caps"], "AUTH")) {
+            offered = c["caps"]["AUTH"];
+        }
+        if (mech == "auto") {
+            if (contains(offered, " PLAIN")) {
+                mech = "plain";
+            } else if (contains(offered, " LOGIN")) {
+                mech = "login";
+            } else {
+                return _smtp_fail(c, "auth", "server offers no PLAIN/LOGIN auth", 0);
+            }
+        }
+        if (mech == "plain") {
+            r = _smtp_cmd(c, "AUTH PLAIN " + base64_encode(chr(0) + user + chr(0) + pass));
+            if (r["code"] != 235) {
+                return _smtp_fail(c, "auth", r["text"], r["code"]);
+            }
+        } else if (mech == "login") {
+            r = _smtp_cmd(c, "AUTH LOGIN");
+            if (r["code"] != 334) {
+                return _smtp_fail(c, "auth", r["text"], r["code"]);
+            }
+            r = _smtp_cmd(c, base64_encode(user));
+            if (r["code"] != 334) {
+                return _smtp_fail(c, "auth", r["text"], r["code"]);
+            }
+            r = _smtp_cmd(c, base64_encode(pass));
+            if (r["code"] != 235) {
+                return _smtp_fail(c, "auth", r["text"], r["code"]);
+            }
+        } else {
+            return _smtp_fail(c, "auth", "unknown auth mechanism: " + mech, 0);
+        }
+    }
+
+    // 5. Zarf + veri
+    r = _smtp_cmd(c, "MAIL FROM:<" + env_from + ">");
+    if (r["code"] != 250) {
+        return _smtp_fail(c, "mail", r["text"], r["code"]);
+    }
+    int j = 0;
+    while (j < len(rcpts)) {
+        r = _smtp_cmd(c, "RCPT TO:<" + rcpts[j] + ">");
+        if (r["code"] != 250 && r["code"] != 251) {
+            return _smtp_fail(c, "rcpt", r["text"], r["code"]);
+        }
+        j = j + 1;
+    }
+    r = _smtp_cmd(c, "DATA");
+    if (r["code"] != 354) {
+        return _smtp_fail(c, "data", r["text"], r["code"]);
+    }
+    if (!_smtp_send_raw(c, smtp_dot_stuff(raw))) {
+        return _smtp_fail(c, "data", "write failed", 0);
+    }
+    r = _smtp_reply(c);
+    if (r["code"] != 250) {
+        return _smtp_fail(c, "data", r["text"], r["code"]);
+    }
+    json done = {"ok": 1, "code": 250, "reply": r["text"]};
+    _smtp_cmd(c, "QUIT");
+    _smtp_close(c);
+    return done;
+}
+
+func _smtp_has(json caps, str k) {
+    json ks = keys(caps);
+    int i = 0;
+    while (i < len(ks)) {
+        if (ks[i] == k) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// smtp_mail(cfg, m) — smtp_message(m) kurup zarf adresleriyle gonderir
+// (to + cc; From'daki adres MAIL FROM olur).
+func smtp_mail(json cfg, json m) {
+    json rcpts = [];
+    json lists = [m["to"], m["cc"]];
+    int a = 0;
+    while (a < 2) {
+        if (typeof(lists[a]) == "array") {
+            int i = 0;
+            while (i < len(lists[a])) {
+                push(rcpts, lists[a][i]);
+                i = i + 1;
+            }
+        } else if (typeof(lists[a]) == "string") {
+            push(rcpts, lists[a]);
+        }
+        a = a + 1;
+    }
+    return smtp_send(cfg, m["from"], rcpts, smtp_message(m));
+}

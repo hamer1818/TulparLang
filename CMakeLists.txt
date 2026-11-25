@@ -293,6 +293,7 @@ set(RUNTIME_SOURCES
     src/vm/runtime_bindings.cpp
     src/vm/runtime_net.cpp
     src/vm/runtime_db.cpp
+    src/vm/runtime_server.cpp
     src/vm/vm.cpp
     src/vm/vm.hpp
     src/vm/bytecode.cpp
@@ -553,6 +554,7 @@ add_library(tulpar_runtime STATIC
     src/vm/runtime_bindings.cpp
     src/vm/runtime_net.cpp
     src/vm/runtime_db.cpp
+    src/vm/runtime_server.cpp
     src/vm/vm.cpp
     src/vm/bytecode.cpp
     runtime/cJSON.c

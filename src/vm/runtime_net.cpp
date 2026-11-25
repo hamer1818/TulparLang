@@ -132,6 +132,7 @@ tulpar_socket http_dial(const char *host, int port) {
     if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
         return tulpar_invalid_socket;
     }
+    tulpar_net_ignore_sigpipe();
     tulpar_socket sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sock == tulpar_invalid_socket) {
         freeaddrinfo(res);
@@ -567,6 +568,92 @@ VMValue aot_tls_ctx_free(VMValue ctxVal) {
   (void)ctxVal;
   return VM_INT(0);
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// TLS istemcisi (SMTP 465 / STARTTLS 587, ya da herhangi bir TLS protokolu).
+// Dogrulama http_request ile ayni (tulpar::tls_client_handshake). Donen
+// tutamac tls_send / tls_recv / tls_close ile kullanilir — sunucu tarafinin
+// tutamaciyla ayni tur (SSL*), tls_close soketi de kapatir.
+// ---------------------------------------------------------------------------
+static thread_local std::string g_tls_last_error;
+
+static long long as_ll(const VMValue *v, long long fb) {
+  if (!v) return fb;
+  if (IS_INT(*v)) return (long long)AS_INT(*v);
+  return fb;
+}
+
+// tls_connect(host, port) -> tutamac (0 = hata; neden tls_error()'da).
+// Okuma/yazma zaman asimi 30 sn: karsi taraf takilirsa istek sonsuza dek
+// beklemesin (socket_timeout ile degistirilebilir — SSL_get_fd).
+VMValue aot_tls_connect_ptr(VMValue *hostv, VMValue *portv) {
+  g_tls_last_error.clear();
+  if (!hostv || !IS_STRING(*hostv)) {
+    g_tls_last_error = "tls_connect: host must be a string";
+    return VM_INT(0);
+  }
+  std::string host(AS_STRING(*hostv)->chars, (size_t)AS_STRING(*hostv)->length);
+  long long port = as_ll(portv, 0);
+  if (port <= 0 || port > 65535) {
+    g_tls_last_error = "tls_connect: bad port";
+    return VM_INT(0);
+  }
+#if defined(TULPAR_HAS_TLS)
+  tulpar_socket fd = http_dial(host.c_str(), (int)port);
+  if (fd == tulpar_invalid_socket) {
+    g_tls_last_error = "connect failed: " + host + ":" + std::to_string(port);
+    return VM_INT(0);
+  }
+#if defined(_WIN32)
+  DWORD tmo = 30000;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tmo, sizeof(tmo));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tmo, sizeof(tmo));
+#else
+  struct timeval tmo;
+  tmo.tv_sec = 30;
+  tmo.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof(tmo));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tmo, sizeof(tmo));
+#endif
+  std::string err;
+  void *ssl = tulpar::tls_client_handshake((long long)fd, host, err);
+  if (!ssl) {
+    g_tls_last_error = err;
+    tulpar_close(fd);
+    return VM_INT(0);
+  }
+  return VM_INT((int64_t)(uintptr_t)ssl);
+#else
+  g_tls_last_error = "TLS destegi olmadan derlendi (OpenSSL yok)";
+  return VM_INT(0);
+#endif
+}
+
+// tls_starttls(fd, host) -> tutamac. Duz bir soketi (ornegin SMTP 587'de
+// "220 Ready to start TLS" yanitindan sonra) TLS'e yukseltir. Hata 0 doner
+// ve soket ACIK kalir — sahibi cagiran, socket_close ile kapatir.
+VMValue aot_tls_starttls_ptr(VMValue *fdv, VMValue *hostv) {
+  g_tls_last_error.clear();
+  long long fd = as_ll(fdv, -1);
+  if (fd < 0 || !hostv || !IS_STRING(*hostv)) {
+    g_tls_last_error = "tls_starttls: bad arguments";
+    return VM_INT(0);
+  }
+  std::string host(AS_STRING(*hostv)->chars, (size_t)AS_STRING(*hostv)->length);
+  std::string err;
+  void *ssl = tulpar::tls_client_handshake(fd, host, err);
+  if (!ssl) {
+    g_tls_last_error = err;
+    return VM_INT(0);
+  }
+  return VM_INT((int64_t)(uintptr_t)ssl);
+}
+
+// tls_error() -> str: bu iplikteki son tls_connect/tls_starttls hatasi.
+VMValue aot_tls_error_ptr(void) {
+  return VM_OBJ((Obj *)aot_allocate_string(g_tls_last_error.data(),
+                                           (int)g_tls_last_error.size()));
 }
 
 #ifdef __cplusplus

@@ -1375,6 +1375,49 @@ static const TameBuiltin k_tame_builtins[] = {
 #define TAME_BUILTIN_COUNT \
   ((int)(sizeof(k_tame_builtins) / sizeof(k_tame_builtins[0])))
 
+// ---------------------------------------------------------------------------
+// Sunucu/ag yardimcilari — tame ile AYNI tablo-gudumlu baglama (N-ptr VMValue
+// ABI), ama tame arsivine degil cekirdek runtime'a (src/vm/runtime_server.cpp,
+// TLS istemcisi runtime_net.cpp) bagli ve kullanici fonksiyonu ayni adi
+// tanimlarsa GOLGELENIR (dispatch bi_name uzerinden). Yeni satir = runtime'da
+// `aot_X_ptr` + buraya satir + typeinfer + LSP; struct alani / elle dispatch
+// blogu yok. tests/dist_archive_audit.py bu satirlari da okuyor.
+// ---------------------------------------------------------------------------
+static const TameBuiltin k_std_builtins[] = {
+    {"bcrypt_hash", "aot_bcrypt_hash_ptr", 2},
+    {"bcrypt_verify", "aot_bcrypt_verify_ptr", 2},
+    {"bcrypt_cost", "aot_bcrypt_cost_ptr", 1},
+    {"shared_set", "aot_shared_set_ptr", 3},
+    {"shared_get", "aot_shared_get_ptr", 1},
+    {"shared_has", "aot_shared_has_ptr", 1},
+    {"shared_add", "aot_shared_add_ptr", 3},
+    {"shared_incr", "aot_shared_incr_ptr", 2},
+    {"shared_del", "aot_shared_del_ptr", 1},
+    {"shared_ttl", "aot_shared_ttl_ptr", 1},
+    {"uuid_v4", "aot_uuid_v4_ptr", 0},
+    {"html_escape", "aot_html_escape_ptr", 1},
+    {"rfc3339", "aot_rfc3339_ptr", 1},
+    {"detect_content_type", "aot_detect_content_type_ptr", 1},
+    {"hex_decode", "aot_hex_decode_ptr", 1},
+    {"socket_timeout", "aot_socket_timeout_ptr", 2},
+    {"shutdown_requested", "aot_shutdown_requested_ptr", 0},
+    {"tls_connect", "aot_tls_connect_ptr", 2},
+    {"tls_starttls", "aot_tls_starttls_ptr", 2},
+    {"tls_error", "aot_tls_error_ptr", 0},
+    {"http_recv_error", "aot_http_recv_error_ptr", 0},
+    {"make_dirs", "aot_make_dirs_ptr", 1},
+};
+
+#define STD_BUILTIN_COUNT \
+  ((int)(sizeof(k_std_builtins) / sizeof(k_std_builtins[0])))
+
+static const TameBuiltin *std_builtin_lookup(const char *name) {
+  for (int i = 0; i < STD_BUILTIN_COUNT; i++) {
+    if (strcmp(k_std_builtins[i].name, name) == 0) return &k_std_builtins[i];
+  }
+  return nullptr;
+}
+
 static const TameBuiltin *tame_builtin_lookup(const char *name) {
   for (int i = 0; i < TAME_BUILTIN_COUNT; i++) {
     if (strcmp(k_tame_builtins[i].name, name) == 0) return &k_tame_builtins[i];
@@ -2021,6 +2064,11 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMTypeRef tm_ft = llvm_make_vmvalue_func_type(
           backend, tm_params, k_tame_builtins[i].argc, 0);
       LLVMAddFunction(backend->module, k_tame_builtins[i].sym, tm_ft);
+    }
+    for (int i = 0; i < STD_BUILTIN_COUNT; i++) {
+      LLVMTypeRef sb_ft = llvm_make_vmvalue_func_type(
+          backend, tm_params, k_std_builtins[i].argc, 0);
+      LLVMAddFunction(backend->module, k_std_builtins[i].sym, sb_ft);
     }
   }
 
@@ -11934,6 +11982,25 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         }
         return llvm_call_vmvalue_func(backend, tm_fn, tm_args,
                                       (unsigned)tb->argc, "tm_res");
+      }
+    }
+    if (*bi_name) {
+      if (const TameBuiltin *sb = std_builtin_lookup(bi_name)) {
+        LLVMValueRef sb_fn = LLVMGetNamedFunction(backend->module, sb->sym);
+        LLVMValueRef sb_args[TAME_MAX_ARGS];
+        for (int i = 0; i < sb->argc; i++) {
+          LLVMValueRef v = (i < node->argument_count)
+                               ? codegen_expression(backend,
+                                                    node->arguments[i])
+                               : llvm_vm_val_int(backend, 0);
+          LLVMValueRef slot = llvm_build_alloca_at_entry(
+              backend, backend->vm_value_type, "sb_arg");
+          LLVMBuildStore(backend->builder, v, slot);
+          sb_args[i] = LLVMBuildBitCast(backend->builder, slot,
+                                        backend->ptr_type, "sb_arg_void");
+        }
+        return llvm_call_vmvalue_func(backend, sb_fn, sb_args,
+                                      (unsigned)sb->argc, "sb_res");
       }
     }
     if (node->name && strcmp(bi_name, "screen_open") == 0) {
