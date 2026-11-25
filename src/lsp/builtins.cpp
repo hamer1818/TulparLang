@@ -398,6 +398,8 @@ const BuiltinEntry kBuiltins[] = {
     {"tls_connect",         "tls_connect(host: str, port: int): int",       "TLS istemci baglantisi (sertifika + ad dogrulamali). Tutamac tls_send/tls_recv/tls_close ile kullanilir; 0 = hata (tls_error())."},
     {"tls_starttls",        "tls_starttls(fd, host: str): int",             "Acik duz soketi TLS'e yukseltir (SMTP STARTTLS). 0 = hata; soket acik kalir."},
     {"tls_error",           "tls_error(): str",                             "Bu iplikteki son tls_connect/tls_starttls hatasinin nedeni."},
+    {"http_recv_error",     "http_recv_error(): int",                       "Son http_recv_request neden bos dondu: 0 kapandi/hata, 413 govde siniri asildi, 431 baslik blogu sigmadi."},
+    {"make_dirs",           "make_dirs(path: str): bool",                   "Dizini ust dizinleriyle birlikte olusturur (mkdir -p). Var olan dizin true; yolun bir parcasi dosyaysa false."},
     {"gzip_compress",       "gzip_compress(s: str): str",                   "Girdi baytlarını gzip (RFC 1952) akışına sıkıştırır — ağaç-içi DEFLATE, zlib bağımlılığı yok. İkili-güvenli (NUL içerir); wings yanıt sıkıştırmasının yapı taşı."},
     {"sha1",                "sha1(s: str): str",                    "20-baytlık ikili SHA-1 özeti döner."},
     {"sha1_hex",            "sha1_hex(s: str): str",                "40 karakter küçük-harf hex SHA-1."},

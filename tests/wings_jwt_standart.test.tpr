@@ -1,0 +1,163 @@
+// Standart JWT (RFC 7519 HS256) + save_upload — lib/wings.tpr (2026-11-25).
+//
+// JWT vektorleri UYDURULMADI: golang-jwt/jwt v5.3.1 (hamza-backend'in kullandigi
+// surum) ile SignedString'den uretildi, sabit zamanli (exp = 2100-01-01) —
+// gecerlilik testin calistigi gune bagli degil. Ters yon de olculdu: buradaki
+// jwt_sign ciktisini Go jwt.Parse(WithValidMethods HS256, WithExpirationRequired)
+// GO_OK ile kabul etti (bkz. RUN_GO_VERIFY aciklamasi).
+// Calistir: ./tulpar tests/wings_jwt_standart.test.tpr
+import "wings";
+import "test";
+
+str SECRET = "tulpar-test-secret";
+str GO_VALID = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjQxMDI0NDQ4MDAsImlhdCI6NDEwMjQwMTYwMCwidXNlcl9pZCI6N30.C6v8LQ-PCMYjHhvPyNtvbOuwz6RpA47w9guq0ZSTrTo";
+str GO_EXPIRED = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjEwMDAwMDAwMDAsInVzZXJfaWQiOjd9.oeGclu3S153he8WUPe06LXjj8TRYbSez_MAfcYpc65o";
+str GO_NOEXP = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjo3fQ.vR_ayymd5FnVFxS-ShVxoUVzyFJCcUWD5MqRZ5p9j1k";
+str GO_HS512 = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJleHAiOjQxMDI0MDUyMDAsInVzZXJfaWQiOjd9.eoWFJ1K1WY8dDLLIvpBLlvXfYv4Uj4CuQ84iXcF5rC7CuPUj_HhYgtB_hezYJABjV10nQvizn4akoDzJ9o9P8g";
+str GO_WRONGKEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjQxMDI0MDUyMDAsInVzZXJfaWQiOjd9.yQbFIzkaWEufw5eNGqxSixO1Y0S10JZVmZkpJIdcupE";
+str GO_NBF = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjQxMDI0NTIwMDAsIm5iZiI6NDEwMjQ0NDgwMCwidXNlcl9pZCI6N30.Q5OB2Ycu1BfbqdhFqKIo_8ZU1MH5XuzTtYUxrw7QOsQ";
+str GO_NONE = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0MDUyMDAsInVzZXJfaWQiOjd9.";
+// jwt_sign({"user_id": 7, "iat": 4102401600, "exp": 4102444800}, SECRET) —
+// Go'da GO_OK 7 (tek bayt degisince "signature is invalid").
+str TULPAR_SIGNED = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjo3LCJpYXQiOjQxMDI0MDE2MDAsImV4cCI6NDEwMjQ0NDgwMH0.WcNM5InCG_S5UszpGAsszDJ45WZUse0tuSdU9xAnCks";
+
+func run_go_tokeni_dogrulanir() {
+    json v = jwt_verify(GO_VALID, SECRET);
+    assert_eq_int(v["ok"], 1);
+    assert_eq_int(v["claims"]["user_id"], 7);
+    assert_eq_int(v["claims"]["exp"], 4102444800);
+}
+
+func run_imza_bayt_bayt_ayni() {
+    // Ayni talepler, ayni anahtar -> Go'nun bayt bayt ayni imzasi olmali
+    // (talep sirasi farkli oldugu icin govdeyi Go'nunkinden kuruyoruz).
+    json p = split(GO_VALID, ".");
+    str input = p[0] + "." + p[1];
+    str sig = _wings_b64url_encode(hex_decode(hmac_sha256(SECRET, input)));
+    assert_eq_str(sig, p[2]);
+    assert_eq_str(jwt_sign({"user_id": 7, "iat": 4102401600, "exp": 4102444800}, SECRET), TULPAR_SIGNED);
+}
+
+func run_reddedilenler() {
+    assert_eq_str(jwt_verify(GO_EXPIRED, SECRET)["error"], "token is expired");
+    assert_eq_str(jwt_verify(GO_NOEXP, SECRET)["error"], "token has no exp");
+    assert_eq_str(jwt_verify(GO_HS512, SECRET)["error"], "unexpected signing method");
+    assert_eq_str(jwt_verify(GO_WRONGKEY, SECRET)["error"], "bad signature");
+    assert_eq_str(jwt_verify(GO_NBF, SECRET)["error"], "token not valid yet");
+    // alg:none tokeninin imzasi bos: bicim denetiminde duser.
+    assert_eq_str(jwt_verify(GO_NONE, SECRET)["error"], "malformed token");
+    assert_eq_int(jwt_verify(GO_VALID, "baska-anahtar")["ok"], 0);
+    assert_eq_int(jwt_verify("", SECRET)["ok"], 0);
+    assert_eq_int(jwt_verify("a.b", SECRET)["ok"], 0);
+    assert_eq_int(jwt_verify("a.b.c.d", SECRET)["ok"], 0);
+    assert_eq_int(jwt_verify("..", SECRET)["ok"], 0);
+}
+
+func run_alg_karisikligi() {
+    json p = split(GO_VALID, ".");
+    // Saldirgan basligi "none" yapip imzayi birakiyor / siliyor.
+    str none_h = _wings_b64url_encode("{\"alg\":\"none\",\"typ\":\"JWT\"}");
+    assert_eq_int(jwt_verify(none_h + "." + p[1] + "." + p[2], SECRET)["ok"], 0);
+    assert_eq_int(jwt_verify(none_h + "." + p[1] + ".", SECRET)["ok"], 0);
+    // "HS256 " / "hs256" gibi yakin yazimlar da HS256 degil.
+    str lower_h = _wings_b64url_encode("{\"alg\":\"hs256\"}");
+    str in2 = lower_h + "." + p[1];
+    str s2 = _wings_b64url_encode(hex_decode(hmac_sha256(SECRET, in2)));
+    assert_eq_str(jwt_verify(in2 + "." + s2, SECRET)["error"], "unexpected signing method");
+    // alg yok.
+    str noalg = _wings_b64url_encode("{\"typ\":\"JWT\"}");
+    str in3 = noalg + "." + p[1];
+    str s3 = _wings_b64url_encode(hex_decode(hmac_sha256(SECRET, in3)));
+    assert_eq_str(jwt_verify(in3 + "." + s3, SECRET)["error"], "unexpected signing method");
+}
+
+func run_govde_kurcalama() {
+    json p = split(GO_VALID, ".");
+    str evil = _wings_b64url_encode("{\"exp\":4102444800,\"user_id\":1}");
+    assert_eq_str(jwt_verify(p[0] + "." + evil + "." + p[2], SECRET)["error"], "bad signature");
+    // Eski wings_jwt bicimi (hex imza) standart dogrulamadan GECMEZ.
+    str input = p[0] + "." + p[1];
+    str legacy = _wings_b64url_encode(hmac_sha256(SECRET, input));
+    assert_eq_int(jwt_verify(input + "." + legacy, SECRET)["ok"], 0);
+    // Talepler nesne degilse (dizi / sayi) ret.
+    str arr = _wings_b64url_encode("[1,2]");
+    str in4 = p[0] + "." + arr;
+    str s4 = _wings_b64url_encode(hex_decode(hmac_sha256(SECRET, in4)));
+    assert_eq_str(jwt_verify(in4 + "." + s4, SECRET)["error"], "malformed claims");
+    // exp dizgi -> yok sayilir gibi davranma, ret.
+    str sx = _wings_b64url_encode("{\"exp\":\"4102444800\"}");
+    str in5 = p[0] + "." + sx;
+    str s5 = _wings_b64url_encode(hex_decode(hmac_sha256(SECRET, in5)));
+    assert_eq_str(jwt_verify(in5 + "." + s5, SECRET)["error"], "token has no exp");
+}
+
+func istek(str auth) {
+    return {"headers": {"Authorization": auth}, "method": "GET", "path": "/"};
+}
+
+func run_bagimliliklar() {
+    jwt_secret(SECRET);
+    json ok = jwt_required(istek("Bearer " + GO_VALID));
+    assert_eq_int(ok["user_id"], 7);
+    assert_eq_int(jwt_required(istek(""))["_status"], 401);
+    assert_eq_int(jwt_required(istek("bearer " + GO_VALID))["_status"], 401);   // Go: "Bearer" tam
+    assert_eq_int(jwt_required(istek("Bearer  " + GO_VALID))["_status"], 401);  // 3 parca
+    assert_eq_int(jwt_required(istek("Bearer " + GO_EXPIRED))["_status"], 401);
+    assert_eq_int(jwt_required(istek("Basic Zm9vOmJhcg=="))["_status"], 401);
+    // Istege bagli: asla reddetmez, gecerliyse talepleri verir.
+    assert_eq_int(jwt_optional(istek("Bearer " + GO_VALID))["user_id"], 7);
+    json none = jwt_optional(istek("Bearer " + GO_EXPIRED));
+    assert(isObject(none), "optional nesne donmedi");
+    assert_eq_int(length(keys(none)), 0);
+    assert_eq_int(length(keys(jwt_optional(istek("")))), 0);
+    assert_eq_int(length(keys(jwt_optional({"headers": {}}))), 0);
+}
+
+func run_save_upload() {
+    str dir = "/tmp/tulpar_save_upload_" + substring(uuid_v4(), 0, 8) + "/a/b";
+    str png = hex_decode("89504E470D0A1A0A0000000D49484452") + chr(0) + "veri";
+    json r = save_upload({"filename": "../../etc/Foto.PNG", "data": png}, dir, 0);
+    assert_eq_int(r["ok"], 1);
+    str fn = r["filename"];
+    assert(endsWith(fn, ".png"), "uzanti: " + fn);
+    assert(!contains(fn, "/") && !contains(fn, ".."), "ad: " + fn);
+    json parts = split(fn, "-");
+    assert_eq_int(length(parts), 2);
+    assert_eq_int(length(split(parts[1], ".")[0]), 8);
+    assert_eq_str(r["path"], dir + "/" + fn);
+    assert_eq_str(read_file(r["path"]), png);                 // ikili guvenli
+    // Uzantisi .png ama icerik HTML: reddedilir.
+    json h = save_upload({"filename": "x.png", "data": "<html><script>1</script>"}, dir, 0);
+    assert_eq_int(h["ok"], 0);
+    assert_eq_int(h["_status"], 400);
+    assert_eq_str(h["error"], "file content is not an image");
+    // Izinsiz uzanti / uzantisiz / cift uzanti
+    assert_eq_str(save_upload({"filename": "x.html", "data": png}, dir, 0)["error"], "unsupported file type");
+    assert_eq_str(save_upload({"filename": "x", "data": png}, dir, 0)["error"], "unsupported file type");
+    assert_eq_str(save_upload({"filename": "x.png.php", "data": png}, dir, 0)["error"], "unsupported file type");
+    assert_eq_str(save_upload({"filename": "a.b/x", "data": png}, dir, 0)["error"], "unsupported file type");
+    // SVG koklanmaz (Go ile ayni) — CSP ile sunulur.
+    assert_eq_int(save_upload({"filename": "i.SVG", "data": "<svg/>"}, dir, 0)["ok"], 1);
+    // Ozel liste
+    assert_eq_int(save_upload({"filename": "i.svg", "data": "<svg/>"}, dir, [".png"])["ok"], 0);
+    assert_eq_int(save_upload(0, dir, 0)["ok"], 0);
+}
+
+func run_make_dirs() {
+    str base = "/tmp/tulpar_make_dirs_" + substring(uuid_v4(), 0, 8);
+    assert(make_dirs(base + "/x/y/z"), "olusturmadi");
+    assert(file_exists(base + "/x/y/z"), "yok");
+    assert(make_dirs(base + "/x/y/z"), "var olan dizin false");
+    write_file(base + "/dosya", "1");
+    assert(make_dirs(base + "/dosya/alt") == false, "dosyanin altina dizin");
+}
+
+test("jwt: Go (golang-jwt) tokeni dogrulanir", "run_go_tokeni_dogrulanir");
+test("jwt: imza Go ile bayt bayt ayni", "run_imza_bayt_bayt_ayni");
+test("jwt: suresi dolmus / exp yok / HS512 / yanlis anahtar / nbf / none", "run_reddedilenler");
+test("jwt: alg karisikligi saldirilari", "run_alg_karisikligi");
+test("jwt: govde kurcalama, eski bicim, bozuk talepler", "run_govde_kurcalama");
+test("jwt_required / jwt_optional bagimliliklari", "run_bagimliliklar");
+test("save_upload: uzanti, imza, uretilen ad, ikili", "run_save_upload");
+test("make_dirs", "run_make_dirs");
+test_summary();

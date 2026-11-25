@@ -768,6 +768,19 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     Kapılar: `tests/wings_istemci_ip.test.tpr`, `tests/wings_rate_limit_smoke.py`.
     Bilinen boşluk: `wings_tls` dinleyicisi `remote_addr` doldurmuyor →
     orada `client_ip` "unknown" (tek kova); dinleyici zaten 127.0.0.1'e bağlı.
+  - ✅ **Taşıma paketi (2026-11-25, hamza.tr API'si için):**
+    `max_body(bytes)` + `max_body_prefix(önek, bytes)` — aşım Content-Length'ten
+    karar verilip GÖVDE OKUNMADAN 413 (önceden bağlantı sessizce kapanıyordu;
+    `http_recv_error()` nedeni söylüyor); `security_headers()`; `cors([liste])`
+    tam eşleşmeli izinli liste (`Vary: Origin`, cached_get bu kipte önbelleğe
+    almaz — aksi hâlde ilk origin sızıyordu, ölçüldü); `static(önek, dizin,
+    başlıklar)` mount başına başlık (CSP/CORP/Cache-Control), yalnız GET/HEAD,
+    jpg/gif/webp/ico/woff2/pdf/wasm MIME; `save_upload(dosya, dizin, uzantılar)`
+    (uzantı beyaz listesi + `detect_content_type` imzası + üretilen ad) ve
+    `make_dirs`; standart RFC 7519 `jwt_sign`/`jwt_verify` (golang-jwt ile
+    bayt bayt aynı; alg HS256'ya sabit, exp zorunlu, nbf) + `jwt_required` /
+    `jwt_optional` bağımlılıkları. Kapılar: `tests/wings_tasima_smoke.py`,
+    `tests/wings_jwt_standart.test.tpr`.
   - ✅ **JWT guard:** `jwt_guard(secret)` — `wings_jwt` paketiyle birebir
     wire-interop (HS256, base64url segmentler, imza=base64url(hex MAC));
     doğrulama `_wings_jwt_verify` (çifte-HMAC imza karşılaştırma + exp).

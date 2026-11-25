@@ -29,8 +29,12 @@
 #include <string>
 #include <unordered_map>
 
+#include <sys/stat.h>
+#include <cerrno>
 #if !defined(_WIN32)
 #include <unistd.h>
+#else
+#include <direct.h>
 #endif
 
 extern "C" {
@@ -810,6 +814,31 @@ VMValue aot_detect_content_type_ptr(VMValue *v) {
 }
 
 // hex_decode("48690a") -> "Hi\n" (ikili guvenli). Gecersiz girdi "".
+// make_dirs(yol) -> bool: `mkdir -p` (Go os.MkdirAll). Var olan dizin true;
+// yolun bir parcasi dosyaysa false. Izin 0755 (umask uygulanir).
+VMValue aot_make_dirs_ptr(VMValue *pv) {
+  std::string p = as_text(pv);
+  if (p.empty()) return VM_BOOL(0);
+  for (size_t i = 1; i <= p.size(); i++) {
+    if (i == p.size() || p[i] == '/' || p[i] == '\\') {
+      std::string part = p.substr(0, i);
+      if (part.empty() || part == "." || part == "..") continue;
+      struct stat st;
+      if (stat(part.c_str(), &st) == 0) {
+        if (!(st.st_mode & S_IFDIR)) return VM_BOOL(0);
+        continue;
+      }
+#if defined(_WIN32)
+      int rc = _mkdir(part.c_str());
+#else
+      int rc = mkdir(part.c_str(), 0755);
+#endif
+      if (rc != 0 && errno != EEXIST) return VM_BOOL(0);
+    }
+  }
+  return VM_BOOL(1);
+}
+
 VMValue aot_hex_decode_ptr(VMValue *v) {
   std::string s = as_text(v);
   if (s.size() % 2 != 0) return empty_str();
