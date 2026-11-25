@@ -1,0 +1,43 @@
+# Wings sunucusu (HTTPS istemcisi + SMTP + SQLite) icin alpine imaji.
+#
+# NEDEN DERLEYICI DE ALPINE'DE: AOT ikilisi libc'ye dinamik bagli. Glibc'li
+# bir makinede derlenen ikili alpine'de (musl) acilmaz; glibc'yi statik
+# baglamak ise getaddrinfo'yu (NSS) bozar — smtp.gmail.com gibi adlar
+# cozulmez. Dogru yol: derleyiciyi musl uzerinde kurup uygulamayi orada
+# AOT derlemek. Sonuc ikili yalniz musl + libssl + libcrypto'ya bagli.
+#
+# Olculdu 2026-11-25 (alpine 3.24, LLVM 22): imaj 23,4 MB; konteyner icinden
+# HTTPS 200, smtp.gmail.com:465 TLS el sikismasi + sertifika dogrulamasi,
+# self-signed.badssl.com REDDEDILDI, bcrypt dogru; graceful_shutdown ile
+# `docker stop` 0,10 sn, cikis 0. (graceful_shutdown cagrilmazsa PID 1
+# SIGTERM'i yok sayar, docker 10 sn bekleyip SIGKILL atar — ya cagir ya da
+# tini kullan.) CI'da degil (derleme ~10 dk); elle dogrulama.
+#
+# Kullanim (depo kokunden, uygulama app.tpr):
+#   docker build -f examples/docker/Dockerfile.alpine --build-arg APP=app.tpr -t uygulama .
+
+FROM alpine:3.24 AS build
+# llvm-gtest / llvm-test-utils: alpine'in LLVMExports.cmake'i
+# libLLVMTestingAnnotations.a'yi listeliyor ve o dosya llvm-gtest'te;
+# yoksa find_package(LLVM) "file does not exist" ile duser.
+RUN apk add --no-cache build-base cmake ninja clang llvm-dev llvm-static \
+        llvm-test-utils llvm-gtest openssl-dev openssl-libs-static \
+        zlib-dev zlib-static zstd-dev zstd-static libxml2-dev linux-headers python3
+COPY . /src
+# Yalniz derleyici + cekirdek runtime: tulpar_tame (raylib) X11 basliklari
+# ister ve sunucu imajinda gereksiz.
+RUN cmake -S /src -B /b -G Ninja -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build /b -j"$(nproc)" --target tulpar tulpar_runtime \
+ && cp /b/tulpar /b/libtulpar_runtime.a /usr/local/bin/
+ARG APP=app.tpr
+RUN cd /src && tulpar build "$APP" /app-bin && ldd /app-bin
+
+FROM alpine:3.24
+RUN apk add --no-cache libssl3 libcrypto3 ca-certificates tzdata \
+ && adduser -D -H -u 10001 app && mkdir -p /app/data /app/uploads && chown -R app /app
+COPY --from=build /app-bin /app/server
+USER app
+WORKDIR /app
+ENV PORT=8080 TULPAR_HTTP_QUIET=1
+EXPOSE 8080
+CMD ["/app/server"]

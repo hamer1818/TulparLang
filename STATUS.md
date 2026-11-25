@@ -788,6 +788,11 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     gibi öldürür. `listen_evented`/`listen_async`/`wings_tls` kapsamda değil.
     Kapı: `tests/wings_kapanis_smoke.py` (+ set-password/backup tarifi:
     stdin'den parola, `VACUUM INTO ?`).
+  - ✅ **Alpine Docker (2026-11-25):** `examples/docker/Dockerfile.alpine` —
+    derleyici musl üzerinde kurulup uygulama orada AOT derleniyor (glibc'li
+    ikili alpine'de açılmaz; statik glibc DNS'i bozar). 21 MB imaj; konteyner
+    içinden HTTPS + SMTP TLS doğrulaması + kendinden imzalı ret ölçüldü,
+    `graceful_shutdown` ile `docker stop` 0,1 sn. CI'da değil.
   - ✅ **JWT guard:** `jwt_guard(secret)` — `wings_jwt` paketiyle birebir
     wire-interop (HS256, base64url segmentler, imza=base64url(hex MAC));
     doğrulama `_wings_jwt_verify` (çifte-HMAC imza karşılaştırma + exp).
