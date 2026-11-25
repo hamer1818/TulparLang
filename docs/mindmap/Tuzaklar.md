@@ -2497,6 +2497,37 @@ kopyayı korumaz. Önbellek kapısı (`tests/onbellek.sh`) kuralın her dalında
 (yeni kazanır / geri dönüş / geri gelir / gölgelenen silinir) iska-isabet
 bekler; anahtar tarayıcısına eski kuralı veren sabotajda kırmızı.
 
+## 7v. Test açığı SABİTLİYORDU — ve SIGPIPE ancak bir sabotajda göründü (2026-11-25)
+
+hamza.tr taşıma işinde (`TULPAR_ISLERI.md`) aynı günde dört ders:
+
+1. **Test, açığı "doğru davranış" diye kilitlemişti.** `wings_features`'ın
+   "rate limit buckets" testi farklı `X-Forwarded-For` değerinin AYRI kova
+   açmasını bekliyordu — yani istemcinin kendi yazdığı başlıkla sınırı
+   aşabilmesini. Düzeltme (`client_ip`: TCP eşi, `X-Real-IP` yalnız özel eşten)
+   bu testi kırdı. Kırılan test her zaman "düzeltmeyi geri al" demek değildir;
+   önce testin NEYİ sabitlediğini oku.
+2. **SIGPIPE hiç ele alınmıyordu.** Kapanmış sokete ikinci yazma POSIX'te süreci
+   öldürür; Wings tek `send` yaptığı için yıllarca görünmedi. SMTP kapısının
+   bir sabotaj koşusunda istemci çıkış kodu 141 ile öldü — kapının asıl
+   ölçtüğü şeyle ilgisiz bir yerden. `tulpar_net_ignore_sigpipe()` her
+   soket/TLS açılışında; ağsız programlarda `| head` davranışı aynı.
+   Kapı: `tests/sigpipe_kapisi.sh`.
+3. **Eksik json anahtarı `typeof` ile `int` okunur.** `typeof(claims["exp"])`
+   yoksa `"int"` (değer 0) — "exp zorunlu" denetimi "süresi dolmuş" diye
+   reddediyordu: doğru sonuç, yanlış neden; bir sonraki değişiklikte yanlış
+   sonuca döner. Varlık için `_wings_has_key`.
+4. **Paylaşılan diziyi C'den okumak onu DEĞİŞTİRİR.** `arr_items()` kutusuz
+   depoyu kutuya açıyor (`arr_debox`) — `listen_pool`'un N işçisinin aynı
+   anda okuduğu bir yapılandırma dizisini runtime'a geçirmek yarış. Gövde
+   sınırı tablosu bu yüzden değişmez bir DİZGİ (`"1048576;/api/upload=…"`).
+
+Ayrıca: istek başına başlık (CORS izinli liste) + `cached_get`'in sabitlenmiş
+baytları = ilk istekçinin origin'i herkese gider; sabotajla ölçüldü, liste
+kipinde önbellek kapalı. Ve SMTP'de base64 gövde nokta doldurmayı hiç
+sınamıyordu (gövdede `.` ile başlayan satır olmuyor) — sabotaj yeşil kaldı,
+ham ileti senaryosu eklendi.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 
