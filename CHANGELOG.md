@@ -13,6 +13,28 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — async görev checkpoint sınırında serbest belleği okuyordu; `thread_create("ad", x)` hiç çalışmıyordu
+
+- `arena_save` içinde başlatılıp `arena_drop`'tan **sonra** çalışan async görevin json/dizgi argümanı,
+  ve checkpoint içinde bitip dışarıda beklenen görevin sonucu, serbest bırakılmış belleği okuyordu —
+  çökme yok, **sessizce yanlış değer** (ölçüldü: `girdi["v"] * 2` → `0`). Sebep: görev argümanları ve
+  promise değeri yalnız `arc_retain` ile tutuluyordu; geri sarma refcount'a bakmıyor. Şimdi ikisi de
+  yazma bariyerinin kuralıyla kalıcıya kopyalanıyor (yalnız geçiciyse; checkpoint yokken maliyet yok).
+  **Davranış notu:** checkpoint içinde async'e verilen json kopya olarak girer — görevin ondaki
+  değişikliği çağırana görünmez (thread_create ile aynı).
+- `thread_create("isci", x)` — LSP imzasının önerdiği yazım — boş işaretçiyle derleniyordu: thread hiçbir
+  şey çalıştırmadan bitiyor, `thread_join` `null` dönüyordu. Ad dizgi olarak da çözülüyor; çözülemeyen ad
+  (ya da değişkende tutulan fonksiyon) artık derleme hatası.
+
+### Eklendi — altın çıktı ve -O0/-O3 kapısı, sarkan işaretçi kapısı, `TULPAR_AOT_OPT`, `TULPAR_ARENA_ZEHIR`
+
+- `tests/altin_cikti.py`: örneklerin stdout'u `tests/altin/` ile **iki optimizasyon seviyesinde**
+  karşılaştırılıyor, her regresyon paketi -O0'da da aynı özeti vermeli (önceden yalnız çıkış kodu).
+- `TULPAR_AOT_OPT=0|1|2|3` (varsayılan 3) optimizasyon seviyesini seçer.
+- `TULPAR_ARENA_ZEHIR=1` geri sarılan arenayı 0xDB ile doldurur ve bölge kaplarını karantinaya alır:
+  drop'tan sonra okunan geçici değer (Kural 2.1) ilk okumada bozuk görünür. `tests/sarkan_isaretci.sh`
+  bunu bilinen desenlerde, güvenli desenlerde ve bütün paketlerde ölçer.
+
 ### Değişti — döngüde üretilen kapanışlar iterasyon başına bağlama alır (JS `let`; RFC C1, davranış değişikliği)
 
 - **Eskiden** döngüdeki bütün kapanışlar tek yuvayı paylaşıyor ve son değeri görüyordu:

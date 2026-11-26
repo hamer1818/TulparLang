@@ -1,0 +1,5 @@
+# Altin ciktida sure basan satirlari maskeler. SEKME ayrimli: ad, regex, yerine.
+15_feature_test	elapsed: [0-9]+ ms	elapsed: N ms
+15_feature_test	clock_ms\(\): [0-9.]+	clock_ms(): N
+35_gather	elapsed ~ [0-9]+ms	elapsed ~ Nms
+37_async_http	\{"served":[01]\} \+ \{"served":[01]\}	{"served":?} + {"served":?}

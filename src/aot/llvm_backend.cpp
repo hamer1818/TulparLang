@@ -12751,8 +12751,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // would segfault on first dispatch.
     if (strcmp(bi_name, "thread_create") == 0 && node->argument_count >= 2) {
       LLVMValueRef func_ptr = nullptr;
-      if (node->arguments[0]->type == AST_IDENTIFIER) {
-        const char *raw = node->arguments[0]->name;
+      // Ad DIZGI olarak da yazilabilir — LSP imzasi `func_name: str` diyor.
+      // 2026-11-26'ya kadar `thread_create("isci", x)` bos isaretciyle
+      // derleniyordu: thread hicbir sey calistirmadan bitiyor, join `null`
+      // donuyordu — tani yok (sarkan_isaretci kapisi yazilirken bulundu).
+      const char *ad_dizgi =
+          (node->arguments[0]->type == AST_STRING_LITERAL)
+              ? node->arguments[0]->value.string_value : nullptr;
+      if (node->arguments[0]->type == AST_IDENTIFIER || ad_dizgi) {
+        const char *raw = ad_dizgi ? ad_dizgi : node->arguments[0]->name;
         char prefixed[256];
         snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
         LLVMValueRef func = LLVMGetNamedFunction(backend->module, prefixed);
@@ -12777,7 +12784,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           // yani BU sarmalayicidan ONCE yapiliyor — tek marshaling noktasi
           // korunuyor (iki yol = #0 riski).
           LLVMValueRef bare = LLVMGetNamedFunction(backend->module, raw);
-          if (bare && node->arguments[0]->type == AST_IDENTIFIER) {
+          if (bare) {
             char wname[300];
             snprintf(wname, sizeof(wname), "tw_%s", raw);
             LLVMValueRef w = LLVMGetNamedFunction(backend->module, wname);
@@ -12836,6 +12843,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           }
         }
         if (func) func_ptr = func;
+        if (!func && !backend->had_error) {
+          fprintf(stderr, tulpar::i18n::tr_en(
+              "Hata: thread_create(): '%s' adinda bir fonksiyon yok\n",
+              "Error: thread_create(): no function named '%s'\n"), raw);
+          backend->had_error = 1;
+        }
+      } else {
+        // Degiskende tutulan fonksiyon referansi / ifade: ad derleme
+        // zamaninda bilinmiyor. Eskiden bos isaretci -> sessiz no-op.
+        fprintf(stderr, "%s", tulpar::i18n::tr_en(
+            "Hata: thread_create() ilk argumani fonksiyon adi olmali "
+            "(`thread_create(isci, x)` ya da `thread_create(\"isci\", x)`)\n",
+            "Error: thread_create() first argument must name a function "
+            "(`thread_create(worker, x)` or `thread_create(\"worker\", x)`)\n"));
+        backend->had_error = 1;
       }
       if (!func_ptr) {
         func_ptr = LLVMConstPointerNull(backend->ptr_type);
@@ -20315,7 +20337,20 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   // fib/struct workloads materially closer to gcc -O2.
   // Debug builds keep the codegen IR 1:1 (verifier-only) so the debugger's
   // line mapping survives; inlining/vectorization would shred it.
-  if (backend->emit_debug_info) {
+  // TULPAR_AOT_OPT=0|1|2|3 (2026-11-26): optimizasyon seviyesini secer.
+  // Varsayilan 3. Varlik sebebi ALTIN CIKTI kapisi (tests/altin_cikti.sh):
+  // ayni program -O0 ve -O3'te ayni ciktiyi vermeli — fark, optimizasyona
+  // bagli tanimsiz davranisin (sarkan isaretci, baslatilmamis yuva, yanlis
+  // aliasing) belirtisi. 0 = --debug gibi yalniz dogrulayici; 1/2 merdivenin
+  // o basamagindan baslar. Derleme onbellegi bu degiskeni anahtara katar
+  // (TULPAR_* hepsi katilir), yani -O0 ikilisi -O3'unkiyle karismaz.
+  int opt_seviye = 3;
+  if (const char *ov = getenv("TULPAR_AOT_OPT")) {
+    if (ov[0] >= '0' && ov[0] <= '3' && ov[1] == '\0') opt_seviye = ov[0] - '0';
+    else fprintf(stderr, "%s", tulpar::i18n::tr_for_en(
+             "[AOT] Warning: TULPAR_AOT_OPT must be 0, 1, 2 or 3; using 3.\n"));
+  }
+  if (backend->emit_debug_info || opt_seviye == 0) {
     LLVMErrorRef error =
         LLVMRunPasses(backend->module, "verify", nullptr, options);
     if (error) {
@@ -20361,7 +20396,9 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMTargetMachineRef opt_tm = make_opt_machine(backend);
   LLVMModuleRef chosen = nullptr;
   int chosen_idx = -1;
-  int ai = 0;
+  // O2 -> merdivenin O2 basamagi, O1 -> guvenli O1 basamagi.
+  int ai = (opt_seviye == 2) ? 1 : (opt_seviye == 1) ? 3 : 0;
+  const int ai_bas = ai;
   while (ai < 5 && !chosen) {
     LLVMPassBuilderOptionsRef opt = att_safe[ai] ? safe_options : options;
     LLVMModuleRef trial = LLVMCloneModule(codegen_ir);
@@ -20436,7 +20473,7 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMDisposePassBuilderOptions(safe_options);
 
   if (chosen) {
-    if (chosen_idx > 0) {
+    if (chosen_idx > ai_bas) {
       // Muhafazakâr basamak uzun bir boru hattı dizesi; kullanıcıya adını
       // dökmek yerine ne olduğunu söylüyoruz.
       const char *nm = (chosen_idx == 4) ? "muhafazakar (InstCombine'siz)"

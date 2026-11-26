@@ -67,6 +67,8 @@ Wings desenleri (`lib/wings.tpr`):
 
 **Bilinen delikler** (kapatılmadı, belgelendi — Bellek Sözleşmesi v0 RFC taslağı, 2026-11-25):
 - Üzerine yazılan **eski kalıcı değer serbest bırakılamaz** (takma adlar izlenmiyor: `json x = g; g = yeni; print(x);`) → kare/istek başına yeniden atanan hesaplanmış global sızar. Kural: sıcak döngüde global'i yeniden atama, yerinde değiştir.
+- **Async sınırı kapandı (2026-11-26):** checkpoint içinde başlatılan async görevin argümanları ve promise'in değeri artık `aot_persist_escape`'ten geçiyor (yalnız geçiciyse kopya). Önceden yalnız `arc_retain` vardı — geri sarma refcount'a bakmıyor, drop'tan sonra çalışan görev serbest belleği okuyordu (sessizce `0`). Bunun sonucu: checkpoint içinde async'e verilen json **kopya** olarak girer; görevin onda yaptığı değişiklik çağırana görünmez (thread_create ile aynı kural). Kapı: `tests/sarkan_isaretci.sh`, Tuzaklar 7w.
+- **Sarkan okumayı görünür kılmak:** `TULPAR_ARENA_ZEHIR=1` geri sarılan arenayı 0xDB ile doldurur, bölge kaplarını karantinaya alır (bellek geri dönmez — yalnız test). Bir programın Kural 2.1'i çiğneyip çiğnemediğini anlamanın yolu bu; ASan göremez.
 - Checkpoint'i **aşan yerel** değişkene yazılan geçici değer bariyerden geçmez (`acc = acc + x`) → geri sarmadan sonra sarkan pointer. Kural: böyle bir yerelde geçici değer tutma ya da `persist()` ile kopyala. Bu yüzden döngülere otomatik save/drop eklemek kaçış analizi olmadan güvenli değil.
 
 ## 🧵 Çok-thread güvenliği (pool/async invariant'ları, 2026-06-18 audit)

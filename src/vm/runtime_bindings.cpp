@@ -1204,10 +1204,75 @@ VMValue aot_arena_save(void) {
   return r; // ulasilmaz
 }
 
+// ZEHIR KIPI — TULPAR_ARENA_ZEHIR=1 (2026-11-26, sarkan isaretci kapisi).
+//
+// Geri sarilan arena bolgesi uzerine YAZILANA KADAR dogru okunur: checkpoint
+// icinde kurulup drop'tan sonra okunan gecici deger (Kural 2.1) cogu kosuda
+// "calisir" ve hata ancak bellek yeniden kullanilinca, baska bir yerde,
+// sessizce yanlis veri olarak cikar. ASan bunu goremez — runtime arsivi
+// enstrumante degil ve arena malloc degil. Bu kip geri sarmada olu baytlari
+// 0xDB ile doldurur ve bolgedeki malloc kaplarini serbest birakmak yerine
+// KARANTINAYA alir (icerigi 0xDB, bellek geri verilmez — adresi baska bir
+// nesneye gecmesin). Boylece olu bir degere her erisim ILK okumada bozuk
+// gorunur. Bellek kipte geri donmez; yalniz test icin.
+//
+// Kapi: tests/sarkan_isaretci.sh — (a) bilinen sarkan desen normal kipte
+// "dogru" basar, zehirde basamaz (pozitif kontrol); (b) desteklenen guvenli
+// desenler iki kipte ayni; (c) butun regresyon paketleri zehirde gecer.
+// Kapaliyken maliyet: geri sarma basina bir dallanma (sicak yolda degil).
+static int g_arena_zehir = -1;
+static inline bool arena_zehir_acik(void) {
+  if (__builtin_expect(g_arena_zehir < 0, 0)) {
+    const char *z = getenv("TULPAR_ARENA_ZEHIR");
+    g_arena_zehir = (z && *z && *z != '0') ? 1 : 0;
+  }
+  return g_arena_zehir == 1;
+}
+static const unsigned char ARENA_ZEHIR_BAYT = 0xDB;
+
+static void region_zehirle_one(Obj *o) {
+  if (!o || o->arena_allocated) return;
+  size_t boy = sizeof(Obj);
+  if (o->type == OBJ_OBJECT) {
+    ObjObject *x = (ObjObject *)o;
+    if (x->keys) memset(x->keys, ARENA_ZEHIR_BAYT, sizeof(ObjString *) * (size_t)x->capacity);
+    if (x->values) memset(x->values, ARENA_ZEHIR_BAYT, sizeof(VMValue) * (size_t)x->capacity);
+    obj_index_release(x);
+    boy = sizeof(ObjObject);
+  } else if (o->type == OBJ_ARRAY) {
+    ObjArray *a = (ObjArray *)o;
+    if (a->items_) memset(a->items_, ARENA_ZEHIR_BAYT, sizeof(VMValue) * (size_t)a->capacity);
+    if (a->idata)
+      memset(a->idata, ARENA_ZEHIR_BAYT, (size_t)a->capacity * (a->elem_bits == 32 ? 4u : 8u));
+    boy = sizeof(ObjArray);
+  } else if (o->type == OBJ_STRUCT_ARRAY) {
+    boy = sizeof(ObjStructArray);
+  }
+  memset((char *)o, ARENA_ZEHIR_BAYT, boy);
+}
+
 // Roll the arena (and the malloc-object region) back to checkpoint `idx`.
 // Shared by arena_restore (keeps the checkpoint) and arena_drop (releases it).
 static void aot_arena_rewind_to(int idx) {
   AOTArenaCheckpoint *cp = &g_arena_checkpoints[idx];
+  if (arena_zehir_acik()) {
+    if (cp->block) {
+      for (AOTArenaBlock *b = cp->block->next; b; b = b->next)
+        memset(b->memory, ARENA_ZEHIR_BAYT, b->used);
+      if (cp->block->used > cp->used)
+        memset(cp->block->memory + cp->used, ARENA_ZEHIR_BAYT,
+               cp->block->used - cp->used);
+    }
+    for (size_t i = cp->region_mark; i < g_region.size(); i++)
+      if (g_region_set.erase(g_region[i])) region_zehirle_one(g_region[i]);
+    if (cp->region_mark < g_region.size()) g_region.resize(cp->region_mark);
+    if (cp->block) {
+      for (AOTArenaBlock *b = cp->block->next; b; b = b->next) b->used = 0;
+      cp->block->used = cp->used;
+      g_aot_string_arena->current = cp->block;
+    }
+    return;
+  }
   if (cp->block) {
     // Zero out every block AFTER the checkpoint's block: keep the
     // memory mapping but reset `used` so the next alloc reuses it.

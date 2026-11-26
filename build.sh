@@ -485,6 +485,17 @@ if [ "$ACTION" = "suites" ]; then
         # sozlesmenin "hayatta kalir" yarisini sinaniyordu; "serbest
         # birakmaz" yarisi hic sinanmamisti.
         kapi_seri "S3 arena sozlesmesi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/arena_contract_smoke.py
+        # ALTIN CIKTI + -O0/-O3 (2026-11-26). `test` yalniz cikis koduna
+        # bakiyor; bu kapi orneklerin stdout'unu tests/altin/ ile ve her
+        # paketi iki optimizasyon seviyesinde karsilastirir. Fark = optimizasyona
+        # bagli tanimsiz davranis. Kontroller: -O0/-O3 ikilileri farkli (K1),
+        # bozuk altin kirmizi (K2). Yeni ornek: `tests/altin_cikti.py --yenile <ad>`.
+        kapi_seri "Altin cikti / -O0-O3 kapisi basarisiz!" python3 tests/altin_cikti.py
+        # SARKAN ISARETCI (2026-11-26): TULPAR_ARENA_ZEHIR=1 geri sarilan
+        # arenayi 0xDB ile doldurur; bilinen sarkan desenler yakalanmali,
+        # guvenli desenler (async/thread/@frame/bariyer) ve butun paketler
+        # zehirde temiz kalmali.
+        kapi_seri "Sarkan isaretci kapisi basarisiz!" bash tests/sarkan_isaretci.sh
         # YIGIN SIZINTISI (R11). Dongu govdesine dusen bir `alloca`
         # yinelemede yigin harciyor ve program YETERINCE UZUN dondugunde
         # SIGSEGV veriyor — derleme sessiz, suitler yesil. `AST_ARRAY_LITERAL`

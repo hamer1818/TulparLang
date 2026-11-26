@@ -35,6 +35,16 @@ reddedilmeli() {
     fi
 }
 
+# thread_create'in ilk argumani cozulemeyen bir ad: eskiden bos isaretciyle
+# derlenip thread'i sessizce bos calistiriyordu (2026-11-26).
+reddedilmeli thread_bilinmeyen_ad "thread_create(): no function named 'yok'" \
+'var t = thread_create("yok", 1);
+print(thread_join(t));'
+reddedilmeli thread_degisken_ad "thread_create(): no function named 'f'" \
+'func w(x) { return x; }
+var f = w;
+print(thread_join(thread_create(f, 1)));'
+
 reddedilmeli yerel_arguman "ilk arguman ust duzey bir \`int\` global olmali" \
 'func f(): int { int k = 0; return atomic_add(k, 1); }
 print(f());'

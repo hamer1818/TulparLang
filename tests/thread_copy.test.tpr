@@ -108,6 +108,14 @@ func run_detach_sonrasi_join_hatadir() {
     assert(firladi, "detach edilmis handle join edilememeli");
 }
 
+// Ad DIZGI olarak (LSP imzasi `func_name: str`). 2026-11-26'ya kadar bos
+// isaretciyle derleniyordu: thread hic calismiyor, join null donuyordu.
+func run_ad_dizgiyle() {
+    int t = thread_create("_kare", 9);
+    var r = thread_join(t);
+    assert_eq_int(r, 81);
+}
+
 print("=== thread kopya sozlesmesi ===");
 test("join iscinin donusunu tasir",     "run_join_sonuc_tasir");
 test("arguman derin kopyalanir",        "run_arguman_derin_kopyalanir");
@@ -116,4 +124,5 @@ test("muteks kopya sonrasi bozulmadi",  "run_muteks_kopya_sonrasi");
 test("tam tipli isci dogru marshal",    "run_tipli_isci");
 test("ikinci join hatadir",            "run_cift_join_hatadir");
 test("detach sonrasi join hatadir",    "run_detach_sonrasi_join_hatadir");
+test("isci adi dizgiyle verilebilir",  "run_ad_dizgiyle");
 test_summary();

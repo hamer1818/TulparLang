@@ -1,0 +1,3 @@
+# Altin cikti kapsami disindaki ornekler: ad + gerekce.
+# `tests/altin_cikti.py --yenile` iki -O3 kosusunu karsilastirip
+# kendisi yazar; gerekce elle iyilestirilebilir (korunur).

@@ -27,6 +27,30 @@ sessiz no-op olarak aylarca yaşaması bu körlükten.
 > ```
 > → [[Tuzaklar]] §3c
 
+### Çıktı ve tanımsız davranış ağı (2026-11-26)
+`build.sh test` yalnız **çıkış koduna** bakar — `print(2+2)` "5" yazsa da yeşil. İki
+kapı bu boşluğu kapatır:
+
+- **`tests/altin_cikti.py`** — uygun her örneğin (grafik ve `listen()` bekleyenler
+  dışında; liste build.sh'ten türetilir, elle tutulmaz) stdout + çıkış kodu
+  `tests/altin/<ad>.out` ile, **`TULPAR_AOT_OPT=0` ve `=3`'te** karşılaştırılır; her
+  `tests/*.test.tpr` paketi de iki seviyede aynı `Tests:` özetini vermeli. Fark =
+  optimizasyona bağlı tanımsız davranış. Süre basan satırlar
+  `tests/altin/NORMALLESTIR.txt` ile maskelenir (örnek dışarıda kalmaz); gerçekten
+  kararsız örnek `KARARSIZ.txt`'e gerekçeyle. Yeni örnek: `--yenile <ad>`, sonra diff'i
+  oku. Kontroller: -O0/-O3 ikilileri bayt bayt farklı (değişken okunuyor mu), bozuk
+  altın kapıyı kırmızı yapıyor (uçtan uca). İlk koşuda bulduğu iki şey kapının
+  kendisindeydi: `\r\n` (SSE/WS çıktısı) Python metin kipinde `\n`'e dönüyordu →
+  dosyalar `newline=""`; sunucunun accept sırası yarış → maske.
+- **`tests/sarkan_isaretci.sh`** — `TULPAR_ARENA_ZEHIR=1` geri sarılan arenayı 0xDB
+  ile doldurur, bölge kaplarını karantinaya alır. ASan bunu göremez (runtime arşivi
+  enstrümante değil, arena malloc değil). Bilinen sarkan desen zehirde yakalanmalı,
+  güvenli desenler iki kipte aynı, bütün paketler zehirde temiz (bilerek sarkan tek
+  test adıyla istisna). İlk koşuda **üç gerçek hata** buldu: async görevin argümanı ve
+  sonucu yalnız `arc_retain` ile tutuluyordu — geri sarma refcount'a bakmıyor, normal
+  kipte sessizce `0`; `thread_create("ad", x)` boş işaretçiyle derlenip thread'i hiç
+  çalıştırmıyordu. → [[Memory Model]], [[Tuzaklar]]
+
 **Denetimler** paket döngüsünden SONRA koşuyor (gömülü stdlib tazeliği ise ÖNCE):
 builtin · kama mesh · dist arşiv · LSP · DAP · fmt · doc · pkg · AOT dumanı · Android
 derleme dumanı · ayrılmış kelime ve parametre adı tanılamaları · `packages/*`.

@@ -51,6 +51,7 @@ ONBELLEK_CALISMA_ZAMANI_ONEK("TULPAR_ENGINE_", "motor koprusu (tulpar-engine), p
 ONBELLEK_CALISMA_ZAMANI_ONEK("TULPAR_MOTOR_", "motor editoru (tulpar-engine): hangi tulpar/eklenti kosacak")
 ONBELLEK_CALISMA_ZAMANI_SONEK("_TANI", "runtime tani sayaclari (src/vm: CALL/OBJ/SPLIT_TANI)")
 ONBELLEK_CALISMA_ZAMANI_SONEK("_ZORUNLU", "test duzenegi: atlama yerine dusme (DIST/TLS/DAP_ZORUNLU)")
+ONBELLEK_CALISMA_ZAMANI_AD("TULPAR_ARENA_ZEHIR", "runtime: geri sarilan arenayi 0xDB ile doldurur (sarkan isaretci kapisi)")
 ONBELLEK_CALISMA_ZAMANI_AD("TULPAR_TEST_JOBS", "build.sh: paralel isci sayisi")
 ONBELLEK_CALISMA_ZAMANI_AD("TULPAR_COMPILE_TIMEOUT", "build.sh: derleme zaman siniri")
 ONBELLEK_CALISMA_ZAMANI_AD("TULPAR_RUN_TIMEOUT", "build.sh: kosu zaman siniri")

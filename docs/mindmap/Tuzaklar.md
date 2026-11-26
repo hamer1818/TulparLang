@@ -2528,6 +2528,23 @@ kipinde önbellek kapalı. Ve SMTP'de base64 gövde nokta doldurmayı hiç
 sınamıyordu (gövdede `.` ile başlayan satır olmuyor) — sabotaj yeşil kaldı,
 ham ileti senaryosu eklendi.
 
+## 7w. ARC sayacı arenayı DURDURMAZ — "retain ettim" ≠ "yaşıyor" (2026-11-26)
+`tulpar_async.cpp` görevin argümanlarını ve promise değerini `arc_retain_vmvalue`
+ile tutuyordu ve bu "görev bitene kadar yaşar" gibi okunuyordu. Değil: AOT yolu
+`arc_release` hiç çağırmıyor, checkpoint geri sarması (`aot_arena_rewind_to`) sayaca
+**hiç bakmıyor** — bölge kabı `free`, arena dizgisi geri sarılır. Checkpoint içinde
+başlatılıp `arena_drop`'tan sonra çalışan (ya da bitip sonra beklenen) görev serbest
+belleği okudu: normal kipte **sessizce `0`**, çökme yok. Testler yeşildi çünkü hiçbiri
+async'i bir checkpoint sınırından geçirmiyordu. Bulan: `TULPAR_ARENA_ZEHIR=1` ile
+`tests/sarkan_isaretci.sh`. Düzeltme: görev kurmak ve promise'i yerine getirmek
+checkpoint'ten **kaçış** — yazma bariyeriyle aynı `aot_persist_escape` (yalnız geçiciyse
+kopya; checkpoint yokken no-op).
+
+**Ders:** bir yaşam süresi mekanizmasının (refcount) başka bir mekanizmanın (arena
+geri sarma) serbest bırakmasını engellediğini varsayma — ikisinin kesiştiği yeri ölç.
+Sarkan okuma geri sarılmış bellekte üzerine yazılana kadar **doğru** döner; görünür
+kılmak için belleği zehirle.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 
