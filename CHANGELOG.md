@@ -13,6 +13,23 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — `arena_save` yığın doluyken sessiz -1 yerine yakalanabilir hata (RFC C3, davranış değişikliği)
+
+- **Açık:** 32'lik kontrol noktası yığını doluyken `arena_save` sessizce **-1** dönüyordu; ardındaki
+  `arena_restore(-1)` / `arena_drop(-1)` hiçbir şey yapmıyordu. Drop'suz tekrarlanan bir `arena_save`
+  (örneğin döngüde) 33. iterasyondan sonra geri sarmayı durduruyor, bellek sınırsız birikiyor, program
+  ise doğru çalışmaya devam ediyordu (P14: 200k'da 23 MB, 1M'de 132 MB).
+- **Şimdi:** 33. kayıt `@frame` gibi yakalanabilir bir hata atar (`arena_save: arena kontrol noktasi
+  yigini dolu (32) …`); yakalanmazsa süreç `Uncaught Exception` ile çıkar. Dengeli desenler (save + drop,
+  tek save + çok restore — wings, tame, arcade) etkilenmez. `@frame` kendi, fonksiyon adlı hatasını
+  korur (şeker iç ad `__frame_arena_save`'i çağırıyor).
+- **Değişen davranış:** drop'suz `arena_save` biriktiren kod eskiden sessizce sızdırıyordu, artık durur.
+- Kapı `tests/arena_yigin_dolu.test.tpr` (4 test); eski davranış geri getirilince 2'si kırmızı.
+- **S3 arena sözleşmesi kapısı düzeltildi** (`tests/arena_contract_smoke.py`): "`arena_restore` serbest
+  bırakmaz" diyordu; ölçüm doğruydu ama kolu her iterasyonda `arena_save` çağırıyordu — sızan drop'suz
+  save'di. Yeni kollar: tek save + her iterasyonda restore **düz** (2 832 KB, drop kolu 2 828 KB, kontrol
+  44 MB); drop'suz tekrar (`arena_dropsuz_tekrar.tpr`, eski `arena_restore.tpr`) hata + çıkış 1.
+
 ### Düzeltildi — eklenti sınırı: `throw` C yığın çerçevelerinin üzerinden atlamıyor (RFC C2)
 
 - **Açık:** C'nin geri çağırdığı Tulpar fonksiyonu (`tulpar_ext_call_f64` / `tulpar_ext_eval_f64`) `throw`

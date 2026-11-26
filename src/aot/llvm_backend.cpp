@@ -11722,6 +11722,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_save,
                                     nullptr, 0, "arena_save_res");
     }
+    // @frame sekerinin ic adi: yigin doluyken -1 doner (atmaz), seker kendi
+    // fonksiyon adli hatasini atiyor. Kullanici yuzu degil.
+    if (node->name && strcmp(bi_name, "__frame_arena_save") == 0) {
+      if (!backend->func_aot_arena_save_try)
+        backend->func_aot_arena_save_try = LLVMAddFunction(
+            backend->module, "aot_arena_save_try",
+            llvm_make_vmvalue_func_type(backend, nullptr, 0, 0));
+      return llvm_call_vmvalue_func(backend, backend->func_aot_arena_save_try,
+                                    nullptr, 0, "frame_save_res");
+    }
     if (node->name && strcmp(bi_name, "now_iso8601") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_now_iso8601,
                                     nullptr, 0, "now_iso");

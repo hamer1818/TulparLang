@@ -45,15 +45,15 @@ kareyi aşan yereller): [[Tuzaklar#7f. Bariyer TEK yolda yazılıydı — aynı 
 
 | çağrı | yığın |
 |---|---|
-| `arena_save()` | `top++` (en fazla **32**, `AOT_ARENA_CHECKPOINT_MAX`); yığın doluysa **-1** döner |
+| `arena_save()` | `top++` (en fazla **32**, `AOT_ARENA_CHECKPOINT_MAX`); yığın doluysa **yakalanabilir hata** (2026-11-26'ya dek sessizce -1) |
 | `arena_restore(wm)` | checkpoint **korunur** (`top = idx + 1`) |
 | `arena_drop(wm)` | checkpoint **kaldırılır** (`top = idx`) |
 
-Yani "restore tek başına yetmez" genel olarak doğru değil: **tek save + çok restore geçerli bir desen** (varsayılan `listen()` bunu kullanır). Yetersiz kaldığı tek durum `arena_save`'in tekrar tekrar çalışması: 33. kayıt -1 döner, `arena_restore(-1)` no-op'tur → **sınırsız sızıntı, hata yok**. [[Memory]]'deki P14 "save + restore" satırının büyümesinin gerçek sebebi bu; "restore serbest bırakmıyor" açıklaması yanlıştı.
+Yani "restore tek başına yetmez" genel olarak doğru değil: **tek save + çok restore geçerli bir desen** (varsayılan `listen()` bunu kullanır). Yetersiz kaldığı tek durum `arena_save`'in tekrar tekrar çalışması: eskiden 33. kayıt -1 dönüyor, `arena_restore(-1)` no-op'tu → **sınırsız sızıntı, hata yok**. [[Memory]]'deki P14 "save + restore" satırının büyümesinin gerçek sebebi bu; "restore serbest bırakmıyor" açıklaması yanlıştı. **2026-11-26'dan beri (RFC C3)** 33. kayıt yakalanabilir bir hata atıyor (`arena_save: arena kontrol noktasi yigini dolu (32) …`); yakalanmazsa süreç `Uncaught Exception` ile 1'le biter — sessiz sızıntı artık gürültülü. Kapı `tests/arena_yigin_dolu.test.tpr` (drop'suz tekrar, iç içe derinlik, dengeli desenler etkilenmez, `@frame` mesajı); hata geri alınınca 2 test kırmızı.
 
 Kural: tekrar çalışan her `arena_save`, `throw` dahil **her** çıkış yolunda bir `arena_drop` ile kapanmalı. `throw` aradaki checkpoint'leri geri almaz (`aot_throw`) — drop, try bloğunun **dışında** olmalı.
 
-**Tercih edilen yol: `@frame func f(...)` (K038, 2026-09-28).** Derleyici girişte `arena_save`, her `return`'de dönüş değerini kalıcılaştırıp `arena_drop`, `throw`'da kalıcılaştır + drop + yeniden fırlat yerleştirir; yığın doluysa yakalanabilir hata verir (sessiz -1 değil). Ölçüm: 20 000 çağrı, tepe RSS 733 MB → 3 MB; çağrı başına ~50 ns. Kapılar `tests/frame.test.tpr`, `frame_istisna.test.tpr`, `frame_hatalari.sh`. **Açık delik:** elle çağrılan `arena_save` yığın doluyken hâlâ sessizce -1 döndürüyor.
+**Tercih edilen yol: `@frame func f(...)` (K038, 2026-09-28).** Derleyici girişte `arena_save`, her `return`'de dönüş değerini kalıcılaştırıp `arena_drop`, `throw`'da kalıcılaştır + drop + yeniden fırlat yerleştirir; yığın doluysa yakalanabilir hata verir (sessiz -1 değil). Ölçüm: 20 000 çağrı, tepe RSS 733 MB → 3 MB; çağrı başına ~50 ns. Kapılar `tests/frame.test.tpr`, `frame_istisna.test.tpr`, `frame_hatalari.sh`. `@frame`'in şekeri iç adı `__frame_arena_save`'i çağırır (dolu yığında -1, atmaz) ki kendi hatası **fonksiyonun adını** taşısın (`@frame 'f': …`).
 
 Wings desenleri (`lib/wings.tpr`):
 

@@ -322,6 +322,7 @@ typedef struct {
   LLVMValueRef func_aot_style;            // style(s,spec)->str : ANSI styling
   LLVMValueRef func_aot_env;
   LLVMValueRef func_aot_arena_save;
+  LLVMValueRef func_aot_arena_save_try = nullptr; // @frame (__frame_arena_save)
   LLVMValueRef func_aot_arena_restore;
   LLVMValueRef func_aot_arena_drop;
   LLVMValueRef func_aot_now_iso8601;

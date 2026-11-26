@@ -39,6 +39,7 @@ INTERNAL = {
     # derleyici/çalışma zamanı iç işleri
     "main", "_request", "persist", "string_pin", "typeof",
     "arena_save", "arena_restore", "arena_drop",
+    "__frame_arena_save",  # @frame sekerinin ic adi (parser.cpp frame_desugar)
     # StringBuilder (lib tarafından sarmalanıyor)
     "StringBuilder", "sb_append", "sb_free", "sb_tostring",
     # wings/http/tls/websocket altyapısı — lib/*.tpr sarmalıyor

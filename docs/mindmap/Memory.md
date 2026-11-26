@@ -58,7 +58,9 @@ slotu bıraktığı için yığın dolmuyor ve satır düz kalıyor.
 Program doğru sonuç verir, hata çıkmaz, yalnız 33. çağrıdan sonra bellek geri
 gelmez. Tek save + çok restore (aynı handle'a) ise geçerli ve düz bir desen.
 `@frame` (K038) bunu derleyiciye bırakır ve yığın doluysa yakalanabilir hata
-verir; elle çağrılan `arena_save` hâlâ sessizce -1 döndürüyor.
+verir. 2026-11-26'dan beri (RFC C3) elle çağrılan `arena_save` de 33. kayıtta
+sessiz -1 yerine yakalanabilir hata atıyor — P14'teki "save + restore" sondası
+bugün 33. iterasyonda gürültüyle durur.
 
 ## Sunucu yolu: DÜZ, ve sebebi biliniyor
 
@@ -98,8 +100,8 @@ bugünkü sözleşme belgesiz — kullanıcının `arena_drop`'u bilmesi gerekiy
 3. ~~`arena_restore` neden kapsamıyor~~ — **cevaplandı, ikinci kez**: kapsıyor
    ve serbest bırakıyor; sızan, drop ile kapatılmayan tekrarlı `arena_save`'di
    (yukarıda). Fonksiyon kapsamı için `@frame` var (K038).
-4. **Açık:** elle çağrılan `arena_save` yığın doluyken sessiz -1 yerine
-   `@frame` gibi yakalanabilir hata versin (RFC C3).
+4. ~~Elle çağrılan `arena_save` yığın doluyken sessiz -1 yerine yakalanabilir
+   hata versin (RFC C3)~~ — **yapıldı** (2026-11-26, `tests/arena_yigin_dolu.test.tpr`).
 5. **Açık:** bellek sayacı yerleşiği (`mem_stats()`: arena kullanımı, bölgedeki
    nesne sayısı, kalıcı heap baytı, checkpoint derinliği) — sızıntı RSS
    grafiğinden değil programdan görünsün (RFC C4).

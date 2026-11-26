@@ -1037,8 +1037,10 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
 // 32'lik kontrol noktasi yigini sizar ve 32 kareden sonra arena_save -1
 // doner (geri sarma durur, bellek birikir). `@frame` ayristiricida SEKER:
 //
-//   var __fcp = arena_save();
-//   if (__fcp < 0) { throw "@frame: ... yigini dolu"; }       // sessiz degil
+//   var __fcp = __frame_arena_save();   // = arena_save, ama dolu yiginda -1
+//   if (__fcp < 0) { throw "@frame 'f': ... yigini dolu"; }   // sessiz degil
+// (Kullanicinin arena_save'i 2026-11-26'dan beri dolu yiginda kendisi atiyor;
+// seker ic adi kullaniyor ki hata mesaji fonksiyonun adini tasisin.)
 //   try { <govde: her `return e;` -> { T __fr = persist(e);
 //                                      arena_drop(__fcp); return __fr; }> }
 //   catch (__fe) { var __fe2 = persist(__fe); arena_drop(__fcp); throw __fe2; }
@@ -1108,7 +1110,7 @@ void frame_desugar(FunctionDecl &fd) {
     frame_rewrite_returns(fd.body, fd.return_type, fd.return_custom_type);
     std::vector<std::unique_ptr<ASTNode>> st;
     st.push_back(std::make_unique<ASTNode>(
-        VariableDecl("__fcp", TYPE_UNKNOWN, frame_call("arena_save", nullptr, L), L)));
+        VariableDecl("__fcp", TYPE_UNKNOWN, frame_call("__frame_arena_save", nullptr, L), L)));
     {
         std::vector<std::unique_ptr<ASTNode>> thr;
         std::string msg = "@frame '" + fd.name +

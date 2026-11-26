@@ -1,5 +1,10 @@
-// S3 — `arena_restore` KOLU: ayni dongu, kapanis RESTORE ile.
-// Beklenti: RSS TIRMANIR — restore serbest BIRAKMAZ (M3).
+// S3 — DROP'SUZ TEKRAR KOLU: her dongude arena_save, kapanis yalniz RESTORE.
+// Restore checkpoint'i korur, yani her iterasyon yigina bir yuva ekler.
+// Eskiden 33. kayit sessizce -1 donuyor, restore(-1) no-op oluyor ve RSS
+// tirmaniyordu — bu kol "restore serbest birakmaz" diye okunmustu (M3); yanlis
+// okumaydi, sizan drop'suz tekrarlanan save'di (Memory.md). 2026-11-26'dan
+// beri (RFC C3) 33. kayit yakalanabilir hata atar: Beklenti — surec 1 ile ve
+// "kontrol noktasi yigini dolu" mesajiyla ERKEN biter.
 // N ve govde uc kolda AYNI; tek fark kapanis cagrisi (kural: farki olc).
 // ⚠ N=100000 KEYFI DEGIL: 175 000 civarinda uc kol da SIGSEGV veriyor
 // (R11 — dizi literali dongusu; `drop` kolu 11 MB RSS ile cokuyor, yani

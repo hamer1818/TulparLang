@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""S3 — arena sozlesmesi: `arena_restore` SERBEST BIRAKMAZ, `arena_drop` BIRAKIR.
+"""S3 — arena sozlesmesi (2026-11-26'da DUZELTILDI).
 
-Sozlesme (FINDINGS M2/M3):
-    arena_save/arena_restore  -> checkpoint geri sarar ama BELLEGI IADE ETMEZ
-    arena_drop                -> iade eder; dongu icinde RSS duz kalir
+Sozlesme:
+    arena_restore ve arena_drop AYNI geri sarmayi yapar (aot_arena_rewind_to);
+    fark yalniz checkpoint yiginin tepesi (restore korur, drop birakir).
+    -> drop kolu ve tek save + cok restore kolu: RSS DUZ
+    -> drop'suz TEKRARLANAN arena_save: 33. kayit yakalanabilir hata (RFC C3);
+       eskiden sessizce -1 donup sizdiriyordu
+    -> arena yonetimi yok: RSS tirmanir (kontrol)
+
+Bu kapinin ilk hali (FINDINGS M3) "restore SERBEST BIRAKMAZ" diyordu ve onu
+"restore kolu none'dan iyi degil" diye olcuyordu. Olcum dogruydu, okuma
+yanlisti: o kol her iterasyonda arena_save cagiriyordu; 33. kayit -1 donunce
+restore(-1) no-op oluyordu. Sizan restore degil, drop'suz tekrarlanan save'di.
 
 Neden fikstur (#21): cumle defterde vardi, hicbir test onu sinamiyordu.
 `arena_restore` uc suite'te GECIYOR ama hepsi "kalici deger hayatta kalir"
@@ -25,13 +34,13 @@ import os, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIX = os.path.join(ROOT, "tests", "fixtures")
-ARMS = ("idle", "drop", "restore", "none")
+ARMS = ("idle", "drop", "restore_tek", "none")
+LOUD_ARM = "dropsuz_tekrar"   # RSS'i degil, cikis kodunu + mesaji olculur
 RUNS = 3
 # Kapilar olculen degerlerden (drop 11 MB · restore 161 MB · none 143 MB,
 # 2026-09-11) DEGIL, aralarindaki BUYUKLUK FARKINDAN turetildi; makineye
 # gore RSS kayar, oran kaymaz.
-DROP_FLAT_RATIO = 4.0     # restore/drop en az bu kadar olmali
-RESTORE_NO_HELP = 0.7     # restore >= none * bu  (yani restore yardim etmiyor)
+FLAT_RATIO = 4.0          # none / (drop | restore_tek) en az bu kadar olmali
 
 RED, GREEN, RESET = "\033[0;31m", "\033[0;32m", "\033[0m"
 fails = []
@@ -46,7 +55,7 @@ def check(name, cond, detail):
 def peak_rss_kb(binary, env):
     """Cocugun VmHWM zirvesi — /proc'tan yoklanarak. VmHWM monoton, yani
     son basarili okuma zirvedir."""
-    p = subprocess.Popen([binary], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+    p = subprocess.Popen([binary], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     hi = 0
     while p.poll() is None:
         try:
@@ -58,7 +67,8 @@ def peak_rss_kb(binary, env):
         except (IOError, OSError):
             break
         time.sleep(0.005)
-    out, _ = p.communicate()
+    out, err = p.communicate()
+    peak_rss_kb.last_err = err.decode("utf-8", "replace")
     return hi, out.decode("utf-8", "replace").strip(), p.returncode
 
 
@@ -69,8 +79,8 @@ def main():
     tmp = tempfile.mkdtemp(prefix="s3_")
     env = dict(os.environ, DISPLAY="", WAYLAND_DISPLAY="")
     peak, outs, rcs = {}, {}, {}
-    print("S3 — arena sozlesmesi (restore birakmaz / drop birakir)")
-    for arm in ARMS:
+    print("S3 — arena sozlesmesi (restore = drop geri sarmasi; drop'suz tekrar gurultulu)")
+    for arm in ARMS + (LOUD_ARM,):
         src = os.path.join(FIX, "arena_%s.tpr" % arm)
         binary = os.path.join(tmp, arm)
         b = subprocess.run([os.path.join(ROOT, "tulpar"), "build", src, binary],
@@ -83,42 +93,47 @@ def main():
         peak[arm] = max(v[0] for v in vals)
         outs[arm] = vals[0][1]
         rcs[arm] = [v[2] for v in vals]
+        if arm == LOUD_ARM:
+            outs["_loud_err"] = peak_rss_kb.last_err
     print("  zirve RSS: " + "  ".join("%s=%d KB" % (a, peak[a]) for a in ARMS))
 
     base = peak["idle"]
-    grow = {a: peak[a] - base for a in ("drop", "restore", "none")}
+    flat = ("drop", "restore_tek", "none")
+    grow = {a: peak[a] - base for a in flat}
     print("  acilis tabani %d KB cikarilinca: " % base +
           "  ".join("%s=+%d KB" % (a, grow[a]) for a in grow))
 
     # SAGLIK ONCE. Bu iki kontrol sus payi degil: ilk yazilislarinda N=200000
-    # secilmisti ve UC KOL DA SIGSEGV veriyordu — RSS tablosu (drop 11 MB /
-    # restore 161 MB / none 143 MB) uc farkli COKUS NOKTASININ orani cikti,
-    # "15x" gibi ikna edici gorunerek. Cikis kodunu ve ciktiyi denetlemeyen
-    # bir bellek olcumu, olcemedigi bir programi olcuyor olabilir.
+    # secilmisti ve UC KOL DA SIGSEGV veriyordu — RSS tablosu uc farkli COKUS
+    # NOKTASININ orani cikti, "15x" gibi ikna edici gorunerek. Cikis kodunu ve
+    # ciktiyi denetlemeyen bir bellek olcumu, olcemedigi bir programi olcuyor
+    # olabilir.
     check("uc kol da temiz bitti (cokme yok)",
-          all(all(c == 0 for c in rcs[a]) for a in ("drop", "restore", "none")),
-          " ".join("%s=%s" % (a, rcs[a]) for a in ("drop", "restore", "none")))
-
-    # Dogruluk once: uc kol AYNI isi yapmali, yoksa RSS karsilastirmasi anlamsiz.
+          all(all(c == 0 for c in rcs[a]) for a in flat),
+          " ".join("%s=%s" % (a, rcs[a]) for a in flat))
     check("uc kol ayni sonucu uretiyor",
-          outs["drop"] == outs["restore"] == outs["none"] and outs["drop"] != "",
+          outs["drop"] == outs["restore_tek"] == outs["none"] and outs["drop"] != "",
           "cikti=%r" % outs["drop"])
 
-    # (1) drop DUZ: restore ile arasinda buyuk fark OLMALI.
-    ratio = grow["restore"] / max(grow["drop"], 1)
-    check("drop bellegi IADE EDIYOR (restore/drop >= %.1fx)" % DROP_FLAT_RATIO,
-          ratio >= DROP_FLAT_RATIO, "oran=%.1fx" % ratio)
-
-    # (2) restore YARDIM ETMIYOR: none ile arasinda fark OLMAMALI.
-    share = grow["restore"] / max(grow["none"], 1)
-    check("restore SERBEST BIRAKMIYOR (restore >= none * %.2f)" % RESTORE_NO_HELP,
-          share >= RESTORE_NO_HELP, "restore/none=%.2f" % share)
+    # (1) drop DUZ: none ile arasinda buyuk fark OLMALI.
+    r_drop = grow["none"] / max(grow["drop"], 1)
+    check("drop geri kazaniyor (none/drop >= %.1fx)" % FLAT_RATIO,
+          r_drop >= FLAT_RATIO, "oran=%.1fx" % r_drop)
+    # (2) tek save + cok restore de DUZ — restore serbest BIRAKIR.
+    r_rest = grow["none"] / max(grow["restore_tek"], 1)
+    check("restore geri kazaniyor (none/restore_tek >= %.1fx)" % FLAT_RATIO,
+          r_rest >= FLAT_RATIO, "oran=%.1fx" % r_rest)
+    # (3) drop'suz tekrar SESSIZ SIZINTI DEGIL: hata ile erken biter.
+    loud_ok = (all(c == 1 for c in rcs[LOUD_ARM]) and outs[LOUD_ARM] == "" and
+               "kontrol noktasi yigini dolu" in outs.get("_loud_err", ""))
+    check("drop'suz tekrar: hata + cikis 1 (sessiz -1 yok)", loud_ok,
+          "rc=%s cikti=%r" % (rcs[LOUD_ARM], outs[LOUD_ARM][:40]))
 
     if fails:
         print(RED + "S3 sozlesmesi IHLAL: %d kontrol dustu" % len(fails) + RESET +
               " (%s)" % ", ".join(fails))
         return 1
-    print(GREEN + "S3 kilitli" + RESET + " — iki zit yonlu iddia, kor olcum ikisini birden gecemez")
+    print(GREEN + "S3 kilitli" + RESET + " — drop ve tek-save/restore duz, none tirmaniyor, drop'suz tekrar gurultulu")
     return 0
 
 

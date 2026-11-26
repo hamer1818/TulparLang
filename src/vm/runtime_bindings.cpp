@@ -1148,7 +1148,10 @@ static inline VMValue wb_persist_escape(Obj *container, VMValue v) {
   return aot_persist(v);
 }
 
-VMValue aot_arena_save(void) {
+// Sessiz surum: yigin doluysa (ya da arena acilamadiysa) -1. Yalniz @frame
+// sekeri cagirir (`__frame_arena_save`): -1'i gorup FONKSIYON ADLI kendi
+// hatasini atiyor (parser.cpp frame_desugar).
+VMValue aot_arena_save_try(void) {
   if (!g_aot_string_arena) aot_arena_init();
   if (!g_aot_string_arena || g_arena_checkpoint_top >= AOT_ARENA_CHECKPOINT_MAX)
     return VM_INT(-1);
@@ -1158,6 +1161,26 @@ VMValue aot_arena_save(void) {
       g_aot_string_arena->current ? g_aot_string_arena->current->used : 0;
   g_arena_checkpoints[idx].region_mark = g_region.size();
   return VM_INT(idx);
+}
+
+// arena_save() — kullanicinin cagirdigi yol (RFC C3, 2026-11-26). Yigin
+// doluyken eskiden SESSIZCE -1 donuyordu: ardindaki restore/drop(-1) no-op,
+// geri sarma durur, bellek sinirsiz birikir ve program dogru calismaya devam
+// eder (Memory.md P14: 200k'da 23 MB, 1M'de 132 MB). Simdi @frame gibi
+// YAKALANABILIR bir hata: drop'suz tekrarlanan arena_save ilk 32'de sorunsuz,
+// 33.'de hata. Dengeli desenler (save + drop, tek save + cok restore) etkilenmez.
+VMValue aot_arena_save(void) {
+  VMValue r = aot_arena_save_try();
+  if (AS_INT(r) >= 0) return r;
+  const char *msg =
+      g_aot_string_arena
+          ? "arena_save: arena kontrol noktasi yigini dolu (32) — drop'suz tekrarlanan "
+            "arena_save ya da cok derin ic ice checkpoint; her arena_save bir arena_drop "
+            "ile kapanmali (ya da @frame) / arena checkpoint stack full (32): an "
+            "arena_save repeated without arena_drop, or checkpoints nested too deep"
+          : "arena_save: arena acilamadi (bellek yok) / arena could not be allocated";
+  aot_throw(VM_OBJ((Obj *)aot_intern_string(msg, (int)strlen(msg))));
+  return r; // ulasilmaz
 }
 
 // Roll the arena (and the malloc-object region) back to checkpoint `idx`.
