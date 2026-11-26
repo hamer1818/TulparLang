@@ -931,6 +931,12 @@ if [ "$ACTION" = "suites" ]; then
         kapi_kuyruk "atomik / thread_local kapisi basarisiz!" bash tests/atomik_hatalari.sh ./tulpar
     fi
 
+    # Jenerik + `?` (2026-11-26): ayristirma hata yollari adiyla + pozitif kontrol.
+    # Anlam: tests/jenerik.test.tpr, tests/sonuc.test.tpr, typeinfer/*jenerik*.
+    if [ -x tests/jenerik_hatalari.sh ]; then
+        kapi_kuyruk "jenerik / ? kapisi basarisiz!" bash tests/jenerik_hatalari.sh ./tulpar
+    fi
+
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
     # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz
     # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan

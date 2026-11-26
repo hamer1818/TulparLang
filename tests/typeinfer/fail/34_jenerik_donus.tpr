@@ -1,0 +1,9 @@
+// JENERIK (2026-11-26): donus tipi cagri yerinde baglanan T'dir —
+// `ilk([1, 2])` int doner, str'ye atanamaz. Tip silinmis olsa da
+// (kodgen tipsiz) denetim kaybolmuyor.
+//
+// EXPECT: Type mismatch in declaration of 's': expected str, got int
+
+func ilk<T>(T[] xs): T { return xs[0]; }
+str s = ilk([1, 2]);
+print(s);

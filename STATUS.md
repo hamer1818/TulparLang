@@ -2300,11 +2300,19 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   bitcast ediyordu → LLVM "Invalid bitcast". `tests/unary_boxed.test.tpr`
   4/4.
 
-- 🟢 **Generics.** Type system overhaul; `func f<T>(T x): T` parse
-  hatası veriyor.
-  - **Sıradaki adım:** v1.0 sonrası. Typecheck pre-pass'te `<T>`
-    syntax'ını parse + iz sürebilecek şekilde genişlet,
-    monomorphization stratejisini seç.
+- ✅ **Generics (2026-11-26) — tip silme.** `func f<T, U>(T x, U[] ys): T`,
+  `struct Kutu<T> { T deger; }`, `Kutu<int> k`. Kodgen `T`'yi tipsiz (kutulu),
+  `T[]`'yi `array` görür — tek gövde, monomorfizasyon YOK (Decisions.md "Jenerikler: tip silme").
+  Typeinfer `T`'yi çağrı yerinde bağlar: çelişki hata (`ayni(1, "iki")`),
+  dönüş tipi bağlanan `T` (`str s = ilk([1, 2])` hata). Sınırlar: açık tip
+  argümanı (`f<int>(x)`) yok, jenerik struct alanının okunan tipi bilinmeyen,
+  struct tipli argüman `T`'ye bağlanmıyor. `tests/jenerik.test.tpr`,
+  `tests/jenerik_hatalari.sh`, `tests/typeinfer/*/…jenerik…`.
+- ✅ **Result + `?` (2026-11-26).** `import "sonuc"` (ya da `"result"`):
+  `tamam(v)`/`hata(e)` (`ok`/`err`), `ac`, `ac_yoksa`, `donustur`, `sonra`,
+  `sarmala`; `match r { {tamam: true, deger} => …, {hata} => … }`. `?`
+  ayrıştırıcı şekeri: fonksiyonda `int x = f()?;` hata ise aynı sonucu döner.
+  Yalnız deyim sonunda (bildirim/atama/return/ifade). `tests/sonuc.test.tpr`.
 
 - ✅ **`async/await` (AOT) ÇALIŞIYOR.** `async func f(){ await sleep_async(10);
   return 1; }`, `var p = f(); int r = await p;`. Gerçek kooperatif eşzamanlılık:

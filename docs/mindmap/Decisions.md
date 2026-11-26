@@ -181,6 +181,27 @@ değişmiyor. Aynı turda iki eski hata kapandı: `for-in` değişkeni hiç
 yakalanmıyordu (`null`) ve yakalanan değişkende `++`/`--` derlenmiyordu.
 Kapı `tests/dongu_kapanis.test.tpr` (12 test + üst düzey). → [[AOT Backend]]
 
+## Jenerikler: tip silme, monomorfizasyon değil (2026-11-26)
+**Karar:** `func f<T>` / `struct Kutu<T>` **tip silme** ile (Java gibi): kodgen `T`'yi
+tipsiz (kutulu VMValue), `T[]`'yi `array` görür; tek gövde, tek ABI. Tip güvenliği
+typeinfer'da: `T` çağrı yerinde bağlanır, çelişki hata, dönüş tipi bağlanan `T`.
+**Neden:** dilin zaten bir kutulu yolu var ve her tipi taşıyor — silme ilk günden doğru
+çalışıyor, sıfır kodgen değişikliğiyle (ölçüldü: ayrıştırıcı `T`'yi `var` yapınca bütün
+örnekler geçti). Monomorfizasyon tipli native hızlı yolu verirdi ama her örnek için ayrı
+gövde, kod şişmesi ve derleme süresi demek; ihtiyaç ölçülünce (jenerik sıcak döngü
+profilde görünürse) eklenir — silinmiş imza o zaman da geçerli kalır.
+**Bedel:** jenerik gövde kutulu yoldan koşar; açık tip argümanı (`f<int>(x)`) yok;
+`Kutu<int>` alanının okunan tipi typeinfer'da bilinmeyen.
+
+## Result: json kutu + `?` ayrıştırıcı şekeri (2026-11-26)
+**Karar:** `Result` dilin yerleşik tipi değil, `lib/sonuc.tpr` (`{"tamam","deger","hata"}`
+json kutusu); `?` ayrıştırıcıda `var __sonucN = e; if (!__sonucN["tamam"]) return __sonucN;`
+olarak açılır, yalnız **deyim sonunda** (bildirim/atama/return/ifade). **Neden:** `match`
+nesne deseni bu temsili zaten açıyor; ifade ortasında `?` (Rust) değerlendirme sırasını
+değiştirmeden ancak yeni bir AST düğümü ve kodgen ister — deyim sonu biçimi kullanımın
+çoğunu kapsıyor ve hiç kodgen istemiyor. İstisnayla (throw) yayma denendi ve REDDEDİLDİ:
+kullanıcının kendi `try`'ı yayma işaretini yakalardı.
+
 ## Sunset (geri getirme)
 Tree-walk interpreter (`src/interpreter/`) + x64 JIT (`src/jit/`) — 2026-05-05 kaldırıldı.
 

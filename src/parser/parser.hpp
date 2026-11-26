@@ -97,6 +97,29 @@ private:
     bool qualified_type_at(int offset) const;
     // K027: son parse_type bir ENUM adina cozulduyse (dizi soneki yoksa) adi.
     std::optional<std::string> last_type_enum_name_;
+    // JENERIK (2026-11-26). Tip SILINIR: `T` tipsiz (`var`), `T[]` `array`.
+    // Aktif tip parametresi kapsamlari (fonksiyon/struct govdesi) ve son
+    // parse_type'in jenerik izi: "T" / "T[]" / bos.
+    std::vector<std::vector<std::string>> generic_scopes_;
+    std::string last_type_generic_;
+    std::vector<DataType> last_type_generic_args_;  // `Kutu<int>` -> {int}
+    // Jenerik struct adlari -> parametre sayisi (on tarama; bildirim sirasindan bagimsiz).
+    std::unordered_map<std::string, size_t> generic_structs_;
+    bool is_generic_param(const std::string& name) const;
+    // `?` YAYMA (Result, 2026-11-26): `var x = f()?;` deyimi
+    //   var __sonucN = f(); if (!__sonucN["tamam"]) return __sonucN;
+    //   var x = __sonucN["deger"];
+    // olarak acilir (ek deyimler pending_after_ ile ayni seviyeye). `?` yalniz
+    // deyimin SONUNDA ve bir cagri/degisken/erisimin ardinda; yalniz fonksiyon
+    // govdesinde. Uclu `a ? b : c` ile karismaz: ardindan `;` gelen `?`
+    // uclunun basi olamaz.
+    int function_depth_ = 0;
+    int sonuc_tmp_counter_ = 0;
+    bool in_propagation_ = false;
+    size_t find_statement_qmark() const;
+    std::unique_ptr<ASTNode> parse_propagating_statement(size_t qpos);
+    std::vector<std::string> parse_type_params();
+    void prescan_generic_structs();
     std::string parse_custom_type_name();
     
     // Error handling

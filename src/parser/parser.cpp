@@ -431,6 +431,7 @@ std::unique_ptr<ASTNode> Parser::parse() {
     // dizisi taranir (bkz. parser.hpp'deki enum notu). Tuple imzalari da
     // ayni sebeple (bkz. tuple notu).
     prescan_enums();
+    prescan_generic_structs();
     prescan_tuple_sigs();
     // Ust duzey fonksiyon adi -> ilk tanimin satiri (K002, yinelenen tanim).
     std::unordered_map<std::string, int> top_fn_lines;
@@ -558,7 +559,123 @@ std::unique_ptr<ASTNode> Parser::parse() {
 // Statement Parsing
 // ============================================================================
 
+// Bu deyimin derinlik-0 `;`'inden hemen onceki token `?` ise onun konumu.
+size_t Parser::find_statement_qmark() const {
+    // Bilesik deyim (if/while/for) `?` tasiyamaz; govdesindeki `?;` ic
+    // parse_statement'te bulunur, parantezsiz govdede reject_pending reddeder.
+    if (position_ < tokens_.size()) {
+        const TulparTokenType h = tokens_[position_].type();
+        if (h == TOKEN_IF || h == TOKEN_WHILE || h == TOKEN_FOR) return std::string::npos;
+    }
+    int depth = 0;
+    for (size_t i = position_; i + 1 < tokens_.size(); i++) {
+        const TulparTokenType t = tokens_[i].type();
+        if (t == TOKEN_LPAREN || t == TOKEN_LBRACKET || t == TOKEN_LBRACE) depth++;
+        else if (t == TOKEN_RPAREN || t == TOKEN_RBRACKET || t == TOKEN_RBRACE) {
+            if (--depth < 0) return std::string::npos;
+            // `if (..) { ... }` gibi govdeli deyim `}` ile biter; sonraki
+            // deyimin `?;`'sini bu deyime mal etme.
+            if (t == TOKEN_RBRACE && depth == 0) return std::string::npos;
+        } else if (t == TOKEN_SEMICOLON && depth == 0) {
+            return (i > position_ && tokens_[i - 1].type() == TOKEN_QUESTION) ? i - 1
+                                                                             : std::string::npos;
+        } else if (t == TOKEN_EOF) {
+            return std::string::npos;
+        }
+    }
+    return std::string::npos;
+}
+
+std::unique_ptr<ASTNode> Parser::parse_propagating_statement(size_t qpos) {
+    SourceLocation L(current().line(), current().column());
+    const int qline = tokens_[qpos].line();
+    // FIRLATMAYAN hata: firlatsaydi panik kurtarmasi imleci yerinde birakir ve
+    // ayni `?;` her turda yeniden bulunurdu (olculdu: sonsuz dongu). Deyim
+    // yine ayristirilir; hata sayildigi icin kodgen kosmaz.
+    if (function_depth_ == 0)
+        report_soft_parse_error(
+            qline,
+            tulpar::i18n::tr_en(
+                "'?' yalniz fonksiyon govdesinde kullanilabilir (hata donusu yayar)",
+                "'?' can only be used inside a function body (it propagates an error return)"),
+            "?",
+            tulpar::i18n::tr_en("fonksiyon icine al ya da `ac(...)` ile ac",
+                                "move it into a function or unwrap with `unwrap(...)`"));
+    // `?`'i gecici olarak `;` yap: deyim normal ayristirilir ve orada biter;
+    // gercek `;` hemen ardindan tuketilir.
+    const Token saved = tokens_[qpos];
+    tokens_[qpos] = Token(TOKEN_SEMICOLON, ";", saved.line(), saved.column());
+    in_propagation_ = true;
+    std::unique_ptr<ASTNode> st;
+    try {
+        st = parse_statement();
+    } catch (...) {
+        tokens_[qpos] = saved;
+        in_propagation_ = false;
+        throw;
+    }
+    tokens_[qpos] = saved;
+    in_propagation_ = false;
+    expect(TOKEN_SEMICOLON, "Expected ';' after '?'");
+
+    auto kabul = [](const std::unique_ptr<ASTNode>& e) {
+        return e && (std::holds_alternative<FunctionCall>(e->value) ||
+                     std::holds_alternative<Identifier>(e->value) ||
+                     std::holds_alternative<ArrayAccess>(e->value));
+    };
+    auto hata_kab = [&](const char* where) {
+        report_soft_parse_error(
+            qline,
+            std::string(tulpar::i18n::tr_en(
+                "'?' bir cagrinin, degiskenin ya da erisimin sonuna yazilir (",
+                "'?' must follow a call, a variable or an access (")) + where + ")",
+            "?",
+            tulpar::i18n::tr_en("`var r = ifade; var x = r?;` diye ikiye bol",
+                                "split it: `var r = expr; var x = r?;`"));
+    };
+    const std::string tmp = "__sonuc" + std::to_string(sonuc_tmp_counter_++);
+    auto ident = [&](void) { return std::make_unique<ASTNode>(Identifier(tmp, L)); };
+    auto field = [&](const char* k) {
+        return std::make_unique<ASTNode>(
+            ArrayAccess(ident(), std::make_unique<ASTNode>(StringLiteral(k, L)), L));
+    };
+    std::unique_ptr<ASTNode> expr;
+    auto& v = st->value;
+    if (auto* vd = std::get_if<VariableDecl>(&v)) {
+        if (!kabul(vd->initializer)) { hata_kab("bildirim / declaration"); return st; }
+        expr = std::move(vd->initializer);
+        vd->initializer = field("deger");
+    } else if (auto* as = std::get_if<Assignment>(&v)) {
+        if (!kabul(as->value)) { hata_kab("atama / assignment"); return st; }
+        expr = std::move(as->value);
+        as->value = field("deger");
+    } else if (auto* rs = std::get_if<ReturnStatement>(&v)) {
+        if (!kabul(rs->value)) { hata_kab("return"); return st; }
+        expr = std::move(rs->value);
+        rs->value = field("deger");
+    } else if (kabul(st)) {
+        expr = std::move(st);
+        st.reset();
+    } else {
+        hata_kab("deyim / statement");
+        return st;
+    }
+    // var __sonucN = E;  if (!__sonucN["tamam"]) { return __sonucN; }  <deyim>
+    auto decl = std::make_unique<ASTNode>(VariableDecl(tmp, TYPE_UNKNOWN, std::move(expr), L));
+    std::vector<std::unique_ptr<ASTNode>> ret;
+    ret.push_back(std::make_unique<ASTNode>(ReturnStatement(ident(), L)));
+    pending_after_.push_back(std::make_unique<ASTNode>(IfStatement(
+        std::make_unique<ASTNode>(UnaryOp(field("tamam"), TOKEN_BANG, L)),
+        std::make_unique<ASTNode>(Block(std::move(ret), L)), nullptr, L)));
+    if (st) pending_after_.push_back(std::move(st));
+    return decl;
+}
+
 std::unique_ptr<ASTNode> Parser::parse_statement() {
+    if (!in_propagation_) {
+        const size_t q = find_statement_qmark();
+        if (q != std::string::npos) return parse_propagating_statement(q);
+    }
     // Variable declaration
     if (check(TOKEN_INT_TYPE) || check(TOKEN_FLOAT_TYPE) ||
         check(TOKEN_STR_TYPE) || check(TOKEN_BOOL_TYPE) ||
@@ -581,6 +698,11 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
     // Once yalniz "IDENT IDENT" sinaniyordu, yani `Point[] ps;` ifade
     // deyimi sanilip ayristirma hatasi veriyordu.
     if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_IDENTIFIER) {
+        return parse_variable_decl();
+    }
+    // `Kutu<int> k;` — jenerik struct ornegi (ad on taramada jenerik struct).
+    if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_LESS &&
+        generic_structs_.count(current().value())) {
         return parse_variable_decl();
     }
     // `g.Point p;` / `g.Point[] ps;` — takma adli modulun tipi (K013). Eskiden
@@ -732,6 +854,8 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
 
     // Parse type
     DataType type = parse_type();
+    const std::vector<DataType> var_generic_args = last_type_generic_args_;
+    if (type == TYPE_CUSTOM && !var_generic_args.empty()) custom_type_name = last_type_custom_name_;
     if (last_type_qualified_ && type == TYPE_CUSTOM) custom_type_name = last_type_custom_name_;  // K013
     const std::optional<std::string> enum_t = last_type_enum_name_;  // K027
     const int fixed_n = last_fixed_array_n_;  // `T[N]` ise N, degilse 0
@@ -829,6 +953,7 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     vd.custom_type = std::move(custom_type_name);
     vd.elem_custom_type = elem_custom;
     vd.enum_type = enum_t;   // K027
+    vd.generic_args = var_generic_args;
     vd.is_const = is_const;
     return std::make_unique<ASTNode>(std::move(vd));
 }
@@ -854,6 +979,18 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
         method_of = name;
         name = name + "." + mname.value();
     }
+
+    // JENERIK: `func ad<T, U>(...)`. Kapsam govde bitene kadar acik: govdede
+    // `T tmp = x;` de silinmis tiple ayristirilir. Hata firlatirsa (panik
+    // kurtarmasi) kapsam yigini sizmasin diye RAII.
+    std::vector<std::string> type_params;
+    if (check(TOKEN_LESS)) type_params = parse_type_params();
+    struct GenericScopeGuard {
+        std::vector<std::vector<std::string>>& st;
+        bool on;
+        ~GenericScopeGuard() { if (on) st.pop_back(); }
+    } generic_guard{generic_scopes_, !type_params.empty()};
+    if (!type_params.empty()) generic_scopes_.push_back(type_params);
 
     // Parameters
     expect(TOKEN_LPAREN, "Expected '(' after function name");
@@ -925,6 +1062,8 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
                 Token param_name = expect(TOKEN_IDENTIFIER,
                                           "Expected parameter name");
                 Parameter par(param_name.value(), param_type);
+                par.generic = last_type_generic_;
+                if (!par.generic.empty()) param_custom_type.reset();
                 par.custom_type = std::move(param_custom_type);
                 par.enum_type = last_type_enum_name_;   // K027
                 par.elem_custom_type = is_array_type(param_type) ? last_type_custom_name_ : std::nullopt;  // `Dusman[] d` (P1.1)
@@ -975,6 +1114,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     DataType return_type = TYPE_UNSPECIFIED;  // yazilmadi != void
     std::optional<std::string> return_custom_type_name;
     std::optional<std::string> return_enum_name;   // K027
+    std::string return_generic;
     match(TOKEN_COLON); // consume ':' if present, harmless otherwise
     std::vector<TupleElem> tuple_types;  // bos = coklu donus degil
     if (check(TOKEN_LPAREN)) {
@@ -994,6 +1134,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
         if (last_type_qualified_ && return_type == TYPE_CUSTOM) return_custom_type_name = last_type_custom_name_;  // K013
         if (return_type != TYPE_CUSTOM) return_custom_type_name.reset();
         return_enum_name = last_type_enum_name_;   // K027
+        return_generic = last_type_generic_;
     }
 
     // Fonksiyon govdesi KENDI kapsaminda; parametreler oraya CONST OLMAYAN
@@ -1018,6 +1159,7 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
         }
         ~TupleCtxGuard() { p->current_tuple_types_ = std::move(saved); }
     } tuple_guard(this, tuple_types);
+    struct DepthGuard { int& d; DepthGuard(int& x) : d(x) { d++; } ~DepthGuard() { d--; } } depth_guard(function_depth_);
     auto body = parse_block();
 
     FunctionDecl decl(name, std::move(parameters), return_type,
@@ -1025,6 +1167,8 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     decl.return_custom_type = std::move(return_custom_type_name);
     decl.return_enum_type = std::move(return_enum_name);
     decl.receiver_type = std::move(method_of);
+    decl.type_params = type_params;
+    decl.return_generic = return_generic;
     return std::make_unique<ASTNode>(std::move(decl));
 }
 
@@ -1281,6 +1425,20 @@ std::unique_ptr<ASTNode> Parser::parse_type_decl(bool repr_c) {
 
     TypeDecl type_decl(name, loc);
     type_decl.repr_c = repr_c;
+
+    // `struct Kutu<T> { T deger; }` — jenerik struct (tip silinir: T alani tipsiz).
+    struct GenericScopeGuard {
+        std::vector<std::vector<std::string>>& st;
+        bool on = false;
+        ~GenericScopeGuard() { if (on) st.pop_back(); }
+    } generic_guard{generic_scopes_};
+    if (check(TOKEN_LESS)) {
+        type_decl.type_params = parse_type_params();
+        generic_scopes_.push_back(type_decl.type_params);
+        generic_guard.on = true;
+        if (repr_c)
+            error("'" + name + "': @repr(C) struct jenerik olamaz / a @repr(C) struct cannot be generic");
+    }
     
     expect(TOKEN_LBRACE, "Expected '{' after type name");
     
@@ -1317,6 +1475,13 @@ std::unique_ptr<ASTNode> Parser::parse_type_decl(bool repr_c) {
             }
         }
 
+        {
+            int gi = -1;
+            const std::string& g = last_type_generic_;
+            for (size_t k = 0; k < type_decl.type_params.size() && bits == 0; k++)
+                if (g == type_decl.type_params[k]) gi = (int)k;
+            type_decl.field_generic.push_back(gi);
+        }
         type_decl.field_types.push_back(field_type);
         type_decl.field_names.push_back(field_name.value());
         type_decl.field_custom_types.push_back(std::nullopt);
@@ -1587,6 +1752,43 @@ void Parser::prescan_imported_enums() {
 
 bool Parser::is_enum_name(const std::string& name) const {
     return enums_.find(name) != enums_.end();
+}
+
+// ---- JENERIK (2026-11-26) ---------------------------------------------------
+bool Parser::is_generic_param(const std::string& name) const {
+    for (const auto& sc : generic_scopes_)
+        for (const auto& p : sc)
+            if (p == name) return true;
+    return false;
+}
+
+// `<T, U>` — imlec '<' uzerinde.
+std::vector<std::string> Parser::parse_type_params() {
+    std::vector<std::string> out;
+    advance();  // '<'
+    do {
+        Token t = expect(TOKEN_IDENTIFIER, "Expected type parameter name");
+        for (const auto& o : out)
+            if (o == t.value())
+                error(std::string(tulpar::i18n::tr_en("tip parametresi yinelendi: '",
+                                                      "duplicate type parameter: '")) +
+                      t.value() + "' at line " + std::to_string(t.line()));
+        out.push_back(t.value());
+    } while (match(TOKEN_COMMA));
+    expect(TOKEN_GREATER, "Expected '>' after type parameters");
+    return out;
+}
+
+void Parser::prescan_generic_structs() {
+    for (size_t i = 0; i + 3 < tokens_.size(); i++) {
+        if (tokens_[i].type() == TOKEN_TYPE_KW && tokens_[i + 1].type() == TOKEN_IDENTIFIER &&
+            tokens_[i + 2].type() == TOKEN_LESS) {
+            size_t n = 0;
+            for (size_t k = i + 3; k < tokens_.size() && tokens_[k].type() != TOKEN_GREATER; k++)
+                if (tokens_[k].type() == TOKEN_IDENTIFIER) n++;
+            generic_structs_[tokens_[i + 1].value()] = n;
+        }
+    }
 }
 
 const long long* Parser::enum_member_value(const std::string& enum_name,
@@ -3230,8 +3432,8 @@ void Parser::drain_pending(std::vector<std::unique_ptr<ASTNode>>& out) {
 void Parser::reject_pending() {
     if (pending_after_.empty()) return;
     pending_after_.clear();
-    error("coklu bildirim/atama burada suslu parantezli govde ister: "
-          "`if (x) { float a, b = f(); }` / a tuple binding needs a braced "
+    error("coklu bildirim/atama ya da `?` burada suslu parantezli govde ister: "
+          "`if (x) { float a, b = f(); }` / a tuple binding or `?` needs a braced "
           "block here");
 }
 
@@ -3240,6 +3442,8 @@ DataType Parser::parse_type() {
     last_type_custom_name_.reset();
     last_type_qualified_ = false;
     last_type_enum_name_.reset();
+    std::string generic_name;          // jenerik iz (sonda last_type_generic_'e)
+    std::vector<DataType> generic_args;
     bool matched = true;
 
     if (match(TOKEN_INT_TYPE)) base = TYPE_INT;
@@ -3269,10 +3473,38 @@ DataType Parser::parse_type() {
         if (is_enum_name(tn)) { last_type_enum_name_ = tn; base = TYPE_INT; }   // K027
         else { last_type_custom_name_ = tn; base = TYPE_CUSTOM; }
     }
+    else if (check(TOKEN_IDENTIFIER) && is_generic_param(current().value())) {
+        // Tip parametresi: SILINIR (tipsiz). Iz typeinfer icin tutulur.
+        generic_name = current().value();
+        advance();
+        base = TYPE_UNKNOWN;
+    }
     else if (check(TOKEN_IDENTIFIER) && is_enum_name(current().value())) {
         last_type_enum_name_ = current().value();   // K027
         advance();
         base = TYPE_INT;
+    }
+    else if (check(TOKEN_IDENTIFIER) && generic_structs_.count(current().value()) &&
+             peek(1).type() == TOKEN_LESS) {
+        // `Kutu<int>` — jenerik struct ornegi; struct'in kendisi tek (silinmis).
+        const std::string sn = current().value();
+        advance();  // ad
+        advance();  // '<'
+        std::vector<DataType> args;
+        do {
+            DataType a = parse_type();
+            args.push_back(a);
+        } while (match(TOKEN_COMMA));
+        expect(TOKEN_GREATER, "Expected '>' after type arguments");
+        if (args.size() != generic_structs_[sn])
+            error(std::string(tulpar::i18n::tr_en("jenerik struct '", "generic struct '")) + sn +
+                  tulpar::i18n::tr_en("' tip argumani sayisi yanlis", "' has the wrong number of type arguments") +
+                  " at line " + std::to_string(current().line()));
+        last_type_custom_name_ = sn;
+        last_type_enum_name_.reset();
+        last_type_qualified_ = false;
+        generic_args = std::move(args);
+        base = TYPE_CUSTOM;
     }
     else if (check(TOKEN_IDENTIFIER)) { last_type_custom_name_ = current().value(); advance(); base = TYPE_CUSTOM; }
     else matched = false;
@@ -3325,6 +3557,9 @@ DataType Parser::parse_type() {
         break;  // `arr[i]` gibi bir ifade — tip sonekini burada bitir.
     }
     if (base != TYPE_INT) last_type_enum_name_.reset();  // `Renk[]` izlenmiyor
+    last_type_generic_ = generic_name.empty() ? std::string()
+                         : (base == TYPE_UNKNOWN ? generic_name : generic_name + "[]");
+    last_type_generic_args_ = std::move(generic_args);
     return base;
 }
 

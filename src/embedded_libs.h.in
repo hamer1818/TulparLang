@@ -101,6 +101,12 @@ static const char *EMBEDDED_SMTP =
 @EMBEDDED_SMTP_CONTENT@;
 
 // ========================================
+// lib/sonuc.tpr (Result)
+// ========================================
+static const char *EMBEDDED_SONUC =
+@EMBEDDED_SONUC_CONTENT@;
+
+// ========================================
 // Library Lookup
 // ========================================
 static const char* get_embedded_lib(const char *name) {
@@ -120,6 +126,8 @@ static const char* get_embedded_lib(const char *name) {
     if (strcmp(name, "arcade") == 0) return EMBEDDED_ARCADE;
     if (strcmp(name, "scene3d") == 0) return EMBEDDED_SCENE3D;
     if (strcmp(name, "smtp") == 0) return EMBEDDED_SMTP;
+    if (strcmp(name, "sonuc") == 0) return EMBEDDED_SONUC;
+    if (strcmp(name, "result") == 0) return EMBEDDED_SONUC;
     return NULL;
 }
 

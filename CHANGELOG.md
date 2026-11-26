@@ -13,6 +13,17 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — jenerikler (`func f<T>`, `struct Kutu<T>`), `Result` modülü ve `?` yayma operatörü
+
+- `func ilk<T>(T[] xs): T`, `func cift<A, B>(A a, B b)`, `struct Kutu<T> { T deger; }`, `Kutu<int> k`.
+  Tip silme: tek gövde, kodgen `T`'yi tipsiz görür. Tip denetimi çağrı yerinde `T`'yi bağlar —
+  `ayni(1, "iki")` ve `str s = ilk([1, 2])` hata.
+- `import "sonuc"` (`"result"`): `tamam`/`hata` (`ok`/`err`), `ac`/`unwrap`, `ac_yoksa`/`unwrap_or`,
+  `donustur`/`map_ok`, `sonra`/`and_then`, `sarmala`/`try_call`; `match` nesne deseniyle açılır.
+- `?`: fonksiyon gövdesinde `int x = f()?;` — `f` hata döndüyse aynı sonuç hemen döner. Bildirim,
+  atama, `return` ve ifade deyiminde; uçlu `a ? b : c` etkilenmez.
+- `tulpar fmt` jenerik ayraçları `ilk<T>` / `Kutu<int>` diye yazar.
+
 ### Eklendi — `tulpar bindgen`: C başlığından eklenti bildirimi; `cbool` tipi
 
 - `tulpar bindgen <başlık.h> [--prefix P] [--lib L] [-o tulpar-ext.json]` bir C başlığını okuyup
