@@ -1779,8 +1779,31 @@ std::vector<std::string> Parser::parse_type_params() {
     return out;
 }
 
+bool Parser::generic_call_ahead() const {
+    size_t i = position_;
+    if (i >= tokens_.size() || tokens_[i].type() != TOKEN_LESS) return false;
+    int items = 0;
+    for (i = i + 1; i < tokens_.size(); i++) {
+        const TulparTokenType t = tokens_[i].type();
+        if (t == TOKEN_GREATER) break;
+        if (t == TOKEN_IDENTIFIER || t == TOKEN_INT_TYPE || t == TOKEN_FLOAT_TYPE ||
+            t == TOKEN_STR_TYPE || t == TOKEN_BOOL_TYPE || t == TOKEN_JSON_TYPE ||
+            t == TOKEN_ARRAY_TYPE || t == TOKEN_VAR) { items++; continue; }
+        if (t == TOKEN_LBRACKET || t == TOKEN_RBRACKET || t == TOKEN_COMMA) continue;
+        return false;
+    }
+    return items > 0 && i + 1 < tokens_.size() && tokens_[i + 1].type() == TOKEN_LPAREN;
+}
+
 void Parser::prescan_generic_structs() {
     for (size_t i = 0; i + 3 < tokens_.size(); i++) {
+        if (tokens_[i].type() == TOKEN_FUNC && tokens_[i + 1].type() == TOKEN_IDENTIFIER &&
+            tokens_[i + 2].type() == TOKEN_LESS) {
+            size_t n = 0;
+            for (size_t k = i + 3; k < tokens_.size() && tokens_[k].type() != TOKEN_GREATER; k++)
+                if (tokens_[k].type() == TOKEN_IDENTIFIER) n++;
+            generic_funcs_[tokens_[i + 1].value()] = n;
+        }
         if (tokens_[i].type() == TOKEN_TYPE_KW && tokens_[i + 1].type() == TOKEN_IDENTIFIER &&
             tokens_[i + 2].type() == TOKEN_LESS) {
             size_t n = 0;
@@ -2838,6 +2861,31 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
 
 std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
     while (true) {
+        // Acik jenerik tip argumani: `ilk<int>(xs)`. Yalniz on taramada jenerik
+        // bilinen fonksiyon adinda ve `<tipler>(` bicimi tam tutuyorsa — yoksa
+        // `a < b` karsilastirmasi aynen kalir.
+        if (check(TOKEN_LESS)) {
+            auto* gid = std::get_if<Identifier>(&expr->value);
+            if (gid && generic_funcs_.count(gid->name) && generic_call_ahead()) {
+                const std::string fname = gid->name;
+                const int tline = current().line();
+                advance();  // '<'
+                std::vector<DataType> targs;
+                do { targs.push_back(parse_type()); } while (match(TOKEN_COMMA));
+                expect(TOKEN_GREATER, "Expected '>' after type arguments");
+                expect(TOKEN_LPAREN, "Expected '(' after type arguments");
+                if (targs.size() != generic_funcs_[fname])
+                    report_soft_parse_error(
+                        tline,
+                        std::string(tulpar::i18n::tr_en("jenerik fonksiyon '", "generic function '")) +
+                            fname + tulpar::i18n::tr_en("' tip argumani sayisi yanlis",
+                                                        "' has the wrong number of type arguments"),
+                        fname.c_str(), nullptr);
+                expr = parse_call(std::move(expr));
+                if (auto* fc = std::get_if<FunctionCall>(&expr->value)) fc->type_args = std::move(targs);
+                continue;
+            }
+        }
         if (match(TOKEN_LPAREN)) {
             expr = parse_call(std::move(expr));
         } else if (match(TOKEN_LBRACKET)) {

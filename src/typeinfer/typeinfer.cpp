@@ -935,6 +935,13 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     if (auto git = ctx->fn_generic.find(effective_name); git != ctx->fn_generic.end())
       gsig = &git->second;
     if (gsig) {
+      // Acik tip argumanlari (`ilk<int>(xs)`): T once bunlara baglanir; arguman
+      // celiskisi asagidaki birlestirmede "hem ... hem ..." diye raporlanir.
+      for (size_t i = 0; i < call->type_args.size() && i < gsig->type_params.size(); i++) {
+        DataType ta = call->type_args[i];
+        if (ta != TYPE_UNKNOWN && ta != TYPE_CUSTOM && ta != TYPE_UNSPECIFIED)
+          gbind[gsig->type_params[i]] = ta;
+      }
       for (size_t i = 0; i < arg_types.size() && i < gsig->params.size(); i++) {
         const std::string &g = gsig->params[i];
         if (g.empty()) continue;

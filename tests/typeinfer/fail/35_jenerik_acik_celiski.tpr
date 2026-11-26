@@ -1,0 +1,7 @@
+// JENERIK (2026-11-26): acik tip argumani T'yi on-baglar — `ilk<int>(["x"])`
+// argumani str dizisi oldugu icin celiski.
+//
+// EXPECT: Type parameter T of 'ilk' inferred as both int and str (argument 1)
+
+func ilk<T>(T[] xs): T { return xs[0]; }
+print(ilk<int>(["x"]));

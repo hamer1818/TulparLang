@@ -142,18 +142,26 @@ print(q + k * 10);
 `func f<T, U>(...)` ve `struct Kutu<T> { T deger; }`. **Tip silme** ile uygulanır: tek gövde,
 `T` çalışma zamanında dinamik (kutulu) değerdir. Tip denetimi `T`'yi her **çağrı yerinde**
 bağlar: aynı `T`'nin iki farklı tipe bağlanması ve bağlanan dönüş tipinin yanlış kullanımı
-raporlanır. Açık tip argümanı (`f<int>(x)`) yoktur.
+raporlanır. Tip argümanı açıkça da verilebilir: `ilk<int>(xs)` — argümanı olmayan bir
+jenerikte (`bos<str>()`) `T` yalnız buradan bağlanır. `ad<...>(` yazımı yalnız `ad` bir jenerik
+fonksiyonsa tip argümanıdır; değilse `<` karşılaştırmadır.
 
 ```tpr
 func ilk<T>(T[] xs): T { return xs[0]; }
+func bos<T>(): T[] { return []; }
 struct Kutu<T> { T deger; }
 Kutu<str> k;
 k.deger = ilk(["a", "b"]);
+str[] b = bos<str>();
 print(ilk([4, 5]) + 1);
+print(ilk<int>([9]));
 print(k.deger);
+print(len(b));
 // cikti:
 // 5
+// 9
 // a
+// 0
 ```
 
 ## 3. İfadeler

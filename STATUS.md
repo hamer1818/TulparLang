@@ -2304,8 +2304,8 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   `struct Kutu<T> { T deger; }`, `Kutu<int> k`. Kodgen `T`'yi tipsiz (kutulu),
   `T[]`'yi `array` görür — tek gövde, monomorfizasyon YOK (Decisions.md "Jenerikler: tip silme").
   Typeinfer `T`'yi çağrı yerinde bağlar: çelişki hata (`ayni(1, "iki")`),
-  dönüş tipi bağlanan `T` (`str s = ilk([1, 2])` hata). Sınırlar: açık tip
-  argümanı (`f<int>(x)`) yok, jenerik struct alanının okunan tipi bilinmeyen,
+  dönüş tipi bağlanan `T` (`str s = ilk([1, 2])` hata); açık tip argümanı
+  `ilk<int>(xs)` / `bos<str>()`. Sınırlar: jenerik struct alanının okunan tipi bilinmeyen,
   struct tipli argüman `T`'ye bağlanmıyor. `tests/jenerik.test.tpr`,
   `tests/jenerik_hatalari.sh`, `tests/typeinfer/*/…jenerik…`.
 - ✅ **Güvenlik ağı (2026-11-26).** Altın çıktı + `-O0`/`-O3` karşılaştırması

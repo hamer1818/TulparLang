@@ -74,6 +74,20 @@ func run_kucuktur_bozulmadi() {
     assert(b > a, "b > a");
 }
 
+// Acik tip argumani (2026-11-26): `f<int>(...)` — arguman yoksa (bos<str>())
+// T yalniz buradan baglanir.
+func bos<T>(): T[] { return []; }
+func run_acik_tip_argumani() {
+    assert_eq_int(ilk<int>([7, 8]), 7);
+    str[] b = bos<str>();
+    push(b, "z");
+    assert_eq_str(b[0], "z");
+    json c = cift<int, str>(1, "x");
+    assert_eq_str(c["b"], "x");
+    int k = 1;
+    assert(k < 2, "< karsilastirmasi");
+}
+
 print("=== jenerik ===");
 test("fonksiyon her tiple", "run_fonksiyon_her_tiple");
 test("iki tip parametresi", "run_iki_parametre");
@@ -82,4 +96,5 @@ test("fonksiyon argumani", "run_fonksiyon_argumani");
 test("jenerik struct", "run_jenerik_struct");
 test("jenerik struct dizide", "run_jenerik_struct_dizide");
 test("< karsilastirmasi bozulmadi", "run_kucuktur_bozulmadi");
+test("acik tip argumani", "run_acik_tip_argumani");
 test_summary();

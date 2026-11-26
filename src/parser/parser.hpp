@@ -105,6 +105,9 @@ private:
     std::vector<DataType> last_type_generic_args_;  // `Kutu<int>` -> {int}
     // Jenerik struct adlari -> parametre sayisi (on tarama; bildirim sirasindan bagimsiz).
     std::unordered_map<std::string, size_t> generic_structs_;
+    // Jenerik fonksiyon adlari -> tip parametresi sayisi (acik tip argumani icin).
+    std::unordered_map<std::string, size_t> generic_funcs_;
+    bool generic_call_ahead() const;  // imlec `<` uzerinde: `<tipler>(` mi
     bool is_generic_param(const std::string& name) const;
     // `?` YAYMA (Result, 2026-11-26): `var x = f()?;` deyimi
     //   var __sonucN = f(); if (!__sonucN["tamam"]) return __sonucN;

@@ -190,7 +190,8 @@ typeinfer'da: `T` çağrı yerinde bağlanır, çelişki hata, dönüş tipi ba�
 örnekler geçti). Monomorfizasyon tipli native hızlı yolu verirdi ama her örnek için ayrı
 gövde, kod şişmesi ve derleme süresi demek; ihtiyaç ölçülünce (jenerik sıcak döngü
 profilde görünürse) eklenir — silinmiş imza o zaman da geçerli kalır.
-**Bedel:** jenerik gövde kutulu yoldan koşar; açık tip argümanı (`f<int>(x)`) yok;
+**Bedel:** jenerik gövde kutulu yoldan koşar (açık tip argümanı `f<int>(x)` yalnız
+typeinfer'a bilgi verir, kodgen'e değil);
 `Kutu<int>` alanının okunan tipi typeinfer'da bilinmeyen.
 
 ## Result: json kutu + `?` ayrıştırıcı şekeri (2026-11-26)

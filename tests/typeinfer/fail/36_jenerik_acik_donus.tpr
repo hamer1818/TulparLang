@@ -1,0 +1,8 @@
+// JENERIK (2026-11-26): argumansiz jenerik — donus tipi yalniz acik tip
+// argumanindan gelir: `bos<str>()` str[] doner, int[]'e atanamaz.
+//
+// EXPECT: Type mismatch in declaration of 'xs'
+
+func bos<T>(): T[] { return []; }
+int[] xs = bos<str>();
+print(len(xs));

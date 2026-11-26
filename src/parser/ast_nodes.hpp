@@ -169,6 +169,9 @@ struct FunctionCall {
     std::optional<std::vector<std::string>> argument_names;
     std::unique_ptr<ASTNode> receiver; // For method calls
     std::unique_ptr<ASTNode> callee;   // For calling arbitrary expressions (indirect calls)
+    // Acik jenerik tip argumanlari: `ilk<int>(xs)` (2026-11-26). Kodgen gormez
+    // (tip silme); typeinfer T'yi bunlarla on-baglar.
+    std::vector<DataType> type_args;
     SourceLocation loc;
     
     FunctionCall(const std::string& n,

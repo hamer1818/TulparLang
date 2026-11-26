@@ -31,6 +31,9 @@ reddedilmeli tip_param_yinelendi "duplicate type parameter: 'T'" \
 reddedilmeli tip_arg_sayisi "has the wrong number of type arguments" \
 'struct Kutu<T> { T deger; }
 Kutu<int, str> k;'
+reddedilmeli tip_arg_sayisi_fn "generic function 'ilk' has the wrong number of type arguments" \
+'func ilk<T>(T[] xs): T { return xs[0]; }
+print(ilk<int, str>([1]));'
 # Pozitif kontrol: gecerli kaynak derlenir ve dogru basar.
 printf 'import "sonuc";\nfunc b(int x): json { if (x == 0) { return hata("s"); } return tamam(10 / x); }\nfunc f(int x): json { int y = b(x)?; return tamam(y + 1); }\nfunc ilk<T>(T[] xs): T { return xs[0]; }\nprint(ac(f(2)));\nprint(hatasi(f(0)));\nprint(ilk(["k"]));\n' > "$TMP/ok.tpr"
 out=$(cd "$TMP" && "$TUL" ok.tpr 2>&1)

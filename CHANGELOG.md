@@ -57,6 +57,7 @@ tag still works;
 - `?`: fonksiyon gövdesinde `int x = f()?;` — `f` hata döndüyse aynı sonuç hemen döner. Bildirim,
   atama, `return` ve ifade deyiminde; uçlu `a ? b : c` etkilenmez.
 - `tulpar fmt` jenerik ayraçları `ilk<T>` / `Kutu<int>` diye yazar.
+- Açık tip argümanı: `ilk<int>(xs)`, `bos<str>()` (argümansız jenerikte `T` buradan bağlanır).
 
 ### Eklendi — `tulpar bindgen`: C başlığından eklenti bildirimi; `cbool` tipi
 
