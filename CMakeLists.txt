@@ -337,6 +337,8 @@ set(PKG_SOURCES
     src/pkg/pkg_cli.hpp
     src/pkg/sha256.cpp
     src/pkg/sha256.hpp
+    src/pkg/imza.cpp
+    src/pkg/imza.hpp
     src/pkg/tpkg.cpp
     src/pkg/tpkg.hpp
 )

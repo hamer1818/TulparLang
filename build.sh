@@ -646,6 +646,9 @@ if [ "$ACTION" = "suites" ]; then
     # cikti (2026-09-27). Yerel sahte registry, istek gunlugu sayiliyor. ~2 sn.
     if command -v python3 >/dev/null 2>&1 && [ -f tests/pkg_registry_audit.py ]; then
         kapi_kuyruk "Paket registry denetimi basarisiz!" python3 tests/pkg_registry_audit.py ./tulpar
+        # Paket imzasi (2026-11-26): keygen/sign/verify + [trust] ile kurulum,
+        # degistirilmis / yabanci / imzasiz paket reddi, onbellek imzaciya bakiyor.
+        kapi_kuyruk "Paket imza denetimi basarisiz!" python3 tests/pkg_imza_audit.py tulpar
     fi
 
     # UÇTAN UCA AOT DUMANI: derleyici gerçekten program üretebiliyor mu?

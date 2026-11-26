@@ -1,6 +1,7 @@
 #include "pkg_cli.hpp"
 #include "manifest.hpp"
 #include "sha256.hpp"
+#include "imza.hpp"
 #include "tpkg.hpp"
 #include "../common/http_fetch.hpp"
 
@@ -783,7 +784,7 @@ int cmd_install(int argc, char **argv) {
     // the same manifest is byte-stable even if the registry's `latest`
     // pointer moves later, AND so we can detect tampered registries
     // serving different content under the same URL.
-    struct LockEntry { std::string name, url, sha256; };
+    struct LockEntry { std::string name, url, sha256, signer; };
     std::vector<LockEntry> lock_entries;
 
     // Read the existing lockfile if present so subsequent installs can
@@ -800,6 +801,7 @@ int cmd_install(int argc, char **argv) {
     // compatible.
     std::map<std::string, std::string> prev_resolved;
     std::map<std::string, std::string> prev_sha;
+    std::map<std::string, std::string> prev_signer;  // [signatures] (2026-11-26)
     if (file_exists(kLockFile)) {
         std::ifstream lf(kLockFile);
         std::string section;
@@ -831,6 +833,7 @@ int cmd_install(int argc, char **argv) {
             }
             if (section == "resolved") prev_resolved[k] = v;
             else if (section == "checksums") prev_sha[k] = v;
+            else if (section == "signatures") prev_signer[k] = v;
         }
     }
 
@@ -866,6 +869,57 @@ int cmd_install(int argc, char **argv) {
         return true;
     };
 
+    // PAKET IMZASI (2026-11-26). `[trust] keys` bossa hic denetlenmez (eski
+    // davranis). Doluysa indirilen her `url:` / kayit defteri paketi icin
+    // `<url>.sig` cekilir ve guvenilen anahtarlardan biriyle dogrulanir.
+    // Gecersiz imza HER ZAMAN hata (biri paketi degistirdi); imza YOKSA
+    // `require_signatures = true` iken hata, degilse uyari. Dogrulayan
+    // anahtar kilide (`[signatures]`) yazilir; onbellek isabeti yalniz kilitteki
+    // imzaci hala guvenilir listedeyse gecerli (anahtar listeden cikarilinca
+    // paket yeniden indirilip dogrulanir).
+    auto trusted = [&](const std::string &pub) {
+        for (const auto &k : m.trust_keys) if (k == pub) return true;
+        return false;
+    };
+    auto signature_ok_cached = [&](const std::string &name) {
+        if (m.trust_keys.empty()) return true;
+        auto it = prev_signer.find(name);
+        if (it != prev_signer.end() && trusted(it->second)) return true;
+        return !m.require_signatures;
+    };
+    // Basari: true (+ signer). Hata: false (mesaj basildi).
+    auto verify_signature = [&](const std::string &name, const std::string &url,
+                                const std::string &body, std::string &signer) -> bool {
+        signer.clear();
+        if (m.trust_keys.empty()) return true;
+        std::string sig, err;
+        int st = 0;
+        const bool got = tulpar::http_fetch_url(url + ".sig", sig, st, err) && st >= 200 && st < 300;
+        if (!got) {
+            if (m.require_signatures) {
+                std::fprintf(stderr,
+                             "tulpar pkg install: %s: imza yok (%s.sig) ve [trust] "
+                             "require_signatures = true / signature missing, signatures required\n",
+                             name.c_str(), url.c_str());
+                return false;
+            }
+            std::fprintf(stderr, "  ! %s: imzasiz paket (%s.sig yok) / unsigned package\n",
+                         name.c_str(), url.c_str());
+            return true;
+        }
+        std::string last_err;
+        for (const auto &k : m.trust_keys) {
+            std::string verr;
+            if (tulpar::imza_verify(body, sig, k, verr)) { signer = k; return true; }
+            last_err = verr;
+        }
+        std::fprintf(stderr,
+                     "tulpar pkg install: %s: imza guvenilen hicbir anahtarla dogrulanmadi — "
+                     "paket reddedildi (%s) / signature does not verify with any trusted key\n",
+                     name.c_str(), last_err.c_str());
+        return false;
+    };
+
     int installed = 0;
     int skipped = 0;
     for (const auto &[name, spec] : m.dependencies) {
@@ -875,11 +929,11 @@ int cmd_install(int argc, char **argv) {
         // path for now. Real semver registry comes after TLS lands.
         if (spec.rfind("url:", 0) == 0) {
             std::string url = spec.substr(4);
-            if (local_matches_lock(name, url)) {
+            if (local_matches_lock(name, url) && signature_ok_cached(name)) {
                 std::fprintf(stdout,
                              "  = %s (cached, sha256 matches lockfile)\n",
                              name.c_str());
-                lock_entries.push_back({name, url, prev_sha[name]});
+                lock_entries.push_back({name, url, prev_sha[name], prev_signer[name]});
                 installed++;
                 continue;
             }
@@ -913,6 +967,8 @@ int cmd_install(int argc, char **argv) {
                              sit->second.c_str(), body_sha.c_str());
                 return 1;
             }
+            std::string signer;
+            if (!verify_signature(name, url, body, signer)) return 1;
             fs::path dest_dir = modules_dir / name;
             std::error_code ec2;
             fs::remove_all(dest_dir, ec2);
@@ -977,7 +1033,7 @@ int cmd_install(int argc, char **argv) {
                              name.c_str(), target.string().c_str(), body.size(),
                              url.c_str(), body_sha.c_str());
             }
-            lock_entries.push_back({name, url, body_sha});
+            lock_entries.push_back({name, url, body_sha, signer});
             installed++;
             continue;
         }
@@ -1089,11 +1145,11 @@ int cmd_install(int argc, char **argv) {
             }
             std::string url = registry_source_url(used_reg, name, resolved_version);
 
-            if (local_matches_lock(name, url)) {
+            if (local_matches_lock(name, url) && signature_ok_cached(name)) {
                 std::fprintf(stdout,
                              "  = %s@%s (cached, sha256 matches lockfile)\n",
                              name.c_str(), spec.c_str());
-                lock_entries.push_back({name, url, prev_sha[name]});
+                lock_entries.push_back({name, url, prev_sha[name], prev_signer[name]});
                 installed++;
                 if (wants_binary(m, name)) {
                     try_fetch_binary(used_reg, name, resolved_version,
@@ -1154,6 +1210,8 @@ int cmd_install(int argc, char **argv) {
                              sit->second.c_str(), body_sha.c_str());
                 return 1;
             }
+            std::string signer;
+            if (!verify_signature(name, url, body, signer)) return 1;
             fs::path dest_dir = modules_dir / name;
             std::error_code ec2;
             fs::remove_all(dest_dir, ec2);
@@ -1213,7 +1271,7 @@ int cmd_install(int argc, char **argv) {
                              target.string().c_str(), body.size(),
                              body_sha.c_str());
             }
-            lock_entries.push_back({name, url, body_sha});
+            lock_entries.push_back({name, url, body_sha, signer});
             installed++;
             if (wants_binary(m, name)) {
                 try_fetch_binary(used_reg, name, resolved_version, dest_dir);
@@ -1268,7 +1326,7 @@ int cmd_install(int argc, char **argv) {
         // resolution is just "look at the same directory next time",
         // so the spec IS the lock. No sha256: local files can change
         // freely, the lockfile-cache flow doesn't apply here.
-        lock_entries.push_back({name, spec, ""});
+        lock_entries.push_back({name, spec, "", ""});
         installed++;
     }
 
@@ -1310,6 +1368,15 @@ int cmd_install(int argc, char **argv) {
                 lock_body += " = \"";
                 lock_body += escape(e.sha256);
                 lock_body += "\"\n";
+            }
+        }
+        bool any_sig = false;
+        for (const auto &e : lock_entries) if (!e.signer.empty()) any_sig = true;
+        if (any_sig) {
+            lock_body += "\n[signatures]\n";
+            for (const auto &e : lock_entries) {
+                if (e.signer.empty()) continue;
+                lock_body += e.name + " = \"" + escape(e.signer) + "\"\n";
             }
         }
         std::ofstream lf(kLockFile, std::ios::binary | std::ios::trunc);
@@ -1997,6 +2064,13 @@ void print_usage() {
         "                           --registry <url>   override the registry root\n"
         "                           --token <tok>      override TULPAR_PUBLISH_TOKEN\n"
         "                           --dry-run          print the bundle plan, skip POST\n"
+        "  keygen <ozel.key>      Ed25519 key pair; prints the public key\n"
+        "  sign <file> --key <k>  Write <file>.sig (Ed25519 detached signature)\n"
+        "  verify <file> <sig> <ed25519:pub>   Check a signature\n"
+        "\n"
+        "Signed installs: [trust] keys = [\"ed25519:...\"] makes install fetch\n"
+        "<url>.sig for url:/registry packages and verify it; an invalid signature\n"
+        "is always an error, a missing one only with require_signatures = true.\n"
         "\n"
         "The manifest format is a small TOML subset (string values only,\n"
         "top-level keys + a single [dependencies] table). `tulpar pkg init`\n"
@@ -2013,6 +2087,80 @@ void print_usage() {
 }
 
 }  // namespace
+
+// `tulpar pkg keygen <ozel.key>` — Ed25519 anahtar cifti; ozel anahtar 0600,
+// genel anahtar stdout'a (`[trust] keys`e yazilacak metin).
+int cmd_keygen(int argc, char **argv) {
+    if (argc < 1) { std::fprintf(stderr, "usage: tulpar pkg keygen <ozel.key>\n"); return 2; }
+    if (file_exists(argv[0])) {
+        std::fprintf(stderr, "tulpar pkg keygen: '%s' zaten var — uzerine yazilmaz / exists\n", argv[0]);
+        return 1;
+    }
+    std::string priv, pub, err;
+    if (!tulpar::imza_keygen(priv, pub, err)) { std::fprintf(stderr, "tulpar pkg keygen: %s\n", err.c_str()); return 1; }
+    {
+        std::ofstream o(argv[0], std::ios::binary | std::ios::trunc);
+        if (!o) { std::fprintf(stderr, "tulpar pkg keygen: '%s' yazilamadi\n", argv[0]); return 1; }
+        o << priv;
+    }
+    std::error_code ec;
+    fs::permissions(argv[0], fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ec);
+    std::fprintf(stdout, "%s\n", pub.c_str());
+    std::fprintf(stderr, "ozel anahtar: %s (gizli tut) — genel anahtar yukarida; kullanicilar "
+                         "tulpar.toml [trust] keys'e ekler\n", argv[0]);
+    return 0;
+}
+
+// `tulpar pkg sign <dosya> --key <ozel.key> [-o <dosya.sig>]`
+int cmd_sign(int argc, char **argv) {
+    std::string file, key, out;
+    for (int i = 0; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--key" && i + 1 < argc) key = argv[++i];
+        else if (a == "-o" && i + 1 < argc) out = argv[++i];
+        else if (file.empty()) file = a;
+    }
+    if (file.empty() || key.empty()) {
+        std::fprintf(stderr, "usage: tulpar pkg sign <dosya> --key <ozel.key> [-o <dosya.sig>]\n");
+        return 2;
+    }
+    bool ok = false;
+    std::string data = slurp_binary(file, ok);
+    if (!ok) { std::fprintf(stderr, "tulpar pkg sign: '%s' okunamadi\n", file.c_str()); return 1; }
+    std::string pem = slurp_binary(key, ok);
+    if (!ok) { std::fprintf(stderr, "tulpar pkg sign: '%s' okunamadi\n", key.c_str()); return 1; }
+    std::string sig, pub, err;
+    if (!tulpar::imza_sign(data, pem, sig, err) || !tulpar::imza_pub_of(pem, pub, err)) {
+        std::fprintf(stderr, "tulpar pkg sign: %s\n", err.c_str());
+        return 1;
+    }
+    if (out.empty()) out = file + ".sig";
+    std::ofstream o(out, std::ios::binary | std::ios::trunc);
+    if (!o) { std::fprintf(stderr, "tulpar pkg sign: '%s' yazilamadi\n", out.c_str()); return 1; }
+    o << sig;
+    std::fprintf(stdout, "imzalandi: %s -> %s (anahtar %s)\n", file.c_str(), out.c_str(), pub.c_str());
+    return 0;
+}
+
+// `tulpar pkg verify <dosya> <dosya.sig> <ed25519:...>`
+int cmd_verify(int argc, char **argv) {
+    if (argc < 3) {
+        std::fprintf(stderr, "usage: tulpar pkg verify <dosya> <dosya.sig> <ed25519:genel>\n");
+        return 2;
+    }
+    bool ok = false;
+    std::string data = slurp_binary(argv[0], ok);
+    if (!ok) { std::fprintf(stderr, "tulpar pkg verify: '%s' okunamadi\n", argv[0]); return 1; }
+    std::string sig = slurp_binary(argv[1], ok);
+    if (!ok) { std::fprintf(stderr, "tulpar pkg verify: '%s' okunamadi\n", argv[1]); return 1; }
+    std::string err;
+    if (!tulpar::imza_verify(data, sig, argv[2], err)) {
+        std::fprintf(stderr, "tulpar pkg verify: GECERSIZ — %s\n", err.c_str());
+        return 1;
+    }
+    std::fprintf(stdout, "gecerli: %s (%s)\n", argv[0], argv[2]);
+    return 0;
+}
 
 int pkg_cli_main(int argc, char **argv) {
     // argv[0] = "tulpar", argv[1] = "pkg", argv[2] = subcommand, …
@@ -2032,6 +2180,9 @@ int pkg_cli_main(int argc, char **argv) {
     if (std::strcmp(sub, "search") == 0)  return cmd_search(sub_argc, sub_argv);
     if (std::strcmp(sub, "info") == 0)    return cmd_info(sub_argc, sub_argv);
     if (std::strcmp(sub, "publish") == 0) return cmd_publish(sub_argc, sub_argv);
+    if (std::strcmp(sub, "keygen") == 0)  return cmd_keygen(sub_argc, sub_argv);
+    if (std::strcmp(sub, "sign") == 0)    return cmd_sign(sub_argc, sub_argv);
+    if (std::strcmp(sub, "verify") == 0)  return cmd_verify(sub_argc, sub_argv);
 
     std::fprintf(stderr, "tulpar pkg: unknown command '%s'\n\n", sub);
     print_usage();

@@ -54,6 +54,11 @@ struct Manifest {
     // when it is unreachable or answers non-2xx. `publish` always goes to
     // `url` only (a mirror is read-only by definition).
     std::vector<std::string> registry_mirrors;
+    // `[trust]` (paket imzalama, 2026-11-26): guvenilen Ed25519 genel
+    // anahtarlari (`"ed25519:<base64>"`) ve imzasiz/gecersiz imzali paketin
+    // HATA mi (true) uyari mi (false) oldugu. keys bossa imza hic denetlenmez.
+    std::vector<std::string> trust_keys;
+    bool require_signatures = false;
     // dep name -> version requirement (as written in the manifest).
     // Order is preserved via a parallel vector so `tulpar pkg list`
     // shows them in the order the user wrote them.

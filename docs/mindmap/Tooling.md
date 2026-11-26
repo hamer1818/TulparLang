@@ -45,6 +45,23 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 > `[registry] mirrors = [...]` okuma yedeği, lock hangi aynadan geldiğini kaydeder ve aynı
 > ad@sürümün sha256'sı aynalar arasında da tutmalı; `publish` yalnız `url`'e.
 
+### Paket imzası (2026-11-26)
+`tulpar.lock`'taki sha256 "ilk indirmeyle aynı bayt" der; ilk indirmenin **yazarın**
+paketi olduğunu söylemez — ele geçirilmiş bir kayıt defteri ilk kurulumda da sahte paket
+verebilir. İmza bunu kapatır (`src/pkg/imza.cpp`, OpenSSL Ed25519):
+```bash
+tulpar pkg keygen yazar.key            # genel anahtarı basar: ed25519:<base64>
+tulpar pkg sign paket.tpr --key yazar.key    # paket.tpr.sig
+tulpar pkg verify paket.tpr paket.tpr.sig ed25519:...
+```
+Kullanıcı tarafı: `[trust] keys = ["ed25519:..."]` (+ `require_signatures = true`).
+`url:`/kayıt defteri paketi için `<url>.sig` çekilir, güvenilen bir anahtarla doğrulanır;
+**geçersiz imza her zaman hata**, eksik imza yalnız `require_signatures`'ta hata (değilse
+uyarı). Doğrulayan anahtar kilide (`[signatures]`) yazılır; önbellek isabeti yalnız o
+imzacı hâlâ güvenilirse — anahtar listeden çıkınca paket yeniden indirilip doğrulanır.
+`[trust]` yoksa `.sig` hiç istenmez (eski davranış). Kayıt defteri (`tulpar-be`) tarafı:
+`<source-url>.sig` sunmalı — o depo ayrı. Kapı: `tests/pkg_imza_audit.py`.
+
 ## Analiz — `tulpar analyze` (K157, 2026-09-29)
 `src/cli/analyze_cmd.cpp`: derlemeden/linklemeden (i) dosyanın her üst düzey fonksiyonu için
 `@no_alloc` kuralıyla ayırma raporu (typeinfer `typeinfer_alloc_report`, geçişli, beyaz liste —

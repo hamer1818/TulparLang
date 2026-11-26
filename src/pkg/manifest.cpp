@@ -72,7 +72,7 @@ std::string escape_for_toml(const std::string &s) {
 bool manifest_parse(const std::string &source, Manifest &out,
                     std::string &out_err) {
     out = Manifest{};
-    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID, SEC_BUILD, SEC_EXT, SEC_UNKNOWN };
+    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID, SEC_BUILD, SEC_EXT, SEC_TRUST, SEC_UNKNOWN };
     Section section = SEC_TOP;
     // TANINMAYAN bolum/anahtar HATA DEGIL, UYARI (tulpar-engine oyun geri
     // bildirimi #21, 2026-10-08): eskiden tek bir yeni anahtar (`[android]
@@ -97,6 +97,7 @@ bool manifest_parse(const std::string &source, Manifest &out,
                                      "internet, lan, bildirim, url_scheme";
             case SEC_BUILD: return "target, entry, output";
             case SEC_EXT: return "paths";
+            case SEC_TRUST: return "keys, require_signatures";
             default: return "";
         }
     };
@@ -107,6 +108,7 @@ bool manifest_parse(const std::string &source, Manifest &out,
             case SEC_ANDROID: return "[android]";
             case SEC_BUILD: return "[build]";
             case SEC_EXT: return "[ext]";
+            case SEC_TRUST: return "[trust]";
             default: return "";
         }
     };
@@ -135,11 +137,13 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 section = SEC_BUILD;
             } else if (name == "ext") {
                 section = SEC_EXT;
+            } else if (name == "trust") {
+                section = SEC_TRUST;
             } else {
                 // Bolumun anahtarlari tek tek uyarilmaz: bolum basligi bir
                 // kez soylenir, altindaki satirlar sessizce atlanir.
                 warn(lineno, "unknown section [" + name + "] (dependencies, registry, "
-                             "release.binaries, binaries, android, build, ext) — "
+                             "release.binaries, binaries, android, build, ext, trust) — "
                              "its keys are ignored");
                 section = SEC_UNKNOWN;
             }
@@ -256,11 +260,25 @@ bool manifest_parse(const std::string &source, Manifest &out,
         // else is an error (not silently dropped: a mirror list that parses
         // to nothing would make the fallback look configured while it never
         // runs; an extension path list the same).
+        if (section == SEC_TRUST && key == "require_signatures") {
+            std::string bool_part = val_part;
+            size_t hash = bool_part.find('#');
+            if (hash != std::string::npos) bool_part = strip(bool_part.substr(0, hash));
+            if (bool_part == "true") { out.require_signatures = true; continue; }
+            if (bool_part == "false") { out.require_signatures = false; continue; }
+            out_err = "line " + std::to_string(lineno) +
+                      ": [trust] 'require_signatures' must be `true` or `false` (got: '" +
+                      bool_part + "')";
+            return false;
+        }
         const bool is_mirrors = section == SEC_REGISTRY && key == "mirrors";
         const bool is_ext_paths = section == SEC_EXT && key == "paths";
-        if (is_mirrors || is_ext_paths) {
-            const std::string what = is_mirrors ? "[registry] mirrors" : "[ext] paths";
-            std::vector<std::string> &dest = is_mirrors ? out.registry_mirrors : out.ext_paths;
+        const bool is_trust_keys = section == SEC_TRUST && key == "keys";
+        if (is_mirrors || is_ext_paths || is_trust_keys) {
+            const std::string what = is_mirrors ? "[registry] mirrors"
+                                     : is_ext_paths ? "[ext] paths" : "[trust] keys";
+            std::vector<std::string> &dest = is_mirrors ? out.registry_mirrors
+                                             : is_ext_paths ? out.ext_paths : out.trust_keys;
             std::string arr = val_part;
             size_t hash = std::string::npos;
             // comment after the closing bracket

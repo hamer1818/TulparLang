@@ -13,6 +13,12 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — paket imzalama (Ed25519)
+
+- `tulpar pkg keygen / sign / verify`. `tulpar.toml` `[trust] keys = ["ed25519:..."]` verilince
+  `pkg install` her `url:`/kayıt defteri paketi için `<url>.sig`'i doğrular: geçersiz imza hata,
+  eksik imza `require_signatures = true` ise hata. Doğrulayan anahtar `tulpar.lock` `[signatures]`'a yazılır.
+
 ### Eklendi — profilleyici: `tulpar --profile`
 
 - Fonksiyon başına öz %, öz/kapsayıcı süre, çağrı sayısı ve öz arena baytı; program bitince stderr'e.
