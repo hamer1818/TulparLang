@@ -268,10 +268,11 @@ static LLVMValueRef build_checked_div(LLVMBackend *backend, LLVMValueRef l,
 
 static void collect_declared_locals(ASTNode_C *node, std::unordered_set<std::string> &declared) {
   if (!node) return;
-  if (node->type == AST_VARIABLE_DECL) {
-    if (node->name) {
-      declared.insert(node->name);
-    }
+  // `for (x in xs)`: x de bir bildirim (RFC C1, 2026-11-26). Eskiden
+  // sayilmiyordu: dongu govdesindeki lambda x'i yakalamiyor, kapsam zincirinde
+  // BASKA bir fonksiyonun yuvasini okuyordu — uc kapanis `null null null`.
+  if ((node->type == AST_VARIABLE_DECL || node->type == AST_FOR_IN) && node->name) {
+    declared.insert(node->name);
   }
   if (node->type != AST_FUNCTION_DECL && node->type != AST_LAMBDA) {
     collect_declared_locals(node->left, declared);
@@ -311,10 +312,8 @@ static void collect_free_variables(ASTNode_C *node,
                                    std::unordered_set<std::string> declared_inner, 
                                    std::unordered_set<std::string> &free_vars) {
   if (!node) return;
-  if (node->type == AST_VARIABLE_DECL) {
-    if (node->name) {
-      declared_inner.insert(node->name);
-    }
+  if ((node->type == AST_VARIABLE_DECL || node->type == AST_FOR_IN) && node->name) {
+    declared_inner.insert(node->name);
   }
   if (node->type == AST_IDENTIFIER) {
     if (node->name && declared_inner.find(node->name) == declared_inner.end()) {
@@ -417,40 +416,92 @@ struct NestedVisitor {
 // function/lambda subtrees — their decls belong to their own frame).
 // Formerly the function-branch-local DeclVisitor; hoisted so the program
 // root can assign slots to captured top-level scope-locals too.
-static void assign_capture_decl_slots(ASTNode_C *curr,
-                                      const std::unordered_set<std::string> &captured_vars,
-                                      std::unordered_map<std::string, int> &func_slots,
-                                      int &slot_idx) {
+// DONGU BASINA ORTAM (RFC C1, 2026-11-26): bir dongunun KENDI bildirdigi ve
+// dongudeki bir lambdanin yakaladigi adlar — `for` init'i, `for-in`
+// degiskeni, govde bildirimleri — fonksiyonun ortaminda DEGIL, dongu
+// dugumunun tablosunda (cd->slots[dongu]) yuva alir. Codegen her iterasyona
+// kendi ortam dizisini verir (yuva 0 = kapsayan ortam), `for` artimdan once
+// degerleri yeni ortama kopyalar: JS `let` anlami — dongude uretilen her
+// kapanis kendi iterasyonunun degerini gorur. Donguden ONCE bildirilmis
+// yakalanan adlar fonksiyonun ortaminda kalir ve PAYLASILIR (eskisi gibi).
+// Eskiden butun dongu degiskenleri tek yuvayi paylasiyordu: uc kapanis
+// `30 30 30` (for), `20 20 20` (govde) basiyordu.
+static void assign_capture_decl_slots_t(ASTNode_C *curr,
+                                        const std::unordered_set<std::string> &captured_vars,
+                                        std::unordered_map<std::string, int> &table,
+                                        int &slot_idx, CaptureData *cd);
+
+static void assign_loop_slots(ASTNode_C *loop,
+                              const std::unordered_set<std::string> &captured_vars,
+                              std::unordered_map<std::string, int> &outer,
+                              int &outer_idx, CaptureData *cd) {
+  std::unordered_map<std::string, int> lt;
+  int li = 1;  // yuva 0 kapsayan ortam
+  if (loop->type == AST_FOR_IN && loop->name &&
+      captured_vars.count(loop->name))
+    lt[loop->name] = li++;
+  if (loop->type == AST_FOR) assign_capture_decl_slots_t(loop->init, captured_vars, lt, li, cd);
+  assign_capture_decl_slots_t(loop->body, captured_vars, lt, li, cd);
+  // Kosul / artim / yinelenen ifade bildirim tasimaz; icindeki lambdalarin
+  // bildirimleri de kendi cercevelerinin.
+  assign_capture_decl_slots_t(loop->condition, captured_vars, outer, outer_idx, cd);
+  assign_capture_decl_slots_t(loop->increment, captured_vars, outer, outer_idx, cd);
+  assign_capture_decl_slots_t(loop->iterable, captured_vars, outer, outer_idx, cd);
+  if (!lt.empty()) cd->slots[loop] = lt;
+}
+
+static void assign_capture_decl_slots_t(ASTNode_C *curr,
+                                        const std::unordered_set<std::string> &captured_vars,
+                                        std::unordered_map<std::string, int> &table,
+                                        int &slot_idx, CaptureData *cd) {
   if (!curr) return;
+  if (cd && (curr->type == AST_FOR || curr->type == AST_WHILE ||
+             curr->type == AST_FOR_IN)) {
+    assign_loop_slots(curr, captured_vars, table, slot_idx, cd);
+    return;
+  }
   if (curr->type == AST_VARIABLE_DECL && curr->name) {
     std::string name = curr->name;
-    if (captured_vars.find(name) != captured_vars.end() && func_slots.find(name) == func_slots.end()) {
-      func_slots[name] = slot_idx++;
+    if (captured_vars.find(name) != captured_vars.end() && table.find(name) == table.end()) {
+      table[name] = slot_idx++;
     }
   }
   if (curr->type != AST_FUNCTION_DECL && curr->type != AST_LAMBDA) {
-    assign_capture_decl_slots(curr->left, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->right, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->body, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->condition, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->then_branch, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->else_branch, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->init, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->increment, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->iterable, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->return_value, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->index, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->receiver, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->callee, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->try_block, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->catch_block, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->finally_block, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->throw_expr, captured_vars, func_slots, slot_idx);
-    for (int i = 0; i < curr->statement_count; i++) assign_capture_decl_slots(curr->statements[i], captured_vars, func_slots, slot_idx);
-    for (int i = 0; i < curr->argument_count; i++) assign_capture_decl_slots(curr->arguments[i], captured_vars, func_slots, slot_idx);
-    for (int i = 0; i < curr->element_count; i++) assign_capture_decl_slots(curr->elements[i], captured_vars, func_slots, slot_idx);
-    for (int i = 0; i < curr->object_count; i++) assign_capture_decl_slots(curr->object_values[i], captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots_t(curr->left, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->right, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->body, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->condition, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->then_branch, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->else_branch, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->init, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->increment, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->iterable, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->return_value, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->index, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->receiver, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->callee, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->try_block, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->catch_block, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->finally_block, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->throw_expr, captured_vars, table, slot_idx, cd);
+    for (int i = 0; i < curr->statement_count; i++) assign_capture_decl_slots_t(curr->statements[i], captured_vars, table, slot_idx, cd);
+    for (int i = 0; i < curr->argument_count; i++) assign_capture_decl_slots_t(curr->arguments[i], captured_vars, table, slot_idx, cd);
+    for (int i = 0; i < curr->element_count; i++) assign_capture_decl_slots_t(curr->elements[i], captured_vars, table, slot_idx, cd);
+    for (int i = 0; i < curr->object_count; i++) assign_capture_decl_slots_t(curr->object_values[i], captured_vars, table, slot_idx, cd);
   }
+}
+
+// Assigns env slot indices (after the existing ones) to every nested
+// VARIABLE_DECL whose name is in `captured_vars` (skipping nested
+// function/lambda subtrees — their decls belong to their own frame).
+// Formerly the function-branch-local DeclVisitor; hoisted so the program
+// root can assign slots to captured top-level scope-locals too. Dongunun
+// kendi bildirimleri dongunun tablosuna gider (yukarida).
+static void assign_capture_decl_slots(ASTNode_C *curr,
+                                      const std::unordered_set<std::string> &captured_vars,
+                                      std::unordered_map<std::string, int> &func_slots,
+                                      int &slot_idx, CaptureData *cd) {
+  assign_capture_decl_slots_t(curr, captured_vars, func_slots, slot_idx, cd);
 }
 
 static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int depth, ASTNode_C *current_func) {
@@ -492,7 +543,7 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
         for (int i = 0; i < node->statement_count; i++) {
           ASTNode_C *st = node->statements[i];
           if (!st || st->type == AST_FUNCTION_DECL) continue;
-          assign_capture_decl_slots(st, top_captured, pcd->slots[node], pslot);
+          assign_capture_decl_slots(st, top_captured, pcd->slots[node], pslot, pcd);
         }
       }
     }
@@ -521,7 +572,7 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
         }
       }
     }
-    assign_capture_decl_slots(node->body, captured, cd->slots[node], slot);
+    assign_capture_decl_slots(node->body, captured, cd->slots[node], slot, cd);
     analyze_module_captures(backend, node->body, depth + 1, node);
     return;
   }
@@ -763,10 +814,20 @@ static void lower_for_in_in_place(LLVMBackend *backend, ASTNode_C *node) {
   access->left = mk_id(it_name);
   access->index = mk_id(idx_name);
   access->line = line;
-  ASTNode_C *name_assign = ast_node_create(AST_ASSIGNMENT);
+  // Dongu degiskeni bir kapanista yakalaniyorsa (RFC C1) her iterasyonda
+  // TAZE bir bildirim: `var x = it[idx]` govdede — iterasyon ortamina yazilir,
+  // o iterasyonun kapanisi kendi x'ini gorur. Yakalanmiyorsa eski bicim
+  // (distaki x'e atama) birebir korunur.
+  CaptureData *fi_cd = (CaptureData *)backend->capture_data;
+  auto fi_tab = fi_cd ? fi_cd->slots.find(node) : decltype(fi_cd->slots.find(node))();
+  const bool fi_has_tab = fi_cd && fi_tab != fi_cd->slots.end();
+  const bool fi_var_captured =
+      fi_has_tab && fi_tab->second.find(loop_var) != fi_tab->second.end();
+  ASTNode_C *name_assign = ast_node_create(fi_var_captured ? AST_VARIABLE_DECL : AST_ASSIGNMENT);
   name_assign->name = strdup(loop_var);
   name_assign->right = access;
   name_assign->line = line;
+  if (fi_var_captured) name_assign->data_type = TYPE_VOID;
 
   // Wrap body so the assignment runs first each iteration.
   ASTNode_C *new_body = ast_node_create(AST_BLOCK);
@@ -783,6 +844,13 @@ static void lower_for_in_in_place(LLVMBackend *backend, ASTNode_C *node) {
   for_node->increment = idx_inc;
   for_node->body = new_body;
   for_node->line = line;
+  // Dongunun ortam tablosu yeni `for` dugumune gecer (orijinal dugum BLOCK
+  // oluyor; tablo onda kalsaydi dongu ortami hic kurulmazdi).
+  if (fi_has_tab) {
+    std::unordered_map<std::string, int> moved = fi_tab->second;
+    fi_cd->slots.erase(fi_tab);
+    fi_cd->slots[for_node] = moved;
+  }
 
   // Mutate the original node into AST_BLOCK { it_decl; for_node; }. We
   // null out the ownership pointers we transferred so the original node's
@@ -5335,9 +5403,142 @@ static bool main_local_foreign_use(LLVMBackend *backend, LLVMValueRef slot,
   return true;
 }
 
+static void llvm_emit_array_set(LLVMBackend *backend, LLVMValueRef array,
+                                LLVMValueRef idx_val, LLVMValueRef value);
+// ---- Dongu basina ortam (RFC C1, 2026-11-26) ---------------------------------
+// Yakalanan dongu bildirimleri (assign_loop_slots) her iterasyonda kendi ortam
+// dizisinde yasar: yuva 0 = kapsayan ortam (bir dis dongununki ya da
+// cercevenin), 1.. = dongunun yuvalari. Gecerli ortam bir alloca'da (her
+// iterasyon degisiyor); dongu func_stack'e de itilir ki dongude uretilen
+// lambdanin govdesi zinciri onun uzerinden yurusun (find_env_for_decl).
+struct LoopEnvEntry {
+  ASTNode_C *loop;
+  LLVMValueRef slot;     // ptr alloca: bu iterasyonun ortami
+  LLVMValueRef parent;   // kapsayan ortam (donguye girerken bir kez okundu)
+  int nslots;            // yuva 0 haric
+  FuncStackNode *fsn;
+};
+
+static std::vector<LoopEnvEntry> *loop_env_vec(LLVMBackend *backend) {
+  return static_cast<std::vector<LoopEnvEntry> *>(backend->loop_envs);
+}
+
+static int loop_env_table_size(LLVMBackend *backend, ASTNode_C *loop) {
+  CaptureData *cd = (CaptureData *)backend->capture_data;
+  if (!cd || !loop) return 0;
+  auto it = cd->slots.find(loop);
+  return it == cd->slots.end() ? 0 : (int)it->second.size();
+}
+
+static LoopEnvEntry *loop_env_find(LLVMBackend *backend, ASTNode_C *loop) {
+  auto *v = loop_env_vec(backend);
+  if (!v) return nullptr;
+  for (auto it = v->rbegin(); it != v->rend(); ++it)
+    if (it->loop == loop) return &*it;
+  return nullptr;
+}
+
+static LLVMValueRef loop_env_load(LLVMBackend *backend, const LoopEnvEntry *e) {
+  return LLVMBuildLoad2(backend->builder, backend->ptr_type, e->slot, "loop_env");
+}
+
+// Yeni kapanisin (ve ic dongu ortaminin) gorecegi ortam: en ic acik dongu
+// ortami, yoksa cercevenin ortami (lambda cercevesi kendi ortami yoksa
+// parametresindeki ust ortam), yoksa null.
+static LLVMValueRef closure_env_here(LLVMBackend *backend) {
+  auto *v = loop_env_vec(backend);
+  if (v && !v->empty()) return loop_env_load(backend, &v->back());
+  if (backend->current_env_ptr) return backend->current_env_ptr;
+  if (backend->current_function_node &&
+      backend->current_function_node->type == AST_LAMBDA)
+    return LLVMGetParam(backend->current_function, 1);
+  return LLVMConstNull(backend->ptr_type);
+}
+
+static LLVMValueRef emit_new_env(LLVMBackend *backend, LLVMValueRef parent, int nslots) {
+  LLVMValueRef alloc_args[] = {LLVMConstNull(backend->ptr_type)};
+  LLVMValueRef env = LLVMBuildCall2(
+      backend->builder, LLVMGlobalGetValueType(backend->func_vm_allocate_array),
+      backend->func_vm_allocate_array, alloc_args, 1, "loop_env_new");
+  // Gecici VMValue yuvasi GIRISTE: dongu icinde LLVMBuildAlloca yigini her
+  // turda buyutur (tests/stack_growth_smoke.py).
+  LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "loop_env_tmp");
+  LLVMBuildStore(backend->builder, llvm_build_vm_val_obj(backend, parent), tmp);
+  LLVMValueRef push0[] = {LLVMConstNull(backend->ptr_type), env, tmp};
+  LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(backend->func_vm_array_push),
+                 backend->func_vm_array_push, push0, 3, "");
+  for (int i = 0; i < nslots; i++) {
+    LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), tmp);
+    LLVMValueRef pushi[] = {LLVMConstNull(backend->ptr_type), env, tmp};
+    LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(backend->func_vm_array_push),
+                   backend->func_vm_array_push, pushi, 3, "");
+  }
+  return env;
+}
+
+static void loop_env_push(LLVMBackend *backend, ASTNode_C *loop) {
+  auto *v = loop_env_vec(backend);
+  if (!v) {
+    v = new std::vector<LoopEnvEntry>();
+    backend->loop_envs = v;
+  }
+  LoopEnvEntry e;
+  e.loop = loop;
+  e.nslots = loop_env_table_size(backend, loop);
+  e.parent = closure_env_here(backend);
+  e.slot = llvm_build_alloca_at_entry(backend, backend->ptr_type, "loop_env_slot");
+  LLVMBuildStore(backend->builder, emit_new_env(backend, e.parent, e.nslots), e.slot);
+  e.fsn = new FuncStackNode{loop, backend->func_stack};
+  backend->func_stack = e.fsn;
+  v->push_back(e);
+}
+
+static void loop_env_pop(LLVMBackend *backend) {
+  auto *v = loop_env_vec(backend);
+  if (!v || v->empty()) return;
+  LoopEnvEntry e = v->back();
+  v->pop_back();
+  backend->func_stack = e.fsn->parent;
+  delete e.fsn;
+}
+
+// Sonraki iterasyonun ortami. copy: dongu degiskenleri tasinir (`for` artimi
+// yeni ortamdaki kopyayi artirir — onceki iterasyonun kapanislari eskisini
+// tutar); copy=false: govde bildirimleri zaten her turda yeniden yaziliyor.
+static void loop_env_renew(LLVMBackend *backend, LoopEnvEntry *e, bool copy) {
+  LLVMValueRef old = copy ? loop_env_load(backend, e) : nullptr;
+  LLVMValueRef nenv = emit_new_env(backend, e->parent, e->nslots);
+  for (int i = 1; copy && i <= e->nslots; i++) {
+    LLVMValueRef idx = LLVMConstInt(backend->int32_type, i, 0);
+    LLVMValueRef get_args[] = {old, idx};
+    LLVMValueRef val = llvm_call_vmvalue_func(backend, backend->func_vm_array_get,
+                                              get_args, 2, "loop_env_cp");
+    llvm_emit_array_set(backend, nenv, idx, val);
+  }
+  LLVMBuildStore(backend->builder, nenv, e->slot);
+}
+
+// Lambda / fonksiyon govdesine girerken: dis cercevenin dongu ortamlari bu
+// LLVM fonksiyonunda gecersiz (alloca'lari baska fonksiyonda).
+static void *loop_envs_enter_frame(LLVMBackend *backend) {
+  void *saved = backend->loop_envs;
+  backend->loop_envs = nullptr;
+  return saved;
+}
+static void loop_envs_leave_frame(LLVMBackend *backend, void *saved) {
+  delete loop_env_vec(backend);
+  backend->loop_envs = saved;
+}
+
 LLVMValueRef find_env_for_decl(LLVMBackend *backend, ASTNode_C *decl_node) {
   CaptureData *cd = (CaptureData*)backend->capture_data;
   ASTNode_C *curr = backend->current_function_node;
+
+  // Bu cercevede acik bir dongunun bildirimi: o dongunun GECERLI iterasyon
+  // ortami (RFC C1).
+  if (LoopEnvEntry *le = loop_env_find(backend, decl_node)) {
+    return loop_env_load(backend, le);
+  }
   
   if (curr == decl_node) {
     return backend->current_env_ptr;
@@ -5350,9 +5551,15 @@ LLVMValueRef find_env_for_decl(LLVMBackend *backend, ASTNode_C *decl_node) {
     env = backend->current_env_ptr;
   }
   
+  // Yurume gecerli fonksiyonun USTUNDEN baslar. Bu cercevenin acik dongu
+  // dugumleri yiginin tepesinde, fonksiyonun ustunde duruyor (loop_env_push)
+  // — onlari atla; aksi halde fonksiyonun kendisi bir atlama sayilirdi.
   FuncStackNode *stack_node = backend->func_stack;
-  if (stack_node) {
-    stack_node = stack_node->parent;
+  {
+    FuncStackNode *f = stack_node;
+    while (f && f->node != curr) f = f->parent;
+    if (f) stack_node = f->parent;
+    else if (stack_node) stack_node = stack_node->parent;
   }
   
   while (stack_node) {
@@ -9696,6 +9903,27 @@ static LLVMValueRef emit_boxed_binop(LLVMBackend *backend, LLVMValueRef L, LLVMV
 // dogruluk hizdan onemli.
 //
 // Post semantigi korunuyor: ESKI deger donuyor (`x++` ile ayni).
+// `x++` / `x--` YAKALANAN degiskende (2026-11-26): deger cercevenin ortam
+// dizisinde (ya da dongu iterasyon ortaminda) — alloca'si yok. Eskiden
+// get_local NULL donuyor ve derleme "'x' degiskeni artirilamaz — tanimli
+// degil" ile dusuyordu: `for (int i = 0; i < n; i++)` dongusunde bir kapanis
+// i'yi yakaladigi anda program derlenmiyordu (v3.48.1'de de). Kutulu yolun
+// anlami: tamsayi okunur, +/-1 yazilir, eski deger doner.
+static LLVMValueRef codegen_captured_step(LLVMBackend *backend, LocalVar *var, int delta,
+                                          const char *name) {
+  LLVMValueRef env = find_env_for_decl(backend, var->declaring_function);
+  LLVMValueRef idx = LLVMConstInt(backend->int32_type, var->slot_index, 0);
+  LLVMValueRef get_args[] = {env, idx};
+  LLVMValueRef old_val = llvm_call_vmvalue_func(backend, backend->func_vm_array_get,
+                                                get_args, 2, name);
+  LLVMValueRef int_val = llvm_extract_vm_val_int(backend, old_val);
+  LLVMValueRef new_int = LLVMBuildAdd(backend->builder, int_val,
+                                      LLVMConstInt(backend->int_type, (unsigned long long)(long long)delta, 1),
+                                      delta > 0 ? "cap.inc" : "cap.dec");
+  llvm_emit_array_set(backend, env, idx, llvm_vm_val_int_val(backend, new_int));
+  return old_val;
+}
+
 static LLVMValueRef codegen_elem_step(LLVMBackend *backend, ASTNode_C *node,
                                       int delta) {
   ASTNode_C *acc = node->left;
@@ -10527,6 +10755,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
   case AST_INCREMENT: {
     if (node->left) return codegen_elem_step(backend, node, 1);
+    if (LocalVar *cv = get_local_var(backend, node->name))
+      if (cv->is_captured == 1) return codegen_captured_step(backend, cv, 1, node->name);
     // Typed-int fast path: top-level `int x = ...;` registers x as a native
     // i64 global with no boxed VMValue local. get_local() would return NULL
     // in that case, so check the typed/native side first.
@@ -10567,6 +10797,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
   case AST_DECREMENT: {
     if (node->left) return codegen_elem_step(backend, node, -1);
+    if (LocalVar *cv = get_local_var(backend, node->name))
+      if (cv->is_captured == 1) return codegen_captured_step(backend, cv, -1, node->name);
     InferredType vt_dec = get_local_type(backend, node->name);
     LLVMValueRef nat_dec = get_local_native(backend, node->name);
     if (vt_dec == INFERRED_INT && nat_dec) {
@@ -13958,6 +14190,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // 5. Set up compiler stack
     FuncStackNode stack_node = { node, backend->func_stack };
     backend->func_stack = &stack_node;
+    void *lam_saved_loop_envs = loop_envs_enter_frame(backend);
     backend->current_function = func;
     backend->current_function_node = node;
     backend->current_function_is_void_abi = 1;
@@ -14055,6 +14288,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // 11. Restore compiler state and pop scope
     exit_scope(backend);
+    loop_envs_leave_frame(backend, lam_saved_loop_envs);
     backend->func_stack = stack_node.parent;
     backend->current_function = prev_function;
     backend->current_function_node = prev_func_node;
@@ -14070,6 +14304,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // 12. Create ObjClosure and wrap it
     LLVMValueRef void_func_ptr = LLVMBuildBitCast(backend->builder, func, backend->ptr_type, "lam_func_ptr");
     LLVMValueRef env_val = prev_env_ptr;
+    // Dongu icinde uretilen kapanis, o ITERASYONUN ortamini yakalar (RFC C1).
+    if (loop_env_vec(backend) && !loop_env_vec(backend)->empty()) {
+      env_val = loop_env_load(backend, &loop_env_vec(backend)->back());
+    }
     if (!env_val) {
       if (prev_func_node && prev_func_node->type == AST_LAMBDA) {
         env_val = LLVMGetParam(prev_function, 1);
@@ -14740,6 +14978,24 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // captured local so subsequent reads/writes in this same scope resolve
     // through the env too. Runs before the typed-int/global/struct paths
     // so `int count = 0` captured by a closure also lands in the env.
+    // Acik bir dongunun yakalanan bildirimi (RFC C1): bu ITERASYONUN ortamina.
+    if (node->name && loop_env_vec(backend)) {
+      CaptureData *lcd = (CaptureData *)backend->capture_data;
+      auto *lv = loop_env_vec(backend);
+      for (auto it = lv->rbegin(); lcd && it != lv->rend(); ++it) {
+        auto t = lcd->slots.find(it->loop);
+        if (t == lcd->slots.end()) continue;
+        auto sl = t->second.find(node->name);
+        if (sl == t->second.end()) continue;
+        LLVMValueRef linit = node->right ? codegen_expression(backend, node->right)
+                                         : llvm_vm_val_int(backend, 0);
+        LLVMValueRef lenv = loop_env_load(backend, &*it);
+        llvm_emit_array_set(backend, lenv,
+                            LLVMConstInt(backend->int32_type, sl->second, 0), linit);
+        add_local_captured(backend, node->name, lenv, sl->second, it->loop);
+        return linit;
+      }
+    }
     {
       CaptureData *cap_cd = (CaptureData *)backend->capture_data;
       ASTNode_C *cap_fn = backend->current_function_node;
@@ -15961,6 +16217,17 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     return nullptr;
   }
   case AST_WHILE: {
+    // DONGU BASINA ORTAM (RFC C1): govdenin yakalanan bildirimleri her
+    // iterasyonda taze ortamda (codegen_while_body govde basinda yeniler).
+    if (loop_env_table_size(backend, node) > 0) {
+      loop_env_push(backend, node);
+      LLVMBasicBlockRef le_after =
+          append_bb(backend, backend->current_function, "while_env_after");
+      codegen_while_body(backend, node, le_after);
+      LLVMPositionBuilderAtEnd(backend->builder, le_after);
+      loop_env_pop(backend);
+      return nullptr;
+    }
     // Int yerel golge surumu (2026-10-01): uygunsa iki kopya burada uretilir,
     // her biri bu dugumu yeniden dagitir (g_iv dolu: ikinci kez denenmez).
     if (iv_try_version(backend, node)) return nullptr;
@@ -16136,6 +16403,22 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     return codegen_statement(backend, node);
   }
   case AST_FOR: {
+    // DONGU BASINA ORTAM (RFC C1): dongunun yakalanan bildirimleri varsa
+    // surumlemesiz duz yol — her iterasyon kendi ortaminda, artimdan once
+    // degerler yeni ortama kopyalanir (codegen_for_body). Surumleme yollari
+    // yakalanan adlari zaten reddediyor; bu yol onlari hic denemiyor.
+    if (loop_env_table_size(backend, node) > 0) {
+      enter_scope(backend);
+      loop_env_push(backend, node);
+      if (node->init) codegen_statement(backend, node->init);
+      LLVMBasicBlockRef le_after =
+          append_bb(backend, backend->current_function, "for_env_after");
+      codegen_for_body(backend, node, le_after);
+      LLVMPositionBuilderAtEnd(backend->builder, le_after);
+      loop_env_pop(backend);
+      exit_scope(backend);
+      return nullptr;
+    }
     // Int yerel golge surumu: init'ten ONCE (her kopya init'i kendisi kosar).
     if (iv_try_version(backend, node)) return nullptr;
     // for (init; condition; increment) { body }
@@ -18345,6 +18628,7 @@ static void emit_typed_entry_body(LLVMBackend *backend, ASTNode_C *node, LLVMVal
   enter_scope(backend);
   FuncStackNode stack_node = {node, backend->func_stack};
   backend->func_stack = &stack_node;
+  void *fn_saved_loop_envs = loop_envs_enter_frame(backend);
   backend->current_function_node = node;
 
   for (int i = 0; i < node->param_count; i++) {
@@ -18375,6 +18659,7 @@ static void emit_typed_entry_body(LLVMBackend *backend, ASTNode_C *node, LLVMVal
   if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
     emit_boxed_fn_return(backend, llvm_vm_val_int(backend, 0));
 
+  loop_envs_leave_frame(backend, fn_saved_loop_envs);
   backend->func_stack = stack_node.parent;
   backend->current_function_node = prev_func_node;
   backend->current_env_ptr = prev_env_ptr;
@@ -18639,6 +18924,7 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   enter_scope(backend);
   FuncStackNode stack_node = { node, backend->func_stack };
   backend->func_stack = &stack_node;
+  void *fn_saved_loop_envs = loop_envs_enter_frame(backend);
   ASTNode_C *prev_func_node = backend->current_function_node;
   backend->current_function_node = node;
 
@@ -18888,6 +19174,7 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
 
   backend->fn_value_abi = prev_value_abi;
   backend->current_function_returns_struct = prev_returns_struct;
+  loop_envs_leave_frame(backend, fn_saved_loop_envs);
   backend->func_stack = stack_node.parent;
   backend->current_function_node = prev_func_node;
   backend->current_env_ptr = prev_env_ptr;
@@ -20687,6 +20974,9 @@ static void codegen_for_body(LLVMBackend *backend, ASTNode_C *node,
     LLVMBuildBr(backend->builder, incrB);
 
   LLVMPositionBuilderAtEnd(backend->builder, incrB);
+  // RFC C1: sonraki iterasyon yeni ortamda (bu iterasyonun kapanislari
+  // eskisini tutar); artim yeni ortamdaki kopyayi gunceller.
+  if (LoopEnvEntry *le = loop_env_find(backend, node)) loop_env_renew(backend, le, true);
   if (node->increment)
     codegen_statement(backend, node->increment);
   LLVMBuildBr(backend->builder, condB);
@@ -20714,6 +21004,7 @@ static void codegen_while_body(LLVMBackend *backend, ASTNode_C *node,
   LLVMBuildCondBr(backend->builder, c, bodyB, exitB);
 
   LLVMPositionBuilderAtEnd(backend->builder, bodyB);
+  if (LoopEnvEntry *le = loop_env_find(backend, node)) loop_env_renew(backend, le, false);
   // Bu dongunun break/continue hedefleri — govdedeki AST_BREAK /
   // AST_CONTINUE nereye atlayacagini buradan ogreniyor.
   if (backend->loop_depth < 32) {

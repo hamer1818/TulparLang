@@ -13,6 +13,26 @@ tag still works;
 
 ## [Unreleased]
 
+### Değişti — döngüde üretilen kapanışlar iterasyon başına bağlama alır (JS `let`; RFC C1, davranış değişikliği)
+
+- **Eskiden** döngüdeki bütün kapanışlar tek yuvayı paylaşıyor ve son değeri görüyordu:
+  `for (int i = 0; i < 3; i++) { push(fns, () => i * 10); }` → `30 30 30`; gövdede bildirilen
+  yakalanan değişken de aynı (`20 20 20`).
+- **Şimdi** her kapanış kendi iterasyonunun değerini görür: `0 10 20`. `for` init'i, `for-in`
+  değişkeni ve gövde bildirimleri iterasyona özel; **döngüden önce bildirilen** yakalanan değişken eskisi
+  gibi paylaşılır (`acc = 100` döngüden sonra yazılırsa her kapanışta görünür). Kapanış kendi
+  iterasyonunun kopyasını değiştirebilir, diğerlerini etkilemez.
+- **Değişen davranış:** paylaşılan yuvaya dayanan kod (son değeri bekleyen) etkilenir. Kasıtlı bir
+  kullanım bilinmiyor; `tests/closure_edges.test.tpr` eski davranışı doğruluyordu, ters çevrildi.
+- Aynı turda kapanan iki eski hata: `for (x in xs)` değişkenini yakalayan kapanış `null` okuyordu
+  (değişken bildirim sayılmıyordu), ve yakalanan değişkende `i++` / `i--` **derlenmiyordu**
+  (`'i' değişkeni artırılamaz — tanımlı değil`; v3.48.1'de de) — yani `for (…; i++)` döngüsünde
+  bir kapanış `i`'yi yakaladığı anda program derlenmiyordu.
+- Maliyet yalnız yakalanan döngü bildirimi olan döngüde (iterasyon başına bir küçük ortam dizisi +
+  kopya); öteki döngülerin kodu değişmedi. Kapı `tests/dongu_kapanis.test.tpr` (12 test + üst düzey):
+  for / gövde / for-in / while, dış değişken paylaşımı, iç içe, break/continue, lambda içinde döngü,
+  lambda içi lambda, `++`/`--`, checkpoint kaçışı. Eski yuva ataması geri getirilince 11'i kırmızı.
+
 ### Belgelendi — eşzamanlılık sözleşmesi editörde: thread/mutex hover metinleri + nitelik hover'ı (RFC C6)
 
 - `thread_create`, `thread_detach`, `mutex_create/lock/unlock/destroy` için LSP açıklamaları **boştu**:

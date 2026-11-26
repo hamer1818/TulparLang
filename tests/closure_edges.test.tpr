@@ -59,9 +59,10 @@ func run_array_roundtrip() {
     assert_eq_int(fns[0](5), 25);
 }
 
-func run_shared_loop_capture() {
-    // Documented shared-slot semantics: all three closures see i's final
-    // value (3) — like JS `var`, not per-iteration.
+func run_per_iteration_loop_capture() {
+    // Per-iteration binding (RFC C1, 2026-11-26) — like JS `let`: each
+    // closure sees the value of ITS iteration. Until then all three shared
+    // one slot and saw the final value (30 30), and this test pinned that.
     var fns = [];
     for (int i = 0; i < 3; i = i + 1) {
         var f = () => i * 10;
@@ -69,8 +70,8 @@ func run_shared_loop_capture() {
     }
     var f0 = fns[0];
     var f2 = fns[2];
-    assert_eq_int(f0(), 30);
-    assert_eq_int(f2(), 30);
+    assert_eq_int(f0(), 0);
+    assert_eq_int(f2(), 20);
 }
 
 print("=== closure capture edges ===");
@@ -78,7 +79,7 @@ test("native-signature func with lambda bails to boxed", "run_native_path_lambda
 test("higher-order apply + curry", "run_apply_and_curry");
 test("closure mutates captured local", "run_mutating_capture");
 test("closure through array round-trip", "run_array_roundtrip");
-test("loop closures share the captured slot", "run_shared_loop_capture");
+test("loop closures get a per-iteration binding", "run_per_iteration_loop_capture");
 test_summary();
 
 // --- top-level captures (outside any function; the second bug's shape) ---

@@ -164,6 +164,23 @@ uyuyordu, ana dosya istisnaydı; (2) tek dosyada fonksiyon tanımdan önce
 verirdi (sessiz); (4) "kullandığını içe aktar" modülü tek başına da
 derlenebilir kılar (LSP). → [[Imports and Modules]]
 
+## Döngü kapanışları iterasyon başına bağlama alır — JS `let` (2026-11-26, RFC C1)
+Döngüde üretilen kapanışlar eskiden çerçevenin TEK yuvasını paylaşıyordu
+(JS `var`/Python gibi, üçü de son değeri görüyordu: `30 30 30`) ve
+`tests/closure_edges.test.tpr` bunu bilerek doğruluyordu. Karar: **her
+iterasyon kendi bağlamasını alır.** Döngünün kendi bildirdiği ve döngüdeki
+bir lambdanın yakaladığı adlar (`for` init'i, `for-in` değişkeni, gövde
+bildirimleri) her iterasyonda ayrı bir ortam dizisinde yaşar; `for` artımdan
+önce değerleri yeni ortama kopyalar. **Döngüden önce bildirilen yakalanan
+değişken PAYLAŞILIR** (eskisi gibi). Gerekçe: (1) paylaşılan yuvanın kasıtlı
+kullanıldığı bir örnek bilinmiyordu — tersine her olay/kanca kaydı döngüsü
+bunun yüzünden yanlıştı; (2) yeni dillerde beklenen anlam bu (JS `let`, Go
+1.22, C#'ın `foreach`'i); (3) maliyet yalnız yakalanan döngü bildirimi olan
+döngüde (iterasyon başına bir küçük dizi + kopya), başka hiçbir döngü
+değişmiyor. Aynı turda iki eski hata kapandı: `for-in` değişkeni hiç
+yakalanmıyordu (`null`) ve yakalanan değişkende `++`/`--` derlenmiyordu.
+Kapı `tests/dongu_kapanis.test.tpr` (12 test + üst düzey). → [[AOT Backend]]
+
 ## Sunset (geri getirme)
 Tree-walk interpreter (`src/interpreter/`) + x64 JIT (`src/jit/`) — 2026-05-05 kaldırıldı.
 

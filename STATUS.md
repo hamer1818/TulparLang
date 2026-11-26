@@ -2184,9 +2184,11 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   (`for (int k…) { var g = () => k; }`) yakalayan lambda hiçbir şey çözemeyip
   nullptr dönüyordu (globaller zaten çalışıyordu). Program kökü artık aynı
   capture analizini alıyor ve `main` gerekirse env array ayırıyor. Semantik
-  not: döngüde üretilen closure'lar frame'in TEK slotunu paylaşır (JS-`var`/
-  Python gibi son değeri görürler). `tests/closure_edges.test.tpr` 5/5 +
-  top-level kontrol.
+  not (**2026-11-26'da DEĞİŞTİ**, RFC C1): döngüde üretilen closure'lar artık
+  iterasyon başına bağlama alır (JS `let`); eskiden frame'in TEK slotunu
+  paylaşıp son değeri görüyorlardı. Döngüden önce bildirilen yakalanan
+  değişken paylaşılır. `tests/closure_edges.test.tpr` 5/5 + top-level kontrol,
+  `tests/dongu_kapanis.test.tpr` 12/12 (Decisions.md).
 - ✅ **`parse_iso8601` imkânsız takvim gününü reddediyor (düzeltildi
   2026-07-21).** Gün yalnız 1..31 aralık-kontrollüydü; days-from-civil formülü
   "2026-02-30"u sessizce 2 Mart'a normalize ediyordu (diğer her bozuk girişe -1

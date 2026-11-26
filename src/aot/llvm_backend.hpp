@@ -708,6 +708,10 @@ typedef struct {
   // ("HATA (lib/router.tpr:245): ..."). May be null for stdin/embedded input.
   const char *source_filename;
   void *capture_data;
+  // Bu cercevede (fonksiyon/lambda govdesi) acik dongu ortamlari — RFC C1
+  // dongu basina ortam. std::vector<LoopEnvEntry>*; nullptr = yok. Lambda /
+  // fonksiyon govdesine girerken saklanip bosaltilir (baska LLVM fonksiyonu).
+  void *loop_envs;
   // Import edilen modullerin ayristirilmis AST onbellegi + modul struct
   // tiplerinin kayit durumu (llvm_backend.cpp: ImportState). Her modul BIR
   // KEZ ayristirilir: once struct on taramasi (prescan_import_types), sonra
