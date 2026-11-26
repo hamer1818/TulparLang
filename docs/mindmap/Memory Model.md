@@ -7,7 +7,9 @@ tags: [runtime, memory, important]
 AOT'ta GC yok. Bellek üç mekanizmayla yönetilir (`src/vm/runtime_bindings.cpp`).
 
 ## 1) Arena (string'ler)
-Per-thread blok allocator. `arena_save()` → checkpoint handle; `arena_restore(wm)` → o noktadan sonrasını geri sarar (blokları free etmez, `used=0` yapar → O(1) reuse). Wings her istek sonrası restore ile belleği sabit tutar.
+Per-thread blok allocator. `arena_save()` → checkpoint handle; `arena_restore(wm)` / `arena_drop(wm)` → o noktadan sonrasını geri sarar (blokları free etmez, `used=0` yapar → O(1) reuse). Wings her istekten sonra geri sararak belleği sabit tutar (desenler aşağıda, "Checkpoint disiplini").
+
+**Bloklar işletim sistemine geri verilmez.** Geri sarma blokları yalnız yeniden kullanıma açar; RSS ulaştığı en yüksek seviyede kalır. Tek bir büyük tepe (bir kerelik büyük iş) RSS'i kalıcı olarak yükseltir.
 
 **Ölümsüz dizgiler arenada değil:** dizgi sabitleri ve (2026-10-02'den beri) `typeof()`
 sonuçları `aot_intern_string` ile malloc'lu, `arena_allocated = 0`, `ref_count = 1<<28`.
@@ -39,7 +41,33 @@ atanan hesaplanmış değer sızar. Kapanışın ortamı (env) yerinde kalıcıl
 kareyi aşan yereller): [[Tuzaklar#7f. Bariyer TEK yolda yazılıydı — aynı global'e yazan öbür yollar onu hiç görmedi]].
 
 ## ⚠️ Checkpoint disiplini (kritik)
-Stack **32 slot** (`AOT_ARENA_CHECKPOINT_MAX`). `arena_restore` checkpoint'i **korur** (`top=idx+1`) — tek-save-çok-restore döngüsü (varsayılan `listen()`) buna güvenir. Ama per-connection/per-request `arena_save` yapan kalıcı thread'ler (pool/evented) serbest bırakmazsa 32'den sonra `arena_save → -1`, restore no-op → **sınırsız sızıntı**. Çözüm: **`arena_drop(wm)`** = rewind + POP (`top=idx`). → [[Memory Leak Fixes]] · [[Wings Serve Modes]]
+**`arena_restore` ile `arena_drop` aynı geri sarmayı yapar** — ikisi de `aot_arena_rewind_to`'yu çağırır: dizgi arenası geri sarılır, bölgedeki obje/diziler serbest kalır. **Tek fark checkpoint yığınının tepesi** (doğrulandı 2026-11-25, `runtime_bindings.cpp`):
+
+| çağrı | yığın |
+|---|---|
+| `arena_save()` | `top++` (en fazla **32**, `AOT_ARENA_CHECKPOINT_MAX`); yığın doluysa **-1** döner |
+| `arena_restore(wm)` | checkpoint **korunur** (`top = idx + 1`) |
+| `arena_drop(wm)` | checkpoint **kaldırılır** (`top = idx`) |
+
+Yani "restore tek başına yetmez" genel olarak doğru değil: **tek save + çok restore geçerli bir desen** (varsayılan `listen()` bunu kullanır). Yetersiz kaldığı tek durum `arena_save`'in tekrar tekrar çalışması: 33. kayıt -1 döner, `arena_restore(-1)` no-op'tur → **sınırsız sızıntı, hata yok**. [[Memory]]'deki P14 "save + restore" satırının büyümesinin gerçek sebebi bu; "restore serbest bırakmıyor" açıklaması yanlıştı.
+
+Kural: tekrar çalışan her `arena_save`, `throw` dahil **her** çıkış yolunda bir `arena_drop` ile kapanmalı. `throw` aradaki checkpoint'leri geri almaz (`aot_throw`) — drop, try bloğunun **dışında** olmalı.
+
+**Tercih edilen yol: `@frame func f(...)` (K038, 2026-09-28).** Derleyici girişte `arena_save`, her `return`'de dönüş değerini kalıcılaştırıp `arena_drop`, `throw`'da kalıcılaştır + drop + yeniden fırlat yerleştirir; yığın doluysa yakalanabilir hata verir (sessiz -1 değil). Ölçüm: 20 000 çağrı, tepe RSS 733 MB → 3 MB; çağrı başına ~50 ns. Kapılar `tests/frame.test.tpr`, `frame_istisna.test.tpr`, `frame_hatalari.sh`. **Açık delik:** elle çağrılan `arena_save` yığın doluyken hâlâ sessizce -1 döndürüyor.
+
+Wings desenleri (`lib/wings.tpr`):
+
+| mod | desen |
+|---|---|
+| `listen()` | başta tek `arena_save`, her istekten sonra `arena_restore`, drop yok |
+| `listen_pool` / `listen_async` (`_wings_serve_connection`) | bağlantı başına save, istek başına restore, bağlantı kapanınca **drop** |
+| `listen_evented` | tick başına save/drop + istek başına save/drop (`_wings_serve_one_request`) |
+
+→ [[Memory Leak Fixes]] · [[Wings Serve Modes]]
+
+**Bilinen delikler** (kapatılmadı, belgelendi — Bellek Sözleşmesi v0 RFC taslağı, 2026-11-25):
+- Üzerine yazılan **eski kalıcı değer serbest bırakılamaz** (takma adlar izlenmiyor: `json x = g; g = yeni; print(x);`) → kare/istek başına yeniden atanan hesaplanmış global sızar. Kural: sıcak döngüde global'i yeniden atama, yerinde değiştir.
+- Checkpoint'i **aşan yerel** değişkene yazılan geçici değer bariyerden geçmez (`acc = acc + x`) → geri sarmadan sonra sarkan pointer. Kural: böyle bir yerelde geçici değer tutma ya da `persist()` ile kopyala. Bu yüzden döngülere otomatik save/drop eklemek kaçış analizi olmadan güvenli değil.
 
 ## 🧵 Çok-thread güvenliği (pool/async invariant'ları, 2026-06-18 audit)
 `listen_pool`/`listen_async` worker'ları aynı runtime'ı paylaşır. Kural: per-call scratch = **TLS**, paylaşılan tablo = **mutex VEYA atomic release/acquire**. ARM/aarch64 gerçek target (Apple Silicon) → "x86 TSO'da çalışır" akıl yürütmesi bug'dır. Audit'te bulunan 3 gerçek bug (hepsi kapandı):
@@ -47,6 +75,10 @@ Stack **32 slot** (`AOT_ARENA_CHECKPOINT_MAX`). `arena_restore` checkpoint'i **k
 - `eh_main`/`eh_cur` (exception context) global'di → pool handler'da `try`/`throw` cross-thread longjmp (crash). → `thread_local`.
 - `g_call_cache` plain-store publish'liyordu → ARM'da stale `ptr` → yanlış handler. → `key` `std::atomic` release/acquire.
 Zaten güvenli: arena/checkpoint/region/`js_small_buffer`/`g_wings_current_fd` TLS; `g_db_registry`/`g_call_cache` mutex; `_request` LLVM-TLS.
+
+**Thread sınırı kopyalayarak geçilir:** `thread_create` argümanı ve dönüş değeri `aot_persist` ile derin kopyalanır (`aot_thread_create` / `aot_thread_entry`); global yolu bariyerden geçer. Her thread'in arenası ve bölgesi kendine özel.
+
+**Kullanıcı düzeyi senkronizasyon (K040, 2026-09-28):** `mutex_*` yanında `atomic_load/store/add/sub/xchg/cas` (üst düzey `int` global; isteğe bağlı sıra `"relaxed"`/`"acquire"`/`"release"`/`"acq_rel"`/`"seq_cst"`, varsayılan seq_cst) ve `@thread_local int x` (thread başına global). Bellek modeli cümlesi: mutex altındaki yazmalar aynı mutex'i sonra alan thread'e, bir release atomic yazmasından önceki yazmalar o değeri acquire ile okuyan thread'e görünür; korumasız paylaşım tanımsız (güncelleme ve görünürlük kaybı ölçüldü). → [[Concurrency]]
 
 ## Dizi temsili: kutulu / kutulanmamış (2026-09-03)
 
@@ -93,7 +125,7 @@ Alan eklerken düşülen tuzak: [[Tuzaklar#6d]]. TBAA'nın neden testle
 doğrulanamadığı: [[Tuzaklar#6e]].
 
 ## Faydalı builtin'ler
-`persist(v)` — değeri kalıcı belleğe derin kopyalar. `arena_save/restore/drop` — codegen'de isimle tanınır.
+`persist(v)` — değeri kalıcı belleğe derin kopyalar. `arena_save/restore/drop` — codegen'de isimle tanınır. `@frame` — fonksiyon kapsamında güvenli save/drop (yukarıda). `@no_alloc` — gövdenin ayırmadığını derleme zamanında denetler (K041).
 
 ## İlgili
 [[Runtime]] · [[Memory Leak Fixes]] · [[Wings Serve Modes]] · [[Performance]]

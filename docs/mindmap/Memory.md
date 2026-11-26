@@ -1,9 +1,11 @@
 # Bellek — P14 süzme testi (2026-09-09)
 
-> **Özet: bellek geri alınabilir, ama doğru çağrı `arena_drop` — `arena_restore`
-> tek başına yetmiyor.** Sunucu yolu (wings) `arena_drop` çağırdığı için 4,16
-> milyon istekte düz kalıyor. `arena_drop` çağırmayan uzun ömürlü döngüler
-> lineer tırmanıyor. Bu bir sızıntı değil, **belgesiz bir sözleşme**.
+> **Özet (2026-11-25'te düzeltildi): bellek geri alınabilir. `arena_restore` ile
+> `arena_drop` aynı geri sarmayı yapar; fark yalnız checkpoint yığınının tepesi.**
+> P14'teki "save + restore" sızıntısının sebebi restore değil, döngüde
+> **tekrar tekrar `arena_save`** çağrılmasıydı: 33. kayıt -1 döner ve ondan
+> sonraki her restore no-op olur. Tercih edilen yol bugün `@frame` (K038).
+> Checkpoint kurmayan uzun ömürlü döngüler hâlâ lineer tırmanıyor.
 
 ## Zemin
 
@@ -39,19 +41,38 @@ küçük bir json başına ~400 bayt, hiç geri alınmıyor.
 | `arena_save` + `arena_restore` | 23 MB | 132 MB | 5,7× |
 | `arena_save` + `arena_restore` + **`arena_drop`** | **2 976 KB** | **2 972 KB** | **1,00× DÜZ** |
 
-`arena_restore` tepe işaretçisini geri sarar ama **checkpoint'i ve blokları
-serbest bırakmaz**; serbest bırakan çağrı `arena_drop` (kaynaktaki not bunu
-zaten söylüyordu: *"like arena_restore, but RELEASES the checkpoint"*).
+> ⚠️ **İkinci düzeltme (2026-11-25, koda bakılarak).** Bu bölüm önce
+> "`arena_restore` checkpoint'i ve blokları serbest bırakmaz, serbest bırakan
+> `arena_drop`" diyordu. Yanlıştı. İkisi de `aot_arena_rewind_to`'yu çağırır:
+> dizgi arenası geri sarılır, bölgedeki obje/diziler serbest kalır. "Releases
+> the checkpoint" yığındaki **slotu** bırakmak demek, belleği değil
+> (`restore`: `top = idx + 1`, `drop`: `top = idx`). Arena blokları hiçbir
+> çağrıda işletim sistemine dönmez.
 
-**API tuzağı:** `arena_restore` tek başına *çalışıyormuş gibi görünür* —
-program doğru sonuç verir, hata çıkmaz, yalnız bellek geri gelmez. Bir
-kaynağın "geri sarar" demesi "serbest bırakır" demek değildir; ikisi ayrı
-çağrı ve zayıf olanı sessizdir.
+Sondanın döngüsü her iterasyonda `arena_save` çağırıyordu. Yığın 32 slot
+(`AOT_ARENA_CHECKPOINT_MAX`): 33. kayıt **-1** döner, `arena_restore(-1)`
+sessizce hiçbir şey yapmaz — tablodaki 23 MB → 132 MB bundan. `arena_drop`
+slotu bıraktığı için yığın dolmuyor ve satır düz kalıyor.
+
+**Gerçek API tuzağı:** tekrar çalışan bir `arena_save`'i drop ile kapatmamak.
+Program doğru sonuç verir, hata çıkmaz, yalnız 33. çağrıdan sonra bellek geri
+gelmez. Tek save + çok restore (aynı handle'a) ise geçerli ve düz bir desen.
+`@frame` (K038) bunu derleyiciye bırakır ve yığın doluysa yakalanabilir hata
+verir; elle çağrılan `arena_save` hâlâ sessizce -1 döndürüyor.
 
 ## Sunucu yolu: DÜZ, ve sebebi biliniyor
 
-`lib/wings.tpr` istek başına `arena_save` → `arena_restore` → **`arena_drop`**
-çağırıyor (satır 2070–2174). Soak testi bunu doğruluyor:
+Wings'in üç deseni de yığını dengeli tutuyor (2026-11-25'te koda bakıldı;
+eski hâli "istek başına save → restore → drop" diyordu, bu yalnız evented için
+doğru):
+
+| mod | desen |
+|---|---|
+| `listen()` | başta tek `arena_save`, her istekten sonra `arena_restore`, drop yok (500k+ istekte RSS 6,9 MB'ta düz) |
+| `listen_pool` / `listen_async` | bağlantı başına save, istek başına restore, bağlantı kapanınca drop |
+| `listen_evented` | tick başına ve istek başına save / drop |
+
+Soak testi bunu doğruluyor:
 
 | sunucu | süre | istek | RSS |
 |---|---|---|---|
@@ -71,16 +92,22 @@ bugünkü sözleşme belgesiz — kullanıcının `arena_drop`'u bilmesi gerekiy
 ## Yapılacaklar
 
 1. ~~Sunucu süzme testi~~ — **yapıldı**, ikisi de düz (yukarıdaki tablo).
-2. **Sözleşmeyi belgele** — bugünkü gerçek: "uzun ömürlü döngülerde üretilen
-   heap değerleri geri alınmaz". Kullanıcının bunu RSS grafiğinden öğrenmesi
-   kabul edilemez.
-3. ~~`arena_restore` neden kapsamıyor~~ — **cevaplandı**: kapsıyor ama serbest
-   bırakmıyor; serbest bırakan `arena_drop`. `arena_restore`'un tek başına
-   sessizce yetersiz kalması API tarafında düzeltilmeli (ya `restore` bıraksın,
-   ya belgeler ikisini birlikte anlatsın).
-4. Uzun vadede: ya AOT yolunda `arc_release`i gerçekten devreye al (bedeli
+2. **Sözleşmeyi belgele** — taslak var: Bellek Sözleşmesi v0 RFC'si
+   (2026-11-25; depolama sınıfları, checkpoint kuralları, bariyer, bilinen
+   delikler). Özeti [[Memory Model]]'de.
+3. ~~`arena_restore` neden kapsamıyor~~ — **cevaplandı, ikinci kez**: kapsıyor
+   ve serbest bırakıyor; sızan, drop ile kapatılmayan tekrarlı `arena_save`'di
+   (yukarıda). Fonksiyon kapsamı için `@frame` var (K038).
+4. **Açık:** elle çağrılan `arena_save` yığın doluyken sessiz -1 yerine
+   `@frame` gibi yakalanabilir hata versin (RFC C3).
+5. **Açık:** bellek sayacı yerleşiği (`mem_stats()`: arena kullanımı, bölgedeki
+   nesne sayısı, kalıcı heap baytı, checkpoint derinliği) — sızıntı RSS
+   grafiğinden değil programdan görünsün (RFC C4).
+6. Uzun vadede: ya AOT yolunda `arc_release`i gerçekten devreye al (bedeli
    ölçülmeli — bugünkü bütün performans rakamları geri kazanım YAPMAYAN bir
-   runtime'ın rakamları), ya da kapsamı belgelenmiş bir bölge modeli.
+   runtime'ın rakamları; yalnız kalıcı katmana refcount **reddedildi**, bariyer
+   dışındaki takma adları göremiyor), ya da kapsamı belgelenmiş bir bölge
+   modeli.
 
 ## İlgili
 [[Concurrency]] · [[Tuzaklar]] · [[Performance]] · [[Decisions]]
