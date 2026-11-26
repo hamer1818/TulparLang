@@ -3,8 +3,9 @@
 > **Güncel durum (2026-11-25, koda bakılarak):** muteks, **atomikler** ve
 > **`@thread_local`** var (K040, 2026-09-28) ve bir bellek modeli cümlesi
 > yazılabiliyor (aşağıda "Bellek modeli"). Wings sayaçları atomik. Açık kalan:
-> TSan'lı CI işi ve `mutex_*` / `thread_create` için LSP açıklama metinleri
-> (bugün boş; `atomic_*`'ınki var). Aşağıdaki bulgular tarihçedir; Bulgu 2'deki "dilin bellek modeli
+> TSan'lı CI işi. (`mutex_*` / `thread_create` LSP metinleri 2026-11-26'da
+> yazıldı — RFC C6; `@thread_local`/`@frame`/`@no_alloc`/`@repr` için nitelik
+> hover'ı da; kapı `tests/lsp_audit.py`.) Aşağıdaki bulgular tarihçedir; Bulgu 2'deki "dilin bellek modeli
 > yok" cümlesi artık geçerli değil.
 
 ## Bellek modeli (sözleşme, 2026-11-25)
@@ -176,9 +177,9 @@ sınanmamış olduğunu söylüyoruz.
    use-after-free yaşamasın). Kanıtlanmış bir hatayı değil, incelemeyle görülen
    bir yarışı kapatıyor.
 4. ~~Atomik yerleşikler~~ — **yapıldı** (K040, 2026-09-28; sıralama
-   parametresiyle). Bellek modeli cümlesi yukarıda. Kalan: `mutex_*` ve
-   `thread_create` için LSP açıklama metinleri (bugün boş) ve
-   `thread_create` belgesinin bu sözleşmeye bağlanması.
+   parametresiyle). Bellek modeli cümlesi yukarıda. LSP açıklama metinleri
+   (`thread_create`, `thread_detach`, `mutex_*`) ve README'nin thread örneği
+   bu sözleşmeye bağlandı (RFC C6, 2026-11-26).
 5. TSan'lı bir CI işi: runtime'ı `-fsanitize=thread` ile derleyip yukarıdaki üç
    üretecin koşulması.
 

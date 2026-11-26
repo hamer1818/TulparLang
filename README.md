@@ -675,16 +675,25 @@ try {
     cleanup();
 }
 
-// Threading
+// Threading — the argument and the return value are deep-copied across the
+// thread boundary; shared mutable globals need a mutex or an atomic.
 int mu = mutex_create();
+int hits = 0;
 func worker(json arg) {
     mutex_lock(mu);
     // critical section
     mutex_unlock(mu);
+    atomic_add(hits, 1);          // lock-free counter
 }
+@thread_local int scratch = 0;    // one copy per thread, no locking needed
 int t = thread_create(worker, 42);
 thread_detach(t);
 ```
+
+Unsynchronized sharing is undefined: increments get lost and a write in one
+thread may never become visible to a loop in another. The memory-model
+sentence (mutex / `"release"`–`"acquire"` / `"seq_cst"`) lives in
+[docs/mindmap/Concurrency.md](docs/mindmap/Concurrency.md).
 
 Full guide at <https://tulparlang.dev/guide/syntax/> · single-page
 language reference at <https://tulparlang.dev/reference/language/>.
@@ -729,8 +738,8 @@ Native built-ins (no `import` needed):
 | Wings helpers   | `wings_openapi`, `wings_metrics_prom`, `wings_cookies`, `log_info`, `log_error`, `wings_current_fd`, `wings_sse_headers`, `wings_sse_event`, `wings_ws_upgrade`, `wings_ws_send_text`, `wings_ws_send_close`, `wings_ws_send_pong`, `wings_ws_send_frame`, `wings_ws_recv_frame`, `wings_ws_accept_key` |
 | Crypto / encode | `sha1`, `sha1_hex`, `sha256`, `base64_encode`, `base64_decode`                |
 | Database        | `db_open`, `db_execute`, `db_query`, `db_close` (vendored SQLite3)            |
-| Threading       | `thread_create`, `thread_detach`, `thread_join`, `mutex_create`, `mutex_lock`, `mutex_unlock`, `mutex_destroy` |
-| Memory arena    | `arena_save`, `arena_restore` (per-request bounded memory)                    |
+| Threading       | `thread_create`, `thread_detach`, `thread_join`, `mutex_create`, `mutex_lock`, `mutex_unlock`, `mutex_destroy`, `atomic_load`, `atomic_store`, `atomic_add`, `atomic_sub`, `atomic_xchg`, `atomic_cas`, `@thread_local` |
+| Memory arena    | `arena_save`, `arena_restore`, `arena_drop`, `@frame`, `persist`, `mem_stats` (per-request bounded memory; see [docs/mindmap/Memory Model.md](docs/mindmap/Memory%20Model.md)) |
 
 ## Architecture
 

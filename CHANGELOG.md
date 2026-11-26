@@ -13,6 +13,22 @@ tag still works;
 
 ## [Unreleased]
 
+### Belgelendi — eşzamanlılık sözleşmesi editörde: thread/mutex hover metinleri + nitelik hover'ı (RFC C6)
+
+- `thread_create`, `thread_detach`, `mutex_create/lock/unlock/destroy` için LSP açıklamaları **boştu**:
+  hover yalnız imzayı veriyordu, "paylaşım muteks ister" kuralı editörde hiç görünmüyordu. Artık her biri
+  sözleşmeyi taşıyor: thread sınırı kopyalayarak geçilir, korumasız paylaşım tanımsız, muteks altındaki
+  yazmalar sonra aynı muteksi alana görünür, aynı thread'de ikinci kilit POSIX'te kilitlenir, throw
+  unlock'u atlar (`finally`), detach handle'ı tüketir. `atomic_load`/`atomic_add` metinleri
+  acquire/release kuralını ve geçerli sıraları söylüyor.
+- **Nitelik hover'ı:** `@thread_local`, `@frame`, `@no_alloc`, `@repr` üzerinde hover açıklama veriyor
+  (eskiden hiçbir şey). Yalnız kelimenin önünde `@` varken — `frame` adlı bir değişken nitelik sanılmaz.
+- README'nin thread örneği atomik sayaç ve `@thread_local` ile, sözleşme cümlesi ve
+  `docs/mindmap/Concurrency.md` bağlantısıyla; yerleşik tablosu atomikleri, `arena_drop`, `@frame`,
+  `persist`, `mem_stats`'ı listeliyor.
+- Kapı `tests/lsp_audit.py`: yedi ad için hover sözleşme parçasını taşımalı, iki nitelik hover'ı ve
+  aynı adlı değişkenin nitelik sanılmaması. v3.48.1 ikilisiyle kırmızı.
+
 ### Eklendi — `mem_stats()`: bellek sayaçları programın içinden (RFC C4)
 
 - Sızıntı artık yalnız RSS grafiğinden değil, programdan görünür. `mem_stats()` bir json döndürür:

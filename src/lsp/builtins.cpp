@@ -210,9 +210,11 @@ const BuiltinEntry kBuiltins[] = {
     {"to_struct",    "to_struct(v: json, tip: \"Ad\"): Ad",         "json nesnesini adı verilen struct'a denetimli çevirir; eksik ya da yanlış tipli alanda hata fırlatır (fazla alanlar yok sayılır). Ad bir dizgi sabiti olmalı."},
 
     // ---- Atomikler (K040): ilk argüman üst düzey `int` global ----
-    {"atomic_load",  "atomic_load(g: int, sira?: str): int",          "Global'i atomik okur. sira: \"relaxed\" | \"acquire\" | \"seq_cst\" (varsayılan)."},
+    // Bellek modeli: release yazmasindan onceki yazmalar, o degeri acquire ile
+    // okuyan thread'e gorunur; seq_cst (varsayilan) tek toplam sira verir.
+    {"atomic_load",  "atomic_load(g: int, sira?: str): int",          "Global'i atomik okur. sira: \"relaxed\" | \"acquire\" | \"seq_cst\" (varsayılan). Bir release yazmasını gören acquire okuma, o yazmadan önceki bütün yazmaları da görür — bekleme döngüsü böyle okumalı (düz `while (f == 0)` döngüden çıkmayabilir)."},
     {"atomic_store", "atomic_store(g: int, v: int, sira?: str)",      "Global'e atomik yazar. sira: \"relaxed\" | \"release\" | \"seq_cst\"."},
-    {"atomic_add",   "atomic_add(g: int, d: int, sira?: str): int",   "Atomik ekler, ESKİ değeri döndürür (kilitsiz sayaç)."},
+    {"atomic_add",   "atomic_add(g: int, d: int, sira?: str): int",   "Atomik ekler, ESKİ değeri döndürür (kilitsiz sayaç; düz `n = n + 1` thread'ler arasında artırma kaybeder). sira: \"relaxed\" | \"acquire\" | \"release\" | \"acq_rel\" | \"seq_cst\" (varsayılan)."},
     {"atomic_sub",   "atomic_sub(g: int, d: int, sira?: str): int",   "Atomik çıkarır, ESKİ değeri döndürür."},
     {"atomic_xchg",  "atomic_xchg(g: int, v: int, sira?: str): int",  "Atomik değiştirir, ESKİ değeri döndürür."},
     {"atomic_cas",   "atomic_cas(g: int, beklenen: int, yeni: int, sira?: str): bool", "g == beklenen ise yeni'yi yazar; yazıldıysa true (karşılaştır-değiştir)."},
@@ -425,18 +427,28 @@ const BuiltinEntry kBuiltins[] = {
     {"socket_peer_ip", "socket_peer_ip(fd: int): str",              "Kabul edilen bağlantının uzak (client) IP'sini döner; hata olursa \"\"."},
 
     // ---- Thread ----
-    {"thread_create",  "thread_create(func_name: str, arg: any): int", ""},
+    // Eszamanlilik sozlesmesi (RFC Bolum 6, docs/mindmap/Concurrency.md): bu
+    // metinler hover'da GORUNEN tek yer — bos kalirlarsa kullanici "paylasim
+    // muteks ister" kuralini ancak sessiz veri kaybindan ogrenir. Bos
+    // birakilmasini tests/lsp_audit.py yakaliyor.
+    {"thread_create",  "thread_create(func_name: str, arg: any): int",
+     "Fonksiyonu yeni bir isletim sistemi thread'inde baslatir, thread kimligini dondurur. **Thread siniri kopyalayarak gecilir:** `arg` derin kopyalanir, donus degeri `thread_join` ile kopya olarak gelir; her thread'in arenasi kendine ozel. **Paylasilan degisebilir global'e** `mutex_lock`/`mutex_unlock` ya da `atomic_*` ile eris: korumasiz erisimde artirmalar kaybolur ve bir thread'in yazdigi deger digerinin dongusunde hic gorunmeyebilir (tanimsiz). Thread basina global: `@thread_local`. Handle'i `thread_join` ya da `thread_detach` ile bir kez tuket."},
     {"at",             "at(arr: array, i: int, default: any): any",
      "Dizi elemani; [0,count) disinda varsayilani dondurur (tani basmaz)."},
     {"json_get",       "json_get(obj: json, key: str, default: any): any",
      "Json alani; anahtar yoksa varsayilani dondurur (tani basmaz)."},
     {"thread_join",    "thread_join(thread_id: int): any",
      "Isciyi bekler ve DONUS DEGERINI verir (kopya)."},
-    {"thread_detach",  "thread_detach(thread_id: int): void",       ""},
-    {"mutex_create",   "mutex_create(): int",                       ""},
-    {"mutex_lock",     "mutex_lock(mtx: int): void",                ""},
-    {"mutex_unlock",   "mutex_unlock(mtx: int): void",              ""},
-    {"mutex_destroy",  "mutex_destroy(mtx: int): void",             ""},
+    {"thread_detach",  "thread_detach(thread_id: int): void",
+     "Thread'i ayirir: bitince kaynaklari kendiliginden serbest kalir, sonucu alinamaz. Handle'i tuketir — sonrasinda `thread_join` calisma zamani hatasidir."},
+    {"mutex_create",   "mutex_create(): int",
+     "Yeni bir muteks yaratir, kimligini dondurur. Paylasilan degisebilir durumu `mutex_lock`/`mutex_unlock` arasinda degistir; tek bir sayac icin `atomic_add` daha ucuz."},
+    {"mutex_lock",     "mutex_lock(mtx: int): void",
+     "Muteksi alir; baska thread tutuyorsa bekler. Bir muteks altinda yapilan yazmalar, ayni muteksi sonradan alan thread'e gorunur. Ayni thread'de ikinci kez kilitleme: POSIX'te kilitlenip kalir (Windows'ta gecer) — yapma."},
+    {"mutex_unlock",   "mutex_unlock(mtx: int): void",
+     "Muteksi birakir. Kritik bolgede `throw` olabiliyorsa unlock'u `finally` icine koy: istisna unlock satirini atlar ve muteks takili kalir."},
+    {"mutex_destroy",  "mutex_destroy(mtx: int): void",
+     "Muteksi yok eder ve bellegini birakir. Hicbir thread onu tutmuyorken ve sonra kullanmayacakken cagir."},
 
     // ---- Misc ----
     {"call",         "call(name: str, ...): any",                   "İsme göre fonksiyon çağırır (handler dispatch)."},
@@ -502,6 +514,28 @@ const BuiltinEntry *extension_entries(size_t *out_count) {
     }
     if (out_count) *out_count = entries.size();
     return entries.empty() ? nullptr : entries.data();
+}
+
+// Nitelikler (`@ad`): hover yalniz kelimenin hemen onunde '@' varken bakar —
+// `frame` adli bir degisken nitelik sanilmasin. Parser'in bildigi liste
+// (parser.cpp parse_attributed_function) ile ayni; yeni nitelik ikisine de.
+static const BuiltinEntry kAttributes[] = {
+    {"thread_local", "@thread_local int x = 0;",
+     "Her thread'in KENDI kopyasi olan ust duzey global (int / float / bool). Baslatici ana thread'de kosar; diger thread'ler sifirdan baslar. Paylasilmadigi icin kilit ya da atomik gerektirmez ve `thread_lint` onu denetlemez. Thread'ler arasi PAYLASILAN durum icin `mutex_*` ya da `atomic_*`."},
+    {"frame", "@frame func f(...) { ... }",
+     "Govde bir arena checkpoint'inde kosar: giriste `arena_save`, her `return`/`throw`'da donus degeri ya da istisna kaliciya kopyalanip `arena_drop`. Kare/istek basina cagrilan fonksiyonun gecici bellegini geri alir (~50 ns/cagri). Ic ice/ozyinelemeli derinlik 32'yi asarsa yakalanabilir hata. `async` ve tuple donuslu fonksiyonda kullanilamaz."},
+    {"no_alloc", "@no_alloc func f(...) { ... }",
+     "Govdenin — ve cagirdigi kullanici fonksiyonlarinin, gecisli — Tulpar yiginina ayirmadigini derleme zamaninda denetler (dizi/nesne literali, kapanis, dizgi birlestirme, try/throw ...); ayiran ifade typecheck tanisi verir (`--strict`'te hata)."},
+    {"repr", "@repr(C) type T { ... }",
+     "Struct'a C yerlesimi sozu: alanlar bildirim sirasinda, hedefin hizalama/dolgu kuraliyla; `bool` 1 bayt, f32/i32 4, int/float 8. Struct dizisinin deposu ayni C struct'inin dizisiyle bayt bayt ayni (C'ye/GPU'ya kopyasiz). Yalniz `type` bildirimine ve yalniz `C`."},
+};
+
+const BuiltinEntry *attribute_lookup(const char *name) {
+    if (!name) return nullptr;
+    for (const auto &a : kAttributes) {
+        if (std::strcmp(a.name, name) == 0) return &a;
+    }
+    return nullptr;
 }
 
 const BuiltinEntry *builtin_lookup(const char *name) {

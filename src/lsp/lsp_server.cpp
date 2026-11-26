@@ -556,6 +556,26 @@ std::string word_at_position(const std::string &source, int line, int character)
     return source.substr(line_start + start, end - start);
 }
 
+// Imlecin uzerindeki kelimenin hemen onunde '@' var mi (nitelik: `@frame`).
+bool word_has_at_prefix(const std::string &source, int line, int character) {
+    int cur_line = 0;
+    size_t i = 0;
+    while (i < source.size() && cur_line < line) {
+        if (source[i] == '\n') cur_line++;
+        i++;
+    }
+    if (cur_line < line) return false;
+    size_t line_start = i;
+    size_t line_end = line_start;
+    while (line_end < source.size() && source[line_end] != '\n' && source[line_end] != '\r')
+        line_end++;
+    int col = character;
+    if ((size_t)col > line_end - line_start) col = (int)(line_end - line_start);
+    int start = col;
+    while (start > 0 && is_ident_char(source[line_start + start - 1])) start--;
+    return start > 0 && source[line_start + start - 1] == '@';
+}
+
 // Locate the enclosing call site for the cursor and report which
 // parameter slot the cursor is in. Walks the source backwards from the
 // cursor offset, counting paren depth and commas at depth 0 below the
@@ -804,6 +824,26 @@ void handle_hover(DocumentStore &docs, cJSON *id, cJSON *params) {
 
     std::string word = word_at_position(it->second.text, line, ch);
     if (word.empty()) { send_response(id, nullptr); return; }
+
+    // `@nitelik`: ad bir kullanici sembolu ya da yerlesikle cakissa bile
+    // '@' onekiyle yazildiysa nitelik aciklamasi.
+    if (word_has_at_prefix(it->second.text, line, ch)) {
+        if (auto *a = attribute_lookup(word.c_str())) {
+            cJSON *result = cJSON_CreateObject();
+            cJSON *contents = cJSON_AddObjectToObject(result, "contents");
+            cJSON_AddStringToObject(contents, "kind", "markdown");
+            std::string md = "```tulpar\n";
+            md += a->signature;
+            md += "\n```\n\n";
+            md += a->doc;
+            md += "\n\n*(";
+            md += tulpar::i18n::tr_en("nitelik", "attribute");
+            md += ")*";
+            cJSON_AddStringToObject(contents, "value", md.c_str());
+            send_response(id, result);
+            return;
+        }
+    }
 
     // Try user functions first; locally defined symbols shadow builtins
     // (matching Tulpar's actual lookup order).
