@@ -354,6 +354,8 @@ set(CLI_SOURCES
     src/cli/analyze_cmd.hpp
     src/cli/doc_cmd.cpp
     src/cli/doc_cmd.hpp
+    src/cli/bindgen_cmd.cpp
+    src/cli/bindgen_cmd.hpp
     src/cli/debug_cmd.cpp
     src/cli/debug_cmd.hpp
 )

@@ -138,6 +138,7 @@ bool parse_type(const std::string &t, bool allow_void, CType &out) {
   else if (t == "bool") out = CType::Bool;
   else if (t == "str") out = CType::Str;
   else if (t == "ptr") out = CType::Ptr;
+  else if (t == "cbool") out = CType::CBool;
   else if (allow_void && t == "void") out = CType::Void;
   else return false;
   return true;
@@ -157,7 +158,7 @@ bool parse_callback(const std::string &t, CallbackSig &out, std::string &why) {
     std::string part = trim(inner.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos));
     CType c;
     if (!parse_type(part, false, c) || c == CType::Fn) {
-      why = "geri cagri parametre tipi '" + part + "' (i32 i64 f32 f64 bool ptr str)";
+      why = "geri cagri parametre tipi '" + part + "' (i32 i64 f32 f64 bool cbool ptr str)";
       return false;
     }
     out.params.push_back(c);
@@ -170,7 +171,7 @@ bool parse_callback(const std::string &t, CallbackSig &out, std::string &why) {
     if (rest[0] != ':') { why = "donus tipi ':' ile yazilir"; return false; }
     std::string rt = trim(rest.substr(1));
     if (!parse_type(rt, true, out.ret) || out.ret == CType::Str) {
-      why = "geri cagri donus tipi '" + rt + "' (void i32 i64 f32 f64 bool ptr)";
+      why = "geri cagri donus tipi '" + rt + "' (void i32 i64 f32 f64 bool cbool ptr)";
       return false;
     }
   }
@@ -399,7 +400,7 @@ bool parse_manifest(const std::string &mpath, const char *origin,
     if (!parse_type(rs, true, F.ret)) {
       err = merr(mpath, where + " (" + F.name + "): " +
                             tr_en("bilinmeyen donus tipi '", "unknown return type '") + rs +
-                            "' (void, i32, i64, int, f32, f64, float, bool, str, ptr)");
+                            "' (void, i32, i64, int, f32, f64, float, bool, cbool, str, ptr)");
       return false;
     }
     cJSON *ps = cJSON_GetObjectItemCaseSensitive(f, "params");
@@ -441,7 +442,7 @@ bool parse_manifest(const std::string &mpath, const char *origin,
       } else if (!parse_type(ptype, false, t)) {
         err = merr(mpath, where + " (" + F.name + "): " +
                               tr_en("bilinmeyen parametre tipi '", "unknown parameter type '") + ptype +
-                              "' (i32, i64, int, f32, f64, float, bool, str, ptr, fn(...): ...)");
+                              "' (i32, i64, int, f32, f64, float, bool, cbool, str, ptr, fn(...): ...)");
         return false;
       }
       F.params.push_back(t);
@@ -535,6 +536,7 @@ const char *ctype_name(CType t) {
   case CType::Str: return "str";
   case CType::Ptr: return "ptr";
   case CType::Fn: return "fn";
+  case CType::CBool: return "cbool";
   }
   return "?";
 }

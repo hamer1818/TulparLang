@@ -27,6 +27,7 @@
 #include "pkg/pkg_cli.hpp"
 #include "cli/debug_cmd.hpp"
 #include "cli/doc_cmd.hpp"
+#include "cli/bindgen_cmd.hpp"
 #include "cli/typecheck_cmd.hpp"
 #include "cli/analyze_cmd.hpp"
 #include "cli/update_cmd.hpp"
@@ -119,6 +120,9 @@ static void print_help() {
   std::printf("  tulpar analyze <source.tpr>      %s\n",
               tulpar::i18n::tr_en("- Ayirma raporu (@no_alloc kurali) + hizli yol ipuclari",
                                   "- Allocation report (@no_alloc rule) + fast-path hints"));
+  std::printf("  tulpar bindgen <header.h>        %s\n",
+              tulpar::i18n::tr_en("- C basligindan eklenti bildirimi (tulpar-ext.json) uret",
+                                  "- Generate an extension manifest (tulpar-ext.json) from a C header"));
   std::printf("  tulpar doc <source.tpr>          %s\n",
               tulpar::i18n::tr_en(
                   "- Markdown referansi uret (fonksiyon + global'lerin "
@@ -275,6 +279,12 @@ int main(int argc, char **argv) {
   if (argc >= 2 && std::strcmp(argv[1], "doc") == 0) {
     if (!ensure_extensions_loaded()) return 2;
     return tulpar::doc_cmd_main(argc, argv);
+  }
+
+  // `tulpar bindgen <baslik.h>` — C basligindan tulpar-ext.json (FFI v1).
+  // Eklenti yuklemez: urettigi sey bir eklentinin girdisi.
+  if (argc >= 2 && std::strcmp(argv[1], "bindgen") == 0) {
+    return tulpar::bindgen_cmd_main(argc, argv);
   }
 
   // `tulpar version` / `tulpar --version` / `-v` — print and exit. Kept

@@ -45,7 +45,11 @@ namespace ext {
 //          i32 i64 f32 f64 bool ptr str; donus: void i32 i64 f32 f64 bool
 //          ptr. Geri cagri icindeki throw RFC C2 sinirindan gecer (C
 //          cercevesi atlanmaz; istisna dis cagri donunce firlatilir).
-enum class CType { Void, I32, I64, F32, F64, Bool, Str, Ptr, Fn };
+//   cbool -> C `bool`/`_Bool` (2026-11-26). `bool` C `int`'idir (0/1, eski
+//          eklentiler); `_Bool` ise i8 ABI'li: ust bitler tanimsiz, clang onu
+//          `zeroext i1` diye gecirir. Ikisini karistirmak sessiz yanlis
+//          dogruluk degeri demek — o yuzden ayri tip (SDL3 her yerde bool).
+enum class CType { Void, I32, I64, F32, F64, Bool, Str, Ptr, Fn, CBool };
 
 const char *ctype_name(CType t);
 

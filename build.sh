@@ -792,6 +792,11 @@ if [ "$ACTION" = "suites" ]; then
     if [ -x tests/yerel_eklenti.sh ]; then
         kapi_kuyruk "yerel eklenti kapisi basarisiz!" bash tests/yerel_eklenti.sh ./tulpar
     fi
+    # `tulpar bindgen` (2026-11-26): fikstur basligindan bildirim bayt bayt,
+    # uretilen bildirimle gercek cagrilar; varsa gercek zlib ve SDL3.
+    if [ -x tests/bindgen.sh ]; then
+        kapi_kuyruk "bindgen kapisi basarisiz!" bash tests/bindgen.sh tulpar
+    fi
 
     # TANINMAYAN tulpar.toml ANAHTARI (tulpar-engine geri bildirimi #21): tek
     # bir yeni anahtar (eski tulpar'da `[android] cutout`) eskiden DOSYANIN

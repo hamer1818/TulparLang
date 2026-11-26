@@ -1,0 +1,22 @@
+// tests/bindgen.sh: bindgen'in bg_ornek.h'ten urettigi bildirimle cagrilar.
+func kars(int a, int b): int { return bg_int_oku(a) - bg_int_oku(b); }
+int g_top = 0;
+func her(i, v, ctx) { g_top = g_top + i * v; }
+
+print("topla " + toString(bg_topla(40, 2)));
+print("olcek " + toString(bg_olcek(3, 0.5)));
+print("kimlik " + toString(bg_kimlik(41)));
+print("uzun " + toString(bg_uzun_iki(21)));
+print("ad " + bg_ad() + " " + toString(bg_uzunluk("tulpar")));
+var t = bg_ac(5);
+array g = [9, -3, 7, 0, 12];
+for (int i = 0; i < 5; i++) { bg_yaz(t, i, g[i]); }
+bg_sirala(t, kars);
+str s = "";
+for (int i = 0; i < 5; i++) { s = s + toString(bg_oku(t, i)) + " "; }
+print("sirala " + s);
+print("her " + toString(bg_her_biri(t, her, 0)) + " " + toString(g_top));
+bg_kapat(t);
+print("cift " + toString(bg_cift_mi(4)) + " " + toString(bg_cift_mi(7)));
+print("degil " + toString(bg_degil(true)) + " " + toString(bg_degil(false)) + " " + toString(bg_degil(0)));
+print("renk " + toString(bg_renk(9)) + " " + toString(bg_renk(1)));

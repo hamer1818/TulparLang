@@ -82,6 +82,7 @@ A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchma
 ./tulpar typecheck script.tpr   # Standalone type checker in error mode (src/cli/typecheck_cmd.cpp)
 ./tulpar analyze script.tpr     # Per-function allocation report (@no_alloc rule) + fast-path hints (src/cli/analyze_cmd.cpp)
 ./tulpar doc script.tpr         # Markdown reference from leading-comment docstrings (src/cli/doc_cmd.cpp)
+./tulpar bindgen header.h       # C header -> native extension manifest tulpar-ext.json (src/cli/bindgen_cmd.cpp)
 ./tulpar debug script.tpr       # Experimental DAP debug adapter (src/cli/debug_cmd.cpp)
 ./tulpar pkg <init|add|install> # Package manager (src/pkg/)
 ./tulpar update [--check]       # Self-update from tulparlang.dev (src/cli/update_cmd.cpp)

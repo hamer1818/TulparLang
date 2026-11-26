@@ -13,6 +13,14 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — `tulpar bindgen`: C başlığından eklenti bildirimi; `cbool` tipi
+
+- `tulpar bindgen <başlık.h> [--prefix P] [--lib L] [-o tulpar-ext.json]` bir C başlığını okuyup
+  bildirimi üretir: typedef zincirleri, enum, opak struct tutamacı, fonksiyon işaretçisi typedef'leri
+  → `fn(...)`, `#include` takibi (yalnız tipler). Desteklenmeyen bildirimler gerekçesiyle raporlanır.
+  zlib.h'ten 80, sqlite3.h'ten 356, SDL_video.h'ten 112 fonksiyon.
+- Bildirimde `cbool`: C `bool`/`_Bool` (i8 ABI). Var olan `bool` C `int` olarak kalır.
+
 ### Eklendi — FFI: opak `ptr` tipi ve gerçek C geri çağrısı (`fn(...)`)
 
 - Eklenti bildiriminde `ptr` (`void *`): C'de yaşayan bir nesneyi Tulpar'da tamsayı adres olarak

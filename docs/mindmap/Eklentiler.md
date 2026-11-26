@@ -46,6 +46,7 @@ Neden: 2026-09-20'de motor derleyiciden çıkarıldı (#333, kullanıcı kararı
 | `str` | `const char *` | str | parametre: kopyasız, çağrı süresince; dönüş: hemen kopyalanır, NULL → "" |
 | `void` | — | — | yalnız dönüş |
 | `ptr` | `void *` | int (adres; NULL = 0) | **opak** — C'de yaşayan nesneyi tutup geri vermek için; aritmetik anlamsız. wasm32'de 32 bit (`inttoptr` hedef genişliğini izler) |
+| `cbool` | C `bool` / `_Bool` | bool | **i8 ABI** — `bool` (C `int`) ile karıştırma: `_Bool` dönüşünün üst bitleri tanımsız; `zeroext i1` (clang ile aynı). SDL3 her yerde bunu kullanır |
 | `fn(<tipler>): <tip>` | C fonksiyon işaretçisi | fonksiyon **adı** ya da `0` | yalnız parametre; aşağıda "Geri çağrı" |
 
 ### Geri çağrı (`fn(...)`, 2026-11-26)
@@ -281,6 +282,35 @@ bağlaması 5.6–6.2 ns; kalıcı bellek büyümesi ikisinde de kontrolle aynı
 yazımda (yapıştırıcı sarmalayıcı + runtime'da dışarı alınmış 33 kollu dağıtım)
 6.4–7.7 ns ölçüldü; `tulpar_ext_call_f64` tek fonksiyonda 0..4 arite satır içi
 kollarla düzeltildi.
+
+## `tulpar bindgen` — başlıktan bildirim (2026-11-26)
+
+```bash
+tulpar bindgen /usr/include/zlib.h --name zlib --lib z -o zlib/tulpar-ext.json
+tulpar bindgen /usr/include/SDL3/SDL_timer.h --prefix SDL_ --lib SDL3 -o sdl/tulpar-ext.json
+```
+
+libclang'sız, küçük bir C **bildirim** ayrıştırıcısı (`src/cli/bindgen_cmd.cpp`). Makro açmaz,
+`#if` değerlendirmez; bunun yerine:
+- `#include` dosyalarını **yalnız tipleri için** izler (basliğin dizini, `-I`, `/usr/include`);
+  içerilen başlığın fonksiyonları bağlanmaz.
+- Gövdesi yalnız tanımlayıcı olan nesne-biçimli `#define`'ları yerine koyar (`z_off_t`, boş
+  `ZEXPORT`); `-D AD=TIP` elle ekler. **Yerleşik tip kelimeleri makroyla ezilmez** —
+  `#if` dalları birleştiği için SDL_stdinc.h'in `#define bool unsigned char` yedeği
+  `bool`'u sessizce yanlış ABI'ye çeviriyordu (ölçüldü, düzeltildi).
+- Tanımsız BÜYÜK_HARF tanımlayıcılar gürültü makrosu sayılır (`SDL_DECLSPEC`, `SDLCALL`,
+  `ZEXTERN`) ve raporda listelenir.
+- Desteklenmeyen her bildirim **gerekçesiyle** `atlandi` satırı olur: variadic, `va_list`,
+  struct değer geçişi (K304), `long double`, fonksiyon işaretçisi döndüren fonksiyon.
+
+Ölçüm (2026-11-26, CachyOS): zlib.h 80/82, sqlite3.h 356/367, SDL_video.h 112/114,
+SDL_timer.h 10/10 — atlananların hepsi gerçekten desteklenmeyen biçimler. Kapı
+`tests/bindgen.sh`: fikstür başlığından bildirim bayt bayt, üretilen bildirimle çağrılar,
+gerçek zlib (sürüm Python'unkiyle aynı) ve gerçek SDL3 (SDL'in **kendi zamanlayıcı
+thread'i** Tulpar geri çağrısını çağırıyor).
+
+Varsayımlar (raporda da basılır): `long` LP64 → i64 (Windows'ta 32 bit); işaretsiz 32 bit
+dönüş i32 (2^31 üstü negatif görünür); `const char *` → `str`, yazılabilir `char *` → `ptr`.
 
 ## Sınırlar
 
