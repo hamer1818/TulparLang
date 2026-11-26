@@ -124,8 +124,23 @@ olmalı (kutulanmamış dizide `items_` NULL'dır). Üç yol: `region_free_one`,
 Alan eklerken düşülen tuzak: [[Tuzaklar#6d]]. TBAA'nın neden testle
 doğrulanamadığı: [[Tuzaklar#6e]].
 
+## Görünürlük: `mem_stats()` (RFC C4, 2026-11-26)
+Sızıntı RSS grafiğinden değil programdan görünsün diye. Dönen json'un alanları (arena/bölge/checkpoint/sayaçlar **bu iplik**, `heap_in_use` süreç):
+
+| alan | ne | hangi deliği gösterir |
+|---|---|---|
+| `arena_used` | arenada kullanımdaki bayt (geri sarma düşürür) | checkpoint'siz döngü (D2) |
+| `arena_reserved`, `arena_blocks` | arenanın ayırdığı bloklar — OS'a hiç geri verilmez | tepe sonrası RSS (D6) |
+| `region_objects` | bölgede izlenen geçici obje/dizi | — (sonraki geri sarmada boşalır) |
+| `checkpoint_depth`, `checkpoint_max` | açık `arena_save` sayısı / 32 | drop'suz save birikimi |
+| `untracked_objects` | checkpoint **açık değilken** kurulan obje/dizi başlıkları (kalıcı) | D2 |
+| `persist_bytes` | `persist()` / yazma bariyerinin kalıcıya kopyaladığı bayt (`aot_persist`'in her ayırması) | yeniden atanan global (D1) |
+| `heap_in_use` | ayırıcının kullanımdaki baytı (glibc ≥ 2.33 `mallinfo2` — zayıf sembol, eski glibc'de link düşmez; macOS `malloc_zone_statistics`; Android/web `mallinfo`); bilinmiyorsa **-1** (Windows, musl/Alpine) | toplam |
+
+Sınır: `untracked_objects` **başlık sayısı**, bayt değil — büyüyen `items_`/`values` dizileri sayılmaz (onları saymak her büyüme yolunu enstrümanlamak demek). Dönen nesne sıradan bir json: checkpoint içinde çağrıldıysa geçici, drop'tan sonra okunmaz (Kural 2.1 — testin ilk yazımı tam bu yüzden `null` okudu; sayıları drop'tan önce `int`'e al). Kapı `tests/mem_stats.test.tpr` (5 test); sayaçlar sökülünce D1/D2 testleri kırmızı.
+
 ## Faydalı builtin'ler
-`persist(v)` — değeri kalıcı belleğe derin kopyalar. `arena_save/restore/drop` — codegen'de isimle tanınır. `@frame` — fonksiyon kapsamında güvenli save/drop (yukarıda). `@no_alloc` — gövdenin ayırmadığını derleme zamanında denetler (K041).
+`persist(v)` — değeri kalıcı belleğe derin kopyalar. `mem_stats()` — yukarıdaki sayaçlar. `arena_save/restore/drop` — codegen'de isimle tanınır. `@frame` — fonksiyon kapsamında güvenli save/drop (yukarıda). `@no_alloc` — gövdenin ayırmadığını derleme zamanında denetler (K041).
 
 ## İlgili
 [[Runtime]] · [[Memory Leak Fixes]] · [[Wings Serve Modes]] · [[Performance]]

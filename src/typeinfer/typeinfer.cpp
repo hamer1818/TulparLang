@@ -2552,6 +2552,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tls_starttls", TYPE_INT, {TYPE_UNKNOWN, TYPE_STRING}},
       {"tls_error", TYPE_STRING, {}},
       {"http_recv_error", TYPE_INT, {}},
+      {"mem_stats", TYPE_JSON, {}},
       {"http_read_timeout", TYPE_INT, {TYPE_INT}},
       {"http_recv_ready", TYPE_STRING, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"http_recv_expired", TYPE_ARRAY, {}},

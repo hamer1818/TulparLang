@@ -102,9 +102,11 @@ bugünkü sözleşme belgesiz — kullanıcının `arena_drop`'u bilmesi gerekiy
    (yukarıda). Fonksiyon kapsamı için `@frame` var (K038).
 4. ~~Elle çağrılan `arena_save` yığın doluyken sessiz -1 yerine yakalanabilir
    hata versin (RFC C3)~~ — **yapıldı** (2026-11-26, `tests/arena_yigin_dolu.test.tpr`).
-5. **Açık:** bellek sayacı yerleşiği (`mem_stats()`: arena kullanımı, bölgedeki
-   nesne sayısı, kalıcı heap baytı, checkpoint derinliği) — sızıntı RSS
-   grafiğinden değil programdan görünsün (RFC C4).
+5. ~~Bellek sayacı yerleşiği (RFC C4)~~ — **yapıldı** (2026-11-26): `mem_stats()`
+   arena kullanımı/ayrılmışı, bölge, checkpoint derinliği, checkpoint dışı kalıcı
+   obje sayısı, `persist_bytes` ve ayırıcının `heap_in_use`'u ([[Memory Model]]).
+   P14'teki "dizgi + json" satırı bugün `untracked_objects` ile `arena_used`'da
+   programın içinden görünür.
 6. Uzun vadede: ya AOT yolunda `arc_release`i gerçekten devreye al (bedeli
    ölçülmeli — bugünkü bütün performans rakamları geri kazanım YAPMAYAN bir
    runtime'ın rakamları; yalnız kalıcı katmana refcount **reddedildi**, bariyer

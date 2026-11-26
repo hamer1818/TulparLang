@@ -1409,6 +1409,7 @@ static const TameBuiltin k_std_builtins[] = {
     {"http_recv_ready", "aot_http_recv_ready_ptr", 2},
     {"http_recv_expired", "aot_http_recv_expired_ptr", 0},
     {"make_dirs", "aot_make_dirs_ptr", 1},
+    {"mem_stats", "aot_mem_stats_ptr", 0},
 };
 
 #define STD_BUILTIN_COUNT \

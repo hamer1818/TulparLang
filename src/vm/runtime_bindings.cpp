@@ -53,6 +53,14 @@ typedef SSIZE_T ssize_t;
 // adi yalniz TUR olarak gorunuyor ve cagri "no matching function for call to
 // 'stat::stat'" ile duşuyordu.
 #include <sys/stat.h>
+#if defined(__GLIBC__) || defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+#include <malloc.h>     // mallinfo2 / mallinfo — mem_stats().heap_in_use
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+#pragma weak mallinfo2
+#endif
+#elif defined(__APPLE__)
+#include <malloc/malloc.h> // malloc_zone_statistics — mem_stats().heap_in_use
+#endif
 
 // Dosya YA DA dizin var mi? Cagiran `extern "C"` blogunun icinde oldugu icin
 // yardimci DISARIDA duruyor.
@@ -1034,9 +1042,22 @@ VMValue aot_persist(VMValue v); // defined below; used by the write barrier
 static thread_local std::vector<Obj *> g_region;
 static thread_local std::unordered_set<Obj *> g_region_set;
 
+// mem_stats() sayaclari (RFC C4, 2026-11-26) — bu iplik, surec basindan beri.
+// Sicak yolda tek bir TLS artirmasi; atomik degil (iplige ozel).
+//   g_mem_untracked: checkpoint ACIK DEGILKEN kurulan obje/dizi/struct dizisi
+//     basliklari — hicbir geri sarma onlari birakmaz (D2: checkpoint'siz dongu).
+//   g_mem_persist_bytes: persist() / yazma bariyerinin KALICIYA kopyaladigi
+//     baytlar (aot_persist'in her malloc'u) — hic serbest kalmaz (D1: kare
+//     basina yeniden atanan global).
+static thread_local uint64_t g_mem_untracked = 0;
+static thread_local uint64_t g_mem_persist_bytes = 0;
+
 static inline void region_track(Obj *o) {
-  if (g_arena_checkpoint_top <= 0 || !o)
+  if (!o) return;
+  if (g_arena_checkpoint_top <= 0) {
+    g_mem_untracked++;
     return; // outside any request scope → permanent (e.g. top-level globals)
+  }
   g_region.push_back(o);
   g_region_set.insert(o);
 }
@@ -1791,8 +1812,15 @@ ObjString *aot_intern_string(const char *chars, int length) {
 // `arena_allocated = 0` so the arena reset skips them. They live as long as
 // something references them (today effectively process lifetime; a future GC
 // would reclaim via ref_count).
+// aot_persist'in butun ayirmalari buradan: kalici kopya bayti sayilir (mem_stats).
+static inline void *persist_malloc(size_t n) {
+  void *p = malloc(n);
+  if (p) g_mem_persist_bytes += n;
+  return p;
+}
+
 static ObjString *aot_persist_string_obj(ObjString *src) {
-  ObjString *p = (ObjString *)malloc(sizeof(ObjString) + src->length + 1);
+  ObjString *p = (ObjString *)persist_malloc(sizeof(ObjString) + src->length + 1);
   if (!p) return src;
   p->obj.type = OBJ_STRING;
   p->obj.arena_allocated = 0;
@@ -1818,7 +1846,7 @@ VMValue aot_persist(VMValue v) {
   }
   if (IS_ARRAY(v)) {
     ObjArray *src = AS_ARRAY(v);
-    ObjArray *dst = (ObjArray *)malloc(sizeof(ObjArray));
+    ObjArray *dst = (ObjArray *)persist_malloc(sizeof(ObjArray));
     if (!dst) return v;
     dst->obj.type = OBJ_ARRAY;
     dst->idata = nullptr;
@@ -1833,7 +1861,7 @@ VMValue aot_persist(VMValue v) {
     // KAYNAGI da kutuya ceviriyordu — global'e atanan split sonucu 16 bayta
     // cikip oyle kaliyordu.
     if (src->idata && src->elem_bits == ARR_ELEM_STR && n > 0) {
-      ObjString **t = (ObjString **)malloc(sizeof(ObjString *) * (size_t)n);
+      ObjString **t = (ObjString **)persist_malloc(sizeof(ObjString *) * (size_t)n);
       if (t) {
         ObjString *const *from = (ObjString *const *)src->idata;
         for (int i = 0; i < n; i++) {
@@ -1846,7 +1874,7 @@ VMValue aot_persist(VMValue v) {
         return VM_OBJ((Obj *)dst);
       }
     }
-    dst->items_ = (n > 0) ? (VMValue *)malloc(sizeof(VMValue) * n) : nullptr;
+    dst->items_ = (n > 0) ? (VMValue *)persist_malloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
       arr_items(dst)[i] = aot_persist(arr_items(src)[i]);
     }
@@ -1854,7 +1882,7 @@ VMValue aot_persist(VMValue v) {
   }
   if (IS_OBJECT(v)) {
     ObjObject *src = AS_OBJECT(v);
-    ObjObject *dst = (ObjObject *)malloc(sizeof(ObjObject));
+    ObjObject *dst = (ObjObject *)persist_malloc(sizeof(ObjObject));
     if (!dst) return v;
     dst->index = nullptr;
     dst->obj.type = OBJ_OBJECT;
@@ -1866,8 +1894,8 @@ VMValue aot_persist(VMValue v) {
     dst->count = n;
     dst->capacity = n;
     if (n > 0) {
-      dst->keys = (ObjString **)malloc(sizeof(ObjString *) * n);
-      dst->values = (VMValue *)malloc(sizeof(VMValue) * n);
+      dst->keys = (ObjString **)persist_malloc(sizeof(ObjString *) * n);
+      dst->values = (VMValue *)persist_malloc(sizeof(VMValue) * n);
       for (int i = 0; i < n; i++) {
         dst->keys[i] =
             src->keys[i] ? aot_persist_string_obj(src->keys[i]) : nullptr;
@@ -1895,7 +1923,7 @@ VMValue aot_persist(VMValue v) {
   if (IS_STRUCT_ARRAY(v)) {
     ObjStructArray *src = AS_STRUCT_ARRAY(v);
     ObjStructArray *dst =
-        static_cast<ObjStructArray *>(malloc(sizeof(ObjStructArray)));
+        static_cast<ObjStructArray *>(persist_malloc(sizeof(ObjStructArray)));
     if (!dst) return v;
     *dst = *src;
     dst->obj.arena_allocated = 0;
@@ -1905,7 +1933,7 @@ VMValue aot_persist(VMValue v) {
     dst->data = nullptr;
     const size_t bytes = (size_t)src->count * sarr_esz(src);
     if (bytes > 0) {
-      dst->data = static_cast<int64_t *>(malloc(bytes));
+      dst->data = static_cast<int64_t *>(persist_malloc(bytes));
       if (!dst->data) {
         free(dst);
         return v;
@@ -1923,7 +1951,7 @@ VMValue aot_persist(VMValue v) {
     ObjStruct *src = AS_STRUCT(v);
     int n = src->field_count > 0 ? src->field_count : 0;
     size_t extra = (n > 1) ? (size_t)(n - 1) * sizeof(int64_t) : 0;
-    ObjStruct *dst = static_cast<ObjStruct *>(malloc(sizeof(ObjStruct) + extra));
+    ObjStruct *dst = static_cast<ObjStruct *>(persist_malloc(sizeof(ObjStruct) + extra));
     if (!dst) return v;
     memcpy(dst, src, sizeof(ObjStruct) + extra);
     dst->obj.arena_allocated = 0;
@@ -5125,6 +5153,78 @@ void vm_object_set_aot_ptr_wrapper(void *vm, ObjObject *obj, char *key,
   if (!value_ptr)
     return;
   vm_object_set_aot_wrapper(vm, obj, key, *value_ptr);
+}
+
+// ---------------------------------------------------------------------------
+// mem_stats() -> json — bellek sizintisini RSS grafiginden degil programdan
+// gorunur kilar (RFC C4, 2026-11-26; Bellek Sozlesmesi D1/D2/D6). Alanlar
+// (arena/bolge/checkpoint/sayaclar BU IPLIGIN; heap_in_use surec geneli):
+//   arena_used        arenada su an kullanimdaki bayt (geri sarma dusurur)
+//   arena_reserved    arenanin ayirdigi bloklarin toplami — isletim sistemine
+//                     HIC geri verilmez (D6), tepe RSS'i bu tutar
+//   arena_blocks      blok sayisi (1 MB'lik, buyuk istekte daha buyuk)
+//   region_objects    bolgede izlenen gecici obje/dizi (sonraki geri sarmada
+//                     serbest kalir)
+//   checkpoint_depth  acik arena_save sayisi (sinir checkpoint_max = 32)
+//   untracked_objects checkpoint ACIK DEGILKEN kurulan obje/dizi basliklari
+//                     (kalici; checkpoint'siz dongude tirmanir — D2)
+//   persist_bytes     persist() / yazma bariyerinin kaliciya kopyaladigi bayt
+//                     (hic serbest kalmaz; kare basina yeniden atanan global
+//                     tirmandirir — D1)
+//   heap_in_use       ayiricinin kullanimdaki bayti (glibc >= 2.33 mallinfo2,
+//                     macOS malloc_zone_statistics, Android/web mallinfo);
+//                     bilinmiyorsa -1 (Windows, musl)
+// Sayaclar cagridan ONCEKI durumu verir: donen nesnenin kendi ayirmasi o
+// cagriya dahil degil (checkpoint disinda cagrilirsa sonraki cagrilarda 1
+// untracked olarak gorunur). Donen nesne siradan bir json: checkpoint icinde
+// cagrildiysa GECICI — drop'tan sonra okumak sarkan isaretci (Kural 2.1);
+// sayilari drop'tan once int'e al.
+static long long mem_heap_in_use(void) {
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+  // Zayif: 2.33'ten eski glibc'ye baglanan program link'te dusmesin.
+  if (&mallinfo2 != nullptr) {
+    struct mallinfo2 m = mallinfo2();
+    return (long long)(m.uordblks + m.hblkhd);
+  }
+  return -1;
+#elif defined(__APPLE__)
+  malloc_statistics_t st;
+  malloc_zone_statistics(nullptr, &st);
+  return (long long)st.size_in_use;
+#elif defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+  struct mallinfo m = mallinfo();
+  return (long long)m.uordblks;
+#else
+  return -1;
+#endif
+}
+
+VMValue aot_mem_stats_ptr(void) {
+  long long used = 0, reserved = 0, blocks = 0;
+  if (g_aot_string_arena) {
+    for (AOTArenaBlock *b = g_aot_string_arena->head; b; b = b->next) {
+      used += (long long)b->used;
+      reserved += (long long)b->size;
+      blocks++;
+    }
+  }
+  const long long region = (long long)g_region.size();
+  const long long depth = (long long)g_arena_checkpoint_top;
+  const long long untracked = (long long)g_mem_untracked;
+  const long long pbytes = (long long)g_mem_persist_bytes;
+  const long long heap = mem_heap_in_use();
+
+  ObjObject *o = vm_allocate_object_aot_wrapper(nullptr);
+  struct { const char *k; long long v; } rows[] = {
+      {"arena_used", used},          {"arena_reserved", reserved},
+      {"arena_blocks", blocks},      {"region_objects", region},
+      {"checkpoint_depth", depth},   {"checkpoint_max", AOT_ARENA_CHECKPOINT_MAX},
+      {"untracked_objects", untracked}, {"persist_bytes", pbytes},
+      {"heap_in_use", heap},
+  };
+  for (auto &r : rows)
+    vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(r.k), VM_INT(r.v));
+  return VM_OBJ((Obj *)o);
 }
 
 // --- AOT Builtin Logic for Input and Strings ---

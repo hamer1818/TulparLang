@@ -13,6 +13,20 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — `mem_stats()`: bellek sayaçları programın içinden (RFC C4)
+
+- Sızıntı artık yalnız RSS grafiğinden değil, programdan görünür. `mem_stats()` bir json döndürür:
+  `arena_used`, `arena_reserved` / `arena_blocks` (işletim sistemine geri verilmez), `region_objects`,
+  `checkpoint_depth` / `checkpoint_max`, `untracked_objects` (checkpoint dışında kurulan kalıcı
+  obje/dizi başlıkları), `persist_bytes` (`persist()` ve yazma bariyerinin kalıcı kopyaları),
+  `heap_in_use` (ayırıcının kullanımdaki baytı; Windows ve musl'de -1). Arena, bölge ve sayaçlar
+  çağıran ipliğindir.
+- Bellek Sözleşmesi'nin üç deliği ölçülebilir: checkpoint'siz döngü `untracked_objects` + `arena_used`'da,
+  kare başına yeniden atanan global `persist_bytes`'ta, tepe sonrası RSS `arena_reserved`'da.
+- Sıcak yol maliyeti yok denecek kadar az: checkpoint dışı kap ayırmasında tek bir TLS artırması.
+  glibc'de `mallinfo2` zayıf sembol (2.33'ten eski glibc'ye bağlanan program link'te düşmez).
+- Kapı `tests/mem_stats.test.tpr` (5 test); sayaçlar sökülünce D1/D2 testleri kırmızı.
+
 ### Düzeltildi — `arena_save` yığın doluyken sessiz -1 yerine yakalanabilir hata (RFC C3, davranış değişikliği)
 
 - **Açık:** 32'lik kontrol noktası yığını doluyken `arena_save` sessizce **-1** dönüyordu; ardındaki
