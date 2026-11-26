@@ -95,7 +95,13 @@ int _wings_color = 1;
 // Status of the most recently dispatched request, so the serve loop can log
 // `method path status` AFTER the handler has run (the status isn't known
 // before dispatch). _wings_dispatch_cached writes this at every return.
-int _wings_last_status = 200;
+// THREAD-LOCAL (2026-11-26): listen_pool / multi-worker listen_evented run
+// dispatches in parallel; a shared int let one thread log another's status.
+@thread_local int _wings_last_status = 200;
+
+// listen_evented worker count (2026-11-26) — see evented_workers(). 1 = the
+// original single-thread loop.
+int _wings_evented_workers = 1;
 
 // AKIS BASLADI MI? (S4 / P44, 2026-09-10)
 //
@@ -131,6 +137,11 @@ func _wings_apply_env_config() {
         if (rt >= 0) {
             _wings_read_timeout_ms = rt;
         }
+    }
+    str ew_str = env("TULPAR_WINGS_WORKERS");
+    if (length(ew_str) > 0) {
+        int ew = toInt(ew_str);
+        if (ew >= 1) { _wings_evented_workers = ew; }
     }
     // Process-wide in the runtime; every serve mode's reader honours it.
     http_read_timeout(_wings_read_timeout_ms);
@@ -806,6 +817,18 @@ func max_body_prefix(str prefix, int bytes) {
 func read_timeout(int ms) {
     if (ms >= 0) {
         _wings_read_timeout_ms = ms;
+    }
+}
+
+// evented_workers(n): run listen_evented on n event loops (threads) that share
+// the listening socket — one loop per core instead of one for the process.
+// Each loop owns the connections it accepted (its poll set, its partial
+// requests, its queued output); the routes and the counters are shared
+// (counters are atomic, per-request state is thread-local, as in listen_pool).
+// Default 1. TULPAR_WINGS_WORKERS overrides.
+func evented_workers(int n) {
+    if (n >= 1) {
+        _wings_evented_workers = n;
     }
 }
 
@@ -2995,8 +3018,21 @@ func _wings_serve_connection(int client) {
 // (since 2026-11-26): `http_recv_ready` takes only the bytes already in the
 // socket and keeps a partial request in a per-fd runtime buffer, returning 1
 // (keep polling) until it is complete. Before that the read blocked, and one
-// client trickling its header stalled every connection on the loop. The
-// response send still blocks — fine for typical < 64 KiB JSON responses.
+// client trickling its header stalled every connection on the loop.
+// The response is written WITHOUT blocking too (since 2026-11-26):
+// `http_send_queued` sends what the socket takes and leaves the rest in a
+// per-fd output buffer that `http_poll` drains on POLLOUT. Return value:
+// 0 = close now, 1 = keep polling, 2 = drop from the poll set but DO NOT
+// close — the runtime closes it once the queued output is flushed. Before,
+// one client that did not read a large response blocked the whole loop on
+// `socket_send` as soon as its socket buffer filled.
+func _wings_evented_send(int client, str data, int keep) {
+    int q = http_send_queued(client, data, keep == 0 ? 1 : 0);
+    if (q < 0) { return 0; }
+    if (q == 1 && keep == 0) { return 2; }
+    return keep;
+}
+
 func _wings_serve_one_request(int client) {
     int wm = arena_save();
     str raw = _wings_recv_ready(client);
@@ -3028,10 +3064,10 @@ func _wings_serve_one_request(int client) {
         _wings_requests_2xx = _wings_requests_2xx + 1;
         str preflight = http_create_response(
             204, "text/plain; charset=utf-8", "", _wings_hdrs(), keep);
-        socket_send(client, preflight);
+        int pr = _wings_evented_send(client, preflight, keep);
         _wings_log_request(method, path, 204, clock_ms() - _t0, length(preflight));
         arena_drop(wm);
-        return keep;
+        return pr;
     }
 
     json route_match = _find_route_with_params(method, path);
@@ -3068,9 +3104,9 @@ func _wings_serve_one_request(int client) {
         arena_drop(wm);
         return 0;
     }
-    socket_send(client, response);
+    int sr = _wings_evented_send(client, response, keep);
     arena_drop(wm);
-    return keep;
+    return sr;
 }
 
 // Single-thread, poll()-multiplexed event loop. Cross-platform via
@@ -3089,7 +3125,7 @@ func _wings_serve_one_request(int client) {
 // (read_timeout) passes, the sweep at the top of each tick answers 408 and
 // closes it. Idle keep-alive connections with no partial request are not
 // timed out here — holding many idle connections is what this mode is for.
-// Responses are still sent blocking.
+// Responses are sent without blocking (`http_send_queued` + `http_poll`).
 func listen_evented(int port) {
     if (_find_route("GET", "/healthz") < 0) {
         get("/healthz", "_wings_healthz");
@@ -3111,7 +3147,11 @@ func listen_evented(int port) {
     _wings_apply_env_config();
     _wings_started_at = timestamp();
 
-    _wings_print_banner(port, "single-thread event loop");
+    if (_wings_evented_workers > 1) {
+        _wings_print_banner(port, "event loop x " + toString(_wings_evented_workers) + " threads");
+    } else {
+        _wings_print_banner(port, "single-thread event loop");
+    }
 
     int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
@@ -3119,7 +3159,16 @@ func listen_evented(int port) {
         return;
     }
     socket_set_nonblocking(server);
+    // Extra loops share the non-blocking listen socket: every loop polls it,
+    // the one whose accept() wins owns the connection, the others get -1 and
+    // go back to poll (a brief wake-up, no lost connection).
+    for (int w = 1; w < _wings_evented_workers; w++) {
+        thread_detach(thread_create(_wings_evented_loop, server));
+    }
+    _wings_evented_loop(server);
+}
 
+func _wings_evented_loop(server) {
     json fds = [];
     push(fds, server);  // index 0 = listen socket
 
@@ -3156,7 +3205,8 @@ func listen_evented(int port) {
             }
         }
         // 1s tick gives the loop a chance to bail / be interrupted.
-        json ready = socket_poll(fds, 1000);
+        // http_poll = socket_poll + drains queued response output (POLLOUT).
+        json ready = http_poll(fds, 1000);
         if (length(ready) == 0) {
             arena_drop(_evt_wm);
             continue;
@@ -3185,6 +3235,9 @@ func listen_evented(int port) {
                 int keep = _wings_serve_one_request(client_fd);
                 if (keep == 0) {
                     socket_close(client_fd);
+                    closed[toString(idx)] = 1;
+                } else if (keep == 2) {
+                    // Output still queued; the runtime closes it when flushed.
                     closed[toString(idx)] = 1;
                 } else {
                     push(next_fds, client_fd);

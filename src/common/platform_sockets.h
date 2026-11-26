@@ -164,6 +164,34 @@ static inline int tulpar_socket_would_block(int error_code) {
 #endif
 }
 
+// BLOKLAMAYAN gonderim (2026-11-26, listen_evented yazma yolu): soket bloklu
+// olsa da bu cagri beklemez. Donus: gonderilen bayt (>= 0; 0 = tampon dolu,
+// sonra dene) ya da -1 (baglanti hatasi). POSIX: MSG_DONTWAIT (+ Linux'ta
+// MSG_NOSIGNAL; SIGPIPE zaten tulpar_net_ignore_sigpipe ile kapali). Windows'ta
+// MSG_DONTWAIT yok: cagri suresince FIONBIO acilip kapatilir.
+static inline long tulpar_socket_send_nb(socket_t fd, const char *buf, size_t len) {
+#if PLATFORM_WINDOWS
+    u_long on = 1, off = 0;
+    ioctlsocket(fd, FIONBIO, &on);
+    int n = send(fd, buf, (int)(len > 0x7fffffff ? 0x7fffffff : len), 0);
+    int err = (n < 0) ? WSAGetLastError() : 0;
+    ioctlsocket(fd, FIONBIO, &off);
+    if (n >= 0) return n;
+    return err == WSAEWOULDBLOCK ? 0 : -1;
+#else
+    int flags = MSG_DONTWAIT;
+#ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#endif
+    for (;;) {
+        ssize_t n = send(fd, buf, len, flags);
+        if (n >= 0) return (long)n;
+        if (errno == EINTR) continue;
+        return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
+    }
+#endif
+}
+
 #ifdef __cplusplus
 }
 #endif

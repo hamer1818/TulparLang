@@ -2308,6 +2308,19 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   argümanı (`f<int>(x)`) yok, jenerik struct alanının okunan tipi bilinmeyen,
   struct tipli argüman `T`'ye bağlanmıyor. `tests/jenerik.test.tpr`,
   `tests/jenerik_hatalari.sh`, `tests/typeinfer/*/…jenerik…`.
+- ✅ **Güvenlik ağı (2026-11-26).** Altın çıktı + `-O0`/`-O3` karşılaştırması
+  (`tests/altin_cikti.py`, `TULPAR_AOT_OPT`), sarkan işaretçi zehri
+  (`TULPAR_ARENA_ZEHIR`, `tests/sarkan_isaretci.sh`) — ilk koşuda async ARC/arena
+  sınırını ve `thread_create("ad")` no-op'unu buldu (düzeltildi).
+- ✅ **FFI v1 (2026-11-26).** `ptr`, `fn(...)` C-ABI geri çağrı trampolini (K305),
+  `cbool` (C `_Bool`), `tulpar bindgen başlık.h` (zlib 80/82, SDL_video 112/114).
+  Struct değer geçişi (K304) hâlâ yok — `ptr` ile.
+- ✅ **Profilleyici (2026-11-26).** `tulpar --profile`: öz/kapsayıcı süre, çağrı,
+  arena baytı, folded yığın (`tests/profil_smoke.py`).
+- ✅ **Dil tanımı v0 + paket imzası (2026-11-26).** `docs/SPEC.md` (örnekleri
+  `tests/spec_ornekleri.py` koşar); `tulpar pkg keygen/sign/verify` + `[trust]`.
+- ✅ **Wings evented (2026-11-26).** Bloklamayan yazma, pipelining düzeltmesi,
+  `evented_workers(n)` çok çekirdek; gecikme histogramı Wings Serve Modes.md'de.
 - ✅ **Result + `?` (2026-11-26).** `import "sonuc"` (ya da `"result"`):
   `tamam(v)`/`hata(e)` (`ok`/`err`), `ac`, `ac_yoksa`, `donustur`, `sonra`,
   `sarmala`; `match r { {tamam: true, deger} => …, {hata} => … }`. `?`

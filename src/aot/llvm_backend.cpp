@@ -1477,6 +1477,9 @@ static const TameBuiltin k_std_builtins[] = {
     {"http_read_timeout", "aot_http_read_timeout_ptr", 1},
     {"http_recv_ready", "aot_http_recv_ready_ptr", 2},
     {"http_recv_expired", "aot_http_recv_expired_ptr", 0},
+    {"http_send_queued", "aot_http_send_queued_ptr", 3},
+    {"http_send_pending", "aot_http_send_pending_ptr", 1},
+    {"http_poll", "aot_http_poll_ptr", 2},
     {"make_dirs", "aot_make_dirs_ptr", 1},
     {"mem_stats", "aot_mem_stats_ptr", 0},
 };

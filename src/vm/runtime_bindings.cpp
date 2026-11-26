@@ -9968,7 +9968,14 @@ struct HttpPending {
   double last;
   int header_end;
   int needed;
+  // PIPELINING (2026-11-26): tamamlanan istegin ARDINDAN ayni okumada gelen
+  // baytlar (istemcinin bir sonraki istegi) atilmaz, burada bekler. Yeni
+  // bayt gelmeyecegi icin poll uyanmaz: http_poll bu fd'yi hemen "hazir"
+  // sayar. Eskiden ikinci istek sessizce kayboluyordu (olculdu:
+  // tests/wings_yazma_smoke.py).
+  bool leftover = false;
 };
+static void http_pending_reparse(HttpPending &st);
 
 // Isaretci: ipligin cikisinda yikici sirasina takilmamak icin (olay dongusu
 // ana iplikte yasar, harita surec sonuna dek durur).
@@ -9981,10 +9988,168 @@ static std::unordered_map<int64_t, HttpPending> &http_pending_map() {
   return *g_http_pending;
 }
 
+// ---- BLOKLAMAYAN YAZMA (listen_evented, 2026-11-26) ------------------------
+// Eskiden olay dongusu yaniti `socket_send` ile BLOKLU yaziyordu: yanitini
+// okumayan tek bir istemci (buyuk yanit, kucuk alma penceresi) soket tamponu
+// dolunca butun donguyu durduruyordu — slowloris'in yazma ikizi. Simdi:
+//   http_send_queued(fd, veri, kapat) -> 0 hepsi gitti | 1 kuyrukta | -1 hata
+// Kuyruktaki fd'nin cikti tamponu http_poll'da POLLOUT gelince bosaltilir;
+// `kapat` = 1 ise (keep-alive yok) bosalinca runtime fd'yi KENDISI kapatir —
+// cagiran onu poll kumesinden hemen cikarir ama kapatmaz. Ayni fd'ye ikinci
+// yanit (pipelining) kuyrugun SONUNA eklenir: sira korunur. Harita iplige
+// ozel: her olay dongusu kendi fd'lerinin sahibi (listen_evented coklu
+// iscide de).
+struct HttpOut {
+  std::string data;
+  size_t off = 0;
+  bool close_after = false;
+};
+static thread_local std::unordered_map<int64_t, HttpOut> *g_http_out = nullptr;
+static std::unordered_map<int64_t, HttpOut> &http_out_map() {
+  if (!g_http_out) g_http_out = new std::unordered_map<int64_t, HttpOut>();
+  return *g_http_out;
+}
+// 0 = bitti, 1 = bekliyor, -1 = hata
+static int http_out_flush(int64_t fd, HttpOut &o) {
+  while (o.off < o.data.size()) {
+    long n = tulpar_socket_send_nb((tulpar_socket)fd, o.data.data() + o.off, o.data.size() - o.off);
+    if (n < 0) return -1;
+    if (n == 0) return 1;
+    o.off += (size_t)n;
+  }
+  return 0;
+}
+static void http_out_forget(int64_t fd) {
+  if (g_http_out) g_http_out->erase(fd);
+}
+
+VMValue aot_http_send_queued_ptr(VMValue *fdv, VMValue *datav, VMValue *closev) {
+  if (!fdv || !IS_INT(*fdv) || !datav || !IS_STRING(*datav)) return VM_INT(-1);
+  int64_t fd = AS_INT(*fdv);
+  ObjString *str = AS_STRING(*datav);
+  const bool close_after = closev && ((IS_INT(*closev) && AS_INT(*closev)) ||
+                                      (IS_BOOL(*closev) && AS_BOOL(*closev)));
+  auto &map = http_out_map();
+  auto it = map.find(fd);
+  if (it != map.end()) {  // onceki yanit hala kuyrukta: sira korunur
+    it->second.data.append(str->chars, (size_t)str->length);
+    it->second.close_after = it->second.close_after || close_after;
+    return VM_INT(1);
+  }
+  HttpOut o;
+  o.data.assign(str->chars, (size_t)str->length);
+  int r = http_out_flush(fd, o);
+  if (r == 0) return VM_INT(0);
+  if (r < 0) return VM_INT(-1);
+  o.close_after = close_after;
+  map.emplace(fd, std::move(o));
+  return VM_INT(1);
+}
+
+// Kuyrukta bekleyen cikti bayti (gozlem/test icin).
+VMValue aot_http_send_pending_ptr(VMValue *fdv) {
+  if (!g_http_out) return VM_INT(0);
+  if (fdv && IS_INT(*fdv)) {
+    auto it = g_http_out->find(AS_INT(*fdv));
+    return VM_INT(it == g_http_out->end() ? 0 : (int64_t)(it->second.data.size() - it->second.off));
+  }
+  int64_t t = 0;
+  for (auto &kv : *g_http_out) t += (int64_t)(kv.second.data.size() - kv.second.off);
+  return VM_INT(t);
+}
+
+// http_poll(fds, ms): socket_poll gibi okunabilir INDEKSLERI dondurur; ek
+// olarak cikti kuyrugu olan fd'ler icin POLLOUT ister ve yazilabilir olanlari
+// bosaltir. `kapat` isaretli ve bosalan (ya da hata veren) fd'ler kapatilir.
+// Cagiranin listesinde olmayan (kapanmayi bekleyen) kuyruklu fd'ler de poll'a
+// katilir — yoksa hic bosalmazlardi. Kuyruk varken bekleme suresi kisalmaz:
+// POLLOUT kendisi uyandirir.
+static void http_poll_flush_and_reap(tulpar_pollfd *p, int n) {
+  if (!g_http_out) return;
+  for (int i = 0; i < n; i++) {
+    if (!(p[i].revents & (POLLOUT | POLLERR | POLLHUP))) continue;
+    auto it = g_http_out->find((int64_t)p[i].fd);
+    if (it == g_http_out->end()) continue;
+    int r = (p[i].revents & POLLOUT) ? http_out_flush((int64_t)p[i].fd, it->second) : -1;
+    if (r == 1) continue;
+    bool kapat = it->second.close_after || r < 0;
+    g_http_out->erase(it);
+    if (kapat) {
+      if (g_http_pending) g_http_pending->erase((int64_t)p[i].fd);
+      tulpar_socket_close((tulpar_socket)p[i].fd);
+    }
+  }
+}
+
+VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal);
+static VMValue aot_http_poll(VMValue fdsVal, VMValue timeoutVal);
+VMValue aot_http_poll_ptr(VMValue *fdsv, VMValue *msv) {
+  return aot_http_poll(fdsv ? *fdsv : VM_VOID(), msv ? *msv : VM_INT(0));
+}
+static bool http_has_leftover(int64_t fd);
+static VMValue aot_http_poll(VMValue fdsVal, VMValue timeoutVal) {
+  bool any_left = false;
+  if (g_http_pending && IS_ARRAY(fdsVal)) {
+    ObjArray *arr = AS_ARRAY(fdsVal);
+    for (int i = 0; i < (int)arr->count && !any_left; i++) {
+      VMValue v = arr_items(arr)[i];
+      if (IS_INT(v) && http_has_leftover(AS_INT(v))) any_left = true;
+    }
+  }
+  if ((!g_http_out || g_http_out->empty()) && !any_left) return aot_socket_poll(fdsVal, timeoutVal);
+  std::vector<tulpar_pollfd> p;
+  std::unordered_map<int64_t, int> in_list;
+  int nfds = 0;
+  if (IS_ARRAY(fdsVal)) {
+    ObjArray *arr = AS_ARRAY(fdsVal);
+    nfds = (int)arr->count;
+    for (int i = 0; i < nfds; i++) {
+      VMValue v = arr_items(arr)[i];
+      tulpar_pollfd x;
+      x.fd = (tulpar_socket)(IS_INT(v) ? AS_INT(v) : -1);
+      x.events = POLLIN;
+      if (IS_INT(v) && g_http_out && g_http_out->count(AS_INT(v))) x.events |= POLLOUT;
+      x.revents = 0;
+      p.push_back(x);
+      if (IS_INT(v)) in_list[AS_INT(v)] = i;
+    }
+  }
+  if (g_http_out) for (auto &kv : *g_http_out) {
+    if (in_list.count(kv.first)) continue;
+    tulpar_pollfd x;
+    x.fd = (tulpar_socket)kv.first;
+    x.events = POLLOUT;
+    x.revents = 0;
+    p.push_back(x);
+  }
+  int timeout_ms = IS_INT(timeoutVal) ? (int)AS_INT(timeoutVal) : 0;
+  if (any_left) timeout_ms = 0;  // bekleyen pipelined istek: hemen don
+  int rc = tulpar_socket_poll(p.data(), (unsigned int)p.size(), timeout_ms);
+  std::vector<int> ready;
+  for (int i = 0; i < nfds; i++) {
+    const bool io = rc > 0 && (p[(size_t)i].revents & (POLLIN | POLLERR | POLLHUP));
+    const bool left = any_left && http_has_leftover((int64_t)p[(size_t)i].fd);
+    if (io || left) ready.push_back(i);
+  }
+  if (rc > 0) http_poll_flush_and_reap(p.data(), (int)p.size());
+  ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+  a->obj.type = OBJ_ARRAY;
+  a->idata = nullptr;
+  a->obj.arena_allocated = 1;
+  a->obj.ref_count = 1;
+  a->obj.is_moved = 0;
+  a->capacity = (int)ready.size();
+  a->count = (int)ready.size();
+  a->items_ = ready.empty() ? nullptr : (VMValue *)aot_arena_alloc(sizeof(VMValue) * ready.size());
+  for (size_t i = 0; i < ready.size(); i++) arr_items(a)[i] = VM_INT(ready[i]);
+  return VM_OBJ((Obj *)a);
+}
+
 // socket_close cagirir: ayni fd numarasi yeni bir baglantiya verildiginde eski
 // baglantinin yarim istegi ona karismasin.
 static void http_pending_forget(int64_t fd) {
   if (g_http_pending) g_http_pending->erase(fd);
+  http_out_forget(fd);
 }
 
 VMValue aot_http_recv_ready_ptr(VMValue *fdv, VMValue *maxv) {
@@ -10005,6 +10170,7 @@ VMValue aot_http_recv_ready_ptr(VMValue *fdv, VMValue *maxv) {
     it = map.emplace(key, std::move(fresh)).first;
   }
   HttpPending &st = it->second;
+  st.leftover = false;  // bu cagri tamponu isliyor; tekrar "hazir" saymaya gerek yok
 
   char tmp[16384];
   bool progressed = false;
@@ -10054,12 +10220,39 @@ VMValue aot_http_recv_ready_ptr(VMValue *fdv, VMValue *maxv) {
   if (progressed) st.last = tulpar_clock_ms();
 
   if (st.needed > 0 && (int)st.buf.size() >= st.needed) {
-    ObjString *res = aot_allocate_string(st.buf.data(), (int)st.buf.size());
-    map.erase(it);
+    ObjString *res = aot_allocate_string(st.buf.data(), st.needed);
+    if ((int)st.buf.size() > st.needed) {
+      // Sonraki (pipelined) istegin baslangici: durum onunla yeniden kurulur.
+      HttpPending next;
+      next.buf = st.buf.substr((size_t)st.needed);
+      next.started = next.last = tulpar_clock_ms();
+      next.header_end = -1;
+      next.needed = -1;
+      next.leftover = true;
+      http_pending_reparse(next);
+      it->second = std::move(next);
+    } else {
+      map.erase(it);
+    }
     return VM_OBJ((Obj *)res);
   }
   g_http_recv_err = HTTP_RECV_PENDING;
   return VM_OBJ((Obj *)aot_allocate_string("", 0));
+}
+
+// Artik tamponda baslik sonu / gereken boy (yeni bayt beklemeden).
+static void http_pending_reparse(HttpPending &st) {
+  int size = (int)st.buf.size();
+  st.header_end = http_find_header_end(st.buf.data(), 0, size);
+  if (st.header_end >= 0)
+    st.needed = st.header_end + (int)http_content_length(st.buf.data(), st.header_end);
+}
+
+// http_poll icin: listedeki bir fd'nin tamponunda bekleyen (pipelined) istek var mi.
+static bool http_has_leftover(int64_t fd) {
+  if (!g_http_pending) return false;
+  auto it = g_http_pending->find(fd);
+  return it != g_http_pending->end() && it->second.leftover && !it->second.buf.empty();
 }
 
 // http_recv_expired() -> int[] — suresi dolan yarim isteklerin fd'leri (bu

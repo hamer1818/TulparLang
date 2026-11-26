@@ -13,6 +13,15 @@ tag still works;
 
 ## [Unreleased]
 
+### Değişti — `listen_evented`: bloklamayan yazma, pipelining, çok çekirdek (`evented_workers(n)`)
+
+- Yanıtlar `http_send_queued` + `http_poll` ile bloklamadan yazılıyor: yanıtını okumayan istemci artık
+  olay döngüsünü durdurmuyor. Yeni yerleşikler: `http_send_queued`, `http_send_pending`, `http_poll`.
+- **Düzeltildi:** aynı bağlantıda art arda gönderilen (pipelined) ikinci istek kayboluyordu.
+- `evented_workers(n)` / `TULPAR_WINGS_WORKERS=n`: n olay döngüsü aynı soketi paylaşır.
+- `_wings_last_status` iş parçacığına özel (pool'da başka isteğin durum kodu loglanabiliyordu).
+- `tools/wings_gecikme.py`: modların gecikme histogramı (düz ve kötü istemcili yük).
+
 ### Eklendi — dil tanımı v0 (`docs/SPEC.md`), çalıştırılabilir
 
 - Sözcük yapısı (TR/EN anahtar kelimeler), tipler, struct/yöntem/enum/tuple/jenerik, işleç önceliği,
