@@ -6181,6 +6181,8 @@ static LLVMTypeRef ext_llvm_type(LLVMBackend *backend, tulpar::ext::CType t) {
   case CType::F64:
     return backend->float_type;
   case CType::Str:
+  case CType::Ptr:
+  case CType::Fn:
     return backend->ptr_type;
   case CType::Void:
     break;
@@ -6278,6 +6280,197 @@ static LLVMValueRef ext_boxed_to_cstr(LLVMBackend *backend, LLVMValueRef v) {
   return phi;
 }
 
+// ---------------------------------------------------------------------------
+// GERI CAGRI TRAMPOLINI (FFI `fn(...)` parametresi, 2026-11-26).
+//
+// C kitapligi (qsort, SDL ses, GLFW tus kancasi) GERCEK bir C fonksiyon
+// isaretcisi ister; tulpar_ext_call_f64 yalniz Tulpar icin yazilmis C'ye
+// yarar. Burada bildirimdeki imzayla (`fn(ptr, ptr): i32`) bir C-ABI
+// fonksiyonu uretilir: C argumanlari VMValue'ya cevrilir, hedef Tulpar
+// fonksiyonu tulpar_ext_cb_call ile (RFC C2 siniri dahil) cagrilir, sonuc
+// bildirilen C tipine cevrilip doner. Hedef ADIYLA cozulur ve isaretci
+// trampolin basina bir genel yuvada onbelleklenir (ilk cagrida
+// tulpar_ext_func_lookup) — kutulu ve tam tipli fonksiyonlar ayni yoldan.
+// Ayni (ad, imza) cifti bir kez uretilir. Yabanci bir thread'den cagri:
+// Tulpar fonksiyonu o thread'in arenasinda kosar (thread_create gibi);
+// paylasilan global'e erisim yine mutex/atomic ister.
+// ---------------------------------------------------------------------------
+static LLVMValueRef ext_vm_from_c(LLVMBackend *backend, LLVMValueRef v, tulpar::ext::CType t) {
+  using tulpar::ext::CType;
+  LLVMBuilderRef b = backend->builder;
+  switch (t) {
+  case CType::I32: return llvm_vm_val_int_val(backend, LLVMBuildSExt(b, v, backend->int_type, "cb.i64"));
+  case CType::I64: return llvm_vm_val_int_val(backend, v);
+  case CType::Bool:
+    return llvm_vm_val_bool_val(
+        backend, LLVMBuildICmp(b, LLVMIntNE, v, LLVMConstInt(backend->int32_type, 0, 0), "cb.b"));
+  case CType::F32:
+    return llvm_build_vm_val_float(backend, LLVMBuildFPExt(b, v, backend->float_type, "cb.f64"));
+  case CType::F64: return llvm_build_vm_val_float(backend, v);
+  case CType::Ptr:
+    return llvm_vm_val_int_val(backend, LLVMBuildPtrToInt(b, v, backend->int_type, "cb.p"));
+  case CType::Str: {
+    LLVMTypeRef cty = LLVMFunctionType(backend->ptr_type, &backend->ptr_type, 1, 0);
+    LLVMValueRef cfn = LLVMGetNamedFunction(backend->module, "aot_ext_cstr_to_obj");
+    if (!cfn) cfn = LLVMAddFunction(backend->module, "aot_ext_cstr_to_obj", cty);
+    return llvm_build_vm_val_obj(backend, LLVMBuildCall2(b, cty, cfn, &v, 1, "cb.s"));
+  }
+  default: break;
+  }
+  return llvm_vm_val_void(backend);
+}
+
+static LLVMValueRef ext_boxed_to_i64(LLVMBackend *backend, LLVMValueRef v);
+static LLVMValueRef ext_boxed_to_f64(LLVMBackend *backend, LLVMValueRef v);
+
+static LLVMValueRef ext_callback_ptr(LLVMBackend *backend, ASTNode_C *arg,
+                                     const tulpar::ext::CallbackSig &cb,
+                                     const tulpar::ext::Function *f, int line) {
+  using tulpar::ext::CType;
+  LLVMBuilderRef b = backend->builder;
+  if (arg && arg->type == AST_INT_LITERAL && arg->value.int_value == 0)
+    return LLVMConstPointerNull(backend->ptr_type);  // NULL geri cagri
+  const char *ad = nullptr;
+  if (arg && arg->type == AST_IDENTIFIER) ad = arg->name;
+  else if (arg && arg->type == AST_STRING_LITERAL) ad = arg->value.string_value;
+  // Ayni ad tabloda birden fazla girdiyle durabilir (on bildirim + tanim);
+  // aritenin dogru kaynagi LLVM fonksiyonunun kendisi: kutulu `t_<ad>`
+  // shim'i (sonuc isaretcisi + arguman basina bir isaretci) ya da tam tipli
+  // `@<ad>` (arguman basina bir parametre).
+  int fi = -1, ar = -1, async_mu = 0;
+  if (ad)
+    for (int i = 0; i < backend->function_count; i++)
+      if (backend->functions[i].name && strcmp(backend->functions[i].name, ad) == 0) {
+        if (fi < 0) fi = i;
+        if (backend->functions[i].is_async) async_mu = 1;
+      }
+  if (fi >= 0) {
+    std::string shim = std::string("t_") + ad;
+    if (LLVMValueRef t = LLVMGetNamedFunction(backend->module, shim.c_str()))
+      ar = (int)LLVMCountParamTypes(LLVMGlobalGetValueType(t)) - 1;
+    else if (LLVMValueRef bare = LLVMGetNamedFunction(backend->module, ad))
+      ar = (int)LLVMCountParamTypes(LLVMGlobalGetValueType(bare));
+    else
+      ar = backend->functions[fi].param_count;
+  }
+  if (fi < 0) {
+    char msg[512];
+    snprintf(msg, sizeof msg,
+             "%s: geri cagri parametresi bir Tulpar fonksiyonunun adi (ya da 0) olmali%s%s / a "
+             "callback parameter takes the name of a Tulpar function (or 0)",
+             f->name.c_str(), ad ? " — bulunamadi: " : "", ad ? ad : "");
+    report_codegen_error(backend, line, "hata", msg, f->name.c_str(), cb.text.c_str());
+    return LLVMConstPointerNull(backend->ptr_type);
+  }
+  const int n = (int)cb.params.size();
+  if (ar != n || async_mu) {
+    char msg[512];
+    snprintf(msg, sizeof msg,
+             "%s: '%s' geri cagri olarak verilemez — %s / '%s' cannot be passed as this callback",
+             f->name.c_str(), ad,
+             async_mu ? "async fonksiyon"
+                                             : "parametre sayisi bildirilen imzayla uyusmuyor",
+             ad);
+    char hint[512];
+    snprintf(hint, sizeof hint, "beklenen: %s, '%s' %d parametreli", cb.text.c_str(), ad, ar);
+    report_codegen_error(backend, line, "hata", msg, f->name.c_str(), hint);
+    return LLVMConstPointerNull(backend->ptr_type);
+  }
+  std::string tname = std::string("tulpar_cb.") + ad + ".";
+  for (CType t : cb.params) tname += tulpar::ext::ctype_name(t), tname += "_";
+  tname += std::string("_") + tulpar::ext::ctype_name(cb.ret);
+  if (LLVMValueRef have = LLVMGetNamedFunction(backend->module, tname.c_str())) return have;
+
+  LLVMTypeRef ptys[8];
+  for (int i = 0; i < n; i++) ptys[i] = ext_llvm_type(backend, cb.params[i]);
+  LLVMTypeRef rty = ext_llvm_type(backend, cb.ret);
+  LLVMTypeRef fty = LLVMFunctionType(rty, ptys, (unsigned)n, 0);
+  LLVMValueRef tr = LLVMAddFunction(backend->module, tname.c_str(), fty);
+  LLVMSetLinkage(tr, LLVMInternalLinkage);
+
+  LLVMBasicBlockRef saved = LLVMGetInsertBlock(b);
+  LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(backend->context, tr, "entry");
+  LLVMBasicBlockRef look = LLVMAppendBasicBlockInContext(backend->context, tr, "lookup");
+  LLVMBasicBlockRef call = LLVMAppendBasicBlockInContext(backend->context, tr, "call");
+  LLVMPositionBuilderAtEnd(b, entry);
+
+  std::string gfn = tname + ".fn", gar = tname + ".arity";
+  LLVMValueRef cache = LLVMAddGlobal(backend->module, backend->ptr_type, gfn.c_str());
+  LLVMSetInitializer(cache, LLVMConstPointerNull(backend->ptr_type));
+  LLVMSetLinkage(cache, LLVMInternalLinkage);
+  LLVMValueRef acache = LLVMAddGlobal(backend->module, backend->int32_type, gar.c_str());
+  LLVMSetInitializer(acache, LLVMConstInt(backend->int32_type, 0, 0));
+  LLVMSetLinkage(acache, LLVMInternalLinkage);
+
+  LLVMValueRef c0 = LLVMBuildLoad2(b, backend->ptr_type, cache, "cb.fn0");
+  LLVMSetOrdering(c0, LLVMAtomicOrderingAcquire);
+  LLVMSetAlignment(c0, 8);
+  LLVMBuildCondBr(b, LLVMBuildIsNull(b, c0, "cb.bos"), look, call);
+
+  LLVMPositionBuilderAtEnd(b, look);
+  LLVMTypeRef lpt[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef lty = LLVMFunctionType(backend->ptr_type, lpt, 2, 0);
+  LLVMValueRef lfn = LLVMGetNamedFunction(backend->module, "tulpar_ext_func_lookup");
+  if (!lfn) lfn = LLVMAddFunction(backend->module, "tulpar_ext_func_lookup", lty);
+  LLVMValueRef ar_slot = LLVMBuildAlloca(b, backend->int32_type, "cb.ar");
+  LLVMValueRef nm = LLVMBuildGlobalStringPtr(b, ad, "cb.ad");
+  LLVMValueRef largs[] = {nm, ar_slot};
+  LLVMValueRef found = LLVMBuildCall2(b, lty, lfn, largs, 2, "cb.found");
+  LLVMBuildStore(b, LLVMBuildLoad2(b, backend->int32_type, ar_slot, "cb.arv"), acache);
+  LLVMValueRef st = LLVMBuildStore(b, found, cache);
+  LLVMSetOrdering(st, LLVMAtomicOrderingRelease);
+  LLVMSetAlignment(st, 8);
+  LLVMBuildBr(b, call);
+
+  LLVMPositionBuilderAtEnd(b, call);
+  LLVMValueRef fnp = LLVMBuildPhi(b, backend->ptr_type, "cb.fnp");
+  LLVMValueRef inc[] = {c0, found};
+  LLVMBasicBlockRef inb[] = {entry, look};
+  LLVMAddIncoming(fnp, inc, inb, 2);
+  LLVMValueRef arity = LLVMBuildLoad2(b, backend->int32_type, acache, "cb.arity");
+  LLVMTypeRef arr_t = LLVMArrayType(backend->vm_value_type, (unsigned)(n > 0 ? n : 1));
+  LLVMValueRef argv = LLVMBuildAlloca(b, arr_t, "cb.argv");
+  for (int i = 0; i < n; i++) {
+    LLVMValueRef idx[] = {LLVMConstInt(backend->int32_type, 0, 0),
+                          LLVMConstInt(backend->int32_type, (unsigned)i, 0)};
+    LLVMValueRef slot = LLVMBuildGEP2(b, arr_t, argv, idx, 2, "cb.slot");
+    LLVMBuildStore(b, ext_vm_from_c(backend, LLVMGetParam(tr, (unsigned)i), cb.params[i]), slot);
+  }
+  LLVMValueRef out = LLVMBuildAlloca(b, backend->vm_value_type, "cb.out");
+  LLVMTypeRef cpt[] = {backend->ptr_type, backend->int32_type, backend->ptr_type,
+                       backend->int32_type, backend->ptr_type};
+  LLVMTypeRef cty = LLVMFunctionType(LLVMVoidTypeInContext(backend->context), cpt, 5, 0);
+  LLVMValueRef cfn = LLVMGetNamedFunction(backend->module, "tulpar_ext_cb_call");
+  if (!cfn) cfn = LLVMAddFunction(backend->module, "tulpar_ext_cb_call", cty);
+  LLVMValueRef cargs[] = {fnp, arity, argv, LLVMConstInt(backend->int32_type, (unsigned)n, 0), out};
+  LLVMBuildCall2(b, cty, cfn, cargs, 5, "");
+  LLVMValueRef r = LLVMBuildLoad2(b, backend->vm_value_type, out, "cb.r");
+  switch (cb.ret) {
+  case CType::Void: LLVMBuildRetVoid(b); break;
+  case CType::I64: LLVMBuildRet(b, ext_boxed_to_i64(backend, r)); break;
+  case CType::I32:
+    LLVMBuildRet(b, LLVMBuildTrunc(b, ext_boxed_to_i64(backend, r), backend->int32_type, "cb.r32"));
+    break;
+  case CType::Bool:
+    LLVMBuildRet(b, LLVMBuildZExt(b,
+                                  LLVMBuildICmp(b, LLVMIntNE, ext_boxed_to_i64(backend, r),
+                                                LLVMConstInt(backend->int_type, 0, 0), "cb.rb"),
+                                  backend->int32_type, "cb.rbool"));
+    break;
+  case CType::F64: LLVMBuildRet(b, ext_boxed_to_f64(backend, r)); break;
+  case CType::F32:
+    LLVMBuildRet(b, LLVMBuildFPTrunc(b, ext_boxed_to_f64(backend, r),
+                                     LLVMFloatTypeInContext(backend->context), "cb.rf32"));
+    break;
+  case CType::Ptr:
+    LLVMBuildRet(b, LLVMBuildIntToPtr(b, ext_boxed_to_i64(backend, r), backend->ptr_type, "cb.rp"));
+    break;
+  default: LLVMBuildRetVoid(b); break;
+  }
+  if (saved) LLVMPositionBuilderAtEnd(b, saved);
+  return tr;
+}
+
 // Tek arguman: tipli yol once; tipi belirsizse kutulu cevrim.
 static LLVMValueRef ext_arg_value(LLVMBackend *backend, ASTNode_C *arg,
                                   tulpar::ext::CType t) {
@@ -6293,6 +6486,14 @@ static LLVMValueRef ext_arg_value(LLVMBackend *backend, ASTNode_C *arg,
   const bool raw_flt = tv.type == INFERRED_FLOAT && tv.value &&
                        LLVMTypeOf(tv.value) == backend->float_type;
   switch (t) {
+  case CType::Ptr: {
+    LLVMValueRef i = raw_int   ? tv.value
+                     : raw_flt ? ext_fptosi_sat(backend, tv.value)
+                               : ext_boxed_to_i64(backend, box_typed_value(backend, tv));
+    return LLVMBuildIntToPtr(b, i, backend->ptr_type, "ext.ptr");
+  }
+  case CType::Fn:
+    break;  // emit_ext_call ext_callback_ptr'i dogrudan cagirir
   case CType::I32:
   case CType::I64:
   case CType::Bool: {
@@ -6379,9 +6580,12 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
 
   // Argumanlar SOLDAN SAGA ve bir kez uretilir (yan etki sirasi korunur).
   LLVMValueRef args[16];
-  for (int i = 0; i < np; i++)
-    args[i] = ext_arg_value(backend, i < node->argument_count ? node->arguments[i] : nullptr,
-                            f->params[i]);
+  for (int i = 0; i < np; i++) {
+    ASTNode_C *a = i < node->argument_count ? node->arguments[i] : nullptr;
+    args[i] = f->params[i] == CType::Fn
+                  ? ext_callback_ptr(backend, a, f->callbacks[i], f, node->line)
+                  : ext_arg_value(backend, a, f->params[i]);
+  }
   LLVMValueRef r = LLVMBuildCall2(b, fty, fn, args, (unsigned)np,
                                   f->ret == CType::Void ? "" : "ext.ret");
   // Ext siniri (RFC C2, 2026-11-26): C'nin geri cagirdigi bir Tulpar
@@ -6438,6 +6642,14 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
   case CType::F64:
     result.type = INFERRED_FLOAT;
     result.value = r;
+    break;
+  case CType::Ptr:
+    result.type = INFERRED_INT;
+    result.value = LLVMBuildPtrToInt(b, r, backend->int_type, "ext.rptr");
+    break;
+  case CType::Fn:
+    result.boxed = llvm_vm_val_void(backend);
+    result.value = result.boxed;
     break;
   case CType::Str: {
     // Donen dizgi HEMEN kopyalanir: C tarafinin tamponu bir sonraki cagrida

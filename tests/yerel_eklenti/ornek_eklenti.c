@@ -110,6 +110,36 @@ int64_t ornek_son_kod(void) { return g_son_kod; }
 #include <stdlib.h>
 const char *ornek_ext_yolu(void) { return getenv("TULPAR_EXT_PATH"); }
 
+/* ---- FFI v1 dilimi (2026-11-26): opak `ptr` + gercek C geri cagrisi ----
+ * Tampon C'de yasar; Tulpar yalniz isaretciyi tutar ve geri verir. Siralama
+ * GERCEK libc qsort ile: Tulpar karsilastiricisi derleyicinin urettigi C-ABI
+ * trampolininden gecer — C kodu Tulpar'a ozgu hicbir sey bilmez. */
+#include <stdlib.h>
+void *ornek_tampon_yeni(int64_t n) { return calloc((size_t)n, sizeof(int64_t)); }
+void ornek_tampon_yaz(void *p, int64_t i, int64_t v) { ((int64_t *)p)[i] = v; }
+int64_t ornek_tampon_oku(void *p, int64_t i) { return ((int64_t *)p)[i]; }
+int64_t ornek_oku_i64(void *p) { return *(int64_t *)p; }
+void ornek_tampon_sil(void *p) { free(p); }
+int ornek_null_mu(void *p) { return p == NULL; }
+void ornek_qsort(void *base, int64_t n, int64_t boy, int (*cmp)(const void *, const void *)) {
+  qsort(base, (size_t)n, (size_t)boy, cmp);
+}
+/* Baglam isaretcili geri cagri: cb(i, ctx) n kez. */
+void ornek_her_biri(int64_t n, void (*cb)(int64_t, void *), void *ctx) {
+  for (int64_t i = 0; i < n; i++) cb(i, ctx);
+}
+double ornek_uygula_f(double (*f)(double), double x) { return f(x) + f(x * 2.0); }
+int64_t ornek_uygula_s(int64_t (*f)(const char *), const char *s) { return f(s) * 10; }
+int32_t ornek_uygula_32(int32_t (*f)(int32_t, float, int), int32_t a) { return f ? f(a, 0.5f, 1) : -1; }
+/* C2 siniri geri cagrida: kilit al, cagir, birak. */
+int64_t ornek_cb_koru(int64_t (*f)(int64_t), int64_t x) {
+  g_kilit = 1;
+  int64_t r = f(x);
+  g_kilit = 0;
+  g_son_kod = r;
+  return r;
+}
+
 /* ---- ABI_KILIDI: bildirimdeki imzalar (tulpar-ext.json ile AYNI) ---- */
 #ifndef ORNEK_ABI_BOZ
 typedef int64_t (*abi_topla)(int64_t, int64_t);
@@ -136,6 +166,18 @@ static double (*const k_koru_eval)(const char *, double) = ornek_koru_eval;
 static int64_t (*const k_iki)(const char *, const char *, double) = ornek_iki_kanca;
 static int64_t (*const k_kilit)(void) = ornek_kilit;
 static int64_t (*const k_son_kod)(void) = ornek_son_kod;
+static void *(*const k_tampon_yeni)(int64_t) = ornek_tampon_yeni;
+static void (*const k_tampon_yaz)(void *, int64_t, int64_t) = ornek_tampon_yaz;
+static int64_t (*const k_tampon_oku)(void *, int64_t) = ornek_tampon_oku;
+static int64_t (*const k_oku_i64)(void *) = ornek_oku_i64;
+static void (*const k_tampon_sil)(void *) = ornek_tampon_sil;
+static int (*const k_null_mu)(void *) = ornek_null_mu;
+static void (*const k_qsort)(void *, int64_t, int64_t, int (*)(const void *, const void *)) = ornek_qsort;
+static void (*const k_her_biri)(int64_t, void (*)(int64_t, void *), void *) = ornek_her_biri;
+static double (*const k_uygula_f)(double (*)(double), double) = ornek_uygula_f;
+static int64_t (*const k_uygula_s)(int64_t (*)(const char *), const char *) = ornek_uygula_s;
+static int32_t (*const k_uygula_32)(int32_t (*)(int32_t, float, int), int32_t) = ornek_uygula_32;
+static int64_t (*const k_cb_koru)(int64_t (*)(int64_t), int64_t) = ornek_cb_koru;
 /* Kullanilmayan-degisken uyarisi olmasin diye tek bir tutucu. */
 const void *ornek_abi_kilidi[] = {(const void *)&k_topla, (const void *)&k_kare32,
                                    (const void *)&k_orta, (const void *)&k_yarim,
@@ -146,4 +188,10 @@ const void *ornek_abi_kilidi[] = {(const void *)&k_topla, (const void *)&k_kare3
                                    (const void *)&k_geri, (const void *)&k_ext_yolu,
                                    (const void *)&k_koru, (const void *)&k_koru_eval,
                                    (const void *)&k_iki, (const void *)&k_kilit,
-                                   (const void *)&k_son_kod};
+                                   (const void *)&k_son_kod, (const void *)&k_tampon_yeni,
+                                   (const void *)&k_tampon_yaz, (const void *)&k_tampon_oku,
+                                   (const void *)&k_oku_i64, (const void *)&k_tampon_sil,
+                                   (const void *)&k_null_mu, (const void *)&k_qsort,
+                                   (const void *)&k_her_biri, (const void *)&k_uygula_f,
+                                   (const void *)&k_uygula_s, (const void *)&k_uygula_32,
+                                   (const void *)&k_cb_koru};

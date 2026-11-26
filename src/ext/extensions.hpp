@@ -35,9 +35,26 @@ namespace ext {
 //   bool -> int (0/1)   str -> const char * (NUL sonlu; parametrede yalniz
 //   cagri suresince gecerli, donuste derleyici hemen KOPYALAR; NULL = "")
 //   void (yalniz donus)
-enum class CType { Void, I32, I64, F32, F64, Bool, Str };
+//   ptr -> void * (OPAK isaretci, 2026-11-26). Tulpar'da `int` (adres, NULL
+//          = 0); aritmetik anlamsiz, yalniz C'ye geri verilmek icin tutulur.
+//          wasm32'de 32 bit: inttoptr/ptrtoint hedef genisligini izler.
+//   fn(<tipler>): <tip> -> C fonksiyon isaretcisi (GERI CAGRI, 2026-11-26).
+//          Yalniz parametrede. Cagri yerinde bir Tulpar fonksiyonunun ADI
+//          (tanimlayici ya da dizgi sabiti) ya da 0 (NULL) verilir; derleyici
+//          o imzada bir C-ABI trampolini uretir. Geri cagri parametreleri:
+//          i32 i64 f32 f64 bool ptr str; donus: void i32 i64 f32 f64 bool
+//          ptr. Geri cagri icindeki throw RFC C2 sinirindan gecer (C
+//          cercevesi atlanmaz; istisna dis cagri donunce firlatilir).
+enum class CType { Void, I32, I64, F32, F64, Bool, Str, Ptr, Fn };
 
 const char *ctype_name(CType t);
+
+// `fn(...)` parametresinin imzasi.
+struct CallbackSig {
+  std::vector<CType> params;
+  CType ret = CType::Void;
+  std::string text;  // bildirimdeki yazim: "fn(i32, f64): f64"
+};
 
 enum class Platform { Linux, MacOS, Windows, Android, Web };
 constexpr int kPlatformCount = 5;
@@ -49,6 +66,7 @@ struct Function {
   std::string doc;
   std::vector<CType> params;
   std::vector<std::string> param_names;
+  std::vector<CallbackSig> callbacks;  // params ile paralel; yalniz Fn icin dolu
   CType ret = CType::Void;
   int ext_index = -1;
   // LSP/hover icin: "ad(a: i32, b: str): f64"

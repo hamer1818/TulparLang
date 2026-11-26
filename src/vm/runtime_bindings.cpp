@@ -1628,6 +1628,54 @@ extern "C" double tulpar_ext_eval_f64(void *fn, int arity, const double *args, i
   return 0.0;
 }
 
+// GERI CAGRI TRAMPOLINI (2026-11-26, FFI `fn(...)` parametresi). Derleyicinin
+// urettigi C-ABI trampolini C argumanlarini VMValue'ya cevirip buradan
+// Tulpar fonksiyonunu cagirir. tulpar_ext_eval_f64'ten farki: argumanlar ve
+// sonuc VMValue — 64-bit isaretci/tamsayi double'a sigmaz (2^53 ustu:
+// arm64 etiketli isaretciler), dizgi de gecebilir. Throw ayni C2 kurali:
+// disarida try varsa sinirda yakalanir, *out VOID, dis ext cagrisi donunce
+// yeniden firlatilir; yoksa eskisi gibi mesaj + exit(1).
+static inline VMValue tulpar_ext_invoke_v(void *fn, int arity, const VMValue *args, int argc) {
+  const int n = arity >= 0 ? arity : argc;
+  VMValue a[TULPAR_CALL_MAX_ARGS];
+  for (int i = 0; i < n; i++) a[i] = i < argc ? args[i] : VM_VOID();
+  VMValue r = VM_VOID();
+  tulpar_boxed_call(fn, &r, a, n);
+  return r;
+}
+__attribute__((noinline)) static void tulpar_ext_cb_guarded(void *fn, int arity,
+                                                           const VMValue *args, int argc,
+                                                           VMValue *out) {
+  jmp_buf *jb = aot_try_push();
+  if (!jb) { *out = tulpar_ext_invoke_v(fn, arity, args, argc); return; }
+  volatile int saved_top = g_arena_checkpoint_top;
+  if (setjmp(*jb) == 0) {
+    VMValue r = tulpar_ext_invoke_v(fn, arity, args, argc);
+    aot_try_pop();
+    *out = r;
+    return;
+  }
+  if (g_arena_checkpoint_top > saved_top) g_arena_checkpoint_top = saved_top;
+  VMValue ex = aot_persist(aot_get_exception());
+  if (!g_ext_has_pending) {
+    g_ext_pending = ex;
+    g_ext_has_pending = true;
+    __atomic_add_fetch(&tulpar_ext_pending_any, 1, __ATOMIC_RELAXED);
+  }
+  g_ext_last_threw = 1;
+  *out = VM_VOID();
+}
+extern "C" void tulpar_ext_cb_call(void *fn, int arity, const VMValue *args, int argc,
+                                   VMValue *out) {
+  *out = VM_VOID();
+  if (!fn || argc < 0 || argc > TULPAR_CALL_MAX_ARGS || arity > TULPAR_CALL_MAX_ARGS) return;
+  if (__builtin_expect(aot_eh_depth() != 0, 0)) {
+    tulpar_ext_cb_guarded(fn, arity, args, argc, out);
+    return;
+  }
+  *out = tulpar_ext_invoke_v(fn, arity, args, argc);
+}
+
 // Bu iplikte son tulpar_ext_eval_f64 throw ile mi bitti (eval'in 0.0'i
 // "sonuc 0" ile "throw" arasinda ayrim yapamaz). tulpar_ext_call_f64 bunu
 // donus degeriyle (-1) zaten soyler ve bayragi sifirlamaz — sicak yoldan bir

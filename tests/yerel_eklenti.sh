@@ -7,7 +7,10 @@
 # (--ext, TULPAR_EXT_PATH, tulpar.toml [ext]) ayni program kosturulur; cikti
 # kullan.beklenen ile BAYT BAYT karsilastirilir. Program her tip ailesini
 # (i64/i32/f64/f32/bool/str/void, 10 parametre, NULL dizgi, statik tampon
-# kopyasi, Tulpar'i geri cagirma) bir kez gecirir.
+# kopyasi, Tulpar'i geri cagirma) bir kez gecirir; FFI v1 dilimi (2026-11-26):
+# opak `ptr` (C'de yasayan tampon) ve `fn(...)` geri cagrisi — GERCEK libc
+# qsort Tulpar karsilastiricisiyla siralar, baglam isaretcili cb, str/f32/
+# bool argumanli cb, NULL cb, geri cagrida throw (C2 siniri, kilit 0).
 #
 # POZITIF KONTROLLER (kapinin olctugunu gosteren yollar — her biri KIRMIZI
 # gormek zorunda; yesil gorurse kapi duser):
@@ -242,6 +245,35 @@ printf 'import "ornek";\nprint(ornek_topla(1, 2, 3));\n' > "$TMP/fazla.tpr"
 (cd "$TMP" && "$TUL" --no-typecheck --ext ext fazla.tpr) >"$TMP/p4f" 2>&1; rc=$?
 [ $rc -ne 0 ] && grep -q "3 arguments given, the extension manifest declares 2" "$TMP/p4f" && gecti "fazla arguman: derleme hatasi (imzayla)" \
   || { dustu "fazla arguman (rc=$rc)"; head -4 "$TMP/p4f"; }
+# P5) FFI v1 geri cagri hatalari (2026-11-26): olmayan fonksiyon, yanlis
+#     arite, async hedef, bozuk `fn(...)` bildirimi — hepsi adiyla hata.
+geri_red() {  # geri_red <ad> <beklenen> <kaynak>
+  printf '%s\n' "$3" > "$TMP/$1.tpr"
+  (cd "$TMP" && "$TUL" --no-typecheck --ext ext "$1.tpr") >"$TMP/$1.out" 2>&1; local rc=$?
+  if [ $rc -ne 0 ] && grep -qF -- "$2" "$TMP/$1.out"; then gecti "geri cagri: $1 reddedildi"
+  else dustu "geri cagri: $1 (rc=$rc) beklenen '$2'"; head -6 "$TMP/$1.out" | sed 's/^/         /'; fi
+}
+geri_red cb_yok "geri cagri parametresi bir Tulpar fonksiyonunun adi (ya da 0) olmali — bulunamadi: yok_boyle" \
+'import "ornek";
+print(ornek_uygula_f(yok_boyle, 1));'
+geri_red cb_arite "cannot be passed as this callback" \
+'import "ornek";
+func iki(a, b) { return a + b; }
+print(ornek_uygula_f(iki, 1));'
+geri_red cb_async "async fonksiyon" \
+'import "ornek";
+async func as(x) { return x; }
+print(ornek_uygula_f(as, 1));'
+geri_red cb_ifade "geri cagri parametresi bir Tulpar fonksiyonunun adi" \
+'import "ornek";
+func f(x) { return x; }
+var g = 3;
+print(ornek_uygula_f(g + 1, 1));'
+mkdir -p "$TMP/bozuk_cb"
+printf '{"tulpar_ext":1,"name":"bozuk_cb","functions":[{"name":"bc_f","params":["f: fn(i32): str"]}]}' > "$TMP/bozuk_cb/tulpar-ext.json"
+(cd "$TMP" && "$TUL" --ext bozuk_cb sade.tpr) >"$TMP/p5b" 2>&1; rc=$?
+[ $rc -ne 0 ] && grep -q "invalid callback type 'fn(i32): str'" "$TMP/p5b" && gecti "bozuk fn(...) bildirimi: adiyla hata" \
+  || { dustu "bozuk fn bildirimi (rc=$rc)"; head -3 "$TMP/p5b"; }
 
 # --- LSP -------------------------------------------------------------------------
 PY=""

@@ -16,6 +16,48 @@ func kendi_yakalar(float x): float {
     return 1;
 }
 
+// FFI v1 (opak ptr + C geri cagrisi): qsort karsilastiricisi ve digerleri.
+func karsilastir(int a, int b): int {
+    int x = ornek_oku_i64(a);
+    int y = ornek_oku_i64(b);
+    if (x < y) { return -1; }
+    if (x > y) { return 1; }
+    return 0;
+}
+int g_toplam = 0;
+func her_birinde(i, ctx) { g_toplam = g_toplam + ornek_tampon_oku(ctx, i); }
+func kare_f(x) { return x * x; }
+func uzunluk_cb(str s): int { return len(s); }
+func uc_arg(int a, float f, bool b): int {
+    if (b) { return a * 100 + toInt(f * 10); }
+    return 0;
+}
+func cb_atar(int x): int { throw "geri cagri hatasi " + toString(x); }
+
+func ffi_v1() {
+    var p = ornek_tampon_yeni(6);
+    array girdi = [42, -7, 19, 0, 1000, 3];
+    for (int i = 0; i < 6; i++) { ornek_tampon_yaz(p, i, girdi[i]); }
+    ornek_qsort(p, 6, 8, karsilastir);
+    str s = "";
+    for (int i = 0; i < 6; i++) { s = s + toString(ornek_tampon_oku(p, i)) + " "; }
+    print("qsort " + s);
+    ornek_her_biri(6, "her_birinde", p);
+    print("her_biri " + toString(g_toplam));
+    ornek_tampon_sil(p);
+    print("null " + toString(ornek_null_mu(0)) + " " + toString(ornek_null_mu(ornek_tampon_yeni(1))));
+    print("uygula_f " + toString(ornek_uygula_f(kare_f, 3)));
+    print("uygula_s " + toString(ornek_uygula_s(uzunluk_cb, "tulpar")));
+    print("uygula_32 " + toString(ornek_uygula_32(uc_arg, 7)) + " " + toString(ornek_uygula_32(0, 7)));
+    try {
+        ornek_cb_koru(cb_atar, 5);
+        print("C2 YANLIS: geri cagri istisnasi firlamadi");
+    } catch (e) {
+        print("cb_sinir " + toString(e) + " | kilit " + toString(ornek_kilit()));
+    }
+    print("cb_sonra " + toString(ornek_cb_koru(kare_f, 9)));
+}
+
 func main() {
     // i64: tipli (ham deger, kutusuz) ve dinamik (kutulu, float -> kirpma)
     int a = 40;
@@ -87,5 +129,6 @@ func main() {
         print("frame " + toString(e) + " | kilit " + toString(ornek_kilit()));
     }
     print("sonra " + toString(ornek_geri("ikiye_kat", 5)));
+    ffi_v1();
 }
 main();

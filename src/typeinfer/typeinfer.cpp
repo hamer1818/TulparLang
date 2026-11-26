@@ -3331,9 +3331,10 @@ std::vector<TypeinferAllocRow> typeinfer_alloc_report(TypeInferContext *ctx,
 static DataType ext_param_type(tulpar::ext::CType t) {
   using tulpar::ext::CType;
   switch (t) {
-  case CType::I32: case CType::I64: case CType::Bool: return TYPE_INT;
+  case CType::I32: case CType::I64: case CType::Bool: case CType::Ptr: return TYPE_INT;
   case CType::F32: case CType::F64: return TYPE_FLOAT;
   case CType::Str: return TYPE_STRING;
+  case CType::Fn: // fonksiyon adi ya da 0 — kodgen denetler
   case CType::Void: break;
   }
   return TYPE_UNKNOWN;
@@ -3342,10 +3343,11 @@ static DataType ext_return_type(tulpar::ext::CType t) {
   using tulpar::ext::CType;
   switch (t) {
   case CType::Void: return TYPE_VOID;
-  case CType::I32: case CType::I64: return TYPE_INT;
+  case CType::I32: case CType::I64: case CType::Ptr: return TYPE_INT;
   case CType::F32: case CType::F64: return TYPE_FLOAT;
   case CType::Bool: return TYPE_BOOL;
   case CType::Str: return TYPE_STRING;
+  case CType::Fn: break;
   }
   return TYPE_UNKNOWN;
 }

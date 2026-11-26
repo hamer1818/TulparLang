@@ -45,6 +45,29 @@ Neden: 2026-09-20'de motor derleyiciden çıkarıldı (#333, kullanıcı kararı
 | `bool` | `int` (0/1) | int + bool | dönüşte ≠0 → true |
 | `str` | `const char *` | str | parametre: kopyasız, çağrı süresince; dönüş: hemen kopyalanır, NULL → "" |
 | `void` | — | — | yalnız dönüş |
+| `ptr` | `void *` | int (adres; NULL = 0) | **opak** — C'de yaşayan nesneyi tutup geri vermek için; aritmetik anlamsız. wasm32'de 32 bit (`inttoptr` hedef genişliğini izler) |
+| `fn(<tipler>): <tip>` | C fonksiyon işaretçisi | fonksiyon **adı** ya da `0` | yalnız parametre; aşağıda "Geri çağrı" |
+
+### Geri çağrı (`fn(...)`, 2026-11-26)
+
+`"cmp: fn(ptr, ptr): i32"` bildirilmiş bir parametreye Tulpar fonksiyonunun **adı**
+(tanımlayıcı ya da dizgi sabiti) verilir; `0` NULL'dur. Derleyici o (ad, imza) çifti için
+bir **C-ABI trampolini** üretir (`ext_callback_ptr`, `llvm_backend.cpp`): C argümanlarını
+VMValue'ya çevirir, hedefi `tulpar_ext_cb_call` ile çağırır, sonucu bildirilen C tipine
+çevirip döner. C kodu Tulpar'a özgü hiçbir şey bilmez — kapı **gerçek libc `qsort`**'u
+Tulpar karşılaştırıcısıyla çalıştırıyor. Geri çağrı parametreleri `i32 i64 f32 f64 bool
+ptr str`, dönüşü `void i32 i64 f32 f64 bool ptr`, en çok 8 parametre.
+
+- Hedef **adıyla** çözülür, işaretçi trampolin başına bir genel yuvada önbelleklenir (ilk
+  çağrıda `tulpar_ext_func_lookup`) — kutulu ve tam tipli fonksiyonlar aynı yoldan.
+- Argüman/sonuç VMValue olarak taşınır, `double` değil: 64-bit işaretçi 2^53'e sığmaz
+  (arm64 etiketli işaretçiler) ve `str` geçebilmeli.
+- Throw RFC C2 sınırından geçer: dışarıda `try` varsa sınırda yakalanır, C dönüş tipinin
+  sıfırını görür ve temizliğini yapar, istisna dış ext çağrısı dönünce fırlar.
+- Derleme hataları (adıyla): olmayan fonksiyon, arite uyuşmazlığı, `async` hedef, ifade
+  (değişkende tutulan fonksiyon değeri desteklenmiyor — ad derleme zamanında bilinmeli).
+- Yabancı bir thread'den (ör. ses aygıtı thread'i) çağrı: fonksiyon o thread'in arenasında
+  koşar; paylaşılan global'e erişim yine mutex/atomic ister.
 
 `symbol` verilmezse `name`. En çok 16 parametre. `lib_dirs` ve `modules`
 yolları bildirimin dizinine göre; `{abi}` Android'de `arm64-v8a`/`x86_64`.
@@ -261,8 +284,10 @@ kollarla düzeltildi.
 
 ## Sınırlar
 
-- Yalnız skaler ABI: struct değer geçişi yok (K304), işlev işaretçisi/geri
-  çağrı değeri yok (K305 — ad tabanlı `tulpar_ext_func_lookup` var).
+- Struct değer geçişi yok (K304): bir C struct'ı `ptr` ile tutulur, alanlarına C
+  yardımcılarıyla erişilir ya da `tulpar bindgen` (aşağıda) erişimcileri üretir.
+- Geri çağrı (K305) yalnız **adlandırılmış** fonksiyonla: değişkende tutulan kapanış
+  (yakalanan ortamıyla) C işaretçisine çevrilemez.
 - Windows: mekanizma derlenir ve kapı CI'da koşar; motorun bildiriminde
   Windows bölümü yok (ölçülmedi).
 - Web: `link.web` verilirse em++ satırına eklenir; ölçülmedi.

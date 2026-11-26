@@ -137,8 +137,43 @@ bool parse_type(const std::string &t, bool allow_void, CType &out) {
   else if (t == "f64" || t == "float") out = CType::F64;
   else if (t == "bool") out = CType::Bool;
   else if (t == "str") out = CType::Str;
+  else if (t == "ptr") out = CType::Ptr;
   else if (allow_void && t == "void") out = CType::Void;
   else return false;
+  return true;
+}
+
+// "fn(i32, f64): f64" / "fn()" / "fn(ptr)" -> CallbackSig. Hata: false + neden.
+bool parse_callback(const std::string &t, CallbackSig &out, std::string &why) {
+  out = CallbackSig();
+  out.text = t;
+  if (t.compare(0, 3, "fn(") != 0) { why = "fn(...) bekleniyor"; return false; }
+  const size_t close = t.find(')');
+  if (close == std::string::npos) { why = "')' eksik"; return false; }
+  std::string inner = t.substr(3, close - 3), rest = trim(t.substr(close + 1));
+  size_t pos = 0;
+  while (!trim(inner).empty() && pos <= inner.size()) {
+    size_t comma = inner.find(',', pos);
+    std::string part = trim(inner.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos));
+    CType c;
+    if (!parse_type(part, false, c) || c == CType::Fn) {
+      why = "geri cagri parametre tipi '" + part + "' (i32 i64 f32 f64 bool ptr str)";
+      return false;
+    }
+    out.params.push_back(c);
+    if (comma == std::string::npos) break;
+    pos = comma + 1;
+  }
+  if (out.params.size() > 8) { why = "geri cagri en fazla 8 parametre"; return false; }
+  out.ret = CType::Void;
+  if (!rest.empty()) {
+    if (rest[0] != ':') { why = "donus tipi ':' ile yazilir"; return false; }
+    std::string rt = trim(rest.substr(1));
+    if (!parse_type(rt, true, out.ret) || out.ret == CType::Str) {
+      why = "geri cagri donus tipi '" + rt + "' (void i32 i64 f32 f64 bool ptr)";
+      return false;
+    }
+  }
   return true;
 }
 
@@ -364,7 +399,7 @@ bool parse_manifest(const std::string &mpath, const char *origin,
     if (!parse_type(rs, true, F.ret)) {
       err = merr(mpath, where + " (" + F.name + "): " +
                             tr_en("bilinmeyen donus tipi '", "unknown return type '") + rs +
-                            "' (void, i32, i64, int, f32, f64, float, bool, str)");
+                            "' (void, i32, i64, int, f32, f64, float, bool, str, ptr)");
       return false;
     }
     cJSON *ps = cJSON_GetObjectItemCaseSensitive(f, "params");
@@ -382,7 +417,9 @@ bool parse_manifest(const std::string &mpath, const char *origin,
         return false;
       }
       std::string s = p->valuestring, pname, ptype;
-      const size_t colon = s.find(':');
+      size_t colon = s.find(':');
+      // Adsiz geri cagri ("fn(i32): i32"): ilk ':' imzanin icinde.
+      if (trim(s).compare(0, 3, "fn(") == 0) colon = std::string::npos;
       if (colon == std::string::npos) {
         ptype = trim(s);
         pname = "a" + std::to_string(F.params.size());
@@ -391,14 +428,25 @@ bool parse_manifest(const std::string &mpath, const char *origin,
         ptype = trim(s.substr(colon + 1));
       }
       CType t;
-      if (!parse_type(ptype, false, t)) {
+      CallbackSig cb;
+      if (ptype.compare(0, 3, "fn(") == 0) {
+        std::string why;
+        if (!parse_callback(ptype, cb, why)) {
+          err = merr(mpath, where + " (" + F.name + "): " +
+                                tr_en("gecersiz geri cagri tipi '", "invalid callback type '") + ptype +
+                                "': " + why);
+          return false;
+        }
+        t = CType::Fn;
+      } else if (!parse_type(ptype, false, t)) {
         err = merr(mpath, where + " (" + F.name + "): " +
                               tr_en("bilinmeyen parametre tipi '", "unknown parameter type '") + ptype +
-                              "' (i32, i64, int, f32, f64, float, bool, str)");
+                              "' (i32, i64, int, f32, f64, float, bool, str, ptr, fn(...): ...)");
         return false;
       }
       F.params.push_back(t);
       F.param_names.push_back(pname);
+      F.callbacks.push_back(cb);
     }
     if (F.params.size() > 16) {
       err = merr(mpath, where + " (" + F.name + tr_en("): en fazla 16 parametre",
@@ -485,6 +533,8 @@ const char *ctype_name(CType t) {
   case CType::F64: return "f64";
   case CType::Bool: return "bool";
   case CType::Str: return "str";
+  case CType::Ptr: return "ptr";
+  case CType::Fn: return "fn";
   }
   return "?";
 }
@@ -514,7 +564,9 @@ std::string Function::signature() const {
   std::string s = name + "(";
   for (size_t i = 0; i < params.size(); i++) {
     if (i) s += ", ";
-    s += param_names[i] + ": " + ctype_name(params[i]);
+    s += param_names[i] + ": " +
+         (params[i] == CType::Fn && i < callbacks.size() ? callbacks[i].text
+                                                         : std::string(ctype_name(params[i])));
   }
   s += ")";
   if (ret != CType::Void) s += std::string(": ") + ctype_name(ret);

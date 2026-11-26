@@ -25,7 +25,19 @@
     {"name": "ornek_koru_eval", "params": ["fn: str", "x: f64"], "returns": "f64", "doc": "Ayni kalip, eval_f64 + tulpar_ext_threw."},
     {"name": "ornek_iki_kanca", "params": ["a: str", "b: str", "x: f64"], "returns": "i64", "doc": "Iki kanca art arda; kod = rc1*10 + rc2."},
     {"name": "ornek_kilit", "returns": "i64", "doc": "C tarafinin kilidi (temizlik kostuysa 0)."},
-    {"name": "ornek_son_kod", "returns": "i64", "doc": "C'nin gordugu son donus kodu."}
+    {"name": "ornek_son_kod", "returns": "i64", "doc": "C'nin gordugu son donus kodu."},
+    {"name": "ornek_tampon_yeni", "params": ["n: i64"], "returns": "ptr", "doc": "n elemanli int64 tamponu (opak isaretci)."},
+    {"name": "ornek_tampon_yaz", "params": ["p: ptr", "i: i64", "v: i64"], "doc": "p[i] = v."},
+    {"name": "ornek_tampon_oku", "params": ["p: ptr", "i: i64"], "returns": "i64", "doc": "p[i]."},
+    {"name": "ornek_oku_i64", "params": ["p: ptr"], "returns": "i64", "doc": "*p."},
+    {"name": "ornek_tampon_sil", "params": ["p: ptr"], "doc": "free(p)."},
+    {"name": "ornek_null_mu", "params": ["p: ptr"], "returns": "bool", "doc": "p == NULL."},
+    {"name": "ornek_qsort", "params": ["base: ptr", "n: i64", "boy: i64", "cmp: fn(ptr, ptr): i32"], "doc": "libc qsort, Tulpar karsilastiricisiyla."},
+    {"name": "ornek_her_biri", "params": ["n: i64", "cb: fn(i64, ptr)", "ctx: ptr"], "doc": "cb(i, ctx) n kez."},
+    {"name": "ornek_uygula_f", "params": ["f: fn(f64): f64", "x: f64"], "returns": "f64", "doc": "f(x) + f(2x)."},
+    {"name": "ornek_uygula_s", "params": ["f: fn(str): i64", "s: str"], "returns": "i64", "doc": "f(s) * 10."},
+    {"name": "ornek_uygula_32", "params": ["fn(i32, f32, bool): i32", "a: i32"], "returns": "i32", "doc": "f(a, 0.5, 1); NULL ise -1."},
+    {"name": "ornek_cb_koru", "params": ["f: fn(i64): i64", "x: i64"], "returns": "i64", "doc": "Kilit al, f(x), kilidi birak."}
   ],
   "link": {
     "linux":   {"lib_dirs": ["lib"], "libs": ["ornek"]},

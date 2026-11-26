@@ -21,3 +21,11 @@ iki kanca hatasi 1 | kod -11 kilit 0
 ic 5 kod 1
 frame kanca hatasi 9 | kilit 0
 sonra 10
+qsort -7 0 3 19 42 1000 
+her_biri 1057
+null true false
+uygula_f 45
+uygula_s 60
+uygula_32 705 -1
+cb_sinir geri cagri hatasi 5 | kilit 0
+cb_sonra 81

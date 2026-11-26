@@ -13,6 +13,16 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — FFI: opak `ptr` tipi ve gerçek C geri çağrısı (`fn(...)`)
+
+- Eklenti bildiriminde `ptr` (`void *`): C'de yaşayan bir nesneyi Tulpar'da tamsayı adres olarak
+  tutup geri vermek için. NULL = 0.
+- `"cmp: fn(ptr, ptr): i32"` parametresi: çağrı yerinde bir Tulpar fonksiyonunun adı (ya da `0`)
+  verilir, derleyici o imzada bir **C-ABI trampolini** üretir. Bir C kitaplığı Tulpar'a özgü hiçbir şey
+  bilmeden Tulpar fonksiyonunu çağırabilir — kapı gerçek libc `qsort`'u bir Tulpar karşılaştırıcısıyla
+  koşuyor. Geri çağrıdaki `throw` RFC C2 sınırından geçer. Olmayan fonksiyon, yanlış arite ve `async`
+  hedef derleme hatası.
+
 ### Düzeltildi — async görev checkpoint sınırında serbest belleği okuyordu; `thread_create("ad", x)` hiç çalışmıyordu
 
 - `arena_save` içinde başlatılıp `arena_drop`'tan **sonra** çalışan async görevin json/dizgi argümanı,
