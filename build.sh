@@ -555,7 +555,12 @@ if [ "$ACTION" = "suites" ]; then
         # statik mount basliklari/MIME, guvenlik basliklari, CORS izinli liste.
         # wings_kapanis_smoke (2026-11-25): graceful_shutdown + on_shutdown gercek
         # SIGTERM ile; set-password/backup tarifi. Windows'ta SKIP.
-        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke wings_rate_limit_smoke wings_tasima_smoke wings_kapanis_smoke; do
+        # wings_slowloris_smoke (2026-11-26): baslik damlatan istemciler dort
+        # modda da (listen/pool/async/evented) 408 ile kapaniyor, digerleri
+        # geciyor; ilerleyen yavas govde kesilmiyor. Kontrol: sure 0 iken pool
+        # KILITLENMELI (kurgu kilidi uretiyor mu). Evented bloklayan okumaya
+        # geri dondurulunce kirmiziya donuyor (4 yavas istemci = 4,5 s durma).
+        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke wings_rate_limit_smoke wings_tasima_smoke wings_kapanis_smoke wings_slowloris_smoke; do
             SMOKE_OUT=$(DISPLAY= WAYLAND_DISPLAY= python3 "tests/$smoke.py" 2>&1)
             SMOKE_RC=$?
             SMOKE_LAST=$(printf '%s\n' "$SMOKE_OUT" | tail -1)

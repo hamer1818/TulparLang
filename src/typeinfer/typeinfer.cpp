@@ -2552,6 +2552,9 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tls_starttls", TYPE_INT, {TYPE_UNKNOWN, TYPE_STRING}},
       {"tls_error", TYPE_STRING, {}},
       {"http_recv_error", TYPE_INT, {}},
+      {"http_read_timeout", TYPE_INT, {TYPE_INT}},
+      {"http_recv_ready", TYPE_STRING, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"http_recv_expired", TYPE_ARRAY, {}},
       {"make_dirs", TYPE_BOOL, {TYPE_STRING}},
       // Sockets — handles + buffers are opaque to typeinfer; we still
       // catch arg-count typos via the wildcard params.

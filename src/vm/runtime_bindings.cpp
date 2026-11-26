@@ -7606,8 +7606,11 @@ VMValue aot_socket_receive(VMValue fdVal, VMValue sizeVal) {
 // invocation. Returning VMValue keeps the ABI uniform with every other
 // builtin and incurs zero cost — `close()` still happens, we just hand
 // back a sentinel zero.
+static void http_pending_forget(int64_t fd);
+
 VMValue aot_socket_close(VMValue fdVal) {
   if (IS_INT(fdVal)) {
+    http_pending_forget(AS_INT(fdVal));
     tulpar_close((tulpar_socket)AS_INT(fdVal));
   }
   return VM_INT(0);
@@ -9304,7 +9307,9 @@ VMValue aot_http_should_keepalive(VMValue requestVal) {
 // payloads larger than 64KB (file uploads, big JSON, etc.), which is
 // when the cost of the malloc is dwarfed by the bytes themselves.
 // Neden reddedildi? http_recv_request "" dondugunde ayirt etmek icin:
-// 0 = kapandi / hata, 413 = govde siniri asildi, 431 = baslik blogu sigmadi.
+// 0 = kapandi / hata / bosta sure doldu, 1 = http_recv_ready istegin devamini
+// bekliyor, 408 = okuma suresi doldu, 413 = govde siniri asildi, 431 = baslik
+// blogu sigmadi.
 // Wings 413'te istemciye yanit yazip kapatiyor (eskiden SESSIZCE kapatiyordu).
 static thread_local int g_http_recv_err = 0;
 
@@ -9356,27 +9361,132 @@ static int http_recv_pick_limit(const char *spec, int spec_len,
   return (int)best;
 }
 
+// ---------------------------------------------------------------------------
+// Okuma suresi siniri — slowloris (2026-11-26).
+//
+// Eskiden okuyucu recv()'i SINIRSIZ bekliyordu: baslik baytlarini damla damla
+// gonderen bir istemci isciyi sonsuza dek tutuyordu (listen_pool'da N yavas
+// istemci = N iscinin hepsi; listen_evented'de TEK yavas istemci butun
+// donguyu). `http_read_timeout(ms)` sureci kapsayan tek bir ayar koyar
+// (varsayilan 0 = eski davranis; wings 10 000 ms veriyor):
+//   * baslik evresi: cagrinin girisinden baslik blogunun sonuna kadar TOPLAM
+//     sure (keep-alive bosta bekleme de buna dahil — yeni istegin ilk baytini
+//     beklemek de bir okumadir);
+//   * govde evresi: her recv arasinda en fazla `ms` (ilerleme varsa yavas
+//     yukleme kesilmez).
+// Sure dolarsa "" doner; o ana dek bayt geldiyse http_recv_error() == 408
+// (wings 408 yaziyor), hic bayt gelmediyse 0 (bosta baglanti, sessizce kapanir).
+static std::atomic<int> g_http_read_timeout_ms{0};
+
+// http_recv_error() == 1: http_recv_ready istegin devamini bekliyor (fd poll
+// kumesinde kalmali, yanit yazilmaz).
+#define HTTP_RECV_PENDING 1
+
+VMValue aot_http_read_timeout_ptr(VMValue *msv) {
+  int prev = g_http_read_timeout_ms.load(std::memory_order_relaxed);
+  if (msv && IS_INT(*msv) && AS_INT(*msv) >= 0) {
+    int64_t ms = AS_INT(*msv);
+    if (ms > 0x7fffffffLL) ms = 0x7fffffffLL;
+    g_http_read_timeout_ms.store((int)ms, std::memory_order_relaxed);
+  }
+  return VM_INT(prev);
+}
+
+// "\r\n\r\n" arar; bulursa baslik blogunun bittigi ofseti (dahil), yoksa -1.
+static int http_find_header_end(const char *buf, int from, int total) {
+  if (from < 0) from = 0;
+  for (int i = from; i + 3 < total; i++) {
+    if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' &&
+        buf[i + 3] == '\n')
+      return i + 4;
+  }
+  return -1;
+}
+
+// Baslik blogundan (buf[0..header_end)) Content-Length; yoksa 0.
+static int http_content_length(const char *buf, int header_end) {
+  const char *hdr_end = buf + header_end - 4;
+  const char *line_start = buf;
+  const char *prefix = "Content-Length:";
+  const int plen = 15;
+  while (line_start < hdr_end) {
+    const char *line_end = line_start;
+    while (line_end < hdr_end && *line_end != '\r' && *line_end != '\n')
+      line_end++;
+    if (line_end - line_start > plen) {
+      bool m = true;
+      for (int j = 0; j < plen; j++) {
+        char a = line_start[j], b = prefix[j];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) { m = false; break; }
+      }
+      if (m) {
+        const char *p = line_start + plen;
+        while (p < line_end && (*p == ' ' || *p == '\t')) p++;
+        long long val = 0;
+        while (p < line_end && *p >= '0' && *p <= '9') {
+          val = val * 10 + (*p - '0');
+          // Clamp to int range so the cap math below stays safe.
+          if (val > 0x7fffffffLL) val = 0x7fffffffLL;
+          p++;
+        }
+        return (int)val;
+      }
+    }
+    line_start = line_end;
+    if (line_start < hdr_end && *line_start == '\r') line_start++;
+    if (line_start < hdr_end && *line_start == '\n') line_start++;
+  }
+  return 0;
+}
+
+// max_bytes argumani: int (tek sinir) ya da rota-onekli tablo dizgisi.
+struct HttpRecvLimits {
+  int max_bytes;
+  const char *spec;
+  int spec_len;
+};
+
+static HttpRecvLimits http_recv_limits(VMValue maxVal) {
+  HttpRecvLimits l;
+  // Default cap: 16 MiB. Big enough for realistic API uploads (package
+  // tarballs, multi-record JSON imports), small enough that a single
+  // worker can't exhaust memory under attack.
+  l.max_bytes = IS_INT(maxVal) ? (int)AS_INT(maxVal) : 16 * 1024 * 1024;
+  l.spec = nullptr;
+  l.spec_len = 0;
+  if (IS_STRING(maxVal)) {
+    l.spec = AS_STRING(maxVal)->chars;
+    l.spec_len = AS_STRING(maxVal)->length;
+    int d = 0;
+    http_recv_pick_limit(l.spec, l.spec_len, "", 0, &d);
+    l.max_bytes = d;
+  }
+  if (l.max_bytes < 1024) l.max_bytes = 1024;
+  return l;
+}
+
+// Baslik bilindikten sonra gecerli sinir. Rota-onekli tablo verildiyse sinir
+// istegin yoluna gore secilir (ornek: genel 1 MB, /api/upload 10 MB).
+static int http_limit_for(const HttpRecvLimits &l, const char *buf,
+                          int header_end) {
+  if (!l.spec) return l.max_bytes;
+  int d = 0;
+  return http_recv_pick_limit(l.spec, l.spec_len, buf, header_end, &d);
+}
+
+static const int HTTP_HEADER_CAP = 65536;
+
 VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
   g_http_recv_err = 0;
   if (!IS_INT(fdVal))
     return VM_OBJ((Obj *)aot_allocate_string("", 0));
   tulpar_socket fd = (tulpar_socket)AS_INT(fdVal);
-  // Default cap: 16 MiB. Big enough for realistic API uploads (package
-  // tarballs, multi-record JSON imports), small enough that a single
-  // worker can't exhaust memory under attack.
-  int max_bytes = IS_INT(maxVal) ? (int)AS_INT(maxVal) : 16 * 1024 * 1024;
-  const char *limit_spec = nullptr;
-  int limit_spec_len = 0;
-  if (IS_STRING(maxVal)) {
-    limit_spec = AS_STRING(maxVal)->chars;
-    limit_spec_len = AS_STRING(maxVal)->length;
-    int d = 0;
-    http_recv_pick_limit(limit_spec, limit_spec_len, "", 0, &d);
-    max_bytes = d;
-  }
-  if (max_bytes < 1024) max_bytes = 1024;
+  HttpRecvLimits lim = http_recv_limits(maxVal);
+  int max_bytes = lim.max_bytes;
 
-  static const int STATIC_CAP = 65536;
+  static const int STATIC_CAP = HTTP_HEADER_CAP;
   static thread_local char *static_buf = nullptr;
   if (!static_buf) {
     static_buf = (char *)malloc(STATIC_CAP + 1);
@@ -9397,8 +9507,19 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
 
   int total = 0;
   int header_end = -1;
-  int content_length = -1;
   int needed = -1;
+
+  // Okuma suresi (yukaridaki blok). 0 = kapali: recv eskisi gibi bekler ve
+  // socket_timeout(fd, ms) yalniz recv'in kendi zaman asimi olarak isler.
+  const int read_to = g_http_read_timeout_ms.load(std::memory_order_relaxed);
+  int rcv_slice = 0;
+  double hdr_deadline = 0.0;
+  if (read_to > 0) {
+    // poll "okunabilir" dedikten sonra recv beklemez; soketin SO_RCVTIMEO'su
+    // (graceful listen() 2 s koyuyor) artik poll'a uygulanmali.
+    rcv_slice = tulpar_socket_get_rcvtimeo_ms(fd);
+    hdr_deadline = tulpar_clock_ms() + (double)read_to;
+  }
 
   for (;;) {
     // Read window: until we know `needed`, fill up to `cap`. After that,
@@ -9406,6 +9527,21 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
     int target = (needed > 0) ? needed : cap;
     if (target > cap) target = cap; // belt-and-braces
     if (total >= target) break;
+
+    if (read_to > 0) {
+      int wait = read_to;
+      if (header_end < 0) {
+        double rem = hdr_deadline - tulpar_clock_ms();
+        wait = rem <= 0.0 ? 0 : (int)rem + 1;
+      }
+      if (rcv_slice > 0 && rcv_slice < wait) wait = rcv_slice;
+      int r = wait > 0 ? tulpar_socket_wait_readable(fd, wait) : 0;
+      if (r <= 0) {
+        if (r == 0 && total > 0) g_http_recv_err = 408;
+        if (buf_owned) free(buf);
+        return VM_OBJ((Obj *)aot_allocate_string("", 0));
+      }
+    }
 
     ssize_t n = tulpar_recv(fd, buf + total, target - total, 0);
     if (n <= 0) {
@@ -9415,15 +9551,7 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
     total += (int)n;
 
     if (header_end < 0) {
-      int scan_from = total - (int)n - 3;
-      if (scan_from < 0) scan_from = 0;
-      for (int i = scan_from; i + 3 < total; i++) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n' &&
-            buf[i + 2] == '\r' && buf[i + 3] == '\n') {
-          header_end = i + 4;
-          break;
-        }
-      }
+      header_end = http_find_header_end(buf, total - (int)n - 3, total);
       if (header_end < 0) {
         // Header didn't fit in `cap` bytes — pathological client; reject.
         if (total >= cap) {
@@ -9434,54 +9562,12 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
         continue;
       }
 
-      content_length = 0;
-      const char *hdr_end = buf + header_end - 4;
-      const char *line_start = buf;
-      const char *prefix = "Content-Length:";
-      int plen = 15;
-      while (line_start < hdr_end) {
-        const char *line_end = line_start;
-        while (line_end < hdr_end && *line_end != '\r' && *line_end != '\n')
-          line_end++;
-        if (line_end - line_start > plen) {
-          bool m = true;
-          for (int j = 0; j < plen; j++) {
-            char a = line_start[j], b = prefix[j];
-            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-            if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
-            if (a != b) { m = false; break; }
-          }
-          if (m) {
-            const char *p = line_start + plen;
-            while (p < line_end && (*p == ' ' || *p == '\t')) p++;
-            long long val = 0;
-            while (p < line_end && *p >= '0' && *p <= '9') {
-              val = val * 10 + (*p - '0');
-              p++;
-            }
-            // Clamp to int range so the cap math below stays safe.
-            if (val > 0x7fffffffLL) val = 0x7fffffffLL;
-            content_length = (int)val;
-            break;
-          }
-        }
-        line_start = line_end;
-        if (line_start < hdr_end && *line_start == '\r') line_start++;
-        if (line_start < hdr_end && *line_start == '\n') line_start++;
-      }
-      needed = header_end + content_length;
-
-      // Rota-onekli tablo verildiyse sinir istegin yoluna gore secilir
-      // (ornek: genel 1 MB, /api/upload 10 MB).
-      if (limit_spec) {
-        int d = 0;
-        max_bytes = http_recv_pick_limit(limit_spec, limit_spec_len, buf,
-                                         header_end, &d);
-      }
+      needed = header_end + http_content_length(buf, header_end);
+      max_bytes = http_limit_for(lim, buf, header_end);
 
       // DoS guard: announced body would push us past max_bytes. Govde
       // OKUNMADAN reddedilir — yalniz Content-Length'e bakilir.
-      if (needed > max_bytes) {
+      if (needed > max_bytes || needed < header_end) {
         if (buf_owned) free(buf);
         g_http_recv_err = 413;
         return VM_OBJ((Obj *)aot_allocate_string("", 0));
@@ -9513,8 +9599,159 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
   return VM_OBJ((Obj *)res);
 }
 
-// http_recv_error() -> int: bu iplikte son http_recv_request neden "" dondu
-// (0 kapandi/hata, 413 govde siniri, 431 baslik blogu). k_std_builtins.
+// ---------------------------------------------------------------------------
+// http_recv_ready(fd, max_bytes) -> str — BLOKLAMAYAN, kaldigi yerden devam
+// eden okuyucu (listen_evented icin, 2026-11-26).
+//
+// Bloklayan okuyucu tek iplikli olay dongusunde kullanilamaz: yarim baslik
+// gonderen tek istemci, bekledigi surece BUTUN baglantilari durdurur. Bu
+// okuyucu yalniz o an sokette bekleyen baytlari alir, eksik istegi fd basina
+// (iplige ozel) bir tamponda saklar ve doner:
+//   * istek tamamsa: istegin metni (http_recv_request ile ayni bicim);
+//   * eksikse: "" + http_recv_error() == 1 — fd poll kumesinde kalir;
+//   * kapandi/hata: "" + 0; sinir asimi: "" + 413 / 431.
+// Siniri ve tablo bicimi http_recv_request ile aynidir. Yarim kalmis istekler
+// http_recv_expired() ile sure asiminda toplanir; socket_close durumu siler.
+struct HttpPending {
+  std::string buf;
+  double started;
+  double last;
+  int header_end;
+  int needed;
+};
+
+// Isaretci: ipligin cikisinda yikici sirasina takilmamak icin (olay dongusu
+// ana iplikte yasar, harita surec sonuna dek durur).
+static thread_local std::unordered_map<int64_t, HttpPending> *g_http_pending =
+    nullptr;
+
+static std::unordered_map<int64_t, HttpPending> &http_pending_map() {
+  if (!g_http_pending)
+    g_http_pending = new std::unordered_map<int64_t, HttpPending>();
+  return *g_http_pending;
+}
+
+// socket_close cagirir: ayni fd numarasi yeni bir baglantiya verildiginde eski
+// baglantinin yarim istegi ona karismasin.
+static void http_pending_forget(int64_t fd) {
+  if (g_http_pending) g_http_pending->erase(fd);
+}
+
+VMValue aot_http_recv_ready_ptr(VMValue *fdv, VMValue *maxv) {
+  g_http_recv_err = 0;
+  if (!fdv || !IS_INT(*fdv))
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  int64_t key = AS_INT(*fdv);
+  tulpar_socket fd = (tulpar_socket)key;
+  HttpRecvLimits lim = http_recv_limits(maxv ? *maxv : VM_VOID());
+
+  auto &map = http_pending_map();
+  auto it = map.find(key);
+  if (it == map.end()) {
+    HttpPending fresh;
+    fresh.started = fresh.last = tulpar_clock_ms();
+    fresh.header_end = -1;
+    fresh.needed = -1;
+    it = map.emplace(key, std::move(fresh)).first;
+  }
+  HttpPending &st = it->second;
+
+  char tmp[16384];
+  bool progressed = false;
+  for (;;) {
+    int size = (int)st.buf.size();
+    int want = (int)sizeof(tmp);
+    if (st.needed > 0) {
+      int left = st.needed - size;
+      if (left <= 0) break;
+      if (left < want) want = left;
+    } else {
+      int room = HTTP_HEADER_CAP - size;
+      if (room <= 0) break;
+      if (room < want) want = room;
+    }
+    if (tulpar_socket_wait_readable(fd, 0) <= 0) break; // simdilik bu kadar
+    ssize_t n = tulpar_recv(fd, tmp, want, 0);
+    if (n <= 0) {
+      map.erase(it);
+      return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    }
+    st.buf.append(tmp, (size_t)n);
+    progressed = true;
+    size = (int)st.buf.size();
+
+    if (st.header_end < 0) {
+      st.header_end = http_find_header_end(st.buf.data(), size - (int)n - 3, size);
+      if (st.header_end < 0) {
+        if (size >= HTTP_HEADER_CAP) {
+          map.erase(it);
+          g_http_recv_err = 431;
+          return VM_OBJ((Obj *)aot_allocate_string("", 0));
+        }
+        continue;
+      }
+      long long need = (long long)st.header_end +
+                       http_content_length(st.buf.data(), st.header_end);
+      if (need > http_limit_for(lim, st.buf.data(), st.header_end)) {
+        map.erase(it);
+        g_http_recv_err = 413;
+        return VM_OBJ((Obj *)aot_allocate_string("", 0));
+      }
+      st.needed = (int)need;
+    }
+    if (st.needed > 0 && size >= st.needed) break;
+  }
+  if (progressed) st.last = tulpar_clock_ms();
+
+  if (st.needed > 0 && (int)st.buf.size() >= st.needed) {
+    ObjString *res = aot_allocate_string(st.buf.data(), (int)st.buf.size());
+    map.erase(it);
+    return VM_OBJ((Obj *)res);
+  }
+  g_http_recv_err = HTTP_RECV_PENDING;
+  return VM_OBJ((Obj *)aot_allocate_string("", 0));
+}
+
+// http_recv_expired() -> int[] — suresi dolan yarim isteklerin fd'leri (bu
+// iplikte). Kural http_recv_request ile ayni: baslik evresinde ilk bayttan
+// beri http_read_timeout, govde evresinde son ilerlemeden beri ayni sure.
+// Donen fd'lerin durumu silinir; cagiran 408 yazip kapatir. Ayar 0 ise bos.
+VMValue aot_http_recv_expired_ptr(void) {
+  const int read_to = g_http_read_timeout_ms.load(std::memory_order_relaxed);
+  std::vector<int64_t> gone;
+  if (read_to > 0 && g_http_pending && !g_http_pending->empty()) {
+    double now = tulpar_clock_ms();
+    for (auto it = g_http_pending->begin(); it != g_http_pending->end();) {
+      const HttpPending &st = it->second;
+      double since = st.header_end < 0 ? st.started : st.last;
+      if (now - since > (double)read_to) {
+        gone.push_back(it->first);
+        it = g_http_pending->erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  int n = (int)gone.size();
+  ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+  a->obj.type = OBJ_ARRAY;
+  a->idata = nullptr;
+  a->obj.arena_allocated = 1;
+  a->obj.ref_count = 1;
+  a->obj.is_moved = 0;
+  a->capacity = n;
+  a->count = n;
+  a->items_ = nullptr;
+  if (n > 0) {
+    a->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * (size_t)n);
+    for (int i = 0; i < n; i++) arr_items(a)[i] = VM_INT(gone[i]);
+  }
+  return VM_OBJ((Obj *)a);
+}
+
+// http_recv_error() -> int: bu iplikte son http_recv_request / http_recv_ready
+// neden "" dondu (0 kapandi/hata/bosta sure doldu, 1 istek eksik — bekle,
+// 408 okuma suresi doldu, 413 govde siniri, 431 baslik blogu). k_std_builtins.
 VMValue aot_http_recv_error_ptr(void) { return VM_INT(g_http_recv_err); }
 
 // Builtin: http_create_response_keepalive(status, ct, body, headers, keep)

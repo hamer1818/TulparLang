@@ -78,6 +78,9 @@ int _wings_max_body_bytes = 16777216;
 // on Content-Length BEFORE reading the body (413).
 json _wings_body_prefixes = [];
 str _wings_body_spec = "";
+// Request read deadline in ms (slowloris guard, 2026-11-26) — see
+// read_timeout() below. 0 = unlimited (the pre-2026-11-26 behaviour).
+int _wings_read_timeout_ms = 10000;
 
 // HTTP_QUIET cache. The per-request access log lookup used to call
 // `env("TULPAR_HTTP_QUIET")` on every served request — one getenv
@@ -121,6 +124,16 @@ func _wings_apply_env_config() {
             _wings_max_body_bytes = parsed;
         }
     }
+    // TULPAR_WINGS_READ_TIMEOUT_MS overrides read_timeout() (0 = unlimited).
+    str rt_str = env("TULPAR_WINGS_READ_TIMEOUT_MS");
+    if (length(rt_str) > 0) {
+        int rt = toInt(rt_str);
+        if (rt >= 0) {
+            _wings_read_timeout_ms = rt;
+        }
+    }
+    // Process-wide in the runtime; every serve mode's reader honours it.
+    http_read_timeout(_wings_read_timeout_ms);
     _wings_body_spec = "";
     if (length(_wings_body_prefixes) > 0) {
         str spec = toString(_wings_max_body_bytes);
@@ -776,6 +789,26 @@ func max_body_prefix(str prefix, int bytes) {
     }
 }
 
+// ----- Request read deadline (slowloris) ----------------------------------------
+// read_timeout(ms): how long a client may take to deliver a request. The
+// header block (and, on a keep-alive connection, the wait for the next
+// request's first byte) must arrive within `ms` in total; the body may pause
+// at most `ms` between reads, so a slow upload that keeps sending is not cut.
+// Default 10 000 ms; 0 = unlimited; TULPAR_WINGS_READ_TIMEOUT_MS overrides.
+// A client that sent part of a request gets 408; an idle one is just closed.
+//
+// Until 2026-11-26 there was no deadline at all: a client trickling header
+// bytes held its worker forever — N such clients stopped listen_pool(port, N)
+// entirely, and ONE stopped listen_evented (single thread). listen_evented now
+// also reads without blocking, so a slow client never stalls the others.
+//
+//   read_timeout(5000);   // 5 s for headers, 5 s between body reads
+func read_timeout(int ms) {
+    if (ms >= 0) {
+        _wings_read_timeout_ms = ms;
+    }
+}
+
 func _wings_recv(int client) {
     if (length(_wings_body_spec) > 0) {
         return http_recv_request(client, _wings_body_spec);
@@ -783,14 +816,30 @@ func _wings_recv(int client) {
     return http_recv_request(client, _wings_max_body_bytes);
 }
 
-// Called when the reader returned "": answer 413 / 431 if that was the
-// reason (plain close otherwise — the peer hung up).
+// Non-blocking variant for listen_evented: returns the request when it is
+// complete, "" + http_recv_error() == 1 while it is still arriving.
+func _wings_recv_ready(int client) {
+    if (length(_wings_body_spec) > 0) {
+        return http_recv_ready(client, _wings_body_spec);
+    }
+    return http_recv_ready(client, _wings_max_body_bytes);
+}
+
+// Called when the reader returned "": answer 408 / 413 / 431 if that was the
+// reason (plain close otherwise — the peer hung up or an idle keep-alive
+// connection ran out of time).
 func _wings_reject_oversize(int client) {
-    int why = http_recv_error();
-    if (why == 413 || why == 431) {
+    _wings_reject_reason(client, http_recv_error());
+}
+
+func _wings_reject_reason(int client, int why) {
+    if (why == 408 || why == 413 || why == 431) {
         str msg = "request body too large";
         if (why == 431) {
             msg = "request header fields too large";
+        }
+        if (why == 408) {
+            msg = "request timeout";
         }
         _wings_requests_total = _wings_requests_total + 1;
         _wings_requests_4xx = _wings_requests_4xx + 1;
@@ -2942,14 +2991,22 @@ func _wings_serve_connection(int client) {
 //
 // Internally mirrors the body of `_wings_serve_connection`'s loop —
 // arena save/restore, route lookup, counter increment, response build —
-// but exits after one request instead of looping. When we add real
-// edge-triggered async I/O later, this is the function that grows a
-// state machine; today it stays blocking-per-step which is fine for
-// the typical < 64 KiB JSON request/response we see in practice.
+// but exits after one request instead of looping. Reading does NOT block
+// (since 2026-11-26): `http_recv_ready` takes only the bytes already in the
+// socket and keeps a partial request in a per-fd runtime buffer, returning 1
+// (keep polling) until it is complete. Before that the read blocked, and one
+// client trickling its header stalled every connection on the loop. The
+// response send still blocks — fine for typical < 64 KiB JSON responses.
 func _wings_serve_one_request(int client) {
     int wm = arena_save();
-    str raw = _wings_recv(client);
+    str raw = _wings_recv_ready(client);
     if (length(raw) == 0) {
+        if (http_recv_error() == 1) {
+            // Request still arriving: keep the fd in the poll set, answer
+            // nothing yet. The bytes so far wait in the runtime's per-fd buffer.
+            arena_drop(wm);
+            return 1;
+        }
         _wings_reject_oversize(client);
         arena_drop(wm);
         return 0;
@@ -3027,11 +3084,12 @@ func _wings_serve_one_request(int client) {
 //                        keep-alive conns (chat clients, dashboards) —
 //                        bounded memory, zero per-conn thread overhead.
 //
-// Blocking semantics inside `_wings_serve_one_request` keep this honest
-// for typical < 64 KiB JSON traffic; while serving conn A, conn B's
-// inbound bytes pool in the kernel buffer until B's slot fires POLLIN
-// next iteration. Real edge-triggered I/O with partial-read state
-// machines is a follow-up — not needed yet for "Python kadar kolay" goals.
+// Requests are read without blocking (`_wings_serve_one_request`): a
+// partial request waits in a per-fd buffer, and once its read deadline
+// (read_timeout) passes, the sweep at the top of each tick answers 408 and
+// closes it. Idle keep-alive connections with no partial request are not
+// timed out here — holding many idle connections is what this mode is for.
+// Responses are still sent blocking.
 func listen_evented(int port) {
     if (_find_route("GET", "/healthz") < 0) {
         get("/healthz", "_wings_healthz");
@@ -3073,6 +3131,30 @@ func listen_evented(int port) {
         // place at the bottom rather than reassigning it to a transient array,
         // so arena_drop can't free it out from under the next tick.
         int _evt_wm = arena_save();
+        // Slowloris sweep: partial requests past their read deadline get 408
+        // and are dropped from the poll set (in place — `fds` is persistent).
+        json expired = http_recv_expired();
+        if (length(expired) > 0) {
+            json keep_fds = [];
+            for (int k = 0; k < length(fds); k++) {
+                bool gone = false;
+                for (int e = 0; e < length(expired); e++) {
+                    if (fds[k] == expired[e]) { gone = true; break; }
+                }
+                if (gone) {
+                    _wings_reject_reason(fds[k], 408);
+                    socket_close(fds[k]);
+                } else {
+                    push(keep_fds, fds[k]);
+                }
+            }
+            while (length(fds) > 0) {
+                pop(fds);
+            }
+            for (int k = 0; k < length(keep_fds); k++) {
+                push(fds, keep_fds[k]);
+            }
+        }
         // 1s tick gives the loop a chance to bail / be interrupted.
         json ready = socket_poll(fds, 1000);
         if (length(ready) == 0) {

@@ -1405,6 +1405,9 @@ static const TameBuiltin k_std_builtins[] = {
     {"tls_starttls", "aot_tls_starttls_ptr", 2},
     {"tls_error", "aot_tls_error_ptr", 0},
     {"http_recv_error", "aot_http_recv_error_ptr", 0},
+    {"http_read_timeout", "aot_http_read_timeout_ptr", 1},
+    {"http_recv_ready", "aot_http_recv_ready_ptr", 2},
+    {"http_recv_expired", "aot_http_recv_expired_ptr", 0},
     {"make_dirs", "aot_make_dirs_ptr", 1},
 };
 

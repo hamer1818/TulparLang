@@ -13,6 +13,27 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — slowloris: wings istek okuma süresi sınırı + bloklamayan evented okuma
+
+- **Açık:** `http_recv_request` recv'i sınırsız bekliyordu. Başlığı 200 ms'de bir bayt damlatan
+  istemci (recv başına zaman aşımı bunu yakalamaz) işçiyi sonsuza dek tutuyordu: `listen_pool(port, N)`'de
+  N yavaş istemci sunucuyu tamamen durduruyor, `listen_evented`'de **tek** yavaş istemci bütün döngüyü
+  kilitliyordu.
+- **`read_timeout(ms)`** (wings, varsayılan **10 000**, `0` = sınırsız, `TULPAR_WINGS_READ_TIMEOUT_MS`
+  ezer): başlık bloğu — keep-alive'da yeni isteğin ilk baytını beklemek dahil — toplam `ms` içinde
+  gelmeli; gövde iki okuma arasında en fazla `ms` durabilir, ilerleyen yavaş yükleme kesilmez. Bayt
+  geldiyse **408**, gelmediyse sessiz kapanış. Runtime'da süreç geneli `http_read_timeout(ms)`
+  (varsayılan 0: wings dışındaki `http_recv_request` çağıranların davranışı değişmedi).
+- **`listen_evented` bloklamadan okuyor:** yeni `http_recv_ready(fd, max)` o an bekleyen baytları alır,
+  yarım isteği fd başına tutar (`http_recv_error() == 1`); tick başında `http_recv_expired()` süresi
+  dolanlara 408 yazılıp kapatılıyor. `socket_close` yarım isteği siler.
+- Kapı `tests/wings_slowloris_smoke.py` (`build.sh suites`): dört mod (listen / pool / async / evented),
+  yavaş istemci 408 + kapanış, diğer istekler geçer (evented'de hemen), yavaş gövde kesilmez, bosta
+  bağlantı sessizce kapanır. Kontrol: süre 0 iken pool **kilitlenmeli**. Evented bloklayan okumaya geri
+  döndürülünce kırmızı: 4 yavaş istemci döngüyü 4,5 s durduruyor.
+- Kalan: R.U.D.Y. (gövdeyi süreden kısa aralıklarla damlatmak) bir işçiyi uzun tutabilir; `lib/router.tpr`
+  ve `wings_tls` kendi okuyucularını kullanıyor, süre sınırı onlara uygulanmıyor.
+
 ### Düzeltildi — null artık null: `db_query` NULL, `fromJson` null ve `== null` (davranış değişikliği)
 
 - **`db_query` (iki biçimi de):** SQL NULL sütun `0` yerine **null** döner (`typeof` "null", `toJson` `null`).

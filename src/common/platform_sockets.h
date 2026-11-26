@@ -187,6 +187,7 @@ static inline int tulpar_socket_would_block(int error_code) {
     typedef WSAPOLLFD tulpar_pollfd;
 #else
     #include <poll.h>
+    #include <sys/time.h>
     typedef struct pollfd tulpar_pollfd;
 #endif
 
@@ -200,6 +201,46 @@ static inline int tulpar_socket_poll(tulpar_pollfd *fds, unsigned int nfds,
     return WSAPoll(fds, (ULONG)nfds, timeout_ms);
 #else
     return poll(fds, (nfds_t)nfds, timeout_ms);
+#endif
+}
+
+// Wait until `fd` is readable (or hung up / errored) for at most
+// `timeout_ms`. Returns 1 = readable (a recv will not block), 0 = timed
+// out, -1 = poll error. EINTR is retried with the full timeout again —
+// callers that enforce a deadline recompute the remainder themselves.
+static inline int tulpar_socket_wait_readable(socket_t fd, int timeout_ms) {
+    for (;;) {
+        tulpar_pollfd p;
+        p.fd = fd;
+        p.events = POLLIN;
+        p.revents = 0;
+        int rc = tulpar_socket_poll(&p, 1, timeout_ms);
+        if (rc > 0) return 1;
+        if (rc == 0) return 0;
+#if !PLATFORM_WINDOWS
+        if (errno == EINTR) continue;
+#endif
+        return -1;
+    }
+}
+
+// The socket's SO_RCVTIMEO in milliseconds (0 = none / unknown). Lets a
+// poll()-based reader keep honouring a per-recv timeout that was set with
+// `socket_timeout(fd, ms)` — once a poll says "readable", recv itself no
+// longer waits, so the cap has to be applied to the poll instead.
+static inline int tulpar_socket_get_rcvtimeo_ms(socket_t fd) {
+#if PLATFORM_WINDOWS
+    DWORD t = 0;
+    int len = (int)sizeof(t);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&t, &len) != 0) return 0;
+    return t > 0x7fffffffUL ? 0x7fffffff : (int)t;
+#else
+    struct timeval tv;
+    socklen_t len = (socklen_t)sizeof(tv);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, &len) != 0) return 0;
+    long long ms = (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    if (ms <= 0 && (tv.tv_sec > 0 || tv.tv_usec > 0)) ms = 1;
+    return ms > 0x7fffffffLL ? 0x7fffffff : (int)ms;
 #endif
 }
 
