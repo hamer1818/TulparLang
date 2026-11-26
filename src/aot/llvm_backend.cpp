@@ -27,6 +27,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -20547,7 +20548,148 @@ static void strip_unused_embedded(LLVMBackend *backend) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// PROFIL ENSTRUMANTASYONU (`tulpar --profile` -> TULPAR_PROFILE=1, 2026-11-26)
+//
+// Optimizasyondan ONCE, kodgen bitmis modulde: her Tulpar fonksiyon GOVDESININ
+// girisine aot_prof_enter(id, tur), her `ret`ten once aot_prof_exit(id, tur).
+// Sonradan satir ici acilan govde kancalarini tasir — sayimlar yine dogru.
+// Bir Tulpar fonksiyonu IR'de birkac bicimde yasar:
+//   `f`        tam tipli govde                      -> tur 0
+//   `t_f.f`    tipsiz fonksiyonun dagitici govdesi   -> tur 1
+//   `f$i` ...  tipe uzmanlasmis govde                -> tur 2 (dagiticisinin
+//              icinde dogrudan cagrilirsa runtime tek cagri sayar)
+//   `t_f`      `t_f.f` varsa ince sarmalayici        -> ATLANIR (yoksa tur 0)
+//   `tb_f` `tw_f` `tulpar_cb.*`  sarmalayicilar       -> ATLANIR
+// Async fonksiyonlar atlanir (coroutine askiya alinir; bkz. runtime notu).
+// `main` "<ust duzey>" olarak sayilir; aot_prof_init oradan cagrilir.
+// Isimler programa sabit bir dizi olarak gomulur (id = dizin).
+// ---------------------------------------------------------------------------
+static void instrument_profile(LLVMBackend *backend) {
+  LLVMModuleRef m = backend->module;
+  LLVMContextRef cx = backend->context;
+  std::unordered_map<std::string, int> tulpar_fn;  // ad -> async mi
+  for (int i = 0; i < backend->function_count; i++)
+    if (backend->functions[i].name) {
+      int &a = tulpar_fn[backend->functions[i].name];
+      a = a || backend->functions[i].is_async;
+    }
+  struct Hedef { LLVMValueRef fn; std::string base; int kind; };
+  std::vector<Hedef> hedefler;
+  for (LLVMValueRef f = LLVMGetFirstFunction(m); f; f = LLVMGetNextFunction(f)) {
+    if (LLVMIsDeclaration(f)) continue;
+    size_t len = 0;
+    const char *raw = LLVMGetValueName2(f, &len);
+    std::string n(raw, len), base;
+    int kind = 0;
+    if (n == "main") { hedefler.push_back({f, "<ust duzey>", 0}); continue; }
+    if (n.compare(0, 3, "tb_") == 0 || n.compare(0, 3, "tw_") == 0 ||
+        n.compare(0, 10, "tulpar_cb.") == 0)
+      continue;
+    // Once TAM ad (yontem adlari `Tip.ad` nokta tasir), sonra sondan `.`/`$`
+    // ekleri soyularak: `.f` dagitici (tur 1), digerleri (`.n` native donus,
+    // `.recN` ozyineleme klonu, `$i` uzmanlasma) tur 2.
+    const bool tpre = n.compare(0, 2, "t_") == 0;
+    std::string core = tpre ? n.substr(2) : n;
+    // Ozyineleme klonu `f.recN` fonksiyon tablosuna KENDI adiyla da kayitli;
+    // tam ad eslesmesinden once tani ki profil `f` diye birlestirsin.
+    {
+      size_t r = core.rfind(".rec");
+      if (r != std::string::npos && r + 4 < core.size() &&
+          core.find_first_not_of("0123456789", r + 4) == std::string::npos &&
+          tulpar_fn.count(core.substr(0, r)))
+        core = core.substr(0, r), kind = 2;
+    }
+    if (tulpar_fn.count(core)) {
+      base = core;
+      if (tpre && LLVMGetNamedFunction(m, (n + ".f").c_str())) continue;  // ince sarmalayici
+    } else {
+      size_t pos = core.find_last_of(".$");
+      while (pos != std::string::npos && pos > 0) {
+        std::string cand = core.substr(0, pos);
+        if (tulpar_fn.count(cand)) {
+          base = cand;
+          kind = (tpre && core[pos] == '.' && core.compare(pos + 1, std::string::npos, "f") == 0) ? 1 : 2;
+          break;
+        }
+        pos = core.find_last_of(".$", pos - 1);
+      }
+      if (base.empty()) continue;
+    }
+    auto it = tulpar_fn.find(base);
+    if (it == tulpar_fn.end() || it->second) continue;  // runtime yardimcisi / async
+    hedefler.push_back({f, base, kind});
+  }
+  if (hedefler.empty()) return;
+  std::map<std::string, int> ids;
+  for (auto &h : hedefler) ids.emplace(h.base, 0);
+  int next = 0;
+  std::vector<std::string> names;
+  for (auto &kv : ids) { kv.second = next++; names.push_back(kv.first); }
+
+  LLVMTypeRef i32 = LLVMInt32TypeInContext(cx);
+  LLVMTypeRef ptr = backend->ptr_type;
+  LLVMTypeRef vt = LLVMVoidTypeInContext(cx);
+  LLVMTypeRef ep[] = {i32, i32};
+  LLVMTypeRef eft = LLVMFunctionType(vt, ep, 2, 0);
+  LLVMValueRef enter = LLVMGetNamedFunction(m, "aot_prof_enter");
+  if (!enter) enter = LLVMAddFunction(m, "aot_prof_enter", eft);
+  LLVMValueRef exitf = LLVMGetNamedFunction(m, "aot_prof_exit");
+  if (!exitf) exitf = LLVMAddFunction(m, "aot_prof_exit", eft);
+  LLVMTypeRef ip[] = {ptr, i32};
+  LLVMTypeRef ift = LLVMFunctionType(vt, ip, 2, 0);
+  LLVMValueRef initf = LLVMGetNamedFunction(m, "aot_prof_init");
+  if (!initf) initf = LLVMAddFunction(m, "aot_prof_init", ift);
+
+  // Ad dizisi: [N x ptr] sabit, her biri ozel dizgi sabiti.
+  std::vector<LLVMValueRef> strs;
+  for (size_t i = 0; i < names.size(); i++) {
+    LLVMValueRef sv = LLVMConstStringInContext(cx, names[i].c_str(), (unsigned)names[i].size(), 0);
+    LLVMValueRef g = LLVMAddGlobal(m, LLVMTypeOf(sv), ("tulpar.prof.ad." + std::to_string(i)).c_str());
+    LLVMSetInitializer(g, sv);
+    LLVMSetGlobalConstant(g, 1);
+    LLVMSetLinkage(g, LLVMPrivateLinkage);
+    strs.push_back(g);
+  }
+  LLVMTypeRef arr_t = LLVMArrayType(ptr, (unsigned)strs.size());
+  LLVMValueRef tab = LLVMAddGlobal(m, arr_t, "tulpar.prof.adlar");
+  LLVMSetInitializer(tab, LLVMConstArray(ptr, strs.data(), (unsigned)strs.size()));
+  LLVMSetGlobalConstant(tab, 1);
+  LLVMSetLinkage(tab, LLVMPrivateLinkage);
+
+  LLVMBuilderRef b = LLVMCreateBuilderInContext(cx);
+  for (auto &h : hedefler) {
+    LLVMValueRef idv = LLVMConstInt(i32, (unsigned)ids[h.base], 0);
+    LLVMValueRef kv = LLVMConstInt(i32, (unsigned)h.kind, 0);
+    LLVMBasicBlockRef entry = LLVMGetEntryBasicBlock(h.fn);
+    LLVMValueRef ins = LLVMGetFirstInstruction(entry);
+    while (ins && LLVMGetInstructionOpcode(ins) == LLVMAlloca) ins = LLVMGetNextInstruction(ins);
+    if (ins) LLVMPositionBuilderBefore(b, ins);
+    else LLVMPositionBuilderAtEnd(b, entry);
+    if (h.base == "<ust duzey>") {
+      LLVMValueRef ia[] = {tab, LLVMConstInt(i32, (unsigned)strs.size(), 0)};
+      LLVMBuildCall2(b, ift, initf, ia, 2, "");
+    }
+    LLVMValueRef ea[] = {idv, kv};
+    LLVMBuildCall2(b, eft, enter, ea, 2, "");
+    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(h.fn); bb; bb = LLVMGetNextBasicBlock(bb)) {
+      LLVMValueRef t = LLVMGetBasicBlockTerminator(bb);
+      if (t && LLVMGetInstructionOpcode(t) == LLVMRet) {
+        LLVMPositionBuilderBefore(b, t);
+        LLVMBuildCall2(b, eft, exitf, ea, 2, "");
+      }
+    }
+  }
+  LLVMDisposeBuilder(b);
+  const char *v = getenv("TULPAR_AOT_VERBOSE");
+  if (v && *v && *v != '0')
+    fprintf(stderr, "[AOT] profil: %zu govde, %zu fonksiyon enstrumante edildi\n", hedefler.size(),
+            names.size());
+}
+
 void llvm_backend_optimize(LLVMBackend *backend) {
+  if (const char *pr = getenv("TULPAR_PROFILE"); pr && *pr && *pr != '0')
+    instrument_profile(backend);
   // Create pass builder options
   LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
 

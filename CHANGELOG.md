@@ -13,6 +13,12 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — profilleyici: `tulpar --profile`
+
+- Fonksiyon başına öz %, öz/kapsayıcı süre, çağrı sayısı ve öz arena baytı; program bitince stderr'e.
+  `TULPAR_PROFILE_OUT=dosya` flamegraph/speedscope için folded yığın yazar. Özyineleme, istisna,
+  `exit()` ve thread'ler doğru sayılır; tipsiz fonksiyonun dağıtıcı/uzmanlaşma biçimleri tek ada katlanır.
+
 ### Eklendi — jenerikler (`func f<T>`, `struct Kutu<T>`), `Result` modülü ve `?` yayma operatörü
 
 - `func ilk<T>(T[] xs): T`, `func cift<A, B>(A a, B b)`, `struct Kutu<T> { T deger; }`, `Kutu<int> k`.

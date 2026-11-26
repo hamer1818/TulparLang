@@ -56,6 +56,31 @@ sırayla (`Tip.f(p)` → `m__f` → alıcının struct tipine göre `Tip.f` → 
 Alıcının tipi statik bilinmiyor ve bu adda bir yöntem varsa tanı bunu adıyla söylüyor
 (`tests/typeinfer/{pass/24,fail/31}_no_alloc_yontem*.tpr`).
 
+## Profilleyici — `tulpar --profile` (2026-11-26)
+`tulpar --profile prog.tpr` (ya da `tulpar build --profile`) her Tulpar fonksiyon gövdesine
+giriş/çıkış kancası koyar; program bitince stderr'e fonksiyon başına **öz %, öz ms,
+kapsayıcı ms, çağrı, öz arena KB** tablosu basılır. `TULPAR_PROFILE_OUT=p.folded` ayrıca
+flamegraph.pl / speedscope'un okuduğu "folded" yığınları yazar (`<ust duzey>;f;g <µs>`),
+`TULPAR_PROFILE_TOP=<n>` tablo boyu. Bayrak derleyiciye `TULPAR_PROFILE=1` olarak gider —
+önbellek anahtarına girer, profilli ikili profilsizle karışmaz.
+
+Nasıl doğru sayıyor (`instrument_profile` llvm_backend.cpp, runtime_bindings.cpp sonu):
+- Bir Tulpar fonksiyonu IR'de birkaç biçimde: `f` (tam tipli), `t_f.f` (tipsizin
+  dağıtıcısı), `f$i`/`t_f.n` (uzmanlaşma), `f.recN` (özyineleme klonu), `t_f`/`tb_f`/`tw_f`
+  (sarmalayıcı). Sarmalayıcılar atlanır, diğerleri **aynı ada** katlanır; dağıtıcının kendi
+  uzmanlaşmasına geçişi tek çağrı sayılır.
+- Kapsayıcı süre özyinelemede iki kez sayılmaz (yalnız en dış çerçeve).
+- `throw` çıkış kancasını atlar: `aot_try_push` profil derinliğini saklar, `aot_throw`
+  atlanan çerçeveleri kapatır. `exit()` açık çerçeveleri raporda kapatır.
+- İplik başına çağrı ağacı, rapor birleştirir. Async gövdeler **enstrümante edilmez**
+  (askıya alınan coroutine yığını bozardı) — await beklemesi çağıranın kapsayıcısında.
+- Ölçüm gideri raporda yazar (~34 ns/çağrı, iki `steady_clock` okuması); çok kısa
+  fonksiyonun öz süresi şişer — sayımlar ve oranlar güvenilir, mutlak ns değil.
+
+Kapı `tests/profil_smoke.py`: kesin çağrı sayıları (fib(20) = 21891, dağıtıcı, yöntem,
+throw, thread, exit), arena baytı, süre oranı, folded biçimi; kontrol: profilsiz ikilide
+kanca yok.
+
 ## Type checker — `tulpar typecheck`
 `src/cli/typecheck_cmd.cpp` — ön-geçişteki (`[typecheck]` uyarıları) aynı denetleyici,
 **hata kipinde**. Her `tulpar`/`tulpar build` çağrısında zaten koşuyor;

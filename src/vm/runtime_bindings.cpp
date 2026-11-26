@@ -7601,7 +7601,10 @@ typedef struct EhContext {
   jmp_buf stack[EH_STACK_MAX];
   int depth;
   VMValue exception;
+  int prof_depth[EH_STACK_MAX];  // profilleyici: try kuruldugundaki yigin derinligi
 } EhContext;
+static int aot_prof_depth(void);          // profilleyici (dosya sonunda)
+static void aot_prof_unwind_to(int depth);
 
 static thread_local EhContext eh_main = {};
 // Active handler context. nullptr = eh_main: `= &eh_main` (the address of
@@ -7621,7 +7624,9 @@ jmp_buf *aot_try_push(void) {
     fprintf(stderr, "Exception handler stack overflow\n");
     return nullptr;
   }
-  return &eh_ctx()->stack[eh_ctx()->depth++];
+  EhContext *c = eh_ctx();
+  c->prof_depth[c->depth] = aot_prof_depth();
+  return &c->stack[c->depth++];
 }
 
 void aot_try_pop(void) {
@@ -7651,6 +7656,7 @@ void aot_throw(VMValue exception) {
   eh_ctx()->exception = exception;
   int target_depth = eh_ctx()->depth - 1;
   eh_ctx()->depth = target_depth;
+  aot_prof_unwind_to(eh_ctx()->prof_depth[target_depth]);
   longjmp(eh_ctx()->stack[target_depth], 1);
 }
 
@@ -11759,3 +11765,231 @@ VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
 #ifdef __cplusplus
 }
 #endif
+
+// ============================================================================
+// PROFILLEYICI (`tulpar --profile`, 2026-11-26)
+//
+// Enstrumantasyonlu: derleyici (TULPAR_PROFILE=1) her Tulpar fonksiyon
+// GOVDESININ girisine aot_prof_enter(id, tur), her donusune aot_prof_exit
+// koyar (llvm_backend.cpp instrument_profile). Iplik basina bir CAGRI AGACI
+// tutulur: dugum = (ust, fonksiyon); oz sure, cagri sayisi, oz arena baytı.
+// Cikista: fonksiyon basina tablo (oz %, oz/kapsayici ms, cagri, oz arena KB)
+// stderr'e; TULPAR_PROFILE_OUT=<dosya> ise flamegraph/speedscope "folded"
+// bicimi (`ana;f;g <oz mikrosaniye>`).
+//
+// Dogruluk kurallari:
+//  * Kapsayici sure ozyinelemede iki kez sayilmaz: yalniz yigindaki EN DIS
+//    cerceve ekler.
+//  * Dagitici + kendi uzmanlasmasi (`t_f.f` -> `f$i`, tur 1 -> 2) TEK cagri.
+//  * throw longjmp ile cikis kancalarini atlar: aot_try_push profil
+//    derinligini saklar, aot_throw hedef derinlige kadar cerceveleri kapatir.
+//  * exit() (test_summary) acik cerceveleri raporda simdiki zamanla kapatir.
+//  * Iplikler: her iplik kendi agaci; rapor hepsini birlestirir (iplik
+//    bitince agac korunur).
+//  * Async govdeler enstrumante EDILMEZ (askiya alinan coroutine yigini
+//    bozardi); await beklemesi cagiranin kapsayici suresinde gorunur.
+// Kapaliyken (enstrumantasyon yokken) maliyet: aot_try_push'ta bir dallanma.
+// ============================================================================
+#include <chrono>
+namespace {
+struct ProfNode {
+  int fn;
+  int parent;
+  uint64_t calls = 0, self_ns = 0, self_bytes = 0;
+  std::vector<std::pair<int, int>> kids;  // (fn, node)
+};
+struct ProfFrame {
+  int node;
+  int fn;
+  int kind;
+  int merged;          // dagitici icine katlanan uzmanlasma sayisi
+  uint64_t t0, child_ns, b0, child_bytes;
+  bool outermost;      // bu fn'in yigindaki en dis cercevesi mi
+};
+struct ProfThread {
+  std::vector<ProfNode> nodes;
+  std::vector<ProfFrame> stack;
+  std::vector<int> active;    // fn -> yigindaki cerceve sayisi
+  std::vector<uint64_t> incl; // fn -> kapsayici ns (en dis cerceveler)
+};
+std::atomic<int> g_prof_on{0};
+const char *const *g_prof_names = nullptr;
+int g_prof_count = 0;
+std::mutex g_prof_mu;
+std::vector<ProfThread *> g_prof_threads;
+thread_local ProfThread *t_prof = nullptr;
+uint64_t g_prof_overhead_ns = 0;
+
+inline uint64_t prof_now() {
+  return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+inline uint64_t prof_bytes() {
+  return g_aot_string_arena ? (uint64_t)g_aot_string_arena->total_allocated : 0;
+}
+ProfThread *prof_thread() {
+  if (!t_prof) {
+    t_prof = new ProfThread();
+    t_prof->nodes.push_back(ProfNode{-1, -1});  // kok
+    t_prof->active.assign((size_t)g_prof_count + 1, 0);
+    t_prof->incl.assign((size_t)g_prof_count + 1, 0);
+    std::lock_guard<std::mutex> g(g_prof_mu);
+    g_prof_threads.push_back(t_prof);
+  }
+  return t_prof;
+}
+void prof_close_top(ProfThread *pt, uint64_t now) {
+  ProfFrame f = pt->stack.back();
+  pt->stack.pop_back();
+  uint64_t total = now > f.t0 ? now - f.t0 : 0;
+  uint64_t bytes = prof_bytes();
+  uint64_t tb = bytes > f.b0 ? bytes - f.b0 : 0;
+  ProfNode &n = pt->nodes[(size_t)f.node];
+  n.self_ns += total > f.child_ns ? total - f.child_ns : 0;
+  n.self_bytes += tb > f.child_bytes ? tb - f.child_bytes : 0;
+  if (f.fn >= 0 && f.fn <= g_prof_count) {
+    pt->active[(size_t)f.fn]--;
+    if (f.outermost) pt->incl[(size_t)f.fn] += total;
+  }
+  if (!pt->stack.empty()) {
+    pt->stack.back().child_ns += total;
+    pt->stack.back().child_bytes += tb;
+  }
+}
+void prof_report();
+}  // namespace
+
+extern "C" void aot_prof_init(const char *const *names, int count) {
+  if (g_prof_on.load(std::memory_order_relaxed)) return;
+  g_prof_names = names;
+  g_prof_count = count;
+  // Olcum gideri: bos enter/exit ciftinin maliyeti (raporda bildirilir).
+  uint64_t a = prof_now();
+  for (int i = 0; i < 2000; i++) { (void)prof_now(); (void)prof_now(); }
+  g_prof_overhead_ns = (prof_now() - a) / 2000;
+  g_prof_on.store(1, std::memory_order_relaxed);
+  atexit(prof_report);
+}
+
+extern "C" void aot_prof_enter(int fn, int kind) {
+  if (!g_prof_on.load(std::memory_order_relaxed)) return;
+  ProfThread *pt = prof_thread();
+  if (!pt->stack.empty()) {
+    ProfFrame &top = pt->stack.back();
+    // Dagiticinin (tur 1) kendi uzmanlasmasina (tur 2) gecisi: ayni cagri.
+    if (kind == 2 && top.kind == 1 && top.fn == fn && top.merged == 0 && top.child_ns == 0) {
+      top.merged++;
+      return;
+    }
+  }
+  int parent = pt->stack.empty() ? 0 : pt->stack.back().node;
+  int node = -1;
+  for (auto &k : pt->nodes[(size_t)parent].kids)
+    if (k.first == fn) { node = k.second; break; }
+  if (node < 0) {
+    node = (int)pt->nodes.size();
+    pt->nodes.push_back(ProfNode{fn, parent});
+    pt->nodes[(size_t)parent].kids.push_back({fn, node});
+  }
+  pt->nodes[(size_t)node].calls++;
+  bool outer = true;
+  if (fn >= 0 && fn <= g_prof_count) outer = pt->active[(size_t)fn]++ == 0;
+  pt->stack.push_back(ProfFrame{node, fn, kind, 0, prof_now(), 0, prof_bytes(), 0, outer});
+}
+
+extern "C" void aot_prof_exit(int fn, int kind) {
+  (void)kind;
+  if (!g_prof_on.load(std::memory_order_relaxed) || !t_prof) return;
+  ProfThread *pt = t_prof;
+  if (pt->stack.empty()) return;
+  ProfFrame &top = pt->stack.back();
+  if (top.fn == fn && top.merged > 0 && kind == 2) { top.merged--; return; }
+  // Eslesmeyen cikis (olmamali): yigini o fonksiyona kadar kapat; yoksa yok say.
+  size_t k = pt->stack.size();
+  while (k > 0 && pt->stack[k - 1].fn != fn) k--;
+  if (k == 0) return;
+  uint64_t now = prof_now();
+  while (pt->stack.size() >= k) prof_close_top(pt, now);
+}
+
+// aot_try_push / aot_throw icin: throw'un atlayacagi cerceveleri kapat.
+static int aot_prof_depth(void) {
+  return (g_prof_on.load(std::memory_order_relaxed) && t_prof) ? (int)t_prof->stack.size() : 0;
+}
+static void aot_prof_unwind_to(int depth) {
+  if (!g_prof_on.load(std::memory_order_relaxed) || !t_prof) return;
+  uint64_t now = prof_now();
+  while ((int)t_prof->stack.size() > depth) prof_close_top(t_prof, now);
+}
+
+namespace {
+void prof_folded(FILE *out, const ProfThread *pt, int node, std::string &path) {
+  const ProfNode &n = pt->nodes[(size_t)node];
+  size_t keep = path.size();
+  if (node != 0) {
+    if (!path.empty()) path += ';';
+    path += (n.fn >= 0 && n.fn < g_prof_count) ? g_prof_names[n.fn] : "?";
+    uint64_t us = n.self_ns / 1000;
+    if (us > 0) fprintf(out, "%s %llu\n", path.c_str(), (unsigned long long)us);
+  }
+  for (const auto &k : n.kids) prof_folded(out, pt, k.second, path);
+  path.resize(keep);
+}
+
+void prof_report() {
+  if (!g_prof_on.load()) return;
+  g_prof_on.store(0);
+  std::lock_guard<std::mutex> g(g_prof_mu);
+  uint64_t now = prof_now();
+  // exit() ile acik kalan cerceveler (yalniz cagiran iplikte guvenli).
+  if (t_prof) while (!t_prof->stack.empty()) prof_close_top(t_prof, now);
+  struct Row { uint64_t calls = 0, self_ns = 0, incl_ns = 0, bytes = 0; };
+  std::vector<Row> rows((size_t)g_prof_count + 1);
+  uint64_t total_self = 0;
+  for (const ProfThread *pt : g_prof_threads) {
+    for (const auto &n : pt->nodes) {
+      if (n.fn < 0 || n.fn > g_prof_count) continue;
+      rows[(size_t)n.fn].calls += n.calls;
+      rows[(size_t)n.fn].self_ns += n.self_ns;
+      rows[(size_t)n.fn].bytes += n.self_bytes;
+      total_self += n.self_ns;
+    }
+    for (int i = 0; i <= g_prof_count; i++) rows[(size_t)i].incl_ns += pt->incl[(size_t)i];
+  }
+  std::vector<int> order;
+  for (int i = 0; i < g_prof_count; i++) if (rows[(size_t)i].calls) order.push_back(i);
+  std::sort(order.begin(), order.end(),
+            [&](int a, int b) { return rows[(size_t)a].self_ns > rows[(size_t)b].self_ns; });
+  fprintf(stderr,
+          "\n=== tulpar profil — %zu fonksiyon, %zu iplik, toplam oz %.3f ms ===\n"
+          "   oz %%     oz ms   kapsayici ms      cagri   oz arena KB  fonksiyon\n",
+          order.size(), g_prof_threads.size(), total_self / 1e6);
+  const char *lim = getenv("TULPAR_PROFILE_TOP");
+  size_t top = lim ? (size_t)atoi(lim) : 30;
+  for (size_t i = 0; i < order.size() && i < top; i++) {
+    const Row &r = rows[(size_t)order[i]];
+    fprintf(stderr, "%6.1f %9.3f %14.3f %10llu %13.1f  %s\n",
+            total_self ? 100.0 * (double)r.self_ns / (double)total_self : 0.0, r.self_ns / 1e6,
+            r.incl_ns / 1e6, (unsigned long long)r.calls, r.bytes / 1024.0,
+            g_prof_names[order[i]]);
+  }
+  if (order.size() > top)
+    fprintf(stderr, "  ... %zu fonksiyon daha (TULPAR_PROFILE_TOP=<n>)\n", order.size() - top);
+  fprintf(stderr,
+          "  olcum gideri ~%llu ns/cagri (iki saat okumasi; kisa fonksiyonlarda oz sureyi "
+          "sisirir) / ~%llu ns per call\n",
+          (unsigned long long)g_prof_overhead_ns, (unsigned long long)g_prof_overhead_ns);
+  if (const char *path = getenv("TULPAR_PROFILE_OUT")) {
+    if (FILE *f = fopen(path, "w")) {
+      for (const ProfThread *pt : g_prof_threads) {
+        std::string p;
+        prof_folded(f, pt, 0, p);
+      }
+      fclose(f);
+      fprintf(stderr, "  folded yigin: %s (flamegraph.pl / speedscope)\n", path);
+    } else {
+      fprintf(stderr, "  folded yigin yazilamadi: %s\n", path);
+    }
+  }
+}
+}  // namespace

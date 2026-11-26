@@ -937,6 +937,10 @@ if [ "$ACTION" = "suites" ]; then
         kapi_kuyruk "jenerik / ? kapisi basarisiz!" bash tests/jenerik_hatalari.sh ./tulpar
     fi
 
+    # `tulpar --profile` (2026-11-26): kesin cagri sayilari, arena baytı, folded,
+    # kontrol olarak profilsiz ikilide kanca yok.
+    kapi_kuyruk "Profilleyici kapisi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/profil_smoke.py
+
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
     # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz
     # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan
