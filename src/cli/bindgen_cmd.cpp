@@ -10,6 +10,7 @@
 
 #include "../typeinfer/typeinfer.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -242,6 +243,8 @@ struct CT {
   K k = K::Bad;
   std::string why;       // Bad icin
   int fn = -1;           // Fn icin g_sigs indeksi
+  int bytes = 0;         // tamsayi/bool boyu (struct alani icin): 1 2 4 8
+  std::string sname;     // StructVal: struct'in Tulpar adi
 };
 struct FnSig {
   CT ret;
@@ -255,7 +258,16 @@ struct Alias {
   bool fn_is_ptr = true;  // typedef ret (*Ad)(...) (true) / typedef ret Ad(...) (false)
 };
 
+// Degerle gecebilen C struct'i (K304): alanlar Tulpar @repr(C) tipleriyle.
+struct StructDef {
+  std::string name;   // Tulpar adi
+  std::vector<std::pair<std::string, std::string>> fields;  // (ad, tulpar tipi)
+  std::string why;    // bos degilse temsil edilemiyor
+};
 struct Ctx {
+  std::map<std::string, StructDef> sdefs;    // ad (typedef ya da etiket) -> tanim
+  std::map<std::string, std::string> stag;   // `struct Etiket` / typedef adi -> sdefs anahtari
+  std::map<std::string, std::string> stag_bekleyen;  // typedef adi -> henuz tanimlanmamis etiket
   std::map<std::string, Alias> aliases;
   std::set<std::string> structs, enums;
   std::vector<FnSig> sigs;
@@ -319,8 +331,17 @@ CT resolve(Ctx &c, std::vector<Tok> toks, int depth) {
   const std::string &w0 = words[0];
   if (w0 == "struct" || w0 == "union") {
     if (stars > 0) { CT r; r.k = K::Ptr; return r; }
-    return bad(std::string("struct deger gecisi desteklenmiyor (K304): ") +
-               (words.size() > 1 ? words[1] : "?") + " — isaretciyle (`ptr`) gecir");
+    std::string tag = words.size() > 1 ? words[1] : "?";
+    if (w0 == "struct") {
+      auto it = c.stag.find(tag);
+      if (it != c.stag.end()) {
+        const StructDef &sd = c.sdefs[it->second];
+        if (sd.why.empty()) { CT r; r.k = K::StructVal; r.sname = sd.name; return r; }
+        return bad("struct " + tag + " degerle gecemez: " + sd.why);
+      }
+    }
+    return bad(std::string("struct deger gecisi: ") + tag +
+               " tanimi bu baslikta/iceriklerde yok ya da union — isaretciyle (`ptr`) gecir");
   }
   if (w0 == "enum") {
     CT r; r.k = stars ? K::Ptr : K::I32; return r;
@@ -340,7 +361,13 @@ CT resolve(Ctx &c, std::vector<Tok> toks, int depth) {
   }
   if (words.size() == 1 && (c.structs.count(w0) || w0 == "FILE")) {
     if (stars > 0) { CT r; r.k = K::Ptr; return r; }
-    return bad("struct deger gecisi desteklenmiyor (K304): " + w0 + " — isaretciyle (`ptr`) gecir");
+    auto it = c.stag.find(w0);
+    if (it != c.stag.end()) {
+      const StructDef &sd = c.sdefs[it->second];
+      if (sd.why.empty()) { CT r; r.k = K::StructVal; r.sname = sd.name; return r; }
+      return bad("struct " + w0 + " degerle gecemez: " + sd.why);
+    }
+    return bad("struct deger gecisi: " + w0 + " tanimi yok (opak) — isaretciyle (`ptr`) gecir");
   }
   if (words.size() == 1 && c.enums.count(w0)) { CT r; r.k = stars ? K::Ptr : K::I32; return r; }
   for (const auto &w : words)
@@ -370,12 +397,21 @@ CT resolve(Ctx &c, std::vector<Tok> toks, int depth) {
     return r;
   }
   CT r;
+  bool has_short = false, has_int8 = false, has_int16 = false;
+  for (const auto &w : words) {
+    if (w == "short") has_short = true;
+    if (w == "int8_t" || w == "uint8_t") has_int8 = true;
+    if (w == "int16_t" || w == "uint16_t") has_int16 = true;
+  }
   if (has_void) r.k = K::Void;
   else if (has_double) r.k = longs ? K::Bad : K::F64;
   else if (has_float) r.k = K::F32;
-  else if (has_bool) r.k = K::Bool8;
-  else if (wide || longs >= 1) r.k = K::I64;
-  else r.k = K::I32;
+  else if (has_bool) { r.k = K::Bool8; r.bytes = 1; }
+  else if (wide || longs >= 1) { r.k = K::I64; r.bytes = 8; }
+  else {
+    r.k = K::I32;
+    r.bytes = (has_char || has_int8) ? 1 : (has_short || has_int16) ? 2 : 4;
+  }
   if (r.k == K::Bad) r.why = "long double desteklenmiyor";
   return r;
 }
@@ -476,7 +512,7 @@ bool cb_text(const Ctx &c, int si, std::string &out, std::string &why) {
   for (size_t i = 0; i < s.params.size(); i++) {
     const CT &p = s.params[i];
     if (p.k == K::Bad) { why = "geri cagri parametresi: " + p.why; return false; }
-    if (p.k == K::Fn || p.k == K::Void) { why = "geri cagri parametresi desteklenmiyor"; return false; }
+    if (p.k == K::Fn || p.k == K::Void || p.k == K::StructVal) { why = "geri cagri parametresi desteklenmiyor"; return false; }
     if (i) out += ", ";
     out += k_name(p.k);
   }
@@ -484,7 +520,7 @@ bool cb_text(const Ctx &c, int si, std::string &out, std::string &why) {
   const CT &r = s.ret;
   if (r.k == K::Bad) { why = "geri cagri donusu: " + r.why; return false; }
   if (r.k == K::CStr) { why = "geri cagri dizgi donduremez"; return false; }
-  if (r.k == K::Fn) { why = "geri cagri fonksiyon donduremez"; return false; }
+  if (r.k == K::Fn || r.k == K::StructVal) { why = "geri cagri fonksiyon/struct donduremez"; return false; }
   if (r.k != K::Void) out += std::string(": ") + k_name(r.k);
   return true;
 }
@@ -657,6 +693,55 @@ int bindgen_cmd_main(int argc, char **argv) {
   std::set<std::string> seen;
   int inline_defs = 0;
   bool in_main = false;
+  std::vector<Tok> last_body;
+  std::set<std::string> used_structs;
+  // Struct govdesini alanlara cevir (K304). Temsil edilemeyen alan -> why.
+  auto struct_from_body = [&](const std::string &name, const std::vector<Tok> &body) {
+    StructDef sd;
+    sd.name = name;
+    std::vector<Tok> fd;
+    auto bitir = [&]() {
+      if (fd.empty() || !sd.why.empty()) { fd.clear(); return; }
+      for (const auto &x : fd)
+        if (is_punct(x, '[') || is_punct(x, ':') || is_punct(x, '(')) {
+          sd.why = "dizi / bit alani / fonksiyon isaretcisi alani";
+          fd.clear();
+          return;
+        }
+      auto parts = split_commas(fd);
+      // ilk parcanin son adi alan, oncesi tip; sonrakiler `*`? + ad
+      std::vector<Tok> base(parts[0].begin(), parts[0].end() - 1);
+      for (size_t pi = 0; pi < parts.size() && sd.why.empty(); pi++) {
+        if (parts[pi].empty() || parts[pi].back().k != TK::Ident) { sd.why = "alan adi yok"; break; }
+        std::vector<Tok> ty = base;
+        if (pi > 0) for (const auto &x : parts[pi]) if (is_punct(x, '*')) ty.push_back(x);
+        CT t = resolve(c, ty);
+        std::string tt;
+        if (t.k == K::I32 && t.bytes == 4) tt = "i32";
+        else if (t.k == K::I64) tt = "int";
+        else if (t.k == K::F32) tt = "f32";
+        else if (t.k == K::F64) tt = "float";
+        else if (t.k == K::Bool8) tt = "bool";
+        else {
+          sd.why = "alan '" + parts[pi].back().s + "' Tulpar @repr(C)'de temsil edilemiyor (" +
+                   (t.k == K::I32 ? std::to_string(t.bytes) + " baytlik tamsayi"
+                    : t.k == K::Ptr || t.k == K::CStr ? std::string("isaretci")
+                    : t.k == K::StructVal ? std::string("ic ice struct")
+                    : t.why.empty() ? std::string("tip") : t.why) + ")";
+          break;
+        }
+        sd.fields.push_back({parts[pi].back().s, tt});
+      }
+      fd.clear();
+    };
+    for (const auto &x : body) {
+      if (is_punct(x, ';')) bitir();
+      else fd.push_back(x);
+    }
+    bitir();
+    if (sd.fields.empty() && sd.why.empty()) sd.why = "alansiz";
+    return sd;
+  };
 
   // Ust duzey bildirimlere bol. `{` govdeleri: tip govdesi ise atlanir ve
   // bildirim devam eder; fonksiyon govdesi (satir ici tanim) ise bildirim atilir.
@@ -680,8 +765,10 @@ int bindgen_cmd_main(int argc, char **argv) {
         // `static inline f() {...}` sonrasi `;` gelmez.
         continue;
       }
-      // enum govdesi: sabitler tamsayi; tip adi asagida kaydedilir.
+      // Tip govdesi: struct alanlari asagida (bildirimin turu belli olunca)
+      // ayristirilir; enum sabitleri tamsayi.
       decl.push_back({TK::Ident, "__govde__"});
+      last_body = body;
       i = j;
       continue;
     }
@@ -746,7 +833,30 @@ int bindgen_cmd_main(int argc, char **argv) {
         if (pi == 0) stars = first_stars;
         else for (const auto &x : p) if (is_punct(x, '*')) stars++;
         if (is_enum && stars == 0) { c.enums.insert(an); continue; }
-        if (is_struct && stars == 0) { c.structs.insert(an); continue; }
+        if (is_struct && stars == 0) {
+          c.structs.insert(an);
+          bool govdeli = false, is_union = false;
+          std::string tag;
+          for (size_t k = 0; k < base.size(); k++) {
+            if (base[k].k == TK::Ident && base[k].s == "__govde__") govdeli = true;
+            if (base[k].k == TK::Ident && base[k].s == "union") is_union = true;
+            if (base[k].k == TK::Ident && base[k].s == "struct" && k + 1 < base.size() &&
+                base[k + 1].k == TK::Ident && base[k + 1].s != "__govde__")
+              tag = base[k + 1].s;
+          }
+          if (is_union) continue;
+          if (govdeli) {
+            c.sdefs[an] = struct_from_body(an, last_body);
+            c.stag[an] = an;
+            if (!tag.empty()) c.stag[tag] = an;
+          } else if (!tag.empty()) {
+            // `typedef struct Etiket Ad;` — Ad, etiketin tanimina baglanir.
+            auto it = c.stag.find(tag);
+            if (it != c.stag.end()) c.stag[an] = it->second;
+            else c.stag_bekleyen[an] = tag;
+          }
+          continue;
+        }
         Alias a;
         a.toks = base_clean;
         for (int k = 0; k < stars; k++) a.toks.push_back({TK::Punct, "*"});
@@ -764,6 +874,15 @@ int bindgen_cmd_main(int argc, char **argv) {
       if (d.size() >= 2 && d[1].k == TK::Ident && d[1].s != "__govde__") {
         if (d[0].s == "enum") c.enums.insert(d[1].s);
         else c.structs.insert(d[1].s);
+        if (d[0].s == "struct" && d.size() >= 3 && d[2].k == TK::Ident && d[2].s == "__govde__") {
+          const std::string tag = d[1].s;
+          c.sdefs[tag] = struct_from_body(tag, last_body);
+          c.stag[tag] = tag;
+          for (auto it = c.stag_bekleyen.begin(); it != c.stag_bekleyen.end();) {
+            if (it->second == tag) { c.stag[it->first] = tag; it = c.stag_bekleyen.erase(it); }
+            else ++it;
+          }
+        }
       }
       if (!has_paren) continue;  // degisken ya da yalniz tip
     }
@@ -823,8 +942,13 @@ int bindgen_cmd_main(int argc, char **argv) {
     if (why.empty() && s.params.size() > 16) why = "16'dan fazla parametre";
     if (why.empty() && typeinfer_is_builtin_name(fname.c_str()))
       why = "Tulpar yerlesigiyle ayni ad";
+    if (why.empty() && out_path.empty() &&
+        (s.ret.k == K::StructVal ||
+         std::any_of(s.params.begin(), s.params.end(), [](const CT &p) { return p.k == K::StructVal; })))
+      why = "struct deger gecisi modul dosyasi ister — -o <dizin/tulpar-ext.json> ver";
     if (why.empty()) {
-      o.ret = k_name(s.ret.k);
+      o.ret = s.ret.k == K::StructVal ? "struct " + s.ret.sname : k_name(s.ret.k);
+      if (s.ret.k == K::StructVal) used_structs.insert(s.ret.sname);
       // Parametre adlari icin parametreleri yeniden bol.
       auto parts = split_commas(ps);
       if (parts.size() == 1 && parts[0].size() == 1 && parts[0][0].s == "void") parts.clear();
@@ -842,6 +966,11 @@ int bindgen_cmd_main(int argc, char **argv) {
           std::string t, w;
           if (!cb_text(c, p.fn, t, w)) { why = "parametre " + std::to_string(pi + 1) + ": " + w; break; }
           o.params.push_back(pn + ": " + t);
+          continue;
+        }
+        if (p.k == K::StructVal) {
+          o.params.push_back(pn + ": struct " + p.sname);
+          used_structs.insert(p.sname);
           continue;
         }
         o.params.push_back(pn + ": " + k_name(p.k));
@@ -865,6 +994,14 @@ int bindgen_cmd_main(int argc, char **argv) {
        << (i + 1 < outs.size() ? ",\n" : "\n");
   }
   js << "  ]";
+  std::string mod_path;
+  if (!used_structs.empty()) {
+    js << ",\n  \"modules\": {\"" << json_esc(name) << "\": \"" << json_esc(name) << ".tpr\"}";
+    std::string dir = out_path;
+    size_t sl = dir.find_last_of("/\\");
+    dir = sl == std::string::npos ? std::string(".") : dir.substr(0, sl);
+    mod_path = dir + "/" + name + ".tpr";
+  }
   if (!libs.empty()) {
     js << ",\n  \"link\": {\n";
     const char *plats[] = {"linux", "macos", "windows"};
@@ -889,6 +1026,20 @@ int bindgen_cmd_main(int argc, char **argv) {
     std::ofstream of(out_path, std::ios::binary);
     if (!of) { std::fprintf(stderr, "bindgen: '%s' yazilamadi\n", out_path.c_str()); return 2; }
     of << js.str();
+  }
+  if (!mod_path.empty()) {
+    std::ofstream mf(mod_path, std::ios::binary);
+    if (!mf) { std::fprintf(stderr, "bindgen: '%s' yazilamadi\n", mod_path.c_str()); return 2; }
+    mf << "// tulpar bindgen " << header << " — C'ye DEGER olarak giden struct'lar (K304).\n"
+       << "// `import \"" << name << "\";` ile gelir; @repr(C) C yerlesimini sozler.\n";
+    for (const auto &sn : used_structs) {
+      const StructDef &sd = c.sdefs[c.stag[sn]];
+      mf << "\n@repr(C)\nstruct " << sd.name << " {";
+      for (const auto &f : sd.fields) mf << " " << f.second << " " << f.first << ";";
+      mf << " }\n";
+    }
+    std::fprintf(stderr, "  not      %zu struct -> %s (import \"%s\")\n", used_structs.size(),
+                 mod_path.c_str(), name.c_str());
   }
   for (const auto &s : skipped)
     std::fprintf(stderr, "  atlandi  %s: %s\n", s.first.c_str(), s.second.c_str());

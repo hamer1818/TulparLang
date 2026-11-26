@@ -1,0 +1,8 @@
+// tulpar bindgen tests/bindgen/bg_ornek.h — C'ye DEGER olarak giden struct'lar (K304).
+// `import "bg_ornek";` ile gelir; @repr(C) C yerlesimini sozler.
+
+@repr(C)
+struct BgEtiket { float u; float v; }
+
+@repr(C)
+struct BgNokta { i32 x; i32 y; }

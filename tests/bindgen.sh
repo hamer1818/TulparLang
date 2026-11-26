@@ -36,11 +36,16 @@ AR_BIN=""; for a in ar llvm-ar; do command -v "$a" >/dev/null 2>&1 && { AR_BIN="
 mkdir -p "$TMP/ext/lib"
 (cd "$SRC/../.." && "$TUL" bindgen tests/bindgen/bg_ornek.h --lib bg_ornek --lib-dir lib -o "$TMP/ext/tulpar-ext.json") 2>"$TMP/rapor"; rc=$?
 if [ $rc -eq 0 ] && diff -u "$SRC/bg_ornek.beklenen.json" "$TMP/ext/tulpar-ext.json" >"$TMP/fark"; then
-  gecti "bg_ornek.h -> bildirim bayt bayt beklenen (17 fonksiyon)"
+  gecti "bg_ornek.h -> bildirim bayt bayt beklenen (20 fonksiyon)"
 else
   dustu "bildirim farkli (rc=$rc)"; head -20 "$TMP/fark" | sed 's/^/         /'
 fi
-for g in "bg_yazdir: variadic" "bg_nokta: donus: struct deger gecisi desteklenmiyor (K304)" \
+if diff -u "$SRC/bg_ornek.beklenen.tpr" "$TMP/ext/bg_ornek.tpr" >"$TMP/fark_m"; then
+  gecti "K304: degerle gecen struct'lar icin @repr(C) modulu bayt bayt (BgNokta, etiketli BgEtiket)"
+else
+  dustu "struct modulu farkli"; head -12 "$TMP/fark_m" | sed 's/^/         /'
+fi
+for g in "bg_yazdir: variadic" "bg_kisa: parametre 1: struct BgKisa degerle gecemez: alan 'a'" \
          "bg_hassas: donus: long double" "bg_isaretci_donduren: fonksiyon isaretcisi"; do
   grep -qF "atlandi  $g" "$TMP/rapor" && gecti "gerekceli atlandi: ${g%%:*}" || dustu "rapor satiri yok: $g"
 done
@@ -56,7 +61,7 @@ if [ -n "$CC_BIN" ] && [ -n "$AR_BIN" ]; then
   "$CC_BIN" -std=c99 -O2 -I "$SRC" -c "$SRC/bg_ornek.c" -o "$TMP/ext/lib/bg.o" && "$AR_BIN" rcs "$TMP/ext/lib/libbg_ornek.a" "$TMP/ext/lib/bg.o"
   "$TUL" --ext "$TMP/ext" "$SRC/bg_kullan.tpr" >"$TMP/o" 2>"$TMP/e"; rc=$?
   if [ $rc -eq 0 ] && diff -u "$SRC/bg_kullan.beklenen" "$TMP/o" >"$TMP/fark2"; then
-    gecti "uretilen bildirimle cagrilar dogru (qsort, baglamli cb, cbool, enum, typedef zinciri)"
+    gecti "uretilen bildirimle cagrilar dogru (qsort, baglamli cb, cbool, enum, typedef zinciri, struct deger)"
   else
     dustu "cagri ciktisi farkli (rc=$rc)"; head -12 "$TMP/fark2" "$TMP/e" | sed 's/^/         /'
   fi
@@ -82,6 +87,23 @@ sdl_lib=""
 for f in /usr/lib/libSDL3.so /usr/lib64/libSDL3.so /usr/lib/*/libSDL3.so /usr/local/lib/libSDL3.so /opt/homebrew/lib/libSDL3.dylib; do
   [ -e "$f" ] && { sdl_lib="$f"; break; }
 done
+# Gercek libc: div/ldiv/lldiv struct DEGER dondurur (K304).
+if [ -f /usr/include/stdlib.h ] && [ "$(uname -s)" = "Linux" ]; then
+  mkdir -p "$TMP/cstd"
+  "$TUL" bindgen /usr/include/stdlib.h --name cstd --prefix div --prefix ldiv --prefix lldiv \
+    -o "$TMP/cstd/tulpar-ext.json" 2>"$TMP/cr"
+  python3 - "$TMP/cstd/tulpar-ext.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p))
+m["link"] = {"linux": {"libs": []}, "macos": {"libs": []}, "windows": {"libs": []}}
+json.dump(m, open(p, "w"))
+PYEOF
+  printf 'import "cstd";\ndiv_t a = div(17, 5);\nldiv_t b = ldiv(-5000000007, 1000);\nlldiv_t c = lldiv(9000000000000000007, 10);\nprint(toString(a.quot) + " " + toString(a.rem) + " " + toString(b.quot) + " " + toString(b.rem) + " " + toString(c.quot) + " " + toString(c.rem));\n' > "$TMP/cstd.tpr"
+  out=$("$TUL" --ext "$TMP/cstd" "$TMP/cstd.tpr" 2>&1)
+  [ "$out" = "3 2 -5000000 -7 900000000000000000 7" ] \
+    && gecti "gercek libc: div/ldiv/lldiv struct DEGER donusu dogru" \
+    || { dustu "gercek libc div: '$out'"; tail -3 "$TMP/cr" | sed 's/^/         /'; }
+fi
 if [ -f /usr/include/SDL3/SDL_timer.h ] && [ -n "$sdl_lib" ]; then
   mkdir -p "$TMP/sdl"
   "$TUL" bindgen /usr/include/SDL3/SDL_timer.h --name sdl_timer --prefix SDL_ --lib SDL3 -o "$TMP/sdl/tulpar-ext.json" 2>/dev/null

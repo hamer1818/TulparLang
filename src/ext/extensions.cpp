@@ -144,6 +144,13 @@ bool parse_type(const std::string &t, bool allow_void, CType &out) {
   return true;
 }
 
+// "struct Ad" -> Ad (bos = struct degil).
+std::string struct_type_name(const std::string &t) {
+  if (t.compare(0, 7, "struct ") != 0) return "";
+  std::string n = trim(t.substr(7));
+  return is_ident(n) ? n : "";
+}
+
 // "fn(i32, f64): f64" / "fn()" / "fn(ptr)" -> CallbackSig. Hata: false + neden.
 bool parse_callback(const std::string &t, CallbackSig &out, std::string &why) {
   out = CallbackSig();
@@ -397,7 +404,10 @@ bool parse_manifest(const std::string &mpath, const char *origin,
     if (cJSON *d = cJSON_GetObjectItemCaseSensitive(f, "doc"); cJSON_IsString(d)) F.doc = d->valuestring;
     cJSON *ret = cJSON_GetObjectItemCaseSensitive(f, "returns");
     const std::string rs = cJSON_IsString(ret) ? ret->valuestring : "void";
-    if (!parse_type(rs, true, F.ret)) {
+    if (!struct_type_name(rs).empty()) {
+      F.ret = CType::Struct;
+      F.ret_struct = struct_type_name(rs);
+    } else if (!parse_type(rs, true, F.ret)) {
       err = merr(mpath, where + " (" + F.name + "): " +
                             tr_en("bilinmeyen donus tipi '", "unknown return type '") + rs +
                             "' (void, i32, i64, int, f32, f64, float, bool, cbool, str, ptr)");
@@ -430,7 +440,10 @@ bool parse_manifest(const std::string &mpath, const char *origin,
       }
       CType t;
       CallbackSig cb;
-      if (ptype.compare(0, 3, "fn(") == 0) {
+      std::string sname = struct_type_name(ptype);
+      if (!sname.empty()) {
+        t = CType::Struct;
+      } else if (ptype.compare(0, 3, "fn(") == 0) {
         std::string why;
         if (!parse_callback(ptype, cb, why)) {
           err = merr(mpath, where + " (" + F.name + "): " +
@@ -442,12 +455,13 @@ bool parse_manifest(const std::string &mpath, const char *origin,
       } else if (!parse_type(ptype, false, t)) {
         err = merr(mpath, where + " (" + F.name + "): " +
                               tr_en("bilinmeyen parametre tipi '", "unknown parameter type '") + ptype +
-                              "' (i32, i64, int, f32, f64, float, bool, cbool, str, ptr, fn(...): ...)");
+                              "' (i32, i64, int, f32, f64, float, bool, cbool, str, ptr, struct Ad, fn(...): ...)");
         return false;
       }
       F.params.push_back(t);
       F.param_names.push_back(pname);
       F.callbacks.push_back(cb);
+      F.param_structs.push_back(sname);
     }
     if (F.params.size() > 16) {
       err = merr(mpath, where + " (" + F.name + tr_en("): en fazla 16 parametre",
@@ -537,6 +551,7 @@ const char *ctype_name(CType t) {
   case CType::Ptr: return "ptr";
   case CType::Fn: return "fn";
   case CType::CBool: return "cbool";
+  case CType::Struct: return "struct";
   }
   return "?";
 }
@@ -567,11 +582,13 @@ std::string Function::signature() const {
   for (size_t i = 0; i < params.size(); i++) {
     if (i) s += ", ";
     s += param_names[i] + ": " +
-         (params[i] == CType::Fn && i < callbacks.size() ? callbacks[i].text
-                                                         : std::string(ctype_name(params[i])));
+         (params[i] == CType::Fn && i < callbacks.size()        ? callbacks[i].text
+          : params[i] == CType::Struct && i < param_structs.size() ? "struct " + param_structs[i]
+                                                                   : std::string(ctype_name(params[i])));
   }
   s += ")";
-  if (ret != CType::Void) s += std::string(": ") + ctype_name(ret);
+  if (ret == CType::Struct) s += ": struct " + ret_struct;
+  else if (ret != CType::Void) s += std::string(": ") + ctype_name(ret);
   return s;
 }
 

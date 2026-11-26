@@ -13,6 +13,13 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — FFI: C struct'ı DEĞER olarak geçirme ve döndürme (K304)
+
+- Bildirimde `"p: struct Nokta"` / `"returns": "struct Nokta"`; `Nokta` kutusuz (`@repr(C)`) bir Tulpar struct'ı.
+  Çağrı hedefin C ABI'sine elle indirilir (x86-64 SysV, AArch64, Windows x64); Android ve web'de derleme hatası.
+- `tulpar bindgen` değerle geçen C struct'larını `@repr(C)` tanımları olarak `<ad>.tpr` modülüne yazar
+  (gerçek libc `div`/`ldiv`/`lldiv` ile ölçüldü).
+
 ### Değişti — `listen_evented`: bloklamayan yazma, pipelining, çok çekirdek (`evented_workers(n)`)
 
 - Yanıtlar `http_send_queued` + `http_poll` ile bloklamadan yazılıyor: yanıtını okumayan istemci artık

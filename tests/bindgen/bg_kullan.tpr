@@ -1,4 +1,5 @@
 // tests/bindgen.sh: bindgen'in bg_ornek.h'ten urettigi bildirimle cagrilar.
+import "bg_ornek";   // bindgen'in urettigi modul: @repr(C) struct'lar (K304)
 func kars(int a, int b): int { return bg_int_oku(a) - bg_int_oku(b); }
 int g_top = 0;
 func her(i, v, ctx) { g_top = g_top + i * v; }
@@ -20,3 +21,8 @@ bg_kapat(t);
 print("cift " + toString(bg_cift_mi(4)) + " " + toString(bg_cift_mi(7)));
 print("degil " + toString(bg_degil(true)) + " " + toString(bg_degil(false)) + " " + toString(bg_degil(0)));
 print("renk " + toString(bg_renk(9)) + " " + toString(bg_renk(1)));
+BgNokta pn = bg_nokta_kaydir(bg_nokta(3, 4), 10);
+print("nokta " + toString(pn.x) + " " + toString(pn.y));
+BgEtiket e = { u: 2.0, v: 1.0 };
+BgEtiket f = { u: 1.0, v: 3.0 };
+print("etiket " + toString(bg_etiket(e, f)));

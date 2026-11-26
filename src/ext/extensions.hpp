@@ -49,7 +49,11 @@ namespace ext {
 //          eklentiler); `_Bool` ise i8 ABI'li: ust bitler tanimsiz, clang onu
 //          `zeroext i1` diye gecirir. Ikisini karistirmak sessiz yanlis
 //          dogruluk degeri demek — o yuzden ayri tip (SDL3 her yerde bool).
-enum class CType { Void, I32, I64, F32, F64, Bool, Str, Ptr, Fn, CBool };
+//   struct Ad -> C struct DEGER olarak (K304, 2026-11-26). `Ad` programda (ya da
+//          eklentinin modulunde) tanimli kutusuz bir Tulpar struct'i; C ile ayni
+//          yerlesim icin `@repr(C)`. Parametre ve donus; geri cagrida yok.
+//          Cagri hedefin C ABI'siyle indirilir (x86-64 SysV, AArch64, Win64).
+enum class CType { Void, I32, I64, F32, F64, Bool, Str, Ptr, Fn, CBool, Struct };
 
 const char *ctype_name(CType t);
 
@@ -71,7 +75,9 @@ struct Function {
   std::vector<CType> params;
   std::vector<std::string> param_names;
   std::vector<CallbackSig> callbacks;  // params ile paralel; yalniz Fn icin dolu
+  std::vector<std::string> param_structs;  // params ile paralel; yalniz Struct icin dolu
   CType ret = CType::Void;
+  std::string ret_struct;             // ret == Struct ise struct adi
   int ext_index = -1;
   // LSP/hover icin: "ad(a: i32, b: str): f64"
   std::string signature() const;

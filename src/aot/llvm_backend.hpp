@@ -728,6 +728,8 @@ typedef struct {
 LLVMBackend *llvm_backend_create(const char *module_name);
 // Web hedefini create'ten ÖNCE kur (bkz. target_web alanının notu).
 void llvm_backend_set_target_web(int enable);
+// Android: ext struct deger gecisi reddedilir (tek IR'den iki ABI).
+void llvm_backend_set_target_android(int enable);
 
 // Emit an object for an EXPLICIT target triple (Android cross-compile:
 // aarch64-linux-android34 / x86_64-linux-android34). Initializes both the

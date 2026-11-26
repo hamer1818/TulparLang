@@ -140,6 +140,34 @@ int64_t ornek_cb_koru(int64_t (*f)(int64_t), int64_t x) {
   return r;
 }
 
+/* ---- K304: struct DEGER gecisi (2026-11-26) — ornek.tpr'deki @repr(C) ikizleri ---- */
+#include <stdbool.h>
+typedef struct { int32_t a, b; } Ikii;            /* 8 bayt: INTEGER        */
+typedef struct { double x, y; } Ikid;             /* 16: SSE+SSE / HFA2     */
+typedef struct { float a, b, c, d; } Dortf;       /* 16: <2xf>x2 / HFA4     */
+typedef struct { int32_t a; float b; int64_t c; } Karisik; /* 16: INT+INT  */
+typedef struct { double x, y, z; } Ucd;           /* 24: byval / sret       */
+typedef struct { bool a; int32_t n; } Kucuk;      /* 8: INTEGER (bool 1B)   */
+typedef struct { double x; } Tekd;                /* 8: SSE                 */
+Ikii ornek_st_topla(Ikii p, Ikii q) { Ikii r = {p.a + q.a, p.b + q.b}; return r; }
+Ikid ornek_st_olcek(Ikid v, double k) { Ikid r = {v.x * k, v.y * k}; return r; }
+float ornek_st_dort_toplam(Dortf v) { return v.a + v.b * 10 + v.c * 100 + v.d * 1000; }
+Dortf ornek_st_dort_ters(Dortf v) { Dortf r = {v.d, v.c, v.b, v.a}; return r; }
+Karisik ornek_st_karisik(Karisik k) { Karisik r = {k.a + 1, k.b * 2, k.c - 1}; return r; }
+Ucd ornek_st_capraz(Ucd a, Ucd b) {
+  Ucd r = {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+  return r;
+}
+int32_t ornek_st_kucuk(Kucuk k) { return k.a ? k.n : -k.n; }
+Kucuk ornek_st_kucuk_yap(int32_t n) { Kucuk r = {n > 0, n * 2}; return r; }
+Tekd ornek_st_tek(Tekd t) { Tekd r = {t.x + 0.5}; return r; }
+/* Karisik arguman listesi: yazmac ayirma struct parcalariyla dogru mu. */
+double ornek_st_cok(int64_t x, Ucd a, double y, Ikid b, int32_t z, Karisik k) {
+  return (double)x + a.x + a.y + a.z + y + b.x * b.y + z + k.a + k.b + (double)k.c;
+}
+/* C struct'i degistirir: Tulpar kopyasi etkilenmemeli (Ucd dolayli gecer). */
+double ornek_st_boz(Ucd a) { a.x = -999; return a.y; }
+
 /* ---- ABI_KILIDI: bildirimdeki imzalar (tulpar-ext.json ile AYNI) ---- */
 #ifndef ORNEK_ABI_BOZ
 typedef int64_t (*abi_topla)(int64_t, int64_t);
@@ -178,6 +206,17 @@ static double (*const k_uygula_f)(double (*)(double), double) = ornek_uygula_f;
 static int64_t (*const k_uygula_s)(int64_t (*)(const char *), const char *) = ornek_uygula_s;
 static int32_t (*const k_uygula_32)(int32_t (*)(int32_t, float, int), int32_t) = ornek_uygula_32;
 static int64_t (*const k_cb_koru)(int64_t (*)(int64_t), int64_t) = ornek_cb_koru;
+static Ikii (*const k_st1)(Ikii, Ikii) = ornek_st_topla;
+static Ikid (*const k_st2)(Ikid, double) = ornek_st_olcek;
+static float (*const k_st3)(Dortf) = ornek_st_dort_toplam;
+static Dortf (*const k_st4)(Dortf) = ornek_st_dort_ters;
+static Karisik (*const k_st5)(Karisik) = ornek_st_karisik;
+static Ucd (*const k_st6)(Ucd, Ucd) = ornek_st_capraz;
+static int32_t (*const k_st7)(Kucuk) = ornek_st_kucuk;
+static Kucuk (*const k_st8)(int32_t) = ornek_st_kucuk_yap;
+static Tekd (*const k_st9)(Tekd) = ornek_st_tek;
+static double (*const k_st10)(int64_t, Ucd, double, Ikid, int32_t, Karisik) = ornek_st_cok;
+static double (*const k_st11)(Ucd) = ornek_st_boz;
 /* Kullanilmayan-degisken uyarisi olmasin diye tek bir tutucu. */
 const void *ornek_abi_kilidi[] = {(const void *)&k_topla, (const void *)&k_kare32,
                                    (const void *)&k_orta, (const void *)&k_yarim,
@@ -194,4 +233,8 @@ const void *ornek_abi_kilidi[] = {(const void *)&k_topla, (const void *)&k_kare3
                                    (const void *)&k_null_mu, (const void *)&k_qsort,
                                    (const void *)&k_her_biri, (const void *)&k_uygula_f,
                                    (const void *)&k_uygula_s, (const void *)&k_uygula_32,
-                                   (const void *)&k_cb_koru};
+                                   (const void *)&k_cb_koru, (const void *)&k_st1,
+                                   (const void *)&k_st2, (const void *)&k_st3, (const void *)&k_st4,
+                                   (const void *)&k_st5, (const void *)&k_st6, (const void *)&k_st7,
+                                   (const void *)&k_st8, (const void *)&k_st9, (const void *)&k_st10,
+                                   (const void *)&k_st11};

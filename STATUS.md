@@ -2313,8 +2313,9 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   (`TULPAR_ARENA_ZEHIR`, `tests/sarkan_isaretci.sh`) — ilk koşuda async ARC/arena
   sınırını ve `thread_create("ad")` no-op'unu buldu (düzeltildi).
 - ✅ **FFI v1 (2026-11-26).** `ptr`, `fn(...)` C-ABI geri çağrı trampolini (K305),
-  `cbool` (C `_Bool`), `tulpar bindgen başlık.h` (zlib 80/82, SDL_video 112/114).
-  Struct değer geçişi (K304) hâlâ yok — `ptr` ile.
+  `cbool` (C `_Bool`), `tulpar bindgen başlık.h` (zlib 80/82, SDL_video 112/114),
+  struct DEĞER geçişi (K304: x86-64 SysV / AArch64 / Win64 C ABI'si; Android ve web'de
+  derleme hatası).
 - ✅ **Profilleyici (2026-11-26).** `tulpar --profile`: öz/kapsayıcı süre, çağrı,
   arena baytı, folded yığın (`tests/profil_smoke.py`).
 - ✅ **Dil tanımı v0 + paket imzası (2026-11-26).** `docs/SPEC.md` (örnekleri

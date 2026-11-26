@@ -3418,6 +3418,7 @@ static DataType ext_param_type(tulpar::ext::CType t) {
   case CType::F32: case CType::F64: return TYPE_FLOAT;
   case CType::Str: return TYPE_STRING;
   case CType::Fn: // fonksiyon adi ya da 0 — kodgen denetler
+  case CType::Struct: // struct degeri — kodgen yerlesimi denetler
   case CType::Void: break;
   }
   return TYPE_UNKNOWN;
@@ -3430,7 +3431,7 @@ static DataType ext_return_type(tulpar::ext::CType t) {
   case CType::F32: case CType::F64: return TYPE_FLOAT;
   case CType::Bool: case CType::CBool: return TYPE_BOOL;
   case CType::Str: return TYPE_STRING;
-  case CType::Fn: break;
+  case CType::Fn: case CType::Struct: break;
   }
   return TYPE_UNKNOWN;
 }

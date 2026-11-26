@@ -20,3 +20,21 @@ func orta_nokta(Nokta a, Nokta b): Nokta {
 func selamla(str ad): str {
     return ornek_selam(ad);
 }
+
+// K304 (2026-11-26): C'ye DEGER olarak giden struct'lar — her biri bir C ABI
+// sinifini temsil eder (x86-64 SysV / AArch64 / Win64). Yerlesim C ile ayni
+// olsun diye @repr(C); ornek_eklenti.c'deki tanimlarla alan alan esit.
+@repr(C)
+struct Ikii { i32 a; i32 b; }
+@repr(C)
+struct Ikid { float x; float y; }
+@repr(C)
+struct Dortf { f32 a; f32 b; f32 c; f32 d; }
+@repr(C)
+struct Karisik { i32 a; f32 b; int c; }
+@repr(C)
+struct Ucd { float x; float y; float z; }
+@repr(C)
+struct Kucuk { bool a; i32 n; }
+@repr(C)
+struct Tekd { float x; }

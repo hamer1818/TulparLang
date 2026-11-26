@@ -27,6 +27,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <algorithm>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -6190,6 +6191,8 @@ static LLVMTypeRef ext_llvm_type(LLVMBackend *backend, tulpar::ext::CType t) {
     return backend->ptr_type;
   case CType::CBool:
     return LLVMInt1TypeInContext(backend->context);
+  case CType::Struct:
+    return backend->ptr_type;  // gercek tip ext_struct_abi'den
   case CType::Void:
     break;
   }
@@ -6503,6 +6506,141 @@ static LLVMValueRef ext_callback_ptr(LLVMBackend *backend, ASTNode_C *arg,
   return tr;
 }
 
+// ---------------------------------------------------------------------------
+// STRUCT DEGER GECISI (K304, 2026-11-26) — C ABI'sini elle indirme.
+//
+// LLVM C ABI siniflandirmasi YAPMAZ (on yuz yapar: clang). Burada kutusuz bir
+// Tulpar struct'inin LLVM yerlesiminden (C ile ayni yerlesim icin @repr(C))
+// hedefin kurali uygulanir:
+//   x86-64 SysV (Linux/macOS): <= 16 bayt -> 8 baytlik parcalar; parcadaki
+//     butun alanlar float/double ise SSE (double, <2 x float>, float) yoksa
+//     INTEGER (i64 ya da kuyruk boyu); her parca ayri arguman. > 16 -> byval
+//     (arguman) / sret (donus).
+//   AArch64 (AAPCS64, Apple dahil): HFA (1-4 ayni tip float/double) ->
+//     [N x T]; degilse <= 8 -> i64, <= 16 -> [2 x i64]; > 16 -> kopyanin
+//     isaretcisi (byval YOK) / sret.
+//   Windows x64: boy 1/2/4/8 -> iN; degilse kopyanin isaretcisi / sret.
+// Android'de tek IR'den IKI ABI (arm64 + x86_64) uretildigi icin ve web'de
+// derleme hatasi (sessizce yanlis ABI yerine).
+// ---------------------------------------------------------------------------
+enum class ExtAbiArch { SysV64, AArch64, Win64, Desteksiz };
+static int g_ext_target_android = 0;  // llvm_backend_set_target_android
+void llvm_backend_set_target_android(int enable) { g_ext_target_android = enable ? 1 : 0; }
+static ExtAbiArch ext_abi_arch(LLVMBackend *backend) {
+  if (backend->target_web || g_ext_target_android) return ExtAbiArch::Desteksiz;
+  const char *t = LLVMGetTarget(backend->module);
+  std::string tr = t ? t : "";
+  if (tr.empty()) {
+    char *d = LLVMGetDefaultTargetTriple();
+    tr = d ? d : "";
+    if (d) LLVMDisposeMessage(d);
+  }
+  const bool win = tr.find("windows") != std::string::npos || tr.find("mingw") != std::string::npos;
+  if (tr.compare(0, 6, "x86_64") == 0) return win ? ExtAbiArch::Win64 : ExtAbiArch::SysV64;
+  if (tr.compare(0, 7, "aarch64") == 0 || tr.compare(0, 5, "arm64") == 0)
+    return win ? ExtAbiArch::Desteksiz : ExtAbiArch::AArch64;
+  return ExtAbiArch::Desteksiz;
+}
+
+struct ExtStructAbi {
+  enum Kip { Dogrudan, Dolayli, Hata } kip = Hata;
+  std::vector<LLVMTypeRef> parcalar;  // Dogrudan: her biri ayri arg; donuste literal struct
+  LLVMTypeRef dizi = nullptr;         // AArch64: [N x T] ya da [2 x i64] tek arguman
+  bool byval = false;                 // Dolayli + SysV arguman
+  unsigned long long boy = 0;
+  std::string neden;
+};
+
+static ExtStructAbi ext_struct_abi(LLVMBackend *backend, StructTypeEntry *st) {
+  ExtStructAbi a;
+  ExtAbiArch arch = ext_abi_arch(backend);
+  if (arch == ExtAbiArch::Desteksiz) {
+    a.neden = g_ext_target_android
+                  ? "Android'de struct deger gecisi yok (tek IR'den iki ABI) — ptr kullan"
+                  : backend->target_web ? "web hedefinde struct deger gecisi yok — ptr kullan"
+                                        : "bu hedefte struct deger gecisi desteklenmiyor";
+    return a;
+  }
+  LLVMTargetDataRef td = LLVMGetModuleDataLayout(backend->module);
+  LLVMTypeRef ty = st->llvm_type;
+  a.boy = LLVMABISizeOfType(td, ty);
+  LLVMContextRef cx = backend->context;
+  unsigned n = LLVMCountStructElementTypes(ty);
+  struct Alan { unsigned long long off, boy; LLVMTypeKind kind; LLVMTypeRef t; };
+  std::vector<Alan> alanlar;
+  for (unsigned i = 0; i < n; i++) {
+    LLVMTypeRef et = LLVMStructGetTypeAtIndex(ty, i);
+    alanlar.push_back({LLVMOffsetOfElement(td, ty, i), LLVMABISizeOfType(td, et), LLVMGetTypeKind(et), et});
+  }
+  auto is_fp = [](LLVMTypeKind k) { return k == LLVMDoubleTypeKind || k == LLVMFloatTypeKind; };
+  if (arch == ExtAbiArch::Win64) {
+    if (a.boy == 1 || a.boy == 2 || a.boy == 4 || a.boy == 8) {
+      a.kip = ExtStructAbi::Dogrudan;
+      a.parcalar.push_back(LLVMIntTypeInContext(cx, (unsigned)(a.boy * 8)));
+    } else {
+      a.kip = ExtStructAbi::Dolayli;
+    }
+    return a;
+  }
+  if (arch == ExtAbiArch::AArch64) {
+    bool hfa = n >= 1 && n <= 4;
+    for (auto &f : alanlar)
+      if (!is_fp(f.kind) || f.kind != alanlar[0].kind) hfa = false;
+    if (hfa) {
+      a.kip = ExtStructAbi::Dogrudan;
+      a.dizi = LLVMArrayType(alanlar[0].t, n);
+      return a;
+    }
+    if (a.boy <= 16) {
+      a.kip = ExtStructAbi::Dogrudan;
+      a.dizi = a.boy <= 8 ? LLVMInt64TypeInContext(cx) : LLVMArrayType(LLVMInt64TypeInContext(cx), 2);
+      return a;
+    }
+    a.kip = ExtStructAbi::Dolayli;
+    return a;
+  }
+  // SysV x86-64
+  if (a.boy > 16) {
+    a.kip = ExtStructAbi::Dolayli;
+    a.byval = true;
+    return a;
+  }
+  for (unsigned long long c = 0; c < a.boy; c += 8) {
+    unsigned long long cb = std::min<unsigned long long>(8, a.boy - c);
+    bool sse = true, any_d = false;
+    int floats = 0;
+    for (auto &f : alanlar) {
+      if (f.off + f.boy <= c || f.off >= c + 8) continue;
+      if (!is_fp(f.kind)) sse = false;
+      if (f.kind == LLVMDoubleTypeKind) any_d = true;
+      if (f.kind == LLVMFloatTypeKind) floats++;
+    }
+    if (sse) {
+      if (any_d) a.parcalar.push_back(LLVMDoubleTypeInContext(cx));
+      else if (floats >= 2) a.parcalar.push_back(LLVMVectorType(LLVMFloatTypeInContext(cx), 2));
+      else a.parcalar.push_back(LLVMFloatTypeInContext(cx));
+    } else {
+      a.parcalar.push_back(LLVMIntTypeInContext(cx, (unsigned)(cb * 8)));
+    }
+  }
+  a.kip = ExtStructAbi::Dogrudan;
+  return a;
+}
+
+static LLVMAttributeRef ext_type_attr(LLVMBackend *backend, const char *name, LLVMTypeRef t) {
+  unsigned kind = LLVMGetEnumAttributeKindForName(name, strlen(name));
+  return LLVMCreateTypeAttribute(backend->context, kind, t);
+}
+
+// 16 baytlik hizali gecici tampon: struct baytlari kopyalanir / parcalar okunur.
+static LLVMValueRef ext_struct_tampon(LLVMBackend *backend, const char *nm) {
+  LLVMTypeRef t = LLVMArrayType(LLVMInt64TypeInContext(backend->context), 2);
+  LLVMValueRef a = llvm_build_alloca_at_entry(backend, t, nm);
+  LLVMSetAlignment(a, 16);
+  LLVMBuildStore(backend->builder, LLVMConstNull(t), a);
+  return a;
+}
+
 // Tek arguman: tipli yol once; tipi belirsizse kutulu cevrim.
 static LLVMValueRef ext_arg_value(LLVMBackend *backend, ASTNode_C *arg,
                                   tulpar::ext::CType t) {
@@ -6594,9 +6732,107 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
   }
   tulpar::ext::mark_used(f->ext_index);
 
-  LLVMTypeRef ptys[16];
-  for (int i = 0; i < np; i++) ptys[i] = ext_llvm_type(backend, f->params[i]);
-  LLVMTypeRef fty = LLVMFunctionType(ext_llvm_type(backend, f->ret), ptys, (unsigned)np, 0);
+  // C imzasi: struct DEGERLERI ext_struct_abi ile parcalara/isaretciye iner,
+  // yani C parametre sayisi Tulpar'inkinden farkli olabilir.
+  std::vector<LLVMTypeRef> ptys;
+  std::vector<LLVMValueRef> args;
+  std::vector<std::pair<unsigned, LLVMAttributeRef>> pattrs;  // (1 tabanli C param, nitelik)
+  auto struct_of = [&](const std::string &nm, StructTypeEntry *&st, ExtStructAbi &abi) -> bool {
+    st = find_struct_type(backend, nm.c_str());
+    if (!st || !struct_is_trivially_unboxable(st)) {
+      char msg[512];
+      snprintf(msg, sizeof msg,
+               "%s: 'struct %s' kutusuz bir struct degil (yalniz int/float/bool/f32/i32 alanli; C "
+               "yerlesimi icin @repr(C)) / not an unboxed struct",
+               f->name.c_str(), nm.c_str());
+      report_codegen_error(backend, node->line, "hata", msg, f->name.c_str(), f->signature().c_str());
+      return false;
+    }
+    abi = ext_struct_abi(backend, st);
+    if (abi.kip == ExtStructAbi::Hata) {
+      char msg[512];
+      snprintf(msg, sizeof msg, "%s: %s / struct by value unsupported on this target",
+               f->name.c_str(), abi.neden.c_str());
+      report_codegen_error(backend, node->line, "hata", msg, f->name.c_str(), f->signature().c_str());
+      return false;
+    }
+    return true;
+  };
+  LLVMTypeRef rty = ext_llvm_type(backend, f->ret);
+  StructTypeEntry *ret_st = nullptr;
+  ExtStructAbi ret_abi;
+  LLVMValueRef sret_tmp = nullptr;
+  if (f->ret == CType::Struct) {
+    if (!struct_of(f->ret_struct, ret_st, ret_abi)) {
+      result.boxed = llvm_vm_val_void(backend);
+      result.value = result.boxed;
+      return result;
+    }
+    if (ret_abi.kip == ExtStructAbi::Dolayli) {
+      sret_tmp = llvm_build_alloca_at_entry(backend, ret_st->llvm_type, "ext.sret");
+      LLVMBuildStore(b, LLVMConstNull(ret_st->llvm_type), sret_tmp);
+      ptys.push_back(backend->ptr_type);
+      args.push_back(sret_tmp);
+      pattrs.push_back({1u, ext_type_attr(backend, "sret", ret_st->llvm_type)});
+      rty = LLVMVoidTypeInContext(backend->context);
+    } else if (ret_abi.dizi) {
+      rty = ret_abi.dizi;
+    } else if (ret_abi.parcalar.size() == 1) {
+      rty = ret_abi.parcalar[0];
+    } else {
+      rty = LLVMStructTypeInContext(backend->context, ret_abi.parcalar.data(),
+                                    (unsigned)ret_abi.parcalar.size(), 0);
+    }
+  }
+  // Argumanlar SOLDAN SAGA ve bir kez uretilir (yan etki sirasi korunur).
+  for (int i = 0; i < np; i++) {
+    ASTNode_C *a = i < node->argument_count ? node->arguments[i] : nullptr;
+    if (f->params[i] == CType::Struct) {
+      StructTypeEntry *st = nullptr;
+      ExtStructAbi abi;
+      if (!struct_of(f->param_structs[i], st, abi)) {
+        result.boxed = llvm_vm_val_void(backend);
+        result.value = result.boxed;
+        return result;
+      }
+      LLVMValueRef src = a ? codegen_struct_expr_ptr(backend, a, st) : nullptr;
+      if (!src) {  // kutulu deger (json, kutulu struct) ya da eksik arguman
+        src = llvm_build_alloca_at_entry(backend, st->llvm_type, "ext.st.arg");
+        LLVMBuildStore(b, LLVMConstNull(st->llvm_type), src);
+        if (a) emit_unpack_boxed_struct_into(backend, codegen_expression(backend, a), st, src);
+      }
+      LLVMValueRef boy = LLVMConstInt(backend->int_type, abi.boy, 0);
+      if (abi.kip == ExtStructAbi::Dolayli) {
+        // Kopya: C tarafi degistirse bile Tulpar degeri bozulmaz.
+        LLVMValueRef cp = llvm_build_alloca_at_entry(backend, st->llvm_type, "ext.st.kopya");
+        LLVMBuildMemCpy(b, cp, 8, src, 8, boy);
+        ptys.push_back(backend->ptr_type);
+        args.push_back(cp);
+        if (abi.byval) pattrs.push_back({(unsigned)ptys.size(), ext_type_attr(backend, "byval", st->llvm_type)});
+        continue;
+      }
+      LLVMValueRef buf = ext_struct_tampon(backend, "ext.st.tampon");
+      LLVMBuildMemCpy(b, buf, 16, src, 8, boy);
+      if (abi.dizi) {
+        ptys.push_back(abi.dizi);
+        args.push_back(LLVMBuildLoad2(b, abi.dizi, buf, "ext.st.dizi"));
+      } else {
+        LLVMTypeRef i8 = LLVMInt8TypeInContext(backend->context);
+        for (size_t k = 0; k < abi.parcalar.size(); k++) {
+          LLVMValueRef off = LLVMConstInt(backend->int_type, 8 * k, 0);
+          LLVMValueRef pp = LLVMBuildGEP2(b, i8, buf, &off, 1, "ext.st.parca.p");
+          ptys.push_back(abi.parcalar[k]);
+          args.push_back(LLVMBuildLoad2(b, abi.parcalar[k], pp, "ext.st.parca"));
+        }
+      }
+      continue;
+    }
+    ptys.push_back(ext_llvm_type(backend, f->params[i]));
+    args.push_back(f->params[i] == CType::Fn
+                       ? ext_callback_ptr(backend, a, f->callbacks[i], f, node->line)
+                       : ext_arg_value(backend, a, f->params[i]));
+  }
+  LLVMTypeRef fty = LLVMFunctionType(rty, ptys.data(), (unsigned)ptys.size(), 0);
   LLVMValueRef fn = LLVMGetNamedFunction(backend->module, f->symbol.c_str());
   if (fn && LLVMGlobalGetValueType(fn) != fty) {
     // Ayni sembol baska bir imzayla zaten var: ya iki eklenti fonksiyonu ayni
@@ -6616,20 +6852,18 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
   }
   if (!fn) {
     fn = LLVMAddFunction(backend->module, f->symbol.c_str(), fty);
-    ext_mark_cbool_fn(backend, fn, f->ret, f->params);
+    if (f->ret != CType::Struct) ext_mark_cbool_fn(backend, fn, f->ret, f->params);
+    for (auto &pa : pattrs) LLVMAddAttributeAtIndex(fn, pa.first, pa.second);
   }
-
-  // Argumanlar SOLDAN SAGA ve bir kez uretilir (yan etki sirasi korunur).
-  LLVMValueRef args[16];
-  for (int i = 0; i < np; i++) {
-    ASTNode_C *a = i < node->argument_count ? node->arguments[i] : nullptr;
-    args[i] = f->params[i] == CType::Fn
-                  ? ext_callback_ptr(backend, a, f->callbacks[i], f, node->line)
-                  : ext_arg_value(backend, a, f->params[i]);
-  }
-  LLVMValueRef r = LLVMBuildCall2(b, fty, fn, args, (unsigned)np,
-                                  f->ret == CType::Void ? "" : "ext.ret");
-  ext_mark_cbool_call(backend, r, f->ret, f->params);
+  const bool has_struct = f->ret == CType::Struct ||
+                          std::find(f->params.begin(), f->params.end(), CType::Struct) != f->params.end();
+  const bool void_ret = LLVMGetTypeKind(rty) == LLVMVoidTypeKind;
+  LLVMValueRef r = LLVMBuildCall2(b, fty, fn, args.data(), (unsigned)args.size(),
+                                  void_ret ? "" : "ext.ret");
+  // cbool nitelikleri param indeksine bagli; struct parcalari indeksleri
+  // kaydirdigi icin (cbool + struct ayni imzada) yalniz struct'siz imzada.
+  if (!has_struct) ext_mark_cbool_call(backend, r, f->ret, f->params);
+  for (auto &pa : pattrs) LLVMAddCallSiteAttribute(r, pa.first, pa.second);
   // Ext siniri (RFC C2, 2026-11-26): C'nin geri cagirdigi bir Tulpar
   // fonksiyonu throw ettiyse runtime istisnayi sinirda yakalayip bekletti; C
   // artik dondu, burada yeniden firlatilir. Sicak yol: surec geneli sayacin
@@ -6693,6 +6927,20 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
     result.type = INFERRED_BOOL;
     result.value = LLVMBuildZExt(b, r, backend->int_type, "ext.rcbool");
     break;
+  case CType::Struct: {
+    // C sonucu yerlesime yazilir, kutulu struct nesnesi olarak doner:
+    // `Nokta n = f()` mevcut kutudan-acma yolundan gecer.
+    LLVMValueRef res = sret_tmp;
+    if (!res) {
+      res = llvm_build_alloca_at_entry(backend, ret_st->llvm_type, "ext.st.sonuc");
+      LLVMValueRef buf = ext_struct_tampon(backend, "ext.st.rtampon");
+      LLVMBuildStore(b, r, buf);
+      LLVMBuildMemCpy(b, res, 8, buf, 16, LLVMConstInt(backend->int_type, ret_abi.boy, 0));
+    }
+    result.boxed = box_native_struct_as_object(backend, res, ret_st);
+    result.value = result.boxed;
+    break;
+  }
   case CType::Fn:
     result.boxed = llvm_vm_val_void(backend);
     result.value = result.boxed;

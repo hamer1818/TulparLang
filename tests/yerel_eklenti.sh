@@ -10,7 +10,10 @@
 # kopyasi, Tulpar'i geri cagirma) bir kez gecirir; FFI v1 dilimi (2026-11-26):
 # opak `ptr` (C'de yasayan tampon) ve `fn(...)` geri cagrisi — GERCEK libc
 # qsort Tulpar karsilastiricisiyla siralar, baglam isaretcili cb, str/f32/
-# bool argumanli cb, NULL cb, geri cagrida throw (C2 siniri, kilit 0).
+# bool argumanli cb, NULL cb, geri cagrida throw (C2 siniri, kilit 0); K304
+# struct DEGER gecisi — her C ABI sinifindan bir struct (8 bayt INTEGER, SSE+SSE,
+# 4xf32, karisik, 24 bayt byval/sret, bool alanli, tek double, karisik liste,
+# C'nin degistirdigi kopya) arguman ve donus olarak.
 #
 # POZITIF KONTROLLER (kapinin olctugunu gosteren yollar — her biri KIRMIZI
 # gormek zorunda; yesil gorurse kapi duser):
@@ -269,6 +272,37 @@ geri_red cb_ifade "geri cagri parametresi bir Tulpar fonksiyonunun adi" \
 func f(x) { return x; }
 var g = 3;
 print(ornek_uygula_f(g + 1, 1));'
+# K304 struct deger gecisi: bilinmeyen / kutulu struct adiyla hata.
+mkdir -p "$TMP/st_ext"
+cp -r "$TMP/ext/." "$TMP/st_ext/"
+python3 - "$TMP/st_ext/tulpar-ext.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p))
+m["functions"].append({"name": "st_yok", "symbol": "ornek_st_tek", "params": ["t: struct YokBoyle"], "returns": "f64"})
+m["functions"].append({"name": "st_kutulu", "symbol": "ornek_st_tek", "params": ["t: struct Kutulu"], "returns": "f64"})
+json.dump(m, open(p, "w"))
+PYEOF
+st_red() {  # st_red <ad> <beklenen> <kaynak>
+  printf '%s\n' "$3" > "$TMP/$1.tpr"
+  (cd "$TMP" && "$TUL" --no-typecheck --ext st_ext "$1.tpr") >"$TMP/$1.out" 2>&1; local rc=$?
+  if [ $rc -ne 0 ] && grep -qF -- "$2" "$TMP/$1.out"; then gecti "struct deger: $1 reddedildi"
+  else dustu "struct deger: $1 (rc=$rc) beklenen '$2'"; head -6 "$TMP/$1.out" | sed 's/^/         /'; fi
+}
+st_red st_bilinmeyen "'struct YokBoyle' kutusuz bir struct degil" \
+'import "ornek";
+print(st_yok(0));'
+st_red st_kutulu_tip "'struct Kutulu' kutusuz bir struct degil" \
+'import "ornek";
+struct Kutulu { str ad; }
+Kutulu k;
+print(st_kutulu(k));'
+# Bolumlu emit ve -O0: struct ABI ayni cikti.
+for kip in "TULPAR_AOT_BOLUM=4" "TULPAR_AOT_OPT=0"; do
+  (cd "$TMP" && env $kip "$TUL" build --ext ext kullan.tpr k_$$ >/dev/null 2>&1 && ./k_$$ >"$TMP/okip" 2>&1); rc=$?
+  if [ $rc -eq 0 ] && diff -q "$beklenen" "$TMP/okip" >/dev/null; then gecti "$kip: cikti ayni (struct ABI dahil)"
+  else dustu "$kip: cikti farkli (rc=$rc)"; diff "$beklenen" "$TMP/okip" | head -6 | sed 's/^/         /'; fi
+done
+
 mkdir -p "$TMP/bozuk_cb"
 printf '{"tulpar_ext":1,"name":"bozuk_cb","functions":[{"name":"bc_f","params":["f: fn(i32): str"]}]}' > "$TMP/bozuk_cb/tulpar-ext.json"
 (cd "$TMP" && "$TUL" --ext bozuk_cb sade.tpr) >"$TMP/p5b" 2>&1; rc=$?

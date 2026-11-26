@@ -24,3 +24,7 @@ BgRenk bg_renk(enum BgRenkE r) { return r == BG_MAVI ? BG_YESIL : BG_KIRMIZI; }
 int bg_dizi_topla(const int dizi[], int n) { int s = 0; for (int i = 0; i < n; i++) s += dizi[i]; return s; }
 int bg_yazdir(const char *fmt, ...) { (void)fmt; return 0; }
 int bg_int_oku(const void *p) { return *(const int *)p; }
+BgNokta bg_nokta(int x, int y) { BgNokta p = {x, y}; return p; }
+BgNokta bg_nokta_kaydir(BgNokta p, int dx) { p.x += dx; return p; }
+double bg_etiket(struct BgEtiket e, BgEtiketT f) { return e.u * f.v - e.v * f.u; }
+int bg_kisa(BgKisa k) { return k.a + k.b; }

@@ -47,7 +47,31 @@ Neden: 2026-09-20'de motor derleyiciden çıkarıldı (#333, kullanıcı kararı
 | `void` | — | — | yalnız dönüş |
 | `ptr` | `void *` | int (adres; NULL = 0) | **opak** — C'de yaşayan nesneyi tutup geri vermek için; aritmetik anlamsız. wasm32'de 32 bit (`inttoptr` hedef genişliğini izler) |
 | `cbool` | C `bool` / `_Bool` | bool | **i8 ABI** — `bool` (C `int`) ile karıştırma: `_Bool` dönüşünün üst bitleri tanımsız; `zeroext i1` (clang ile aynı). SDL3 her yerde bunu kullanır |
+| `struct Ad` | C struct **değer** olarak (K304) | kutusuz Tulpar struct'ı (`@repr(C)`) | parametre + dönüş; aşağıda "Struct değer geçişi" |
 | `fn(<tipler>): <tip>` | C fonksiyon işaretçisi | fonksiyon **adı** ya da `0` | yalnız parametre; aşağıda "Geri çağrı" |
+
+### Struct değer geçişi (`struct Ad`, K304, 2026-11-26)
+
+`"p: struct Nokta"` / `"returns": "struct Nokta"` — `Nokta` programda ya da eklentinin
+modülünde tanımlı **kutusuz** bir struct (int/float/bool/f32/i32 alanlı); C ile aynı yerleşim
+için `@repr(C)`. LLVM C ABI sınıflandırması yapmaz (o clang'ın işi), bu yüzden
+`ext_struct_abi` (llvm_backend.cpp) hedef kuralını elle uygular:
+
+| hedef | ≤ 16 bayt | > 16 bayt |
+|---|---|---|
+| x86-64 SysV (Linux/macOS) | 8 baytlık parçalar: hepsi float/double → SSE (`double`, `<2 x float>`), değilse INTEGER (`iN`); her parça ayrı argüman | `byval` argüman / `sret` dönüş |
+| AArch64 (AAPCS64, Apple) | HFA (1–4 aynı float tipi) → `[N x T]`; değilse `i64` / `[2 x i64]` | kopyanın işaretçisi / `sret` |
+| Windows x64 | boy 1/2/4/8 → `iN`; değilse kopyanın işaretçisi | kopya / `sret` |
+
+Dönen struct kutulu nesne olarak gelir; `Nokta n = f()` mevcut kutudan-açma yolundan geçer.
+Dolaylı geçişte C'ye **kopya** verilir — C değiştirse de Tulpar değeri bozulmaz. Android'de
+(tek IR'den iki ABI) ve web'de derleme hatası. Kapı `tests/yerel_eklenti.sh`: her ABI
+sınıfından bir struct (8 bayt INTEGER, SSE+SSE, 4×f32, karışık, 24 bayt byval/sret, bool
+alanlı, tek double, karışık uzun liste); sabotaj (SSE'yi INTEGER saymak) kapıyı kırmızı yapar.
+`tulpar bindgen` değerle geçen struct'ları ayrıştırır, `@repr(C)` tanımlarını `<ad>.tpr`
+modülüne yazar (`"modules"`), temsil edilemeyen alanı (char/short, dizi, bit alanı, işaretçi,
+iç içe struct) gerekçesiyle raporlar — gerçek libc `div`/`ldiv`/`lldiv` ile ölçüldü.
+Geri çağrıda struct yok.
 
 ### Geri çağrı (`fn(...)`, 2026-11-26)
 
@@ -314,8 +338,8 @@ dönüş i32 (2^31 üstü negatif görünür); `const char *` → `str`, yazıla
 
 ## Sınırlar
 
-- Struct değer geçişi yok (K304): bir C struct'ı `ptr` ile tutulur, alanlarına C
-  yardımcılarıyla erişilir ya da `tulpar bindgen` (aşağıda) erişimcileri üretir.
+- Struct değer geçişi (K304) Android ve web'de yok; geri çağrı parametresinde yok. Alanı
+  temsil edilemeyen (char/short/dizi) struct'lar `ptr` ile.
 - Geri çağrı (K305) yalnız **adlandırılmış** fonksiyonla: değişkende tutulan kapanış
   (yakalanan ortamıyla) C işaretçisine çevrilemez.
 - Windows: mekanizma derlenir ve kapı CI'da koşar; motorun bildiriminde

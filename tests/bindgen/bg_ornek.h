@@ -38,10 +38,17 @@ BG_API bool bg_degil(bool b);
 BG_API BgRenk bg_renk(enum BgRenkE r);
 BG_API int bg_dizi_topla(const int dizi[], int n);
 BG_API int bg_int_oku(const void *p);
+/* K304: struct DEGER olarak */
+struct BgEtiket { double u; double v; };
+typedef struct BgEtiket BgEtiketT;
+BG_API BgNokta bg_nokta_kaydir(BgNokta p, int dx);
+BG_API double bg_etiket(struct BgEtiket e, BgEtiketT f);
+typedef struct { short a; int b; } BgKisa;
 
 /* atlanmasi gerekenler */
 BG_API int bg_yazdir(const char *fmt, ...);
 BG_API BgNokta bg_nokta(int x, int y);
+BG_API int bg_kisa(BgKisa k);
 BG_API long double bg_hassas(void);
 static inline int bg_satir_ici(int x) { return x + 1; }
 BG_API int (*bg_isaretci_donduren(void))(int);

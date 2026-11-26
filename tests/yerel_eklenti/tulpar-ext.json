@@ -37,7 +37,18 @@
     {"name": "ornek_uygula_f", "params": ["f: fn(f64): f64", "x: f64"], "returns": "f64", "doc": "f(x) + f(2x)."},
     {"name": "ornek_uygula_s", "params": ["f: fn(str): i64", "s: str"], "returns": "i64", "doc": "f(s) * 10."},
     {"name": "ornek_uygula_32", "params": ["fn(i32, f32, bool): i32", "a: i32"], "returns": "i32", "doc": "f(a, 0.5, 1); NULL ise -1."},
-    {"name": "ornek_cb_koru", "params": ["f: fn(i64): i64", "x: i64"], "returns": "i64", "doc": "Kilit al, f(x), kilidi birak."}
+    {"name": "ornek_cb_koru", "params": ["f: fn(i64): i64", "x: i64"], "returns": "i64", "doc": "Kilit al, f(x), kilidi birak."},
+    {"name": "ornek_st_topla", "params": ["p: struct Ikii", "q: struct Ikii"], "returns": "struct Ikii", "doc": "K304: 8 bayt INTEGER."},
+    {"name": "ornek_st_olcek", "params": ["v: struct Ikid", "k: f64"], "returns": "struct Ikid", "doc": "K304: SSE+SSE / HFA2."},
+    {"name": "ornek_st_dort_toplam", "params": ["v: struct Dortf"], "returns": "f32", "doc": "K304: 4 x f32."},
+    {"name": "ornek_st_dort_ters", "params": ["v: struct Dortf"], "returns": "struct Dortf", "doc": "K304: 4 x f32 donus."},
+    {"name": "ornek_st_karisik", "params": ["k: struct Karisik"], "returns": "struct Karisik", "doc": "K304: karisik parca."},
+    {"name": "ornek_st_capraz", "params": ["a: struct Ucd", "b: struct Ucd"], "returns": "struct Ucd", "doc": "K304: 24 bayt byval/sret."},
+    {"name": "ornek_st_kucuk", "params": ["k: struct Kucuk"], "returns": "i32", "doc": "K304: bool alanli."},
+    {"name": "ornek_st_kucuk_yap", "params": ["n: i32"], "returns": "struct Kucuk", "doc": "K304: bool alanli donus."},
+    {"name": "ornek_st_tek", "params": ["t: struct Tekd"], "returns": "struct Tekd", "doc": "K304: tek double."},
+    {"name": "ornek_st_cok", "params": ["x: i64", "a: struct Ucd", "y: f64", "b: struct Ikid", "z: i32", "k: struct Karisik"], "returns": "f64", "doc": "K304: karisik liste."},
+    {"name": "ornek_st_boz", "params": ["a: struct Ucd"], "returns": "f64", "doc": "K304: C kopyayi degistirir."}
   ],
   "link": {
     "linux":   {"lib_dirs": ["lib"], "libs": ["ornek"]},
