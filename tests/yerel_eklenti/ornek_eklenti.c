@@ -20,6 +20,7 @@
 void *tulpar_ext_func_lookup(const char *name, int *arity);
 int tulpar_ext_call_f64(void *fn, int arity, const double *args, int argc);   /* sonuc atilir */
 double tulpar_ext_eval_f64(void *fn, int arity, const double *args, int argc); /* sonuc double */
+int tulpar_ext_threw(void); /* son eval throw ile mi bitti (1/0) */
 
 int64_t ornek_topla(int64_t a, int64_t b) { return a + b; }
 int32_t ornek_kare32(int32_t x) { return x * x; }
@@ -61,6 +62,48 @@ double ornek_geri_cagir(const char *fn, double x) {
   return tulpar_ext_eval_f64(p, arity, &x, 1);
 }
 
+/* EXT SINIRI (RFC C2, 2026-11-26): "kilit al, Tulpar'i cagir, kilidi birak".
+ * Geri cagrilan fonksiyon throw ederse runtime onu SINIRDA yakalar: burada
+ * hata kodu doner, temizlik (g_kilit = 0) KOSAR, istisna bu fonksiyon
+ * Tulpar'a donunce yeniden firlar. Eskiden throw, disarida bir Tulpar try'i
+ * varsa bu cercevenin USTUNDEN longjmp yapiyordu: kilit takili kaliyor, kod
+ * hic yazilmiyordu (olculdu: kilit 1, kod 99). */
+static int64_t g_kilit = 0;
+static int64_t g_son_kod = 99;
+int64_t ornek_koru(const char *fn, double x) {
+  int ar = -1;
+  void *p = tulpar_ext_func_lookup(fn, &ar);
+  g_kilit = 1;
+  g_son_kod = tulpar_ext_call_f64(p, ar, &x, 1);
+  g_kilit = 0;
+  return g_son_kod;
+}
+/* eval yolu: throw -> 0.0, ayirt etmek icin tulpar_ext_threw(). */
+double ornek_koru_eval(const char *fn, double x) {
+  int ar = -1;
+  void *p = tulpar_ext_func_lookup(fn, &ar);
+  g_kilit = 1;
+  double r = tulpar_ext_eval_f64(p, ar, &x, 1);
+  g_son_kod = tulpar_ext_threw() ? -1 : 1;
+  g_kilit = 0;
+  return r;
+}
+/* Iki kanca art arda, ikisi de atabilir: kod = rc1 * 10 + rc2. Tulpar'a ILK
+ * istisna firlar. */
+int64_t ornek_iki_kanca(const char *a, const char *b, double x) {
+  int ar1 = -1, ar2 = -1;
+  void *p1 = tulpar_ext_func_lookup(a, &ar1);
+  void *p2 = tulpar_ext_func_lookup(b, &ar2);
+  g_kilit = 1;
+  int r1 = tulpar_ext_call_f64(p1, ar1, &x, 1);
+  int r2 = tulpar_ext_call_f64(p2, ar2, &x, 1);
+  g_son_kod = (int64_t)r1 * 10 + r2;
+  g_kilit = 0;
+  return g_son_kod;
+}
+int64_t ornek_kilit(void) { return g_kilit; }
+int64_t ornek_son_kod(void) { return g_son_kod; }
+
 /* Calisan programin gordugu TULPAR_EXT_PATH (yoksa NULL -> Tulpar'da "").
  * Bir eklentinin kendi kaynaklarini (font, doku) calisma aninda nasil
  * buldugunun kalibi: `tulpar <dosya>` eklenti dizinlerini oraya yazar. */
@@ -88,6 +131,11 @@ static double (*const k_on)(int64_t, double, int64_t, double, int32_t, double, i
                             int32_t, double) = ornek_on;
 static double (*const k_geri)(const char *, double) = ornek_geri_cagir;
 static const char *(*const k_ext_yolu)(void) = ornek_ext_yolu;
+static int64_t (*const k_koru)(const char *, double) = ornek_koru;
+static double (*const k_koru_eval)(const char *, double) = ornek_koru_eval;
+static int64_t (*const k_iki)(const char *, const char *, double) = ornek_iki_kanca;
+static int64_t (*const k_kilit)(void) = ornek_kilit;
+static int64_t (*const k_son_kod)(void) = ornek_son_kod;
 /* Kullanilmayan-degisken uyarisi olmasin diye tek bir tutucu. */
 const void *ornek_abi_kilidi[] = {(const void *)&k_topla, (const void *)&k_kare32,
                                    (const void *)&k_orta, (const void *)&k_yarim,
@@ -95,4 +143,7 @@ const void *ornek_abi_kilidi[] = {(const void *)&k_topla, (const void *)&k_kare3
                                    (const void *)&k_selam, (const void *)&k_uzunluk,
                                    (const void *)&k_bos, (const void *)&k_artir,
                                    (const void *)&k_sayac, (const void *)&k_on,
-                                   (const void *)&k_geri, (const void *)&k_ext_yolu};
+                                   (const void *)&k_geri, (const void *)&k_ext_yolu,
+                                   (const void *)&k_koru, (const void *)&k_koru_eval,
+                                   (const void *)&k_iki, (const void *)&k_kilit,
+                                   (const void *)&k_son_kod};

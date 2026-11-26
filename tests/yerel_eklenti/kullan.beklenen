@@ -15,3 +15,9 @@ geri 42 -1
 dongu 499500
 nokta 1 2 cagri 1
 Merhaba, Tulpar!
+sinir kanca hatasi 7 | kod -1 kilit 0
+eval kanca hatasi 8 | kod -1 kilit 0
+iki kanca hatasi 1 | kod -11 kilit 0
+ic 5 kod 1
+frame kanca hatasi 9 | kilit 0
+sonra 10

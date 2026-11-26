@@ -111,6 +111,22 @@ T
 out=$(cd "$TMP" && "$TUL" --ext ext golge.tpr 2>&1 | tail -1)
 [ "$out" = "golge 99" ] && gecti "kullanici tanimi eklenti fonksiyonunu golgeler" || dustu "golgeleme: '$out' (beklenen 'golge 99')"
 
+# 6b) Ext siniri (RFC C2), DISARIDA try YOKKEN: davranis degismedi — geri
+#     cagrilan fonksiyondaki yakalanmayan throw mesaj basip surec 1 ile biter
+#     (longjmp yok). try VARKEN olan yol kullan.tpr'de (sinir/eval/iki/@frame).
+cat > "$TMP/sinir0.tpr" <<'T'
+import "ornek";
+func atar(float x) { throw "yakalanmayan " + toString(x); }
+ornek_koru("atar", 3);
+print("C2 YANLIS: surec devam etti");
+T
+(cd "$TMP" && "$TUL" --ext ext sinir0.tpr) >"$TMP/s0.out" 2>"$TMP/s0.err"; rc=$?
+if [ $rc -eq 1 ] && grep -q "Uncaught Exception: yakalanmayan 3" "$TMP/s0.err" && ! grep -q "C2 YANLIS" "$TMP/s0.out"; then
+  gecti "ext siniri, disarida try yok: yakalanmayan throw eskisi gibi mesaj + cikis 1"
+else
+  dustu "ext siniri, disarida try yok (rc=$rc)"; tail -5 "$TMP/s0.err" "$TMP/s0.out" | sed 's/^/         /'
+fi
+
 # 7) Eklentiyi KULLANMAYAN program ona baglanmaz: link bolumu bozuk bir
 #    eklenti yukluyken bile derlenir.
 mkdir -p "$TMP/kullanilmayan"

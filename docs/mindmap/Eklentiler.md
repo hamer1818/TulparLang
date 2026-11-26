@@ -126,6 +126,40 @@ HUD fontunu oradaki girdilerde arar — tulpar-engine Tuzaklar 8cp).
   bir olay-kancası tablosunun alanına birebir uyar (araya katman girmesin —
   ölçüm aşağıda).
 
+## İstisna sınırı (RFC C2, 2026-11-26)
+
+C'nin geri çağırdığı Tulpar fonksiyonu `throw` ederse istisna **C yığın
+çerçevelerinin üzerinden atlamaz**. Eskiden dışarıda bir Tulpar `try`'ı varsa
+`aot_throw` oraya `longjmp` yapıyordu: aradaki C çerçevesi hiç bitmiyordu
+(kilit takılı kalıyor, dönüş kodu hiç yazılmıyordu — `tests/yerel_eklenti.sh`
+ile ölçüldü: kilit 1, kod 99). Şimdi:
+
+| durum | davranış |
+|---|---|
+| dışarıda `try` **yok** (try derinliği 0) | değişmedi: `Uncaught Exception` + çıkış 1, longjmp yok |
+| dışarıda `try` **var** | sınırda yakalanır, istisna kalıcıya kopyalanır; `tulpar_ext_call_f64` **-1**, `tulpar_ext_eval_f64` **0.0** + `tulpar_ext_threw() == 1`; C temizliğini yapıp döner; C fonksiyonu Tulpar'a döndüğü anda istisna **yeniden fırlar** |
+| aynı C çağrısında iki kanca atar | ilk istisna kazanır; C ikisinin de kodunu görür |
+
+Yeniden fırlatma codegen'de: her eklenti çağrısından sonra süreç geneli
+`tulpar_ext_pending_any` sayacı okunur (tek monotonic yükleme + dallanma),
+sıfır değilse `aot_ext_rethrow_pending()` kendi ipliğine bakar. Geri çağrının
+içinde kapatılmadan kalan checkpoint yuvaları sınırda bırakılır.
+
+Maliyet (2026-11-26, Ryzen 7 9800X3D, `taskset -c 10`, boş kanca, 10M çağrı):
+`try` dışında **2.15 → 2.4–2.6 ns** (yalnız try derinliği okuması), `try`
+içinde **~5.3 ns** (`setjmp`, ayrı `noinline` yavaş yolda — tek fonksiyonda
+yazılınca try dışı da 3.70 ns oluyordu, setjmp'li yardımcı satır içi
+açılamıyor). Tulpar → C çağrısı değişmedi (0.78 ns). `eh_cur` sabitle
+ilklenir (`nullptr` = `eh_main`): `= &eh_main` her erişime TLS init bekçisi
+koyuyordu.
+
+Kapı: `tests/yerel_eklenti.sh` — `kullan.tpr`'de call/eval/iki kanca/ iç
+yakalama/`@frame` yolları, ayrıca try yokken eski davranış. Pozitif kontrol:
+koruma devre dışı bırakılınca kapı kırmızı (kod 99, kilit 1).
+
+Açık (RFC açık soru 3): C kütüphanesi hata kodunu işleyemiyorsa süreci
+sonlandırma seçeneği (ext tanımında bir bayrak) yok.
+
 ## ABI uyumu kimde
 
 Derleyici statik arşivde tip göremez: bildirim `i32` derken C `double`

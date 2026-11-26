@@ -13,6 +13,21 @@ tag still works;
 
 ## [Unreleased]
 
+### Düzeltildi — eklenti sınırı: `throw` C yığın çerçevelerinin üzerinden atlamıyor (RFC C2)
+
+- **Açık:** C'nin geri çağırdığı Tulpar fonksiyonu (`tulpar_ext_call_f64` / `tulpar_ext_eval_f64`) `throw`
+  edince, dışarıda bir Tulpar `try`'ı varsa istisna aradaki C çerçevesinin **üzerinden** `longjmp`
+  yapıyordu: C'nin temizliği (kilidi bırakma, sayaç, free) hiç koşmuyordu. Ölçüldü: kilit 1, dönüş kodu
+  hiç yazılmadı.
+- **Şimdi:** sınırda yakalanır, istisna kalıcıya kopyalanır, C hata kodu görür (`call_f64` → **-1**,
+  `eval_f64` → 0.0 + yeni `tulpar_ext_threw()`), temizliğini yapıp döner; C fonksiyonu Tulpar'a döndüğü
+  anda istisna **yeniden fırlar**. İki kanca atarsa ilki kazanır. Dışarıda `try` yokken davranış aynı
+  (mesaj + çıkış 1).
+- Maliyet (boş kanca, 10M çağrı): `try` dışında 2.15 → 2.4–2.6 ns, `try` içinde ~5.3 ns (`setjmp`);
+  Tulpar → C çağrısı değişmedi. Bunun için `eh_cur` sabitle ilkleniyor (TLS init bekçisi kalktı).
+- Kapı `tests/yerel_eklenti.sh` (call / eval / iki kanca / iç yakalama / `@frame`, try yokken eski
+  davranış); koruma devre dışı bırakılınca kırmızı.
+
 ### Düzeltildi — slowloris: wings istek okuma süresi sınırı + bloklamayan evented okuma
 
 - **Açık:** `http_recv_request` recv'i sınırsız bekliyordu. Başlığı 200 ms'de bir bayt damlatan

@@ -4,6 +4,18 @@ import "ornek";
 
 func ikiye_kat(float x): float { return x * 2; }
 
+// Ext siniri (RFC C2): C'nin geri cagirdigi fonksiyonlar.
+func atar(float x) { throw "kanca hatasi " + toString(x); }
+func atar_iki(float x) { throw "ikinci hata"; }
+func kendi_yakalar(float x): float {
+    try { throw "ic"; } catch (e) { return x + 1; }
+    return 0;
+}
+@frame func cerceveli(): int {
+    ornek_koru("atar", 9);
+    return 1;
+}
+
 func main() {
     // i64: tipli (ham deger, kutusuz) ve dinamik (kutulu, float -> kirpma)
     int a = 40;
@@ -43,5 +55,37 @@ func main() {
     Nokta m = orta_nokta(nokta(0.0, 0.0), nokta(2.0, 4.0));
     print("nokta " + toString(m.x) + " " + toString(m.y) + " cagri " + toString(ornek_cagri_sayisi));
     print(selamla("Tulpar"));
+    // Ext siniri (RFC C2): throw C cercevesinin ustunden atlamaz — C hata
+    // kodunu gorur, temizligini yapar (kilit 0), istisna sonra burada firlar.
+    try {
+        ornek_koru("atar", 7);
+        print("C2 YANLIS: istisna yeniden firlamadi");
+    } catch (e) {
+        print("sinir " + toString(e) + " | kod " + toString(ornek_son_kod()) + " kilit " + toString(ornek_kilit()));
+    }
+    try {
+        float v = ornek_koru_eval("atar", 8);
+        print("C2 YANLIS: eval yolu firlamadi " + toString(v));
+    } catch (e) {
+        print("eval " + toString(e) + " | kod " + toString(ornek_son_kod()) + " kilit " + toString(ornek_kilit()));
+    }
+    try {
+        ornek_iki_kanca("atar", "atar_iki", 1);
+        print("C2 YANLIS: iki kanca");
+    } catch (e) {
+        print("iki " + toString(e) + " | kod " + toString(ornek_son_kod()) + " kilit " + toString(ornek_kilit()));
+    }
+    try {
+        print("ic " + toString(ornek_koru_eval("kendi_yakalar", 4)) + " kod " + toString(ornek_son_kod()));
+    } catch (e) {
+        print("C2 YANLIS: ic yakalama disari sizdi " + toString(e));
+    }
+    try {
+        cerceveli();
+        print("C2 YANLIS: @frame");
+    } catch (e) {
+        print("frame " + toString(e) + " | kilit " + toString(ornek_kilit()));
+    }
+    print("sonra " + toString(ornek_geri("ikiye_kat", 5)));
 }
 main();

@@ -1419,26 +1419,111 @@ __attribute__((always_inline)) static inline VMValue tulpar_ext_invoke_f64(void 
   }
   return r;
 }
+// ---- Ext siniri: throw C yigin cercevelerinin UZERINDEN atlamaz (RFC C2,
+// 2026-11-26). Eskiden C'den cagrilan bir Tulpar fonksiyonu icindeki throw,
+// disarida bir Tulpar `try`'i varsa oraya longjmp yapiyordu: aradaki C
+// cerceveleri hic bitmiyordu (kilidi birakma, sayaci geri alma, free — hepsi
+// atlaniyordu; tests/yerel_eklenti.sh'te olculdu). Simdi:
+//   * disarida yakalayici YOKSA (eh derinligi 0) hicbir sey degismez ve ek
+//     maliyet yok: yakalanmayan throw eskisi gibi mesaj + exit(1) — longjmp
+//     yok, C cercevesi atlanmaz, surec biter;
+//   * VARSA sinirda bir try cercevesi kurulur. Throw orada yakalanir, istisna
+//     kaliciya kopyalanir (@frame kalibi), C'ye hata kodu doner
+//     (tulpar_ext_call_f64 -> -1, tulpar_ext_eval_f64 -> 0.0 +
+//     tulpar_ext_threw() == 1) ve C fonksiyonu Tulpar'a dondugu anda codegen
+//     istisnayi YENIDEN FIRLATIR (aot_ext_rethrow_pending). Bekleyen istisna
+//     varken gelen yeni bir throw ilki kazanir.
+// tulpar_ext_pending_any: bekleyen istisnasi olan iplik sayisi (surec geneli).
+// Her ext cagrisindan sonra codegen yalniz bunu okur — sicak yolda bir yukleme
+// ve dallanma; sifir degilse aot_ext_rethrow_pending kendi ipligine bakar.
+extern "C" {
+int tulpar_ext_pending_any = 0;
+}
+static thread_local bool g_ext_has_pending = false;
+static thread_local VMValue g_ext_pending;
+static thread_local int g_ext_last_threw = 0;
+
+static int aot_eh_depth(void); // istisna bolumunde tanimli
+jmp_buf *aot_try_push(void);
+void aot_try_pop(void);
+VMValue aot_get_exception(void);
+
+// YAVAS YOL — yalniz disarida bir Tulpar try'i varken (eh derinligi > 0).
+// setjmp iceren fonksiyon satir ici acilamaz; o yuzden ayri ve noinline:
+// try disindaki sicak yol (olay kancalari) bu cagriyi ve setjmp'i hic odemez.
+// Olculdu (2026-11-26, Ryzen 7 9800X3D, bos kanca, 10M cagri): eski 2.15 ns;
+// tek fonksiyonda korumali 3.70 ns idi (setjmp'li yardimci her cagrida
+// cagriliyordu); bu ayrimla try disi eskiyle ayni, try ici ~+3 ns.
+// 1 = cagrildi (sonuc *out'ta), -1 = throw sinirda yakalandi.
+__attribute__((noinline)) static int tulpar_ext_guarded_slow(void *fn, int arity,
+                                                            const double *args,
+                                                            int argc, VMValue *out) {
+  jmp_buf *jb = aot_try_push();
+  if (!jb) { // try yigini dolu (mesaj basildi): korumasiz eski yol
+    *out = tulpar_ext_invoke_f64(fn, arity, args, argc);
+    return 1;
+  }
+  volatile int saved_top = g_arena_checkpoint_top;
+  if (setjmp(*jb) == 0) {
+    VMValue r = tulpar_ext_invoke_f64(fn, arity, args, argc);
+    aot_try_pop();
+    *out = r;
+    return 1;
+  }
+  // aot_throw cerceveyi zaten dusurdu. Geri cagrinin icinde kapatilmadan
+  // kalan checkpoint yuvalari birakilir (bellek dis checkpoint'le geri sarilir).
+  if (g_arena_checkpoint_top > saved_top) g_arena_checkpoint_top = saved_top;
+  VMValue ex = aot_persist(aot_get_exception());
+  if (!g_ext_has_pending) {
+    g_ext_pending = ex;
+    g_ext_has_pending = true;
+    __atomic_add_fetch(&tulpar_ext_pending_any, 1, __ATOMIC_RELAXED);
+  }
+  g_ext_last_threw = 1;
+  *out = VM_VOID();
+  return -1;
+}
+
+// Donus: 1 cagrildi, 0 cagrilmadi (fn NULL ya da tavan asildi), -1 Tulpar
+// fonksiyonu throw etti (istisna C fonksiyonu Tulpar'a donunce yeniden
+// firlatilir; C temizligini yapip donmeli).
 extern "C" int tulpar_ext_call_f64(void *fn, int arity, const double *args, int argc) {
   if (!fn) return 0;
   if (argc < 0 || !args) argc = 0;
   if (argc > TULPAR_CALL_MAX_ARGS || arity > TULPAR_CALL_MAX_ARGS) return 0;
+  if (__builtin_expect(aot_eh_depth() != 0, 0)) {
+    VMValue r;
+    return tulpar_ext_guarded_slow(fn, arity, args, argc, &r);
+  }
   (void)tulpar_ext_invoke_f64(fn, arity, args, argc);
   return 1;
 }
 
 // tulpar_ext_call_f64'un SONUCLU esi: donus sayi/bool ise double olarak
-// (bool 1/0), degilse — ya da cagrilamadiysa — 0.
+// (bool 1/0), degilse — ya da cagrilamadiysa, ya da throw ettiyse — 0.
+// Throw'u ayirt etmek icin hemen ardindan tulpar_ext_threw().
 extern "C" double tulpar_ext_eval_f64(void *fn, int arity, const double *args, int argc) {
+  if (__builtin_expect(g_ext_last_threw, 0)) g_ext_last_threw = 0;
   if (!fn) return 0.0;
   if (argc < 0 || !args) argc = 0;
   if (argc > TULPAR_CALL_MAX_ARGS || arity > TULPAR_CALL_MAX_ARGS) return 0.0;
-  const VMValue r = tulpar_ext_invoke_f64(fn, arity, args, argc);
+  VMValue r;
+  if (__builtin_expect(aot_eh_depth() != 0, 0)) {
+    if (tulpar_ext_guarded_slow(fn, arity, args, argc, &r) < 0) return 0.0;
+  } else {
+    r = tulpar_ext_invoke_f64(fn, arity, args, argc);
+  }
   if (IS_INT(r)) return (double)AS_INT(r);
   if (IS_FLOAT(r)) return AS_FLOAT(r);
   if (IS_BOOL(r)) return AS_BOOL(r) ? 1.0 : 0.0;
   return 0.0;
 }
+
+// Bu iplikte son tulpar_ext_eval_f64 throw ile mi bitti (eval'in 0.0'i
+// "sonuc 0" ile "throw" arasinda ayrim yapamaz). tulpar_ext_call_f64 bunu
+// donus degeriyle (-1) zaten soyler ve bayragi sifirlamaz — sicak yoldan bir
+// TLS yazmasi daha cikmasin diye.
+extern "C" int tulpar_ext_threw(void) { return g_ext_last_threw; }
 
 // DİZGİ SABİTİNİ BİR KEZ AYIR (interning).
 //
@@ -7283,20 +7368,29 @@ typedef struct EhContext {
 } EhContext;
 
 static thread_local EhContext eh_main = {};
-static thread_local EhContext *eh_cur = &eh_main; // active handler context
+// Active handler context. nullptr = eh_main: `= &eh_main` (the address of
+// another thread_local) is NOT a constant initializer, so the compiler put a
+// TLS init guard on every eh_cur access — measured 2026-11-26 as ~0.4 ns on
+// the ext-callback hot path (tulpar_ext_call_f64 reads the try depth). With a
+// constant nullptr the access is a plain %fs-relative load.
+static thread_local EhContext *eh_cur_ = nullptr;
+static inline EhContext *eh_ctx() {
+  EhContext *c = eh_cur_;
+  return c ? c : &eh_main;
+}
 
 // Returns pointer to jmp_buf for direct setjmp call
 jmp_buf *aot_try_push(void) {
-  if (eh_cur->depth >= EH_STACK_MAX) {
+  if (eh_ctx()->depth >= EH_STACK_MAX) {
     fprintf(stderr, "Exception handler stack overflow\n");
     return nullptr;
   }
-  return &eh_cur->stack[eh_cur->depth++];
+  return &eh_ctx()->stack[eh_ctx()->depth++];
 }
 
 void aot_try_pop(void) {
-  if (eh_cur->depth > 0)
-    eh_cur->depth--;
+  if (eh_ctx()->depth > 0)
+    eh_ctx()->depth--;
 }
 
 // Yakalanmayan istisna kancasi: async calisma zamani (runtime/tulpar_async.cpp)
@@ -7306,7 +7400,7 @@ static void (*g_uncaught_hook)(VMValue) = nullptr;
 extern "C" void aot_set_uncaught_hook(void (*hook)(VMValue)) { g_uncaught_hook = hook; }
 
 void aot_throw(VMValue exception) {
-  if (eh_cur->depth == 0) {
+  if (eh_ctx()->depth == 0) {
     fprintf(stderr, "Uncaught Exception: ");
     if (IS_STRING(exception)) {
       fprintf(stderr, "%s\n", AS_STRING(exception)->chars);
@@ -7318,10 +7412,10 @@ void aot_throw(VMValue exception) {
     if (g_uncaught_hook) g_uncaught_hook(exception);
     exit(1);
   }
-  eh_cur->exception = exception;
-  int target_depth = eh_cur->depth - 1;
-  eh_cur->depth = target_depth;
-  longjmp(eh_cur->stack[target_depth], 1);
+  eh_ctx()->exception = exception;
+  int target_depth = eh_ctx()->depth - 1;
+  eh_ctx()->depth = target_depth;
+  longjmp(eh_ctx()->stack[target_depth], 1);
 }
 
 // ---- Per-coroutine EH context management (used by runtime/tulpar_async.cpp) -
@@ -7335,8 +7429,8 @@ void *aot_eh_context_new(void) {
 }
 void aot_eh_context_free(void *ctx) { delete static_cast<EhContext *>(ctx); }
 void *aot_eh_context_swap(void *ctx) {
-  void *prev = eh_cur;
-  eh_cur = ctx ? static_cast<EhContext *>(ctx) : &eh_main;
+  void *prev = eh_ctx();
+  eh_cur_ = ctx ? static_cast<EhContext *>(ctx) : nullptr;
   return prev;
 }
 
@@ -7346,7 +7440,21 @@ void aot_throw_ptr(VMValue *exception_ptr) {
   aot_throw(*exception_ptr);
 }
 
-VMValue aot_get_exception(void) { return eh_cur->exception; }
+VMValue aot_get_exception(void) { return eh_ctx()->exception; }
+
+static int aot_eh_depth(void) { return eh_ctx()->depth; }
+
+// Codegen her ext cagrisindan sonra tulpar_ext_pending_any sifir degilse
+// cagirir: bu iplikte sinirda yakalanmis bir istisna varsa simdi — artik C
+// cerceveleri bitmis, Tulpar cercevesindeyiz — yeniden firlatir.
+extern "C" void aot_ext_rethrow_pending(void) {
+  if (!g_ext_has_pending) return;
+  VMValue ex = g_ext_pending;
+  g_ext_has_pending = false;
+  g_ext_pending = VM_VOID();
+  __atomic_sub_fetch(&tulpar_ext_pending_any, 1, __ATOMIC_RELAXED);
+  aot_throw(ex);
+}
 
 // ============================================
 // Time Functions

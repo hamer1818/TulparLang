@@ -6176,6 +6176,34 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
                             f->params[i]);
   LLVMValueRef r = LLVMBuildCall2(b, fty, fn, args, (unsigned)np,
                                   f->ret == CType::Void ? "" : "ext.ret");
+  // Ext siniri (RFC C2, 2026-11-26): C'nin geri cagirdigi bir Tulpar
+  // fonksiyonu throw ettiyse runtime istisnayi sinirda yakalayip bekletti; C
+  // artik dondu, burada yeniden firlatilir. Sicak yol: surec geneli sayacin
+  // tek (monotonic) yuklemesi + dallanma; cagri yalniz sayac sifir degilken.
+  {
+    LLVMValueRef pend = LLVMGetNamedGlobal(backend->module, "tulpar_ext_pending_any");
+    if (!pend) {
+      pend = LLVMAddGlobal(backend->module, backend->int32_type, "tulpar_ext_pending_any");
+      LLVMSetLinkage(pend, LLVMExternalLinkage);
+    }
+    LLVMValueRef pv = LLVMBuildLoad2(b, backend->int32_type, pend, "ext.pend");
+    LLVMSetOrdering(pv, LLVMAtomicOrderingMonotonic);
+    LLVMSetAlignment(pv, 4);
+    LLVMValueRef cur_fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(b));
+    LLVMBasicBlockRef rethrow_bb = append_bb(backend, cur_fn, "ext.rethrow");
+    LLVMBasicBlockRef cont_bb = append_bb(backend, cur_fn, "ext.cont");
+    LLVMBuildCondBr(b,
+                    LLVMBuildICmp(b, LLVMIntNE, pv, LLVMConstInt(backend->int32_type, 0, 0),
+                                  "ext.haspend"),
+                    rethrow_bb, cont_bb);
+    LLVMPositionBuilderAtEnd(b, rethrow_bb);
+    LLVMTypeRef rty = LLVMFunctionType(LLVMVoidTypeInContext(backend->context), nullptr, 0, 0);
+    LLVMValueRef rfn = LLVMGetNamedFunction(backend->module, "aot_ext_rethrow_pending");
+    if (!rfn) rfn = LLVMAddFunction(backend->module, "aot_ext_rethrow_pending", rty);
+    LLVMBuildCall2(b, rty, rfn, nullptr, 0, "");
+    LLVMBuildBr(b, cont_bb);
+    LLVMPositionBuilderAtEnd(b, cont_bb);
+  }
   switch (f->ret) {
   case CType::Void:
     result.boxed = llvm_vm_val_void(backend);
