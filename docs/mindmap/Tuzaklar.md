@@ -2528,6 +2528,19 @@ kipinde önbellek kapalı. Ve SMTP'de base64 gövde nokta doldurmayı hiç
 sınamıyordu (gövdede `.` ile başlayan satır olmuyor) — sabotaj yeşil kaldı,
 ham ileti senaryosu eklendi.
 
+## 7x. fork→exec penceresinde `/proc/<pid>` ÇOCUĞU değil, ebeveynin KOPYASINI gösterir (2026-11-26)
+`tests/arena_contract_smoke.py` çocuğun zirve RSS'ini `/proc/<pid>/status` VmHWM'i 5 ms'de bir
+yoklayarak ölçüyordu. `Popen` önce **fork** eder: exec tamamlanana kadar o pid'in belleği
+fork edilmiş **python**'un kopyası (~15 MB). Tek başına koşunca pencere mikrosaniye, yoklama onu
+hiç görmüyor; `build.sh suites` yükü altında pencere uzuyor ve ilk okuma python'un 15 MB'ını
+yakalıyor — VmHWM'in maksimumu alındığı için de değer orada kalıyordu. Sonuç: drop/restore kolları
+"15 MB", oran 3.8x < 4.0 eşik, kapı kırmızı — kodda hiçbir değişiklik yokken. (`getrusage`'ın
+`ru_maxrss`'i de aynı sebeple yanıltır: fork öncesi kopyayı sayar.) Düzeltme: yalnız
+`/proc/<pid>/exe` ikilinin kendisi olduktan sonraki okumalar sayılır.
+
+**Ders:** "yük altında bazen düşüyor" bir ölçüm hatasının imzası olabilir; HEAD'de ve eski
+sürümde aynı ölçümü yap (ikisi de aynı çıktı), sonra ölçeni ölç.
+
 ## 7w. ARC sayacı arenayı DURDURMAZ — "retain ettim" ≠ "yaşıyor" (2026-11-26)
 `tulpar_async.cpp` görevin argümanlarını ve promise değerini `arc_retain_vmvalue`
 ile tutuyordu ve bu "görev bitene kadar yaşar" gibi okunuyordu. Değil: AOT yolu

@@ -57,8 +57,17 @@ def peak_rss_kb(binary, env):
     son basarili okuma zirvedir."""
     p = subprocess.Popen([binary], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     hi = 0
+    real = os.path.realpath(binary)
     while p.poll() is None:
         try:
+            # exec'ten ONCE okunan deger cocugun degil, fork edilmis PYTHON
+            # kopyasinin VmHWM'i (~15 MB). Yuk altinda fork->exec penceresi
+            # uzuyor ve yoklama onu yakaliyordu: drop/restore kollari "15 MB"
+            # cikip oran esigin altina dusuyordu (2026-11-26, suites'te 3.8x;
+            # tek basina 90x+). Yalniz exec'ten sonraki okumalar sayilir.
+            if os.path.realpath("/proc/%d/exe" % p.pid) != real:
+                time.sleep(0.001)
+                continue
             with open("/proc/%d/status" % p.pid) as f:
                 for ln in f:
                     if ln.startswith("VmHWM:"):
