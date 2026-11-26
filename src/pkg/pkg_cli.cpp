@@ -1585,6 +1585,7 @@ int cmd_publish(int argc, char **argv) {
     // don't silently absorb a typo.
     std::string flag_registry;
     std::string flag_token;
+    std::string flag_sign;  // --sign <ozel.key>: Ed25519 imzasi (2026-11-26)
     bool dry_run = false;
     for (int i = 0; i < argc; i++) {
         std::string a = argv[i];
@@ -1592,13 +1593,15 @@ int cmd_publish(int argc, char **argv) {
             flag_registry = argv[++i];
         } else if (a == "--token" && i + 1 < argc) {
             flag_token = argv[++i];
+        } else if (a == "--sign" && i + 1 < argc) {
+            flag_sign = argv[++i];
         } else if (a == "--dry-run") {
             dry_run = true;
         } else {
             std::fprintf(stderr,
                          "tulpar pkg publish: unknown argument '%s'\n"
                          "Usage: tulpar pkg publish [--registry <url>] "
-                         "[--token <tok>] [--dry-run]\n",
+                         "[--token <tok>] [--sign <ozel.key>] [--dry-run]\n",
                          a.c_str());
             return 2;
         }
@@ -1665,6 +1668,25 @@ int cmd_publish(int argc, char **argv) {
                      ? "raw .tpr"
                      : ".tpkg bundle");
     std::fprintf(stdout, "  source size: %zu bytes\n", source.size());
+    // Imza, kayit defterinin `.../source` olarak SUNACAGI baytlarin (yani tam
+    // bu `source` dizgisinin) uzerine; kurulum `.../source.sig` ile dogrular.
+    std::string signature;
+    if (!flag_sign.empty()) {
+        bool kok = false;
+        std::string pem = slurp_binary(flag_sign, kok);
+        std::string serr, pub;
+        if (!kok) {
+            std::fprintf(stderr, "tulpar pkg publish: --sign '%s' okunamadi\n", flag_sign.c_str());
+            return 1;
+        }
+        if (!tulpar::imza_sign(source, pem, signature, serr) || !tulpar::imza_pub_of(pem, pub, serr)) {
+            std::fprintf(stderr, "tulpar pkg publish: imza: %s\n", serr.c_str());
+            return 1;
+        }
+        while (!signature.empty() && (signature.back() == '\n' || signature.back() == '\r'))
+            signature.pop_back();
+        std::fprintf(stdout, "  signed by:   %s\n", pub.c_str());
+    }
     std::fprintf(stdout, "  sha256:      %s\n", sha.c_str());
 
     // [release.binaries] URLs get downloaded verbatim by every consumer
@@ -1698,6 +1720,7 @@ int cmd_publish(int argc, char **argv) {
     cJSON_AddStringToObject(body_json, "sha256", sha.c_str());
     cJSON_AddStringToObject(body_json, "source", source.c_str());
     cJSON_AddStringToObject(body_json, "description", m.description.c_str());
+    if (!signature.empty()) cJSON_AddStringToObject(body_json, "signature", signature.c_str());
     if (!m.release_binaries.empty()) {
         cJSON *bins = cJSON_CreateObject();
         for (const auto &[platform, bin_url] : m.release_binaries) {
@@ -2064,6 +2087,7 @@ void print_usage() {
         "                           --registry <url>   override the registry root\n"
         "                           --token <tok>      override TULPAR_PUBLISH_TOKEN\n"
         "                           --dry-run          print the bundle plan, skip POST\n"
+        "                           --sign <key>       Ed25519-sign the source (served as .sig)\n"
         "  keygen <ozel.key>      Ed25519 key pair; prints the public key\n"
         "  sign <file> --key <k>  Write <file>.sig (Ed25519 detached signature)\n"
         "  verify <file> <sig> <ed25519:pub>   Check a signature\n"

@@ -40,6 +40,8 @@ tag still works;
 - `tulpar pkg keygen / sign / verify`. `tulpar.toml` `[trust] keys = ["ed25519:..."]` verilince
   `pkg install` her `url:`/kayıt defteri paketi için `<url>.sig`'i doğrular: geçersiz imza hata,
   eksik imza `require_signatures = true` ise hata. Doğrulayan anahtar `tulpar.lock` `[signatures]`'a yazılır.
+- `tulpar pkg publish --sign <ozel.key>`: kaynağı imzalayıp kayıt defterine `signature` olarak gönderir
+  (kayıt defteri `.../source.sig`'de sunar).
 
 ### Eklendi — profilleyici: `tulpar --profile`
 

@@ -59,8 +59,11 @@ Kullanıcı tarafı: `[trust] keys = ["ed25519:..."]` (+ `require_signatures = t
 **geçersiz imza her zaman hata**, eksik imza yalnız `require_signatures`'ta hata (değilse
 uyarı). Doğrulayan anahtar kilide (`[signatures]`) yazılır; önbellek isabeti yalnız o
 imzacı hâlâ güvenilirse — anahtar listeden çıkınca paket yeniden indirilip doğrulanır.
-`[trust]` yoksa `.sig` hiç istenmez (eski davranış). Kayıt defteri (`tulpar-be`) tarafı:
-`<source-url>.sig` sunmalı — o depo ayrı. Kapı: `tests/pkg_imza_audit.py`.
+`[trust]` yoksa `.sig` hiç istenmez (eski davranış). Yayın: `tulpar pkg publish --sign
+yazar.key` imzayı kayıt defterinin `.../source` olarak sunacağı baytların üzerine atar ve
+`signature` alanıyla gönderir; `tulpar-be` (ayrı depo, `registry/paket-imza` dalı) onu
+`.../source.sig`'de sunar. Kapılar: `tests/pkg_imza_audit.py` (yerel sunucu) ve
+`tulpar-be/tests/imza_smoke.sh` (gerçek kayıt defteri + bu istemci, uçtan uca).
 
 ## Analiz — `tulpar analyze` (K157, 2026-09-29)
 `src/cli/analyze_cmd.cpp`: derlemeden/linklemeden (i) dosyanın her üst düzey fonksiyonu için
