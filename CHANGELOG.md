@@ -13,6 +13,12 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — dil tanımı v0 (`docs/SPEC.md`), çalıştırılabilir
+
+- Sözcük yapısı (TR/EN anahtar kelimeler), tipler, struct/yöntem/enum/tuple/jenerik, işleç önceliği,
+  deyimler, istisnalar, `match`, kapanışlar, `Result`/`?`, modül çözümü, bellek ve eşzamanlılık özeti.
+  Her örnek `tests/spec_ornekleri.py` tarafından derlenip çıktısıyla karşılaştırılır.
+
 ### Eklendi — paket imzalama (Ed25519)
 
 - `tulpar pkg keygen / sign / verify`. `tulpar.toml` `[trust] keys = ["ed25519:..."]` verilince

@@ -944,6 +944,10 @@ if [ "$ACTION" = "suites" ]; then
     # kontrol olarak profilsiz ikilide kanca yok.
     kapi_kuyruk "Profilleyici kapisi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/profil_smoke.py
 
+    # docs/SPEC.md (2026-11-26) calistirilabilir: her ```tpr ornegi derlenir,
+    # cikti / hata beklentisiyle karsilastirilir — belge eskiyemez.
+    kapi_kuyruk "Dil tanimi ornekleri basarisiz!" python3 tests/spec_ornekleri.py
+
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
     # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz
     # halde geldi (EXDEV: /tmp tmpfs, hedef ~/.local/bin). Kapi agdan
