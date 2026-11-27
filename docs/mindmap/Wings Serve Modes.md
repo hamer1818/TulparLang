@@ -42,6 +42,13 @@ Eskiden `http_recv_request` recv'i **sınırsız** bekliyordu: başlığı damla
   (poll kümesi, yarım istek, çıktı kuyruğu iş parçacığına özel). Sayaçlar atomik, istek başına
   durum thread-local (`_request`, `_wings_deps`, `_wings_last_status` — sonuncusu bu turda
   `@thread_local` oldu; pool'da da bir iş parçacığı diğerinin durum kodunu logluyordu).
+  Birden çok döngüde her uyanış **tek** bağlantı kabul eder ve önce hazır istemcilerini
+  servis eder: kabul kuyruğunu boşaltan döngü, eşzamanlı 4 bağlantıyı tek başına kapıp seri
+  işliyordu (CI 4 vCPU: 4.0x; yerelde 32 çekirdekte döngüler hızlı uyandığı için görünmedi).
+  Kalan artık: 4 çekirdeğe sabitlenince yeni kabul edilmiş, verisi henüz gelmemiş bağlantısı
+  olan döngü ikinci kabulü de kazanabiliyor → 2.0x (17 koşuda hiç 3x yok). Bunu "verisi
+  gelmeyen bağlantı varken kabulden çekil" ile kapatmak sessiz 4 bağlantıyla kabulü slowloris
+  süresi boyunca dondururdu; bilerek yapılmadı.
 - Kapı `tests/wings_yazma_smoke.py`: yavaş okuyucu varken /ping hemen (kontrol: bloklu `listen()`
   kilitli), 8 MB eksiksiz + kapanış, pipelining sırası, 4 işçide CPU yoğun 4 istek 1.0x (kontrol:
   1 işçide 4.0x).

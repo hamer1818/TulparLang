@@ -3218,18 +3218,12 @@ func _wings_evented_loop(server) {
         json next_fds = [];
         push(next_fds, server);
         json closed = {};
+        bool listen_ready = false;
 
         for (int i = 0; i < length(ready); i++) {
             int idx = ready[i];
             if (idx == 0) {
-                // Listen socket fired — drain accept queue.
-                while (true) {
-                    int client = socket_accept(server);
-                    if (client < 0) {
-                        break;
-                    }
-                    push(next_fds, client);
-                }
+                listen_ready = true;
             } else {
                 int client_fd = fds[idx];
                 int keep = _wings_serve_one_request(client_fd);
@@ -3241,6 +3235,27 @@ func _wings_evented_loop(server) {
                     closed[toString(idx)] = 1;
                 } else {
                     push(next_fds, client_fd);
+                }
+            }
+        }
+
+        // Listen socket fired. One loop drains the accept queue. With several
+        // loops sharing the socket, each takes ONE connection, and only after
+        // serving its ready clients: draining would let the first loop to wake
+        // grab a whole burst (4 simultaneous connections) and serve it
+        // serially while the other loops sit idle — CI measured 4.0x for 4
+        // parallel CPU-heavy requests on 4 workers. poll() wakes every loop
+        // waiting on the listen socket, so the rest of the burst goes to the
+        // idle ones; a busy loop is not polling and does not compete.
+        if (listen_ready) {
+            while (true) {
+                int client = socket_accept(server);
+                if (client < 0) {
+                    break;
+                }
+                push(next_fds, client);
+                if (_wings_evented_workers > 1) {
+                    break;
                 }
             }
         }
