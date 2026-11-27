@@ -1,0 +1,113 @@
+// MUTEKS (Bellek Sozlesmesi v0, Kural 6.1 — 2026-11-27).
+//
+// Kural 6.1: paylasilan degisebilir duruma ya bir mutex altinda ya da
+// atomik yerlesiklerle erisilir; mutex altinda yapilan yazmalar ayni mutex'i
+// sonradan alan thread'e gorunur. Atomik yol tests/atomik.test.tpr'de; mutex
+// yolunun kalici testi YOKTU (RFC "Dogrulama" tablosu).
+//
+// Korumasiz `n = n + 1` (Kural 6.2) olculdu: 8 x 100 000'de artis dusuyor.
+// Bu paket onu ASSERT ETMEZ (kac artisin dusecegi makineye bagli, kapi
+// titrer); yalniz mutex'li yolun TAM saydigini ve mutex altinda okuyan bekleme
+// dongusunun bittigini sabitler.
+// SABOTAJ (2026-11-27, elle): _arttir'daki kilitler silinince ilk test uc
+// kosuda da KIRMIZI (400 000 yerine 67 012 / 72 546 / 74 353).
+// Calistir (depo kokunden): ./tulpar tests/muteks.test.tpr
+import "test";
+
+int g_kilit = 0;
+int g_sayac = 0;
+int g_bayrak = 0;
+json g_kayit = [];
+
+// Kritik bolge: oku -> runtime cagrisi -> yaz. Cagri saydam degil, derleyici
+// artisi donguden cikarip tek toplamaya indiremez (duz `g = g + 1` dongusu
+// O3'te `g += n`'e iner ve kilitsiz de "tam sayar" — kapi bos olcer; ilk
+// yazimda tam bu oldu). Sabotaj (kilitler silinince) artis DUSURMELI.
+json g_bos = [];
+func _arttir(int n): int {
+    for (int i = 0; i < n; i++) {
+        mutex_lock(g_kilit);
+        int v = g_sayac;
+        v = v + 1 + len(g_bos);
+        g_sayac = v;
+        mutex_unlock(g_kilit);
+    }
+    return n;
+}
+
+// Mutex altinda paylasilan json kabina yazma: eleman sayisi tam olmali ve
+// her eleman kendi thread'inin dizgisini tasimali (bariyer kaliciya kopyalar;
+// thread'in arenasi join'den sonra gider).
+func _kaydet(int k): int {
+    for (int i = 0; i < 200; i++) {
+        mutex_lock(g_kilit);
+        push(g_kayit, "t" + toString(k) + "-" + toString(i));
+        mutex_unlock(g_kilit);
+    }
+    return 0;
+}
+
+func _yayinla(int x): int {
+    mutex_lock(g_kilit);
+    g_bayrak = x;
+    mutex_unlock(g_kilit);
+    return 0;
+}
+
+func run_sekiz_thread_tam_sayar() {
+    g_kilit = mutex_create();
+    g_sayac = 0;
+    int[] th = [];
+    for (int k = 0; k < 8; k++) { push(th, thread_create(_arttir, 50000)); }
+    int toplam = 0;
+    for (int k = 0; k < 8; k++) { toplam = toplam + thread_join(th[k]); }
+    assert_eq_int(toplam, 400000);
+    assert_eq_int(g_sayac, 400000);   // hic artis dusmedi
+    mutex_destroy(g_kilit);
+}
+
+func run_mutex_altinda_kap_yazmasi() {
+    g_kilit = mutex_create();
+    g_kayit = [];
+    int[] th = [];
+    for (int k = 0; k < 4; k++) { push(th, thread_create(_kaydet, k)); }
+    for (int k = 0; k < 4; k++) { thread_join(th[k]); }
+    assert_eq_int(len(g_kayit), 800);
+    // Thread arenalari gitti; elemanlar kalici kopyalar olmali.
+    for (int i = 0; i < 100; i++) { json cop = {"c": "cop-" + toString(i)}; }
+    int t0 = 0;
+    int t3 = 0;
+    for (int i = 0; i < len(g_kayit); i++) {
+        str s = g_kayit[i];
+        if (startsWith(s, "t0-")) { t0 = t0 + 1; }
+        if (startsWith(s, "t3-")) { t3 = t3 + 1; }
+    }
+    assert_eq_int(t0, 200);
+    assert_eq_int(t3, 200);
+    mutex_destroy(g_kilit);
+}
+
+// Bekleme dongusu mutex altinda okur: yazma gorunur olmali, dongu bitmeli
+// (Kural 6.2'nin gorunurluk kaybinin mutex'li karsiligi).
+func run_mutex_altinda_bekleme_biter() {
+    g_kilit = mutex_create();
+    g_bayrak = 0;
+    var t = thread_create(_yayinla, 7);
+    int gorulen = 0;
+    int tur = 0;
+    while (gorulen == 0 && tur < 50000000) {
+        mutex_lock(g_kilit);
+        gorulen = g_bayrak;
+        mutex_unlock(g_kilit);
+        tur = tur + 1;
+    }
+    thread_join(t);
+    assert_eq_int(gorulen, 7);
+    mutex_destroy(g_kilit);
+}
+
+print("=== muteks (Kural 6.1) ===");
+test("8 thread x 50 000 mutex'li artis = 400 000", "run_sekiz_thread_tam_sayar");
+test("mutex altinda paylasilan kaba yazma tam ve kalici", "run_mutex_altinda_kap_yazmasi");
+test("mutex altinda okuyan bekleme dongusu biter", "run_mutex_altinda_bekleme_biter");
+test_summary();

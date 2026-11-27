@@ -2320,6 +2320,17 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   arena baytı, folded yığın (`tests/profil_smoke.py`).
 - ✅ **Dil tanımı v0 + paket imzası (2026-11-26).** `docs/SPEC.md` (örnekleri
   `tests/spec_ornekleri.py` koşar); `tulpar pkg keygen/sign/verify` + `[trust]`.
+- ✅ **Async bellek sözleşmesi (2026-11-27, #504/#505).** Coroutine'ler ayrı arena
+  bağlamında, coroutine'de açık nokta `await`'i aşamaz, `gather` argümanı kaçar, promise
+  bölgede (`promoted_promises`), async'ten ARC çıktı. `tests/async_arena.sh` (üç platform).
+- ✅ **İşçi thread belleği + Bellek RFC uyum testleri (2026-11-27).**
+  İşçi arenası ve 64 KB başlık tamponu thread bitince bırakılmıyordu: 1000 thread
+  +1 GB heap, `listen_async` 2000 yeni bağlantıda +2,2 GB (artık +125 KB). Thread
+  bitince kesin ölü bloklar bırakılıyor; işçinin ilk bloğu 4 KB (noktasız işçi ~5 KB
+  tutar). Eksik uyum testleri: Kural 4.2 (noktayı aşan yerel, zehir), 6.1
+  (`tests/muteks.test.tpr`), 6.4 (`tests/thread_bellek.test.tpr`), 7.1/7.2
+  (`tests/wings_baglanti_bellek_smoke.py`: throw → 500, sonra 200, heap düz).
+  `sarkan_isaretci` artık Windows'ta da koşuyor.
 - ✅ **Wings evented (2026-11-26).** Bloklamayan yazma, pipelining düzeltmesi,
   `evented_workers(n)` çok çekirdek; gecikme histogramı Wings Serve Modes.md'de.
 - ✅ **Result + `?` (2026-11-26).** `import "sonuc"` (ya da `"result"`):

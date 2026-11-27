@@ -2558,6 +2558,40 @@ geri sarma) serbest bırakmasını engellediğini varsayma — ikisinin kesişti
 Sarkan okuma geri sarılmış bellekte üzerine yazılana kadar **doğru** döner; görünür
 kılmak için belleği zehirle.
 
+## 7y. İkili "geçici/kalıcı" ayrımı üç ömrü taşımaz — işçi arenasını bırakmanın iki yanlış yolu (2026-11-27)
+Bariyer bir kabın geçici mi kalıcı mı olduğunu **bölge kümesine üyelikle** anlar
+(`obj_is_transient`); kontrol noktası yokken kurulan kap bölgeye girmez → kalıcı. Ana
+thread'de bu doğru. İşçi thread'in arenasını thread bitince bırakmak için iki deneme:
+1. **"İşçide dizgi yerleşmiş sayılmaz" bayrağı.** İşçide kurulan `{"ic": "ic-" + ...}`
+   kalıcı sayıldı, global'e **paylaşılarak** gitti, içindeki dizgi işçinin arenasındaydı:
+   12 elemandan 4'ü bozuk, normal kipte SIGSEGV.
+2. **İşçinin ömrünü örtük bir noktaya sarmak** (her şey geçici, her kaçış kopya). Global
+   yazmaları düzeldi, **suitlerin hepsi yeşildi** — ama noktanın dışında kurulup iç
+   noktalarda doldurulan işçi kabı (istekler arası önbellek) artık "geçici"ydi; iç noktanın
+   değerleri ona kopyalanmadan yazıldı, drop'ta sarktı: `0 0 <closure>`. Hiçbir paket bu
+   deseni işçide koşmuyordu.
+Doğrusu üç ömür (süreç > thread > nokta) ve "değer kabından kısa yaşıyorsa kopyala" — sıcak
+yolda tasarım değişikliği. Uygulanan: yalnız **kesin ölü** blokları bırak (uç en baştaysa
+tamamı, değilse ucun ötesi), işçinin ilk bloğu 4 KB. Desen kapısı:
+`tests/thread_bellek.test.tpr` (`run_isci_onbellegi`).
+
+**Ders:** bir belleği serbest bırakmadan önce "ona kim bakıyor olabilir" sorusunu
+bariyerin kendi tanımıyla sor; ve yeşil suite'e değil, değiştirdiğin semantiğin
+**sınanmayan** desenlerine bak.
+
+## 7z. Kontrol koşusu yeni arşivle bağlanınca boş yere yeşil (2026-11-27)
+İki sabotaj bu oturumda ilk denemede **yeşil** çıktı, ikisi de ölçümün değil kurgunun hatası:
+- **O3 kritik bölgeyi siler.** Kilitsiz `g = g + 1` döngüsü `g += n`'e iner; 8 thread
+  kilitsiz de 400 000 "sayıyor", muteks testi hiçbir şey ölçmüyordu. Kritik bölgeye saydam
+  olmayan bir runtime çağrısı (`len(g_bos)`) konunca kilitsiz sürüm ~70 000'de kaldı.
+- **Bağlayıcı çalışma dizinindeki arşivi alır.** Eski derleyici + eski
+  `libtulpar_runtime.a`'yı ayrı dizine koyup kontrolü **depo kökünden** koşunca program
+  kökteki YENİ `./libtulpar_runtime.a` ile bağlandı; "eski runtime" kontrolü yeşil verdi.
+  Kontrolü arşivle aynı dizinden koş.
+
+**Ders:** sabotaj yeşilse önce sabotajın gerçekten uygulandığını kanıtla (çıktı farkı,
+hangi arşiv), sonra kapıya güven. [[Testing]]
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
 

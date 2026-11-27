@@ -192,6 +192,26 @@ extern "C" void aot_runtime_error(const char *msg) {
 }
 
 static thread_local AOTArena *g_aot_string_arena = nullptr;
+// ISCI ARENASI (2026-11-27, Bellek RFC Kural 6.4 testi yazilirken olculdu).
+// `thread_create` iscisinin dizgi arenasi thread bitince HIC serbest
+// kalmiyordu: ilk dizgi 1 MB'lik blok ayiriyor, 1000 thread heap_in_use'u
+// 1 GB buyutuyordu. Wings `listen_async` HER BAGLANTI icin bir thread aciyor:
+// 2000 yeni baglanti +2,2 GB (RSS +18 MB).
+// Arenanin TAMAMI bırakılamaz: kontrol noktasi yokken iscide ayrilip kalici
+// bir yere (global, kalici kap) yazilan dizgi "yerlesmis" sayilir ve
+// KOPYALANMAZ (arena_str_settled) — o dizgi thread'den sonra da okunur.
+// Ilk deneme (iscinin omrunu ortuk bir noktaya sarip hepsini birakmak) bunu
+// kirdi: noktanin disinda kurulup ic noktalarda doldurulan isci kaplari
+// (istekler arasi onbellek) sarkti — `0 0 <closure>` (Tuzaklar 7y).
+// Simdi yalniz KESIN OLU olan birakiliyor (aot_isci_arenasini_kirp):
+//   * acik nokta yokken arena ucunun OTESINDEKI bloklar (geri sarilmis bos
+//     bloklar; icinde canli bayt olamaz);
+//   * uc arenanin EN BASINDAYSA (isci noktalar disinda hic ayirmamis —
+//     listen_async baglantisi boyle) arenanin tamami.
+// Ve iscinin ilk blogu 1 MB degil AOT_ARENA_ISCI_ILK_BLOK: noktalar disinda
+// biraz ayiran isci (canli olabilecegi icin) 1 MB yerine 4 KB tutar.
+static thread_local bool g_arena_isci = false;
+#define AOT_ARENA_ISCI_ILK_BLOK (4 * 1024)
 
 // ---------------------------------------------------------------------------
 // Dynamic-call dlsym cache.
@@ -893,9 +913,12 @@ void aot_runtime_init(void) {
 #endif
 }
 
+static AOTArenaBlock *aot_arena_new_block_exact(size_t size);
 static AOTArenaBlock *aot_arena_new_block(size_t min_size) {
-  size_t size =
-      min_size > AOT_ARENA_BLOCK_SIZE ? min_size : AOT_ARENA_BLOCK_SIZE;
+  return aot_arena_new_block_exact(
+      min_size > AOT_ARENA_BLOCK_SIZE ? min_size : AOT_ARENA_BLOCK_SIZE);
+}
+static AOTArenaBlock *aot_arena_new_block_exact(size_t size) {
   AOTArenaBlock *block = static_cast<AOTArenaBlock*>(malloc(sizeof(AOTArenaBlock)));
   if (!block)
     return nullptr;
@@ -919,7 +942,10 @@ static void aot_arena_init(void) {
   if (!g_aot_string_arena)
     return;
 
-  g_aot_string_arena->head = aot_arena_new_block(AOT_ARENA_BLOCK_SIZE);
+  // Isci: kucuk ilk blok (asilinca aot_arena_new_block yine 1 MB verir).
+  g_aot_string_arena->head = g_arena_isci
+      ? aot_arena_new_block_exact(AOT_ARENA_ISCI_ILK_BLOK)
+      : aot_arena_new_block(AOT_ARENA_BLOCK_SIZE);
   g_aot_string_arena->current = g_aot_string_arena->head;
   g_aot_string_arena->total_allocated = 0;
 }
@@ -2235,6 +2261,40 @@ extern "C" void aot_arena_ctx_swap(void *ctx) {
   c->region.swap(g_region);
   c->region_set.swap(g_region_set);
 }
+// Bir blok zincirini birak (zehirde: zehirle ve KARANTINAYA al — o bloklara
+// bakan sarkan isaretci 0xDB okusun).
+static void arena_zincirini_birak(AOTArenaBlock *b) {
+  const bool zehir = arena_zehir_acik();
+  while (b) {
+    AOTArenaBlock *next = b->next;
+    if (zehir) {
+      memset(b->memory, ARENA_ZEHIR_BAYT, b->size);
+    } else {
+      free(b->memory);
+      free(b);
+    }
+    b = next;
+  }
+}
+// aot_thread_entry'nin son adimi (sonuc kaliciya kopyalandiktan SONRA):
+// yalniz kesin olu bloklari birak (bkz. "ISCI ARENASI").
+static void aot_isci_arenasini_kirp(void) {
+  AOTArena *a = g_aot_string_arena;
+  if (!a || !a->current || g_arena_checkpoint_top != 0) return;
+  AOTArenaBlock *cur = a->current;
+  if (cur == a->head && cur->used == 0) {
+    // Uc en basta: arenada canli bayt yok.
+    arena_zincirini_birak(a->head);
+    if (!arena_zehir_acik()) free(a);
+    g_aot_string_arena = nullptr;
+    return;
+  }
+  // Ucun otesi olu.
+  AOTArenaBlock *kuyruk = cur->next;
+  cur->next = nullptr;
+  arena_zincirini_birak(kuyruk);
+}
+
 // Etkin baglamin acik kontrol noktasi sayisi (A.2 denetimi: coroutine'de
 // await aninda 0 olmali).
 extern "C" int aot_arena_checkpoint_depth(void) { return g_arena_checkpoint_top; }
@@ -8288,6 +8348,7 @@ static unsigned __stdcall aot_thread_entry(void *arg) {
 static void *aot_thread_entry(void *arg) {
 #endif
   AOTThreadRec *rec = (AOTThreadRec *)arg;
+  g_arena_isci = true;  // ilk arena blogu kucuk (bkz. "ISCI ARENASI")
 
   typedef void (*ThreadFunc)(VMValue *result, VMValue *arg);
   ThreadFunc func = (ThreadFunc)rec->func_ptr;
@@ -8317,6 +8378,8 @@ static void *aot_thread_entry(void *arg) {
       rec->result = aot_persist(result);
     }
   }
+  // Sonuc kalici kopyada; iscinin arenasinin kesin olu kismini birak.
+  aot_isci_arenasini_kirp();
   // Kayit BURADA serbest birakilmaz — `thread_join`/`thread_detach` yapar.
 #if PLATFORM_WINDOWS
   return 0;
@@ -9965,12 +10028,21 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
   int max_bytes = lim.max_bytes;
 
   static const int STATIC_CAP = HTTP_HEADER_CAP;
-  static thread_local char *static_buf = nullptr;
-  if (!static_buf) {
-    static_buf = (char *)malloc(STATIC_CAP + 1);
+  // Thread basina 64 KB baslik tamponu. Eskiden duz `thread_local char *`
+  // idi ve thread bitince BIRAKILMIYORDU: listen_async her baglanti icin bir
+  // thread aciyor, yani baglanti basina 64 KB (olculdu 2026-11-27: 3000 yeni
+  // baglantida heap +192 MB, thread arenasi duzeltildikten sonra kalan tek
+  // buyuk kalem). Tutucunun yikicisi thread cikisinda birakir.
+  struct BaslikTamponu {
+    char *p = nullptr;
+    ~BaslikTamponu() { free(p); }
+  };
+  static thread_local BaslikTamponu static_buf;
+  if (!static_buf.p) {
+    static_buf.p = (char *)malloc(STATIC_CAP + 1);
   }
-  char *buf = static_buf;
-  int cap = static_buf ? STATIC_CAP : 0;
+  char *buf = static_buf.p;
+  int cap = static_buf.p ? STATIC_CAP : 0;
   bool buf_owned = false;
   if (!buf) {
     // First-call malloc failed — fall back to per-call alloc capped at
