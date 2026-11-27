@@ -1,0 +1,25 @@
+=== TulparLang Basics Demo ===
+--- Variables ---
+Integer: 10
+Float: 3.14
+String: Tulpar
+Boolean: true
+
+--- Control Flow ---
+x is greater than 5
+Count: 0
+Count: 1
+Count: 2
+
+--- Arrays ---
+Array: [1,2,3,4]
+Length: 4
+Modified: [99,2,3,4]
+
+--- Functions ---
+Sum of 5 + 7 = 12
+Hello, User!
+
+Basics Demo Completed.
+
+[cikis=0]

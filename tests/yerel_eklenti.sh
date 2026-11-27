@@ -7,7 +7,13 @@
 # (--ext, TULPAR_EXT_PATH, tulpar.toml [ext]) ayni program kosturulur; cikti
 # kullan.beklenen ile BAYT BAYT karsilastirilir. Program her tip ailesini
 # (i64/i32/f64/f32/bool/str/void, 10 parametre, NULL dizgi, statik tampon
-# kopyasi, Tulpar'i geri cagirma) bir kez gecirir.
+# kopyasi, Tulpar'i geri cagirma) bir kez gecirir; FFI v1 dilimi (2026-11-26):
+# opak `ptr` (C'de yasayan tampon) ve `fn(...)` geri cagrisi — GERCEK libc
+# qsort Tulpar karsilastiricisiyla siralar, baglam isaretcili cb, str/f32/
+# bool argumanli cb, NULL cb, geri cagrida throw (C2 siniri, kilit 0); K304
+# struct DEGER gecisi — her C ABI sinifindan bir struct (8 bayt INTEGER, SSE+SSE,
+# 4xf32, karisik, 24 bayt byval/sret, bool alanli, tek double, karisik liste,
+# C'nin degistirdigi kopya) arguman ve donus olarak.
 #
 # POZITIF KONTROLLER (kapinin olctugunu gosteren yollar — her biri KIRMIZI
 # gormek zorunda; yesil gorurse kapi duser):
@@ -66,8 +72,11 @@ cp "$SRC/kullan.tpr" "$TMP/kullan.tpr"
 
 beklenen="$SRC/kullan.beklenen"
 karsilastir() {  # karsilastir <ad> <cikti> <rc> <log>
-  if [ "$3" -eq 0 ] && diff -u "$beklenen" "$2" >"$TMP/fark" 2>&1; then gecti "$1: cikti bayt bayt beklenen"
-  else dustu "$1 (rc=$3)"; head -20 "$TMP/fark" | sed 's/^/         /'; tail -12 "$4" | sed 's/^/         /'; fi
+  # Fark HER ZAMAN hesaplanir: program coktuyse (rc!=0) bile o ana kadarki
+  # cikti gorunsun — hangi satirda coktugu CI gunlugunden okunabilsin.
+  diff -u "$beklenen" "$2" >"$TMP/fark" 2>&1; local d=$?
+  if [ "$3" -eq 0 ] && [ $d -eq 0 ]; then gecti "$1: cikti bayt bayt beklenen"
+  else dustu "$1 (rc=$3)"; head -20 "$TMP/fark" | sed 's/^/         /'; echo "         --- son cikti satirlari:"; tail -4 "$2" | sed 's/^/         /'; tail -12 "$4" | sed 's/^/         /'; fi
 }
 
 # 1) --ext ile calistir (sessiz derleme yolu)
@@ -110,6 +119,22 @@ print("golge " + toString(ornek_topla(1, 2)));
 T
 out=$(cd "$TMP" && "$TUL" --ext ext golge.tpr 2>&1 | tail -1)
 [ "$out" = "golge 99" ] && gecti "kullanici tanimi eklenti fonksiyonunu golgeler" || dustu "golgeleme: '$out' (beklenen 'golge 99')"
+
+# 6b) Ext siniri (RFC C2), DISARIDA try YOKKEN: davranis degismedi — geri
+#     cagrilan fonksiyondaki yakalanmayan throw mesaj basip surec 1 ile biter
+#     (longjmp yok). try VARKEN olan yol kullan.tpr'de (sinir/eval/iki/@frame).
+cat > "$TMP/sinir0.tpr" <<'T'
+import "ornek";
+func atar(float x) { throw "yakalanmayan " + toString(x); }
+ornek_koru("atar", 3);
+print("C2 YANLIS: surec devam etti");
+T
+(cd "$TMP" && "$TUL" --ext ext sinir0.tpr) >"$TMP/s0.out" 2>"$TMP/s0.err"; rc=$?
+if [ $rc -eq 1 ] && grep -q "Uncaught Exception: yakalanmayan 3" "$TMP/s0.err" && ! grep -q "C2 YANLIS" "$TMP/s0.out"; then
+  gecti "ext siniri, disarida try yok: yakalanmayan throw eskisi gibi mesaj + cikis 1"
+else
+  dustu "ext siniri, disarida try yok (rc=$rc)"; tail -5 "$TMP/s0.err" "$TMP/s0.out" | sed 's/^/         /'
+fi
 
 # 7) Eklentiyi KULLANMAYAN program ona baglanmaz: link bolumu bozuk bir
 #    eklenti yukluyken bile derlenir.
@@ -226,6 +251,64 @@ printf 'import "ornek";\nprint(ornek_topla(1, 2, 3));\n' > "$TMP/fazla.tpr"
 (cd "$TMP" && "$TUL" --no-typecheck --ext ext fazla.tpr) >"$TMP/p4f" 2>&1; rc=$?
 [ $rc -ne 0 ] && grep -q "3 arguments given, the extension manifest declares 2" "$TMP/p4f" && gecti "fazla arguman: derleme hatasi (imzayla)" \
   || { dustu "fazla arguman (rc=$rc)"; head -4 "$TMP/p4f"; }
+# P5) FFI v1 geri cagri hatalari (2026-11-26): olmayan fonksiyon, yanlis
+#     arite, async hedef, bozuk `fn(...)` bildirimi — hepsi adiyla hata.
+geri_red() {  # geri_red <ad> <beklenen> <kaynak>
+  printf '%s\n' "$3" > "$TMP/$1.tpr"
+  (cd "$TMP" && "$TUL" --no-typecheck --ext ext "$1.tpr") >"$TMP/$1.out" 2>&1; local rc=$?
+  if [ $rc -ne 0 ] && grep -qF -- "$2" "$TMP/$1.out"; then gecti "geri cagri: $1 reddedildi"
+  else dustu "geri cagri: $1 (rc=$rc) beklenen '$2'"; head -6 "$TMP/$1.out" | sed 's/^/         /'; fi
+}
+geri_red cb_yok "geri cagri parametresi bir Tulpar fonksiyonunun adi (ya da 0) olmali — bulunamadi: yok_boyle" \
+'import "ornek";
+print(ornek_uygula_f(yok_boyle, 1));'
+geri_red cb_arite "cannot be passed as this callback" \
+'import "ornek";
+func iki(a, b) { return a + b; }
+print(ornek_uygula_f(iki, 1));'
+geri_red cb_async "async fonksiyon" \
+'import "ornek";
+async func as(x) { return x; }
+print(ornek_uygula_f(as, 1));'
+geri_red cb_ifade "geri cagri parametresi bir Tulpar fonksiyonunun adi" \
+'import "ornek";
+func f(x) { return x; }
+var g = 3;
+print(ornek_uygula_f(g + 1, 1));'
+# K304 struct deger gecisi: bilinmeyen / kutulu struct adiyla hata.
+mkdir -p "$TMP/st_ext"
+cp -r "$TMP/ext/." "$TMP/st_ext/"
+# Bildirime iki fonksiyon ekle (python'suz: Windows CI'da python3 yok) — son
+# fonksiyon satirinin ardina, `]` kapanisindan once.
+sed -i.bak 's|"returns": "f64", "doc": "K304: C kopyayi degistirir."}|&,\
+    {"name": "st_yok", "symbol": "ornek_st_tek", "params": ["t: struct YokBoyle"], "returns": "f64"},\
+    {"name": "st_kutulu", "symbol": "ornek_st_tek", "params": ["t: struct Kutulu"], "returns": "f64"}|' "$TMP/st_ext/tulpar-ext.json"
+st_red() {  # st_red <ad> <beklenen> <kaynak>
+  printf '%s\n' "$3" > "$TMP/$1.tpr"
+  (cd "$TMP" && "$TUL" --no-typecheck --ext st_ext "$1.tpr") >"$TMP/$1.out" 2>&1; local rc=$?
+  if [ $rc -ne 0 ] && grep -qF -- "$2" "$TMP/$1.out"; then gecti "struct deger: $1 reddedildi"
+  else dustu "struct deger: $1 (rc=$rc) beklenen '$2'"; head -6 "$TMP/$1.out" | sed 's/^/         /'; fi
+}
+st_red st_bilinmeyen "'struct YokBoyle' kutusuz bir struct degil" \
+'import "ornek";
+print(st_yok(0));'
+st_red st_kutulu_tip "'struct Kutulu' kutusuz bir struct degil" \
+'import "ornek";
+struct Kutulu { str ad; }
+Kutulu k;
+print(st_kutulu(k));'
+# Bolumlu emit ve -O0: struct ABI ayni cikti.
+for kip in "TULPAR_AOT_BOLUM=4" "TULPAR_AOT_OPT=0"; do
+  (cd "$TMP" && env $kip "$TUL" build --ext ext kullan.tpr k_$$ >/dev/null 2>&1 && ./k_$$ >"$TMP/okip" 2>&1); rc=$?
+  if [ $rc -eq 0 ] && diff -q "$beklenen" "$TMP/okip" >/dev/null; then gecti "$kip: cikti ayni (struct ABI dahil)"
+  else dustu "$kip: cikti farkli (rc=$rc)"; diff "$beklenen" "$TMP/okip" | head -6 | sed 's/^/         /'; fi
+done
+
+mkdir -p "$TMP/bozuk_cb"
+printf '{"tulpar_ext":1,"name":"bozuk_cb","functions":[{"name":"bc_f","params":["f: fn(i32): str"]}]}' > "$TMP/bozuk_cb/tulpar-ext.json"
+(cd "$TMP" && "$TUL" --ext bozuk_cb sade.tpr) >"$TMP/p5b" 2>&1; rc=$?
+[ $rc -ne 0 ] && grep -q "invalid callback type 'fn(i32): str'" "$TMP/p5b" && gecti "bozuk fn(...) bildirimi: adiyla hata" \
+  || { dustu "bozuk fn bildirimi (rc=$rc)"; head -3 "$TMP/p5b"; }
 
 # --- LSP -------------------------------------------------------------------------
 PY=""

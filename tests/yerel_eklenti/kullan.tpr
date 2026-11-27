@@ -4,6 +4,91 @@ import "ornek";
 
 func ikiye_kat(float x): float { return x * 2; }
 
+// Ext siniri (RFC C2): C'nin geri cagirdigi fonksiyonlar.
+func atar(float x) { throw "kanca hatasi " + toString(x); }
+func atar_iki(float x) { throw "ikinci hata"; }
+func kendi_yakalar(float x): float {
+    try { throw "ic"; } catch (e) { return x + 1; }
+    return 0;
+}
+@frame func cerceveli(): int {
+    ornek_koru("atar", 9);
+    return 1;
+}
+
+// FFI v1 (opak ptr + C geri cagrisi): qsort karsilastiricisi ve digerleri.
+func karsilastir(int a, int b): int {
+    int x = ornek_oku_i64(a);
+    int y = ornek_oku_i64(b);
+    if (x < y) { return -1; }
+    if (x > y) { return 1; }
+    return 0;
+}
+int g_toplam = 0;
+func her_birinde(i, ctx) { g_toplam = g_toplam + ornek_tampon_oku(ctx, i); }
+func kare_f(x) { return x * x; }
+func uzunluk_cb(str s): int { return len(s); }
+func uc_arg(int a, float f, bool b): int {
+    if (b) { return a * 100 + toInt(f * 10); }
+    return 0;
+}
+func cb_atar(int x): int { throw "geri cagri hatasi " + toString(x); }
+
+// K304: struct DEGER olarak C'ye gidip gelir.
+func ffi_struct() {
+    Ikii p = { a: 1, b: 2 };
+    Ikii q = { a: 10, b: 20 };
+    Ikii t = ornek_st_topla(p, q);
+    print("st ikii " + toString(t.a) + " " + toString(t.b));
+    Ikid v = { x: 1.5, y: -2.0 };
+    Ikid o = ornek_st_olcek(v, 3);
+    print("st ikid " + toString(o.x) + " " + toString(o.y));
+    Dortf d = { a: 1.0, b: 2.0, c: 3.0, d: 4.0 };
+    print("st dortf " + toString(ornek_st_dort_toplam(d)));
+    Dortf r = ornek_st_dort_ters(d);
+    print("st ters " + toString(r.a) + " " + toString(r.d));
+    Karisik k = { a: 41, b: 1.25, c: 5000000001 };
+    Karisik k2 = ornek_st_karisik(k);
+    print("st karisik " + toString(k2.a) + " " + toString(k2.b) + " " + toString(k2.c));
+    Ucd x = { x: 1.0, y: 0.0, z: 0.0 };
+    Ucd y = { x: 0.0, y: 1.0, z: 0.0 };
+    Ucd z = ornek_st_capraz(x, y);
+    print("st capraz " + toString(z.x) + " " + toString(z.y) + " " + toString(z.z));
+    Kucuk ku = { a: true, n: 7 };
+    Kucuk ku2 = ornek_st_kucuk_yap(-3);
+    print("st kucuk " + toString(ornek_st_kucuk(ku)) + " " + toString(ku2.a) + " " + toString(ku2.n));
+    Tekd te = { x: 2.0 };
+    Tekd te2 = ornek_st_tek(te);
+    print("st tek " + toString(te2.x));
+    print("st cok " + toString(ornek_st_cok(1, x, 2.5, v, 3, k)));
+    print("st boz " + toString(ornek_st_boz(y)) + " " + toString(y.x));
+    print("st literal " + toString(ornek_st_topla({ a: 5, b: 6 }, q).b));
+}
+
+func ffi_v1() {
+    var p = ornek_tampon_yeni(6);
+    array girdi = [42, -7, 19, 0, 1000, 3];
+    for (int i = 0; i < 6; i++) { ornek_tampon_yaz(p, i, girdi[i]); }
+    ornek_qsort(p, 6, 8, karsilastir);
+    str s = "";
+    for (int i = 0; i < 6; i++) { s = s + toString(ornek_tampon_oku(p, i)) + " "; }
+    print("qsort " + s);
+    ornek_her_biri(6, "her_birinde", p);
+    print("her_biri " + toString(g_toplam));
+    ornek_tampon_sil(p);
+    print("null " + toString(ornek_null_mu(0)) + " " + toString(ornek_null_mu(ornek_tampon_yeni(1))));
+    print("uygula_f " + toString(ornek_uygula_f(kare_f, 3)));
+    print("uygula_s " + toString(ornek_uygula_s(uzunluk_cb, "tulpar")));
+    print("uygula_32 " + toString(ornek_uygula_32(uc_arg, 7)) + " " + toString(ornek_uygula_32(0, 7)));
+    try {
+        ornek_cb_koru(cb_atar, 5);
+        print("C2 YANLIS: geri cagri istisnasi firlamadi");
+    } catch (e) {
+        print("cb_sinir " + toString(e) + " | kilit " + toString(ornek_kilit()));
+    }
+    print("cb_sonra " + toString(ornek_cb_koru(kare_f, 9)));
+}
+
 func main() {
     // i64: tipli (ham deger, kutusuz) ve dinamik (kutulu, float -> kirpma)
     int a = 40;
@@ -43,5 +128,39 @@ func main() {
     Nokta m = orta_nokta(nokta(0.0, 0.0), nokta(2.0, 4.0));
     print("nokta " + toString(m.x) + " " + toString(m.y) + " cagri " + toString(ornek_cagri_sayisi));
     print(selamla("Tulpar"));
+    // Ext siniri (RFC C2): throw C cercevesinin ustunden atlamaz — C hata
+    // kodunu gorur, temizligini yapar (kilit 0), istisna sonra burada firlar.
+    try {
+        ornek_koru("atar", 7);
+        print("C2 YANLIS: istisna yeniden firlamadi");
+    } catch (e) {
+        print("sinir " + toString(e) + " | kod " + toString(ornek_son_kod()) + " kilit " + toString(ornek_kilit()));
+    }
+    try {
+        float v = ornek_koru_eval("atar", 8);
+        print("C2 YANLIS: eval yolu firlamadi " + toString(v));
+    } catch (e) {
+        print("eval " + toString(e) + " | kod " + toString(ornek_son_kod()) + " kilit " + toString(ornek_kilit()));
+    }
+    try {
+        ornek_iki_kanca("atar", "atar_iki", 1);
+        print("C2 YANLIS: iki kanca");
+    } catch (e) {
+        print("iki " + toString(e) + " | kod " + toString(ornek_son_kod()) + " kilit " + toString(ornek_kilit()));
+    }
+    try {
+        print("ic " + toString(ornek_koru_eval("kendi_yakalar", 4)) + " kod " + toString(ornek_son_kod()));
+    } catch (e) {
+        print("C2 YANLIS: ic yakalama disari sizdi " + toString(e));
+    }
+    try {
+        cerceveli();
+        print("C2 YANLIS: @frame");
+    } catch (e) {
+        print("frame " + toString(e) + " | kilit " + toString(ornek_kilit()));
+    }
+    print("sonra " + toString(ornek_geri("ikiye_kat", 5)));
+    ffi_v1();
+    ffi_struct();
 }
 main();

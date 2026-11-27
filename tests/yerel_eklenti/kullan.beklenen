@@ -15,3 +15,28 @@ geri 42 -1
 dongu 499500
 nokta 1 2 cagri 1
 Merhaba, Tulpar!
+sinir kanca hatasi 7 | kod -1 kilit 0
+eval kanca hatasi 8 | kod -1 kilit 0
+iki kanca hatasi 1 | kod -11 kilit 0
+ic 5 kod 1
+frame kanca hatasi 9 | kilit 0
+sonra 10
+qsort -7 0 3 19 42 1000 
+her_biri 1057
+null true false
+uygula_f 45
+uygula_s 60
+uygula_32 705 -1
+cb_sinir geri cagri hatasi 5 | kilit 0
+cb_sonra 81
+st ikii 11 22
+st ikid 4.5 -6
+st dortf 4321
+st ters 4 1
+st karisik 42 2.5 5000000000
+st capraz 0 0 1
+st kucuk 7 false -6
+st tek 2.5
+st cok 5000000047.75
+st boz 1 0
+st literal 26

@@ -1,0 +1,88 @@
+// arena_save yigin doluyken SESSIZ -1 yerine yakalanabilir hata (RFC C3,
+// 2026-11-26). Eskiden 33. kayit -1 donuyordu, ardindaki restore/drop(-1)
+// no-op'tu: geri sarma durur, bellek sinirsiz birikir, program dogru calismaya
+// devam ederdi (Memory.md P14). Dengeli desenler etkilenmemeli.
+import "test";
+
+func icerik(str e): bool {
+    return contains(e, "kontrol noktasi yigini dolu") && contains(e, "arena_save");
+}
+
+// drop'suz tekrarlanan arena_save: hata, ve bos yigin kalanina kadar sorunsuz.
+func run_dropsuz_tekrar_hata_verir() {
+    int taban = arena_save();      // su anki derinlik (test cercevesi dahil)
+    arena_drop(taban);
+    int kac = 0;
+    str msg = "";
+    try {
+        for (int i = 0; i < 100; i++) {
+            int wm = arena_save();
+            kac = kac + 1;
+        }
+    } catch (e) {
+        msg = toString(e);
+    }
+    assert(icerik(msg), "hata metni beklenen degil: " + msg);
+    assert_eq_int(kac, 32 - taban);   // tam yigin kalani kadar basarili kayit
+    arena_drop(taban);                // birikenleri tek seferde birak
+    int sonra = arena_save();
+    arena_drop(sonra);
+    assert_eq_int(sonra, taban);      // hata sonrasi yigin kullanilabilir
+}
+
+// dengeli desenler: save + drop ve tek save + cok restore hata vermez.
+func run_dengeli_desenler_etkilenmez() {
+    for (int i = 0; i < 1000; i++) {
+        int wm = arena_save();
+        str s = "gecici-" + toString(i);
+        arena_drop(wm);
+    }
+    int tek = arena_save();
+    for (int i = 0; i < 1000; i++) {
+        str s = "istek-" + toString(i);
+        arena_restore(tek);
+    }
+    arena_drop(tek);
+    int son = arena_save();
+    arena_drop(son);
+    assert(son < 4, "dengeli desen yigini doldurdu: " + toString(son));
+}
+
+// ic ice: 32'yi asan derinlik ayni hatayi verir, catch'ten sonra devam edilir.
+func derin_kayit(int n): int {
+    int wm = arena_save();
+    int r = n;
+    if (n > 0) {
+        r = derin_kayit(n - 1);
+    }
+    arena_drop(wm);
+    return r;
+}
+
+func run_ic_ice_derinlik() {
+    assert_eq_int(derin_kayit(10), 0);
+    str msg = "";
+    try { int x = derin_kayit(50); } catch (e) { msg = toString(e); }
+    assert(icerik(msg), "ic ice derinlikte hata yok: " + msg);
+}
+
+// @frame kendi, FONKSIYON ADLI hatasini korur (ic ad __frame_arena_save).
+@frame
+func cerceve_derin(int n): int {
+    if (n == 0) { return 0; }
+    return cerceve_derin(n - 1) + 1;
+}
+
+func run_frame_mesaji_fonksiyon_adli() {
+    str msg = "";
+    try { int x = cerceve_derin(40); } catch (e) { msg = toString(e); }
+    assert_contains(msg, "@frame 'cerceve_derin'");
+    assert_contains(msg, "kontrol noktasi yigini dolu");
+}
+
+print("=== arena_save yigin dolu ===");
+test("drop'suz tekrar: 33. kayit yakalanabilir hata", "run_dropsuz_tekrar_hata_verir");
+test("dengeli desenler etkilenmez", "run_dengeli_desenler_etkilenmez");
+test("ic ice derinlik: ayni hata", "run_ic_ice_derinlik");
+test("@frame mesaji fonksiyon adli", "run_frame_mesaji_fonksiyon_adli");
+test_summary();

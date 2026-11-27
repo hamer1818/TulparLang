@@ -169,6 +169,9 @@ struct FunctionCall {
     std::optional<std::vector<std::string>> argument_names;
     std::unique_ptr<ASTNode> receiver; // For method calls
     std::unique_ptr<ASTNode> callee;   // For calling arbitrary expressions (indirect calls)
+    // Acik jenerik tip argumanlari: `ilk<int>(xs)` (2026-11-26). Kodgen gormez
+    // (tip silme); typeinfer T'yi bunlarla on-baglar.
+    std::vector<DataType> type_args;
     SourceLocation loc;
     
     FunctionCall(const std::string& n,
@@ -194,6 +197,10 @@ struct Parameter {
     // tipleri icin dolu; codegen tipli struct dizisi yerelini bundan tanir.
     std::optional<std::string> elem_custom_type;
     std::optional<std::string> enum_type;   // K027: `func f(Renk r)` (tip int kalir)
+    // JENERIK (2026-11-26): `func f<T>(T x, T[] xs)` — "T" ya da "T[]".
+    // Kodgen gormez (tip silinir: parametre tipsiz/`array`); typeinfer cagri
+    // yerinde T'yi baglar.
+    std::string generic;
 
     Parameter(const std::string& n, DataType t)
         : name(n), type(t) {}
@@ -205,6 +212,8 @@ struct VariableDecl {
     std::optional<std::string> custom_type;
     std::optional<std::string> elem_custom_type;  // `Dusman[] d` (P1.1)
     std::optional<std::string> enum_type;         // K027: `Renk r` (tip int kalir)
+    // `Kutu<int> k` (jenerik struct ornegi): tip argumanlari, typeinfer icin.
+    std::vector<DataType> generic_args;
     std::unique_ptr<ASTNode> initializer;
     bool is_moved;
     // `const int x = 5;` — yeniden atama YASAK. Denetim ayristiricida
@@ -290,6 +299,8 @@ struct FunctionDecl {
     DataType return_type;
     std::optional<std::string> return_custom_type;
     std::optional<std::string> return_enum_type;   // K027: `func f(): Renk`
+    std::vector<std::string> type_params;          // `func f<T, U>` (jenerik)
+    std::string return_generic;                    // "T" / "T[]" / ""
     std::unique_ptr<ASTNode> body;
     std::optional<std::string> receiver_type; // For methods
     bool is_async = false;                     // `async func` — coroutine
@@ -467,6 +478,10 @@ struct TypeDecl {
     // `@repr(C)` (K036): yerlesim C'ninki olmak ZORUNDA — butun alanlar
     // skaler, `bool` 1 bayt (field_bits 8). Kodgen struct'i compact sayar.
     bool repr_c = false;
+    // `struct Kutu<T> { T deger; }` (jenerik): tip parametreleri ve alan
+    // basina hangi parametreye bagli oldugu (-1 = somut tip).
+    std::vector<std::string> type_params;
+    std::vector<int> field_generic;
     SourceLocation loc;
 
     TypeDecl(const std::string& n, SourceLocation l) : name(n), loc(l) {}

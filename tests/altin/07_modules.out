@@ -1,0 +1,9 @@
+=== Modules Demo ===
+Importing 'examples/utils.tpr'
+Utils Imported.
+PI: 3.14159
+5 + 10 = 15
+3^4 = 81
+Point: (10, 20)
+
+[cikis=0]

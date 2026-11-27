@@ -1,0 +1,18 @@
+// S3 — TEK SAVE + COK RESTORE KOLU: dongu disinda bir kez arena_save, her
+// iterasyonda ayni handle'a arena_restore, sonda drop (varsayilan wings
+// listen() ve tame run() deseni). Beklenti: RSS drop kolu gibi DUZ —
+// restore, drop ile ayni geri sarmayi yapar (aot_arena_rewind_to); fark
+// yalniz yigin tepesi.
+// N ve govde obur kollarla AYNI (N=100000 — gerekcesi arena_drop.tpr'de).
+int i = 0;
+int n = 0;
+int wm = arena_save();
+while (i < 100000) {
+    str s = "deger-" + toString(i);
+    json j = {"a": s, "b": [1, 2, 3]};
+    n = n + length(s);
+    arena_restore(wm);
+    i = i + 1;
+}
+arena_drop(wm);
+print(toString(n));

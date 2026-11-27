@@ -1,0 +1,12 @@
+=== TulparLang LLVM Benchmark ===
+
+Fibonacci(30):
+832040
+Fibonacci(35):
+9227465
+Fibonacci(38):
+39088169
+
+=== Benchmark Complete ===
+
+[cikis=0]

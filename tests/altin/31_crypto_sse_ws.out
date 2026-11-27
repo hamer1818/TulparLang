@@ -1,0 +1,24 @@
+a9993e364706816aba3e25717850c26c9cd0d89d
+da39a3ee5e6b4b0d3255bfef95601890afd80709
+SGVsbG8sIFR1bHBhciE=
+Hello, Tulpar!
+
+Zg==
+Zm8=
+Zm9v
+s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+event: ping
+data: {"x":1}
+
+
+data: plain
+
+
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+
+
+[cikis=0]

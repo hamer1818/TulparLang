@@ -25,5 +25,22 @@ tags: [component, backend, llvm]
 - **`match` öznesi struct (2026-10-06):** struct DEĞERİ veren özne (`struct_expr_type`: tipli yerel, struct döndüren çağrı, struct dizisi elemanı, `pop(d)`) arena'da `OBJ_STRUCT`'a kutulanır ve gizli yerele (`match.N` — nokta: kullanıcı kodundan erişilemez) yazılır; desenler alanları özne tipinden DERLEME ZAMANINDA indeksle okur (anonim `{x}` dahil). `OBJ_STRUCT` alan adı/tipi taşımaz — dışarı çıkmamalı (`tests/match_gizli_ozne.sh`). Tipli desen (`Q{x}`) kutulu struct'ı (ad etiketli json, `Obj::struct_tag`) da eşler (`aot_struct_type_is_ptr`). → `tests/match_struct_ozne.test.tpr`
 - Ctrl+C: `AOT_RAN_NONZERO` enum'u, program'ın non-zero exit'ini AOT link hatasından ayırır (`aot_pipeline.hpp/.cpp`, `src/main.cpp`); SIGINT temiz çıkış.
 
+## Kapanış modeli (ortam dizileri)
+- Yakalanan değişken alloca'da değil **ortam dizisinde** yaşar: yuva 0 üst
+  ortam, 1.. yakalananlar. Yuvalar `analyze_module_captures` →
+  `assign_capture_decl_slots`'ta atanır, okuma/yazma `find_env_for_decl` ile
+  `func_stack` zinciri üzerinden yürür.
+- **Döngü başına ortam (RFC C1, 2026-11-26):** döngünün kendi bildirdiği ve
+  döngüdeki bir lambdanın yakaladığı adlar `cd->slots[dongu]` tablosuna gider
+  (`assign_loop_slots`). Codegen döngüye girerken bir ortam kurar
+  (`loop_env_push`; geçerli ortam bir alloca'da, döngü `func_stack`'e itilir),
+  `for` artımdan önce yeni ortama kopyalar, `while` gövde başında yeniler
+  (`loop_env_renew`). Böyle bir döngü sürümleme yollarına (iv/fv/ver) girmez.
+  Lambda/fonksiyon gövdesine girerken dış çerçevenin döngü ortamları gizlenir
+  (`loop_envs_enter_frame`). `for-in` değişkeni yakalanıyorsa indirgeme onu
+  gövdede bildirir (atama yerine). Karar: [[Decisions]].
+- Yakalanan değişkende `++`/`--` ortam yuvasından geçer
+  (`codegen_captured_step`) — 2026-11-26'ya dek derleme hatasıydı.
+
 ## İlgili
 [[Runtime]] · [[Memory Model]] · [[Type Inference]] · [[Build System]]

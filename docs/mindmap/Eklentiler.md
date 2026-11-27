@@ -45,6 +45,54 @@ Neden: 2026-09-20'de motor derleyiciden çıkarıldı (#333, kullanıcı kararı
 | `bool` | `int` (0/1) | int + bool | dönüşte ≠0 → true |
 | `str` | `const char *` | str | parametre: kopyasız, çağrı süresince; dönüş: hemen kopyalanır, NULL → "" |
 | `void` | — | — | yalnız dönüş |
+| `ptr` | `void *` | int (adres; NULL = 0) | **opak** — C'de yaşayan nesneyi tutup geri vermek için; aritmetik anlamsız. wasm32'de 32 bit (`inttoptr` hedef genişliğini izler) |
+| `cbool` | C `bool` / `_Bool` | bool | **i8 ABI** — `bool` (C `int`) ile karıştırma: `_Bool` dönüşünün üst bitleri tanımsız; `zeroext i1` (clang ile aynı). SDL3 her yerde bunu kullanır |
+| `struct Ad` | C struct **değer** olarak (K304) | kutusuz Tulpar struct'ı (`@repr(C)`) | parametre + dönüş; aşağıda "Struct değer geçişi" |
+| `fn(<tipler>): <tip>` | C fonksiyon işaretçisi | fonksiyon **adı** ya da `0` | yalnız parametre; aşağıda "Geri çağrı" |
+
+### Struct değer geçişi (`struct Ad`, K304, 2026-11-26)
+
+`"p: struct Nokta"` / `"returns": "struct Nokta"` — `Nokta` programda ya da eklentinin
+modülünde tanımlı **kutusuz** bir struct (int/float/bool/f32/i32 alanlı); C ile aynı yerleşim
+için `@repr(C)`. LLVM C ABI sınıflandırması yapmaz (o clang'ın işi), bu yüzden
+`ext_struct_abi` (llvm_backend.cpp) hedef kuralını elle uygular:
+
+| hedef | ≤ 16 bayt | > 16 bayt |
+|---|---|---|
+| x86-64 SysV (Linux/macOS) | 8 baytlık parçalar: hepsi float/double → SSE (`double`, `<2 x float>`), değilse INTEGER (`iN`); her parça ayrı argüman | `byval` argüman / `sret` dönüş |
+| AArch64 (AAPCS64, Apple) | HFA (1–4 aynı float tipi) → `[N x T]`; değilse `i64` / `[2 x i64]` | kopyanın işaretçisi / `sret` |
+| Windows x64 | boy 1/2/4/8 → `iN`; değilse kopyanın işaretçisi | kopya / `sret` |
+
+Dönen struct kutulu nesne olarak gelir; `Nokta n = f()` mevcut kutudan-açma yolundan geçer.
+Dolaylı geçişte C'ye **kopya** verilir — C değiştirse de Tulpar değeri bozulmaz. Android'de
+(tek IR'den iki ABI) ve web'de derleme hatası. Kapı `tests/yerel_eklenti.sh`: her ABI
+sınıfından bir struct (8 bayt INTEGER, SSE+SSE, 4×f32, karışık, 24 bayt byval/sret, bool
+alanlı, tek double, karışık uzun liste); sabotaj (SSE'yi INTEGER saymak) kapıyı kırmızı yapar.
+`tulpar bindgen` değerle geçen struct'ları ayrıştırır, `@repr(C)` tanımlarını `<ad>.tpr`
+modülüne yazar (`"modules"`), temsil edilemeyen alanı (char/short, dizi, bit alanı, işaretçi,
+iç içe struct) gerekçesiyle raporlar — gerçek libc `div`/`ldiv`/`lldiv` ile ölçüldü.
+Geri çağrıda struct yok.
+
+### Geri çağrı (`fn(...)`, 2026-11-26)
+
+`"cmp: fn(ptr, ptr): i32"` bildirilmiş bir parametreye Tulpar fonksiyonunun **adı**
+(tanımlayıcı ya da dizgi sabiti) verilir; `0` NULL'dur. Derleyici o (ad, imza) çifti için
+bir **C-ABI trampolini** üretir (`ext_callback_ptr`, `llvm_backend.cpp`): C argümanlarını
+VMValue'ya çevirir, hedefi `tulpar_ext_cb_call` ile çağırır, sonucu bildirilen C tipine
+çevirip döner. C kodu Tulpar'a özgü hiçbir şey bilmez — kapı **gerçek libc `qsort`**'u
+Tulpar karşılaştırıcısıyla çalıştırıyor. Geri çağrı parametreleri `i32 i64 f32 f64 bool
+ptr str`, dönüşü `void i32 i64 f32 f64 bool ptr`, en çok 8 parametre.
+
+- Hedef **adıyla** çözülür, işaretçi trampolin başına bir genel yuvada önbelleklenir (ilk
+  çağrıda `tulpar_ext_func_lookup`) — kutulu ve tam tipli fonksiyonlar aynı yoldan.
+- Argüman/sonuç VMValue olarak taşınır, `double` değil: 64-bit işaretçi 2^53'e sığmaz
+  (arm64 etiketli işaretçiler) ve `str` geçebilmeli.
+- Throw RFC C2 sınırından geçer: dışarıda `try` varsa sınırda yakalanır, C dönüş tipinin
+  sıfırını görür ve temizliğini yapar, istisna dış ext çağrısı dönünce fırlar.
+- Derleme hataları (adıyla): olmayan fonksiyon, arite uyuşmazlığı, `async` hedef, ifade
+  (değişkende tutulan fonksiyon değeri desteklenmiyor — ad derleme zamanında bilinmeli).
+- Yabancı bir thread'den (ör. ses aygıtı thread'i) çağrı: fonksiyon o thread'in arenasında
+  koşar; paylaşılan global'e erişim yine mutex/atomic ister.
 
 `symbol` verilmezse `name`. En çok 16 parametre. `lib_dirs` ve `modules`
 yolları bildirimin dizinine göre; `{abi}` Android'de `arm64-v8a`/`x86_64`.
@@ -125,6 +173,40 @@ HUD fontunu oradaki girdilerde arar — tulpar-engine Tuzaklar 8cp).
   `double tulpar_ext_eval_f64(...)` (sonuçlu). `call_f64`'ün imzası bilerek
   bir olay-kancası tablosunun alanına birebir uyar (araya katman girmesin —
   ölçüm aşağıda).
+
+## İstisna sınırı (RFC C2, 2026-11-26)
+
+C'nin geri çağırdığı Tulpar fonksiyonu `throw` ederse istisna **C yığın
+çerçevelerinin üzerinden atlamaz**. Eskiden dışarıda bir Tulpar `try`'ı varsa
+`aot_throw` oraya `longjmp` yapıyordu: aradaki C çerçevesi hiç bitmiyordu
+(kilit takılı kalıyor, dönüş kodu hiç yazılmıyordu — `tests/yerel_eklenti.sh`
+ile ölçüldü: kilit 1, kod 99). Şimdi:
+
+| durum | davranış |
+|---|---|
+| dışarıda `try` **yok** (try derinliği 0) | değişmedi: `Uncaught Exception` + çıkış 1, longjmp yok |
+| dışarıda `try` **var** | sınırda yakalanır, istisna kalıcıya kopyalanır; `tulpar_ext_call_f64` **-1**, `tulpar_ext_eval_f64` **0.0** + `tulpar_ext_threw() == 1`; C temizliğini yapıp döner; C fonksiyonu Tulpar'a döndüğü anda istisna **yeniden fırlar** |
+| aynı C çağrısında iki kanca atar | ilk istisna kazanır; C ikisinin de kodunu görür |
+
+Yeniden fırlatma codegen'de: her eklenti çağrısından sonra süreç geneli
+`tulpar_ext_pending_any` sayacı okunur (tek monotonic yükleme + dallanma),
+sıfır değilse `aot_ext_rethrow_pending()` kendi ipliğine bakar. Geri çağrının
+içinde kapatılmadan kalan checkpoint yuvaları sınırda bırakılır.
+
+Maliyet (2026-11-26, Ryzen 7 9800X3D, `taskset -c 10`, boş kanca, 10M çağrı):
+`try` dışında **2.15 → 2.4–2.6 ns** (yalnız try derinliği okuması), `try`
+içinde **~5.3 ns** (`setjmp`, ayrı `noinline` yavaş yolda — tek fonksiyonda
+yazılınca try dışı da 3.70 ns oluyordu, setjmp'li yardımcı satır içi
+açılamıyor). Tulpar → C çağrısı değişmedi (0.78 ns). `eh_cur` sabitle
+ilklenir (`nullptr` = `eh_main`): `= &eh_main` her erişime TLS init bekçisi
+koyuyordu.
+
+Kapı: `tests/yerel_eklenti.sh` — `kullan.tpr`'de call/eval/iki kanca/ iç
+yakalama/`@frame` yolları, ayrıca try yokken eski davranış. Pozitif kontrol:
+koruma devre dışı bırakılınca kapı kırmızı (kod 99, kilit 1).
+
+Açık (RFC açık soru 3): C kütüphanesi hata kodunu işleyemiyorsa süreci
+sonlandırma seçeneği (ext tanımında bir bayrak) yok.
 
 ## ABI uyumu kimde
 
@@ -225,10 +307,41 @@ yazımda (yapıştırıcı sarmalayıcı + runtime'da dışarı alınmış 33 ko
 6.4–7.7 ns ölçüldü; `tulpar_ext_call_f64` tek fonksiyonda 0..4 arite satır içi
 kollarla düzeltildi.
 
+## `tulpar bindgen` — başlıktan bildirim (2026-11-26)
+
+```bash
+tulpar bindgen /usr/include/zlib.h --name zlib --lib z -o zlib/tulpar-ext.json
+tulpar bindgen /usr/include/SDL3/SDL_timer.h --prefix SDL_ --lib SDL3 -o sdl/tulpar-ext.json
+```
+
+libclang'sız, küçük bir C **bildirim** ayrıştırıcısı (`src/cli/bindgen_cmd.cpp`). Makro açmaz,
+`#if` değerlendirmez; bunun yerine:
+- `#include` dosyalarını **yalnız tipleri için** izler (basliğin dizini, `-I`, `/usr/include`);
+  içerilen başlığın fonksiyonları bağlanmaz.
+- Gövdesi yalnız tanımlayıcı olan nesne-biçimli `#define`'ları yerine koyar (`z_off_t`, boş
+  `ZEXPORT`); `-D AD=TIP` elle ekler. **Yerleşik tip kelimeleri makroyla ezilmez** —
+  `#if` dalları birleştiği için SDL_stdinc.h'in `#define bool unsigned char` yedeği
+  `bool`'u sessizce yanlış ABI'ye çeviriyordu (ölçüldü, düzeltildi).
+- Tanımsız BÜYÜK_HARF tanımlayıcılar gürültü makrosu sayılır (`SDL_DECLSPEC`, `SDLCALL`,
+  `ZEXTERN`) ve raporda listelenir.
+- Desteklenmeyen her bildirim **gerekçesiyle** `atlandi` satırı olur: variadic, `va_list`,
+  struct değer geçişi (K304), `long double`, fonksiyon işaretçisi döndüren fonksiyon.
+
+Ölçüm (2026-11-26, CachyOS): zlib.h 80/82, sqlite3.h 356/367, SDL_video.h 112/114,
+SDL_timer.h 10/10 — atlananların hepsi gerçekten desteklenmeyen biçimler. Kapı
+`tests/bindgen.sh`: fikstür başlığından bildirim bayt bayt, üretilen bildirimle çağrılar,
+gerçek zlib (sürüm Python'unkiyle aynı) ve gerçek SDL3 (SDL'in **kendi zamanlayıcı
+thread'i** Tulpar geri çağrısını çağırıyor).
+
+Varsayımlar (raporda da basılır): `long` LP64 → i64 (Windows'ta 32 bit); işaretsiz 32 bit
+dönüş i32 (2^31 üstü negatif görünür); `const char *` → `str`, yazılabilir `char *` → `ptr`.
+
 ## Sınırlar
 
-- Yalnız skaler ABI: struct değer geçişi yok (K304), işlev işaretçisi/geri
-  çağrı değeri yok (K305 — ad tabanlı `tulpar_ext_func_lookup` var).
+- Struct değer geçişi (K304) Android ve web'de yok; geri çağrı parametresinde yok. Alanı
+  temsil edilemeyen (char/short/dizi) struct'lar `ptr` ile.
+- Geri çağrı (K305) yalnız **adlandırılmış** fonksiyonla: değişkende tutulan kapanış
+  (yakalanan ortamıyla) C işaretçisine çevrilemez.
 - Windows: mekanizma derlenir ve kapı CI'da koşar; motorun bildiriminde
   Windows bölümü yok (ölçülmedi).
 - Web: `link.web` verilirse em++ satırına eklenir; ölçülmedi.

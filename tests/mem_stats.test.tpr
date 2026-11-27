@@ -1,0 +1,79 @@
+// mem_stats() — bellek sayaclari (RFC C4, 2026-11-26). Sizinti RSS
+// grafiginden degil programdan gorunsun diye: D1 (yeniden atanan global ->
+// persist_bytes), D2 (checkpoint'siz dongu -> untracked_objects, arena_used),
+// D6 (arena_reserved geri verilmez). Her test FARKI olcer, mutlak degeri degil.
+import "test";
+
+int N = 500;
+json g_kalici = {};
+
+func run_alanlar_var() {
+    json m = mem_stats();
+    assert_eq_int(m["checkpoint_max"], 32);
+    assert(m["arena_reserved"] >= m["arena_used"], "reserved < used");
+    assert(m["heap_in_use"] == -1 || m["heap_in_use"] > 0, "heap_in_use ne -1 ne pozitif");
+    assert(m["untracked_objects"] >= 0 && m["persist_bytes"] >= 0, "negatif sayac");
+    assert(m["region_objects"] >= 0 && m["arena_blocks"] >= 0, "negatif sayac");
+}
+
+func run_checkpoint_derinligi() {
+    int d0 = mem_stats()["checkpoint_depth"];
+    int a = arena_save();
+    int b = arena_save();
+    int d2 = mem_stats()["checkpoint_depth"];
+    arena_drop(a);
+    int d3 = mem_stats()["checkpoint_depth"];
+    assert_eq_int(d2, d0 + 2);
+    assert_eq_int(d3, d0);
+}
+
+// D2: checkpoint acik degilken kurulan obje kalici -> sayac N kadar tirmanir.
+func run_checkpointsiz_dongu_gorunur() {
+    assert_eq_int(mem_stats()["checkpoint_depth"], 0);
+    int u0 = mem_stats()["untracked_objects"];
+    for (int i = 0; i < N; i++) { json t = {"i": i}; }
+    int u1 = mem_stats()["untracked_objects"];
+    assert(u1 - u0 >= N && u1 - u0 < N + 5, "untracked farki " + toString(u1 - u0));
+}
+
+// Checkpoint icinde: bolgede izlenir, drop sonrasi bolge ve arena eski yerine.
+// DIKKAT (Kural 2.1): checkpoint icinde donen mem_stats() nesnesi de GECICI —
+// drop'tan sonra okunursa sarkan isaretci (ilk yazimda tam bu yuzden degerler
+// null cikti). Sayilar drop'tan ONCE int'e alinir.
+func run_checkpoint_geri_kazanir() {
+    json m0 = mem_stats();
+    int wm = arena_save();
+    for (int i = 0; i < N; i++) { json t = {"s": "gecici-" + toString(i)}; }
+    json m1 = mem_stats();
+    int bolge1 = m1["region_objects"];
+    int arena1 = m1["arena_used"];
+    arena_drop(wm);
+    json m2 = mem_stats();
+    assert(bolge1 - m0["region_objects"] >= N, "bolge tirmanmadi");
+    assert(arena1 > m0["arena_used"], "arena tirmanmadi");
+    assert(m2["region_objects"] <= m0["region_objects"] + 1, "drop bolgeyi bosaltmadi");
+    assert(m2["arena_used"] < arena1, "drop arenayi geri sarmadi");
+    assert(m2["untracked_objects"] - m0["untracked_objects"] <= 2, "checkpoint icindeki obje kalici sayildi");
+}
+
+// D1: checkpoint icinde global'e yeniden atanan hesaplanmis deger kaliciya
+// kopyalanir ve eskisi serbest kalmaz -> persist_bytes her atamada tirmanir.
+func run_global_yeniden_atama_gorunur() {
+    int p0 = mem_stats()["persist_bytes"];
+    int wm = arena_save();
+    for (int i = 0; i < N; i++) {
+        g_kalici = {"k": "deger-" + toString(i)};
+    }
+    arena_drop(wm);
+    int p1 = mem_stats()["persist_bytes"];
+    assert(p1 - p0 >= N * 32, "persist_bytes farki " + toString(p1 - p0));
+    assert_eq_str(g_kalici["k"], "deger-" + toString(N - 1));
+}
+
+print("=== mem_stats ===");
+test("alanlar ve tutarlilik", "run_alanlar_var");
+test("checkpoint_depth arena_save/drop'u izler", "run_checkpoint_derinligi");
+test("D2: checkpoint'siz dongu untracked_objects'te", "run_checkpointsiz_dongu_gorunur");
+test("checkpoint drop'u bolgeyi ve arenayi geri alir", "run_checkpoint_geri_kazanir");
+test("D1: global yeniden atama persist_bytes'ta", "run_global_yeniden_atama_gorunur");
+test_summary();

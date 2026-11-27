@@ -237,3 +237,7 @@ engine/
 /dist-windows/
 /build-windows.zip
 /dist-windows.zip
+
+# Altin cikti kapisinin beklenen ciktilari (tests/altin_cikti.py) — *.out kuralina ISTISNA.
+# 2026-11-26: bu satir yokken altinlar commit edilmedi, kapi yerelde gecti CI'da 39 "altin yok" ile dustu.
+!tests/altin/*.out

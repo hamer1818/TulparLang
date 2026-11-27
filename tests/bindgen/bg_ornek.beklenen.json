@@ -1,0 +1,35 @@
+{
+  "tulpar_ext": 1,
+  "name": "bg_ornek",
+  "version": "0.0.0",
+  "description": "tulpar bindgen tests/bindgen/bg_ornek.h",
+  "functions": [
+    {"name": "bg_topla", "params": ["a: i64", "b: i64"], "returns": "i64", "doc": "bindgen: BG_API int64_t bg_topla (int64_t a, int64_t b)"},
+    {"name": "bg_olcek", "params": ["x: f64", "k: f32"], "returns": "f64", "doc": "bindgen: BG_API double bg_olcek (double x, float k)"},
+    {"name": "bg_kimlik", "params": ["k: i32"], "returns": "i32", "doc": "bindgen: BG_API bg_u32 bg_kimlik (BgKimlik k)"},
+    {"name": "bg_uzun_iki", "params": ["x: i64"], "returns": "i64", "doc": "bindgen: BG_API long long bg_uzun_iki (long long x)"},
+    {"name": "bg_ad", "params": [], "returns": "str", "doc": "bindgen: BG_API const char*bg_ad (void)"},
+    {"name": "bg_uzunluk", "params": ["s: str"], "returns": "i64", "doc": "bindgen: BG_API size_t bg_uzunluk (const char*s)"},
+    {"name": "bg_ac", "params": ["boy: i32"], "returns": "ptr", "doc": "bindgen: BG_API BgTutamac*bg_ac (int boy)"},
+    {"name": "bg_yaz", "params": ["t: ptr", "i: i32", "v: i32"], "returns": "void", "doc": "bindgen: BG_API void bg_yaz (BgTutamac*t, int i, int v)"},
+    {"name": "bg_oku", "params": ["t: ptr", "i: i32"], "returns": "i32", "doc": "bindgen: BG_API int bg_oku (BgTutamac*t, int i)"},
+    {"name": "bg_kapat", "params": ["t: ptr"], "returns": "void", "doc": "bindgen: BG_API void bg_kapat (BgTutamac*t)"},
+    {"name": "bg_sirala", "params": ["t: ptr", "cmp: fn(ptr, ptr): i32"], "returns": "void", "doc": "bindgen: BG_API void bg_sirala (BgTutamac*t, BgKarsilastir cmp)"},
+    {"name": "bg_her_biri", "params": ["t: ptr", "cb: fn(i32, i32, ptr)", "ctx: ptr"], "returns": "i32", "doc": "bindgen: BG_API int bg_her_biri (BgTutamac*t, void (*cb) (int i, int v, void*ctx), void*ctx)"},
+    {"name": "bg_cift_mi", "params": ["x: i32"], "returns": "cbool", "doc": "bindgen: BG_API bool bg_cift_mi (int x)"},
+    {"name": "bg_degil", "params": ["b: cbool"], "returns": "cbool", "doc": "bindgen: BG_API bool bg_degil (bool b)"},
+    {"name": "bg_renk", "params": ["r: i32"], "returns": "i32", "doc": "bindgen: BG_API BgRenk bg_renk (enum BgRenkE r)"},
+    {"name": "bg_dizi_topla", "params": ["dizi: ptr", "n: i32"], "returns": "i32", "doc": "bindgen: BG_API int bg_dizi_topla (const int dizi[], int n)"},
+    {"name": "bg_int_oku", "params": ["p: ptr"], "returns": "i32", "doc": "bindgen: BG_API int bg_int_oku (const void*p)"},
+    {"name": "bg_of", "params": ["a: i32", "b: i32"], "returns": "i32", "doc": "bindgen: BG_API int bg_of (int a, int b)"},
+    {"name": "bg_nokta_kaydir", "params": ["p: struct BgNokta", "dx: i32"], "returns": "struct BgNokta", "doc": "bindgen: BG_API BgNokta bg_nokta_kaydir (BgNokta p, int dx)"},
+    {"name": "bg_etiket", "params": ["e: struct BgEtiket", "f: struct BgEtiket"], "returns": "f64", "doc": "bindgen: BG_API double bg_etiket (struct BgEtiket e, BgEtiketT f)"},
+    {"name": "bg_nokta", "params": ["x: i32", "y: i32"], "returns": "struct BgNokta", "doc": "bindgen: BG_API BgNokta bg_nokta (int x, int y)"}
+  ],
+  "modules": {"bg_ornek": "bg_ornek.tpr"},
+  "link": {
+    "linux": {"lib_dirs": ["lib"], "libs": ["bg_ornek"]},
+    "macos": {"lib_dirs": ["lib"], "libs": ["bg_ornek"]},
+    "windows": {"lib_dirs": ["lib"], "libs": ["bg_ornek"]}
+  }
+}

@@ -485,6 +485,17 @@ if [ "$ACTION" = "suites" ]; then
         # sozlesmenin "hayatta kalir" yarisini sinaniyordu; "serbest
         # birakmaz" yarisi hic sinanmamisti.
         kapi_seri "S3 arena sozlesmesi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/arena_contract_smoke.py
+        # ALTIN CIKTI + -O0/-O3 (2026-11-26). `test` yalniz cikis koduna
+        # bakiyor; bu kapi orneklerin stdout'unu tests/altin/ ile ve her
+        # paketi iki optimizasyon seviyesinde karsilastirir. Fark = optimizasyona
+        # bagli tanimsiz davranis. Kontroller: -O0/-O3 ikilileri farkli (K1),
+        # bozuk altin kirmizi (K2). Yeni ornek: `tests/altin_cikti.py --yenile <ad>`.
+        kapi_seri "Altin cikti / -O0-O3 kapisi basarisiz!" python3 tests/altin_cikti.py
+        # SARKAN ISARETCI (2026-11-26): TULPAR_ARENA_ZEHIR=1 geri sarilan
+        # arenayi 0xDB ile doldurur; bilinen sarkan desenler yakalanmali,
+        # guvenli desenler (async/thread/@frame/bariyer) ve butun paketler
+        # zehirde temiz kalmali.
+        kapi_seri "Sarkan isaretci kapisi basarisiz!" bash tests/sarkan_isaretci.sh
         # YIGIN SIZINTISI (R11). Dongu govdesine dusen bir `alloca`
         # yinelemede yigin harciyor ve program YETERINCE UZUN dondugunde
         # SIGSEGV veriyor — derleme sessiz, suitler yesil. `AST_ARRAY_LITERAL`
@@ -555,7 +566,12 @@ if [ "$ACTION" = "suites" ]; then
         # statik mount basliklari/MIME, guvenlik basliklari, CORS izinli liste.
         # wings_kapanis_smoke (2026-11-25): graceful_shutdown + on_shutdown gercek
         # SIGTERM ile; set-password/backup tarifi. Windows'ta SKIP.
-        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke wings_rate_limit_smoke wings_tasima_smoke wings_kapanis_smoke; do
+        # wings_slowloris_smoke (2026-11-26): baslik damlatan istemciler dort
+        # modda da (listen/pool/async/evented) 408 ile kapaniyor, digerleri
+        # geciyor; ilerleyen yavas govde kesilmiyor. Kontrol: sure 0 iken pool
+        # KILITLENMELI (kurgu kilidi uretiyor mu). Evented bloklayan okumaya
+        # geri dondurulunce kirmiziya donuyor (4 yavas istemci = 4,5 s durma).
+        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke wings_rate_limit_smoke wings_tasima_smoke wings_kapanis_smoke wings_slowloris_smoke wings_yazma_smoke; do
             SMOKE_OUT=$(DISPLAY= WAYLAND_DISPLAY= python3 "tests/$smoke.py" 2>&1)
             SMOKE_RC=$?
             SMOKE_LAST=$(printf '%s\n' "$SMOKE_OUT" | tail -1)
@@ -630,6 +646,9 @@ if [ "$ACTION" = "suites" ]; then
     # cikti (2026-09-27). Yerel sahte registry, istek gunlugu sayiliyor. ~2 sn.
     if command -v python3 >/dev/null 2>&1 && [ -f tests/pkg_registry_audit.py ]; then
         kapi_kuyruk "Paket registry denetimi basarisiz!" python3 tests/pkg_registry_audit.py ./tulpar
+        # Paket imzasi (2026-11-26): keygen/sign/verify + [trust] ile kurulum,
+        # degistirilmis / yabanci / imzasiz paket reddi, onbellek imzaciya bakiyor.
+        kapi_kuyruk "Paket imza denetimi basarisiz!" python3 tests/pkg_imza_audit.py tulpar
     fi
 
     # UÇTAN UCA AOT DUMANI: derleyici gerçekten program üretebiliyor mu?
@@ -776,6 +795,11 @@ if [ "$ACTION" = "suites" ]; then
     if [ -x tests/yerel_eklenti.sh ]; then
         kapi_kuyruk "yerel eklenti kapisi basarisiz!" bash tests/yerel_eklenti.sh ./tulpar
     fi
+    # `tulpar bindgen` (2026-11-26): fikstur basligindan bildirim bayt bayt,
+    # uretilen bildirimle gercek cagrilar; varsa gercek zlib ve SDL3.
+    if [ -x tests/bindgen.sh ]; then
+        kapi_kuyruk "bindgen kapisi basarisiz!" bash tests/bindgen.sh tulpar
+    fi
 
     # TANINMAYAN tulpar.toml ANAHTARI (tulpar-engine geri bildirimi #21): tek
     # bir yeni anahtar (eski tulpar'da `[android] cutout`) eskiden DOSYANIN
@@ -908,6 +932,23 @@ if [ "$ACTION" = "suites" ]; then
     # iliskisi (atomik yazma yazma sayilir, atomik okuma senkronize).
     if [ -x tests/atomik_hatalari.sh ]; then
         kapi_kuyruk "atomik / thread_local kapisi basarisiz!" bash tests/atomik_hatalari.sh ./tulpar
+    fi
+
+    # Jenerik + `?` (2026-11-26): ayristirma hata yollari adiyla + pozitif kontrol.
+    # Anlam: tests/jenerik.test.tpr, tests/sonuc.test.tpr, typeinfer/*jenerik*.
+    if [ -x tests/jenerik_hatalari.sh ]; then
+        kapi_kuyruk "jenerik / ? kapisi basarisiz!" bash tests/jenerik_hatalari.sh ./tulpar
+    fi
+
+    # `tulpar --profile` (2026-11-26): kesin cagri sayilari, arena baytı, folded,
+    # kontrol olarak profilsiz ikilide kanca yok.
+    # Python kapilari: Windows kosucusunda python3 yok (diger Python denetimleri gibi).
+    if command -v python3 >/dev/null 2>&1; then
+    kapi_kuyruk "Profilleyici kapisi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/profil_smoke.py
+
+    # docs/SPEC.md (2026-11-26) calistirilabilir: her ```tpr ornegi derlenir,
+    # cikti / hata beklentisiyle karsilastirilir — belge eskiyemez.
+    kapi_kuyruk "Dil tanimi ornekleri basarisiz!" python3 tests/spec_ornekleri.py
     fi
 
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu

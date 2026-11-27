@@ -1,0 +1,9 @@
+=== Interactive Demo ===
+Note: Run this in a terminal (not background)
+What is your name?
+Hello, Hamza!
+Enter a number:
+You entered: 42
+Square: 1764
+
+[cikis=0]

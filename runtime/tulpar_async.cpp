@@ -51,6 +51,17 @@
 #include <csetjmp>
 #include <cstdint>
 #include <vector>
+
+// ARC + ARENA SINIRI (2026-11-26, tests/sarkan_isaretci.sh). Gorevin
+// argumanlari ve promise'in degeri `arc_retain` ile tutuluyordu — ama AOT
+// yolu arc_release cagirmiyor ve checkpoint geri sarmasi refcount'a hic
+// bakmiyor: bolge kabi serbest, arena dizgisi geri sarilir. Checkpoint
+// icinde baslatilip drop'tan SONRA calisan (ya da bitip drop'tan sonra
+// beklenen) gorev serbest bellegi okuyordu — normal kipte sessizce yanlis
+// deger (olculdu: `girdi["v"] * 2` 42 yerine 0). Gorev kurmak ve promise'i
+// yerine getirmek checkpoint'ten KACIS: yazma bariyeriyle ayni kural,
+// yalniz GECICI degerler kaliciya kopyalanir (checkpoint yokken no-op).
+extern "C" VMValue aot_persist_escape(VMValue v);
 #include <algorithm>
 #include <unordered_map>
 #include <chrono> // steady_clock only (header-only; safe on all toolchains)
@@ -978,6 +989,7 @@ ObjPromise *aot_promise_new(void) {
 
 void aot_promise_settle(ObjPromise *p, VMValue value, int state) {
   if (!p || p->state != 0) return; // already settled — ignore
+  value = aot_persist_escape(value);
   arc_retain_vmvalue(&value);
   p->value = value;
   p->state = state;
@@ -1017,8 +1029,10 @@ ObjPromise *aot_async_spawn(void *fn, VMValue *args, int argc) {
   t->argc = argc;
   if (argc > 0) {
     t->args = (VMValue *)malloc(sizeof(VMValue) * argc);
-    memcpy(t->args, args, sizeof(VMValue) * argc);
-    for (int i = 0; i < argc; i++) arc_retain_vmvalue(&t->args[i]);
+    for (int i = 0; i < argc; i++) {
+      t->args[i] = aot_persist_escape(args[i]);
+      arc_retain_vmvalue(&t->args[i]);
+    }
   }
   t->result = aot_promise_new();
   t->result->task = t;

@@ -1,0 +1,80 @@
+// sonuc — Result tipi (2026-11-26). `import "sonuc";` ya da `import "result";`
+//
+// Bir islem ya bir DEGER ya da bir HATA uretir; ikisi ayni kutuda tasinir:
+//   {"tamam": true,  "deger": v,    "hata": null}
+//   {"tamam": false, "deger": null, "hata": e}
+// Istisnanin (throw) aksine hata DEGERDIR: imzada gorunur, sessizce yukari
+// ucmaz, `match` ile acilir:
+//
+//   var r = bol(10, 0);
+//   var metin = match r {
+//       {tamam: true, deger} => "sonuc " + toString(deger),
+//       {hata}               => "hata: " + hata
+//   };
+//
+// `?` YAYMA (dil ozelligi, ayristirici): fonksiyon icinde `int x = f()?;`
+// f hata donduyse AYNI sonucu hemen dondurur, degilse `deger`i x'e koyar:
+//
+//   func toplam(a, b, c): json {
+//       int x = bol(a, b)?;
+//       int y = bol(x, c)?;
+//       return tamam(x + y);
+//   }
+//
+// Kutu `json`; jenerik bir struct DEGIL, cunku `match` nesne deseni ve `?`
+// acilimi ayni anahtarlari (tamam/deger/hata) okur — temsil tek ve sabit.
+// Her fonksiyonun Ingilizce takma adi var (ok, err, is_ok, unwrap, ...).
+
+// Basarili sonuc.
+func tamam(deger): json { return {"tamam": true, "deger": deger, "hata": null}; }
+// Hatali sonuc.
+func hata(neden): json { return {"tamam": false, "deger": null, "hata": neden}; }
+
+// Basarili mi.
+func tamam_mi(json r): bool { return r["tamam"] == true; }
+// Hatali mi.
+func hata_mi(json r): bool { return r["tamam"] != true; }
+
+// Degeri al; hataliysa hatayi istisna olarak firlat.
+func ac(json r) {
+    if (r["tamam"] != true) { throw r["hata"]; }
+    return r["deger"];
+}
+// Degeri al; hataliysa varsayilani dondur.
+func ac_yoksa(json r, varsayilan) {
+    if (r["tamam"] != true) { return varsayilan; }
+    return r["deger"];
+}
+// Hatayi al (basariliysa null).
+func hatasi(json r) { return r["hata"]; }
+
+// Basariliysa degeri `fn(deger)` ile donustur; hata aynen gecer.
+func donustur(json r, fn): json {
+    if (r["tamam"] != true) { return r; }
+    return tamam(call(fn, r["deger"]));
+}
+// Basariliysa `fn(deger)`in dondurdugu SONUCU dondur (zincirleme).
+func sonra(json r, fn): json {
+    if (r["tamam"] != true) { return r; }
+    return call(fn, r["deger"]);
+}
+// Istisna atan bir fonksiyonu sonuca cevir: `sarmala(f, x)` -> tamam(f(x)) / hata(e).
+func sarmala(fn, arg): json {
+    try {
+        return tamam(call(fn, arg));
+    } catch (e) {
+        return hata(e);
+    }
+}
+
+// ---- English aliases ----
+func ok(value): json { return tamam(value); }
+func err(reason): json { return hata(reason); }
+func is_ok(json r): bool { return tamam_mi(r); }
+func is_err(json r): bool { return hata_mi(r); }
+func unwrap(json r) { return ac(r); }
+func unwrap_or(json r, fallback) { return ac_yoksa(r, fallback); }
+func unwrap_err(json r) { return hatasi(r); }
+func map_ok(json r, fn): json { return donustur(r, fn); }
+func and_then(json r, fn): json { return sonra(r, fn); }
+func try_call(fn, arg): json { return sarmala(fn, arg); }

@@ -1,0 +1,100 @@
+// JENERIK (2026-11-26) — `func f<T>(...)` ve `struct Kutu<T>`.
+//
+// Strateji TIP SILME (Java gibi, monomorfizasyon DEGIL): `T` kodgende tipsiz
+// (kutulu VMValue), `T[]` duz `array`; typeinfer T'yi cagri yerinde baglar
+// (cakisma hata, donus tipi baglanan T). Bedeli: jenerik govde kutulu yoldan
+// kosar (tipli native hizli yola girmez). Kazanci: tek govde, kod sismesi yok,
+// her tiple ayni ABI. Tip denetimi fikstürleri: tests/typeinfer/{pass,fail}/*jenerik*.
+import "test";
+
+func ilk<T>(T[] xs): T { return xs[0]; }
+func son<T>(T[] xs): T { return xs[len(xs) - 1]; }
+func ikile<T>(T x): T[] { T y = x; return [x, y]; }
+func cift<A, B>(A a, B b): json { return {"a": a, "b": b}; }
+func esle_dizi<T>(T[] xs, fn): T[] {
+    var out = [];
+    for (x in xs) { push(out, call(fn, x)); }
+    return out;
+}
+func kare(x) { return x * x; }
+func en_buyuk<T>(T[] xs): T {
+    T m = xs[0];
+    for (x in xs) { if (x > m) { m = x; } }
+    return m;
+}
+
+struct Kutu<T> { T deger; int surum; }
+struct Cift<A, B> { A sol; B sag; }
+func kutula<T>(T v): Kutu<T> { Kutu<T> k; k.deger = v; k.surum = 1; return k; }
+
+func run_fonksiyon_her_tiple() {
+    assert_eq_int(ilk([5, 6, 7]), 5);
+    assert_eq_str(ilk(["a", "b"]), "a");
+    assert_eq_int(toInt(son([1.5, 2.5]) * 2), 5);
+    assert_eq_int(len(ikile("x")), 2);
+    assert_eq_str(ikile(3)[1] + 0 == 3 ? "ok" : "yok", "ok");
+}
+func run_iki_parametre() {
+    json c = cift(1, "bir");
+    assert_eq_int(c["a"], 1);
+    assert_eq_str(c["b"], "bir");
+}
+func run_govdede_T_yereli() {
+    assert_eq_int(en_buyuk([3, 9, 2]), 9);
+    assert_eq_str(en_buyuk(["elma", "zeytin", "armut"]), "zeytin");
+}
+func run_fonksiyon_argumani() {
+    var r = esle_dizi([1, 2, 3], kare);
+    assert_eq_int(r[2], 9);
+}
+func run_jenerik_struct() {
+    Kutu<int> a = kutula(7);
+    Kutu<str> b = kutula("yedi");
+    assert_eq_int(a.deger + 1, 8);
+    assert_eq_str(b.deger + "!", "yedi!");
+    assert_eq_int(a.surum + b.surum, 2);
+    Cift<int, str> c;
+    c.sol = 1;
+    c.sag = "s";
+    assert_eq_str(toString(c.sol) + c.sag, "1s");
+}
+func run_jenerik_struct_dizide() {
+    array ks = [];
+    push(ks, kutula(1));
+    push(ks, kutula("iki"));
+    assert_eq_int(ks[0].deger, 1);
+    assert_eq_str(ks[1].deger, "iki");
+}
+// Karsilastirma operatoru `<` jenerik sozdizimiyle karismaz.
+func run_kucuktur_bozulmadi() {
+    int a = 1;
+    int b = 2;
+    bool k = a < b;
+    assert(k, "a < b");
+    assert(b > a, "b > a");
+}
+
+// Acik tip argumani (2026-11-26): `f<int>(...)` — arguman yoksa (bos<str>())
+// T yalniz buradan baglanir.
+func bos<T>(): T[] { return []; }
+func run_acik_tip_argumani() {
+    assert_eq_int(ilk<int>([7, 8]), 7);
+    str[] b = bos<str>();
+    push(b, "z");
+    assert_eq_str(b[0], "z");
+    json c = cift<int, str>(1, "x");
+    assert_eq_str(c["b"], "x");
+    int k = 1;
+    assert(k < 2, "< karsilastirmasi");
+}
+
+print("=== jenerik ===");
+test("fonksiyon her tiple", "run_fonksiyon_her_tiple");
+test("iki tip parametresi", "run_iki_parametre");
+test("govdede T yereli", "run_govdede_T_yereli");
+test("fonksiyon argumani", "run_fonksiyon_argumani");
+test("jenerik struct", "run_jenerik_struct");
+test("jenerik struct dizide", "run_jenerik_struct_dizide");
+test("< karsilastirmasi bozulmadi", "run_kucuktur_bozulmadi");
+test("acik tip argumani", "run_acik_tip_argumani");
+test_summary();

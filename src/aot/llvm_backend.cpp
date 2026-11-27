@@ -27,6 +27,8 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <algorithm>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -268,10 +270,11 @@ static LLVMValueRef build_checked_div(LLVMBackend *backend, LLVMValueRef l,
 
 static void collect_declared_locals(ASTNode_C *node, std::unordered_set<std::string> &declared) {
   if (!node) return;
-  if (node->type == AST_VARIABLE_DECL) {
-    if (node->name) {
-      declared.insert(node->name);
-    }
+  // `for (x in xs)`: x de bir bildirim (RFC C1, 2026-11-26). Eskiden
+  // sayilmiyordu: dongu govdesindeki lambda x'i yakalamiyor, kapsam zincirinde
+  // BASKA bir fonksiyonun yuvasini okuyordu — uc kapanis `null null null`.
+  if ((node->type == AST_VARIABLE_DECL || node->type == AST_FOR_IN) && node->name) {
+    declared.insert(node->name);
   }
   if (node->type != AST_FUNCTION_DECL && node->type != AST_LAMBDA) {
     collect_declared_locals(node->left, declared);
@@ -311,10 +314,8 @@ static void collect_free_variables(ASTNode_C *node,
                                    std::unordered_set<std::string> declared_inner, 
                                    std::unordered_set<std::string> &free_vars) {
   if (!node) return;
-  if (node->type == AST_VARIABLE_DECL) {
-    if (node->name) {
-      declared_inner.insert(node->name);
-    }
+  if ((node->type == AST_VARIABLE_DECL || node->type == AST_FOR_IN) && node->name) {
+    declared_inner.insert(node->name);
   }
   if (node->type == AST_IDENTIFIER) {
     if (node->name && declared_inner.find(node->name) == declared_inner.end()) {
@@ -417,40 +418,92 @@ struct NestedVisitor {
 // function/lambda subtrees — their decls belong to their own frame).
 // Formerly the function-branch-local DeclVisitor; hoisted so the program
 // root can assign slots to captured top-level scope-locals too.
-static void assign_capture_decl_slots(ASTNode_C *curr,
-                                      const std::unordered_set<std::string> &captured_vars,
-                                      std::unordered_map<std::string, int> &func_slots,
-                                      int &slot_idx) {
+// DONGU BASINA ORTAM (RFC C1, 2026-11-26): bir dongunun KENDI bildirdigi ve
+// dongudeki bir lambdanin yakaladigi adlar — `for` init'i, `for-in`
+// degiskeni, govde bildirimleri — fonksiyonun ortaminda DEGIL, dongu
+// dugumunun tablosunda (cd->slots[dongu]) yuva alir. Codegen her iterasyona
+// kendi ortam dizisini verir (yuva 0 = kapsayan ortam), `for` artimdan once
+// degerleri yeni ortama kopyalar: JS `let` anlami — dongude uretilen her
+// kapanis kendi iterasyonunun degerini gorur. Donguden ONCE bildirilmis
+// yakalanan adlar fonksiyonun ortaminda kalir ve PAYLASILIR (eskisi gibi).
+// Eskiden butun dongu degiskenleri tek yuvayi paylasiyordu: uc kapanis
+// `30 30 30` (for), `20 20 20` (govde) basiyordu.
+static void assign_capture_decl_slots_t(ASTNode_C *curr,
+                                        const std::unordered_set<std::string> &captured_vars,
+                                        std::unordered_map<std::string, int> &table,
+                                        int &slot_idx, CaptureData *cd);
+
+static void assign_loop_slots(ASTNode_C *loop,
+                              const std::unordered_set<std::string> &captured_vars,
+                              std::unordered_map<std::string, int> &outer,
+                              int &outer_idx, CaptureData *cd) {
+  std::unordered_map<std::string, int> lt;
+  int li = 1;  // yuva 0 kapsayan ortam
+  if (loop->type == AST_FOR_IN && loop->name &&
+      captured_vars.count(loop->name))
+    lt[loop->name] = li++;
+  if (loop->type == AST_FOR) assign_capture_decl_slots_t(loop->init, captured_vars, lt, li, cd);
+  assign_capture_decl_slots_t(loop->body, captured_vars, lt, li, cd);
+  // Kosul / artim / yinelenen ifade bildirim tasimaz; icindeki lambdalarin
+  // bildirimleri de kendi cercevelerinin.
+  assign_capture_decl_slots_t(loop->condition, captured_vars, outer, outer_idx, cd);
+  assign_capture_decl_slots_t(loop->increment, captured_vars, outer, outer_idx, cd);
+  assign_capture_decl_slots_t(loop->iterable, captured_vars, outer, outer_idx, cd);
+  if (!lt.empty()) cd->slots[loop] = lt;
+}
+
+static void assign_capture_decl_slots_t(ASTNode_C *curr,
+                                        const std::unordered_set<std::string> &captured_vars,
+                                        std::unordered_map<std::string, int> &table,
+                                        int &slot_idx, CaptureData *cd) {
   if (!curr) return;
+  if (cd && (curr->type == AST_FOR || curr->type == AST_WHILE ||
+             curr->type == AST_FOR_IN)) {
+    assign_loop_slots(curr, captured_vars, table, slot_idx, cd);
+    return;
+  }
   if (curr->type == AST_VARIABLE_DECL && curr->name) {
     std::string name = curr->name;
-    if (captured_vars.find(name) != captured_vars.end() && func_slots.find(name) == func_slots.end()) {
-      func_slots[name] = slot_idx++;
+    if (captured_vars.find(name) != captured_vars.end() && table.find(name) == table.end()) {
+      table[name] = slot_idx++;
     }
   }
   if (curr->type != AST_FUNCTION_DECL && curr->type != AST_LAMBDA) {
-    assign_capture_decl_slots(curr->left, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->right, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->body, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->condition, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->then_branch, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->else_branch, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->init, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->increment, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->iterable, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->return_value, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->index, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->receiver, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->callee, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->try_block, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->catch_block, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->finally_block, captured_vars, func_slots, slot_idx);
-    assign_capture_decl_slots(curr->throw_expr, captured_vars, func_slots, slot_idx);
-    for (int i = 0; i < curr->statement_count; i++) assign_capture_decl_slots(curr->statements[i], captured_vars, func_slots, slot_idx);
-    for (int i = 0; i < curr->argument_count; i++) assign_capture_decl_slots(curr->arguments[i], captured_vars, func_slots, slot_idx);
-    for (int i = 0; i < curr->element_count; i++) assign_capture_decl_slots(curr->elements[i], captured_vars, func_slots, slot_idx);
-    for (int i = 0; i < curr->object_count; i++) assign_capture_decl_slots(curr->object_values[i], captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots_t(curr->left, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->right, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->body, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->condition, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->then_branch, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->else_branch, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->init, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->increment, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->iterable, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->return_value, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->index, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->receiver, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->callee, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->try_block, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->catch_block, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->finally_block, captured_vars, table, slot_idx, cd);
+    assign_capture_decl_slots_t(curr->throw_expr, captured_vars, table, slot_idx, cd);
+    for (int i = 0; i < curr->statement_count; i++) assign_capture_decl_slots_t(curr->statements[i], captured_vars, table, slot_idx, cd);
+    for (int i = 0; i < curr->argument_count; i++) assign_capture_decl_slots_t(curr->arguments[i], captured_vars, table, slot_idx, cd);
+    for (int i = 0; i < curr->element_count; i++) assign_capture_decl_slots_t(curr->elements[i], captured_vars, table, slot_idx, cd);
+    for (int i = 0; i < curr->object_count; i++) assign_capture_decl_slots_t(curr->object_values[i], captured_vars, table, slot_idx, cd);
   }
+}
+
+// Assigns env slot indices (after the existing ones) to every nested
+// VARIABLE_DECL whose name is in `captured_vars` (skipping nested
+// function/lambda subtrees — their decls belong to their own frame).
+// Formerly the function-branch-local DeclVisitor; hoisted so the program
+// root can assign slots to captured top-level scope-locals too. Dongunun
+// kendi bildirimleri dongunun tablosuna gider (yukarida).
+static void assign_capture_decl_slots(ASTNode_C *curr,
+                                      const std::unordered_set<std::string> &captured_vars,
+                                      std::unordered_map<std::string, int> &func_slots,
+                                      int &slot_idx, CaptureData *cd) {
+  assign_capture_decl_slots_t(curr, captured_vars, func_slots, slot_idx, cd);
 }
 
 static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int depth, ASTNode_C *current_func) {
@@ -492,7 +545,7 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
         for (int i = 0; i < node->statement_count; i++) {
           ASTNode_C *st = node->statements[i];
           if (!st || st->type == AST_FUNCTION_DECL) continue;
-          assign_capture_decl_slots(st, top_captured, pcd->slots[node], pslot);
+          assign_capture_decl_slots(st, top_captured, pcd->slots[node], pslot, pcd);
         }
       }
     }
@@ -521,7 +574,7 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
         }
       }
     }
-    assign_capture_decl_slots(node->body, captured, cd->slots[node], slot);
+    assign_capture_decl_slots(node->body, captured, cd->slots[node], slot, cd);
     analyze_module_captures(backend, node->body, depth + 1, node);
     return;
   }
@@ -763,10 +816,20 @@ static void lower_for_in_in_place(LLVMBackend *backend, ASTNode_C *node) {
   access->left = mk_id(it_name);
   access->index = mk_id(idx_name);
   access->line = line;
-  ASTNode_C *name_assign = ast_node_create(AST_ASSIGNMENT);
+  // Dongu degiskeni bir kapanista yakalaniyorsa (RFC C1) her iterasyonda
+  // TAZE bir bildirim: `var x = it[idx]` govdede — iterasyon ortamina yazilir,
+  // o iterasyonun kapanisi kendi x'ini gorur. Yakalanmiyorsa eski bicim
+  // (distaki x'e atama) birebir korunur.
+  CaptureData *fi_cd = (CaptureData *)backend->capture_data;
+  auto fi_tab = fi_cd ? fi_cd->slots.find(node) : decltype(fi_cd->slots.find(node))();
+  const bool fi_has_tab = fi_cd && fi_tab != fi_cd->slots.end();
+  const bool fi_var_captured =
+      fi_has_tab && fi_tab->second.find(loop_var) != fi_tab->second.end();
+  ASTNode_C *name_assign = ast_node_create(fi_var_captured ? AST_VARIABLE_DECL : AST_ASSIGNMENT);
   name_assign->name = strdup(loop_var);
   name_assign->right = access;
   name_assign->line = line;
+  if (fi_var_captured) name_assign->data_type = TYPE_VOID;
 
   // Wrap body so the assignment runs first each iteration.
   ASTNode_C *new_body = ast_node_create(AST_BLOCK);
@@ -783,6 +846,13 @@ static void lower_for_in_in_place(LLVMBackend *backend, ASTNode_C *node) {
   for_node->increment = idx_inc;
   for_node->body = new_body;
   for_node->line = line;
+  // Dongunun ortam tablosu yeni `for` dugumune gecer (orijinal dugum BLOCK
+  // oluyor; tablo onda kalsaydi dongu ortami hic kurulmazdi).
+  if (fi_has_tab) {
+    std::unordered_map<std::string, int> moved = fi_tab->second;
+    fi_cd->slots.erase(fi_tab);
+    fi_cd->slots[for_node] = moved;
+  }
 
   // Mutate the original node into AST_BLOCK { it_decl; for_node; }. We
   // null out the ownership pointers we transferred so the original node's
@@ -1405,7 +1475,14 @@ static const TameBuiltin k_std_builtins[] = {
     {"tls_starttls", "aot_tls_starttls_ptr", 2},
     {"tls_error", "aot_tls_error_ptr", 0},
     {"http_recv_error", "aot_http_recv_error_ptr", 0},
+    {"http_read_timeout", "aot_http_read_timeout_ptr", 1},
+    {"http_recv_ready", "aot_http_recv_ready_ptr", 2},
+    {"http_recv_expired", "aot_http_recv_expired_ptr", 0},
+    {"http_send_queued", "aot_http_send_queued_ptr", 3},
+    {"http_send_pending", "aot_http_send_pending_ptr", 1},
+    {"http_poll", "aot_http_poll_ptr", 2},
     {"make_dirs", "aot_make_dirs_ptr", 1},
+    {"mem_stats", "aot_mem_stats_ptr", 0},
 };
 
 #define STD_BUILTIN_COUNT \
@@ -5331,9 +5408,142 @@ static bool main_local_foreign_use(LLVMBackend *backend, LLVMValueRef slot,
   return true;
 }
 
+static void llvm_emit_array_set(LLVMBackend *backend, LLVMValueRef array,
+                                LLVMValueRef idx_val, LLVMValueRef value);
+// ---- Dongu basina ortam (RFC C1, 2026-11-26) ---------------------------------
+// Yakalanan dongu bildirimleri (assign_loop_slots) her iterasyonda kendi ortam
+// dizisinde yasar: yuva 0 = kapsayan ortam (bir dis dongununki ya da
+// cercevenin), 1.. = dongunun yuvalari. Gecerli ortam bir alloca'da (her
+// iterasyon degisiyor); dongu func_stack'e de itilir ki dongude uretilen
+// lambdanin govdesi zinciri onun uzerinden yurusun (find_env_for_decl).
+struct LoopEnvEntry {
+  ASTNode_C *loop;
+  LLVMValueRef slot;     // ptr alloca: bu iterasyonun ortami
+  LLVMValueRef parent;   // kapsayan ortam (donguye girerken bir kez okundu)
+  int nslots;            // yuva 0 haric
+  FuncStackNode *fsn;
+};
+
+static std::vector<LoopEnvEntry> *loop_env_vec(LLVMBackend *backend) {
+  return static_cast<std::vector<LoopEnvEntry> *>(backend->loop_envs);
+}
+
+static int loop_env_table_size(LLVMBackend *backend, ASTNode_C *loop) {
+  CaptureData *cd = (CaptureData *)backend->capture_data;
+  if (!cd || !loop) return 0;
+  auto it = cd->slots.find(loop);
+  return it == cd->slots.end() ? 0 : (int)it->second.size();
+}
+
+static LoopEnvEntry *loop_env_find(LLVMBackend *backend, ASTNode_C *loop) {
+  auto *v = loop_env_vec(backend);
+  if (!v) return nullptr;
+  for (auto it = v->rbegin(); it != v->rend(); ++it)
+    if (it->loop == loop) return &*it;
+  return nullptr;
+}
+
+static LLVMValueRef loop_env_load(LLVMBackend *backend, const LoopEnvEntry *e) {
+  return LLVMBuildLoad2(backend->builder, backend->ptr_type, e->slot, "loop_env");
+}
+
+// Yeni kapanisin (ve ic dongu ortaminin) gorecegi ortam: en ic acik dongu
+// ortami, yoksa cercevenin ortami (lambda cercevesi kendi ortami yoksa
+// parametresindeki ust ortam), yoksa null.
+static LLVMValueRef closure_env_here(LLVMBackend *backend) {
+  auto *v = loop_env_vec(backend);
+  if (v && !v->empty()) return loop_env_load(backend, &v->back());
+  if (backend->current_env_ptr) return backend->current_env_ptr;
+  if (backend->current_function_node &&
+      backend->current_function_node->type == AST_LAMBDA)
+    return LLVMGetParam(backend->current_function, 1);
+  return LLVMConstNull(backend->ptr_type);
+}
+
+static LLVMValueRef emit_new_env(LLVMBackend *backend, LLVMValueRef parent, int nslots) {
+  LLVMValueRef alloc_args[] = {LLVMConstNull(backend->ptr_type)};
+  LLVMValueRef env = LLVMBuildCall2(
+      backend->builder, LLVMGlobalGetValueType(backend->func_vm_allocate_array),
+      backend->func_vm_allocate_array, alloc_args, 1, "loop_env_new");
+  // Gecici VMValue yuvasi GIRISTE: dongu icinde LLVMBuildAlloca yigini her
+  // turda buyutur (tests/stack_growth_smoke.py).
+  LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, backend->vm_value_type, "loop_env_tmp");
+  LLVMBuildStore(backend->builder, llvm_build_vm_val_obj(backend, parent), tmp);
+  LLVMValueRef push0[] = {LLVMConstNull(backend->ptr_type), env, tmp};
+  LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(backend->func_vm_array_push),
+                 backend->func_vm_array_push, push0, 3, "");
+  for (int i = 0; i < nslots; i++) {
+    LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), tmp);
+    LLVMValueRef pushi[] = {LLVMConstNull(backend->ptr_type), env, tmp};
+    LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(backend->func_vm_array_push),
+                   backend->func_vm_array_push, pushi, 3, "");
+  }
+  return env;
+}
+
+static void loop_env_push(LLVMBackend *backend, ASTNode_C *loop) {
+  auto *v = loop_env_vec(backend);
+  if (!v) {
+    v = new std::vector<LoopEnvEntry>();
+    backend->loop_envs = v;
+  }
+  LoopEnvEntry e;
+  e.loop = loop;
+  e.nslots = loop_env_table_size(backend, loop);
+  e.parent = closure_env_here(backend);
+  e.slot = llvm_build_alloca_at_entry(backend, backend->ptr_type, "loop_env_slot");
+  LLVMBuildStore(backend->builder, emit_new_env(backend, e.parent, e.nslots), e.slot);
+  e.fsn = new FuncStackNode{loop, backend->func_stack};
+  backend->func_stack = e.fsn;
+  v->push_back(e);
+}
+
+static void loop_env_pop(LLVMBackend *backend) {
+  auto *v = loop_env_vec(backend);
+  if (!v || v->empty()) return;
+  LoopEnvEntry e = v->back();
+  v->pop_back();
+  backend->func_stack = e.fsn->parent;
+  delete e.fsn;
+}
+
+// Sonraki iterasyonun ortami. copy: dongu degiskenleri tasinir (`for` artimi
+// yeni ortamdaki kopyayi artirir — onceki iterasyonun kapanislari eskisini
+// tutar); copy=false: govde bildirimleri zaten her turda yeniden yaziliyor.
+static void loop_env_renew(LLVMBackend *backend, LoopEnvEntry *e, bool copy) {
+  LLVMValueRef old = copy ? loop_env_load(backend, e) : nullptr;
+  LLVMValueRef nenv = emit_new_env(backend, e->parent, e->nslots);
+  for (int i = 1; copy && i <= e->nslots; i++) {
+    LLVMValueRef idx = LLVMConstInt(backend->int32_type, i, 0);
+    LLVMValueRef get_args[] = {old, idx};
+    LLVMValueRef val = llvm_call_vmvalue_func(backend, backend->func_vm_array_get,
+                                              get_args, 2, "loop_env_cp");
+    llvm_emit_array_set(backend, nenv, idx, val);
+  }
+  LLVMBuildStore(backend->builder, nenv, e->slot);
+}
+
+// Lambda / fonksiyon govdesine girerken: dis cercevenin dongu ortamlari bu
+// LLVM fonksiyonunda gecersiz (alloca'lari baska fonksiyonda).
+static void *loop_envs_enter_frame(LLVMBackend *backend) {
+  void *saved = backend->loop_envs;
+  backend->loop_envs = nullptr;
+  return saved;
+}
+static void loop_envs_leave_frame(LLVMBackend *backend, void *saved) {
+  delete loop_env_vec(backend);
+  backend->loop_envs = saved;
+}
+
 LLVMValueRef find_env_for_decl(LLVMBackend *backend, ASTNode_C *decl_node) {
   CaptureData *cd = (CaptureData*)backend->capture_data;
   ASTNode_C *curr = backend->current_function_node;
+
+  // Bu cercevede acik bir dongunun bildirimi: o dongunun GECERLI iterasyon
+  // ortami (RFC C1).
+  if (LoopEnvEntry *le = loop_env_find(backend, decl_node)) {
+    return loop_env_load(backend, le);
+  }
   
   if (curr == decl_node) {
     return backend->current_env_ptr;
@@ -5346,9 +5556,15 @@ LLVMValueRef find_env_for_decl(LLVMBackend *backend, ASTNode_C *decl_node) {
     env = backend->current_env_ptr;
   }
   
+  // Yurume gecerli fonksiyonun USTUNDEN baslar. Bu cercevenin acik dongu
+  // dugumleri yiginin tepesinde, fonksiyonun ustunde duruyor (loop_env_push)
+  // — onlari atla; aksi halde fonksiyonun kendisi bir atlama sayilirdi.
   FuncStackNode *stack_node = backend->func_stack;
-  if (stack_node) {
-    stack_node = stack_node->parent;
+  {
+    FuncStackNode *f = stack_node;
+    while (f && f->node != curr) f = f->parent;
+    if (f) stack_node = f->parent;
+    else if (stack_node) stack_node = stack_node->parent;
   }
   
   while (stack_node) {
@@ -5970,7 +6186,13 @@ static LLVMTypeRef ext_llvm_type(LLVMBackend *backend, tulpar::ext::CType t) {
   case CType::F64:
     return backend->float_type;
   case CType::Str:
+  case CType::Ptr:
+  case CType::Fn:
     return backend->ptr_type;
+  case CType::CBool:
+    return LLVMInt1TypeInContext(backend->context);
+  case CType::Struct:
+    return backend->ptr_type;  // gercek tip ext_struct_abi'den
   case CType::Void:
     break;
   }
@@ -6067,6 +6289,369 @@ static LLVMValueRef ext_boxed_to_cstr(LLVMBackend *backend, LLVMValueRef v) {
   return phi;
 }
 
+// ---------------------------------------------------------------------------
+// GERI CAGRI TRAMPOLINI (FFI `fn(...)` parametresi, 2026-11-26).
+//
+// C kitapligi (qsort, SDL ses, GLFW tus kancasi) GERCEK bir C fonksiyon
+// isaretcisi ister; tulpar_ext_call_f64 yalniz Tulpar icin yazilmis C'ye
+// yarar. Burada bildirimdeki imzayla (`fn(ptr, ptr): i32`) bir C-ABI
+// fonksiyonu uretilir: C argumanlari VMValue'ya cevrilir, hedef Tulpar
+// fonksiyonu tulpar_ext_cb_call ile (RFC C2 siniri dahil) cagrilir, sonuc
+// bildirilen C tipine cevrilip doner. Hedef ADIYLA cozulur ve isaretci
+// trampolin basina bir genel yuvada onbelleklenir (ilk cagrida
+// tulpar_ext_func_lookup) — kutulu ve tam tipli fonksiyonlar ayni yoldan.
+// Ayni (ad, imza) cifti bir kez uretilir. Yabanci bir thread'den cagri:
+// Tulpar fonksiyonu o thread'in arenasinda kosar (thread_create gibi);
+// paylasilan global'e erisim yine mutex/atomic ister.
+// ---------------------------------------------------------------------------
+// C `_Bool` ABI: clang gibi `zeroext i1` (idx 0 = donus, 1.. = parametre).
+static LLVMAttributeRef ext_zeroext(LLVMBackend *backend) {
+  static unsigned kind = LLVMGetEnumAttributeKindForName("zeroext", 7);
+  return LLVMCreateEnumAttribute(backend->context, kind, 0);
+}
+static void ext_mark_cbool_fn(LLVMBackend *backend, LLVMValueRef fn, tulpar::ext::CType ret,
+                              const std::vector<tulpar::ext::CType> &ps) {
+  using tulpar::ext::CType;
+  if (ret == CType::CBool) LLVMAddAttributeAtIndex(fn, 0, ext_zeroext(backend));
+  for (size_t i = 0; i < ps.size(); i++)
+    if (ps[i] == CType::CBool) LLVMAddAttributeAtIndex(fn, (unsigned)i + 1, ext_zeroext(backend));
+}
+static void ext_mark_cbool_call(LLVMBackend *backend, LLVMValueRef call, tulpar::ext::CType ret,
+                                const std::vector<tulpar::ext::CType> &ps) {
+  using tulpar::ext::CType;
+  if (ret == CType::CBool) LLVMAddCallSiteAttribute(call, 0, ext_zeroext(backend));
+  for (size_t i = 0; i < ps.size(); i++)
+    if (ps[i] == CType::CBool) LLVMAddCallSiteAttribute(call, (unsigned)i + 1, ext_zeroext(backend));
+}
+
+static LLVMValueRef ext_vm_from_c(LLVMBackend *backend, LLVMValueRef v, tulpar::ext::CType t) {
+  using tulpar::ext::CType;
+  LLVMBuilderRef b = backend->builder;
+  switch (t) {
+  case CType::I32: return llvm_vm_val_int_val(backend, LLVMBuildSExt(b, v, backend->int_type, "cb.i64"));
+  case CType::I64: return llvm_vm_val_int_val(backend, v);
+  case CType::Bool:
+    return llvm_vm_val_bool_val(
+        backend, LLVMBuildICmp(b, LLVMIntNE, v, LLVMConstInt(backend->int32_type, 0, 0), "cb.b"));
+  case CType::F32:
+    return llvm_build_vm_val_float(backend, LLVMBuildFPExt(b, v, backend->float_type, "cb.f64"));
+  case CType::F64: return llvm_build_vm_val_float(backend, v);
+  case CType::CBool: return llvm_vm_val_bool_val(backend, v);
+  case CType::Ptr:
+    return llvm_vm_val_int_val(backend, LLVMBuildPtrToInt(b, v, backend->int_type, "cb.p"));
+  case CType::Str: {
+    LLVMTypeRef cty = LLVMFunctionType(backend->ptr_type, &backend->ptr_type, 1, 0);
+    LLVMValueRef cfn = LLVMGetNamedFunction(backend->module, "aot_ext_cstr_to_obj");
+    if (!cfn) cfn = LLVMAddFunction(backend->module, "aot_ext_cstr_to_obj", cty);
+    return llvm_build_vm_val_obj(backend, LLVMBuildCall2(b, cty, cfn, &v, 1, "cb.s"));
+  }
+  default: break;
+  }
+  return llvm_vm_val_void(backend);
+}
+
+static LLVMValueRef ext_boxed_to_i64(LLVMBackend *backend, LLVMValueRef v);
+static LLVMValueRef ext_boxed_to_f64(LLVMBackend *backend, LLVMValueRef v);
+
+static LLVMValueRef ext_callback_ptr(LLVMBackend *backend, ASTNode_C *arg,
+                                     const tulpar::ext::CallbackSig &cb,
+                                     const tulpar::ext::Function *f, int line) {
+  using tulpar::ext::CType;
+  LLVMBuilderRef b = backend->builder;
+  if (arg && arg->type == AST_INT_LITERAL && arg->value.int_value == 0)
+    return LLVMConstPointerNull(backend->ptr_type);  // NULL geri cagri
+  const char *ad = nullptr;
+  if (arg && arg->type == AST_IDENTIFIER) ad = arg->name;
+  else if (arg && arg->type == AST_STRING_LITERAL) ad = arg->value.string_value;
+  // Ayni ad tabloda birden fazla girdiyle durabilir (on bildirim + tanim);
+  // aritenin dogru kaynagi LLVM fonksiyonunun kendisi: kutulu `t_<ad>`
+  // shim'i (sonuc isaretcisi + arguman basina bir isaretci) ya da tam tipli
+  // `@<ad>` (arguman basina bir parametre).
+  int fi = -1, ar = -1, async_mu = 0;
+  if (ad)
+    for (int i = 0; i < backend->function_count; i++)
+      if (backend->functions[i].name && strcmp(backend->functions[i].name, ad) == 0) {
+        if (fi < 0) fi = i;
+        if (backend->functions[i].is_async) async_mu = 1;
+      }
+  if (fi >= 0) {
+    std::string shim = std::string("t_") + ad;
+    if (LLVMValueRef t = LLVMGetNamedFunction(backend->module, shim.c_str()))
+      ar = (int)LLVMCountParamTypes(LLVMGlobalGetValueType(t)) - 1;
+    else if (LLVMValueRef bare = LLVMGetNamedFunction(backend->module, ad))
+      ar = (int)LLVMCountParamTypes(LLVMGlobalGetValueType(bare));
+    else
+      ar = backend->functions[fi].param_count;
+  }
+  if (fi < 0) {
+    char msg[512];
+    snprintf(msg, sizeof msg,
+             "%s: geri cagri parametresi bir Tulpar fonksiyonunun adi (ya da 0) olmali%s%s / a "
+             "callback parameter takes the name of a Tulpar function (or 0)",
+             f->name.c_str(), ad ? " — bulunamadi: " : "", ad ? ad : "");
+    report_codegen_error(backend, line, "hata", msg, f->name.c_str(), cb.text.c_str());
+    return LLVMConstPointerNull(backend->ptr_type);
+  }
+  const int n = (int)cb.params.size();
+  if (ar != n || async_mu) {
+    char msg[512];
+    snprintf(msg, sizeof msg,
+             "%s: '%s' geri cagri olarak verilemez — %s / '%s' cannot be passed as this callback",
+             f->name.c_str(), ad,
+             async_mu ? "async fonksiyon"
+                                             : "parametre sayisi bildirilen imzayla uyusmuyor",
+             ad);
+    char hint[512];
+    snprintf(hint, sizeof hint, "beklenen: %s, '%s' %d parametreli", cb.text.c_str(), ad, ar);
+    report_codegen_error(backend, line, "hata", msg, f->name.c_str(), hint);
+    return LLVMConstPointerNull(backend->ptr_type);
+  }
+  std::string tname = std::string("tulpar_cb.") + ad + ".";
+  for (CType t : cb.params) tname += tulpar::ext::ctype_name(t), tname += "_";
+  tname += std::string("_") + tulpar::ext::ctype_name(cb.ret);
+  if (LLVMValueRef have = LLVMGetNamedFunction(backend->module, tname.c_str())) return have;
+
+  LLVMTypeRef ptys[8];
+  for (int i = 0; i < n; i++) ptys[i] = ext_llvm_type(backend, cb.params[i]);
+  LLVMTypeRef rty = ext_llvm_type(backend, cb.ret);
+  LLVMTypeRef fty = LLVMFunctionType(rty, ptys, (unsigned)n, 0);
+  LLVMValueRef tr = LLVMAddFunction(backend->module, tname.c_str(), fty);
+  LLVMSetLinkage(tr, LLVMInternalLinkage);
+  ext_mark_cbool_fn(backend, tr, cb.ret, cb.params);
+
+  LLVMBasicBlockRef saved = LLVMGetInsertBlock(b);
+  LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(backend->context, tr, "entry");
+  LLVMBasicBlockRef look = LLVMAppendBasicBlockInContext(backend->context, tr, "lookup");
+  LLVMBasicBlockRef call = LLVMAppendBasicBlockInContext(backend->context, tr, "call");
+  LLVMPositionBuilderAtEnd(b, entry);
+
+  std::string gfn = tname + ".fn", gar = tname + ".arity";
+  LLVMValueRef cache = LLVMAddGlobal(backend->module, backend->ptr_type, gfn.c_str());
+  LLVMSetInitializer(cache, LLVMConstPointerNull(backend->ptr_type));
+  LLVMSetLinkage(cache, LLVMInternalLinkage);
+  LLVMValueRef acache = LLVMAddGlobal(backend->module, backend->int32_type, gar.c_str());
+  LLVMSetInitializer(acache, LLVMConstInt(backend->int32_type, 0, 0));
+  LLVMSetLinkage(acache, LLVMInternalLinkage);
+
+  LLVMValueRef c0 = LLVMBuildLoad2(b, backend->ptr_type, cache, "cb.fn0");
+  LLVMSetOrdering(c0, LLVMAtomicOrderingAcquire);
+  LLVMSetAlignment(c0, 8);
+  LLVMBuildCondBr(b, LLVMBuildIsNull(b, c0, "cb.bos"), look, call);
+
+  LLVMPositionBuilderAtEnd(b, look);
+  LLVMTypeRef lpt[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef lty = LLVMFunctionType(backend->ptr_type, lpt, 2, 0);
+  LLVMValueRef lfn = LLVMGetNamedFunction(backend->module, "tulpar_ext_func_lookup");
+  if (!lfn) lfn = LLVMAddFunction(backend->module, "tulpar_ext_func_lookup", lty);
+  LLVMValueRef ar_slot = LLVMBuildAlloca(b, backend->int32_type, "cb.ar");
+  LLVMValueRef nm = LLVMBuildGlobalStringPtr(b, ad, "cb.ad");
+  LLVMValueRef largs[] = {nm, ar_slot};
+  LLVMValueRef found = LLVMBuildCall2(b, lty, lfn, largs, 2, "cb.found");
+  LLVMBuildStore(b, LLVMBuildLoad2(b, backend->int32_type, ar_slot, "cb.arv"), acache);
+  LLVMValueRef st = LLVMBuildStore(b, found, cache);
+  LLVMSetOrdering(st, LLVMAtomicOrderingRelease);
+  LLVMSetAlignment(st, 8);
+  LLVMBuildBr(b, call);
+
+  LLVMPositionBuilderAtEnd(b, call);
+  LLVMValueRef fnp = LLVMBuildPhi(b, backend->ptr_type, "cb.fnp");
+  LLVMValueRef inc[] = {c0, found};
+  LLVMBasicBlockRef inb[] = {entry, look};
+  LLVMAddIncoming(fnp, inc, inb, 2);
+  LLVMValueRef arity = LLVMBuildLoad2(b, backend->int32_type, acache, "cb.arity");
+  LLVMTypeRef arr_t = LLVMArrayType(backend->vm_value_type, (unsigned)(n > 0 ? n : 1));
+  LLVMValueRef argv = LLVMBuildAlloca(b, arr_t, "cb.argv");
+  for (int i = 0; i < n; i++) {
+    LLVMValueRef idx[] = {LLVMConstInt(backend->int32_type, 0, 0),
+                          LLVMConstInt(backend->int32_type, (unsigned)i, 0)};
+    LLVMValueRef slot = LLVMBuildGEP2(b, arr_t, argv, idx, 2, "cb.slot");
+    LLVMBuildStore(b, ext_vm_from_c(backend, LLVMGetParam(tr, (unsigned)i), cb.params[i]), slot);
+  }
+  LLVMValueRef out = LLVMBuildAlloca(b, backend->vm_value_type, "cb.out");
+  LLVMTypeRef cpt[] = {backend->ptr_type, backend->int32_type, backend->ptr_type,
+                       backend->int32_type, backend->ptr_type};
+  LLVMTypeRef cty = LLVMFunctionType(LLVMVoidTypeInContext(backend->context), cpt, 5, 0);
+  LLVMValueRef cfn = LLVMGetNamedFunction(backend->module, "tulpar_ext_cb_call");
+  if (!cfn) cfn = LLVMAddFunction(backend->module, "tulpar_ext_cb_call", cty);
+  LLVMValueRef cargs[] = {fnp, arity, argv, LLVMConstInt(backend->int32_type, (unsigned)n, 0), out};
+  LLVMBuildCall2(b, cty, cfn, cargs, 5, "");
+  LLVMValueRef r = LLVMBuildLoad2(b, backend->vm_value_type, out, "cb.r");
+  switch (cb.ret) {
+  case CType::Void: LLVMBuildRetVoid(b); break;
+  case CType::I64: LLVMBuildRet(b, ext_boxed_to_i64(backend, r)); break;
+  case CType::I32:
+    LLVMBuildRet(b, LLVMBuildTrunc(b, ext_boxed_to_i64(backend, r), backend->int32_type, "cb.r32"));
+    break;
+  case CType::Bool:
+    LLVMBuildRet(b, LLVMBuildZExt(b,
+                                  LLVMBuildICmp(b, LLVMIntNE, ext_boxed_to_i64(backend, r),
+                                                LLVMConstInt(backend->int_type, 0, 0), "cb.rb"),
+                                  backend->int32_type, "cb.rbool"));
+    break;
+  case CType::F64: LLVMBuildRet(b, ext_boxed_to_f64(backend, r)); break;
+  case CType::CBool:
+    LLVMBuildRet(b, LLVMBuildICmp(b, LLVMIntNE, ext_boxed_to_i64(backend, r),
+                                  LLVMConstInt(backend->int_type, 0, 0), "cb.rcb"));
+    break;
+  case CType::F32:
+    LLVMBuildRet(b, LLVMBuildFPTrunc(b, ext_boxed_to_f64(backend, r),
+                                     LLVMFloatTypeInContext(backend->context), "cb.rf32"));
+    break;
+  case CType::Ptr:
+    LLVMBuildRet(b, LLVMBuildIntToPtr(b, ext_boxed_to_i64(backend, r), backend->ptr_type, "cb.rp"));
+    break;
+  default: LLVMBuildRetVoid(b); break;
+  }
+  if (saved) LLVMPositionBuilderAtEnd(b, saved);
+  return tr;
+}
+
+// ---------------------------------------------------------------------------
+// STRUCT DEGER GECISI (K304, 2026-11-26) — C ABI'sini elle indirme.
+//
+// LLVM C ABI siniflandirmasi YAPMAZ (on yuz yapar: clang). Burada kutusuz bir
+// Tulpar struct'inin LLVM yerlesiminden (C ile ayni yerlesim icin @repr(C))
+// hedefin kurali uygulanir:
+//   x86-64 SysV (Linux/macOS): <= 16 bayt -> 8 baytlik parcalar; parcadaki
+//     butun alanlar float/double ise SSE (double, <2 x float>, float) yoksa
+//     INTEGER (i64 ya da kuyruk boyu); her parca ayri arguman. > 16 -> byval
+//     (arguman) / sret (donus).
+//   AArch64 (AAPCS64, Apple dahil): HFA (1-4 ayni tip float/double) ->
+//     [N x T]; degilse <= 8 -> i64, <= 16 -> [2 x i64]; > 16 -> kopyanin
+//     isaretcisi (byval YOK) / sret.
+//   Windows x64: boy 1/2/4/8 -> iN; degilse kopyanin isaretcisi / sret.
+// Android'de tek IR'den IKI ABI (arm64 + x86_64) uretildigi icin ve web'de
+// derleme hatasi (sessizce yanlis ABI yerine).
+// ---------------------------------------------------------------------------
+enum class ExtAbiArch { SysV64, AArch64, Win64, Desteksiz };
+static int g_ext_target_android = 0;  // llvm_backend_set_target_android
+void llvm_backend_set_target_android(int enable) { g_ext_target_android = enable ? 1 : 0; }
+static ExtAbiArch ext_abi_arch(LLVMBackend *backend) {
+  if (backend->target_web || g_ext_target_android) return ExtAbiArch::Desteksiz;
+  // Yalniz test/teshis: siniflandirmayi baska bir hedefin kuraliyla zorla
+  // (uretilen IR o hedefin llc'siyle incelenir; kullanici kodu icin degil).
+  if (const char *z = getenv("TULPAR_EXT_ABI_ZORLA")) {
+    if (!strcmp(z, "sysv")) return ExtAbiArch::SysV64;
+    if (!strcmp(z, "aarch64")) return ExtAbiArch::AArch64;
+    if (!strcmp(z, "win64")) return ExtAbiArch::Win64;
+  }
+  const char *t = LLVMGetTarget(backend->module);
+  std::string tr = t ? t : "";
+  if (tr.empty()) {
+    char *d = LLVMGetDefaultTargetTriple();
+    tr = d ? d : "";
+    if (d) LLVMDisposeMessage(d);
+  }
+  const bool win = tr.find("windows") != std::string::npos || tr.find("mingw") != std::string::npos;
+  if (tr.compare(0, 6, "x86_64") == 0) return win ? ExtAbiArch::Win64 : ExtAbiArch::SysV64;
+  if (tr.compare(0, 7, "aarch64") == 0 || tr.compare(0, 5, "arm64") == 0)
+    return win ? ExtAbiArch::Desteksiz : ExtAbiArch::AArch64;
+  return ExtAbiArch::Desteksiz;
+}
+
+struct ExtStructAbi {
+  enum Kip { Dogrudan, Dolayli, Hata } kip = Hata;
+  std::vector<LLVMTypeRef> parcalar;  // Dogrudan: her biri ayri arg; donuste literal struct
+  LLVMTypeRef dizi = nullptr;         // AArch64: [N x T] ya da [2 x i64] tek arguman
+  bool byval = false;                 // Dolayli + SysV arguman
+  unsigned long long boy = 0;
+  std::string neden;
+};
+
+static ExtStructAbi ext_struct_abi(LLVMBackend *backend, StructTypeEntry *st) {
+  ExtStructAbi a;
+  ExtAbiArch arch = ext_abi_arch(backend);
+  if (arch == ExtAbiArch::Desteksiz) {
+    a.neden = g_ext_target_android
+                  ? "Android'de struct deger gecisi yok (tek IR'den iki ABI) — ptr kullan"
+                  : backend->target_web ? "web hedefinde struct deger gecisi yok — ptr kullan"
+                                        : "bu hedefte struct deger gecisi desteklenmiyor";
+    return a;
+  }
+  LLVMTargetDataRef td = LLVMGetModuleDataLayout(backend->module);
+  LLVMTypeRef ty = st->llvm_type;
+  a.boy = LLVMABISizeOfType(td, ty);
+  LLVMContextRef cx = backend->context;
+  unsigned n = LLVMCountStructElementTypes(ty);
+  struct Alan { unsigned long long off, boy; LLVMTypeKind kind; LLVMTypeRef t; };
+  std::vector<Alan> alanlar;
+  for (unsigned i = 0; i < n; i++) {
+    LLVMTypeRef et = LLVMStructGetTypeAtIndex(ty, i);
+    alanlar.push_back({LLVMOffsetOfElement(td, ty, i), LLVMABISizeOfType(td, et), LLVMGetTypeKind(et), et});
+  }
+  auto is_fp = [](LLVMTypeKind k) { return k == LLVMDoubleTypeKind || k == LLVMFloatTypeKind; };
+  if (arch == ExtAbiArch::Win64) {
+    if (a.boy == 1 || a.boy == 2 || a.boy == 4 || a.boy == 8) {
+      a.kip = ExtStructAbi::Dogrudan;
+      a.parcalar.push_back(LLVMIntTypeInContext(cx, (unsigned)(a.boy * 8)));
+    } else {
+      a.kip = ExtStructAbi::Dolayli;
+    }
+    return a;
+  }
+  if (arch == ExtAbiArch::AArch64) {
+    bool hfa = n >= 1 && n <= 4;
+    for (auto &f : alanlar)
+      if (!is_fp(f.kind) || f.kind != alanlar[0].kind) hfa = false;
+    if (hfa) {
+      a.kip = ExtStructAbi::Dogrudan;
+      a.dizi = LLVMArrayType(alanlar[0].t, n);
+      return a;
+    }
+    if (a.boy <= 16) {
+      a.kip = ExtStructAbi::Dogrudan;
+      a.dizi = a.boy <= 8 ? LLVMInt64TypeInContext(cx) : LLVMArrayType(LLVMInt64TypeInContext(cx), 2);
+      return a;
+    }
+    a.kip = ExtStructAbi::Dolayli;
+    return a;
+  }
+  // SysV x86-64
+  if (a.boy > 16) {
+    a.kip = ExtStructAbi::Dolayli;
+    a.byval = true;
+    return a;
+  }
+  for (unsigned long long c = 0; c < a.boy; c += 8) {
+    unsigned long long cb = std::min<unsigned long long>(8, a.boy - c);
+    bool sse = true, any_d = false;
+    int floats = 0;
+    for (auto &f : alanlar) {
+      if (f.off + f.boy <= c || f.off >= c + 8) continue;
+      if (!is_fp(f.kind)) sse = false;
+      if (f.kind == LLVMDoubleTypeKind) any_d = true;
+      if (f.kind == LLVMFloatTypeKind) floats++;
+    }
+    if (sse) {
+      if (any_d) a.parcalar.push_back(LLVMDoubleTypeInContext(cx));
+      else if (floats >= 2) a.parcalar.push_back(LLVMVectorType(LLVMFloatTypeInContext(cx), 2));
+      else a.parcalar.push_back(LLVMFloatTypeInContext(cx));
+    } else {
+      a.parcalar.push_back(LLVMIntTypeInContext(cx, (unsigned)(cb * 8)));
+    }
+  }
+  a.kip = ExtStructAbi::Dogrudan;
+  return a;
+}
+
+static LLVMAttributeRef ext_type_attr(LLVMBackend *backend, const char *name, LLVMTypeRef t) {
+  unsigned kind = LLVMGetEnumAttributeKindForName(name, strlen(name));
+  return LLVMCreateTypeAttribute(backend->context, kind, t);
+}
+
+// Hizali gecici tampon: struct baytlari kopyalanir / parcalar okunur. 32 bayt:
+// dogrudan gecisin en buyugu AArch64 HFA'si (4 x double). Ilk surumu 16 bayt
+// idi — 3 double'lik HFA (24 bayt) tampondan TASIYORDU: macOS arm64'te
+// sonuc cop, Linux SysV'de bu yol yalniz <= 16 baytta kullanildigi icin
+// gorunmedi (CI 2026-11-27).
+static LLVMValueRef ext_struct_tampon(LLVMBackend *backend, const char *nm) {
+  LLVMTypeRef t = LLVMArrayType(LLVMInt64TypeInContext(backend->context), 4);
+  LLVMValueRef a = llvm_build_alloca_at_entry(backend, t, nm);
+  LLVMSetAlignment(a, 16);
+  LLVMBuildStore(backend->builder, LLVMConstNull(t), a);
+  return a;
+}
+
 // Tek arguman: tipli yol once; tipi belirsizse kutulu cevrim.
 static LLVMValueRef ext_arg_value(LLVMBackend *backend, ASTNode_C *arg,
                                   tulpar::ext::CType t) {
@@ -6082,6 +6667,20 @@ static LLVMValueRef ext_arg_value(LLVMBackend *backend, ASTNode_C *arg,
   const bool raw_flt = tv.type == INFERRED_FLOAT && tv.value &&
                        LLVMTypeOf(tv.value) == backend->float_type;
   switch (t) {
+  case CType::Ptr: {
+    LLVMValueRef i = raw_int   ? tv.value
+                     : raw_flt ? ext_fptosi_sat(backend, tv.value)
+                               : ext_boxed_to_i64(backend, box_typed_value(backend, tv));
+    return LLVMBuildIntToPtr(b, i, backend->ptr_type, "ext.ptr");
+  }
+  case CType::Fn:
+    break;  // emit_ext_call ext_callback_ptr'i dogrudan cagirir
+  case CType::CBool: {
+    LLVMValueRef i = raw_int   ? tv.value
+                     : raw_flt ? ext_fptosi_sat(backend, tv.value)
+                               : ext_boxed_to_i64(backend, box_typed_value(backend, tv));
+    return LLVMBuildICmp(b, LLVMIntNE, i, LLVMConstInt(backend->int_type, 0, 0), "ext.cb");
+  }
   case CType::I32:
   case CType::I64:
   case CType::Bool: {
@@ -6144,9 +6743,107 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
   }
   tulpar::ext::mark_used(f->ext_index);
 
-  LLVMTypeRef ptys[16];
-  for (int i = 0; i < np; i++) ptys[i] = ext_llvm_type(backend, f->params[i]);
-  LLVMTypeRef fty = LLVMFunctionType(ext_llvm_type(backend, f->ret), ptys, (unsigned)np, 0);
+  // C imzasi: struct DEGERLERI ext_struct_abi ile parcalara/isaretciye iner,
+  // yani C parametre sayisi Tulpar'inkinden farkli olabilir.
+  std::vector<LLVMTypeRef> ptys;
+  std::vector<LLVMValueRef> args;
+  std::vector<std::pair<unsigned, LLVMAttributeRef>> pattrs;  // (1 tabanli C param, nitelik)
+  auto struct_of = [&](const std::string &nm, StructTypeEntry *&st, ExtStructAbi &abi) -> bool {
+    st = find_struct_type(backend, nm.c_str());
+    if (!st || !struct_is_trivially_unboxable(st)) {
+      char msg[512];
+      snprintf(msg, sizeof msg,
+               "%s: 'struct %s' kutusuz bir struct degil (yalniz int/float/bool/f32/i32 alanli; C "
+               "yerlesimi icin @repr(C)) / not an unboxed struct",
+               f->name.c_str(), nm.c_str());
+      report_codegen_error(backend, node->line, "hata", msg, f->name.c_str(), f->signature().c_str());
+      return false;
+    }
+    abi = ext_struct_abi(backend, st);
+    if (abi.kip == ExtStructAbi::Hata) {
+      char msg[512];
+      snprintf(msg, sizeof msg, "%s: %s / struct by value unsupported on this target",
+               f->name.c_str(), abi.neden.c_str());
+      report_codegen_error(backend, node->line, "hata", msg, f->name.c_str(), f->signature().c_str());
+      return false;
+    }
+    return true;
+  };
+  LLVMTypeRef rty = ext_llvm_type(backend, f->ret);
+  StructTypeEntry *ret_st = nullptr;
+  ExtStructAbi ret_abi;
+  LLVMValueRef sret_tmp = nullptr;
+  if (f->ret == CType::Struct) {
+    if (!struct_of(f->ret_struct, ret_st, ret_abi)) {
+      result.boxed = llvm_vm_val_void(backend);
+      result.value = result.boxed;
+      return result;
+    }
+    if (ret_abi.kip == ExtStructAbi::Dolayli) {
+      sret_tmp = llvm_build_alloca_at_entry(backend, ret_st->llvm_type, "ext.sret");
+      LLVMBuildStore(b, LLVMConstNull(ret_st->llvm_type), sret_tmp);
+      ptys.push_back(backend->ptr_type);
+      args.push_back(sret_tmp);
+      pattrs.push_back({1u, ext_type_attr(backend, "sret", ret_st->llvm_type)});
+      rty = LLVMVoidTypeInContext(backend->context);
+    } else if (ret_abi.dizi) {
+      rty = ret_abi.dizi;
+    } else if (ret_abi.parcalar.size() == 1) {
+      rty = ret_abi.parcalar[0];
+    } else {
+      rty = LLVMStructTypeInContext(backend->context, ret_abi.parcalar.data(),
+                                    (unsigned)ret_abi.parcalar.size(), 0);
+    }
+  }
+  // Argumanlar SOLDAN SAGA ve bir kez uretilir (yan etki sirasi korunur).
+  for (int i = 0; i < np; i++) {
+    ASTNode_C *a = i < node->argument_count ? node->arguments[i] : nullptr;
+    if (f->params[i] == CType::Struct) {
+      StructTypeEntry *st = nullptr;
+      ExtStructAbi abi;
+      if (!struct_of(f->param_structs[i], st, abi)) {
+        result.boxed = llvm_vm_val_void(backend);
+        result.value = result.boxed;
+        return result;
+      }
+      LLVMValueRef src = a ? codegen_struct_expr_ptr(backend, a, st) : nullptr;
+      if (!src) {  // kutulu deger (json, kutulu struct) ya da eksik arguman
+        src = llvm_build_alloca_at_entry(backend, st->llvm_type, "ext.st.arg");
+        LLVMBuildStore(b, LLVMConstNull(st->llvm_type), src);
+        if (a) emit_unpack_boxed_struct_into(backend, codegen_expression(backend, a), st, src);
+      }
+      LLVMValueRef boy = LLVMConstInt(backend->int_type, abi.boy, 0);
+      if (abi.kip == ExtStructAbi::Dolayli) {
+        // Kopya: C tarafi degistirse bile Tulpar degeri bozulmaz.
+        LLVMValueRef cp = llvm_build_alloca_at_entry(backend, st->llvm_type, "ext.st.kopya");
+        LLVMBuildMemCpy(b, cp, 8, src, 8, boy);
+        ptys.push_back(backend->ptr_type);
+        args.push_back(cp);
+        if (abi.byval) pattrs.push_back({(unsigned)ptys.size(), ext_type_attr(backend, "byval", st->llvm_type)});
+        continue;
+      }
+      LLVMValueRef buf = ext_struct_tampon(backend, "ext.st.tampon");
+      LLVMBuildMemCpy(b, buf, 16, src, 8, boy);
+      if (abi.dizi) {
+        ptys.push_back(abi.dizi);
+        args.push_back(LLVMBuildLoad2(b, abi.dizi, buf, "ext.st.dizi"));
+      } else {
+        LLVMTypeRef i8 = LLVMInt8TypeInContext(backend->context);
+        for (size_t k = 0; k < abi.parcalar.size(); k++) {
+          LLVMValueRef off = LLVMConstInt(backend->int_type, 8 * k, 0);
+          LLVMValueRef pp = LLVMBuildGEP2(b, i8, buf, &off, 1, "ext.st.parca.p");
+          ptys.push_back(abi.parcalar[k]);
+          args.push_back(LLVMBuildLoad2(b, abi.parcalar[k], pp, "ext.st.parca"));
+        }
+      }
+      continue;
+    }
+    ptys.push_back(ext_llvm_type(backend, f->params[i]));
+    args.push_back(f->params[i] == CType::Fn
+                       ? ext_callback_ptr(backend, a, f->callbacks[i], f, node->line)
+                       : ext_arg_value(backend, a, f->params[i]));
+  }
+  LLVMTypeRef fty = LLVMFunctionType(rty, ptys.data(), (unsigned)ptys.size(), 0);
   LLVMValueRef fn = LLVMGetNamedFunction(backend->module, f->symbol.c_str());
   if (fn && LLVMGlobalGetValueType(fn) != fty) {
     // Ayni sembol baska bir imzayla zaten var: ya iki eklenti fonksiyonu ayni
@@ -6164,15 +6861,48 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
     result.value = result.boxed;
     return result;
   }
-  if (!fn) fn = LLVMAddFunction(backend->module, f->symbol.c_str(), fty);
-
-  // Argumanlar SOLDAN SAGA ve bir kez uretilir (yan etki sirasi korunur).
-  LLVMValueRef args[16];
-  for (int i = 0; i < np; i++)
-    args[i] = ext_arg_value(backend, i < node->argument_count ? node->arguments[i] : nullptr,
-                            f->params[i]);
-  LLVMValueRef r = LLVMBuildCall2(b, fty, fn, args, (unsigned)np,
-                                  f->ret == CType::Void ? "" : "ext.ret");
+  if (!fn) {
+    fn = LLVMAddFunction(backend->module, f->symbol.c_str(), fty);
+    if (f->ret != CType::Struct) ext_mark_cbool_fn(backend, fn, f->ret, f->params);
+    for (auto &pa : pattrs) LLVMAddAttributeAtIndex(fn, pa.first, pa.second);
+  }
+  const bool has_struct = f->ret == CType::Struct ||
+                          std::find(f->params.begin(), f->params.end(), CType::Struct) != f->params.end();
+  const bool void_ret = LLVMGetTypeKind(rty) == LLVMVoidTypeKind;
+  LLVMValueRef r = LLVMBuildCall2(b, fty, fn, args.data(), (unsigned)args.size(),
+                                  void_ret ? "" : "ext.ret");
+  // cbool nitelikleri param indeksine bagli; struct parcalari indeksleri
+  // kaydirdigi icin (cbool + struct ayni imzada) yalniz struct'siz imzada.
+  if (!has_struct) ext_mark_cbool_call(backend, r, f->ret, f->params);
+  for (auto &pa : pattrs) LLVMAddCallSiteAttribute(r, pa.first, pa.second);
+  // Ext siniri (RFC C2, 2026-11-26): C'nin geri cagirdigi bir Tulpar
+  // fonksiyonu throw ettiyse runtime istisnayi sinirda yakalayip bekletti; C
+  // artik dondu, burada yeniden firlatilir. Sicak yol: surec geneli sayacin
+  // tek (monotonic) yuklemesi + dallanma; cagri yalniz sayac sifir degilken.
+  {
+    LLVMValueRef pend = LLVMGetNamedGlobal(backend->module, "tulpar_ext_pending_any");
+    if (!pend) {
+      pend = LLVMAddGlobal(backend->module, backend->int32_type, "tulpar_ext_pending_any");
+      LLVMSetLinkage(pend, LLVMExternalLinkage);
+    }
+    LLVMValueRef pv = LLVMBuildLoad2(b, backend->int32_type, pend, "ext.pend");
+    LLVMSetOrdering(pv, LLVMAtomicOrderingMonotonic);
+    LLVMSetAlignment(pv, 4);
+    LLVMValueRef cur_fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(b));
+    LLVMBasicBlockRef rethrow_bb = append_bb(backend, cur_fn, "ext.rethrow");
+    LLVMBasicBlockRef cont_bb = append_bb(backend, cur_fn, "ext.cont");
+    LLVMBuildCondBr(b,
+                    LLVMBuildICmp(b, LLVMIntNE, pv, LLVMConstInt(backend->int32_type, 0, 0),
+                                  "ext.haspend"),
+                    rethrow_bb, cont_bb);
+    LLVMPositionBuilderAtEnd(b, rethrow_bb);
+    LLVMTypeRef rty = LLVMFunctionType(LLVMVoidTypeInContext(backend->context), nullptr, 0, 0);
+    LLVMValueRef rfn = LLVMGetNamedFunction(backend->module, "aot_ext_rethrow_pending");
+    if (!rfn) rfn = LLVMAddFunction(backend->module, "aot_ext_rethrow_pending", rty);
+    LLVMBuildCall2(b, rty, rfn, nullptr, 0, "");
+    LLVMBuildBr(b, cont_bb);
+    LLVMPositionBuilderAtEnd(b, cont_bb);
+  }
   switch (f->ret) {
   case CType::Void:
     result.boxed = llvm_vm_val_void(backend);
@@ -6199,6 +6929,32 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
   case CType::F64:
     result.type = INFERRED_FLOAT;
     result.value = r;
+    break;
+  case CType::Ptr:
+    result.type = INFERRED_INT;
+    result.value = LLVMBuildPtrToInt(b, r, backend->int_type, "ext.rptr");
+    break;
+  case CType::CBool:
+    result.type = INFERRED_BOOL;
+    result.value = LLVMBuildZExt(b, r, backend->int_type, "ext.rcbool");
+    break;
+  case CType::Struct: {
+    // C sonucu yerlesime yazilir, kutulu struct nesnesi olarak doner:
+    // `Nokta n = f()` mevcut kutudan-acma yolundan gecer.
+    LLVMValueRef res = sret_tmp;
+    if (!res) {
+      res = llvm_build_alloca_at_entry(backend, ret_st->llvm_type, "ext.st.sonuc");
+      LLVMValueRef buf = ext_struct_tampon(backend, "ext.st.rtampon");
+      LLVMBuildStore(b, r, buf);
+      LLVMBuildMemCpy(b, res, 8, buf, 16, LLVMConstInt(backend->int_type, ret_abi.boy, 0));
+    }
+    result.boxed = box_native_struct_as_object(backend, res, ret_st);
+    result.value = result.boxed;
+    break;
+  }
+  case CType::Fn:
+    result.boxed = llvm_vm_val_void(backend);
+    result.value = result.boxed;
     break;
   case CType::Str: {
     // Donen dizgi HEMEN kopyalanir: C tarafinin tamponu bir sonraki cagrida
@@ -9664,6 +10420,27 @@ static LLVMValueRef emit_boxed_binop(LLVMBackend *backend, LLVMValueRef L, LLVMV
 // dogruluk hizdan onemli.
 //
 // Post semantigi korunuyor: ESKI deger donuyor (`x++` ile ayni).
+// `x++` / `x--` YAKALANAN degiskende (2026-11-26): deger cercevenin ortam
+// dizisinde (ya da dongu iterasyon ortaminda) — alloca'si yok. Eskiden
+// get_local NULL donuyor ve derleme "'x' degiskeni artirilamaz — tanimli
+// degil" ile dusuyordu: `for (int i = 0; i < n; i++)` dongusunde bir kapanis
+// i'yi yakaladigi anda program derlenmiyordu (v3.48.1'de de). Kutulu yolun
+// anlami: tamsayi okunur, +/-1 yazilir, eski deger doner.
+static LLVMValueRef codegen_captured_step(LLVMBackend *backend, LocalVar *var, int delta,
+                                          const char *name) {
+  LLVMValueRef env = find_env_for_decl(backend, var->declaring_function);
+  LLVMValueRef idx = LLVMConstInt(backend->int32_type, var->slot_index, 0);
+  LLVMValueRef get_args[] = {env, idx};
+  LLVMValueRef old_val = llvm_call_vmvalue_func(backend, backend->func_vm_array_get,
+                                                get_args, 2, name);
+  LLVMValueRef int_val = llvm_extract_vm_val_int(backend, old_val);
+  LLVMValueRef new_int = LLVMBuildAdd(backend->builder, int_val,
+                                      LLVMConstInt(backend->int_type, (unsigned long long)(long long)delta, 1),
+                                      delta > 0 ? "cap.inc" : "cap.dec");
+  llvm_emit_array_set(backend, env, idx, llvm_vm_val_int_val(backend, new_int));
+  return old_val;
+}
+
 static LLVMValueRef codegen_elem_step(LLVMBackend *backend, ASTNode_C *node,
                                       int delta) {
   ASTNode_C *acc = node->left;
@@ -10495,6 +11272,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
   case AST_INCREMENT: {
     if (node->left) return codegen_elem_step(backend, node, 1);
+    if (LocalVar *cv = get_local_var(backend, node->name))
+      if (cv->is_captured == 1) return codegen_captured_step(backend, cv, 1, node->name);
     // Typed-int fast path: top-level `int x = ...;` registers x as a native
     // i64 global with no boxed VMValue local. get_local() would return NULL
     // in that case, so check the typed/native side first.
@@ -10535,6 +11314,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
   case AST_DECREMENT: {
     if (node->left) return codegen_elem_step(backend, node, -1);
+    if (LocalVar *cv = get_local_var(backend, node->name))
+      if (cv->is_captured == 1) return codegen_captured_step(backend, cv, -1, node->name);
     InferredType vt_dec = get_local_type(backend, node->name);
     LLVMValueRef nat_dec = get_local_native(backend, node->name);
     if (vt_dec == INFERRED_INT && nat_dec) {
@@ -11691,6 +12472,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_save,
                                     nullptr, 0, "arena_save_res");
     }
+    // @frame sekerinin ic adi: yigin doluyken -1 doner (atmaz), seker kendi
+    // fonksiyon adli hatasini atiyor. Kullanici yuzu degil.
+    if (node->name && strcmp(bi_name, "__frame_arena_save") == 0) {
+      if (!backend->func_aot_arena_save_try)
+        backend->func_aot_arena_save_try = LLVMAddFunction(
+            backend->module, "aot_arena_save_try",
+            llvm_make_vmvalue_func_type(backend, nullptr, 0, 0));
+      return llvm_call_vmvalue_func(backend, backend->func_aot_arena_save_try,
+                                    nullptr, 0, "frame_save_res");
+    }
     if (node->name && strcmp(bi_name, "now_iso8601") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_now_iso8601,
                                     nullptr, 0, "now_iso");
@@ -12477,8 +13268,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // would segfault on first dispatch.
     if (strcmp(bi_name, "thread_create") == 0 && node->argument_count >= 2) {
       LLVMValueRef func_ptr = nullptr;
-      if (node->arguments[0]->type == AST_IDENTIFIER) {
-        const char *raw = node->arguments[0]->name;
+      // Ad DIZGI olarak da yazilabilir — LSP imzasi `func_name: str` diyor.
+      // 2026-11-26'ya kadar `thread_create("isci", x)` bos isaretciyle
+      // derleniyordu: thread hicbir sey calistirmadan bitiyor, join `null`
+      // donuyordu — tani yok (sarkan_isaretci kapisi yazilirken bulundu).
+      const char *ad_dizgi =
+          (node->arguments[0]->type == AST_STRING_LITERAL)
+              ? node->arguments[0]->value.string_value : nullptr;
+      if (node->arguments[0]->type == AST_IDENTIFIER || ad_dizgi) {
+        const char *raw = ad_dizgi ? ad_dizgi : node->arguments[0]->name;
         char prefixed[256];
         snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
         LLVMValueRef func = LLVMGetNamedFunction(backend->module, prefixed);
@@ -12503,7 +13301,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           // yani BU sarmalayicidan ONCE yapiliyor — tek marshaling noktasi
           // korunuyor (iki yol = #0 riski).
           LLVMValueRef bare = LLVMGetNamedFunction(backend->module, raw);
-          if (bare && node->arguments[0]->type == AST_IDENTIFIER) {
+          if (bare) {
             char wname[300];
             snprintf(wname, sizeof(wname), "tw_%s", raw);
             LLVMValueRef w = LLVMGetNamedFunction(backend->module, wname);
@@ -12562,6 +13360,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           }
         }
         if (func) func_ptr = func;
+        if (!func && !backend->had_error) {
+          fprintf(stderr, tulpar::i18n::tr_en(
+              "Hata: thread_create(): '%s' adinda bir fonksiyon yok\n",
+              "Error: thread_create(): no function named '%s'\n"), raw);
+          backend->had_error = 1;
+        }
+      } else {
+        // Degiskende tutulan fonksiyon referansi / ifade: ad derleme
+        // zamaninda bilinmiyor. Eskiden bos isaretci -> sessiz no-op.
+        fprintf(stderr, "%s", tulpar::i18n::tr_en(
+            "Hata: thread_create() ilk argumani fonksiyon adi olmali "
+            "(`thread_create(isci, x)` ya da `thread_create(\"isci\", x)`)\n",
+            "Error: thread_create() first argument must name a function "
+            "(`thread_create(worker, x)` or `thread_create(\"worker\", x)`)\n"));
+        backend->had_error = 1;
       }
       if (!func_ptr) {
         func_ptr = LLVMConstPointerNull(backend->ptr_type);
@@ -13916,6 +14729,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // 5. Set up compiler stack
     FuncStackNode stack_node = { node, backend->func_stack };
     backend->func_stack = &stack_node;
+    void *lam_saved_loop_envs = loop_envs_enter_frame(backend);
     backend->current_function = func;
     backend->current_function_node = node;
     backend->current_function_is_void_abi = 1;
@@ -14013,6 +14827,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // 11. Restore compiler state and pop scope
     exit_scope(backend);
+    loop_envs_leave_frame(backend, lam_saved_loop_envs);
     backend->func_stack = stack_node.parent;
     backend->current_function = prev_function;
     backend->current_function_node = prev_func_node;
@@ -14028,6 +14843,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // 12. Create ObjClosure and wrap it
     LLVMValueRef void_func_ptr = LLVMBuildBitCast(backend->builder, func, backend->ptr_type, "lam_func_ptr");
     LLVMValueRef env_val = prev_env_ptr;
+    // Dongu icinde uretilen kapanis, o ITERASYONUN ortamini yakalar (RFC C1).
+    if (loop_env_vec(backend) && !loop_env_vec(backend)->empty()) {
+      env_val = loop_env_load(backend, &loop_env_vec(backend)->back());
+    }
     if (!env_val) {
       if (prev_func_node && prev_func_node->type == AST_LAMBDA) {
         env_val = LLVMGetParam(prev_function, 1);
@@ -14698,6 +15517,24 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // captured local so subsequent reads/writes in this same scope resolve
     // through the env too. Runs before the typed-int/global/struct paths
     // so `int count = 0` captured by a closure also lands in the env.
+    // Acik bir dongunun yakalanan bildirimi (RFC C1): bu ITERASYONUN ortamina.
+    if (node->name && loop_env_vec(backend)) {
+      CaptureData *lcd = (CaptureData *)backend->capture_data;
+      auto *lv = loop_env_vec(backend);
+      for (auto it = lv->rbegin(); lcd && it != lv->rend(); ++it) {
+        auto t = lcd->slots.find(it->loop);
+        if (t == lcd->slots.end()) continue;
+        auto sl = t->second.find(node->name);
+        if (sl == t->second.end()) continue;
+        LLVMValueRef linit = node->right ? codegen_expression(backend, node->right)
+                                         : llvm_vm_val_int(backend, 0);
+        LLVMValueRef lenv = loop_env_load(backend, &*it);
+        llvm_emit_array_set(backend, lenv,
+                            LLVMConstInt(backend->int32_type, sl->second, 0), linit);
+        add_local_captured(backend, node->name, lenv, sl->second, it->loop);
+        return linit;
+      }
+    }
     {
       CaptureData *cap_cd = (CaptureData *)backend->capture_data;
       ASTNode_C *cap_fn = backend->current_function_node;
@@ -15919,6 +16756,17 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     return nullptr;
   }
   case AST_WHILE: {
+    // DONGU BASINA ORTAM (RFC C1): govdenin yakalanan bildirimleri her
+    // iterasyonda taze ortamda (codegen_while_body govde basinda yeniler).
+    if (loop_env_table_size(backend, node) > 0) {
+      loop_env_push(backend, node);
+      LLVMBasicBlockRef le_after =
+          append_bb(backend, backend->current_function, "while_env_after");
+      codegen_while_body(backend, node, le_after);
+      LLVMPositionBuilderAtEnd(backend->builder, le_after);
+      loop_env_pop(backend);
+      return nullptr;
+    }
     // Int yerel golge surumu (2026-10-01): uygunsa iki kopya burada uretilir,
     // her biri bu dugumu yeniden dagitir (g_iv dolu: ikinci kez denenmez).
     if (iv_try_version(backend, node)) return nullptr;
@@ -16094,6 +16942,22 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     return codegen_statement(backend, node);
   }
   case AST_FOR: {
+    // DONGU BASINA ORTAM (RFC C1): dongunun yakalanan bildirimleri varsa
+    // surumlemesiz duz yol — her iterasyon kendi ortaminda, artimdan once
+    // degerler yeni ortama kopyalanir (codegen_for_body). Surumleme yollari
+    // yakalanan adlari zaten reddediyor; bu yol onlari hic denemiyor.
+    if (loop_env_table_size(backend, node) > 0) {
+      enter_scope(backend);
+      loop_env_push(backend, node);
+      if (node->init) codegen_statement(backend, node->init);
+      LLVMBasicBlockRef le_after =
+          append_bb(backend, backend->current_function, "for_env_after");
+      codegen_for_body(backend, node, le_after);
+      LLVMPositionBuilderAtEnd(backend->builder, le_after);
+      loop_env_pop(backend);
+      exit_scope(backend);
+      return nullptr;
+    }
     // Int yerel golge surumu: init'ten ONCE (her kopya init'i kendisi kosar).
     if (iv_try_version(backend, node)) return nullptr;
     // for (init; condition; increment) { body }
@@ -18303,6 +19167,7 @@ static void emit_typed_entry_body(LLVMBackend *backend, ASTNode_C *node, LLVMVal
   enter_scope(backend);
   FuncStackNode stack_node = {node, backend->func_stack};
   backend->func_stack = &stack_node;
+  void *fn_saved_loop_envs = loop_envs_enter_frame(backend);
   backend->current_function_node = node;
 
   for (int i = 0; i < node->param_count; i++) {
@@ -18333,6 +19198,7 @@ static void emit_typed_entry_body(LLVMBackend *backend, ASTNode_C *node, LLVMVal
   if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
     emit_boxed_fn_return(backend, llvm_vm_val_int(backend, 0));
 
+  loop_envs_leave_frame(backend, fn_saved_loop_envs);
   backend->func_stack = stack_node.parent;
   backend->current_function_node = prev_func_node;
   backend->current_env_ptr = prev_env_ptr;
@@ -18597,6 +19463,7 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   enter_scope(backend);
   FuncStackNode stack_node = { node, backend->func_stack };
   backend->func_stack = &stack_node;
+  void *fn_saved_loop_envs = loop_envs_enter_frame(backend);
   ASTNode_C *prev_func_node = backend->current_function_node;
   backend->current_function_node = node;
 
@@ -18846,6 +19713,7 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
 
   backend->fn_value_abi = prev_value_abi;
   backend->current_function_returns_struct = prev_returns_struct;
+  loop_envs_leave_frame(backend, fn_saved_loop_envs);
   backend->func_stack = stack_node.parent;
   backend->current_function_node = prev_func_node;
   backend->current_env_ptr = prev_env_ptr;
@@ -19942,7 +20810,148 @@ static void strip_unused_embedded(LLVMBackend *backend) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// PROFIL ENSTRUMANTASYONU (`tulpar --profile` -> TULPAR_PROFILE=1, 2026-11-26)
+//
+// Optimizasyondan ONCE, kodgen bitmis modulde: her Tulpar fonksiyon GOVDESININ
+// girisine aot_prof_enter(id, tur), her `ret`ten once aot_prof_exit(id, tur).
+// Sonradan satir ici acilan govde kancalarini tasir — sayimlar yine dogru.
+// Bir Tulpar fonksiyonu IR'de birkac bicimde yasar:
+//   `f`        tam tipli govde                      -> tur 0
+//   `t_f.f`    tipsiz fonksiyonun dagitici govdesi   -> tur 1
+//   `f$i` ...  tipe uzmanlasmis govde                -> tur 2 (dagiticisinin
+//              icinde dogrudan cagrilirsa runtime tek cagri sayar)
+//   `t_f`      `t_f.f` varsa ince sarmalayici        -> ATLANIR (yoksa tur 0)
+//   `tb_f` `tw_f` `tulpar_cb.*`  sarmalayicilar       -> ATLANIR
+// Async fonksiyonlar atlanir (coroutine askiya alinir; bkz. runtime notu).
+// `main` "<ust duzey>" olarak sayilir; aot_prof_init oradan cagrilir.
+// Isimler programa sabit bir dizi olarak gomulur (id = dizin).
+// ---------------------------------------------------------------------------
+static void instrument_profile(LLVMBackend *backend) {
+  LLVMModuleRef m = backend->module;
+  LLVMContextRef cx = backend->context;
+  std::unordered_map<std::string, int> tulpar_fn;  // ad -> async mi
+  for (int i = 0; i < backend->function_count; i++)
+    if (backend->functions[i].name) {
+      int &a = tulpar_fn[backend->functions[i].name];
+      a = a || backend->functions[i].is_async;
+    }
+  struct Hedef { LLVMValueRef fn; std::string base; int kind; };
+  std::vector<Hedef> hedefler;
+  for (LLVMValueRef f = LLVMGetFirstFunction(m); f; f = LLVMGetNextFunction(f)) {
+    if (LLVMIsDeclaration(f)) continue;
+    size_t len = 0;
+    const char *raw = LLVMGetValueName2(f, &len);
+    std::string n(raw, len), base;
+    int kind = 0;
+    if (n == "main") { hedefler.push_back({f, "<ust duzey>", 0}); continue; }
+    if (n.compare(0, 3, "tb_") == 0 || n.compare(0, 3, "tw_") == 0 ||
+        n.compare(0, 10, "tulpar_cb.") == 0)
+      continue;
+    // Once TAM ad (yontem adlari `Tip.ad` nokta tasir), sonra sondan `.`/`$`
+    // ekleri soyularak: `.f` dagitici (tur 1), digerleri (`.n` native donus,
+    // `.recN` ozyineleme klonu, `$i` uzmanlasma) tur 2.
+    const bool tpre = n.compare(0, 2, "t_") == 0;
+    std::string core = tpre ? n.substr(2) : n;
+    // Ozyineleme klonu `f.recN` fonksiyon tablosuna KENDI adiyla da kayitli;
+    // tam ad eslesmesinden once tani ki profil `f` diye birlestirsin.
+    {
+      size_t r = core.rfind(".rec");
+      if (r != std::string::npos && r + 4 < core.size() &&
+          core.find_first_not_of("0123456789", r + 4) == std::string::npos &&
+          tulpar_fn.count(core.substr(0, r)))
+        core = core.substr(0, r), kind = 2;
+    }
+    if (tulpar_fn.count(core)) {
+      base = core;
+      if (tpre && LLVMGetNamedFunction(m, (n + ".f").c_str())) continue;  // ince sarmalayici
+    } else {
+      size_t pos = core.find_last_of(".$");
+      while (pos != std::string::npos && pos > 0) {
+        std::string cand = core.substr(0, pos);
+        if (tulpar_fn.count(cand)) {
+          base = cand;
+          kind = (tpre && core[pos] == '.' && core.compare(pos + 1, std::string::npos, "f") == 0) ? 1 : 2;
+          break;
+        }
+        pos = core.find_last_of(".$", pos - 1);
+      }
+      if (base.empty()) continue;
+    }
+    auto it = tulpar_fn.find(base);
+    if (it == tulpar_fn.end() || it->second) continue;  // runtime yardimcisi / async
+    hedefler.push_back({f, base, kind});
+  }
+  if (hedefler.empty()) return;
+  std::map<std::string, int> ids;
+  for (auto &h : hedefler) ids.emplace(h.base, 0);
+  int next = 0;
+  std::vector<std::string> names;
+  for (auto &kv : ids) { kv.second = next++; names.push_back(kv.first); }
+
+  LLVMTypeRef i32 = LLVMInt32TypeInContext(cx);
+  LLVMTypeRef ptr = backend->ptr_type;
+  LLVMTypeRef vt = LLVMVoidTypeInContext(cx);
+  LLVMTypeRef ep[] = {i32, i32};
+  LLVMTypeRef eft = LLVMFunctionType(vt, ep, 2, 0);
+  LLVMValueRef enter = LLVMGetNamedFunction(m, "aot_prof_enter");
+  if (!enter) enter = LLVMAddFunction(m, "aot_prof_enter", eft);
+  LLVMValueRef exitf = LLVMGetNamedFunction(m, "aot_prof_exit");
+  if (!exitf) exitf = LLVMAddFunction(m, "aot_prof_exit", eft);
+  LLVMTypeRef ip[] = {ptr, i32};
+  LLVMTypeRef ift = LLVMFunctionType(vt, ip, 2, 0);
+  LLVMValueRef initf = LLVMGetNamedFunction(m, "aot_prof_init");
+  if (!initf) initf = LLVMAddFunction(m, "aot_prof_init", ift);
+
+  // Ad dizisi: [N x ptr] sabit, her biri ozel dizgi sabiti.
+  std::vector<LLVMValueRef> strs;
+  for (size_t i = 0; i < names.size(); i++) {
+    LLVMValueRef sv = LLVMConstStringInContext(cx, names[i].c_str(), (unsigned)names[i].size(), 0);
+    LLVMValueRef g = LLVMAddGlobal(m, LLVMTypeOf(sv), ("tulpar.prof.ad." + std::to_string(i)).c_str());
+    LLVMSetInitializer(g, sv);
+    LLVMSetGlobalConstant(g, 1);
+    LLVMSetLinkage(g, LLVMPrivateLinkage);
+    strs.push_back(g);
+  }
+  LLVMTypeRef arr_t = LLVMArrayType(ptr, (unsigned)strs.size());
+  LLVMValueRef tab = LLVMAddGlobal(m, arr_t, "tulpar.prof.adlar");
+  LLVMSetInitializer(tab, LLVMConstArray(ptr, strs.data(), (unsigned)strs.size()));
+  LLVMSetGlobalConstant(tab, 1);
+  LLVMSetLinkage(tab, LLVMPrivateLinkage);
+
+  LLVMBuilderRef b = LLVMCreateBuilderInContext(cx);
+  for (auto &h : hedefler) {
+    LLVMValueRef idv = LLVMConstInt(i32, (unsigned)ids[h.base], 0);
+    LLVMValueRef kv = LLVMConstInt(i32, (unsigned)h.kind, 0);
+    LLVMBasicBlockRef entry = LLVMGetEntryBasicBlock(h.fn);
+    LLVMValueRef ins = LLVMGetFirstInstruction(entry);
+    while (ins && LLVMGetInstructionOpcode(ins) == LLVMAlloca) ins = LLVMGetNextInstruction(ins);
+    if (ins) LLVMPositionBuilderBefore(b, ins);
+    else LLVMPositionBuilderAtEnd(b, entry);
+    if (h.base == "<ust duzey>") {
+      LLVMValueRef ia[] = {tab, LLVMConstInt(i32, (unsigned)strs.size(), 0)};
+      LLVMBuildCall2(b, ift, initf, ia, 2, "");
+    }
+    LLVMValueRef ea[] = {idv, kv};
+    LLVMBuildCall2(b, eft, enter, ea, 2, "");
+    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(h.fn); bb; bb = LLVMGetNextBasicBlock(bb)) {
+      LLVMValueRef t = LLVMGetBasicBlockTerminator(bb);
+      if (t && LLVMGetInstructionOpcode(t) == LLVMRet) {
+        LLVMPositionBuilderBefore(b, t);
+        LLVMBuildCall2(b, eft, exitf, ea, 2, "");
+      }
+    }
+  }
+  LLVMDisposeBuilder(b);
+  const char *v = getenv("TULPAR_AOT_VERBOSE");
+  if (v && *v && *v != '0')
+    fprintf(stderr, "[AOT] profil: %zu govde, %zu fonksiyon enstrumante edildi\n", hedefler.size(),
+            names.size());
+}
+
 void llvm_backend_optimize(LLVMBackend *backend) {
+  if (const char *pr = getenv("TULPAR_PROFILE"); pr && *pr && *pr != '0')
+    instrument_profile(backend);
   // Create pass builder options
   LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
 
@@ -19986,7 +20995,20 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   // fib/struct workloads materially closer to gcc -O2.
   // Debug builds keep the codegen IR 1:1 (verifier-only) so the debugger's
   // line mapping survives; inlining/vectorization would shred it.
-  if (backend->emit_debug_info) {
+  // TULPAR_AOT_OPT=0|1|2|3 (2026-11-26): optimizasyon seviyesini secer.
+  // Varsayilan 3. Varlik sebebi ALTIN CIKTI kapisi (tests/altin_cikti.sh):
+  // ayni program -O0 ve -O3'te ayni ciktiyi vermeli — fark, optimizasyona
+  // bagli tanimsiz davranisin (sarkan isaretci, baslatilmamis yuva, yanlis
+  // aliasing) belirtisi. 0 = --debug gibi yalniz dogrulayici; 1/2 merdivenin
+  // o basamagindan baslar. Derleme onbellegi bu degiskeni anahtara katar
+  // (TULPAR_* hepsi katilir), yani -O0 ikilisi -O3'unkiyle karismaz.
+  int opt_seviye = 3;
+  if (const char *ov = getenv("TULPAR_AOT_OPT")) {
+    if (ov[0] >= '0' && ov[0] <= '3' && ov[1] == '\0') opt_seviye = ov[0] - '0';
+    else fprintf(stderr, "%s", tulpar::i18n::tr_for_en(
+             "[AOT] Warning: TULPAR_AOT_OPT must be 0, 1, 2 or 3; using 3.\n"));
+  }
+  if (backend->emit_debug_info || opt_seviye == 0) {
     LLVMErrorRef error =
         LLVMRunPasses(backend->module, "verify", nullptr, options);
     if (error) {
@@ -20032,7 +21054,9 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMTargetMachineRef opt_tm = make_opt_machine(backend);
   LLVMModuleRef chosen = nullptr;
   int chosen_idx = -1;
-  int ai = 0;
+  // O2 -> merdivenin O2 basamagi, O1 -> guvenli O1 basamagi.
+  int ai = (opt_seviye == 2) ? 1 : (opt_seviye == 1) ? 3 : 0;
+  const int ai_bas = ai;
   while (ai < 5 && !chosen) {
     LLVMPassBuilderOptionsRef opt = att_safe[ai] ? safe_options : options;
     LLVMModuleRef trial = LLVMCloneModule(codegen_ir);
@@ -20107,7 +21131,7 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMDisposePassBuilderOptions(safe_options);
 
   if (chosen) {
-    if (chosen_idx > 0) {
+    if (chosen_idx > ai_bas) {
       // Muhafazakâr basamak uzun bir boru hattı dizesi; kullanıcıya adını
       // dökmek yerine ne olduğunu söylüyoruz.
       const char *nm = (chosen_idx == 4) ? "muhafazakar (InstCombine'siz)"
@@ -20645,6 +21669,9 @@ static void codegen_for_body(LLVMBackend *backend, ASTNode_C *node,
     LLVMBuildBr(backend->builder, incrB);
 
   LLVMPositionBuilderAtEnd(backend->builder, incrB);
+  // RFC C1: sonraki iterasyon yeni ortamda (bu iterasyonun kapanislari
+  // eskisini tutar); artim yeni ortamdaki kopyayi gunceller.
+  if (LoopEnvEntry *le = loop_env_find(backend, node)) loop_env_renew(backend, le, true);
   if (node->increment)
     codegen_statement(backend, node->increment);
   LLVMBuildBr(backend->builder, condB);
@@ -20672,6 +21699,7 @@ static void codegen_while_body(LLVMBackend *backend, ASTNode_C *node,
   LLVMBuildCondBr(backend->builder, c, bodyB, exitB);
 
   LLVMPositionBuilderAtEnd(backend->builder, bodyB);
+  if (LoopEnvEntry *le = loop_env_find(backend, node)) loop_env_renew(backend, le, false);
   // Bu dongunun break/continue hedefleri — govdedeki AST_BREAK /
   // AST_CONTINUE nereye atlayacagini buradan ogreniyor.
   if (backend->loop_depth < 32) {

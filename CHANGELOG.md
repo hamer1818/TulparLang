@@ -13,6 +13,197 @@ tag still works;
 
 ## [Unreleased]
 
+### Eklendi — FFI: C struct'ı DEĞER olarak geçirme ve döndürme (K304)
+
+- Bildirimde `"p: struct Nokta"` / `"returns": "struct Nokta"`; `Nokta` kutusuz (`@repr(C)`) bir Tulpar struct'ı.
+  Çağrı hedefin C ABI'sine elle indirilir (x86-64 SysV, AArch64, Windows x64); Android ve web'de derleme hatası.
+- `tulpar bindgen` değerle geçen C struct'larını `@repr(C)` tanımları olarak `<ad>.tpr` modülüne yazar
+  (gerçek libc `div`/`ldiv`/`lldiv` ile ölçüldü).
+
+### Değişti — `listen_evented`: bloklamayan yazma, pipelining, çok çekirdek (`evented_workers(n)`)
+
+- Yanıtlar `http_send_queued` + `http_poll` ile bloklamadan yazılıyor: yanıtını okumayan istemci artık
+  olay döngüsünü durdurmuyor. Yeni yerleşikler: `http_send_queued`, `http_send_pending`, `http_poll`.
+- **Düzeltildi:** aynı bağlantıda art arda gönderilen (pipelined) ikinci istek kayboluyordu.
+- `evented_workers(n)` / `TULPAR_WINGS_WORKERS=n`: n olay döngüsü aynı soketi paylaşır.
+- `_wings_last_status` iş parçacığına özel (pool'da başka isteğin durum kodu loglanabiliyordu).
+- `tools/wings_gecikme.py`: modların gecikme histogramı (düz ve kötü istemcili yük).
+
+### Eklendi — dil tanımı v0 (`docs/SPEC.md`), çalıştırılabilir
+
+- Sözcük yapısı (TR/EN anahtar kelimeler), tipler, struct/yöntem/enum/tuple/jenerik, işleç önceliği,
+  deyimler, istisnalar, `match`, kapanışlar, `Result`/`?`, modül çözümü, bellek ve eşzamanlılık özeti.
+  Her örnek `tests/spec_ornekleri.py` tarafından derlenip çıktısıyla karşılaştırılır.
+
+### Eklendi — paket imzalama (Ed25519)
+
+- `tulpar pkg keygen / sign / verify`. `tulpar.toml` `[trust] keys = ["ed25519:..."]` verilince
+  `pkg install` her `url:`/kayıt defteri paketi için `<url>.sig`'i doğrular: geçersiz imza hata,
+  eksik imza `require_signatures = true` ise hata. Doğrulayan anahtar `tulpar.lock` `[signatures]`'a yazılır.
+- `tulpar pkg publish --sign <ozel.key>`: kaynağı imzalayıp kayıt defterine `signature` olarak gönderir
+  (kayıt defteri `.../source.sig`'de sunar).
+
+### Eklendi — profilleyici: `tulpar --profile`
+
+- Fonksiyon başına öz %, öz/kapsayıcı süre, çağrı sayısı ve öz arena baytı; program bitince stderr'e.
+  `TULPAR_PROFILE_OUT=dosya` flamegraph/speedscope için folded yığın yazar. Özyineleme, istisna,
+  `exit()` ve thread'ler doğru sayılır; tipsiz fonksiyonun dağıtıcı/uzmanlaşma biçimleri tek ada katlanır.
+
+### Eklendi — jenerikler (`func f<T>`, `struct Kutu<T>`), `Result` modülü ve `?` yayma operatörü
+
+- `func ilk<T>(T[] xs): T`, `func cift<A, B>(A a, B b)`, `struct Kutu<T> { T deger; }`, `Kutu<int> k`.
+  Tip silme: tek gövde, kodgen `T`'yi tipsiz görür. Tip denetimi çağrı yerinde `T`'yi bağlar —
+  `ayni(1, "iki")` ve `str s = ilk([1, 2])` hata.
+- `import "sonuc"` (`"result"`): `tamam`/`hata` (`ok`/`err`), `ac`/`unwrap`, `ac_yoksa`/`unwrap_or`,
+  `donustur`/`map_ok`, `sonra`/`and_then`, `sarmala`/`try_call`; `match` nesne deseniyle açılır.
+- `?`: fonksiyon gövdesinde `int x = f()?;` — `f` hata döndüyse aynı sonuç hemen döner. Bildirim,
+  atama, `return` ve ifade deyiminde; uçlu `a ? b : c` etkilenmez.
+- `tulpar fmt` jenerik ayraçları `ilk<T>` / `Kutu<int>` diye yazar.
+- Açık tip argümanı: `ilk<int>(xs)`, `bos<str>()` (argümansız jenerikte `T` buradan bağlanır).
+
+### Eklendi — `tulpar bindgen`: C başlığından eklenti bildirimi; `cbool` tipi
+
+- `tulpar bindgen <başlık.h> [--prefix P] [--lib L] [-o tulpar-ext.json]` bir C başlığını okuyup
+  bildirimi üretir: typedef zincirleri, enum, opak struct tutamacı, fonksiyon işaretçisi typedef'leri
+  → `fn(...)`, `#include` takibi (yalnız tipler). Desteklenmeyen bildirimler gerekçesiyle raporlanır.
+  zlib.h'ten 80, sqlite3.h'ten 356, SDL_video.h'ten 112 fonksiyon.
+- Bildirimde `cbool`: C `bool`/`_Bool` (i8 ABI). Var olan `bool` C `int` olarak kalır.
+
+### Eklendi — FFI: opak `ptr` tipi ve gerçek C geri çağrısı (`fn(...)`)
+
+- Eklenti bildiriminde `ptr` (`void *`): C'de yaşayan bir nesneyi Tulpar'da tamsayı adres olarak
+  tutup geri vermek için. NULL = 0.
+- `"cmp: fn(ptr, ptr): i32"` parametresi: çağrı yerinde bir Tulpar fonksiyonunun adı (ya da `0`)
+  verilir, derleyici o imzada bir **C-ABI trampolini** üretir. Bir C kitaplığı Tulpar'a özgü hiçbir şey
+  bilmeden Tulpar fonksiyonunu çağırabilir — kapı gerçek libc `qsort`'u bir Tulpar karşılaştırıcısıyla
+  koşuyor. Geri çağrıdaki `throw` RFC C2 sınırından geçer. Olmayan fonksiyon, yanlış arite ve `async`
+  hedef derleme hatası.
+
+### Düzeltildi — async görev checkpoint sınırında serbest belleği okuyordu; `thread_create("ad", x)` hiç çalışmıyordu
+
+- `arena_save` içinde başlatılıp `arena_drop`'tan **sonra** çalışan async görevin json/dizgi argümanı,
+  ve checkpoint içinde bitip dışarıda beklenen görevin sonucu, serbest bırakılmış belleği okuyordu —
+  çökme yok, **sessizce yanlış değer** (ölçüldü: `girdi["v"] * 2` → `0`). Sebep: görev argümanları ve
+  promise değeri yalnız `arc_retain` ile tutuluyordu; geri sarma refcount'a bakmıyor. Şimdi ikisi de
+  yazma bariyerinin kuralıyla kalıcıya kopyalanıyor (yalnız geçiciyse; checkpoint yokken maliyet yok).
+  **Davranış notu:** checkpoint içinde async'e verilen json kopya olarak girer — görevin ondaki
+  değişikliği çağırana görünmez (thread_create ile aynı).
+- `thread_create("isci", x)` — LSP imzasının önerdiği yazım — boş işaretçiyle derleniyordu: thread hiçbir
+  şey çalıştırmadan bitiyor, `thread_join` `null` dönüyordu. Ad dizgi olarak da çözülüyor; çözülemeyen ad
+  (ya da değişkende tutulan fonksiyon) artık derleme hatası.
+
+### Eklendi — altın çıktı ve -O0/-O3 kapısı, sarkan işaretçi kapısı, `TULPAR_AOT_OPT`, `TULPAR_ARENA_ZEHIR`
+
+- `tests/altin_cikti.py`: örneklerin stdout'u `tests/altin/` ile **iki optimizasyon seviyesinde**
+  karşılaştırılıyor, her regresyon paketi -O0'da da aynı özeti vermeli (önceden yalnız çıkış kodu).
+- `TULPAR_AOT_OPT=0|1|2|3` (varsayılan 3) optimizasyon seviyesini seçer.
+- `TULPAR_ARENA_ZEHIR=1` geri sarılan arenayı 0xDB ile doldurur ve bölge kaplarını karantinaya alır:
+  drop'tan sonra okunan geçici değer (Kural 2.1) ilk okumada bozuk görünür. `tests/sarkan_isaretci.sh`
+  bunu bilinen desenlerde, güvenli desenlerde ve bütün paketlerde ölçer.
+
+### Değişti — döngüde üretilen kapanışlar iterasyon başına bağlama alır (JS `let`; RFC C1, davranış değişikliği)
+
+- **Eskiden** döngüdeki bütün kapanışlar tek yuvayı paylaşıyor ve son değeri görüyordu:
+  `for (int i = 0; i < 3; i++) { push(fns, () => i * 10); }` → `30 30 30`; gövdede bildirilen
+  yakalanan değişken de aynı (`20 20 20`).
+- **Şimdi** her kapanış kendi iterasyonunun değerini görür: `0 10 20`. `for` init'i, `for-in`
+  değişkeni ve gövde bildirimleri iterasyona özel; **döngüden önce bildirilen** yakalanan değişken eskisi
+  gibi paylaşılır (`acc = 100` döngüden sonra yazılırsa her kapanışta görünür). Kapanış kendi
+  iterasyonunun kopyasını değiştirebilir, diğerlerini etkilemez.
+- **Değişen davranış:** paylaşılan yuvaya dayanan kod (son değeri bekleyen) etkilenir. Kasıtlı bir
+  kullanım bilinmiyor; `tests/closure_edges.test.tpr` eski davranışı doğruluyordu, ters çevrildi.
+- Aynı turda kapanan iki eski hata: `for (x in xs)` değişkenini yakalayan kapanış `null` okuyordu
+  (değişken bildirim sayılmıyordu), ve yakalanan değişkende `i++` / `i--` **derlenmiyordu**
+  (`'i' değişkeni artırılamaz — tanımlı değil`; v3.48.1'de de) — yani `for (…; i++)` döngüsünde
+  bir kapanış `i`'yi yakaladığı anda program derlenmiyordu.
+- Maliyet yalnız yakalanan döngü bildirimi olan döngüde (iterasyon başına bir küçük ortam dizisi +
+  kopya); öteki döngülerin kodu değişmedi. Kapı `tests/dongu_kapanis.test.tpr` (12 test + üst düzey):
+  for / gövde / for-in / while, dış değişken paylaşımı, iç içe, break/continue, lambda içinde döngü,
+  lambda içi lambda, `++`/`--`, checkpoint kaçışı. Eski yuva ataması geri getirilince 11'i kırmızı.
+
+### Belgelendi — eşzamanlılık sözleşmesi editörde: thread/mutex hover metinleri + nitelik hover'ı (RFC C6)
+
+- `thread_create`, `thread_detach`, `mutex_create/lock/unlock/destroy` için LSP açıklamaları **boştu**:
+  hover yalnız imzayı veriyordu, "paylaşım muteks ister" kuralı editörde hiç görünmüyordu. Artık her biri
+  sözleşmeyi taşıyor: thread sınırı kopyalayarak geçilir, korumasız paylaşım tanımsız, muteks altındaki
+  yazmalar sonra aynı muteksi alana görünür, aynı thread'de ikinci kilit POSIX'te kilitlenir, throw
+  unlock'u atlar (`finally`), detach handle'ı tüketir. `atomic_load`/`atomic_add` metinleri
+  acquire/release kuralını ve geçerli sıraları söylüyor.
+- **Nitelik hover'ı:** `@thread_local`, `@frame`, `@no_alloc`, `@repr` üzerinde hover açıklama veriyor
+  (eskiden hiçbir şey). Yalnız kelimenin önünde `@` varken — `frame` adlı bir değişken nitelik sanılmaz.
+- README'nin thread örneği atomik sayaç ve `@thread_local` ile, sözleşme cümlesi ve
+  `docs/mindmap/Concurrency.md` bağlantısıyla; yerleşik tablosu atomikleri, `arena_drop`, `@frame`,
+  `persist`, `mem_stats`'ı listeliyor.
+- Kapı `tests/lsp_audit.py`: yedi ad için hover sözleşme parçasını taşımalı, iki nitelik hover'ı ve
+  aynı adlı değişkenin nitelik sanılmaması. v3.48.1 ikilisiyle kırmızı.
+
+### Eklendi — `mem_stats()`: bellek sayaçları programın içinden (RFC C4)
+
+- Sızıntı artık yalnız RSS grafiğinden değil, programdan görünür. `mem_stats()` bir json döndürür:
+  `arena_used`, `arena_reserved` / `arena_blocks` (işletim sistemine geri verilmez), `region_objects`,
+  `checkpoint_depth` / `checkpoint_max`, `untracked_objects` (checkpoint dışında kurulan kalıcı
+  obje/dizi başlıkları), `persist_bytes` (`persist()` ve yazma bariyerinin kalıcı kopyaları),
+  `heap_in_use` (ayırıcının kullanımdaki baytı; Windows ve musl'de -1). Arena, bölge ve sayaçlar
+  çağıran ipliğindir.
+- Bellek Sözleşmesi'nin üç deliği ölçülebilir: checkpoint'siz döngü `untracked_objects` + `arena_used`'da,
+  kare başına yeniden atanan global `persist_bytes`'ta, tepe sonrası RSS `arena_reserved`'da.
+- Sıcak yol maliyeti yok denecek kadar az: checkpoint dışı kap ayırmasında tek bir TLS artırması.
+  glibc'de `mallinfo2` zayıf sembol (2.33'ten eski glibc'ye bağlanan program link'te düşmez).
+- Kapı `tests/mem_stats.test.tpr` (5 test); sayaçlar sökülünce D1/D2 testleri kırmızı.
+
+### Düzeltildi — `arena_save` yığın doluyken sessiz -1 yerine yakalanabilir hata (RFC C3, davranış değişikliği)
+
+- **Açık:** 32'lik kontrol noktası yığını doluyken `arena_save` sessizce **-1** dönüyordu; ardındaki
+  `arena_restore(-1)` / `arena_drop(-1)` hiçbir şey yapmıyordu. Drop'suz tekrarlanan bir `arena_save`
+  (örneğin döngüde) 33. iterasyondan sonra geri sarmayı durduruyor, bellek sınırsız birikiyor, program
+  ise doğru çalışmaya devam ediyordu (P14: 200k'da 23 MB, 1M'de 132 MB).
+- **Şimdi:** 33. kayıt `@frame` gibi yakalanabilir bir hata atar (`arena_save: arena kontrol noktasi
+  yigini dolu (32) …`); yakalanmazsa süreç `Uncaught Exception` ile çıkar. Dengeli desenler (save + drop,
+  tek save + çok restore — wings, tame, arcade) etkilenmez. `@frame` kendi, fonksiyon adlı hatasını
+  korur (şeker iç ad `__frame_arena_save`'i çağırıyor).
+- **Değişen davranış:** drop'suz `arena_save` biriktiren kod eskiden sessizce sızdırıyordu, artık durur.
+- Kapı `tests/arena_yigin_dolu.test.tpr` (4 test); eski davranış geri getirilince 2'si kırmızı.
+- **S3 arena sözleşmesi kapısı düzeltildi** (`tests/arena_contract_smoke.py`): "`arena_restore` serbest
+  bırakmaz" diyordu; ölçüm doğruydu ama kolu her iterasyonda `arena_save` çağırıyordu — sızan drop'suz
+  save'di. Yeni kollar: tek save + her iterasyonda restore **düz** (2 832 KB, drop kolu 2 828 KB, kontrol
+  44 MB); drop'suz tekrar (`arena_dropsuz_tekrar.tpr`, eski `arena_restore.tpr`) hata + çıkış 1.
+
+### Düzeltildi — eklenti sınırı: `throw` C yığın çerçevelerinin üzerinden atlamıyor (RFC C2)
+
+- **Açık:** C'nin geri çağırdığı Tulpar fonksiyonu (`tulpar_ext_call_f64` / `tulpar_ext_eval_f64`) `throw`
+  edince, dışarıda bir Tulpar `try`'ı varsa istisna aradaki C çerçevesinin **üzerinden** `longjmp`
+  yapıyordu: C'nin temizliği (kilidi bırakma, sayaç, free) hiç koşmuyordu. Ölçüldü: kilit 1, dönüş kodu
+  hiç yazılmadı.
+- **Şimdi:** sınırda yakalanır, istisna kalıcıya kopyalanır, C hata kodu görür (`call_f64` → **-1**,
+  `eval_f64` → 0.0 + yeni `tulpar_ext_threw()`), temizliğini yapıp döner; C fonksiyonu Tulpar'a döndüğü
+  anda istisna **yeniden fırlar**. İki kanca atarsa ilki kazanır. Dışarıda `try` yokken davranış aynı
+  (mesaj + çıkış 1).
+- Maliyet (boş kanca, 10M çağrı): `try` dışında 2.15 → 2.4–2.6 ns, `try` içinde ~5.3 ns (`setjmp`);
+  Tulpar → C çağrısı değişmedi. Bunun için `eh_cur` sabitle ilkleniyor (TLS init bekçisi kalktı).
+- Kapı `tests/yerel_eklenti.sh` (call / eval / iki kanca / iç yakalama / `@frame`, try yokken eski
+  davranış); koruma devre dışı bırakılınca kırmızı.
+
+### Düzeltildi — slowloris: wings istek okuma süresi sınırı + bloklamayan evented okuma
+
+- **Açık:** `http_recv_request` recv'i sınırsız bekliyordu. Başlığı 200 ms'de bir bayt damlatan
+  istemci (recv başına zaman aşımı bunu yakalamaz) işçiyi sonsuza dek tutuyordu: `listen_pool(port, N)`'de
+  N yavaş istemci sunucuyu tamamen durduruyor, `listen_evented`'de **tek** yavaş istemci bütün döngüyü
+  kilitliyordu.
+- **`read_timeout(ms)`** (wings, varsayılan **10 000**, `0` = sınırsız, `TULPAR_WINGS_READ_TIMEOUT_MS`
+  ezer): başlık bloğu — keep-alive'da yeni isteğin ilk baytını beklemek dahil — toplam `ms` içinde
+  gelmeli; gövde iki okuma arasında en fazla `ms` durabilir, ilerleyen yavaş yükleme kesilmez. Bayt
+  geldiyse **408**, gelmediyse sessiz kapanış. Runtime'da süreç geneli `http_read_timeout(ms)`
+  (varsayılan 0: wings dışındaki `http_recv_request` çağıranların davranışı değişmedi).
+- **`listen_evented` bloklamadan okuyor:** yeni `http_recv_ready(fd, max)` o an bekleyen baytları alır,
+  yarım isteği fd başına tutar (`http_recv_error() == 1`); tick başında `http_recv_expired()` süresi
+  dolanlara 408 yazılıp kapatılıyor. `socket_close` yarım isteği siler.
+- Kapı `tests/wings_slowloris_smoke.py` (`build.sh suites`): dört mod (listen / pool / async / evented),
+  yavaş istemci 408 + kapanış, diğer istekler geçer (evented'de hemen), yavaş gövde kesilmez, bosta
+  bağlantı sessizce kapanır. Kontrol: süre 0 iken pool **kilitlenmeli**. Evented bloklayan okumaya geri
+  döndürülünce kırmızı: 4 yavaş istemci döngüyü 4,5 s durduruyor.
+- Kalan: R.U.D.Y. (gövdeyi süreden kısa aralıklarla damlatmak) bir işçiyi uzun tutabilir; `lib/router.tpr`
+  ve `wings_tls` kendi okuyucularını kullanıyor, süre sınırı onlara uygulanmıyor.
+
 ### Düzeltildi — null artık null: `db_query` NULL, `fromJson` null ve `== null` (davranış değişikliği)
 
 - **`db_query` (iki biçimi de):** SQL NULL sütun `0` yerine **null** döner (`typeof` "null", `toJson` `null`).

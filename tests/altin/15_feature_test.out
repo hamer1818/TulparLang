@@ -1,0 +1,66 @@
+=== TulparLang Feature Test ===
+
+--- String Functions ---
+Original: Hello, Tulpar World!
+contains('Tulpar'): true
+startsWith('Hello'): true
+endsWith('!'): true
+indexOf('Tulpar'): 7
+substring(7, 13): Tulpar
+trim('  hi  '): hi
+replace('World', 'Tulpar'): Hello, Tulpar Tulpar!
+length(): 20
+
+--- Math Functions ---
+abs(-42): 42
+sqrt(16): 4
+floor(3.7): 3
+ceil(3.2): 4
+
+--- Time Functions ---
+clock_ms(): N
+sleep(10) elapsed: N ms
+
+--- Type Checking ---
+intVar: 42
+floatVar: 3.14
+strVar: hello
+boolVar: true
+
+--- JSON Functions ---
+JSON object: {"name":"Tulpar","version":2.1,"fast":true}
+  name: Tulpar
+  version: 2.1
+  fast: true
+
+
+--- Array Functions ---
+Original array: [3,1,4,1,5,9,2,6]
+length: 8
+First element: 3
+Last element: 6
+After numbers[0] = 99: [99,1,4,1,5,9,2,6]
+
+--- Control Flow ---
+x is greater than 5
+While loop (0-4):
+  i = 0
+  i = 1
+  i = 2
+  i = 3
+  i = 4
+For loop (0-4):
+  j = 0
+  j = 1
+  j = 2
+  j = 3
+  j = 4
+
+--- Functions ---
+add(3, 4): 7
+factorial(5): 120
+
+=== All Tests Completed! ===
+TulparLang interpreter is working correctly!
+
+[cikis=0]

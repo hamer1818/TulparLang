@@ -81,6 +81,14 @@ struct TypeInferContext {
   // Ad bilinmiyorsa kayit yok: karsilastirma yalniz iki taraf da biliniyorsa.
   std::unordered_map<std::string, std::string> fn_return_custom;
   std::unordered_map<std::string, std::vector<std::string>> fn_param_custom;
+  // JENERIK (2026-11-26): `func f<T>(T x, T[] xs): T` — parametre basina
+  // "T" / "T[]" / "" ve donus izi. Cagri yerinde T baglanir (birlestirme).
+  struct GenericSig {
+    std::vector<std::string> type_params;
+    std::vector<std::string> params;
+    std::string ret;
+  };
+  std::unordered_map<std::string, GenericSig> fn_generic;
 
   // P23 — COZUM ile BASLATMA ayri sorulardir.
   //

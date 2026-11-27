@@ -81,6 +81,7 @@ embed_library("tame" "tame.tpr" EMBEDDED_TAME_CONTENT)
 embed_library("arcade" "arcade.tpr" EMBEDDED_ARCADE_CONTENT)
 embed_library("scene3d" "scene3d.tpr" EMBEDDED_SCENE3D_CONTENT)
 embed_library("smtp" "smtp.tpr" EMBEDDED_SMTP_CONTENT)
+embed_library("sonuc" "sonuc.tpr" EMBEDDED_SONUC_CONTENT)
 
 # Generate the header file from template
 configure_file(

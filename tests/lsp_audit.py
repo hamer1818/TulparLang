@@ -189,6 +189,63 @@ def main():
             check(all(e.get("newText") == "toplam" for e in edits),
                   "rename yeni adi yazmiyor", edits[:2])
 
+        # EŞZAMANLILIK SÖZLEŞMESİ HOVER'DA (RFC C6, 2026-11-26). thread_create,
+        # thread_detach ve mutex_* açıklamaları BOŞTU: hover yalnız imzayı
+        # veriyordu, "paylaşım muteks ister" kuralı editörde hiç görünmüyordu.
+        # Her ad için açıklama boş olmamalı ve sözleşmenin anahtar kelimesini
+        # taşımalı; `@thread_local` (ve öbür nitelikler) yalnız '@' önekiyle
+        # nitelik açıklaması vermeli — aynı adlı değişken nitelik sanılmamalı.
+        if caps.get("hoverProvider"):
+            conc_uri = "file:///tmp/lsp_audit_conc.tpr"
+            conc = ("@thread_local int sayac = 0;\n"
+                    "int mu = mutex_create();\n"
+                    "func isci(int x) { mutex_lock(mu); sayac = sayac + x; mutex_unlock(mu); return 0; }\n"
+                    "int t = thread_create(isci, 1);\n"
+                    "thread_detach(t);\n"
+                    "mutex_destroy(mu);\n"
+                    "int frame = atomic_add(sayac, 1);\n"
+                    "@frame func kare(): int { return frame; }\n")
+            srv.send({"jsonrpc": "2.0", "method": "textDocument/didOpen",
+                      "params": {"textDocument": {"uri": conc_uri, "languageId": "tulpar",
+                                                  "version": 1, "text": conc}}})
+            srv.wait(lambda m: m.get("method") == "textDocument/publishDiagnostics")
+            lines = conc.split("\n")
+
+            def hover_at(word, nth_line, rid, offset=1):
+                col = lines[nth_line].index(word) + offset
+                r = srv.request(rid, "textDocument/hover",
+                                {"textDocument": {"uri": conc_uri},
+                                 "position": {"line": nth_line, "character": col}})
+                val = ((r or {}).get("result") or {}).get("contents", {})
+                return val.get("value", "") if isinstance(val, dict) else str(val or "")
+
+            beklenen = [  # (ad, satir, sozlesmeden bir parca)
+                ("thread_create", 3, "kopyala"),
+                ("thread_detach", 4, "tuketir"),
+                ("mutex_create", 1, "mutex_lock"),
+                ("mutex_lock", 2, "gorunur"),
+                ("mutex_unlock", 2, "finally"),
+                ("mutex_destroy", 5, "birakir"),
+                ("atomic_add", 6, "acq_rel"),
+            ]
+            for i, (ad, ln, parca) in enumerate(beklenen):
+                txt = hover_at(ad, ln, 40 + i)
+                check(ad in txt and parca in txt,
+                      "hover '%s' sozlesme aciklamasini vermiyor (beklenen '%s')" % (ad, parca),
+                      txt[:120])
+            # @thread_local: '@' oneki varken nitelik metni
+            txt = hover_at("thread_local", 0, 60)
+            check("kendi kopyasi" in txt.lower() or "KENDI kopyasi" in txt,
+                  "hover '@thread_local' nitelik aciklamasini vermiyor", txt[:120])
+            txt = hover_at("frame", 7, 61)
+            # Etiket tr_en("nitelik", "attribute"): CI Ingilizce yerelde kosar.
+            check("arena_save" in txt and ("nitelik" in txt or "attribute" in txt),
+                  "hover '@frame' nitelik aciklamasini vermiyor", txt[:120])
+            # ayni adli degisken (`int frame`, satir 6): nitelik DEGIL
+            txt = hover_at("frame", 6, 62)
+            check("nitelik" not in txt and "attribute" not in txt and "arena_save" not in txt,
+                  "'frame' degiskeni nitelik sanildi", txt[:120])
+
         # BOZUK kod tanı üretmeli — editörün kırmızı altçizgisi buradan geliyor.
         srv.send({"jsonrpc": "2.0", "method": "textDocument/didChange",
                   "params": {"textDocument": {"uri": URI, "version": 2},

@@ -24,6 +24,10 @@ const BuiltinEntry *builtin_table(size_t *out_count);
 // yoksa yuklu yerel eklentilerin fonksiyonlarina bakar (K303).
 const BuiltinEntry *builtin_lookup(const char *name);
 
+// Nitelik (`@thread_local`, `@frame`, `@no_alloc`, `@repr`) — ad '@' olmadan.
+// `signature` kullanim bicimi, `doc` aciklama. Bulunamazsa nullptr.
+const BuiltinEntry *attribute_lookup(const char *name);
+
 // Yuklu yerel eklentilerin fonksiyonlari, BuiltinEntry olarak (tamamlama).
 // Eklenti listesi buyudukce yeniden kurulur; isaretciler bir sonraki
 // cagriya kadar gecerli.

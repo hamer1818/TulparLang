@@ -307,6 +307,45 @@ std::string normalise_line_spacing(const std::string &content) {
                     continue;
                 }
             }
+            // JENERIK liste (2026-11-26): `func ilk<T>(`, `struct Kutu<K, V> {`,
+            // `Kutu<int> k`. Kalip: onceki karakter bir ad, iceride virgulle
+            // ayrilmis TIP KELIMESI ya da BUYUK HARFLE baslayan ad (istege bagli
+            // `[]`), sonra `>`. Karsilastirma `a < b > c` kucuk harfli oldugu
+            // icin eslesmez; eslesse bile fmt yalniz bosluk degistirir, token
+            // akisi ayni kalir.
+            {
+                size_t b = out.size();
+                while (b > 0 && out[b - 1] == ' ') b--;
+                const bool after_name = b > 0 && (std::isalnum((unsigned char)out[b - 1]) || out[b - 1] == '_');
+                size_t q = i + 1;
+                bool ok = after_name;
+                std::string inner;
+                int items = 0;
+                while (ok) {
+                    while (q < content.size() && (content[q] == ' ' || content[q] == '\t')) q++;
+                    size_t st = q;
+                    while (q < content.size() && (std::isalnum((unsigned char)content[q]) || content[q] == '_')) q++;
+                    if (q == st) { ok = false; break; }
+                    std::string w = content.substr(st, q - st);
+                    bool kw = false;
+                    for (auto k : kGenericInner) if (w == k) kw = true;
+                    if (!kw && !(w[0] >= 'A' && w[0] <= 'Z')) { ok = false; break; }
+                    if (q + 1 < content.size() && content[q] == '[' && content[q + 1] == ']') { w += "[]"; q += 2; }
+                    inner += (items++ ? ", " : "") + w;
+                    while (q < content.size() && (content[q] == ' ' || content[q] == '\t')) q++;
+                    if (q < content.size() && content[q] == ',') { q++; continue; }
+                    if (q < content.size() && content[q] == '>') break;
+                    ok = false;
+                }
+                if (ok && items > 0) {
+                    while (!out.empty() && out.back() == ' ') out.pop_back();
+                    out.push_back('<');
+                    out += inner;
+                    out.push_back('>');
+                    i = q;
+                    continue;
+                }
+            }
             // Not a generic — fall through to binary-op handling.
         }
 

@@ -1,0 +1,138 @@
+// Dongude uretilen kapanislar: iterasyon basina baglama (RFC C1, 2026-11-26).
+// JS `let` anlami — her kapanis KENDI iterasyonunun degerini gorur; donguden
+// ONCE bildirilmis yakalanan degisken paylasilir. Eskiden butun dongu
+// degiskenleri tek yuvayi paylasiyordu (for: 30 30 30, govde: 20 20 20),
+// for-in degiskeni hic yakalanmiyordu (null null null) ve yakalanan
+// degiskende `i++` derlenmiyordu ("artirilamaz — tanimli degil").
+import "test";
+
+func goster(json fns): str {
+    str out = "";
+    for (int k = 0; k < len(fns); k++) { var f = fns[k]; out = out + toString(f()) + " "; }
+    return out;
+}
+
+func run_for_degiskeni() {
+    var fns = [];
+    for (int i = 0; i < 3; i++) { push(fns, () => i * 10); }
+    assert_eq_str(goster(fns), "0 10 20 ");
+}
+
+func run_govde_bildirimi() {
+    var fns = [];
+    for (int i = 0; i < 3; i = i + 1) { int j = i * 10; push(fns, () => j); }
+    assert_eq_str(goster(fns), "0 10 20 ");
+}
+
+func run_for_in() {
+    var fns = [];
+    for (x in [10, 20, 30]) { push(fns, () => x); }
+    assert_eq_str(goster(fns), "10 20 30 ");
+}
+
+func run_while_govdesi() {
+    var fns = [];
+    int n = 0;
+    while (n < 3) { int w = n * 10; push(fns, () => w); n = n + 1; }
+    assert_eq_str(goster(fns), "0 10 20 ");
+}
+
+// Donguden once bildirilen degisken PAYLASILIR: donguden sonraki yazma her
+// kapanista gorunur; dongu degiskeni iterasyona ozel.
+func run_dis_degisken_paylasilir() {
+    var fns = [];
+    int acc = 0;
+    for (int i = 0; i < 3; i++) { push(fns, () => acc + i); }
+    acc = 100;
+    assert_eq_str(goster(fns), "100 101 102 ");
+}
+
+func run_ic_ice_donguler() {
+    var fns = [];
+    for (int i = 0; i < 2; i++) { for (int j = 0; j < 2; j++) { push(fns, () => i * 10 + j); } }
+    assert_eq_str(goster(fns), "0 1 10 11 ");
+}
+
+// Kapanis kendi iterasyonunun kopyasini degistirir; digerleri etkilenmez.
+func run_kapanis_kendi_kopyasini_degistirir() {
+    var fns = [];
+    for (int i = 0; i < 3; i++) { push(fns, () => { i = i + 100; return i; }); }
+    var f0 = fns[0];
+    assert_eq_int(f0(), 100);
+    assert_eq_int(f0(), 200);
+    var f1 = fns[1];
+    assert_eq_int(f1(), 101);
+}
+
+func run_break_continue() {
+    var fns = [];
+    for (int i = 0; i < 10; i++) {
+        if (i % 2 == 1) { continue; }
+        if (i > 6) { break; }
+        push(fns, () => i);
+    }
+    int w = 0;
+    while (w < 5) { int v = w; w = w + 1; if (v == 2) { continue; } push(fns, () => v * 100); }
+    assert_eq_str(goster(fns), "0 2 4 6 0 100 300 400 ");
+}
+
+func run_lambda_icinde_dongu() {
+    var mk = (int n) => {
+        var fs = [];
+        for (int i = 0; i < n; i++) { push(fs, () => i + n * 1000); }
+        return fs;
+    };
+    assert_eq_str(goster(mk(3)), "3000 3001 3002 ");
+}
+
+func run_lambda_ici_lambda() {
+    var fns = [];
+    for (int i = 0; i < 3; i++) { var mk = () => () => i; push(fns, mk()); }
+    assert_eq_str(goster(fns), "0 1 2 ");
+}
+
+// Yakalanan degiskende ++/-- (dongu disinda da).
+func run_yakalananda_artirma() {
+    int c = 0;
+    var oku = () => c;
+    c++;
+    c++;
+    c--;
+    assert_eq_int(oku(), 1);
+}
+
+// Kare checkpoint'i icinde uretilip kalici diziye konan kapanislar geri
+// sarma + coplamadan sag cikar (iterasyon ortamlari yerinde kalicilasir).
+json g_kapanislar = [];
+func run_checkpoint_kacisi() {
+    int wm = arena_save();
+    for (int i = 0; i < 3; i++) { str et = "e" + toString(i); push(g_kapanislar, () => et); }
+    arena_drop(wm);
+    for (int k = 0; k < 2000; k++) { str cop = "copcopcop" + toString(k); }
+    assert_eq_str(goster(g_kapanislar), "e0 e1 e2 ");
+}
+
+print("=== dongu kapanislari (iterasyon basina baglama) ===");
+test("for degiskeni", "run_for_degiskeni");
+test("govde bildirimi", "run_govde_bildirimi");
+test("for-in degiskeni", "run_for_in");
+test("while govdesi", "run_while_govdesi");
+test("dis degisken paylasilir", "run_dis_degisken_paylasilir");
+test("ic ice donguler", "run_ic_ice_donguler");
+test("kapanis kendi kopyasini degistirir", "run_kapanis_kendi_kopyasini_degistirir");
+test("break / continue", "run_break_continue");
+test("lambda icinde dongu", "run_lambda_icinde_dongu");
+test("lambda ici lambda", "run_lambda_ici_lambda");
+test("yakalanan degiskende ++/--", "run_yakalananda_artirma");
+test("checkpoint kacisi", "run_checkpoint_kacisi");
+test_summary();
+
+// Ust duzey (fonksiyon disi) dongu ve for-in.
+var ust = [];
+for (int t = 0; t < 3; t++) { push(ust, () => t); }
+for (s in ["a", "b"]) { push(ust, () => s); }
+if (goster(ust) != "0 1 2 a b ") {
+    print("UST DUZEY DONGU KAPANISI YANLIS: " + goster(ust));
+    exit(1);
+}
+print("ust duzey dongu kapanislari OK");

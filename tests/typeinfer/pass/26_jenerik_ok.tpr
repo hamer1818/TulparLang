@@ -1,0 +1,11 @@
+// JENERIK (2026-11-26): ayni jenerik fonksiyon farkli cagri yerlerinde farkli
+// tiplere baglanir; baglanan donus tipi ileri tasinir (int + 1, str + "!").
+func ilk<T>(T[] xs): T { return xs[0]; }
+func ayni<T>(T a, T b): T { return a; }
+struct Kutu<T> { T deger; }
+int a = ilk([1, 2]) + 1;
+str b = ilk(["x"]) + "!";
+float c = ayni(1.5, 2.5);
+Kutu<int> k;
+k.deger = 3;
+print(a); print(b); print(c); print(k.deger);

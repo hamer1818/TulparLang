@@ -1,0 +1,12 @@
+=== enum ===
+Ekran.MENU = 0, Ekran.AYAR = 3
+Hasar.AGIR = 35
+Menu --ENTER--> Oyun
+Oyun --ESC--> Duraklat
+Duraklat --ESC--> Oyun
+Oyun --ESC--> Duraklat
+Duraklat --A--> Duraklat
+Duraklat --ESC--> Oyun
+can: 65
+
+[cikis=0]

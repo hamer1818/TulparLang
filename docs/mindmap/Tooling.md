@@ -45,6 +45,26 @@ ve **hâlâ ayrışıyor** (biçimlendirilen dosya derlenebiliyor).
 > `[registry] mirrors = [...]` okuma yedeği, lock hangi aynadan geldiğini kaydeder ve aynı
 > ad@sürümün sha256'sı aynalar arasında da tutmalı; `publish` yalnız `url`'e.
 
+### Paket imzası (2026-11-26)
+`tulpar.lock`'taki sha256 "ilk indirmeyle aynı bayt" der; ilk indirmenin **yazarın**
+paketi olduğunu söylemez — ele geçirilmiş bir kayıt defteri ilk kurulumda da sahte paket
+verebilir. İmza bunu kapatır (`src/pkg/imza.cpp`, OpenSSL Ed25519):
+```bash
+tulpar pkg keygen yazar.key            # genel anahtarı basar: ed25519:<base64>
+tulpar pkg sign paket.tpr --key yazar.key    # paket.tpr.sig
+tulpar pkg verify paket.tpr paket.tpr.sig ed25519:...
+```
+Kullanıcı tarafı: `[trust] keys = ["ed25519:..."]` (+ `require_signatures = true`).
+`url:`/kayıt defteri paketi için `<url>.sig` çekilir, güvenilen bir anahtarla doğrulanır;
+**geçersiz imza her zaman hata**, eksik imza yalnız `require_signatures`'ta hata (değilse
+uyarı). Doğrulayan anahtar kilide (`[signatures]`) yazılır; önbellek isabeti yalnız o
+imzacı hâlâ güvenilirse — anahtar listeden çıkınca paket yeniden indirilip doğrulanır.
+`[trust]` yoksa `.sig` hiç istenmez (eski davranış). Yayın: `tulpar pkg publish --sign
+yazar.key` imzayı kayıt defterinin `.../source` olarak sunacağı baytların üzerine atar ve
+`signature` alanıyla gönderir; `tulpar-be` (ayrı depo, `registry/paket-imza` dalı) onu
+`.../source.sig`'de sunar. Kapılar: `tests/pkg_imza_audit.py` (yerel sunucu) ve
+`tulpar-be/tests/imza_smoke.sh` (gerçek kayıt defteri + bu istemci, uçtan uca).
+
 ## Analiz — `tulpar analyze` (K157, 2026-09-29)
 `src/cli/analyze_cmd.cpp`: derlemeden/linklemeden (i) dosyanın her üst düzey fonksiyonu için
 `@no_alloc` kuralıyla ayırma raporu (typeinfer `typeinfer_alloc_report`, geçişli, beyaz liste —
@@ -55,6 +75,31 @@ kadar "beyaz listede olmayan yerleşik" sayılıyordu (K003 + K041); artık hede
 sırayla (`Tip.f(p)` → `m__f` → alıcının struct tipine göre `Tip.f` → serbest `f`) çözülüyor.
 Alıcının tipi statik bilinmiyor ve bu adda bir yöntem varsa tanı bunu adıyla söylüyor
 (`tests/typeinfer/{pass/24,fail/31}_no_alloc_yontem*.tpr`).
+
+## Profilleyici — `tulpar --profile` (2026-11-26)
+`tulpar --profile prog.tpr` (ya da `tulpar build --profile`) her Tulpar fonksiyon gövdesine
+giriş/çıkış kancası koyar; program bitince stderr'e fonksiyon başına **öz %, öz ms,
+kapsayıcı ms, çağrı, öz arena KB** tablosu basılır. `TULPAR_PROFILE_OUT=p.folded` ayrıca
+flamegraph.pl / speedscope'un okuduğu "folded" yığınları yazar (`<ust duzey>;f;g <µs>`),
+`TULPAR_PROFILE_TOP=<n>` tablo boyu. Bayrak derleyiciye `TULPAR_PROFILE=1` olarak gider —
+önbellek anahtarına girer, profilli ikili profilsizle karışmaz.
+
+Nasıl doğru sayıyor (`instrument_profile` llvm_backend.cpp, runtime_bindings.cpp sonu):
+- Bir Tulpar fonksiyonu IR'de birkaç biçimde: `f` (tam tipli), `t_f.f` (tipsizin
+  dağıtıcısı), `f$i`/`t_f.n` (uzmanlaşma), `f.recN` (özyineleme klonu), `t_f`/`tb_f`/`tw_f`
+  (sarmalayıcı). Sarmalayıcılar atlanır, diğerleri **aynı ada** katlanır; dağıtıcının kendi
+  uzmanlaşmasına geçişi tek çağrı sayılır.
+- Kapsayıcı süre özyinelemede iki kez sayılmaz (yalnız en dış çerçeve).
+- `throw` çıkış kancasını atlar: `aot_try_push` profil derinliğini saklar, `aot_throw`
+  atlanan çerçeveleri kapatır. `exit()` açık çerçeveleri raporda kapatır.
+- İplik başına çağrı ağacı, rapor birleştirir. Async gövdeler **enstrümante edilmez**
+  (askıya alınan coroutine yığını bozardı) — await beklemesi çağıranın kapsayıcısında.
+- Ölçüm gideri raporda yazar (~34 ns/çağrı, iki `steady_clock` okuması); çok kısa
+  fonksiyonun öz süresi şişer — sayımlar ve oranlar güvenilir, mutlak ns değil.
+
+Kapı `tests/profil_smoke.py`: kesin çağrı sayıları (fib(20) = 21891, dağıtıcı, yöntem,
+throw, thread, exit), arena baytı, süre oranı, folded biçimi; kontrol: profilsiz ikilide
+kanca yok.
 
 ## Type checker — `tulpar typecheck`
 `src/cli/typecheck_cmd.cpp` — ön-geçişteki (`[typecheck]` uyarıları) aynı denetleyici,

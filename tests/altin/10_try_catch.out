@@ -1,0 +1,24 @@
+=== Try-Catch Test ===
+
+-- Test 1: Basic throw and catch --
+Inside try block
+Caught exception: This is an error!
+After try-catch
+
+-- Test 2: Object throw --
+Caught error object:
+Message: Something went wrong
+
+-- Test 3: Finally block --
+Try block executing
+Caught: Error with finally
+Finally block - always executes
+
+-- Test 4: No exception --
+Try block - no error
+Result: 8
+Finally runs anyway
+
+=== All tests completed! ===
+
+[cikis=0]

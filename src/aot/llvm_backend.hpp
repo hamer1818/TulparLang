@@ -322,6 +322,7 @@ typedef struct {
   LLVMValueRef func_aot_style;            // style(s,spec)->str : ANSI styling
   LLVMValueRef func_aot_env;
   LLVMValueRef func_aot_arena_save;
+  LLVMValueRef func_aot_arena_save_try = nullptr; // @frame (__frame_arena_save)
   LLVMValueRef func_aot_arena_restore;
   LLVMValueRef func_aot_arena_drop;
   LLVMValueRef func_aot_now_iso8601;
@@ -707,6 +708,10 @@ typedef struct {
   // ("HATA (lib/router.tpr:245): ..."). May be null for stdin/embedded input.
   const char *source_filename;
   void *capture_data;
+  // Bu cercevede (fonksiyon/lambda govdesi) acik dongu ortamlari — RFC C1
+  // dongu basina ortam. std::vector<LoopEnvEntry>*; nullptr = yok. Lambda /
+  // fonksiyon govdesine girerken saklanip bosaltilir (baska LLVM fonksiyonu).
+  void *loop_envs;
   // Import edilen modullerin ayristirilmis AST onbellegi + modul struct
   // tiplerinin kayit durumu (llvm_backend.cpp: ImportState). Her modul BIR
   // KEZ ayristirilir: once struct on taramasi (prescan_import_types), sonra
@@ -723,6 +728,8 @@ typedef struct {
 LLVMBackend *llvm_backend_create(const char *module_name);
 // Web hedefini create'ten ÖNCE kur (bkz. target_web alanının notu).
 void llvm_backend_set_target_web(int enable);
+// Android: ext struct deger gecisi reddedilir (tek IR'den iki ABI).
+void llvm_backend_set_target_android(int enable);
 
 // Emit an object for an EXPLICIT target triple (Android cross-compile:
 // aarch64-linux-android34 / x86_64-linux-android34). Initializes both the

@@ -1,0 +1,5 @@
+Point { x: 3, y: 4 }
+Box { width: 2, height: 3, depth: 4 }
+Point { x: 0, y: 0 }
+
+[cikis=0]

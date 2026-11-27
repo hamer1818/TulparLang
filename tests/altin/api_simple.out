@@ -1,0 +1,21 @@
+=== TulparAPI Simple Example ===
+
+Created 5 users
+
+--- GET /users ---
+{"status":200,"data":[{"id":1,"name":"User","email":"user@example.com"},{"id":2,"name":"User","email":"user@example.com"},{"id":3,"name":"User","email":"user@example.com"},{"id":4,"name":"User","email":"user@example.com"},{"id":5,"name":"User","email":"user@example.com"}],"count":5}
+
+--- GET /users/1 ---
+{"status":200,"data":{"id":1,"name":"User","email":"user@example.com"}}
+
+--- POST /users ---
+{"status":201,"data":{"id":6,"name":"NewUser","email":"new@example.com"}}
+
+--- DELETE /users/6 ---
+{"status":200,"message":"User deleted"}
+
+Total users: 6
+
+=== API Example Complete ===
+
+[cikis=0]

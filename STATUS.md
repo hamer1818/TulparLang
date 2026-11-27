@@ -2184,9 +2184,11 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   (`for (int k…) { var g = () => k; }`) yakalayan lambda hiçbir şey çözemeyip
   nullptr dönüyordu (globaller zaten çalışıyordu). Program kökü artık aynı
   capture analizini alıyor ve `main` gerekirse env array ayırıyor. Semantik
-  not: döngüde üretilen closure'lar frame'in TEK slotunu paylaşır (JS-`var`/
-  Python gibi son değeri görürler). `tests/closure_edges.test.tpr` 5/5 +
-  top-level kontrol.
+  not (**2026-11-26'da DEĞİŞTİ**, RFC C1): döngüde üretilen closure'lar artık
+  iterasyon başına bağlama alır (JS `let`); eskiden frame'in TEK slotunu
+  paylaşıp son değeri görüyorlardı. Döngüden önce bildirilen yakalanan
+  değişken paylaşılır. `tests/closure_edges.test.tpr` 5/5 + top-level kontrol,
+  `tests/dongu_kapanis.test.tpr` 12/12 (Decisions.md).
 - ✅ **`parse_iso8601` imkânsız takvim gününü reddediyor (düzeltildi
   2026-07-21).** Gün yalnız 1..31 aralık-kontrollüydü; days-from-civil formülü
   "2026-02-30"u sessizce 2 Mart'a normalize ediyordu (diğer her bozuk girişe -1
@@ -2298,11 +2300,33 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   bitcast ediyordu → LLVM "Invalid bitcast". `tests/unary_boxed.test.tpr`
   4/4.
 
-- 🟢 **Generics.** Type system overhaul; `func f<T>(T x): T` parse
-  hatası veriyor.
-  - **Sıradaki adım:** v1.0 sonrası. Typecheck pre-pass'te `<T>`
-    syntax'ını parse + iz sürebilecek şekilde genişlet,
-    monomorphization stratejisini seç.
+- ✅ **Generics (2026-11-26) — tip silme.** `func f<T, U>(T x, U[] ys): T`,
+  `struct Kutu<T> { T deger; }`, `Kutu<int> k`. Kodgen `T`'yi tipsiz (kutulu),
+  `T[]`'yi `array` görür — tek gövde, monomorfizasyon YOK (Decisions.md "Jenerikler: tip silme").
+  Typeinfer `T`'yi çağrı yerinde bağlar: çelişki hata (`ayni(1, "iki")`),
+  dönüş tipi bağlanan `T` (`str s = ilk([1, 2])` hata); açık tip argümanı
+  `ilk<int>(xs)` / `bos<str>()`. Sınırlar: jenerik struct alanının okunan tipi bilinmeyen,
+  struct tipli argüman `T`'ye bağlanmıyor. `tests/jenerik.test.tpr`,
+  `tests/jenerik_hatalari.sh`, `tests/typeinfer/*/…jenerik…`.
+- ✅ **Güvenlik ağı (2026-11-26).** Altın çıktı + `-O0`/`-O3` karşılaştırması
+  (`tests/altin_cikti.py`, `TULPAR_AOT_OPT`), sarkan işaretçi zehri
+  (`TULPAR_ARENA_ZEHIR`, `tests/sarkan_isaretci.sh`) — ilk koşuda async ARC/arena
+  sınırını ve `thread_create("ad")` no-op'unu buldu (düzeltildi).
+- ✅ **FFI v1 (2026-11-26).** `ptr`, `fn(...)` C-ABI geri çağrı trampolini (K305),
+  `cbool` (C `_Bool`), `tulpar bindgen başlık.h` (zlib 80/82, SDL_video 112/114),
+  struct DEĞER geçişi (K304: x86-64 SysV / AArch64 / Win64 C ABI'si; Android ve web'de
+  derleme hatası).
+- ✅ **Profilleyici (2026-11-26).** `tulpar --profile`: öz/kapsayıcı süre, çağrı,
+  arena baytı, folded yığın (`tests/profil_smoke.py`).
+- ✅ **Dil tanımı v0 + paket imzası (2026-11-26).** `docs/SPEC.md` (örnekleri
+  `tests/spec_ornekleri.py` koşar); `tulpar pkg keygen/sign/verify` + `[trust]`.
+- ✅ **Wings evented (2026-11-26).** Bloklamayan yazma, pipelining düzeltmesi,
+  `evented_workers(n)` çok çekirdek; gecikme histogramı Wings Serve Modes.md'de.
+- ✅ **Result + `?` (2026-11-26).** `import "sonuc"` (ya da `"result"`):
+  `tamam(v)`/`hata(e)` (`ok`/`err`), `ac`, `ac_yoksa`, `donustur`, `sonra`,
+  `sarmala`; `match r { {tamam: true, deger} => …, {hata} => … }`. `?`
+  ayrıştırıcı şekeri: fonksiyonda `int x = f()?;` hata ise aynı sonucu döner.
+  Yalnız deyim sonunda (bildirim/atama/return/ifade). `tests/sonuc.test.tpr`.
 
 - ✅ **`async/await` (AOT) ÇALIŞIYOR.** `async func f(){ await sleep_async(10);
   return 1; }`, `var p = f(); int r = await p;`. Gerçek kooperatif eşzamanlılık:

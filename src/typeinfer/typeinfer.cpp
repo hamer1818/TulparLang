@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <memory>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -277,6 +278,39 @@ static void register_fn_custom(TypeInferContext *ctx, const std::string &name,
     }
   }
   if (any) ctx->fn_param_custom[name] = std::move(ps);
+  if (!func->type_params.empty()) {
+    TypeInferContext::GenericSig g;
+    g.type_params = func->type_params;
+    for (const auto &p : func->parameters) g.params.push_back(p.generic);
+    g.ret = func->return_generic;
+    ctx->fn_generic[name] = std::move(g);
+  }
+}
+
+// Jenerik birlestirme yardimcilari: dizi tipi <-> eleman tipi.
+static DataType generic_elem_of(DataType t) {
+  switch (t) {
+  case TYPE_ARRAY_INT: return TYPE_INT;
+  case TYPE_ARRAY_FLOAT: return TYPE_FLOAT;
+  case TYPE_ARRAY_STR: return TYPE_STRING;
+  case TYPE_ARRAY_BOOL: return TYPE_BOOL;
+  case TYPE_ARRAY_JSON: return TYPE_JSON;
+  default: return TYPE_UNKNOWN;
+  }
+}
+static DataType generic_array_of(DataType t) {
+  switch (t) {
+  case TYPE_INT: return TYPE_ARRAY_INT;
+  case TYPE_FLOAT: return TYPE_ARRAY_FLOAT;
+  case TYPE_STRING: return TYPE_ARRAY_STR;
+  case TYPE_BOOL: return TYPE_ARRAY_BOOL;
+  case TYPE_JSON: return TYPE_ARRAY_JSON;
+  default: return TYPE_ARRAY;
+  }
+}
+static bool generic_is_array(DataType t) {
+  return t == TYPE_ARRAY || t == TYPE_ARRAY_INT || t == TYPE_ARRAY_FLOAT || t == TYPE_ARRAY_STR ||
+         t == TYPE_ARRAY_BOOL || t == TYPE_ARRAY_JSON;
 }
 
 // FONKSİYON REFERANSI: bir üst düzey fonksiyonun adı DEĞER olarak
@@ -895,6 +929,53 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     // ctx->functions and are skipped — their argument contracts are too
     // varied to model here without a dedicated catalogue.
     auto sig_it = ctx->functions.find(effective_name);
+    // JENERIK: T -> cagri yerinde baglanan somut tip (donus tipini de verir).
+    std::map<std::string, DataType> gbind;
+    const TypeInferContext::GenericSig *gsig = nullptr;
+    if (auto git = ctx->fn_generic.find(effective_name); git != ctx->fn_generic.end())
+      gsig = &git->second;
+    if (gsig) {
+      // Acik tip argumanlari (`ilk<int>(xs)`): T once bunlara baglanir; arguman
+      // celiskisi asagidaki birlestirmede "hem ... hem ..." diye raporlanir.
+      for (size_t i = 0; i < call->type_args.size() && i < gsig->type_params.size(); i++) {
+        DataType ta = call->type_args[i];
+        if (ta != TYPE_UNKNOWN && ta != TYPE_CUSTOM && ta != TYPE_UNSPECIFIED)
+          gbind[gsig->type_params[i]] = ta;
+      }
+      for (size_t i = 0; i < arg_types.size() && i < gsig->params.size(); i++) {
+        const std::string &g = gsig->params[i];
+        if (g.empty()) continue;
+        const bool arr = g.size() > 2 && g.compare(g.size() - 2, 2, "[]") == 0;
+        const std::string tp = arr ? g.substr(0, g.size() - 2) : g;
+        DataType a = arg_types[i];
+        if (a == TYPE_UNKNOWN || a == TYPE_UNSPECIFIED || a == TYPE_VOID) continue;
+        DataType elem = a;
+        if (arr) {
+          if (!generic_is_array(a)) continue;  // dizi olmayan arguman: normal parametre denetimi raporlar
+          elem = generic_elem_of(a);
+          if (elem == TYPE_UNKNOWN) continue;  // tipsiz dizi: baglama yok
+        } else if (a == TYPE_CUSTOM) {
+          continue;  // struct adlari ayri izleniyor (K061); v1 baglamaz
+        }
+        auto it = gbind.find(tp);
+        if (it == gbind.end()) {
+          gbind[tp] = elem;
+        } else if (it->second != elem) {
+          char gm[512];
+          if (tulpar::i18n::is_turkish_locale())
+            snprintf(gm, sizeof gm,
+                     "'%s' cagrisinda tip parametresi %s hem %s hem %s olarak cikarildi (arguman %d) satir %d",
+                     call->name.c_str(), tp.c_str(), datatype_to_string(it->second),
+                     datatype_to_string(elem), (int)i + 1, call->loc.line);
+          else
+            snprintf(gm, sizeof gm,
+                     "Type parameter %s of '%s' inferred as both %s and %s (argument %d) at line %d",
+                     tp.c_str(), call->name.c_str(), datatype_to_string(it->second),
+                     datatype_to_string(elem), (int)i + 1, call->loc.line);
+          report_error(ctx, "%s", gm);
+        }
+      }
+    }
     if (sig_it != ctx->functions.end()) {
       const FunctionSignature &sig = sig_it->second;
       const int expected = static_cast<int>(sig.param_types.size());
@@ -1030,6 +1111,12 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     }
 
     if (effective_name.empty()) return TYPE_UNKNOWN;   // belirsiz yontem (K003)
+    if (gsig && !gsig->ret.empty()) {
+      const bool arr = gsig->ret.size() > 2 && gsig->ret.compare(gsig->ret.size() - 2, 2, "[]") == 0;
+      auto it = gbind.find(arr ? gsig->ret.substr(0, gsig->ret.size() - 2) : gsig->ret);
+      if (it == gbind.end()) return arr ? TYPE_ARRAY : TYPE_UNKNOWN;
+      return arr ? generic_array_of(it->second) : it->second;
+    }
     DataType ret = function_return_type(ctx, effective_name);
     if (ret == TYPE_VOID && effective_name.find('.') == std::string::npos &&
         call->name != "print" && call->name != "println") {
@@ -2552,6 +2639,13 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tls_starttls", TYPE_INT, {TYPE_UNKNOWN, TYPE_STRING}},
       {"tls_error", TYPE_STRING, {}},
       {"http_recv_error", TYPE_INT, {}},
+      {"mem_stats", TYPE_JSON, {}},
+      {"http_read_timeout", TYPE_INT, {TYPE_INT}},
+      {"http_recv_ready", TYPE_STRING, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"http_recv_expired", TYPE_ARRAY, {}},
+      {"http_send_queued", TYPE_INT, {TYPE_INT, TYPE_STRING, TYPE_UNKNOWN}},
+      {"http_send_pending", TYPE_INT, {TYPE_UNKNOWN}},
+      {"http_poll", TYPE_ARRAY, {TYPE_ARRAY, TYPE_INT}},
       {"make_dirs", TYPE_BOOL, {TYPE_STRING}},
       // Sockets — handles + buffers are opaque to typeinfer; we still
       // catch arg-count typos via the wildcard params.
@@ -3327,9 +3421,11 @@ std::vector<TypeinferAllocRow> typeinfer_alloc_report(TypeInferContext *ctx,
 static DataType ext_param_type(tulpar::ext::CType t) {
   using tulpar::ext::CType;
   switch (t) {
-  case CType::I32: case CType::I64: case CType::Bool: return TYPE_INT;
+  case CType::I32: case CType::I64: case CType::Bool: case CType::CBool: case CType::Ptr: return TYPE_INT;
   case CType::F32: case CType::F64: return TYPE_FLOAT;
   case CType::Str: return TYPE_STRING;
+  case CType::Fn: // fonksiyon adi ya da 0 — kodgen denetler
+  case CType::Struct: // struct degeri — kodgen yerlesimi denetler
   case CType::Void: break;
   }
   return TYPE_UNKNOWN;
@@ -3338,10 +3434,11 @@ static DataType ext_return_type(tulpar::ext::CType t) {
   using tulpar::ext::CType;
   switch (t) {
   case CType::Void: return TYPE_VOID;
-  case CType::I32: case CType::I64: return TYPE_INT;
+  case CType::I32: case CType::I64: case CType::Ptr: return TYPE_INT;
   case CType::F32: case CType::F64: return TYPE_FLOAT;
-  case CType::Bool: return TYPE_BOOL;
+  case CType::Bool: case CType::CBool: return TYPE_BOOL;
   case CType::Str: return TYPE_STRING;
+  case CType::Fn: case CType::Struct: break;
   }
   return TYPE_UNKNOWN;
 }

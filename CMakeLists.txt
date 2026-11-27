@@ -337,6 +337,8 @@ set(PKG_SOURCES
     src/pkg/pkg_cli.hpp
     src/pkg/sha256.cpp
     src/pkg/sha256.hpp
+    src/pkg/imza.cpp
+    src/pkg/imza.hpp
     src/pkg/tpkg.cpp
     src/pkg/tpkg.hpp
 )
@@ -354,6 +356,8 @@ set(CLI_SOURCES
     src/cli/analyze_cmd.hpp
     src/cli/doc_cmd.cpp
     src/cli/doc_cmd.hpp
+    src/cli/bindgen_cmd.cpp
+    src/cli/bindgen_cmd.hpp
     src/cli/debug_cmd.cpp
     src/cli/debug_cmd.hpp
 )

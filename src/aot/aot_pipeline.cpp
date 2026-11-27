@@ -674,7 +674,10 @@ static long long file_size_bytes(const char *path) {
 // o yüzden web'in aksine backend'e ayrı bir bayrak taşınmaz.
 static int g_target_android = 0;
 
-void aot_set_target_android(int enable) { g_target_android = enable ? 1 : 0; }
+void aot_set_target_android(int enable) {
+  g_target_android = enable ? 1 : 0;
+  llvm_backend_set_target_android(g_target_android);
+}
 
 // `--apk`: staging'in ardından android/package_apk.sh'yi de çalıştır → tek
 // komutta imzalı, kurulabilir .apk. Betik WSL/Windows-interop ayrıntılarını

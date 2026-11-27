@@ -27,6 +27,7 @@
 #include "pkg/pkg_cli.hpp"
 #include "cli/debug_cmd.hpp"
 #include "cli/doc_cmd.hpp"
+#include "cli/bindgen_cmd.hpp"
 #include "cli/typecheck_cmd.hpp"
 #include "cli/analyze_cmd.hpp"
 #include "cli/update_cmd.hpp"
@@ -68,6 +69,15 @@ char *read_file(const char *filename) {
 // değil, -1 = desteklenmeyen tür (hata basıldı). UBSan/TSan kaynak düzeyinde
 // ön uç işi (clang denetimleri AST'den ekler); Tulpar IR'ına sonradan
 // eklenemiyor — bu yüzden yalnız `address`.
+// `--profile` derleyiciye ortam degiskeniyle iletiliyor (bkz. kullanimi).
+static void setenv_portable(const char *k, const char *v) {
+#if defined(_WIN32)
+  _putenv_s(k, v);
+#else
+  setenv(k, v, 1);
+#endif
+}
+
 static int parse_sanitize_flag(const char *f) {
   if (strcmp(f, "--asan") == 0 || strcmp(f, "--sanitize") == 0 ||
       strcmp(f, "--sanitize=address") == 0)
@@ -119,6 +129,9 @@ static void print_help() {
   std::printf("  tulpar analyze <source.tpr>      %s\n",
               tulpar::i18n::tr_en("- Ayirma raporu (@no_alloc kurali) + hizli yol ipuclari",
                                   "- Allocation report (@no_alloc rule) + fast-path hints"));
+  std::printf("  tulpar bindgen <header.h>        %s\n",
+              tulpar::i18n::tr_en("- C basligindan eklenti bildirimi (tulpar-ext.json) uret",
+                                  "- Generate an extension manifest (tulpar-ext.json) from a C header"));
   std::printf("  tulpar doc <source.tpr>          %s\n",
               tulpar::i18n::tr_en(
                   "- Markdown referansi uret (fonksiyon + global'lerin "
@@ -135,6 +148,10 @@ static void print_help() {
               tulpar::i18n::tr_en(
                   "- run/build oncesi tip uyarilarini kapat",
                   "- Disable pre-build [typecheck] warnings"));
+  std::printf("  --profile                        %s\n",
+              tulpar::i18n::tr_en(
+                  "- fonksiyon basina sure/cagri/arena raporu (TULPAR_PROFILE_OUT=folded dosya)",
+                  "- per-function time/calls/arena report (TULPAR_PROFILE_OUT=folded file)"));
   std::printf("  --sanitize=address (--asan)      %s\n",
               tulpar::i18n::tr_en(
                   "- build: uretilen kodu AddressSanitizer ile enstrumante et "
@@ -275,6 +292,12 @@ int main(int argc, char **argv) {
   if (argc >= 2 && std::strcmp(argv[1], "doc") == 0) {
     if (!ensure_extensions_loaded()) return 2;
     return tulpar::doc_cmd_main(argc, argv);
+  }
+
+  // `tulpar bindgen <baslik.h>` — C basligindan tulpar-ext.json (FFI v1).
+  // Eklenti yuklemez: urettigi sey bir eklentinin girdisi.
+  if (argc >= 2 && std::strcmp(argv[1], "bindgen") == 0) {
+    return tulpar::bindgen_cmd_main(argc, argv);
   }
 
   // `tulpar version` / `tulpar --version` / `-v` — print and exit. Kept
@@ -423,6 +446,10 @@ int main(int argc, char **argv) {
       // Promote `[typecheck]` warnings to exit-blocking errors. Format
       // stays the same; we just summarise and exit 1 when count > 0.
       strict_typecheck = 1;
+    } else if (strcmp(argv[i], "--profile") == 0) {
+      // Profil enstrumantasyonu: derleyici ortam degiskeninden okur (onbellek
+      // anahtarina otomatik girer — profilli ikili profilsizle karismaz).
+      setenv_portable("TULPAR_PROFILE", "1");
     } else if (strcmp(argv[i], "--debug") == 0 ||
                strcmp(argv[i], "-g") == 0) {
       // `tulpar build --debug` opt-in. Doesn't shift arg_offset on its
@@ -541,6 +568,8 @@ int main(int argc, char **argv) {
           strict_typecheck = 1;
         } else if (strcmp(f, "--no-typecheck") == 0) {
           skip_typecheck = 1;
+        } else if (strcmp(f, "--profile") == 0) {
+          setenv_portable("TULPAR_PROFILE", "1");
         } else if (strcmp(f, "--debug") == 0 || strcmp(f, "-g") == 0) {
           emit_debug = 1;
         } else if (int s = parse_sanitize_flag(f)) {

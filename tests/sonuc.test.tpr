@@ -1,0 +1,131 @@
+// Result (lib/sonuc.tpr) ve `?` yayma (2026-11-26).
+//
+// `?` ayristirici sekeri: `int x = f()?;` ->
+//   var __sonucN = f(); if (!__sonucN["tamam"]) return __sonucN; int x = __sonucN["deger"];
+// Dort bicim: bildirim, atama, return, ifade deyimi. Yalniz fonksiyon
+// govdesinde ve deyim sonunda; uclu `a ? b : c` etkilenmez.
+import "test";
+import "sonuc";
+
+func bol(int a, int b): json {
+    if (b == 0) { return hata("sifira bolme"); }
+    return tamam(a / b);
+}
+int g_yan_etki = 0;
+func say(): json { g_yan_etki = g_yan_etki + 1; return tamam(1); }
+
+func bildirim(a, b, c): json {
+    int x = bol(a, b)?;
+    int y = bol(x, c)?;
+    return tamam(x + y);
+}
+func atama(a, b): json {
+    int x = 0;
+    x = bol(a, b)?;
+    return tamam(x * 10);
+}
+func ifade_deyimi(a, b): json {
+    bol(a, b)?;
+    return tamam("gecti");
+}
+func donus(a, b) {
+    return bol(a, b)?;
+}
+func dongude(array bs): json {
+    int t = 0;
+    for (b in bs) {
+        int q = bol(100, b)?;
+        t = t + q;
+    }
+    return tamam(t);
+}
+func kosulda(bool k): json {
+    if (k) {
+        int v = bol(1, 0)?;
+        return tamam(v);
+    }
+    return tamam(-1);
+}
+// Erken donus sonraki deyimleri CALISTIRMAZ.
+func erken(): json {
+    bol(1, 0)?;
+    say()?;
+    return tamam(0);
+}
+func iki_kat(x) { return x * 2; }
+func patlar(x) { throw "patladi " + toString(x); }
+func yarim(x): json { return ok(x / 2); }
+
+func run_bildirim() {
+    assert_eq_int(ac(bildirim(100, 5, 2)), 30);
+    assert_eq_str(hatasi(bildirim(100, 0, 2)), "sifira bolme");
+    assert_eq_str(hatasi(bildirim(100, 5, 0)), "sifira bolme");
+}
+func run_atama_ifade_donus() {
+    assert_eq_int(ac(atama(9, 3)), 30);
+    assert(hata_mi(atama(9, 0)), "atama hatayi yaymadi");
+    assert_eq_str(ac(ifade_deyimi(1, 1)), "gecti");
+    assert(hata_mi(ifade_deyimi(1, 0)), "ifade deyimi hatayi yaymadi");
+    assert_eq_int(donus(8, 2), 4);
+    assert_eq_str(hatasi(donus(8, 0)), "sifira bolme");
+}
+func run_dongu_ve_kosul() {
+    assert_eq_int(ac(dongude([1, 2, 4])), 175);
+    assert(hata_mi(dongude([1, 0, 4])), "dongu hatayi yaymadi");
+    assert(hata_mi(kosulda(true)), "kosul govdesi");
+    assert_eq_int(ac(kosulda(false)), -1);
+}
+func run_erken_donus() {
+    g_yan_etki = 0;
+    assert(hata_mi(erken()), "erken");
+    assert_eq_int(g_yan_etki, 0);
+}
+func run_match_ile_ac() {
+    var yazi = match bol(10, 0) {
+        {tamam: true, deger} => "deger " + toString(deger),
+        {hata} => "hata: " + hata
+    };
+    assert_eq_str(yazi, "hata: sifira bolme");
+    var y2 = match bol(10, 5) {
+        {tamam: true, deger} => "deger " + toString(deger),
+        {hata} => "hata: " + hata
+    };
+    assert_eq_str(y2, "deger 2");
+}
+func run_yardimcilar() {
+    assert_eq_int(ac_yoksa(bol(1, 0), -7), -7);
+    assert_eq_int(ac(donustur(bol(9, 3), iki_kat)), 6);
+    assert(hata_mi(donustur(bol(9, 0), iki_kat)), "donustur hatayi korumali");
+    assert_eq_int(ac(sonra(tamam(10), yarim)), 5);
+    assert_eq_str(hatasi(sarmala(patlar, 3)), "patladi 3");
+    assert_eq_int(ac(sarmala(iki_kat, 4)), 8);
+    bool firladi = false;
+    try { ac(bol(1, 0)); } catch (e) { firladi = (e == "sifira bolme"); }
+    assert(firladi, "ac hatayi firlatmali");
+}
+func run_ingilizce_adlar() {
+    assert(is_ok(ok(1)) && is_err(err("x")), "is_ok/is_err");
+    assert_eq_int(unwrap(ok(5)), 5);
+    assert_eq_int(unwrap_or(err("x"), 9), 9);
+    assert_eq_str(unwrap_err(err("e")), "e");
+    assert_eq_int(unwrap(map_ok(ok(2), iki_kat)), 4);
+    assert_eq_int(unwrap(and_then(ok(10), yarim)), 5);
+    assert(is_err(try_call(patlar, 1)), "try_call");
+}
+func run_uclu_bozulmadi() {
+    bool k = true;
+    int v = k ? 1 : 2;
+    assert_eq_int(v, 1);
+    assert_eq_int(k == false ? 1 : 2, 2);
+}
+
+print("=== sonuc / ? ===");
+test("bildirimde ?", "run_bildirim");
+test("atama, ifade, return'de ?", "run_atama_ifade_donus");
+test("dongu ve kosul govdesinde ?", "run_dongu_ve_kosul");
+test("erken donus sonrasini calistirmaz", "run_erken_donus");
+test("match ile acma", "run_match_ile_ac");
+test("yardimcilar", "run_yardimcilar");
+test("Ingilizce adlar", "run_ingilizce_adlar");
+test("uclu operator bozulmadi", "run_uclu_bozulmadi");
+test_summary();

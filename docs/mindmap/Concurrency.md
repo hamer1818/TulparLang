@@ -1,5 +1,40 @@
 # Eşzamanlılık — P10 doğruluk kapısı (2026-09-09)
 
+> **Güncel durum (2026-11-25, koda bakılarak):** muteks, **atomikler** ve
+> **`@thread_local`** var (K040, 2026-09-28) ve bir bellek modeli cümlesi
+> yazılabiliyor (aşağıda "Bellek modeli"). Wings sayaçları atomik. Açık kalan:
+> TSan'lı CI işi. (`mutex_*` / `thread_create` LSP metinleri 2026-11-26'da
+> yazıldı — RFC C6; `@thread_local`/`@frame`/`@no_alloc`/`@repr` için nitelik
+> hover'ı da; kapı `tests/lsp_audit.py`.) Aşağıdaki bulgular tarihçedir; Bulgu 2'deki "dilin bellek modeli
+> yok" cümlesi artık geçerli değil.
+
+## Bellek modeli (sözleşme, 2026-11-25)
+
+Paylaşılan değişebilir duruma ya bir **mutex** altında ya da **atomic**
+yerleşiklerle erişilmelidir:
+- Bir mutex altında yapılan yazmalar, aynı mutex'i sonradan alan thread'e
+  görünür.
+- Bir `"release"` atomic yazmasından önceki yazmalar, aynı değişkeni
+  `"acquire"` ile okuyup o değeri gören thread'e görünür.
+- `"seq_cst"` (varsayılan) tüm seq_cst işlemlerine tek bir toplam sıra verir;
+  `"relaxed"` yalnız o değişkenin kendi atomikliğini garanti eder.
+- **Korumasız paylaşım tanımsızdır**: güncelleme kaybı (Bulgu 1) ve görünürlük
+  kaybı (Bulgu 2) ölçüldü. Bekleme döngüsü mutex altında ya da
+  `atomic_load(f, "acquire")` ile okumalı — `atomic_store(f, 1)` + düz
+  `while (f == 0)` aynı tuzaktır (`thread_lint` bunu uyarır).
+- Paylaşılan bir `int[]` / `json`'u eşzamanlı **yalnız okumak** güvenli
+  (Bulgu 3 düzeltmesi, `tests/debox_yaris.sh`).
+- **Thread sınırı kopyalayarak geçilir:** `thread_create` argümanı ve sonucu
+  `aot_persist` ile derin kopyalanır; her thread'in arenası ve bölgesi
+  kendine özel. Global'e yazma bariyerden geçer ([[Memory Model]]).
+
+| araç | kapsam | kanıt |
+|---|---|---|
+| `mutex_create/lock/unlock/destroy` | kritik bölge | 8 × 50 000 → 400 000 (aşağıda) |
+| `atomic_load/store/add/sub/xchg/cas` | üst düzey `int` global; son argüman bellek sırası | `tests/atomik.test.tpr` (4 × 50 000 `atomic_add` → 200 000, release/acquire yayını), `tests/atomik_hatalari.sh` |
+| `@thread_local int x` | thread başına global (int/float/bool, üst düzey) | aynı test |
+| `thread_lint.cpp` | worker'da yazılıp senkronizasyonsuz okunan global | 2026-09-11'den beri |
+
 > **Özet (2026-09-10'da DÜZELTİLDİ): dilde MUTEKS var ve çalışıyor.**
 > `thread_create` ile paylaşılan değişebilir durum korumasız kullanılırsa ne
 > atomik ne görünür — ama `mutex_lock`/`mutex_unlock` ikisini de çözüyor
@@ -132,15 +167,19 @@ sınanmamış olduğunu söylüyoruz.
    `mutex_lock`/`mutex_unlock` ile erişin; korumasız erişim hem güncelleme
    kaybeder hem görünürlük garantisi vermez."* Belgesiz bırakmak, kullanıcının
    sessiz veri kaybıyla tanışması demek — üstelik çözüm elinin altındayken.
-2. **Wings sayaçlarını thread-güvenli yap** (atomik yerleşik ya da thread başına
-   toplama + okuma anında birleştirme).
+2. ~~Wings sayaçlarını thread-güvenli yap~~ — **yapıldı**: derleyici
+   `_wings_requests_*` için `name = name + delta` desenini tanıyıp tek bir
+   `atomicrmw add` üretiyor (`global_needs_atomic_rmw`, `llvm_backend.cpp`).
+   Bu özel durum kullanıcı global'lerine uygulanmaz; kullanıcı `atomic_add`
+   kullanır.
 3. ~~Tembel kutulama çevrimini kapıla~~ — **yapıldı** (çift denetimli kilit;
    eski tampon bilerek serbest bırakılmıyor ki hızlı yoldaki bir okuyucu
    use-after-free yaşamasın). Kanıtlanmış bir hatayı değil, incelemeyle görülen
    bir yarışı kapatıyor.
-4. ~~Atomik yerleşikler~~ — muteks zaten yeterli taban; asıl eksik bir
-   **bellek modeli cümlesi** ("muteks altındaki yazmalar diğer thread'lere
-   görünür") ve `mutex_*`'ın belgelenmesi.
+4. ~~Atomik yerleşikler~~ — **yapıldı** (K040, 2026-09-28; sıralama
+   parametresiyle). Bellek modeli cümlesi yukarıda. LSP açıklama metinleri
+   (`thread_create`, `thread_detach`, `mutex_*`) ve README'nin thread örneği
+   bu sözleşmeye bağlandı (RFC C6, 2026-11-26).
 5. TSan'lı bir CI işi: runtime'ı `-fsanitize=thread` ile derleyip yukarıdaki üç
    üretecin koşulması.
 

@@ -1,0 +1,18 @@
+=== Data Structures Demo ===
+
+--- JSON Objects ---
+Person: {"name":"Hamza","age":25,"skills":["C","Python","Tulpar"],"address":{"city":"Istanbul","zip":"34000"}}
+Name: Hamza
+City: Istanbul
+Skill 1: C
+Updated Age: 26
+
+--- JSON Arrays ---
+Users: [{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]
+User 1: Alice
+User 2: Bob
+
+--- Dictionary Usage ---
+Config: {"host":"localhost","port":8080,"debug":true}
+
+[cikis=0]

@@ -53,6 +53,14 @@ typedef SSIZE_T ssize_t;
 // adi yalniz TUR olarak gorunuyor ve cagri "no matching function for call to
 // 'stat::stat'" ile duşuyordu.
 #include <sys/stat.h>
+#if defined(__GLIBC__) || defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+#include <malloc.h>     // mallinfo2 / mallinfo — mem_stats().heap_in_use
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+#pragma weak mallinfo2
+#endif
+#elif defined(__APPLE__)
+#include <malloc/malloc.h> // malloc_zone_statistics — mem_stats().heap_in_use
+#endif
 
 // Dosya YA DA dizin var mi? Cagiran `extern "C"` blogunun icinde oldugu icin
 // yardimci DISARIDA duruyor.
@@ -1034,9 +1042,22 @@ VMValue aot_persist(VMValue v); // defined below; used by the write barrier
 static thread_local std::vector<Obj *> g_region;
 static thread_local std::unordered_set<Obj *> g_region_set;
 
+// mem_stats() sayaclari (RFC C4, 2026-11-26) — bu iplik, surec basindan beri.
+// Sicak yolda tek bir TLS artirmasi; atomik degil (iplige ozel).
+//   g_mem_untracked: checkpoint ACIK DEGILKEN kurulan obje/dizi/struct dizisi
+//     basliklari — hicbir geri sarma onlari birakmaz (D2: checkpoint'siz dongu).
+//   g_mem_persist_bytes: persist() / yazma bariyerinin KALICIYA kopyaladigi
+//     baytlar (aot_persist'in her malloc'u) — hic serbest kalmaz (D1: kare
+//     basina yeniden atanan global).
+static thread_local uint64_t g_mem_untracked = 0;
+static thread_local uint64_t g_mem_persist_bytes = 0;
+
 static inline void region_track(Obj *o) {
-  if (g_arena_checkpoint_top <= 0 || !o)
+  if (!o) return;
+  if (g_arena_checkpoint_top <= 0) {
+    g_mem_untracked++;
     return; // outside any request scope → permanent (e.g. top-level globals)
+  }
   g_region.push_back(o);
   g_region_set.insert(o);
 }
@@ -1148,7 +1169,10 @@ static inline VMValue wb_persist_escape(Obj *container, VMValue v) {
   return aot_persist(v);
 }
 
-VMValue aot_arena_save(void) {
+// Sessiz surum: yigin doluysa (ya da arena acilamadiysa) -1. Yalniz @frame
+// sekeri cagirir (`__frame_arena_save`): -1'i gorup FONKSIYON ADLI kendi
+// hatasini atiyor (parser.cpp frame_desugar).
+VMValue aot_arena_save_try(void) {
   if (!g_aot_string_arena) aot_arena_init();
   if (!g_aot_string_arena || g_arena_checkpoint_top >= AOT_ARENA_CHECKPOINT_MAX)
     return VM_INT(-1);
@@ -1160,10 +1184,95 @@ VMValue aot_arena_save(void) {
   return VM_INT(idx);
 }
 
+// arena_save() — kullanicinin cagirdigi yol (RFC C3, 2026-11-26). Yigin
+// doluyken eskiden SESSIZCE -1 donuyordu: ardindaki restore/drop(-1) no-op,
+// geri sarma durur, bellek sinirsiz birikir ve program dogru calismaya devam
+// eder (Memory.md P14: 200k'da 23 MB, 1M'de 132 MB). Simdi @frame gibi
+// YAKALANABILIR bir hata: drop'suz tekrarlanan arena_save ilk 32'de sorunsuz,
+// 33.'de hata. Dengeli desenler (save + drop, tek save + cok restore) etkilenmez.
+VMValue aot_arena_save(void) {
+  VMValue r = aot_arena_save_try();
+  if (AS_INT(r) >= 0) return r;
+  const char *msg =
+      g_aot_string_arena
+          ? "arena_save: arena kontrol noktasi yigini dolu (32) — drop'suz tekrarlanan "
+            "arena_save ya da cok derin ic ice checkpoint; her arena_save bir arena_drop "
+            "ile kapanmali (ya da @frame) / arena checkpoint stack full (32): an "
+            "arena_save repeated without arena_drop, or checkpoints nested too deep"
+          : "arena_save: arena acilamadi (bellek yok) / arena could not be allocated";
+  aot_throw(VM_OBJ((Obj *)aot_intern_string(msg, (int)strlen(msg))));
+  return r; // ulasilmaz
+}
+
+// ZEHIR KIPI — TULPAR_ARENA_ZEHIR=1 (2026-11-26, sarkan isaretci kapisi).
+//
+// Geri sarilan arena bolgesi uzerine YAZILANA KADAR dogru okunur: checkpoint
+// icinde kurulup drop'tan sonra okunan gecici deger (Kural 2.1) cogu kosuda
+// "calisir" ve hata ancak bellek yeniden kullanilinca, baska bir yerde,
+// sessizce yanlis veri olarak cikar. ASan bunu goremez — runtime arsivi
+// enstrumante degil ve arena malloc degil. Bu kip geri sarmada olu baytlari
+// 0xDB ile doldurur ve bolgedeki malloc kaplarini serbest birakmak yerine
+// KARANTINAYA alir (icerigi 0xDB, bellek geri verilmez — adresi baska bir
+// nesneye gecmesin). Boylece olu bir degere her erisim ILK okumada bozuk
+// gorunur. Bellek kipte geri donmez; yalniz test icin.
+//
+// Kapi: tests/sarkan_isaretci.sh — (a) bilinen sarkan desen normal kipte
+// "dogru" basar, zehirde basamaz (pozitif kontrol); (b) desteklenen guvenli
+// desenler iki kipte ayni; (c) butun regresyon paketleri zehirde gecer.
+// Kapaliyken maliyet: geri sarma basina bir dallanma (sicak yolda degil).
+static int g_arena_zehir = -1;
+static inline bool arena_zehir_acik(void) {
+  if (__builtin_expect(g_arena_zehir < 0, 0)) {
+    const char *z = getenv("TULPAR_ARENA_ZEHIR");
+    g_arena_zehir = (z && *z && *z != '0') ? 1 : 0;
+  }
+  return g_arena_zehir == 1;
+}
+static const unsigned char ARENA_ZEHIR_BAYT = 0xDB;
+
+static void region_zehirle_one(Obj *o) {
+  if (!o || o->arena_allocated) return;
+  size_t boy = sizeof(Obj);
+  if (o->type == OBJ_OBJECT) {
+    ObjObject *x = (ObjObject *)o;
+    if (x->keys) memset(x->keys, ARENA_ZEHIR_BAYT, sizeof(ObjString *) * (size_t)x->capacity);
+    if (x->values) memset(x->values, ARENA_ZEHIR_BAYT, sizeof(VMValue) * (size_t)x->capacity);
+    obj_index_release(x);
+    boy = sizeof(ObjObject);
+  } else if (o->type == OBJ_ARRAY) {
+    ObjArray *a = (ObjArray *)o;
+    if (a->items_) memset(a->items_, ARENA_ZEHIR_BAYT, sizeof(VMValue) * (size_t)a->capacity);
+    if (a->idata)
+      memset(a->idata, ARENA_ZEHIR_BAYT, (size_t)a->capacity * (a->elem_bits == 32 ? 4u : 8u));
+    boy = sizeof(ObjArray);
+  } else if (o->type == OBJ_STRUCT_ARRAY) {
+    boy = sizeof(ObjStructArray);
+  }
+  memset((char *)o, ARENA_ZEHIR_BAYT, boy);
+}
+
 // Roll the arena (and the malloc-object region) back to checkpoint `idx`.
 // Shared by arena_restore (keeps the checkpoint) and arena_drop (releases it).
 static void aot_arena_rewind_to(int idx) {
   AOTArenaCheckpoint *cp = &g_arena_checkpoints[idx];
+  if (arena_zehir_acik()) {
+    if (cp->block) {
+      for (AOTArenaBlock *b = cp->block->next; b; b = b->next)
+        memset(b->memory, ARENA_ZEHIR_BAYT, b->used);
+      if (cp->block->used > cp->used)
+        memset(cp->block->memory + cp->used, ARENA_ZEHIR_BAYT,
+               cp->block->used - cp->used);
+    }
+    for (size_t i = cp->region_mark; i < g_region.size(); i++)
+      if (g_region_set.erase(g_region[i])) region_zehirle_one(g_region[i]);
+    if (cp->region_mark < g_region.size()) g_region.resize(cp->region_mark);
+    if (cp->block) {
+      for (AOTArenaBlock *b = cp->block->next; b; b = b->next) b->used = 0;
+      cp->block->used = cp->used;
+      g_aot_string_arena->current = cp->block;
+    }
+    return;
+  }
   if (cp->block) {
     // Zero out every block AFTER the checkpoint's block: keep the
     // memory mapping but reset `used` so the next alloc reuses it.
@@ -1419,26 +1528,173 @@ __attribute__((always_inline)) static inline VMValue tulpar_ext_invoke_f64(void 
   }
   return r;
 }
+// ---- Ext siniri: throw C yigin cercevelerinin UZERINDEN atlamaz (RFC C2,
+// 2026-11-26). Eskiden C'den cagrilan bir Tulpar fonksiyonu icindeki throw,
+// disarida bir Tulpar `try`'i varsa oraya longjmp yapiyordu: aradaki C
+// cerceveleri hic bitmiyordu (kilidi birakma, sayaci geri alma, free — hepsi
+// atlaniyordu; tests/yerel_eklenti.sh'te olculdu). Simdi:
+//   * disarida yakalayici YOKSA (eh derinligi 0) hicbir sey degismez ve ek
+//     maliyet yok: yakalanmayan throw eskisi gibi mesaj + exit(1) — longjmp
+//     yok, C cercevesi atlanmaz, surec biter;
+//   * VARSA sinirda bir try cercevesi kurulur. Throw orada yakalanir, istisna
+//     kaliciya kopyalanir (@frame kalibi), C'ye hata kodu doner
+//     (tulpar_ext_call_f64 -> -1, tulpar_ext_eval_f64 -> 0.0 +
+//     tulpar_ext_threw() == 1) ve C fonksiyonu Tulpar'a dondugu anda codegen
+//     istisnayi YENIDEN FIRLATIR (aot_ext_rethrow_pending). Bekleyen istisna
+//     varken gelen yeni bir throw ilki kazanir.
+// tulpar_ext_pending_any: bekleyen istisnasi olan iplik sayisi (surec geneli).
+// Her ext cagrisindan sonra codegen yalniz bunu okur — sicak yolda bir yukleme
+// ve dallanma; sifir degilse aot_ext_rethrow_pending kendi ipligine bakar.
+extern "C" {
+int tulpar_ext_pending_any = 0;
+}
+static thread_local bool g_ext_has_pending = false;
+static thread_local VMValue g_ext_pending;
+static thread_local int g_ext_last_threw = 0;
+
+static int aot_eh_depth(void); // istisna bolumunde tanimli
+
+// Runtime'in KENDI try cerceveleri (ext siniri) icin setjmp. Windows x64'te
+// MinGW'nin `setjmp` makrosu `_setjmp(buf, __builtin_frame_address(0))`
+// demek: NULL olmayan cerceve eslesen longjmp'i SEH GERI SARMASINA
+// (RtlUnwindEx) ceviriyor ve o yuruyus bir `call()` / kutulu cagri
+// cercevesini gecen throw'da cokuyordu (kodgendeki AST_TRY_CATCH notu,
+// errors.test.tpr). Kodgen bu yuzden `_setjmpex(buf, NULL)` cagiriyor;
+// runtime ayni anlambilimi kullanmazsa ayni yigindaki iki tur cerceve
+// farkli longjmp yolundan doner. POSIX'te duz setjmp.
+#if defined(_WIN32) && defined(__x86_64__)
+#define TULPAR_RT_SETJMP(b) _setjmp((b), nullptr)
+#else
+#define TULPAR_RT_SETJMP(b) setjmp(b)
+#endif
+jmp_buf *aot_try_push(void);
+void aot_try_pop(void);
+VMValue aot_get_exception(void);
+
+// YAVAS YOL — yalniz disarida bir Tulpar try'i varken (eh derinligi > 0).
+// setjmp iceren fonksiyon satir ici acilamaz; o yuzden ayri ve noinline:
+// try disindaki sicak yol (olay kancalari) bu cagriyi ve setjmp'i hic odemez.
+// Olculdu (2026-11-26, Ryzen 7 9800X3D, bos kanca, 10M cagri): eski 2.15 ns;
+// tek fonksiyonda korumali 3.70 ns idi (setjmp'li yardimci her cagrida
+// cagriliyordu); bu ayrimla try disi eskiyle ayni, try ici ~+3 ns.
+// 1 = cagrildi (sonuc *out'ta), -1 = throw sinirda yakalandi.
+__attribute__((noinline)) static int tulpar_ext_guarded_slow(void *fn, int arity,
+                                                            const double *args,
+                                                            int argc, VMValue *out) {
+  jmp_buf *jb = aot_try_push();
+  if (!jb) { // try yigini dolu (mesaj basildi): korumasiz eski yol
+    *out = tulpar_ext_invoke_f64(fn, arity, args, argc);
+    return 1;
+  }
+  volatile int saved_top = g_arena_checkpoint_top;
+  if (TULPAR_RT_SETJMP(*jb) == 0) {
+    VMValue r = tulpar_ext_invoke_f64(fn, arity, args, argc);
+    aot_try_pop();
+    *out = r;
+    return 1;
+  }
+  // aot_throw cerceveyi zaten dusurdu. Geri cagrinin icinde kapatilmadan
+  // kalan checkpoint yuvalari birakilir (bellek dis checkpoint'le geri sarilir).
+  if (g_arena_checkpoint_top > saved_top) g_arena_checkpoint_top = saved_top;
+  VMValue ex = aot_persist(aot_get_exception());
+  if (!g_ext_has_pending) {
+    g_ext_pending = ex;
+    g_ext_has_pending = true;
+    __atomic_add_fetch(&tulpar_ext_pending_any, 1, __ATOMIC_RELAXED);
+  }
+  g_ext_last_threw = 1;
+  *out = VM_VOID();
+  return -1;
+}
+
+// Donus: 1 cagrildi, 0 cagrilmadi (fn NULL ya da tavan asildi), -1 Tulpar
+// fonksiyonu throw etti (istisna C fonksiyonu Tulpar'a donunce yeniden
+// firlatilir; C temizligini yapip donmeli).
 extern "C" int tulpar_ext_call_f64(void *fn, int arity, const double *args, int argc) {
   if (!fn) return 0;
   if (argc < 0 || !args) argc = 0;
   if (argc > TULPAR_CALL_MAX_ARGS || arity > TULPAR_CALL_MAX_ARGS) return 0;
+  if (__builtin_expect(aot_eh_depth() != 0, 0)) {
+    VMValue r;
+    return tulpar_ext_guarded_slow(fn, arity, args, argc, &r);
+  }
   (void)tulpar_ext_invoke_f64(fn, arity, args, argc);
   return 1;
 }
 
 // tulpar_ext_call_f64'un SONUCLU esi: donus sayi/bool ise double olarak
-// (bool 1/0), degilse — ya da cagrilamadiysa — 0.
+// (bool 1/0), degilse — ya da cagrilamadiysa, ya da throw ettiyse — 0.
+// Throw'u ayirt etmek icin hemen ardindan tulpar_ext_threw().
 extern "C" double tulpar_ext_eval_f64(void *fn, int arity, const double *args, int argc) {
+  if (__builtin_expect(g_ext_last_threw, 0)) g_ext_last_threw = 0;
   if (!fn) return 0.0;
   if (argc < 0 || !args) argc = 0;
   if (argc > TULPAR_CALL_MAX_ARGS || arity > TULPAR_CALL_MAX_ARGS) return 0.0;
-  const VMValue r = tulpar_ext_invoke_f64(fn, arity, args, argc);
+  VMValue r;
+  if (__builtin_expect(aot_eh_depth() != 0, 0)) {
+    if (tulpar_ext_guarded_slow(fn, arity, args, argc, &r) < 0) return 0.0;
+  } else {
+    r = tulpar_ext_invoke_f64(fn, arity, args, argc);
+  }
   if (IS_INT(r)) return (double)AS_INT(r);
   if (IS_FLOAT(r)) return AS_FLOAT(r);
   if (IS_BOOL(r)) return AS_BOOL(r) ? 1.0 : 0.0;
   return 0.0;
 }
+
+// GERI CAGRI TRAMPOLINI (2026-11-26, FFI `fn(...)` parametresi). Derleyicinin
+// urettigi C-ABI trampolini C argumanlarini VMValue'ya cevirip buradan
+// Tulpar fonksiyonunu cagirir. tulpar_ext_eval_f64'ten farki: argumanlar ve
+// sonuc VMValue — 64-bit isaretci/tamsayi double'a sigmaz (2^53 ustu:
+// arm64 etiketli isaretciler), dizgi de gecebilir. Throw ayni C2 kurali:
+// disarida try varsa sinirda yakalanir, *out VOID, dis ext cagrisi donunce
+// yeniden firlatilir; yoksa eskisi gibi mesaj + exit(1).
+static inline VMValue tulpar_ext_invoke_v(void *fn, int arity, const VMValue *args, int argc) {
+  const int n = arity >= 0 ? arity : argc;
+  VMValue a[TULPAR_CALL_MAX_ARGS];
+  for (int i = 0; i < n; i++) a[i] = i < argc ? args[i] : VM_VOID();
+  VMValue r = VM_VOID();
+  tulpar_boxed_call(fn, &r, a, n);
+  return r;
+}
+__attribute__((noinline)) static void tulpar_ext_cb_guarded(void *fn, int arity,
+                                                           const VMValue *args, int argc,
+                                                           VMValue *out) {
+  jmp_buf *jb = aot_try_push();
+  if (!jb) { *out = tulpar_ext_invoke_v(fn, arity, args, argc); return; }
+  volatile int saved_top = g_arena_checkpoint_top;
+  if (TULPAR_RT_SETJMP(*jb) == 0) {
+    VMValue r = tulpar_ext_invoke_v(fn, arity, args, argc);
+    aot_try_pop();
+    *out = r;
+    return;
+  }
+  if (g_arena_checkpoint_top > saved_top) g_arena_checkpoint_top = saved_top;
+  VMValue ex = aot_persist(aot_get_exception());
+  if (!g_ext_has_pending) {
+    g_ext_pending = ex;
+    g_ext_has_pending = true;
+    __atomic_add_fetch(&tulpar_ext_pending_any, 1, __ATOMIC_RELAXED);
+  }
+  g_ext_last_threw = 1;
+  *out = VM_VOID();
+}
+extern "C" void tulpar_ext_cb_call(void *fn, int arity, const VMValue *args, int argc,
+                                   VMValue *out) {
+  *out = VM_VOID();
+  if (!fn || argc < 0 || argc > TULPAR_CALL_MAX_ARGS || arity > TULPAR_CALL_MAX_ARGS) return;
+  if (__builtin_expect(aot_eh_depth() != 0, 0)) {
+    tulpar_ext_cb_guarded(fn, arity, args, argc, out);
+    return;
+  }
+  *out = tulpar_ext_invoke_v(fn, arity, args, argc);
+}
+
+// Bu iplikte son tulpar_ext_eval_f64 throw ile mi bitti (eval'in 0.0'i
+// "sonuc 0" ile "throw" arasinda ayrim yapamaz). tulpar_ext_call_f64 bunu
+// donus degeriyle (-1) zaten soyler ve bayragi sifirlamaz — sicak yoldan bir
+// TLS yazmasi daha cikmasin diye.
+extern "C" int tulpar_ext_threw(void) { return g_ext_last_threw; }
 
 // DİZGİ SABİTİNİ BİR KEZ AYIR (interning).
 //
@@ -1683,8 +1939,15 @@ ObjString *aot_intern_string(const char *chars, int length) {
 // `arena_allocated = 0` so the arena reset skips them. They live as long as
 // something references them (today effectively process lifetime; a future GC
 // would reclaim via ref_count).
+// aot_persist'in butun ayirmalari buradan: kalici kopya bayti sayilir (mem_stats).
+static inline void *persist_malloc(size_t n) {
+  void *p = malloc(n);
+  if (p) g_mem_persist_bytes += n;
+  return p;
+}
+
 static ObjString *aot_persist_string_obj(ObjString *src) {
-  ObjString *p = (ObjString *)malloc(sizeof(ObjString) + src->length + 1);
+  ObjString *p = (ObjString *)persist_malloc(sizeof(ObjString) + src->length + 1);
   if (!p) return src;
   p->obj.type = OBJ_STRING;
   p->obj.arena_allocated = 0;
@@ -1710,7 +1973,7 @@ VMValue aot_persist(VMValue v) {
   }
   if (IS_ARRAY(v)) {
     ObjArray *src = AS_ARRAY(v);
-    ObjArray *dst = (ObjArray *)malloc(sizeof(ObjArray));
+    ObjArray *dst = (ObjArray *)persist_malloc(sizeof(ObjArray));
     if (!dst) return v;
     dst->obj.type = OBJ_ARRAY;
     dst->idata = nullptr;
@@ -1725,7 +1988,7 @@ VMValue aot_persist(VMValue v) {
     // KAYNAGI da kutuya ceviriyordu — global'e atanan split sonucu 16 bayta
     // cikip oyle kaliyordu.
     if (src->idata && src->elem_bits == ARR_ELEM_STR && n > 0) {
-      ObjString **t = (ObjString **)malloc(sizeof(ObjString *) * (size_t)n);
+      ObjString **t = (ObjString **)persist_malloc(sizeof(ObjString *) * (size_t)n);
       if (t) {
         ObjString *const *from = (ObjString *const *)src->idata;
         for (int i = 0; i < n; i++) {
@@ -1738,7 +2001,7 @@ VMValue aot_persist(VMValue v) {
         return VM_OBJ((Obj *)dst);
       }
     }
-    dst->items_ = (n > 0) ? (VMValue *)malloc(sizeof(VMValue) * n) : nullptr;
+    dst->items_ = (n > 0) ? (VMValue *)persist_malloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
       arr_items(dst)[i] = aot_persist(arr_items(src)[i]);
     }
@@ -1746,7 +2009,7 @@ VMValue aot_persist(VMValue v) {
   }
   if (IS_OBJECT(v)) {
     ObjObject *src = AS_OBJECT(v);
-    ObjObject *dst = (ObjObject *)malloc(sizeof(ObjObject));
+    ObjObject *dst = (ObjObject *)persist_malloc(sizeof(ObjObject));
     if (!dst) return v;
     dst->index = nullptr;
     dst->obj.type = OBJ_OBJECT;
@@ -1758,8 +2021,8 @@ VMValue aot_persist(VMValue v) {
     dst->count = n;
     dst->capacity = n;
     if (n > 0) {
-      dst->keys = (ObjString **)malloc(sizeof(ObjString *) * n);
-      dst->values = (VMValue *)malloc(sizeof(VMValue) * n);
+      dst->keys = (ObjString **)persist_malloc(sizeof(ObjString *) * n);
+      dst->values = (VMValue *)persist_malloc(sizeof(VMValue) * n);
       for (int i = 0; i < n; i++) {
         dst->keys[i] =
             src->keys[i] ? aot_persist_string_obj(src->keys[i]) : nullptr;
@@ -1787,7 +2050,7 @@ VMValue aot_persist(VMValue v) {
   if (IS_STRUCT_ARRAY(v)) {
     ObjStructArray *src = AS_STRUCT_ARRAY(v);
     ObjStructArray *dst =
-        static_cast<ObjStructArray *>(malloc(sizeof(ObjStructArray)));
+        static_cast<ObjStructArray *>(persist_malloc(sizeof(ObjStructArray)));
     if (!dst) return v;
     *dst = *src;
     dst->obj.arena_allocated = 0;
@@ -1797,7 +2060,7 @@ VMValue aot_persist(VMValue v) {
     dst->data = nullptr;
     const size_t bytes = (size_t)src->count * sarr_esz(src);
     if (bytes > 0) {
-      dst->data = static_cast<int64_t *>(malloc(bytes));
+      dst->data = static_cast<int64_t *>(persist_malloc(bytes));
       if (!dst->data) {
         free(dst);
         return v;
@@ -1815,7 +2078,7 @@ VMValue aot_persist(VMValue v) {
     ObjStruct *src = AS_STRUCT(v);
     int n = src->field_count > 0 ? src->field_count : 0;
     size_t extra = (n > 1) ? (size_t)(n - 1) * sizeof(int64_t) : 0;
-    ObjStruct *dst = static_cast<ObjStruct *>(malloc(sizeof(ObjStruct) + extra));
+    ObjStruct *dst = static_cast<ObjStruct *>(persist_malloc(sizeof(ObjStruct) + extra));
     if (!dst) return v;
     memcpy(dst, src, sizeof(ObjStruct) + extra);
     dst->obj.arena_allocated = 0;
@@ -5019,6 +5282,78 @@ void vm_object_set_aot_ptr_wrapper(void *vm, ObjObject *obj, char *key,
   vm_object_set_aot_wrapper(vm, obj, key, *value_ptr);
 }
 
+// ---------------------------------------------------------------------------
+// mem_stats() -> json — bellek sizintisini RSS grafiginden degil programdan
+// gorunur kilar (RFC C4, 2026-11-26; Bellek Sozlesmesi D1/D2/D6). Alanlar
+// (arena/bolge/checkpoint/sayaclar BU IPLIGIN; heap_in_use surec geneli):
+//   arena_used        arenada su an kullanimdaki bayt (geri sarma dusurur)
+//   arena_reserved    arenanin ayirdigi bloklarin toplami — isletim sistemine
+//                     HIC geri verilmez (D6), tepe RSS'i bu tutar
+//   arena_blocks      blok sayisi (1 MB'lik, buyuk istekte daha buyuk)
+//   region_objects    bolgede izlenen gecici obje/dizi (sonraki geri sarmada
+//                     serbest kalir)
+//   checkpoint_depth  acik arena_save sayisi (sinir checkpoint_max = 32)
+//   untracked_objects checkpoint ACIK DEGILKEN kurulan obje/dizi basliklari
+//                     (kalici; checkpoint'siz dongude tirmanir — D2)
+//   persist_bytes     persist() / yazma bariyerinin kaliciya kopyaladigi bayt
+//                     (hic serbest kalmaz; kare basina yeniden atanan global
+//                     tirmandirir — D1)
+//   heap_in_use       ayiricinin kullanimdaki bayti (glibc >= 2.33 mallinfo2,
+//                     macOS malloc_zone_statistics, Android/web mallinfo);
+//                     bilinmiyorsa -1 (Windows, musl)
+// Sayaclar cagridan ONCEKI durumu verir: donen nesnenin kendi ayirmasi o
+// cagriya dahil degil (checkpoint disinda cagrilirsa sonraki cagrilarda 1
+// untracked olarak gorunur). Donen nesne siradan bir json: checkpoint icinde
+// cagrildiysa GECICI — drop'tan sonra okumak sarkan isaretci (Kural 2.1);
+// sayilari drop'tan once int'e al.
+static long long mem_heap_in_use(void) {
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+  // Zayif: 2.33'ten eski glibc'ye baglanan program link'te dusmesin.
+  if (&mallinfo2 != nullptr) {
+    struct mallinfo2 m = mallinfo2();
+    return (long long)(m.uordblks + m.hblkhd);
+  }
+  return -1;
+#elif defined(__APPLE__)
+  malloc_statistics_t st;
+  malloc_zone_statistics(nullptr, &st);
+  return (long long)st.size_in_use;
+#elif defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+  struct mallinfo m = mallinfo();
+  return (long long)m.uordblks;
+#else
+  return -1;
+#endif
+}
+
+VMValue aot_mem_stats_ptr(void) {
+  long long used = 0, reserved = 0, blocks = 0;
+  if (g_aot_string_arena) {
+    for (AOTArenaBlock *b = g_aot_string_arena->head; b; b = b->next) {
+      used += (long long)b->used;
+      reserved += (long long)b->size;
+      blocks++;
+    }
+  }
+  const long long region = (long long)g_region.size();
+  const long long depth = (long long)g_arena_checkpoint_top;
+  const long long untracked = (long long)g_mem_untracked;
+  const long long pbytes = (long long)g_mem_persist_bytes;
+  const long long heap = mem_heap_in_use();
+
+  ObjObject *o = vm_allocate_object_aot_wrapper(nullptr);
+  struct { const char *k; long long v; } rows[] = {
+      {"arena_used", used},          {"arena_reserved", reserved},
+      {"arena_blocks", blocks},      {"region_objects", region},
+      {"checkpoint_depth", depth},   {"checkpoint_max", AOT_ARENA_CHECKPOINT_MAX},
+      {"untracked_objects", untracked}, {"persist_bytes", pbytes},
+      {"heap_in_use", heap},
+  };
+  for (auto &r : rows)
+    vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(r.k), VM_INT(r.v));
+  return VM_OBJ((Obj *)o);
+}
+
 // --- AOT Builtin Logic for Input and Strings ---
 
 // AOT Builtin: now_iso8601() -> str
@@ -7280,23 +7615,37 @@ typedef struct EhContext {
   jmp_buf stack[EH_STACK_MAX];
   int depth;
   VMValue exception;
+  int prof_depth[EH_STACK_MAX];  // profilleyici: try kuruldugundaki yigin derinligi
 } EhContext;
+static int aot_prof_depth(void);          // profilleyici (dosya sonunda)
+static void aot_prof_unwind_to(int depth);
 
 static thread_local EhContext eh_main = {};
-static thread_local EhContext *eh_cur = &eh_main; // active handler context
+// Active handler context. nullptr = eh_main: `= &eh_main` (the address of
+// another thread_local) is NOT a constant initializer, so the compiler put a
+// TLS init guard on every eh_cur access — measured 2026-11-26 as ~0.4 ns on
+// the ext-callback hot path (tulpar_ext_call_f64 reads the try depth). With a
+// constant nullptr the access is a plain %fs-relative load.
+static thread_local EhContext *eh_cur_ = nullptr;
+static inline EhContext *eh_ctx() {
+  EhContext *c = eh_cur_;
+  return c ? c : &eh_main;
+}
 
 // Returns pointer to jmp_buf for direct setjmp call
 jmp_buf *aot_try_push(void) {
-  if (eh_cur->depth >= EH_STACK_MAX) {
+  if (eh_ctx()->depth >= EH_STACK_MAX) {
     fprintf(stderr, "Exception handler stack overflow\n");
     return nullptr;
   }
-  return &eh_cur->stack[eh_cur->depth++];
+  EhContext *c = eh_ctx();
+  c->prof_depth[c->depth] = aot_prof_depth();
+  return &c->stack[c->depth++];
 }
 
 void aot_try_pop(void) {
-  if (eh_cur->depth > 0)
-    eh_cur->depth--;
+  if (eh_ctx()->depth > 0)
+    eh_ctx()->depth--;
 }
 
 // Yakalanmayan istisna kancasi: async calisma zamani (runtime/tulpar_async.cpp)
@@ -7306,7 +7655,7 @@ static void (*g_uncaught_hook)(VMValue) = nullptr;
 extern "C" void aot_set_uncaught_hook(void (*hook)(VMValue)) { g_uncaught_hook = hook; }
 
 void aot_throw(VMValue exception) {
-  if (eh_cur->depth == 0) {
+  if (eh_ctx()->depth == 0) {
     fprintf(stderr, "Uncaught Exception: ");
     if (IS_STRING(exception)) {
       fprintf(stderr, "%s\n", AS_STRING(exception)->chars);
@@ -7318,10 +7667,11 @@ void aot_throw(VMValue exception) {
     if (g_uncaught_hook) g_uncaught_hook(exception);
     exit(1);
   }
-  eh_cur->exception = exception;
-  int target_depth = eh_cur->depth - 1;
-  eh_cur->depth = target_depth;
-  longjmp(eh_cur->stack[target_depth], 1);
+  eh_ctx()->exception = exception;
+  int target_depth = eh_ctx()->depth - 1;
+  eh_ctx()->depth = target_depth;
+  aot_prof_unwind_to(eh_ctx()->prof_depth[target_depth]);
+  longjmp(eh_ctx()->stack[target_depth], 1);
 }
 
 // ---- Per-coroutine EH context management (used by runtime/tulpar_async.cpp) -
@@ -7335,8 +7685,8 @@ void *aot_eh_context_new(void) {
 }
 void aot_eh_context_free(void *ctx) { delete static_cast<EhContext *>(ctx); }
 void *aot_eh_context_swap(void *ctx) {
-  void *prev = eh_cur;
-  eh_cur = ctx ? static_cast<EhContext *>(ctx) : &eh_main;
+  void *prev = eh_ctx();
+  eh_cur_ = ctx ? static_cast<EhContext *>(ctx) : nullptr;
   return prev;
 }
 
@@ -7346,7 +7696,21 @@ void aot_throw_ptr(VMValue *exception_ptr) {
   aot_throw(*exception_ptr);
 }
 
-VMValue aot_get_exception(void) { return eh_cur->exception; }
+VMValue aot_get_exception(void) { return eh_ctx()->exception; }
+
+static int aot_eh_depth(void) { return eh_ctx()->depth; }
+
+// Codegen her ext cagrisindan sonra tulpar_ext_pending_any sifir degilse
+// cagirir: bu iplikte sinirda yakalanmis bir istisna varsa simdi — artik C
+// cerceveleri bitmis, Tulpar cercevesindeyiz — yeniden firlatir.
+extern "C" void aot_ext_rethrow_pending(void) {
+  if (!g_ext_has_pending) return;
+  VMValue ex = g_ext_pending;
+  g_ext_has_pending = false;
+  g_ext_pending = VM_VOID();
+  __atomic_sub_fetch(&tulpar_ext_pending_any, 1, __ATOMIC_RELAXED);
+  aot_throw(ex);
+}
 
 // ============================================
 // Time Functions
@@ -7606,8 +7970,11 @@ VMValue aot_socket_receive(VMValue fdVal, VMValue sizeVal) {
 // invocation. Returning VMValue keeps the ABI uniform with every other
 // builtin and incurs zero cost — `close()` still happens, we just hand
 // back a sentinel zero.
+static void http_pending_forget(int64_t fd);
+
 VMValue aot_socket_close(VMValue fdVal) {
   if (IS_INT(fdVal)) {
+    http_pending_forget(AS_INT(fdVal));
     tulpar_close((tulpar_socket)AS_INT(fdVal));
   }
   return VM_INT(0);
@@ -9304,7 +9671,9 @@ VMValue aot_http_should_keepalive(VMValue requestVal) {
 // payloads larger than 64KB (file uploads, big JSON, etc.), which is
 // when the cost of the malloc is dwarfed by the bytes themselves.
 // Neden reddedildi? http_recv_request "" dondugunde ayirt etmek icin:
-// 0 = kapandi / hata, 413 = govde siniri asildi, 431 = baslik blogu sigmadi.
+// 0 = kapandi / hata / bosta sure doldu, 1 = http_recv_ready istegin devamini
+// bekliyor, 408 = okuma suresi doldu, 413 = govde siniri asildi, 431 = baslik
+// blogu sigmadi.
 // Wings 413'te istemciye yanit yazip kapatiyor (eskiden SESSIZCE kapatiyordu).
 static thread_local int g_http_recv_err = 0;
 
@@ -9356,27 +9725,132 @@ static int http_recv_pick_limit(const char *spec, int spec_len,
   return (int)best;
 }
 
+// ---------------------------------------------------------------------------
+// Okuma suresi siniri — slowloris (2026-11-26).
+//
+// Eskiden okuyucu recv()'i SINIRSIZ bekliyordu: baslik baytlarini damla damla
+// gonderen bir istemci isciyi sonsuza dek tutuyordu (listen_pool'da N yavas
+// istemci = N iscinin hepsi; listen_evented'de TEK yavas istemci butun
+// donguyu). `http_read_timeout(ms)` sureci kapsayan tek bir ayar koyar
+// (varsayilan 0 = eski davranis; wings 10 000 ms veriyor):
+//   * baslik evresi: cagrinin girisinden baslik blogunun sonuna kadar TOPLAM
+//     sure (keep-alive bosta bekleme de buna dahil — yeni istegin ilk baytini
+//     beklemek de bir okumadir);
+//   * govde evresi: her recv arasinda en fazla `ms` (ilerleme varsa yavas
+//     yukleme kesilmez).
+// Sure dolarsa "" doner; o ana dek bayt geldiyse http_recv_error() == 408
+// (wings 408 yaziyor), hic bayt gelmediyse 0 (bosta baglanti, sessizce kapanir).
+static std::atomic<int> g_http_read_timeout_ms{0};
+
+// http_recv_error() == 1: http_recv_ready istegin devamini bekliyor (fd poll
+// kumesinde kalmali, yanit yazilmaz).
+#define HTTP_RECV_PENDING 1
+
+VMValue aot_http_read_timeout_ptr(VMValue *msv) {
+  int prev = g_http_read_timeout_ms.load(std::memory_order_relaxed);
+  if (msv && IS_INT(*msv) && AS_INT(*msv) >= 0) {
+    int64_t ms = AS_INT(*msv);
+    if (ms > 0x7fffffffLL) ms = 0x7fffffffLL;
+    g_http_read_timeout_ms.store((int)ms, std::memory_order_relaxed);
+  }
+  return VM_INT(prev);
+}
+
+// "\r\n\r\n" arar; bulursa baslik blogunun bittigi ofseti (dahil), yoksa -1.
+static int http_find_header_end(const char *buf, int from, int total) {
+  if (from < 0) from = 0;
+  for (int i = from; i + 3 < total; i++) {
+    if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' &&
+        buf[i + 3] == '\n')
+      return i + 4;
+  }
+  return -1;
+}
+
+// Baslik blogundan (buf[0..header_end)) Content-Length; yoksa 0.
+static int http_content_length(const char *buf, int header_end) {
+  const char *hdr_end = buf + header_end - 4;
+  const char *line_start = buf;
+  const char *prefix = "Content-Length:";
+  const int plen = 15;
+  while (line_start < hdr_end) {
+    const char *line_end = line_start;
+    while (line_end < hdr_end && *line_end != '\r' && *line_end != '\n')
+      line_end++;
+    if (line_end - line_start > plen) {
+      bool m = true;
+      for (int j = 0; j < plen; j++) {
+        char a = line_start[j], b = prefix[j];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) { m = false; break; }
+      }
+      if (m) {
+        const char *p = line_start + plen;
+        while (p < line_end && (*p == ' ' || *p == '\t')) p++;
+        long long val = 0;
+        while (p < line_end && *p >= '0' && *p <= '9') {
+          val = val * 10 + (*p - '0');
+          // Clamp to int range so the cap math below stays safe.
+          if (val > 0x7fffffffLL) val = 0x7fffffffLL;
+          p++;
+        }
+        return (int)val;
+      }
+    }
+    line_start = line_end;
+    if (line_start < hdr_end && *line_start == '\r') line_start++;
+    if (line_start < hdr_end && *line_start == '\n') line_start++;
+  }
+  return 0;
+}
+
+// max_bytes argumani: int (tek sinir) ya da rota-onekli tablo dizgisi.
+struct HttpRecvLimits {
+  int max_bytes;
+  const char *spec;
+  int spec_len;
+};
+
+static HttpRecvLimits http_recv_limits(VMValue maxVal) {
+  HttpRecvLimits l;
+  // Default cap: 16 MiB. Big enough for realistic API uploads (package
+  // tarballs, multi-record JSON imports), small enough that a single
+  // worker can't exhaust memory under attack.
+  l.max_bytes = IS_INT(maxVal) ? (int)AS_INT(maxVal) : 16 * 1024 * 1024;
+  l.spec = nullptr;
+  l.spec_len = 0;
+  if (IS_STRING(maxVal)) {
+    l.spec = AS_STRING(maxVal)->chars;
+    l.spec_len = AS_STRING(maxVal)->length;
+    int d = 0;
+    http_recv_pick_limit(l.spec, l.spec_len, "", 0, &d);
+    l.max_bytes = d;
+  }
+  if (l.max_bytes < 1024) l.max_bytes = 1024;
+  return l;
+}
+
+// Baslik bilindikten sonra gecerli sinir. Rota-onekli tablo verildiyse sinir
+// istegin yoluna gore secilir (ornek: genel 1 MB, /api/upload 10 MB).
+static int http_limit_for(const HttpRecvLimits &l, const char *buf,
+                          int header_end) {
+  if (!l.spec) return l.max_bytes;
+  int d = 0;
+  return http_recv_pick_limit(l.spec, l.spec_len, buf, header_end, &d);
+}
+
+static const int HTTP_HEADER_CAP = 65536;
+
 VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
   g_http_recv_err = 0;
   if (!IS_INT(fdVal))
     return VM_OBJ((Obj *)aot_allocate_string("", 0));
   tulpar_socket fd = (tulpar_socket)AS_INT(fdVal);
-  // Default cap: 16 MiB. Big enough for realistic API uploads (package
-  // tarballs, multi-record JSON imports), small enough that a single
-  // worker can't exhaust memory under attack.
-  int max_bytes = IS_INT(maxVal) ? (int)AS_INT(maxVal) : 16 * 1024 * 1024;
-  const char *limit_spec = nullptr;
-  int limit_spec_len = 0;
-  if (IS_STRING(maxVal)) {
-    limit_spec = AS_STRING(maxVal)->chars;
-    limit_spec_len = AS_STRING(maxVal)->length;
-    int d = 0;
-    http_recv_pick_limit(limit_spec, limit_spec_len, "", 0, &d);
-    max_bytes = d;
-  }
-  if (max_bytes < 1024) max_bytes = 1024;
+  HttpRecvLimits lim = http_recv_limits(maxVal);
+  int max_bytes = lim.max_bytes;
 
-  static const int STATIC_CAP = 65536;
+  static const int STATIC_CAP = HTTP_HEADER_CAP;
   static thread_local char *static_buf = nullptr;
   if (!static_buf) {
     static_buf = (char *)malloc(STATIC_CAP + 1);
@@ -9397,8 +9871,19 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
 
   int total = 0;
   int header_end = -1;
-  int content_length = -1;
   int needed = -1;
+
+  // Okuma suresi (yukaridaki blok). 0 = kapali: recv eskisi gibi bekler ve
+  // socket_timeout(fd, ms) yalniz recv'in kendi zaman asimi olarak isler.
+  const int read_to = g_http_read_timeout_ms.load(std::memory_order_relaxed);
+  int rcv_slice = 0;
+  double hdr_deadline = 0.0;
+  if (read_to > 0) {
+    // poll "okunabilir" dedikten sonra recv beklemez; soketin SO_RCVTIMEO'su
+    // (graceful listen() 2 s koyuyor) artik poll'a uygulanmali.
+    rcv_slice = tulpar_socket_get_rcvtimeo_ms(fd);
+    hdr_deadline = tulpar_clock_ms() + (double)read_to;
+  }
 
   for (;;) {
     // Read window: until we know `needed`, fill up to `cap`. After that,
@@ -9406,6 +9891,21 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
     int target = (needed > 0) ? needed : cap;
     if (target > cap) target = cap; // belt-and-braces
     if (total >= target) break;
+
+    if (read_to > 0) {
+      int wait = read_to;
+      if (header_end < 0) {
+        double rem = hdr_deadline - tulpar_clock_ms();
+        wait = rem <= 0.0 ? 0 : (int)rem + 1;
+      }
+      if (rcv_slice > 0 && rcv_slice < wait) wait = rcv_slice;
+      int r = wait > 0 ? tulpar_socket_wait_readable(fd, wait) : 0;
+      if (r <= 0) {
+        if (r == 0 && total > 0) g_http_recv_err = 408;
+        if (buf_owned) free(buf);
+        return VM_OBJ((Obj *)aot_allocate_string("", 0));
+      }
+    }
 
     ssize_t n = tulpar_recv(fd, buf + total, target - total, 0);
     if (n <= 0) {
@@ -9415,15 +9915,7 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
     total += (int)n;
 
     if (header_end < 0) {
-      int scan_from = total - (int)n - 3;
-      if (scan_from < 0) scan_from = 0;
-      for (int i = scan_from; i + 3 < total; i++) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n' &&
-            buf[i + 2] == '\r' && buf[i + 3] == '\n') {
-          header_end = i + 4;
-          break;
-        }
-      }
+      header_end = http_find_header_end(buf, total - (int)n - 3, total);
       if (header_end < 0) {
         // Header didn't fit in `cap` bytes — pathological client; reject.
         if (total >= cap) {
@@ -9434,54 +9926,12 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
         continue;
       }
 
-      content_length = 0;
-      const char *hdr_end = buf + header_end - 4;
-      const char *line_start = buf;
-      const char *prefix = "Content-Length:";
-      int plen = 15;
-      while (line_start < hdr_end) {
-        const char *line_end = line_start;
-        while (line_end < hdr_end && *line_end != '\r' && *line_end != '\n')
-          line_end++;
-        if (line_end - line_start > plen) {
-          bool m = true;
-          for (int j = 0; j < plen; j++) {
-            char a = line_start[j], b = prefix[j];
-            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-            if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
-            if (a != b) { m = false; break; }
-          }
-          if (m) {
-            const char *p = line_start + plen;
-            while (p < line_end && (*p == ' ' || *p == '\t')) p++;
-            long long val = 0;
-            while (p < line_end && *p >= '0' && *p <= '9') {
-              val = val * 10 + (*p - '0');
-              p++;
-            }
-            // Clamp to int range so the cap math below stays safe.
-            if (val > 0x7fffffffLL) val = 0x7fffffffLL;
-            content_length = (int)val;
-            break;
-          }
-        }
-        line_start = line_end;
-        if (line_start < hdr_end && *line_start == '\r') line_start++;
-        if (line_start < hdr_end && *line_start == '\n') line_start++;
-      }
-      needed = header_end + content_length;
-
-      // Rota-onekli tablo verildiyse sinir istegin yoluna gore secilir
-      // (ornek: genel 1 MB, /api/upload 10 MB).
-      if (limit_spec) {
-        int d = 0;
-        max_bytes = http_recv_pick_limit(limit_spec, limit_spec_len, buf,
-                                         header_end, &d);
-      }
+      needed = header_end + http_content_length(buf, header_end);
+      max_bytes = http_limit_for(lim, buf, header_end);
 
       // DoS guard: announced body would push us past max_bytes. Govde
       // OKUNMADAN reddedilir — yalniz Content-Length'e bakilir.
-      if (needed > max_bytes) {
+      if (needed > max_bytes || needed < header_end) {
         if (buf_owned) free(buf);
         g_http_recv_err = 413;
         return VM_OBJ((Obj *)aot_allocate_string("", 0));
@@ -9513,8 +9963,352 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
   return VM_OBJ((Obj *)res);
 }
 
-// http_recv_error() -> int: bu iplikte son http_recv_request neden "" dondu
-// (0 kapandi/hata, 413 govde siniri, 431 baslik blogu). k_std_builtins.
+// ---------------------------------------------------------------------------
+// http_recv_ready(fd, max_bytes) -> str — BLOKLAMAYAN, kaldigi yerden devam
+// eden okuyucu (listen_evented icin, 2026-11-26).
+//
+// Bloklayan okuyucu tek iplikli olay dongusunde kullanilamaz: yarim baslik
+// gonderen tek istemci, bekledigi surece BUTUN baglantilari durdurur. Bu
+// okuyucu yalniz o an sokette bekleyen baytlari alir, eksik istegi fd basina
+// (iplige ozel) bir tamponda saklar ve doner:
+//   * istek tamamsa: istegin metni (http_recv_request ile ayni bicim);
+//   * eksikse: "" + http_recv_error() == 1 — fd poll kumesinde kalir;
+//   * kapandi/hata: "" + 0; sinir asimi: "" + 413 / 431.
+// Siniri ve tablo bicimi http_recv_request ile aynidir. Yarim kalmis istekler
+// http_recv_expired() ile sure asiminda toplanir; socket_close durumu siler.
+struct HttpPending {
+  std::string buf;
+  double started;
+  double last;
+  int header_end;
+  int needed;
+  // PIPELINING (2026-11-26): tamamlanan istegin ARDINDAN ayni okumada gelen
+  // baytlar (istemcinin bir sonraki istegi) atilmaz, burada bekler. Yeni
+  // bayt gelmeyecegi icin poll uyanmaz: http_poll bu fd'yi hemen "hazir"
+  // sayar. Eskiden ikinci istek sessizce kayboluyordu (olculdu:
+  // tests/wings_yazma_smoke.py).
+  bool leftover = false;
+};
+static void http_pending_reparse(HttpPending &st);
+
+// Isaretci: ipligin cikisinda yikici sirasina takilmamak icin (olay dongusu
+// ana iplikte yasar, harita surec sonuna dek durur).
+static thread_local std::unordered_map<int64_t, HttpPending> *g_http_pending =
+    nullptr;
+
+static std::unordered_map<int64_t, HttpPending> &http_pending_map() {
+  if (!g_http_pending)
+    g_http_pending = new std::unordered_map<int64_t, HttpPending>();
+  return *g_http_pending;
+}
+
+// ---- BLOKLAMAYAN YAZMA (listen_evented, 2026-11-26) ------------------------
+// Eskiden olay dongusu yaniti `socket_send` ile BLOKLU yaziyordu: yanitini
+// okumayan tek bir istemci (buyuk yanit, kucuk alma penceresi) soket tamponu
+// dolunca butun donguyu durduruyordu — slowloris'in yazma ikizi. Simdi:
+//   http_send_queued(fd, veri, kapat) -> 0 hepsi gitti | 1 kuyrukta | -1 hata
+// Kuyruktaki fd'nin cikti tamponu http_poll'da POLLOUT gelince bosaltilir;
+// `kapat` = 1 ise (keep-alive yok) bosalinca runtime fd'yi KENDISI kapatir —
+// cagiran onu poll kumesinden hemen cikarir ama kapatmaz. Ayni fd'ye ikinci
+// yanit (pipelining) kuyrugun SONUNA eklenir: sira korunur. Harita iplige
+// ozel: her olay dongusu kendi fd'lerinin sahibi (listen_evented coklu
+// iscide de).
+struct HttpOut {
+  std::string data;
+  size_t off = 0;
+  bool close_after = false;
+};
+static thread_local std::unordered_map<int64_t, HttpOut> *g_http_out = nullptr;
+static std::unordered_map<int64_t, HttpOut> &http_out_map() {
+  if (!g_http_out) g_http_out = new std::unordered_map<int64_t, HttpOut>();
+  return *g_http_out;
+}
+// 0 = bitti, 1 = bekliyor, -1 = hata
+static int http_out_flush(int64_t fd, HttpOut &o) {
+  while (o.off < o.data.size()) {
+    long n = tulpar_socket_send_nb((tulpar_socket)fd, o.data.data() + o.off, o.data.size() - o.off);
+    if (n < 0) return -1;
+    if (n == 0) return 1;
+    o.off += (size_t)n;
+  }
+  return 0;
+}
+static void http_out_forget(int64_t fd) {
+  if (g_http_out) g_http_out->erase(fd);
+}
+
+VMValue aot_http_send_queued_ptr(VMValue *fdv, VMValue *datav, VMValue *closev) {
+  if (!fdv || !IS_INT(*fdv) || !datav || !IS_STRING(*datav)) return VM_INT(-1);
+  int64_t fd = AS_INT(*fdv);
+  ObjString *str = AS_STRING(*datav);
+  const bool close_after = closev && ((IS_INT(*closev) && AS_INT(*closev)) ||
+                                      (IS_BOOL(*closev) && AS_BOOL(*closev)));
+  auto &map = http_out_map();
+  auto it = map.find(fd);
+  if (it != map.end()) {  // onceki yanit hala kuyrukta: sira korunur
+    it->second.data.append(str->chars, (size_t)str->length);
+    it->second.close_after = it->second.close_after || close_after;
+    return VM_INT(1);
+  }
+  HttpOut o;
+  o.data.assign(str->chars, (size_t)str->length);
+  int r = http_out_flush(fd, o);
+  if (r == 0) return VM_INT(0);
+  if (r < 0) return VM_INT(-1);
+  o.close_after = close_after;
+  map.emplace(fd, std::move(o));
+  return VM_INT(1);
+}
+
+// Kuyrukta bekleyen cikti bayti (gozlem/test icin).
+VMValue aot_http_send_pending_ptr(VMValue *fdv) {
+  if (!g_http_out) return VM_INT(0);
+  if (fdv && IS_INT(*fdv)) {
+    auto it = g_http_out->find(AS_INT(*fdv));
+    return VM_INT(it == g_http_out->end() ? 0 : (int64_t)(it->second.data.size() - it->second.off));
+  }
+  int64_t t = 0;
+  for (auto &kv : *g_http_out) t += (int64_t)(kv.second.data.size() - kv.second.off);
+  return VM_INT(t);
+}
+
+// http_poll(fds, ms): socket_poll gibi okunabilir INDEKSLERI dondurur; ek
+// olarak cikti kuyrugu olan fd'ler icin POLLOUT ister ve yazilabilir olanlari
+// bosaltir. `kapat` isaretli ve bosalan (ya da hata veren) fd'ler kapatilir.
+// Cagiranin listesinde olmayan (kapanmayi bekleyen) kuyruklu fd'ler de poll'a
+// katilir — yoksa hic bosalmazlardi. Kuyruk varken bekleme suresi kisalmaz:
+// POLLOUT kendisi uyandirir.
+static void http_poll_flush_and_reap(tulpar_pollfd *p, int n) {
+  if (!g_http_out) return;
+  for (int i = 0; i < n; i++) {
+    if (!(p[i].revents & (POLLOUT | POLLERR | POLLHUP))) continue;
+    auto it = g_http_out->find((int64_t)p[i].fd);
+    if (it == g_http_out->end()) continue;
+    int r = (p[i].revents & POLLOUT) ? http_out_flush((int64_t)p[i].fd, it->second) : -1;
+    if (r == 1) continue;
+    bool kapat = it->second.close_after || r < 0;
+    g_http_out->erase(it);
+    if (kapat) {
+      if (g_http_pending) g_http_pending->erase((int64_t)p[i].fd);
+      tulpar_socket_close((tulpar_socket)p[i].fd);
+    }
+  }
+}
+
+VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal);
+static VMValue aot_http_poll(VMValue fdsVal, VMValue timeoutVal);
+VMValue aot_http_poll_ptr(VMValue *fdsv, VMValue *msv) {
+  return aot_http_poll(fdsv ? *fdsv : VM_VOID(), msv ? *msv : VM_INT(0));
+}
+static bool http_has_leftover(int64_t fd);
+static VMValue aot_http_poll(VMValue fdsVal, VMValue timeoutVal) {
+  bool any_left = false;
+  if (g_http_pending && IS_ARRAY(fdsVal)) {
+    ObjArray *arr = AS_ARRAY(fdsVal);
+    for (int i = 0; i < (int)arr->count && !any_left; i++) {
+      VMValue v = arr_items(arr)[i];
+      if (IS_INT(v) && http_has_leftover(AS_INT(v))) any_left = true;
+    }
+  }
+  if ((!g_http_out || g_http_out->empty()) && !any_left) return aot_socket_poll(fdsVal, timeoutVal);
+  std::vector<tulpar_pollfd> p;
+  std::unordered_map<int64_t, int> in_list;
+  int nfds = 0;
+  if (IS_ARRAY(fdsVal)) {
+    ObjArray *arr = AS_ARRAY(fdsVal);
+    nfds = (int)arr->count;
+    for (int i = 0; i < nfds; i++) {
+      VMValue v = arr_items(arr)[i];
+      tulpar_pollfd x;
+      x.fd = (tulpar_socket)(IS_INT(v) ? AS_INT(v) : -1);
+      x.events = POLLIN;
+      if (IS_INT(v) && g_http_out && g_http_out->count(AS_INT(v))) x.events |= POLLOUT;
+      x.revents = 0;
+      p.push_back(x);
+      if (IS_INT(v)) in_list[AS_INT(v)] = i;
+    }
+  }
+  if (g_http_out) for (auto &kv : *g_http_out) {
+    if (in_list.count(kv.first)) continue;
+    tulpar_pollfd x;
+    x.fd = (tulpar_socket)kv.first;
+    x.events = POLLOUT;
+    x.revents = 0;
+    p.push_back(x);
+  }
+  int timeout_ms = IS_INT(timeoutVal) ? (int)AS_INT(timeoutVal) : 0;
+  if (any_left) timeout_ms = 0;  // bekleyen pipelined istek: hemen don
+  int rc = tulpar_socket_poll(p.data(), (unsigned int)p.size(), timeout_ms);
+  std::vector<int> ready;
+  for (int i = 0; i < nfds; i++) {
+    const bool io = rc > 0 && (p[(size_t)i].revents & (POLLIN | POLLERR | POLLHUP));
+    const bool left = any_left && http_has_leftover((int64_t)p[(size_t)i].fd);
+    if (io || left) ready.push_back(i);
+  }
+  if (rc > 0) http_poll_flush_and_reap(p.data(), (int)p.size());
+  ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+  a->obj.type = OBJ_ARRAY;
+  a->idata = nullptr;
+  a->obj.arena_allocated = 1;
+  a->obj.ref_count = 1;
+  a->obj.is_moved = 0;
+  a->capacity = (int)ready.size();
+  a->count = (int)ready.size();
+  a->items_ = ready.empty() ? nullptr : (VMValue *)aot_arena_alloc(sizeof(VMValue) * ready.size());
+  for (size_t i = 0; i < ready.size(); i++) arr_items(a)[i] = VM_INT(ready[i]);
+  return VM_OBJ((Obj *)a);
+}
+
+// socket_close cagirir: ayni fd numarasi yeni bir baglantiya verildiginde eski
+// baglantinin yarim istegi ona karismasin.
+static void http_pending_forget(int64_t fd) {
+  if (g_http_pending) g_http_pending->erase(fd);
+  http_out_forget(fd);
+}
+
+VMValue aot_http_recv_ready_ptr(VMValue *fdv, VMValue *maxv) {
+  g_http_recv_err = 0;
+  if (!fdv || !IS_INT(*fdv))
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  int64_t key = AS_INT(*fdv);
+  tulpar_socket fd = (tulpar_socket)key;
+  HttpRecvLimits lim = http_recv_limits(maxv ? *maxv : VM_VOID());
+
+  auto &map = http_pending_map();
+  auto it = map.find(key);
+  if (it == map.end()) {
+    HttpPending fresh;
+    fresh.started = fresh.last = tulpar_clock_ms();
+    fresh.header_end = -1;
+    fresh.needed = -1;
+    it = map.emplace(key, std::move(fresh)).first;
+  }
+  HttpPending &st = it->second;
+  st.leftover = false;  // bu cagri tamponu isliyor; tekrar "hazir" saymaya gerek yok
+
+  char tmp[16384];
+  bool progressed = false;
+  for (;;) {
+    int size = (int)st.buf.size();
+    int want = (int)sizeof(tmp);
+    if (st.needed > 0) {
+      int left = st.needed - size;
+      if (left <= 0) break;
+      if (left < want) want = left;
+    } else {
+      int room = HTTP_HEADER_CAP - size;
+      if (room <= 0) break;
+      if (room < want) want = room;
+    }
+    if (tulpar_socket_wait_readable(fd, 0) <= 0) break; // simdilik bu kadar
+    ssize_t n = tulpar_recv(fd, tmp, want, 0);
+    if (n <= 0) {
+      map.erase(it);
+      return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    }
+    st.buf.append(tmp, (size_t)n);
+    progressed = true;
+    size = (int)st.buf.size();
+
+    if (st.header_end < 0) {
+      st.header_end = http_find_header_end(st.buf.data(), size - (int)n - 3, size);
+      if (st.header_end < 0) {
+        if (size >= HTTP_HEADER_CAP) {
+          map.erase(it);
+          g_http_recv_err = 431;
+          return VM_OBJ((Obj *)aot_allocate_string("", 0));
+        }
+        continue;
+      }
+      long long need = (long long)st.header_end +
+                       http_content_length(st.buf.data(), st.header_end);
+      if (need > http_limit_for(lim, st.buf.data(), st.header_end)) {
+        map.erase(it);
+        g_http_recv_err = 413;
+        return VM_OBJ((Obj *)aot_allocate_string("", 0));
+      }
+      st.needed = (int)need;
+    }
+    if (st.needed > 0 && size >= st.needed) break;
+  }
+  if (progressed) st.last = tulpar_clock_ms();
+
+  if (st.needed > 0 && (int)st.buf.size() >= st.needed) {
+    ObjString *res = aot_allocate_string(st.buf.data(), st.needed);
+    if ((int)st.buf.size() > st.needed) {
+      // Sonraki (pipelined) istegin baslangici: durum onunla yeniden kurulur.
+      HttpPending next;
+      next.buf = st.buf.substr((size_t)st.needed);
+      next.started = next.last = tulpar_clock_ms();
+      next.header_end = -1;
+      next.needed = -1;
+      next.leftover = true;
+      http_pending_reparse(next);
+      it->second = std::move(next);
+    } else {
+      map.erase(it);
+    }
+    return VM_OBJ((Obj *)res);
+  }
+  g_http_recv_err = HTTP_RECV_PENDING;
+  return VM_OBJ((Obj *)aot_allocate_string("", 0));
+}
+
+// Artik tamponda baslik sonu / gereken boy (yeni bayt beklemeden).
+static void http_pending_reparse(HttpPending &st) {
+  int size = (int)st.buf.size();
+  st.header_end = http_find_header_end(st.buf.data(), 0, size);
+  if (st.header_end >= 0)
+    st.needed = st.header_end + (int)http_content_length(st.buf.data(), st.header_end);
+}
+
+// http_poll icin: listedeki bir fd'nin tamponunda bekleyen (pipelined) istek var mi.
+static bool http_has_leftover(int64_t fd) {
+  if (!g_http_pending) return false;
+  auto it = g_http_pending->find(fd);
+  return it != g_http_pending->end() && it->second.leftover && !it->second.buf.empty();
+}
+
+// http_recv_expired() -> int[] — suresi dolan yarim isteklerin fd'leri (bu
+// iplikte). Kural http_recv_request ile ayni: baslik evresinde ilk bayttan
+// beri http_read_timeout, govde evresinde son ilerlemeden beri ayni sure.
+// Donen fd'lerin durumu silinir; cagiran 408 yazip kapatir. Ayar 0 ise bos.
+VMValue aot_http_recv_expired_ptr(void) {
+  const int read_to = g_http_read_timeout_ms.load(std::memory_order_relaxed);
+  std::vector<int64_t> gone;
+  if (read_to > 0 && g_http_pending && !g_http_pending->empty()) {
+    double now = tulpar_clock_ms();
+    for (auto it = g_http_pending->begin(); it != g_http_pending->end();) {
+      const HttpPending &st = it->second;
+      double since = st.header_end < 0 ? st.started : st.last;
+      if (now - since > (double)read_to) {
+        gone.push_back(it->first);
+        it = g_http_pending->erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  int n = (int)gone.size();
+  ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+  a->obj.type = OBJ_ARRAY;
+  a->idata = nullptr;
+  a->obj.arena_allocated = 1;
+  a->obj.ref_count = 1;
+  a->obj.is_moved = 0;
+  a->capacity = n;
+  a->count = n;
+  a->items_ = nullptr;
+  if (n > 0) {
+    a->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * (size_t)n);
+    for (int i = 0; i < n; i++) arr_items(a)[i] = VM_INT(gone[i]);
+  }
+  return VM_OBJ((Obj *)a);
+}
+
+// http_recv_error() -> int: bu iplikte son http_recv_request / http_recv_ready
+// neden "" dondu (0 kapandi/hata/bosta sure doldu, 1 istek eksik — bekle,
+// 408 okuma suresi doldu, 413 govde siniri, 431 baslik blogu). k_std_builtins.
 VMValue aot_http_recv_error_ptr(void) { return VM_INT(g_http_recv_err); }
 
 // Builtin: http_create_response_keepalive(status, ct, body, headers, keep)
@@ -11178,3 +11972,231 @@ VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
 #ifdef __cplusplus
 }
 #endif
+
+// ============================================================================
+// PROFILLEYICI (`tulpar --profile`, 2026-11-26)
+//
+// Enstrumantasyonlu: derleyici (TULPAR_PROFILE=1) her Tulpar fonksiyon
+// GOVDESININ girisine aot_prof_enter(id, tur), her donusune aot_prof_exit
+// koyar (llvm_backend.cpp instrument_profile). Iplik basina bir CAGRI AGACI
+// tutulur: dugum = (ust, fonksiyon); oz sure, cagri sayisi, oz arena baytı.
+// Cikista: fonksiyon basina tablo (oz %, oz/kapsayici ms, cagri, oz arena KB)
+// stderr'e; TULPAR_PROFILE_OUT=<dosya> ise flamegraph/speedscope "folded"
+// bicimi (`ana;f;g <oz mikrosaniye>`).
+//
+// Dogruluk kurallari:
+//  * Kapsayici sure ozyinelemede iki kez sayilmaz: yalniz yigindaki EN DIS
+//    cerceve ekler.
+//  * Dagitici + kendi uzmanlasmasi (`t_f.f` -> `f$i`, tur 1 -> 2) TEK cagri.
+//  * throw longjmp ile cikis kancalarini atlar: aot_try_push profil
+//    derinligini saklar, aot_throw hedef derinlige kadar cerceveleri kapatir.
+//  * exit() (test_summary) acik cerceveleri raporda simdiki zamanla kapatir.
+//  * Iplikler: her iplik kendi agaci; rapor hepsini birlestirir (iplik
+//    bitince agac korunur).
+//  * Async govdeler enstrumante EDILMEZ (askiya alinan coroutine yigini
+//    bozardi); await beklemesi cagiranin kapsayici suresinde gorunur.
+// Kapaliyken (enstrumantasyon yokken) maliyet: aot_try_push'ta bir dallanma.
+// ============================================================================
+#include <chrono>
+namespace {
+struct ProfNode {
+  int fn;
+  int parent;
+  uint64_t calls = 0, self_ns = 0, self_bytes = 0;
+  std::vector<std::pair<int, int>> kids;  // (fn, node)
+};
+struct ProfFrame {
+  int node;
+  int fn;
+  int kind;
+  int merged;          // dagitici icine katlanan uzmanlasma sayisi
+  uint64_t t0, child_ns, b0, child_bytes;
+  bool outermost;      // bu fn'in yigindaki en dis cercevesi mi
+};
+struct ProfThread {
+  std::vector<ProfNode> nodes;
+  std::vector<ProfFrame> stack;
+  std::vector<int> active;    // fn -> yigindaki cerceve sayisi
+  std::vector<uint64_t> incl; // fn -> kapsayici ns (en dis cerceveler)
+};
+std::atomic<int> g_prof_on{0};
+const char *const *g_prof_names = nullptr;
+int g_prof_count = 0;
+std::mutex g_prof_mu;
+std::vector<ProfThread *> g_prof_threads;
+thread_local ProfThread *t_prof = nullptr;
+uint64_t g_prof_overhead_ns = 0;
+
+inline uint64_t prof_now() {
+  return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+inline uint64_t prof_bytes() {
+  return g_aot_string_arena ? (uint64_t)g_aot_string_arena->total_allocated : 0;
+}
+ProfThread *prof_thread() {
+  if (!t_prof) {
+    t_prof = new ProfThread();
+    t_prof->nodes.push_back(ProfNode{-1, -1});  // kok
+    t_prof->active.assign((size_t)g_prof_count + 1, 0);
+    t_prof->incl.assign((size_t)g_prof_count + 1, 0);
+    std::lock_guard<std::mutex> g(g_prof_mu);
+    g_prof_threads.push_back(t_prof);
+  }
+  return t_prof;
+}
+void prof_close_top(ProfThread *pt, uint64_t now) {
+  ProfFrame f = pt->stack.back();
+  pt->stack.pop_back();
+  uint64_t total = now > f.t0 ? now - f.t0 : 0;
+  uint64_t bytes = prof_bytes();
+  uint64_t tb = bytes > f.b0 ? bytes - f.b0 : 0;
+  ProfNode &n = pt->nodes[(size_t)f.node];
+  n.self_ns += total > f.child_ns ? total - f.child_ns : 0;
+  n.self_bytes += tb > f.child_bytes ? tb - f.child_bytes : 0;
+  if (f.fn >= 0 && f.fn <= g_prof_count) {
+    pt->active[(size_t)f.fn]--;
+    if (f.outermost) pt->incl[(size_t)f.fn] += total;
+  }
+  if (!pt->stack.empty()) {
+    pt->stack.back().child_ns += total;
+    pt->stack.back().child_bytes += tb;
+  }
+}
+void prof_report();
+}  // namespace
+
+extern "C" void aot_prof_init(const char *const *names, int count) {
+  if (g_prof_on.load(std::memory_order_relaxed)) return;
+  g_prof_names = names;
+  g_prof_count = count;
+  // Olcum gideri: bos enter/exit ciftinin maliyeti (raporda bildirilir).
+  uint64_t a = prof_now();
+  for (int i = 0; i < 2000; i++) { (void)prof_now(); (void)prof_now(); }
+  g_prof_overhead_ns = (prof_now() - a) / 2000;
+  g_prof_on.store(1, std::memory_order_relaxed);
+  atexit(prof_report);
+}
+
+extern "C" void aot_prof_enter(int fn, int kind) {
+  if (!g_prof_on.load(std::memory_order_relaxed)) return;
+  ProfThread *pt = prof_thread();
+  if (!pt->stack.empty()) {
+    ProfFrame &top = pt->stack.back();
+    // Dagiticinin (tur 1) kendi uzmanlasmasina (tur 2) gecisi: ayni cagri.
+    if (kind == 2 && top.kind == 1 && top.fn == fn && top.merged == 0 && top.child_ns == 0) {
+      top.merged++;
+      return;
+    }
+  }
+  int parent = pt->stack.empty() ? 0 : pt->stack.back().node;
+  int node = -1;
+  for (auto &k : pt->nodes[(size_t)parent].kids)
+    if (k.first == fn) { node = k.second; break; }
+  if (node < 0) {
+    node = (int)pt->nodes.size();
+    pt->nodes.push_back(ProfNode{fn, parent});
+    pt->nodes[(size_t)parent].kids.push_back({fn, node});
+  }
+  pt->nodes[(size_t)node].calls++;
+  bool outer = true;
+  if (fn >= 0 && fn <= g_prof_count) outer = pt->active[(size_t)fn]++ == 0;
+  pt->stack.push_back(ProfFrame{node, fn, kind, 0, prof_now(), 0, prof_bytes(), 0, outer});
+}
+
+extern "C" void aot_prof_exit(int fn, int kind) {
+  (void)kind;
+  if (!g_prof_on.load(std::memory_order_relaxed) || !t_prof) return;
+  ProfThread *pt = t_prof;
+  if (pt->stack.empty()) return;
+  ProfFrame &top = pt->stack.back();
+  if (top.fn == fn && top.merged > 0 && kind == 2) { top.merged--; return; }
+  // Eslesmeyen cikis (olmamali): yigini o fonksiyona kadar kapat; yoksa yok say.
+  size_t k = pt->stack.size();
+  while (k > 0 && pt->stack[k - 1].fn != fn) k--;
+  if (k == 0) return;
+  uint64_t now = prof_now();
+  while (pt->stack.size() >= k) prof_close_top(pt, now);
+}
+
+// aot_try_push / aot_throw icin: throw'un atlayacagi cerceveleri kapat.
+static int aot_prof_depth(void) {
+  return (g_prof_on.load(std::memory_order_relaxed) && t_prof) ? (int)t_prof->stack.size() : 0;
+}
+static void aot_prof_unwind_to(int depth) {
+  if (!g_prof_on.load(std::memory_order_relaxed) || !t_prof) return;
+  uint64_t now = prof_now();
+  while ((int)t_prof->stack.size() > depth) prof_close_top(t_prof, now);
+}
+
+namespace {
+void prof_folded(FILE *out, const ProfThread *pt, int node, std::string &path) {
+  const ProfNode &n = pt->nodes[(size_t)node];
+  size_t keep = path.size();
+  if (node != 0) {
+    if (!path.empty()) path += ';';
+    path += (n.fn >= 0 && n.fn < g_prof_count) ? g_prof_names[n.fn] : "?";
+    uint64_t us = n.self_ns / 1000;
+    if (us > 0) fprintf(out, "%s %llu\n", path.c_str(), (unsigned long long)us);
+  }
+  for (const auto &k : n.kids) prof_folded(out, pt, k.second, path);
+  path.resize(keep);
+}
+
+void prof_report() {
+  if (!g_prof_on.load()) return;
+  g_prof_on.store(0);
+  std::lock_guard<std::mutex> g(g_prof_mu);
+  uint64_t now = prof_now();
+  // exit() ile acik kalan cerceveler (yalniz cagiran iplikte guvenli).
+  if (t_prof) while (!t_prof->stack.empty()) prof_close_top(t_prof, now);
+  struct Row { uint64_t calls = 0, self_ns = 0, incl_ns = 0, bytes = 0; };
+  std::vector<Row> rows((size_t)g_prof_count + 1);
+  uint64_t total_self = 0;
+  for (const ProfThread *pt : g_prof_threads) {
+    for (const auto &n : pt->nodes) {
+      if (n.fn < 0 || n.fn > g_prof_count) continue;
+      rows[(size_t)n.fn].calls += n.calls;
+      rows[(size_t)n.fn].self_ns += n.self_ns;
+      rows[(size_t)n.fn].bytes += n.self_bytes;
+      total_self += n.self_ns;
+    }
+    for (int i = 0; i <= g_prof_count; i++) rows[(size_t)i].incl_ns += pt->incl[(size_t)i];
+  }
+  std::vector<int> order;
+  for (int i = 0; i < g_prof_count; i++) if (rows[(size_t)i].calls) order.push_back(i);
+  std::sort(order.begin(), order.end(),
+            [&](int a, int b) { return rows[(size_t)a].self_ns > rows[(size_t)b].self_ns; });
+  fprintf(stderr,
+          "\n=== tulpar profil — %zu fonksiyon, %zu iplik, toplam oz %.3f ms ===\n"
+          "   oz %%     oz ms   kapsayici ms      cagri   oz arena KB  fonksiyon\n",
+          order.size(), g_prof_threads.size(), total_self / 1e6);
+  const char *lim = getenv("TULPAR_PROFILE_TOP");
+  size_t top = lim ? (size_t)atoi(lim) : 30;
+  for (size_t i = 0; i < order.size() && i < top; i++) {
+    const Row &r = rows[(size_t)order[i]];
+    fprintf(stderr, "%6.1f %9.3f %14.3f %10llu %13.1f  %s\n",
+            total_self ? 100.0 * (double)r.self_ns / (double)total_self : 0.0, r.self_ns / 1e6,
+            r.incl_ns / 1e6, (unsigned long long)r.calls, r.bytes / 1024.0,
+            g_prof_names[order[i]]);
+  }
+  if (order.size() > top)
+    fprintf(stderr, "  ... %zu fonksiyon daha (TULPAR_PROFILE_TOP=<n>)\n", order.size() - top);
+  fprintf(stderr,
+          "  olcum gideri ~%llu ns/cagri (iki saat okumasi; kisa fonksiyonlarda oz sureyi "
+          "sisirir) / ~%llu ns per call\n",
+          (unsigned long long)g_prof_overhead_ns, (unsigned long long)g_prof_overhead_ns);
+  if (const char *path = getenv("TULPAR_PROFILE_OUT")) {
+    if (FILE *f = fopen(path, "w")) {
+      for (const ProfThread *pt : g_prof_threads) {
+        std::string p;
+        prof_folded(f, pt, 0, p);
+      }
+      fclose(f);
+      fprintf(stderr, "  folded yigin: %s (flamegraph.pl / speedscope)\n", path);
+    } else {
+      fprintf(stderr, "  folded yigin yazilamadi: %s\n", path);
+    }
+  }
+}
+}  // namespace
