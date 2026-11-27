@@ -56,6 +56,37 @@ grep -q "atlandi  bg_kimlik: .*bilinmeyen tip 'bg_u32'" "$TMP/rapor2" \
   && gecti "kontrol: --no-includes ile bg_kimlik bilinmeyen tip (include takibi yuk tasiyor)" \
   || { dustu "kontrol: --no-includes farki gorunmedi"; tail -4 "$TMP/rapor2" | sed 's/^/         /'; }
 
+# 1c) #ifdef dallari (CI 2026-11-27, Ubuntu zlib 1.3): zconf.h'in `#ifdef
+# Z_PREFIX` blogundaki `#define zlibVersion z_zlibVersion` her adi yeniden
+# adlandiriyordu; yerel zlib-ng basliginda o blok yok, gorunmedi. Ikinci
+# desen: bilinmeyen `#if` dalinda `#define FAR _far`, sonra `#ifndef FAR` /
+# `#define FAR` — FAR bos kalmali, yoksa Bytef cozulmez.
+mkdir -p "$TMP/dal"
+cat > "$TMP/dal/dal.h" <<'H'
+#ifdef Z_PREFIX
+#  define zlibVersion z_zlibVersion
+#endif
+#if defined(M_I86SM) || defined(M_I86MM)
+#  define FAR _far
+#endif
+#ifndef FAR
+#  define FAR
+#endif
+typedef unsigned char Byte;
+typedef Byte FAR Bytef;
+#ifndef YOK_HIC
+#  define dal_eski dal_yeni
+#endif
+const char *zlibVersion(void);
+unsigned long adler32(unsigned long a, const Bytef *buf, unsigned len);
+int dal_eski(int x);
+H
+"$TUL" bindgen "$TMP/dal/dal.h" --name dal -o "$TMP/dal/tulpar-ext.json" 2>"$TMP/dal/r"
+dad=$(grep -oE '"name": *"[A-Za-z_0-9]+"' "$TMP/dal/tulpar-ext.json" | sed 's/.*"\([^"]*\)"$/\1/' | grep -v '^dal$' | sort | tr '\n' ' ')
+[ "$dad" = "adler32 dal_yeni zlibVersion " ] \
+  && gecti "#ifdef/#ifndef dallari: etkin olmayan dalin #define'i uygulanmiyor (zlibVersion, FAR, dal_yeni)" \
+  || { dustu "#ifdef dallari: adlar '$dad'"; grep atlandi "$TMP/dal/r" | sed 's/^/         /'; }
+
 # 2) uretilen bildirimle cagri
 if [ -n "$CC_BIN" ] && [ -n "$AR_BIN" ]; then
   "$CC_BIN" -std=c99 -O2 -I "$SRC" -c "$SRC/bg_ornek.c" -o "$TMP/ext/lib/bg.o" && "$AR_BIN" rcs "$TMP/ext/lib/libbg_ornek.a" "$TMP/ext/lib/bg.o"

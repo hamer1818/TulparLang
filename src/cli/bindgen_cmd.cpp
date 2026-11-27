@@ -79,6 +79,35 @@ std::string strip_source(const std::string &in, std::map<std::string, std::strin
   // 4 kelime; bos govde dahil) TOKEN YERINE KOYMA olarak toplanir:
   // `#define z_off_t off_t`, `#define ZEXPORT`, `#define z_const const`.
   // Fonksiyon-bicimli makro, sayi/ifade govdesi dikkate alinmaz.
+  //
+  // #if dallari DEGERLENDIRILMEZ, tek istisna: `#ifdef AD` / `#ifndef AD`
+  // sonucu BILINEN dalda toplanmaz. Olculdu (CI, Ubuntu zlib 1.3):
+  // zconf.h'in `#ifdef Z_PREFIX` blogundaki `#define zlibVersion z_zlibVersion`
+  // her adi yeniden adlandiriyor, zlibVersion hic baglanmiyordu (yereldeki
+  // zlib-ng basliginda o blok yok). AD daha once tanimlanmadiysa ve `_` ile
+  // baslamiyorsa "tanimsiz" sayilir; `_`/`__` ile baslayanlar cogunlukla
+  // derleyicinin onceden tanimladiklaridir (__GNUC__, _WIN32) -> BILINMEZ,
+  // eski davranis (dal etkin). `#if`/`#elif` ifadeleri de bilinmez.
+  // Sonucu bilinmeyen dalda tanimlanan ad yalniz "belki tanimli"dir: zconf.h
+  // `#if defined(M_I86SM)` altinda `#define FAR _far`, sonra `#ifndef FAR` /
+  // `#define FAR` (bos). Onu "tanimli" saymak ikinci tanimi atar, FAR `_far`
+  // kalir ve Bytef cozulmezdi (olculdu: 53 fonksiyon atlandi).
+  std::set<std::string> known_defs, maybe_defs;
+  if (defines) for (const auto &kv : *defines) known_defs.insert(kv.first);
+  std::vector<int> conds;  // 1 etkin, 0 etkin degil, 2 bilinmez
+  auto region_active = [&]() {
+    for (int s : conds) if (s == 0) return false;
+    return true;
+  };
+  auto region_definite = [&]() {
+    for (int s : conds) if (s != 1) return false;
+    return true;
+  };
+  auto word_after = [](const std::string &l, size_t from) {
+    size_t a = l.find_first_not_of(" \t", from), b = a;
+    while (b < l.size() && is_id_char(l[b])) b++;
+    return a == std::string::npos ? std::string() : l.substr(a, b - a);
+  };
   std::string res;
   std::istringstream ss(out);
   std::string line;
@@ -86,6 +115,35 @@ std::string strip_source(const std::string &in, std::map<std::string, std::strin
     size_t p = line.find_first_not_of(" \t");
     if (p != std::string::npos && line[p] == '#') {
       size_t q = line.find_first_not_of(" \t", p + 1);
+      std::string dir = q == std::string::npos ? std::string() : word_after(line, q);
+      if (dir == "ifdef" || dir == "ifndef") {
+        std::string nm = word_after(line, q + dir.size());
+        int st = 2;
+        if (maybe_defs.count(nm)) st = 2;
+        else if (known_defs.count(nm)) st = dir == "ifdef" ? 1 : 0;
+        else if (!nm.empty() && nm[0] != '_') st = dir == "ifdef" ? 0 : 1;
+        conds.push_back(st);
+      } else if (dir == "if") {
+        conds.push_back(2);
+      } else if (dir == "elif") {
+        if (!conds.empty()) conds.back() = conds.back() == 1 ? 0 : 2;
+      } else if (dir == "else") {
+        if (!conds.empty() && conds.back() != 2) conds.back() = 1 - conds.back();
+      } else if (dir == "endif") {
+        if (!conds.empty()) conds.pop_back();
+      } else if (dir == "undef") {
+        std::string nm = word_after(line, q + 5);
+        if (region_definite()) { known_defs.erase(nm); maybe_defs.erase(nm); }
+        else if (region_active()) maybe_defs.insert(nm);
+      } else if (dir == "define" && region_active()) {
+        std::string nm = word_after(line, q + 6);
+        if (region_definite()) known_defs.insert(nm);
+        else maybe_defs.insert(nm);
+      }
+      if (dir == "define" && !region_active()) {
+        res += '\n';
+        continue;
+      }
       if (q != std::string::npos && line.compare(q, 7, "include") == 0 && includes) {
         size_t a = line.find_first_of("<\"", q + 7);
         if (a != std::string::npos) {
