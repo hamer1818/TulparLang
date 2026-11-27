@@ -238,11 +238,12 @@ def main():
             check("kendi kopyasi" in txt.lower() or "KENDI kopyasi" in txt,
                   "hover '@thread_local' nitelik aciklamasini vermiyor", txt[:120])
             txt = hover_at("frame", 7, 61)
-            check("arena_save" in txt and "nitelik" in txt,
+            # Etiket tr_en("nitelik", "attribute"): CI Ingilizce yerelde kosar.
+            check("arena_save" in txt and ("nitelik" in txt or "attribute" in txt),
                   "hover '@frame' nitelik aciklamasini vermiyor", txt[:120])
             # ayni adli degisken (`int frame`, satir 6): nitelik DEGIL
             txt = hover_at("frame", 6, 62)
-            check("nitelik" not in txt and "arena_save" not in txt,
+            check("nitelik" not in txt and "attribute" not in txt and "arena_save" not in txt,
                   "'frame' degiskeni nitelik sanildi", txt[:120])
 
         # BOZUK kod tanı üretmeli — editörün kırmızı altçizgisi buradan geliyor.

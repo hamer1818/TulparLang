@@ -117,7 +117,7 @@ SDL_Delay(200);
 print(atomic_load(g_tik) >= 3);
 print(SDL_RemoveTimer(id));
 T
-  out=$(DISPLAY= WAYLAND_DISPLAY= timeout 30 "$TUL" --ext "$TMP/sdl" "$TMP/sdl.tpr" 2>&1)
+  out=$(DISPLAY= WAYLAND_DISPLAY= perl -e 'alarm shift; exec @ARGV' 30 "$TUL" --ext "$TMP/sdl" "$TMP/sdl.tpr" 2>&1)
   [ "$out" = "true
 false
 true

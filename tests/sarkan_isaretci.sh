@@ -29,10 +29,14 @@ TULPAR="$(pwd)/tulpar"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 FAIL=0
+# Sureli kosum: `timeout` macOS'ta yok (CI arm64'te "command not found"), perl
+# her yerde var — tests/sanitize_smoke.sh ile ayni yol.
+sureli() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+export -f sureli
 gecti() { echo "  gecti  $1"; }
 dustu() { echo "  DUSTU  $1"; FAIL=1; }
 kos() {  # kos <zehir 0|1> <dosya>
-    ( cd "$TMP" && DISPLAY= WAYLAND_DISPLAY= TULPAR_ARENA_ZEHIR="$1" timeout 60 "$TULPAR" "$2" 2>&1 )
+    ( cd "$TMP" && DISPLAY= WAYLAND_DISPLAY= TULPAR_ARENA_ZEHIR="$1" sureli 60 "$TULPAR" "$2" 2>&1 )
 }
 
 # --- 1. pozitif kontrol ---------------------------------------------------
@@ -166,7 +170,7 @@ BILEREK="gecici_dizgi.test.tpr|olu dizgi kopyalanarak kurtarilir"
 ls tests/*.test.tpr > "$TMP/paketler"
 paket_n=$(wc -l < "$TMP/paketler")
 xargs -P "${TULPAR_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}" -I{} sh -c \
-    'out=$(DISPLAY= WAYLAND_DISPLAY= TULPAR_ARENA_ZEHIR=1 timeout 180 "$1" "$2" 2>&1); rc=$?;
+    'out=$(DISPLAY= WAYLAND_DISPLAY= TULPAR_ARENA_ZEHIR=1 perl -e "alarm shift; exec @ARGV" 180 "$1" "$2" 2>&1); rc=$?;
      b=$(basename "$2"); printf "%s\n" "$out" | grep -E "^ *FAIL" | sed "s/^ *FAIL /$b|/" ;
      printf "%s\n" "$out" | grep -q "Tests:" || echo "$b|OZET-YOK rc=$rc"' _ "$TULPAR" {} \
     < "$TMP/paketler" > "$TMP/zehir_fail" 2>&1
