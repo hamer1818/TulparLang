@@ -1,6 +1,6 @@
-  fetched fast
-  fetched mid
-  fetched slow
+  fetched ?
+  fetched ?
+  fetched ?
 results = [30, 10, 20]
 elapsed ~ Nms (concurrent: ~30, not ~60)
   fetched x
