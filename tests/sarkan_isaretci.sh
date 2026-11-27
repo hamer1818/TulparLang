@@ -68,6 +68,28 @@ case "$n" in *gecici-12345-uzun-bir-dizgi*) gecti "normal kip: sarkan dizgi SESS
              *) echo "  not    normal kipte sarkan dizgi zaten bozuk: $n";; esac
 case "$z" in *gecici-12345-uzun-bir-dizgi*) dustu "zehir: drop sonrasi dizgi okumasi hala dogru ($z)";;
              *) gecti "zehir: drop sonrasi dizgi okumasi bozuk gorunuyor";; esac
+# Yerine gelmis promise kendi kontrol noktasinin drop'undan SONRA okunur
+# (Async RFC A.4, 2026-11-27: promise bolgede izlenir, yerine gelmisse drop'ta
+# birakilir). Ayni noktada BEKLEYEN promise ise terfi eder — guvenli
+# desenlerde (g) olculuyor.
+cat > "$TMP/sark_promise.tpr" <<'T'
+import "async";
+async func is(): json { return {"r": "promise-" + toString(77)}; }
+func yap(): int {
+    int wm = arena_save();
+    var p = is();
+    await sleep_async(1);
+    arena_drop(wm);
+    for (int i = 0; i < 50; i++) { json cop = {"cop": "c-" + toString(i)}; }
+    json r = await p;
+    print(r["r"]);
+    return 0;
+}
+yap();
+T
+z=$(kos 1 sark_promise.tpr)
+case "$z" in *promise-77*) dustu "zehir: drop sonrasi yerine gelmis promise okumasi hala dogru ($z)";;
+             *) gecti "zehir: drop sonrasi yerine gelmis promise okumasi bozuk gorunuyor";; esac
 
 # --- 2. guvenli desenler --------------------------------------------------
 cat > "$TMP/guvenli.tpr" <<'T'
@@ -110,15 +132,49 @@ async func d_kos(): int {
     return await p;
 }
 // d2) gorev checkpoint ICINDE biter, sonucu checkpoint DISINDA beklenir.
+//     Ana akista (Async RFC A.2: coroutine'de acik nokta await'i asamaz;
+//     ana akista block-on serbest — gorev ayri async baglaminda kosar).
 async func d2_is(): json { return {"r": "sonuc-" + toString(5)}; }
-async func d2_kos(): str {
+json g_d2 = {};
+func d2_kos(): str {
     int wm = arena_save();
     var p = d2_is();
     await sleep_async(1);
+    // Async RFC A.4: promise bu noktanin geçici nesnesi — sonucu drop'tan
+    // ONCE al; drop'u global (bariyer) asar. Drop'tan sonra `await p`
+    // bilinen sarkan desen (pozitif kontrol: sark_promise.tpr).
+    g_d2 = await p;
     arena_drop(wm);
     for (int i = 0; i < 50; i++) { json cop = {"cop": "c-" + toString(i)}; }
-    json r = await p;
-    return r["r"];
+    return g_d2["r"];
+}
+// g) Async RFC A.4: drop aninda BEKLEYEN promise terfi eder (gorev hala ona
+//    bakiyor) — drop'tan sonra beklemek guvenli.
+async func g_gec(): int { await sleep_async(5); return 9; }
+func g_bekleyen(): int {
+    int wm = arena_save();
+    var p = g_gec();
+    arena_drop(wm);
+    for (int i = 0; i < 50; i++) { json cop = {"cop": "c-" + toString(i)}; }
+    return await p;
+}
+// h) Async RFC A.1: ana akis noktasi acikken bekler; o sirada UZUN coroutine
+//    dizgi/json kurar. Noktanin drop'u coroutine'in async baglamina dokunmaz.
+async func h_uzun(): str {
+    await sleep_async(1);
+    str s = "ic-" + toString(3);
+    json j = {"s": s};
+    await sleep_async(20);
+    return j["s"];
+}
+async func h_kisa(): int { await sleep_async(5); return 1; }
+func g_ic_ice(): str {
+    var pu = h_uzun();
+    int wm = arena_save();
+    int k = await h_kisa();
+    arena_drop(wm);
+    for (int i = 0; i < 50; i++) { str cop = "c-" + toString(i) + "-xxxxxxxxxxxxxxxx"; }
+    return await pu;
 }
 // e) thread arg kopyasi.
 int g_thr = 0;
@@ -140,7 +196,7 @@ print(g_son["ad"] + " " + toString(len(g_son["liste"])) + " " + g_ad);
 print(b_skaler());
 for (int i = 0; i < 3; i++) { print(c_frame(i)); }
 print(await d_kos());
-print(await d2_kos());
+print(d2_kos());
 int wm = arena_save();
 var t = thread_create("e_thr", {"x": 41});
 arena_drop(wm);
@@ -148,6 +204,8 @@ thread_join(t);
 print(g_thr);
 f_dongu();
 print(toString(len(g_birikim)) + " " + g_birikim[0] + " " + g_birikim[19]);
+print(g_bekleyen());
+print(g_ic_ice());
 T
 beklenen='kayit-7 3 isim-99
 42
@@ -157,7 +215,9 @@ frame-2
 42
 sonuc-5
 42
-20 satir-0 satir-19'
+20 satir-0 satir-19
+9
+ic-3'
 n=$(kos 0 guvenli.tpr); z=$(kos 1 guvenli.tpr)
 if [ "$n" = "$beklenen" ]; then gecti "guvenli desenler normal kipte dogru"; else dustu "guvenli desenler normal kipte YANLIS:"; echo "$n" | sed 's/^/      /'; fi
 if [ "$z" = "$beklenen" ]; then gecti "guvenli desenler zehirde de dogru (yanlis alarm yok)"; else dustu "guvenli desenler zehirde YANLIS:"; echo "$z" | sed 's/^/      /'; fi

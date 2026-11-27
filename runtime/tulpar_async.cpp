@@ -62,6 +62,15 @@
 // yerine getirmek checkpoint'ten KACIS: yazma bariyeriyle ayni kural,
 // yalniz GECICI degerler kaliciya kopyalanir (checkpoint yokken no-op).
 extern "C" VMValue aot_persist_escape(VMValue v);
+// ASYNC ARENA BAGLAMI (Async RFC A.1-A.5, 2026-11-27; src/vm/runtime_bindings.cpp).
+// Coroutine dilimleri ana akistan ayri, ortak bir arena baglaminda kosar;
+// coroutine'de acik kontrol noktasiyla await hata; promise bolgede izlenir;
+// ARC (arc_retain/arc_release) bu dosyadan cikti — AOT'ta ARC yok, istisnasiz.
+extern "C" void *aot_arena_ctx_new(void);
+extern "C" void aot_arena_ctx_swap(void *ctx);
+extern "C" int aot_arena_checkpoint_depth(void);
+extern "C" void aot_region_track_obj(Obj *o);
+extern "C" void aot_free_untracked_container(Obj *o);
 #include <algorithm>
 #include <unordered_map>
 #include <chrono> // steady_clock only (header-only; safe on all toolchains)
@@ -131,8 +140,6 @@ inline void async_sleep_ms(long long ms) {
 
 extern "C" {
 void aot_runtime_error(const char *msg); // src/vm/runtime_bindings.cpp
-void arc_retain_vmvalue(VMValue *val);
-void arc_release_vmvalue(VMValue *val);
 // Exception-handler runtime (src/vm/runtime_bindings.cpp). Coroutines get their
 // own handler context so an uncaught throw rejects the promise instead of
 // longjmp'ing across stacks; await re-raises a rejection in the awaiter.
@@ -379,6 +386,8 @@ struct SchedState {
   std::vector<Timer> timers;        // pending timers (unsorted; min-scanned)
   std::vector<IoSource> io_sources; // background-I/O completion polls
   std::vector<ObjPromise *> rejected; // koken kaydi olan redler (async iz, K156)
+  void *arena_ctx = nullptr;          // coroutine'lerin ortak arena baglami (A.1)
+  bool in_async = false;              // su an bir coroutine dilimi mi kosuyor
 };
 thread_local SchedState *t_sched = nullptr;
 inline SchedState &sched() {
@@ -431,6 +440,13 @@ bool remove_waiter(ObjPromise *p, Task *t) {
 }
 
 void add_waiter(ObjPromise *p, Task *t) {
+  // A.4: bekleyen bir gorev bu promise'e zamanlayicidan bakiyor. Yerine
+  // gelince bekleyen hazir kuyruguna gecer ama henuz KOSMAMIS olabilir; o
+  // arada ana akisin drop'u promise'i birakmasin — yerinde terfi.
+  VMValue pv;
+  pv.type = VM_VAL_OBJ;
+  pv.as.obj = (Obj *)p;
+  (void)aot_persist_escape(pv);
   if (p->nwaiters >= p->cap_waiters) {
     int nc = p->cap_waiters ? p->cap_waiters * 2 : 4;
     p->waiters = realloc(p->waiters, sizeof(Task *) * nc);
@@ -586,7 +602,6 @@ VMValue gather_body(GatherState *gs) {
     VMValue v = aot_await(gs->items[i]);
     vm_array_push_aot_wrapper(nullptr, arr, v);
   }
-  for (int i = 0; i < gs->n; i++) arc_release_vmvalue(&gs->items[i]);
   free(gs->items);
   delete gs;
   VMValue out;
@@ -609,13 +624,9 @@ void task_body(Task *t) {
     // child args and the partial result array, free the state).
     if (t->gather) {
       GatherState *gs = t->gather;
-      for (int i = 0; i < gs->n; i++) arc_release_vmvalue(&gs->items[i]);
-      if (gs->arr) {
-        VMValue av;
-        av.type = VM_VAL_OBJ;
-        av.as.obj = (Obj *)gs->arr;
-        arc_release_vmvalue(&av); // drops gather's own ref → frees the array
-      }
+      // Kismi sonuc dizisi: bolgede degilse burada birakilir; bolgedeyse
+      // geri sarma birakir (eskiden arc_release + bolge = cift free adayi).
+      if (gs->arr) aot_free_untracked_container((Obj *)gs->arr);
       free(gs->items);
       delete gs;
       t->gather = nullptr;
@@ -724,14 +735,10 @@ void resume(Task *t) {
     if (t->result->task == t) t->result->task = nullptr;
     if (t->gather) {
       GatherState *gs = t->gather;
-      for (int i = 0; i < gs->n; i++) arc_release_vmvalue(&gs->items[i]);
       free(gs->items);
       delete gs;
     }
-    if (t->args) {
-      for (int i = 0; i < t->argc; i++) arc_release_vmvalue(&t->args[i]);
-      free(t->args);
-    }
+    if (t->args) free(t->args);
     aot_promise_settle(t->result, cancel_error(), /*rejected*/ 2);
     delete t;
     return;
@@ -742,6 +749,17 @@ void resume(Task *t) {
   // throws stay isolated to the stack they belong to.
   if (!t->eh_ctx) t->eh_ctx = aot_eh_context_new();
   void *prev_eh = aot_eh_context_swap(t->eh_ctx);
+  // Arena baglami (A.1): dilim boyunca coroutine'lerin ortak baglami etkin;
+  // dilim bitince ana akisinki geri gelir. Degis tokus simetrik — iki cagri
+  // birbirini geri alir. Ic ice resume (dilim icinden dongu) ikinci kez
+  // degistirmez.
+  SchedState &ss = sched();
+  const bool arena_swapped = !ss.in_async;
+  if (arena_swapped) {
+    if (!ss.arena_ctx) ss.arena_ctx = aot_arena_ctx_new();
+    aot_arena_ctx_swap(ss.arena_ctx);
+    ss.in_async = true;
+  }
 #if TULPAR_ASYNC_FIBERS
   if (!t->started) {
     t->started = true;
@@ -784,6 +802,10 @@ void resume(Task *t) {
   }
   swapcontext(&g_main_ctx, &t->ctx);
 #endif
+  if (arena_swapped) {
+    aot_arena_ctx_swap(ss.arena_ctx);
+    ss.in_async = false;
+  }
   aot_eh_context_swap(prev_eh);
   g_current = nullptr;
   if (t->done) {
@@ -973,7 +995,11 @@ extern "C" {
 ObjPromise *aot_promise_new(void) {
   ObjPromise *p = (ObjPromise *)malloc(sizeof(ObjPromise));
   p->obj.type = OBJ_PROMISE;
-  p->obj.arena_allocated = 1; // ARC must not reclaim while the loop holds it
+  // A.4: siradan bir nesne — kontrol noktasi icinde kurulduysa bolgede
+  // izlenir (geri sarmada yerine gelmisse birakilir, degilse terfi eder),
+  // disinda kalici. Eskiden arena_allocated = 1 ile hic birakilmiyordu:
+  // her await ~71 bayt (olculdu 2026-11-27, 100k/400k cagri).
+  p->obj.arena_allocated = 0;
   p->obj.ref_count = 1;
   p->obj.is_moved = 0;
   p->state = 0;
@@ -984,13 +1010,13 @@ ObjPromise *aot_promise_new(void) {
   p->cap_waiters = 0;
   p->task = nullptr;
   p->origin = nullptr;
+  aot_region_track_obj((Obj *)p);
   return p;
 }
 
 void aot_promise_settle(ObjPromise *p, VMValue value, int state) {
   if (!p || p->state != 0) return; // already settled — ignore
   value = aot_persist_escape(value);
-  arc_retain_vmvalue(&value);
   p->value = value;
   p->state = state;
   // Move all waiters onto the ready queue.
@@ -1031,7 +1057,6 @@ ObjPromise *aot_async_spawn(void *fn, VMValue *args, int argc) {
     t->args = (VMValue *)malloc(sizeof(VMValue) * argc);
     for (int i = 0; i < argc; i++) {
       t->args[i] = aot_persist_escape(args[i]);
-      arc_retain_vmvalue(&t->args[i]);
     }
   }
   t->result = aot_promise_new();
@@ -1056,6 +1081,17 @@ VMValue aot_await(VMValue awaited) {
   ensure_scheduler_inited();
 
   if (g_current) {
+    // A.2: coroutine'de acik kontrol noktasi await'i asamaz. Askida kalinca
+    // baska coroutine ayni async baglamda deger kurar; bu noktanin drop'u
+    // onlari da geri sarardi. Zamanlamadan bagimsiz olsun diye promise zaten
+    // yerine gelmis olsa da denetlenir.
+    if (aot_arena_checkpoint_depth() != 0) {
+      aot_runtime_error(tulpar::i18n::tr_en(
+          "arena kontrol noktasi await'i asamaz: coroutine'de arena_save ile acilan nokta "
+          "bir sonraki await'ten once arena_drop ile kapanmali",
+          "an arena checkpoint cannot span an await: inside a coroutine, close an "
+          "arena_save with arena_drop before the next await"));
+    }
     // Inside a coroutine: register as a waiter and yield until settled.
     Task *t = g_current;
     while (p->state == 0) {
@@ -1114,8 +1150,10 @@ ObjPromise *aot_gather(VMValue *args, int argc) {
   gs->n = argc;
   if (argc > 0) {
     gs->items = (VMValue *)malloc(sizeof(VMValue) * argc);
-    memcpy(gs->items, args, sizeof(VMValue) * argc);
-    for (int i = 0; i < argc; i++) arc_retain_vmvalue(&gs->items[i]);
+    // A.3: gorev argumanlari gibi kacis — gecici dizi/dizgi kopyalanir,
+    // cocuk promise'ler yerinde terfi eder (gather onlari sonra bekliyor;
+    // eskiden yalniz memcpy + arc_retain, drop'tan sonra cop okunuyordu).
+    for (int i = 0; i < argc; i++) gs->items[i] = aot_persist_escape(args[i]);
   }
   Task *t = new Task();
   t->gather = gs;
