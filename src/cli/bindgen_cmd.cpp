@@ -407,7 +407,14 @@ CT resolve(Ctx &c, std::vector<Tok> toks, int depth) {
   else if (has_double) r.k = longs ? K::Bad : K::F64;
   else if (has_float) r.k = K::F32;
   else if (has_bool) { r.k = K::Bool8; r.bytes = 1; }
+  // `long`: LP64 (Linux/macOS) 64 bit, LLP64 (Windows) 32 bit — bindgen
+  // basligi derleyicinin kostugu platform icin cozer (bildirim hedefe ozgu).
+#if defined(_WIN32)
+  else if (wide || longs >= 2) { r.k = K::I64; r.bytes = 8; }
+  else if (longs == 1) { r.k = K::I32; r.bytes = 4; }
+#else
   else if (wide || longs >= 1) { r.k = K::I64; r.bytes = 8; }
+#endif
   else {
     r.k = K::I32;
     r.bytes = (has_char || has_int8) ? 1 : (has_short || has_int16) ? 2 : 4;
@@ -1054,8 +1061,13 @@ int bindgen_cmd_main(int argc, char **argv) {
                outs.size(), skipped.size(),
                inline_defs ? (", " + std::to_string(inline_defs) + " satir ici tanim yok sayildi").c_str() : "",
                outs.size(), skipped.size());
-  std::fprintf(stderr, "  not      `long` LP64 varsayimiyla i64 (Windows'ta 32 bit); uint32 donusleri i32 "
+#if defined(_WIN32)
+  std::fprintf(stderr, "  not      `long` LLP64: i32 (bu bildirim Windows'a ozgu); uint32 donusleri i32 "
                        "(2^31 ustu negatif gorunur)\n");
+#else
+  std::fprintf(stderr, "  not      `long` LP64: i64 (bu bildirim Linux/macOS'a ozgu; Windows'ta 32 bit); "
+                       "uint32 donusleri i32 (2^31 ustu negatif gorunur)\n");
+#endif
   return outs.empty() ? 1 : 0;
 }
 

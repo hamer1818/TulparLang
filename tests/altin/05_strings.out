@@ -1,0 +1,13 @@
+=== String Manipulation Demo ===
+Original: '  Hello, Tulpar!  '
+Trimmed: 'Hello, Tulpar!'
+Length: 14
+Replaced: 'Hello, World!'
+Split: ["Hello","World!"]
+First char: H
+Substring (manual): Hello
+Line 1
+Line 2
+Tab	Separated
+
+[cikis=0]

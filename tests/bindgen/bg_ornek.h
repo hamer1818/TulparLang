@@ -13,7 +13,7 @@ extern "C" {
 
 #define BG_API __attribute__((visibility("default")))
 #define BGCALL
-#define bg_uzun long   /* nesne-bicimli makro tip (zlib z_off_t kalibi) */
+#define bg_uzun long long   /* nesne-bicimli makro tip (zlib z_off_t kalibi); LP64 = LLP64 */
 
 typedef struct BgTutamac BgTutamac;            /* opak tutamac */
 typedef enum { BG_KIRMIZI, BG_YESIL = 5 } BgRenk;

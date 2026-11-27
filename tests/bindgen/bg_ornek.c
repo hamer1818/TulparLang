@@ -5,7 +5,7 @@ struct BgTutamac { int n; int *d; };
 int64_t bg_topla(int64_t a, int64_t b) { return a + b; }
 double bg_olcek(double x, float k) { return x * k; }
 bg_u32 bg_kimlik(BgKimlik k) { return k + 1; }
-long bg_uzun_iki(long x) { return x * 2; }
+long long bg_uzun_iki(long long x) { return x * 2; }
 const char *bg_ad(void) { return "bindgen"; }
 size_t bg_uzunluk(const char *s) { return strlen(s); }
 BgTutamac *bg_ac(int boy) { BgTutamac *t = malloc(sizeof *t); t->n = boy; t->d = calloc((size_t)boy, sizeof(int)); return t; }

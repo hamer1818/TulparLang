@@ -35,12 +35,12 @@ AR_BIN=""; for a in ar llvm-ar; do command -v "$a" >/dev/null 2>&1 && { AR_BIN="
 # 1) bildirim
 mkdir -p "$TMP/ext/lib"
 (cd "$SRC/../.." && "$TUL" bindgen tests/bindgen/bg_ornek.h --lib bg_ornek --lib-dir lib -o "$TMP/ext/tulpar-ext.json") 2>"$TMP/rapor"; rc=$?
-if [ $rc -eq 0 ] && diff -u "$SRC/bg_ornek.beklenen.json" "$TMP/ext/tulpar-ext.json" >"$TMP/fark"; then
+if [ $rc -eq 0 ] && diff -u --strip-trailing-cr "$SRC/bg_ornek.beklenen.json" "$TMP/ext/tulpar-ext.json" >"$TMP/fark"; then
   gecti "bg_ornek.h -> bildirim bayt bayt beklenen (20 fonksiyon)"
 else
   dustu "bildirim farkli (rc=$rc)"; head -20 "$TMP/fark" | sed 's/^/         /'
 fi
-if diff -u "$SRC/bg_ornek.beklenen.tpr" "$TMP/ext/bg_ornek.tpr" >"$TMP/fark_m"; then
+if diff -u --strip-trailing-cr "$SRC/bg_ornek.beklenen.tpr" "$TMP/ext/bg_ornek.tpr" >"$TMP/fark_m"; then
   gecti "K304: degerle gecen struct'lar icin @repr(C) modulu bayt bayt (BgNokta, etiketli BgEtiket)"
 else
   dustu "struct modulu farkli"; head -12 "$TMP/fark_m" | sed 's/^/         /'
@@ -60,7 +60,7 @@ grep -q "atlandi  bg_kimlik: .*bilinmeyen tip 'bg_u32'" "$TMP/rapor2" \
 if [ -n "$CC_BIN" ] && [ -n "$AR_BIN" ]; then
   "$CC_BIN" -std=c99 -O2 -I "$SRC" -c "$SRC/bg_ornek.c" -o "$TMP/ext/lib/bg.o" && "$AR_BIN" rcs "$TMP/ext/lib/libbg_ornek.a" "$TMP/ext/lib/bg.o"
   "$TUL" --ext "$TMP/ext" "$SRC/bg_kullan.tpr" >"$TMP/o" 2>"$TMP/e"; rc=$?
-  if [ $rc -eq 0 ] && diff -u "$SRC/bg_kullan.beklenen" "$TMP/o" >"$TMP/fark2"; then
+  if [ $rc -eq 0 ] && diff -u --strip-trailing-cr "$SRC/bg_kullan.beklenen" "$TMP/o" >"$TMP/fark2"; then
     gecti "uretilen bildirimle cagrilar dogru (qsort, baglamli cb, cbool, enum, typedef zinciri, struct deger)"
   else
     dustu "cagri ciktisi farkli (rc=$rc)"; head -12 "$TMP/fark2" "$TMP/e" | sed 's/^/         /'

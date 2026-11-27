@@ -1,0 +1,8 @@
+OK   sha256("")
+OK   sha256("a")
+OK   sha256("abc")
+OK   sha256(<long token>)
+OK   idempotence
+done
+
+[cikis=0]

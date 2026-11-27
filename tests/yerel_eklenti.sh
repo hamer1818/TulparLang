@@ -72,8 +72,11 @@ cp "$SRC/kullan.tpr" "$TMP/kullan.tpr"
 
 beklenen="$SRC/kullan.beklenen"
 karsilastir() {  # karsilastir <ad> <cikti> <rc> <log>
-  if [ "$3" -eq 0 ] && diff -u "$beklenen" "$2" >"$TMP/fark" 2>&1; then gecti "$1: cikti bayt bayt beklenen"
-  else dustu "$1 (rc=$3)"; head -20 "$TMP/fark" | sed 's/^/         /'; tail -12 "$4" | sed 's/^/         /'; fi
+  # Fark HER ZAMAN hesaplanir: program coktuyse (rc!=0) bile o ana kadarki
+  # cikti gorunsun — hangi satirda coktugu CI gunlugunden okunabilsin.
+  diff -u "$beklenen" "$2" >"$TMP/fark" 2>&1; local d=$?
+  if [ "$3" -eq 0 ] && [ $d -eq 0 ]; then gecti "$1: cikti bayt bayt beklenen"
+  else dustu "$1 (rc=$3)"; head -20 "$TMP/fark" | sed 's/^/         /'; echo "         --- son cikti satirlari:"; tail -4 "$2" | sed 's/^/         /'; tail -12 "$4" | sed 's/^/         /'; fi
 }
 
 # 1) --ext ile calistir (sessiz derleme yolu)
@@ -275,13 +278,11 @@ print(ornek_uygula_f(g + 1, 1));'
 # K304 struct deger gecisi: bilinmeyen / kutulu struct adiyla hata.
 mkdir -p "$TMP/st_ext"
 cp -r "$TMP/ext/." "$TMP/st_ext/"
-python3 - "$TMP/st_ext/tulpar-ext.json" <<'PYEOF'
-import json, sys
-p = sys.argv[1]; m = json.load(open(p))
-m["functions"].append({"name": "st_yok", "symbol": "ornek_st_tek", "params": ["t: struct YokBoyle"], "returns": "f64"})
-m["functions"].append({"name": "st_kutulu", "symbol": "ornek_st_tek", "params": ["t: struct Kutulu"], "returns": "f64"})
-json.dump(m, open(p, "w"))
-PYEOF
+# Bildirime iki fonksiyon ekle (python'suz: Windows CI'da python3 yok) — son
+# fonksiyon satirinin ardina, `]` kapanisindan once.
+sed -i.bak 's|"returns": "f64", "doc": "K304: C kopyayi degistirir."}|&,\
+    {"name": "st_yok", "symbol": "ornek_st_tek", "params": ["t: struct YokBoyle"], "returns": "f64"},\
+    {"name": "st_kutulu", "symbol": "ornek_st_tek", "params": ["t: struct Kutulu"], "returns": "f64"}|' "$TMP/st_ext/tulpar-ext.json"
 st_red() {  # st_red <ad> <beklenen> <kaynak>
   printf '%s\n' "$3" > "$TMP/$1.tpr"
   (cd "$TMP" && "$TUL" --no-typecheck --ext st_ext "$1.tpr") >"$TMP/$1.out" 2>&1; local rc=$?

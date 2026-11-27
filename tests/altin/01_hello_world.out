@@ -1,0 +1,52 @@
+=== Tulpar'E HOS GELDINIZ! ===
+
+--- Veri Tipleri ---
+Integer: 42
+Float: 3.14159
+String: Merhaba Tulpar!
+Boolean: true
+
+--- Aritmetik Islemler ---
+20 + 8 = 28
+20 - 8 = 12
+20 * 8 = 160
+20 / 8 = 2
+
+--- Karsilastirmalar ---
+20 > 8 = true
+20 == 8 = false
+20 < 8 = false
+
+
+--- Mantiksal Operatorler ---
+(20 > 10) && (8 < 15) = true
+(20 > 100) || (8 < 15) = true
+!(20 == 8) = true
+
+--- Increment & Decrement ---
+Başlangıç: 5
+sayac++ sonrası: 6
+sayac-- sonrası: 5
+
+--- Compound Assignment ---
+Başlangıç değer: 10
+deger += 5 → 15
+deger -= 3 → 12
+deger *= 2 → 24
+deger /= 4 → 6
+
+--- String İşlemleri ---
+Dil: Tulpar, Versiyon: 1.2.1
+
+--- Tip Dönüşümleri ---
+String '123' → int: 123
+int 25 → string: 25
+float 3.14 → int: 3
+
+=================================
+✅ Tüm temel özellikler çalışıyor!
+=================================
+
+Sıradaki adım: 02_control_flow.Tulpar
+
+[cikis=0]

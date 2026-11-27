@@ -1,0 +1,24 @@
+=== Tulpar SQLite Test ===
+
+Opening database...
+Database opened successfully.
+
+Creating table...
+Table created.
+
+Inserting data...
+3 rows inserted.
+
+Querying data...
+Results (3 rows):
+[{"id":1,"name":"Hamza","email":"hamza@example.com"},{"id":2,"name":"Tulpar","email":"tulpar@lang.com"},{"id":3,"name":"Test User","email":"test@test.com"}]
+
+Individual rows:
+  [1] Hamza <hamza@example.com>
+  [2] Tulpar <tulpar@lang.com>
+  [3] Test User <test@test.com>
+
+Closing database...
+Done.
+
+[cikis=0]

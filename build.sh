@@ -942,11 +942,14 @@ if [ "$ACTION" = "suites" ]; then
 
     # `tulpar --profile` (2026-11-26): kesin cagri sayilari, arena baytı, folded,
     # kontrol olarak profilsiz ikilide kanca yok.
+    # Python kapilari: Windows kosucusunda python3 yok (diger Python denetimleri gibi).
+    if command -v python3 >/dev/null 2>&1; then
     kapi_kuyruk "Profilleyici kapisi basarisiz!" env DISPLAY= WAYLAND_DISPLAY= python3 tests/profil_smoke.py
 
     # docs/SPEC.md (2026-11-26) calistirilabilir: her ```tpr ornegi derlenir,
     # cikti / hata beklentisiyle karsilastirilir — belge eskiyemez.
     kapi_kuyruk "Dil tanimi ornekleri basarisiz!" python3 tests/spec_ornekleri.py
+    fi
 
     # `tulpar update` YERLESTIRME yolu. Gercek bir guncelleme AG ister, bu
     # yuzden hic olculmuyordu ve komut yayinlanmis surumde Linux'ta calismaz

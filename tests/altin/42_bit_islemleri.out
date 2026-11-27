@@ -1,0 +1,47 @@
+=== Bit Islemleri ===
+
+a = 12 (1100), b = 10 (1010)
+a & b  = 8
+a | b  = 14
+a ^ b  = 6
+a << 1 = 24
+a >> 2 = 3
+~a     = -13
+
+0xFF        = 255
+0b1010      = 10
+1_000_000   = 1000000
+0xFF_FF     = 65535
+0xFFFFFFFFFFFFFFFF = -1
+
+1 | 2 & 3   = 3
+1 << 2 + 3  = 32
+(1 << 2) + 3 = 7
+
+-8 >> 1     = -4
+-1 & 0xFF   = 255
+1 << 64     = 0
+-8 >> 100   = -1
+
+izin (oku+yaz) = 3
+yazma var mi?  = true
+yazma kalkti   = false
+calistir acik  = true
+
+=== Renk paketleme: carpma == kaydirma ===
+beyaz  carpma = 4294967295
+beyaz  kaydir = 4294967295
+gunes  carpma = 4294369535
+gunes  kaydir = 4294369535
+256 renkte fark sayisi = 0
+R = 200
+G = 150
+B = 100
+A = 50
+eski yazimla R = 200
+
+OKUMA sabiti = 1
+
+=== Bitti ===
+
+[cikis=0]

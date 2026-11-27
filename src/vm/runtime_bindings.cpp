@@ -1553,6 +1553,20 @@ static thread_local VMValue g_ext_pending;
 static thread_local int g_ext_last_threw = 0;
 
 static int aot_eh_depth(void); // istisna bolumunde tanimli
+
+// Runtime'in KENDI try cerceveleri (ext siniri) icin setjmp. Windows x64'te
+// MinGW'nin `setjmp` makrosu `_setjmp(buf, __builtin_frame_address(0))`
+// demek: NULL olmayan cerceve eslesen longjmp'i SEH GERI SARMASINA
+// (RtlUnwindEx) ceviriyor ve o yuruyus bir `call()` / kutulu cagri
+// cercevesini gecen throw'da cokuyordu (kodgendeki AST_TRY_CATCH notu,
+// errors.test.tpr). Kodgen bu yuzden `_setjmpex(buf, NULL)` cagiriyor;
+// runtime ayni anlambilimi kullanmazsa ayni yigindaki iki tur cerceve
+// farkli longjmp yolundan doner. POSIX'te duz setjmp.
+#if defined(_WIN32) && defined(__x86_64__)
+#define TULPAR_RT_SETJMP(b) _setjmp((b), nullptr)
+#else
+#define TULPAR_RT_SETJMP(b) setjmp(b)
+#endif
 jmp_buf *aot_try_push(void);
 void aot_try_pop(void);
 VMValue aot_get_exception(void);
@@ -1573,7 +1587,7 @@ __attribute__((noinline)) static int tulpar_ext_guarded_slow(void *fn, int arity
     return 1;
   }
   volatile int saved_top = g_arena_checkpoint_top;
-  if (setjmp(*jb) == 0) {
+  if (TULPAR_RT_SETJMP(*jb) == 0) {
     VMValue r = tulpar_ext_invoke_f64(fn, arity, args, argc);
     aot_try_pop();
     *out = r;
@@ -1649,7 +1663,7 @@ __attribute__((noinline)) static void tulpar_ext_cb_guarded(void *fn, int arity,
   jmp_buf *jb = aot_try_push();
   if (!jb) { *out = tulpar_ext_invoke_v(fn, arity, args, argc); return; }
   volatile int saved_top = g_arena_checkpoint_top;
-  if (setjmp(*jb) == 0) {
+  if (TULPAR_RT_SETJMP(*jb) == 0) {
     VMValue r = tulpar_ext_invoke_v(fn, arity, args, argc);
     aot_try_pop();
     *out = r;

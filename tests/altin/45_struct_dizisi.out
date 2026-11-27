@@ -1,0 +1,10 @@
+=== tipli struct dizisi ===
+dusman sayisi: 3
+canli: 3
+dusman 1: can 40, konum (-2.5, 0), kovaliyor true
+dusman 2: can 40, konum (0, 3.5), kovaliyor true
+dusman 3: can 40, konum (5.008065044950047, -0.9105572809000084), kovaliyor true
+canli: 3
+bolum bitti, dusman sayisi: 0
+
+[cikis=0]

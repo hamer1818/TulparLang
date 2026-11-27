@@ -7,7 +7,7 @@
     {"name": "bg_topla", "params": ["a: i64", "b: i64"], "returns": "i64", "doc": "bindgen: BG_API int64_t bg_topla (int64_t a, int64_t b)"},
     {"name": "bg_olcek", "params": ["x: f64", "k: f32"], "returns": "f64", "doc": "bindgen: BG_API double bg_olcek (double x, float k)"},
     {"name": "bg_kimlik", "params": ["k: i32"], "returns": "i32", "doc": "bindgen: BG_API bg_u32 bg_kimlik (BgKimlik k)"},
-    {"name": "bg_uzun_iki", "params": ["x: i64"], "returns": "i64", "doc": "bindgen: BG_API long bg_uzun_iki (long x)"},
+    {"name": "bg_uzun_iki", "params": ["x: i64"], "returns": "i64", "doc": "bindgen: BG_API long long bg_uzun_iki (long long x)"},
     {"name": "bg_ad", "params": [], "returns": "str", "doc": "bindgen: BG_API const char*bg_ad (void)"},
     {"name": "bg_uzunluk", "params": ["s: str"], "returns": "i64", "doc": "bindgen: BG_API size_t bg_uzunluk (const char*s)"},
     {"name": "bg_ac", "params": ["boy: i32"], "returns": "ptr", "doc": "bindgen: BG_API BgTutamac*bg_ac (int boy)"},

@@ -1,0 +1,14 @@
+=== Math & Logic Demo ===
+Basic Math: 10 + 5 * 2 = 20
+
+--- Tamsayi siniri ---
+int en buyuk deger: 9223372036854775807
+Tasma sarar (en_buyuk + 1): -9223372036854775808
+Iki parcali gosterim: 1234567890987654321
+
+--- Logic ---
+T && F: false
+T || F: true
+!T: false
+
+[cikis=0]
