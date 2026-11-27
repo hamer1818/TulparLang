@@ -143,14 +143,12 @@ fi
 #     catch hic kosmaz. Geri cagrinin ICINDEKI try'lar ve ic ice isaretsiz
 #     sinir normal calisir; cagri bitince dis try yine calisir.
 kur "$TMP/cikis" 2>/dev/null
-python3 - "$TMP/cikis/tulpar-ext.json" <<'P'
-import json, sys
-p = sys.argv[1]; d = json.load(open(p))
-d["on_throw"] = "exit"
-for f in d["functions"]:
-    if f["name"] == "ornek_koru_eval": f["on_throw"] = "rethrow"
-json.dump(d, open(p, "w"), indent=1)
-P
+# sed (python3 degil): Windows CI'in MSYS2 ortaminda python3 yok.
+sed -i.bak -e 's/"tulpar_ext": *1,/"tulpar_ext": 1, "on_throw": "exit",/' \
+  -e 's/"name": "ornek_koru_eval",/"name": "ornek_koru_eval", "on_throw": "rethrow",/' "$TMP/cikis/tulpar-ext.json"
+if ! grep -q '"on_throw": "exit"' "$TMP/cikis/tulpar-ext.json" || ! grep -q '"on_throw": "rethrow"' "$TMP/cikis/tulpar-ext.json"; then
+  dustu "on_throw: bildirim duzenlenemedi (sed kalibi tutmadi)"
+fi
 cat > "$TMP/cikis_dis.tpr" <<'T'
 import "ornek";
 func atar(float x) { throw "kacan " + toString(x); }
@@ -188,21 +186,22 @@ if [ $rc -eq 1 ] && grep -q "Uncaught Exception: kacan 4" "$TMP/c1.err" && grep 
    && grep -q '"on_throw": "exit"' "$TMP/c1.err" && ! grep -q "EXIT YANLIS" "$TMP/c1.out"; then
   gecti "on_throw exit: dis try varken kacan throw sureci mesajla 1 ile bitirir (catch kosmaz)"
 else
-  dustu "on_throw exit, dis try (rc=$rc)"; tail -5 "$TMP/c1.err" "$TMP/c1.out" | sed 's/^/         /'
+  dustu "on_throw exit, dis try (rc=$rc)"; tail -n 5 "$TMP/c1.err" "$TMP/c1.out" | sed 's/^/         /'
 fi
 (cd "$TMP" && "$TUL" --ext cikis cikis_cb.tpr) >"$TMP/c2.out" 2>"$TMP/c2.err"; rc=$?
 if [ $rc -eq 1 ] && grep -q "Uncaught Exception: cb kacan" "$TMP/c2.err" && grep -q "ornek_cb_koru" "$TMP/c2.err" \
    && ! grep -q "EXIT YANLIS" "$TMP/c2.out"; then
   gecti "on_throw exit: fn(...) trampolini yolu da sureci bitirir"
 else
-  dustu "on_throw exit, fn(...) yolu (rc=$rc)"; tail -5 "$TMP/c2.err" "$TMP/c2.out" | sed 's/^/         /'
+  dustu "on_throw exit, fn(...) yolu (rc=$rc)"; tail -n 5 "$TMP/c2.err" "$TMP/c2.out" | sed 's/^/         /'
 fi
-(cd "$TMP" && "$TUL" --ext cikis cikis_ic.tpr) >"$TMP/c3.out" 2>"$TMP/c3.err"; rc=$?
+(cd "$TMP" && "$TUL" --ext cikis cikis_ic.tpr) >"$TMP/c3.raw" 2>"$TMP/c3.err"; rc=$?
+tr -d '\r' <"$TMP/c3.raw" >"$TMP/c3.out"   # Windows: CRLF
 printf 'kanca kendi yakaladi\nkod 1\nic sinir yakaladi: ic 2\nkod 1\ndis yakaladi: sonra | kilit 0\n' > "$TMP/c3.bek"
 if [ $rc -eq 0 ] && diff -u "$TMP/c3.bek" "$TMP/c3.out" >/dev/null; then
   gecti "on_throw exit: geri cagri icindeki try, ic ice rethrow siniri ve cagri sonrasi dis try normal"
 else
-  dustu "on_throw exit, ic yollar (rc=$rc)"; diff -u "$TMP/c3.bek" "$TMP/c3.out" | sed 's/^/         /'; tail -3 "$TMP/c3.err" | sed 's/^/         /'
+  dustu "on_throw exit, ic yollar (rc=$rc)"; diff -u "$TMP/c3.bek" "$TMP/c3.out" | sed 's/^/         /'; tail -n 3 "$TMP/c3.err" | sed 's/^/         /'
 fi
 # Pozitif kontrol: AYNI program bayraksiz eklentiyle dis catch'e varir —
 # yukaridaki "exit" sonucunu bayrak uretti, baska bir sey degil.
@@ -210,7 +209,7 @@ fi
 if [ $rc -eq 0 ] && grep -q "dis catch kostu kacan 4" "$TMP/c4.out"; then
   gecti "kontrol: bayraksiz eklentide ayni throw dis catch'e ulasir (rethrow)"
 else
-  dustu "kontrol: bayraksiz eklentide dis catch beklenirdi (rc=$rc)"; tail -3 "$TMP/c4.out" "$TMP/c4.err" | sed 's/^/         /'
+  dustu "kontrol: bayraksiz eklentide dis catch beklenirdi (rc=$rc)"; tail -n 3 "$TMP/c4.out" "$TMP/c4.err" | sed 's/^/         /'
 fi
 # Bozuk deger adiyla reddedilir.
 kur "$TMP/cikis_bozuk" 2>/dev/null
