@@ -358,6 +358,81 @@ print(g["ad"]);
 // kalici-1
 ```
 
+### 8.1 Atama: paylaşım ve kopya (RFC açık soru 2, 2026-11-27)
+
+**Tek kural: paylaşım varsayılandır; global değişkene atama kopyadır.**
+
+- **Değer tipleri** `int`, `float`, `bool`, dizgi (değişmez) ve **kutusuz struct** (tüm alanları
+  `int`/`float`/`bool`) — atama, parametre ve dönüş kopyadır.
+- **Referans tipleri** dizi, `json` ve **kutulu struct** (dizgi/dizi alanlı) — yerel atama,
+  parametre, dönüş değeri ve bir kaba koyma (`push`, `k[i] = x`) **aynı nesneyi** gösterir;
+  biri değiştirince öbürü görür.
+- **İstisna, kalıcıya kaçış:** global bir değişkene atama (`g = x`, `g += x`; kaynak yerel de
+  global de olsa) değerin **derin kopyasını** saklar. Thread ve async argümanı/sonucu da kopyadır
+  (bölüm 9). **Bildirimdeki ilk değer atama sayılmaz:** üst düzey `int[] h = g;` takma addır
+  (`g`'yi paylaşır); yalnız geçici bir değer (kontrol noktası içinde kurulmuş) kopyalanır.
+- **Tanımsız:** global bir kabın elemanına/alanına yazdıktan (`g[i] = x`, `g["k"] = x`) sonra
+  `x`'i eski adıyla değiştirmenin `g[i]`'ye yansıyıp yansımaması. Bugün kontrol noktası içinde
+  geçici `x` kopyalanır, dışında paylaşılır — buna dayanmayın; değiştirecekseniz önce yazın,
+  ya da kabın içinden (`g[i][0] = ...`) değiştirin.
+
+Struct'ın değer mi referans mı davrandığının alan tiplerine bağlı olması v0'ın bilinen
+bir tutarsızlığıdır (bkz. Ek A).
+
+```tpr
+int[] g = [0];
+func f() {
+    int[] a = [1];
+    int[] b = a;
+    a[0] = 2;
+    print(b[0]);
+    g = a;
+    a[0] = 3;
+    print(g[0]);
+}
+f();
+// cikti:
+// 2
+// 2
+```
+
+```tpr
+struct N { int x; }
+struct K { string ad; int x; }
+func f() {
+    N n; n.x = 1;
+    N m = n;
+    n.x = 2;
+    print(m.x);
+    K k; k.ad = "a"; k.x = 1;
+    K l = k;
+    k.x = 2;
+    print(l.x);
+}
+f();
+// cikti:
+// 1
+// 2
+```
+
+```tpr
+func doldur(int[] d) { d[0] = 9; }
+int[] g2 = [0];
+int[] h = g2;
+int[] k = [0];
+k = g2;
+g2[0] = 5;
+print(h[0]);
+print(k[0]);
+int[] c = [1];
+doldur(c);
+print(c[0]);
+// cikti:
+// 5
+// 0
+// 9
+```
+
 ## 9. Eşzamanlılık (özet)
 
 - `thread_create(isci, arg)` yeni işletim sistemi iş parçacığı; `arg` **derin kopyalanır**,
@@ -380,8 +455,15 @@ print(thread_join(t));
 `i32 i64 f32 f64 bool cbool str ptr void` ve `fn(...)` geri çağrı; `tulpar bindgen başlık.h`
 bildirimi C başlığından üretir. Ayrıntı: [Eklentiler](mindmap/Eklentiler.md).
 
+C'nin geri çağırdığı Tulpar kodundan kaçan istisna: dışarıda `try` yoksa süreç 1'le biter;
+varsa sınırda yakalanır, C'ye hata kodu döner ve C fonksiyonu dönünce **yeniden fırlatılır**.
+Bildirimde `"on_throw": "exit"` (kökte ya da fonksiyonda) bu ikinci yolu kapatır: istisna C
+çerçevesini aşacaksa süreç her durumda mesajla 1'le biter.
+
 ## Ek A — Bu sürümde tanımlanmamış
 
 Dizgi indekslemenin bayt/karakter anlamı, `float` biçimlendirme kuralları, sayısal taşma
-(64 bit sarma mı), `json` eşitliği, modül döngüleri, `finally` içinde `return`. Bunlara dayanan
+(64 bit sarma mı), `json` eşitliği, modül döngüleri, `finally` içinde `return`, global bir
+kabın elemanına yazılan değerin kopya mı paylaşım mı olduğu (8.1). Struct'ın değer/referans
+davranışı bugün alan tiplerine bağlı (8.1); tek bir anlama indirilmesi sonraki sürümün kararı. Bunlara dayanan
 kod bugünkü uygulamaya dayanır; sonraki sürümler tanımlayacak.

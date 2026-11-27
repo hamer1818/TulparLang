@@ -78,6 +78,12 @@ struct Function {
   std::vector<std::string> param_structs;  // params ile paralel; yalniz Struct icin dolu
   CType ret = CType::Void;
   std::string ret_struct;             // ret == Struct ise struct adi
+  // `"on_throw": "exit"` (RFC acik soru 3, 2026-11-27): bu C fonksiyonu
+  // calisirken geri cagrilan Tulpar kodundan kacan istisna C cercevesini
+  // ASMAZ — sinirda yakalanip C'ye hata kodu donmek yerine surec mesajla
+  // biter (yakalanmayan istisna gibi). Hata kodunu isleyemeyen kutuphaneler
+  // (qsort karsilastiricisi, olay dongusu) icin. Varsayilan "rethrow".
+  bool exit_on_throw = false;
   int ext_index = -1;
   // LSP/hover icin: "ad(a: i32, b: str): f64"
   std::string signature() const;

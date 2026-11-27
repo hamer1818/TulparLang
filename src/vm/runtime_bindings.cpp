@@ -7616,6 +7616,12 @@ typedef struct EhContext {
   int depth;
   VMValue exception;
   int prof_depth[EH_STACK_MAX];  // profilleyici: try kuruldugundaki yigin derinligi
+  // Eklenti tabani (RFC acik soru 3, `"on_throw": "exit"`): bu derinligin
+  // ALTINDAKI try cerceveleri bir throw'a gorunmez — onlara varmak, istisnanin
+  // "exit" isaretli bir C cercevesini asmasi demek. floor'a inen throw
+  // yakalanmayan istisna gibi mesaj + exit(1). 0 = taban yok (eski davranis).
+  int floor;
+  const char *floor_name;  // tabani kuran eklenti fonksiyonu (mesaj icin)
 } EhContext;
 static int aot_prof_depth(void);          // profilleyici (dosya sonunda)
 static void aot_prof_unwind_to(int depth);
@@ -7655,7 +7661,7 @@ static void (*g_uncaught_hook)(VMValue) = nullptr;
 extern "C" void aot_set_uncaught_hook(void (*hook)(VMValue)) { g_uncaught_hook = hook; }
 
 void aot_throw(VMValue exception) {
-  if (eh_ctx()->depth == 0) {
+  if (eh_ctx()->depth <= eh_ctx()->floor) {
     fprintf(stderr, "Uncaught Exception: ");
     if (IS_STRING(exception)) {
       fprintf(stderr, "%s\n", AS_STRING(exception)->chars);
@@ -7663,6 +7669,14 @@ void aot_throw(VMValue exception) {
       fprintf(stderr, "<object type=%d>\n", AS_OBJ(exception)->type);
     } else {
       fprintf(stderr, "<value type=%d>\n", exception.type);
+    }
+    if (eh_ctx()->floor_name) {
+      const char *n = eh_ctx()->floor_name;
+      fprintf(stderr, "%s", tulpar::i18n::tr_en(
+                                "  (istisna eklenti fonksiyonu '", "  (the exception would cross the C frame of extension function '"));
+      fprintf(stderr, "%s%s\n", n, tulpar::i18n::tr_en(
+                                      "' C cercevesini asacakti; bildirimde \"on_throw\": \"exit\")",
+                                      "'; the manifest says \"on_throw\": \"exit\")"));
     }
     if (g_uncaught_hook) g_uncaught_hook(exception);
     exit(1);
@@ -7698,7 +7712,33 @@ void aot_throw_ptr(VMValue *exception_ptr) {
 
 VMValue aot_get_exception(void) { return eh_ctx()->exception; }
 
-static int aot_eh_depth(void) { return eh_ctx()->depth; }
+// Etkin derinlik: eklenti tabaninin USTUNDEKI try cerceveleri. Ext sinir
+// korumasi (tulpar_ext_call_f64 / _cb_call) buna bakar: taban varken ve
+// geri cagrinin icinde try yokken 0 — throw dogrudan aot_throw'un
+// "yakalanmayan" yoluna gider, C'ye -1 donulmez.
+static int aot_eh_depth(void) { return eh_ctx()->depth - eh_ctx()->floor; }
+
+// `"on_throw": "exit"` eklenti cagrisinin cevresi (codegen yalniz bu
+// isaretli fonksiyonlarda uretir; digerleri bir sey odemez). `save` cagiranin
+// yigininda 16 baytlik yuva: onceki taban oraya, cagridan sonra geri. Ic ice
+// cagri sinirsiz — yigin yok. Taban = cagri anindaki derinlik: geri cagrinin
+// ICINDE kurulan try'lar normal calisir, disaridakiler gorunmez.
+struct TulparExtFloorSave { int floor; const char *name; };
+static_assert(sizeof(TulparExtFloorSave) <= 16, "codegen 16 baytlik yuva ayiriyor");
+extern "C" void aot_ext_floor_enter(void *save, const char *name) {
+  EhContext *c = eh_ctx();
+  TulparExtFloorSave *s = static_cast<TulparExtFloorSave *>(save);
+  s->floor = c->floor;
+  s->name = c->floor_name;
+  c->floor = c->depth;
+  c->floor_name = name;
+}
+extern "C" void aot_ext_floor_leave(void *save) {
+  EhContext *c = eh_ctx();
+  const TulparExtFloorSave *s = static_cast<const TulparExtFloorSave *>(save);
+  c->floor = s->floor;
+  c->floor_name = s->name;
+}
 
 // Codegen her ext cagrisindan sonra tulpar_ext_pending_any sifir degilse
 // cagirir: bu iplikte sinirda yakalanmis bir istisna varsa simdi — artik C

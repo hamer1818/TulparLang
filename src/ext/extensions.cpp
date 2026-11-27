@@ -373,6 +373,19 @@ bool parse_manifest(const std::string &mpath, const char *origin,
     }
   }
 
+  // on_throw: eklenti geneli varsayilan; fonksiyon kendi alaniyla ezer.
+  auto parse_on_throw = [&](cJSON *node, const std::string &where, bool &out) -> bool {
+    cJSON *ot = cJSON_GetObjectItemCaseSensitive(node, "on_throw");
+    if (!ot) return true;
+    if (cJSON_IsString(ot) && strcmp(ot->valuestring, "rethrow") == 0) { out = false; return true; }
+    if (cJSON_IsString(ot) && strcmp(ot->valuestring, "exit") == 0) { out = true; return true; }
+    err = merr(mpath, where + tr_en("\"on_throw\" \"rethrow\" ya da \"exit\" olmali",
+                                    "\"on_throw\" must be \"rethrow\" or \"exit\""));
+    return false;
+  };
+  bool ext_exit_on_throw = false;
+  if (!parse_on_throw(root, "", ext_exit_on_throw)) return false;
+
   const int ext_index = (int)g_exts.size();
   std::vector<Function> fns;
   cJSON *jf = cJSON_GetObjectItemCaseSensitive(root, "functions");
@@ -402,6 +415,8 @@ bool parse_manifest(const std::string &mpath, const char *origin,
       return false;
     }
     if (cJSON *d = cJSON_GetObjectItemCaseSensitive(f, "doc"); cJSON_IsString(d)) F.doc = d->valuestring;
+    F.exit_on_throw = ext_exit_on_throw;
+    if (!parse_on_throw(f, where + " (" + F.name + "): ", F.exit_on_throw)) return false;
     cJSON *ret = cJSON_GetObjectItemCaseSensitive(f, "returns");
     const std::string rs = cJSON_IsString(ret) ? ret->valuestring : "void";
     if (!struct_type_name(rs).empty()) {
