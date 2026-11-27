@@ -215,6 +215,18 @@ std::vector<Tok> drop_noise(const std::vector<Tok> &in) {
       transparent.pop_back();
       if (tr) continue;
     }
+    // zlib'in eski bicimi: `ZEXTERN int ZEXPORT deflate OF((z_streamp s, int f));`
+    // `OF(args)` fonksiyon-bicimli makro (`args` olarak acilir): `OF` ve DIS
+    // parantez cifti atilir, ic `( ... )` parametre listesi olarak kalir.
+    // Eskiden `OF` fonksiyon adi saniliyordu ve bu bicimdeki her fonksiyon
+    // sessizce dusuyordu (Ubuntu zlib.h, CI 2026-11-27).
+    if (x.k == TK::Ident && (x.s == "OF" || x.s == "_Z_OF") && i + 2 < in.size() &&
+        is_punct(in[i + 1], '(') && is_punct(in[i + 2], '(')) {
+      size_t close = skip_parens(in, i + 1);  // dis ')' sonrasi
+      for (size_t k = i + 2; k + 1 < close; k++) out.push_back(in[k]);
+      i = close - 1;
+      continue;
+    }
     if (x.k == TK::Ident && noise_calls().count(x.s) && i + 1 < in.size() && is_punct(in[i + 1], '(')) {
       i = skip_parens(in, i + 1) - 1;
       continue;

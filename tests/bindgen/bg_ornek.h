@@ -13,6 +13,7 @@ extern "C" {
 
 #define BG_API __attribute__((visibility("default")))
 #define BGCALL
+#define OF(args) args   /* zlib'in eski prototip makrosu */
 #define bg_uzun long long   /* nesne-bicimli makro tip (zlib z_off_t kalibi); LP64 = LLP64 */
 
 typedef struct BgTutamac BgTutamac;            /* opak tutamac */
@@ -38,6 +39,7 @@ BG_API bool bg_degil(bool b);
 BG_API BgRenk bg_renk(enum BgRenkE r);
 BG_API int bg_dizi_topla(const int dizi[], int n);
 BG_API int bg_int_oku(const void *p);
+BG_API int bg_of OF((int a, int b));    /* zlib kalibi: `ad OF((params))` */
 /* K304: struct DEGER olarak */
 struct BgEtiket { double u; double v; };
 typedef struct BgEtiket BgEtiketT;

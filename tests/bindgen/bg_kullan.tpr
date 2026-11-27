@@ -26,3 +26,4 @@ print("nokta " + toString(pn.x) + " " + toString(pn.y));
 BgEtiket e = { u: 2.0, v: 1.0 };
 BgEtiket f = { u: 1.0, v: 3.0 };
 print("etiket " + toString(bg_etiket(e, f)));
+print("of " + toString(bg_of(6, 7)));

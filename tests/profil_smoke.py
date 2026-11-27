@@ -132,7 +132,8 @@ def main():
                             capture_output=True, text=True, env=env)
         def kanca_sayisi(ikili):
             dis = subprocess.run(["objdump", "-d", ikili], capture_output=True, text=True).stdout
-            return len(re.findall(r"call.*<aot_prof_enter", dis))
+            # x86-64 `call ... <aot_prof_enter>`, arm64 `bl ... <_aot_prof_enter>` (macOS).
+            return len(re.findall(r"\b(call|callq|bl)\b.*<_?aot_prof_enter", dis))
         kp, kd = kanca_sayisi(os.path.join(d, "prof")), kanca_sayisi(os.path.join(d, "duz"))
         check("kontrol: build --profile ikilisinde kanca var, duz ikilide yok",
               b.returncode == 0 and b2.returncode == 0 and kp > 0 and kd == 0,

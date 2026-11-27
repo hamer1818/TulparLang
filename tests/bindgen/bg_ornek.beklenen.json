@@ -21,6 +21,7 @@
     {"name": "bg_renk", "params": ["r: i32"], "returns": "i32", "doc": "bindgen: BG_API BgRenk bg_renk (enum BgRenkE r)"},
     {"name": "bg_dizi_topla", "params": ["dizi: ptr", "n: i32"], "returns": "i32", "doc": "bindgen: BG_API int bg_dizi_topla (const int dizi[], int n)"},
     {"name": "bg_int_oku", "params": ["p: ptr"], "returns": "i32", "doc": "bindgen: BG_API int bg_int_oku (const void*p)"},
+    {"name": "bg_of", "params": ["a: i32", "b: i32"], "returns": "i32", "doc": "bindgen: BG_API int bg_of (int a, int b)"},
     {"name": "bg_nokta_kaydir", "params": ["p: struct BgNokta", "dx: i32"], "returns": "struct BgNokta", "doc": "bindgen: BG_API BgNokta bg_nokta_kaydir (BgNokta p, int dx)"},
     {"name": "bg_etiket", "params": ["e: struct BgEtiket", "f: struct BgEtiket"], "returns": "f64", "doc": "bindgen: BG_API double bg_etiket (struct BgEtiket e, BgEtiketT f)"},
     {"name": "bg_nokta", "params": ["x: i32", "y: i32"], "returns": "struct BgNokta", "doc": "bindgen: BG_API BgNokta bg_nokta (int x, int y)"}

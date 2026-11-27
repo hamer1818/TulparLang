@@ -6528,6 +6528,13 @@ static int g_ext_target_android = 0;  // llvm_backend_set_target_android
 void llvm_backend_set_target_android(int enable) { g_ext_target_android = enable ? 1 : 0; }
 static ExtAbiArch ext_abi_arch(LLVMBackend *backend) {
   if (backend->target_web || g_ext_target_android) return ExtAbiArch::Desteksiz;
+  // Yalniz test/teshis: siniflandirmayi baska bir hedefin kuraliyla zorla
+  // (uretilen IR o hedefin llc'siyle incelenir; kullanici kodu icin degil).
+  if (const char *z = getenv("TULPAR_EXT_ABI_ZORLA")) {
+    if (!strcmp(z, "sysv")) return ExtAbiArch::SysV64;
+    if (!strcmp(z, "aarch64")) return ExtAbiArch::AArch64;
+    if (!strcmp(z, "win64")) return ExtAbiArch::Win64;
+  }
   const char *t = LLVMGetTarget(backend->module);
   std::string tr = t ? t : "";
   if (tr.empty()) {
@@ -6632,9 +6639,13 @@ static LLVMAttributeRef ext_type_attr(LLVMBackend *backend, const char *name, LL
   return LLVMCreateTypeAttribute(backend->context, kind, t);
 }
 
-// 16 baytlik hizali gecici tampon: struct baytlari kopyalanir / parcalar okunur.
+// Hizali gecici tampon: struct baytlari kopyalanir / parcalar okunur. 32 bayt:
+// dogrudan gecisin en buyugu AArch64 HFA'si (4 x double). Ilk surumu 16 bayt
+// idi — 3 double'lik HFA (24 bayt) tampondan TASIYORDU: macOS arm64'te
+// sonuc cop, Linux SysV'de bu yol yalniz <= 16 baytta kullanildigi icin
+// gorunmedi (CI 2026-11-27).
 static LLVMValueRef ext_struct_tampon(LLVMBackend *backend, const char *nm) {
-  LLVMTypeRef t = LLVMArrayType(LLVMInt64TypeInContext(backend->context), 2);
+  LLVMTypeRef t = LLVMArrayType(LLVMInt64TypeInContext(backend->context), 4);
   LLVMValueRef a = llvm_build_alloca_at_entry(backend, t, nm);
   LLVMSetAlignment(a, 16);
   LLVMBuildStore(backend->builder, LLVMConstNull(t), a);
