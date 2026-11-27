@@ -75,8 +75,10 @@ runtime_bindings.cpp'de sıfır çağrı). Yani:
 
 - Kullanıcı kodunda **refcount trafiği yok** → refcount yarışı da yok.
 - Bellek yönetimi pratikte **arena** (toplu sıfırlama) + kalıcı değerler için
-  ömür boyu yaşayan `malloc`. `arc_*` yalnız `tulpar_async.cpp`'de kullanılıyor
-  ve orası tek iş parçacıklı (ucontext coroutine'leri, thread değil).
+  ömür boyu yaşayan `malloc`. `arc_*` eskiden yalnız `tulpar_async.cpp`'de kullanılıyordu;
+  2026-11-27'den beri orada da yok (Async Bellek RFC — [[Memory Model]]).
+  Coroutine'ler tek iş parçacıklı (thread değil) ve ayrı bir async arena
+  bağlamında çalışır.
 - **Sonuç:** "ARC throughput bedeli" tartışması AOT yolu için konusuz. Belgeler
   ARC'ı çalışan bir mekanizma gibi anlatıyorsa düzeltilmeli.
 

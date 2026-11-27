@@ -342,7 +342,8 @@ Ayrıntı: "RFC: Tulpar Bellek Sözleşmesi v0" ve [Memory Model](mindmap/Memory
   bırakmaz. `@frame func f()` bunu otomatik yapar ve dönüş değerini kalıcılaştırır.
 - **Kural 2.1:** drop/restore'dan **sonra** o kontrol noktasında üretilmiş bir geçici değeri
   okumak tanımsızdır. `TULPAR_ARENA_ZEHIR=1` bu okumayı görünür kılar.
-- Kalıcıya kaçış: global'e atama, async görev argümanı/sonucu, thread argümanı — hepsi kopyalanır.
+- Kalıcıya kaçış: global'e atama, async görev argümanı/sonucu, `gather` argümanı, thread argümanı
+  — hepsi kopyalanır (promise kopyalanmaz, yerinde kalıcı olur; bölüm 9).
 - `mem_stats()` sayaçları program içinden okur.
 
 ```tpr
@@ -439,7 +440,20 @@ print(c[0]);
   sonuç `thread_join` ile **kopya** olarak döner. İş parçacığı başına arena.
 - Paylaşılan değişebilir global'e `mutex_*` ya da `atomic_*` ile erişilir; korumasız erişim
   tanımsızdır (tip denetimi uyarır). `@thread_local` iş parçacığı başına global.
-- `async func` + `await`: tek iş parçacığında kooperatif coroutine'ler (web/Android'de yok).
+- `async func` + `await`: tek iş parçacığında kooperatif coroutine'ler (masaüstü, web ve Android).
+
+**Async bellek kuralları** (Async Bellek RFC, 2026-11-27):
+
+- Coroutine'ler ana akıştan ayrı bir arena bağlamında çalışır: ana akışın kontrol noktası
+  `await` sırasında araya giren coroutine'in değerlerine dokunmaz. Ana akışta kontrol noktası
+  açıkken `await` serbesttir.
+- Coroutine içinde açılan kontrol noktası, bir sonraki `await`'ten **önce** kapanmalıdır;
+  açıkken `await` yakalanabilir bir hata atar (`@frame async` aynı sebeple derlenmez).
+- Görev argümanı, promise değeri ve `gather` argümanı kalıcıya kaçar (geçiciyse kopya).
+- Promise sıradan bir nesnedir: kontrol noktası içinde kurulup yerine gelmiş promise drop'ta
+  serbest kalır (sonra okumak Kural 2.1 gereği tanımsız); drop anında **bekleyen** promise
+  kalıcıya terfi eder (`mem_stats()["promoted_promises"]` sayar). Global'e yazılan promise
+  kopyalanmaz, kalıcı olur. Kontrol noktası dışında kurulan promise ölümsüzdür.
 
 ```tpr
 func kare(n) { return n * n; }
@@ -447,6 +461,30 @@ int t = thread_create(kare, 12);
 print(thread_join(t));
 // cikti:
 // 144
+```
+
+```tpr
+async func is(): int {
+    int wm = arena_save();
+    try {
+        await sleep_async(1);
+    } catch (e) {
+        print(contains(toString(e), "await"));
+    }
+    arena_drop(wm);
+    await sleep_async(1);
+    return 1;
+}
+func sonuc_al(): int {
+    int wm = arena_save();
+    var p = is();
+    arena_drop(wm);
+    return await p;
+}
+print(sonuc_al());
+// cikti:
+// true
+// 1
 ```
 
 ## 10. Yerel eklentiler (FFI, özet)

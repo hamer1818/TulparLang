@@ -1051,6 +1051,10 @@ static thread_local std::unordered_set<Obj *> g_region_set;
 //     basina yeniden atanan global).
 static thread_local uint64_t g_mem_untracked = 0;
 static thread_local uint64_t g_mem_persist_bytes = 0;
+// Async RFC A.4 (2026-11-27): geri sarmada serbest BIRAKILAMAYAN (bekleyen,
+// gorevi suren ya da red kokeni tasiyan) promise'ler kaliciya terfi eder.
+// Sizinti sessiz kalmasin diye sayilir (mem_stats "promoted_promises").
+static thread_local uint64_t g_mem_promise_promoted = 0;
 
 static inline void region_track(Obj *o) {
   if (!o) return;
@@ -1136,9 +1140,24 @@ static inline bool value_is_transient(Obj *o) {
 // are arena-owned (reclaimed by the arena rewind).
 static void obj_index_note(ObjObject *o); // json nesnesi hash indeksi (asagida)
 
+// Async RFC A.4: kontrol noktasi icinde kurulan promise bolgede izlenir.
+// Geri sarmada YALNIZ yerine gelmis, gorevi bitmis, red kokeni olmayan ve
+// bekleyeni kalmamis olani serbest kalir. Digerine hala zamanlayici (gorev,
+// zamanlayici, bekleyen listesi, red kaydi) bakiyor: kaliciya terfi eder.
+static inline bool promise_must_survive(const ObjPromise *p) {
+  return p->state == 0 || p->task || p->origin || p->nwaiters;
+}
+
 static inline void region_free_one(Obj *o) {
   if (!o || o->arena_allocated)
     return;
+  if (o->type == OBJ_PROMISE) {
+    ObjPromise *p = (ObjPromise *)o;
+    if (promise_must_survive(p)) { g_mem_promise_promoted++; return; }
+    free(p->waiters);
+    free(p);
+    return;
+  }
   if (o->type == OBJ_OBJECT) {
     ObjObject *x = (ObjObject *)o;
     free(x->keys);
@@ -1232,7 +1251,11 @@ static const unsigned char ARENA_ZEHIR_BAYT = 0xDB;
 
 static void region_zehirle_one(Obj *o) {
   if (!o || o->arena_allocated) return;
-  size_t boy = sizeof(Obj);
+  if (o->type == OBJ_PROMISE && promise_must_survive((const ObjPromise *)o)) {
+    g_mem_promise_promoted++;
+    return;
+  }
+  size_t boy = o->type == OBJ_PROMISE ? sizeof(ObjPromise) : sizeof(Obj);
   if (o->type == OBJ_OBJECT) {
     ObjObject *x = (ObjObject *)o;
     if (x->keys) memset(x->keys, ARENA_ZEHIR_BAYT, sizeof(ObjString *) * (size_t)x->capacity);
@@ -1965,6 +1988,13 @@ VMValue aot_persist(VMValue v) {
   // ortam yok" isareti) boyle. Asagidaki IS_* makrolari tipi okumak icin
   // isaretciyi izliyor; bir ortam genel dizi yolundan kopyalanirsa bu SEGV'di.
   if (IS_OBJ(v) && !AS_OBJ(v)) return v;
+  // Promise KOPYALANMAZ — kimligi (bekleyenler, gorev) onun kendisi. Kaciste
+  // yerinde terfi eder: bolge kumesinden cikar, geri sarma ona dokunmaz
+  // (Async RFC A.4). Kontrol noktasi disinda kurulan promise zaten kalici.
+  if (IS_PROMISE(v)) {
+    g_region_set.erase(AS_OBJ(v));
+    return v;
+  }
   if (IS_STRING(v)) {
     // Fonksiyon referansi (havuz kaydi) olumsuz ve degismez: kopyalamak
     // yalniz havuz kimligini kaybettirir (call() yeniden adla cozmeye duser).
@@ -2173,6 +2203,50 @@ VMValue aot_persist_global(VMValue v) {
   if (IS_STRING(v) || IS_STRUCT_ARRAY(v))
     return aot_persist_escape(v);
   return aot_persist(v);
+}
+
+// ---- Async arena baglami (Async RFC A.1, 2026-11-27) ----------------------
+// Arena (dizgi arenasi + kontrol noktasi yigini + bolge) iplik basina; async
+// coroutine'ler ise ayni iplikte sirayla kosar. Eskiden bir kontrol noktasi
+// await'i asinca araya giren BASKA coroutine'in dizgileri/kaplari o noktaya
+// dusuyor, drop'ta oluyordu (dizgide sessizce `<object>` — olculdu). Simdi
+// zamanlayici her coroutine diliminin cevresinde iplik durumunu bu baglamla
+// DEGIS TOKUS eder (EhContext ile ayni kalip): coroutine'ler ayri, ortak bir
+// async baglamda kosar; ana akisin drop'u onlara dokunmaz.
+//
+// Neden isaretci dolaylamasi degil de degis tokus: sicak yol (region_track,
+// her dizgi ayirmasi) bugun duz bir TLS okumasi. Her erisime bir dolaylama
+// eklemek yerine maliyet yalniz baglam gecisine gidiyor: birkac isaretci +
+// acik kontrol noktasi kadar 24 baytlik kayit + iki O(1) kap degisimi.
+struct AotArenaCtx {
+  AOTArena *arena = nullptr;
+  int top = 0;
+  AOTArenaCheckpoint cps[AOT_ARENA_CHECKPOINT_MAX];
+  std::vector<Obj *> region;
+  std::unordered_set<Obj *> region_set;
+};
+extern "C" void *aot_arena_ctx_new(void) { return new AotArenaCtx(); }
+extern "C" void aot_arena_ctx_swap(void *ctx) {
+  AotArenaCtx *c = static_cast<AotArenaCtx *>(ctx);
+  std::swap(c->arena, g_aot_string_arena);
+  const int n = c->top > g_arena_checkpoint_top ? c->top : g_arena_checkpoint_top;
+  for (int i = 0; i < n; i++) std::swap(c->cps[i], g_arena_checkpoints[i]);
+  std::swap(c->top, g_arena_checkpoint_top);
+  c->region.swap(g_region);
+  c->region_set.swap(g_region_set);
+}
+// Etkin baglamin acik kontrol noktasi sayisi (A.2 denetimi: coroutine'de
+// await aninda 0 olmali).
+extern "C" int aot_arena_checkpoint_depth(void) { return g_arena_checkpoint_top; }
+// Promise'i (ya da baska bir nesneyi) etkin baglamin bolgesine kaydet:
+// kontrol noktasi aciksa izlenir, degilse kalici (izlenmeyen sayilir).
+extern "C" void aot_region_track_obj(Obj *o) { region_track(o); }
+// Bolgede OLMAYAN bir kabi serbest birak (reddedilen gather'in kismi sonuc
+// dizisi). Bolgedeyse geri sarma birakacak — iki kez birakmamak icin dokunma
+// (Async RFC A3: eskiden arc_release + bolge = cift free adayi).
+extern "C" void aot_free_untracked_container(Obj *o) {
+  if (!o || o->arena_allocated || g_region_set.count(o)) return;
+  region_free_one(o);
 }
 
 // Wrapper for AOT print (takes pointer to VMValue, calls vm_print_value which
@@ -5347,7 +5421,7 @@ VMValue aot_mem_stats_ptr(void) {
       {"arena_blocks", blocks},      {"region_objects", region},
       {"checkpoint_depth", depth},   {"checkpoint_max", AOT_ARENA_CHECKPOINT_MAX},
       {"untracked_objects", untracked}, {"persist_bytes", pbytes},
-      {"heap_in_use", heap},
+      {"heap_in_use", heap},         {"promoted_promises", (long long)g_mem_promise_promoted},
   };
   for (auto &r : rows)
     vm_object_set_aot_wrapper(nullptr, o, const_cast<char *>(r.k), VM_INT(r.v));
