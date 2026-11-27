@@ -27,10 +27,22 @@ yerleşiklerle erişilmelidir:
 - **Thread sınırı kopyalayarak geçilir:** `thread_create` argümanı ve sonucu
   `aot_persist` ile derin kopyalanır; her thread'in arenası ve bölgesi
   kendine özel. Global'e yazma bariyerden geçer ([[Memory Model]]).
+- **İşçi arenası (2026-11-27):** thread bitince arena hiç serbest
+  kalmıyordu: 1000 thread heap'i **1 GB** büyütüyordu, `listen_async`
+  (bağlantı başına thread) 2000 yeni bağlantıda **+2,2 GB** (artı 64 KB'lık
+  `thread_local` başlık tamponu, o da bırakılmıyordu). Artık
+  `aot_thread_entry` sonunda yalnız **kesin ölü** bloklar bırakılıyor: arena
+  ucu en baştaysa (işçi noktalar dışında hiç ayırmamış — `listen_async`
+  bağlantısı) arenanın tamamı, değilse ucun ötesi; işçinin ilk bloğu 4 KB.
+  `listen_async`: 2000 bağlantı +125 KB. Noktasız işçi: thread başına ~5 KB.
+  Tamamı bırakılamaz: noktasız işçinin kalıcı yere yazdığı dizgi "yerleşmiş"
+  sayılıp kopyalanmıyor ([[Tuzaklar]] 7y). Kapılar:
+  `tests/thread_bellek.test.tpr`, `tests/wings_baglanti_bellek_smoke.py`.
+  Kalan: noktasız işçinin ilk bloğu ve async bağlam arenası.
 
 | araç | kapsam | kanıt |
 |---|---|---|
-| `mutex_create/lock/unlock/destroy` | kritik bölge | 8 × 50 000 → 400 000 (aşağıda) |
+| `mutex_create/lock/unlock/destroy` | kritik bölge | `tests/muteks.test.tpr` (8 × 50 000 → 400 000; kilitler silinince ~70 000 — sabotaj kırmızı), mutex altında kaba yazma, bekleme döngüsü |
 | `atomic_load/store/add/sub/xchg/cas` | üst düzey `int` global; son argüman bellek sırası | `tests/atomik.test.tpr` (4 × 50 000 `atomic_add` → 200 000, release/acquire yayını), `tests/atomik_hatalari.sh` |
 | `@thread_local int x` | thread başına global (int/float/bool, üst düzey) | aynı test |
 | `thread_lint.cpp` | worker'da yazılıp senkronizasyonsuz okunan global | 2026-09-11'den beri |

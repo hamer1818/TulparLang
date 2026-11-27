@@ -91,6 +91,8 @@ Zaten güvenli: arena/checkpoint/region/`js_small_buffer`/`g_wings_current_fd` T
 
 **Thread sınırı kopyalayarak geçilir:** `thread_create` argümanı ve dönüş değeri `aot_persist` ile derin kopyalanır (`aot_thread_create` / `aot_thread_entry`); global yolu bariyerden geçer. Her thread'in arenası ve bölgesi kendine özel.
 
+**İşçi arenası (2026-11-27):** thread bitince arenanın yalnız kesin ölü kısmı bırakılır (`aot_isci_arenasini_kirp`): uç en baştaysa tamamı, değilse ucun ötesi; işçinin ilk bloğu 4 KB (eskiden hiçbir şey bırakılmıyordu — thread başına 1 MB, `listen_async`'te bağlantı başına). Tamamını bırakmak için thread başına bir yaşam katmanı gerekir (değer kabından kısa yaşıyorsa kopyala); iki deneme bunu ikili "geçici/kalıcı" ayrımıyla yapmaya çalıştı ve ikisi de bozdu ([[Tuzaklar]] 7y). → [[Concurrency]]
+
 **Kullanıcı düzeyi senkronizasyon (K040, 2026-09-28):** `mutex_*` yanında `atomic_load/store/add/sub/xchg/cas` (üst düzey `int` global; isteğe bağlı sıra `"relaxed"`/`"acquire"`/`"release"`/`"acq_rel"`/`"seq_cst"`, varsayılan seq_cst) ve `@thread_local int x` (thread başına global). Bellek modeli cümlesi: mutex altındaki yazmalar aynı mutex'i sonra alan thread'e, bir release atomic yazmasından önceki yazmalar o değeri acquire ile okuyan thread'e görünür; korumasız paylaşım tanımsız (güncelleme ve görünürlük kaybı ölçüldü). → [[Concurrency]]
 
 ## Dizi temsili: kutulu / kutulanmamış (2026-09-03)

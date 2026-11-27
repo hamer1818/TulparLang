@@ -438,6 +438,10 @@ print(c[0]);
 
 - `thread_create(isci, arg)` yeni işletim sistemi iş parçacığı; `arg` **derin kopyalanır**,
   sonuç `thread_join` ile **kopya** olarak döner. İş parçacığı başına arena.
+- İşçinin global'e ya da kalıcı kaba yazdığı veri iş parçacığı bittikten sonra da sağlamdır.
+  İş parçacığı bitince arenasının yalnız kesin ölü kısmı bırakılır (2026-11-27): kontrol
+  noktaları dışında hiç ayırmamış işçinin arenası tümüyle, diğerinin ilk bloğu (4 KB)
+  dışındaki boş blokları.
 - Paylaşılan değişebilir global'e `mutex_*` ya da `atomic_*` ile erişilir; korumasız erişim
   tanımsızdır (tip denetimi uyarır). `@thread_local` iş parçacığı başına global.
 - `async func` + `await`: tek iş parçacığında kooperatif coroutine'ler (masaüstü, web ve Android).
@@ -461,6 +465,18 @@ int t = thread_create(kare, 12);
 print(thread_join(t));
 // cikti:
 // 144
+```
+
+```tpr
+json g = [];
+func isci(int k): int {
+    push(g, {"ad": "is-" + toString(k), "l": [k, k + 1]});
+    return 0;
+}
+thread_join(thread_create(isci, 1));
+print(g[0]["ad"] + " " + toString(len(g[0]["l"])));
+// cikti:
+// is-1 2
 ```
 
 ```tpr

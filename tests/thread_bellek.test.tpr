@@ -1,0 +1,184 @@
+// ISCI THREAD BELLEGI (2026-11-27).
+//
+// Bellek RFC Kural 6.4 testi yazilirken olculdu: `thread_create` iscisinin
+// dizgi arenasi thread bitince HIC serbest kalmiyordu. Ilk dizgi 1 MB'lik bir
+// blok ayiriyor; 1000 thread heap_in_use'u 1 GB buyutuyordu (thread basina
+// 1 MB). Wings `listen_async` her baglanti icin bir thread aciyor, yani
+// baglanti basina 1 MB + 64 KB baslik tamponu (o da birakilmiyordu; soket
+// tarafi: tests/wings_baglanti_bellek_smoke.py).
+//
+// Duzeltme (runtime_bindings.cpp "ISCI ARENASI"): thread bitince yalniz KESIN
+// OLU bloklar birakilir — arena ucu en bastaysa (isci kontrol noktalari
+// disinda hic ayirmamis) arenanin tamami, degilse ucun otesi. Iscinin ilk
+// blogu 4 KB. Arenanin tamami BIRAKILAMAZ: noktasiz iscinin kalici yere
+// yazdigi dizgi kopyalanmaz ("yerlesmis", arena_str_settled), thread'den
+// sonra da okunur.
+//
+// Ilk duzeltme denemesi (iscinin omrunu ortuk bir noktaya sarip her seyi
+// birakmak) suitlerin HEPSI yesilken su deseni kirdi: noktanin disinda
+// kurulup ic noktalarda doldurulan isci kabi (istekler arasi onbellek) —
+// `0 0 <closure>`. run_isci_onbellegi o yuzden burada (Tuzaklar 7y).
+//
+// SABOTAJ (2026-11-27, elle): duzeltmesiz runtime ile iki bellek testi de
+// KIRMIZI (1000 thread: +1 029 169 KB).
+// Windows'ta heap_in_use -1 ve zehir kipinde (karantina) bellek testleri
+// gorunur sekilde atlar; digerleri her yerde kosar.
+// Calistir (depo kokunden): ./tulpar tests/thread_bellek.test.tpr
+import "test";
+
+json g_ortak = [];
+json g_nesne = {};
+str g_son = "";
+int g_kilit = 0;
+
+// Butun isi kontrol noktasinda: thread bitince arena ucu en basta.
+func _noktali_isci(int x): int {
+    int wm = arena_save();
+    str s = "is-" + toString(x) + "-biraz-uzun-bir-dizgi";
+    json j = {"k": s, "l": [1, 2, 3]};
+    int n = len(s) + len(j["l"]);
+    arena_drop(wm);
+    return n;
+}
+
+// Noktasiz: dizgi ve json arenada/kalici; ilk blok (4 KB) tutulur.
+func _noktasiz_isci(int x): int {
+    str s = "is-" + toString(x) + "-biraz-uzun-bir-dizgi";
+    json j = {"k": s, "l": [1, 2, 3]};
+    return len(s) + len(j["l"]);
+}
+
+func _tur(int n, bool noktali) {
+    for (int i = 0; i < n; i++) {
+        var t = noktali ? thread_create(_noktali_isci, i) : thread_create(_noktasiz_isci, i);
+        thread_join(t);
+    }
+}
+
+// -1: olcum yok (platform ya da zehir kipi), yoksa KB.
+func _bin_thread_kb(bool noktali): int {
+    if (mem_stats()["heap_in_use"] < 0) {
+        print("  atla: heap_in_use bu platformda yok");
+        return -1;
+    }
+    // Zehir kipi birakilan bloklari BILEREK karantinada tutar (sarkan okuma
+    // 0xDB gorsun) — bellek olcumu orada anlamsiz.
+    str zehir = env("TULPAR_ARENA_ZEHIR");
+    if (length(zehir) > 0 && zehir != "0") {
+        print("  atla: zehir kipi bloklari karantinada tutar");
+        return -1;
+    }
+    _tur(50, noktali);
+    int h0 = mem_stats()["heap_in_use"];
+    _tur(1000, noktali);
+    int h1 = mem_stats()["heap_in_use"];
+    return (h1 - h0) / 1024;
+}
+
+func run_noktali_isci_hic_tutmaz() {
+    int kb = _bin_thread_kb(true);
+    if (kb < 0) { return; }
+    // Olculen ~0; eski ~1 029 000 KB.
+    assert(kb < 1024, "1000 noktali thread'de heap " + toString(kb) + " KB buyudu");
+}
+
+func run_noktasiz_isci_ilk_blok_kadar() {
+    int kb = _bin_thread_kb(false);
+    if (kb < 0) { return; }
+    // Olculen ~5 200 KB (thread basina 4 KB ilk blok + json); eski ~1 029 000.
+    assert(kb < 12288, "1000 noktasiz thread'de heap " + toString(kb) + " KB buyudu");
+}
+
+func _yazan(int k): int {
+    str yerel = "w" + toString(k) + "-dizgi";
+    json kap = {"ic": "ic-" + toString(k), "l": ["e-" + toString(k)]};
+    str[] ds = [];
+    push(ds, "ds-" + toString(k));
+    mutex_lock(g_kilit);
+    push(g_ortak, yerel);
+    push(g_ortak, kap);
+    push(g_ortak, ds);
+    g_nesne["k" + toString(k)] = "v" + toString(k);
+    g_son = "son-" + toString(k);
+    mutex_unlock(g_kilit);
+    return 0;
+}
+
+// Noktasiz iscinin global'e yazdiklari (dizgi, kap, tipli dizi, anahtar)
+// thread bittikten ve bellek yeniden kullanildiktan sonra saglam.
+func run_isci_global_yazmalari_sag() {
+    g_kilit = mutex_create();
+    g_ortak = [];
+    g_nesne = {};
+    int[] th = [];
+    for (int k = 0; k < 4; k++) { push(th, thread_create(_yazan, k)); }
+    for (int k = 0; k < 4; k++) { thread_join(th[k]); }
+    for (int i = 0; i < 300; i++) {
+        json cop = {"c": "cop-" + toString(i) + "-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"};
+        str[] cd = ["a-" + toString(i)];
+    }
+    assert_eq_int(len(g_ortak), 12);
+    int dizgi = 0;
+    int kap = 0;
+    int ds = 0;
+    for (int i = 0; i < len(g_ortak); i++) {
+        str t = toString(g_ortak[i]);
+        if (startsWith(t, "w") && contains(t, "-dizgi")) { dizgi = dizgi + 1; }
+        if (contains(t, "\"ic\": \"ic-") && contains(t, "\"e-")) { kap = kap + 1; }
+        if (startsWith(t, "[\"ds-")) { ds = ds + 1; }
+    }
+    assert_eq_int(dizgi, 4);
+    assert_eq_int(kap, 4);
+    assert_eq_int(ds, 4);
+    assert_eq_str(g_nesne["k0"] + g_nesne["k1"] + g_nesne["k2"] + g_nesne["k3"], "v0v1v2v3");
+    assert(startsWith(g_son, "son-"), "g_son: " + g_son);
+    mutex_destroy(g_kilit);
+}
+
+// Noktanin DISINDA kurulup ic noktalarda doldurulan isci kabi: kab kalici
+// sayilir, ic noktanin degerleri ona yazilirken kopyalanir. Ortuk-nokta
+// denemesinde tam burasi sarkti.
+func _onbellekli(int n): str {
+    json cache = {};
+    str[] ad = [];
+    for (int i = 0; i < n; i++) {
+        int wm = arena_save();
+        cache["k" + toString(i)] = "deger-" + toString(i) + "-uzun-bir-metin";
+        push(ad, "ad-" + toString(i));
+        arena_drop(wm);
+        for (int j = 0; j < 20; j++) { str cop = "cop-" + toString(j) + "-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"; }
+    }
+    return cache["k0"] + " " + cache["k" + toString(n - 1)] + " " + ad[0] + " " + ad[n - 1];
+}
+
+func run_isci_onbellegi() {
+    str beklenen = "deger-0-uzun-bir-metin deger-4-uzun-bir-metin ad-0 ad-4";
+    assert_eq_str(_onbellekli(5), beklenen);          // ana thread
+    var t = thread_create(_onbellekli, 5);
+    assert_eq_str(thread_join(t), beklenen);          // isci: ayni sonuc
+}
+
+func _sonuc_ver(json j): json {
+    return {"s": j["ad"] + "-sonuc", "n": [1, 2, 3]};
+}
+
+// Kural 6.4: thread SONUCU kopya olarak doner; cagiranin noktasi create ile
+// join arasinda dusurulup coplenir.
+func run_thread_sonucu_kopya() {
+    int wm = arena_save();
+    var t = thread_create(_sonuc_ver, {"ad": "is-" + toString(8)});
+    arena_drop(wm);
+    for (int i = 0; i < 200; i++) { json cop = {"c": "cop-" + toString(i)}; }
+    json r = thread_join(t);
+    for (int i = 0; i < 200; i++) { json cop = {"c": "cop-" + toString(i)}; }
+    assert_eq_str(r["s"], "is-8-sonuc");
+    assert_eq_int(len(r["n"]), 3);
+}
+
+print("=== isci thread bellegi ===");
+test("1000 noktali isci: arena tamamen birakilir", "run_noktali_isci_hic_tutmaz");
+test("1000 noktasiz isci: yalniz 4 KB ilk blok kalir", "run_noktasiz_isci_ilk_blok_kadar");
+test("noktasiz iscinin global yazmalari thread bitince sag", "run_isci_global_yazmalari_sag");
+test("isci onbellegi ic noktalardan sag cikar", "run_isci_onbellegi");
+test("thread sonucu kopya olarak doner (Kural 6.4)", "run_thread_sonucu_kopya");
+test_summary();

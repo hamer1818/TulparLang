@@ -491,11 +491,6 @@ if [ "$ACTION" = "suites" ]; then
         # bagli tanimsiz davranis. Kontroller: -O0/-O3 ikilileri farkli (K1),
         # bozuk altin kirmizi (K2). Yeni ornek: `tests/altin_cikti.py --yenile <ad>`.
         kapi_seri "Altin cikti / -O0-O3 kapisi basarisiz!" python3 tests/altin_cikti.py
-        # SARKAN ISARETCI (2026-11-26): TULPAR_ARENA_ZEHIR=1 geri sarilan
-        # arenayi 0xDB ile doldurur; bilinen sarkan desenler yakalanmali,
-        # guvenli desenler (async/thread/@frame/bariyer) ve butun paketler
-        # zehirde temiz kalmali.
-        kapi_seri "Sarkan isaretci kapisi basarisiz!" bash tests/sarkan_isaretci.sh
         # YIGIN SIZINTISI (R11). Dongu govdesine dusen bir `alloca`
         # yinelemede yigin harciyor ve program YETERINCE UZUN dondugunde
         # SIGSEGV veriyor — derleme sessiz, suitler yesil. `AST_ARRAY_LITERAL`
@@ -571,7 +566,11 @@ if [ "$ACTION" = "suites" ]; then
         # geciyor; ilerleyen yavas govde kesilmiyor. Kontrol: sure 0 iken pool
         # KILITLENMELI (kurgu kilidi uretiyor mu). Evented bloklayan okumaya
         # geri dondurulunce kirmiziya donuyor (4 yavas istemci = 4,5 s durma).
-        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke wings_rate_limit_smoke wings_tasima_smoke wings_kapanis_smoke wings_slowloris_smoke wings_yazma_smoke; do
+        # wings_baglanti_bellek_smoke (2026-11-27): dort modda 2000 YENI
+        # baglanti heap'i buyutmuyor. listen_async baglanti basina thread
+        # aciyor; iscinin arenasi + 64 KB baslik tamponu thread bitince
+        # birakilmiyordu (eski: +2,2 GB). Heap yoksa (Windows) SKIP.
+        for smoke in ws_masked_client_smoke wings_tls_smoke smtp_smoke wings_rate_limit_smoke wings_tasima_smoke wings_kapanis_smoke wings_slowloris_smoke wings_yazma_smoke wings_baglanti_bellek_smoke; do
             SMOKE_OUT=$(DISPLAY= WAYLAND_DISPLAY= python3 "tests/$smoke.py" 2>&1)
             SMOKE_RC=$?
             SMOKE_LAST=$(printf '%s\n' "$SMOKE_OUT" | tail -1)
@@ -595,6 +594,14 @@ if [ "$ACTION" = "suites" ]; then
     # ayri bir arka uc (Fiber). Orada heap_in_use -1: A.4 bellek denetimi
     # gorunur sekilde atlanir, digerleri kosar.
     kapi_seri "Async arena kapisi basarisiz!" bash tests/async_arena.sh
+    # SARKAN ISARETCI (2026-11-26): TULPAR_ARENA_ZEHIR=1 geri sarilan
+    # arenayi 0xDB ile doldurur; bilinen sarkan desenler yakalanmali,
+    # guvenli desenler (async/thread/@frame/bariyer) ve butun paketler
+    # zehirde temiz kalmali. 2026-11-27'de async kapisiyla ayni sebeple
+    # python3 blogunun DISINA alindi (yalniz bash + perl): Windows'ta hic
+    # kosmuyordu, oysa thread'ler ve async baglam takasi orada ayri arka
+    # uclardan (Win32 thread, Fiber) geciyor.
+    kapi_seri "Sarkan isaretci kapisi basarisiz!" bash tests/sarkan_isaretci.sh
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:
     # bozulsa derleyici de süitler de yeşil kalır, yalnız editörde tamamlama

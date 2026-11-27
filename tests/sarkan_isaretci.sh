@@ -36,7 +36,8 @@ export -f sureli
 gecti() { echo "  gecti  $1"; }
 dustu() { echo "  DUSTU  $1"; FAIL=1; }
 kos() {  # kos <zehir 0|1> <dosya>
-    ( cd "$TMP" && DISPLAY= WAYLAND_DISPLAY= TULPAR_ARENA_ZEHIR="$1" sureli 60 "$TULPAR" "$2" 2>&1 )
+    # tr: Windows (MSYS2) ciktisi CRLF — beklenen metinle karsilastirma bozulur.
+    ( cd "$TMP" && DISPLAY= WAYLAND_DISPLAY= TULPAR_ARENA_ZEHIR="$1" sureli 60 "$TULPAR" "$2" 2>&1 | tr -d '\r' )
 }
 
 # --- 1. pozitif kontrol ---------------------------------------------------
@@ -90,6 +91,28 @@ T
 z=$(kos 1 sark_promise.tpr)
 case "$z" in *promise-77*) dustu "zehir: drop sonrasi yerine gelmis promise okumasi hala dogru ($z)";;
              *) gecti "zehir: drop sonrasi yerine gelmis promise okumasi bozuk gorunuyor";; esac
+
+# Kural 4.2 [DELIK] (2026-11-27): noktanin DISINDA tanimli yerele nokta
+# icinde gecici deger yazilir (`acc = acc + x`) — bariyer yalniz global ve
+# kalici kaplari kapsar, yerel drop'ta sarkar. Kullanici kurali: persist()
+# (guvenli desen i). Derleme aninda typecheck bunu UYARIR (fikstur:
+# tests/typeinfer/fail/29_checkpoint_outer_local.tpr); bu kapi calisma
+# zamaninda sarktigini olcer. Olculdu: normal kipte de bozuk (coplenen arena
+# dizgisi `cop-5-...` basiyor), zehirde bozuk.
+cat > "$TMP/sark_yerel.tpr" <<'T'
+func yap(): str {
+    str acc = "bas";
+    int wm = arena_save();
+    for (int i = 0; i < 5; i++) { acc = acc + "-parca" + toString(i); }
+    arena_drop(wm);
+    for (int i = 0; i < 100; i++) { str cop = "cop-" + toString(i) + "-xxxxxxxxxxxxxxxxxxxxxxxx"; }
+    return acc;
+}
+print(yap());
+T
+z=$(kos 1 sark_yerel.tpr)
+case "$z" in *bas-parca0-parca1-parca2-parca3-parca4*) dustu "zehir: noktayi asan yerel (Kural 4.2) hala dogru basiyor ($z)";;
+             *) gecti "zehir: noktayi asan yereldeki gecici deger bozuk gorunuyor (Kural 4.2 deligi)";; esac
 
 # --- 2. guvenli desenler --------------------------------------------------
 cat > "$TMP/guvenli.tpr" <<'T'
@@ -179,6 +202,19 @@ func g_ic_ice(): str {
 // e) thread arg kopyasi.
 int g_thr = 0;
 func e_thr(json j) { g_thr = j["x"] + 1; }
+// e2) Kural 6.4: thread SONUCU kopyalanarak doner. Thread json/dizgiyi kendi
+//     arenasinda kurar; cagiranin noktasi create ile join arasinda drop
+//     edilip coplenir; join'in dondurdugu deger saglam olmali.
+func e2_thr(json j): json { return {"s": j["ad"] + "-sonuc", "n": [1, 2, 3]}; }
+// i) Kural 4.2'nin kullanici kurali: noktayi asan yerele persist() ile yaz.
+func i_yerel(): str {
+    str acc = "bas";
+    int wm = arena_save();
+    for (int i = 0; i < 5; i++) { acc = persist(acc + "-parca" + toString(i)); }
+    arena_drop(wm);
+    for (int i = 0; i < 100; i++) { str cop = "cop-" + toString(i) + "-xxxxxxxxxxxxxxxxxxxxxxxx"; }
+    return acc;
+}
 // f) tek save + cok restore dongusu, kaliciya birikim.
 func f_dongu() {
     int wm = arena_save();
@@ -202,6 +238,14 @@ var t = thread_create("e_thr", {"x": 41});
 arena_drop(wm);
 thread_join(t);
 print(g_thr);
+int wm2 = arena_save();
+var t2 = thread_create("e2_thr", {"ad": "is-" + toString(8)});
+arena_drop(wm2);
+for (int i = 0; i < 200; i++) { json cop = {"c": "cop-" + toString(i)}; }
+json r2 = thread_join(t2);
+for (int i = 0; i < 200; i++) { json cop = {"c": "cop-" + toString(i)}; }
+print(r2["s"] + " " + toString(len(r2["n"])));
+print(i_yerel());
 f_dongu();
 print(toString(len(g_birikim)) + " " + g_birikim[0] + " " + g_birikim[19]);
 print(g_bekleyen());
@@ -215,6 +259,8 @@ frame-2
 42
 sonuc-5
 42
+is-8-sonuc 3
+bas-parca0-parca1-parca2-parca3-parca4
 20 satir-0 satir-19
 9
 ic-3'
@@ -231,6 +277,7 @@ ls tests/*.test.tpr > "$TMP/paketler"
 paket_n=$(wc -l < "$TMP/paketler")
 xargs -P "${TULPAR_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}" -I{} sh -c \
     'out=$(DISPLAY= WAYLAND_DISPLAY= TULPAR_ARENA_ZEHIR=1 perl -e "alarm shift; exec @ARGV" 180 "$1" "$2" 2>&1); rc=$?;
+     out=$(printf "%s\n" "$out" | tr -d "\r");
      b=$(basename "$2"); printf "%s\n" "$out" | grep -E "^ *FAIL" | sed "s/^ *FAIL /$b|/" ;
      printf "%s\n" "$out" | grep -q "Tests:" || echo "$b|OZET-YOK rc=$rc"' _ "$TULPAR" {} \
     < "$TMP/paketler" > "$TMP/zehir_fail" 2>&1
@@ -249,4 +296,4 @@ else
 fi
 
 if [ $FAIL -ne 0 ]; then echo "FAIL: sarkan_isaretci"; exit 1; fi
-echo "PASS: sarkan_isaretci — zehir sarkan json/dizgiyi ve bilerek sarkan testi yakaliyor; 7 guvenli desen iki kipte ayni; $paket_n paket zehirde temiz"
+echo "PASS: sarkan_isaretci — zehir sarkan json/dizgiyi ve bilerek sarkan testi yakaliyor; 9 guvenli desen iki kipte ayni; $paket_n paket zehirde temiz"
