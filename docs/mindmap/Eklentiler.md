@@ -205,8 +205,25 @@ Kapı: `tests/yerel_eklenti.sh` — `kullan.tpr`'de call/eval/iki kanca/ iç
 yakalama/`@frame` yolları, ayrıca try yokken eski davranış. Pozitif kontrol:
 koruma devre dışı bırakılınca kapı kırmızı (kod 99, kilit 1).
 
-Açık (RFC açık soru 3): C kütüphanesi hata kodunu işleyemiyorsa süreci
-sonlandırma seçeneği (ext tanımında bir bayrak) yok.
+**`"on_throw": "exit"` (RFC açık soru 3, kapandı 2026-11-27).** Hata kodunu
+işleyemeyen bir C kütüphanesi (qsort karşılaştırıcısı, -1'i yok sayan olay
+döngüsü) için: bildirimin kökünde (eklenti geneli) ya da tek fonksiyonda
+`"on_throw": "exit"`; fonksiyondaki değer kökü ezer, varsayılan `"rethrow"`.
+İşaretli fonksiyon çalışırken geri çağrıdan kaçan istisna C çerçevesini
+**aşmaz**: dışarıda `try` olsa bile süreç yakalanmayan istisna gibi mesajla
+1'le biter (ikinci satır fonksiyonun adını ve bayrağı söyler), C'ye -1 hiç
+dönülmez.
+
+Mekanizma bir **istisna tabanı**: codegen yalnız işaretli çağrının çevresine
+`aot_ext_floor_enter(&yuva, ad)` / `aot_ext_floor_leave(&yuva)` koyar (16
+baytlık yığın yuvası önceki tabanı saklar — iç içe çağrı sınırsız, yığın yok).
+Taban = çağrı anındaki try derinliği; `aot_throw` tabana inen throw'u
+"yakalanmayan" sayar, `aot_eh_depth()` tabanın üstünü döndürür. Sonuç:
+geri çağrının **içinde** kurulan try'lar ve iç içe işaretsiz bir sınır
+(rethrow) normal çalışır, çağrı bitince dış try yine görünür. İşaretsiz
+çağrılar hiçbir şey ödemez (sıcak yol değişmedi). Kapı: `tests/yerel_eklenti.sh`
+6c — dış try, `fn(...)` trampolini, iç yollar, geçersiz değer; pozitif kontrol:
+aynı program bayraksız eklentiyle dış catch'e varmalı.
 
 ## ABI uyumu kimde
 

@@ -6869,8 +6869,36 @@ static TypedValue emit_ext_call(LLVMBackend *backend, ASTNode_C *node,
   const bool has_struct = f->ret == CType::Struct ||
                           std::find(f->params.begin(), f->params.end(), CType::Struct) != f->params.end();
   const bool void_ret = LLVMGetTypeKind(rty) == LLVMVoidTypeKind;
+  // `"on_throw": "exit"` (RFC acik soru 3, 2026-11-27): cagri boyunca istisna
+  // tabani kurulur — geri cagridan kacan throw C cercevesini asmaz, surec
+  // mesajla biter (aot_ext_floor_enter, runtime_bindings.cpp). Isaretsiz
+  // fonksiyonlar bunu hic odemez.
+  LLVMValueRef floor_save = nullptr;
+  LLVMTypeRef floor_fty = nullptr;
+  if (f->exit_on_throw) {
+    LLVMTypeRef save_ty = LLVMArrayType(backend->int_type, 2);  // 16 bayt (i64 x 2)
+    floor_save = llvm_build_alloca_at_entry(backend, save_ty, "ext.floor");
+    LLVMTypeRef ptr_ty = backend->ptr_type;
+    LLVMTypeRef enter_params[] = {ptr_ty, ptr_ty};
+    floor_fty = LLVMFunctionType(LLVMVoidTypeInContext(backend->context), enter_params, 2, 0);
+    LLVMValueRef efn = LLVMGetNamedFunction(backend->module, "aot_ext_floor_enter");
+    if (!efn) efn = LLVMAddFunction(backend->module, "aot_ext_floor_enter", floor_fty);
+    LLVMValueRef nm = LLVMBuildGlobalStringPtr(b, f->name.c_str(), "ext.floor.ad");
+    LLVMValueRef eargs[] = {floor_save, nm};
+    LLVMBuildCall2(b, floor_fty, efn, eargs, 2, "");
+  }
   LLVMValueRef r = LLVMBuildCall2(b, fty, fn, args.data(), (unsigned)args.size(),
                                   void_ret ? "" : "ext.ret");
+  if (floor_save) {
+    LLVMTypeRef ptr_ty = backend->ptr_type;
+    LLVMTypeRef leave_params[] = {ptr_ty};
+    LLVMTypeRef lfty =
+        LLVMFunctionType(LLVMVoidTypeInContext(backend->context), leave_params, 1, 0);
+    LLVMValueRef lfn = LLVMGetNamedFunction(backend->module, "aot_ext_floor_leave");
+    if (!lfn) lfn = LLVMAddFunction(backend->module, "aot_ext_floor_leave", lfty);
+    LLVMValueRef largs[] = {floor_save};
+    LLVMBuildCall2(b, lfty, lfn, largs, 1, "");
+  }
   // cbool nitelikleri param indeksine bagli; struct parcalari indeksleri
   // kaydirdigi icin (cbool + struct ayni imzada) yalniz struct'siz imzada.
   if (!has_struct) ext_mark_cbool_call(backend, r, f->ret, f->params);

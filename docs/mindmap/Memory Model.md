@@ -65,6 +65,16 @@ Wings desenleri (`lib/wings.tpr`):
 
 → [[Memory Leak Fixes]] · [[Wings Serve Modes]]
 
+**Atama kuralı (RFC açık soru 2, kapandı 2026-11-27 — [SPEC §8.1](../SPEC.md)):**
+paylaşım varsayılandır, global değişkene atama (`g = x`, `g += x`) derin kopyadır.
+Ölçülen tablo (2026-11-27): yerel atama/parametre/dönüş/`push` dizi, json ve kutulu
+struct'ı paylaşır; kutusuz struct her yerde kopyalanır; global'e atama (yerel ya da
+global kaynaktan) kopyalar; üst düzey **bildirim** `T g = h;` paylaşır (yalnız geçiciyi
+kopyalar — `tests/main_yerel.test.tpr` 9. bölüm bunu takma ad olarak sabitler); global
+kabın elemanına yazma (`g[i] = x`) kontrol noktası içinde geçiciyse kopyalar, dışında
+paylaşır → SPEC'te **tanımsız**. Struct'ın değer/referans davranışının alan tiplerine
+bağlı olması v0'ın bilinen tutarsızlığı (SPEC Ek A).
+
 **Bilinen delikler** (kapatılmadı, belgelendi — Bellek Sözleşmesi v0 RFC taslağı, 2026-11-25):
 - Üzerine yazılan **eski kalıcı değer serbest bırakılamaz** (takma adlar izlenmiyor: `json x = g; g = yeni; print(x);`) → kare/istek başına yeniden atanan hesaplanmış global sızar. Kural: sıcak döngüde global'i yeniden atama, yerinde değiştir.
 - **Async sınırı kapandı (2026-11-26):** checkpoint içinde başlatılan async görevin argümanları ve promise'in değeri artık `aot_persist_escape`'ten geçiyor (yalnız geçiciyse kopya). Önceden yalnız `arc_retain` vardı — geri sarma refcount'a bakmıyor, drop'tan sonra çalışan görev serbest belleği okuyordu (sessizce `0`). Bunun sonucu: checkpoint içinde async'e verilen json **kopya** olarak girer; görevin onda yaptığı değişiklik çağırana görünmez (thread_create ile aynı kural). Kapı: `tests/sarkan_isaretci.sh`, Tuzaklar 7w.
