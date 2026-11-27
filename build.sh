@@ -496,10 +496,6 @@ if [ "$ACTION" = "suites" ]; then
         # guvenli desenler (async/thread/@frame/bariyer) ve butun paketler
         # zehirde temiz kalmali.
         kapi_seri "Sarkan isaretci kapisi basarisiz!" bash tests/sarkan_isaretci.sh
-        # ASYNC ARENA (2026-11-27, Async Bellek RFC A.1-A.4): coroutine'ler ayri
-        # arena baglaminda; coroutine'de acik nokta await'i asamaz; gather
-        # argumani kacar; promise bolgede (heap olcumu — seri kosar).
-        kapi_seri "Async arena kapisi basarisiz!" bash tests/async_arena.sh
         # YIGIN SIZINTISI (R11). Dongu govdesine dusen bir `alloca`
         # yinelemede yigin harciyor ve program YETERINCE UZUN dondugunde
         # SIGSEGV veriyor — derleme sessiz, suitler yesil. `AST_ARRAY_LITERAL`
@@ -590,6 +586,15 @@ if [ "$ACTION" = "suites" ]; then
             esac
         done
     fi
+
+    # ASYNC ARENA (2026-11-27, Async Bellek RFC A.1-A.4): coroutine'ler ayri
+    # arena baglaminda; coroutine'de acik nokta await'i asamaz; gather argumani
+    # kacar; promise bolgede (heap olcumu — seri kosar). python3 BLOGUNUN
+    # DISINDA: kapi yalniz bash + perl istiyor; blogun icindeyken Windows'ta
+    # (MSYS2'de python3 yok) hic kosmuyordu — oysa Windows'un baglam gecisi
+    # ayri bir arka uc (Fiber). Orada heap_in_use -1: A.4 bellek denetimi
+    # gorunur sekilde atlanir, digerleri kosar.
+    kapi_seri "Async arena kapisi basarisiz!" bash tests/async_arena.sh
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:
     # bozulsa derleyici de süitler de yeşil kalır, yalnız editörde tamamlama
